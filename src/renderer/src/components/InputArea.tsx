@@ -151,7 +151,7 @@ export function InputArea(): React.JSX.Element {
                   className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
                   title="切换提供商与模型"
                 >
-                  <span className="max-w-[120px] truncate">{activeProviderName} / {activeModel}</span>
+                  <span className="max-w-[120px] truncate">{activeModel}</span>
                   <ChevronDown size={11} />
                 </button>
 

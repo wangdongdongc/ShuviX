@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { MessageSquarePlus, Sparkles } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -11,11 +11,32 @@ import { InputArea } from './InputArea'
  */
 export function ChatView(): React.JSX.Element {
   const { messages, streamingContent, isStreaming, activeSessionId } = useChatStore()
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const prevSessionIdRef = useRef<string | null>(null)
+  const instantScrollRef = useRef(0)
 
-  /** 自动滚动到底部 */
+  // 渲染阶段检测会话切换（在 hooks 之前执行）
+  if (prevSessionIdRef.current !== activeSessionId) {
+    // 给 2 次渲染周期的瞬间滚动，覆盖异步加载消息的延迟
+    instantScrollRef.current = 2
+    prevSessionIdRef.current = activeSessionId
+  }
+
+  /** 切换会话时在绘制前直接定位到底部（无闪烁） */
+  useLayoutEffect(() => {
+    if (instantScrollRef.current > 0) {
+      const el = scrollContainerRef.current
+      if (el) el.scrollTop = el.scrollHeight
+      instantScrollRef.current--
+    }
+  }, [activeSessionId, messages])
+
+  /** 同会话内新消息/流式更新时平滑滚动到底部 */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (instantScrollRef.current <= 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages, streamingContent])
 
   /** 创建新会话 */
@@ -61,7 +82,7 @@ export function ChatView(): React.JSX.Element {
       ) : (
         /* 聊天消息列表 */
         <>
-          <div className="flex-1 overflow-y-auto">
+          <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
             {messages.length === 0 && !isStreaming ? (
               /* 空会话引导 */
               <div className="flex items-center justify-center h-full">
