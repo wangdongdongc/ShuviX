@@ -1,15 +1,14 @@
 import { ipcMain } from 'electron'
-import { v4 as uuidv4 } from 'uuid'
-import { storageService, type Message } from '../services/storage'
+import { messageService } from '../services/messageService'
 
 /**
  * 消息管理 IPC 处理器
- * 负责消息的查询、添加、清空
+ * 负责参数解析，委托给 MessageService
  */
 export function registerMessageHandlers(): void {
   /** 获取会话消息 */
   ipcMain.handle('message:list', (_event, sessionId: string) => {
-    return storageService.getMessages(sessionId)
+    return messageService.listBySession(sessionId)
   })
 
   /** 保存消息 */
@@ -18,19 +17,12 @@ export function registerMessageHandlers(): void {
     role: 'user' | 'assistant'
     content: string
   }) => {
-    const message: Message = {
-      id: uuidv4(),
-      sessionId: params.sessionId,
-      role: params.role,
-      content: params.content,
-      createdAt: Date.now()
-    }
-    return storageService.addMessage(message)
+    return messageService.add(params)
   })
 
   /** 清空会话消息 */
   ipcMain.handle('message:clear', (_event, sessionId: string) => {
-    storageService.clearMessages(sessionId)
+    messageService.clear(sessionId)
     return { success: true }
   })
 }
