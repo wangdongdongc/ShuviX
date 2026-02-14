@@ -11,14 +11,39 @@ import { SettingsPanel } from './components/SettingsPanel'
  */
 function App(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
-  const { provider, model, systemPrompt, apiKeys, baseUrls, loaded } = useSettingsStore()
+  const { activeProvider, activeModel, systemPrompt, providers, theme, loaded } = useSettingsStore()
+
+  /** 主题切换：根据 theme 状态设置 data-theme 属性 */
+  useEffect(() => {
+    const applyTheme = (resolved: 'dark' | 'light'): void => {
+      document.documentElement.setAttribute('data-theme', resolved)
+    }
+
+    if (theme === 'system') {
+      // 跟随系统偏好
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      applyTheme(mq.matches ? 'dark' : 'light')
+      const handler = (e: MediaQueryListEvent): void => applyTheme(e.matches ? 'dark' : 'light')
+      mq.addEventListener('change', handler)
+      return () => mq.removeEventListener('change', handler)
+    } else {
+      applyTheme(theme)
+      return undefined
+    }
+  }, [theme])
 
   /** 应用启动时加载数据 */
   useEffect(() => {
     const init = async (): Promise<void> => {
-      // 加载设置
+      // 加载通用设置
       const settings = await window.api.settings.getAll()
       useSettingsStore.getState().loadSettings(settings)
+
+      // 加载提供商列表和可用模型
+      const allProviders = await window.api.provider.listAll()
+      useSettingsStore.getState().setProviders(allProviders)
+      const availableModels = await window.api.provider.listAvailableModels()
+      useSettingsStore.getState().setAvailableModels(availableModels)
 
       // 加载会话列表
       const sessions = await window.api.session.list()
@@ -36,15 +61,14 @@ function App(): React.JSX.Element {
       const msgs = await window.api.message.list(activeSessionId)
       useChatStore.getState().setMessages(msgs)
 
-      // 初始化 Agent（传入自定义 Base URL）
-      const apiKey = apiKeys[provider]
-      const baseUrl = baseUrls[provider]
+      // 从 providers 表获取当前 Provider 的 apiKey 和 baseUrl
+      const providerInfo = providers.find((p) => p.id === activeProvider)
       await window.api.agent.init({
-        provider,
-        model,
+        provider: activeProvider,
+        model: activeModel,
         systemPrompt,
-        apiKey,
-        baseUrl: baseUrl || undefined,
+        apiKey: providerInfo?.apiKey || undefined,
+        baseUrl: providerInfo?.baseUrl || undefined,
         messages: msgs.map((m) => ({ role: m.role, content: m.content }))
       })
     }

@@ -18,6 +18,27 @@ export interface Message {
   createdAt: number
 }
 
+/** 提供商数据结构 */
+export interface Provider {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl: string
+  isEnabled: number      // 0=禁用, 1=启用
+  sortOrder: number
+  createdAt: number
+  updatedAt: number
+}
+
+/** 提供商模型数据结构 */
+export interface ProviderModel {
+  id: string             // '{providerId}:{modelId}'
+  providerId: string
+  modelId: string
+  isEnabled: number      // 0=禁用, 1=启用
+  sortOrder: number
+}
+
 /** 设置数据结构 */
 export interface Settings {
   key: string

@@ -1,88 +1,88 @@
 import { create } from 'zustand'
 
+/** 提供商信息（来自 DB） */
+export interface ProviderInfo {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl: string
+  isEnabled: number
+  sortOrder: number
+}
+
+/** 模型信息（来自 DB） */
+export interface ProviderModelInfo {
+  id: string
+  providerId: string
+  modelId: string
+  isEnabled: number
+  sortOrder: number
+}
+
+/** 可用模型（含提供商名称，用于对话选择器） */
+export interface AvailableModel extends ProviderModelInfo {
+  providerName: string
+}
+
 interface SettingsState {
-  /** API Keys（按 provider 存储） */
-  apiKeys: Record<string, string>
-  /** 自定义 Base URL（按 provider 存储） */
-  baseUrls: Record<string, string>
-  /** 当前选择的 provider */
-  provider: string
-  /** 当前选择的模型 */
-  model: string
+  /** 所有提供商列表（含禁用的） */
+  providers: ProviderInfo[]
+  /** 所有可用模型（已启用提供商 + 已启用模型） */
+  availableModels: AvailableModel[]
+  /** 当前选择的 provider ID */
+  activeProvider: string
+  /** 当前选择的模型 ID */
+  activeModel: string
   /** 系统提示词 */
   systemPrompt: string
+  /** 主题 */
+  theme: 'dark' | 'light' | 'system'
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
+  /** 设置面板当前 Tab */
+  activeSettingsTab: 'general' | 'providers'
   /** 是否已加载 */
   loaded: boolean
 
   // Actions
-  setApiKey: (provider: string, key: string) => void
-  setBaseUrl: (provider: string, url: string) => void
-  setProvider: (provider: string) => void
-  setModel: (model: string) => void
+  setProviders: (providers: ProviderInfo[]) => void
+  setAvailableModels: (models: AvailableModel[]) => void
+  setActiveProvider: (provider: string) => void
+  setActiveModel: (model: string) => void
   setSystemPrompt: (prompt: string) => void
+  setTheme: (theme: 'dark' | 'light' | 'system') => void
   setIsSettingsOpen: (open: boolean) => void
+  setActiveSettingsTab: (tab: 'general' | 'providers') => void
   loadSettings: (settings: Record<string, string>) => void
 }
 
-/** 可用的 Provider 和模型列表 */
-export const PROVIDERS = [
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    defaultBaseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3-mini', 'o4-mini']
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    defaultBaseUrl: 'https://api.anthropic.com',
-    models: ['claude-sonnet-4-20250514', 'claude-haiku-3-5-20241022', 'claude-opus-4-20250514']
-  },
-  {
-    id: 'google',
-    name: 'Google',
-    defaultBaseUrl: 'https://generativelanguage.googleapis.com',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']
-  }
-]
-
 export const useSettingsStore = create<SettingsState>((set) => ({
-  apiKeys: {},
-  baseUrls: {},
-  provider: 'openai',
-  model: 'gpt-4o-mini',
+  providers: [],
+  availableModels: [],
+  activeProvider: 'openai',
+  activeModel: 'gpt-4o-mini',
   systemPrompt: 'You are a helpful assistant.',
+  theme: 'dark',
   isSettingsOpen: false,
+  activeSettingsTab: 'general',
   loaded: false,
 
-  setApiKey: (provider, key) =>
-    set((state) => ({ apiKeys: { ...state.apiKeys, [provider]: key } })),
-  setBaseUrl: (provider, url) =>
-    set((state) => ({ baseUrls: { ...state.baseUrls, [provider]: url } })),
-  setProvider: (provider) => set({ provider }),
-  setModel: (model) => set({ model }),
+  setProviders: (providers) => set({ providers }),
+  setAvailableModels: (models) => set({ availableModels: models }),
+  setActiveProvider: (provider) => set({ activeProvider: provider }),
+  setActiveModel: (model) => set({ activeModel: model }),
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
+  setTheme: (theme) => set({ theme }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
+  setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
 
-  /** 从持久化存储加载设置 */
+  /** 从 settings 表加载通用设置 */
   loadSettings: (settings) => {
-    const apiKeys: Record<string, string> = {}
-    const baseUrls: Record<string, string> = {}
-    for (const [key, value] of Object.entries(settings)) {
-      if (key.startsWith('apiKey:')) {
-        apiKeys[key.replace('apiKey:', '')] = value
-      } else if (key.startsWith('baseUrl:')) {
-        baseUrls[key.replace('baseUrl:', '')] = value
-      }
-    }
     set({
-      apiKeys,
-      baseUrls,
-      provider: settings['provider'] || 'openai',
-      model: settings['model'] || 'gpt-4o-mini',
-      systemPrompt: settings['systemPrompt'] || 'You are a helpful assistant.',
+      activeProvider: settings['general.defaultProvider'] || 'openai',
+      activeModel: settings['general.defaultModel'] || 'gpt-4o-mini',
+      systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
+      theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       loaded: true
     })
   }

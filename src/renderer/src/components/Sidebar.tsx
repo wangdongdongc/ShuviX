@@ -16,8 +16,8 @@ export function Sidebar(): React.JSX.Element {
   const handleNewChat = async (): Promise<void> => {
     const settings = useSettingsStore.getState()
     const session = await window.api.session.create({
-      provider: settings.provider,
-      model: settings.model,
+      provider: settings.activeProvider,
+      model: settings.activeModel,
       systemPrompt: settings.systemPrompt
     })
     // 刷新会话列表

@@ -27,6 +27,32 @@ interface ChatMessage {
   createdAt: number
 }
 
+/** 提供商类型 */
+interface ProviderInfo {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl: string
+  isEnabled: number
+  sortOrder: number
+  createdAt: number
+  updatedAt: number
+}
+
+/** 提供商模型类型 */
+interface ProviderModelInfo {
+  id: string
+  providerId: string
+  modelId: string
+  isEnabled: number
+  sortOrder: number
+}
+
+/** 可用模型（含提供商名称） */
+interface AvailableModel extends ProviderModelInfo {
+  providerName: string
+}
+
 /** 暴露给 Renderer 的 API 类型 */
 interface ShiroBotAPI {
   agent: {
@@ -42,6 +68,16 @@ interface ShiroBotAPI {
     abort: () => Promise<{ success: boolean }>
     setModel: (params: { provider: string; model: string; baseUrl?: string }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
+  }
+  provider: {
+    listAll: () => Promise<ProviderInfo[]>
+    listEnabled: () => Promise<ProviderInfo[]>
+    getById: (id: string) => Promise<ProviderInfo | undefined>
+    updateConfig: (params: { id: string; apiKey?: string; baseUrl?: string }) => Promise<{ success: boolean }>
+    toggleEnabled: (params: { id: string; isEnabled: boolean }) => Promise<{ success: boolean }>
+    listModels: (providerId: string) => Promise<ProviderModelInfo[]>
+    listAvailableModels: () => Promise<AvailableModel[]>
+    toggleModelEnabled: (params: { id: string; isEnabled: boolean }) => Promise<{ success: boolean }>
   }
   session: {
     list: () => Promise<Session[]>

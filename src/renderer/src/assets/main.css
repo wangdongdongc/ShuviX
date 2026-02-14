@@ -1,23 +1,52 @@
 @import "tailwindcss";
 
-/* 自定义暗色主题变量 */
+/* Tailwind 自定义颜色 token（默认值，会被 CSS 变量覆盖） */
 @theme {
-  --color-bg-primary: #0a0a0f;
-  --color-bg-secondary: #12121a;
-  --color-bg-tertiary: #1a1a25;
-  --color-bg-hover: #22222f;
-  --color-bg-active: #2a2a3a;
-  --color-border-primary: #2a2a3a;
-  --color-border-secondary: #1e1e2a;
-  --color-text-primary: #e8e8f0;
-  --color-text-secondary: #9898b0;
-  --color-text-tertiary: #686880;
+  --color-bg-primary: var(--theme-bg-primary);
+  --color-bg-secondary: var(--theme-bg-secondary);
+  --color-bg-tertiary: var(--theme-bg-tertiary);
+  --color-bg-hover: var(--theme-bg-hover);
+  --color-bg-active: var(--theme-bg-active);
+  --color-border-primary: var(--theme-border-primary);
+  --color-border-secondary: var(--theme-border-secondary);
+  --color-text-primary: var(--theme-text-primary);
+  --color-text-secondary: var(--theme-text-secondary);
+  --color-text-tertiary: var(--theme-text-tertiary);
   --color-accent: #6366f1;
   --color-accent-hover: #818cf8;
   --color-accent-muted: rgba(99, 102, 241, 0.15);
   --color-success: #22c55e;
   --color-error: #ef4444;
   --color-warning: #f59e0b;
+}
+
+/* 暗色主题（默认） */
+:root,
+[data-theme='dark'] {
+  --theme-bg-primary: #0a0a0f;
+  --theme-bg-secondary: #12121a;
+  --theme-bg-tertiary: #1a1a25;
+  --theme-bg-hover: #22222f;
+  --theme-bg-active: #2a2a3a;
+  --theme-border-primary: #2a2a3a;
+  --theme-border-secondary: #1e1e2a;
+  --theme-text-primary: #e8e8f0;
+  --theme-text-secondary: #9898b0;
+  --theme-text-tertiary: #686880;
+}
+
+/* 浅色主题 */
+[data-theme='light'] {
+  --theme-bg-primary: #ffffff;
+  --theme-bg-secondary: #f5f5f7;
+  --theme-bg-tertiary: #eaeaef;
+  --theme-bg-hover: #e0e0e8;
+  --theme-bg-active: #d5d5e0;
+  --theme-border-primary: #d0d0da;
+  --theme-border-secondary: #e0e0e8;
+  --theme-text-primary: #1a1a2e;
+  --theme-text-secondary: #5a5a72;
+  --theme-text-tertiary: #8a8aa0;
 }
 
 /* 全局基础样式 */

@@ -32,6 +32,21 @@ const api = {
     }
   },
 
+  // ============ 提供商管理 ============
+  provider: {
+    listAll: () => ipcRenderer.invoke('provider:listAll'),
+    listEnabled: () => ipcRenderer.invoke('provider:listEnabled'),
+    getById: (id: string) => ipcRenderer.invoke('provider:getById', id),
+    updateConfig: (params: { id: string; apiKey?: string; baseUrl?: string }) =>
+      ipcRenderer.invoke('provider:updateConfig', params),
+    toggleEnabled: (params: { id: string; isEnabled: boolean }) =>
+      ipcRenderer.invoke('provider:toggleEnabled', params),
+    listModels: (providerId: string) => ipcRenderer.invoke('provider:listModels', providerId),
+    listAvailableModels: () => ipcRenderer.invoke('provider:listAvailableModels'),
+    toggleModelEnabled: (params: { id: string; isEnabled: boolean }) =>
+      ipcRenderer.invoke('provider:toggleModelEnabled', params)
+  },
+
   // ============ 会话管理 ============
   session: {
     list: () => ipcRenderer.invoke('session:list'),

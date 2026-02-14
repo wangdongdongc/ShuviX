@@ -1,89 +1,18 @@
 import { useState, useEffect } from 'react'
-import { X, Eye, EyeOff, Save } from 'lucide-react'
-import { useSettingsStore, PROVIDERS } from '../stores/settingsStore'
+import { X, Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight } from 'lucide-react'
+import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
 
 /**
- * 设置面板 — 右侧滑出面板
- * 管理 API Key、Provider/Model 选择、系统提示词
+ * 设置面板 — 右侧滑出面板（分组 Tab）
+ * 通用设置 + 提供商管理
  */
 export function SettingsPanel(): React.JSX.Element {
   const {
     isSettingsOpen,
     setIsSettingsOpen,
-    apiKeys,
-    baseUrls,
-    provider,
-    model,
-    systemPrompt,
-    setApiKey,
-    setBaseUrl,
-    setProvider,
-    setModel,
-    setSystemPrompt
+    activeSettingsTab,
+    setActiveSettingsTab
   } = useSettingsStore()
-
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
-  const [localApiKeys, setLocalApiKeys] = useState<Record<string, string>>({})
-  const [localBaseUrls, setLocalBaseUrls] = useState<Record<string, string>>({})
-  const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
-  const [saved, setSaved] = useState(false)
-
-  /** 同步本地状态 */
-  useEffect(() => {
-    setLocalApiKeys({ ...apiKeys })
-    setLocalBaseUrls({ ...baseUrls })
-    setLocalSystemPrompt(systemPrompt)
-  }, [apiKeys, baseUrls, systemPrompt, isSettingsOpen])
-
-  /** 获取当前 Provider 的模型列表 */
-  const currentProvider = PROVIDERS.find((p) => p.id === provider)
-  const models = currentProvider?.models ?? []
-
-  /** 切换密钥可见性 */
-  const toggleKeyVisibility = (providerId: string): void => {
-    setShowKeys((prev) => ({ ...prev, [providerId]: !prev[providerId] }))
-  }
-
-  /** 保存所有设置 */
-  const handleSave = async (): Promise<void> => {
-    // 保存 API Keys
-    for (const [pid, key] of Object.entries(localApiKeys)) {
-      if (key !== apiKeys[pid]) {
-        setApiKey(pid, key)
-        await window.api.settings.set({ key: `apiKey:${pid}`, value: key })
-      }
-    }
-
-    // 保存 Base URLs
-    for (const [pid, url] of Object.entries(localBaseUrls)) {
-      if (url !== baseUrls[pid]) {
-        setBaseUrl(pid, url)
-        await window.api.settings.set({ key: `baseUrl:${pid}`, value: url })
-      }
-    }
-
-    // 保存 Provider 和 Model
-    await window.api.settings.set({ key: 'provider', value: provider })
-    await window.api.settings.set({ key: 'model', value: model })
-
-    // 保存 System Prompt
-    if (localSystemPrompt !== systemPrompt) {
-      setSystemPrompt(localSystemPrompt)
-      await window.api.settings.set({ key: 'systemPrompt', value: localSystemPrompt })
-    }
-
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
-
-  /** 切换 Provider 时自动选择第一个模型 */
-  const handleProviderChange = (newProvider: string): void => {
-    setProvider(newProvider)
-    const providerConfig = PROVIDERS.find((p) => p.id === newProvider)
-    if (providerConfig && providerConfig.models.length > 0) {
-      setModel(providerConfig.models[0])
-    }
-  }
 
   if (!isSettingsOpen) return <></>
 
@@ -96,7 +25,7 @@ export function SettingsPanel(): React.JSX.Element {
       />
 
       {/* 设置面板 */}
-      <div className="fixed right-0 top-0 bottom-0 w-[420px] bg-bg-secondary border-l border-border-secondary z-50 flex flex-col shadow-2xl">
+      <div className="fixed right-0 top-0 bottom-0 w-[520px] bg-bg-secondary border-l border-border-secondary z-50 flex flex-col shadow-2xl">
         {/* 头部 */}
         <div className="flex items-center justify-between px-6 pt-10 pb-4 border-b border-border-secondary">
           <h2 className="text-base font-semibold text-text-primary">设置</h2>
@@ -108,73 +37,298 @@ export function SettingsPanel(): React.JSX.Element {
           </button>
         </div>
 
-        {/* 内容 */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-          {/* Provider 选择 */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-2">
-              AI 服务商
-            </label>
-            <div className="flex gap-2">
-              {PROVIDERS.map((p) => (
+        {/* Tab + 内容 */}
+        <div className="flex flex-1 min-h-0">
+          {/* 左侧导航 */}
+          <div className="w-[130px] flex-shrink-0 border-r border-border-secondary py-3 px-2 space-y-1">
+            <TabButton
+              icon={<Settings size={14} />}
+              label="通用"
+              active={activeSettingsTab === 'general'}
+              onClick={() => setActiveSettingsTab('general')}
+            />
+            <TabButton
+              icon={<Layers size={14} />}
+              label="提供商"
+              active={activeSettingsTab === 'providers'}
+              onClick={() => setActiveSettingsTab('providers')}
+            />
+          </div>
+
+          {/* 右侧内容区 */}
+          <div className="flex-1 min-w-0 overflow-y-auto">
+            {activeSettingsTab === 'general' && <GeneralSettings />}
+            {activeSettingsTab === 'providers' && <ProviderSettings />}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** Tab 按钮 */
+function TabButton({ icon, label, active, onClick }: {
+  icon: React.ReactNode
+  label: string
+  active: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+        active
+          ? 'bg-accent/10 text-accent'
+          : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
+
+/** 通用设置 */
+function GeneralSettings(): React.JSX.Element {
+  const { systemPrompt, theme, setSystemPrompt, setTheme, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
+  const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    setLocalSystemPrompt(systemPrompt)
+  }, [systemPrompt])
+
+  // 从可用模型中提取已启用的 provider 列表（去重）
+  const enabledProviderIds = [...new Set(availableModels.map((m) => m.providerId))]
+
+  const handleSave = async (): Promise<void> => {
+    if (localSystemPrompt !== systemPrompt) {
+      setSystemPrompt(localSystemPrompt)
+      await window.api.settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
+    }
+    await window.api.settings.set({ key: 'general.theme', value: theme })
+    await window.api.settings.set({ key: 'general.defaultProvider', value: activeProvider })
+    await window.api.settings.set({ key: 'general.defaultModel', value: activeModel })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  /** 切换默认 Provider 时自动选第一个可用模型 */
+  const handleProviderChange = (newProvider: string): void => {
+    setActiveProvider(newProvider)
+    const firstModel = availableModels.find((m) => m.providerId === newProvider)
+    if (firstModel) {
+      setActiveModel(firstModel.modelId)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 px-5 py-5 space-y-6">
+        {/* 主题 */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">主题</label>
+          <div className="flex gap-2">
+            {(['dark', 'light', 'system'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTheme(t)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  theme === t
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+              >
+                {t === 'dark' ? '深色' : t === 'light' ? '浅色' : '跟随系统'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 默认 Provider */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">默认提供商</label>
+          <select
+            value={activeProvider}
+            onChange={(e) => handleProviderChange(e.target.value)}
+            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          >
+            {enabledProviderIds.map((pid) => {
+              const m = availableModels.find((am) => am.providerId === pid)
+              return (
+                <option key={pid} value={pid}>{m?.providerName || pid}</option>
+              )
+            })}
+          </select>
+        </div>
+
+        {/* 默认模型 */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">默认模型</label>
+          <select
+            value={activeModel}
+            onChange={(e) => setActiveModel(e.target.value)}
+            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          >
+            {availableModels
+              .filter((m) => m.providerId === activeProvider)
+              .map((m) => (
+                <option key={m.id} value={m.modelId}>{m.modelId}</option>
+              ))}
+          </select>
+        </div>
+
+        {/* 系统提示词 */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">系统提示词</label>
+          <textarea
+            value={localSystemPrompt}
+            onChange={(e) => setLocalSystemPrompt(e.target.value)}
+            rows={4}
+            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
+            placeholder="设定 AI 助手的角色和行为..."
+          />
+        </div>
+      </div>
+
+      {/* 保存 */}
+      <div className="px-5 py-4 border-t border-border-secondary">
+        <button
+          onClick={handleSave}
+          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            saved ? 'bg-success/20 text-success' : 'bg-accent text-white hover:bg-accent-hover'
+          }`}
+        >
+          <Save size={16} />
+          {saved ? '已保存' : '保存设置'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** 提供商设置 */
+function ProviderSettings(): React.JSX.Element {
+  const { providers, setProviders, setAvailableModels } = useSettingsStore()
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
+  const [localEdits, setLocalEdits] = useState<Record<string, { apiKey?: string; baseUrl?: string }>>({})
+  const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
+  const [saved, setSaved] = useState(false)
+
+  /** 展开提供商时加载其模型列表 */
+  const handleToggleExpand = async (providerId: string): Promise<void> => {
+    if (expandedProvider === providerId) {
+      setExpandedProvider(null)
+      return
+    }
+    setExpandedProvider(providerId)
+    if (!providerModels[providerId]) {
+      const models = await window.api.provider.listModels(providerId)
+      setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    }
+  }
+
+  /** 切换提供商启用/禁用 */
+  const handleToggleProvider = async (providerId: string, isEnabled: boolean): Promise<void> => {
+    await window.api.provider.toggleEnabled({ id: providerId, isEnabled })
+    // 刷新列表
+    const updated = await window.api.provider.listAll()
+    setProviders(updated)
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
+  }
+
+  /** 切换模型启用/禁用 */
+  const handleToggleModel = async (modelId: string, providerId: string, isEnabled: boolean): Promise<void> => {
+    await window.api.provider.toggleModelEnabled({ id: modelId, isEnabled })
+    // 刷新该提供商的模型列表
+    const models = await window.api.provider.listModels(providerId)
+    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
+  }
+
+  /** 更新本地编辑状态 */
+  const updateLocalEdit = (providerId: string, field: 'apiKey' | 'baseUrl', value: string): void => {
+    setLocalEdits((prev) => ({
+      ...prev,
+      [providerId]: { ...prev[providerId], [field]: value }
+    }))
+  }
+
+  /** 保存提供商配置 */
+  const handleSave = async (): Promise<void> => {
+    for (const [pid, edits] of Object.entries(localEdits)) {
+      const provider = providers.find((p) => p.id === pid)
+      if (!provider) continue
+      const updates: { apiKey?: string; baseUrl?: string } = {}
+      if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
+        updates.apiKey = edits.apiKey
+      }
+      if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
+        updates.baseUrl = edits.baseUrl
+      }
+      if (Object.keys(updates).length > 0) {
+        await window.api.provider.updateConfig({ id: pid, ...updates })
+      }
+    }
+    // 刷新
+    const updated = await window.api.provider.listAll()
+    setProviders(updated)
+    setLocalEdits({})
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 px-5 py-5 space-y-2">
+        {providers.map((p) => {
+          const isExpanded = expandedProvider === p.id
+          const edits = localEdits[p.id] || {}
+          const models = providerModels[p.id] || []
+
+          return (
+            <div key={p.id} className="border border-border-secondary rounded-lg overflow-hidden">
+              {/* 提供商头部 */}
+              <div className="flex items-center gap-3 px-3 py-2.5 bg-bg-primary/30">
                 <button
-                  key={p.id}
-                  onClick={() => handleProviderChange(p.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    provider === p.id
-                      ? 'bg-accent text-white'
-                      : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                  onClick={() => handleToggleExpand(p.id)}
+                  className="text-text-tertiary hover:text-text-primary transition-colors"
+                >
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
+                <span className="flex-1 text-xs font-medium text-text-primary">{p.name}</span>
+                {/* 启用/禁用开关 */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleToggleProvider(p.id, !p.isEnabled) }}
+                  className={`w-8 h-4.5 rounded-full relative transition-colors ${
+                    p.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
                   }`}
                 >
-                  {p.name}
+                  <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                    p.isEnabled ? 'left-[18px]' : 'left-0.5'
+                  }`} />
                 </button>
-              ))}
-            </div>
-          </div>
+              </div>
 
-          {/* 模型选择 */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-2">
-              模型
-            </label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
-            >
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 服务商配置（API Key + Base URL） */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-3">
-              服务商配置
-            </label>
-            <div className="space-y-4">
-              {PROVIDERS.map((p) => (
-                <div key={p.id} className="p-3 bg-bg-primary/50 rounded-lg border border-border-secondary space-y-2">
-                  <div className="text-xs font-medium text-text-primary">{p.name}</div>
-
+              {/* 展开内容 */}
+              {isExpanded && (
+                <div className="px-4 py-3 space-y-3 border-t border-border-secondary">
                   {/* API Key */}
                   <div>
                     <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
                     <div className="flex items-center bg-bg-tertiary border border-border-primary rounded-lg overflow-hidden focus-within:border-accent/50 transition-colors">
                       <input
                         type={showKeys[p.id] ? 'text' : 'password'}
-                        value={localApiKeys[p.id] || ''}
-                        onChange={(e) =>
-                          setLocalApiKeys((prev) => ({ ...prev, [p.id]: e.target.value }))
-                        }
+                        value={edits.apiKey ?? p.apiKey}
+                        onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
                         placeholder={`输入 ${p.name} API Key`}
                         className="flex-1 bg-transparent px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none"
                       />
                       <button
-                        onClick={() => toggleKeyVisibility(p.id)}
+                        onClick={() => setShowKeys((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
                         className="px-2 text-text-tertiary hover:text-text-secondary"
                       >
                         {showKeys[p.id] ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -187,52 +341,53 @@ export function SettingsPanel(): React.JSX.Element {
                     <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
                     <input
                       type="text"
-                      value={localBaseUrls[p.id] || ''}
-                      onChange={(e) =>
-                        setLocalBaseUrls((prev) => ({ ...prev, [p.id]: e.target.value }))
-                      }
-                      placeholder={p.defaultBaseUrl}
+                      value={edits.baseUrl ?? p.baseUrl}
+                      onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
+                      placeholder="留空使用默认地址"
                       className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
                     />
-                    <p className="text-[10px] text-text-tertiary mt-1">
-                      留空使用默认地址，支持自定义代理或兼容 API
-                    </p>
+                  </div>
+
+                  {/* 模型列表 */}
+                  <div>
+                    <label className="block text-[11px] text-text-tertiary mb-2">模型管理</label>
+                    <div className="space-y-1">
+                      {models.map((m) => (
+                        <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors">
+                          <span className="text-xs text-text-primary">{m.modelId}</span>
+                          <button
+                            onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
+                            className={`w-7 h-4 rounded-full relative transition-colors ${
+                              m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+                            }`}
+                          >
+                            <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                              m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                            }`} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-
-          {/* 系统提示词 */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-2">
-              系统提示词
-            </label>
-            <textarea
-              value={localSystemPrompt}
-              onChange={(e) => setLocalSystemPrompt(e.target.value)}
-              rows={4}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
-              placeholder="设定 AI 助手的角色和行为..."
-            />
-          </div>
-        </div>
-
-        {/* 底部保存按钮 */}
-        <div className="px-6 py-4 border-t border-border-secondary">
-          <button
-            onClick={handleSave}
-            className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-              saved
-                ? 'bg-success/20 text-success'
-                : 'bg-accent text-white hover:bg-accent-hover'
-            }`}
-          >
-            <Save size={16} />
-            {saved ? '已保存' : '保存设置'}
-          </button>
-        </div>
+          )
+        })}
       </div>
-    </>
+
+      {/* 保存 */}
+      <div className="px-5 py-4 border-t border-border-secondary">
+        <button
+          onClick={handleSave}
+          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            saved ? 'bg-success/20 text-success' : 'bg-accent text-white hover:bg-accent-hover'
+          }`}
+        >
+          <Save size={16} />
+          {saved ? '已保存' : '保存配置'}
+        </button>
+      </div>
+    </div>
   )
 }
