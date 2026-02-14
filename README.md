@@ -20,25 +20,33 @@
 ```
 src/
 ├── main/                          # Electron 主进程
-│   ├── index.ts                   # 应用入口，窗口创建，生命周期管理
-│   ├── types/
-│   │   └── index.ts               # 共享数据类型（Session, Message, Settings）
+│   ├── index.ts                   # 应用入口，主窗口 + 独立设置窗口管理
+│   ├── types/                     # 共享数据类型（按模块拆分）
+│   │   ├── index.ts               # 统一出口（re-export）
+│   │   ├── session.ts             # Session + IPC 参数类型
+│   │   ├── message.ts             # Message + IPC 参数类型
+│   │   ├── provider.ts            # Provider / ProviderModel + IPC 参数类型
+│   │   ├── settings.ts            # Settings + IPC 参数类型
+│   │   └── agent.ts               # AgentInitParams / AgentSetModelParams
 │   ├── dao/                       # 数据访问层（纯 SQL 操作）
 │   │   ├── database.ts            # SQLite 连接管理 + 表结构初始化
 │   │   ├── sessionDao.ts          # Session 表 CRUD
 │   │   ├── messageDao.ts          # Message 表 CRUD
-│   │   └── settingsDao.ts         # Settings 表 CRUD
+│   │   ├── settingsDao.ts         # Settings 表 CRUD
+│   │   └── providerDao.ts         # Provider / ProviderModel 表 CRUD
 │   ├── services/                  # 业务逻辑层（编排 DAO，处理业务规则）
 │   │   ├── agent.ts               # Agent 服务，封装 pi-agent-core 事件流
-│   │   ├── sessionService.ts      # 会话业务（创建、删除时级联清理消息）
+│   │   ├── sessionService.ts      # 会话业务（创建、删除时级联清理消息、模型切换）
 │   │   ├── messageService.ts      # 消息业务（添加后自动更新会话时间戳）
-│   │   └── settingsService.ts     # 设置业务（读写 API Key、Base URL 等）
+│   │   ├── settingsService.ts     # 设置业务（读写通用配置）
+│   │   └── providerService.ts     # 提供商业务（配置、启停、模型同步）
 │   └── ipc/                       # IPC 通信层（Controller，参数解析 + 委托）
 │       ├── handlers.ts            # 统一注册入口
 │       ├── agentHandlers.ts       # agent:* 通道
 │       ├── sessionHandlers.ts     # session:* 通道
 │       ├── messageHandlers.ts     # message:* 通道
-│       └── settingsHandlers.ts    # settings:* 通道
+│       ├── settingsHandlers.ts    # settings:* 通道
+│       └── providerHandlers.ts    # provider:* 通道
 │
 ├── preload/                       # 预加载脚本（安全桥接）
 │   ├── index.ts                   # contextBridge 暴露 window.api
@@ -48,7 +56,7 @@ src/
     ├── index.html                 # HTML 入口
     └── src/
         ├── main.tsx               # React 入口
-        ├── App.tsx                # 根组件，布局 + Agent 事件监听
+        ├── App.tsx                # 根组件，URL hash 路由（主窗口/设置窗口）+ Agent 事件监听
         ├── assets/
         │   └── main.css           # Tailwind v4 + 暗色主题变量
         ├── stores/                # Zustand 状态管理
@@ -58,8 +66,8 @@ src/
             ├── Sidebar.tsx        # 侧边栏（会话列表、新建/删除/重命名）
             ├── ChatView.tsx       # 聊天主视图（消息列表 + 空状态引导）
             ├── MessageBubble.tsx  # 消息气泡（Markdown 渲染 + 代码高亮）
-            ├── InputArea.tsx      # 输入区（发送/停止，Shift+Enter 换行）
-            └── SettingsPanel.tsx  # 设置面板（API Key、Base URL、模型选择）
+            ├── InputArea.tsx      # 输入区（发送/停止，Shift+Enter 换行，提供商/模型选择器）
+            └── SettingsPanel.tsx  # 独立设置窗口（通用设置 + 提供商管理）
 ```
 
 ## 架构分层
@@ -90,7 +98,7 @@ Service Layer                   ← 业务逻辑，编排多个 DAO
 - **IPC (Controller)** — 只做 `ipcMain.handle` 注册、参数解构、调用 Service、返回结果。不含业务逻辑。
 - **Service** — 编排跨 DAO 操作（如删除会话时级联删消息），处理 ID 生成、时间戳更新等业务规则。
 - **DAO** — 一个方法对应一条 SQL，不含任何业务逻辑，不调用其他 DAO。
-- **Types** — 所有层共享的数据结构定义，集中管理。
+- **Types** — 所有层共享的数据结构与 IPC 参数类型，按模块拆分（session / message / provider / settings / agent）。
 
 ## 数据存储
 
@@ -100,7 +108,9 @@ SQLite 数据库位于：
 ~/Library/Application Support/shirobot/data/shirobot.db
 ```
 
-包含三张表：`sessions`、`messages`、`settings`。使用 WAL 模式提升并发性能。
+包含五张表：`sessions`、`messages`、`settings`、`providers`、`provider_models`。使用 WAL 模式提升并发性能。
+
+每个会话（session）独立维护 `provider` 和 `model` 字段，支持不同会话使用不同模型。
 
 ## 开发
 

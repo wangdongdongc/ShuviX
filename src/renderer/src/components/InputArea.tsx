@@ -136,8 +136,6 @@ export function InputArea(): React.JSX.Element {
     setPickerStep('provider')
   }
 
-  const activeProviderName = enabledProviders.find((p) => p.id === activeProvider)?.name || activeProvider
-
   return (
     <div className="border-t border-border-secondary bg-bg-primary px-4 py-3">
       <div className="max-w-3xl mx-auto">
