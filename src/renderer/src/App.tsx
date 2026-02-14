@@ -11,7 +11,12 @@ import { SettingsPanel } from './components/SettingsPanel'
  */
 function App(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
-  const { activeProvider, activeModel, systemPrompt, providers, theme, loaded } = useSettingsStore()
+  const { activeProvider, activeModel, systemPrompt, providers, theme, fontSize, loaded } = useSettingsStore()
+
+  /** 字体大小：设置 CSS 变量供全局使用 */
+  useEffect(() => {
+    document.documentElement.style.setProperty('--app-font-size', `${fontSize}px`)
+  }, [fontSize])
 
   /** 主题切换：根据 theme 状态设置 data-theme 属性 */
   useEffect(() => {

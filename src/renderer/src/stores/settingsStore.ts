@@ -37,6 +37,8 @@ interface SettingsState {
   systemPrompt: string
   /** 主题 */
   theme: 'dark' | 'light' | 'system'
+  /** 字体大小 (px) */
+  fontSize: number
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -51,6 +53,7 @@ interface SettingsState {
   setActiveModel: (model: string) => void
   setSystemPrompt: (prompt: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
+  setFontSize: (size: number) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (tab: 'general' | 'providers') => void
   loadSettings: (settings: Record<string, string>) => void
@@ -63,6 +66,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   activeModel: 'gpt-4o-mini',
   systemPrompt: 'You are a helpful assistant.',
   theme: 'dark',
+  fontSize: 14,
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -73,6 +77,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setActiveModel: (model) => set({ activeModel: model }),
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
   setTheme: (theme) => set({ theme }),
+  setFontSize: (size) => set({ fontSize: size }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
 
@@ -83,6 +88,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       activeModel: settings['general.defaultModel'] || 'gpt-4o-mini',
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
+      fontSize: Number(settings['general.fontSize']) || 14,
       loaded: true
     })
   }

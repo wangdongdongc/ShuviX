@@ -90,7 +90,7 @@ function TabButton({ icon, label, active, onClick }: {
 
 /** 通用设置 */
 function GeneralSettings(): React.JSX.Element {
-  const { systemPrompt, theme, setSystemPrompt, setTheme, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
+  const { systemPrompt, theme, fontSize, setSystemPrompt, setTheme, setFontSize, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
   const [saved, setSaved] = useState(false)
 
@@ -107,6 +107,7 @@ function GeneralSettings(): React.JSX.Element {
       await window.api.settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
     }
     await window.api.settings.set({ key: 'general.theme', value: theme })
+    await window.api.settings.set({ key: 'general.fontSize', value: String(fontSize) })
     await window.api.settings.set({ key: 'general.defaultProvider', value: activeProvider })
     await window.api.settings.set({ key: 'general.defaultModel', value: activeModel })
     setSaved(true)
@@ -142,6 +143,26 @@ function GeneralSettings(): React.JSX.Element {
                 {t === 'dark' ? '深色' : t === 'light' ? '浅色' : '跟随系统'}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* 字体大小 */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">
+            字体大小 <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
+          </label>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-text-tertiary">12</span>
+            <input
+              type="range"
+              min={12}
+              max={20}
+              step={1}
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+              className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
+            />
+            <span className="text-[10px] text-text-tertiary">20</span>
           </div>
         </div>
 
