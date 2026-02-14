@@ -78,6 +78,7 @@ interface ShiroBotAPI {
     listModels: (providerId: string) => Promise<ProviderModelInfo[]>
     listAvailableModels: () => Promise<AvailableModel[]>
     toggleModelEnabled: (params: { id: string; isEnabled: boolean }) => Promise<{ success: boolean }>
+    syncModels: (params: { providerId: string }) => Promise<{ providerId: string; total: number; added: number }>
   }
   session: {
     list: () => Promise<Session[]>

@@ -235,6 +235,9 @@ function ProviderSettings(): React.JSX.Element {
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [localEdits, setLocalEdits] = useState<Record<string, { apiKey?: string; baseUrl?: string }>>({})
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
+  const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
+  const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
   const [saved, setSaved] = useState(false)
 
   /** 展开提供商时加载其模型列表 */
@@ -302,6 +305,33 @@ function ProviderSettings(): React.JSX.Element {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  /**
+   * 从提供商拉取并同步模型列表
+   * 当前先支持 OpenAI
+   */
+  const handleSyncModels = async (providerId: string): Promise<void> => {
+    setSyncingProviderId(providerId)
+    setSyncMessages((prev) => ({ ...prev, [providerId]: '' }))
+    try {
+      const result = await window.api.provider.syncModels({ providerId })
+      const models = await window.api.provider.listModels(providerId)
+      setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+      const available = await window.api.provider.listAvailableModels()
+      setAvailableModels(available)
+      setSyncMessages((prev) => ({
+        ...prev,
+        [providerId]: `同步成功：共 ${result.total} 个模型，新增 ${result.added} 个`
+      }))
+    } catch (err: any) {
+      setSyncMessages((prev) => ({
+        ...prev,
+        [providerId]: err?.message || '同步失败，请检查 API Key 与网络设置'
+      }))
+    } finally {
+      setSyncingProviderId(null)
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 px-5 py-5 space-y-2">
@@ -309,6 +339,10 @@ function ProviderSettings(): React.JSX.Element {
           const isExpanded = expandedProvider === p.id
           const edits = localEdits[p.id] || {}
           const models = providerModels[p.id] || []
+          const query = (modelSearch[p.id] || '').trim().toLowerCase()
+          const filteredModels = query
+            ? models.filter((m) => m.modelId.toLowerCase().includes(query))
+            : models
 
           return (
             <div key={p.id} className="border border-border-secondary rounded-lg overflow-hidden">
@@ -371,9 +405,32 @@ function ProviderSettings(): React.JSX.Element {
 
                   {/* 模型列表 */}
                   <div>
-                    <label className="block text-[11px] text-text-tertiary mb-2">模型管理</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-[11px] text-text-tertiary">模型管理</label>
+                      <button
+                        onClick={() => handleSyncModels(p.id)}
+                        disabled={syncingProviderId === p.id}
+                        className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {syncingProviderId === p.id ? '同步中...' : '同步模型'}
+                      </button>
+                    </div>
+                    {syncMessages[p.id] && (
+                      <div className="text-[10px] text-text-tertiary mb-2">{syncMessages[p.id]}</div>
+                    )}
+
+                    <input
+                      type="text"
+                      value={modelSearch[p.id] || ''}
+                      onChange={(e) =>
+                        setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
+                      }
+                      placeholder="搜索模型（如 gpt-4o / o3）"
+                      className="w-full mb-2 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
+                    />
+
                     <div className="space-y-1">
-                      {models.map((m) => (
+                      {filteredModels.map((m) => (
                         <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors">
                           <span className="text-xs text-text-primary">{m.modelId}</span>
                           <button
@@ -388,6 +445,11 @@ function ProviderSettings(): React.JSX.Element {
                           </button>
                         </div>
                       ))}
+                      {filteredModels.length === 0 && (
+                        <div className="px-2 py-2 text-[11px] text-text-tertiary">
+                          未找到匹配模型
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

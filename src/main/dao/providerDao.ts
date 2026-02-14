@@ -69,6 +69,29 @@ export class ProviderDao {
       .all(providerId) as ProviderModel[]
   }
 
+  /**
+   * 批量同步模型列表（存在则更新排序，不存在则新增并默认禁用）
+   * 注意：不会删除已有模型，避免误删用户手动配置
+   */
+  upsertModels(providerId: string, modelIds: string[]): void {
+    const insertStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 0, ?)'
+    )
+    const updateSortStmt = this.db.prepare(
+      'UPDATE provider_models SET sortOrder = ? WHERE id = ?'
+    )
+
+    const syncTx = this.db.transaction(() => {
+      modelIds.forEach((modelId, idx) => {
+        const id = `${providerId}:${modelId}`
+        insertStmt.run(id, providerId, modelId, idx)
+        updateSortStmt.run(idx, id)
+      })
+    })
+
+    syncTx()
+  }
+
   /** 获取所有已启用提供商的已启用模型（用于对话中的模型选择器） */
   findAllEnabledModels(): (ProviderModel & { providerName: string })[] {
     return this.db

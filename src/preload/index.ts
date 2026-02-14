@@ -44,7 +44,9 @@ const api = {
     listModels: (providerId: string) => ipcRenderer.invoke('provider:listModels', providerId),
     listAvailableModels: () => ipcRenderer.invoke('provider:listAvailableModels'),
     toggleModelEnabled: (params: { id: string; isEnabled: boolean }) =>
-      ipcRenderer.invoke('provider:toggleModelEnabled', params)
+      ipcRenderer.invoke('provider:toggleModelEnabled', params),
+    syncModels: (params: { providerId: string }) =>
+      ipcRenderer.invoke('provider:syncModels', params)
   },
 
   // ============ 会话管理 ============

@@ -61,4 +61,11 @@ export function registerProviderHandlers(): void {
     providerService.toggleModelEnabled(params.id, params.isEnabled)
     return { success: true }
   })
+
+  /** 从提供商 API 同步模型列表（当前先支持 OpenAI） */
+  ipcMain.handle('provider:syncModels', async (_event, params: {
+    providerId: string
+  }) => {
+    return providerService.syncModelsFromProvider(params.providerId)
+  })
 }
