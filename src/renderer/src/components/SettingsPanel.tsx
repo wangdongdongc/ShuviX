@@ -1,68 +1,46 @@
 import { useState, useEffect } from 'react'
-import { X, Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight } from 'lucide-react'
+import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
 
 /**
- * 设置面板 — 右侧滑出面板（分组 Tab）
+ * 设置面板 — 独立窗口（分组 Tab）
  * 通用设置 + 提供商管理
  */
 export function SettingsPanel(): React.JSX.Element {
-  const {
-    isSettingsOpen,
-    setIsSettingsOpen,
-    activeSettingsTab,
-    setActiveSettingsTab
-  } = useSettingsStore()
-
-  if (!isSettingsOpen) return <></>
+  const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
 
   return (
-    <>
-      {/* 遮罩层 */}
-      <div
-        className="fixed inset-0 bg-black/50 z-40"
-        onClick={() => setIsSettingsOpen(false)}
-      />
+    <div className="h-full bg-bg-primary flex flex-col">
+      {/* 头部（macOS 拖拽区） */}
+      <div className="titlebar-drag flex items-center px-6 pt-10 pb-4 border-b border-border-secondary bg-bg-secondary">
+        <h2 className="text-base font-semibold text-text-primary">设置</h2>
+      </div>
 
-      {/* 设置面板 */}
-      <div className="fixed right-0 top-0 bottom-0 w-[520px] bg-bg-secondary border-l border-border-secondary z-50 flex flex-col shadow-2xl">
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-6 pt-10 pb-4 border-b border-border-secondary">
-          <h2 className="text-base font-semibold text-text-primary">设置</h2>
-          <button
-            onClick={() => setIsSettingsOpen(false)}
-            className="p-1.5 rounded-lg hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <X size={18} />
-          </button>
+      {/* Tab + 内容 */}
+      <div className="flex flex-1 min-h-0">
+        {/* 左侧导航 */}
+        <div className="w-[180px] flex-shrink-0 border-r border-border-secondary py-4 px-3 space-y-1 bg-bg-secondary">
+          <TabButton
+            icon={<Settings size={14} />}
+            label="通用"
+            active={activeSettingsTab === 'general'}
+            onClick={() => setActiveSettingsTab('general')}
+          />
+          <TabButton
+            icon={<Layers size={14} />}
+            label="提供商"
+            active={activeSettingsTab === 'providers'}
+            onClick={() => setActiveSettingsTab('providers')}
+          />
         </div>
 
-        {/* Tab + 内容 */}
-        <div className="flex flex-1 min-h-0">
-          {/* 左侧导航 */}
-          <div className="w-[130px] flex-shrink-0 border-r border-border-secondary py-3 px-2 space-y-1">
-            <TabButton
-              icon={<Settings size={14} />}
-              label="通用"
-              active={activeSettingsTab === 'general'}
-              onClick={() => setActiveSettingsTab('general')}
-            />
-            <TabButton
-              icon={<Layers size={14} />}
-              label="提供商"
-              active={activeSettingsTab === 'providers'}
-              onClick={() => setActiveSettingsTab('providers')}
-            />
-          </div>
-
-          {/* 右侧内容区 */}
-          <div className="flex-1 min-w-0 overflow-y-auto">
-            {activeSettingsTab === 'general' && <GeneralSettings />}
-            {activeSettingsTab === 'providers' && <ProviderSettings />}
-          </div>
+        {/* 右侧内容区 */}
+        <div className="flex-1 min-w-0 overflow-y-auto">
+          {activeSettingsTab === 'general' && <GeneralSettings />}
+          {activeSettingsTab === 'providers' && <ProviderSettings />}
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -88,11 +66,10 @@ function TabButton({ icon, label, active, onClick }: {
   )
 }
 
-/** 通用设置 */
+/** 通用设置（所有修改即时保存） */
 function GeneralSettings(): React.JSX.Element {
   const { systemPrompt, theme, fontSize, setSystemPrompt, setTheme, setFontSize, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
-  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     setLocalSystemPrompt(systemPrompt)
@@ -101,128 +78,124 @@ function GeneralSettings(): React.JSX.Element {
   // 从可用模型中提取已启用的 provider 列表（去重）
   const enabledProviderIds = [...new Set(availableModels.map((m) => m.providerId))]
 
-  const handleSave = async (): Promise<void> => {
-    if (localSystemPrompt !== systemPrompt) {
-      setSystemPrompt(localSystemPrompt)
-      await window.api.settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
-    }
-    await window.api.settings.set({ key: 'general.theme', value: theme })
-    await window.api.settings.set({ key: 'general.fontSize', value: String(fontSize) })
-    await window.api.settings.set({ key: 'general.defaultProvider', value: activeProvider })
-    await window.api.settings.set({ key: 'general.defaultModel', value: activeModel })
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
-
-  /** 切换默认 Provider 时自动选第一个可用模型 */
+  /** 切换默认 Provider 时自动选第一个可用模型并即时保存 */
   const handleProviderChange = (newProvider: string): void => {
     setActiveProvider(newProvider)
+    window.api.settings.set({ key: 'general.defaultProvider', value: newProvider })
     const firstModel = availableModels.find((m) => m.providerId === newProvider)
     if (firstModel) {
       setActiveModel(firstModel.modelId)
+      window.api.settings.set({ key: 'general.defaultModel', value: firstModel.modelId })
+    }
+  }
+
+  /** 切换默认模型并即时保存 */
+  const handleModelChange = (modelId: string): void => {
+    setActiveModel(modelId)
+    window.api.settings.set({ key: 'general.defaultModel', value: modelId })
+  }
+
+  /** 系统提示词失焦时保存 */
+  const handleSystemPromptBlur = (): void => {
+    if (localSystemPrompt !== systemPrompt) {
+      setSystemPrompt(localSystemPrompt)
+      window.api.settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
     }
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 px-5 py-5 space-y-6">
-        {/* 主题 */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-2">主题</label>
-          <div className="flex gap-2">
-            {(['dark', 'light', 'system'] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTheme(t)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  theme === t
-                    ? 'bg-accent text-white'
-                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-                }`}
-              >
-                {t === 'dark' ? '深色' : t === 'light' ? '浅色' : '跟随系统'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 字体大小 */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-2">
-            字体大小 <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
-          </label>
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] text-text-tertiary">12</span>
-            <input
-              type="range"
-              min={12}
-              max={20}
-              step={1}
-              value={fontSize}
-              onChange={(e) => setFontSize(Number(e.target.value))}
-              className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
-            />
-            <span className="text-[10px] text-text-tertiary">20</span>
-          </div>
-        </div>
-
-        {/* 默认 Provider */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-2">默认提供商</label>
-          <select
-            value={activeProvider}
-            onChange={(e) => handleProviderChange(e.target.value)}
-            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
-          >
-            {enabledProviderIds.map((pid) => {
-              const m = availableModels.find((am) => am.providerId === pid)
-              return (
-                <option key={pid} value={pid}>{m?.providerName || pid}</option>
-              )
-            })}
-          </select>
-        </div>
-
-        {/* 默认模型 */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-2">默认模型</label>
-          <select
-            value={activeModel}
-            onChange={(e) => setActiveModel(e.target.value)}
-            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
-          >
-            {availableModels
-              .filter((m) => m.providerId === activeProvider)
-              .map((m) => (
-                <option key={m.id} value={m.modelId}>{m.modelId}</option>
-              ))}
-          </select>
-        </div>
-
-        {/* 系统提示词 */}
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-2">系统提示词</label>
-          <textarea
-            value={localSystemPrompt}
-            onChange={(e) => setLocalSystemPrompt(e.target.value)}
-            rows={4}
-            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
-            placeholder="设定 AI 助手的角色和行为..."
-          />
+    <div className="flex-1 px-5 py-5 space-y-6">
+      {/* 主题 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">主题</label>
+        <div className="flex gap-2">
+          {(['dark', 'light', 'system'] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => {
+                setTheme(t)
+                window.api.settings.set({ key: 'general.theme', value: t })
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                theme === t
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+            >
+              {t === 'dark' ? '深色' : t === 'light' ? '浅色' : '跟随系统'}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* 保存 */}
-      <div className="px-5 py-4 border-t border-border-secondary">
-        <button
-          onClick={handleSave}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-            saved ? 'bg-success/20 text-success' : 'bg-accent text-white hover:bg-accent-hover'
-          }`}
+      {/* 字体大小 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          字体大小 <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
+        </label>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-text-tertiary">12</span>
+          <input
+            type="range"
+            min={12}
+            max={20}
+            step={1}
+            value={fontSize}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              setFontSize(v)
+              window.api.settings.set({ key: 'general.fontSize', value: String(v) })
+            }}
+            className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
+          />
+          <span className="text-[10px] text-text-tertiary">20</span>
+        </div>
+      </div>
+
+      {/* 默认 Provider */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">默认提供商</label>
+        <select
+          value={activeProvider}
+          onChange={(e) => handleProviderChange(e.target.value)}
+          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
         >
-          <Save size={16} />
-          {saved ? '已保存' : '保存设置'}
-        </button>
+          {enabledProviderIds.map((pid) => {
+            const m = availableModels.find((am) => am.providerId === pid)
+            return (
+              <option key={pid} value={pid}>{m?.providerName || pid}</option>
+            )
+          })}
+        </select>
+      </div>
+
+      {/* 默认模型 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">默认模型</label>
+        <select
+          value={activeModel}
+          onChange={(e) => handleModelChange(e.target.value)}
+          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+        >
+          {availableModels
+            .filter((m) => m.providerId === activeProvider)
+            .map((m) => (
+              <option key={m.id} value={m.modelId}>{m.modelId}</option>
+            ))}
+        </select>
+      </div>
+
+      {/* 系统提示词 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">系统提示词</label>
+        <textarea
+          value={localSystemPrompt}
+          onChange={(e) => setLocalSystemPrompt(e.target.value)}
+          onBlur={handleSystemPromptBlur}
+          rows={4}
+          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
+          placeholder="设定 AI 助手的角色和行为..."
+        />
       </div>
     </div>
   )

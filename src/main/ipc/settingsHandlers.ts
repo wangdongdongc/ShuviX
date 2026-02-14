@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import { settingsService } from '../services/settingsService'
 
 /**
@@ -16,9 +16,13 @@ export function registerSettingsHandlers(): void {
     return settingsService.get(key)
   })
 
-  /** 保存设置 */
+  /** 保存设置，并广播通知所有窗口刷新 */
   ipcMain.handle('settings:set', (_event, params: { key: string; value: string }) => {
     settingsService.set(params.key, params.value)
+    // 通知所有窗口设置已变更（主窗口监听后会刷新主题/字体等）
+    BrowserWindow.getAllWindows().forEach((win) => {
+      win.webContents.send('app:settings-changed')
+    })
     return { success: true }
   })
 }

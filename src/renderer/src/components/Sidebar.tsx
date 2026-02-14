@@ -8,7 +8,6 @@ import { useSettingsStore } from '../stores/settingsStore'
  */
 export function Sidebar(): React.JSX.Element {
   const { sessions, activeSessionId, setActiveSessionId } = useChatStore()
-  const { setIsSettingsOpen } = useSettingsStore()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
 
@@ -154,7 +153,7 @@ export function Sidebar(): React.JSX.Element {
       {/* 底部设置按钮 */}
       <div className="p-3 border-t border-border-secondary">
         <button
-          onClick={() => setIsSettingsOpen(true)}
+          onClick={() => window.api.app.openSettings()}
           className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
         >
           <Settings size={16} />

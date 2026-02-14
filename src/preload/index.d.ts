@@ -55,6 +55,10 @@ interface AvailableModel extends ProviderModelInfo {
 
 /** 暴露给 Renderer 的 API 类型 */
 interface ShiroBotAPI {
+  app: {
+    openSettings: () => Promise<{ success: boolean }>
+    onSettingsChanged: (callback: () => void) => () => void
+  }
   agent: {
     init: (params: {
       provider: string

@@ -3,6 +3,18 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 /** 暴露给 Renderer 的 API */
 const api = {
+  // ============ 应用事件 ============
+  app: {
+    /** 打开独立设置窗口 */
+    openSettings: () => ipcRenderer.invoke('app:open-settings'),
+    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
+    onSettingsChanged: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('app:settings-changed', handler)
+      return () => ipcRenderer.removeListener('app:settings-changed', handler)
+    }
+  },
+
   // ============ Agent 操作 ============
   agent: {
     /** 初始化 Agent */
