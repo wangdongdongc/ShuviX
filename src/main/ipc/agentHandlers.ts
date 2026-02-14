@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agent'
+import type { AgentInitParams, AgentSetModelParams } from '../types'
 
 /**
  * Agent 相关 IPC 处理器
@@ -7,14 +8,7 @@ import { agentService } from '../services/agent'
  */
 export function registerAgentHandlers(): void {
   /** 初始化 Agent（切换会话时调用） */
-  ipcMain.handle('agent:init', (_event, params: {
-    provider: string
-    model: string
-    systemPrompt: string
-    apiKey?: string
-    baseUrl?: string
-    messages?: Array<{ role: string; content: string }>
-  }) => {
+  ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
     agentService.createAgent(
       params.provider,
       params.model,
@@ -51,11 +45,7 @@ export function registerAgentHandlers(): void {
   })
 
   /** 切换模型 */
-  ipcMain.handle('agent:setModel', (_event, params: {
-    provider: string
-    model: string
-    baseUrl?: string
-  }) => {
+  ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
     agentService.setModel(params.provider, params.model, params.baseUrl)
     return { success: true }
   })

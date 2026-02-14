@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { settingsService } from '../services/settingsService'
+import type { SettingsSetParams } from '../types'
 
 /**
  * 设置管理 IPC 处理器
@@ -17,7 +18,7 @@ export function registerSettingsHandlers(): void {
   })
 
   /** 保存设置，并广播通知所有窗口刷新 */
-  ipcMain.handle('settings:set', (_event, params: { key: string; value: string }) => {
+  ipcMain.handle('settings:set', (_event, params: SettingsSetParams) => {
     settingsService.set(params.key, params.value)
     // 通知所有窗口设置已变更（主窗口监听后会刷新主题/字体等）
     BrowserWindow.getAllWindows().forEach((win) => {

@@ -13,8 +13,8 @@ const isSettingsWindow = window.location.hash === '#settings'
  * 根据 hash 区分：主窗口（侧边栏 + 聊天区）或设置窗口（独立设置页）
  */
 function App(): React.JSX.Element {
-  const { activeSessionId } = useChatStore()
-  const { activeProvider, activeModel, systemPrompt, providers, theme, fontSize, loaded } = useSettingsStore()
+  const { activeSessionId, sessions } = useChatStore()
+  const { systemPrompt, providers, theme, fontSize, loaded, setActiveProvider, setActiveModel } = useSettingsStore()
 
   /** 字体大小：设置 CSS 变量供全局使用 */
   useEffect(() => {
@@ -71,10 +71,18 @@ function App(): React.JSX.Element {
       const msgs = await window.api.message.list(activeSessionId)
       useChatStore.getState().setMessages(msgs)
 
-      const providerInfo = providers.find((p) => p.id === activeProvider)
+      const currentSession = sessions.find((s) => s.id === activeSessionId)
+      const sessionProvider = currentSession?.provider || 'openai'
+      const sessionModel = currentSession?.model || 'gpt-4o-mini'
+
+      // 将当前激活模型同步为该会话配置
+      setActiveProvider(sessionProvider)
+      setActiveModel(sessionModel)
+
+      const providerInfo = providers.find((p) => p.id === sessionProvider)
       await window.api.agent.init({
-        provider: activeProvider,
-        model: activeModel,
+        provider: sessionProvider,
+        model: sessionModel,
         systemPrompt,
         apiKey: providerInfo?.apiKey || undefined,
         baseUrl: providerInfo?.baseUrl || undefined,
@@ -82,7 +90,7 @@ function App(): React.JSX.Element {
       })
     }
     loadSession()
-  }, [activeSessionId, loaded])
+  }, [activeSessionId, loaded, sessions, providers, systemPrompt, setActiveProvider, setActiveModel])
 
   /** 处理 Agent 流式事件 */
   const handleAgentEvent = useCallback(

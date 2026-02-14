@@ -47,6 +47,13 @@ export class SessionDao {
       .run(title, Date.now(), id)
   }
 
+  /** 更新会话模型配置（provider/model） */
+  updateModelConfig(id: string, provider: string, model: string): void {
+    this.db
+      .prepare('UPDATE sessions SET provider = ?, model = ?, updatedAt = ? WHERE id = ?')
+      .run(provider, model, Date.now(), id)
+  }
+
   /** 更新时间戳 */
   touch(id: string): void {
     this.db

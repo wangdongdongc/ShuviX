@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { messageService } from '../services/messageService'
+import type { MessageAddParams } from '../types'
 
 /**
  * 消息管理 IPC 处理器
@@ -12,11 +13,7 @@ export function registerMessageHandlers(): void {
   })
 
   /** 保存消息 */
-  ipcMain.handle('message:add', (_event, params: {
-    sessionId: string
-    role: 'user' | 'assistant'
-    content: string
-  }) => {
+  ipcMain.handle('message:add', (_event, params: MessageAddParams) => {
     return messageService.add(params)
   })
 

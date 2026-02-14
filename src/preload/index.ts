@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type {
+  AgentInitParams,
+  AgentSetModelParams,
+  MessageAddParams,
+  ProviderSyncModelsParams,
+  ProviderToggleEnabledParams,
+  ProviderToggleModelEnabledParams,
+  ProviderUpdateConfigParams,
+  SessionUpdateModelConfigParams,
+  SessionUpdateTitleParams,
+  SettingsSetParams
+} from '../main/types'
 
 /** 暴露给 Renderer 的 API */
 const api = {
@@ -18,13 +30,7 @@ const api = {
   // ============ Agent 操作 ============
   agent: {
     /** 初始化 Agent */
-    init: (params: {
-      provider: string
-      model: string
-      systemPrompt: string
-      apiKey?: string
-      messages?: Array<{ role: string; content: string }>
-    }) => ipcRenderer.invoke('agent:init', params),
+    init: (params: AgentInitParams) => ipcRenderer.invoke('agent:init', params),
 
     /** 发送消息 */
     prompt: (text: string) => ipcRenderer.invoke('agent:prompt', text),
@@ -33,7 +39,7 @@ const api = {
     abort: () => ipcRenderer.invoke('agent:abort'),
 
     /** 切换模型 */
-    setModel: (params: { provider: string; model: string }) =>
+    setModel: (params: AgentSetModelParams) =>
       ipcRenderer.invoke('agent:setModel', params),
 
     /** 监听 Agent 事件流 */
@@ -49,15 +55,15 @@ const api = {
     listAll: () => ipcRenderer.invoke('provider:listAll'),
     listEnabled: () => ipcRenderer.invoke('provider:listEnabled'),
     getById: (id: string) => ipcRenderer.invoke('provider:getById', id),
-    updateConfig: (params: { id: string; apiKey?: string; baseUrl?: string }) =>
+    updateConfig: (params: ProviderUpdateConfigParams) =>
       ipcRenderer.invoke('provider:updateConfig', params),
-    toggleEnabled: (params: { id: string; isEnabled: boolean }) =>
+    toggleEnabled: (params: ProviderToggleEnabledParams) =>
       ipcRenderer.invoke('provider:toggleEnabled', params),
     listModels: (providerId: string) => ipcRenderer.invoke('provider:listModels', providerId),
     listAvailableModels: () => ipcRenderer.invoke('provider:listAvailableModels'),
-    toggleModelEnabled: (params: { id: string; isEnabled: boolean }) =>
+    toggleModelEnabled: (params: ProviderToggleModelEnabledParams) =>
       ipcRenderer.invoke('provider:toggleModelEnabled', params),
-    syncModels: (params: { providerId: string }) =>
+    syncModels: (params: ProviderSyncModelsParams) =>
       ipcRenderer.invoke('provider:syncModels', params)
   },
 
@@ -65,15 +71,17 @@ const api = {
   session: {
     list: () => ipcRenderer.invoke('session:list'),
     create: (params?: any) => ipcRenderer.invoke('session:create', params),
-    updateTitle: (params: { id: string; title: string }) =>
+    updateTitle: (params: SessionUpdateTitleParams) =>
       ipcRenderer.invoke('session:updateTitle', params),
+    updateModelConfig: (params: SessionUpdateModelConfigParams) =>
+      ipcRenderer.invoke('session:updateModelConfig', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id)
   },
 
   // ============ 消息管理 ============
   message: {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),
-    add: (params: { sessionId: string; role: 'user' | 'assistant'; content: string }) =>
+    add: (params: MessageAddParams) =>
       ipcRenderer.invoke('message:add', params),
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId)
   },
@@ -82,7 +90,7 @@ const api = {
   settings: {
     getAll: () => ipcRenderer.invoke('settings:getAll'),
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
-    set: (params: { key: string; value: string }) => ipcRenderer.invoke('settings:set', params)
+    set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params)
   }
 }
 

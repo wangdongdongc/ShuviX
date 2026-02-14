@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { sessionService } from '../services/sessionService'
-import type { Session } from '../types'
+import type { Session, SessionUpdateModelConfigParams, SessionUpdateTitleParams } from '../types'
 
 /**
  * 会话管理 IPC 处理器
@@ -18,8 +18,14 @@ export function registerSessionHandlers(): void {
   })
 
   /** 更新会话标题 */
-  ipcMain.handle('session:updateTitle', (_event, params: { id: string; title: string }) => {
+  ipcMain.handle('session:updateTitle', (_event, params: SessionUpdateTitleParams) => {
     sessionService.updateTitle(params.id, params.title)
+    return { success: true }
+  })
+
+  /** 更新会话模型配置（provider/model） */
+  ipcMain.handle('session:updateModelConfig', (_event, params: SessionUpdateModelConfigParams) => {
+    sessionService.updateModelConfig(params.id, params.provider, params.model)
     return { success: true }
   })
 

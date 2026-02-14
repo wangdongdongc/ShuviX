@@ -1,5 +1,11 @@
 import { ipcMain } from 'electron'
 import { providerService } from '../services/providerService'
+import type {
+  ProviderSyncModelsParams,
+  ProviderToggleEnabledParams,
+  ProviderToggleModelEnabledParams,
+  ProviderUpdateConfigParams
+} from '../types'
 
 /**
  * 提供商管理 IPC 处理器
@@ -22,11 +28,7 @@ export function registerProviderHandlers(): void {
   })
 
   /** 更新提供商配置（apiKey、baseUrl） */
-  ipcMain.handle('provider:updateConfig', (_event, params: {
-    id: string
-    apiKey?: string
-    baseUrl?: string
-  }) => {
+  ipcMain.handle('provider:updateConfig', (_event, params: ProviderUpdateConfigParams) => {
     providerService.updateConfig(params.id, {
       apiKey: params.apiKey,
       baseUrl: params.baseUrl
@@ -35,10 +37,7 @@ export function registerProviderHandlers(): void {
   })
 
   /** 切换提供商启用状态 */
-  ipcMain.handle('provider:toggleEnabled', (_event, params: {
-    id: string
-    isEnabled: boolean
-  }) => {
+  ipcMain.handle('provider:toggleEnabled', (_event, params: ProviderToggleEnabledParams) => {
     providerService.toggleEnabled(params.id, params.isEnabled)
     return { success: true }
   })
@@ -54,18 +53,13 @@ export function registerProviderHandlers(): void {
   })
 
   /** 切换模型启用状态 */
-  ipcMain.handle('provider:toggleModelEnabled', (_event, params: {
-    id: string
-    isEnabled: boolean
-  }) => {
+  ipcMain.handle('provider:toggleModelEnabled', (_event, params: ProviderToggleModelEnabledParams) => {
     providerService.toggleModelEnabled(params.id, params.isEnabled)
     return { success: true }
   })
 
   /** 从提供商 API 同步模型列表（当前先支持 OpenAI） */
-  ipcMain.handle('provider:syncModels', async (_event, params: {
-    providerId: string
-  }) => {
+  ipcMain.handle('provider:syncModels', async (_event, params: ProviderSyncModelsParams) => {
     return providerService.syncModelsFromProvider(params.providerId)
   })
 }

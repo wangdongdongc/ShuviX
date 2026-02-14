@@ -1,4 +1,16 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type {
+  AgentInitParams,
+  AgentSetModelParams,
+  MessageAddParams,
+  ProviderSyncModelsParams,
+  ProviderToggleEnabledParams,
+  ProviderToggleModelEnabledParams,
+  ProviderUpdateConfigParams,
+  SessionUpdateModelConfigParams,
+  SessionUpdateTitleParams,
+  SettingsSetParams
+} from '../main/types'
 
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
@@ -60,49 +72,39 @@ interface ShiroBotAPI {
     onSettingsChanged: (callback: () => void) => () => void
   }
   agent: {
-    init: (params: {
-      provider: string
-      model: string
-      systemPrompt: string
-      apiKey?: string
-      baseUrl?: string
-      messages?: Array<{ role: string; content: string }>
-    }) => Promise<{ success: boolean }>
+    init: (params: AgentInitParams) => Promise<{ success: boolean }>
     prompt: (text: string) => Promise<{ success: boolean }>
     abort: () => Promise<{ success: boolean }>
-    setModel: (params: { provider: string; model: string; baseUrl?: string }) => Promise<{ success: boolean }>
+    setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }
   provider: {
     listAll: () => Promise<ProviderInfo[]>
     listEnabled: () => Promise<ProviderInfo[]>
     getById: (id: string) => Promise<ProviderInfo | undefined>
-    updateConfig: (params: { id: string; apiKey?: string; baseUrl?: string }) => Promise<{ success: boolean }>
-    toggleEnabled: (params: { id: string; isEnabled: boolean }) => Promise<{ success: boolean }>
+    updateConfig: (params: ProviderUpdateConfigParams) => Promise<{ success: boolean }>
+    toggleEnabled: (params: ProviderToggleEnabledParams) => Promise<{ success: boolean }>
     listModels: (providerId: string) => Promise<ProviderModelInfo[]>
     listAvailableModels: () => Promise<AvailableModel[]>
-    toggleModelEnabled: (params: { id: string; isEnabled: boolean }) => Promise<{ success: boolean }>
-    syncModels: (params: { providerId: string }) => Promise<{ providerId: string; total: number; added: number }>
+    toggleModelEnabled: (params: ProviderToggleModelEnabledParams) => Promise<{ success: boolean }>
+    syncModels: (params: ProviderSyncModelsParams) => Promise<{ providerId: string; total: number; added: number }>
   }
   session: {
     list: () => Promise<Session[]>
     create: (params?: Partial<Session>) => Promise<Session>
-    updateTitle: (params: { id: string; title: string }) => Promise<{ success: boolean }>
+    updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
+    updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     delete: (id: string) => Promise<{ success: boolean }>
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>
-    add: (params: {
-      sessionId: string
-      role: 'user' | 'assistant'
-      content: string
-    }) => Promise<ChatMessage>
+    add: (params: MessageAddParams) => Promise<ChatMessage>
     clear: (sessionId: string) => Promise<{ success: boolean }>
   }
   settings: {
     getAll: () => Promise<Record<string, string>>
     get: (key: string) => Promise<string | undefined>
-    set: (params: { key: string; value: string }) => Promise<{ success: boolean }>
+    set: (params: SettingsSetParams) => Promise<{ success: boolean }>
   }
 }
 

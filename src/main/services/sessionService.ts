@@ -39,6 +39,11 @@ export class SessionService {
     sessionDao.updateTitle(id, title)
   }
 
+  /** 更新会话模型配置（provider/model） */
+  updateModelConfig(id: string, provider: string, model: string): void {
+    sessionDao.updateModelConfig(id, provider, model)
+  }
+
   /** 删除会话（同时清理关联消息） */
   delete(id: string): void {
     messageDao.deleteBySessionId(id)
