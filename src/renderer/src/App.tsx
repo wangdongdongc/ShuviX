@@ -81,6 +81,7 @@ function App(): React.JSX.Element {
 
       const providerInfo = providers.find((p) => p.id === sessionProvider)
       await window.api.agent.init({
+        sessionId: activeSessionId,
         provider: sessionProvider,
         model: sessionModel,
         systemPrompt,

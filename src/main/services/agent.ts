@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent } from '@mariozechner/pi-agent-core'
-import { getModel } from '@mariozechner/pi-ai'
+import { getModel, streamSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
+import { httpLogService } from './httpLogService'
 
 // Agent 事件类型（用于 IPC 通信）
 export interface AgentStreamEvent {
@@ -16,6 +17,7 @@ export interface AgentStreamEvent {
 export class AgentService {
   private agent: Agent | null = null
   private mainWindow: BrowserWindow | null = null
+  private activeSessionId = ''
 
   /** 绑定主窗口，用于发送 IPC 事件 */
   setWindow(window: BrowserWindow): void {
@@ -24,12 +26,15 @@ export class AgentService {
 
   /** 创建新的 Agent 实例 */
   createAgent(
+    sessionId: string | undefined,
     provider: string,
     model: string,
     systemPrompt: string,
     apiKey?: string,
     baseUrl?: string
   ): void {
+    this.activeSessionId = sessionId || ''
+
     // 设置 API Key 环境变量
     if (apiKey) {
       const envMap: Record<string, string> = {
@@ -57,7 +62,20 @@ export class AgentService {
         thinkingLevel: 'off',
         messages: [],
         tools: []
-      }
+      },
+      streamFn: (streamModel, context, options) =>
+        streamSimple(streamModel, context, {
+          ...(options || {}),
+          onPayload: (payload) => {
+            if (!this.activeSessionId) return
+            httpLogService.logRequest({
+              sessionId: this.activeSessionId,
+              provider: String(streamModel.provider || provider),
+              model: String(streamModel.id || model),
+              payload
+            })
+          }
+        })
     })
 
     // 订阅 Agent 事件，转发到 Renderer

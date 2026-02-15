@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight } from 'lucide-react'
+import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
 
 /**
@@ -32,12 +32,181 @@ export function SettingsPanel(): React.JSX.Element {
             active={activeSettingsTab === 'providers'}
             onClick={() => setActiveSettingsTab('providers')}
           />
+          <TabButton
+            icon={<FileText size={14} />}
+            label="HTTP 日志"
+            active={activeSettingsTab === 'httpLogs'}
+            onClick={() => setActiveSettingsTab('httpLogs')}
+          />
         </div>
 
         {/* 右侧内容区 */}
         <div className="flex-1 min-w-0 overflow-y-auto">
           {activeSettingsTab === 'general' && <GeneralSettings />}
           {activeSettingsTab === 'providers' && <ProviderSettings />}
+          {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** HTTP 日志设置 */
+function HttpLogSettings(): React.JSX.Element {
+  const [logs, setLogs] = useState<Array<{
+    id: string
+    sessionId: string
+    provider: string
+    model: string
+    createdAt: number
+  }>>([])
+  const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
+  const [selectedLog, setSelectedLog] = useState<{
+    id: string
+    sessionId: string
+    provider: string
+    model: string
+    payload: string
+    createdAt: number
+  } | null>(null)
+  const [loadingList, setLoadingList] = useState(false)
+  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
+  /** 加载日志列表 */
+  const loadLogs = async (): Promise<void> => {
+    setLoadingList(true)
+    try {
+      const rows = await window.api.httpLog.list({ limit: 300 })
+      setLogs(rows)
+      if (rows.length === 0) {
+        setSelectedLogId(null)
+        setSelectedLog(null)
+      } else if (!selectedLogId || !rows.some((row) => row.id === selectedLogId)) {
+        setSelectedLogId(rows[0].id)
+      }
+    } finally {
+      setLoadingList(false)
+    }
+  }
+
+  /** 加载日志详情 */
+  const loadLogDetail = async (id: string): Promise<void> => {
+    setLoadingDetail(true)
+    try {
+      const detail = await window.api.httpLog.get(id)
+      setSelectedLog(detail || null)
+    } finally {
+      setLoadingDetail(false)
+    }
+  }
+
+  /** 清空日志 */
+  const handleClear = async (): Promise<void> => {
+    setClearing(true)
+    try {
+      await window.api.httpLog.clear()
+      setLogs([])
+      setSelectedLogId(null)
+      setSelectedLog(null)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  useEffect(() => {
+    loadLogs()
+  }, [])
+
+  useEffect(() => {
+    if (selectedLogId) {
+      loadLogDetail(selectedLogId)
+    }
+  }, [selectedLogId])
+
+  return (
+    <div className="h-full flex flex-col">
+      <div className="px-5 py-4 border-b border-border-secondary flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">HTTP 请求日志</h3>
+          <p className="text-[11px] text-text-tertiary mt-1">每次请求 AI 时会记录请求体，便于审计和排查。</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadLogs}
+            disabled={loadingList}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            <RefreshCw size={12} className={loadingList ? 'animate-spin' : ''} />
+            刷新
+          </button>
+          <button
+            onClick={handleClear}
+            disabled={clearing || logs.length === 0}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            <Trash2 size={12} />
+            清空
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 flex">
+        <div className="w-[320px] border-r border-border-secondary overflow-y-auto">
+          {logs.length === 0 ? (
+            <div className="px-4 py-6 text-xs text-text-tertiary">暂无日志</div>
+          ) : (
+            <div className="p-2 space-y-1">
+              {logs.map((log) => {
+                const active = selectedLogId === log.id
+                return (
+                  <button
+                    key={log.id}
+                    onClick={() => setSelectedLogId(log.id)}
+                    className={`w-full text-left rounded-md px-2.5 py-2 border transition-colors ${
+                      active
+                        ? 'border-accent/40 bg-accent/10'
+                        : 'border-transparent hover:border-border-primary hover:bg-bg-hover'
+                    }`}
+                  >
+                    <div className="text-[11px] text-text-secondary">{new Date(log.createdAt).toLocaleString()}</div>
+                    <div className="mt-1 text-xs text-text-primary font-medium">
+                      {log.provider} / {log.model}
+                    </div>
+                    <div className="mt-1 text-[11px] text-text-tertiary truncate">session: {log.sessionId}</div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 min-w-0 p-4 overflow-y-auto">
+          {!selectedLogId ? (
+            <div className="text-xs text-text-tertiary">请选择左侧日志查看请求体详情。</div>
+          ) : loadingDetail ? (
+            <div className="text-xs text-text-tertiary">正在加载日志详情...</div>
+          ) : !selectedLog ? (
+            <div className="text-xs text-text-tertiary">日志不存在或已被清理。</div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-bg-tertiary rounded-md px-3 py-2">
+                  <div className="text-text-tertiary">时间</div>
+                  <div className="text-text-primary mt-0.5 break-all">{new Date(selectedLog.createdAt).toLocaleString()}</div>
+                </div>
+                <div className="bg-bg-tertiary rounded-md px-3 py-2">
+                  <div className="text-text-tertiary">会话</div>
+                  <div className="text-text-primary mt-0.5 break-all">{selectedLog.sessionId}</div>
+                </div>
+              </div>
+
+              <div className="text-xs text-text-secondary">请求体（JSON 文本）</div>
+              <pre className="w-full min-h-[260px] rounded-lg border border-border-primary bg-bg-tertiary p-3 text-[11px] leading-relaxed text-text-primary overflow-auto whitespace-pre-wrap break-words">
+                {selectedLog.payload}
+              </pre>
+            </div>
+          )}
         </div>
       </div>
     </div>

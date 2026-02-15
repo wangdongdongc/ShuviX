@@ -74,8 +74,18 @@ class DatabaseManager {
         FOREIGN KEY (providerId) REFERENCES providers(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS http_logs (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        createdAt INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
+      CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
     // 种子数据：内置提供商和模型

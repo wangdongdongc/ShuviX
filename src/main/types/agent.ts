@@ -6,6 +6,7 @@ export interface AgentInitMessage {
 
 /** Agent 初始化参数（字段较多，统一类型） */
 export interface AgentInitParams {
+  sessionId?: string
   provider: string
   model: string
   systemPrompt: string

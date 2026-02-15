@@ -42,7 +42,7 @@ interface SettingsState {
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
-  activeSettingsTab: 'general' | 'providers'
+  activeSettingsTab: 'general' | 'providers' | 'httpLogs'
   /** 是否已加载 */
   loaded: boolean
 
@@ -55,7 +55,7 @@ interface SettingsState {
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setFontSize: (size: number) => void
   setIsSettingsOpen: (open: boolean) => void
-  setActiveSettingsTab: (tab: 'general' | 'providers') => void
+  setActiveSettingsTab: (tab: 'general' | 'providers' | 'httpLogs') => void
   loadSettings: (settings: Record<string, string>) => void
 }
 

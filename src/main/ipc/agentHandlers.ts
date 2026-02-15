@@ -10,6 +10,7 @@ export function registerAgentHandlers(): void {
   /** 初始化 Agent（切换会话时调用） */
   ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
     agentService.createAgent(
+      params.sessionId,
       params.provider,
       params.model,
       params.systemPrompt,

@@ -2,6 +2,9 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   AgentInitParams,
   AgentSetModelParams,
+  HttpLog,
+  HttpLogListParams,
+  HttpLogSummary,
   MessageAddParams,
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
@@ -105,6 +108,11 @@ interface ShiroBotAPI {
     getAll: () => Promise<Record<string, string>>
     get: (key: string) => Promise<string | undefined>
     set: (params: SettingsSetParams) => Promise<{ success: boolean }>
+  }
+  httpLog: {
+    list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
+    get: (id: string) => Promise<HttpLog | undefined>
+    clear: () => Promise<{ success: boolean }>
   }
 }
 

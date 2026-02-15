@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AgentInitParams,
   AgentSetModelParams,
+  HttpLogListParams,
   MessageAddParams,
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
@@ -91,6 +92,13 @@ const api = {
     getAll: () => ipcRenderer.invoke('settings:getAll'),
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params)
+  },
+
+  // ============ HTTP 日志 ============
+  httpLog: {
+    list: (params?: HttpLogListParams) => ipcRenderer.invoke('httpLog:list', params),
+    get: (id: string) => ipcRenderer.invoke('httpLog:get', id),
+    clear: () => ipcRenderer.invoke('httpLog:clear')
   }
 }
 
