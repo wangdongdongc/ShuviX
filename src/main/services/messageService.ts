@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+import { v7 as uuidv7 } from 'uuid'
 import { messageDao } from '../dao/messageDao'
 import { sessionDao } from '../dao/sessionDao'
 import type { Message } from '../types'
@@ -20,7 +20,7 @@ export class MessageService {
     content: string
   }): Message {
     const message: Message = {
-      id: uuidv4(),
+      id: uuidv7(),
       sessionId: params.sessionId,
       role: params.role,
       content: params.content,

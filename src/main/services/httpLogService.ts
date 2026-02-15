@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+import { v7 as uuidv7 } from 'uuid'
 import { httpLogDao } from '../dao/httpLogDao'
 import type { HttpLog, HttpLogSummary } from '../types'
 
@@ -23,7 +23,7 @@ export class HttpLogService {
     payload: unknown
   }): void {
     const log: HttpLog = {
-      id: uuidv4(),
+      id: uuidv7(),
       sessionId: params.sessionId,
       provider: params.provider,
       model: params.model,

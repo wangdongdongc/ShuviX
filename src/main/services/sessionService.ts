@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+import { v7 as uuidv7 } from 'uuid'
 import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
 import type { Session } from '../types'
@@ -22,7 +22,7 @@ export class SessionService {
   create(params?: Partial<Session>): Session {
     const now = Date.now()
     const session: Session = {
-      id: uuidv4(),
+      id: uuidv7(),
       title: params?.title || '新对话',
       provider: params?.provider || 'openai',
       model: params?.model || 'gpt-4o-mini',
