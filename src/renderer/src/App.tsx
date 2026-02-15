@@ -93,49 +93,55 @@ function App(): React.JSX.Element {
     loadSession()
   }, [activeSessionId, loaded, sessions, providers, systemPrompt, setActiveProvider, setActiveModel])
 
-  /** 处理 Agent 流式事件 */
+  /** 处理 Agent 流式事件（所有 session 的事件都处理，按 sessionId 隔离状态） */
   const handleAgentEvent = useCallback(
     async (event: any): Promise<void> => {
       const store = useChatStore.getState()
+      const sid: string = event.sessionId
 
       switch (event.type) {
         case 'agent_start':
-          store.setIsStreaming(true)
-          store.clearStreamingContent()
+          store.setIsStreaming(sid, true)
+          store.clearStreamingContent(sid)
           break
 
         case 'text_delta':
-          store.appendStreamingContent(event.data || '')
+          store.appendStreamingContent(sid, event.data || '')
           break
 
         case 'text_end':
           break
 
         case 'agent_end': {
-          const content = store.streamingContent
-          if (content && store.activeSessionId) {
+          const content = store.getSessionStreamContent(sid)
+          if (content) {
             const assistantMsg = await window.api.message.add({
-              sessionId: store.activeSessionId,
+              sessionId: sid,
               role: 'assistant',
               content
             })
-            store.addMessage(assistantMsg)
+            // 仅当该 session 是当前查看的会话时，才更新内存中的消息列表
+            if (sid === store.activeSessionId) {
+              store.addMessage(assistantMsg)
+            }
 
-            if (store.messages.length <= 2) {
+            // 自动生成标题（首次对话）
+            const isActive = sid === store.activeSessionId
+            if (isActive && store.messages.length <= 2) {
               const title = content.slice(0, 30).replace(/\n/g, ' ') + (content.length > 30 ? '...' : '')
-              await window.api.session.updateTitle({ id: store.activeSessionId, title })
-              store.updateSessionTitle(store.activeSessionId, title)
+              await window.api.session.updateTitle({ id: sid, title })
+              store.updateSessionTitle(sid, title)
             }
           }
-          store.clearStreamingContent()
-          store.setIsStreaming(false)
+          store.clearStreamingContent(sid)
+          store.setIsStreaming(sid, false)
           break
         }
 
         case 'error':
           store.setError(event.error || '未知错误')
-          store.setIsStreaming(false)
-          store.clearStreamingContent()
+          store.setIsStreaming(sid, false)
+          store.clearStreamingContent(sid)
           break
       }
     },

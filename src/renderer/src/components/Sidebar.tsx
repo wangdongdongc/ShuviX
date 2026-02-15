@@ -7,7 +7,7 @@ import { useSettingsStore } from '../stores/settingsStore'
  * 侧边栏 — 会话列表 + 新建对话 + 设置入口
  */
 export function Sidebar(): React.JSX.Element {
-  const { sessions, activeSessionId, setActiveSessionId } = useChatStore()
+  const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
 
@@ -118,7 +118,12 @@ export function Sidebar(): React.JSX.Element {
                 /* 正常模式 */
                 <>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium truncate">{session.title}</div>
+                    <div className="flex items-center gap-1.5 text-xs font-medium">
+                      <span className="truncate">{session.title}</span>
+                      {sessionStreams[session.id]?.isStreaming && (
+                        <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" title="正在生成" />
+                      )}
+                    </div>
                     <div className="text-[10px] text-text-tertiary mt-0.5">
                       {formatTime(session.updatedAt)}
                     </div>

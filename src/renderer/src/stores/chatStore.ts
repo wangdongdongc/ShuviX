@@ -20,6 +20,12 @@ export interface Session {
   updatedAt: number
 }
 
+/** 每个 session 的流式状态 */
+interface SessionStreamState {
+  content: string
+  isStreaming: boolean
+}
+
 interface ChatState {
   /** 所有会话 */
   sessions: Session[]
@@ -27,9 +33,11 @@ interface ChatState {
   activeSessionId: string | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
-  /** 当前正在流式输出的内容 */
+  /** 各 session 的流式状态（按 sessionId 隔离） */
+  sessionStreams: Record<string, SessionStreamState>
+  /** 当前会话的流式内容（UI 直接读取，自动同步自 sessionStreams） */
   streamingContent: string
-  /** 是否正在生成 */
+  /** 当前会话是否正在生成（UI 直接读取，自动同步自 sessionStreams） */
   isStreaming: boolean
   /** 输入框内容 */
   inputText: string
@@ -41,32 +49,77 @@ interface ChatState {
   setActiveSessionId: (id: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
-  appendStreamingContent: (delta: string) => void
-  clearStreamingContent: () => void
-  setIsStreaming: (streaming: boolean) => void
+  appendStreamingContent: (sessionId: string, delta: string) => void
+  clearStreamingContent: (sessionId: string) => void
+  setIsStreaming: (sessionId: string, streaming: boolean) => void
+  getSessionStreamContent: (sessionId: string) => string
   setInputText: (text: string) => void
   setError: (error: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
   removeSession: (id: string) => void
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   messages: [],
+  sessionStreams: {},
   streamingContent: '',
   isStreaming: false,
   inputText: '',
   error: null,
 
   setSessions: (sessions) => set({ sessions }),
-  setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setActiveSessionId: (id) =>
+    set((state) => {
+      const stream = id ? state.sessionStreams[id] : undefined
+      return {
+        activeSessionId: id,
+        streamingContent: stream?.content || '',
+        isStreaming: stream?.isStreaming || false
+      }
+    }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
-  appendStreamingContent: (delta) =>
-    set((state) => ({ streamingContent: state.streamingContent + delta })),
-  clearStreamingContent: () => set({ streamingContent: '' }),
-  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+
+  appendStreamingContent: (sessionId, delta) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId] || { content: '', isStreaming: false }
+      const updated = { ...prev, content: prev.content + delta }
+      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
+      return {
+        sessionStreams: newStreams,
+        ...(sessionId === state.activeSessionId ? { streamingContent: updated.content } : {})
+      }
+    }),
+
+  clearStreamingContent: (sessionId) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId]
+      if (!prev) return {}
+      const updated = { ...prev, content: '' }
+      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
+      return {
+        sessionStreams: newStreams,
+        ...(sessionId === state.activeSessionId ? { streamingContent: '' } : {})
+      }
+    }),
+
+  setIsStreaming: (sessionId, streaming) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId] || { content: '', isStreaming: false }
+      const updated = { ...prev, isStreaming: streaming }
+      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
+      return {
+        sessionStreams: newStreams,
+        ...(sessionId === state.activeSessionId ? { isStreaming: streaming } : {})
+      }
+    }),
+
+  getSessionStreamContent: (sessionId) => {
+    return get().sessionStreams[sessionId]?.content || ''
+  },
+
   setInputText: (text) => set({ inputText: text }),
   setError: (error) => set({ error }),
   updateSessionTitle: (id, title) =>

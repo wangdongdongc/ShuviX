@@ -1,13 +1,13 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agent'
-import type { AgentInitParams, AgentSetModelParams } from '../types'
+import type { AgentInitParams, AgentPromptParams, AgentSetModelParams } from '../types'
 
 /**
  * Agent 相关 IPC 处理器
- * 负责 Agent 初始化、消息发送、中止、模型切换
+ * 所有操作均通过 sessionId 指定目标 Agent
  */
 export function registerAgentHandlers(): void {
-  /** 初始化 Agent（切换会话时调用） */
+  /** 初始化指定 session 的 Agent */
   ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
     agentService.createAgent(
       params.sessionId,
@@ -26,28 +26,28 @@ export function registerAgentHandlers(): void {
         timestamp: Date.now()
       }))
       for (const msg of agentMessages) {
-        agentService.getMessages().push(msg as any)
+        agentService.getMessages(params.sessionId).push(msg as any)
       }
     }
 
     return { success: true }
   })
 
-  /** 发送消息 */
-  ipcMain.handle('agent:prompt', async (_event, text: string) => {
-    await agentService.prompt(text)
+  /** 向指定 session 发送消息 */
+  ipcMain.handle('agent:prompt', async (_event, params: AgentPromptParams) => {
+    await agentService.prompt(params.sessionId, params.text)
     return { success: true }
   })
 
-  /** 中止生成 */
-  ipcMain.handle('agent:abort', () => {
-    agentService.abort()
+  /** 中止指定 session 的生成 */
+  ipcMain.handle('agent:abort', (_event, sessionId: string) => {
+    agentService.abort(sessionId)
     return { success: true }
   })
 
-  /** 切换模型 */
+  /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
-    agentService.setModel(params.provider, params.model, params.baseUrl)
+    agentService.setModel(params.sessionId, params.provider, params.model, params.baseUrl)
     return { success: true }
   })
 }

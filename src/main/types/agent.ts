@@ -4,9 +4,9 @@ export interface AgentInitMessage {
   content: string
 }
 
-/** Agent 初始化参数（字段较多，统一类型） */
+/** Agent 初始化参数 */
 export interface AgentInitParams {
-  sessionId?: string
+  sessionId: string
   provider: string
   model: string
   systemPrompt: string
@@ -15,8 +15,15 @@ export interface AgentInitParams {
   messages?: AgentInitMessage[]
 }
 
-/** Agent 模型切换参数（后续可扩展） */
+/** Agent 发送消息参数 */
+export interface AgentPromptParams {
+  sessionId: string
+  text: string
+}
+
+/** Agent 模型切换参数 */
 export interface AgentSetModelParams {
+  sessionId: string
   provider: string
   model: string
   baseUrl?: string

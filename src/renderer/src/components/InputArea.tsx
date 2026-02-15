@@ -38,8 +38,8 @@ export function InputArea(): React.JSX.Element {
 
     const store = useChatStore.getState()
     store.setInputText('')
-    store.setIsStreaming(true)
-    store.clearStreamingContent()
+    store.setIsStreaming(activeSessionId, true)
+    store.clearStreamingContent(activeSessionId)
     store.setError(null)
 
     // 保存用户消息到数据库
@@ -51,12 +51,13 @@ export function InputArea(): React.JSX.Element {
     store.addMessage(userMsg)
 
     // 发送给 Agent
-    await window.api.agent.prompt(text)
+    await window.api.agent.prompt({ sessionId: activeSessionId, text })
   }
 
   /** 中止生成 */
   const handleAbort = (): void => {
-    window.api.agent.abort()
+    if (!activeSessionId) return
+    window.api.agent.abort(activeSessionId)
   }
 
   /** 键盘事件处理 */
@@ -127,11 +128,14 @@ export function InputArea(): React.JSX.Element {
     }
 
     const providerInfo = providers.find((p) => p.id === draftProvider)
-    await window.api.agent.setModel({
-      provider: draftProvider,
-      model: modelId,
-      baseUrl: providerInfo?.baseUrl || undefined
-    })
+    if (activeSessionId) {
+      await window.api.agent.setModel({
+        sessionId: activeSessionId,
+        provider: draftProvider,
+        model: modelId,
+        baseUrl: providerInfo?.baseUrl || undefined
+      })
+    }
     setPickerOpen(false)
     setPickerStep('provider')
   }

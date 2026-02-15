@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   AgentInitParams,
+  AgentPromptParams,
   AgentSetModelParams,
   HttpLog,
   HttpLogListParams,
@@ -18,6 +19,7 @@ import type {
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
   type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error'
+  sessionId: string
   data?: string
   error?: string
 }
@@ -76,8 +78,8 @@ interface ShiroBotAPI {
   }
   agent: {
     init: (params: AgentInitParams) => Promise<{ success: boolean }>
-    prompt: (text: string) => Promise<{ success: boolean }>
-    abort: () => Promise<{ success: boolean }>
+    prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
+    abort: (sessionId: string) => Promise<{ success: boolean }>
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }

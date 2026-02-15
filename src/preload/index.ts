@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AgentInitParams,
+  AgentPromptParams,
   AgentSetModelParams,
   HttpLogListParams,
   MessageAddParams,
@@ -33,11 +34,11 @@ const api = {
     /** 初始化 Agent */
     init: (params: AgentInitParams) => ipcRenderer.invoke('agent:init', params),
 
-    /** 发送消息 */
-    prompt: (text: string) => ipcRenderer.invoke('agent:prompt', text),
+    /** 向指定 session 发送消息 */
+    prompt: (params: AgentPromptParams) => ipcRenderer.invoke('agent:prompt', params),
 
-    /** 中止生成 */
-    abort: () => ipcRenderer.invoke('agent:abort'),
+    /** 中止指定 session 的生成 */
+    abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
 
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) =>

@@ -3,37 +3,41 @@ import { getModel, streamSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 
-// Agent 事件类型（用于 IPC 通信）
+// Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
   type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error'
+  sessionId: string
   data?: string
   error?: string
 }
 
 /**
- * Agent 服务 — 封装 pi-agent-core，在 Main Process 中运行
- * 通过 IPC 将事件流转发到 Renderer Process
+ * Agent 服务 — 管理多个独立的 Agent 实例，按 sessionId 隔离
+ * 每个 session 拥有自己的 Agent，互不影响
  */
 export class AgentService {
-  private agent: Agent | null = null
+  private agents = new Map<string, Agent>()
   private mainWindow: BrowserWindow | null = null
-  private activeSessionId = ''
 
   /** 绑定主窗口，用于发送 IPC 事件 */
   setWindow(window: BrowserWindow): void {
     this.mainWindow = window
   }
 
-  /** 创建新的 Agent 实例 */
+  /** 为指定 session 创建 Agent 实例（已存在则跳过） */
   createAgent(
-    sessionId: string | undefined,
+    sessionId: string,
     provider: string,
     model: string,
     systemPrompt: string,
     apiKey?: string,
     baseUrl?: string
   ): void {
-    this.activeSessionId = sessionId || ''
+    if (this.agents.has(sessionId)) {
+      console.log(`[Agent] 跳过创建，已存在 session=${sessionId}`)
+      return
+    }
+    console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
 
     // 设置 API Key 环境变量
     if (apiKey) {
@@ -55,7 +59,7 @@ export class AgentService {
       resolvedModel.baseUrl = baseUrl
     }
 
-    this.agent = new Agent({
+    const agent = new Agent({
       initialState: {
         systemPrompt,
         model: resolvedModel,
@@ -67,9 +71,8 @@ export class AgentService {
         streamSimple(streamModel, context, {
           ...(options || {}),
           onPayload: (payload) => {
-            if (!this.activeSessionId) return
             httpLogService.logRequest({
-              sessionId: this.activeSessionId,
+              sessionId,
               provider: String(streamModel.provider || provider),
               model: String(streamModel.id || model),
               payload
@@ -78,73 +81,94 @@ export class AgentService {
         })
     })
 
-    // 订阅 Agent 事件，转发到 Renderer
-    this.agent.subscribe((event: AgentEvent) => {
-      this.forwardEvent(event)
+    this.agents.set(sessionId, agent)
+
+    // 订阅 Agent 事件，转发到 Renderer（携带 sessionId）
+    agent.subscribe((event: AgentEvent) => {
+      this.forwardEvent(sessionId, event)
     })
   }
 
-  /** 发送消息给 Agent */
-  async prompt(text: string): Promise<void> {
-    if (!this.agent) {
-      this.sendToRenderer({ type: 'error', error: 'Agent 未初始化' })
+  /** 向指定 session 的 Agent 发送消息 */
+  async prompt(sessionId: string, text: string): Promise<void> {
+    const agent = this.agents.get(sessionId)
+    if (!agent) {
+      console.log(`[Agent] prompt 失败，未找到 session=${sessionId}`)
+      this.sendToRenderer({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
 
+    console.log(`[Agent] prompt session=${sessionId} text=${text.slice(0, 50)}...`)
     try {
-      await this.agent.prompt(text)
+      await agent.prompt(text)
     } catch (err: any) {
-      this.sendToRenderer({ type: 'error', error: err.message || String(err) })
+      this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
     }
   }
 
-  /** 中止当前生成 */
-  abort(): void {
-    this.agent?.abort()
+  /** 中止指定 session 的生成 */
+  abort(sessionId: string): void {
+    console.log(`[Agent] 中止 session=${sessionId}`)
+    this.agents.get(sessionId)?.abort()
   }
 
-  /** 切换模型 */
-  setModel(provider: string, model: string, baseUrl?: string): void {
-    if (!this.agent) return
+  /** 切换指定 session 的模型 */
+  setModel(sessionId: string, provider: string, model: string, baseUrl?: string): void {
+    const agent = this.agents.get(sessionId)
+    if (!agent) return
     const resolvedModel = getModel(provider as any, model as any)
     if (baseUrl) {
       resolvedModel.baseUrl = baseUrl
     }
-    this.agent.setModel(resolvedModel)
+    agent.setModel(resolvedModel)
+    console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model}`)
   }
 
-  /** 获取当前消息列表 */
-  getMessages(): any[] {
-    return this.agent?.state.messages ?? []
+  /** 获取指定 session 的消息列表 */
+  getMessages(sessionId: string): any[] {
+    return this.agents.get(sessionId)?.state.messages ?? []
   }
 
-  /** 清除消息历史 */
-  clearMessages(): void {
-    if (this.agent) {
-      this.agent.state.messages = []
+  /** 清除指定 session 的消息历史 */
+  clearMessages(sessionId: string): void {
+    const agent = this.agents.get(sessionId)
+    if (agent) {
+      agent.state.messages = []
+    }
+  }
+
+  /** 移除指定 session 的 Agent（删除会话时调用） */
+  removeAgent(sessionId: string): void {
+    const agent = this.agents.get(sessionId)
+    if (agent) {
+      agent.abort()
+      this.agents.delete(sessionId)
+      console.log(`[Agent] 移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
 
   /** 将 pi-agent-core 事件转换并发送到 Renderer */
-  private forwardEvent(event: AgentEvent): void {
+  private forwardEvent(sessionId: string, event: AgentEvent): void {
     switch (event.type) {
       case 'agent_start':
-        this.sendToRenderer({ type: 'agent_start' })
+        console.log(`[Agent] 开始生成 session=${sessionId}`)
+        this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end':
-        this.sendToRenderer({ type: 'agent_end' })
+        console.log(`[Agent] 生成完成 session=${sessionId}`)
+        this.sendToRenderer({ type: 'agent_end', sessionId })
         break
       case 'message_update': {
         const msgEvent = event.assistantMessageEvent
         if (msgEvent.type === 'text_delta') {
-          this.sendToRenderer({ type: 'text_delta', data: msgEvent.delta })
+          this.sendToRenderer({ type: 'text_delta', sessionId, data: msgEvent.delta })
         } else if (msgEvent.type === 'thinking_delta') {
-          this.sendToRenderer({ type: 'thinking_delta', data: msgEvent.delta })
+          this.sendToRenderer({ type: 'thinking_delta', sessionId, data: msgEvent.delta })
         }
         break
       }
       case 'message_end':
-        this.sendToRenderer({ type: 'text_end' })
+        this.sendToRenderer({ type: 'text_end', sessionId })
         break
       default:
         break
