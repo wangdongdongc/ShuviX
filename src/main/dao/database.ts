@@ -91,26 +91,8 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
-    // 迁移：sessions 表增加工作目录 + Docker 字段
-    this.migrateSessionsWorkingDirColumns()
-
-    // 迁移：messages 表增加 type + metadata 列（支持工具调用）
-    this.migrateMessagesToolColumns()
-
-    // 迁移：http_logs 表增加 token 用量字段
-    this.migrateHttpLogsTokenColumns()
-
-    // 迁移：providers 表增加 apiProtocol / isBuiltin 字段
-    this.migrateProvidersProtocolColumns()
-
-    // 迁移：provider ID 统一为 uuidv7 格式
-    this.migrateProviderIdsToUuidv7()
-
     // 种子数据：内置提供商和模型
     this.seedProviders()
-
-    // 迁移旧 settings 表中的 provider 数据
-    this.migrateOldSettings()
   }
 
   /** 种子数据：预置提供商和模型列表 */
@@ -155,117 +137,6 @@ class DatabaseManager {
       }
     })
     seedAll()
-  }
-
-  /** 迁移：providers 表增加 apiProtocol / isBuiltin 字段 */
-  private migrateProvidersProtocolColumns(): void {
-    const columns = this.db.pragma('table_info(providers)') as Array<{ name: string }>
-    const hasApiProtocol = columns.some((c) => c.name === 'apiProtocol')
-    if (hasApiProtocol) return
-
-    this.db.exec(`
-      ALTER TABLE providers ADD COLUMN apiProtocol TEXT NOT NULL DEFAULT 'openai-completions';
-      ALTER TABLE providers ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 1;
-    `)
-    // 回填内置提供商的协议类型（按 name 匹配，兼容新旧 ID 格式）
-    this.db.prepare("UPDATE providers SET apiProtocol = 'anthropic-messages' WHERE name = 'Anthropic'").run()
-    this.db.prepare("UPDATE providers SET apiProtocol = 'google-generative-ai' WHERE name = 'Google'").run()
-  }
-
-  /** 迁移：将旧格式 provider ID（如 'openai'、'custom-xxx'）统一为 uuidv7 */
-  private migrateProviderIdsToUuidv7(): void {
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    const providers = this.db.prepare('SELECT id FROM providers').all() as Array<{ id: string }>
-    const needsMigration = providers.some((p) => !UUID_RE.test(p.id))
-    if (!needsMigration) return
-
-    // 暂停 FK 约束以便更新主键
-    this.db.pragma('foreign_keys = OFF')
-    const migrateTx = this.db.transaction(() => {
-      for (const p of providers) {
-        if (UUID_RE.test(p.id)) continue
-        const newId = uuidv7()
-        this.db.prepare('UPDATE provider_models SET providerId = ? WHERE providerId = ?').run(newId, p.id)
-        this.db.prepare('UPDATE sessions SET provider = ? WHERE provider = ?').run(newId, p.id)
-        this.db.prepare('UPDATE http_logs SET provider = ? WHERE provider = ?').run(newId, p.id)
-        this.db.prepare('UPDATE providers SET id = ? WHERE id = ?').run(newId, p.id)
-      }
-    })
-    migrateTx()
-    this.db.pragma('foreign_keys = ON')
-  }
-
-  /** 迁移：sessions 表增加工作目录 + Docker 字段 */
-  private migrateSessionsWorkingDirColumns(): void {
-    const columns = this.db.pragma('table_info(sessions)') as Array<{ name: string }>
-    const hasWorkingDir = columns.some((c) => c.name === 'workingDirectory')
-    if (hasWorkingDir) return
-
-    this.db.exec(`
-      ALTER TABLE sessions ADD COLUMN workingDirectory TEXT NOT NULL DEFAULT '';
-      ALTER TABLE sessions ADD COLUMN dockerEnabled INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE sessions ADD COLUMN dockerImage TEXT NOT NULL DEFAULT 'ubuntu:latest';
-    `)
-  }
-
-  /** 迁移：messages 表增加 type + metadata 列（支持工具调用） */
-  private migrateMessagesToolColumns(): void {
-    const columns = this.db.pragma('table_info(messages)') as Array<{ name: string }>
-    const hasType = columns.some((c) => c.name === 'type')
-    if (hasType) return
-
-    this.db.exec(`
-      ALTER TABLE messages ADD COLUMN type TEXT NOT NULL DEFAULT 'text';
-      ALTER TABLE messages ADD COLUMN metadata TEXT;
-    `)
-  }
-
-  /** 迁移：http_logs 表增加 token 用量字段 */
-  private migrateHttpLogsTokenColumns(): void {
-    const columns = this.db.pragma('table_info(http_logs)') as Array<{ name: string }>
-    const hasInputTokens = columns.some((c) => c.name === 'inputTokens')
-    if (hasInputTokens) return
-
-    this.db.exec(`
-      ALTER TABLE http_logs ADD COLUMN inputTokens INTEGER DEFAULT 0;
-      ALTER TABLE http_logs ADD COLUMN outputTokens INTEGER DEFAULT 0;
-      ALTER TABLE http_logs ADD COLUMN totalTokens INTEGER DEFAULT 0;
-    `)
-  }
-
-  /** 迁移旧 settings 表中的 apiKey:/baseUrl: 数据到 providers 表 */
-  private migrateOldSettings(): void {
-    const rows = this.db.prepare(
-      "SELECT key, value FROM settings WHERE key LIKE 'apiKey:%' OR key LIKE 'baseUrl:%'"
-    ).all() as Array<{ key: string; value: string }>
-
-    if (rows.length === 0) return
-
-    // 旧 slug → 提供商 name 的映射（旧 settings 键用的是 slug）
-    const slugToName: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google' }
-
-    const migrate = this.db.transaction(() => {
-      for (const row of rows) {
-        if (row.key.startsWith('apiKey:')) {
-          const slug = row.key.replace('apiKey:', '')
-          const name = slugToName[slug]
-          if (name) {
-            this.db.prepare('UPDATE providers SET apiKey = ?, updatedAt = ? WHERE name = ?')
-              .run(row.value, Date.now(), name)
-          }
-        } else if (row.key.startsWith('baseUrl:')) {
-          const slug = row.key.replace('baseUrl:', '')
-          const name = slugToName[slug]
-          if (name) {
-            this.db.prepare('UPDATE providers SET baseUrl = ?, updatedAt = ? WHERE name = ?')
-              .run(row.value, Date.now(), name)
-          }
-        }
-        this.db.prepare('DELETE FROM settings WHERE key = ?').run(row.key)
-      }
-      this.db.prepare("DELETE FROM settings WHERE key IN ('provider', 'model')").run()
-    })
-    migrate()
   }
 
   /** 获取数据库连接实例 */
