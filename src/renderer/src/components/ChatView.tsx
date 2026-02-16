@@ -131,7 +131,6 @@ export function ChatView(): React.JSX.Element {
                         args={callMeta.args}
                         result={msg.content}
                         status={meta.isError ? 'error' : 'done'}
-                        isHistorical
                       />
                     )
                   }

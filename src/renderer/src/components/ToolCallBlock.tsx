@@ -6,8 +6,6 @@ interface ToolCallBlockProps {
   args?: any
   result?: string
   status: 'running' | 'done' | 'error'
-  /** 是否从持久化消息渲染（非实时） */
-  isHistorical?: boolean
 }
 
 /**
@@ -19,7 +17,6 @@ export function ToolCallBlock({
   args,
   result,
   status,
-  isHistorical: _isHistorical
 }: ToolCallBlockProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
 
