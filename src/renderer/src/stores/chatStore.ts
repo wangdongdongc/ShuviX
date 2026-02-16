@@ -4,8 +4,8 @@ import { create } from 'zustand'
 export interface ChatMessage {
   id: string
   sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool'
-  type: 'text' | 'tool_call' | 'tool_result'
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'shirobot_notify'
+  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
   content: string
   metadata: string | null
   createdAt: number

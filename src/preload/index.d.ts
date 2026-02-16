@@ -20,7 +20,7 @@ import type {
 
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event'
   sessionId: string
   data?: string
   error?: string
@@ -49,8 +49,8 @@ interface Session {
 interface ChatMessage {
   id: string
   sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool'
-  type: 'text' | 'tool_call' | 'tool_result'
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'shirobot_notify'
+  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
   content: string
   metadata: string | null
   createdAt: number

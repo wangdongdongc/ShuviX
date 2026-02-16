@@ -39,12 +39,12 @@ export class DockerManager {
     sessionId: string,
     image: string,
     workingDirectory: string
-  ): Promise<string> {
+  ): Promise<{ containerId: string; isNew: boolean }> {
     const existing = this.containers.get(sessionId)
     if (existing) {
       // 检查容器是否仍在运行
       if (this.isContainerRunning(existing.containerId)) {
-        return existing.containerId
+        return { containerId: existing.containerId, isNew: false }
       }
       // 容器已停止，清理引用
       this.containers.delete(sessionId)
@@ -55,16 +55,22 @@ export class DockerManager {
     const containerId = await this.createContainer(containerName, image, workingDirectory)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
     console.log(`[Docker] 创建容器 session=${sessionId.slice(0, 8)} container=${containerId.slice(0, 12)}`)
-    return containerId
+    return { containerId, isNew: true }
   }
 
   /** 在容器中执行命令 */
   async exec(
     containerId: string,
     command: string,
-    cwd: string
+    cwd: string,
+    signal?: AbortSignal
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error('操作已中止'))
+        return
+      }
+
       const child = spawn('docker', [
         'exec',
         '-w', cwd,
@@ -76,6 +82,7 @@ export class DockerManager {
 
       let stdout = ''
       let stderr = ''
+      let aborted = false
 
       child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString('utf-8')
@@ -84,11 +91,26 @@ export class DockerManager {
         stderr += data.toString('utf-8')
       })
 
+      // abort 处理：终止 docker exec 子进程
+      const onAbort = (): void => {
+        aborted = true
+        child.kill('SIGTERM')
+      }
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+
       child.on('close', (code) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
+        if (aborted) {
+          reject(new Error('操作已中止'))
+          return
+        }
         resolve({ stdout, stderr, exitCode: code ?? 1 })
       })
 
       child.on('error', (err) => {
+        if (signal) signal.removeEventListener('abort', onAbort)
         reject(err)
       })
     })

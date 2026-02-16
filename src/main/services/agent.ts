@@ -9,7 +9,7 @@ import { createDockerOperations } from '../tools/dockerOperations'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event'
   sessionId: string
   data?: string
   error?: string
@@ -105,7 +105,10 @@ export class AgentService {
     let toolOps: import('../tools').CreateToolsOptions | undefined
     if (useDocker) {
       // Docker 模式：仅 bash 在容器中执行，read/write/edit 直接操作宿主机文件
-      const dockerOps = createDockerOperations(dockerManager, sessionId, dockerImage!, hostCwd)
+      const dockerOps = createDockerOperations(dockerManager, sessionId, dockerImage!, hostCwd, (containerId) => {
+        // 容器创建时写入 docker_event 消息
+        this.emitDockerEvent(sessionId, 'container_created', { containerId: containerId.slice(0, 12), image: dockerImage! })
+      })
       toolOps = {
         bashOperations: dockerOps.bash,
         bashCwd: CONTAINER_WORKSPACE
@@ -274,6 +277,7 @@ export class AgentService {
         console.log(`[Agent] 生成完成 session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
         if (this.dockerSessions.has(sessionId)) {
+          this.emitDockerEvent(sessionId, 'container_destroyed')
           dockerManager.destroyContainer(sessionId).catch((err) =>
             console.error(`[Docker] 销毁容器失败: ${err}`)
           )
@@ -355,6 +359,18 @@ export class AgentService {
       default:
         break
     }
+  }
+
+  /** 持久化 docker_event 消息并通知前端 */
+  private emitDockerEvent(sessionId: string, action: string, extra?: Record<string, string>): void {
+    const msg = messageService.add({
+      sessionId,
+      role: 'shirobot_notify',
+      type: 'docker_event',
+      content: action,
+      metadata: extra ? JSON.stringify(extra) : null
+    })
+    this.sendToRenderer({ type: 'docker_event', sessionId, data: msg.id })
   }
 
   /** 发送事件到 Renderer */

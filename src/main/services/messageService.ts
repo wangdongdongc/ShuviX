@@ -16,8 +16,8 @@ export class MessageService {
   /** 添加消息（同时更新会话时间戳） */
   add(params: {
     sessionId: string
-    role: 'user' | 'assistant' | 'tool'
-    type?: 'text' | 'tool_call' | 'tool_result'
+    role: 'user' | 'assistant' | 'tool' | 'system' | 'shirobot_notify'
+    type?: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
     content: string
     metadata?: string | null
   }): Message {

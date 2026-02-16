@@ -14,16 +14,20 @@ export function createDockerOperations(
   dockerManager: DockerManager,
   sessionId: string,
   image: string,
-  workingDirectory: string
+  workingDirectory: string,
+  onContainerCreated?: (containerId: string) => void
 ): { bash: BashOperations } {
   /** 确保容器运行中并返回 containerId */
-  const getContainer = (): Promise<string> =>
-    dockerManager.ensureContainer(sessionId, image, workingDirectory)
+  const getContainer = async (): Promise<string> => {
+    const { containerId, isNew } = await dockerManager.ensureContainer(sessionId, image, workingDirectory)
+    if (isNew) onContainerCreated?.(containerId)
+    return containerId
+  }
 
   const bashOps: BashOperations = {
-    spawn: async (command, cwd, _timeout, _signal) => {
+    spawn: async (command, cwd, _timeout, signal) => {
       const containerId = await getContainer()
-      return dockerManager.exec(containerId, command, cwd)
+      return dockerManager.exec(containerId, command, cwd, signal)
     }
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { MessageSquarePlus, Sparkles } from 'lucide-react'
+import { MessageSquarePlus, Sparkles, Container } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
@@ -99,6 +99,16 @@ export function ChatView(): React.JSX.Element {
             ) : (
               <div className="max-w-3xl mx-auto py-4">
                 {messages.map((msg) => {
+                  if (msg.type === 'docker_event') {
+                    const action = msg.content
+                    const isCreate = action === 'container_created'
+                    return (
+                      <div key={msg.id} className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
+                        <Container size={12} />
+                        <span>{isCreate ? '容器已创建' : '容器已销毁'}</span>
+                      </div>
+                    )
+                  }
                   if (msg.type === 'tool_call') {
                     const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
                     // 查找是否已有配对的 tool_result
@@ -134,10 +144,12 @@ export function ChatView(): React.JSX.Element {
                       />
                     )
                   }
+                  // shirobot_notify 等非对话消息不渲染为气泡
+                  if (msg.role === 'shirobot_notify') return null
                   return (
                     <MessageBubble
                       key={msg.id}
-                      role={msg.role}
+                      role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
                       content={msg.content}
                     />
                   )

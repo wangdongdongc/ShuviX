@@ -144,6 +144,15 @@ function App(): React.JSX.Element {
           }
           break
 
+        case 'docker_event':
+          // 仅当前活跃会话时添加 docker_event 消息
+          if (sid === store.activeSessionId && event.data) {
+            const msgs3 = await window.api.message.list(sid)
+            const dockerMsg = msgs3.find((m) => m.id === event.data)
+            if (dockerMsg) store.addMessage(dockerMsg)
+          }
+          break
+
         case 'agent_end': {
           const content = store.getSessionStreamContent(sid)
           if (content) {
