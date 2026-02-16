@@ -17,6 +17,7 @@ export interface HttpLogSummary {
   sessionId: string
   sessionTitle: string
   provider: string
+  providerName: string
   model: string
   inputTokens: number
   outputTokens: number

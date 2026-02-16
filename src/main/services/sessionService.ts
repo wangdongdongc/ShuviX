@@ -2,6 +2,7 @@ import { v7 as uuidv7 } from 'uuid'
 import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
 import { httpLogDao } from '../dao/httpLogDao'
+import { providerDao } from '../dao/providerDao'
 import type { Session } from '../types'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -39,8 +40,8 @@ export class SessionService {
     const session: Session = {
       id,
       title: params?.title || '新对话',
-      provider: params?.provider || 'openai',
-      model: params?.model || 'gpt-4o-mini',
+      provider: params?.provider || this.getDefaultProvider(),
+      model: params?.model || this.getDefaultModel(),
       systemPrompt: params?.systemPrompt || 'You are a helpful assistant.',
       workingDirectory,
       dockerEnabled: params?.dockerEnabled ?? 0,
@@ -78,6 +79,20 @@ export class SessionService {
       dockerEnabled ? 1 : 0,
       dockerImage || 'ubuntu:latest'
     )
+  }
+
+  /** 获取默认提供商 ID（第一个已启用的提供商） */
+  private getDefaultProvider(): string {
+    const enabled = providerDao.findEnabled()
+    return enabled.length > 0 ? enabled[0].id : ''
+  }
+
+  /** 获取默认模型 ID（第一个已启用提供商的第一个已启用模型） */
+  private getDefaultModel(): string {
+    const providerId = this.getDefaultProvider()
+    if (!providerId) return ''
+    const models = providerDao.findEnabledModels(providerId)
+    return models.length > 0 ? models[0].modelId : ''
   }
 
   /** 删除会话（同时清理关联消息和 HTTP 日志） */

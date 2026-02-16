@@ -72,8 +72,8 @@ function App(): React.JSX.Element {
       useChatStore.getState().setMessages(msgs)
 
       const currentSession = sessions.find((s) => s.id === activeSessionId)
-      const sessionProvider = currentSession?.provider || 'openai'
-      const sessionModel = currentSession?.model || 'gpt-4o-mini'
+      const sessionProvider = currentSession?.provider || ''
+      const sessionModel = currentSession?.model || ''
 
       // 将当前激活模型同步为该会话配置
       setActiveProvider(sessionProvider)

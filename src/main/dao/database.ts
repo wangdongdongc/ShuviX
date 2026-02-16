@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
+import { v7 as uuidv7 } from 'uuid'
 
 /**
  * 数据库连接管理
@@ -33,8 +34,8 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
-        provider TEXT NOT NULL DEFAULT 'openai',
-        model TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+        provider TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
         systemPrompt TEXT NOT NULL DEFAULT 'You are a helpful assistant.',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
@@ -56,7 +57,7 @@ class DatabaseManager {
 
       CREATE TABLE IF NOT EXISTS providers (
         id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
+        name TEXT NOT NULL UNIQUE,
         apiKey TEXT DEFAULT '',
         baseUrl TEXT DEFAULT '',
         apiProtocol TEXT NOT NULL DEFAULT 'openai-completions',
@@ -102,6 +103,9 @@ class DatabaseManager {
     // 迁移：providers 表增加 apiProtocol / isBuiltin 字段
     this.migrateProvidersProtocolColumns()
 
+    // 迁移：provider ID 统一为 uuidv7 格式
+    this.migrateProviderIdsToUuidv7()
+
     // 种子数据：内置提供商和模型
     this.seedProviders()
 
@@ -114,40 +118,39 @@ class DatabaseManager {
     const now = Date.now()
 
     const builtinProviders = [
-      { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0 },
-      { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1 },
-      { id: 'google', name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2 }
+      { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0,
+        models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3-mini', 'o4-mini'],
+        defaultEnabled: ['gpt-4o-mini'] },
+      { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1,
+        models: ['claude-sonnet-4-20250514', 'claude-haiku-3-5-20241022', 'claude-opus-4-20250514'],
+        defaultEnabled: ['claude-sonnet-4-20250514'] },
+      { name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2,
+        models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+        defaultEnabled: ['gemini-2.5-flash'] }
     ]
 
-    const builtinModels: Record<string, string[]> = {
-      openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3-mini', 'o4-mini'],
-      anthropic: ['claude-sonnet-4-20250514', 'claude-haiku-3-5-20241022', 'claude-opus-4-20250514'],
-      google: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']
-    }
-
-    // 默认启用的模型（用户常用的）
-    const defaultEnabled: Record<string, string[]> = {
-      openai: ['gpt-4o-mini'],
-      anthropic: ['claude-sonnet-4-20250514'],
-      google: ['gemini-2.5-flash']
-    }
-
+    const findByName = this.db.prepare('SELECT id FROM providers WHERE name = ?')
     const insertProvider = this.db.prepare(
-      'INSERT OR IGNORE INTO providers (id, name, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)'
+      'INSERT INTO providers (id, name, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)'
     )
+    const findModel = this.db.prepare('SELECT id FROM provider_models WHERE providerId = ? AND modelId = ?')
     const insertModel = this.db.prepare(
-      'INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, ?, ?)'
     )
 
     const seedAll = this.db.transaction(() => {
       for (const p of builtinProviders) {
-        insertProvider.run(p.id, p.name, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
-      }
-      for (const [providerId, models] of Object.entries(builtinModels)) {
-        const enabled = defaultEnabled[providerId] || []
-        models.forEach((modelId, idx) => {
-          const id = `${providerId}:${modelId}`
-          insertModel.run(id, providerId, modelId, enabled.includes(modelId) ? 1 : 0, idx)
+        let existing = findByName.get(p.name) as { id: string } | undefined
+        if (!existing) {
+          const id = uuidv7()
+          insertProvider.run(id, p.name, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
+          existing = { id }
+        }
+        const providerId = existing.id
+        p.models.forEach((modelId, idx) => {
+          if (!findModel.get(providerId, modelId)) {
+            insertModel.run(uuidv7(), providerId, modelId, p.defaultEnabled.includes(modelId) ? 1 : 0, idx)
+          }
         })
       }
     })
@@ -160,14 +163,36 @@ class DatabaseManager {
     const hasApiProtocol = columns.some((c) => c.name === 'apiProtocol')
     if (hasApiProtocol) return
 
-    // 添加新列
     this.db.exec(`
       ALTER TABLE providers ADD COLUMN apiProtocol TEXT NOT NULL DEFAULT 'openai-completions';
       ALTER TABLE providers ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 1;
     `)
-    // 回填内置提供商的协议类型
-    this.db.prepare("UPDATE providers SET apiProtocol = 'anthropic-messages' WHERE id = 'anthropic'").run()
-    this.db.prepare("UPDATE providers SET apiProtocol = 'google-generative-ai' WHERE id = 'google'").run()
+    // 回填内置提供商的协议类型（按 name 匹配，兼容新旧 ID 格式）
+    this.db.prepare("UPDATE providers SET apiProtocol = 'anthropic-messages' WHERE name = 'Anthropic'").run()
+    this.db.prepare("UPDATE providers SET apiProtocol = 'google-generative-ai' WHERE name = 'Google'").run()
+  }
+
+  /** 迁移：将旧格式 provider ID（如 'openai'、'custom-xxx'）统一为 uuidv7 */
+  private migrateProviderIdsToUuidv7(): void {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const providers = this.db.prepare('SELECT id FROM providers').all() as Array<{ id: string }>
+    const needsMigration = providers.some((p) => !UUID_RE.test(p.id))
+    if (!needsMigration) return
+
+    // 暂停 FK 约束以便更新主键
+    this.db.pragma('foreign_keys = OFF')
+    const migrateTx = this.db.transaction(() => {
+      for (const p of providers) {
+        if (UUID_RE.test(p.id)) continue
+        const newId = uuidv7()
+        this.db.prepare('UPDATE provider_models SET providerId = ? WHERE providerId = ?').run(newId, p.id)
+        this.db.prepare('UPDATE sessions SET provider = ? WHERE provider = ?').run(newId, p.id)
+        this.db.prepare('UPDATE http_logs SET provider = ? WHERE provider = ?').run(newId, p.id)
+        this.db.prepare('UPDATE providers SET id = ? WHERE id = ?').run(newId, p.id)
+      }
+    })
+    migrateTx()
+    this.db.pragma('foreign_keys = ON')
   }
 
   /** 迁移：sessions 表增加工作目录 + Docker 字段 */
@@ -216,21 +241,28 @@ class DatabaseManager {
 
     if (rows.length === 0) return
 
+    // 旧 slug → 提供商 name 的映射（旧 settings 键用的是 slug）
+    const slugToName: Record<string, string> = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google' }
+
     const migrate = this.db.transaction(() => {
       for (const row of rows) {
         if (row.key.startsWith('apiKey:')) {
-          const providerId = row.key.replace('apiKey:', '')
-          this.db.prepare('UPDATE providers SET apiKey = ?, updatedAt = ? WHERE id = ?')
-            .run(row.value, Date.now(), providerId)
+          const slug = row.key.replace('apiKey:', '')
+          const name = slugToName[slug]
+          if (name) {
+            this.db.prepare('UPDATE providers SET apiKey = ?, updatedAt = ? WHERE name = ?')
+              .run(row.value, Date.now(), name)
+          }
         } else if (row.key.startsWith('baseUrl:')) {
-          const providerId = row.key.replace('baseUrl:', '')
-          this.db.prepare('UPDATE providers SET baseUrl = ?, updatedAt = ? WHERE id = ?')
-            .run(row.value, Date.now(), providerId)
+          const slug = row.key.replace('baseUrl:', '')
+          const name = slugToName[slug]
+          if (name) {
+            this.db.prepare('UPDATE providers SET baseUrl = ?, updatedAt = ? WHERE name = ?')
+              .run(row.value, Date.now(), name)
+          }
         }
-        // 删除已迁移的旧数据
         this.db.prepare('DELETE FROM settings WHERE key = ?').run(row.key)
       }
-      // 同时清理旧的 provider/model 全局 key
       this.db.prepare("DELETE FROM settings WHERE key IN ('provider', 'model')").run()
     })
     migrate()

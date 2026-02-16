@@ -81,18 +81,19 @@ export class AgentService {
     }
     console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
 
-    // 解析模型：内置提供商用 getModel，自定义提供商手动构造
-    const isCustom = provider.startsWith('custom-')
+    // 查询提供商信息，判断是否内置
+    const providerInfo = providerDao.findById(provider)
+    const isBuiltin = providerInfo?.isBuiltin ?? false
     let resolvedModel: Model<Api>
 
-    if (isCustom) {
+    if (!isBuiltin) {
       // 自定义提供商：手动构造 Model 对象
       resolvedModel = {
         id: model,
         name: model,
-        api: (apiProtocol || 'openai-completions') as Api,
+        api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
         provider,
-        baseUrl: baseUrl || '',
+        baseUrl: baseUrl || providerInfo?.baseUrl || '',
         reasoning: false,
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -100,19 +101,20 @@ export class AgentService {
         maxTokens: 16384
       }
     } else {
-      // 内置提供商：通过 SDK 解析
+      // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
+      const slug = (providerInfo?.name || '').toLowerCase()
       if (apiKey) {
         const envMap: Record<string, string> = {
           openai: 'OPENAI_API_KEY',
           anthropic: 'ANTHROPIC_API_KEY',
           google: 'GOOGLE_API_KEY'
         }
-        const envKey = envMap[provider]
+        const envKey = envMap[slug]
         if (envKey) {
           process.env[envKey] = apiKey
         }
       }
-      resolvedModel = getModel(provider as any, model as any)
+      resolvedModel = getModel(slug as any, model as any)
       if (baseUrl) {
         resolvedModel.baseUrl = baseUrl
       }
@@ -225,16 +227,17 @@ export class AgentService {
     const agent = this.agents.get(sessionId)
     if (!agent) return
 
-    const isCustom = provider.startsWith('custom-')
+    const providerInfo = providerDao.findById(provider)
+    const isBuiltin = providerInfo?.isBuiltin ?? false
     let resolvedModel: Model<Api>
 
-    if (isCustom) {
+    if (!isBuiltin) {
       resolvedModel = {
         id: model,
         name: model,
-        api: (apiProtocol || 'openai-completions') as Api,
+        api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
         provider,
-        baseUrl: baseUrl || '',
+        baseUrl: baseUrl || providerInfo?.baseUrl || '',
         reasoning: false,
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -242,7 +245,8 @@ export class AgentService {
         maxTokens: 16384
       }
     } else {
-      resolvedModel = getModel(provider as any, model as any)
+      const slug = (providerInfo?.name || '').toLowerCase()
+      resolvedModel = getModel(slug as any, model as any)
       if (baseUrl) {
         resolvedModel.baseUrl = baseUrl
       }

@@ -24,9 +24,12 @@ export class HttpLogDao {
     if (params.sessionId) {
       return this.db
         .prepare(
-          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model,
+          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle,
+                  h.provider, COALESCE(p.name, h.provider) AS providerName, h.model,
                   h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
-           FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
+           FROM http_logs h
+           LEFT JOIN sessions s ON h.sessionId = s.id
+           LEFT JOIN providers p ON h.provider = p.id
            WHERE h.sessionId = ?
            ORDER BY h.createdAt DESC LIMIT ?`
         )
@@ -34,9 +37,12 @@ export class HttpLogDao {
     }
     return this.db
       .prepare(
-        `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model,
+        `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle,
+                h.provider, COALESCE(p.name, h.provider) AS providerName, h.model,
                 h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
-         FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
+         FROM http_logs h
+         LEFT JOIN sessions s ON h.sessionId = s.id
+         LEFT JOIN providers p ON h.provider = p.id
          ORDER BY h.createdAt DESC LIMIT ?`
       )
       .all(limit) as HttpLogSummary[]

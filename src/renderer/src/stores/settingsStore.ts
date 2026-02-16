@@ -64,8 +64,8 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set) => ({
   providers: [],
   availableModels: [],
-  activeProvider: 'openai',
-  activeModel: 'gpt-4o-mini',
+  activeProvider: '',
+  activeModel: '',
   systemPrompt: 'You are a helpful assistant.',
   theme: 'dark',
   fontSize: 14,
@@ -86,8 +86,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   /** 从 settings 表加载通用设置 */
   loadSettings: (settings) => {
     set({
-      activeProvider: settings['general.defaultProvider'] || 'openai',
-      activeModel: settings['general.defaultModel'] || 'gpt-4o-mini',
+      activeProvider: settings['general.defaultProvider'] || '',
+      activeModel: settings['general.defaultModel'] || '',
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       fontSize: Number(settings['general.fontSize']) || 14,

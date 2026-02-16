@@ -40,7 +40,7 @@ export class ProviderService {
 
   /** 添加自定义提供商 */
   addCustomProvider(params: { name: string; baseUrl: string; apiKey: string; apiProtocol: ApiProtocol }): Provider {
-    const id = `custom-${uuidv7()}`
+    const id = uuidv7()
     providerDao.insert({
       id,
       name: params.name,
@@ -105,7 +105,7 @@ export class ProviderService {
 
     // 仅支持 OpenAI 兼容协议的提供商同步模型
     const protocol = (provider as any).apiProtocol || 'openai-completions'
-    if (protocol !== 'openai-completions' && providerId !== 'openai') {
+    if (protocol !== 'openai-completions') {
       throw new Error('自动同步仅支持 OpenAI 兼容协议的提供商')
     }
 
@@ -115,7 +115,7 @@ export class ProviderService {
     }
 
     const existingModelIds = new Set(providerDao.findModelsByProvider(providerId).map((m) => m.modelId))
-    const baseUrl = provider.baseUrl?.trim() || (providerId === 'openai' ? 'https://api.openai.com/v1' : '')
+    const baseUrl = provider.baseUrl?.trim() || 'https://api.openai.com/v1'
     const fetchedModelIds = await this.fetchOpenAIModels(apiKey, baseUrl)
 
     providerDao.upsertModels(providerId, fetchedModelIds)

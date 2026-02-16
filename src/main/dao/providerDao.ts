@@ -53,8 +53,12 @@ export class ProviderDao {
       .run(isEnabled ? 1 : 0, Date.now(), id)
   }
 
-  /** 插入自定义提供商 */
+  /** 插入自定义提供商（name 必须唯一） */
   insert(provider: { id: string; name: string; baseUrl: string; apiKey: string; apiProtocol: string }): void {
+    const existing = this.db.prepare('SELECT id FROM providers WHERE name = ?').get(provider.name)
+    if (existing) {
+      throw new Error(`提供商名称"${provider.name}"已存在`)
+    }
     const now = Date.now()
     const maxOrder = this.getMaxSortOrder()
     this.db

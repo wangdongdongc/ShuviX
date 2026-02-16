@@ -58,6 +58,7 @@ function HttpLogSettings(): React.JSX.Element {
     sessionId: string
     sessionTitle: string
     provider: string
+    providerName: string
     model: string
     inputTokens: number
     outputTokens: number
@@ -213,7 +214,7 @@ function HttpLogSettings(): React.JSX.Element {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-text-primary font-medium">
-                      {log.provider} / {log.model}
+                      {log.providerName || log.provider} / {log.model}
                     </div>
                     {log.totalTokens > 0 && (
                       <div className="mt-0.5 text-[10px] text-text-tertiary">
