@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Wrench, Check, X, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 
 interface ToolCallBlockProps {
   toolName: string
@@ -22,6 +22,25 @@ export function ToolCallBlock({
   isHistorical: _isHistorical
 }: ToolCallBlockProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
+
+  // 根据工具类型生成摘要
+  const { icon, detail } = (() => {
+    const ic = 'text-text-tertiary flex-shrink-0'
+    switch (toolName) {
+      case 'bash': {
+        const line = (args?.command || '').split('\n')[0]
+        return { icon: <Terminal size={14} className={ic} />, detail: line.length > 80 ? line.slice(0, 77) + '...' : line }
+      }
+      case 'read':
+        return { icon: <FileText size={14} className={ic} />, detail: args?.path || '' }
+      case 'write':
+        return { icon: <FileOutput size={14} className={ic} />, detail: args?.path || '' }
+      case 'edit':
+        return { icon: <FilePen size={14} className={ic} />, detail: args?.path || '' }
+      default:
+        return { icon: <Wrench size={14} className={ic} />, detail: '' }
+    }
+  })()
 
   const statusConfig = {
     running: {
@@ -50,8 +69,10 @@ export function ToolCallBlock({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 transition-colors"
       >
-        <Wrench size={14} className="text-text-tertiary flex-shrink-0" />
-        <span className="flex-1 text-xs font-medium text-text-primary truncate">{toolName}</span>
+        {icon}
+        <span className="text-xs font-medium text-text-primary flex-shrink-0">{toolName}</span>
+        {detail && <span className="flex-1 text-[11px] text-text-secondary truncate font-mono">{detail}</span>}
+        {!detail && <span className="flex-1" />}
         <span className="flex items-center gap-1.5 text-[10px] text-text-tertiary flex-shrink-0">
           {config.icon}
           {config.label}
