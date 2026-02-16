@@ -7,6 +7,9 @@ import type {
   HttpLogListParams,
   HttpLogSummary,
   MessageAddParams,
+  ProviderAddModelParams,
+  ProviderAddParams,
+  ProviderDeleteParams,
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
@@ -62,6 +65,8 @@ interface ProviderInfo {
   name: string
   apiKey: string
   baseUrl: string
+  apiProtocol: 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+  isBuiltin: number
   isEnabled: number
   sortOrder: number
   createdAt: number
@@ -105,6 +110,10 @@ interface ShiroBotAPI {
     listAvailableModels: () => Promise<AvailableModel[]>
     toggleModelEnabled: (params: ProviderToggleModelEnabledParams) => Promise<{ success: boolean }>
     syncModels: (params: ProviderSyncModelsParams) => Promise<{ providerId: string; total: number; added: number }>
+    add: (params: ProviderAddParams) => Promise<ProviderInfo>
+    delete: (params: ProviderDeleteParams) => Promise<{ success: boolean }>
+    addModel: (params: ProviderAddModelParams) => Promise<{ success: boolean }>
+    deleteModel: (id: string) => Promise<{ success: boolean }>
   }
   session: {
     list: () => Promise<Session[]>

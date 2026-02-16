@@ -15,6 +15,7 @@ export interface AgentInitParams {
   dockerImage?: string
   apiKey?: string
   baseUrl?: string
+  apiProtocol?: string
   messages?: AgentInitMessage[]
 }
 
@@ -30,4 +31,5 @@ export interface AgentSetModelParams {
   provider: string
   model: string
   baseUrl?: string
+  apiProtocol?: string
 }

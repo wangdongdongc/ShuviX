@@ -1,9 +1,14 @@
+/** API 协议类型（用户可选） */
+export type ApiProtocol = 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+
 /** 提供商数据结构 */
 export interface Provider {
   id: string
   name: string
   apiKey: string
   baseUrl: string
+  apiProtocol: ApiProtocol
+  isBuiltin: number // 0=自定义, 1=内置
   isEnabled: number // 0=禁用, 1=启用
   sortOrder: number
   createdAt: number
@@ -41,4 +46,23 @@ export interface ProviderToggleModelEnabledParams {
 /** IPC: 同步提供商模型参数 */
 export interface ProviderSyncModelsParams {
   providerId: string
+}
+
+/** IPC: 添加自定义提供商参数 */
+export interface ProviderAddParams {
+  name: string
+  baseUrl: string
+  apiKey: string
+  apiProtocol: ApiProtocol
+}
+
+/** IPC: 删除提供商参数 */
+export interface ProviderDeleteParams {
+  id: string
+}
+
+/** IPC: 添加模型参数 */
+export interface ProviderAddModelParams {
+  providerId: string
+  modelId: string
 }

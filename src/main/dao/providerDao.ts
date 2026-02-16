@@ -53,6 +53,35 @@ export class ProviderDao {
       .run(isEnabled ? 1 : 0, Date.now(), id)
   }
 
+  /** 插入自定义提供商 */
+  insert(provider: { id: string; name: string; baseUrl: string; apiKey: string; apiProtocol: string }): void {
+    const now = Date.now()
+    const maxOrder = this.getMaxSortOrder()
+    this.db
+      .prepare(
+        'INSERT INTO providers (id, name, apiKey, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?)'
+      )
+      .run(provider.id, provider.name, provider.apiKey, provider.baseUrl, provider.apiProtocol, maxOrder + 1, now, now)
+  }
+
+  /** 删除提供商及其模型（仅允许删除自定义提供商） */
+  delete(id: string): boolean {
+    const provider = this.findById(id)
+    if (!provider || provider.isBuiltin) return false
+    const deleteTx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM provider_models WHERE providerId = ?').run(id)
+      this.db.prepare('DELETE FROM providers WHERE id = ?').run(id)
+    })
+    deleteTx()
+    return true
+  }
+
+  /** 获取当前最大 sortOrder */
+  private getMaxSortOrder(): number {
+    const row = this.db.prepare('SELECT MAX(sortOrder) as maxOrder FROM providers').get() as { maxOrder: number | null }
+    return row?.maxOrder ?? -1
+  }
+
   // ============ 模型操作 ============
 
   /** 获取某个提供商的所有模型 */
@@ -121,6 +150,22 @@ export class ProviderDao {
       }
     })
     batch()
+  }
+
+  /** 手动添加单个模型（默认启用） */
+  insertModel(providerId: string, modelId: string): void {
+    const id = `${providerId}:${modelId}`
+    const maxOrder = this.db
+      .prepare('SELECT MAX(sortOrder) as maxOrder FROM provider_models WHERE providerId = ?')
+      .get(providerId) as { maxOrder: number | null }
+    this.db
+      .prepare('INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 1, ?)')
+      .run(id, providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
+  }
+
+  /** 删除单个模型 */
+  deleteModel(id: string): void {
+    this.db.prepare('DELETE FROM provider_models WHERE id = ?').run(id)
   }
 }
 

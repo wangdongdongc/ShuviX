@@ -167,7 +167,7 @@ export function SessionEditDialog({ session, onClose }: SessionEditDialogProps):
             <p className="text-[10px] text-text-tertiary mt-2">
               {dockerAvailable === false
                 ? '未检测到 Docker，请先安装并启动 Docker Desktop'
-                : '开启后命令执行和文件操作将通过 Docker 容器隔离，工作目录会挂载到容器内'}
+                : '开启后 Bash 命令将在 Docker 容器内隔离执行，当前工作目录会挂载到容器内'}
             </p>
           </div>
         </div>

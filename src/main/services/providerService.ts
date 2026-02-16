@@ -1,5 +1,6 @@
+import { v7 as uuidv7 } from 'uuid'
 import { providerDao } from '../dao/providerDao'
-import type { Provider, ProviderModel } from '../types'
+import type { ApiProtocol, Provider, ProviderModel } from '../types'
 
 /**
  * 提供商服务 — 编排提供商和模型的业务逻辑
@@ -37,6 +38,24 @@ export class ProviderService {
     providerDao.updateEnabled(id, isEnabled)
   }
 
+  /** 添加自定义提供商 */
+  addCustomProvider(params: { name: string; baseUrl: string; apiKey: string; apiProtocol: ApiProtocol }): Provider {
+    const id = `custom-${uuidv7()}`
+    providerDao.insert({
+      id,
+      name: params.name,
+      baseUrl: params.baseUrl.replace(/\/+$/, ''),
+      apiKey: params.apiKey,
+      apiProtocol: params.apiProtocol
+    })
+    return providerDao.findById(id)!
+  }
+
+  /** 删除自定义提供商 */
+  deleteProvider(id: string): boolean {
+    return providerDao.delete(id)
+  }
+
   // ============ 模型操作 ============
 
   /** 获取某个提供商的所有模型（含禁用的，用于设置面板） */
@@ -64,6 +83,16 @@ export class ProviderService {
     providerDao.batchUpdateModelEnabled(updates)
   }
 
+  /** 手动添加模型 */
+  addModel(providerId: string, modelId: string): void {
+    providerDao.insertModel(providerId, modelId)
+  }
+
+  /** 删除模型 */
+  deleteModel(id: string): void {
+    providerDao.deleteModel(id)
+  }
+
   /**
    * 从提供商 API 拉取并同步模型列表
    * 目前先支持 OpenAI
@@ -74,17 +103,20 @@ export class ProviderService {
       throw new Error(`未找到提供商：${providerId}`)
     }
 
-    if (providerId !== 'openai') {
-      throw new Error('当前仅支持 OpenAI 自动同步模型')
+    // 仅支持 OpenAI 兼容协议的提供商同步模型
+    const protocol = (provider as any).apiProtocol || 'openai-completions'
+    if (protocol !== 'openai-completions' && providerId !== 'openai') {
+      throw new Error('自动同步仅支持 OpenAI 兼容协议的提供商')
     }
 
     const apiKey = provider.apiKey?.trim()
     if (!apiKey) {
-      throw new Error('请先配置 OpenAI API Key')
+      throw new Error('请先配置 API Key')
     }
 
     const existingModelIds = new Set(providerDao.findModelsByProvider(providerId).map((m) => m.modelId))
-    const fetchedModelIds = await this.fetchOpenAIModels(apiKey, provider.baseUrl)
+    const baseUrl = provider.baseUrl?.trim() || (providerId === 'openai' ? 'https://api.openai.com/v1' : '')
+    const fetchedModelIds = await this.fetchOpenAIModels(apiKey, baseUrl)
 
     providerDao.upsertModels(providerId, fetchedModelIds)
 

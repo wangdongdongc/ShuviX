@@ -1,6 +1,9 @@
 import { ipcMain } from 'electron'
 import { providerService } from '../services/providerService'
 import type {
+  ProviderAddModelParams,
+  ProviderAddParams,
+  ProviderDeleteParams,
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
@@ -58,8 +61,31 @@ export function registerProviderHandlers(): void {
     return { success: true }
   })
 
-  /** 从提供商 API 同步模型列表（当前先支持 OpenAI） */
+  /** 从提供商 API 同步模型列表（支持 OpenAI 兼容协议） */
   ipcMain.handle('provider:syncModels', async (_event, params: ProviderSyncModelsParams) => {
     return providerService.syncModelsFromProvider(params.providerId)
+  })
+
+  /** 添加自定义提供商 */
+  ipcMain.handle('provider:add', (_event, params: ProviderAddParams) => {
+    return providerService.addCustomProvider(params)
+  })
+
+  /** 删除自定义提供商 */
+  ipcMain.handle('provider:delete', (_event, params: ProviderDeleteParams) => {
+    const ok = providerService.deleteProvider(params.id)
+    return { success: ok }
+  })
+
+  /** 手动添加模型 */
+  ipcMain.handle('provider:addModel', (_event, params: ProviderAddModelParams) => {
+    providerService.addModel(params.providerId, params.modelId)
+    return { success: true }
+  })
+
+  /** 删除模型 */
+  ipcMain.handle('provider:deleteModel', (_event, id: string) => {
+    providerService.deleteModel(id)
+    return { success: true }
   })
 }

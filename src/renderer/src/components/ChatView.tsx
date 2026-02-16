@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { MessageSquarePlus, Sparkles, Container } from 'lucide-react'
+import { MessageSquarePlus, Sparkles, Container, AlertCircle } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
@@ -11,7 +11,7 @@ import { InputArea } from './InputArea'
  * 包含空状态引导和自动滚动
  */
 export function ChatView(): React.JSX.Element {
-  const { messages, streamingContent, isStreaming, activeSessionId } = useChatStore()
+  const { messages, streamingContent, isStreaming, activeSessionId, error, setError } = useChatStore()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const prevSessionIdRef = useRef<string | null>(null)
@@ -165,7 +165,7 @@ export function ChatView(): React.JSX.Element {
                 )}
 
                 {/* 等待响应的加载指示器 */}
-                {isStreaming && !streamingContent && (
+                {isStreaming && !streamingContent && !error && (
                   <div className="flex gap-3 px-4 py-3">
                     <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
                       <Sparkles size={14} className="text-text-secondary animate-pulse" />
@@ -175,6 +175,24 @@ export function ChatView(): React.JSX.Element {
                       <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '150ms' }} />
                       <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
+                  </div>
+                )}
+
+                {/* 错误提示 */}
+                {error && (
+                  <div className="mx-4 my-2 flex items-start gap-2.5 px-3.5 py-2.5 rounded-lg bg-error/10 border border-error/20">
+                    <AlertCircle size={15} className="text-error flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-error font-medium mb-0.5">生成失败</p>
+                      <p className="text-[11px] text-error/80 break-words whitespace-pre-wrap">{error}</p>
+                    </div>
+                    <button
+                      onClick={() => setError(null)}
+                      className="text-error/50 hover:text-error transition-colors flex-shrink-0"
+                      title="关闭"
+                    >
+                      ×
+                    </button>
                   </div>
                 )}
 

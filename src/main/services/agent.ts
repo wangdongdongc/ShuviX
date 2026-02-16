@@ -1,8 +1,9 @@
 import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
-import { type AssistantMessage, getModel, streamSimple, completeSimple } from '@mariozechner/pi-ai'
+import { type AssistantMessage, type Model, type Api, getModel, streamSimple, completeSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
+import { providerDao } from '../dao/providerDao'
 import { createCodingTools } from '../tools'
 import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
 import { createDockerOperations } from '../tools/dockerOperations'
@@ -55,7 +56,8 @@ export class AgentService {
     dockerEnabled?: boolean,
     dockerImage?: string,
     apiKey?: string,
-    baseUrl?: string
+    baseUrl?: string,
+    apiProtocol?: string
   ): void {
     // 检测关键配置是否变化，变化则销毁旧 agent 重建
     const newConfig: AgentConfig = {
@@ -79,24 +81,41 @@ export class AgentService {
     }
     console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
 
-    // 设置 API Key 环境变量
-    if (apiKey) {
-      const envMap: Record<string, string> = {
-        openai: 'OPENAI_API_KEY',
-        anthropic: 'ANTHROPIC_API_KEY',
-        google: 'GOOGLE_API_KEY'
-      }
-      const envKey = envMap[provider]
-      if (envKey) {
-        process.env[envKey] = apiKey
-      }
-    }
+    // 解析模型：内置提供商用 getModel，自定义提供商手动构造
+    const isCustom = provider.startsWith('custom-')
+    let resolvedModel: Model<Api>
 
-    const resolvedModel = getModel(provider as any, model as any)
-
-    // 如果用户设置了自定义 Base URL，覆盖模型默认值
-    if (baseUrl) {
-      resolvedModel.baseUrl = baseUrl
+    if (isCustom) {
+      // 自定义提供商：手动构造 Model 对象
+      resolvedModel = {
+        id: model,
+        name: model,
+        api: (apiProtocol || 'openai-completions') as Api,
+        provider,
+        baseUrl: baseUrl || '',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384
+      }
+    } else {
+      // 内置提供商：通过 SDK 解析
+      if (apiKey) {
+        const envMap: Record<string, string> = {
+          openai: 'OPENAI_API_KEY',
+          anthropic: 'ANTHROPIC_API_KEY',
+          google: 'GOOGLE_API_KEY'
+        }
+        const envKey = envMap[provider]
+        if (envKey) {
+          process.env[envKey] = apiKey
+        }
+      }
+      resolvedModel = getModel(provider as any, model as any)
+      if (baseUrl) {
+        resolvedModel.baseUrl = baseUrl
+      }
     }
 
     // 创建工具集（基于会话工作目录，可选 Docker 隔离）
@@ -140,21 +159,33 @@ export class AgentService {
         messages: [],
         tools
       },
-      streamFn: (streamModel, context, options) =>
-        streamSimple(streamModel, context, {
-          ...(options || {}),
-          onPayload: (payload) => {
-            const logId = httpLogService.logRequest({
-              sessionId,
-              provider: String(streamModel.provider || provider),
-              model: String(streamModel.id || model),
-              payload
-            })
-            const ids = this.pendingLogIds.get(sessionId) || []
-            ids.push(logId)
-            this.pendingLogIds.set(sessionId, ids)
-          }
-        })
+      streamFn: (streamModel, context, options) => {
+        // 动态查找当前模型对应提供商的 apiKey（支持运行时切换提供商）
+        const currentProvider = providerDao.findById(String(streamModel.provider))
+        const resolvedApiKey = currentProvider?.apiKey || apiKey
+        try {
+          return streamSimple(streamModel, context, {
+            ...(options || {}),
+            ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
+            onPayload: (payload) => {
+              const logId = httpLogService.logRequest({
+                sessionId,
+                provider: String(streamModel.provider || provider),
+                model: String(streamModel.id || model),
+                payload
+              })
+              const ids = this.pendingLogIds.get(sessionId) || []
+              ids.push(logId)
+              this.pendingLogIds.set(sessionId, ids)
+            }
+          })
+        } catch (err: any) {
+          // streamFn 抛出同步错误时，立即通知渲染进程
+          console.error(`[Agent] streamFn 错误: ${err.message}`)
+          this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
+          throw err
+        }
+      }
     })
 
     this.agents.set(sessionId, agent)
@@ -190,13 +221,33 @@ export class AgentService {
   }
 
   /** 切换指定 session 的模型 */
-  setModel(sessionId: string, provider: string, model: string, baseUrl?: string): void {
+  setModel(sessionId: string, provider: string, model: string, baseUrl?: string, apiProtocol?: string): void {
     const agent = this.agents.get(sessionId)
     if (!agent) return
-    const resolvedModel = getModel(provider as any, model as any)
-    if (baseUrl) {
-      resolvedModel.baseUrl = baseUrl
+
+    const isCustom = provider.startsWith('custom-')
+    let resolvedModel: Model<Api>
+
+    if (isCustom) {
+      resolvedModel = {
+        id: model,
+        name: model,
+        api: (apiProtocol || 'openai-completions') as Api,
+        provider,
+        baseUrl: baseUrl || '',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384
+      }
+    } else {
+      resolvedModel = getModel(provider as any, model as any)
+      if (baseUrl) {
+        resolvedModel.baseUrl = baseUrl
+      }
     }
+
     agent.setModel(resolvedModel)
     console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model}`)
   }
@@ -273,7 +324,7 @@ export class AgentService {
         console.log(`[Agent] 开始生成 session=${sessionId}`)
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
-      case 'agent_end':
+      case 'agent_end': {
         console.log(`[Agent] 生成完成 session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
         if (this.dockerSessions.has(sessionId)) {
@@ -282,8 +333,19 @@ export class AgentService {
             console.error(`[Docker] 销毁容器失败: ${err}`)
           )
         }
+        // 检查 agent_end 中的消息是否携带错误信息
+        const endMessages = (event as any).messages as any[] | undefined
+        if (endMessages) {
+          for (const m of endMessages) {
+            if (m.errorMessage) {
+              console.error(`[Agent] 流式错误: ${m.errorMessage}`)
+              this.sendToRenderer({ type: 'error', sessionId, error: m.errorMessage })
+            }
+          }
+        }
         this.sendToRenderer({ type: 'agent_end', sessionId })
         break
+      }
       case 'message_update': {
         const msgEvent = event.assistantMessageEvent
         if (msgEvent.type === 'text_delta') {
@@ -297,6 +359,11 @@ export class AgentService {
         // 如果是 assistant 消息，将 token 用量回填到对应的 HTTP 日志
         const msg = event.message
         if (this.isAssistantMessage(msg)) {
+          // 检查流式响应中的错误（如 API 返回的错误）
+          if (msg.stopReason === 'error' && msg.errorMessage) {
+            console.error(`[Agent] API 错误: ${msg.errorMessage}`)
+            this.sendToRenderer({ type: 'error', sessionId, error: msg.errorMessage })
+          }
           const logId = this.pendingLogIds.get(sessionId)?.shift()
           if (logId) {
             const usage = msg.usage

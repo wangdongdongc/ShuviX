@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw } from 'lucide-react'
+import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw, Plus, X } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
 
 /**
@@ -428,6 +428,10 @@ function ProviderSettings(): React.JSX.Element {
   const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
   const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
   const [saved, setSaved] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [newProvider, setNewProvider] = useState({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' as const })
+  const [addingProvider, setAddingProvider] = useState(false)
+  const [newModelId, setNewModelId] = useState<Record<string, string>>({})
 
   /** 展开提供商时加载其模型列表 */
   const handleToggleExpand = async (providerId: string): Promise<void> => {
@@ -494,9 +498,62 @@ function ProviderSettings(): React.JSX.Element {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  /** 添加自定义提供商 */
+  const handleAddProvider = async (): Promise<void> => {
+    if (!newProvider.name.trim() || !newProvider.baseUrl.trim()) return
+    setAddingProvider(true)
+    try {
+      await window.api.provider.add({
+        name: newProvider.name.trim(),
+        baseUrl: newProvider.baseUrl.trim(),
+        apiKey: newProvider.apiKey.trim(),
+        apiProtocol: newProvider.apiProtocol
+      })
+      const updated = await window.api.provider.listAll()
+      setProviders(updated)
+      const available = await window.api.provider.listAvailableModels()
+      setAvailableModels(available)
+      setNewProvider({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
+      setShowAddForm(false)
+    } finally {
+      setAddingProvider(false)
+    }
+  }
+
+  /** 删除自定义提供商 */
+  const handleDeleteProvider = async (providerId: string): Promise<void> => {
+    await window.api.provider.delete({ id: providerId })
+    const updated = await window.api.provider.listAll()
+    setProviders(updated)
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
+    if (expandedProvider === providerId) setExpandedProvider(null)
+  }
+
+  /** 手动添加模型 */
+  const handleAddModel = async (providerId: string): Promise<void> => {
+    const modelId = newModelId[providerId]?.trim()
+    if (!modelId) return
+    await window.api.provider.addModel({ providerId, modelId })
+    const models = await window.api.provider.listModels(providerId)
+    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
+    setNewModelId((prev) => ({ ...prev, [providerId]: '' }))
+  }
+
+  /** 删除模型 */
+  const handleDeleteModel = async (modelId: string, providerId: string): Promise<void> => {
+    await window.api.provider.deleteModel(modelId)
+    const models = await window.api.provider.listModels(providerId)
+    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
+  }
+
   /**
    * 从提供商拉取并同步模型列表
-   * 当前先支持 OpenAI
+   * 支持 OpenAI 兼容协议
    */
   const handleSyncModels = async (providerId: string): Promise<void> => {
     setSyncingProviderId(providerId)
@@ -523,7 +580,75 @@ function ProviderSettings(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 px-5 py-5 space-y-2">
+      <div className="flex-1 px-5 py-5 space-y-2 overflow-y-auto">
+        {/* 添加自定义提供商按钮 */}
+        <button
+          onClick={() => setShowAddForm(!showAddForm)}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-border-secondary text-xs text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
+        >
+          <Plus size={14} />
+          添加自定义提供商
+        </button>
+
+        {/* 添加表单 */}
+        {showAddForm && (
+          <div className="border border-accent/30 rounded-lg p-4 space-y-3 bg-accent/5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-primary">新增提供商</span>
+              <button onClick={() => setShowAddForm(false)} className="text-text-tertiary hover:text-text-primary">
+                <X size={14} />
+              </button>
+            </div>
+            <div>
+              <label className="block text-[11px] text-text-tertiary mb-1">名称</label>
+              <input
+                value={newProvider.name}
+                onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value }))}
+                placeholder="例如：DeepSeek、智谱、Moonshot"
+                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
+              <input
+                value={newProvider.baseUrl}
+                onChange={(e) => setNewProvider((p) => ({ ...p, baseUrl: e.target.value }))}
+                placeholder="https://api.example.com/v1"
+                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
+              <input
+                type="password"
+                value={newProvider.apiKey}
+                onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
+                placeholder="sk-..."
+                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-text-tertiary mb-1">API 协议</label>
+              <select
+                value={newProvider.apiProtocol}
+                onChange={(e) => setNewProvider((p) => ({ ...p, apiProtocol: e.target.value as any }))}
+                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+              >
+                <option value="openai-completions">OpenAI 兼容（绝大多数提供商）</option>
+                <option value="anthropic-messages">Anthropic Messages</option>
+                <option value="google-generative-ai">Google Generative AI</option>
+              </select>
+            </div>
+            <button
+              onClick={handleAddProvider}
+              disabled={addingProvider || !newProvider.name.trim() || !newProvider.baseUrl.trim()}
+              className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {addingProvider ? '添加中…' : '添加'}
+            </button>
+          </div>
+        )}
+
         {providers.map((p) => {
           const isExpanded = expandedProvider === p.id
           const edits = localEdits[p.id] || {}
@@ -543,7 +668,22 @@ function ProviderSettings(): React.JSX.Element {
                 >
                   {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </button>
-                <span className="flex-1 text-xs font-medium text-text-primary">{p.name}</span>
+                <span className="flex-1 text-xs font-medium text-text-primary">
+                  {p.name}
+                  {!p.isBuiltin && (
+                    <span className="ml-1.5 text-[10px] text-text-tertiary font-normal">自定义</span>
+                  )}
+                </span>
+                {/* 删除自定义提供商 */}
+                {!p.isBuiltin && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteProvider(p.id) }}
+                    className="text-text-tertiary hover:text-danger transition-colors mr-1"
+                    title="删除提供商"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
                 {/* 启用/禁用开关 */}
                 <button
                   onClick={(e) => { e.stopPropagation(); handleToggleProvider(p.id, !p.isEnabled) }}
@@ -608,6 +748,29 @@ function ProviderSettings(): React.JSX.Element {
                       <div className="text-[10px] text-text-tertiary mb-2">{syncMessages[p.id]}</div>
                     )}
 
+                    {/* 手动添加模型 */}
+                    {!p.isBuiltin && (
+                      <div className="flex items-center gap-2 mb-2">
+                        <input
+                          type="text"
+                          value={newModelId[p.id] || ''}
+                          onChange={(e) =>
+                            setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
+                          }
+                          onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
+                          placeholder="输入模型 ID 并回车添加"
+                          className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+                        />
+                        <button
+                          onClick={() => handleAddModel(p.id)}
+                          disabled={!newModelId[p.id]?.trim()}
+                          className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          添加
+                        </button>
+                      </div>
+                    )}
+
                     <input
                       type="text"
                       value={modelSearch[p.id] || ''}
@@ -621,17 +784,29 @@ function ProviderSettings(): React.JSX.Element {
                     <div className="space-y-1">
                       {filteredModels.map((m) => (
                         <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors">
-                          <span className="text-xs text-text-primary">{m.modelId}</span>
-                          <button
-                            onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
-                            className={`w-7 h-4 rounded-full relative transition-colors ${
-                              m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                            }`}
-                          >
-                            <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                              m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                            }`} />
-                          </button>
+                          <span className="text-xs text-text-primary font-mono">{m.modelId}</span>
+                          <div className="flex items-center gap-1.5">
+                            {/* 自定义提供商的模型可删除 */}
+                            {!p.isBuiltin && (
+                              <button
+                                onClick={() => handleDeleteModel(m.id, p.id)}
+                                className="text-text-tertiary hover:text-danger transition-colors"
+                                title="删除模型"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
+                              className={`w-7 h-4 rounded-full relative transition-colors ${
+                                m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+                              }`}
+                            >
+                              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                                m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                              }`} />
+                            </button>
+                          </div>
                         </div>
                       ))}
                       {filteredModels.length === 0 && (

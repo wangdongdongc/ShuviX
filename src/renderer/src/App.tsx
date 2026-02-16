@@ -90,6 +90,7 @@ function App(): React.JSX.Element {
         dockerImage: currentSession?.dockerImage || undefined,
         apiKey: providerInfo?.apiKey || undefined,
         baseUrl: providerInfo?.baseUrl || undefined,
+        apiProtocol: (providerInfo as any)?.apiProtocol || undefined,
         messages: msgs.map((m) => ({ role: m.role, content: m.content }))
       })
     }

@@ -104,7 +104,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeSessionId: id,
         streamingContent: stream?.content || '',
         isStreaming: stream?.isStreaming || false,
-        toolExecutions: tools
+        toolExecutions: tools,
+        error: null
       }
     }),
   setMessages: (messages) => set({ messages }),

@@ -71,10 +71,8 @@ export function InputArea(): React.JSX.Element {
 
   const canSend = inputText.trim().length > 0 && !isStreaming && activeSessionId
 
-  // 已启用 provider 列表（从 availableModels 推导）
-  const enabledProviders = [...new Map(
-    availableModels.map((m) => [m.providerId, { id: m.providerId, name: m.providerName }])
-  ).values()]
+  // 已启用 provider 列表（直接从 providers 筛选，确保无模型的自定义提供商也可见）
+  const enabledProviders = providers.filter((p) => p.isEnabled)
 
   // 选择器内当前 provider 下可选模型（仅已启用）
   const draftProviderModels = availableModels.filter((m) => m.providerId === draftProvider)
@@ -133,7 +131,8 @@ export function InputArea(): React.JSX.Element {
         sessionId: activeSessionId,
         provider: draftProvider,
         model: modelId,
-        baseUrl: providerInfo?.baseUrl || undefined
+        baseUrl: providerInfo?.baseUrl || undefined,
+        apiProtocol: (providerInfo as any)?.apiProtocol || undefined
       })
     }
     setPickerOpen(false)

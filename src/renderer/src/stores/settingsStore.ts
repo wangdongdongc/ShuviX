@@ -6,6 +6,8 @@ export interface ProviderInfo {
   name: string
   apiKey: string
   baseUrl: string
+  apiProtocol: 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+  isBuiltin: number
   isEnabled: number
   sortOrder: number
 }

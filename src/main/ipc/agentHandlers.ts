@@ -18,7 +18,8 @@ export function registerAgentHandlers(): void {
       params.dockerEnabled,
       params.dockerImage,
       params.apiKey,
-      params.baseUrl
+      params.baseUrl,
+      params.apiProtocol
     )
 
     // 如果有历史消息，恢复到 Agent 状态
@@ -50,7 +51,7 @@ export function registerAgentHandlers(): void {
 
   /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
-    agentService.setModel(params.sessionId, params.provider, params.model, params.baseUrl)
+    agentService.setModel(params.sessionId, params.provider, params.model, params.baseUrl, params.apiProtocol)
     return { success: true }
   })
 }

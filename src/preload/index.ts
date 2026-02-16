@@ -6,6 +6,9 @@ import type {
   AgentSetModelParams,
   HttpLogListParams,
   MessageAddParams,
+  ProviderAddModelParams,
+  ProviderAddParams,
+  ProviderDeleteParams,
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
@@ -68,7 +71,15 @@ const api = {
     toggleModelEnabled: (params: ProviderToggleModelEnabledParams) =>
       ipcRenderer.invoke('provider:toggleModelEnabled', params),
     syncModels: (params: ProviderSyncModelsParams) =>
-      ipcRenderer.invoke('provider:syncModels', params)
+      ipcRenderer.invoke('provider:syncModels', params),
+    add: (params: ProviderAddParams) =>
+      ipcRenderer.invoke('provider:add', params),
+    delete: (params: ProviderDeleteParams) =>
+      ipcRenderer.invoke('provider:delete', params),
+    addModel: (params: ProviderAddModelParams) =>
+      ipcRenderer.invoke('provider:addModel', params),
+    deleteModel: (id: string) =>
+      ipcRenderer.invoke('provider:deleteModel', id)
   },
 
   // ============ 会话管理 ============

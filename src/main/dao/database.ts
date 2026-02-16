@@ -59,6 +59,8 @@ class DatabaseManager {
         name TEXT NOT NULL,
         apiKey TEXT DEFAULT '',
         baseUrl TEXT DEFAULT '',
+        apiProtocol TEXT NOT NULL DEFAULT 'openai-completions',
+        isBuiltin INTEGER NOT NULL DEFAULT 1,
         isEnabled INTEGER DEFAULT 1,
         sortOrder INTEGER DEFAULT 0,
         createdAt INTEGER NOT NULL,
@@ -97,6 +99,9 @@ class DatabaseManager {
     // 迁移：http_logs 表增加 token 用量字段
     this.migrateHttpLogsTokenColumns()
 
+    // 迁移：providers 表增加 apiProtocol / isBuiltin 字段
+    this.migrateProvidersProtocolColumns()
+
     // 种子数据：内置提供商和模型
     this.seedProviders()
 
@@ -109,9 +114,9 @@ class DatabaseManager {
     const now = Date.now()
 
     const builtinProviders = [
-      { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', sortOrder: 0 },
-      { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', sortOrder: 1 },
-      { id: 'google', name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', sortOrder: 2 }
+      { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0 },
+      { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1 },
+      { id: 'google', name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2 }
     ]
 
     const builtinModels: Record<string, string[]> = {
@@ -128,7 +133,7 @@ class DatabaseManager {
     }
 
     const insertProvider = this.db.prepare(
-      'INSERT OR IGNORE INTO providers (id, name, baseUrl, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?, ?)'
+      'INSERT OR IGNORE INTO providers (id, name, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)'
     )
     const insertModel = this.db.prepare(
       'INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, ?, ?)'
@@ -136,7 +141,7 @@ class DatabaseManager {
 
     const seedAll = this.db.transaction(() => {
       for (const p of builtinProviders) {
-        insertProvider.run(p.id, p.name, p.baseUrl, p.sortOrder, now, now)
+        insertProvider.run(p.id, p.name, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
       }
       for (const [providerId, models] of Object.entries(builtinModels)) {
         const enabled = defaultEnabled[providerId] || []
@@ -147,6 +152,22 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：providers 表增加 apiProtocol / isBuiltin 字段 */
+  private migrateProvidersProtocolColumns(): void {
+    const columns = this.db.pragma('table_info(providers)') as Array<{ name: string }>
+    const hasApiProtocol = columns.some((c) => c.name === 'apiProtocol')
+    if (hasApiProtocol) return
+
+    // 添加新列
+    this.db.exec(`
+      ALTER TABLE providers ADD COLUMN apiProtocol TEXT NOT NULL DEFAULT 'openai-completions';
+      ALTER TABLE providers ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 1;
+    `)
+    // 回填内置提供商的协议类型
+    this.db.prepare("UPDATE providers SET apiProtocol = 'anthropic-messages' WHERE id = 'anthropic'").run()
+    this.db.prepare("UPDATE providers SET apiProtocol = 'google-generative-ai' WHERE id = 'google'").run()
   }
 
   /** 迁移：sessions 表增加工作目录 + Docker 字段 */
