@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { providerDao } from '../dao/providerDao'
-import type { ApiProtocol, Provider, ProviderModel } from '../types'
+import { litellmService } from './litellmService'
+import type { ApiProtocol, ModelCapabilities, Provider, ProviderModel } from '../types'
 
 /**
  * 提供商服务 — 编排提供商和模型的业务逻辑
@@ -86,11 +87,49 @@ export class ProviderService {
   /** 手动添加模型 */
   addModel(providerId: string, modelId: string): void {
     providerDao.insertModel(providerId, modelId)
+    // 插入后自动补充能力信息
+    const provider = providerDao.findById(providerId)
+    if (provider) {
+      this.fillMissingCapabilities(providerId, provider.name, provider.baseUrl)
+    }
   }
 
   /** 删除模型 */
   deleteModel(id: string): void {
     providerDao.deleteModel(id)
+  }
+
+  /** 更新模型能力信息 */
+  updateModelCapabilities(id: string, capabilities: ModelCapabilities): void {
+    providerDao.updateModelCapabilities(id, JSON.stringify(capabilities))
+  }
+
+  /**
+   * 为指定提供商下 capabilities 为空的模型自动补充能力信息
+   * 已有 capabilities 的模型不会被覆盖
+   */
+  fillMissingCapabilities(providerId: string, providerName: string, baseUrl?: string): void {
+    if (!litellmService.isReady()) return
+    const slug = providerName.toLowerCase()
+    const models = providerDao.findModelsByProvider(providerId)
+    for (const m of models) {
+      // 跳过已有能力信息的模型
+      const existing = m.capabilities ? JSON.parse(m.capabilities) : {}
+      if (Object.keys(existing).length > 0) continue
+
+      const caps = litellmService.getModelCapabilities(m.modelId, slug, baseUrl)
+      if (caps && Object.keys(caps).length > 0) {
+        providerDao.updateModelCapabilities(m.id, JSON.stringify(caps))
+      }
+    }
+  }
+
+  /** 遍历所有提供商，为 capabilities 为空的模型自动补充能力信息（启动时调用） */
+  fillAllMissingCapabilities(): void {
+    const providers = providerDao.findAll()
+    for (const p of providers) {
+      this.fillMissingCapabilities(p.id, p.name, p.baseUrl)
+    }
   }
 
   /**
@@ -119,6 +158,9 @@ export class ProviderService {
     const fetchedModelIds = await this.fetchOpenAIModels(apiKey, baseUrl)
 
     providerDao.upsertModels(providerId, fetchedModelIds)
+
+    // 自动补充新模型的能力信息
+    this.fillMissingCapabilities(providerId, provider.name, provider.baseUrl)
 
     let added = 0
     for (const modelId of fetchedModelIds) {

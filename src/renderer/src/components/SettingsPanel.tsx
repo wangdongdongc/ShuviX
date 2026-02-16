@@ -418,6 +418,59 @@ function GeneralSettings(): React.JSX.Element {
   )
 }
 
+/** 能力标签定义 */
+const CAPABILITY_OPTIONS = [
+  { key: 'vision', label: 'Vision', desc: '图像输入' },
+  { key: 'imageOutput', label: 'Image Output', desc: '图像生成' },
+  { key: 'functionCalling', label: 'Function Calling', desc: '工具调用' },
+  { key: 'reasoning', label: 'Reasoning', desc: '推理/思考' },
+  { key: 'audioInput', label: 'Audio Input', desc: '音频输入' },
+  { key: 'audioOutput', label: 'Audio Output', desc: '音频输出' },
+  { key: 'pdfInput', label: 'PDF Input', desc: 'PDF 文件输入' }
+] as const
+
+/** 模型能力编辑器 */
+function ModelCapabilitiesEditor({
+  capabilities,
+  onUpdate
+}: {
+  capabilities: Record<string, any>
+  onUpdate: (caps: Record<string, any>) => Promise<void>
+}): React.JSX.Element {
+  const toggle = (key: string): void => {
+    const updated = { ...capabilities, [key]: !capabilities[key] }
+    onUpdate(updated)
+  }
+
+  return (
+    <div className="px-4 pb-2 pt-1">
+      <div className="flex flex-wrap gap-1.5">
+        {CAPABILITY_OPTIONS.map(({ key, label, desc }) => (
+          <button
+            key={key}
+            onClick={() => toggle(key)}
+            className={`px-2 py-1 text-[10px] rounded-md border transition-colors ${
+              capabilities[key]
+                ? 'border-accent/50 bg-accent/10 text-accent'
+                : 'border-border-primary bg-bg-tertiary text-text-tertiary hover:text-text-secondary'
+            }`}
+            title={desc}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {(capabilities.maxInputTokens || capabilities.maxOutputTokens) && (
+        <div className="mt-1.5 text-[10px] text-text-tertiary">
+          {capabilities.maxInputTokens && <span>上下文: {(capabilities.maxInputTokens / 1000).toFixed(0)}K</span>}
+          {capabilities.maxInputTokens && capabilities.maxOutputTokens && <span className="mx-1">·</span>}
+          {capabilities.maxOutputTokens && <span>最大输出: {(capabilities.maxOutputTokens / 1000).toFixed(0)}K</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** 提供商设置 */
 function ProviderSettings(): React.JSX.Element {
   const { providers, setProviders, setAvailableModels } = useSettingsStore()
@@ -433,6 +486,7 @@ function ProviderSettings(): React.JSX.Element {
   const [newProvider, setNewProvider] = useState({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' as const })
   const [addingProvider, setAddingProvider] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
+  const [expandedModelId, setExpandedModelId] = useState<string | null>(null)
 
   /** 展开提供商时加载其模型列表 */
   const handleToggleExpand = async (providerId: string): Promise<void> => {
@@ -783,33 +837,67 @@ function ProviderSettings(): React.JSX.Element {
                     />
 
                     <div className="space-y-1">
-                      {filteredModels.map((m) => (
-                        <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors">
-                          <span className="text-xs text-text-primary font-mono">{m.modelId}</span>
-                          <div className="flex items-center gap-1.5">
-                            {/* 自定义提供商的模型可删除 */}
-                            {!p.isBuiltin && (
-                              <button
-                                onClick={() => handleDeleteModel(m.id, p.id)}
-                                className="text-text-tertiary hover:text-danger transition-colors"
-                                title="删除模型"
-                              >
-                                <X size={12} />
-                              </button>
+                      {filteredModels.map((m) => {
+                        const caps = (() => { try { return JSON.parse(m.capabilities || '{}') } catch { return {} } })()
+                        const isModelExpanded = expandedModelId === m.id
+                        return (
+                          <div key={m.id} className="rounded-md hover:bg-bg-hover transition-colors">
+                            <div className="flex items-center justify-between px-2 py-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <button
+                                  onClick={() => setExpandedModelId(isModelExpanded ? null : m.id)}
+                                  className="text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
+                                  title="编辑能力"
+                                >
+                                  {isModelExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                </button>
+                                <span className="text-xs text-text-primary font-mono truncate">{m.modelId}</span>
+                                {/* 能力标签 */}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {caps.vision && <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">Vision</span>}
+                                  {caps.functionCalling && <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">Tools</span>}
+                                  {caps.reasoning && <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">Reasoning</span>}
+                                  {caps.imageOutput && <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">ImgOut</span>}
+                                  {caps.audioInput && <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">Audio</span>}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                {/* 自定义提供商的模型可删除 */}
+                                {!p.isBuiltin && (
+                                  <button
+                                    onClick={() => handleDeleteModel(m.id, p.id)}
+                                    className="text-text-tertiary hover:text-danger transition-colors"
+                                    title="删除模型"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
+                                  className={`w-7 h-4 rounded-full relative transition-colors ${
+                                    m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+                                  }`}
+                                >
+                                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                                    m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                                  }`} />
+                                </button>
+                              </div>
+                            </div>
+                            {/* 能力编辑展开面板 */}
+                            {isModelExpanded && (
+                              <ModelCapabilitiesEditor
+                                capabilities={caps}
+                                onUpdate={async (newCaps) => {
+                                  await window.api.provider.updateModelCapabilities({ id: m.id, capabilities: newCaps })
+                                  const models = await window.api.provider.listModels(p.id)
+                                  setProviderModels((prev) => ({ ...prev, [p.id]: models }))
+                                }}
+                              />
                             )}
-                            <button
-                              onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
-                              className={`w-7 h-4 rounded-full relative transition-colors ${
-                                m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                              }`}
-                            >
-                              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                                m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                              }`} />
-                            </button>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                       {filteredModels.length === 0 && (
                         <div className="px-2 py-2 text-[11px] text-text-tertiary">
                           未找到匹配模型

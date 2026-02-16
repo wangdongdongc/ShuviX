@@ -4,6 +4,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { agentService } from './services/agent'
 import { dockerManager } from './services/dockerManager'
+import { litellmService } from './services/litellmService'
+import { providerService } from './services/providerService'
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -147,6 +149,11 @@ app.whenReady().then(() => {
 
   // 注册所有 IPC 处理器
   registerIpcHandlers()
+
+  // 启动时异步拉取 LiteLLM 模型数据，完成后自动补充模型能力信息
+  litellmService.init().then(() => {
+    providerService.fillAllMissingCapabilities()
+  }).catch(() => {})
 
   createWindow()
 

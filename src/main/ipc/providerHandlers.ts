@@ -7,7 +7,8 @@ import type {
   ProviderSyncModelsParams,
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
-  ProviderUpdateConfigParams
+  ProviderUpdateConfigParams,
+  ProviderUpdateModelCapabilitiesParams
 } from '../types'
 
 /**
@@ -86,6 +87,12 @@ export function registerProviderHandlers(): void {
   /** 删除模型 */
   ipcMain.handle('provider:deleteModel', (_event, id: string) => {
     providerService.deleteModel(id)
+    return { success: true }
+  })
+
+  /** 更新模型能力信息 */
+  ipcMain.handle('provider:updateModelCapabilities', (_event, params: ProviderUpdateModelCapabilitiesParams) => {
+    providerService.updateModelCapabilities(params.id, params.capabilities)
     return { success: true }
   })
 }

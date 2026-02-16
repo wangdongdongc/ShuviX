@@ -7,6 +7,7 @@ import type {
   HttpLogListParams,
   HttpLogSummary,
   MessageAddParams,
+  ModelCapabilities,
   ProviderAddModelParams,
   ProviderAddParams,
   ProviderDeleteParams,
@@ -14,6 +15,7 @@ import type {
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
+  ProviderUpdateModelCapabilitiesParams,
   SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateTitleParams,
@@ -80,6 +82,7 @@ interface ProviderModelInfo {
   modelId: string
   isEnabled: number
   sortOrder: number
+  capabilities: string
 }
 
 /** 可用模型（含提供商名称） */
@@ -114,6 +117,7 @@ interface ShiroBotAPI {
     delete: (params: ProviderDeleteParams) => Promise<{ success: boolean }>
     addModel: (params: ProviderAddModelParams) => Promise<{ success: boolean }>
     deleteModel: (id: string) => Promise<{ success: boolean }>
+    updateModelCapabilities: (params: ProviderUpdateModelCapabilitiesParams) => Promise<{ success: boolean }>
   }
   session: {
     list: () => Promise<Session[]>

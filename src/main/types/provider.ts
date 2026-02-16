@@ -1,6 +1,21 @@
 /** API 协议类型（用户可选） */
 export type ApiProtocol = 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
 
+/** 模型能力元数据 */
+export interface ModelCapabilities {
+  vision?: boolean           // 图像输入
+  imageOutput?: boolean      // 图像生成输出
+  functionCalling?: boolean  // 工具调用
+  reasoning?: boolean        // 推理/思考
+  audioInput?: boolean
+  audioOutput?: boolean
+  pdfInput?: boolean
+  maxInputTokens?: number
+  maxOutputTokens?: number
+  inputCostPerToken?: number   // 仅存储，暂不展示
+  outputCostPerToken?: number  // 仅存储，暂不展示
+}
+
 /** 提供商数据结构 */
 export interface Provider {
   id: string
@@ -17,11 +32,12 @@ export interface Provider {
 
 /** 提供商模型数据结构 */
 export interface ProviderModel {
-  id: string // '{providerId}:{modelId}'
+  id: string
   providerId: string
   modelId: string
   isEnabled: number // 0=禁用, 1=启用
   sortOrder: number
+  capabilities: string // JSON 字符串，解析为 ModelCapabilities
 }
 
 /** IPC: 更新提供商配置参数 */
@@ -65,4 +81,10 @@ export interface ProviderDeleteParams {
 export interface ProviderAddModelParams {
   providerId: string
   modelId: string
+}
+
+/** IPC: 更新模型能力参数 */
+export interface ProviderUpdateModelCapabilitiesParams {
+  id: string
+  capabilities: ModelCapabilities
 }

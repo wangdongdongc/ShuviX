@@ -7,6 +7,7 @@ import { providerDao } from '../dao/providerDao'
 import { createCodingTools } from '../tools'
 import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
 import { createDockerOperations } from '../tools/dockerOperations'
+import type { ModelCapabilities } from '../types'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -86,19 +87,25 @@ export class AgentService {
     const isBuiltin = providerInfo?.isBuiltin ?? false
     let resolvedModel: Model<Api>
 
+    // 从 DB 读取模型能力信息
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+
     if (!isBuiltin) {
-      // 自定义提供商：手动构造 Model 对象
+      // 自定义提供商：手动构造 Model 对象，用 capabilities 填充
+      const inputModalities: string[] = ['text']
+      if (caps.vision) inputModalities.push('image')
       resolvedModel = {
         id: model,
         name: model,
         api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
         provider,
         baseUrl: baseUrl || providerInfo?.baseUrl || '',
-        reasoning: false,
-        input: ['text'],
+        reasoning: caps.reasoning ?? false,
+        input: inputModalities as any,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 16384
+        contextWindow: caps.maxInputTokens ?? 128000,
+        maxTokens: caps.maxOutputTokens ?? 16384
       }
     } else {
       // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
@@ -231,18 +238,24 @@ export class AgentService {
     const isBuiltin = providerInfo?.isBuiltin ?? false
     let resolvedModel: Model<Api>
 
+    // 从 DB 读取模型能力信息
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+
     if (!isBuiltin) {
+      const inputModalities: string[] = ['text']
+      if (caps.vision) inputModalities.push('image')
       resolvedModel = {
         id: model,
         name: model,
         api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
         provider,
         baseUrl: baseUrl || providerInfo?.baseUrl || '',
-        reasoning: false,
-        input: ['text'],
+        reasoning: caps.reasoning ?? false,
+        input: inputModalities as any,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 16384
+        contextWindow: caps.maxInputTokens ?? 128000,
+        maxTokens: caps.maxOutputTokens ?? 16384
       }
     } else {
       const slug = (providerInfo?.name || '').toLowerCase()

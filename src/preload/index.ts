@@ -13,6 +13,7 @@ import type {
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
+  ProviderUpdateModelCapabilitiesParams,
   SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateTitleParams,
@@ -79,7 +80,9 @@ const api = {
     addModel: (params: ProviderAddModelParams) =>
       ipcRenderer.invoke('provider:addModel', params),
     deleteModel: (id: string) =>
-      ipcRenderer.invoke('provider:deleteModel', id)
+      ipcRenderer.invoke('provider:deleteModel', id),
+    updateModelCapabilities: (params: ProviderUpdateModelCapabilitiesParams) =>
+      ipcRenderer.invoke('provider:updateModelCapabilities', params)
   },
 
   // ============ 会话管理 ============

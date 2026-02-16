@@ -74,6 +74,7 @@ class DatabaseManager {
         modelId TEXT NOT NULL,
         isEnabled INTEGER DEFAULT 0,
         sortOrder INTEGER DEFAULT 0,
+        capabilities TEXT DEFAULT '{}',
         FOREIGN KEY (providerId) REFERENCES providers(id) ON DELETE CASCADE
       );
 
@@ -90,6 +91,9 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
+
+    // 迁移：provider_models 表增加 capabilities 列
+    this.migrateProviderModelsCapabilities()
 
     // 种子数据：内置提供商和模型
     this.seedProviders()
@@ -137,6 +141,13 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：provider_models 表增加 capabilities 列 */
+  private migrateProviderModelsCapabilities(): void {
+    const columns = this.db.pragma('table_info(provider_models)') as Array<{ name: string }>
+    if (columns.some((c) => c.name === 'capabilities')) return
+    this.db.exec("ALTER TABLE provider_models ADD COLUMN capabilities TEXT DEFAULT '{}'")
   }
 
   /** 获取数据库连接实例 */

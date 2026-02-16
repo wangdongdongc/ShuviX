@@ -19,6 +19,7 @@ export interface ProviderModelInfo {
   modelId: string
   isEnabled: number
   sortOrder: number
+  capabilities: string
 }
 
 /** 可用模型（含提供商名称，用于对话选择器） */

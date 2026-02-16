@@ -177,6 +177,13 @@ export class ProviderDao {
       .run(uuidv7(), providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
   }
 
+  /** 更新模型能力信息 */
+  updateModelCapabilities(id: string, capabilities: string): void {
+    this.db
+      .prepare('UPDATE provider_models SET capabilities = ? WHERE id = ?')
+      .run(capabilities, id)
+  }
+
   /** 删除单个模型 */
   deleteModel(id: string): void {
     this.db.prepare('DELETE FROM provider_models WHERE id = ?').run(id)
