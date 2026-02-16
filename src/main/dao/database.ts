@@ -88,6 +88,9 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
+    // 迁移：messages 表增加 type + metadata 列（支持工具调用）
+    this.migrateMessagesToolColumns()
+
     // 迁移：http_logs 表增加 token 用量字段
     this.migrateHttpLogsTokenColumns()
 
@@ -141,6 +144,18 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：messages 表增加 type + metadata 列（支持工具调用） */
+  private migrateMessagesToolColumns(): void {
+    const columns = this.db.pragma('table_info(messages)') as Array<{ name: string }>
+    const hasType = columns.some((c) => c.name === 'type')
+    if (hasType) return
+
+    this.db.exec(`
+      ALTER TABLE messages ADD COLUMN type TEXT NOT NULL DEFAULT 'text';
+      ALTER TABLE messages ADD COLUMN metadata TEXT;
+    `)
   }
 
   /** 迁移：http_logs 表增加 token 用量字段 */

@@ -4,9 +4,21 @@ import { create } from 'zustand'
 export interface ChatMessage {
   id: string
   sessionId: string
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  type: 'text' | 'tool_call' | 'tool_result'
   content: string
+  metadata: string | null
   createdAt: number
+}
+
+/** 工具执行实时状态（流式期间的临时状态） */
+export interface ToolExecution {
+  toolCallId: string
+  toolName: string
+  args: any
+  status: 'running' | 'done' | 'error'
+  result?: string
+  messageId?: string
 }
 
 /** 会话类型 */
@@ -39,6 +51,10 @@ interface ChatState {
   streamingContent: string
   /** 当前会话是否正在生成（UI 直接读取，自动同步自 sessionStreams） */
   isStreaming: boolean
+  /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
+  sessionToolExecutions: Record<string, ToolExecution[]>
+  /** 当前会话的工具执行实时状态（UI 直接读取） */
+  toolExecutions: ToolExecution[]
   /** 输入框内容 */
   inputText: string
   /** 错误信息 */
@@ -53,6 +69,9 @@ interface ChatState {
   clearStreamingContent: (sessionId: string) => void
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
+  addToolExecution: (sessionId: string, exec: ToolExecution) => void
+  updateToolExecution: (sessionId: string, toolCallId: string, updates: Partial<ToolExecution>) => void
+  clearToolExecutions: (sessionId: string) => void
   setInputText: (text: string) => void
   setError: (error: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
@@ -66,6 +85,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreams: {},
   streamingContent: '',
   isStreaming: false,
+  sessionToolExecutions: {},
+  toolExecutions: [],
   inputText: '',
   error: null,
 
@@ -73,10 +94,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setActiveSessionId: (id) =>
     set((state) => {
       const stream = id ? state.sessionStreams[id] : undefined
+      const tools = id ? state.sessionToolExecutions[id] || [] : []
       return {
         activeSessionId: id,
         streamingContent: stream?.content || '',
-        isStreaming: stream?.isStreaming || false
+        isStreaming: stream?.isStreaming || false,
+        toolExecutions: tools
       }
     }),
   setMessages: (messages) => set({ messages }),
@@ -119,6 +142,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
   getSessionStreamContent: (sessionId) => {
     return get().sessionStreams[sessionId]?.content || ''
   },
+
+  addToolExecution: (sessionId, exec) =>
+    set((state) => {
+      const prev = state.sessionToolExecutions[sessionId] || []
+      const updated = [...prev, exec]
+      const newMap = { ...state.sessionToolExecutions, [sessionId]: updated }
+      return {
+        sessionToolExecutions: newMap,
+        ...(sessionId === state.activeSessionId ? { toolExecutions: updated } : {})
+      }
+    }),
+
+  updateToolExecution: (sessionId, toolCallId, updates) =>
+    set((state) => {
+      const prev = state.sessionToolExecutions[sessionId] || []
+      const updated = prev.map((t) => (t.toolCallId === toolCallId ? { ...t, ...updates } : t))
+      const newMap = { ...state.sessionToolExecutions, [sessionId]: updated }
+      return {
+        sessionToolExecutions: newMap,
+        ...(sessionId === state.activeSessionId ? { toolExecutions: updated } : {})
+      }
+    }),
+
+  clearToolExecutions: (sessionId) =>
+    set((state) => {
+      const { [sessionId]: _, ...rest } = state.sessionToolExecutions
+      return {
+        sessionToolExecutions: rest,
+        ...(sessionId === state.activeSessionId ? { toolExecutions: [] } : {})
+      }
+    }),
 
   setInputText: (text) => set({ inputText: text }),
   setError: (error) => set({ error }),

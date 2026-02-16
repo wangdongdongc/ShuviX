@@ -16,14 +16,18 @@ export class MessageService {
   /** 添加消息（同时更新会话时间戳） */
   add(params: {
     sessionId: string
-    role: 'user' | 'assistant'
+    role: 'user' | 'assistant' | 'tool'
+    type?: 'text' | 'tool_call' | 'tool_result'
     content: string
+    metadata?: string | null
   }): Message {
     const message: Message = {
       id: uuidv7(),
       sessionId: params.sessionId,
       role: params.role,
+      type: params.type || 'text',
       content: params.content,
+      metadata: params.metadata ?? null,
       createdAt: Date.now()
     }
     messageDao.insert(message)

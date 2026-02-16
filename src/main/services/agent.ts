@@ -2,13 +2,21 @@ import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agen
 import { type AssistantMessage, getModel, streamSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
+import { messageService } from './messageService'
+import { getCurrentTimeTool } from '../tools/getCurrentTime'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end'
   sessionId: string
   data?: string
   error?: string
+  // 工具调用相关字段
+  toolCallId?: string
+  toolName?: string
+  toolArgs?: any
+  toolResult?: any
+  toolIsError?: boolean
 }
 
 /**
@@ -65,7 +73,7 @@ export class AgentService {
         model: resolvedModel,
         thinkingLevel: 'off',
         messages: [],
-        tools: []
+        tools: [getCurrentTimeTool]
       },
       streamFn: (streamModel, context, options) =>
         streamSimple(streamModel, context, {
@@ -187,6 +195,56 @@ export class AgentService {
           }
         }
         this.sendToRenderer({ type: 'text_end', sessionId })
+        break
+      }
+      case 'tool_execution_start': {
+        // 持久化工具调用消息
+        const toolCallMsg = messageService.add({
+          sessionId,
+          role: 'assistant',
+          type: 'tool_call',
+          content: '',
+          metadata: JSON.stringify({
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.args
+          })
+        })
+        this.sendToRenderer({
+          type: 'tool_start',
+          sessionId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          toolArgs: event.args,
+          data: toolCallMsg.id
+        })
+        break
+      }
+      case 'tool_execution_end': {
+        // 持久化工具结果消息
+        const resultContent = event.result?.content
+          ?.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
+          .join('\n') || ''
+        const toolResultMsg = messageService.add({
+          sessionId,
+          role: 'tool',
+          type: 'tool_result',
+          content: resultContent,
+          metadata: JSON.stringify({
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            isError: event.isError || false
+          })
+        })
+        this.sendToRenderer({
+          type: 'tool_end',
+          sessionId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          toolResult: resultContent,
+          toolIsError: event.isError || false,
+          data: toolResultMsg.id
+        })
         break
       }
       default:

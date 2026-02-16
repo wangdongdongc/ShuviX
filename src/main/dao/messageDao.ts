@@ -20,9 +20,9 @@ export class MessageDao {
   insert(message: Message): void {
     this.db
       .prepare(
-        'INSERT INTO messages (id, sessionId, role, content, createdAt) VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO messages (id, sessionId, role, type, content, metadata, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(message.id, message.sessionId, message.role, message.content, message.createdAt)
+      .run(message.id, message.sessionId, message.role, message.type, message.content, message.metadata, message.createdAt)
   }
 
   /** 删除某个会话的所有消息 */

@@ -3,6 +3,7 @@ import { MessageSquarePlus, Sparkles } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
+import { ToolCallBlock } from './ToolCallBlock'
 import { InputArea } from './InputArea'
 
 /**
@@ -97,13 +98,51 @@ export function ChatView(): React.JSX.Element {
               </div>
             ) : (
               <div className="max-w-3xl mx-auto py-4">
-                {messages.map((msg) => (
-                  <MessageBubble
-                    key={msg.id}
-                    role={msg.role}
-                    content={msg.content}
-                  />
-                ))}
+                {messages.map((msg) => {
+                  if (msg.type === 'tool_call') {
+                    const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
+                    // 查找是否已有配对的 tool_result
+                    const hasPairedResult = messages.some(
+                      (m) => m.type === 'tool_result' && m.metadata &&
+                        JSON.parse(m.metadata).toolCallId === meta.toolCallId
+                    )
+                    // 有结果 → 跳过（由 tool_result 合并渲染）；无结果 → 显示执行中
+                    if (hasPairedResult) return null
+                    return (
+                      <ToolCallBlock
+                        key={msg.id}
+                        toolName={meta.toolName || '未知工具'}
+                        args={meta.args}
+                        status="running"
+                      />
+                    )
+                  }
+                  if (msg.type === 'tool_result') {
+                    const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
+                    const pairedCall = messages.find(
+                      (m) => m.type === 'tool_call' && m.metadata &&
+                        JSON.parse(m.metadata).toolCallId === meta.toolCallId
+                    )
+                    const callMeta = pairedCall?.metadata ? JSON.parse(pairedCall.metadata) : {}
+                    return (
+                      <ToolCallBlock
+                        key={msg.id}
+                        toolName={meta.toolName || '未知工具'}
+                        args={callMeta.args}
+                        result={msg.content}
+                        status={meta.isError ? 'error' : 'done'}
+                        isHistorical
+                      />
+                    )
+                  }
+                  return (
+                    <MessageBubble
+                      key={msg.id}
+                      role={msg.role}
+                      content={msg.content}
+                    />
+                  )
+                })}
 
                 {/* 流式输出的助手消息 */}
                 {isStreaming && streamingContent && (

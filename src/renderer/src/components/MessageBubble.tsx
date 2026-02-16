@@ -7,7 +7,7 @@ import { User, Bot, Copy, Check } from 'lucide-react'
 import { useState } from 'react'
 
 interface MessageBubbleProps {
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   isStreaming?: boolean
 }

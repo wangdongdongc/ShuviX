@@ -112,6 +112,35 @@ function App(): React.JSX.Element {
         case 'text_end':
           break
 
+        case 'tool_start':
+          store.addToolExecution(sid, {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.toolArgs,
+            status: 'running',
+            messageId: event.data
+          })
+          // 仅当前活跃会话时添加到消息列表（tool_call 消息已在 main 进程持久化）
+          if (sid === store.activeSessionId && event.data) {
+            const msgs = await window.api.message.list(sid)
+            const toolCallMsg = msgs.find((m) => m.id === event.data)
+            if (toolCallMsg) store.addMessage(toolCallMsg)
+          }
+          break
+
+        case 'tool_end':
+          store.updateToolExecution(sid, event.toolCallId, {
+            status: event.toolIsError ? 'error' : 'done',
+            result: event.toolResult
+          })
+          // 仅当前活跃会话时添加 tool_result 消息
+          if (sid === store.activeSessionId && event.data) {
+            const msgs2 = await window.api.message.list(sid)
+            const toolResultMsg = msgs2.find((m) => m.id === event.data)
+            if (toolResultMsg) store.addMessage(toolResultMsg)
+          }
+          break
+
         case 'agent_end': {
           const content = store.getSessionStreamContent(sid)
           if (content) {
@@ -134,6 +163,7 @@ function App(): React.JSX.Element {
             }
           }
           store.clearStreamingContent(sid)
+          store.clearToolExecutions(sid)
           store.setIsStreaming(sid, false)
           break
         }
@@ -142,6 +172,7 @@ function App(): React.JSX.Element {
           store.setError(event.error || '未知错误')
           store.setIsStreaming(sid, false)
           store.clearStreamingContent(sid)
+          store.clearToolExecutions(sid)
           break
       }
     },
