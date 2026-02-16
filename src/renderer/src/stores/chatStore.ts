@@ -28,6 +28,9 @@ export interface Session {
   provider: string
   model: string
   systemPrompt: string
+  workingDirectory: string
+  dockerEnabled: number
+  dockerImage: string
   createdAt: number
   updatedAt: number
 }
@@ -75,6 +78,8 @@ interface ChatState {
   setInputText: (text: string) => void
   setError: (error: string | null) => void
   updateSessionTitle: (id: string, title: string) => void
+  updateSessionWorkingDir: (id: string, workingDirectory: string) => void
+  updateSessionDocker: (id: string, dockerEnabled: number, dockerImage: string) => void
   removeSession: (id: string) => void
 }
 
@@ -179,6 +184,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   updateSessionTitle: (id, title) =>
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s))
+    })),
+  updateSessionWorkingDir: (id, workingDirectory) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, workingDirectory } : s))
+    })),
+  updateSessionDocker: (id, dockerEnabled, dockerImage) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, dockerEnabled, dockerImage } : s
+      )
     })),
   removeSession: (id) =>
     set((state) => ({

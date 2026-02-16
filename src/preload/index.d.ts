@@ -3,6 +3,7 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentSetModelParams,
+  DirContentsResult,
   HttpLog,
   HttpLogListParams,
   HttpLogSummary,
@@ -11,8 +12,10 @@ import type {
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
+  SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateTitleParams,
+  SessionUpdateWorkingDirParams,
   SettingsSetParams
 } from '../main/types'
 
@@ -36,6 +39,9 @@ interface Session {
   provider: string
   model: string
   systemPrompt: string
+  workingDirectory: string
+  dockerEnabled: number
+  dockerImage: string
   createdAt: number
   updatedAt: number
 }
@@ -106,7 +112,11 @@ interface ShiroBotAPI {
     create: (params?: Partial<Session>) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
-    delete: (id: string) => Promise<{ success: boolean }>
+    updateWorkingDir: (params: SessionUpdateWorkingDirParams) => Promise<{ success: boolean }>
+    updateDocker: (params: SessionUpdateDockerParams) => Promise<{ success: boolean }>
+    checkDirContents: (dirPath: string) => Promise<DirContentsResult>
+    generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
+    delete: (id: string, cleanDir?: boolean) => Promise<{ success: boolean }>
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>
@@ -122,6 +132,9 @@ interface ShiroBotAPI {
     list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
     get: (id: string) => Promise<HttpLog | undefined>
     clear: () => Promise<{ success: boolean }>
+  }
+  docker: {
+    check: () => Promise<{ available: boolean }>
   }
 }
 

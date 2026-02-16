@@ -1,9 +1,11 @@
 import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
-import { type AssistantMessage, getModel, streamSimple } from '@mariozechner/pi-ai'
+import { type AssistantMessage, getModel, streamSimple, completeSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
-import { getCurrentTimeTool } from '../tools/getCurrentTime'
+import { createCodingTools } from '../tools'
+import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
+import { createDockerOperations } from '../tools/dockerOperations'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -23,9 +25,19 @@ export interface AgentStreamEvent {
  * Agent 服务 — 管理多个独立的 Agent 实例，按 sessionId 隔离
  * 每个 session 拥有自己的 Agent，互不影响
  */
+/** 记录 Agent 创建时的关键配置，用于变更检测 */
+interface AgentConfig {
+  workingDirectory: string
+  dockerEnabled: boolean
+  dockerImage: string
+}
+
 export class AgentService {
   private agents = new Map<string, Agent>()
+  private agentConfigs = new Map<string, AgentConfig>()
   private pendingLogIds = new Map<string, string[]>()
+  /** 记录哪些 session 开启了 Docker，用于 agent_end 时销毁容器 */
+  private dockerSessions = new Set<string>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -39,11 +51,31 @@ export class AgentService {
     provider: string,
     model: string,
     systemPrompt: string,
+    workingDirectory?: string,
+    dockerEnabled?: boolean,
+    dockerImage?: string,
     apiKey?: string,
     baseUrl?: string
   ): void {
+    // 检测关键配置是否变化，变化则销毁旧 agent 重建
+    const newConfig: AgentConfig = {
+      workingDirectory: workingDirectory || '',
+      dockerEnabled: dockerEnabled || false,
+      dockerImage: dockerImage || 'ubuntu:latest'
+    }
+    const oldConfig = this.agentConfigs.get(sessionId)
     if (this.agents.has(sessionId)) {
-      return
+      if (
+        oldConfig &&
+        oldConfig.workingDirectory === newConfig.workingDirectory &&
+        oldConfig.dockerEnabled === newConfig.dockerEnabled &&
+        oldConfig.dockerImage === newConfig.dockerImage
+      ) {
+        return
+      }
+      // 配置变更，销毁旧 agent
+      console.log(`[Agent] 配置变更，重建 session=${sessionId}`)
+      this.removeAgent(sessionId)
     }
     console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
 
@@ -67,13 +99,43 @@ export class AgentService {
       resolvedModel.baseUrl = baseUrl
     }
 
+    // 创建工具集（基于会话工作目录，可选 Docker 隔离）
+    const hostCwd = workingDirectory || process.cwd()
+    const useDocker = dockerEnabled && !!dockerImage
+    let toolOps: import('../tools').CreateToolsOptions | undefined
+    if (useDocker) {
+      // Docker 模式：仅 bash 在容器中执行，read/write/edit 直接操作宿主机文件
+      const dockerOps = createDockerOperations(dockerManager, sessionId, dockerImage!, hostCwd)
+      toolOps = {
+        bashOperations: dockerOps.bash,
+        bashCwd: CONTAINER_WORKSPACE
+      }
+      this.dockerSessions.add(sessionId)
+      console.log(`[Agent] Docker 模式已开启 session=${sessionId} image=${dockerImage} containerCwd=${CONTAINER_WORKSPACE}`)
+    }
+    // hostCwd 用于 read/write/edit（本地 fs），bashCwd 用于 bash（Docker 模式下为容器路径）
+    const tools = createCodingTools(hostCwd, toolOps)
+
+    // 在 system prompt 中附加工作目录信息
+    let enhancedPrompt = systemPrompt
+    if (workingDirectory) {
+      if (useDocker) {
+        // Docker 模式：bash 在容器中运行，路径是 CONTAINER_WORKSPACE；read/write/edit 在本地运行，路径是宿主机路径
+        enhancedPrompt += `\n\n当前工作目录：${hostCwd}\n你可以使用 bash, read, write, edit 工具来操作文件系统。所有相对路径都基于上述工作目录。`
+        enhancedPrompt += `\n注意：bash 命令运行在 Docker 容器中（镜像: ${dockerImage}），容器内工作目录为 ${CONTAINER_WORKSPACE}，对应宿主机 ${hostCwd}。`
+        enhancedPrompt += `\n因此 bash 命令中请使用 ${CONTAINER_WORKSPACE} 作为工作路径，而 read/write/edit 工具中请使用 ${hostCwd}。`
+      } else {
+        enhancedPrompt += `\n\n当前工作目录：${hostCwd}\n你可以使用 bash, read, write, edit 工具来操作文件系统。所有相对路径都基于上述工作目录。`
+      }
+    }
+
     const agent = new Agent({
       initialState: {
-        systemPrompt,
+        systemPrompt: enhancedPrompt,
         model: resolvedModel,
         thinkingLevel: 'off',
         messages: [],
-        tools: [getCurrentTimeTool]
+        tools
       },
       streamFn: (streamModel, context, options) =>
         streamSimple(streamModel, context, {
@@ -93,6 +155,7 @@ export class AgentService {
     })
 
     this.agents.set(sessionId, agent)
+    this.agentConfigs.set(sessionId, newConfig)
 
     // 订阅 Agent 事件，转发到 Renderer（携带 sessionId）
     agent.subscribe((event: AgentEvent) => {
@@ -148,13 +211,49 @@ export class AgentService {
     }
   }
 
+  /**
+   * 让 AI 根据对话内容生成简短标题（后台静默调用，对用户透明）
+   * 复用该 session 已有的模型配置
+   */
+  async generateTitle(sessionId: string, userMessage: string, assistantMessage: string): Promise<string | null> {
+    const agent = this.agents.get(sessionId)
+    if (!agent) return null
+
+    try {
+      const result = await completeSimple(agent.state.model, {
+        systemPrompt: '你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的中文标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}` }], timestamp: Date.now() }
+        ]
+      })
+      // 从 AssistantMessage 中提取文本
+      const text = result.content
+        ?.filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join('')
+        .trim()
+      if (text && text.length > 0) {
+        return text.slice(0, 30)
+      }
+    } catch (err) {
+      console.error(`[Agent] 生成标题失败: ${err}`)
+    }
+    return null
+  }
+
   /** 移除指定 session 的 Agent（删除会话时调用） */
   removeAgent(sessionId: string): void {
     const agent = this.agents.get(sessionId)
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
+      this.agentConfigs.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
+      // 清理 Docker 容器
+      if (this.dockerSessions.has(sessionId)) {
+        this.dockerSessions.delete(sessionId)
+        dockerManager.destroyContainer(sessionId).catch(() => {})
+      }
       console.log(`[Agent] 移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
@@ -173,6 +272,12 @@ export class AgentService {
         break
       case 'agent_end':
         console.log(`[Agent] 生成完成 session=${sessionId}`)
+        // Docker 模式下，回复完成后销毁容器
+        if (this.dockerSessions.has(sessionId)) {
+          dockerManager.destroyContainer(sessionId).catch((err) =>
+            console.error(`[Docker] 销毁容器失败: ${err}`)
+          )
+        }
         this.sendToRenderer({ type: 'agent_end', sessionId })
         break
       case 'message_update': {

@@ -27,7 +27,7 @@ export class SessionDao {
   insert(session: Session): void {
     this.db
       .prepare(
-        'INSERT INTO sessions (id, title, provider, model, systemPrompt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO sessions (id, title, provider, model, systemPrompt, workingDirectory, dockerEnabled, dockerImage, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         session.id,
@@ -35,6 +35,9 @@ export class SessionDao {
         session.provider,
         session.model,
         session.systemPrompt,
+        session.workingDirectory,
+        session.dockerEnabled,
+        session.dockerImage,
         session.createdAt,
         session.updatedAt
       )
@@ -59,6 +62,20 @@ export class SessionDao {
     this.db
       .prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?')
       .run(Date.now(), id)
+  }
+
+  /** 更新工作目录 */
+  updateWorkingDirectory(id: string, workingDirectory: string): void {
+    this.db
+      .prepare('UPDATE sessions SET workingDirectory = ?, updatedAt = ? WHERE id = ?')
+      .run(workingDirectory, Date.now(), id)
+  }
+
+  /** 更新 Docker 配置 */
+  updateDockerConfig(id: string, dockerEnabled: number, dockerImage: string): void {
+    this.db
+      .prepare('UPDATE sessions SET dockerEnabled = ?, dockerImage = ?, updatedAt = ? WHERE id = ?')
+      .run(dockerEnabled, dockerImage, Date.now(), id)
   }
 
   /** 删除会话 */

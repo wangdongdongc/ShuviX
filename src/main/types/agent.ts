@@ -10,6 +10,9 @@ export interface AgentInitParams {
   provider: string
   model: string
   systemPrompt: string
+  workingDirectory?: string
+  dockerEnabled?: boolean
+  dockerImage?: string
   apiKey?: string
   baseUrl?: string
   messages?: AgentInitMessage[]

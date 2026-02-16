@@ -85,6 +85,9 @@ function App(): React.JSX.Element {
         provider: sessionProvider,
         model: sessionModel,
         systemPrompt,
+        workingDirectory: currentSession?.workingDirectory || undefined,
+        dockerEnabled: currentSession?.dockerEnabled === 1,
+        dockerImage: currentSession?.dockerImage || undefined,
         apiKey: providerInfo?.apiKey || undefined,
         baseUrl: providerInfo?.baseUrl || undefined,
         messages: msgs.map((m) => ({ role: m.role, content: m.content }))
@@ -154,12 +157,22 @@ function App(): React.JSX.Element {
               store.addMessage(assistantMsg)
             }
 
-            // 自动生成标题（首次对话）
-            const isActive = sid === store.activeSessionId
-            if (isActive && store.messages.length <= 2) {
-              const title = content.slice(0, 30).replace(/\n/g, ' ') + (content.length > 30 ? '...' : '')
-              await window.api.session.updateTitle({ id: sid, title })
-              store.updateSessionTitle(sid, title)
+            // 首次对话时后台让 AI 生成标题（对用户透明）
+            const textMsgCount = store.messages.filter((m) => m.type === 'text' || !m.type).length
+            if (textMsgCount <= 2) {
+              const userMsg = store.messages.find((m) => m.role === 'user')
+              if (userMsg) {
+                // 异步生成，不阻塞主流程
+                window.api.session.generateTitle({
+                  sessionId: sid,
+                  userMessage: userMsg.content,
+                  assistantMessage: content
+                }).then((res) => {
+                  if (res.title) {
+                    useChatStore.getState().updateSessionTitle(sid, res.title)
+                  }
+                }).catch(() => {})
+              }
             }
           }
           store.clearStreamingContent(sid)

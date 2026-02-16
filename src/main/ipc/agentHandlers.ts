@@ -14,6 +14,9 @@ export function registerAgentHandlers(): void {
       params.provider,
       params.model,
       params.systemPrompt,
+      params.workingDirectory,
+      params.dockerEnabled,
+      params.dockerImage,
       params.apiKey,
       params.baseUrl
     )

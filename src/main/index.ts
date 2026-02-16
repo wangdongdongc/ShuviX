@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { agentService } from './services/agent'
+import { dockerManager } from './services/dockerManager'
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -153,6 +154,11 @@ app.whenReady().then(() => {
     // macOS dock 点击时重新创建窗口
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// 应用退出前清理 Docker 容器
+app.on('before-quit', () => {
+  dockerManager.destroyAll().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

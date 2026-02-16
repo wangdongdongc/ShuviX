@@ -5,6 +5,9 @@ export interface Session {
   provider: string
   model: string
   systemPrompt: string
+  workingDirectory: string
+  dockerEnabled: number
+  dockerImage: string
   createdAt: number
   updatedAt: number
 }
@@ -20,4 +23,25 @@ export interface SessionUpdateModelConfigParams {
   id: string
   provider: string
   model: string
+}
+
+/** IPC: 更新会话工作目录参数 */
+export interface SessionUpdateWorkingDirParams {
+  id: string
+  workingDirectory: string
+}
+
+/** IPC: 更新会话 Docker 配置参数 */
+export interface SessionUpdateDockerParams {
+  id: string
+  dockerEnabled: boolean
+  dockerImage?: string
+}
+
+/** IPC: 目录内容检查结果 */
+export interface DirContentsResult {
+  exists: boolean
+  isEmpty: boolean
+  files: string[]
+  totalCount: number
 }

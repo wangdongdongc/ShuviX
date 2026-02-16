@@ -88,6 +88,9 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
+    // 迁移：sessions 表增加工作目录 + Docker 字段
+    this.migrateSessionsWorkingDirColumns()
+
     // 迁移：messages 表增加 type + metadata 列（支持工具调用）
     this.migrateMessagesToolColumns()
 
@@ -144,6 +147,19 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：sessions 表增加工作目录 + Docker 字段 */
+  private migrateSessionsWorkingDirColumns(): void {
+    const columns = this.db.pragma('table_info(sessions)') as Array<{ name: string }>
+    const hasWorkingDir = columns.some((c) => c.name === 'workingDirectory')
+    if (hasWorkingDir) return
+
+    this.db.exec(`
+      ALTER TABLE sessions ADD COLUMN workingDirectory TEXT NOT NULL DEFAULT '';
+      ALTER TABLE sessions ADD COLUMN dockerEnabled INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN dockerImage TEXT NOT NULL DEFAULT 'ubuntu:latest';
+    `)
   }
 
   /** 迁移：messages 表增加 type + metadata 列（支持工具调用） */

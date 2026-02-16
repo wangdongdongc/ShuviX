@@ -1,6 +1,14 @@
-import { ipcMain } from 'electron'
+import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
-import type { Session, SessionUpdateModelConfigParams, SessionUpdateTitleParams } from '../types'
+import { agentService } from '../services/agent'
+import { dockerManager } from '../services/dockerManager'
+import type {
+  Session,
+  SessionUpdateDockerParams,
+  SessionUpdateModelConfigParams,
+  SessionUpdateTitleParams,
+  SessionUpdateWorkingDirParams
+} from '../types'
 
 /**
  * 会话管理 IPC 处理器
@@ -29,9 +37,54 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 删除会话 */
-  ipcMain.handle('session:delete', (_event, id: string) => {
-    sessionService.delete(id)
+  /** 更新工作目录 */
+  ipcMain.handle('session:updateWorkingDir', (_event, params: SessionUpdateWorkingDirParams) => {
+    sessionService.updateWorkingDirectory(params.id, params.workingDirectory)
     return { success: true }
+  })
+
+  /** 更新 Docker 配置 */
+  ipcMain.handle('session:updateDocker', (_event, params: SessionUpdateDockerParams) => {
+    sessionService.updateDockerConfig(params.id, params.dockerEnabled, params.dockerImage)
+    return { success: true }
+  })
+
+  /** 检查目录内容 */
+  ipcMain.handle('session:checkDirContents', (_event, dirPath: string) => {
+    return sessionService.checkDirContents(dirPath)
+  })
+
+  /** 删除会话（cleanDir 控制是否清理临时目录） */
+  ipcMain.handle('session:delete', (_event, id: string, cleanDir?: boolean) => {
+    sessionService.delete(id, cleanDir ?? false)
+    return { success: true }
+  })
+
+  /** AI 自动生成会话标题（后台静默，对用户透明） */
+  ipcMain.handle(
+    'session:generateTitle',
+    async (_event, params: { sessionId: string; userMessage: string; assistantMessage: string }) => {
+      const title = await agentService.generateTitle(params.sessionId, params.userMessage, params.assistantMessage)
+      if (title) {
+        sessionService.updateTitle(params.sessionId, title)
+      }
+      return { title }
+    }
+  )
+
+  /** 检测 Docker 是否可用 */
+  ipcMain.handle('docker:check', () => {
+    return { available: dockerManager.isDockerAvailable() }
+  })
+
+  /** 打开文件夹选择对话框 */
+  ipcMain.handle('dialog:openDirectory', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
 }

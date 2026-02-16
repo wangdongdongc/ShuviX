@@ -10,8 +10,10 @@ import type {
   ProviderToggleEnabledParams,
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
+  SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateTitleParams,
+  SessionUpdateWorkingDirParams,
   SettingsSetParams
 } from '../main/types'
 
@@ -77,7 +79,16 @@ const api = {
       ipcRenderer.invoke('session:updateTitle', params),
     updateModelConfig: (params: SessionUpdateModelConfigParams) =>
       ipcRenderer.invoke('session:updateModelConfig', params),
-    delete: (id: string) => ipcRenderer.invoke('session:delete', id)
+    updateWorkingDir: (params: SessionUpdateWorkingDirParams) =>
+      ipcRenderer.invoke('session:updateWorkingDir', params),
+    updateDocker: (params: SessionUpdateDockerParams) =>
+      ipcRenderer.invoke('session:updateDocker', params),
+    checkDirContents: (dirPath: string) =>
+      ipcRenderer.invoke('session:checkDirContents', dirPath),
+    generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
+      ipcRenderer.invoke('session:generateTitle', params),
+    delete: (id: string, cleanDir?: boolean) =>
+      ipcRenderer.invoke('session:delete', id, cleanDir)
   },
 
   // ============ 消息管理 ============
@@ -100,6 +111,11 @@ const api = {
     list: (params?: HttpLogListParams) => ipcRenderer.invoke('httpLog:list', params),
     get: (id: string) => ipcRenderer.invoke('httpLog:get', id),
     clear: () => ipcRenderer.invoke('httpLog:clear')
+  },
+
+  // ============ Docker ============
+  docker: {
+    check: () => ipcRenderer.invoke('docker:check')
   }
 }
 
