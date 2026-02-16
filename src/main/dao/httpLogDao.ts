@@ -18,11 +18,24 @@ export class HttpLogDao {
       .run(log.id, log.sessionId, log.provider, log.model, log.payload, log.createdAt)
   }
 
-  /** 获取日志列表（不含 payload，按时间倒序） */
-  list(limit = 200): HttpLogSummary[] {
+  /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId 筛选） */
+  list(params: { sessionId?: string; limit?: number } = {}): HttpLogSummary[] {
+    const limit = params.limit ?? 200
+    if (params.sessionId) {
+      return this.db
+        .prepare(
+          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model, h.createdAt
+           FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
+           WHERE h.sessionId = ?
+           ORDER BY h.createdAt DESC LIMIT ?`
+        )
+        .all(params.sessionId, limit) as HttpLogSummary[]
+    }
     return this.db
       .prepare(
-        'SELECT id, sessionId, provider, model, createdAt FROM http_logs ORDER BY createdAt DESC LIMIT ?'
+        `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model, h.createdAt
+         FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
+         ORDER BY h.createdAt DESC LIMIT ?`
       )
       .all(limit) as HttpLogSummary[]
   }

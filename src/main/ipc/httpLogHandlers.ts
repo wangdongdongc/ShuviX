@@ -7,9 +7,9 @@ import type { HttpLogListParams } from '../types'
  * 提供日志列表、详情、清空能力
  */
 export function registerHttpLogHandlers(): void {
-  /** 获取日志列表（默认最近 200 条） */
+  /** 获取日志列表（支持 sessionId 筛选，默认最近 200 条） */
   ipcMain.handle('httpLog:list', (_event, params?: HttpLogListParams) => {
-    return httpLogService.list(params?.limit)
+    return httpLogService.list(params)
   })
 
   /** 获取日志详情（含完整请求体） */

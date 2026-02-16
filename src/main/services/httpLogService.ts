@@ -33,9 +33,9 @@ export class HttpLogService {
     httpLogDao.insert(log)
   }
 
-  /** 获取日志列表 */
-  list(limit?: number): HttpLogSummary[] {
-    return httpLogDao.list(limit)
+  /** 获取日志列表（支持 sessionId 筛选） */
+  list(params?: { sessionId?: string; limit?: number }): HttpLogSummary[] {
+    return httpLogDao.list(params)
   }
 
   /** 获取日志详情 */

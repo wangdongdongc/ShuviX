@@ -56,6 +56,7 @@ function HttpLogSettings(): React.JSX.Element {
   const [logs, setLogs] = useState<Array<{
     id: string
     sessionId: string
+    sessionTitle: string
     provider: string
     model: string
     createdAt: number
@@ -72,12 +73,23 @@ function HttpLogSettings(): React.JSX.Element {
   const [loadingList, setLoadingList] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([])
+  const [filterSessionId, setFilterSessionId] = useState<string>('')
+
+  /** 加载会话列表（用于筛选下拉） */
+  const loadSessions = async (): Promise<void> => {
+    const list = await window.api.session.list()
+    setSessions(list.map((s) => ({ id: s.id, title: s.title })))
+  }
 
   /** 加载日志列表 */
-  const loadLogs = async (): Promise<void> => {
+  const loadLogs = async (sessionId?: string): Promise<void> => {
     setLoadingList(true)
     try {
-      const rows = await window.api.httpLog.list({ limit: 300 })
+      const rows = await window.api.httpLog.list({
+        limit: 300,
+        ...(sessionId ? { sessionId } : {})
+      })
       setLogs(rows)
       if (rows.length === 0) {
         setSelectedLogId(null)
@@ -115,8 +127,14 @@ function HttpLogSettings(): React.JSX.Element {
   }
 
   useEffect(() => {
+    loadSessions()
     loadLogs()
   }, [])
+
+  /** 切换筛选条件时重新加载日志 */
+  useEffect(() => {
+    loadLogs(filterSessionId || undefined)
+  }, [filterSessionId])
 
   useEffect(() => {
     if (selectedLogId) {
@@ -126,28 +144,44 @@ function HttpLogSettings(): React.JSX.Element {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-5 py-4 border-b border-border-secondary flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-text-primary">HTTP 请求日志</h3>
-          <p className="text-[11px] text-text-tertiary mt-1">每次请求 AI 时会记录请求体，便于审计和排查。</p>
+      <div className="px-5 py-4 border-b border-border-secondary space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">HTTP 请求日志</h3>
+            <p className="text-[11px] text-text-tertiary mt-1">每次请求 AI 时会记录请求体，便于审计和排查。</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadLogs(filterSessionId || undefined)}
+              disabled={loadingList}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              <RefreshCw size={12} className={loadingList ? 'animate-spin' : ''} />
+              刷新
+            </button>
+            <button
+              onClick={handleClear}
+              disabled={clearing || logs.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              <Trash2 size={12} />
+              清空
+            </button>
+          </div>
         </div>
+        {/* 会话筛选 */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={loadLogs}
-            disabled={loadingList}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          <label className="text-[11px] text-text-tertiary flex-shrink-0">按会话筛选</label>
+          <select
+            value={filterSessionId}
+            onChange={(e) => setFilterSessionId(e.target.value)}
+            className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
           >
-            <RefreshCw size={12} className={loadingList ? 'animate-spin' : ''} />
-            刷新
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={clearing || logs.length === 0}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-          >
-            <Trash2 size={12} />
-            清空
-          </button>
+            <option value="">全部会话</option>
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -173,7 +207,6 @@ function HttpLogSettings(): React.JSX.Element {
                     <div className="mt-1 text-xs text-text-primary font-medium">
                       {log.provider} / {log.model}
                     </div>
-                    <div className="mt-1 text-[11px] text-text-tertiary truncate">session: {log.sessionId}</div>
                   </button>
                 )
               })}
@@ -197,7 +230,8 @@ function HttpLogSettings(): React.JSX.Element {
                 </div>
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
                   <div className="text-text-tertiary">会话</div>
-                  <div className="text-text-primary mt-0.5 break-all">{selectedLog.sessionId}</div>
+                  <div className="text-text-primary mt-0.5">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || '未知会话'}</div>
+                  <div className="text-[10px] text-text-tertiary mt-0.5 break-all">{selectedLog.sessionId}</div>
                 </div>
               </div>
 

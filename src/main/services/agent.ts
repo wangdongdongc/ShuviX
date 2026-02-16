@@ -34,7 +34,6 @@ export class AgentService {
     baseUrl?: string
   ): void {
     if (this.agents.has(sessionId)) {
-      console.log(`[Agent] 跳过创建，已存在 session=${sessionId}`)
       return
     }
     console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
