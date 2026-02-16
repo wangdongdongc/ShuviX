@@ -88,6 +88,9 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
+    // 迁移：http_logs 表增加 token 用量字段
+    this.migrateHttpLogsTokenColumns()
+
     // 种子数据：内置提供商和模型
     this.seedProviders()
 
@@ -138,6 +141,19 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：http_logs 表增加 token 用量字段 */
+  private migrateHttpLogsTokenColumns(): void {
+    const columns = this.db.pragma('table_info(http_logs)') as Array<{ name: string }>
+    const hasInputTokens = columns.some((c) => c.name === 'inputTokens')
+    if (hasInputTokens) return
+
+    this.db.exec(`
+      ALTER TABLE http_logs ADD COLUMN inputTokens INTEGER DEFAULT 0;
+      ALTER TABLE http_logs ADD COLUMN outputTokens INTEGER DEFAULT 0;
+      ALTER TABLE http_logs ADD COLUMN totalTokens INTEGER DEFAULT 0;
+    `)
   }
 
   /** 迁移旧 settings 表中的 apiKey:/baseUrl: 数据到 providers 表 */

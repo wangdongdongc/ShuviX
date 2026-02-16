@@ -1,5 +1,5 @@
-import { Agent, type AgentEvent } from '@mariozechner/pi-agent-core'
-import { getModel, streamSimple } from '@mariozechner/pi-ai'
+import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
+import { type AssistantMessage, getModel, streamSimple } from '@mariozechner/pi-ai'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 
@@ -17,6 +17,7 @@ export interface AgentStreamEvent {
  */
 export class AgentService {
   private agents = new Map<string, Agent>()
+  private pendingLogIds = new Map<string, string[]>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -70,12 +71,15 @@ export class AgentService {
         streamSimple(streamModel, context, {
           ...(options || {}),
           onPayload: (payload) => {
-            httpLogService.logRequest({
+            const logId = httpLogService.logRequest({
               sessionId,
               provider: String(streamModel.provider || provider),
               model: String(streamModel.id || model),
               payload
             })
+            const ids = this.pendingLogIds.get(sessionId) || []
+            ids.push(logId)
+            this.pendingLogIds.set(sessionId, ids)
           }
         })
     })
@@ -142,8 +146,14 @@ export class AgentService {
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
+      this.pendingLogIds.delete(sessionId)
       console.log(`[Agent] 移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
+  }
+
+  /** 判断 AgentMessage 是否为 AssistantMessage */
+  private isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+    return message !== null && 'role' in message && message.role === 'assistant'
   }
 
   /** 将 pi-agent-core 事件转换并发送到 Renderer */
@@ -166,9 +176,19 @@ export class AgentService {
         }
         break
       }
-      case 'message_end':
+      case 'message_end': {
+        // 如果是 assistant 消息，将 token 用量回填到对应的 HTTP 日志
+        const msg = event.message
+        if (this.isAssistantMessage(msg)) {
+          const logId = this.pendingLogIds.get(sessionId)?.shift()
+          if (logId) {
+            const usage = msg.usage
+            httpLogService.updateUsage(logId, usage.input, usage.output, usage.totalTokens)
+          }
+        }
         this.sendToRenderer({ type: 'text_end', sessionId })
         break
+      }
       default:
         break
     }

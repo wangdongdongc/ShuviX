@@ -59,6 +59,9 @@ function HttpLogSettings(): React.JSX.Element {
     sessionTitle: string
     provider: string
     model: string
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
     createdAt: number
   }>>([])
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
@@ -203,10 +206,20 @@ function HttpLogSettings(): React.JSX.Element {
                         : 'border-transparent hover:border-border-primary hover:bg-bg-hover'
                     }`}
                   >
-                    <div className="text-[11px] text-text-secondary">{new Date(log.createdAt).toLocaleString()}</div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] text-text-secondary">{new Date(log.createdAt).toLocaleString()}</div>
+                      {log.totalTokens > 0 && (
+                        <div className="text-[10px] text-text-tertiary">{log.totalTokens} tokens</div>
+                      )}
+                    </div>
                     <div className="mt-1 text-xs text-text-primary font-medium">
                       {log.provider} / {log.model}
                     </div>
+                    {log.totalTokens > 0 && (
+                      <div className="mt-0.5 text-[10px] text-text-tertiary">
+                        in: {log.inputTokens} / out: {log.outputTokens}
+                      </div>
+                    )}
                   </button>
                 )
               })}

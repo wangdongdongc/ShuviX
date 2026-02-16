@@ -5,6 +5,9 @@ export interface HttpLog {
   provider: string
   model: string
   payload: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
   createdAt: number
 }
 
@@ -15,6 +18,9 @@ export interface HttpLogSummary {
   sessionTitle: string
   provider: string
   model: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
   createdAt: number
 }
 

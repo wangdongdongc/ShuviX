@@ -15,22 +15,31 @@ export class HttpLogService {
     }
   }
 
-  /** 记录一次请求体 */
+  /** 记录一次请求体，返回日志 ID（用于后续更新 token 用量） */
   logRequest(params: {
     sessionId: string
     provider: string
     model: string
     payload: unknown
-  }): void {
+  }): string {
     const log: HttpLog = {
       id: uuidv7(),
       sessionId: params.sessionId,
       provider: params.provider,
       model: params.model,
       payload: this.stringifyPayload(params.payload),
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
       createdAt: Date.now()
     }
     httpLogDao.insert(log)
+    return log.id
+  }
+
+  /** 更新指定日志的 token 用量 */
+  updateUsage(id: string, inputTokens: number, outputTokens: number, totalTokens: number): void {
+    httpLogDao.updateUsage(id, inputTokens, outputTokens, totalTokens)
   }
 
   /** 获取日志列表（支持 sessionId 筛选） */

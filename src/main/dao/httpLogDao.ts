@@ -13,9 +13,9 @@ export class HttpLogDao {
   insert(log: HttpLog): void {
     this.db
       .prepare(
-        'INSERT INTO http_logs (id, sessionId, provider, model, payload, createdAt) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO http_logs (id, sessionId, provider, model, payload, inputTokens, outputTokens, totalTokens, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(log.id, log.sessionId, log.provider, log.model, log.payload, log.createdAt)
+      .run(log.id, log.sessionId, log.provider, log.model, log.payload, log.inputTokens, log.outputTokens, log.totalTokens, log.createdAt)
   }
 
   /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId 筛选） */
@@ -24,7 +24,8 @@ export class HttpLogDao {
     if (params.sessionId) {
       return this.db
         .prepare(
-          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model, h.createdAt
+          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model,
+                  h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
            FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
            WHERE h.sessionId = ?
            ORDER BY h.createdAt DESC LIMIT ?`
@@ -33,7 +34,8 @@ export class HttpLogDao {
     }
     return this.db
       .prepare(
-        `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model, h.createdAt
+        `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle, h.provider, h.model,
+                h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
          FROM http_logs h LEFT JOIN sessions s ON h.sessionId = s.id
          ORDER BY h.createdAt DESC LIMIT ?`
       )
@@ -43,8 +45,15 @@ export class HttpLogDao {
   /** 根据 ID 获取完整日志（含 payload） */
   getById(id: string): HttpLog | undefined {
     return this.db
-      .prepare('SELECT id, sessionId, provider, model, payload, createdAt FROM http_logs WHERE id = ?')
+      .prepare('SELECT id, sessionId, provider, model, payload, inputTokens, outputTokens, totalTokens, createdAt FROM http_logs WHERE id = ?')
       .get(id) as HttpLog | undefined
+  }
+
+  /** 更新指定日志的 token 用量 */
+  updateUsage(id: string, inputTokens: number, outputTokens: number, totalTokens: number): void {
+    this.db
+      .prepare('UPDATE http_logs SET inputTokens = ?, outputTokens = ?, totalTokens = ? WHERE id = ?')
+      .run(inputTokens, outputTokens, totalTokens, id)
   }
 
   /** 清空所有日志 */
