@@ -1,3 +1,4 @@
+import { v7 as uuidv7 } from 'uuid'
 import { databaseManager } from './database'
 import type { Provider, ProviderModel } from '../types'
 
@@ -107,18 +108,24 @@ export class ProviderDao {
    * 注意：不会删除已有模型，避免误删用户手动配置
    */
   upsertModels(providerId: string, modelIds: string[]): void {
+    const findStmt = this.db.prepare(
+      'SELECT id FROM provider_models WHERE providerId = ? AND modelId = ?'
+    )
     const insertStmt = this.db.prepare(
-      'INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 0, ?)'
+      'INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 0, ?)'
     )
     const updateSortStmt = this.db.prepare(
-      'UPDATE provider_models SET sortOrder = ? WHERE id = ?'
+      'UPDATE provider_models SET sortOrder = ? WHERE providerId = ? AND modelId = ?'
     )
 
     const syncTx = this.db.transaction(() => {
       modelIds.forEach((modelId, idx) => {
-        const id = `${providerId}:${modelId}`
-        insertStmt.run(id, providerId, modelId, idx)
-        updateSortStmt.run(idx, id)
+        const existing = findStmt.get(providerId, modelId) as { id: string } | undefined
+        if (existing) {
+          updateSortStmt.run(idx, providerId, modelId)
+        } else {
+          insertStmt.run(uuidv7(), providerId, modelId, idx)
+        }
       })
     })
 
@@ -158,13 +165,16 @@ export class ProviderDao {
 
   /** 手动添加单个模型（默认启用） */
   insertModel(providerId: string, modelId: string): void {
-    const id = `${providerId}:${modelId}`
+    const existing = this.db
+      .prepare('SELECT id FROM provider_models WHERE providerId = ? AND modelId = ?')
+      .get(providerId, modelId)
+    if (existing) return
     const maxOrder = this.db
       .prepare('SELECT MAX(sortOrder) as maxOrder FROM provider_models WHERE providerId = ?')
       .get(providerId) as { maxOrder: number | null }
     this.db
-      .prepare('INSERT OR IGNORE INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 1, ?)')
-      .run(id, providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
+      .prepare('INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 1, ?)')
+      .run(uuidv7(), providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
   }
 
   /** 删除单个模型 */
