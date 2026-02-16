@@ -1,10 +1,10 @@
 import { v7 as uuidv7 } from 'uuid'
 import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
-import type { DirContentsResult, Session } from '../types'
+import type { Session } from '../types'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdirSync, existsSync, readdirSync, rmSync } from 'fs'
+import { mkdirSync, existsSync } from 'fs'
 
 /**
  * 会话服务 — 编排会话相关的业务逻辑
@@ -79,43 +79,10 @@ export class SessionService {
     )
   }
 
-  /** 检查目录内容（用于删除确认弹窗） */
-  checkDirContents(dirPath: string): DirContentsResult {
-    if (!existsSync(dirPath)) {
-      return { exists: false, isEmpty: true, files: [], totalCount: 0 }
-    }
-    try {
-      const entries = readdirSync(dirPath)
-      return {
-        exists: true,
-        isEmpty: entries.length === 0,
-        files: entries.slice(0, 20),
-        totalCount: entries.length
-      }
-    } catch {
-      return { exists: false, isEmpty: true, files: [], totalCount: 0 }
-    }
-  }
-
-  /** 删除会话（同时清理关联消息，可选清理临时目录） */
-  delete(id: string, cleanDir = false): void {
-    if (cleanDir) {
-      const session = sessionDao.findById(id)
-      if (session?.workingDirectory && this.isTempDirectory(session.workingDirectory)) {
-        try {
-          rmSync(session.workingDirectory, { recursive: true, force: true })
-        } catch (err) {
-          console.error(`[会话] 清理工作目录失败: ${err}`)
-        }
-      }
-    }
+  /** 删除会话（同时清理关联消息） */
+  delete(id: string): void {
     messageDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
-  }
-
-  /** 判断是否为 ShiroBot 创建的临时目录 */
-  private isTempDirectory(dirPath: string): boolean {
-    return dirPath.startsWith(SESSIONS_TMP_ROOT)
   }
 }
 

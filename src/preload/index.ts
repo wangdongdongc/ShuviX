@@ -23,7 +23,7 @@ const api = {
   app: {
     /** 打开独立设置窗口 */
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
-    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
+    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */ 
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
       ipcRenderer.on('app:settings-changed', handler)
@@ -83,12 +83,10 @@ const api = {
       ipcRenderer.invoke('session:updateWorkingDir', params),
     updateDocker: (params: SessionUpdateDockerParams) =>
       ipcRenderer.invoke('session:updateDocker', params),
-    checkDirContents: (dirPath: string) =>
-      ipcRenderer.invoke('session:checkDirContents', dirPath),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
-    delete: (id: string, cleanDir?: boolean) =>
-      ipcRenderer.invoke('session:delete', id, cleanDir)
+    delete: (id: string) =>
+      ipcRenderer.invoke('session:delete', id)
   },
 
   // ============ 消息管理 ============

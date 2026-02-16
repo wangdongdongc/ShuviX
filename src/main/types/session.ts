@@ -37,11 +37,3 @@ export interface SessionUpdateDockerParams {
   dockerEnabled: boolean
   dockerImage?: string
 }
-
-/** IPC: 目录内容检查结果 */
-export interface DirContentsResult {
-  exists: boolean
-  isEmpty: boolean
-  files: string[]
-  totalCount: number
-}

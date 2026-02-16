@@ -25,7 +25,6 @@ function shortenPath(p: string): string {
 export function Sidebar(): React.JSX.Element {
   const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
   const [editingSession, setEditingSession] = useState<Session | null>(null)
-  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; files: string[]; total: number } | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
 
   // 按工作目录分组，临时目录统一归类为“临时对话”
@@ -63,30 +62,10 @@ export function Sidebar(): React.JSX.Element {
     setActiveSessionId(id)
   }
 
-  /** 删除会话（先检查临时目录内容） */
+  /** 删除会话 */
   const handleDelete = async (id: string): Promise<void> => {
-    const session = sessions.find((s) => s.id === id)
-    if (!session) return
-
-    // 检查工作目录是否非空
-    if (session.workingDirectory) {
-      const result = await window.api.session.checkDirContents(session.workingDirectory)
-      if (result.exists && !result.isEmpty) {
-        setDeleteConfirm({ id, files: result.files, total: result.totalCount })
-        return
-      }
-    }
-    // 目录为空或不存在，直接删除并清理
-    await window.api.session.delete(id, true)
+    await window.api.session.delete(id)
     useChatStore.getState().removeSession(id)
-  }
-
-  /** 确认删除（含清理目录） */
-  const confirmDelete = async (cleanDir: boolean): Promise<void> => {
-    if (!deleteConfirm) return
-    await window.api.session.delete(deleteConfirm.id, cleanDir)
-    useChatStore.getState().removeSession(deleteConfirm.id)
-    setDeleteConfirm(null)
   }
 
   /** 切换分组折叠状态 */
@@ -220,48 +199,6 @@ export function Sidebar(): React.JSX.Element {
           session={editingSession}
           onClose={() => setEditingSession(null)}
         />
-      )}
-
-      {/* 删除确认弹窗（工作目录非空时） */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[380px] max-w-[90vw] p-5">
-            <h3 className="text-sm font-semibold text-text-primary mb-2">删除会话</h3>
-            <p className="text-xs text-text-secondary mb-3">
-              该会话的工作目录不为空，包含 {deleteConfirm.total} 个文件/文件夹：
-            </p>
-            <div className="bg-bg-secondary rounded-lg p-2 mb-3 max-h-32 overflow-y-auto">
-              {deleteConfirm.files.map((f) => (
-                <div key={f} className="text-[10px] text-text-tertiary font-mono truncate py-0.5">
-                  {f}
-                </div>
-              ))}
-              {deleteConfirm.total > deleteConfirm.files.length && (
-                <div className="text-[10px] text-text-tertiary">…还有 {deleteConfirm.total - deleteConfirm.files.length} 项</div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-3 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => confirmDelete(false)}
-                className="px-3 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
-              >
-                仅删除会话
-              </button>
-              <button
-                onClick={() => confirmDelete(true)}
-                className="px-3 py-1.5 rounded-lg text-xs bg-error text-white hover:bg-error/90 transition-colors"
-              >
-                删除会话和目录
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   )

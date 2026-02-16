@@ -49,14 +49,9 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 检查目录内容 */
-  ipcMain.handle('session:checkDirContents', (_event, dirPath: string) => {
-    return sessionService.checkDirContents(dirPath)
-  })
-
-  /** 删除会话（cleanDir 控制是否清理临时目录） */
-  ipcMain.handle('session:delete', (_event, id: string, cleanDir?: boolean) => {
-    sessionService.delete(id, cleanDir ?? false)
+  /** 删除会话 */
+  ipcMain.handle('session:delete', (_event, id: string) => {
+    sessionService.delete(id)
     return { success: true }
   })
 

@@ -3,7 +3,6 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentSetModelParams,
-  DirContentsResult,
   HttpLog,
   HttpLogListParams,
   HttpLogSummary,
@@ -114,9 +113,8 @@ interface ShiroBotAPI {
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     updateWorkingDir: (params: SessionUpdateWorkingDirParams) => Promise<{ success: boolean }>
     updateDocker: (params: SessionUpdateDockerParams) => Promise<{ success: boolean }>
-    checkDirContents: (dirPath: string) => Promise<DirContentsResult>
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
-    delete: (id: string, cleanDir?: boolean) => Promise<{ success: boolean }>
+    delete: (id: string) => Promise<{ success: boolean }>
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>
