@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
+import { httpLogDao } from '../dao/httpLogDao'
 import type { Session } from '../types'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -79,9 +80,10 @@ export class SessionService {
     )
   }
 
-  /** 删除会话（同时清理关联消息） */
+  /** 删除会话（同时清理关联消息和 HTTP 日志） */
   delete(id: string): void {
     messageDao.deleteBySessionId(id)
+    httpLogDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
   }
 }

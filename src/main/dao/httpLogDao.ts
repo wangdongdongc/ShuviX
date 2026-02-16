@@ -56,6 +56,11 @@ export class HttpLogDao {
       .run(inputTokens, outputTokens, totalTokens, id)
   }
 
+  /** 删除指定会话的所有日志 */
+  deleteBySessionId(sessionId: string): void {
+    this.db.prepare('DELETE FROM http_logs WHERE sessionId = ?').run(sessionId)
+  }
+
   /** 清空所有日志 */
   clear(): void {
     this.db.prepare('DELETE FROM http_logs').run()
