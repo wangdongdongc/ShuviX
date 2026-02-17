@@ -51,10 +51,10 @@ export class DockerManager {
     }
 
     // 创建新容器
-    const containerName = `shirobot-${sessionId.slice(0, 12)}`
+    const containerName = `shirobot-${sessionId.replace(/-/g, '')}`
     const containerId = await this.createContainer(containerName, image, workingDirectory)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
-    console.log(`[Docker] 创建容器 ${containerId}`)
+    console.log(`[Docker] 创建容器 ${containerId.slice(0, 12)}`)
     return { containerId, isNew: true }
   }
 
@@ -118,16 +118,26 @@ export class DockerManager {
 
   /** 销毁指定 session 的容器 */
   async destroyContainer(sessionId: string): Promise<boolean> {
-    const info = this.containers.get(sessionId)
-    if (!info) return false
 
-    this.containers.delete(sessionId)
-    spawnSync('docker', ['rm', '-f', info.containerId], {
-      timeout: 10000,
-      stdio: 'ignore'
+    return new Promise((resolve, reject) => {
+      const info = this.containers.get(sessionId)
+      if (!info) {
+        resolve(false)
+        return
+      }
+
+      this.containers.delete(sessionId)
+      try {
+        spawnSync('docker', ['rm', '-f', info.containerId], {
+        timeout: 10000,
+        stdio: 'ignore'
+      })
+      } catch (e) {
+        reject(e)
+      }
+      console.log(`[Docker] 销毁容器 ${info.containerId.slice(0, 12)}`)
+      resolve(true)
     })
-    console.log(`[Docker] 销毁容器 ${info.containerId}`)
-    return true
   }
 
   /** 销毁所有容器（应用退出时调用） */
@@ -140,7 +150,7 @@ export class DockerManager {
           timeout: 10000,
           stdio: 'ignore'
         })
-        console.log(`[Docker] 清理容器 ${info.containerId}`)
+        console.log(`[Docker] 清理容器 ${info.containerId.slice(0, 12)}`)
       } catch {
         // 忽略错误
       }
