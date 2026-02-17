@@ -305,12 +305,15 @@ export class AgentService {
     if (!agent) return null
 
     try {
+      // 查找当前模型对应提供商的 apiKey
+      const currentProvider = providerDao.findById(String(agent.state.model.provider))
+      const resolvedApiKey = currentProvider?.apiKey
       const result = await completeSimple(agent.state.model, {
         systemPrompt: '你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的中文标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。',
         messages: [
           { role: 'user', content: [{ type: 'text', text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}` }], timestamp: Date.now() }
         ]
-      })
+      }, resolvedApiKey ? { apiKey: resolvedApiKey } : {})
       // 从 AssistantMessage 中提取文本
       const text = result.content
         ?.filter((c: any) => c.type === 'text')
