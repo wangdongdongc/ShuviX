@@ -25,12 +25,11 @@ export interface ToolExecution {
 export interface Session {
   id: string
   title: string
+  /** 所属项目 ID（null 表示临时会话） */
+  projectId: string | null
   provider: string
   model: string
   systemPrompt: string
-  workingDirectory: string
-  dockerEnabled: number
-  dockerImage: string
   /** 模型相关设置（JSON：思考深度等） */
   modelMetadata: string
   createdAt: number
@@ -91,8 +90,7 @@ interface ChatState {
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
   updateSessionTitle: (id: string, title: string) => void
-  updateSessionWorkingDir: (id: string, workingDirectory: string) => void
-  updateSessionDocker: (id: string, dockerEnabled: number, dockerImage: string) => void
+  updateSessionProject: (id: string, projectId: string | null) => void
   removeSession: (id: string) => void
 }
 
@@ -220,15 +218,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s))
     })),
-  updateSessionWorkingDir: (id, workingDirectory) =>
+  updateSessionProject: (id, projectId) =>
     set((state) => ({
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, workingDirectory } : s))
-    })),
-  updateSessionDocker: (id, dockerEnabled, dockerImage) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, dockerEnabled, dockerImage } : s
-      )
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, projectId } : s))
     })),
   removeSession: (id) =>
     set((state) => ({

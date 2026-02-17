@@ -1,5 +1,6 @@
 import { registerAgentHandlers } from './agentHandlers'
 import { registerSessionHandlers } from './sessionHandlers'
+import { registerProjectHandlers } from './projectHandlers'
 import { registerMessageHandlers } from './messageHandlers'
 import { registerSettingsHandlers } from './settingsHandlers'
 import { registerProviderHandlers } from './providerHandlers'
@@ -12,6 +13,7 @@ import { registerHttpLogHandlers } from './httpLogHandlers'
 export function registerIpcHandlers(): void {
   registerAgentHandlers()
   registerSessionHandlers()
+  registerProjectHandlers()
   registerMessageHandlers()
   registerSettingsHandlers()
   registerProviderHandlers()

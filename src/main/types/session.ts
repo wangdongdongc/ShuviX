@@ -2,12 +2,11 @@
 export interface Session {
   id: string
   title: string
+  /** 所属项目 ID（null 表示临时会话） */
+  projectId: string | null
   provider: string
   model: string
   systemPrompt: string
-  workingDirectory: string
-  dockerEnabled: number
-  dockerImage: string
   /** 模型相关设置（JSON：思考深度等） */
   modelMetadata: string
   createdAt: number
@@ -27,17 +26,10 @@ export interface SessionUpdateModelConfigParams {
   model: string
 }
 
-/** IPC: 更新会话工作目录参数 */
-export interface SessionUpdateWorkingDirParams {
+/** IPC: 更新会话所属项目参数 */
+export interface SessionUpdateProjectParams {
   id: string
-  workingDirectory: string
-}
-
-/** IPC: 更新会话 Docker 配置参数 */
-export interface SessionUpdateDockerParams {
-  id: string
-  dockerEnabled: boolean
-  dockerImage?: string
+  projectId: string | null
 }
 
 /** IPC: 更新会话模型元数据参数 */

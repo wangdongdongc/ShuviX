@@ -1,39 +1,39 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SessionEditDialog } from './SessionEditDialog'
+import { ProjectEditDialog } from './ProjectEditDialog'
 import type { Session } from '../stores/chatStore'
 
 /**
  * 侧边栏 — 会话列表 + 新建对话 + 设置入口
+ * 按项目（Project）分组展示
  */
-/** 判断是否为 ShiroBot 创建的临时目录 */
-const TEMP_GROUP_KEY = '__temp__'
-function isTempDirectory(p: string): boolean {
-  return p.includes('shirobot-sessions')
-}
-
-/** 缩短目录路径显示 */
-function shortenPath(p: string): string {
-  if (!p) return '未分类'
-  const parts = p.replace(/\\/g, '/').split('/')
-  if (parts.length <= 3) return p
-  return `…/${parts.slice(-2).join('/')}`
-}
+const TEMP_GROUP_KEY = '__no_project__'
 
 export function Sidebar(): React.JSX.Element {
   const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
   const [editingSession, setEditingSession] = useState<Session | null>(null)
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  // 项目名称缓存：projectId → name
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({})
 
-  // 按工作目录分组，临时目录统一归类为“临时对话”
+  // 异步加载项目名称
+  useEffect(() => {
+    window.api.project.list().then((projects) => {
+      const map: Record<string, string> = {}
+      for (const p of projects) { map[p.id] = p.name }
+      setProjectNames(map)
+    })
+  }, [sessions])
+
+  // 按 projectId 分组
   const grouped = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const s of sessions) {
-      const key = s.workingDirectory && isTempDirectory(s.workingDirectory)
-        ? TEMP_GROUP_KEY
-        : (s.workingDirectory || '')
+      const key = s.projectId || TEMP_GROUP_KEY
       const arr = map.get(key) || []
       arr.push(s)
       map.set(key, arr)
@@ -41,16 +41,22 @@ export function Sidebar(): React.JSX.Element {
     return map
   }, [sessions])
 
-  // 是否需要分组显示（多于一个分组 或 唯一分组有多个 session）
   const showGroups = grouped.size > 1
 
-  /** 创建新会话 */
+  // 获取当前活跃会话的 projectId（新建对话时继承）
+  const activeProjectId = useMemo(() => {
+    const active = sessions.find((s) => s.id === activeSessionId)
+    return active?.projectId ?? null
+  }, [sessions, activeSessionId])
+
+  /** 创建新会话（继承当前项目） */
   const handleNewChat = async (): Promise<void> => {
     const settings = useSettingsStore.getState()
     const session = await window.api.session.create({
       provider: settings.activeProvider,
       model: settings.activeModel,
-      systemPrompt: settings.systemPrompt
+      systemPrompt: settings.systemPrompt,
+      projectId: activeProjectId
     })
     const allSessions = await window.api.session.list()
     useChatStore.getState().setSessions(allSessions)
@@ -156,22 +162,34 @@ export function Sidebar(): React.JSX.Element {
             点击上方按钮开始新对话
           </div>
         ) : showGroups ? (
-          /* 分组展示 */
-          Array.from(grouped.entries()).map(([dirKey, groupSessions]) => {
-            const collapsed = collapsedGroups.has(dirKey)
+          /* 按项目分组展示 */
+          Array.from(grouped.entries()).map(([groupKey, groupSessions]) => {
+            const collapsed = collapsedGroups.has(groupKey)
+            const isTemp = groupKey === TEMP_GROUP_KEY
+            const groupLabel = isTemp ? '临时对话' : (projectNames[groupKey] || '未命名项目')
             return (
-              <div key={dirKey} className="mb-1">
-                <button
-                  onClick={() => toggleGroup(dirKey)}
-                  className="flex items-center gap-1 w-full px-2 py-1.5 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-                >
-                  {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
-                  <FolderOpen size={10} />
-                  <span className="truncate font-medium">
-                    {dirKey === TEMP_GROUP_KEY ? '临时对话' : shortenPath(dirKey)}
-                  </span>
-                  <span className="ml-auto text-text-tertiary">{groupSessions.length}</span>
-                </button>
+              <div key={groupKey} className="mb-1">
+                <div className="flex items-center w-full px-2 py-1.5 text-[10px] text-text-tertiary group/header">
+                  <button
+                    onClick={() => toggleGroup(groupKey)}
+                    className="flex items-center gap-1 flex-1 min-w-0 hover:text-text-secondary transition-colors"
+                  >
+                    {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                    <FolderOpen size={10} />
+                    <span className="truncate font-medium">{groupLabel}</span>
+                    <span className="ml-1 text-text-tertiary">{groupSessions.length}</span>
+                  </button>
+                  {/* 项目编辑入口（临时对话组不显示） */}
+                  {!isTemp && (
+                    <button
+                      onClick={() => setEditingProjectId(groupKey)}
+                      className="opacity-0 group-hover/header:opacity-100 p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary transition-all"
+                      title="编辑项目"
+                    >
+                      <Pencil size={9} />
+                    </button>
+                  )}
+                </div>
                 {!collapsed && groupSessions.map(renderSessionItem)}
               </div>
             )
@@ -198,6 +216,14 @@ export function Sidebar(): React.JSX.Element {
         <SessionEditDialog
           session={editingSession}
           onClose={() => setEditingSession(null)}
+        />
+      )}
+
+      {/* 项目编辑弹窗 */}
+      {editingProjectId && (
+        <ProjectEditDialog
+          projectId={editingProjectId}
+          onClose={() => setEditingProjectId(null)}
         />
       )}
     </div>

@@ -80,14 +80,23 @@ function App(): React.JSX.Element {
       setActiveModel(sessionModel)
 
       const providerInfo = providers.find((p) => p.id === sessionProvider)
+      // 从关联项目获取工作目录和 Docker 配置
+      const project = currentSession?.projectId
+        ? await window.api.project.getById(currentSession.projectId)
+        : null
+      // 合并 system prompt：全局 + 项目级
+      let mergedPrompt = systemPrompt
+      if (project?.systemPrompt) {
+        mergedPrompt = `${systemPrompt}\n\n${project.systemPrompt}`
+      }
       await window.api.agent.init({
         sessionId: activeSessionId,
         provider: sessionProvider,
         model: sessionModel,
-        systemPrompt,
-        workingDirectory: currentSession?.workingDirectory || undefined,
-        dockerEnabled: currentSession?.dockerEnabled === 1,
-        dockerImage: currentSession?.dockerImage || undefined,
+        systemPrompt: mergedPrompt,
+        workingDirectory: project?.path || undefined,
+        dockerEnabled: project ? project.dockerEnabled === 1 : false,
+        dockerImage: project?.dockerImage || undefined,
         apiKey: providerInfo?.apiKey || undefined,
         baseUrl: providerInfo?.baseUrl || undefined,
         apiProtocol: (providerInfo as any)?.apiProtocol || undefined,

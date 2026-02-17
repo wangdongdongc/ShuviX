@@ -42,6 +42,7 @@ export function createReadTool(cwd: string): AgentTool<typeof ReadParamsSchema> 
       if (signal?.aborted) throw new Error('操作已中止')
 
       const absolutePath = resolveReadPath(params.path, cwd)
+      console.log(`[工具调用] read ${absolutePath}`)
 
       try {
         // 获取文件信息

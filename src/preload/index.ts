@@ -7,6 +7,9 @@ import type {
   AgentSetThinkingLevelParams,
   HttpLogListParams,
   MessageAddParams,
+  ProjectCreateParams,
+  ProjectUpdateParams,
+  ProjectDeleteParams,
   ProviderAddModelParams,
   ProviderAddParams,
   ProviderDeleteParams,
@@ -15,11 +18,10 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
-  SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
+  SessionUpdateProjectParams,
   SessionUpdateTitleParams,
-  SessionUpdateWorkingDirParams,
   SettingsSetParams
 } from '../main/types'
 
@@ -91,6 +93,15 @@ const api = {
       ipcRenderer.invoke('provider:updateModelCapabilities', params)
   },
 
+  // ============ 项目管理 ============
+  project: {
+    list: () => ipcRenderer.invoke('project:list'),
+    getById: (id: string) => ipcRenderer.invoke('project:getById', id),
+    create: (params: ProjectCreateParams) => ipcRenderer.invoke('project:create', params),
+    update: (params: ProjectUpdateParams) => ipcRenderer.invoke('project:update', params),
+    delete: (params: ProjectDeleteParams) => ipcRenderer.invoke('project:delete', params)
+  },
+
   // ============ 会话管理 ============
   session: {
     list: () => ipcRenderer.invoke('session:list'),
@@ -99,12 +110,10 @@ const api = {
       ipcRenderer.invoke('session:updateTitle', params),
     updateModelConfig: (params: SessionUpdateModelConfigParams) =>
       ipcRenderer.invoke('session:updateModelConfig', params),
-    updateWorkingDir: (params: SessionUpdateWorkingDirParams) =>
-      ipcRenderer.invoke('session:updateWorkingDir', params),
+    updateProject: (params: SessionUpdateProjectParams) =>
+      ipcRenderer.invoke('session:updateProject', params),
     updateModelMetadata: (params: SessionUpdateModelMetadataParams) =>
       ipcRenderer.invoke('session:updateModelMetadata', params),
-    updateDocker: (params: SessionUpdateDockerParams) =>
-      ipcRenderer.invoke('session:updateDocker', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) =>

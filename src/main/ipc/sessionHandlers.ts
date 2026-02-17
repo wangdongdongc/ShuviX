@@ -4,11 +4,10 @@ import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
 import type {
   Session,
-  SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
-  SessionUpdateTitleParams,
-  SessionUpdateWorkingDirParams
+  SessionUpdateProjectParams,
+  SessionUpdateTitleParams
 } from '../types'
 
 /**
@@ -38,21 +37,15 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 更新工作目录 */
-  ipcMain.handle('session:updateWorkingDir', (_event, params: SessionUpdateWorkingDirParams) => {
-    sessionService.updateWorkingDirectory(params.id, params.workingDirectory)
+  /** 更新会话所属项目 */
+  ipcMain.handle('session:updateProject', (_event, params: SessionUpdateProjectParams) => {
+    sessionService.updateProjectId(params.id, params.projectId)
     return { success: true }
   })
 
   /** 更新模型元数据（思考深度等） */
   ipcMain.handle('session:updateModelMetadata', (_event, params: SessionUpdateModelMetadataParams) => {
     sessionService.updateModelMetadata(params.id, params.modelMetadata)
-    return { success: true }
-  })
-
-  /** 更新 Docker 配置 */
-  ipcMain.handle('session:updateDocker', (_event, params: SessionUpdateDockerParams) => {
-    sessionService.updateDockerConfig(params.id, params.dockerEnabled, params.dockerImage)
     return { success: true }
   })
 

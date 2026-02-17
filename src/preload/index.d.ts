@@ -9,6 +9,9 @@ import type {
   HttpLogSummary,
   MessageAddParams,
   ModelCapabilities,
+  ProjectCreateParams,
+  ProjectUpdateParams,
+  ProjectDeleteParams,
   ProviderAddModelParams,
   ProviderAddParams,
   ProviderDeleteParams,
@@ -17,11 +20,10 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
-  SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
+  SessionUpdateProjectParams,
   SessionUpdateTitleParams,
-  SessionUpdateWorkingDirParams,
   SettingsSetParams
 } from '../main/types'
 
@@ -38,16 +40,28 @@ interface AgentStreamEvent {
   toolIsError?: boolean
 }
 
+/** 项目类型 */
+interface Project {
+  id: string
+  name: string
+  path: string
+  systemPrompt: string
+  dockerEnabled: number
+  dockerImage: string
+  settings: string
+  createdAt: number
+  updatedAt: number
+}
+
 /** 会话类型 */
 interface Session {
   id: string
   title: string
+  /** 所属项目 ID（null 表示临时会话） */
+  projectId: string | null
   provider: string
   model: string
   systemPrompt: string
-  workingDirectory: string
-  dockerEnabled: number
-  dockerImage: string
   modelMetadata: string
   createdAt: number
   updatedAt: number
@@ -123,14 +137,20 @@ interface ShiroBotAPI {
     deleteModel: (id: string) => Promise<{ success: boolean }>
     updateModelCapabilities: (params: ProviderUpdateModelCapabilitiesParams) => Promise<{ success: boolean }>
   }
+  project: {
+    list: () => Promise<Project[]>
+    getById: (id: string) => Promise<Project | null>
+    create: (params: ProjectCreateParams) => Promise<Project>
+    update: (params: ProjectUpdateParams) => Promise<{ success: boolean }>
+    delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
+  }
   session: {
     list: () => Promise<Session[]>
     create: (params?: Partial<Session>) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
-    updateWorkingDir: (params: SessionUpdateWorkingDirParams) => Promise<{ success: boolean }>
+    updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
     updateModelMetadata: (params: SessionUpdateModelMetadataParams) => Promise<{ success: boolean }>
-    updateDocker: (params: SessionUpdateDockerParams) => Promise<{ success: boolean }>
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
   }

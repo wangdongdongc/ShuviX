@@ -39,6 +39,7 @@ export function createEditTool(cwd: string): AgentTool<typeof EditParamsSchema> 
       signal?: AbortSignal
     ) => {
       const absolutePath = resolveToCwd(params.path, cwd)
+      console.log(`[工具调用] edit: ${absolutePath}`)
 
       return new Promise<{
         content: Array<{ type: 'text'; text: string }>

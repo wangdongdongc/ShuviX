@@ -4,16 +4,11 @@ import { messageDao } from '../dao/messageDao'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import type { Session } from '../types'
-import { join } from 'path'
-import { tmpdir } from 'os'
-import { mkdirSync, existsSync } from 'fs'
 
 /**
  * 会话服务 — 编排会话相关的业务逻辑
  * 例如删除会话时需要同时清理消息
  */
-/** 临时目录根路径 */
-const SESSIONS_TMP_ROOT = join(tmpdir(), 'shirobot-sessions')
 
 export class SessionService {
   /** 获取所有会话 */
@@ -26,26 +21,18 @@ export class SessionService {
     return sessionDao.findById(id)
   }
 
-  /** 创建新会话，自动创建临时工作目录 */
+  /** 创建新会话 */
   create(params?: Partial<Session>): Session {
     const now = Date.now()
     const id = uuidv7()
 
-    // 自动创建临时工作目录
-    const workingDirectory = params?.workingDirectory || join(SESSIONS_TMP_ROOT, id)
-    if (!existsSync(workingDirectory)) {
-      mkdirSync(workingDirectory, { recursive: true })
-    }
-
     const session: Session = {
       id,
       title: params?.title || '新对话',
+      projectId: params?.projectId ?? null,
       provider: params?.provider || this.getDefaultProvider(),
       model: params?.model || this.getDefaultModel(),
       systemPrompt: params?.systemPrompt || 'You are a helpful assistant.',
-      workingDirectory,
-      dockerEnabled: params?.dockerEnabled ?? 0,
-      dockerImage: params?.dockerImage || 'ubuntu:latest',
       modelMetadata: params?.modelMetadata || '{}',
       createdAt: now,
       updatedAt: now
@@ -64,27 +51,14 @@ export class SessionService {
     sessionDao.updateModelConfig(id, provider, model)
   }
 
-  /** 更新工作目录 */
-  updateWorkingDirectory(id: string, workingDirectory: string): void {
-    // 确保目标目录存在
-    if (!existsSync(workingDirectory)) {
-      mkdirSync(workingDirectory, { recursive: true })
-    }
-    sessionDao.updateWorkingDirectory(id, workingDirectory)
+  /** 更新会话所属项目 */
+  updateProjectId(id: string, projectId: string | null): void {
+    sessionDao.updateProjectId(id, projectId)
   }
 
   /** 更新模型元数据（思考深度等） */
   updateModelMetadata(id: string, modelMetadata: string): void {
     sessionDao.updateModelMetadata(id, modelMetadata)
-  }
-
-  /** 更新 Docker 配置 */
-  updateDockerConfig(id: string, dockerEnabled: boolean, dockerImage?: string): void {
-    sessionDao.updateDockerConfig(
-      id,
-      dockerEnabled ? 1 : 0,
-      dockerImage || 'ubuntu:latest'
-    )
   }
 
   /** 获取默认提供商 ID（第一个已启用的提供商） */

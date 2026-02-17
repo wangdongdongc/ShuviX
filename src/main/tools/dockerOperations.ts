@@ -27,6 +27,7 @@ export function createDockerOperations(
   const bashOps: BashOperations = {
     spawn: async (command, cwd, _timeout, signal) => {
       const containerId = await getContainer()
+      console.log(`[工具调用] docker exec: ${command}`)
       return dockerManager.exec(containerId, command, cwd, signal)
     }
   }

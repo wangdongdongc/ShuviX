@@ -355,11 +355,11 @@ export class AgentService {
   private forwardEvent(sessionId: string, event: AgentEvent): void {
     switch (event.type) {
       case 'agent_start':
-        console.log(`[Agent] 开始生成 session=${sessionId}`)
+        console.log(`[Prompt] start session=${sessionId}`)
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end': {
-        console.log(`[Agent] 生成完成 session=${sessionId}`)
+        console.log(`[Prompt] end session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
         if (this.dockerSessions.has(sessionId)) {
           this.emitDockerEvent(sessionId, 'container_destroyed')

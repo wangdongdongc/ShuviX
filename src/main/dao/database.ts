@@ -45,7 +45,9 @@ class DatabaseManager {
         id TEXT PRIMARY KEY,
         sessionId TEXT NOT NULL,
         role TEXT NOT NULL,
+        type TEXT NOT NULL,
         content TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
         createdAt INTEGER NOT NULL,
         FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
       );
@@ -84,7 +86,22 @@ class DatabaseManager {
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         payload TEXT NOT NULL,
+        inputTokens INTEGER DEFAULT 0,
+        outputTokens INTEGER DEFAULT 0,
+        totalTokens INTEGER DEFAULT 0,
         createdAt INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        systemPrompt TEXT NOT NULL DEFAULT '',
+        dockerEnabled INTEGER NOT NULL DEFAULT 0,
+        dockerImage TEXT NOT NULL DEFAULT 'ubuntu:latest',
+        settings TEXT NOT NULL DEFAULT '{}',
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
@@ -92,10 +109,6 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
 
-    // 迁移：provider_models 表增加 capabilities 列
-    this.migrateProviderModelsCapabilities()
-    // 迁移：sessions 表增加 modelMetadata 列
-    this.migrateSessionsModelMetadata()
 
     // 种子数据：内置提供商和模型
     this.seedProviders()
@@ -143,20 +156,6 @@ class DatabaseManager {
       }
     })
     seedAll()
-  }
-
-  /** 迁移：sessions 表增加 modelMetadata 列（存储思考深度等模型相关设置） */
-  private migrateSessionsModelMetadata(): void {
-    const columns = this.db.pragma('table_info(sessions)') as Array<{ name: string }>
-    if (columns.some((c) => c.name === 'modelMetadata')) return
-    this.db.exec("ALTER TABLE sessions ADD COLUMN modelMetadata TEXT DEFAULT '{}'")
-  }
-
-  /** 迁移：provider_models 表增加 capabilities 列 */
-  private migrateProviderModelsCapabilities(): void {
-    const columns = this.db.pragma('table_info(provider_models)') as Array<{ name: string }>
-    if (columns.some((c) => c.name === 'capabilities')) return
-    this.db.exec("ALTER TABLE provider_models ADD COLUMN capabilities TEXT DEFAULT '{}'")
   }
 
   /** 获取数据库连接实例 */

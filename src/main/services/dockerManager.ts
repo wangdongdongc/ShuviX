@@ -54,7 +54,7 @@ export class DockerManager {
     const containerName = `shirobot-${sessionId.slice(0, 12)}`
     const containerId = await this.createContainer(containerName, image, workingDirectory)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
-    console.log(`[Docker] 创建容器 session=${sessionId.slice(0, 8)} container=${containerId.slice(0, 12)}`)
+    console.log(`[Docker] 创建容器 ${containerId}`)
     return { containerId, isNew: true }
   }
 
@@ -127,9 +127,9 @@ export class DockerManager {
         timeout: 10000,
         stdio: 'ignore'
       })
-      console.log(`[Docker] 销毁容器 session=${sessionId.slice(0, 8)} container=${info.containerId.slice(0, 12)}`)
+      console.log(`[Docker] 销毁容器 ${info.containerId}`)
     } catch (err) {
-      console.error(`[Docker] 销毁容器失败: ${err}`)
+      console.error(`[Docker] 销毁容器 ${info.containerId} 失败: ${err}`)
     }
   }
 

@@ -47,6 +47,8 @@ function defaultSpawn(
     }
 
     const { shell, args } = getShellConfig()
+    console.log(`[工具调用] ${shell}(${cwd}): ${args.join(' ')} ${command}`)
+
     const child = spawn(shell, [...args, command], {
       cwd,
       env: { ...process.env },

@@ -27,17 +27,15 @@ export class SessionDao {
   insert(session: Session): void {
     this.db
       .prepare(
-        'INSERT INTO sessions (id, title, provider, model, systemPrompt, workingDirectory, dockerEnabled, dockerImage, modelMetadata, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         session.id,
         session.title,
+        session.projectId,
         session.provider,
         session.model,
         session.systemPrompt,
-        session.workingDirectory,
-        session.dockerEnabled,
-        session.dockerImage,
         session.modelMetadata,
         session.createdAt,
         session.updatedAt
@@ -65,11 +63,18 @@ export class SessionDao {
       .run(Date.now(), id)
   }
 
-  /** 更新工作目录 */
-  updateWorkingDirectory(id: string, workingDirectory: string): void {
+  /** 更新会话所属项目 */
+  updateProjectId(id: string, projectId: string | null): void {
     this.db
-      .prepare('UPDATE sessions SET workingDirectory = ?, updatedAt = ? WHERE id = ?')
-      .run(workingDirectory, Date.now(), id)
+      .prepare('UPDATE sessions SET projectId = ?, updatedAt = ? WHERE id = ?')
+      .run(projectId, Date.now(), id)
+  }
+
+  /** 查找指定项目下的所有会话 */
+  findByProjectId(projectId: string): Session[] {
+    return this.db
+      .prepare('SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC')
+      .all(projectId) as Session[]
   }
 
   /** 更新模型元数据（思考深度等） */
@@ -77,13 +82,6 @@ export class SessionDao {
     this.db
       .prepare('UPDATE sessions SET modelMetadata = ?, updatedAt = ? WHERE id = ?')
       .run(modelMetadata, Date.now(), id)
-  }
-
-  /** 更新 Docker 配置 */
-  updateDockerConfig(id: string, dockerEnabled: number, dockerImage: string): void {
-    this.db
-      .prepare('UPDATE sessions SET dockerEnabled = ?, dockerImage = ?, updatedAt = ? WHERE id = ?')
-      .run(dockerEnabled, dockerImage, Date.now(), id)
   }
 
   /** 删除会话 */

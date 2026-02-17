@@ -30,6 +30,8 @@ export function createWriteTool(cwd: string): AgentTool<typeof WriteParamsSchema
     ) => {
       const absolutePath = resolveToCwd(params.path, cwd)
       const dir = dirname(absolutePath)
+      
+      console.log(`[工具调用] write: ${absolutePath}`)
 
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
         (resolve, reject) => {
