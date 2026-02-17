@@ -14,7 +14,7 @@ const isSettingsWindow = window.location.hash === '#settings'
  */
 function App(): React.JSX.Element {
   const { activeSessionId, sessions } = useChatStore()
-  const { systemPrompt, providers, theme, fontSize, loaded, setActiveProvider, setActiveModel } = useSettingsStore()
+  const { systemPrompt, providers, availableModels, theme, fontSize, loaded, setActiveProvider, setActiveModel } = useSettingsStore()
 
   /** 字体大小：设置 CSS 变量供全局使用 */
   useEffect(() => {
@@ -93,6 +93,13 @@ function App(): React.JSX.Element {
         apiProtocol: (providerInfo as any)?.apiProtocol || undefined,
         messages: msgs.map((m) => ({ role: m.role, content: m.content }))
       })
+
+      // 初始化当前模型的思考能力状态
+      const currentModel = availableModels.find((m) => m.providerId === sessionProvider && m.modelId === sessionModel)
+      const caps = (() => { try { return JSON.parse(currentModel?.capabilities || '{}') } catch { return {} } })()
+      const hasReasoning = !!caps.reasoning
+      useChatStore.getState().setModelSupportsReasoning(hasReasoning)
+      useChatStore.getState().setThinkingLevel(hasReasoning ? 'medium' : 'off')
     }
     loadSession()
   }, [activeSessionId, loaded, sessions, providers, systemPrompt, setActiveProvider, setActiveModel])
@@ -161,10 +168,12 @@ function App(): React.JSX.Element {
         case 'agent_end': {
           const content = store.getSessionStreamContent(sid)
           if (content) {
+            const thinking = store.getSessionStreamThinking(sid)
             const assistantMsg = await window.api.message.add({
               sessionId: sid,
               role: 'assistant',
-              content
+              content,
+              metadata: thinking ? JSON.stringify({ thinking }) : undefined
             })
             // 仅当该 session 是当前查看的会话时，才更新内存中的消息列表
             if (sid === store.activeSessionId) {

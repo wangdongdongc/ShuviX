@@ -7,7 +7,7 @@ import { providerDao } from '../dao/providerDao'
 import { createCodingTools } from '../tools'
 import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
 import { createDockerOperations } from '../tools/dockerOperations'
-import type { ModelCapabilities } from '../types'
+import type { ModelCapabilities, ThinkingLevel } from '../types'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -286,6 +286,17 @@ export class AgentService {
     if (agent) {
       agent.state.messages = []
     }
+  }
+
+  /** 设置指定 session 的思考深度 */
+  setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
+    const agent = this.agents.get(sessionId)
+    if (!agent) {
+      console.warn(`[Agent] setThinkingLevel: session=${sessionId} 不存在`)
+      return
+    }
+    agent.setThinkingLevel(level)
+    console.log(`[Agent] 设置思考深度 session=${sessionId} level=${level}`)
   }
 
   /**

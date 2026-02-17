@@ -9,6 +9,7 @@ import { useState } from 'react'
 interface MessageBubbleProps {
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
+  metadata?: string | null
   isStreaming?: boolean
 }
 
@@ -19,11 +20,21 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   role,
   content,
+  metadata,
   isStreaming
 }: MessageBubbleProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
 
   const isUser = role === 'user'
+
+  // 从 metadata 解析思考过程
+  const thinking = (() => {
+    if (!metadata) return null
+    try {
+      const parsed = JSON.parse(metadata)
+      return parsed.thinking || null
+    } catch { return null }
+  })()
 
   /** 复制消息内容 */
   const handleCopy = (): void => {
@@ -69,16 +80,30 @@ export const MessageBubble = memo(function MessageBubble({
             {content}
           </div>
         ) : (
-          /* 助手消息：Markdown 渲染 */
-          <div className="markdown-body text-sm">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
-              {content}
-            </ReactMarkdown>
-            {/* 流式输出光标 */}
-            {isStreaming && (
-              <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+          <>
+            {/* 思考过程（可折叠） */}
+            {thinking && (
+              <details className="group mb-2">
+                <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
+                  <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                  <span>已深度思考</span>
+                </summary>
+                <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+                  {thinking}
+                </div>
+              </details>
             )}
-          </div>
+            {/* 助手消息：Markdown 渲染 */}
+            <div className="markdown-body text-sm">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
+                {content}
+              </ReactMarkdown>
+              {/* 流式输出光标 */}
+              {isStreaming && (
+                <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

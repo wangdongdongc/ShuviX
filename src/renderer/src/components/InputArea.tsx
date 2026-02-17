@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react'
-import { Send, Square, ChevronDown } from 'lucide-react'
+import { Send, Square, ChevronDown, Brain } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settingsStore'
  * 支持 Shift+Enter 换行，Enter 发送
  */
 export function InputArea(): React.JSX.Element {
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions } = useChatStore()
+  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel } = useChatStore()
   const {
     availableModels,
     providers,
@@ -22,6 +22,8 @@ export function InputArea(): React.JSX.Element {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerStep, setPickerStep] = useState<'provider' | 'model'>('provider')
   const [draftProvider, setDraftProvider] = useState(activeProvider)
+  const thinkingRef = useRef<HTMLDivElement>(null)
+  const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false)
 
   /** 自动调整文本框高度 */
   useEffect(() => {
@@ -135,17 +137,60 @@ export function InputArea(): React.JSX.Element {
         apiProtocol: (providerInfo as any)?.apiProtocol || undefined
       })
     }
+
+    // 根据新模型能力更新思考深度状态
+    const selectedModel = availableModels.find((m) => m.providerId === draftProvider && m.modelId === modelId)
+    const caps = (() => { try { return JSON.parse(selectedModel?.capabilities || '{}') } catch { return {} } })()
+    const hasReasoning = !!caps.reasoning
+    setModelSupportsReasoning(hasReasoning)
+    const newLevel = hasReasoning ? 'medium' : 'off'
+    setThinkingLevel(newLevel)
+    if (activeSessionId) {
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as any })
+    }
+
     setPickerOpen(false)
     setPickerStep('provider')
   }
+
+  /** 思考深度选项 */
+  const thinkingLevels = [
+    { value: 'off', label: '关闭' },
+    { value: 'low', label: '浅思考' },
+    { value: 'medium', label: '中等' },
+    { value: 'high', label: '深度' },
+    { value: 'xhigh', label: '极深' }
+  ]
+
+  /** 切换思考深度 */
+  const handleSetThinkingLevel = async (level: string): Promise<void> => {
+    setThinkingLevel(level)
+    setThinkingPickerOpen(false)
+    if (activeSessionId) {
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as any })
+    }
+  }
+
+  /** 点击外部关闭思考深度选择器 */
+  useEffect(() => {
+    if (!thinkingPickerOpen) return
+    const handleClickOutside = (event: MouseEvent): void => {
+      if (!thinkingRef.current?.contains(event.target as Node)) {
+        setThinkingPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [thinkingPickerOpen])
 
   return (
     <div className="border-t border-border-secondary bg-bg-primary px-4 py-3">
       <div className="max-w-3xl mx-auto">
         <div className="bg-bg-secondary rounded-xl border border-border-primary focus-within:border-accent/50 transition-colors">
           <div className="relative flex items-end gap-2">
-            {/* 左下角紧凑扩展位：后续可从左向右增加更多选项 */}
+            {/* 左下角紧凑扩展位 */}
             <div className="absolute left-2 bottom-2 z-10 flex items-center gap-1.5">
+              {/* 模型选择器 */}
               <div ref={pickerRef} className="relative">
                 <button
                   onClick={togglePicker}
@@ -203,6 +248,43 @@ export function InputArea(): React.JSX.Element {
                   </div>
                 )}
               </div>
+
+              {/* 思考深度选择器（仅当模型支持 reasoning 时显示） */}
+              {modelSupportsReasoning && (
+                <div ref={thinkingRef} className="relative">
+                  <button
+                    onClick={() => setThinkingPickerOpen(!thinkingPickerOpen)}
+                    className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
+                      thinkingLevel !== 'off'
+                        ? 'border-purple-500/50 text-purple-400'
+                        : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
+                    }`}
+                    title="思考深度"
+                  >
+                    <Brain size={11} />
+                    <span>{thinkingLevels.find((l) => l.value === thinkingLevel)?.label || '关闭'}</span>
+                  </button>
+
+                  {thinkingPickerOpen && (
+                    <div className="absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">思考深度</div>
+                      <div className="py-1">
+                        {thinkingLevels.map((l) => (
+                          <button
+                            key={l.value}
+                            onClick={() => { void handleSetThinkingLevel(l.value) }}
+                            className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-bg-hover transition-colors ${
+                              thinkingLevel === l.value ? 'text-purple-400 font-medium' : 'text-text-primary'
+                            }`}
+                          >
+                            {l.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <textarea

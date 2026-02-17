@@ -61,6 +61,10 @@ interface ChatState {
   sessionToolExecutions: Record<string, ToolExecution[]>
   /** 当前会话的工具执行实时状态（UI 直接读取） */
   toolExecutions: ToolExecution[]
+  /** 当前模型是否支持深度思考 */
+  modelSupportsReasoning: boolean
+  /** 当前思考深度 */
+  thinkingLevel: string
   /** 输入框内容 */
   inputText: string
   /** 错误信息 */
@@ -76,11 +80,14 @@ interface ChatState {
   clearStreamingContent: (sessionId: string) => void
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
+  getSessionStreamThinking: (sessionId: string) => string
   addToolExecution: (sessionId: string, exec: ToolExecution) => void
   updateToolExecution: (sessionId: string, toolCallId: string, updates: Partial<ToolExecution>) => void
   clearToolExecutions: (sessionId: string) => void
   setInputText: (text: string) => void
   setError: (error: string | null) => void
+  setModelSupportsReasoning: (supports: boolean) => void
+  setThinkingLevel: (level: string) => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionWorkingDir: (id: string, workingDirectory: string) => void
   updateSessionDocker: (id: string, dockerEnabled: number, dockerImage: string) => void
@@ -97,6 +104,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   sessionToolExecutions: {},
   toolExecutions: [],
+  modelSupportsReasoning: false,
+  thinkingLevel: 'off',
   inputText: '',
   error: null,
 
@@ -166,6 +175,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return get().sessionStreams[sessionId]?.content || ''
   },
 
+  getSessionStreamThinking: (sessionId) => {
+    return get().sessionStreams[sessionId]?.thinking || ''
+  },
+
   addToolExecution: (sessionId, exec) =>
     set((state) => {
       const prev = state.sessionToolExecutions[sessionId] || []
@@ -199,6 +212,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setInputText: (text) => set({ inputText: text }),
   setError: (error) => set({ error }),
+  setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
+  setThinkingLevel: (level) => set({ thinkingLevel: level }),
   updateSessionTitle: (id, title) =>
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s))

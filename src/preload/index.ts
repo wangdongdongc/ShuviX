@@ -4,6 +4,7 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentSetModelParams,
+  AgentSetThinkingLevelParams,
   HttpLogListParams,
   MessageAddParams,
   ProviderAddModelParams,
@@ -49,6 +50,10 @@ const api = {
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) =>
       ipcRenderer.invoke('agent:setModel', params),
+
+    /** 设置思考深度 */
+    setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
+      ipcRenderer.invoke('agent:setThinkingLevel', params),
 
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: any) => void) => {

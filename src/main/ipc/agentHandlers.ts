@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agent'
-import type { AgentInitParams, AgentPromptParams, AgentSetModelParams } from '../types'
+import type { AgentInitParams, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
 
 /**
  * Agent 相关 IPC 处理器
@@ -52,6 +52,12 @@ export function registerAgentHandlers(): void {
   /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
     agentService.setModel(params.sessionId, params.provider, params.model, params.baseUrl, params.apiProtocol)
+    return { success: true }
+  })
+
+  /** 设置指定 session 的思考深度 */
+  ipcMain.handle('agent:setThinkingLevel', (_event, params: AgentSetThinkingLevelParams) => {
+    agentService.setThinkingLevel(params.sessionId, params.level)
     return { success: true }
   })
 }

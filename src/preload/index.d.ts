@@ -3,6 +3,7 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentSetModelParams,
+  AgentSetThinkingLevelParams,
   HttpLog,
   HttpLogListParams,
   HttpLogSummary,
@@ -101,6 +102,7 @@ interface ShiroBotAPI {
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+    setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }
   provider: {

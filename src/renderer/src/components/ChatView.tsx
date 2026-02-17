@@ -151,6 +151,7 @@ export function ChatView(): React.JSX.Element {
                       key={msg.id}
                       role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
                       content={msg.content}
+                      metadata={msg.metadata}
                     />
                   )
                 })}

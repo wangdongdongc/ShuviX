@@ -33,3 +33,12 @@ export interface AgentSetModelParams {
   baseUrl?: string
   apiProtocol?: string
 }
+
+/** 思考深度级别 */
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** Agent 设置思考深度参数 */
+export interface AgentSetThinkingLevelParams {
+  sessionId: string
+  level: ThinkingLevel
+}
