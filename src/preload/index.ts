@@ -17,6 +17,7 @@ import type {
   ProviderUpdateModelCapabilitiesParams,
   SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
+  SessionUpdateModelMetadataParams,
   SessionUpdateTitleParams,
   SessionUpdateWorkingDirParams,
   SettingsSetParams
@@ -100,6 +101,8 @@ const api = {
       ipcRenderer.invoke('session:updateModelConfig', params),
     updateWorkingDir: (params: SessionUpdateWorkingDirParams) =>
       ipcRenderer.invoke('session:updateWorkingDir', params),
+    updateModelMetadata: (params: SessionUpdateModelMetadataParams) =>
+      ipcRenderer.invoke('session:updateModelMetadata', params),
     updateDocker: (params: SessionUpdateDockerParams) =>
       ipcRenderer.invoke('session:updateDocker', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>

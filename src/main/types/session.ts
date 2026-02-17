@@ -8,6 +8,8 @@ export interface Session {
   workingDirectory: string
   dockerEnabled: number
   dockerImage: string
+  /** 模型相关设置（JSON：思考深度等） */
+  modelMetadata: string
   createdAt: number
   updatedAt: number
 }
@@ -36,4 +38,10 @@ export interface SessionUpdateDockerParams {
   id: string
   dockerEnabled: boolean
   dockerImage?: string
+}
+
+/** IPC: 更新会话模型元数据参数 */
+export interface SessionUpdateModelMetadataParams {
+  id: string
+  modelMetadata: string
 }

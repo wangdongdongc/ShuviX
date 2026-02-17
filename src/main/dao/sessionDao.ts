@@ -27,7 +27,7 @@ export class SessionDao {
   insert(session: Session): void {
     this.db
       .prepare(
-        'INSERT INTO sessions (id, title, provider, model, systemPrompt, workingDirectory, dockerEnabled, dockerImage, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO sessions (id, title, provider, model, systemPrompt, workingDirectory, dockerEnabled, dockerImage, modelMetadata, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         session.id,
@@ -38,6 +38,7 @@ export class SessionDao {
         session.workingDirectory,
         session.dockerEnabled,
         session.dockerImage,
+        session.modelMetadata,
         session.createdAt,
         session.updatedAt
       )
@@ -69,6 +70,13 @@ export class SessionDao {
     this.db
       .prepare('UPDATE sessions SET workingDirectory = ?, updatedAt = ? WHERE id = ?')
       .run(workingDirectory, Date.now(), id)
+  }
+
+  /** 更新模型元数据（思考深度等） */
+  updateModelMetadata(id: string, modelMetadata: string): void {
+    this.db
+      .prepare('UPDATE sessions SET modelMetadata = ?, updatedAt = ? WHERE id = ?')
+      .run(modelMetadata, Date.now(), id)
   }
 
   /** 更新 Docker 配置 */

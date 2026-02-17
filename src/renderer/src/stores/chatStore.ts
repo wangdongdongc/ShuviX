@@ -31,6 +31,8 @@ export interface Session {
   workingDirectory: string
   dockerEnabled: number
   dockerImage: string
+  /** 模型相关设置（JSON：思考深度等） */
+  modelMetadata: string
   createdAt: number
   updatedAt: number
 }

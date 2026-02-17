@@ -94,6 +94,8 @@ class DatabaseManager {
 
     // 迁移：provider_models 表增加 capabilities 列
     this.migrateProviderModelsCapabilities()
+    // 迁移：sessions 表增加 modelMetadata 列
+    this.migrateSessionsModelMetadata()
 
     // 种子数据：内置提供商和模型
     this.seedProviders()
@@ -141,6 +143,13 @@ class DatabaseManager {
       }
     })
     seedAll()
+  }
+
+  /** 迁移：sessions 表增加 modelMetadata 列（存储思考深度等模型相关设置） */
+  private migrateSessionsModelMetadata(): void {
+    const columns = this.db.pragma('table_info(sessions)') as Array<{ name: string }>
+    if (columns.some((c) => c.name === 'modelMetadata')) return
+    this.db.exec("ALTER TABLE sessions ADD COLUMN modelMetadata TEXT DEFAULT '{}'")
   }
 
   /** 迁移：provider_models 表增加 capabilities 列 */

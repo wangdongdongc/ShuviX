@@ -46,6 +46,7 @@ export class SessionService {
       workingDirectory,
       dockerEnabled: params?.dockerEnabled ?? 0,
       dockerImage: params?.dockerImage || 'ubuntu:latest',
+      modelMetadata: params?.modelMetadata || '{}',
       createdAt: now,
       updatedAt: now
     }
@@ -70,6 +71,11 @@ export class SessionService {
       mkdirSync(workingDirectory, { recursive: true })
     }
     sessionDao.updateWorkingDirectory(id, workingDirectory)
+  }
+
+  /** 更新模型元数据（思考深度等） */
+  updateModelMetadata(id: string, modelMetadata: string): void {
+    sessionDao.updateModelMetadata(id, modelMetadata)
   }
 
   /** 更新 Docker 配置 */

@@ -94,12 +94,17 @@ function App(): React.JSX.Element {
         messages: msgs.map((m) => ({ role: m.role, content: m.content }))
       })
 
-      // 初始化当前模型的思考能力状态
+      // 初始化当前模型的思考能力状态，从 modelMetadata 恢复用户上次设置的思考深度
       const currentModel = availableModels.find((m) => m.providerId === sessionProvider && m.modelId === sessionModel)
       const caps = (() => { try { return JSON.parse(currentModel?.capabilities || '{}') } catch { return {} } })()
       const hasReasoning = !!caps.reasoning
       useChatStore.getState().setModelSupportsReasoning(hasReasoning)
-      useChatStore.getState().setThinkingLevel(hasReasoning ? 'medium' : 'off')
+      const meta = (() => { try { return JSON.parse(currentSession?.modelMetadata || '{}') } catch { return {} } })()
+      const savedLevel = meta.thinkingLevel
+      const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'
+      useChatStore.getState().setThinkingLevel(restoredLevel)
+      // 同步到 Agent
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as any })
     }
     loadSession()
   }, [activeSessionId, loaded, sessions, providers, systemPrompt, setActiveProvider, setActiveModel])

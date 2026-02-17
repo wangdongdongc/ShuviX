@@ -6,6 +6,7 @@ import type {
   Session,
   SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
+  SessionUpdateModelMetadataParams,
   SessionUpdateTitleParams,
   SessionUpdateWorkingDirParams
 } from '../types'
@@ -40,6 +41,12 @@ export function registerSessionHandlers(): void {
   /** 更新工作目录 */
   ipcMain.handle('session:updateWorkingDir', (_event, params: SessionUpdateWorkingDirParams) => {
     sessionService.updateWorkingDirectory(params.id, params.workingDirectory)
+    return { success: true }
+  })
+
+  /** 更新模型元数据（思考深度等） */
+  ipcMain.handle('session:updateModelMetadata', (_event, params: SessionUpdateModelMetadataParams) => {
+    sessionService.updateModelMetadata(params.id, params.modelMetadata)
     return { success: true }
   })
 

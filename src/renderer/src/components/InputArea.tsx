@@ -147,6 +147,11 @@ export function InputArea(): React.JSX.Element {
     setThinkingLevel(newLevel)
     if (activeSessionId) {
       await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as any })
+      // 持久化思考深度到会话
+      await window.api.session.updateModelMetadata({
+        id: activeSessionId,
+        modelMetadata: JSON.stringify({ thinkingLevel: newLevel })
+      })
     }
 
     setPickerOpen(false)
@@ -168,6 +173,11 @@ export function InputArea(): React.JSX.Element {
     setThinkingPickerOpen(false)
     if (activeSessionId) {
       await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as any })
+      // 持久化思考深度到会话
+      await window.api.session.updateModelMetadata({
+        id: activeSessionId,
+        modelMetadata: JSON.stringify({ thinkingLevel: level })
+      })
     }
   }
 

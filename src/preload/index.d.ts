@@ -19,6 +19,7 @@ import type {
   ProviderUpdateModelCapabilitiesParams,
   SessionUpdateDockerParams,
   SessionUpdateModelConfigParams,
+  SessionUpdateModelMetadataParams,
   SessionUpdateTitleParams,
   SessionUpdateWorkingDirParams,
   SettingsSetParams
@@ -47,6 +48,7 @@ interface Session {
   workingDirectory: string
   dockerEnabled: number
   dockerImage: string
+  modelMetadata: string
   createdAt: number
   updatedAt: number
 }
@@ -127,6 +129,7 @@ interface ShiroBotAPI {
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     updateWorkingDir: (params: SessionUpdateWorkingDirParams) => Promise<{ success: boolean }>
+    updateModelMetadata: (params: SessionUpdateModelMetadataParams) => Promise<{ success: boolean }>
     updateDocker: (params: SessionUpdateDockerParams) => Promise<{ success: boolean }>
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
