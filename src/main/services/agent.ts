@@ -79,7 +79,7 @@ export class AgentService {
       console.log(`[Agent] 配置变更，重建 session=${sessionId}`)
       this.removeAgent(sessionId)
     }
-    console.log(`[Agent] 创建 session=${sessionId} provider=${provider} model=${model}`)
+    console.log(`[Agent] 创建 model=${model} session=${sessionId}`)
 
     // 查询提供商信息，判断是否内置
     const providerInfo = providerDao.findById(provider)
@@ -349,11 +349,11 @@ export class AgentService {
   private forwardEvent(sessionId: string, event: AgentEvent): void {
     switch (event.type) {
       case 'agent_start':
-        console.log(`[Prompt] 开始生成 session=${sessionId}`)
+        console.log(`[Prompt] 开始 session=${sessionId}`)
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end': {
-        console.log(`[Prompt] 生成完成 session=${sessionId}`)
+        console.log(`[Prompt] 结束 session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
         dockerManager.destroyContainer(sessionId).catch((err) =>
             console.error(`[Docker] 销毁容器失败: ${err}`)

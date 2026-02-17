@@ -27,7 +27,7 @@ export function Sidebar(): React.JSX.Element {
       for (const p of projects) { map[p.id] = p.name }
       setProjectNames(map)
     })
-  }, [sessions])
+  }, [sessions, editingProjectId])
 
   // 按 projectId 分组
   const grouped = useMemo(() => {
