@@ -113,6 +113,10 @@ function App(): React.JSX.Element {
           store.appendStreamingContent(sid, event.data || '')
           break
 
+        case 'thinking_delta':
+          store.appendStreamingThinking(sid, event.data || '')
+          break
+
         case 'text_end':
           break
 

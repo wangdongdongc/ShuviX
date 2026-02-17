@@ -38,6 +38,7 @@ export interface Session {
 /** 每个 session 的流式状态 */
 interface SessionStreamState {
   content: string
+  thinking: string
   isStreaming: boolean
 }
 
@@ -52,6 +53,8 @@ interface ChatState {
   sessionStreams: Record<string, SessionStreamState>
   /** 当前会话的流式内容（UI 直接读取，自动同步自 sessionStreams） */
   streamingContent: string
+  /** 当前会话的流式思考内容 */
+  streamingThinking: string
   /** 当前会话是否正在生成（UI 直接读取，自动同步自 sessionStreams） */
   isStreaming: boolean
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
@@ -69,6 +72,7 @@ interface ChatState {
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   appendStreamingContent: (sessionId: string, delta: string) => void
+  appendStreamingThinking: (sessionId: string, delta: string) => void
   clearStreamingContent: (sessionId: string) => void
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
@@ -89,6 +93,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   sessionStreams: {},
   streamingContent: '',
+  streamingThinking: '',
   isStreaming: false,
   sessionToolExecutions: {},
   toolExecutions: [],
@@ -103,6 +108,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         activeSessionId: id,
         streamingContent: stream?.content || '',
+        streamingThinking: stream?.thinking || '',
         isStreaming: stream?.isStreaming || false,
         toolExecutions: tools,
         error: null
@@ -113,7 +119,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   appendStreamingContent: (sessionId, delta) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', isStreaming: false }
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
       const updated = { ...prev, content: prev.content + delta }
       const newStreams = { ...state.sessionStreams, [sessionId]: updated }
       return {
@@ -122,15 +128,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
+  appendStreamingThinking: (sessionId, delta) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
+      const updated = { ...prev, thinking: prev.thinking + delta }
+      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
+      return {
+        sessionStreams: newStreams,
+        ...(sessionId === state.activeSessionId ? { streamingThinking: updated.thinking } : {})
+      }
+    }),
+
   clearStreamingContent: (sessionId) =>
     set((state) => {
       const prev = state.sessionStreams[sessionId]
       if (!prev) return {}
-      const updated = { ...prev, content: '' }
+      const updated = { ...prev, content: '', thinking: '' }
       const newStreams = { ...state.sessionStreams, [sessionId]: updated }
       return {
         sessionStreams: newStreams,
-        ...(sessionId === state.activeSessionId ? { streamingContent: '' } : {})
+        ...(sessionId === state.activeSessionId ? { streamingContent: '', streamingThinking: '' } : {})
       }
     }),
 

@@ -95,17 +95,20 @@ export class AgentService {
       // 自定义提供商：手动构造 Model 对象，用 capabilities 填充
       const inputModalities: string[] = ['text']
       if (caps.vision) inputModalities.push('image')
+      const resolvedApi = (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api
       resolvedModel = {
         id: model,
         name: model,
-        api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
+        api: resolvedApi,
         provider,
         baseUrl: baseUrl || providerInfo?.baseUrl || '',
         reasoning: caps.reasoning ?? false,
         input: inputModalities as any,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: caps.maxInputTokens ?? 128000,
-        maxTokens: caps.maxOutputTokens ?? 16384
+        maxTokens: caps.maxOutputTokens ?? 16384,
+        // 自定义提供商禁用 store 参数，避免 reasoning summary 在多轮对话中触发 404
+        ...(resolvedApi === 'openai-completions' ? { compat: { supportsStore: false } } : {})
       }
     } else {
       // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
@@ -164,7 +167,7 @@ export class AgentService {
       initialState: {
         systemPrompt: enhancedPrompt,
         model: resolvedModel,
-        thinkingLevel: 'off',
+        thinkingLevel: caps.reasoning ? 'medium' : 'off',
         messages: [],
         tools
       },
@@ -245,17 +248,19 @@ export class AgentService {
     if (!isBuiltin) {
       const inputModalities: string[] = ['text']
       if (caps.vision) inputModalities.push('image')
+      const resolvedApi = (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api
       resolvedModel = {
         id: model,
         name: model,
-        api: (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api,
+        api: resolvedApi,
         provider,
         baseUrl: baseUrl || providerInfo?.baseUrl || '',
         reasoning: caps.reasoning ?? false,
         input: inputModalities as any,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: caps.maxInputTokens ?? 128000,
-        maxTokens: caps.maxOutputTokens ?? 16384
+        maxTokens: caps.maxOutputTokens ?? 16384,
+        ...(resolvedApi === 'openai-completions' ? { compat: { supportsStore: false } } : {})
       }
     } else {
       const slug = (providerInfo?.name || '').toLowerCase()
@@ -266,7 +271,8 @@ export class AgentService {
     }
 
     agent.setModel(resolvedModel)
-    console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model}`)
+    agent.setThinkingLevel(caps.reasoning ? 'medium' : 'off')
+    console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`)
   }
 
   /** 获取指定 session 的消息列表 */

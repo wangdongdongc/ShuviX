@@ -157,7 +157,7 @@ export function InputArea(): React.JSX.Element {
                 </button>
 
                 {pickerOpen && (
-                  <div className="absolute left-0 bottom-8 w-[220px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+                  <div className="absolute left-0 bottom-8 w-[280px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
                     <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary flex items-center justify-between">
                       <span>{pickerStep === 'provider' ? '选择提供商' : '选择模型'}</span>
                       {pickerStep === 'model' && (
@@ -181,17 +181,24 @@ export function InputArea(): React.JSX.Element {
                         </button>
                       ))}
 
-                      {pickerStep === 'model' && draftProviderModels.map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => {
-                            void handlePickModel(m.modelId)
-                          }}
-                          className="w-full text-left px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors"
-                        >
-                          {m.modelId}
-                        </button>
-                      ))}
+                      {pickerStep === 'model' && draftProviderModels.map((m) => {
+                        const caps = (() => { try { return JSON.parse(m.capabilities || '{}') } catch { return {} } })()
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => { void handlePickModel(m.modelId) }}
+                            className="w-full text-left px-2 py-1.5 hover:bg-bg-hover transition-colors flex items-center gap-1.5"
+                          >
+                            <span className="text-[11px] text-text-primary truncate">{m.modelId}</span>
+                            <div className="flex items-center gap-0.5 shrink-0 ml-auto">
+                              {caps.vision && <span className="px-1 py-0.5 text-[8px] rounded bg-blue-500/20 text-blue-400">Vision</span>}
+                              {caps.functionCalling && <span className="px-1 py-0.5 text-[8px] rounded bg-green-500/20 text-green-400">Tools</span>}
+                              {caps.reasoning && <span className="px-1 py-0.5 text-[8px] rounded bg-purple-500/20 text-purple-400">Reasoning</span>}
+                              {caps.imageOutput && <span className="px-1 py-0.5 text-[8px] rounded bg-orange-500/20 text-orange-400">ImgOut</span>}
+                            </div>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
