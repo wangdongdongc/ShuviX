@@ -117,33 +117,30 @@ export class DockerManager {
   }
 
   /** 销毁指定 session 的容器 */
-  async destroyContainer(sessionId: string): Promise<void> {
+  async destroyContainer(sessionId: string): Promise<boolean> {
     const info = this.containers.get(sessionId)
-    if (!info) return
+    if (!info) return false
 
     this.containers.delete(sessionId)
-    try {
-      spawnSync('docker', ['rm', '-f', info.containerId], {
-        timeout: 10000,
-        stdio: 'ignore'
-      })
-      console.log(`[Docker] 销毁容器 ${info.containerId}`)
-    } catch (err) {
-      console.error(`[Docker] 销毁容器 ${info.containerId} 失败: ${err}`)
-    }
+    spawnSync('docker', ['rm', '-f', info.containerId], {
+      timeout: 10000,
+      stdio: 'ignore'
+    })
+    console.log(`[Docker] 销毁容器 ${info.containerId}`)
+    return true
   }
 
   /** 销毁所有容器（应用退出时调用） */
   async destroyAll(): Promise<void> {
     const entries = Array.from(this.containers.entries())
     this.containers.clear()
-    for (const [sessionId, info] of entries) {
+    for (const [_, info] of entries) {
       try {
         spawnSync('docker', ['rm', '-f', info.containerId], {
           timeout: 10000,
           stdio: 'ignore'
         })
-        console.log(`[Docker] 清理容器 session=${sessionId.slice(0, 8)}`)
+        console.log(`[Docker] 清理容器 ${info.containerId}`)
       } catch {
         // 忽略错误
       }

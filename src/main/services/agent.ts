@@ -39,8 +39,6 @@ export class AgentService {
   private agents = new Map<string, Agent>()
   private agentConfigs = new Map<string, AgentConfig>()
   private pendingLogIds = new Map<string, string[]>()
-  /** 记录哪些 session 开启了 Docker，用于 agent_end 时销毁容器 */
-  private dockerSessions = new Set<string>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -134,8 +132,9 @@ export class AgentService {
     const hostCwd = workingDirectory || process.cwd()
     const useDocker = dockerEnabled && !!dockerImage
     let toolOps: import('../tools').CreateToolsOptions | undefined
+    console.log(`[Agent] useDocker=${useDocker}`)
     if (useDocker) {
-      // Docker 模式：仅 bash 在容器中执行，read/write/edit 直接操作宿主机文件
+      // Docker 隔离：在容器中执行bash命令
       const dockerOps = createDockerOperations(dockerManager, sessionId, dockerImage!, hostCwd, (containerId) => {
         // 容器创建时写入 docker_event 消息
         this.emitDockerEvent(sessionId, 'container_created', { containerId: containerId.slice(0, 12), image: dockerImage! })
@@ -144,8 +143,6 @@ export class AgentService {
         bashOperations: dockerOps.bash,
         bashCwd: CONTAINER_WORKSPACE
       }
-      this.dockerSessions.add(sessionId)
-      console.log(`[Agent] Docker 模式已开启 session=${sessionId} image=${dockerImage} containerCwd=${CONTAINER_WORKSPACE}`)
     }
     // hostCwd 用于 read/write/edit（本地 fs），bashCwd 用于 bash（Docker 模式下为容器路径）
     const tools = createCodingTools(hostCwd, toolOps)
@@ -155,8 +152,8 @@ export class AgentService {
     if (workingDirectory) {
       if (useDocker) {
         // Docker 模式：bash 在容器中运行，路径是 CONTAINER_WORKSPACE；read/write/edit 在本地运行，路径是宿主机路径
-        enhancedPrompt += `\n\n当前工作目录：${hostCwd}\n你可以使用 bash, read, write, edit 工具来操作文件系统。所有相对路径都基于上述工作目录。`
-        enhancedPrompt += `\n注意：bash 命令运行在 Docker 容器中（镜像: ${dockerImage}），容器内工作目录为 ${CONTAINER_WORKSPACE}，对应宿主机 ${hostCwd}。`
+        enhancedPrompt += `\n\n你可以使用 bash, read, write, edit 工具来操作文件系统。\n当前工作目录：${hostCwd}`
+        enhancedPrompt += `\n但但意：bash 命令运行在 Docker 容器中（镜像: ${dockerImage}），工作目录将挂载到 ${CONTAINER_WORKSPACE}。`
         enhancedPrompt += `\n因此 bash 命令中请使用 ${CONTAINER_WORKSPACE} 作为工作路径，而 read/write/edit 工具中请使用 ${hostCwd}。`
       } else {
         enhancedPrompt += `\n\n当前工作目录：${hostCwd}\n你可以使用 bash, read, write, edit 工具来操作文件系统。所有相对路径都基于上述工作目录。`
@@ -292,11 +289,11 @@ export class AgentService {
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const agent = this.agents.get(sessionId)
     if (!agent) {
-      console.warn(`[Agent] setThinkingLevel: session=${sessionId} 不存在`)
+      console.warn(`[Agent] setThinkingLevel: session=${sessionId} agent不存在`)
       return
     }
     agent.setThinkingLevel(level)
-    console.log(`[Agent] 设置思考深度 session=${sessionId} level=${level}`)
+    console.log(`[Agent] setThinkingLevel=${level}`)
   }
 
   /**
@@ -338,10 +335,7 @@ export class AgentService {
       this.agentConfigs.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
       // 清理 Docker 容器
-      if (this.dockerSessions.has(sessionId)) {
-        this.dockerSessions.delete(sessionId)
-        dockerManager.destroyContainer(sessionId).catch(() => {})
-      }
+      dockerManager.destroyContainer(sessionId).catch(() => {})
       console.log(`[Agent] 移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
@@ -355,18 +349,17 @@ export class AgentService {
   private forwardEvent(sessionId: string, event: AgentEvent): void {
     switch (event.type) {
       case 'agent_start':
-        console.log(`[Prompt] start session=${sessionId}`)
+        console.log(`[Prompt] 开始生成 session=${sessionId}`)
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end': {
-        console.log(`[Prompt] end session=${sessionId}`)
+        console.log(`[Prompt] 生成完成 session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
-        if (this.dockerSessions.has(sessionId)) {
-          this.emitDockerEvent(sessionId, 'container_destroyed')
-          dockerManager.destroyContainer(sessionId).catch((err) =>
+        dockerManager.destroyContainer(sessionId).catch((err) =>
             console.error(`[Docker] 销毁容器失败: ${err}`)
-          )
-        }
+          ).then(() => {
+            this.emitDockerEvent(sessionId, 'container_destroyed')
+          })
         // 检查 agent_end 中的消息是否携带错误信息
         const endMessages = (event as any).messages as any[] | undefined
         if (endMessages) {
