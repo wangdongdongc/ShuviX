@@ -101,22 +101,20 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg mb-0.5 cursor-pointer transition-colors ${
+      className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg mb-px cursor-pointer transition-colors ${
         activeSessionId === session.id
           ? 'bg-bg-active text-text-primary'
           : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
       }`}
     >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 text-xs font-medium">
-          <span className="truncate">{session.title}</span>
-          {sessionStreams[session.id]?.isStreaming && (
-            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" title="正在生成" />
-          )}
-        </div>
-        <div className="text-[10px] text-text-tertiary mt-0.5">
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
+        <span className="truncate">{session.title}</span>
+        {sessionStreams[session.id]?.isStreaming && (
+          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" title="正在生成" />
+        )}
+        <span className="flex-shrink-0 ml-auto text-[9px] text-text-tertiary group-hover:hidden">
           {formatTime(session.updatedAt)}
-        </div>
+        </span>
       </div>
       <div className="hidden group-hover:flex items-center gap-0.5">
         <button
@@ -169,15 +167,15 @@ export function Sidebar(): React.JSX.Element {
             const groupLabel = isTemp ? '临时对话' : (projectNames[groupKey] || '未命名项目')
             return (
               <div key={groupKey} className="mb-1">
-                <div className="flex items-center w-full px-2 py-1.5 text-[10px] text-text-tertiary group/header">
+                <div className="flex items-center w-full px-2 py-2 text-xs text-text-secondary group/header">
                   <button
                     onClick={() => toggleGroup(groupKey)}
-                    className="flex items-center gap-1 flex-1 min-w-0 hover:text-text-secondary transition-colors"
+                    className="flex items-center gap-1.5 flex-1 min-w-0 hover:text-text-primary transition-colors"
                   >
-                    {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
-                    <FolderOpen size={10} />
-                    <span className="truncate font-medium">{groupLabel}</span>
-                    <span className="ml-1 text-text-tertiary">{groupSessions.length}</span>
+                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                    <FolderOpen size={12} />
+                    <span className="truncate font-semibold">{groupLabel}</span>
+                    <span className="ml-1 text-[10px] text-text-tertiary font-normal">{groupSessions.length}</span>
                   </button>
                   {/* 项目编辑入口（临时对话组不显示） */}
                   {!isTemp && (
