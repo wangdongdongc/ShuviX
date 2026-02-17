@@ -8,6 +8,7 @@ import { createCodingTools } from '../tools'
 import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
 import { createDockerOperations } from '../tools/dockerOperations'
 import type { ModelCapabilities, ThinkingLevel } from '../types'
+import { buildCustomProviderCompat } from './providerCompat'
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -107,8 +108,7 @@ export class AgentService {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: caps.maxInputTokens ?? 128000,
         maxTokens: caps.maxOutputTokens ?? 16384,
-        // 自定义提供商禁用 store 参数，避免 reasoning summary 在多轮对话中触发 404
-        ...(resolvedApi === 'openai-completions' ? { compat: { supportsStore: false } } : {})
+        ...(buildCustomProviderCompat(resolvedApi) ? { compat: buildCustomProviderCompat(resolvedApi) } : {})
       }
     } else {
       // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
@@ -260,7 +260,7 @@ export class AgentService {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: caps.maxInputTokens ?? 128000,
         maxTokens: caps.maxOutputTokens ?? 16384,
-        ...(resolvedApi === 'openai-completions' ? { compat: { supportsStore: false } } : {})
+        ...(buildCustomProviderCompat(resolvedApi) ? { compat: buildCustomProviderCompat(resolvedApi) } : {})
       }
     } else {
       const slug = (providerInfo?.name || '').toLowerCase()
