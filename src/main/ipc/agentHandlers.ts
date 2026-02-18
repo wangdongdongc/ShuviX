@@ -37,9 +37,9 @@ export function registerAgentHandlers(): void {
     return { success: true }
   })
 
-  /** 向指定 session 发送消息 */
+  /** 向指定 session 发送消息（支持附带图片） */
   ipcMain.handle('agent:prompt', async (_event, params: AgentPromptParams) => {
-    await agentService.prompt(params.sessionId, params.text)
+    await agentService.prompt(params.sessionId, params.text, params.images)
     return { success: true }
   })
 

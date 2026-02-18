@@ -75,9 +75,32 @@ export const MessageBubble = memo(function MessageBubble({
         </div>
 
         {isUser ? (
-          /* 用户消息：纯文本 */
-          <div className="text-sm text-text-primary whitespace-pre-wrap leading-relaxed">
-            {content}
+          /* 用户消息：文本 + 图片 */
+          <div>
+            {/* 图片展示 */}
+            {(() => {
+              if (!metadata) return null
+              try {
+                const parsed = JSON.parse(metadata)
+                if (!parsed.images?.length) return null
+                return (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {parsed.images.map((img: { preview: string; mimeType: string }, idx: number) => (
+                      <img
+                        key={idx}
+                        src={img.preview}
+                        alt={`附图 ${idx + 1}`}
+                        className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() => window.open(img.preview, '_blank')}
+                      />
+                    ))}
+                  </div>
+                )
+              } catch { return null }
+            })()}
+            <div className="text-sm text-text-primary whitespace-pre-wrap leading-relaxed">
+              {content}
+            </div>
           </div>
         ) : (
           <>

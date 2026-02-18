@@ -66,6 +66,10 @@ interface ChatState {
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
   thinkingLevel: string
+  /** 当前模型是否支持图片输入 */
+  modelSupportsVision: boolean
+  /** 待发送的图片列表（base64） */
+  pendingImages: Array<{ data: string; mimeType: string; preview: string }>
   /** 输入框内容 */
   inputText: string
   /** 错误信息 */
@@ -89,6 +93,10 @@ interface ChatState {
   setError: (error: string | null) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
+  setModelSupportsVision: (supports: boolean) => void
+  addPendingImage: (image: { data: string; mimeType: string; preview: string }) => void
+  removePendingImage: (index: number) => void
+  clearPendingImages: () => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
   removeSession: (id: string) => void
@@ -106,6 +114,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   toolExecutions: [],
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
+  modelSupportsVision: false,
+  pendingImages: [],
   inputText: '',
   error: null,
 
@@ -214,6 +224,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setError: (error) => set({ error }),
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
+  setModelSupportsVision: (supports) => set({ modelSupportsVision: supports }),
+  addPendingImage: (image) => set((state) => ({ pendingImages: [...state.pendingImages, image] })),
+  removePendingImage: (index) => set((state) => ({ pendingImages: state.pendingImages.filter((_, i) => i !== index) })),
+  clearPendingImages: () => set({ pendingImages: [] }),
   updateSessionTitle: (id, title) =>
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s))

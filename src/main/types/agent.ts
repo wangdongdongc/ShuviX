@@ -19,10 +19,19 @@ export interface AgentInitParams {
   messages?: AgentInitMessage[]
 }
 
+/** 图片内容（base64） */
+export interface ImageContentParam {
+  type: 'image'
+  data: string
+  mimeType: string
+}
+
 /** Agent 发送消息参数 */
 export interface AgentPromptParams {
   sessionId: string
   text: string
+  /** 附带的图片列表（base64 编码） */
+  images?: ImageContentParam[]
 }
 
 /** Agent 模型切换参数 */

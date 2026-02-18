@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState } from 'react'
-import { Send, Square, ChevronDown, Brain } from 'lucide-react'
+import { useRef, useEffect, useState, useCallback } from 'react'
+import { Send, Square, ChevronDown, Brain, ImagePlus, X } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settingsStore'
  * 支持 Shift+Enter 换行，Enter 发送
  */
 export function InputArea(): React.JSX.Element {
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel } = useChatStore()
+  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, pendingImages, addPendingImage, removePendingImage, clearPendingImages } = useChatStore()
   const {
     availableModels,
     providers,
@@ -24,6 +24,8 @@ export function InputArea(): React.JSX.Element {
   const [draftProvider, setDraftProvider] = useState(activeProvider)
   const thinkingRef = useRef<HTMLDivElement>(null)
   const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   /** 自动调整文本框高度 */
   useEffect(() => {
@@ -33,27 +35,64 @@ export function InputArea(): React.JSX.Element {
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [inputText])
 
-  /** 发送消息 */
+  /** 将文件转为 base64 图片数据 */
+  const fileToImageData = (file: File): Promise<{ data: string; mimeType: string; preview: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result as string
+        // data:image/png;base64,xxxxx → 提取 base64 部分
+        const base64 = result.split(',')[1]
+        resolve({ data: base64, mimeType: file.type, preview: result })
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
+  /** 处理文件选择/拖放的图片 */
+  const handleImageFiles = useCallback(async (files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    for (const file of imageFiles) {
+      const imgData = await fileToImageData(file)
+      addPendingImage(imgData)
+    }
+  }, [addPendingImage])
+
+  /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
     const text = inputText.trim()
-    if (!text || isStreaming || !activeSessionId) return
+    const images = pendingImages
+    if ((!text && images.length === 0) || isStreaming || !activeSessionId) return
 
     const store = useChatStore.getState()
     store.setInputText('')
+    store.clearPendingImages()
     store.setIsStreaming(activeSessionId, true)
     store.clearStreamingContent(activeSessionId)
     store.setError(null)
+
+    // 构造消息内容：文本 + 图片标记
+    const contentText = text || '(图片)'
+    // 图片信息存入 metadata 用于消息气泡渲染
+    const metadata = images.length > 0
+      ? JSON.stringify({ images: images.map((img) => ({ mimeType: img.mimeType, preview: img.preview })) })
+      : undefined
 
     // 保存用户消息到数据库
     const userMsg = await window.api.message.add({
       sessionId: activeSessionId,
       role: 'user',
-      content: text
+      content: contentText,
+      metadata
     })
     store.addMessage(userMsg)
 
-    // 发送给 Agent
-    await window.api.agent.prompt({ sessionId: activeSessionId, text })
+    // 发送给 Agent（附带图片）
+    const agentImages = images.length > 0
+      ? images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType }))
+      : undefined
+    await window.api.agent.prompt({ sessionId: activeSessionId, text: contentText, images: agentImages })
   }
 
   /** 中止生成 */
@@ -71,7 +110,7 @@ export function InputArea(): React.JSX.Element {
     }
   }
 
-  const canSend = inputText.trim().length > 0 && !isStreaming && activeSessionId
+  const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !isStreaming && activeSessionId
 
   // 已启用 provider 列表（直接从 providers 筛选，确保无模型的自定义提供商也可见）
   const enabledProviders = providers.filter((p) => p.isEnabled)
@@ -143,6 +182,7 @@ export function InputArea(): React.JSX.Element {
     const caps = (() => { try { return JSON.parse(selectedModel?.capabilities || '{}') } catch { return {} } })()
     const hasReasoning = !!caps.reasoning
     setModelSupportsReasoning(hasReasoning)
+    setModelSupportsVision(!!caps.vision)
     const newLevel = hasReasoning ? 'medium' : 'off'
     setThinkingLevel(newLevel)
     if (activeSessionId) {
@@ -193,10 +233,76 @@ export function InputArea(): React.JSX.Element {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [thinkingPickerOpen])
 
+  /** 拖拽事件处理 */
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (modelSupportsVision) setIsDragging(true)
+  }, [modelSupportsVision])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    if (!modelSupportsVision) return
+    const files = e.dataTransfer.files
+    if (files.length > 0) void handleImageFiles(files)
+  }, [modelSupportsVision, handleImageFiles])
+
+  /** 粘贴图片 */
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    if (!modelSupportsVision) return
+    const items = e.clipboardData.items
+    const imageFiles: File[] = []
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) imageFiles.push(file)
+      }
+    }
+    if (imageFiles.length > 0) void handleImageFiles(imageFiles)
+  }, [modelSupportsVision, handleImageFiles])
+
   return (
     <div className="border-t border-border-secondary bg-bg-primary px-4 py-3">
       <div className="max-w-3xl mx-auto">
-        <div className="bg-bg-secondary rounded-xl border border-border-primary focus-within:border-accent/50 transition-colors">
+        <div
+          className={`bg-bg-secondary rounded-xl border transition-colors ${
+            isDragging
+              ? 'border-accent border-dashed bg-accent/5'
+              : 'border-border-primary focus-within:border-accent/50'
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* 图片预览条 */}
+          {pendingImages.length > 0 && (
+            <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
+              {pendingImages.map((img, idx) => (
+                <div key={idx} className="relative flex-shrink-0 group/img">
+                  <img
+                    src={img.preview}
+                    alt={`附图 ${idx + 1}`}
+                    className="w-16 h-16 object-cover rounded-lg border border-border-primary"
+                  />
+                  <button
+                    onClick={() => removePendingImage(idx)}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="relative flex items-end gap-2">
             {/* 左下角紧凑扩展位 */}
             <div className="absolute left-2 bottom-2 z-10 flex items-center gap-1.5">
@@ -259,6 +365,30 @@ export function InputArea(): React.JSX.Element {
                 )}
               </div>
 
+              {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
+              {modelSupportsVision && (
+                <>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
+                    title="上传图片"
+                  >
+                    <ImagePlus size={11} />
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files) void handleImageFiles(e.target.files)
+                      e.target.value = ''
+                    }}
+                  />
+                </>
+              )}
+
               {/* 思考深度选择器（仅当模型支持 reasoning 时显示） */}
               {modelSupportsReasoning && (
                 <div ref={thinkingRef} className="relative">
@@ -302,7 +432,8 @@ export function InputArea(): React.JSX.Element {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={activeSessionId ? '输入消息... (Shift+Enter 换行)' : '请先创建或选择一个对话'}
+              onPaste={handlePaste}
+              placeholder={activeSessionId ? (modelSupportsVision ? '输入消息，可拖放或粘贴图片...' : '输入消息... (Shift+Enter 换行)') : '请先创建或选择一个对话'}
               disabled={!activeSessionId}
               rows={1}
               className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-3 pb-9 resize-none outline-none max-h-[200px] disabled:opacity-50"

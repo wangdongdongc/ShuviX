@@ -108,6 +108,7 @@ function App(): React.JSX.Element {
       const caps = (() => { try { return JSON.parse(currentModel?.capabilities || '{}') } catch { return {} } })()
       const hasReasoning = !!caps.reasoning
       useChatStore.getState().setModelSupportsReasoning(hasReasoning)
+      useChatStore.getState().setModelSupportsVision(!!caps.vision)
       const meta = (() => { try { return JSON.parse(currentSession?.modelMetadata || '{}') } catch { return {} } })()
       const savedLevel = meta.thinkingLevel
       const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'

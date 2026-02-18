@@ -206,8 +206,8 @@ export class AgentService {
     })
   }
 
-  /** 向指定 session 的 Agent 发送消息 */
-  async prompt(sessionId: string, text: string): Promise<void> {
+  /** 向指定 session 的 Agent 发送消息（支持附带图片） */
+  async prompt(sessionId: string, text: string, images?: Array<{ type: 'image'; data: string; mimeType: string }>): Promise<void> {
     const agent = this.agents.get(sessionId)
     if (!agent) {
       console.log(`[Agent] prompt 失败，未找到 session=${sessionId}`)
@@ -215,9 +215,13 @@ export class AgentService {
       return
     }
 
-    console.log(`[Agent] prompt session=${sessionId} text=${text.slice(0, 50)}...`)
+    console.log(`[Agent] prompt session=${sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`)
     try {
-      await agent.prompt(text)
+      if (images && images.length > 0) {
+        await agent.prompt(text, images)
+      } else {
+        await agent.prompt(text)
+      }
     } catch (err: any) {
       this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
     }
@@ -360,8 +364,8 @@ export class AgentService {
         // Docker 模式下，回复完成后销毁容器
         dockerManager.destroyContainer(sessionId).catch((err) =>
             console.error(`[Docker] 销毁容器失败: ${err}`)
-          ).then(() => {
-            this.emitDockerEvent(sessionId, 'container_destroyed')
+          ).then((destroyed) => {
+            if (destroyed) this.emitDockerEvent(sessionId, 'container_destroyed')
           })
         // 检查 agent_end 中的消息是否携带错误信息
         const endMessages = (event as any).messages as any[] | undefined
