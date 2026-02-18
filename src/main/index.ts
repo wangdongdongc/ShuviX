@@ -86,7 +86,16 @@ function setupApplicationMenu(): void {
       {
         label: '窗口',
         submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'front' }]
-      }
+      },
+      // 开发模式下添加开发菜单
+      ...(is.dev ? [{
+        label: '开发',
+        submenu: [
+          { role: 'toggleDevTools' as const },
+          { role: 'reload' as const },
+          { role: 'forceReload' as const }
+        ]
+      }] : [])
     ]
 
     Menu.setApplicationMenu(Menu.buildFromTemplate(template))
