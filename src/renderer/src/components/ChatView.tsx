@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { MessageSquarePlus, Sparkles, Container, AlertCircle } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
@@ -77,10 +77,23 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
 export function ChatView(): React.JSX.Element {
   const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
+  const atBottomRef = useRef(true)
+
+  // 跟踪用户是否在底部附近
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    atBottomRef.current = atBottom
+  }, [])
 
   // 预构建工具调用索引 + 可见消息列表，messages 不变时复用缓存
   const toolIndex = useMemo(() => buildToolIndex(messages), [messages])
   const visibleItems = useMemo(() => buildVisibleItems(messages, toolIndex), [messages, toolIndex])
+
+  // 流式内容 / 新消息更新时，若用户在底部则自动滚动
+  useEffect(() => {
+    if (atBottomRef.current && virtuosoRef.current) {
+      virtuosoRef.current.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' })
+    }
+  }, [streamingContent, streamingThinking, messages])
 
   /** 渲染单条可见消息 */
   const renderItem = useCallback((_index: number, item: VisibleItem) => {
@@ -262,6 +275,8 @@ export function ChatView(): React.JSX.Element {
               key={activeSessionId}
               increaseViewportBy={200}
               computeItemKey={(_index, item) => item.msg.id}
+              atBottomStateChange={handleAtBottomChange}
+              atBottomThreshold={100}
             />
           )}
 
