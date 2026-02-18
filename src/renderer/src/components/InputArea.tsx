@@ -43,48 +43,49 @@ export function InputArea(): React.JSX.Element {
   /** 将文件转为 base64 图片数据（大图自动压缩） */
   const fileToImageData = (file: File): Promise<{ data: string; mimeType: string; preview: string }> => {
     return new Promise((resolve, reject) => {
-      const img = new Image()
-      img.onload = () => {
-        URL.revokeObjectURL(img.src)
-        const { naturalWidth: w, naturalHeight: h } = img
-        const needResize = w > MAX_EDGE || h > MAX_EDGE
-        const needCompress = needResize || file.size > SKIP_SIZE
+      // 先用 FileReader 读取为 data URL（兼容 CSP，不需要 blob:）
+      const reader = new FileReader()
+      reader.onerror = reject
+      reader.onload = () => {
+        const dataUrl = reader.result as string
+        const img = new Image()
+        img.onload = () => {
+          const { naturalWidth: w, naturalHeight: h } = img
+          const needResize = w > MAX_EDGE || h > MAX_EDGE
+          const needCompress = needResize || file.size > SKIP_SIZE
 
-        if (!needCompress) {
-          // 小图直接用原始数据，避免不必要的质量损失
-          const reader = new FileReader()
-          reader.onload = () => {
-            const result = reader.result as string
-            resolve({ data: result.split(',')[1], mimeType: file.type, preview: result })
+          if (!needCompress) {
+            // 小图直接用原始数据，避免不必要的质量损失
+            resolve({ data: dataUrl.split(',')[1], mimeType: file.type, preview: dataUrl })
+            return
           }
-          reader.onerror = reject
-          reader.readAsDataURL(file)
-          return
+
+          console.log('压缩', file.name)
+
+          // 计算缩放尺寸（等比缩小到长边 MAX_EDGE）
+          let dw = w, dh = h
+          if (needResize) {
+            const ratio = MAX_EDGE / Math.max(w, h)
+            dw = Math.round(w * ratio)
+            dh = Math.round(h * ratio)
+          }
+
+          // Canvas 压缩
+          const canvas = document.createElement('canvas')
+          canvas.width = dw
+          canvas.height = dh
+          const ctx = canvas.getContext('2d')!
+          ctx.drawImage(img, 0, 0, dw, dh)
+
+          const compressedUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY)
+          const base64 = compressedUrl.split(',')[1]
+          resolve({ data: base64, mimeType: 'image/jpeg', preview: compressedUrl })
         }
-
-        console.log('压缩', file.name)
-
-        // 计算缩放尺寸（等比缩小到长边 MAX_EDGE）
-        let dw = w, dh = h
-        if (needResize) {
-          const ratio = MAX_EDGE / Math.max(w, h)
-          dw = Math.round(w * ratio)
-          dh = Math.round(h * ratio)
-        }
-
-        // Canvas 压缩
-        const canvas = document.createElement('canvas')
-        canvas.width = dw
-        canvas.height = dh
-        const ctx = canvas.getContext('2d')!
-        ctx.drawImage(img, 0, 0, dw, dh)
-
-        const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY)
-        const base64 = dataUrl.split(',')[1]
-        resolve({ data: base64, mimeType: 'image/jpeg', preview: dataUrl })
+        img.onerror = () => reject(new Error('图片加载失败'))
+        // 使用 data: URL 加载图片（CSP 允许 data:）
+        img.src = dataUrl
       }
-      img.onerror = () => reject(new Error('图片加载失败'))
-      img.src = URL.createObjectURL(file)
+      reader.readAsDataURL(file)
     })
   }
 
@@ -92,7 +93,6 @@ export function InputArea(): React.JSX.Element {
   const handleImageFiles = useCallback(async (files: FileList | File[]) => {
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
     for (const file of imageFiles) {
-      console.log('图片', file.name)
       const imgData = await fileToImageData(file)
       addPendingImage(imgData)
     }
@@ -407,24 +407,24 @@ export function InputArea(): React.JSX.Element {
               {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
               {modelSupportsVision && (
                 <>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
-                    title="上传图片"
-                  >
-                    <ImagePlus size={11} />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) void handleImageFiles(e.target.files)
-                      e.target.value = ''
-                    }}
-                  />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
+                  title="上传图片"
+                >
+                  <ImagePlus size={11} />
+                </button>
+                            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) void handleImageFiles(e.target.files)
+                  e.target.value = ''
+                }}
+              />
                 </>
               )}
 
