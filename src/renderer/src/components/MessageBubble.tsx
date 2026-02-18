@@ -91,7 +91,7 @@ export const MessageBubble = memo(function MessageBubble({
                         src={img.preview}
                         alt={`附图 ${idx + 1}`}
                         className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => window.open(img.preview, '_blank')}
+                        onClick={() => window.api.app.openImage(img.preview)}
                       />
                     ))}
                   </div>

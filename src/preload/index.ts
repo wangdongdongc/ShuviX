@@ -31,6 +31,8 @@ const api = {
   app: {
     /** 打开独立设置窗口 */
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
+    /** 用系统默认应用打开 base64 图片 */
+    openImage: (dataUrl: string) => ipcRenderer.invoke('app:open-image', dataUrl),
     /** 监听设置变更（设置窗口关闭后主窗口收到通知） */ 
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()

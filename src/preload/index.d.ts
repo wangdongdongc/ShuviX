@@ -111,6 +111,8 @@ interface AvailableModel extends ProviderModelInfo {
 interface ShiroBotAPI {
   app: {
     openSettings: () => Promise<{ success: boolean }>
+    /** 用系统默认应用打开 base64 图片 */
+    openImage: (dataUrl: string) => Promise<{ success: boolean }>
     onSettingsChanged: (callback: () => void) => () => void
   }
   agent: {

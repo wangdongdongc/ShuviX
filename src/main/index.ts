@@ -138,6 +138,26 @@ ipcMain.handle('app:open-settings', () => {
   return { success: true }
 })
 
+// 将 base64 图片写入临时文件并用系统默认应用打开
+ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
+  const { shell } = await import('electron')
+  const { writeFileSync } = await import('fs')
+  const { join } = await import('path')
+  const { tmpdir } = await import('os')
+
+  // 解析 data URL：data:image/png;base64,xxxxx
+  const match = dataUrl.match(/^data:(image\/(\w+));base64,(.+)$/)
+  if (!match) return { success: false, error: '无效的图片数据' }
+
+  const ext = match[2] === 'jpeg' ? 'jpg' : match[2]
+  const base64Data = match[3]
+  const tmpPath = join(tmpdir(), `shirobot-img-${Date.now()}.${ext}`)
+
+  writeFileSync(tmpPath, Buffer.from(base64Data, 'base64'))
+  await shell.openPath(tmpPath)
+  return { success: true }
+})
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.shirobot')
 
