@@ -1,10 +1,96 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { MessageSquarePlus, Sparkles, Container, AlertCircle } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 import { InputArea } from './InputArea'
+
+/** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
+interface ToolIndex {
+  /** toolCallId → tool_call 消息的解析后 meta */
+  callMeta: Map<string, any>
+  /** 已有配对 result 的 toolCallId 集合 */
+  pairedIds: Set<string>
+  /** msgId → 解析后的 meta */
+  metaCache: Map<string, any>
+}
+
+/** 构建工具调用索引（纯函数，供 useMemo 缓存） */
+function buildToolIndex(messages: ChatMessage[]): ToolIndex {
+  const callMeta = new Map<string, any>()
+  const pairedIds = new Set<string>()
+  const metaCache = new Map<string, any>()
+
+  for (const m of messages) {
+    if (!m.metadata) continue
+    try {
+      const parsed = JSON.parse(m.metadata)
+      if (m.type === 'tool_call' && parsed.toolCallId) {
+        callMeta.set(parsed.toolCallId, parsed)
+        metaCache.set(m.id, parsed)
+      } else if (m.type === 'tool_result' && parsed.toolCallId) {
+        pairedIds.add(parsed.toolCallId)
+        metaCache.set(m.id, parsed)
+      }
+    } catch { /* 忽略解析失败 */ }
+  }
+
+  return { callMeta, pairedIds, metaCache }
+}
+
+/** 渲染单条消息 */
+function renderMessage(msg: ChatMessage, toolIndex: ToolIndex): React.ReactNode {
+  if (msg.type === 'docker_event') {
+    const isCreate = msg.content === 'container_created'
+    return (
+      <div key={msg.id} className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
+        <Container size={12} />
+        <span>{isCreate ? '容器已创建' : '容器已销毁'}</span>
+      </div>
+    )
+  }
+
+  if (msg.type === 'tool_call') {
+    const meta = toolIndex.metaCache.get(msg.id) || {}
+    // 有配对结果 → 跳过（由 tool_result 合并渲染）
+    if (meta.toolCallId && toolIndex.pairedIds.has(meta.toolCallId)) return null
+    return (
+      <ToolCallBlock
+        key={msg.id}
+        toolName={meta.toolName || '未知工具'}
+        args={meta.args}
+        status="running"
+      />
+    )
+  }
+
+  if (msg.type === 'tool_result') {
+    const meta = toolIndex.metaCache.get(msg.id) || {}
+    const paired = meta.toolCallId ? toolIndex.callMeta.get(meta.toolCallId) : undefined
+    return (
+      <ToolCallBlock
+        key={msg.id}
+        toolName={meta.toolName || '未知工具'}
+        args={paired?.args}
+        result={msg.content}
+        status={meta.isError ? 'error' : 'done'}
+      />
+    )
+  }
+
+  // shirobot_notify 等非对话消息不渲染为气泡
+  if (msg.role === 'shirobot_notify') return null
+
+  return (
+    <MessageBubble
+      key={msg.id}
+      role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
+      content={msg.content}
+      metadata={msg.metadata}
+    />
+  )
+}
 
 /**
  * 聊天主视图 — 消息列表 + 输入区
@@ -16,6 +102,9 @@ export function ChatView(): React.JSX.Element {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const prevSessionIdRef = useRef<string | null>(null)
   const instantScrollRef = useRef(0)
+
+  // 预构建工具调用索引，messages 不变时复用缓存
+  const toolIndex = useMemo(() => buildToolIndex(messages), [messages])
 
   // 渲染阶段检测会话切换（在 hooks 之前执行）
   if (prevSessionIdRef.current !== activeSessionId) {
@@ -98,63 +187,7 @@ export function ChatView(): React.JSX.Element {
               </div>
             ) : (
               <div className="max-w-3xl mx-auto py-4">
-                {messages.map((msg) => {
-                  if (msg.type === 'docker_event') {
-                    const action = msg.content
-                    const isCreate = action === 'container_created'
-                    return (
-                      <div key={msg.id} className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
-                        <Container size={12} />
-                        <span>{isCreate ? '容器已创建' : '容器已销毁'}</span>
-                      </div>
-                    )
-                  }
-                  if (msg.type === 'tool_call') {
-                    const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
-                    // 查找是否已有配对的 tool_result
-                    const hasPairedResult = messages.some(
-                      (m) => m.type === 'tool_result' && m.metadata &&
-                        JSON.parse(m.metadata).toolCallId === meta.toolCallId
-                    )
-                    // 有结果 → 跳过（由 tool_result 合并渲染）；无结果 → 显示执行中
-                    if (hasPairedResult) return null
-                    return (
-                      <ToolCallBlock
-                        key={msg.id}
-                        toolName={meta.toolName || '未知工具'}
-                        args={meta.args}
-                        status="running"
-                      />
-                    )
-                  }
-                  if (msg.type === 'tool_result') {
-                    const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
-                    const pairedCall = messages.find(
-                      (m) => m.type === 'tool_call' && m.metadata &&
-                        JSON.parse(m.metadata).toolCallId === meta.toolCallId
-                    )
-                    const callMeta = pairedCall?.metadata ? JSON.parse(pairedCall.metadata) : {}
-                    return (
-                      <ToolCallBlock
-                        key={msg.id}
-                        toolName={meta.toolName || '未知工具'}
-                        args={callMeta.args}
-                        result={msg.content}
-                        status={meta.isError ? 'error' : 'done'}
-                      />
-                    )
-                  }
-                  // shirobot_notify 等非对话消息不渲染为气泡
-                  if (msg.role === 'shirobot_notify') return null
-                  return (
-                    <MessageBubble
-                      key={msg.id}
-                      role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
-                      content={msg.content}
-                      metadata={msg.metadata}
-                    />
-                  )
-                })}
+                {messages.map((msg) => renderMessage(msg, toolIndex))}
 
                 {/* 流式思考过程 */}
                 {isStreaming && streamingThinking && (
