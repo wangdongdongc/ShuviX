@@ -1,40 +1,83 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agent'
-import type { AgentInitParams, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
+import { sessionDao } from '../dao/sessionDao'
+import { providerDao } from '../dao/providerDao'
+import { projectDao } from '../dao/projectDao'
+import { settingsDao } from '../dao/settingsDao'
+import { messageDao } from '../dao/messageDao'
+import type { AgentInitParams, AgentInitResult, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams, ModelCapabilities } from '../types'
 
 /**
  * Agent 相关 IPC 处理器
  * 所有操作均通过 sessionId 指定目标 Agent
  */
 export function registerAgentHandlers(): void {
-  /** 初始化指定 session 的 Agent */
-  ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
+  /** 初始化指定 session 的 Agent（后端自行查询所有所需信息） */
+  ipcMain.handle('agent:init', (_event, params: AgentInitParams): AgentInitResult => {
+    const { sessionId } = params
+
+    // 查询会话信息
+    const session = sessionDao.findById(sessionId)
+    if (!session) {
+      return { success: false, provider: '', model: '', capabilities: {}, modelMetadata: '' }
+    }
+
+    const provider = session.provider || ''
+    const model = session.model || ''
+
+    // 查询提供商信息
+    const providerInfo = providerDao.findById(provider)
+
+    // 查询项目信息
+    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+
+    // 合并 system prompt：全局 + 项目级
+    const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
+    let mergedPrompt = globalPrompt
+    if (project?.systemPrompt) {
+      mergedPrompt = `${globalPrompt}\n\n${project.systemPrompt}`
+    }
+
+    // 查询模型能力
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    const capabilities: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+
+    // 创建 Agent（已存在且配置不变时跳过）
     const created = agentService.createAgent(
-      params.sessionId,
-      params.provider,
-      params.model,
-      params.systemPrompt,
-      params.workingDirectory,
-      params.dockerEnabled,
-      params.dockerImage,
-      params.apiKey,
-      params.baseUrl,
-      params.apiProtocol
+      sessionId,
+      provider,
+      model,
+      mergedPrompt,
+      project?.path || undefined,
+      project ? project.dockerEnabled === 1 : false,
+      project?.dockerImage || undefined,
+      providerInfo?.apiKey || undefined,
+      providerInfo?.baseUrl || undefined,
+      (providerInfo as any)?.apiProtocol || undefined
     )
 
-    // 仅新建 Agent 时恢复历史消息，避免切换回已有会话时重复追加
-    if (created && params.messages && params.messages.length > 0) {
-      const agentMessages = params.messages.map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: [{ type: 'text' as const, text: m.content }],
-        timestamp: Date.now()
-      }))
-      for (const msg of agentMessages) {
-        agentService.getMessages(params.sessionId).push(msg as any)
+    // 仅新建 Agent 时恢复历史消息
+    if (created) {
+      const msgs = messageDao.findBySessionId(sessionId)
+      if (msgs.length > 0) {
+        const agentMessages = msgs.map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: [{ type: 'text' as const, text: m.content }],
+          timestamp: Date.now()
+        }))
+        for (const msg of agentMessages) {
+          agentService.getMessages(sessionId).push(msg as any)
+        }
       }
     }
 
-    return { success: true }
+    return {
+      success: true,
+      provider,
+      model,
+      capabilities,
+      modelMetadata: session.modelMetadata || ''
+    }
   })
 
   /** 向指定 session 发送消息（支持附带图片） */

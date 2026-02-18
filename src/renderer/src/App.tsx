@@ -13,8 +13,8 @@ const isSettingsWindow = window.location.hash === '#settings'
  * 根据 hash 区分：主窗口（侧边栏 + 聊天区）或设置窗口（独立设置页）
  */
 function App(): React.JSX.Element {
-  const { activeSessionId, sessions } = useChatStore()
-  const { systemPrompt, providers, availableModels, theme, fontSize, loaded, setActiveProvider, setActiveModel } = useSettingsStore()
+  const { activeSessionId } = useChatStore()
+  const { theme, fontSize, loaded, setActiveProvider, setActiveModel } = useSettingsStore()
 
   /** 字体大小：设置 CSS 变量供全局使用 */
   useEffect(() => {
@@ -68,56 +68,31 @@ function App(): React.JSX.Element {
     if (isSettingsWindow || !activeSessionId || !loaded) return
 
     const loadSession = async (): Promise<void> => {
+      // 加载消息用于 UI 渲染
       const msgs = await window.api.message.list(activeSessionId)
       useChatStore.getState().setMessages(msgs)
 
-      const currentSession = sessions.find((s) => s.id === activeSessionId)
-      const sessionProvider = currentSession?.provider || ''
-      const sessionModel = currentSession?.model || ''
+      // 后端初始化 Agent 并返回会话信息
+      const result = await window.api.agent.init({ sessionId: activeSessionId })
 
-      // 将当前激活模型同步为该会话配置
-      setActiveProvider(sessionProvider)
-      setActiveModel(sessionModel)
+      // 同步前端 UI 状态
+      setActiveProvider(result.provider)
+      setActiveModel(result.model)
 
-      const providerInfo = providers.find((p) => p.id === sessionProvider)
-      // 从关联项目获取工作目录和 Docker 配置
-      const project = currentSession?.projectId
-        ? await window.api.project.getById(currentSession.projectId)
-        : null
-      // 合并 system prompt：全局 + 项目级
-      let mergedPrompt = systemPrompt
-      if (project?.systemPrompt) {
-        mergedPrompt = `${systemPrompt}\n\n${project.systemPrompt}`
-      }
-      await window.api.agent.init({
-        sessionId: activeSessionId,
-        provider: sessionProvider,
-        model: sessionModel,
-        systemPrompt: mergedPrompt,
-        workingDirectory: project?.path || undefined,
-        dockerEnabled: project ? project.dockerEnabled === 1 : false,
-        dockerImage: project?.dockerImage || undefined,
-        apiKey: providerInfo?.apiKey || undefined,
-        baseUrl: providerInfo?.baseUrl || undefined,
-        apiProtocol: (providerInfo as any)?.apiProtocol || undefined,
-        messages: msgs.map((m) => ({ role: m.role, content: m.content }))
-      })
-
-      // 初始化当前模型的思考能力状态，从 modelMetadata 恢复用户上次设置的思考深度
-      const currentModel = availableModels.find((m) => m.providerId === sessionProvider && m.modelId === sessionModel)
-      const caps = (() => { try { return JSON.parse(currentModel?.capabilities || '{}') } catch { return {} } })()
+      const caps = result.capabilities || {}
       const hasReasoning = !!caps.reasoning
       useChatStore.getState().setModelSupportsReasoning(hasReasoning)
       useChatStore.getState().setModelSupportsVision(!!caps.vision)
-      const meta = (() => { try { return JSON.parse(currentSession?.modelMetadata || '{}') } catch { return {} } })()
+
+      // 从 modelMetadata 恢复用户上次设置的思考深度
+      const meta = (() => { try { return JSON.parse(result.modelMetadata || '{}') } catch { return {} } })()
       const savedLevel = meta.thinkingLevel
       const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'
       useChatStore.getState().setThinkingLevel(restoredLevel)
-      // 同步到 Agent
       await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as any })
     }
     loadSession()
-  }, [activeSessionId, loaded, sessions, providers, systemPrompt, setActiveProvider, setActiveModel])
+  }, [activeSessionId, loaded, setActiveProvider, setActiveModel])
 
   /** 处理 Agent 流式事件（所有 session 的事件都处理，按 sessionId 隔离状态） */
   const handleAgentEvent = useCallback(

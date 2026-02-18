@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
   AgentInitParams,
+  AgentInitResult,
   AgentPromptParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
@@ -116,7 +117,7 @@ interface ShiroBotAPI {
     onSettingsChanged: (callback: () => void) => () => void
   }
   agent: {
-    init: (params: AgentInitParams) => Promise<{ success: boolean }>
+    init: (params: AgentInitParams) => Promise<AgentInitResult>
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
