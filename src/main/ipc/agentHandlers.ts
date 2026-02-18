@@ -9,7 +9,7 @@ import type { AgentInitParams, AgentPromptParams, AgentSetModelParams, AgentSetT
 export function registerAgentHandlers(): void {
   /** 初始化指定 session 的 Agent */
   ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
-    agentService.createAgent(
+    const created = agentService.createAgent(
       params.sessionId,
       params.provider,
       params.model,
@@ -22,8 +22,8 @@ export function registerAgentHandlers(): void {
       params.apiProtocol
     )
 
-    // 如果有历史消息，恢复到 Agent 状态
-    if (params.messages && params.messages.length > 0) {
+    // 仅新建 Agent 时恢复历史消息，避免切换回已有会话时重复追加
+    if (created && params.messages && params.messages.length > 0) {
       const agentMessages = params.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: [{ type: 'text' as const, text: m.content }],

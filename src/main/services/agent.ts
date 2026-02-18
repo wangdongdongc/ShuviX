@@ -58,7 +58,7 @@ export class AgentService {
     apiKey?: string,
     baseUrl?: string,
     apiProtocol?: string
-  ): void {
+  ): boolean {
     // 检测关键配置是否变化，变化则销毁旧 agent 重建
     const newConfig: AgentConfig = {
       workingDirectory: workingDirectory || '',
@@ -73,7 +73,7 @@ export class AgentService {
         oldConfig.dockerEnabled === newConfig.dockerEnabled &&
         oldConfig.dockerImage === newConfig.dockerImage
       ) {
-        return
+        return false
       }
       // 配置变更，销毁旧 agent
       console.log(`[Agent] 配置变更，重建 session=${sessionId}`)
@@ -204,6 +204,7 @@ export class AgentService {
     agent.subscribe((event: AgentEvent) => {
       this.forwardEvent(sessionId, event)
     })
+    return true
   }
 
   /** 向指定 session 的 Agent 发送消息（支持附带图片） */
