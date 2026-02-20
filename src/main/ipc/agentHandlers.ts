@@ -42,15 +42,13 @@ export function registerAgentHandlers(): void {
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
 
-    // 创建 Agent（已存在且配置不变时跳过）
+    // 创建 Agent（已存在且配置不变时跳过；Docker 配置在工具执行时动态查询）
     const created = agentService.createAgent(
       sessionId,
       provider,
       model,
       mergedPrompt,
       project?.path || undefined,
-      project ? project.dockerEnabled === 1 : false,
-      project?.dockerImage || undefined,
       providerInfo?.apiKey || undefined,
       providerInfo?.baseUrl || undefined,
       (providerInfo as any)?.apiProtocol || undefined

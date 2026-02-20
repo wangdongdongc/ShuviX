@@ -7,7 +7,7 @@
 import { spawn, spawnSync } from 'child_process'
 
 /** 容器内固定工作目录，避免与容器自身路径冲突 */
-export const CONTAINER_WORKSPACE = '/docker-shirobot-workspace'
+export const CONTAINER_WORKSPACE = '/isolated-docker-workspace'
 
 /** 容器信息 */
 interface ContainerInfo {

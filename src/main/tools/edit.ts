@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } 
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
+import { resolveProjectConfig, type ToolContext } from './types'
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -25,7 +26,7 @@ const EditParamsSchema = Type.Object({
 })
 
 /** 创建 edit 工具实例 */
-export function createEditTool(cwd: string): AgentTool<typeof EditParamsSchema> {
+export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSchema> {
 
   return {
     name: 'edit',
@@ -38,7 +39,8 @@ export function createEditTool(cwd: string): AgentTool<typeof EditParamsSchema> 
       params: { path: string; oldText: string; newText: string },
       signal?: AbortSignal
     ) => {
-      const absolutePath = resolveToCwd(params.path, cwd)
+      const { workingDirectory } = resolveProjectConfig(ctx)
+      const absolutePath = resolveToCwd(params.path, workingDirectory)
       console.log(`[Tool: edit] ${absolutePath}`)
 
       return new Promise<{

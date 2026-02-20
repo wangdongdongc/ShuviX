@@ -5,8 +5,7 @@ import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { createCodingTools } from '../tools'
-import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
-import { createDockerOperations } from '../tools/dockerOperations'
+import { dockerManager } from './dockerManager'
 import type { ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
 
@@ -125,16 +124,8 @@ export interface AgentStreamEvent {
  * Agent 服务 — 管理多个独立的 Agent 实例，按 sessionId 隔离
  * 每个 session 拥有自己的 Agent，互不影响
  */
-/** 记录 Agent 创建时的关键配置，用于变更检测 */
-interface AgentConfig {
-  workingDirectory: string
-  dockerEnabled: boolean
-  dockerImage: string
-}
-
 export class AgentService {
   private agents = new Map<string, Agent>()
-  private agentConfigs = new Map<string, AgentConfig>()
   private pendingLogIds = new Map<string, string[]>()
   private mainWindow: BrowserWindow | null = null
 
@@ -150,31 +141,13 @@ export class AgentService {
     model: string,
     systemPrompt: string,
     workingDirectory?: string,
-    dockerEnabled?: boolean,
-    dockerImage?: string,
     apiKey?: string,
     baseUrl?: string,
     apiProtocol?: string
   ): boolean {
-    // 检测关键配置是否变化，变化则销毁旧 agent 重建
-    const newConfig: AgentConfig = {
-      workingDirectory: workingDirectory || '',
-      dockerEnabled: dockerEnabled || false,
-      dockerImage: dockerImage || 'ubuntu:latest'
-    }
-    const oldConfig = this.agentConfigs.get(sessionId)
+    // 已存在则跳过（工具通过 getProjectConfig 动态获取配置，无需重建）
     if (this.agents.has(sessionId)) {
-      if (
-        oldConfig &&
-        oldConfig.workingDirectory === newConfig.workingDirectory &&
-        oldConfig.dockerEnabled === newConfig.dockerEnabled &&
-        oldConfig.dockerImage === newConfig.dockerImage
-      ) {
-        return false
-      }
-      // 配置变更，销毁旧 agent
-      console.log(`[Agent] 配置变更，重建 session=${sessionId}`)
-      this.removeAgent(sessionId)
+      return false
     }
     console.log(`[Agent] 创建 model=${model} session=${sessionId}`)
 
@@ -225,36 +198,20 @@ export class AgentService {
       }
     }
 
-    // 创建工具集（基于会话工作目录，可选 Docker 隔离）
-    const hostCwd = workingDirectory || process.cwd()
-    const useDocker = dockerEnabled && !!dockerImage
-    let toolOps: import('../tools').CreateToolsOptions | undefined
-    console.log(`[Agent] useDocker=${useDocker}`)
-    if (useDocker) {
-      // Docker 隔离：在容器中执行bash命令
-      const dockerOps = createDockerOperations(dockerManager, sessionId, dockerImage!, hostCwd, (containerId) => {
-        // 容器创建时写入 docker_event 消息
-        this.emitDockerEvent(sessionId, 'container_created', { containerId: containerId.slice(0, 12), image: dockerImage! })
-      })
-      toolOps = {
-        bashOperations: dockerOps.bash,
-        bashCwd: CONTAINER_WORKSPACE
+    // 创建工具集（通过 sessionId 动态查询项目配置）
+    const tools = createCodingTools({
+      sessionId,
+      onContainerCreated: (containerId) => {
+        this.emitDockerEvent(sessionId, 'container_created', {
+          containerId: containerId.slice(0, 12)
+        })
       }
-    }
-    // hostCwd 用于 read/write/edit（本地 fs），bashCwd 用于 bash（Docker 模式下为容器路径）
-    const tools = createCodingTools(hostCwd, toolOps)
+    })
 
-    // 在 system prompt 中附加工作目录信息
+    // 在 system prompt 中附加工具说明
     let enhancedPrompt = systemPrompt
     if (workingDirectory) {
-      if (useDocker) {
-        // Docker 模式：bash 在容器中运行，路径是 CONTAINER_WORKSPACE；read/write/edit 在本地运行，路径是宿主机路径
-        enhancedPrompt += `\n\n你可以使用 bash, read, write, edit 工具来操作文件系统。\n当前工作目录：${hostCwd}`
-        enhancedPrompt += `\n但但意：bash 命令运行在 Docker 容器中（镜像: ${dockerImage}），工作目录将挂载到 ${CONTAINER_WORKSPACE}。`
-        enhancedPrompt += `\n因此 bash 命令中请使用 ${CONTAINER_WORKSPACE} 作为工作路径，而 read/write/edit 工具中请使用 ${hostCwd}。`
-      } else {
-        enhancedPrompt += `\n\n当前工作目录：${hostCwd}\n你可以使用 bash, read, write, edit 工具来操作文件系统。所有相对路径都基于上述工作目录。`
-      }
+      enhancedPrompt += `\n\n你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。`
     }
 
     const agent = new Agent({
@@ -295,7 +252,6 @@ export class AgentService {
     })
 
     this.agents.set(sessionId, agent)
-    this.agentConfigs.set(sessionId, newConfig)
 
     // 订阅 Agent 事件，转发到 Renderer（携带 sessionId）
     agent.subscribe((event: AgentEvent) => {
@@ -437,7 +393,7 @@ export class AgentService {
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
-      // 保留 agentConfigs / pendingLogIds / Docker 容器，下次 createAgent 会自动复用
+      // 保留 pendingLogIds / Docker 容器，下次 createAgent 会自动复用
       console.log(`[Agent] invalidate session=${sessionId}`)
     }
   }
@@ -448,7 +404,6 @@ export class AgentService {
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
-      this.agentConfigs.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
       // 清理 Docker 容器
       dockerManager.destroyContainer(sessionId).catch(() => {})

@@ -8,6 +8,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath } from './utils/pathUtils'
+import { resolveProjectConfig, type ToolContext } from './types'
 
 const ReadParamsSchema = Type.Object({
   path: Type.String({
@@ -26,7 +27,7 @@ const ReadParamsSchema = Type.Object({
 })
 
 /** 创建 read 工具实例 */
-export function createReadTool(cwd: string): AgentTool<typeof ReadParamsSchema> {
+export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSchema> {
 
   return {
     name: 'read',
@@ -41,7 +42,8 @@ export function createReadTool(cwd: string): AgentTool<typeof ReadParamsSchema> 
     ) => {
       if (signal?.aborted) throw new Error('操作已中止')
 
-      const absolutePath = resolveReadPath(params.path, cwd)
+      const { workingDirectory } = resolveProjectConfig(ctx)
+      const absolutePath = resolveReadPath(params.path, workingDirectory)
       console.log(`[Tool: read] ${absolutePath}`)
 
       try {

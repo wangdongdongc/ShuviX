@@ -8,6 +8,7 @@ import { dirname } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
+import { resolveProjectConfig, type ToolContext } from './types'
 
 const WriteParamsSchema = Type.Object({
   path: Type.String({ description: '要写入的文件路径（相对或绝对路径）' }),
@@ -15,7 +16,7 @@ const WriteParamsSchema = Type.Object({
 })
 
 /** 创建 write 工具实例 */
-export function createWriteTool(cwd: string): AgentTool<typeof WriteParamsSchema> {
+export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsSchema> {
 
   return {
     name: 'write',
@@ -28,7 +29,8 @@ export function createWriteTool(cwd: string): AgentTool<typeof WriteParamsSchema
       params: { path: string; content: string },
       signal?: AbortSignal
     ) => {
-      const absolutePath = resolveToCwd(params.path, cwd)
+      const { workingDirectory } = resolveProjectConfig(ctx)
+      const absolutePath = resolveToCwd(params.path, workingDirectory)
       const dir = dirname(absolutePath)
       
       console.log(`[Tool: write] ${absolutePath}`)

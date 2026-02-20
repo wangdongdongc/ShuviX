@@ -8,6 +8,8 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
+import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
+import { resolveProjectConfig, type ToolContext } from './types'
 
 /** 默认超时时间（秒） */
 const DEFAULT_TIMEOUT = 120
@@ -22,16 +24,6 @@ const BashParamsSchema = Type.Object({
     })
   )
 })
-
-/** 可插拔的执行接口（用于 Docker 适配） */
-export interface BashOperations {
-  spawn: (
-    command: string,
-    cwd: string,
-    timeout: number,
-    signal?: AbortSignal
-  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>
-}
 
 /** 默认本地执行实现 */
 function defaultSpawn(
@@ -107,16 +99,8 @@ function defaultSpawn(
   })
 }
 
-const defaultOperations: BashOperations = { spawn: defaultSpawn }
-
-export interface BashToolOptions {
-  operations?: BashOperations
-}
-
 /** 创建 bash 工具实例 */
-export function createBashTool(cwd: string, options?: BashToolOptions): AgentTool<typeof BashParamsSchema> {
-  const ops = options?.operations ?? defaultOperations
-
+export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSchema> {
   return {
     name: 'bash',
     label: '执行命令',
@@ -129,9 +113,24 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
       signal?: AbortSignal
     ) => {
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
+      const config = resolveProjectConfig(ctx)
+      const useDocker = config.dockerEnabled && !!config.dockerImage
 
       try {
-        const result = await ops.spawn(params.command, cwd, timeout, signal)
+        let result: { stdout: string; stderr: string; exitCode: number }
+
+        if (useDocker) {
+          // Docker 模式：确保容器运行，在容器内执行
+          const { containerId, isNew } = await dockerManager.ensureContainer(
+            ctx.sessionId, config.dockerImage, config.workingDirectory
+          )
+          if (isNew) ctx.onContainerCreated?.(containerId)
+          console.log(`[Tool: bash] (docker ${config.dockerImage}): ${params.command}`)
+          result = await dockerManager.exec(containerId, params.command, CONTAINER_WORKSPACE, signal)
+        } else {
+          // 本地模式
+          result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)
+        }
         const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
 
         // 截断过长的输出
