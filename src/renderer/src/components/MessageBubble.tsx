@@ -1,10 +1,74 @@
-import { memo } from 'react'
+import { memo, useState, useEffect, useRef, useId } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
+import mermaid from 'mermaid'
 import { User, Bot, Copy, Check, Code, FileText } from 'lucide-react'
-import { useState } from 'react'
+
+// 初始化 mermaid（暗色主题，禁用自动启动）
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  securityLevel: 'loose',
+  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
+})
+
+/** Mermaid 代码块 → SVG 图表，支持源码/图表切换 */
+function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [showSource, setShowSource] = useState(false)
+  const uniqueId = useId().replace(/:/g, '_')
+
+  useEffect(() => {
+    let cancelled = false
+    const render = async (): Promise<void> => {
+      try {
+        const { svg } = await mermaid.render(`mermaid${uniqueId}`, code)
+        if (!cancelled && containerRef.current) {
+          containerRef.current.innerHTML = svg
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e))
+      }
+    }
+    render()
+    return () => { cancelled = true }
+  }, [code, uniqueId])
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
+        <div className="text-[10px] text-orange-400 mb-1">Mermaid 渲染失败</div>
+        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">{code}</pre>
+      </div>
+    )
+  }
+
+  return (
+    <div className="my-2 rounded-lg border border-border-primary bg-bg-tertiary/50 overflow-hidden">
+      {/* 工具栏 */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-primary bg-bg-tertiary/80">
+        <span className="text-[10px] text-text-tertiary font-medium">Mermaid</span>
+        <button
+          onClick={() => setShowSource(!showSource)}
+          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+          title={showSource ? '显示图表' : '显示源码'}
+        >
+          {showSource ? <FileText size={10} /> : <Code size={10} />}
+          <span>{showSource ? '图表' : '源码'}</span>
+        </button>
+      </div>
+      {/* 内容区：两个视图始终挂载，CSS 控制显隐，避免切换时丢失已渲染的 SVG */}
+      <pre className={`p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto ${showSource ? '' : 'hidden'}`}>{code}</pre>
+      <div
+        ref={containerRef}
+        className={`flex justify-center overflow-auto p-3 [&_svg]:max-w-full ${showSource ? 'hidden' : ''}`}
+      />
+    </div>
+  )
+}
 
 interface MessageBubbleProps {
   role: 'user' | 'assistant' | 'system' | 'tool'
@@ -134,7 +198,33 @@ export const MessageBubble = memo(function MessageBubble({
               </pre>
             ) : (
               <div className="markdown-body text-sm">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                  components={{
+                    pre({ node, children, ...props }) {
+                      // 从 hast 节点检测 mermaid 代码块
+                      const codeNode = node?.children?.[0] as any
+                      if (codeNode?.tagName === 'code') {
+                        const cls = codeNode.properties?.className
+                        const isMermaid = Array.isArray(cls)
+                          ? cls.some((c: string) => c === 'language-mermaid')
+                          : typeof cls === 'string' && cls.includes('language-mermaid')
+                        if (isMermaid) {
+                          // 递归提取 hast 节点中的纯文本
+                          const extractText = (n: any): string => {
+                            if (n.type === 'text') return n.value || ''
+                            if (n.children) return n.children.map(extractText).join('')
+                            return ''
+                          }
+                          const code = extractText(codeNode).replace(/\n$/, '')
+                          if (code) return <MermaidBlock code={code} />
+                        }
+                      }
+                      return <pre {...props}>{children}</pre>
+                    }
+                  }}
+                >
                   {content}
                 </ReactMarkdown>
                 {/* 流式输出光标 */}
