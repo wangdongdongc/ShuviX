@@ -8,6 +8,8 @@ export interface AgentInitParams {
 /** Agent 初始化返回结果（后端解析的会话信息，供前端同步 UI 状态） */
 export interface AgentInitResult {
   success: boolean
+  /** 是否新创建了 Agent（false 表示已存在，跳过创建） */
+  created: boolean
   /** 会话所属提供商 ID */
   provider: string
   /** 会话当前模型 ID */

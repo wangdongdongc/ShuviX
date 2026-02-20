@@ -4,9 +4,13 @@ import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
+import { sessionDao } from '../dao/sessionDao'
+import { projectDao } from '../dao/projectDao'
+import { settingsDao } from '../dao/settingsDao'
+import { messageDao } from '../dao/messageDao'
 import { createCodingTools } from '../tools'
 import { dockerManager } from './dockerManager'
-import type { ModelCapabilities, ThinkingLevel, Message } from '../types'
+import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
 
 /** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */
@@ -134,43 +138,55 @@ export class AgentService {
     this.mainWindow = window
   }
 
-  /** 为指定 session 创建 Agent 实例（已存在则跳过） */
-  createAgent(
-    sessionId: string,
-    provider: string,
-    model: string,
-    systemPrompt: string,
-    workingDirectory?: string,
-    apiKey?: string,
-    baseUrl?: string,
-    apiProtocol?: string
-  ): boolean {
-    // 已存在则跳过（工具通过 getProjectConfig 动态获取配置，无需重建）
-    if (this.agents.has(sessionId)) {
-      return false
+  /** 为指定 session 创建 Agent 实例（已存在则跳过）；返回会话元信息供前端同步 */
+  createAgent(sessionId: string): AgentInitResult {
+    // 查询会话信息
+    const session = sessionDao.findById(sessionId)
+    if (!session) {
+      console.error(`[Agent] 创建失败，未找到 session=${sessionId}`)
+      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '' }
     }
+
+    const provider = session.provider || ''
+    const model = session.model || ''
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    const capabilities: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+    const meta = { provider, model, capabilities, modelMetadata: session.modelMetadata || '' }
+
+    // 已存在则跳过（工具通过 resolveProjectConfig 动态获取配置，无需重建）
+    if (this.agents.has(sessionId)) {
+      return { success: true, created: false, ...meta }
+    }
+
     console.log(`[Agent] 创建 model=${model} session=${sessionId}`)
+
+    // 查询项目信息
+    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+
+    // 合并 system prompt：全局 + 项目级
+    const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
+    let systemPrompt = globalPrompt
+    if (project?.systemPrompt) {
+      systemPrompt = `${globalPrompt}\n\n${project.systemPrompt}`
+    }
 
     // 查询提供商信息，判断是否内置
     const providerInfo = providerDao.findById(provider)
     const isBuiltin = providerInfo?.isBuiltin ?? false
     let resolvedModel: Model<Api>
-
-    // 从 DB 读取模型能力信息
-    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
-    const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+    const caps = capabilities
 
     if (!isBuiltin) {
       // 自定义提供商：手动构造 Model 对象，用 capabilities 填充
       const inputModalities: string[] = ['text']
       if (caps.vision) inputModalities.push('image')
-      const resolvedApi = (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api
+      const resolvedApi = (providerInfo?.apiProtocol || 'openai-completions') as Api
       resolvedModel = {
         id: model,
         name: model,
         api: resolvedApi,
         provider,
-        baseUrl: baseUrl || providerInfo?.baseUrl || '',
+        baseUrl: providerInfo?.baseUrl || '',
         reasoning: caps.reasoning ?? false,
         input: inputModalities as any,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -181,7 +197,7 @@ export class AgentService {
     } else {
       // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
       const slug = (providerInfo?.name || '').toLowerCase()
-      if (apiKey) {
+      if (providerInfo?.apiKey) {
         const envMap: Record<string, string> = {
           openai: 'OPENAI_API_KEY',
           anthropic: 'ANTHROPIC_API_KEY',
@@ -189,12 +205,12 @@ export class AgentService {
         }
         const envKey = envMap[slug]
         if (envKey) {
-          process.env[envKey] = apiKey
+          process.env[envKey] = providerInfo.apiKey
         }
       }
       resolvedModel = getModel(slug as any, model as any)
-      if (baseUrl) {
-        resolvedModel.baseUrl = baseUrl
+      if (providerInfo?.baseUrl) {
+        resolvedModel.baseUrl = providerInfo.baseUrl
       }
     }
 
@@ -210,7 +226,7 @@ export class AgentService {
 
     // 在 system prompt 中附加工具说明
     let enhancedPrompt = systemPrompt
-    if (workingDirectory) {
+    if (project?.path) {
       enhancedPrompt += `\n\n你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。`
     }
 
@@ -225,7 +241,7 @@ export class AgentService {
       streamFn: (streamModel, context, options) => {
         // 动态查找当前模型对应提供商的 apiKey（支持运行时切换提供商）
         const currentProvider = providerDao.findById(String(streamModel.provider))
-        const resolvedApiKey = currentProvider?.apiKey || apiKey
+        const resolvedApiKey = currentProvider?.apiKey
         try {
           return streamSimple(streamModel, context, {
             ...(options || {}),
@@ -257,7 +273,17 @@ export class AgentService {
     agent.subscribe((event: AgentEvent) => {
       this.forwardEvent(sessionId, event)
     })
-    return true
+
+    // 恢复历史消息到 Agent 上下文（正确处理 tool_call / tool_result / 图片等类型）
+    const dbMsgs = messageDao.findBySessionId(sessionId)
+    if (dbMsgs.length > 0) {
+      const agentMessages = dbMessagesToAgentMessages(dbMsgs)
+      for (const msg of agentMessages) {
+        agent.state.messages.push(msg)
+      }
+    }
+
+    return { success: true, created: true, ...meta }
   }
 
   /** 向指定 session 的 Agent 发送消息（支持附带图片） */
