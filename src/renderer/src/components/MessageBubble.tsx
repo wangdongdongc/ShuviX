@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import { User, Bot, Copy, Check } from 'lucide-react'
+import { User, Bot, Copy, Check, Code, FileText } from 'lucide-react'
 import { useState } from 'react'
 
 interface MessageBubbleProps {
@@ -24,6 +24,7 @@ export const MessageBubble = memo(function MessageBubble({
   isStreaming
 }: MessageBubbleProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
 
   const isUser = role === 'user'
 
@@ -72,6 +73,16 @@ export const MessageBubble = memo(function MessageBubble({
               {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
             </button>
           )}
+          {/* 切换原始文本 / Markdown 渲染 */}
+          {!isUser && !isStreaming && content && (
+            <button
+              onClick={() => setShowRaw(!showRaw)}
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
+              title={showRaw ? '显示渲染' : '显示源码'}
+            >
+              {showRaw ? <FileText size={12} /> : <Code size={12} />}
+            </button>
+          )}
         </div>
 
         {isUser ? (
@@ -116,16 +127,22 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
               </details>
             )}
-            {/* 助手消息：Markdown 渲染 */}
-            <div className="markdown-body text-sm">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
+            {/* 助手消息：Markdown 渲染 / 原始文本 */}
+            {showRaw ? (
+              <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
                 {content}
-              </ReactMarkdown>
-              {/* 流式输出光标 */}
-              {isStreaming && (
-                <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
-              )}
-            </div>
+              </pre>
+            ) : (
+              <div className="markdown-body text-sm">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight, rehypeRaw]}>
+                  {content}
+                </ReactMarkdown>
+                {/* 流式输出光标 */}
+                {isStreaming && (
+                  <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
