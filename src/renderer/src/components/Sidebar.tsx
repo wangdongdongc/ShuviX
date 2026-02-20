@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect } from 'react'
-import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react'
+import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderOpen, FolderPlus } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SessionEditDialog } from './SessionEditDialog'
 import { ProjectEditDialog } from './ProjectEditDialog'
+import { ProjectCreateDialog } from './ProjectCreateDialog'
 import type { Session } from '../stores/chatStore'
 
 /**
@@ -16,6 +17,8 @@ export function Sidebar(): React.JSX.Element {
   const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
   const [editingSession, setEditingSession] = useState<Session | null>(null)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  const [showCreateProject, setShowCreateProject] = useState(false)
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   // 项目名称缓存：projectId → name
   const [projectNames, setProjectNames] = useState<Record<string, string>>({})
@@ -43,20 +46,14 @@ export function Sidebar(): React.JSX.Element {
 
   const showGroups = grouped.size > 1
 
-  // 获取当前活跃会话的 projectId（新建对话时继承）
-  const activeProjectId = useMemo(() => {
-    const active = sessions.find((s) => s.id === activeSessionId)
-    return active?.projectId ?? null
-  }, [sessions, activeSessionId])
-
-  /** 创建新会话（继承当前项目） */
-  const handleNewChat = async (): Promise<void> => {
+  /** 在指定项目下创建新会话 */
+  const handleNewChat = async (projectId?: string | null): Promise<void> => {
     const settings = useSettingsStore.getState()
     const session = await window.api.session.create({
       provider: settings.activeProvider,
       model: settings.activeModel,
       systemPrompt: settings.systemPrompt,
-      projectId: activeProjectId
+      projectId: projectId ?? null
     })
     const allSessions = await window.api.session.list()
     useChatStore.getState().setSessions(allSessions)
@@ -68,10 +65,21 @@ export function Sidebar(): React.JSX.Element {
     setActiveSessionId(id)
   }
 
-  /** 删除会话 */
+  /** 删除会话（有消息时先确认） */
   const handleDelete = async (id: string): Promise<void> => {
+    const msgs = await window.api.message.list(id)
+    if (msgs.length > 0) {
+      setDeletingSessionId(id)
+      return
+    }
+    await doDelete(id)
+  }
+
+  /** 执行删除 */
+  const doDelete = async (id: string): Promise<void> => {
     await window.api.session.delete(id)
     useChatStore.getState().removeSession(id)
+    setDeletingSessionId(null)
   }
 
   /** 切换分组折叠状态 */
@@ -145,11 +153,11 @@ export function Sidebar(): React.JSX.Element {
       <div className="titlebar-drag flex items-center justify-between px-4 pt-10 pb-3">
         <h1 className="text-sm font-semibold text-text-primary tracking-tight">ShiroBot</h1>
         <button
-          onClick={handleNewChat}
+          onClick={() => setShowCreateProject(true)}
           className="titlebar-no-drag p-1.5 rounded-lg hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors"
-          title="新建对话"
+          title="新建项目"
         >
-          <MessageSquarePlus size={18} />
+          <FolderPlus size={18} />
         </button>
       </div>
 
@@ -157,7 +165,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex-1 overflow-y-auto px-2 py-1">
         {sessions.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
-            点击上方按钮开始新对话
+            点击上方按钮新建项目
           </div>
         ) : showGroups ? (
           /* 按项目分组展示 */
@@ -177,16 +185,30 @@ export function Sidebar(): React.JSX.Element {
                     <span className="truncate font-semibold">{groupLabel}</span>
                     <span className="ml-1 text-[10px] text-text-tertiary font-normal">{groupSessions.length}</span>
                   </button>
-                  {/* 项目编辑入口（临时对话组不显示） */}
-                  {!isTemp && (
+                  {/* 项目操作按钮 */}
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-all">
+                    {/* 新建对话 */}
                     <button
-                      onClick={() => setEditingProjectId(groupKey)}
-                      className="opacity-0 group-hover/header:opacity-100 p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary transition-all"
-                      title="编辑项目"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleNewChat(isTemp ? null : groupKey)
+                      }}
+                      className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                      title="新建对话"
                     >
-                      <Pencil size={9} />
+                      <MessageSquarePlus size={11} />
                     </button>
-                  )}
+                    {/* 编辑项目（临时对话组不显示） */}
+                    {!isTemp && (
+                      <button
+                        onClick={() => setEditingProjectId(groupKey)}
+                        className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                        title="编辑项目"
+                      >
+                        <Pencil size={9} />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {!collapsed && groupSessions.map(renderSessionItem)}
               </div>
@@ -222,6 +244,50 @@ export function Sidebar(): React.JSX.Element {
         <ProjectEditDialog
           projectId={editingProjectId}
           onClose={() => setEditingProjectId(null)}
+        />
+      )}
+
+      {/* 删除会话确认弹窗 */}
+      {deletingSessionId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[340px] max-w-[90vw]">
+            <div className="px-5 py-4">
+              <h3 className="text-sm font-semibold text-text-primary mb-2">确认删除</h3>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                该会话中已有消息记录，删除后将<span className="text-error font-medium">彻底删除所有消息</span>，且无法恢复。确定要删除吗？
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
+              <button
+                onClick={() => setDeletingSessionId(null)}
+                className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => doDelete(deletingSessionId)}
+                className="px-4 py-1.5 rounded-lg text-xs bg-error text-white hover:bg-error/90 transition-colors"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新建项目弹窗 */}
+      {showCreateProject && (
+        <ProjectCreateDialog
+          onClose={() => setShowCreateProject(false)}
+          onCreated={async (projectId) => {
+            // 刷新项目名称缓存
+            const projects = await window.api.project.list()
+            const map: Record<string, string> = {}
+            for (const p of projects) { map[p.id] = p.name }
+            setProjectNames(map)
+            // 自动在新项目下创建一个会话
+            await handleNewChat(projectId)
+          }}
         />
       )}
     </div>

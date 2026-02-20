@@ -49,8 +49,9 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 删除会话 */
+  /** 删除会话（同时清理 Agent 内存实例 + Docker 容器） */
   ipcMain.handle('session:delete', (_event, id: string) => {
+    agentService.removeAgent(id)
     sessionService.delete(id)
     return { success: true }
   })
