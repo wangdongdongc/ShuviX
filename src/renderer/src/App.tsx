@@ -159,11 +159,14 @@ function App(): React.JSX.Element {
           const content = store.getSessionStreamContent(sid)
           if (content) {
             const thinking = store.getSessionStreamThinking(sid)
+            const meta: Record<string, any> = {}
+            if (thinking) meta.thinking = thinking
+            if (event.usage) meta.usage = event.usage
             const assistantMsg = await window.api.message.add({
               sessionId: sid,
               role: 'assistant',
               content,
-              metadata: thinking ? JSON.stringify({ thinking }) : undefined
+              metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined
             })
             // 仅当该 session 是当前查看的会话时，才更新内存中的消息列表
             if (sid === store.activeSessionId) {

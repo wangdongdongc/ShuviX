@@ -119,14 +119,16 @@ export const MessageBubble = memo(function MessageBubble({
 
   const isUser = role === 'user'
 
-  // 从 metadata 解析思考过程
-  const thinking = (() => {
+  // 从 metadata 解析思考过程和 token 用量
+  const parsedMeta = (() => {
     if (!metadata) return null
-    try {
-      const parsed = JSON.parse(metadata)
-      return parsed.thinking || null
-    } catch { return null }
+    try { return JSON.parse(metadata) } catch { return null }
   })()
+  const thinking = parsedMeta?.thinking || null
+  const usage = parsedMeta?.usage as {
+    input: number; output: number; total: number
+    details?: Array<{ input: number; output: number; total: number; stopReason: string }>
+  } | undefined
 
   /** 复制消息内容 */
   const handleCopy = (): void => {
@@ -281,6 +283,32 @@ export const MessageBubble = memo(function MessageBubble({
               </div>
             )}
           </>
+        )}
+
+        {/* token 用量（助手消息底部） */}
+        {!isUser && usage && !isStreaming && (
+          <div className="mt-1.5 text-[10px] text-text-tertiary">
+            {usage.details && usage.details.length > 1 ? (
+              <details>
+                <summary className="cursor-pointer select-none hover:text-text-secondary">
+                  tokens: {usage.input} in / {usage.output} out
+                  {usage.total ? ` · ${usage.total} total` : ''}
+                  {` · ${usage.details.length} 次调用`}
+                </summary>
+                <div className="mt-1 ml-2 space-y-0.5">
+                  {usage.details.map((d, i) => (
+                    <div key={i}>
+                      #{i + 1} {d.input} in / {d.output} out
+                      {d.total ? ` · ${d.total}` : ''}
+                      {d.stopReason ? ` (${d.stopReason})` : ''}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ) : (
+              <span>tokens: {usage.input} in / {usage.output} out{usage.total ? ` · ${usage.total} total` : ''}</span>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -114,6 +114,11 @@ export interface AgentStreamEvent {
   toolArgs?: any
   toolResult?: any
   toolIsError?: boolean
+  // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
+  usage?: {
+    input: number; output: number; total: number
+    details: Array<{ input: number; output: number; total: number; stopReason: string }>
+  }
 }
 
 /**
@@ -481,7 +486,25 @@ export class AgentService {
             }
           }
         }
-        this.sendToRenderer({ type: 'agent_end', sessionId })
+        // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
+        const details: Array<{ input: number; output: number; total: number; stopReason: string }> = []
+        const msgs = (event as any).messages as AgentMessage[] | undefined
+        if (msgs) {
+          for (const m of msgs) {
+            if (this.isAssistantMessage(m) && m.usage) {
+              details.push({
+                input: m.usage.input || 0,
+                output: m.usage.output || 0,
+                total: m.usage.totalTokens || 0,
+                stopReason: m.stopReason || ''
+              })
+            }
+          }
+        }
+        const totalUsage = details.reduce((acc, d) => ({
+          input: acc.input + d.input, output: acc.output + d.output, total: acc.total + d.total
+        }), { input: 0, output: 0, total: 0 })
+        this.sendToRenderer({ type: 'agent_end', sessionId, usage: { ...totalUsage, details } })
         break
       }
       case 'message_update': {
