@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw, Plus, X } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
+import { PayloadViewer } from './PayloadViewer'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -249,10 +250,8 @@ function HttpLogSettings(): React.JSX.Element {
                 </div>
               </div>
 
-              <div className="text-xs text-text-secondary">请求体（JSON 文本）</div>
-              <pre className="w-full min-h-[260px] rounded-lg border border-border-primary bg-bg-tertiary p-3 text-[11px] leading-relaxed text-text-primary overflow-auto whitespace-pre-wrap break-words">
-                {selectedLog.payload}
-              </pre>
+              <div className="text-xs text-text-secondary">请求体</div>
+              <PayloadViewer payload={selectedLog.payload} />
             </div>
           )}
         </div>
