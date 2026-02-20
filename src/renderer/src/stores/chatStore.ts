@@ -68,6 +68,10 @@ interface ChatState {
   thinkingLevel: string
   /** 当前模型是否支持图片输入 */
   modelSupportsVision: boolean
+  /** 当前模型最大上下文 token 数 */
+  maxContextTokens: number
+  /** 当前会话已占用上下文 token 数（来自最近一次 LLM 请求的 input usage） */
+  usedContextTokens: number | null
   /** 待发送的图片列表（base64） */
   pendingImages: Array<{ data: string; mimeType: string; preview: string }>
   /** 输入框内容 */
@@ -94,6 +98,8 @@ interface ChatState {
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
   setModelSupportsVision: (supports: boolean) => void
+  setMaxContextTokens: (tokens: number) => void
+  setUsedContextTokens: (tokens: number | null) => void
   addPendingImage: (image: { data: string; mimeType: string; preview: string }) => void
   removePendingImage: (index: number) => void
   clearPendingImages: () => void
@@ -115,6 +121,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
   modelSupportsVision: false,
+  maxContextTokens: 0,
+  usedContextTokens: null,
   pendingImages: [],
   inputText: '',
   error: null,
@@ -225,6 +233,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
   setModelSupportsVision: (supports) => set({ modelSupportsVision: supports }),
+  setMaxContextTokens: (tokens) => set({ maxContextTokens: tokens }),
+  setUsedContextTokens: (tokens) => set({ usedContextTokens: tokens }),
   addPendingImage: (image) => set((state) => ({ pendingImages: [...state.pendingImages, image] })),
   removePendingImage: (index) => set((state) => ({ pendingImages: state.pendingImages.filter((_, i) => i !== index) })),
   clearPendingImages: () => set({ pendingImages: [] }),

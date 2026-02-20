@@ -83,6 +83,23 @@ function App(): React.JSX.Element {
       const hasReasoning = !!caps.reasoning
       useChatStore.getState().setModelSupportsReasoning(hasReasoning)
       useChatStore.getState().setModelSupportsVision(!!caps.vision)
+      useChatStore.getState().setMaxContextTokens(caps.maxInputTokens || 0)
+
+      // 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
+      const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && m.metadata)
+      const lastUsage = (() => {
+        try { return lastAssistant ? JSON.parse(lastAssistant.metadata!).usage : null } catch { return null }
+      })()
+      if (lastUsage) {
+        const details = lastUsage.details
+        const last = details?.length > 0 ? details[details.length - 1] : null
+        const promptTokens = last
+          ? (last.total || 0) - (last.output || 0)
+          : (lastUsage.total || 0) - (lastUsage.output || 0)
+        useChatStore.getState().setUsedContextTokens(promptTokens > 0 ? promptTokens : null)
+      } else {
+        useChatStore.getState().setUsedContextTokens(null)
+      }
 
       // 从 modelMetadata 恢复用户上次设置的思考深度
       const meta = (() => { try { return JSON.parse(result.modelMetadata || '{}') } catch { return {} } })()
@@ -156,6 +173,15 @@ function App(): React.JSX.Element {
           break
 
         case 'agent_end': {
+          // 更新已占用上下文 token 数（total - output = prompt_tokens，包含 cached tokens）
+          if (event.usage && sid === store.activeSessionId) {
+            const details = event.usage.details
+            const last = details?.length > 0 ? details[details.length - 1] : null
+            const promptTokens = last
+              ? (last.total || 0) - (last.output || 0)
+              : (event.usage.total || 0) - (event.usage.output || 0)
+            store.setUsedContextTokens(promptTokens > 0 ? promptTokens : null)
+          }
           const content = store.getSessionStreamContent(sid)
           if (content) {
             const thinking = store.getSessionStreamThinking(sid)

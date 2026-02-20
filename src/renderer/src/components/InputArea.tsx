@@ -3,12 +3,21 @@ import { Send, Square, ChevronDown, Brain, ImagePlus, X } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
+/** 将 token 数格式化为紧凑显示（如 12.5k、128k） */
+function formatTokenCount(n: number): string {
+  if (n >= 1000) {
+    const k = n / 1000
+    return k % 1 === 0 ? `${k}k` : `${k.toFixed(1)}k`
+  }
+  return String(n)
+}
+
 /**
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
  */
 export function InputArea(): React.JSX.Element {
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, pendingImages, addPendingImage, removePendingImage, clearPendingImages } = useChatStore()
+  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage, clearPendingImages } = useChatStore()
   const {
     availableModels,
     providers,
@@ -222,6 +231,8 @@ export function InputArea(): React.JSX.Element {
     const hasReasoning = !!caps.reasoning
     setModelSupportsReasoning(hasReasoning)
     setModelSupportsVision(!!caps.vision)
+    useChatStore.getState().setMaxContextTokens(caps.maxInputTokens || 0)
+    useChatStore.getState().setUsedContextTokens(null)
     const newLevel = hasReasoning ? 'medium' : 'off'
     setThinkingLevel(newLevel)
     if (activeSessionId) {
@@ -426,6 +437,18 @@ export function InputArea(): React.JSX.Element {
                 }}
               />
                 </>
+              )}
+
+              {/* 上下文用量指示器 */}
+              {maxContextTokens > 0 && (
+                <span
+                  className="h-6 inline-flex items-center px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-tertiary select-none"
+                  title={`上下文用量：${usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-'} / ${maxContextTokens.toLocaleString()} tokens`}
+                >
+                  {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
+                  {' / '}
+                  {formatTokenCount(maxContextTokens)}
+                </span>
               )}
 
               {/* 思考深度选择器（仅当模型支持 reasoning 时显示） */}
