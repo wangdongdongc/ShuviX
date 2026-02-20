@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import mermaid from 'mermaid'
-import { User, Bot, Copy, Check, Code, FileText } from 'lucide-react'
+import { User, Bot, Copy, Check, Code, FileText, RotateCcw, RefreshCw } from 'lucide-react'
 
 // 初始化 mermaid（暗色主题，禁用自动启动）
 mermaid.initialize({
@@ -75,6 +75,10 @@ interface MessageBubbleProps {
   content: string
   metadata?: string | null
   isStreaming?: boolean
+  /** 回退到此消息（删除之后的所有消息） */
+  onRollback?: () => void
+  /** 重新生成此消息（仅助手消息） */
+  onRegenerate?: () => void
 }
 
 /**
@@ -85,7 +89,9 @@ export const MessageBubble = memo(function MessageBubble({
   role,
   content,
   metadata,
-  isStreaming
+  isStreaming,
+  onRollback,
+  onRegenerate
 }: MessageBubbleProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
@@ -145,6 +151,26 @@ export const MessageBubble = memo(function MessageBubble({
               title={showRaw ? '显示渲染' : '显示源码'}
             >
               {showRaw ? <FileText size={12} /> : <Code size={12} />}
+            </button>
+          )}
+          {/* 回退到此处 */}
+          {!isStreaming && onRollback && (
+            <button
+              onClick={onRollback}
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
+              title="回退到此处"
+            >
+              <RotateCcw size={12} />
+            </button>
+          )}
+          {/* 重新生成 */}
+          {!isUser && !isStreaming && onRegenerate && (
+            <button
+              onClick={onRegenerate}
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
+              title="重新生成"
+            >
+              <RefreshCw size={12} />
             </button>
           )}
         </div>

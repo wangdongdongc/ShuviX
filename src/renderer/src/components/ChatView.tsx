@@ -95,6 +95,51 @@ export function ChatView(): React.JSX.Element {
     }
   }, [streamingContent, streamingThinking, messages])
 
+  /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
+  const handleRollback = useCallback(async (messageId: string) => {
+    if (!activeSessionId) return
+    if (!window.confirm('回退到此处将删除之后的所有消息，是否继续？')) return
+    await window.api.message.rollback({ sessionId: activeSessionId, messageId })
+    // 重新拉取消息 + 重建 Agent
+    const msgs = await window.api.message.list(activeSessionId)
+    useChatStore.getState().setMessages(msgs)
+    await window.api.agent.init({ sessionId: activeSessionId })
+  }, [activeSessionId])
+
+  /** 重新生成最近一次助手回复（回退到用户消息前 + 重发） */
+  const handleRegenerate = useCallback(async (assistantMsgId: string) => {
+    if (!activeSessionId) return
+    const store = useChatStore.getState()
+    const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
+    // 向前查找最近的 user/text 消息
+    let lastUserText = ''
+    let userMsgId = ''
+    for (let j = idx - 1; j >= 0; j--) {
+      if (store.messages[j].role === 'user' && store.messages[j].type === 'text') {
+        lastUserText = store.messages[j].content
+        userMsgId = store.messages[j].id
+        break
+      }
+    }
+    if (!userMsgId) return
+    // 删除用户消息及之后的所有消息
+    await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
+    // 重新拉取消息 + 重建 Agent
+    const msgs = await window.api.message.list(activeSessionId)
+    store.setMessages(msgs)
+    await window.api.agent.init({ sessionId: activeSessionId })
+    // 重新保存用户消息并发送
+    const userMsg = await window.api.message.add({ sessionId: activeSessionId, role: 'user', content: lastUserText })
+    store.addMessage(userMsg)
+    await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
+  }, [activeSessionId])
+
+  // 仅当最后一条消息是助手文本消息时才允许重新生成
+  const lastAssistantTextId = useMemo(() => {
+    const last = messages[messages.length - 1]
+    return last?.role === 'assistant' && last?.type === 'text' ? last.id : null
+  }, [messages])
+
   /** 渲染单条可见消息 */
   const renderItem = useCallback((_index: number, item: VisibleItem) => {
     const { msg, meta, pairedCallMeta } = item
@@ -135,9 +180,11 @@ export function ChatView(): React.JSX.Element {
         role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
         content={msg.content}
         metadata={msg.metadata}
+        onRollback={msg.id !== messages[messages.length - 1]?.id ? () => handleRollback(msg.id) : undefined}
+        onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
       />
     )
-  }, [])
+  }, [handleRollback, handleRegenerate, lastAssistantTextId])
 
   /** 流式内容 / 思考 / 加载指示器 / 错误提示（固定在列表底部） */
   const Footer = useCallback(() => {

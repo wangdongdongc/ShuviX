@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { agentService } from '../services/agent'
+import { agentService, dbMessagesToAgentMessages } from '../services/agent'
 import { sessionDao } from '../dao/sessionDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
@@ -56,17 +56,13 @@ export function registerAgentHandlers(): void {
       (providerInfo as any)?.apiProtocol || undefined
     )
 
-    // 仅新建 Agent 时恢复历史消息
+    // 仅新建 Agent 时恢复历史消息（正确处理 tool_call / tool_result / 图片等类型）
     if (created) {
       const msgs = messageDao.findBySessionId(sessionId)
       if (msgs.length > 0) {
-        const agentMessages = msgs.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: [{ type: 'text' as const, text: m.content }],
-          timestamp: Date.now()
-        }))
+        const agentMessages = dbMessagesToAgentMessages(msgs)
         for (const msg of agentMessages) {
-          agentService.getMessages(sessionId).push(msg as any)
+          agentService.getMessages(sessionId).push(msg)
         }
       }
     }

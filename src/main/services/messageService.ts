@@ -35,6 +35,16 @@ export class MessageService {
     return message
   }
 
+  /** 回退到指定消息：删除该消息之后的所有消息 */
+  rollbackToMessage(sessionId: string, messageId: string): void {
+    messageDao.deleteAfterMessage(sessionId, messageId)
+  }
+
+  /** 从指定消息开始删除（含该消息本身及之后的所有消息） */
+  deleteFromMessage(sessionId: string, messageId: string): void {
+    messageDao.deleteFromMessage(sessionId, messageId)
+  }
+
   /** 清空会话消息 */
   clear(sessionId: string): void {
     messageDao.deleteBySessionId(sessionId)

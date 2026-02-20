@@ -7,8 +7,100 @@ import { providerDao } from '../dao/providerDao'
 import { createCodingTools } from '../tools'
 import { dockerManager, CONTAINER_WORKSPACE } from './dockerManager'
 import { createDockerOperations } from '../tools/dockerOperations'
-import type { ModelCapabilities, ThinkingLevel } from '../types'
+import type { ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
+
+/** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */
+function extractBase64(img: any): string {
+  if (img.data) return img.data
+  if (typeof img.preview === 'string' && img.preview.includes(',')) {
+    return img.preview.split(',')[1]
+  }
+  return ''
+}
+
+/**
+ * 将数据库消息转换为 pi-agent-core 的 AgentMessage 格式
+ * 处理 text / tool_call / tool_result 等类型，跳过 shirobot_notify
+ */
+export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
+  const result: AgentMessage[] = []
+  let i = 0
+  while (i < msgs.length) {
+    const msg = msgs[i]
+
+    // 跳过系统通知
+    if (msg.role === 'shirobot_notify' || msg.role === 'system') { i++; continue }
+
+    // 用户消息（可能包含图片）
+    if (msg.role === 'user') {
+      let content: any = msg.content
+      if (msg.metadata) {
+        try {
+          const meta = JSON.parse(msg.metadata)
+          if (meta.images?.length) {
+            content = [
+              { type: 'text', text: msg.content },
+              ...meta.images.map((img: any) => ({ type: 'image', data: extractBase64(img), mimeType: img.mimeType }))
+            ]
+          }
+        } catch { /* 忽略 */ }
+      }
+      result.push({ role: 'user', content, timestamp: msg.createdAt } as any)
+      i++; continue
+    }
+
+    // 助手文本消息
+    if (msg.role === 'assistant' && msg.type === 'text') {
+      const contentBlocks: any[] = []
+      if (msg.metadata) {
+        try {
+          const meta = JSON.parse(msg.metadata)
+          if (meta.thinking) contentBlocks.push({ type: 'thinking', thinking: meta.thinking })
+        } catch { /* 忽略 */ }
+      }
+      contentBlocks.push({ type: 'text', text: msg.content })
+      result.push({
+        role: 'assistant', content: contentBlocks,
+        api: 'openai-completions', provider: '', model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop', timestamp: msg.createdAt
+      } as any)
+      i++; continue
+    }
+
+    // 助手工具调用（连续的 tool_call 合并为一条 AssistantMessage）
+    if (msg.role === 'assistant' && msg.type === 'tool_call') {
+      const toolCalls: any[] = []
+      const ts = msg.createdAt
+      while (i < msgs.length && msgs[i].role === 'assistant' && msgs[i].type === 'tool_call') {
+        const meta = msgs[i].metadata ? JSON.parse(msgs[i].metadata!) : {}
+        toolCalls.push({ type: 'toolCall', id: meta.toolCallId || '', name: meta.toolName || '', arguments: meta.args || {} })
+        i++
+      }
+      result.push({
+        role: 'assistant', content: toolCalls,
+        api: 'openai-completions', provider: '', model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'toolUse', timestamp: ts
+      } as any)
+      continue
+    }
+
+    // 工具结果消息
+    if (msg.role === 'tool' && msg.type === 'tool_result') {
+      const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
+      result.push({
+        role: 'toolResult', toolCallId: meta.toolCallId || '', toolName: meta.toolName || '',
+        content: [{ type: 'text', text: msg.content }], isError: meta.isError || false, timestamp: msg.createdAt
+      } as any)
+      i++; continue
+    }
+
+    i++ // 未知类型跳过
+  }
+  return result
+}
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -332,6 +424,17 @@ export class AgentService {
       console.error(`[Agent] 生成标题失败: ${err}`)
     }
     return null
+  }
+
+  /** 使指定 session 的 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
+  invalidateAgent(sessionId: string): void {
+    const agent = this.agents.get(sessionId)
+    if (agent) {
+      agent.abort()
+      this.agents.delete(sessionId)
+      // 保留 agentConfigs / pendingLogIds / Docker 容器，下次 createAgent 会自动复用
+      console.log(`[Agent] invalidate session=${sessionId}`)
+    }
   }
 
   /** 移除指定 session 的 Agent（删除会话时调用） */

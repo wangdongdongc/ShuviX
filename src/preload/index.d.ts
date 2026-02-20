@@ -161,6 +161,10 @@ interface ShiroBotAPI {
     list: (sessionId: string) => Promise<ChatMessage[]>
     add: (params: MessageAddParams) => Promise<ChatMessage>
     clear: (sessionId: string) => Promise<{ success: boolean }>
+    /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
+    rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
+    /** 从指定消息开始删除（含该消息本身，使 Agent 失效） */
+    deleteFrom: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
   }
   settings: {
     getAll: () => Promise<Record<string, string>>

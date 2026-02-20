@@ -127,7 +127,11 @@ const api = {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),
     add: (params: MessageAddParams) =>
       ipcRenderer.invoke('message:add', params),
-    clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId)
+    clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
+    rollback: (params: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('message:rollback', params),
+    deleteFrom: (params: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('message:deleteFrom', params)
   },
 
   // ============ 设置管理 ============
