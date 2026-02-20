@@ -9,7 +9,7 @@ import { User, Bot, Copy, Check, Code, FileText } from 'lucide-react'
 // 初始化 mermaid（暗色主题，禁用自动启动）
 mermaid.initialize({
   startOnLoad: false,
-  theme: 'dark',
+  theme: 'default',
   securityLevel: 'loose',
   fontFamily: 'ui-sans-serif, system-ui, sans-serif'
 })
@@ -64,7 +64,7 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       <pre className={`p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto ${showSource ? '' : 'hidden'}`}>{code}</pre>
       <div
         ref={containerRef}
-        className={`flex justify-center overflow-auto p-3 [&_svg]:max-w-full ${showSource ? 'hidden' : ''}`}
+        className={`flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full ${showSource ? 'hidden' : ''}`}
       />
     </div>
   )
