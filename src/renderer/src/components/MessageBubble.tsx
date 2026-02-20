@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useId } from 'react'
+import { memo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -14,28 +14,46 @@ mermaid.initialize({
   fontFamily: 'ui-sans-serif, system-ui, sans-serif'
 })
 
-/** Mermaid 代码块 → SVG 图表，支持源码/图表切换 */
-function MermaidBlock({ code }: { code: string }): React.JSX.Element {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [showSource, setShowSource] = useState(false)
-  const uniqueId = useId().replace(/:/g, '_')
+// 模块级缓存：组件频繁重挂载时保持 SVG 渲染结果和视图状态
+const mermaidSvgCache = new Map<string, string>()
+const mermaidViewState = new Map<string, boolean>() // code → showSource
+let mermaidIdCounter = 0
 
-  useEffect(() => {
-    let cancelled = false
-    const render = async (): Promise<void> => {
+/** Mermaid 代码块 → SVG 图表，支持源码/图表切换（懒渲染） */
+function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+  const [svgHtml, setSvgHtml] = useState<string | null>(mermaidSvgCache.get(code) ?? null)
+  const [error, setError] = useState<string | null>(null)
+  const [showSource, _setShowSource] = useState(mermaidViewState.get(code) ?? true)
+  const [rendering, setRendering] = useState(false)
+
+  // 包装 setShowSource，同步写入模块级缓存
+  const setShowSource = (v: boolean): void => {
+    mermaidViewState.set(code, v)
+    _setShowSource(v)
+  }
+
+  // 点击"图表"按钮时触发渲染
+  const handleToggle = async (): Promise<void> => {
+    if (!showSource) {
+      setShowSource(true)
+      return
+    }
+    // 首次切换到图表视图时渲染
+    if (!svgHtml && !error) {
+      setRendering(true)
       try {
-        const { svg } = await mermaid.render(`mermaid${uniqueId}`, code)
-        if (!cancelled && containerRef.current) {
-          containerRef.current.innerHTML = svg
-        }
+        const id = `mermaid_${mermaidIdCounter++}`
+        const { svg } = await mermaid.render(id, code)
+        mermaidSvgCache.set(code, svg)
+        setSvgHtml(svg)
       } catch (e) {
-        if (!cancelled) setError(String(e))
+        setError(String(e))
+      } finally {
+        setRendering(false)
       }
     }
-    render()
-    return () => { cancelled = true }
-  }, [code, uniqueId])
+    setShowSource(false)
+  }
 
   if (error) {
     return (
@@ -52,20 +70,23 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-primary bg-bg-tertiary/80">
         <span className="text-[10px] text-text-tertiary font-medium">Mermaid</span>
         <button
-          onClick={() => setShowSource(!showSource)}
-          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+          onClick={handleToggle}
+          disabled={rendering}
+          className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors disabled:opacity-50"
           title={showSource ? '显示图表' : '显示源码'}
         >
           {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>{showSource ? '图表' : '源码'}</span>
+          <span>{rendering ? '渲染中…' : showSource ? '图表' : '源码'}</span>
         </button>
       </div>
-      {/* 内容区：两个视图始终挂载，CSS 控制显隐，避免切换时丢失已渲染的 SVG */}
-      <pre className={`p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto ${showSource ? '' : 'hidden'}`}>{code}</pre>
-      <div
-        ref={containerRef}
-        className={`flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full ${showSource ? 'hidden' : ''}`}
-      />
+      {showSource ? (
+        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">{code}</pre>
+      ) : (
+        <div
+          className="flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full"
+          dangerouslySetInnerHTML={{ __html: svgHtml || '' }}
+        />
+      )}
     </div>
   )
 }
