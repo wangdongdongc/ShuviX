@@ -221,7 +221,11 @@
     "paramLimit": "读取的最大行数，与 offset 配合使用",
     "paramCommand": "要执行的 shell 命令。支持管道、重定向等 bash 特性。避免需要交互输入的命令。",
     "paramTimeout": "命令超时时间（秒），默认 {{default}}s。长时间运行的命令建议加大此值。",
-        "sandboxBlocked": "沙箱模式：禁止访问工作区外的路径 {{path}}。工作区: {{workspace}}",
+        "readDesc": "读取文件内容。支持纯文本文件（可分页）以及 PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook 等富文本格式（自动转换为 Markdown）。",
+    "convertedHeader": "文件: {{path}} ({{format}}, {{size}}) — 已转换为 Markdown",
+    "convertFailed": "无法转换文件: {{path}}",
+    "unsupportedFormat": "不支持的文件格式 ({{ext}}): {{path}}。支持纯文本文件以及 PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 格式。",
+    "sandboxBlocked": "沙箱模式：禁止访问工作区外的路径 {{path}}。工作区: {{workspace}}",
     "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行"
   }
 }

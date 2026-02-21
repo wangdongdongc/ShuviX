@@ -221,6 +221,10 @@
     "paramLimit": "Maximum number of lines to read, used with offset",
     "paramCommand": "Shell command to execute. Supports pipes, redirects, and other bash features. Avoid interactive commands.",
     "paramTimeout": "Command timeout in seconds, default {{default}}s. Increase for long-running commands.",
+    "readDesc": "Read file contents. Supports text files (with pagination) and rich formats like PDF, Word, Excel, PowerPoint, HTML, Jupyter Notebook (auto-converted to Markdown).",
+    "convertedHeader": "File: {{path}} ({{format}}, {{size}}) — converted to Markdown",
+    "convertFailed": "Failed to convert file: {{path}}",
+    "unsupportedFormat": "Unsupported file format ({{ext}}): {{path}}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.",
     "sandboxBlocked": "Sandbox: access denied to path outside workspace: {{path}}. Workspace: {{workspace}}",
     "sandboxBashDenied": "Sandbox: user denied execution of this command"
   }

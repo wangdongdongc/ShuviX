@@ -221,6 +221,10 @@
     "paramLimit": "読み込む最大行数、offsetと併用",
     "paramCommand": "実行するシェルコマンド。パイプ、リダイレクトなどのbash機能をサポート。対話型コマンドは避けてください。",
     "paramTimeout": "コマンドタイムアウト（秒）、デフォルト {{default}}秒。長時間実行コマンドには大きな値を設定してください。",
+    "readDesc": "ファイルの内容を読み込みます。テキストファイル（ページネーション対応）および PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook などのリッチフォーマット（自動的に Markdown に変換）をサポートします。",
+    "convertedHeader": "ファイル: {{path}} ({{format}}, {{size}}) — Markdown に変換済み",
+    "convertFailed": "ファイルの変換に失敗しました: {{path}}",
+    "unsupportedFormat": "サポートされていないファイル形式 ({{ext}}): {{path}}。テキストファイルおよび PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 形式をサポートしています。",
     "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
     "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました"
   }
