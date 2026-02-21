@@ -28,5 +28,7 @@ export interface HttpLogSummary {
 /** IPC: 查询日志列表参数 */
 export interface HttpLogListParams {
   sessionId?: string
+  provider?: string
+  model?: string
   limit?: number
 }

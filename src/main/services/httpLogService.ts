@@ -42,8 +42,8 @@ export class HttpLogService {
     httpLogDao.updateUsage(id, inputTokens, outputTokens, totalTokens)
   }
 
-  /** 获取日志列表（支持 sessionId 筛选） */
-  list(params?: { sessionId?: string; limit?: number }): HttpLogSummary[] {
+  /** 获取日志列表（支持 sessionId/provider/model 筛选） */
+  list(params?: { sessionId?: string; provider?: string; model?: string; limit?: number }): HttpLogSummary[] {
     return httpLogDao.list(params)
   }
 

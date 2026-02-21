@@ -18,23 +18,28 @@ export class HttpLogDao {
       .run(log.id, log.sessionId, log.provider, log.model, log.payload, log.inputTokens, log.outputTokens, log.totalTokens, log.createdAt)
   }
 
-  /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId 筛选） */
-  list(params: { sessionId?: string; limit?: number } = {}): HttpLogSummary[] {
+  /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId/provider/model 筛选） */
+  list(params: { sessionId?: string; provider?: string; model?: string; limit?: number } = {}): HttpLogSummary[] {
     const limit = params.limit ?? 200
+    const conditions: string[] = []
+    const values: unknown[] = []
+
     if (params.sessionId) {
-      return this.db
-        .prepare(
-          `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle,
-                  h.provider, COALESCE(p.name, h.provider) AS providerName, h.model,
-                  h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
-           FROM http_logs h
-           LEFT JOIN sessions s ON h.sessionId = s.id
-           LEFT JOIN providers p ON h.provider = p.id
-           WHERE h.sessionId = ?
-           ORDER BY h.createdAt DESC LIMIT ?`
-        )
-        .all(params.sessionId, limit) as HttpLogSummary[]
+      conditions.push('h.sessionId = ?')
+      values.push(params.sessionId)
     }
+    if (params.provider) {
+      conditions.push('h.provider = ?')
+      values.push(params.provider)
+    }
+    if (params.model) {
+      conditions.push('h.model = ?')
+      values.push(params.model)
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    values.push(limit)
+
     return this.db
       .prepare(
         `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle,
@@ -43,9 +48,10 @@ export class HttpLogDao {
          FROM http_logs h
          LEFT JOIN sessions s ON h.sessionId = s.id
          LEFT JOIN providers p ON h.provider = p.id
+         ${where}
          ORDER BY h.createdAt DESC LIMIT ?`
       )
-      .all(limit) as HttpLogSummary[]
+      .all(...values) as HttpLogSummary[]
   }
 
   /** 根据 ID 获取完整日志（含 payload） */

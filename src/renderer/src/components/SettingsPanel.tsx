@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw, Plus, X } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
@@ -82,7 +82,10 @@ function HttpLogSettings(): React.JSX.Element {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([])
+  const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([])
   const [filterSessionId, setFilterSessionId] = useState<string>('')
+  const [filterProvider, setFilterProvider] = useState<string>('')
+  const [filterModel, setFilterModel] = useState<string>('')
 
   /** 加载会话列表（用于筛选下拉） */
   const loadSessions = async (): Promise<void> => {
@@ -90,13 +93,21 @@ function HttpLogSettings(): React.JSX.Element {
     setSessions(list.map((s) => ({ id: s.id, title: s.title })))
   }
 
+  /** 加载提供商列表（用于筛选下拉） */
+  const loadProviders = async (): Promise<void> => {
+    const list = await window.api.provider.listAll()
+    setProviders(list.map((p) => ({ id: p.id, name: p.name })))
+  }
+
   /** 加载日志列表 */
-  const loadLogs = async (sessionId?: string): Promise<void> => {
+  const loadLogs = async (filters?: { sessionId?: string; provider?: string; model?: string }): Promise<void> => {
     setLoadingList(true)
     try {
       const rows = await window.api.httpLog.list({
         limit: 300,
-        ...(sessionId ? { sessionId } : {})
+        ...(filters?.sessionId ? { sessionId: filters.sessionId } : {}),
+        ...(filters?.provider ? { provider: filters.provider } : {}),
+        ...(filters?.model ? { model: filters.model } : {})
       })
       setLogs(rows)
       if (rows.length === 0) {
@@ -134,15 +145,36 @@ function HttpLogSettings(): React.JSX.Element {
     }
   }
 
+  /** 当前筛选参数 */
+  const currentFilters = useMemo(() => ({
+    sessionId: filterSessionId || undefined,
+    provider: filterProvider || undefined,
+    model: filterModel || undefined
+  }), [filterSessionId, filterProvider, filterModel])
+
+  /** 从已加载日志中提取去重的模型列表（用于筛选下拉） */
+  const modelOptions = useMemo(() => {
+    const set = new Set<string>()
+    logs.forEach((l) => set.add(l.model))
+    return Array.from(set).sort()
+  }, [logs])
+
   useEffect(() => {
     loadSessions()
+    loadProviders()
     loadLogs()
   }, [])
 
   /** 切换筛选条件时重新加载日志 */
   useEffect(() => {
-    loadLogs(filterSessionId || undefined)
-  }, [filterSessionId])
+    loadLogs(currentFilters)
+  }, [filterSessionId, filterProvider])
+
+  /** 切换模型筛选时在前端过滤（模型列表从日志中提取，无需重新请求） */
+  // 注意：model 筛选也走后端，保持一致性
+  useEffect(() => {
+    loadLogs(currentFilters)
+  }, [filterModel])
 
   useEffect(() => {
     if (selectedLogId) {
@@ -160,7 +192,7 @@ function HttpLogSettings(): React.JSX.Element {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => loadLogs(filterSessionId || undefined)}
+              onClick={() => loadLogs(currentFilters)}
               disabled={loadingList}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
@@ -177,17 +209,36 @@ function HttpLogSettings(): React.JSX.Element {
             </button>
           </div>
         </div>
-        {/* 会话筛选 */}
+        {/* 筛选条件 */}
         <div className="flex items-center gap-2">
-          <label className="text-[11px] text-text-tertiary flex-shrink-0">{t('settings.filterBySession')}</label>
           <select
             value={filterSessionId}
             onChange={(e) => setFilterSessionId(e.target.value)}
-            className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[160px]"
           >
             <option value="">{t('settings.allSessions')}</option>
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>
+            ))}
+          </select>
+          <select
+            value={filterProvider}
+            onChange={(e) => { setFilterProvider(e.target.value); setFilterModel('') }}
+            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[140px]"
+          >
+            <option value="">{t('settings.allProviders')}</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={filterModel}
+            onChange={(e) => setFilterModel(e.target.value)}
+            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[180px]"
+          >
+            <option value="">{t('settings.allModels')}</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>{m}</option>
             ))}
           </select>
         </div>
