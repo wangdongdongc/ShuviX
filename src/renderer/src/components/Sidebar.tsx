@@ -44,7 +44,17 @@ export function Sidebar(): React.JSX.Element {
     return map
   }, [sessions])
 
-  const showGroups = grouped.size > 1
+  // 对分组排序：项目按名称升序，临时对话始终放最后
+  const sortedGroups = useMemo(() => {
+    const entries = Array.from(grouped.entries())
+    return entries.sort(([keyA], [keyB]) => {
+      if (keyA === TEMP_GROUP_KEY) return 1
+      if (keyB === TEMP_GROUP_KEY) return -1
+      const nameA = (projectNames[keyA] || '').toLowerCase()
+      const nameB = (projectNames[keyB] || '').toLowerCase()
+      return nameA.localeCompare(nameB, 'zh-CN')
+    })
+  }, [grouped, projectNames])
 
   /** 在指定项目下创建新会话 */
   const handleNewChat = async (projectId?: string | null): Promise<void> => {
@@ -167,22 +177,26 @@ export function Sidebar(): React.JSX.Element {
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             点击上方按钮新建项目
           </div>
-        ) : showGroups ? (
-          /* 按项目分组展示 */
-          Array.from(grouped.entries()).map(([groupKey, groupSessions]) => {
+        ) : (
+          /* 按项目分组展示（项目按名称排序，临时对话始终最后） */
+          sortedGroups.map(([groupKey, groupSessions]) => {
             const collapsed = collapsedGroups.has(groupKey)
             const isTemp = groupKey === TEMP_GROUP_KEY
             const groupLabel = isTemp ? '临时对话' : (projectNames[groupKey] || '未命名项目')
             return (
-              <div key={groupKey} className="mb-1">
-                <div className="flex items-center w-full px-2 py-2 text-xs text-text-secondary group/header">
+              <div key={groupKey} className="mb-2">
+                <div className={`flex items-center w-full px-2 py-1.5 rounded-md text-xs group/header ${
+                  isTemp
+                    ? 'bg-bg-tertiary/30 text-text-tertiary border-l-2 border-border-secondary'
+                    : 'bg-bg-tertiary/50 text-text-primary border-l-2 border-accent/60'
+                }`}>
                   <button
                     onClick={() => toggleGroup(groupKey)}
                     className="flex items-center gap-1.5 flex-1 min-w-0 hover:text-text-primary transition-colors"
                   >
                     {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    <FolderOpen size={12} />
-                    <span className="truncate font-semibold">{groupLabel}</span>
+                    <FolderOpen size={isTemp ? 12 : 13} className={isTemp ? 'text-text-tertiary' : 'text-accent/70'} />
+                    <span className={`truncate ${isTemp ? 'font-normal' : 'font-semibold'}`}>{groupLabel}</span>
                     <span className="ml-1 text-[10px] text-text-tertiary font-normal">{groupSessions.length}</span>
                   </button>
                   {/* 项目操作按钮 */}
@@ -210,13 +224,17 @@ export function Sidebar(): React.JSX.Element {
                     )}
                   </div>
                 </div>
-                {!collapsed && groupSessions.map(renderSessionItem)}
+                {!collapsed && (
+                  <div className={isTemp
+                    ? 'ml-1.5 border-l border-border-secondary/30 pl-1'
+                    : 'ml-1.5 border-l border-border-secondary/50 pl-1'
+                  }>
+                    {groupSessions.map(renderSessionItem)}
+                  </div>
+                )}
               </div>
             )
           })
-        ) : (
-          /* 不分组，平铺展示 */
-          sessions.map(renderSessionItem)
         )}
       </div>
 
