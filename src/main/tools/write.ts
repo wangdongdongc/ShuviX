@@ -8,7 +8,7 @@ import { dirname } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
-import { resolveProjectConfig, type ToolContext } from './types'
+import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
 
 const WriteParamsSchema = Type.Object({
@@ -30,11 +30,19 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       params: { path: string; content: string },
       signal?: AbortSignal
     ) => {
-      const { workingDirectory } = resolveProjectConfig(ctx)
-      const absolutePath = resolveToCwd(params.path, workingDirectory)
+      const config = resolveProjectConfig(ctx)
+      const absolutePath = resolveToCwd(params.path, config.workingDirectory)
       const dir = dirname(absolutePath)
       
       console.log(`[Tool: write] ${absolutePath}`)
+
+      // 沙箱模式：路径越界检查
+      if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
+        return {
+          content: [{ type: 'text' as const, text: t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }) }],
+          details: undefined
+        }
+      }
 
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
         (resolve, reject) => {

@@ -86,6 +86,10 @@
     "running": "执行中...",
     "done": "完成",
     "error": "出错",
+    "pendingApproval": "等待确认",
+    "allow": "允许执行",
+    "deny": "拒绝",
+    "sandboxHint": "沙箱模式：bash 命令需确认后执行",
     "params": "参数",
     "result": "结果"
   },
@@ -113,7 +117,9 @@
     "docker": "Docker 隔离",
     "dockerImage": "Docker 镜像",
     "dockerNotFound": "未检测到 Docker，请先安装并启动 Docker Desktop",
-    "dockerHint": "开启后 Bash 命令将在 Docker 容器内隔离执行，项目路径会挂载到容器内"
+    "dockerHint": "开启后 Bash 命令将在 Docker 容器内隔离执行，项目路径会挂载到容器内",
+    "sandbox": "沙箱模式",
+    "sandboxHint": "开启后文件工具禁止访问工作区外的文件，Bash 命令需逐条确认后执行"
   },
 
   "settings": {
@@ -215,6 +221,8 @@
     "paramLimit": "读取的最大行数，与 offset 配合使用",
     "paramCommand": "要执行的 shell 命令。支持管道、重定向等 bash 特性。避免需要交互输入的命令。",
     "paramTimeout": "命令超时时间（秒），默认 {{default}}s。长时间运行的命令建议加大此值。",
-    "paramTimezone": "时区，如 Asia/Shanghai、America/New_York。留空使用系统默认时区"
+    "paramTimezone": "时区，如 Asia/Shanghai、America/New_York。留空使用系统默认时区",
+    "sandboxBlocked": "沙箱模式：禁止访问工作区外的路径 {{path}}。工作区: {{workspace}}",
+    "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行"
   }
 }

@@ -35,4 +35,10 @@ export function registerAgentHandlers(): void {
     agentService.setThinkingLevel(params.sessionId, params.level)
     return { success: true }
   })
+
+  /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
+  ipcMain.handle('agent:approveToolCall', (_event, params: { toolCallId: string; approved: boolean }) => {
+    agentService.approveToolCall(params.toolCallId, params.approved)
+    return { success: true }
+  })
 }

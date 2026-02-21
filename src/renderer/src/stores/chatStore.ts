@@ -17,7 +17,7 @@ export interface ToolExecution {
   toolCallId: string
   toolName: string
   args: any
-  status: 'running' | 'done' | 'error'
+  status: 'running' | 'done' | 'error' | 'pending_approval'
   result?: string
   messageId?: string
 }

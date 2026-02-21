@@ -11,6 +11,8 @@ export interface Project {
   dockerEnabled: number
   /** Docker 镜像名 */
   dockerImage: string
+  /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
+  sandboxEnabled: number
   /** JSON 扩展字段（预留） */
   settings: string
   createdAt: number
@@ -24,6 +26,7 @@ export interface ProjectCreateParams {
   systemPrompt?: string
   dockerEnabled?: boolean
   dockerImage?: string
+  sandboxEnabled?: boolean
 }
 
 /** IPC: 更新项目参数 */
@@ -34,6 +37,7 @@ export interface ProjectUpdateParams {
   systemPrompt?: string
   dockerEnabled?: boolean
   dockerImage?: string
+  sandboxEnabled?: boolean
 }
 
 /** IPC: 删除项目参数 */

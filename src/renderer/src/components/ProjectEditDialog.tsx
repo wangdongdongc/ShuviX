@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, Container } from 'lucide-react'
+import { X, FolderOpen, Container, ShieldCheck } from 'lucide-react'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -17,6 +17,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   const [systemPrompt, setSystemPrompt] = useState('')
   const [dockerEnabled, setDockerEnabled] = useState(false)
   const [dockerImage, setDockerImage] = useState('ubuntu:latest')
+  const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
@@ -33,6 +34,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
         setSystemPrompt(project.systemPrompt)
         setDockerEnabled(project.dockerEnabled === 1)
         setDockerImage(project.dockerImage)
+        setSandboxEnabled(project.sandboxEnabled === 1)
       }
       setDockerAvailable(dockerResult.available)
       setLoading(false)
@@ -66,7 +68,8 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
         path: path || undefined,
         systemPrompt,
         dockerEnabled,
-        dockerImage
+        dockerImage,
+        sandboxEnabled
       })
       onClose()
     } finally {
@@ -176,6 +179,31 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
               {dockerAvailable === false
                 ? t('projectForm.dockerNotFound')
                 : t('projectForm.dockerHint')}
+            </p>
+          </div>
+
+          {/* 沙箱模式 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <ShieldCheck size={12} />
+                {t('projectForm.sandbox')}
+              </label>
+              <button
+                onClick={() => setSandboxEnabled(!sandboxEnabled)}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.sandboxHint')}
             </p>
           </div>
         </div>

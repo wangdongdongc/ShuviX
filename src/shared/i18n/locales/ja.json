@@ -86,6 +86,10 @@
     "running": "実行中...",
     "done": "完了",
     "error": "エラー",
+    "pendingApproval": "承認待ち",
+    "allow": "許可",
+    "deny": "拒否",
+    "sandboxHint": "サンドボックス: bashコマンドは承認が必要です",
     "params": "パラメータ",
     "result": "結果"
   },
@@ -113,7 +117,9 @@
     "docker": "Docker隔離",
     "dockerImage": "Dockerイメージ",
     "dockerNotFound": "Dockerが検出されません。Docker Desktopをインストールして起動してください。",
-    "dockerHint": "有効にすると、Bashコマンドは隔離されたDockerコンテナ内で実行され、プロジェクトパスがマウントされます。"
+    "dockerHint": "有効にすると、Bashコマンドは隔離されたDockerコンテナ内で実行され、プロジェクトパスがマウントされます。",
+    "sandbox": "サンドボックスモード",
+    "sandboxHint": "有効にすると、ファイルツールはワークスペース外へのアクセスが制限され、Bashコマンドは実行前に承認が必要です。"
   },
 
   "settings": {
@@ -215,6 +221,8 @@
     "paramLimit": "読み込む最大行数、offsetと併用",
     "paramCommand": "実行するシェルコマンド。パイプ、リダイレクトなどのbash機能をサポート。対話型コマンドは避けてください。",
     "paramTimeout": "コマンドタイムアウト（秒）、デフォルト {{default}}秒。長時間実行コマンドには大きな値を設定してください。",
-    "paramTimezone": "タイムゾーン。例：Asia/Shanghai、America/New_York。空欄でシステムデフォルトを使用。"
+    "paramTimezone": "タイムゾーン。例：Asia/Shanghai、America/New_York。空欄でシステムデフォルトを使用。",
+    "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
+    "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました"
   }
 }

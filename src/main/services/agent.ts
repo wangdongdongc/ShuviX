@@ -8,7 +8,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { messageDao } from '../dao/messageDao'
-import { createCodingTools } from '../tools'
+import { createCodingTools, resolveProjectConfig } from '../tools'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
@@ -108,7 +108,7 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request'
   sessionId: string
   data?: string
   error?: string
@@ -118,6 +118,8 @@ export interface AgentStreamEvent {
   toolArgs?: any
   toolResult?: any
   toolIsError?: boolean
+  /** bash 工具在沙箱模式下需要用户审批 */
+  approvalRequired?: boolean
   // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
   usage?: {
     input: number; output: number; total: number
@@ -132,6 +134,8 @@ export interface AgentStreamEvent {
 export class AgentService {
   private agents = new Map<string, Agent>()
   private pendingLogIds = new Map<string, string[]>()
+  /** 待审批的 bash 命令 Promise resolver，key = toolCallId */
+  private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -222,6 +226,19 @@ export class AgentService {
         this.emitDockerEvent(sessionId, 'container_created', {
           containerId: containerId.slice(0, 12)
         })
+      },
+      requestApproval: (toolCallId: string, command: string) => {
+        return new Promise<boolean>((resolve) => {
+          this.pendingApprovals.set(toolCallId, { resolve })
+          console.log(`[Agent] 发送审批请求 toolCallId=${toolCallId} command=${command.slice(0, 50)}`)
+          this.sendToRenderer({
+            type: 'tool_approval_request',
+            sessionId,
+            toolCallId,
+            toolName: 'bash',
+            toolArgs: { command }
+          })
+        })
       }
     })
 
@@ -308,10 +325,24 @@ export class AgentService {
     }
   }
 
+  /** 响应工具审批请求（前端用户点击允许/拒绝后调用） */
+  approveToolCall(toolCallId: string, approved: boolean): void {
+    const pending = this.pendingApprovals.get(toolCallId)
+    if (pending) {
+      pending.resolve(approved)
+      this.pendingApprovals.delete(toolCallId)
+    }
+  }
+
   /** 中止指定 session 的生成 */
   abort(sessionId: string): void {
     console.log(`[Agent] 中止 session=${sessionId}`)
     this.agents.get(sessionId)?.abort()
+    // 取消所有待审批的 Promise
+    for (const [id, pending] of this.pendingApprovals) {
+      pending.resolve(false)
+      this.pendingApprovals.delete(id)
+    }
   }
 
   /** 切换指定 session 的模型 */
@@ -518,6 +549,7 @@ export class AgentService {
         break
       }
       case 'tool_execution_start': {
+        console.log(`[Agent] tool_execution_start toolCallId=${event.toolCallId} toolName=${event.toolName}`)
         // 持久化工具调用消息
         const sessionForTool = sessionDao.findById(sessionId)
         const toolCallMsg = messageService.add({
@@ -532,13 +564,23 @@ export class AgentService {
           }),
           model: sessionForTool?.model || ''
         })
+        // 检查 bash 工具是否需要沙箱审批（在 tool_start 事件中携带，避免需要额外事件）
+        let approvalRequired = false
+        if (event.toolName === 'bash') {
+          const config = resolveProjectConfig({ sessionId })
+          approvalRequired = config.sandboxEnabled
+          if (approvalRequired) {
+            console.log(`[Agent] bash 需要沙箱审批 toolCallId=${event.toolCallId}`)
+          }
+        }
         this.sendToRenderer({
           type: 'tool_start',
           sessionId,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           toolArgs: event.args,
-          data: toolCallMsg.id
+          data: toolCallMsg.id,
+          approvalRequired
         })
         break
       }

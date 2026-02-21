@@ -49,6 +49,7 @@ interface Project {
   systemPrompt: string
   dockerEnabled: number
   dockerImage: string
+  sandboxEnabled: number
   settings: string
   createdAt: number
   updatedAt: number
@@ -127,6 +128,8 @@ interface ShuviXAPI {
     abort: (sessionId: string) => Promise<{ success: boolean }>
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
+    /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
+    approveToolCall: (params: { toolCallId: string; approved: boolean }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }
   provider: {

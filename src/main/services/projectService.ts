@@ -29,6 +29,7 @@ export class ProjectService {
     systemPrompt?: string
     dockerEnabled?: boolean
     dockerImage?: string
+    sandboxEnabled?: boolean
   }): Project {
     const now = Date.now()
     const id = uuidv7()
@@ -39,6 +40,7 @@ export class ProjectService {
       systemPrompt: params.systemPrompt || '',
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || 'ubuntu:latest',
+      sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
       settings: '{}',
       createdAt: now,
       updatedAt: now
@@ -54,13 +56,15 @@ export class ProjectService {
     systemPrompt?: string
     dockerEnabled?: boolean
     dockerImage?: string
+    sandboxEnabled?: boolean
   }): void {
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.path !== undefined ? { path: params.path } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.dockerEnabled !== undefined ? { dockerEnabled: params.dockerEnabled ? 1 : 0 } : {}),
-      ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {})
+      ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
+      ...(params.sandboxEnabled !== undefined ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 } : {})
     })
   }
 

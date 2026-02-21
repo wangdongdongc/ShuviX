@@ -8,7 +8,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath } from './utils/pathUtils'
-import { resolveProjectConfig, type ToolContext } from './types'
+import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
 
 const ReadParamsSchema = Type.Object({
@@ -43,9 +43,17 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
     ) => {
       if (signal?.aborted) throw new Error(t('tool.aborted'))
 
-      const { workingDirectory } = resolveProjectConfig(ctx)
-      const absolutePath = resolveReadPath(params.path, workingDirectory)
+      const config = resolveProjectConfig(ctx)
+      const absolutePath = resolveReadPath(params.path, config.workingDirectory)
       console.log(`[Tool: read] ${absolutePath}`)
+
+      // 沙箱模式：路径越界检查
+      if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
+        return {
+          content: [{ type: 'text' as const, text: t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }) }],
+          details: undefined
+        }
+      }
 
       try {
         // 获取文件信息

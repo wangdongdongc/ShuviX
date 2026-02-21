@@ -109,13 +109,24 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
       'Execute a bash command in the working directory. Use this for running shell commands, scripts, installing packages, etc. The command runs in a bash shell with pipe and redirect support.',
     parameters: BashParamsSchema,
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       params: { command: string; timeout?: number },
       signal?: AbortSignal
     ) => {
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
       const config = resolveProjectConfig(ctx)
       const useDocker = config.dockerEnabled && !!config.dockerImage
+
+      // 沙箱模式：bash 命令需用户确认
+      if (config.sandboxEnabled && ctx.requestApproval) {
+        const approved = await ctx.requestApproval(toolCallId, params.command)
+        if (!approved) {
+          return {
+            content: [{ type: 'text' as const, text: t('tool.sandboxBashDenied') }],
+            details: undefined
+          }
+        }
+      }
 
       try {
         let result: { stdout: string; stderr: string; exitCode: number }

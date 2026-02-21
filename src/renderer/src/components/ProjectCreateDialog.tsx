@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, Container } from 'lucide-react'
+import { X, FolderOpen, Container, ShieldCheck } from 'lucide-react'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -18,6 +18,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [systemPrompt, setSystemPrompt] = useState('')
   const [dockerEnabled, setDockerEnabled] = useState(false)
   const [dockerImage, setDockerImage] = useState('ubuntu:latest')
+  const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
 
@@ -60,7 +61,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         path: path.trim(),
         systemPrompt,
         dockerEnabled,
-        dockerImage
+        dockerImage,
+        sandboxEnabled
       })
       onCreated?.(project.id)
       onClose()
@@ -169,6 +171,31 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
               {dockerAvailable === false
                 ? t('projectForm.dockerNotFound')
                 : t('projectForm.dockerHint')}
+            </p>
+          </div>
+
+          {/* 沙箱模式 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <ShieldCheck size={12} />
+                {t('projectForm.sandbox')}
+              </label>
+              <button
+                onClick={() => setSandboxEnabled(!sandboxEnabled)}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.sandboxHint')}
             </p>
           </div>
         </div>

@@ -62,6 +62,10 @@ const api = {
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
       ipcRenderer.invoke('agent:setThinkingLevel', params),
 
+    /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
+    approveToolCall: (params: { toolCallId: string; approved: boolean }) =>
+      ipcRenderer.invoke('agent:approveToolCall', params),
+
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: any) => void) => {
       const handler = (_: any, event: any): void => callback(event)

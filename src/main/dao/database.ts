@@ -26,6 +26,16 @@ class DatabaseManager {
     this.db.pragma('journal_mode = WAL')
 
     this.initTables()
+    this.migrate()
+  }
+
+  /** 增量迁移 */
+  private migrate(): void {
+    // 为已有 projects 表添加 sandboxEnabled 列（新建表已包含该列）
+    const cols = this.db.pragma('table_info(projects)') as { name: string }[]
+    if (!cols.find((c) => c.name === 'sandboxEnabled')) {
+      this.db.exec("ALTER TABLE projects ADD COLUMN sandboxEnabled INTEGER NOT NULL DEFAULT 1")
+    }
   }
 
   /** 初始化数据库表 */
@@ -102,6 +112,7 @@ class DatabaseManager {
         systemPrompt TEXT NOT NULL DEFAULT '',
         dockerEnabled INTEGER NOT NULL DEFAULT 0,
         dockerImage TEXT NOT NULL DEFAULT 'ubuntu:latest',
+        sandboxEnabled INTEGER NOT NULL DEFAULT 1,
         settings TEXT NOT NULL DEFAULT '{}',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL

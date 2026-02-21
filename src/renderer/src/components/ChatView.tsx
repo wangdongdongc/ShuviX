@@ -78,7 +78,7 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
  */
 export function ChatView(): React.JSX.Element {
   const { t } = useTranslation()
-  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError } = useChatStore()
+  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError, toolExecutions } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
 
@@ -148,6 +148,18 @@ export function ChatView(): React.JSX.Element {
     await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
   }, [activeSessionId])
 
+  /** 沙箱审批：用户允许/拒绝 bash 命令执行 */
+  const handleToolApproval = useCallback(async (toolCallId: string, approved: boolean) => {
+    await window.api.agent.approveToolCall({ toolCallId, approved })
+    // 审批后立即将本地状态切为 running（允许）或 error（拒绝），避免 UI 停留在 pending
+    const store = useChatStore.getState()
+    if (activeSessionId) {
+      store.updateToolExecution(activeSessionId, toolCallId, {
+        status: approved ? 'running' : 'error'
+      })
+    }
+  }, [activeSessionId])
+
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -169,11 +181,15 @@ export function ChatView(): React.JSX.Element {
     }
 
     if (msg.type === 'tool_call') {
+      // 查找实时工具执行状态（流式期间有值，完成后回退到 running）
+      const liveExec = toolExecutions.find((te) => te.toolCallId === meta?.toolCallId)
       return (
         <ToolCallBlock
           toolName={meta?.toolName || '未知工具'}
+          toolCallId={meta?.toolCallId}
           args={meta?.args}
-          status="running"
+          status={liveExec?.status || 'running'}
+          onApproval={handleToolApproval}
         />
       )
     }
@@ -199,7 +215,7 @@ export function ChatView(): React.JSX.Element {
         onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
       />
     )
-  }, [handleRollback, handleRegenerate, lastAssistantTextId])
+  }, [handleRollback, handleRegenerate, handleToolApproval, lastAssistantTextId, toolExecutions])
 
   /** 流式内容 / 思考 / 加载指示器 / 错误提示（固定在列表底部） */
   const Footer = useCallback(() => {

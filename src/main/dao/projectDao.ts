@@ -34,7 +34,7 @@ export class ProjectDao {
   insert(project: Project): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         project.id,
@@ -43,6 +43,7 @@ export class ProjectDao {
         project.systemPrompt,
         project.dockerEnabled,
         project.dockerImage,
+        project.sandboxEnabled,
         project.settings,
         project.createdAt,
         project.updatedAt
@@ -50,7 +51,7 @@ export class ProjectDao {
   }
 
   /** 更新项目 */
-  update(id: string, fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'dockerEnabled' | 'dockerImage' | 'settings'>>): void {
+  update(id: string, fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'dockerEnabled' | 'dockerImage' | 'sandboxEnabled' | 'settings'>>): void {
     const sets: string[] = []
     const values: any[] = []
     if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name) }
@@ -58,6 +59,7 @@ export class ProjectDao {
     if (fields.systemPrompt !== undefined) { sets.push('systemPrompt = ?'); values.push(fields.systemPrompt) }
     if (fields.dockerEnabled !== undefined) { sets.push('dockerEnabled = ?'); values.push(fields.dockerEnabled) }
     if (fields.dockerImage !== undefined) { sets.push('dockerImage = ?'); values.push(fields.dockerImage) }
+    if (fields.sandboxEnabled !== undefined) { sets.push('sandboxEnabled = ?'); values.push(fields.sandboxEnabled) }
     if (fields.settings !== undefined) { sets.push('settings = ?'); values.push(fields.settings) }
     if (sets.length === 0) return
     sets.push('updatedAt = ?')
