@@ -147,6 +147,13 @@ ipcMain.handle('app:open-settings', () => {
   return { success: true }
 })
 
+// 用系统文件管理器打开指定文件夹
+ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
+  const { shell } = await import('electron')
+  await shell.openPath(folderPath)
+  return { success: true }
+})
+
 // 将 base64 图片写入临时文件并用系统默认应用打开
 ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
   const { shell } = await import('electron')

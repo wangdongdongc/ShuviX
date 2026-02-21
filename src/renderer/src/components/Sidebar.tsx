@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderOpen, FolderPlus } from 'lucide-react'
+import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus, ExternalLink } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SessionEditDialog } from './SessionEditDialog'
@@ -20,15 +20,21 @@ export function Sidebar(): React.JSX.Element {
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  // 项目名称缓存：projectId → name
+  // 项目名称/路径缓存
   const [projectNames, setProjectNames] = useState<Record<string, string>>({})
+  const [projectPaths, setProjectPaths] = useState<Record<string, string>>({})
 
-  // 异步加载项目名称
+  // 异步加载项目名称和路径
   useEffect(() => {
     window.api.project.list().then((projects) => {
-      const map: Record<string, string> = {}
-      for (const p of projects) { map[p.id] = p.name }
-      setProjectNames(map)
+      const nameMap: Record<string, string> = {}
+      const pathMap: Record<string, string> = {}
+      for (const p of projects) {
+        nameMap[p.id] = p.name
+        if (p.path) pathMap[p.id] = p.path
+      }
+      setProjectNames(nameMap)
+      setProjectPaths(pathMap)
     })
   }, [sessions, editingProjectId])
 
@@ -185,41 +191,52 @@ export function Sidebar(): React.JSX.Element {
             const groupLabel = isTemp ? '临时对话' : (projectNames[groupKey] || '未命名项目')
             return (
               <div key={groupKey} className="mb-2">
-                <div className={`flex items-center w-full px-2 py-1.5 rounded-md text-xs group/header ${
+                <div className={`flex items-center w-full px-2 py-2 rounded-md text-[13px] group/header ${
                   isTemp
                     ? 'bg-bg-tertiary/30 text-text-tertiary border-l-2 border-border-secondary'
                     : 'bg-bg-tertiary/50 text-text-primary border-l-2 border-accent/60'
                 }`}>
                   <button
                     onClick={() => toggleGroup(groupKey)}
-                    className="flex items-center gap-1.5 flex-1 min-w-0 hover:text-text-primary transition-colors"
+                    className="flex items-center gap-2 flex-1 min-w-0 hover:text-text-primary transition-colors"
                   >
-                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    <FolderOpen size={isTemp ? 12 : 13} className={isTemp ? 'text-text-tertiary' : 'text-accent/70'} />
+                    {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                     <span className={`truncate ${isTemp ? 'font-normal' : 'font-semibold'}`}>{groupLabel}</span>
-                    <span className="ml-1 text-[10px] text-text-tertiary font-normal">{groupSessions.length}</span>
                   </button>
                   {/* 项目操作按钮 */}
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-all">
+                  <div className="flex items-center gap-1 opacity-0 group-hover/header:opacity-100 transition-all">
                     {/* 新建对话 */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
                         handleNewChat(isTemp ? null : groupKey)
                       }}
-                      className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                      className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
                       title="新建对话"
                     >
-                      <MessageSquarePlus size={11} />
+                      <MessageSquarePlus size={13} />
                     </button>
+                    {/* 打开项目文件夹（仅有路径的项目显示） */}
+                    {!isTemp && projectPaths[groupKey] && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          window.api.app.openFolder(projectPaths[groupKey])
+                        }}
+                        className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                        title="打开项目文件夹"
+                      >
+                        <ExternalLink size={12} />
+                      </button>
+                    )}
                     {/* 编辑项目（临时对话组不显示） */}
                     {!isTemp && (
                       <button
                         onClick={() => setEditingProjectId(groupKey)}
-                        className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                        className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
                         title="编辑项目"
                       >
-                        <Pencil size={9} />
+                        <Pencil size={12} />
                       </button>
                     )}
                   </div>

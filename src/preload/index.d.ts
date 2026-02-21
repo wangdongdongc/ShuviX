@@ -114,6 +114,8 @@ interface ShiroBotAPI {
     openSettings: () => Promise<{ success: boolean }>
     /** 用系统默认应用打开 base64 图片 */
     openImage: (dataUrl: string) => Promise<{ success: boolean }>
+    /** 用系统文件管理器打开指定文件夹 */
+    openFolder: (folderPath: string) => Promise<{ success: boolean }>
     onSettingsChanged: (callback: () => void) => () => void
   }
   agent: {

@@ -33,6 +33,8 @@ const api = {
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
     /** 用系统默认应用打开 base64 图片 */
     openImage: (dataUrl: string) => ipcRenderer.invoke('app:open-image', dataUrl),
+    /** 用系统文件管理器打开指定文件夹 */
+    openFolder: (folderPath: string) => ipcRenderer.invoke('app:open-folder', folderPath),
     /** 监听设置变更（设置窗口关闭后主窗口收到通知） */ 
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
