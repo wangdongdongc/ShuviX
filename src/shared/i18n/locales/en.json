@@ -197,7 +197,7 @@
     "writeLabel": "Write File",
     "editLabel": "Edit File",
     "timeLabel": "Get Current Time",
-    "timeDesc": "Get the current system time, optionally with a specific timezone",
+    "timeDesc": "Get the current system time",
     "aborted": "Operation aborted",
     "writeSuccess": "Successfully wrote {{bytes}} bytes to {{path}}",
     "cmdFailed": "Command execution failed: {{message}}",
@@ -213,7 +213,7 @@
     "editNoChange": "Replacement produced no change: {{path}}",
     "editSuccess": "Successfully replaced text in {{path}}.",
     "currentTime": "Current time",
-    "currentTimeWithTz": "Current time ({{timezone}})",
+    "timezone": "Timezone",
     "paramPath": "File path to read (relative or absolute)",
     "paramWritePath": "File path to write (relative or absolute)",
     "paramWriteContent": "Content to write to the file",
@@ -221,7 +221,6 @@
     "paramLimit": "Maximum number of lines to read, used with offset",
     "paramCommand": "Shell command to execute. Supports pipes, redirects, and other bash features. Avoid interactive commands.",
     "paramTimeout": "Command timeout in seconds, default {{default}}s. Increase for long-running commands.",
-    "paramTimezone": "Timezone, e.g. Asia/Shanghai, America/New_York. Leave empty for system default.",
     "sandboxBlocked": "Sandbox: access denied to path outside workspace: {{path}}. Workspace: {{workspace}}",
     "sandboxBashDenied": "Sandbox: user denied execution of this command"
   }

@@ -4,7 +4,7 @@
  */
 
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { getCurrentTimeTool } from './getCurrentTime'
+import { nowTool } from './now'
 import { createBashTool } from './bash'
 import { createReadTool } from './read'
 import { createWriteTool } from './write'
@@ -18,7 +18,7 @@ import type { ToolContext } from './types'
 export function createCodingTools(ctx: ToolContext): AgentTool[] {
   // 使用 as any 绕过 AgentTool 泛型参数不兼容问题
   return [
-    getCurrentTimeTool as any,
+    nowTool as any,
     createBashTool(ctx) as any,
     createReadTool(ctx) as any,
     createWriteTool(ctx) as any,
@@ -26,6 +26,6 @@ export function createCodingTools(ctx: ToolContext): AgentTool[] {
   ]
 }
 
-export { createBashTool, createReadTool, createWriteTool, createEditTool, getCurrentTimeTool }
+export { createBashTool, createReadTool, createWriteTool, createEditTool, nowTool }
 export type { ToolContext, ProjectConfig } from './types'
 export { resolveProjectConfig } from './types'

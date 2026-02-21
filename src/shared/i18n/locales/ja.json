@@ -197,7 +197,7 @@
     "writeLabel": "ファイルを書き込む",
     "editLabel": "ファイルを編集",
     "timeLabel": "現在時刻を取得",
-    "timeDesc": "現在のシステム時刻を取得、タイムゾーン指定可能",
+    "timeDesc": "現在のシステム時刻を取得",
     "aborted": "操作が中止されました",
     "writeSuccess": "{{path}} に {{bytes}} バイトを書き込みました",
     "cmdFailed": "コマンド実行失敗: {{message}}",
@@ -213,7 +213,7 @@
     "editNoChange": "置換で変更なし: {{path}}",
     "editSuccess": "{{path}} のテキストを正常に置換しました。",
     "currentTime": "現在時刻",
-    "currentTimeWithTz": "現在時刻（{{timezone}}）",
+    "timezone": "タイムゾーン",
     "paramPath": "読み込むファイルパス（相対または絶対パス）",
     "paramWritePath": "書き込むファイルパス（相対または絶対パス）",
     "paramWriteContent": "ファイルに書き込む内容",
@@ -221,7 +221,6 @@
     "paramLimit": "読み込む最大行数、offsetと併用",
     "paramCommand": "実行するシェルコマンド。パイプ、リダイレクトなどのbash機能をサポート。対話型コマンドは避けてください。",
     "paramTimeout": "コマンドタイムアウト（秒）、デフォルト {{default}}秒。長時間実行コマンドには大きな値を設定してください。",
-    "paramTimezone": "タイムゾーン。例：Asia/Shanghai、America/New_York。空欄でシステムデフォルトを使用。",
     "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
     "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました"
   }
