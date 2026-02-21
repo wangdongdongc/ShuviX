@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react'
+import i18next from 'i18next'
 import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { Sidebar } from './components/Sidebar'
@@ -45,6 +46,12 @@ function App(): React.JSX.Element {
       // 加载通用设置
       const settings = await window.api.settings.getAll()
       useSettingsStore.getState().loadSettings(settings)
+
+      // 同步前端 i18n 语言（优先用户设置，否则保持检测值）
+      const savedLang = settings['general.language']
+      if (savedLang && savedLang !== i18next.language) {
+        i18next.changeLanguage(savedLang)
+      }
 
       // 加载提供商列表和可用模型
       const allProviders = await window.api.provider.listAll()
@@ -224,7 +231,7 @@ function App(): React.JSX.Element {
         }
 
         case 'error':
-          store.setError(event.error || '未知错误')
+          store.setError(event.error || 'Unknown error')
           store.setIsStreaming(sid, false)
           store.clearStreamingContent(sid)
           store.clearToolExecutions(sid)
@@ -247,6 +254,11 @@ function App(): React.JSX.Element {
     const unsubscribe = window.api.app.onSettingsChanged(async () => {
       const settings = await window.api.settings.getAll()
       useSettingsStore.getState().loadSettings(settings)
+      // 同步前端 i18n 语言
+      const savedLang = settings['general.language']
+      if (savedLang && savedLang !== i18next.language) {
+        i18next.changeLanguage(savedLang)
+      }
       const allProviders = await window.api.provider.listAll()
       useSettingsStore.getState().setProviders(allProviders)
       const availableModels = await window.api.provider.listAvailableModels()

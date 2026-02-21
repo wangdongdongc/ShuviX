@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { settingsService } from '../services/settingsService'
+import { changeLanguage } from '../i18n'
 import type { SettingsSetParams } from '../types'
 
 /**
@@ -20,6 +21,10 @@ export function registerSettingsHandlers(): void {
   /** 保存设置，并广播通知所有窗口刷新 */
   ipcMain.handle('settings:set', (_event, params: SettingsSetParams) => {
     settingsService.set(params.key, params.value)
+    // 语言变更时同步更新主进程 i18n
+    if (params.key === 'general.language') {
+      changeLanguage(params.value)
+    }
     // 通知所有窗口设置已变更（主窗口监听后会刷新主题/字体等）
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send('app:settings-changed')

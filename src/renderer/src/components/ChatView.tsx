@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { MessageSquarePlus, Sparkles, Container, AlertCircle, Folder } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
@@ -75,6 +76,7 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
  * 使用 react-virtuoso 虚拟滚动，仅渲染可视区域内的消息
  */
 export function ChatView(): React.JSX.Element {
+  const { t } = useTranslation()
   const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
@@ -109,7 +111,7 @@ export function ChatView(): React.JSX.Element {
   /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
   const handleRollback = useCallback(async (messageId: string) => {
     if (!activeSessionId) return
-    if (!window.confirm('回退到此处将删除之后的所有消息，是否继续？')) return
+    if (!window.confirm(t('chat.rollbackConfirm'))) return
     await window.api.message.rollback({ sessionId: activeSessionId, messageId })
     // 重新拉取消息 + 重建 Agent
     const msgs = await window.api.message.list(activeSessionId)
@@ -160,7 +162,7 @@ export function ChatView(): React.JSX.Element {
       return (
         <div className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
           <Container size={12} />
-          <span>{isCreate ? '容器已创建' : '容器已销毁'}</span>
+          <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
         </div>
       )
     }
@@ -213,7 +215,7 @@ export function ChatView(): React.JSX.Element {
             <details open className="group">
               <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
                 <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                <span className="animate-pulse">思考中…</span>
+                <span className="animate-pulse">{t('chat.thinking')}</span>
               </summary>
               <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                 {thinking}
@@ -250,13 +252,13 @@ export function ChatView(): React.JSX.Element {
           <div className="mx-4 my-2 flex items-start gap-2.5 px-3.5 py-2.5 rounded-lg bg-error/10 border border-error/20">
             <AlertCircle size={15} className="text-error flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-error font-medium mb-0.5">生成失败</p>
+              <p className="text-xs text-error font-medium mb-0.5">{t('chat.genFailed')}</p>
               <p className="text-[11px] text-error/80 break-words whitespace-pre-wrap">{err}</p>
             </div>
             <button
               onClick={() => setError(null)}
               className="text-error/50 hover:text-error transition-colors flex-shrink-0"
-              title="关闭"
+              title={t('common.close')}
             >
               ×
             </button>
@@ -299,17 +301,17 @@ export function ChatView(): React.JSX.Element {
               <Sparkles size={32} className="text-accent" />
             </div>
             <h2 className="text-xl font-semibold text-text-primary mb-2">
-              欢迎使用 ShiroBot
+              {t('chat.welcomeTitle')}
             </h2>
             <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-              一个基于多模型的 AI 智能体助手，支持自然对话和扩展能力。
+              {t('chat.welcomeDesc')}
             </p>
             <button
               onClick={handleNewChat}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
             >
               <MessageSquarePlus size={16} />
-              开始新对话
+              {t('chat.startNewChat')}
             </button>
           </div>
         </div>
@@ -324,7 +326,7 @@ export function ChatView(): React.JSX.Element {
                   <Sparkles size={24} className="text-text-tertiary" />
                 </div>
                 <p className="text-sm text-text-secondary">
-                  发送一条消息开始对话
+                  {t('chat.emptyHint')}
                 </p>
               </div>
             </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container } from 'lucide-react'
 
 interface ProjectCreateDialogProps {
@@ -11,6 +12,7 @@ interface ProjectCreateDialogProps {
  * 新建项目弹窗 — 表单内容与编辑项目保持一致
  */
 export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
@@ -72,7 +74,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw]">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
-          <h2 className="text-sm font-semibold text-text-primary">新建项目</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>
           <button
             onClick={onClose}
             className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
@@ -85,12 +87,12 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         <div className="px-5 py-4 space-y-4">
           {/* 项目名称 */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">项目名称</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.name')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors"
-              placeholder="项目名称"
+              placeholder={t('projectForm.namePlaceholder')}
             />
           </div>
 
@@ -98,36 +100,36 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
           <div>
             <label className="block text-xs font-medium text-text-secondary mb-1.5">
               <FolderOpen size={12} className="inline mr-1 -mt-0.5" />
-              项目路径
+              {t('projectForm.path')}
             </label>
             <div className="flex gap-2">
               <input
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 className="flex-1 bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
-                placeholder="/path/to/project"
+                placeholder={t('projectForm.pathPlaceholder')}
               />
               <button
                 onClick={handleSelectFolder}
                 className="px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors whitespace-nowrap"
               >
-                选择…
+                {t('projectForm.selectFolder')}
               </button>
             </div>
             <p className="text-[10px] text-text-tertiary mt-1">
-              工具执行时的工作目录，所有相对路径基于此目录解析
+              {t('projectForm.pathHint')}
             </p>
           </div>
 
           {/* 项目级 System Prompt */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">项目提示词</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.prompt')}</label>
             <textarea
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
               rows={3}
               className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none"
-              placeholder="项目级提示词（与全局提示词同时生效）"
+              placeholder={t('projectForm.promptPlaceholder')}
             />
           </div>
 
@@ -136,7 +138,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
                 <Container size={12} />
-                Docker 隔离
+                {t('projectForm.docker')}
               </label>
               <button
                 onClick={() => dockerAvailable && setDockerEnabled(!dockerEnabled)}
@@ -154,7 +156,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             </div>
             {dockerEnabled && (
               <div className="mt-3">
-                <label className="block text-[10px] text-text-tertiary mb-1">Docker 镜像</label>
+                <label className="block text-[10px] text-text-tertiary mb-1">{t('projectForm.dockerImage')}</label>
                 <input
                   value={dockerImage}
                   onChange={(e) => setDockerImage(e.target.value)}
@@ -165,8 +167,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             )}
             <p className="text-[10px] text-text-tertiary mt-2">
               {dockerAvailable === false
-                ? '未检测到 Docker，请先安装并启动 Docker Desktop'
-                : '开启后 Bash 命令将在 Docker 容器内隔离执行，项目路径会挂载到容器内'}
+                ? t('projectForm.dockerNotFound')
+                : t('projectForm.dockerHint')}
             </p>
           </div>
         </div>
@@ -177,14 +179,14 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             onClick={onClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleCreate}
             disabled={saving || !path.trim()}
             className="px-4 py-1.5 rounded-lg text-xs bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50"
           >
-            {saving ? '创建中…' : '创建'}
+            {saving ? t('common.creating') : t('common.create')}
           </button>
         </div>
       </div>

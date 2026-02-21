@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { X, FolderOpen } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import type { Session } from '../stores/chatStore'
@@ -17,6 +18,7 @@ interface SessionEditDialogProps {
  * 会话编辑弹窗 — 编辑标题、所属项目
  */
 export function SessionEditDialog({ session, onClose }: SessionEditDialogProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [title, setTitle] = useState(session.title)
   const [projectId, setProjectId] = useState<string | null>(session.projectId)
   const [projects, setProjects] = useState<ProjectOption[]>([])
@@ -67,7 +69,7 @@ export function SessionEditDialog({ session, onClose }: SessionEditDialogProps):
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw]">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
-          <h2 className="text-sm font-semibold text-text-primary">编辑会话</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t('sessionEdit.title')}</h2>
           <button
             onClick={onClose}
             className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
@@ -80,12 +82,12 @@ export function SessionEditDialog({ session, onClose }: SessionEditDialogProps):
         <div className="px-5 py-4 space-y-4">
           {/* 标题 */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">标题</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('sessionEdit.sessionTitle')}</label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors"
-              placeholder="会话标题"
+              placeholder={t('sessionEdit.sessionTitlePlaceholder')}
             />
           </div>
 
@@ -93,20 +95,20 @@ export function SessionEditDialog({ session, onClose }: SessionEditDialogProps):
           <div>
             <label className="block text-xs font-medium text-text-secondary mb-1.5">
               <FolderOpen size={12} className="inline mr-1 -mt-0.5" />
-              所属项目
+              {t('sessionEdit.project')}
             </label>
             <select
               value={projectId || ''}
               onChange={(e) => setProjectId(e.target.value || null)}
               className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors"
             >
-              <option value="">无（临时对话）</option>
+              <option value="">{t('sessionEdit.noProject')}</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
             <p className="text-[10px] text-text-tertiary mt-1">
-              切换项目后，会话将使用该项目的工作目录和配置
+              {t('sessionEdit.projectHint')}
             </p>
           </div>
         </div>
@@ -117,14 +119,14 @@ export function SessionEditDialog({ session, onClose }: SessionEditDialogProps):
             onClick={onClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleSave}
             disabled={saving}
             className="px-4 py-1.5 rounded-lg text-xs bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50"
           >
-            {saving ? '保存中…' : '保存'}
+            {saving ? t('common.saving') : t('common.save')}
           </button>
         </div>
       </div>

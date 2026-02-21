@@ -9,6 +9,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { resolveProjectConfig, type ToolContext } from './types'
+import { t } from '../i18n'
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -20,9 +21,9 @@ import {
 } from './utils/editDiff'
 
 const EditParamsSchema = Type.Object({
-  path: Type.String({ description: '要编辑的文件路径（相对或绝对路径）' }),
-  oldText: Type.String({ description: '要查找并替换的精确文本（必须完全匹配，包括空白字符）' }),
-  newText: Type.String({ description: '替换后的新文本' })
+  path: Type.String({ description: t('tool.paramWritePath') }),
+  oldText: Type.String({ description: 'Exact text to find and replace (must match exactly, including whitespace)' }),
+  newText: Type.String({ description: 'New text to replace with' })
 })
 
 /** 创建 edit 工具实例 */
@@ -30,7 +31,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
 
   return {
     name: 'edit',
-    label: '编辑文件',
+    label: t('tool.editLabel'),
     description:
       'Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.',
     parameters: EditParamsSchema,
@@ -48,7 +49,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
         details: { diff: string; firstChangedLine?: number } | undefined
       }>((resolve, reject) => {
         if (signal?.aborted) {
-          reject(new Error('操作已中止'))
+          reject(new Error(t('tool.aborted')))
           return
         }
 
@@ -56,7 +57,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
 
         const onAbort = (): void => {
           aborted = true
-          reject(new Error('操作已中止'))
+          reject(new Error(t('tool.aborted')))
         }
 
         if (signal) {
@@ -70,7 +71,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               await fsAccess(absolutePath, constants.R_OK | constants.W_OK)
             } catch {
               if (signal) signal.removeEventListener('abort', onAbort)
-              reject(new Error(`文件不存在: ${params.path}`))
+              reject(new Error(t('tool.fileNotFound', { path: params.path })))
               return
             }
 
@@ -96,7 +97,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               if (signal) signal.removeEventListener('abort', onAbort)
               reject(
                 new Error(
-                  `在 ${params.path} 中未找到匹配文本。oldText 必须精确匹配，包括所有空白和换行。`
+                  t('tool.editNoMatch', { path: params.path })
                 )
               )
               return
@@ -111,7 +112,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               if (signal) signal.removeEventListener('abort', onAbort)
               reject(
                 new Error(
-                  `在 ${params.path} 中找到 ${occurrences} 处匹配。文本必须唯一，请提供更多上下文。`
+                  t('tool.editMultiMatch', { path: params.path, count: occurrences })
                 )
               )
               return
@@ -129,7 +130,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
             // 验证替换是否有效
             if (baseContent === newContent) {
               if (signal) signal.removeEventListener('abort', onAbort)
-              reject(new Error(`替换未产生变化: ${params.path}`))
+              reject(new Error(t('tool.editNoChange', { path: params.path })))
               return
             }
 
@@ -145,7 +146,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               content: [
                 {
                   type: 'text',
-                  text: `成功替换 ${params.path} 中的文本。`
+                  text: t('tool.editSuccess', { path: params.path })
                 }
               ],
               details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine }

@@ -9,10 +9,11 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { resolveProjectConfig, type ToolContext } from './types'
+import { t } from '../i18n'
 
 const WriteParamsSchema = Type.Object({
-  path: Type.String({ description: '要写入的文件路径（相对或绝对路径）' }),
-  content: Type.String({ description: '要写入的文件内容' })
+  path: Type.String({ description: t('tool.paramWritePath') }),
+  content: Type.String({ description: t('tool.paramWriteContent') })
 })
 
 /** 创建 write 工具实例 */
@@ -20,7 +21,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
 
   return {
     name: 'write',
-    label: '写入文件',
+    label: t('tool.writeLabel'),
     description:
       'Write content to a file. Creates the file if it doesn\'t exist, overwrites if it does. Automatically creates parent directories.',
     parameters: WriteParamsSchema,
@@ -38,7 +39,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
         (resolve, reject) => {
           if (signal?.aborted) {
-            reject(new Error('操作已中止'))
+            reject(new Error(t('tool.aborted')))
             return
           }
 
@@ -46,7 +47,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
 
           const onAbort = (): void => {
             aborted = true
-            reject(new Error('操作已中止'))
+            reject(new Error(t('tool.aborted')))
           }
 
           if (signal) {
@@ -64,7 +65,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
               if (signal) signal.removeEventListener('abort', onAbort)
 
               resolve({
-                content: [{ type: 'text', text: `成功写入 ${params.content.length} 字节到 ${params.path}` }],
+                content: [{ type: 'text', text: t('tool.writeSuccess', { bytes: params.content.length, path: params.path }) }],
                 details: undefined
               })
             } catch (error: any) {

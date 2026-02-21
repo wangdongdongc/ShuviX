@@ -4,6 +4,7 @@ import { messageDao } from '../dao/messageDao'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
+import { t } from '../i18n'
 import type { Session } from '../types'
 
 /**
@@ -32,7 +33,7 @@ export class SessionService {
 
     const session: Session = {
       id,
-      title: params?.title || '新对话',
+      title: params?.title || t('agent.defaultTitle'),
       projectId: params?.projectId ?? null,
       provider: params?.provider || this.getDefaultProvider(),
       model: params?.model || this.getDefaultModel(),

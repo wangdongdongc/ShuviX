@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Send, Square, ChevronDown, Brain, ImagePlus, X } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -17,7 +18,8 @@ function formatTokenCount(n: number): string {
  * 支持 Shift+Enter 换行，Enter 发送
  */
 export function InputArea(): React.JSX.Element {
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage, clearPendingImages } = useChatStore()
+  const { t } = useTranslation()
+  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage } = useChatStore()
   const {
     availableModels,
     providers,
@@ -121,7 +123,7 @@ export function InputArea(): React.JSX.Element {
     store.setError(null)
 
     // 构造消息内容：文本 + 图片标记
-    const contentText = text || '(图片)'
+    const contentText = text || t('input.imageOnly')
     // 图片信息存入 metadata 用于消息气泡渲染
     const metadata = images.length > 0
       ? JSON.stringify({ images: images.map((img) => ({ mimeType: img.mimeType, preview: img.preview })) })
@@ -250,11 +252,11 @@ export function InputArea(): React.JSX.Element {
 
   /** 思考深度选项 */
   const thinkingLevels = [
-    { value: 'off', label: '关闭' },
-    { value: 'low', label: '浅思考' },
-    { value: 'medium', label: '中等' },
-    { value: 'high', label: '深度' },
-    { value: 'xhigh', label: '极深' }
+    { value: 'off', label: t('input.thinkOff') },
+    { value: 'low', label: t('input.thinkLow') },
+    { value: 'medium', label: t('input.thinkMedium') },
+    { value: 'high', label: t('input.thinkHigh') },
+    { value: 'xhigh', label: t('input.thinkXHigh') }
   ]
 
   /** 切换思考深度 */
@@ -361,7 +363,7 @@ export function InputArea(): React.JSX.Element {
                 <button
                   onClick={togglePicker}
                   className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
-                  title="切换提供商与模型"
+                  title={t('input.switchModel')}
                 >
                   <span className="max-w-[120px] truncate">{activeModel}</span>
                   <ChevronDown size={11} />
@@ -370,13 +372,13 @@ export function InputArea(): React.JSX.Element {
                 {pickerOpen && (
                   <div className="absolute left-0 bottom-8 w-[280px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
                     <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary flex items-center justify-between">
-                      <span>{pickerStep === 'provider' ? '选择提供商' : '选择模型'}</span>
+                      <span>{pickerStep === 'provider' ? t('input.selectProvider') : t('input.selectModel')}</span>
                       {pickerStep === 'model' && (
                         <button
                           onClick={() => setPickerStep('provider')}
                           className="text-text-secondary hover:text-text-primary"
                         >
-                          返回
+                          {t('common.back')}
                         </button>
                       )}
                     </div>
@@ -421,7 +423,7 @@ export function InputArea(): React.JSX.Element {
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
-                  title="上传图片"
+                  title={t('input.uploadImage')}
                 >
                   <ImagePlus size={11} />
                 </button>
@@ -443,7 +445,7 @@ export function InputArea(): React.JSX.Element {
               {maxContextTokens > 0 && (
                 <span
                   className="h-6 inline-flex items-center px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-tertiary select-none"
-                  title={`上下文用量：${usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-'} / ${maxContextTokens.toLocaleString()} tokens`}
+                  title={t('input.contextUsage', { used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-', max: maxContextTokens.toLocaleString() })}
                 >
                   {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
                   {' / '}
@@ -461,15 +463,15 @@ export function InputArea(): React.JSX.Element {
                         ? 'border-purple-500/50 text-purple-400'
                         : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
                     }`}
-                    title="思考深度"
+                    title={t('input.thinkingDepth')}
                   >
                     <Brain size={11} />
-                    <span>{thinkingLevels.find((l) => l.value === thinkingLevel)?.label || '关闭'}</span>
+                    <span>{thinkingLevels.find((l) => l.value === thinkingLevel)?.label || t('input.thinkOff')}</span>
                   </button>
 
                   {thinkingPickerOpen && (
                     <div className="absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">思考深度</div>
+                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.thinkingDepth')}</div>
                       <div className="py-1">
                         {thinkingLevels.map((l) => (
                           <button
@@ -495,7 +497,7 @@ export function InputArea(): React.JSX.Element {
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={activeSessionId ? (modelSupportsVision ? '输入消息，可拖放或粘贴图片...' : '输入消息... (Shift+Enter 换行)') : '请先创建或选择一个对话'}
+              placeholder={activeSessionId ? (modelSupportsVision ? t('input.placeholderVision') : t('input.placeholder')) : t('input.placeholderNoSession')}
               disabled={!activeSessionId}
               rows={1}
               className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-3 pb-9 resize-none outline-none max-h-[200px] disabled:opacity-50"
@@ -505,7 +507,7 @@ export function InputArea(): React.JSX.Element {
               <button
                 onClick={handleAbort}
                 className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
-                title="停止生成"
+                title={t('input.stopGen')}
               >
                 <Square size={16} fill="currentColor" />
               </button>
@@ -518,7 +520,7 @@ export function InputArea(): React.JSX.Element {
                     ? 'bg-accent text-white hover:bg-accent-hover'
                     : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
                 }`}
-                title="发送"
+                title={t('input.send')}
               >
                 <Send size={16} />
               </button>

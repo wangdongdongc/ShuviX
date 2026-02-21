@@ -6,6 +6,8 @@ import { agentService } from './services/agent'
 import { dockerManager } from './services/dockerManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
+import { initI18n } from './i18n'
+import { settingsDao } from './dao/settingsDao'
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -176,6 +178,10 @@ ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.shirobot')
+
+  // 初始化 i18n（从 DB 读取用户语言偏好，无则跟随系统）
+  const savedLang = settingsDao.findByKey('general.language')
+  initI18n(savedLang || undefined)
 
   setupApplicationMenu()
 

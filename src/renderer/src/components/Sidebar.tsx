@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus, ExternalLink } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -14,6 +15,7 @@ import type { Session } from '../stores/chatStore'
 const TEMP_GROUP_KEY = '__no_project__'
 
 export function Sidebar(): React.JSX.Element {
+  const { t } = useTranslation()
   const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
   const [editingSession, setEditingSession] = useState<Session | null>(null)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
@@ -114,10 +116,10 @@ export function Sidebar(): React.JSX.Element {
     const now = new Date()
     const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
 
-    if (diffDays === 0) return '今天'
-    if (diffDays === 1) return '昨天'
-    if (diffDays < 7) return `${diffDays}天前`
-    return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    if (diffDays < 7) return `${diffDays}d ago`
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   }
 
   /** 渲染单个会话项 */
@@ -134,7 +136,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
         <span className="truncate">{session.title}</span>
         {sessionStreams[session.id]?.isStreaming && (
-          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" title="正在生成" />
+          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
         <span className="flex-shrink-0 ml-auto text-[9px] text-text-tertiary group-hover:hidden">
           {formatTime(session.updatedAt)}
@@ -171,7 +173,7 @@ export function Sidebar(): React.JSX.Element {
         <button
           onClick={() => setShowCreateProject(true)}
           className="titlebar-no-drag p-1.5 rounded-lg hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors"
-          title="新建项目"
+          title={t('sidebar.newProject')}
         >
           <FolderPlus size={18} />
         </button>
@@ -181,14 +183,14 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex-1 overflow-y-auto px-2 py-1">
         {sessions.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
-            点击上方按钮新建项目
+            {t('sidebar.emptyHint')}
           </div>
         ) : (
           /* 按项目分组展示（项目按名称排序，临时对话始终最后） */
           sortedGroups.map(([groupKey, groupSessions]) => {
             const collapsed = collapsedGroups.has(groupKey)
             const isTemp = groupKey === TEMP_GROUP_KEY
-            const groupLabel = isTemp ? '临时对话' : (projectNames[groupKey] || '未命名项目')
+            const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
             return (
               <div key={groupKey} className="mb-2">
                 <div className={`flex items-center w-full px-2 py-2 rounded-md text-[13px] group/header ${
@@ -212,7 +214,7 @@ export function Sidebar(): React.JSX.Element {
                         handleNewChat(isTemp ? null : groupKey)
                       }}
                       className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-                      title="新建对话"
+                      title={t('sidebar.newChat')}
                     >
                       <MessageSquarePlus size={13} />
                     </button>
@@ -224,7 +226,7 @@ export function Sidebar(): React.JSX.Element {
                           window.api.app.openFolder(projectPaths[groupKey])
                         }}
                         className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-                        title="打开项目文件夹"
+                        title={t('sidebar.openFolder')}
                       >
                         <ExternalLink size={12} />
                       </button>
@@ -234,7 +236,7 @@ export function Sidebar(): React.JSX.Element {
                       <button
                         onClick={() => setEditingProjectId(groupKey)}
                         className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-                        title="编辑项目"
+                        title={t('sidebar.editProject')}
                       >
                         <Pencil size={12} />
                       </button>
@@ -262,7 +264,7 @@ export function Sidebar(): React.JSX.Element {
           className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
         >
           <Settings size={16} />
-          <span>设置</span>
+          <span>{t('sidebar.settings')}</span>
         </button>
       </div>
 
@@ -287,9 +289,9 @@ export function Sidebar(): React.JSX.Element {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[340px] max-w-[90vw]">
             <div className="px-5 py-4">
-              <h3 className="text-sm font-semibold text-text-primary mb-2">确认删除</h3>
+              <h3 className="text-sm font-semibold text-text-primary mb-2">{t('sidebar.confirmDelete')}</h3>
               <p className="text-xs text-text-secondary leading-relaxed">
-                该会话中已有消息记录，删除后将<span className="text-error font-medium">彻底删除所有消息</span>，且无法恢复。确定要删除吗？
+                {t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}
               </p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
@@ -297,13 +299,13 @@ export function Sidebar(): React.JSX.Element {
                 onClick={() => setDeletingSessionId(null)}
                 className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
               >
-                取消
+                {t('common.cancel')}
               </button>
               <button
                 onClick={() => doDelete(deletingSessionId)}
                 className="px-4 py-1.5 rounded-lg text-xs bg-error text-white hover:bg-error/90 transition-colors"
               >
-                删除
+                {t('common.delete')}
               </button>
             </div>
           </div>

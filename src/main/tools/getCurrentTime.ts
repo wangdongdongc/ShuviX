@@ -1,21 +1,22 @@
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
+import { t } from '../i18n'
 
 const ParamsSchema = Type.Object({
-  timezone: Type.Optional(Type.String({ description: '时区，如 Asia/Shanghai、America/New_York。留空使用系统默认时区' }))
+  timezone: Type.Optional(Type.String({ description: t('tool.paramTimezone') }))
 })
 
 /** 获取当前时间工具 */
 export const getCurrentTimeTool: AgentTool<typeof ParamsSchema> = {
   name: 'get_current_time',
-  label: '获取当前时间',
-  description: '获取当前系统时间，可指定时区',
+  label: t('tool.timeLabel'),
+  description: t('tool.timeDesc'),
   parameters: ParamsSchema,
   execute: async (_toolCallId, params) => {
     const now = new Date()
     let formatted: string
     try {
-      formatted = now.toLocaleString('zh-CN', {
+      formatted = now.toLocaleString(undefined, {
         timeZone: params.timezone || undefined,
         year: 'numeric',
         month: '2-digit',
@@ -26,12 +27,12 @@ export const getCurrentTimeTool: AgentTool<typeof ParamsSchema> = {
         hour12: false
       })
     } catch {
-      formatted = now.toLocaleString('zh-CN')
+      formatted = now.toLocaleString()
     }
     const iso = now.toISOString()
     const text = params.timezone
-      ? `当前时间（${params.timezone}）：${formatted}\nISO: ${iso}`
-      : `当前时间：${formatted}\nISO: ${iso}`
+      ? `${t('tool.currentTimeWithTz', { timezone: params.timezone })}: ${formatted}\nISO: ${iso}`
+      : `${t('tool.currentTime')}: ${formatted}\nISO: ${iso}`
     return {
       content: [{ type: 'text', text }],
       details: { timezone: params.timezone || 'system', formatted, iso }

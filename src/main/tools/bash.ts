@@ -10,17 +10,18 @@ import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from '
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
 import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
 import { resolveProjectConfig, type ToolContext } from './types'
+import { t } from '../i18n'
 
 /** 默认超时时间（秒） */
 const DEFAULT_TIMEOUT = 120
 
 const BashParamsSchema = Type.Object({
   command: Type.String({
-    description: '要执行的 shell 命令。支持管道、重定向等 bash 特性。避免需要交互输入的命令。'
+    description: t('tool.paramCommand')
   }),
   timeout: Type.Optional(
     Type.Number({
-      description: `命令超时时间（秒），默认 ${DEFAULT_TIMEOUT}s。长时间运行的命令建议加大此值。`
+      description: t('tool.paramTimeout', { default: DEFAULT_TIMEOUT })
     })
   )
 })
@@ -34,7 +35,7 @@ function defaultSpawn(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error('操作已中止'))
+      reject(new Error(t('tool.aborted')))
       return
     }
 
@@ -80,7 +81,7 @@ function defaultSpawn(
       if (signal) signal.removeEventListener('abort', onAbort)
 
       if (killed && signal?.aborted) {
-        reject(new Error('操作已中止'))
+        reject(new Error(t('tool.aborted')))
         return
       }
 
@@ -103,7 +104,7 @@ function defaultSpawn(
 export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSchema> {
   return {
     name: 'bash',
-    label: '执行命令',
+    label: t('tool.bashLabel'),
     description:
       'Execute a bash command in the working directory. Use this for running shell commands, scripts, installing packages, etc. The command runs in a bash shell with pipe and redirect support.',
     parameters: BashParamsSchema,
@@ -138,14 +139,14 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
 
         let text = ''
         if (truncated.truncated) {
-          text += `[输出已截断：原始 ${truncated.originalLines} 行 / ${formatSize(truncated.originalBytes)}]\n\n`
+          text += `${t('tool.outputTruncated', { lines: truncated.originalLines, size: formatSize(truncated.originalBytes) })}\n\n`
         }
         text += truncated.text
 
         if (result.exitCode === 124) {
-          text += `\n\n[命令超时（${timeout}s）]`
+          text += `\n\n${t('tool.cmdTimeout', { timeout })}`
         } else if (result.exitCode !== 0) {
-          text += `\n\n[退出码: ${result.exitCode}]`
+          text += `\n\n${t('tool.exitCode', { code: result.exitCode })}`
         }
 
         return {
@@ -156,9 +157,9 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
           }
         }
       } catch (err: any) {
-        if (err.message === '操作已中止') throw err
+        if (err.message === t('tool.aborted')) throw err
         return {
-          content: [{ type: 'text' as const, text: `命令执行失败: ${err.message}` }],
+          content: [{ type: 'text' as const, text: t('tool.cmdFailed', { message: err.message }) }],
           details: undefined
         }
       }

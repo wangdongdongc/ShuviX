@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Save, Settings, Layers, ChevronDown, ChevronRight, FileText, Trash2, RefreshCw, Plus, X } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../stores/settingsStore'
 import { PayloadViewer } from './PayloadViewer'
@@ -8,13 +9,14 @@ import { PayloadViewer } from './PayloadViewer'
  * 通用设置 + 提供商管理
  */
 export function SettingsPanel(): React.JSX.Element {
+  const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
 
   return (
     <div className="h-full bg-bg-primary flex flex-col">
       {/* 头部（macOS 拖拽区） */}
       <div className="titlebar-drag flex items-center px-6 pt-10 pb-4 border-b border-border-secondary bg-bg-secondary">
-        <h2 className="text-base font-semibold text-text-primary">设置</h2>
+        <h2 className="text-base font-semibold text-text-primary">{t('settings.title')}</h2>
       </div>
 
       {/* Tab + 内容 */}
@@ -23,19 +25,19 @@ export function SettingsPanel(): React.JSX.Element {
         <div className="w-[180px] flex-shrink-0 border-r border-border-secondary py-4 px-3 space-y-1 bg-bg-secondary">
           <TabButton
             icon={<Settings size={14} />}
-            label="通用"
+            label={t('settings.tabGeneral')}
             active={activeSettingsTab === 'general'}
             onClick={() => setActiveSettingsTab('general')}
           />
           <TabButton
             icon={<Layers size={14} />}
-            label="提供商"
+            label={t('settings.tabProviders')}
             active={activeSettingsTab === 'providers'}
             onClick={() => setActiveSettingsTab('providers')}
           />
           <TabButton
             icon={<FileText size={14} />}
-            label="HTTP 日志"
+            label={t('settings.tabHttpLogs')}
             active={activeSettingsTab === 'httpLogs'}
             onClick={() => setActiveSettingsTab('httpLogs')}
           />
@@ -54,6 +56,7 @@ export function SettingsPanel(): React.JSX.Element {
 
 /** HTTP 日志设置 */
 function HttpLogSettings(): React.JSX.Element {
+  const { t } = useTranslation()
   const [logs, setLogs] = useState<Array<{
     id: string
     sessionId: string
@@ -152,8 +155,8 @@ function HttpLogSettings(): React.JSX.Element {
       <div className="px-5 py-4 border-b border-border-secondary space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-text-primary">HTTP 请求日志</h3>
-            <p className="text-[11px] text-text-tertiary mt-1">每次请求 AI 时会记录请求体，便于审计和排查。</p>
+            <h3 className="text-sm font-semibold text-text-primary">{t('settings.httpLogTitle')}</h3>
+            <p className="text-[11px] text-text-tertiary mt-1">{t('settings.httpLogDesc')}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -162,7 +165,7 @@ function HttpLogSettings(): React.JSX.Element {
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               <RefreshCw size={12} className={loadingList ? 'animate-spin' : ''} />
-              刷新
+              {t('common.refresh')}
             </button>
             <button
               onClick={handleClear}
@@ -170,19 +173,19 @@ function HttpLogSettings(): React.JSX.Element {
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               <Trash2 size={12} />
-              清空
+              {t('common.clear')}
             </button>
           </div>
         </div>
         {/* 会话筛选 */}
         <div className="flex items-center gap-2">
-          <label className="text-[11px] text-text-tertiary flex-shrink-0">按会话筛选</label>
+          <label className="text-[11px] text-text-tertiary flex-shrink-0">{t('settings.filterBySession')}</label>
           <select
             value={filterSessionId}
             onChange={(e) => setFilterSessionId(e.target.value)}
             className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
           >
-            <option value="">全部会话</option>
+            <option value="">{t('settings.allSessions')}</option>
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>
             ))}
@@ -193,7 +196,7 @@ function HttpLogSettings(): React.JSX.Element {
       <div className="flex-1 min-h-0 flex">
         <div className="w-[320px] border-r border-border-secondary overflow-y-auto">
           {logs.length === 0 ? (
-            <div className="px-4 py-6 text-xs text-text-tertiary">暂无日志</div>
+            <div className="px-4 py-6 text-xs text-text-tertiary">{t('settings.noLogs')}</div>
           ) : (
             <div className="p-2 space-y-1">
               {logs.map((log) => {
@@ -231,26 +234,26 @@ function HttpLogSettings(): React.JSX.Element {
 
         <div className="flex-1 min-w-0 p-4 overflow-y-auto">
           {!selectedLogId ? (
-            <div className="text-xs text-text-tertiary">请选择左侧日志查看请求体详情。</div>
+            <div className="text-xs text-text-tertiary">{t('settings.selectLogHint')}</div>
           ) : loadingDetail ? (
-            <div className="text-xs text-text-tertiary">正在加载日志详情...</div>
+            <div className="text-xs text-text-tertiary">{t('settings.loadingLog')}</div>
           ) : !selectedLog ? (
-            <div className="text-xs text-text-tertiary">日志不存在或已被清理。</div>
+            <div className="text-xs text-text-tertiary">{t('settings.logNotFound')}</div>
           ) : (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
-                  <div className="text-text-tertiary">时间</div>
+                  <div className="text-text-tertiary">{t('settings.time')}</div>
                   <div className="text-text-primary mt-0.5 break-all">{new Date(selectedLog.createdAt).toLocaleString()}</div>
                 </div>
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
-                  <div className="text-text-tertiary">会话</div>
-                  <div className="text-text-primary mt-0.5">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || '未知会话'}</div>
+                  <div className="text-text-tertiary">{t('settings.session')}</div>
+                  <div className="text-text-primary mt-0.5">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || t('settings.unknownSession')}</div>
                   <div className="text-[10px] text-text-tertiary mt-0.5 break-all">{selectedLog.sessionId}</div>
                 </div>
               </div>
 
-              <div className="text-xs text-text-secondary">请求体</div>
+              <div className="text-xs text-text-secondary">{t('settings.requestBody')}</div>
               <PayloadViewer payload={selectedLog.payload} />
             </div>
           )}
@@ -284,6 +287,8 @@ function TabButton({ icon, label, active, onClick }: {
 
 /** 通用设置（所有修改即时保存） */
 function GeneralSettings(): React.JSX.Element {
+  const { t, i18n: i18nInstance } = useTranslation()
+  const i18nLang = i18nInstance.language
   const { systemPrompt, theme, fontSize, setSystemPrompt, setTheme, setFontSize, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
 
@@ -323,22 +328,45 @@ function GeneralSettings(): React.JSX.Element {
     <div className="flex-1 px-5 py-5 space-y-6">
       {/* 主题 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">主题</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.theme')}</label>
         <div className="flex gap-2">
-          {(['dark', 'light', 'system'] as const).map((t) => (
+          {(['dark', 'light', 'system'] as const).map((th) => (
             <button
-              key={t}
+              key={th}
               onClick={() => {
-                setTheme(t)
-                window.api.settings.set({ key: 'general.theme', value: t })
+                setTheme(th)
+                window.api.settings.set({ key: 'general.theme', value: th })
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                theme === t
+                theme === th
                   ? 'bg-accent text-white'
                   : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
               }`}
             >
-              {t === 'dark' ? '深色' : t === 'light' ? '浅色' : '跟随系统'}
+              {th === 'dark' ? t('settings.themeDark') : th === 'light' ? t('settings.themeLight') : t('settings.themeSystem')}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 语言 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.language')}</label>
+        <div className="flex gap-2">
+          {(['zh', 'en', 'ja'] as const).map((lng) => (
+            <button
+              key={lng}
+              onClick={() => {
+                i18nInstance.changeLanguage(lng)
+                window.api.settings.set({ key: 'general.language', value: lng })
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                (i18nLang || 'zh') === lng
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+            >
+              {lng === 'zh' ? '中文' : lng === 'en' ? 'English' : '日本語'}
             </button>
           ))}
         </div>
@@ -347,7 +375,7 @@ function GeneralSettings(): React.JSX.Element {
       {/* 字体大小 */}
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-2">
-          字体大小 <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
+          {t('settings.fontSize')} <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
         </label>
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-text-tertiary">12</span>
@@ -370,7 +398,7 @@ function GeneralSettings(): React.JSX.Element {
 
       {/* 默认 Provider */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">默认提供商</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.defaultProvider')}</label>
         <select
           value={activeProvider}
           onChange={(e) => handleProviderChange(e.target.value)}
@@ -387,7 +415,7 @@ function GeneralSettings(): React.JSX.Element {
 
       {/* 默认模型 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">默认模型</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.defaultModel')}</label>
         <select
           value={activeModel}
           onChange={(e) => handleModelChange(e.target.value)}
@@ -403,29 +431,29 @@ function GeneralSettings(): React.JSX.Element {
 
       {/* 系统提示词 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">系统提示词</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.systemPrompt')}</label>
         <textarea
           value={localSystemPrompt}
           onChange={(e) => setLocalSystemPrompt(e.target.value)}
           onBlur={handleSystemPromptBlur}
           rows={4}
           className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
-          placeholder="设定 AI 助手的角色和行为..."
+          placeholder={t('settings.systemPromptPlaceholder')}
         />
       </div>
     </div>
   )
 }
 
-/** 能力标签定义 */
-const CAPABILITY_OPTIONS = [
-  { key: 'vision', label: 'Vision', desc: '图像输入' },
-  { key: 'imageOutput', label: 'Image Output', desc: '图像生成' },
-  { key: 'functionCalling', label: 'Function Calling', desc: '工具调用' },
-  { key: 'reasoning', label: 'Reasoning', desc: '推理/思考' },
-  { key: 'audioInput', label: 'Audio Input', desc: '音频输入' },
-  { key: 'audioOutput', label: 'Audio Output', desc: '音频输出' },
-  { key: 'pdfInput', label: 'PDF Input', desc: 'PDF 文件输入' }
+/** 能力标签 key 列表（desc 通过 i18n 查找） */
+const CAPABILITY_KEYS = [
+  { key: 'vision', label: 'Vision', descKey: 'settings.capVision' },
+  { key: 'imageOutput', label: 'Image Output', descKey: 'settings.capImageOutput' },
+  { key: 'functionCalling', label: 'Function Calling', descKey: 'settings.capFunctionCalling' },
+  { key: 'reasoning', label: 'Reasoning', descKey: 'settings.capReasoning' },
+  { key: 'audioInput', label: 'Audio Input', descKey: 'settings.capAudioInput' },
+  { key: 'audioOutput', label: 'Audio Output', descKey: 'settings.capAudioOutput' },
+  { key: 'pdfInput', label: 'PDF Input', descKey: 'settings.capPdfInput' }
 ] as const
 
 /** 模型能力编辑器 */
@@ -436,6 +464,7 @@ function ModelCapabilitiesEditor({
   capabilities: Record<string, any>
   onUpdate: (caps: Record<string, any>) => Promise<void>
 }): React.JSX.Element {
+  const { t } = useTranslation()
   const toggle = (key: string): void => {
     const updated = { ...capabilities, [key]: !capabilities[key] }
     onUpdate(updated)
@@ -444,7 +473,7 @@ function ModelCapabilitiesEditor({
   return (
     <div className="px-4 pb-2 pt-1">
       <div className="flex flex-wrap gap-1.5">
-        {CAPABILITY_OPTIONS.map(({ key, label, desc }) => (
+        {CAPABILITY_KEYS.map(({ key, label, descKey }) => (
           <button
             key={key}
             onClick={() => toggle(key)}
@@ -453,7 +482,7 @@ function ModelCapabilitiesEditor({
                 ? 'border-accent/50 bg-accent/10 text-accent'
                 : 'border-border-primary bg-bg-tertiary text-text-tertiary hover:text-text-secondary'
             }`}
-            title={desc}
+            title={t(descKey)}
           >
             {label}
           </button>
@@ -461,9 +490,9 @@ function ModelCapabilitiesEditor({
       </div>
       {(capabilities.maxInputTokens || capabilities.maxOutputTokens) && (
         <div className="mt-1.5 text-[10px] text-text-tertiary">
-          {capabilities.maxInputTokens && <span>上下文: {(capabilities.maxInputTokens / 1000).toFixed(0)}K</span>}
+          {capabilities.maxInputTokens && <span>{t('settings.context')}: {(capabilities.maxInputTokens / 1000).toFixed(0)}K</span>}
           {capabilities.maxInputTokens && capabilities.maxOutputTokens && <span className="mx-1">·</span>}
-          {capabilities.maxOutputTokens && <span>最大输出: {(capabilities.maxOutputTokens / 1000).toFixed(0)}K</span>}
+          {capabilities.maxOutputTokens && <span>{t('settings.maxOutput')}: {(capabilities.maxOutputTokens / 1000).toFixed(0)}K</span>}
         </div>
       )}
     </div>
@@ -472,6 +501,7 @@ function ModelCapabilitiesEditor({
 
 /** 提供商设置 */
 function ProviderSettings(): React.JSX.Element {
+  const { t } = useTranslation()
   const { providers, setProviders, setAvailableModels } = useSettingsStore()
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
@@ -620,12 +650,12 @@ function ProviderSettings(): React.JSX.Element {
       setAvailableModels(available)
       setSyncMessages((prev) => ({
         ...prev,
-        [providerId]: `同步成功：共 ${result.total} 个模型，新增 ${result.added} 个`
+        [providerId]: t('settings.syncSuccess', { total: result.total, added: result.added })
       }))
     } catch (err: any) {
       setSyncMessages((prev) => ({
         ...prev,
-        [providerId]: err?.message || '同步失败，请检查 API Key 与网络设置'
+        [providerId]: err?.message || t('settings.syncFailed')
       }))
     } finally {
       setSyncingProviderId(null)
@@ -641,24 +671,24 @@ function ProviderSettings(): React.JSX.Element {
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-border-secondary text-xs text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
         >
           <Plus size={14} />
-          添加自定义提供商
+          {t('settings.addProvider')}
         </button>
 
         {/* 添加表单 */}
         {showAddForm && (
           <div className="border border-accent/30 rounded-lg p-4 space-y-3 bg-accent/5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-primary">新增提供商</span>
+              <span className="text-xs font-medium text-text-primary">{t('settings.newProvider')}</span>
               <button onClick={() => setShowAddForm(false)} className="text-text-tertiary hover:text-text-primary">
                 <X size={14} />
               </button>
             </div>
             <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">名称</label>
+              <label className="block text-[11px] text-text-tertiary mb-1">{t('settings.providerName')}</label>
               <input
                 value={newProvider.name}
                 onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value }))}
-                placeholder="例如：DeepSeek、智谱、Moonshot"
+                placeholder={t('settings.providerNamePlaceholder')}
                 className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
               />
             </div>
@@ -682,13 +712,13 @@ function ProviderSettings(): React.JSX.Element {
               />
             </div>
             <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">API 协议</label>
+              <label className="block text-[11px] text-text-tertiary mb-1">{t('settings.apiProtocol')}</label>
               <select
                 value={newProvider.apiProtocol}
                 onChange={(e) => setNewProvider((p) => ({ ...p, apiProtocol: e.target.value as any }))}
                 className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
               >
-                <option value="openai-completions">OpenAI 兼容（绝大多数提供商）</option>
+                <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
                 <option value="anthropic-messages">Anthropic Messages</option>
                 <option value="google-generative-ai">Google Generative AI</option>
               </select>
@@ -698,7 +728,7 @@ function ProviderSettings(): React.JSX.Element {
               disabled={addingProvider || !newProvider.name.trim() || !newProvider.baseUrl.trim()}
               className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {addingProvider ? '添加中…' : '添加'}
+              {addingProvider ? t('common.adding') : t('common.add')}
             </button>
           </div>
         )}
@@ -725,7 +755,7 @@ function ProviderSettings(): React.JSX.Element {
                 <span className="flex-1 text-xs font-medium text-text-primary">
                   {p.name}
                   {!p.isBuiltin && (
-                    <span className="ml-1.5 text-[10px] text-text-tertiary font-normal">自定义</span>
+                    <span className="ml-1.5 text-[10px] text-text-tertiary font-normal">{t('settings.custom')}</span>
                   )}
                 </span>
                 {/* 删除自定义提供商 */}
@@ -733,7 +763,7 @@ function ProviderSettings(): React.JSX.Element {
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteProvider(p.id) }}
                     className="text-text-tertiary hover:text-danger transition-colors mr-1"
-                    title="删除提供商"
+                    title={t('settings.deleteProvider')}
                   >
                     <Trash2 size={13} />
                   </button>
@@ -762,7 +792,7 @@ function ProviderSettings(): React.JSX.Element {
                         type={showKeys[p.id] ? 'text' : 'password'}
                         value={edits.apiKey ?? p.apiKey}
                         onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
-                        placeholder={`输入 ${p.name} API Key`}
+                        placeholder={t('settings.apiKeyPlaceholder', { name: p.name })}
                         className="flex-1 bg-transparent px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none"
                       />
                       <button
@@ -781,7 +811,7 @@ function ProviderSettings(): React.JSX.Element {
                       type="text"
                       value={edits.baseUrl ?? p.baseUrl}
                       onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
-                      placeholder="留空使用默认地址"
+                      placeholder={t('settings.baseUrlPlaceholder')}
                       className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
                     />
                   </div>
@@ -789,13 +819,13 @@ function ProviderSettings(): React.JSX.Element {
                   {/* 模型列表 */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="block text-[11px] text-text-tertiary">模型管理</label>
+                      <label className="block text-[11px] text-text-tertiary">{t('settings.modelManagement')}</label>
                       <button
                         onClick={() => handleSyncModels(p.id)}
                         disabled={syncingProviderId === p.id}
                         className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                       >
-                        {syncingProviderId === p.id ? '同步中...' : '同步模型'}
+                        {syncingProviderId === p.id ? t('settings.syncing') : t('settings.syncModels')}
                       </button>
                     </div>
                     {syncMessages[p.id] && (
@@ -812,7 +842,7 @@ function ProviderSettings(): React.JSX.Element {
                             setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
                           }
                           onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
-                          placeholder="输入模型 ID 并回车添加"
+                          placeholder={t('settings.addModelPlaceholder')}
                           className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
                         />
                         <button
@@ -820,7 +850,7 @@ function ProviderSettings(): React.JSX.Element {
                           disabled={!newModelId[p.id]?.trim()}
                           className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
-                          添加
+                          {t('common.add')}
                         </button>
                       </div>
                     )}
@@ -831,7 +861,7 @@ function ProviderSettings(): React.JSX.Element {
                       onChange={(e) =>
                         setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
                       }
-                      placeholder="搜索模型（如 gpt-4o / o3）"
+                      placeholder={t('settings.searchModel')}
                       className="w-full mb-2 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
                     />
 
@@ -846,7 +876,7 @@ function ProviderSettings(): React.JSX.Element {
                                 <button
                                   onClick={() => setExpandedModelId(isModelExpanded ? null : m.id)}
                                   className="text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
-                                  title="编辑能力"
+                                  title={t('settings.editCapabilities')}
                                 >
                                   {isModelExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                                 </button>
@@ -866,7 +896,7 @@ function ProviderSettings(): React.JSX.Element {
                                   <button
                                     onClick={() => handleDeleteModel(m.id, p.id)}
                                     className="text-text-tertiary hover:text-danger transition-colors"
-                                    title="删除模型"
+                                    title={t('settings.deleteModel')}
                                   >
                                     <X size={12} />
                                   </button>
@@ -899,7 +929,7 @@ function ProviderSettings(): React.JSX.Element {
                       })}
                       {filteredModels.length === 0 && (
                         <div className="px-2 py-2 text-[11px] text-text-tertiary">
-                          未找到匹配模型
+                          {t('settings.noMatchingModels')}
                         </div>
                       )}
                     </div>
@@ -920,7 +950,7 @@ function ProviderSettings(): React.JSX.Element {
           }`}
         >
           <Save size={16} />
-          {saved ? '已保存' : '保存配置'}
+          {saved ? t('settings.saved') : t('settings.saveConfig')}
         </button>
       </div>
     </div>

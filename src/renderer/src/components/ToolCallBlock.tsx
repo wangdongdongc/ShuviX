@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 
 interface ToolCallBlockProps {
@@ -18,6 +19,7 @@ export function ToolCallBlock({
   result,
   status,
 }: ToolCallBlockProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
 
   // 根据工具类型生成摘要
@@ -42,17 +44,17 @@ export function ToolCallBlock({
   const statusConfig = {
     running: {
       icon: <Loader2 size={14} className="animate-spin text-accent" />,
-      label: '执行中...',
+      label: t('toolCall.running'),
       borderColor: 'border-accent/40'
     },
     done: {
       icon: <Check size={14} className="text-success" />,
-      label: '完成',
+      label: t('toolCall.done'),
       borderColor: 'border-success/40'
     },
     error: {
       icon: <X size={14} className="text-error" />,
-      label: '出错',
+      label: t('toolCall.error'),
       borderColor: 'border-error/40'
     }
   }
@@ -86,7 +88,7 @@ export function ToolCallBlock({
         <div className="px-3 pb-2.5 space-y-2 border-t border-border-secondary/50">
           {args && Object.keys(args).length > 0 && (
             <div className="pt-2">
-              <div className="text-[10px] text-text-tertiary mb-1">参数</div>
+              <div className="text-[10px] text-text-tertiary mb-1">{t('toolCall.params')}</div>
               <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words">
                 {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
               </pre>
@@ -94,7 +96,7 @@ export function ToolCallBlock({
           )}
           {result && (
             <div>
-              <div className="text-[10px] text-text-tertiary mb-1">结果</div>
+              <div className="text-[10px] text-text-tertiary mb-1">{t('toolCall.result')}</div>
               <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words">
                 {result}
               </pre>

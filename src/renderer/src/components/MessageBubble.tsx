@@ -1,4 +1,5 @@
 import { memo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -21,6 +22,7 @@ let mermaidIdCounter = 0
 
 /** Mermaid 代码块 → SVG 图表，支持源码/图表切换（懒渲染） */
 function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+  const { t } = useTranslation()
   const [svgHtml, setSvgHtml] = useState<string | null>(mermaidSvgCache.get(code) ?? null)
   const [error, setError] = useState<string | null>(null)
   const [showSource, _setShowSource] = useState(mermaidViewState.get(code) ?? true)
@@ -58,7 +60,7 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   if (error) {
     return (
       <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
-        <div className="text-[10px] text-orange-400 mb-1">Mermaid 渲染失败</div>
+        <div className="text-[10px] text-orange-400 mb-1">{t('message.mermaidFailed')}</div>
         <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">{code}</pre>
       </div>
     )
@@ -73,10 +75,10 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
           onClick={handleToggle}
           disabled={rendering}
           className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors disabled:opacity-50"
-          title={showSource ? '显示图表' : '显示源码'}
+          title={showSource ? t('message.showDiagram') : t('message.source')}
         >
           {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>{rendering ? '渲染中…' : showSource ? '图表' : '源码'}</span>
+          <span>{rendering ? t('message.rendering') : showSource ? t('message.diagram') : t('message.source')}</span>
         </button>
       </div>
       {showSource ? (
@@ -114,6 +116,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRollback,
   onRegenerate
 }: MessageBubbleProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
 
@@ -154,14 +157,14 @@ export const MessageBubble = memo(function MessageBubble({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {isUser ? '你' : 'ShiroBot'}
+            {isUser ? t('message.you') : 'ShiroBot'}
           </span>
           {/* 复制按钮 */}
           {!isStreaming && content && (
             <button
               onClick={handleCopy}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title="复制"
+              title={t('message.copy')}
             >
               {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
             </button>
@@ -171,7 +174,7 @@ export const MessageBubble = memo(function MessageBubble({
             <button
               onClick={() => setShowRaw(!showRaw)}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={showRaw ? '显示渲染' : '显示源码'}
+              title={showRaw ? t('message.showRendered') : t('message.showSource')}
             >
               {showRaw ? <FileText size={12} /> : <Code size={12} />}
             </button>
@@ -181,7 +184,7 @@ export const MessageBubble = memo(function MessageBubble({
             <button
               onClick={onRollback}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title="回退到此处"
+              title={t('message.rollback')}
             >
               <RotateCcw size={12} />
             </button>
@@ -191,7 +194,7 @@ export const MessageBubble = memo(function MessageBubble({
             <button
               onClick={onRegenerate}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title="重新生成"
+              title={t('message.regenerate')}
             >
               <RefreshCw size={12} />
             </button>
@@ -213,7 +216,7 @@ export const MessageBubble = memo(function MessageBubble({
                       <img
                         key={idx}
                         src={img.preview}
-                        alt={`附图 ${idx + 1}`}
+                        alt={t('message.attachment', { index: idx + 1 })}
                         className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
                         onClick={() => window.api.app.openImage(img.preview)}
                       />
@@ -233,7 +236,7 @@ export const MessageBubble = memo(function MessageBubble({
               <details className="group mb-2">
                 <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
                   <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                  <span>已深度思考</span>
+                  <span>{t('message.deepThought')}</span>
                 </summary>
                 <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                   {thinking}

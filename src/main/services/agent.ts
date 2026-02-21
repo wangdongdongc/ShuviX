@@ -12,6 +12,7 @@ import { createCodingTools } from '../tools'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
+import { t } from '../i18n'
 
 /** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */
 function extractBase64(img: any): string {
@@ -227,7 +228,7 @@ export class AgentService {
     // 在 system prompt 中附加工具说明
     let enhancedPrompt = systemPrompt
     if (project?.path) {
-      enhancedPrompt += `\n\n你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。`
+      enhancedPrompt += `\n\n${t('agent.promptSupplement')}`
     }
 
     const agent = new Agent({
@@ -393,7 +394,7 @@ export class AgentService {
       const currentProvider = providerDao.findById(String(agent.state.model.provider))
       const resolvedApiKey = currentProvider?.apiKey
       const result = await completeSimple(agent.state.model, {
-        systemPrompt: '你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的中文标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。',
+        systemPrompt: t('agent.titleGenPrompt'),
         messages: [
           { role: 'user', content: [{ type: 'text', text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}` }], timestamp: Date.now() }
         ]

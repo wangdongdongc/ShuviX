@@ -9,19 +9,20 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath } from './utils/pathUtils'
 import { resolveProjectConfig, type ToolContext } from './types'
+import { t } from '../i18n'
 
 const ReadParamsSchema = Type.Object({
   path: Type.String({
-    description: '要读取的文件路径（相对或绝对路径）'
+    description: t('tool.paramPath')
   }),
   offset: Type.Optional(
     Type.Number({
-      description: '起始行号（从 1 开始），用于分页读取大文件'
+      description: t('tool.paramOffset')
     })
   ),
   limit: Type.Optional(
     Type.Number({
-      description: '读取的最大行数，与 offset 配合使用'
+      description: t('tool.paramLimit')
     })
   )
 })
@@ -31,7 +32,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
   return {
     name: 'read',
-    label: '读取文件',
+    label: t('tool.readLabel'),
     description:
       'Read the contents of a file. Supports text files with optional line offset and limit for pagination. Returns content with line numbers.',
     parameters: ReadParamsSchema,
@@ -40,7 +41,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       params: { path: string; offset?: number; limit?: number },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error('操作已中止')
+      if (signal?.aborted) throw new Error(t('tool.aborted'))
 
       const { workingDirectory } = resolveProjectConfig(ctx)
       const absolutePath = resolveReadPath(params.path, workingDirectory)
@@ -52,12 +53,12 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
         const fileStat = { size: s.size, isFile: s.isFile() }
         if (!fileStat.isFile) {
           return {
-            content: [{ type: 'text' as const, text: `错误：${params.path} 不是一个文件` }],
+            content: [{ type: 'text' as const, text: t('tool.notAFile', { path: params.path }) }],
             details: undefined
           }
         }
 
-        if (signal?.aborted) throw new Error('操作已中止')
+        if (signal?.aborted) throw new Error(t('tool.aborted'))
 
         // 读取文件
         const buffer = await fsReadFile(absolutePath)
@@ -87,16 +88,16 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
         // 截断处理
         const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
         if (truncated.truncated) {
-          text = `[内容已截断：文件共 ${totalLines} 行 / ${formatSize(fileStat.size)}]\n\n${truncated.text}`
+          text = `${t('tool.outputTruncated', { lines: totalLines, size: formatSize(fileStat.size) })}\n\n${truncated.text}`
         } else {
           text = truncated.text
         }
 
         // 添加文件信息头
-        const header = `文件: ${params.path} (${totalLines} 行, ${formatSize(fileStat.size)})`
+        const header = t('tool.fileHeader', { path: params.path, lines: totalLines, size: formatSize(fileStat.size) })
         if (params.offset || params.limit) {
           const endLine = startLine + lines.length - 1
-          text = `${header}\n显示: 第 ${startLine}-${endLine} 行\n\n${text}`
+          text = `${header}\n${t('tool.showingLines', { start: startLine, end: endLine })}\n\n${text}`
         } else {
           text = `${header}\n\n${text}`
         }
@@ -110,15 +111,15 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
           }
         }
       } catch (err: any) {
-        if (err.message === '操作已中止') throw err
+        if (err.message === t('tool.aborted')) throw err
         if (err.code === 'ENOENT') {
           return {
-            content: [{ type: 'text' as const, text: `文件不存在: ${params.path}` }],
+            content: [{ type: 'text' as const, text: t('tool.fileNotFound', { path: params.path }) }],
             details: undefined
           }
         }
         return {
-          content: [{ type: 'text' as const, text: `读取文件失败: ${err.message}` }],
+          content: [{ type: 'text' as const, text: t('tool.cmdFailed', { message: err.message }) }],
           details: undefined
         }
       }
