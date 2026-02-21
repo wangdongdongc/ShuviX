@@ -194,6 +194,7 @@ export function ChatView(): React.JSX.Element {
         role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
         content={msg.content}
         metadata={msg.metadata}
+        model={msg.model}
         onRollback={msg.id !== messages[messages.length - 1]?.id ? () => handleRollback(msg.id) : undefined}
         onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
       />
@@ -231,6 +232,7 @@ export function ChatView(): React.JSX.Element {
             role="assistant"
             content={content}
             isStreaming
+            model={useSettingsStore.getState().activeModel}
           />
         )}
 

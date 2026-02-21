@@ -195,11 +195,14 @@ function App(): React.JSX.Element {
             const meta: Record<string, any> = {}
             if (thinking) meta.thinking = thinking
             if (event.usage) meta.usage = event.usage
+            // 从会话列表获取当前模型名称
+            const session = store.sessions.find((s) => s.id === sid)
             const assistantMsg = await window.api.message.add({
               sessionId: sid,
               role: 'assistant',
               content,
-              metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined
+              metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined,
+              model: session?.model || ''
             })
             // 仅当该 session 是当前查看的会话时，才更新内存中的消息列表
             if (sid === store.activeSessionId) {

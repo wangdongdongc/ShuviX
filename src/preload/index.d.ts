@@ -78,6 +78,7 @@ interface ChatMessage {
   type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
   content: string
   metadata: string | null
+  model: string
   createdAt: number
 }
 

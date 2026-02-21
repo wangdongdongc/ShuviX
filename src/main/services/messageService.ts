@@ -20,6 +20,7 @@ export class MessageService {
     type?: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
     content: string
     metadata?: string | null
+    model?: string
   }): Message {
     const message: Message = {
       id: uuidv7(),
@@ -28,6 +29,7 @@ export class MessageService {
       type: params.type || 'text',
       content: params.content,
       metadata: params.metadata ?? null,
+      model: params.model || '',
       createdAt: Date.now()
     }
     messageDao.insert(message)

@@ -519,6 +519,7 @@ export class AgentService {
       }
       case 'tool_execution_start': {
         // 持久化工具调用消息
+        const sessionForTool = sessionDao.findById(sessionId)
         const toolCallMsg = messageService.add({
           sessionId,
           role: 'assistant',
@@ -528,7 +529,8 @@ export class AgentService {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
             args: event.args
-          })
+          }),
+          model: sessionForTool?.model || ''
         })
         this.sendToRenderer({
           type: 'tool_start',

@@ -110,18 +110,6 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
-  /** 格式化时间 */
-  const formatTime = (timestamp: number): string => {
-    const date = new Date(timestamp)
-    const now = new Date()
-    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (diffDays === 0) return 'Today'
-    if (diffDays === 1) return 'Yesterday'
-    if (diffDays < 7) return `${diffDays}d ago`
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  }
-
   /** 渲染单个会话项 */
   const renderSessionItem = (session: Session): React.JSX.Element => (
     <div
@@ -138,9 +126,6 @@ export function Sidebar(): React.JSX.Element {
         {sessionStreams[session.id]?.isStreaming && (
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
-        <span className="flex-shrink-0 ml-auto text-[9px] text-text-tertiary group-hover:hidden">
-          {formatTime(session.updatedAt)}
-        </span>
       </div>
       <div className="hidden group-hover:flex items-center gap-0.5">
         <button

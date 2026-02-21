@@ -47,6 +47,7 @@ class DatabaseManager {
         role TEXT NOT NULL,
         type TEXT NOT NULL,
         content TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
         metadata TEXT DEFAULT '{}',
         createdAt INTEGER NOT NULL,
         FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE

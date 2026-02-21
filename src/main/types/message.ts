@@ -9,6 +9,7 @@ export interface Message {
   type: MessageType
   content: string
   metadata: string | null
+  model: string
   createdAt: number
 }
 
@@ -19,4 +20,5 @@ export interface MessageAddParams {
   type?: MessageType
   content: string
   metadata?: string | null
+  model?: string
 }

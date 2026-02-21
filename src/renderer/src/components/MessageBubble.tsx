@@ -5,7 +5,8 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import mermaid from 'mermaid'
-import { User, Bot, Copy, Check, Code, FileText, RotateCcw, RefreshCw } from 'lucide-react'
+import { User, Copy, Check, Code, FileText, RotateCcw, RefreshCw } from 'lucide-react'
+import assistantAvatar from '../assets/ngnl_xiubi_color_mini.jpg'
 
 // 初始化 mermaid（暗色主题，禁用自动启动）
 mermaid.initialize({
@@ -98,6 +99,8 @@ interface MessageBubbleProps {
   content: string
   metadata?: string | null
   isStreaming?: boolean
+  /** 生成该消息的模型名称 */
+  model?: string
   /** 回退到此消息（删除之后的所有消息） */
   onRollback?: () => void
   /** 重新生成此消息（仅助手消息） */
@@ -113,6 +116,7 @@ export const MessageBubble = memo(function MessageBubble({
   content,
   metadata,
   isStreaming,
+  model,
   onRollback,
   onRegenerate
 }: MessageBubbleProps): React.JSX.Element {
@@ -143,21 +147,21 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div className={`group flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-bg-secondary/30'}`}>
       {/* 头像 */}
-      <div
-        className={`flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5 ${
-          isUser
-            ? 'bg-accent/20 text-accent'
-            : 'bg-bg-tertiary text-text-secondary'
-        }`}
-      >
-        {isUser ? <User size={14} /> : <Bot size={14} />}
-      </div>
+      {isUser ? (
+        <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5 bg-accent/20 text-accent">
+          <User size={14} />
+        </div>
+      ) : (
+        <div className="flex-shrink-0 w-7 h-7 rounded-lg overflow-hidden mt-0.5">
+          <img src={assistantAvatar} alt="assistant" className="w-full h-full object-cover" />
+        </div>
+      )}
 
       {/* 消息内容 */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {isUser ? t('message.you') : 'ShiroBot'}
+            {isUser ? t('message.you') : (model || 'Assistant')}
           </span>
           {/* 复制按钮 */}
           {!isStreaming && content && (
