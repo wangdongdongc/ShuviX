@@ -34,9 +34,11 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
+        projectId TEXT DEFAULT NULL,
         provider TEXT NOT NULL DEFAULT '',
         model TEXT NOT NULL DEFAULT '',
         systemPrompt TEXT NOT NULL DEFAULT 'You are a helpful assistant.',
+        modelMetadata TEXT NOT NULL DEFAULT '',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );
