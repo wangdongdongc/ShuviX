@@ -74,7 +74,7 @@ interface Session {
 interface ChatMessage {
   id: string
   sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool' | 'shirobot_notify'
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
   type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
   content: string
   metadata: string | null
@@ -112,7 +112,7 @@ interface AvailableModel extends ProviderModelInfo {
 }
 
 /** 暴露给 Renderer 的 API 类型 */
-interface ShiroBotAPI {
+interface ShuviXAPI {
   app: {
     openSettings: () => Promise<{ success: boolean }>
     /** 用系统默认应用打开 base64 图片 */
@@ -191,6 +191,6 @@ interface ShiroBotAPI {
 declare global {
   interface Window {
     electron: ElectronAPI
-    api: ShiroBotAPI
+    api: ShuviXAPI
   }
 }

@@ -5,7 +5,7 @@ export type MessageType = 'text' | 'tool_call' | 'tool_result' | 'docker_event'
 export interface Message {
   id: string
   sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool' | 'shirobot_notify'
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
   type: MessageType
   content: string
   metadata: string | null
@@ -16,7 +16,7 @@ export interface Message {
 /** IPC: 新增消息参数 */
 export interface MessageAddParams {
   sessionId: string
-  role: 'user' | 'assistant' | 'tool' | 'system' | 'shirobot_notify'
+  role: 'user' | 'assistant' | 'tool' | 'system' | 'system_notify'
   type?: MessageType
   content: string
   metadata?: string | null

@@ -170,7 +170,7 @@ ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
 
   const ext = match[2] === 'jpeg' ? 'jpg' : match[2]
   const base64Data = match[3]
-  const tmpPath = join(tmpdir(), `shirobot-img-${Date.now()}.${ext}`)
+  const tmpPath = join(tmpdir(), `shuvix-img-${Date.now()}.${ext}`)
 
   writeFileSync(tmpPath, Buffer.from(base64Data, 'base64'))
   await shell.openPath(tmpPath)
@@ -178,7 +178,7 @@ ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
 })
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.shirobot')
+  electronApp.setAppUserModelId('com.shuvix')
 
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
   const iconPath = join(app.getAppPath(), 'resources/icon.png')

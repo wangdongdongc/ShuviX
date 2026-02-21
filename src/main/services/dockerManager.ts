@@ -51,7 +51,7 @@ export class DockerManager {
     }
 
     // 创建新容器
-    const containerName = `shirobot-${sessionId.replace(/-/g, '')}`
+    const containerName = `shuvix-${sessionId.replace(/-/g, '')}`
     const containerId = await this.createContainer(containerName, image, workingDirectory)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
     console.log(`[Docker] 创建容器 ${containerId.slice(0, 12)}`)

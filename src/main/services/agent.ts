@@ -25,7 +25,7 @@ function extractBase64(img: any): string {
 
 /**
  * 将数据库消息转换为 pi-agent-core 的 AgentMessage 格式
- * 处理 text / tool_call / tool_result 等类型，跳过 shirobot_notify
+ * 处理 text / tool_call / tool_result 等类型，跳过 system_notify
  */
 export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
   const result: AgentMessage[] = []
@@ -34,7 +34,7 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
     const msg = msgs[i]
 
     // 跳过系统通知
-    if (msg.role === 'shirobot_notify' || msg.role === 'system') { i++; continue }
+    if (msg.role === 'system_notify' || msg.role === 'system') { i++; continue }
 
     // 用户消息（可能包含图片）
     if (msg.role === 'user') {
@@ -578,7 +578,7 @@ export class AgentService {
   private emitDockerEvent(sessionId: string, action: string, extra?: Record<string, string>): void {
     const msg = messageService.add({
       sessionId,
-      role: 'shirobot_notify',
+      role: 'system_notify',
       type: 'docker_event',
       content: action,
       metadata: extra ? JSON.stringify(extra) : null

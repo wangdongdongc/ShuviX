@@ -1,4 +1,4 @@
-# ShiroBot
+# ShuviX
 
 桌面 AI 智能体应用，基于 Electron + React + TypeScript 构建，集成 [pi-mono](https://github.com/nicepkg/pi-mono) 生态实现多模型聊天能力。
 
@@ -105,7 +105,7 @@ Service Layer                   ← 业务逻辑，编排多个 DAO
 SQLite 数据库位于：
 
 ```
-~/Library/Application Support/shirobot/data/shirobot.db
+~/Library/Application Support/shuvix/data/shuvix.db
 ```
 
 包含五张表：`sessions`、`messages`、`settings`、`providers`、`provider_models`。使用 WAL 模式提升并发性能。

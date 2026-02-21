@@ -19,7 +19,7 @@ class DatabaseManager {
       mkdirSync(dbDir, { recursive: true })
     }
 
-    const dbPath = join(dbDir, 'shirobot.db')
+    const dbPath = join(dbDir, 'shuvix.db')
     this.db = new Database(dbPath)
 
     // 启用 WAL 模式，提升并发性能
