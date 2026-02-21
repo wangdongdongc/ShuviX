@@ -230,7 +230,6 @@ export class AgentService {
       requestApproval: (toolCallId: string, command: string) => {
         return new Promise<boolean>((resolve) => {
           this.pendingApprovals.set(toolCallId, { resolve })
-          console.log(`[Agent] 发送审批请求 toolCallId=${toolCallId} command=${command.slice(0, 50)}`)
           this.sendToRenderer({
             type: 'tool_approval_request',
             sessionId,
@@ -549,7 +548,6 @@ export class AgentService {
         break
       }
       case 'tool_execution_start': {
-        console.log(`[Agent] tool_execution_start toolCallId=${event.toolCallId} toolName=${event.toolName}`)
         // 持久化工具调用消息
         const sessionForTool = sessionDao.findById(sessionId)
         const toolCallMsg = messageService.add({
@@ -569,9 +567,6 @@ export class AgentService {
         if (event.toolName === 'bash') {
           const config = resolveProjectConfig({ sessionId })
           approvalRequired = config.sandboxEnabled
-          if (approvalRequired) {
-            console.log(`[Agent] bash 需要沙箱审批 toolCallId=${event.toolCallId}`)
-          }
         }
         this.sendToRenderer({
           type: 'tool_start',

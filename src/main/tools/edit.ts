@@ -46,10 +46,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
-        return {
-          content: [{ type: 'text' as const, text: t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }) }],
-          details: undefined
-        }
+        throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
       }
 
       return new Promise<{

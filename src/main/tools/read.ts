@@ -49,10 +49,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
-        return {
-          content: [{ type: 'text' as const, text: t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }) }],
-          details: undefined
-        }
+        throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
       }
 
       try {
@@ -60,10 +57,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
         const s = await fsStat(absolutePath)
         const fileStat = { size: s.size, isFile: s.isFile() }
         if (!fileStat.isFile) {
-          return {
-            content: [{ type: 'text' as const, text: t('tool.notAFile', { path: params.path }) }],
-            details: undefined
-          }
+          throw new Error(t('tool.notAFile', { path: params.path }))
         }
 
         if (signal?.aborted) throw new Error(t('tool.aborted'))
@@ -121,15 +115,9 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       } catch (err: any) {
         if (err.message === t('tool.aborted')) throw err
         if (err.code === 'ENOENT') {
-          return {
-            content: [{ type: 'text' as const, text: t('tool.fileNotFound', { path: params.path }) }],
-            details: undefined
-          }
+          throw new Error(t('tool.fileNotFound', { path: params.path }))
         }
-        return {
-          content: [{ type: 'text' as const, text: t('tool.cmdFailed', { message: err.message }) }],
-          details: undefined
-        }
+        throw new Error(t('tool.cmdFailed', { message: err.message }))
       }
     }
   }

@@ -38,10 +38,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
-        return {
-          content: [{ type: 'text' as const, text: t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }) }],
-          details: undefined
-        }
+        throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
       }
 
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(

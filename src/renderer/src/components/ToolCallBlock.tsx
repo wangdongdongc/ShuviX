@@ -35,9 +35,6 @@ export function ToolCallBlock({
   })
   const status = liveStatus || propStatus
 
-  // DEBUG: 确认渲染状态
-  console.log(`[ToolCallBlock] toolCallId=${toolCallId} propStatus=${propStatus} liveStatus=${liveStatus} status=${status}`)
-
   // 根据工具类型生成摘要
   const { icon, detail } = (() => {
     const ic = 'text-text-tertiary flex-shrink-0'

@@ -121,10 +121,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
       if (config.sandboxEnabled && ctx.requestApproval) {
         const approved = await ctx.requestApproval(toolCallId, params.command)
         if (!approved) {
-          return {
-            content: [{ type: 'text' as const, text: t('tool.sandboxBashDenied') }],
-            details: undefined
-          }
+          throw new Error(t('tool.sandboxBashDenied'))
         }
       }
 
@@ -169,10 +166,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
         }
       } catch (err: any) {
         if (err.message === t('tool.aborted')) throw err
-        return {
-          content: [{ type: 'text' as const, text: t('tool.cmdFailed', { message: err.message }) }],
-          details: undefined
-        }
+        throw new Error(t('tool.cmdFailed', { message: err.message }))
       }
     }
   }

@@ -144,7 +144,6 @@ function App(): React.JSX.Element {
         case 'tool_start': {
           // 沙箱模式 bash 工具：直接以 pending_approval 状态创建，无需等待额外事件
           const initialStatus = event.approvalRequired ? 'pending_approval' : 'running'
-          console.log('[Renderer] tool_start', event.toolCallId, event.toolName, 'approvalRequired=', event.approvalRequired, 'status=', initialStatus)
           store.addToolExecution(sid, {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
@@ -162,13 +161,11 @@ function App(): React.JSX.Element {
         }
 
         case 'tool_approval_request':
-          // 沙箱模式：bash 命令等待用户审批
-          console.log('[Renderer] 收到审批请求', event.toolCallId, 'toolExecutions:', store.sessionToolExecutions[sid])
+          // 沙箱模式：bash 命令等待用户审批（备用路径，通常 tool_start 已携带 approvalRequired）
           store.updateToolExecution(sid, event.toolCallId, {
             status: 'pending_approval',
             args: event.toolArgs
           })
-          console.log('[Renderer] 更新后 toolExecutions:', useChatStore.getState().sessionToolExecutions[sid])
           break
 
         case 'tool_end':
