@@ -8,7 +8,12 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { messageDao } from '../dao/messageDao'
-import { createCodingTools, resolveProjectConfig } from '../tools'
+import { nowTool } from '../tools/now'
+import { createBashTool } from '../tools/bash'
+import { createReadTool } from '../tools/read'
+import { createWriteTool } from '../tools/write'
+import { createEditTool } from '../tools/edit'
+import { resolveProjectConfig, type ToolContext } from '../tools/types'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
@@ -220,7 +225,7 @@ export class AgentService {
     }
 
     // 创建工具集（通过 sessionId 动态查询项目配置）
-    const tools = createCodingTools({
+    const ctx: ToolContext = {
       sessionId,
       onContainerCreated: (containerId) => {
         this.emitDockerEvent(sessionId, 'container_created', {
@@ -239,7 +244,14 @@ export class AgentService {
           })
         })
       }
-    })
+    }
+    const tools = [
+      nowTool,
+      createBashTool(ctx),
+      createReadTool(ctx),
+      createWriteTool(ctx),
+      createEditTool(ctx)
+    ]
 
     // 在 system prompt 中附加工具说明
     let enhancedPrompt = systemPrompt
