@@ -3,8 +3,8 @@
  * 所有工具通过 ToolContext + resolveProjectConfig 获取运行时项目配置
  */
 
-import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
+import { sessionService } from '../services/sessionService'
 
 /** 项目配置（工具执行时动态查询） */
 export interface ProjectConfig {
@@ -26,10 +26,10 @@ export interface ToolContext {
 
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
 export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
-  const session = sessionDao.findById(ctx.sessionId)
+  const session = sessionService.getById(ctx.sessionId)
   const project = session?.projectId ? projectDao.findById(session.projectId) : undefined
   return {
-    workingDirectory: project?.path || process.cwd(),
+    workingDirectory: session?.workingDirectory ?? process.cwd(),
     dockerEnabled: project ? project.dockerEnabled === 1 : false,
     dockerImage: project?.dockerImage || 'ubuntu:latest'
   }

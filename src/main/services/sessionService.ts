@@ -3,6 +3,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
+import { projectDao } from '../dao/projectDao'
 import type { Session } from '../types'
 
 /**
@@ -16,9 +17,12 @@ export class SessionService {
     return sessionDao.findAll()
   }
 
-  /** 获取单个会话 */
+  /** 获取单个会话（含计算属性 workingDirectory） */
   getById(id: string): Session | undefined {
-    return sessionDao.findById(id)
+    const session = sessionDao.findById(id)
+    if (!session) return undefined
+    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+    return { ...session, workingDirectory: project?.path || process.cwd() }
   }
 
   /** 创建新会话 */

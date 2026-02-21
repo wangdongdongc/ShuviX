@@ -34,6 +34,8 @@ export interface Session {
   modelMetadata: string
   createdAt: number
   updatedAt: number
+  /** 项目工作目录（计算属性，由后端填充） */
+  workingDirectory?: string | null
 }
 
 /** 每个 session 的流式状态 */

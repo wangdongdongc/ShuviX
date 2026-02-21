@@ -66,6 +66,8 @@ interface Session {
   modelMetadata: string
   createdAt: number
   updatedAt: number
+  /** 项目工作目录（计算属性，由后端填充） */
+  workingDirectory?: string | null
 }
 
 /** 消息类型 */
@@ -158,6 +160,8 @@ interface ShiroBotAPI {
     updateModelMetadata: (params: SessionUpdateModelMetadataParams) => Promise<{ success: boolean }>
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
+    /** 获取单个会话（含 workingDirectory） */
+    getById: (id: string) => Promise<Session | null>
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>

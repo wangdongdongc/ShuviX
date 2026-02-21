@@ -121,7 +121,10 @@ const api = {
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) =>
-      ipcRenderer.invoke('session:delete', id)
+      ipcRenderer.invoke('session:delete', id),
+    /** 获取单个会话（含 workingDirectory） */
+    getById: (id: string) =>
+      ipcRenderer.invoke('session:getById', id)
   },
 
   // ============ 消息管理 ============

@@ -11,6 +11,8 @@ export interface Session {
   modelMetadata: string
   createdAt: number
   updatedAt: number
+  /** 项目工作目录（计算属性，由 service 层填充，DB 中不存在） */
+  workingDirectory?: string | null
 }
 
 /** IPC: 更新会话标题参数 */

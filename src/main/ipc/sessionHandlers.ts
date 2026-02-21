@@ -49,6 +49,11 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
+  /** 获取单个会话（含 workingDirectory） */
+  ipcMain.handle('session:getById', (_event, id: string) => {
+    return sessionService.getById(id) || null
+  })
+
   /** 删除会话（同时清理 Agent 内存实例 + Docker 容器） */
   ipcMain.handle('session:delete', (_event, id: string) => {
     agentService.removeAgent(id)

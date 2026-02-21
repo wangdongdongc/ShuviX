@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { MessageSquarePlus, Sparkles, Container, AlertCircle } from 'lucide-react'
+import { MessageSquarePlus, Sparkles, Container, AlertCircle, Folder } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
@@ -78,6 +78,17 @@ export function ChatView(): React.JSX.Element {
   const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
+
+  // 当前项目工作目录
+  const [projectPath, setProjectPath] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setProjectPath(null)
+      return
+    }
+    window.api.session.getById(activeSessionId).then((s) => setProjectPath(s?.workingDirectory || null))
+  }, [activeSessionId])
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -270,8 +281,15 @@ export function ChatView(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      {/* macOS 窗口拖拽区 */}
-      <div className="titlebar-drag h-12 flex-shrink-0" />
+      {/* macOS 窗口拖拽区 + 工作目录 */}
+      <div className="titlebar-drag h-12 flex-shrink-0 flex items-end justify-center pb-1.5">
+        {projectPath && (
+          <div className="titlebar-no-drag flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-text-tertiary max-w-[80%] truncate" title={projectPath}>
+            <Folder size={11} className="flex-shrink-0 text-text-tertiary/70" />
+            <span className="truncate">{projectPath}</span>
+          </div>
+        )}
+      </div>
 
       {!activeSessionId ? (
         /* 空状态 — 欢迎页 */
