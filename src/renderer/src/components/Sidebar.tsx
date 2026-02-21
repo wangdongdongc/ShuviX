@@ -169,7 +169,7 @@ export function Sidebar(): React.JSX.Element {
     <div className="flex flex-col h-full bg-bg-secondary border-r border-border-secondary">
       {/* macOS 窗口拖拽区 + 标题 */}
       <div className="titlebar-drag flex items-center justify-between px-4 pt-10 pb-3">
-        <h1 className="text-sm font-semibold text-text-primary tracking-tight">ShiroBot</h1>
+        <h1 className="text-sm font-semibold text-text-primary tracking-tight">{t('sidebar.title')}</h1>
         <button
           onClick={() => setShowCreateProject(true)}
           className="titlebar-no-drag p-1.5 rounded-lg hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors"

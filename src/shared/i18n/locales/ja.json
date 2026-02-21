@@ -19,6 +19,7 @@
   },
 
   "sidebar": {
+    "title": "プロジェクト",
     "tempChats": "一時チャット",
     "unnamedProject": "名前なしプロジェクト",
     "newChat": "新規チャット",
@@ -34,7 +35,7 @@
   },
 
   "chat": {
-    "welcomeTitle": "ShiroBot へようこそ",
+    "welcomeTitle": "ShuviX",
     "welcomeDesc": "マルチモデル対応のAIエージェントアシスタント。自然な対話と拡張機能をサポートします。",
     "startNewChat": "新しいチャットを開始",
     "emptyHint": "メッセージを送信して会話を開始",

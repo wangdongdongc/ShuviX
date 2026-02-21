@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { MessageSquarePlus, Sparkles, Container, AlertCircle, Folder } from 'lucide-react'
+import welcomeIcon from '../assets/ngnl_xiubi_blank_mini.jpg'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
@@ -297,8 +298,8 @@ export function ChatView(): React.JSX.Element {
         /* 空状态 — 欢迎页 */
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-md px-6">
-            <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
-              <Sparkles size={32} className="text-accent" />
+            <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-6">
+              <img src={welcomeIcon} alt="ShuviX" className="w-full h-full object-cover" />
             </div>
             <h2 className="text-xl font-semibold text-text-primary mb-2">
               {t('chat.welcomeTitle')}

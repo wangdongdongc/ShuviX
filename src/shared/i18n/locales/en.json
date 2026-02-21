@@ -19,6 +19,7 @@
   },
 
   "sidebar": {
+    "title": "Projects",
     "tempChats": "Temporary Chats",
     "unnamedProject": "Unnamed Project",
     "newChat": "New Chat",
@@ -34,7 +35,7 @@
   },
 
   "chat": {
-    "welcomeTitle": "Welcome to ShiroBot",
+    "welcomeTitle": "ShuviX",
     "welcomeDesc": "A multi-model AI agent assistant with natural conversation and extensible capabilities.",
     "startNewChat": "Start New Chat",
     "emptyHint": "Send a message to start the conversation",

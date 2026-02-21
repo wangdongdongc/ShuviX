@@ -19,6 +19,7 @@
   },
 
   "sidebar": {
+    "title": "项目",
     "tempChats": "临时对话",
     "unnamedProject": "未命名项目",
     "newChat": "新建对话",
@@ -34,7 +35,7 @@
   },
 
   "chat": {
-    "welcomeTitle": "欢迎使用 ShiroBot",
+    "welcomeTitle": "ShuviX",
     "welcomeDesc": "一个基于多模型的 AI 智能体助手，支持自然对话和扩展能力。",
     "startNewChat": "开始新对话",
     "emptyHint": "发送一条消息开始对话",
