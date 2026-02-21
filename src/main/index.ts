@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Menu, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, Menu, ipcMain, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -111,6 +111,7 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     show: false,
+    icon: join(__dirname, '../../resources/icon.png'),
     // macOS 无边框窗口，使用系统交通灯按钮
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 18 },
@@ -178,6 +179,13 @@ ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.shirobot')
+
+  // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
+  const iconPath = join(app.getAppPath(), 'resources/icon.png')
+  const appIcon = nativeImage.createFromPath(iconPath)
+  if (process.platform === 'darwin' && app.dock && !appIcon.isEmpty()) {
+    app.dock.setIcon(appIcon)
+  }
 
   // 初始化 i18n（从 DB 读取用户语言偏好，无则跟随系统）
   const savedLang = settingsDao.findByKey('general.language')
