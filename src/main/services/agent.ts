@@ -8,7 +8,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { messageDao } from '../dao/messageDao'
-import { nowTool } from '../tools/now'
+import { createNowTool } from '../tools/now'
 import { createBashTool } from '../tools/bash'
 import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
@@ -246,7 +246,7 @@ export class AgentService {
       }
     }
     const tools = [
-      nowTool,
+      createNowTool(),
       createBashTool(ctx),
       createReadTool(ctx),
       createWriteTool(ctx),
