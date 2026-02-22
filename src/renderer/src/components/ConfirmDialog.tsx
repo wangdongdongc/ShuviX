@@ -51,9 +51,9 @@ export function ConfirmDialog({
     <div
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay"
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[360px] max-w-[90vw] animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[360px] max-w-[90vw] dialog-panel">
         <div className="flex items-start gap-3 px-5 py-4">
           <img
             src={appIcon}

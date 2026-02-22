@@ -16,6 +16,20 @@ let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 const isMac = process.platform === 'darwin'
 
+/** 根据用户主题设置返回窗口背景色 */
+function getThemeBgColor(): string {
+  try {
+    const theme = settingsDao.findByKey('general.theme') || 'dark'
+    if (theme === 'system') {
+      const { nativeTheme } = require('electron')
+      return nativeTheme.shouldUseDarkColors ? '#0a0a0f' : '#ffffff'
+    }
+    return theme === 'light' ? '#ffffff' : '#0a0a0f'
+  } catch {
+    return '#0a0a0f'
+  }
+}
+
 /** 打开独立设置窗口（单例） */
 function openSettingsWindow(): void {
   // 已存在则聚焦
@@ -29,14 +43,14 @@ function openSettingsWindow(): void {
     height: 620,
     minWidth: 600,
     minHeight: 400,
+    show: false,
     title: '设置',
-    // macOS 使用隐藏标题栏 + 交通灯按钮，Windows/Linux 使用系统默认标题栏
+    // macOS 使用隐藏标题栏 + 交通灯按钮
     ...(isMac ? {
       titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 18 },
-      vibrancy: 'under-window'
+      trafficLightPosition: { x: 16, y: 18 }
     } : {}),
-    backgroundColor: '#0a0a0f',
+    backgroundColor: getThemeBgColor(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -135,13 +149,12 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     icon: join(__dirname, '../../resources/icon.png'),
-    // macOS 使用隐藏标题栏 + 交通灯按钮，Windows/Linux 使用系统默认标题栏
+    // macOS 使用隐藏标题栏 + 交通灯按钮
     ...(isMac ? {
       titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 18 },
-      vibrancy: 'under-window'
+      trafficLightPosition: { x: 16, y: 18 }
     } : {}),
-    backgroundColor: '#0a0a0f',
+    backgroundColor: getThemeBgColor(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -151,10 +164,6 @@ function createWindow(): void {
 
   // 绑定 Agent 服务到主窗口
   agentService.setWindow(mainWindow)
-
-  mainWindow.on('ready-to-show', () => {
-    mainWindow?.show()
-  })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -172,6 +181,16 @@ function createWindow(): void {
 // 获取应用版本号
 ipcMain.handle('app:version', () => {
   return app.getVersion()
+})
+
+// React 挂载完成后显示对应窗口
+ipcMain.on('app:window-ready', (event) => {
+  const sender = event.sender
+  if (mainWindow && sender === mainWindow.webContents) {
+    mainWindow.show()
+  } else if (settingsWindow && !settingsWindow.isDestroyed() && sender === settingsWindow.webContents) {
+    settingsWindow.show()
+  }
 })
 
 // Sidebar 按钮触发打开设置窗口

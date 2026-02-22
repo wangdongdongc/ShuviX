@@ -64,6 +64,13 @@ function App(): React.JSX.Element {
         const sessions = await window.api.session.list()
         useChatStore.getState().setSessions(sessions)
       }
+
+      // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.api.app.windowReady()
+        })
+      })
     }
     init()
   }, [])

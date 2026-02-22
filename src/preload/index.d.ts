@@ -133,6 +133,8 @@ interface ShuviXAPI {
     openImage: (dataUrl: string) => Promise<{ success: boolean }>
     /** 用系统文件管理器打开指定文件夹 */
     openFolder: (folderPath: string) => Promise<{ success: boolean }>
+    /** 通知主进程渲染已就绪，可以显示窗口 */
+    windowReady: () => void
     onSettingsChanged: (callback: () => void) => () => void
   }
   agent: {

@@ -94,5 +94,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       fontSize: Number(settings['general.fontSize']) || 14,
       loaded: true
     })
+    // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁
+    localStorage.setItem('theme', settings['general.theme'] || 'dark')
   }
 }))

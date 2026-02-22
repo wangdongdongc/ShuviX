@@ -52,6 +52,7 @@ export function GeneralSettings(): React.JSX.Element {
               key={th}
               onClick={() => {
                 setTheme(th)
+                localStorage.setItem('theme', th)
                 window.api.settings.set({ key: 'general.theme', value: th })
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${

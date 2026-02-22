@@ -91,8 +91,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay">
+      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw] dialog-panel">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
           <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>

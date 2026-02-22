@@ -41,6 +41,8 @@ const api = {
     openImage: (dataUrl: string) => ipcRenderer.invoke('app:open-image', dataUrl),
     /** 用系统文件管理器打开指定文件夹 */
     openFolder: (folderPath: string) => ipcRenderer.invoke('app:open-folder', folderPath),
+    /** 通知主进程渲染已就绪，可以显示窗口 */
+    windowReady: () => ipcRenderer.send('app:window-ready'),
     /** 监听设置变更（设置窗口关闭后主窗口收到通知） */ 
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
