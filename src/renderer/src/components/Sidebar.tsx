@@ -35,6 +35,13 @@ export function Sidebar(): React.JSX.Element {
     })
   }, [sessions, editingProjectId])
 
+  // 当前活动会话所属的项目组 key
+  const activeGroupKey = useMemo(() => {
+    if (!activeSessionId) return null
+    const s = sessions.find((s) => s.id === activeSessionId)
+    return s?.projectId || TEMP_GROUP_KEY
+  }, [activeSessionId, sessions])
+
   // 按 projectId 分组
   const grouped = useMemo(() => {
     const map = new Map<string, Session[]>()
@@ -110,10 +117,10 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg mb-px cursor-pointer transition-colors ${
+      className={`group flex items-center gap-2 px-3 py-[5px] cursor-pointer ${
         activeSessionId === session.id
-          ? 'bg-bg-active text-text-primary'
-          : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+          ? 'bg-bg-active/80 text-text-primary'
+          : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
       }`}
     >
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
@@ -122,31 +129,31 @@ export function Sidebar(): React.JSX.Element {
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
       </div>
-      <div className="hidden group-hover:flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
         <button
           onClick={(e) => {
             e.stopPropagation()
             handleDelete(session.id)
           }}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
+          className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
         >
-          <Trash2 size={12} />
+          <Trash2 size={11} />
         </button>
       </div>
     </div>
   )
 
   return (
-    <div className="flex flex-col h-full bg-bg-secondary border-r border-border-secondary">
+    <div className="flex flex-col h-full bg-bg-primary border-r border-border-secondary/50">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
-      <div className={`titlebar-drag flex items-center justify-between px-4 pb-3 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}>
-        <h1 className="text-sm font-semibold text-text-primary tracking-tight">{t('sidebar.title')}</h1>
+      <div className={`titlebar-drag flex items-center justify-between px-4 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}>
+        <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">{t('sidebar.title')}</h1>
         <button
           onClick={() => setShowCreateProject(true)}
-          className="titlebar-no-drag p-1.5 rounded-lg hover:bg-bg-hover text-text-secondary hover:text-text-primary transition-colors"
+          className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
           title={t('sidebar.newProject')}
         >
-          <FolderPlus size={18} />
+          <FolderPlus size={15} />
         </button>
       </div>
 
@@ -163,49 +170,46 @@ export function Sidebar(): React.JSX.Element {
             const isTemp = groupKey === TEMP_GROUP_KEY
             const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
             return (
-              <div key={groupKey} className="mb-2">
-                <div className={`flex items-center w-full px-2 py-2 rounded-md text-[13px] group/header ${
-                  isTemp
-                    ? 'bg-bg-tertiary/30 text-text-tertiary border-l-2 border-border-secondary'
-                    : 'bg-bg-tertiary/50 text-text-primary border-l-2 border-accent/60'
-                }`}>
+              <div key={groupKey} className={`mb-1 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
+                <div className="flex items-center w-full px-2 py-1 text-[10px] group/header">
                   <button
                     onClick={() => toggleGroup(groupKey)}
-                    className="flex items-center gap-2 flex-1 min-w-0 hover:text-text-primary transition-colors"
+                    className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
+                      activeGroupKey === groupKey
+                        ? 'text-text-secondary'
+                        : isTemp
+                          ? 'text-text-tertiary/60 hover:text-text-tertiary'
+                          : 'text-text-tertiary hover:text-text-secondary'
+                    }`}
                   >
-                    {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                    <span className={`truncate ${isTemp ? 'font-normal' : 'font-semibold'}`}>{groupLabel}</span>
+                    {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                    <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
                   </button>
                   {/* 项目操作按钮 */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover/header:opacity-100 transition-all">
-                    {/* 新建对话 */}
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
                         handleNewChat(isTemp ? null : groupKey)
                       }}
-                      className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
                       title={t('sidebar.newChat')}
                     >
-                      <MessageSquarePlus size={13} />
+                      <MessageSquarePlus size={11} />
                     </button>
-                    {/* 编辑项目（临时对话组不显示） */}
                     {!isTemp && (
                       <button
                         onClick={() => setEditingProjectId(groupKey)}
-                        className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
                         title={t('sidebar.editProject')}
                       >
-                        <Pencil size={12} />
+                        <Pencil size={10} />
                       </button>
                     )}
                   </div>
                 </div>
                 {!collapsed && (
-                  <div className={isTemp
-                    ? 'ml-1.5 border-l border-border-secondary/30 pl-1'
-                    : 'ml-1.5 border-l border-border-secondary/50 pl-1'
-                  }>
+                  <div className="ml-2 pl-1">
                     {groupSessions.map(renderSessionItem)}
                   </div>
                 )}
@@ -216,12 +220,12 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* 底部设置按钮 */}
-      <div className="p-3 border-t border-border-secondary">
+      <div className="p-2 border-t border-border-secondary/50">
         <button
           onClick={() => window.api.app.openSettings()}
-          className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
+          className="flex items-center gap-2 w-full px-3 py-1.5 rounded-md text-[11px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
         >
-          <Settings size={16} />
+          <Settings size={14} />
           <span>{t('sidebar.settings')}</span>
         </button>
       </div>
