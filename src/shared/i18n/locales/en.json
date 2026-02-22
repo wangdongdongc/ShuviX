@@ -146,6 +146,7 @@
     "defaultModel": "Default Model",
     "systemPrompt": "System Prompt",
     "systemPromptPlaceholder": "Define the AI assistant's role and behavior...",
+    "tokenUsageWarning": "Agent mode consumes significantly more tokens than simple chat. It is recommended to monitor your usage or set spending limits on your provider's platform to avoid unexpected charges.",
     "addProvider": "Add Custom Provider",
     "newProvider": "New Provider",
     "providerName": "Name",

@@ -146,6 +146,7 @@
     "defaultModel": "默认模型",
     "systemPrompt": "系统提示词",
     "systemPromptPlaceholder": "设定 AI 助手的角色和行为...",
+    "tokenUsageWarning": "智能体模式的 Token 用量通常远高于普通对话，建议在提供商平台关注用量或设置消费限额，避免产生意外费用。",
     "addProvider": "添加自定义提供商",
     "newProvider": "新增提供商",
     "providerName": "名称",

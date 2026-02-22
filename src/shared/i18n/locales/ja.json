@@ -146,6 +146,7 @@
     "defaultModel": "デフォルトモデル",
     "systemPrompt": "システムプロンプト",
     "systemPromptPlaceholder": "AIアシスタントの役割と動作を設定...",
+    "tokenUsageWarning": "エージェントモードでは通常の会話よりも大幅に多くのトークンを消費します。予期しない課金を避けるため、プロバイダーのプラットフォームで使用量の確認や利用上限の設定をお勧めします。",
     "addProvider": "カスタムプロバイダーを追加",
     "newProvider": "新規プロバイダー",
     "providerName": "名前",

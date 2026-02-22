@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, Save, ChevronDown, ChevronRight, Trash2, Plus, X } from 'lucide-react'
+import { Eye, EyeOff, Save, ChevronDown, ChevronRight, Trash2, Plus, X, TriangleAlert } from 'lucide-react'
 import { useSettingsStore, type ProviderModelInfo } from '../../stores/settingsStore'
 
 /** 能力标签 key 列表（desc 通过 i18n 查找） */
@@ -223,6 +223,12 @@ export function ProviderSettings(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 px-5 py-5 space-y-2 overflow-y-auto">
+        {/* Token 用量提示 */}
+        <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
+          <TriangleAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-[11px] text-text-secondary leading-relaxed">{t('settings.tokenUsageWarning')}</p>
+        </div>
+
         {/* 添加自定义提供商按钮 */}
         <button
           onClick={() => setShowAddForm(!showAddForm)}
