@@ -3,10 +3,25 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
+/** useChatActions 返回值类型 */
+export interface UseChatActionsReturn {
+  /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
+  handleRollback: (messageId: string) => Promise<void>
+  /** 重新生成最近一次助手回复 */
+  handleRegenerate: (assistantMsgId: string) => Promise<void>
+  /** 沙箱审批：用户允许/拒绝工具调用 */
+  handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
+  /** ask 工具：用户选择回调 */
+  handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
+  /** 创建新会话 */
+  handleNewChat: () => Promise<void>
+}
+
 /**
  * 聊天操作 Hook — 封装消息回退、重新生成、工具审批、用户输入等业务逻辑
+ * @param activeSessionId 当前活动会话ID
  */
-export function useChatActions(activeSessionId: string | null) {
+export function useChatActions(activeSessionId: string | null): UseChatActionsReturn {
   const { t } = useTranslation()
 
   /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
@@ -82,5 +97,5 @@ export function useChatActions(activeSessionId: string | null) {
     useChatStore.getState().setActiveSessionId(session.id)
   }, [])
 
-  return { handleRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat }
+  return { handleRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } satisfies UseChatActionsReturn
 }

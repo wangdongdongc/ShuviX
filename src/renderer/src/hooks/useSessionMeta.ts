@@ -3,8 +3,10 @@ import { useChatStore } from '../stores/chatStore'
 
 /**
  * 会话元信息 Hook — 会话切换时恢复 projectPath 和 enabledTools
+ * @param activeSessionId 当前活动会话ID
+ * @returns 当前会话关联的项目路径，无则返回 null
  */
-export function useSessionMeta(activeSessionId: string | null) {
+export function useSessionMeta(activeSessionId: string | null): string | null {
   const [projectPath, setProjectPath] = useState<string | null>(null)
 
   useEffect(() => {

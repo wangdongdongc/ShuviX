@@ -2,10 +2,27 @@ import { useCallback, useState } from 'react'
 import { fileToImageData } from '../utils/imageProcessing'
 import { useChatStore } from '../stores/chatStore'
 
+/** useImageUpload 返回值类型 */
+export interface UseImageUploadReturn {
+  /** 是否正在拖拽中 */
+  isDragging: boolean
+  /** 处理文件列表中的图片 */
+  handleImageFiles: (files: FileList | File[]) => Promise<void>
+  /** 拖拽进入事件处理 */
+  handleDragOver: (e: React.DragEvent) => void
+  /** 拖拽离开事件处理 */
+  handleDragLeave: (e: React.DragEvent) => void
+  /** 拖拽释放事件处理 */
+  handleDrop: (e: React.DragEvent) => void
+  /** 粘贴图片事件处理 */
+  handlePaste: (e: React.ClipboardEvent) => void
+}
+
 /**
  * 图片上传 Hook — 封装文件选择、拖拽、粘贴的图片处理逻辑
+ * @param modelSupportsVision 当前模型是否支持视觉输入
  */
-export function useImageUpload(modelSupportsVision: boolean) {
+export function useImageUpload(modelSupportsVision: boolean): UseImageUploadReturn {
   const { addPendingImage } = useChatStore()
   const [isDragging, setIsDragging] = useState(false)
 
@@ -56,5 +73,5 @@ export function useImageUpload(modelSupportsVision: boolean) {
     if (imageFiles.length > 0) void handleImageFiles(imageFiles)
   }, [modelSupportsVision, handleImageFiles])
 
-  return { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste }
+  return { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } satisfies UseImageUploadReturn
 }
