@@ -7,6 +7,7 @@ import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
+import { AskPanel } from './AskPanel'
 import { InputArea } from './InputArea'
 
 /** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
@@ -201,7 +202,6 @@ export function ChatView(): React.JSX.Element {
           args={meta?.args}
           status={liveExec?.status || 'running'}
           onApproval={handleToolApproval}
-          onUserInput={handleUserInput}
         />
       )
     }
@@ -227,7 +227,7 @@ export function ChatView(): React.JSX.Element {
         onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
       />
     )
-  }, [handleRollback, handleRegenerate, handleToolApproval, handleUserInput, lastAssistantTextId, toolExecutions])
+  }, [handleRollback, handleRegenerate, handleToolApproval, lastAssistantTextId, toolExecutions])
 
   /** 流式内容 / 思考 / 加载指示器 / 错误提示（固定在列表底部） */
   const Footer = useCallback(() => {
@@ -378,6 +378,8 @@ export function ChatView(): React.JSX.Element {
             />
           )}
 
+          {/* ask 工具浮动选项面板 */}
+          <AskPanel onUserInput={handleUserInput} />
           {/* 输入区 */}
           <InputArea />
         </>

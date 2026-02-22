@@ -11,8 +11,6 @@ interface ToolCallBlockProps {
   status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input'
   /** 审批回调（仅 pending_approval 时使用） */
   onApproval?: (toolCallId: string, approved: boolean) => void
-  /** 用户选择回调（仅 pending_user_input 时使用） */
-  onUserInput?: (toolCallId: string, selections: string[]) => void
 }
 
 /**
@@ -26,11 +24,9 @@ export function ToolCallBlock({
   result,
   status: propStatus,
   onApproval,
-  onUserInput,
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
-  const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
   // 从 store 读取实时工具执行状态，确保审批状态变更时组件能独立重渲染
   const liveStatus = useChatStore((s) => {
@@ -113,64 +109,6 @@ export function ToolCallBlock({
             : <ChevronRight size={12} className="text-text-tertiary flex-shrink-0" />
         )}
       </button>
-
-      {/* ask 工具：显示问题 + 选项卡片 */}
-      {status === 'pending_user_input' && toolName === 'ask' && (
-        <div className="px-3 pb-2.5 border-t border-border-secondary/50">
-          <p className="mt-2 text-xs text-text-primary font-medium">{args?.question}</p>
-          <div className="flex flex-col gap-1.5 mt-2">
-            {(args?.options || []).map((opt: { label: string; description: string }) => {
-              const isSelected = selectedOptions.has(opt.label)
-              return (
-                <button
-                  key={opt.label}
-                  onClick={() => {
-                    setSelectedOptions((prev) => {
-                      const next = new Set(prev)
-                      if (args?.allowMultiple) {
-                        if (next.has(opt.label)) next.delete(opt.label)
-                        else next.add(opt.label)
-                      } else {
-                        // 单选：直接切换
-                        if (next.has(opt.label)) next.clear()
-                        else { next.clear(); next.add(opt.label) }
-                      }
-                      return next
-                    })
-                  }}
-                  className={`flex items-start gap-2 px-2.5 py-2 rounded-md text-left transition-colors border ${
-                    isSelected
-                      ? 'border-accent bg-accent/10 text-text-primary'
-                      : 'border-border-secondary bg-bg-primary/50 text-text-secondary hover:bg-bg-hover/50'
-                  }`}
-                >
-                  <div className={`mt-0.5 w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center ${
-                    isSelected ? 'border-accent bg-accent' : 'border-border-primary'
-                  }`}>
-                    {isSelected && <Check size={10} className="text-white" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-medium">{opt.label}</div>
-                    {opt.description && <div className="text-[10px] text-text-tertiary mt-0.5">{opt.description}</div>}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-          <div className="flex items-center gap-2 mt-2.5">
-            <button
-              onClick={() => toolCallId && onUserInput?.(toolCallId, Array.from(selectedOptions))}
-              disabled={selectedOptions.size === 0}
-              className="px-3 py-1 rounded-md text-[11px] font-medium bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {t('toolCall.confirmSelection')}
-            </button>
-            {args?.allowMultiple && (
-              <span className="text-[10px] text-text-tertiary">{t('toolCall.multiSelectHint')}</span>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* 沙箱审批：显示命令内容 + 允许/拒绝按钮 */}
       {status === 'pending_approval' && (
