@@ -36,6 +36,27 @@ function StatusDot({ status }: { status: string }): React.JSX.Element {
   return <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
 }
 
+/** 单个工具描述项 — 默认截断两行，点击可展开全文 */
+function ToolDescItem({ tool }: { tool: McpToolInfo }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="flex items-start gap-2 py-0.5">
+      <Wrench size={10} className="text-purple-400 mt-0.5 flex-shrink-0" />
+      <div className="min-w-0">
+        <span className="text-[11px] font-mono text-purple-300">{tool.name.split('__').pop()}</span>
+        {tool.description && (
+          <p
+            className={`text-[10px] text-text-tertiary cursor-pointer hover:text-text-secondary transition-colors ${expanded ? '' : 'line-clamp-2'}`}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {tool.description}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** 状态文案 */
 function statusText(status: string, t: (key: string) => string): string {
   switch (status) {
@@ -456,16 +477,7 @@ export function McpSettings(): React.JSX.Element {
                         {t('settings.mcpTools')} ({tools.length})
                       </p>
                       {tools.map(tool => (
-                        <div key={tool.name} className="flex items-start gap-2 py-0.5">
-                          <Wrench size={10} className="text-purple-400 mt-0.5 flex-shrink-0" />
-                          <div>
-                            <span className="text-[11px] font-mono text-purple-300">{tool.name.split('__').pop()}</span>
-                            <span className="text-[10px] text-text-tertiary ml-1.5">{tool.label}</span>
-                            {tool.description && (
-                              <p className="text-[10px] text-text-tertiary">{tool.description}</p>
-                            )}
-                          </div>
-                        </div>
+                        <ToolDescItem key={tool.name} tool={tool} />
                       ))}
                     </div>
                   )}
