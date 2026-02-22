@@ -14,6 +14,8 @@ asarUnpack:
   - resources/**
 # 启用原生模块重新编译（better-sqlite3 等）
 npmRebuild: true
+# macOS 无开发者证书时，afterPack 钩子统一 ad-hoc 签名
+afterPack: build/afterPack.cjs
 win:
   executableName: shuvix
   target:
@@ -27,6 +29,8 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # 跳过 electron-builder 默认签名，由 afterPack 钩子统一 ad-hoc 签名
+  identity: null
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
@@ -65,3 +69,4 @@ publish:
   provider: github
   owner: wangdongdongc
   repo: ShuviX
+  releaseType: prerelease
