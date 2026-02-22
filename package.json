@@ -25,6 +25,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@mariozechner/pi-agent-core": "^0.52.12",
     "@mariozechner/pi-ai": "^0.52.12",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "better-sqlite3": "^12.6.2",
     "diff": "^8.0.3",
     "i18next": "^25.8.13",

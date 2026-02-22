@@ -21,12 +21,14 @@ import { buildCustomProviderCompat } from './providerCompat'
 import { t } from '../i18n'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
+import { mcpService } from './mcpService'
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
 
-/** 根据启用列表构建工具子集 */
+/** 根据启用列表构建工具子集（内置 + MCP 合并） */
 function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
-  const all: Record<string, AgentTool<any>> = {
+  // 内置工具
+  const builtinAll: Record<string, AgentTool<any>> = {
     now: createNowTool(),
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -34,6 +36,13 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     edit: createEditTool(ctx),
     ask: createAskTool(ctx)
   }
+  // MCP 工具（动态），key = "mcp:<serverName>:<toolName>"
+  const mcpAll: Record<string, AgentTool<any>> = {}
+  for (const tool of mcpService.getAllAgentTools()) {
+    mcpAll[tool.name] = tool
+  }
+  // 合并后按 enabledTools 过滤
+  const all = { ...builtinAll, ...mcpAll }
   return enabledTools.filter((name) => name in all).map((name) => all[name])
 }
 

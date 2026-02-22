@@ -118,6 +118,20 @@ class DatabaseManager {
         updatedAt INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL DEFAULT 'stdio',
+        command TEXT NOT NULL DEFAULT '',
+        args TEXT NOT NULL DEFAULT '[]',
+        env TEXT NOT NULL DEFAULT '{}',
+        url TEXT NOT NULL DEFAULT '',
+        headers TEXT NOT NULL DEFAULT '{}',
+        isEnabled INTEGER NOT NULL DEFAULT 1,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);

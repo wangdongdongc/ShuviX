@@ -5,6 +5,7 @@ import { registerMessageHandlers } from './messageHandlers'
 import { registerSettingsHandlers } from './settingsHandlers'
 import { registerProviderHandlers } from './providerHandlers'
 import { registerHttpLogHandlers } from './httpLogHandlers'
+import { registerMcpHandlers } from './mcpHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -18,4 +19,5 @@ export function registerIpcHandlers(): void {
   registerSettingsHandlers()
   registerProviderHandlers()
   registerHttpLogHandlers()
+  registerMcpHandlers()
 }

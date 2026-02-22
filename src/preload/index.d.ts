@@ -25,7 +25,11 @@ import type {
   SessionUpdateModelMetadataParams,
   SessionUpdateProjectParams,
   SessionUpdateTitleParams,
-  SettingsSetParams
+  SettingsSetParams,
+  McpServerAddParams,
+  McpServerUpdateParams,
+  McpServerInfo,
+  McpToolInfo
 } from '../main/types'
 
 /** Agent 事件流类型 */
@@ -203,7 +207,16 @@ interface ShuviXAPI {
     validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
   }
   tools: {
-    list: () => Promise<Array<{ name: string; label: string }>>
+    list: () => Promise<Array<{ name: string; label: string; group?: string }>>
+  }
+  mcp: {
+    list: () => Promise<McpServerInfo[]>
+    add: (params: McpServerAddParams) => Promise<{ success: boolean; id: string }>
+    update: (params: McpServerUpdateParams) => Promise<{ success: boolean }>
+    delete: (id: string) => Promise<{ success: boolean }>
+    connect: (id: string) => Promise<{ success: boolean }>
+    disconnect: (id: string) => Promise<{ success: boolean }>
+    getTools: (id: string) => Promise<McpToolInfo[]>
   }
 }
 

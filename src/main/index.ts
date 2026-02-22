@@ -8,6 +8,7 @@ import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
+import { mcpService } from './services/mcpService'
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -239,6 +240,11 @@ app.whenReady().then(() => {
     providerService.fillAllMissingCapabilities()
   }).catch(() => {})
 
+  // 启动所有已启用的 MCP Server
+  mcpService.connectAll().catch((err) => {
+    console.error('[MCP] connectAll failed:', err)
+  })
+
   createWindow()
 
   app.on('activate', () => {
@@ -247,9 +253,10 @@ app.whenReady().then(() => {
   })
 })
 
-// 应用退出前清理 Docker 容器
+// 应用退出前清理
 app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
+  mcpService.disconnectAll().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

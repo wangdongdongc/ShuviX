@@ -22,7 +22,9 @@ import type {
   SessionUpdateModelMetadataParams,
   SessionUpdateProjectParams,
   SessionUpdateTitleParams,
-  SettingsSetParams
+  SettingsSetParams,
+  McpServerAddParams,
+  McpServerUpdateParams
 } from '../main/types'
 
 /** 暴露给 Renderer 的 API */
@@ -177,6 +179,24 @@ const api = {
   // ============ 工具 ============
   tools: {
     list: () => ipcRenderer.invoke('tools:list')
+  },
+
+  // ============ MCP Server 管理 ============
+  mcp: {
+    /** 列出所有 MCP Server（含运行时状态） */
+    list: () => ipcRenderer.invoke('mcp:list'),
+    /** 添加 MCP Server */
+    add: (params: McpServerAddParams) => ipcRenderer.invoke('mcp:add', params),
+    /** 更新 MCP Server 配置 */
+    update: (params: McpServerUpdateParams) => ipcRenderer.invoke('mcp:update', params),
+    /** 删除 MCP Server */
+    delete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
+    /** 手动连接 */
+    connect: (id: string) => ipcRenderer.invoke('mcp:connect', id),
+    /** 手动断开 */
+    disconnect: (id: string) => ipcRenderer.invoke('mcp:disconnect', id),
+    /** 获取指定 server 已发现的工具列表 */
+    getTools: (id: string) => ipcRenderer.invoke('mcp:getTools', id)
   }
 }
 

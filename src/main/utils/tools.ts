@@ -4,10 +4,16 @@
  */
 
 import { t } from '../i18n'
+import { mcpService } from '../services/mcpService'
 
-/** 所有可用工具名称（固定顺序） */
+/** 内置工具名称（固定顺序） */
 export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'now'] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
+
+/** 获取所有可用工具名（内置 + MCP 动态） */
+export function getAllToolNames(): string[] {
+  return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames()]
+}
 
 /** 工具 prompt 构建上下文 */
 export interface ToolPromptContext {
@@ -54,6 +60,6 @@ export function resolveEnabledTools(
     const settings = JSON.parse(projectSettings || '{}')
     if (Array.isArray(settings.enabledTools)) return settings.enabledTools
   } catch { /* 忽略 */ }
-  // 默认全部启用
-  return [...ALL_TOOL_NAMES]
+  // 默认全部启用（内置 + MCP）
+  return getAllToolNames()
 }

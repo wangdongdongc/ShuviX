@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { agentService, ALL_TOOL_NAMES } from '../services/agent'
 import type { AgentInitParams, AgentInitResult, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
 import { t } from '../i18n'
+import { mcpService } from '../services/mcpService'
 
 /**
  * Agent 相关 IPC 处理器
@@ -55,9 +56,9 @@ export function registerAgentHandlers(): void {
     return { success: true }
   })
 
-  /** 获取所有可用工具列表（名称 + 标签） */
+  /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
   ipcMain.handle('tools:list', () => {
-    /** 工具名称到 i18n label key 的映射 */
+    /** 内置工具 */
     const labelMap: Record<string, string> = {
       bash: t('tool.bashLabel'),
       read: t('tool.readLabel'),
@@ -66,6 +67,17 @@ export function registerAgentHandlers(): void {
       ask: t('tool.askLabel'),
       now: t('tool.timeLabel')
     }
-    return ALL_TOOL_NAMES.map((name) => ({ name, label: labelMap[name] || name }))
+    const builtinTools = ALL_TOOL_NAMES.map((name) => ({
+      name,
+      label: labelMap[name] || name,
+      group: undefined as string | undefined
+    }))
+    /** MCP 工具（带 group 字段用于 UI 分组） */
+    const mcpTools = mcpService.getAllToolInfos().map((info) => ({
+      name: info.name,
+      label: info.label,
+      group: info.group
+    }))
+    return [...builtinTools, ...mcpTools]
   })
 }

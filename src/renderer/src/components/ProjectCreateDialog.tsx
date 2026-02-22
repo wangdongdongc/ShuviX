@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
+import { ToolSelectList, type ToolItem } from './ToolSelectList'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -22,7 +23,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [saving, setSaving] = useState(false)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const [dockerError, setDockerError] = useState<string | null>(null)
-  const [allTools, setAllTools] = useState<Array<{ name: string; label: string }>>([])
+  const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
 
   // 加载工具列表 + 检查 Docker 可用性
@@ -184,25 +185,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
               <Wrench size={12} />
               {t('projectForm.tools')}
             </label>
-            <div className="flex flex-wrap gap-2">
-              {allTools.map((tool) => (
-                <label key={tool.name} className="flex items-center gap-1.5 text-[11px] text-text-secondary cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={enabledTools.includes(tool.name)}
-                    onChange={() => {
-                      setEnabledTools((prev) =>
-                        prev.includes(tool.name)
-                          ? prev.filter((n) => n !== tool.name)
-                          : [...prev, tool.name]
-                      )
-                    }}
-                    className="rounded border-border-primary accent-accent w-3.5 h-3.5"
-                  />
-                  {tool.label}
-                </label>
-              ))}
-            </div>
+            <ToolSelectList tools={allTools} enabledTools={enabledTools} onChange={setEnabledTools} />
             <p className="text-[10px] text-text-tertiary mt-2">
               {t('projectForm.toolsHint')}
             </p>

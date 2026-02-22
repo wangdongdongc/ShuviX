@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Wrench } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useClickOutside } from '../hooks/useClickOutside'
+import { ToolSelectList, type ToolItem } from './ToolSelectList'
 
 /**
  * 工具选择器 — 动态切换会话启用的工具集
@@ -13,25 +14,35 @@ export function ToolPicker(): React.JSX.Element | null {
 
   const toolsRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-  const [allTools, setAllTools] = useState<Array<{ name: string; label: string }>>([])
+  const [allTools, setAllTools] = useState<ToolItem[]>([])
 
   const close = useCallback(() => setOpen(false), [])
   useClickOutside(toolsRef, close, open)
 
-  // 加载工具列表
+  // 加载工具列表，并清理 enabledTools 中不存在的陈旧名称
   useEffect(() => {
-    window.api.tools.list().then(setAllTools)
+    window.api.tools.list().then(tools => {
+      setAllTools(tools)
+      const validNames = new Set(tools.map(t => t.name))
+      const cleaned = enabledTools.filter(n => validNames.has(n))
+      if (cleaned.length !== enabledTools.length) {
+        void handleChange(cleaned)
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (allTools.length === 0) return null
 
-  /** 切换单个工具的启用状态 */
-  const handleToggleTool = async (toolName: string): Promise<void> => {
-    const newTools = enabledTools.includes(toolName)
-      ? enabledTools.filter((n) => n !== toolName)
-      : [...enabledTools, toolName]
+  // 仅统计在 allTools 中实际存在的已启用工具
+  const validNames = new Set(allTools.map(t => t.name))
+  const activeCount = enabledTools.filter(n => validNames.has(n)).length
+  const totalCount = allTools.length
+  const disabledCount = totalCount - activeCount
+
+  /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
+  const handleChange = async (newTools: string[]): Promise<void> => {
     setEnabledTools(newTools)
-    // 动态更新 Agent 工具集
     if (activeSessionId) {
       await window.api.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
       // 持久化到 session modelMetadata
@@ -52,34 +63,26 @@ export function ToolPicker(): React.JSX.Element | null {
       <button
         onClick={() => setOpen(!open)}
         className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
-          enabledTools.length < allTools.length
+          disabledCount > 0
             ? 'border-orange-500/50 text-orange-400'
             : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
         }`}
         title={t('input.tools')}
       >
         <Wrench size={11} />
-        <span>{enabledTools.length}/{allTools.length}</span>
+        {disabledCount > 0 && <span>-{disabledCount}</span>}
       </button>
 
       {open && (
-        <div className="absolute left-0 bottom-8 w-[160px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+        <div className="absolute left-0 bottom-8 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
           <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.tools')}</div>
           <div className="py-1">
-            {allTools.map((tool) => (
-              <label
-                key={tool.name}
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors cursor-pointer"
-              >
-                <input
-                  type="checkbox"
-                  checked={enabledTools.includes(tool.name)}
-                  onChange={() => { void handleToggleTool(tool.name) }}
-                  className="rounded border-border-primary accent-accent w-3.5 h-3.5"
-                />
-                {tool.label}
-              </label>
-            ))}
+            <ToolSelectList
+              tools={allTools}
+              enabledTools={enabledTools}
+              onChange={(tools) => { void handleChange(tools) }}
+              compact
+            />
           </div>
         </div>
       )}
