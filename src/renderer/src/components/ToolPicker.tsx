@@ -68,13 +68,13 @@ export function ToolPicker(): React.JSX.Element | null {
   }
 
   return (
-    <div ref={toolsRef} className="relative">
+    <div ref={toolsRef} className="relative flex items-center">
       <button
         onClick={() => setOpen(!open)}
-        className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
+        className={`inline-flex items-center gap-1 text-[11px] transition-colors ${
           disabledCount > 0
-            ? 'border-orange-500/50 text-orange-400'
-            : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
+            ? 'text-amber-400 hover:text-amber-300'
+            : 'text-amber-400/50 hover:text-amber-400'
         }`}
         title={t('input.tools')}
       >

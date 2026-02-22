@@ -97,10 +97,10 @@ export function ModelPicker(): React.JSX.Element {
   }
 
   return (
-    <div ref={pickerRef} className="relative">
+    <div ref={pickerRef} className="relative flex items-center">
       <button
         onClick={togglePicker}
-        className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
+        className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
         title={t('input.switchModel')}
       >
         <span className="max-w-[120px] truncate">{activeModel}</span>

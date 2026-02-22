@@ -42,13 +42,13 @@ export function ThinkingPicker(): React.JSX.Element | null {
   }
 
   return (
-    <div ref={thinkingRef} className="relative">
+    <div ref={thinkingRef} className="relative flex items-center">
       <button
         onClick={() => setOpen(!open)}
-        className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
+        className={`inline-flex items-center gap-1 text-[11px] transition-colors ${
           thinkingLevel !== 'off'
-            ? 'border-purple-500/50 text-purple-400'
-            : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
+            ? 'text-purple-400 hover:text-purple-300'
+            : 'text-purple-400/50 hover:text-purple-400'
         }`}
         title={t('input.thinkingDepth')}
       >

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, ImagePlus, X } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
@@ -28,13 +28,44 @@ export function InputArea(): React.JSX.Element {
 
   const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } = useImageUpload(modelSupportsVision)
 
-  /** 自动调整文本框高度 */
+  // 拖拽调节的 textarea 最小高度
+  const DRAG_MIN = 60
+  const DRAG_MAX = 480
+  const DEFAULT_MIN_H = 72
+  const [minH, setMinH] = useState(DEFAULT_MIN_H)
+  const draggingRef = useRef(false)
+
+  /** 自动调整文本框高度（内容超出时自动扩展） */
   useEffect(() => {
     const el = textareaRef.current
-    if (!el) return
+    if (!el || draggingRef.current) return
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
-  }, [inputText])
+    el.style.height = Math.max(el.scrollHeight, minH) + 'px'
+  }, [inputText, minH])
+
+  /** 拖拽手柄：向上拖增大输入区，向下拖缩小 */
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+    const startY = e.clientY
+    const startH = minH
+    const onMove = (ev: MouseEvent): void => {
+      const delta = startY - ev.clientY
+      const newH = Math.max(DRAG_MIN, Math.min(startH + delta, DRAG_MAX))
+      setMinH(newH)
+      // 拖拽时直接设置 textarea 高度
+      if (textareaRef.current) {
+        textareaRef.current.style.height = newH + 'px'
+      }
+    }
+    const onUp = (): void => {
+      draggingRef.current = false
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [minH])
 
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
@@ -90,18 +121,24 @@ export function InputArea(): React.JSX.Element {
   const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !isStreaming && activeSessionId
 
   return (
-    <div className="border-t border-border-secondary bg-bg-primary px-4 py-3">
+    <div
+      className={`border-t bg-bg-secondary transition-colors ${
+        isDragging
+          ? 'border-accent border-dashed bg-accent/5'
+          : 'border-border-secondary'
+      }`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* 拖拽调节手柄 */}
+      <div
+        onMouseDown={handleResizeStart}
+        className="flex justify-center py-1 cursor-ns-resize group"
+      >
+        <div className="w-8 h-0.5 rounded-full bg-border-secondary group-hover:bg-text-tertiary transition-colors" />
+      </div>
       <div className="max-w-3xl mx-auto">
-        <div
-          className={`bg-bg-secondary rounded-xl border transition-colors ${
-            isDragging
-              ? 'border-accent border-dashed bg-accent/5'
-              : 'border-border-primary focus-within:border-accent/50'
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
@@ -125,7 +162,7 @@ export function InputArea(): React.JSX.Element {
 
           <div className="relative flex items-end gap-2">
             {/* 左下角紧凑扩展位 */}
-            <div className="absolute left-2 bottom-2 z-10 flex items-center gap-1.5">
+            <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
               <ModelPicker />
 
               {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
@@ -133,10 +170,10 @@ export function InputArea(): React.JSX.Element {
                 <>
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
+                    className="inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
                     title={t('input.uploadImage')}
                   >
-                    <ImagePlus size={11} />
+                    <ImagePlus size={12} />
                   </button>
                   <input
                     ref={fileInputRef}
@@ -155,7 +192,7 @@ export function InputArea(): React.JSX.Element {
               {/* 上下文用量指示器 */}
               {maxContextTokens > 0 && (
                 <span
-                  className="h-6 inline-flex items-center px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-tertiary select-none"
+                  className="inline-flex items-center text-[11px] select-none"
                   title={t('input.contextUsage', { used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-', max: maxContextTokens.toLocaleString() })}
                 >
                   {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
@@ -176,8 +213,9 @@ export function InputArea(): React.JSX.Element {
               onPaste={handlePaste}
               placeholder={activeSessionId ? (modelSupportsVision ? t('input.placeholderVision') : t('input.placeholder')) : t('input.placeholderNoSession')}
               disabled={!activeSessionId}
-              rows={1}
-              className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-3 pb-9 resize-none outline-none max-h-[200px] disabled:opacity-50"
+              rows={3}
+              style={{ minHeight: `${minH}px` }}
+              className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none disabled:opacity-50"
             />
 
             {isStreaming ? (
@@ -203,7 +241,6 @@ export function InputArea(): React.JSX.Element {
               </button>
             )}
           </div>
-        </div>
       </div>
     </div>
   )
