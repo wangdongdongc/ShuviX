@@ -64,8 +64,7 @@ export function registerAgentHandlers(): void {
       read: t('tool.readLabel'),
       write: t('tool.writeLabel'),
       edit: t('tool.editLabel'),
-      ask: t('tool.askLabel'),
-      now: t('tool.timeLabel')
+      ask: t('tool.askLabel')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,

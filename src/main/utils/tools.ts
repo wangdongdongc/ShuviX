@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import { mcpService } from '../services/mcpService'
 
 /** 内置工具名称（固定顺序） */
-export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'now'] as const
+export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask'] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 
 /** 获取所有可用工具名（内置 + MCP 动态） */

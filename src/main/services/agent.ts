@@ -8,7 +8,6 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { messageDao } from '../dao/messageDao'
-import { createNowTool } from '../tools/now'
 import { createBashTool } from '../tools/bash'
 import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
@@ -31,7 +30,6 @@ export type { ToolName } from '../utils/tools'
 function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
   // 内置工具
   const builtinAll: Record<string, AgentTool<any>> = {
-    now: createNowTool(),
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
     write: createWriteTool(ctx),
