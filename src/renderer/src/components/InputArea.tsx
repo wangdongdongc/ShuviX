@@ -1,8 +1,11 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, ChevronDown, Brain, ImagePlus, X, Wrench } from 'lucide-react'
+import { Send, Square, ImagePlus, X } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
+import { useImageUpload } from '../hooks/useImageUpload'
+import { ModelPicker } from './ModelPicker'
+import { ThinkingPicker } from './ThinkingPicker'
+import { ToolPicker } from './ToolPicker'
 
 /** 将 token 数格式化为紧凑显示（如 12.5k、128k） */
 function formatTokenCount(n: number): string {
@@ -19,32 +22,11 @@ function formatTokenCount(n: number): string {
  */
 export function InputArea(): React.JSX.Element {
   const { t } = useTranslation()
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage, enabledTools, setEnabledTools } = useChatStore()
-  const {
-    availableModels,
-    providers,
-    activeProvider,
-    activeModel,
-    setActiveProvider,
-    setActiveModel
-  } = useSettingsStore()
+  const { inputText, setInputText, isStreaming, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const pickerRef = useRef<HTMLDivElement>(null)
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerStep, setPickerStep] = useState<'provider' | 'model'>('provider')
-  const [draftProvider, setDraftProvider] = useState(activeProvider)
-  const thinkingRef = useRef<HTMLDivElement>(null)
-  const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [isDragging, setIsDragging] = useState(false)
-  const toolsRef = useRef<HTMLDivElement>(null)
-  const [toolsPickerOpen, setToolsPickerOpen] = useState(false)
-  const [allTools, setAllTools] = useState<Array<{ name: string; label: string }>>([])
 
-  // 加载工具列表
-  useEffect(() => {
-    window.api.tools.list().then(setAllTools)
-  }, [])
+  const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } = useImageUpload(modelSupportsVision)
 
   /** 自动调整文本框高度 */
   useEffect(() => {
@@ -53,69 +35,6 @@ export function InputArea(): React.JSX.Element {
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [inputText])
-
-  /** 压缩阈值配置 */
-  const MAX_EDGE = 2048
-  const JPEG_QUALITY = 0.85
-  const SKIP_SIZE = 1 * 1024 * 1024 // 1MB 以下且尺寸达标则跳过压缩
-
-  /** 将文件转为 base64 图片数据（大图自动压缩） */
-  const fileToImageData = (file: File): Promise<{ data: string; mimeType: string; preview: string }> => {
-    return new Promise((resolve, reject) => {
-      // 先用 FileReader 读取为 data URL（兼容 CSP，不需要 blob:）
-      const reader = new FileReader()
-      reader.onerror = reject
-      reader.onload = () => {
-        const dataUrl = reader.result as string
-        const img = new Image()
-        img.onload = () => {
-          const { naturalWidth: w, naturalHeight: h } = img
-          const needResize = w > MAX_EDGE || h > MAX_EDGE
-          const needCompress = needResize || file.size > SKIP_SIZE
-
-          if (!needCompress) {
-            // 小图直接用原始数据，避免不必要的质量损失
-            resolve({ data: dataUrl.split(',')[1], mimeType: file.type, preview: dataUrl })
-            return
-          }
-
-          console.log('压缩', file.name)
-
-          // 计算缩放尺寸（等比缩小到长边 MAX_EDGE）
-          let dw = w, dh = h
-          if (needResize) {
-            const ratio = MAX_EDGE / Math.max(w, h)
-            dw = Math.round(w * ratio)
-            dh = Math.round(h * ratio)
-          }
-
-          // Canvas 压缩
-          const canvas = document.createElement('canvas')
-          canvas.width = dw
-          canvas.height = dh
-          const ctx = canvas.getContext('2d')!
-          ctx.drawImage(img, 0, 0, dw, dh)
-
-          const compressedUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY)
-          const base64 = compressedUrl.split(',')[1]
-          resolve({ data: base64, mimeType: 'image/jpeg', preview: compressedUrl })
-        }
-        img.onerror = () => reject(new Error('图片加载失败'))
-        // 使用 data: URL 加载图片（CSP 允许 data:）
-        img.src = dataUrl
-      }
-      reader.readAsDataURL(file)
-    })
-  }
-
-  /** 处理文件选择/拖放的图片 */
-  const handleImageFiles = useCallback(async (files: FileList | File[]) => {
-    const imageFiles = Array.from(files).filter((f) => f.type.startsWith('image/'))
-    for (const file of imageFiles) {
-      const imgData = await fileToImageData(file)
-      addPendingImage(imgData)
-    }
-  }, [addPendingImage])
 
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
@@ -170,199 +89,6 @@ export function InputArea(): React.JSX.Element {
 
   const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !isStreaming && activeSessionId
 
-  // 已启用 provider 列表（直接从 providers 筛选，确保无模型的自定义提供商也可见）
-  const enabledProviders = providers.filter((p) => p.isEnabled)
-
-  // 选择器内当前 provider 下可选模型（仅已启用）
-  const draftProviderModels = availableModels.filter((m) => m.providerId === draftProvider)
-
-  /** 点击外部关闭选择器 */
-  useEffect(() => {
-    if (!pickerOpen) return
-    const handleClickOutside = (event: MouseEvent): void => {
-      if (!pickerRef.current) return
-      if (!pickerRef.current.contains(event.target as Node)) {
-        setPickerOpen(false)
-        setPickerStep('provider')
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [pickerOpen])
-
-  /** 打开单一选择器（默认先选 provider） */
-  const togglePicker = (): void => {
-    if (pickerOpen) {
-      setPickerOpen(false)
-      setPickerStep('provider')
-      return
-    }
-    setDraftProvider(activeProvider)
-    setPickerStep('provider')
-    setPickerOpen(true)
-  }
-
-  /** 选择 provider 后进入模型选择 */
-  const handlePickProvider = (providerId: string): void => {
-    setDraftProvider(providerId)
-    setPickerStep('model')
-  }
-
-  /** 紧凑选择器：确认模型并提交 provider/model 切换 */
-  const handlePickModel = async (modelId: string): Promise<void> => {
-    setActiveProvider(draftProvider)
-    setActiveModel(modelId)
-
-    // 会话级持久化：仅更新当前会话的 provider/model
-    if (activeSessionId) {
-      await window.api.session.updateModelConfig({
-        id: activeSessionId,
-        provider: draftProvider,
-        model: modelId
-      })
-      const sessions = await window.api.session.list()
-      setSessions(sessions)
-    }
-
-    const providerInfo = providers.find((p) => p.id === draftProvider)
-    if (activeSessionId) {
-      await window.api.agent.setModel({
-        sessionId: activeSessionId,
-        provider: draftProvider,
-        model: modelId,
-        baseUrl: providerInfo?.baseUrl || undefined,
-        apiProtocol: (providerInfo as any)?.apiProtocol || undefined
-      })
-    }
-
-    // 根据新模型能力更新思考深度状态
-    const selectedModel = availableModels.find((m) => m.providerId === draftProvider && m.modelId === modelId)
-    const caps = (() => { try { return JSON.parse(selectedModel?.capabilities || '{}') } catch { return {} } })()
-    const hasReasoning = !!caps.reasoning
-    setModelSupportsReasoning(hasReasoning)
-    setModelSupportsVision(!!caps.vision)
-    useChatStore.getState().setMaxContextTokens(caps.maxInputTokens || 0)
-    useChatStore.getState().setUsedContextTokens(null)
-    const newLevel = hasReasoning ? 'medium' : 'off'
-    setThinkingLevel(newLevel)
-    if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as any })
-      // 持久化思考深度到会话
-      await window.api.session.updateModelMetadata({
-        id: activeSessionId,
-        modelMetadata: JSON.stringify({ thinkingLevel: newLevel })
-      })
-    }
-
-    setPickerOpen(false)
-    setPickerStep('provider')
-  }
-
-  /** 思考深度选项 */
-  const thinkingLevels = [
-    { value: 'off', label: t('input.thinkOff') },
-    { value: 'low', label: t('input.thinkLow') },
-    { value: 'medium', label: t('input.thinkMedium') },
-    { value: 'high', label: t('input.thinkHigh') },
-    { value: 'xhigh', label: t('input.thinkXHigh') }
-  ]
-
-  /** 切换思考深度 */
-  const handleSetThinkingLevel = async (level: string): Promise<void> => {
-    setThinkingLevel(level)
-    setThinkingPickerOpen(false)
-    if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as any })
-      // 持久化思考深度到会话
-      await window.api.session.updateModelMetadata({
-        id: activeSessionId,
-        modelMetadata: JSON.stringify({ thinkingLevel: level })
-      })
-    }
-  }
-
-  /** 点击外部关闭思考深度选择器 */
-  useEffect(() => {
-    if (!thinkingPickerOpen) return
-    const handleClickOutside = (event: MouseEvent): void => {
-      if (!thinkingRef.current?.contains(event.target as Node)) {
-        setThinkingPickerOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [thinkingPickerOpen])
-
-  /** 点击外部关闭工具选择器 */
-  useEffect(() => {
-    if (!toolsPickerOpen) return
-    const handleClickOutside = (event: MouseEvent): void => {
-      if (!toolsRef.current?.contains(event.target as Node)) {
-        setToolsPickerOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [toolsPickerOpen])
-
-  /** 切换单个工具的启用状态 */
-  const handleToggleTool = async (toolName: string): Promise<void> => {
-    const newTools = enabledTools.includes(toolName)
-      ? enabledTools.filter((n) => n !== toolName)
-      : [...enabledTools, toolName]
-    setEnabledTools(newTools)
-    // 动态更新 Agent 工具集
-    if (activeSessionId) {
-      await window.api.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      // 持久化到 session modelMetadata
-      const currentMeta = (() => {
-        const s = useChatStore.getState().sessions.find((s) => s.id === activeSessionId)
-        try { return JSON.parse(s?.modelMetadata || '{}') } catch { return {} }
-      })()
-      currentMeta.enabledTools = newTools
-      await window.api.session.updateModelMetadata({
-        id: activeSessionId,
-        modelMetadata: JSON.stringify(currentMeta)
-      })
-    }
-  }
-
-  /** 拖拽事件处理 */
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (modelSupportsVision) setIsDragging(true)
-  }, [modelSupportsVision])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragging(false)
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setIsDragging(false)
-    if (!modelSupportsVision) return
-    const files = e.dataTransfer.files
-    if (files.length > 0) void handleImageFiles(files)
-  }, [modelSupportsVision, handleImageFiles])
-
-  /** 粘贴图片 */
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    if (!modelSupportsVision) return
-    const items = e.clipboardData.items
-    const imageFiles: File[] = []
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) imageFiles.push(file)
-      }
-    }
-    if (imageFiles.length > 0) void handleImageFiles(imageFiles)
-  }, [modelSupportsVision, handleImageFiles])
-
   return (
     <div className="border-t border-border-secondary bg-bg-primary px-4 py-3">
       <div className="max-w-3xl mx-auto">
@@ -400,86 +126,29 @@ export function InputArea(): React.JSX.Element {
           <div className="relative flex items-end gap-2">
             {/* 左下角紧凑扩展位 */}
             <div className="absolute left-2 bottom-2 z-10 flex items-center gap-1.5">
-              {/* 模型选择器 */}
-              <div ref={pickerRef} className="relative">
-                <button
-                  onClick={togglePicker}
-                  className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
-                  title={t('input.switchModel')}
-                >
-                  <span className="max-w-[120px] truncate">{activeModel}</span>
-                  <ChevronDown size={11} />
-                </button>
-
-                {pickerOpen && (
-                  <div className="absolute left-0 bottom-8 w-[280px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-                    <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary flex items-center justify-between">
-                      <span>{pickerStep === 'provider' ? t('input.selectProvider') : t('input.selectModel')}</span>
-                      {pickerStep === 'model' && (
-                        <button
-                          onClick={() => setPickerStep('provider')}
-                          className="text-text-secondary hover:text-text-primary"
-                        >
-                          {t('common.back')}
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="max-h-56 overflow-y-auto py-1">
-                      {pickerStep === 'provider' && enabledProviders.map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => handlePickProvider(p.id)}
-                          className="w-full text-left px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors"
-                        >
-                          {p.name}
-                        </button>
-                      ))}
-
-                      {pickerStep === 'model' && draftProviderModels.map((m) => {
-                        const caps = (() => { try { return JSON.parse(m.capabilities || '{}') } catch { return {} } })()
-                        return (
-                          <button
-                            key={m.id}
-                            onClick={() => { void handlePickModel(m.modelId) }}
-                            className="w-full text-left px-2 py-1.5 hover:bg-bg-hover transition-colors flex items-center gap-1.5"
-                          >
-                            <span className="text-[11px] text-text-primary truncate">{m.modelId}</span>
-                            <div className="flex items-center gap-0.5 shrink-0 ml-auto">
-                              {caps.vision && <span className="px-1 py-0.5 text-[8px] rounded bg-blue-500/20 text-blue-400">Vision</span>}
-                              {caps.functionCalling && <span className="px-1 py-0.5 text-[8px] rounded bg-green-500/20 text-green-400">Tools</span>}
-                              {caps.reasoning && <span className="px-1 py-0.5 text-[8px] rounded bg-purple-500/20 text-purple-400">Reasoning</span>}
-                              {caps.imageOutput && <span className="px-1 py-0.5 text-[8px] rounded bg-orange-500/20 text-orange-400">ImgOut</span>}
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <ModelPicker />
 
               {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
               {modelSupportsVision && (
                 <>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
-                  title={t('input.uploadImage')}
-                >
-                  <ImagePlus size={11} />
-                </button>
-                            <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) void handleImageFiles(e.target.files)
-                  e.target.value = ''
-                }}
-              />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-6 inline-flex items-center gap-1 px-2 rounded-md border border-border-primary/70 bg-bg-primary/45 backdrop-blur-sm text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-primary/60 transition-colors"
+                    title={t('input.uploadImage')}
+                  >
+                    <ImagePlus size={11} />
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files) void handleImageFiles(e.target.files)
+                      e.target.value = ''
+                    }}
+                  />
                 </>
               )}
 
@@ -495,82 +164,8 @@ export function InputArea(): React.JSX.Element {
                 </span>
               )}
 
-              {/* 思考深度选择器（仅当模型支持 reasoning 时显示） */}
-              {modelSupportsReasoning && (
-                <div ref={thinkingRef} className="relative">
-                  <button
-                    onClick={() => setThinkingPickerOpen(!thinkingPickerOpen)}
-                    className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
-                      thinkingLevel !== 'off'
-                        ? 'border-purple-500/50 text-purple-400'
-                        : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
-                    }`}
-                    title={t('input.thinkingDepth')}
-                  >
-                    <Brain size={11} />
-                    <span>{thinkingLevels.find((l) => l.value === thinkingLevel)?.label || t('input.thinkOff')}</span>
-                  </button>
-
-                  {thinkingPickerOpen && (
-                    <div className="absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.thinkingDepth')}</div>
-                      <div className="py-1">
-                        {thinkingLevels.map((l) => (
-                          <button
-                            key={l.value}
-                            onClick={() => { void handleSetThinkingLevel(l.value) }}
-                            className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-bg-hover transition-colors ${
-                              thinkingLevel === l.value ? 'text-purple-400 font-medium' : 'text-text-primary'
-                            }`}
-                          >
-                            {l.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 工具选择器 */}
-              {allTools.length > 0 && (
-                <div ref={toolsRef} className="relative">
-                  <button
-                    onClick={() => setToolsPickerOpen(!toolsPickerOpen)}
-                    className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
-                      enabledTools.length < allTools.length
-                        ? 'border-orange-500/50 text-orange-400'
-                        : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
-                    }`}
-                    title={t('input.tools')}
-                  >
-                    <Wrench size={11} />
-                    <span>{enabledTools.length}/{allTools.length}</span>
-                  </button>
-
-                  {toolsPickerOpen && (
-                    <div className="absolute left-0 bottom-8 w-[160px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.tools')}</div>
-                      <div className="py-1">
-                        {allTools.map((tool) => (
-                          <label
-                            key={tool.name}
-                            className="flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={enabledTools.includes(tool.name)}
-                              onChange={() => { void handleToggleTool(tool.name) }}
-                              className="rounded border-border-primary accent-accent w-3.5 h-3.5"
-                            />
-                            {tool.label}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              <ThinkingPicker />
+              <ToolPicker />
             </div>
 
             <textarea
