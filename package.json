@@ -1,6 +1,6 @@
 {
   "name": "shuvix",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A multi-model-based AI agent assistant that supports natural conversation and extensibility.",
   "main": "./out/main/index.js",
   "author": "wangdongdongc",

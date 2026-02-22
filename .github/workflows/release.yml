@@ -22,8 +22,8 @@ jobs:
           # Windows
           - os: windows-latest
             platform: win
-          # Linux
-          - os: ubuntu-latest
+          # Linux（使用 22.04 LTS 确保 arm64 交叉编译工具链可用）
+          - os: ubuntu-22.04
             platform: linux
 
     runs-on: ${{ matrix.os }}
