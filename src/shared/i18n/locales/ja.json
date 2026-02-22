@@ -91,7 +91,10 @@
     "deny": "拒否",
     "sandboxHint": "サンドボックス: bashコマンドは承認が必要です",
     "params": "パラメータ",
-    "result": "結果"
+    "result": "結果",
+    "pendingUserInput": "選択待ち",
+    "confirmSelection": "確認",
+    "multiSelectHint": "複数選択可"
   },
 
   "sessionEdit": {
@@ -188,6 +191,7 @@
   "agent": {
     "defaultTitle": "新規チャット",
     "promptSupplement": "bash、read、write、editツールを使用して、現在のプロジェクトディレクトリ内のファイルを操作できます。すべての相対パスはプロジェクトディレクトリに基づきます。",
+    "askToolGuidance": "ユーザーに複数のアプローチ、スタイル、設定、方向から選んでもらう必要がある場合は、必ず ask ツールを使用してクリック可能な選択肢カードを提示してください。番号付きの選択肢をプレーンテキストで列挙しないでください。",
     "titleGenPrompt": "あなたはタイトル生成アシスタントです。ユーザーとアシスタントの最初のやり取りに基づいて、簡潔なタイトルを生成してください（10語以内、引用符や句読点なし）。タイトルのみを出力し、他の内容は含めないでください。"
   },
 
@@ -226,6 +230,10 @@
     "convertFailed": "ファイルの変換に失敗しました: {{path}}",
     "unsupportedFormat": "サポートされていないファイル形式 ({{ext}}): {{path}}。テキストファイルおよび PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 形式をサポートしています。",
     "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
-    "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました"
+    "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました",
+    "askLabel": "ユーザーに質問",
+    "askDesc": "ユーザーに質問し、事前定義された選択肢から選んでもらいます",
+    "askNoSelection": "ユーザーは選択しませんでした",
+    "askUserSelected": "ユーザーが選択しました: {{selections}}"
   }
 }

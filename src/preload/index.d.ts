@@ -30,7 +30,7 @@ import type {
 
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request' | 'user_input_request'
   sessionId: string
   data?: string
   error?: string
@@ -39,6 +39,9 @@ interface AgentStreamEvent {
   toolArgs?: any
   toolResult?: any
   toolIsError?: boolean
+  approvalRequired?: boolean
+  userInputRequired?: boolean
+  userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
 }
 
 /** 项目类型 */
@@ -130,6 +133,8 @@ interface ShuviXAPI {
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
     approveToolCall: (params: { toolCallId: string; approved: boolean }) => Promise<{ success: boolean }>
+    /** 响应 ask 工具的用户选择 */
+    respondToAsk: (params: { toolCallId: string; selections: string[] }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }
   provider: {

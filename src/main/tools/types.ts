@@ -29,6 +29,15 @@ export interface ToolContext {
   onContainerCreated?: (containerId: string) => void
   /** 沙箱模式下 bash 命令需用户确认，返回 true 表示允许执行 */
   requestApproval?: (toolCallId: string, command: string) => Promise<boolean>
+  /** ask 工具：向用户提问并等待选择结果，返回用户选中的 label 列表 */
+  requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
+}
+
+/** ask 工具的用户输入请求数据 */
+export interface UserInputPayload {
+  question: string
+  options: Array<{ label: string; description: string }>
+  allowMultiple: boolean
 }
 
 /** 获取临时会话的工作目录 */

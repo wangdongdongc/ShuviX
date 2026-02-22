@@ -66,6 +66,10 @@ const api = {
     approveToolCall: (params: { toolCallId: string; approved: boolean }) =>
       ipcRenderer.invoke('agent:approveToolCall', params),
 
+    /** 响应 ask 工具的用户选择 */
+    respondToAsk: (params: { toolCallId: string; selections: string[] }) =>
+      ipcRenderer.invoke('agent:respondToAsk', params),
+
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: any) => void) => {
       const handler = (_: any, event: any): void => callback(event)

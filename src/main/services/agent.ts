@@ -13,6 +13,7 @@ import { createBashTool } from '../tools/bash'
 import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
 import { createEditTool } from '../tools/edit'
+import { createAskTool } from '../tools/ask'
 import { resolveProjectConfig, type ToolContext } from '../tools/types'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
@@ -113,7 +114,7 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request' | 'user_input_request'
   sessionId: string
   data?: string
   error?: string
@@ -125,6 +126,10 @@ export interface AgentStreamEvent {
   toolIsError?: boolean
   /** bash 工具在沙箱模式下需要用户审批 */
   approvalRequired?: boolean
+  /** ask 工具始终需要用户输入 */
+  userInputRequired?: boolean
+  /** ask 工具：用户输入请求数据 */
+  userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
   // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
   usage?: {
     input: number; output: number; total: number
@@ -141,6 +146,8 @@ export class AgentService {
   private pendingLogIds = new Map<string, string[]>()
   /** 待审批的 bash 命令 Promise resolver，key = toolCallId */
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>()
+  /** 待用户选择的 ask 工具 Promise resolver，key = toolCallId */
+  private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -243,6 +250,18 @@ export class AgentService {
             toolArgs: { command }
           })
         })
+      },
+      requestUserInput: (toolCallId: string, payload: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }) => {
+        return new Promise<string[]>((resolve) => {
+          this.pendingUserInputs.set(toolCallId, { resolve })
+          this.sendToRenderer({
+            type: 'user_input_request',
+            sessionId,
+            toolCallId,
+            toolName: 'ask',
+            userInputPayload: payload
+          })
+        })
       }
     }
     const tools = [
@@ -250,7 +269,8 @@ export class AgentService {
       createBashTool(ctx),
       createReadTool(ctx),
       createWriteTool(ctx),
-      createEditTool(ctx)
+      createEditTool(ctx),
+      createAskTool(ctx)
     ]
 
     // 在 system prompt 中附加工具说明
@@ -258,6 +278,8 @@ export class AgentService {
     if (project?.path) {
       enhancedPrompt += `\n\n${t('agent.promptSupplement')}`
     }
+    // ask 工具引导始终追加（不依赖项目）
+    enhancedPrompt += `\n\n${t('agent.askToolGuidance')}`
 
     const agent = new Agent({
       initialState: {
@@ -345,6 +367,15 @@ export class AgentService {
     }
   }
 
+  /** 响应 ask 工具的用户选择 */
+  respondToAsk(toolCallId: string, selections: string[]): void {
+    const pending = this.pendingUserInputs.get(toolCallId)
+    if (pending) {
+      pending.resolve(selections)
+      this.pendingUserInputs.delete(toolCallId)
+    }
+  }
+
   /** 中止指定 session 的生成 */
   abort(sessionId: string): void {
     console.log(`[Agent] 中止 session=${sessionId}`)
@@ -353,6 +384,11 @@ export class AgentService {
     for (const [id, pending] of this.pendingApprovals) {
       pending.resolve(false)
       this.pendingApprovals.delete(id)
+    }
+    // 取消所有待用户选择的 Promise
+    for (const [id, pending] of this.pendingUserInputs) {
+      pending.resolve([])
+      this.pendingUserInputs.delete(id)
     }
   }
 
@@ -580,6 +616,8 @@ export class AgentService {
           const config = resolveProjectConfig({ sessionId })
           approvalRequired = config.sandboxEnabled
         }
+        // ask 工具始终需要用户输入（与 bash 审批同模式，直接在 tool_start 携带标记）
+        const userInputRequired = event.toolName === 'ask'
         this.sendToRenderer({
           type: 'tool_start',
           sessionId,
@@ -587,7 +625,8 @@ export class AgentService {
           toolName: event.toolName,
           toolArgs: event.args,
           data: toolCallMsg.id,
-          approvalRequired
+          approvalRequired,
+          userInputRequired
         })
         break
       }

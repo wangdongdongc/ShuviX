@@ -91,7 +91,10 @@
     "deny": "拒绝",
     "sandboxHint": "沙箱模式：bash 命令需确认后执行",
     "params": "参数",
-    "result": "结果"
+    "result": "结果",
+    "pendingUserInput": "等待选择",
+    "confirmSelection": "确认选择",
+    "multiSelectHint": "可多选"
   },
 
   "sessionEdit": {
@@ -188,6 +191,7 @@
   "agent": {
     "defaultTitle": "新对话",
     "promptSupplement": "你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。",
+    "askToolGuidance": "当你需要用户在多个方案、风格、配置或方向中做出选择时，必须使用 ask 工具提供可点击的选项卡片。禁止用纯文本列出编号选项让用户手动回复。",
     "titleGenPrompt": "你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。"
   },
 
@@ -226,6 +230,10 @@
     "convertFailed": "无法转换文件: {{path}}",
     "unsupportedFormat": "不支持的文件格式 ({{ext}}): {{path}}。支持纯文本文件以及 PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 格式。",
     "sandboxBlocked": "沙箱模式：禁止访问工作区外的路径 {{path}}。工作区: {{workspace}}",
-    "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行"
+    "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行",
+    "askLabel": "向用户提问",
+    "askDesc": "向用户提出问题并提供预定义选项，等待用户选择后继续",
+    "askNoSelection": "用户未做出选择",
+    "askUserSelected": "用户选择了: {{selections}}"
   }
 }

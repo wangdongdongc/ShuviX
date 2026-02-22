@@ -160,6 +160,17 @@ export function ChatView(): React.JSX.Element {
     }
   }, [activeSessionId])
 
+  /** ask 工具：用户选择回调 */
+  const handleUserInput = useCallback(async (toolCallId: string, selections: string[]) => {
+    await window.api.agent.respondToAsk({ toolCallId, selections })
+    const store = useChatStore.getState()
+    if (activeSessionId) {
+      store.updateToolExecution(activeSessionId, toolCallId, {
+        status: 'running'
+      })
+    }
+  }, [activeSessionId])
+
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -190,6 +201,7 @@ export function ChatView(): React.JSX.Element {
           args={meta?.args}
           status={liveExec?.status || 'running'}
           onApproval={handleToolApproval}
+          onUserInput={handleUserInput}
         />
       )
     }
@@ -215,7 +227,7 @@ export function ChatView(): React.JSX.Element {
         onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
       />
     )
-  }, [handleRollback, handleRegenerate, handleToolApproval, lastAssistantTextId, toolExecutions])
+  }, [handleRollback, handleRegenerate, handleToolApproval, handleUserInput, lastAssistantTextId, toolExecutions])
 
   /** 流式内容 / 思考 / 加载指示器 / 错误提示（固定在列表底部） */
   const Footer = useCallback(() => {

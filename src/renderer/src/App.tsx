@@ -142,13 +142,15 @@ function App(): React.JSX.Element {
           break
 
         case 'tool_start': {
-          // 沙箱模式 bash 工具：直接以 pending_approval 状态创建，无需等待额外事件
-          const initialStatus = event.approvalRequired ? 'pending_approval' : 'running'
+          // 根据工具类型设置初始状态：bash 沙箱审批 / ask 用户输入 / 其余直接运行
+          let initialStatus: 'running' | 'pending_approval' | 'pending_user_input' = 'running'
+          if (event.approvalRequired) initialStatus = 'pending_approval'
+          if (event.userInputRequired) initialStatus = 'pending_user_input'
           store.addToolExecution(sid, {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
             args: event.toolArgs,
-            status: initialStatus as 'running' | 'pending_approval',
+            status: initialStatus,
             messageId: event.data
           })
           // 仅当前活跃会话时添加到消息列表（tool_call 消息已在 main 进程持久化）
@@ -165,6 +167,13 @@ function App(): React.JSX.Element {
           store.updateToolExecution(sid, event.toolCallId, {
             status: 'pending_approval',
             args: event.toolArgs
+          })
+          break
+
+        case 'user_input_request':
+          // ask 工具：仅切换状态为等待选择，不覆盖 args（tool_start 已携带完整参数）
+          store.updateToolExecution(sid, event.toolCallId, {
+            status: 'pending_user_input'
           })
           break
 

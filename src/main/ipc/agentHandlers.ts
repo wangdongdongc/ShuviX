@@ -41,4 +41,10 @@ export function registerAgentHandlers(): void {
     agentService.approveToolCall(params.toolCallId, params.approved)
     return { success: true }
   })
+
+  /** 响应 ask 工具的用户选择 */
+  ipcMain.handle('agent:respondToAsk', (_event, params: { toolCallId: string; selections: string[] }) => {
+    agentService.respondToAsk(params.toolCallId, params.selections)
+    return { success: true }
+  })
 }
