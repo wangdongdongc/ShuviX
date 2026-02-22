@@ -11,6 +11,8 @@ import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/s
 import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
 import { resolveProjectConfig, type ToolContext } from './types'
 import { t } from '../i18n'
+import { createLogger } from '../logger'
+const log = createLogger('Tool:bash')
 
 /** 默认超时时间（秒） */
 const DEFAULT_TIMEOUT = 120
@@ -40,7 +42,7 @@ function defaultSpawn(
     }
 
     const { shell, args } = getShellConfig()
-    console.log(`[Tool: bash] (${cwd}): ${shell} ${args.join(' ')} ${command}`)
+    log.info(`(${cwd}): ${shell} ${args.join(' ')} ${command}`)
 
     const child = spawn(shell, [...args, command], {
       cwd,
@@ -134,7 +136,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
             ctx.sessionId, config.dockerImage, config.workingDirectory
           )
           if (isNew) ctx.onContainerCreated?.(containerId)
-          console.log(`[Tool: bash] (docker ${config.dockerImage}): ${params.command}`)
+          log.info(`(docker ${config.dockerImage}): ${params.command}`)
           result = await dockerManager.exec(containerId, params.command, CONTAINER_WORKSPACE, signal)
         } else {
           // 本地模式

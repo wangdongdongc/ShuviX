@@ -10,6 +10,8 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
+import { createLogger } from '../logger'
+const log = createLogger('Tool:write')
 
 const WriteParamsSchema = Type.Object({
   path: Type.String({ description: t('tool.paramWritePath') }),
@@ -34,7 +36,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       const absolutePath = resolveToCwd(params.path, config.workingDirectory)
       const dir = dirname(absolutePath)
       
-      console.log(`[Tool: write] ${absolutePath}`)
+      log.info(absolutePath)
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {

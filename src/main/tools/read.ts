@@ -15,6 +15,8 @@ import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from '
 import { resolveReadPath } from './utils/pathUtils'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
+import { createLogger } from '../logger'
+const log = createLogger('Tool:read')
 
 /** markitdown-ts 支持转换的文件扩展名 */
 const RICH_FILE_EXTENSIONS = new Set([
@@ -96,7 +98,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
       const config = resolveProjectConfig(ctx)
       const absolutePath = resolveReadPath(params.path, config.workingDirectory)
-      console.log(`[Tool: read] ${absolutePath}`)
+      log.info(absolutePath)
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {

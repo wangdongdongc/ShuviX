@@ -5,6 +5,8 @@
  */
 
 import { spawn, spawnSync } from 'child_process'
+import { createLogger } from '../logger'
+const log = createLogger('Docker')
 
 /** 容器内固定工作目录，避免与容器自身路径冲突 */
 export const CONTAINER_WORKSPACE = '/isolated-docker-workspace'
@@ -100,7 +102,7 @@ export class DockerManager {
     const containerName = `shuvix-${sessionId.replace(/-/g, '')}`
     const containerId = await this.createContainer(containerName, image, workingDirectory)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
-    console.log(`[Docker] 创建容器 ${containerId.slice(0, 12)}`)
+    log.info(`创建容器 ${containerId.slice(0, 12)}`)
     return { containerId, isNew: true }
   }
 
@@ -181,7 +183,7 @@ export class DockerManager {
       } catch (e) {
         reject(e)
       }
-      console.log(`[Docker] 销毁容器 ${info.containerId.slice(0, 12)}`)
+      log.info(`销毁容器 ${info.containerId.slice(0, 12)}`)
       resolve(true)
     })
   }
@@ -196,7 +198,7 @@ export class DockerManager {
           timeout: 10000,
           stdio: 'ignore'
         })
-        console.log(`[Docker] 清理容器 ${info.containerId.slice(0, 12)}`)
+        log.info(`清理容器 ${info.containerId.slice(0, 12)}`)
       } catch {
         // 忽略错误
       }

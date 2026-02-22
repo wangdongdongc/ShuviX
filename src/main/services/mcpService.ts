@@ -7,6 +7,8 @@ import { Type, type TSchema } from '@sinclair/typebox'
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import { mcpDao } from '../dao/mcpDao'
 import type { McpServer, McpServerStatus, McpToolInfo } from '../types'
+import { createLogger } from '../logger'
+const log = createLogger('MCP')
 
 /** MCP tools/list 返回的单个工具结构 */
 interface McpDiscoveredTool {
@@ -73,7 +75,7 @@ class McpService {
 
     const server = mcpDao.findById(serverId)
     if (!server) {
-      console.warn(`[MCP] connect: server ${serverId} 不存在`)
+      log.warn(`connect: server ${serverId} 不存在`)
       return
     }
 
@@ -92,12 +94,12 @@ class McpService {
 
       // 监听 transport 关闭事件（子进程退出等）
       conn.transport.onclose = () => {
-        console.log(`[MCP] transport closed: ${server.name}`)
+        log.info(`transport closed: ${server.name}`)
         conn.status = 'disconnected'
         conn.tools = []
       }
       conn.transport.onerror = (err: Error) => {
-        console.error(`[MCP] transport error: ${server.name}`, err.message)
+        log.error(`transport error: ${server.name} ${err.message}`)
         conn.status = 'error'
         conn.error = err.message
       }
@@ -111,11 +113,11 @@ class McpService {
       conn.status = 'connected'
       conn.error = undefined
 
-      console.log(`[MCP] connected: ${server.name} (${conn.tools.length} tools)`)
+      log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
     } catch (err: any) {
       conn.status = 'error'
       conn.error = err?.message || String(err)
-      console.error(`[MCP] connect failed: ${server.name}`, conn.error)
+      log.error(`connect failed: ${server.name} ${conn.error}`)
     }
   }
 
@@ -128,11 +130,11 @@ class McpService {
       await conn.transport?.close()
       await conn.client?.close()
     } catch (err: any) {
-      console.warn(`[MCP] disconnect error: ${serverId}`, err?.message)
+      log.warn(`disconnect error: ${serverId} ${err?.message}`)
     }
 
     this.connections.delete(serverId)
-    console.log(`[MCP] disconnected: ${serverId}`)
+    log.info(`disconnected: ${serverId}`)
   }
 
   /** 启动所有已启用的 MCP Server */
@@ -140,7 +142,7 @@ class McpService {
     const servers = mcpDao.findEnabled()
     if (servers.length === 0) return
 
-    console.log(`[MCP] connectAll: ${servers.length} server(s)`)
+    log.info(`connectAll: ${servers.length} server(s)`)
     // 并行连接，单个失败不影响其他
     await Promise.allSettled(servers.map((s) => this.connect(s.id)))
   }
@@ -149,7 +151,7 @@ class McpService {
   async disconnectAll(): Promise<void> {
     const ids = [...this.connections.keys()]
     await Promise.allSettled(ids.map((id) => this.disconnect(id)))
-    console.log(`[MCP] disconnectAll: ${ids.length} server(s) closed`)
+    log.info(`disconnectAll: ${ids.length} server(s) closed`)
   }
 
   // ─── 状态查询 ───

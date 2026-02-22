@@ -9,6 +9,8 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
+import { createLogger } from './logger'
+const log = createLogger('App')
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -242,7 +244,7 @@ app.whenReady().then(() => {
 
   // 启动所有已启用的 MCP Server
   mcpService.connectAll().catch((err) => {
-    console.error('[MCP] connectAll failed:', err)
+    log.error(`connectAll failed: ${err}`)
   })
 
   createWindow()

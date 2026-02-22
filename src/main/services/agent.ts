@@ -22,6 +22,8 @@ import { t } from '../i18n'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
 import { mcpService } from './mcpService'
+import { createLogger } from '../logger'
+const log = createLogger('Agent')
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
 
@@ -188,7 +190,7 @@ export class AgentService {
     // 查询会话信息
     const session = sessionDao.findById(sessionId)
     if (!session) {
-      console.error(`[Agent] 创建失败，未找到 session=${sessionId}`)
+      log.error(`创建失败，未找到 session=${sessionId}`)
       return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '' }
     }
 
@@ -203,7 +205,7 @@ export class AgentService {
       return { success: true, created: false, ...meta }
     }
 
-    console.log(`[Agent] 创建 model=${model} session=${sessionId}`)
+    log.info(`创建 model=${model} session=${sessionId}`)
 
     // 查询项目信息
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
@@ -330,7 +332,7 @@ export class AgentService {
           })
         } catch (err: any) {
           // streamFn 抛出同步错误时，立即通知渲染进程
-          console.error(`[Agent] streamFn 错误: ${err.message}`)
+          log.error(`streamFn 错误: ${err.message}`)
           this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
           throw err
         }
@@ -360,12 +362,12 @@ export class AgentService {
   async prompt(sessionId: string, text: string, images?: Array<{ type: 'image'; data: string; mimeType: string }>): Promise<void> {
     const agent = this.agents.get(sessionId)
     if (!agent) {
-      console.log(`[Agent] prompt 失败，未找到 session=${sessionId}`)
+      log.warn(`prompt 失败，未找到 session=${sessionId}`)
       this.sendToRenderer({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
 
-    console.log(`[Agent] prompt session=${sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`)
+    log.info(`prompt session=${sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`)
     try {
       if (images && images.length > 0) {
         await agent.prompt(text, images)
@@ -397,7 +399,7 @@ export class AgentService {
 
   /** 中止指定 session 的生成 */
   abort(sessionId: string): void {
-    console.log(`[Agent] 中止 session=${sessionId}`)
+    log.info(`中止 session=${sessionId}`)
     this.agents.get(sessionId)?.abort()
     // 取消所有待审批的 Promise
     for (const [id, pending] of this.pendingApprovals) {
@@ -451,7 +453,7 @@ export class AgentService {
 
     agent.setModel(resolvedModel)
     agent.setThinkingLevel(caps.reasoning ? 'medium' : 'off')
-    console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`)
+    log.info(`切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`)
   }
 
   /** 动态更新指定 session 的启用工具集 */
@@ -459,12 +461,12 @@ export class AgentService {
     const agent = this.agents.get(sessionId)
     const ctx = this.toolContexts.get(sessionId)
     if (!agent || !ctx) {
-      console.warn(`[Agent] setEnabledTools: session=${sessionId} agent/ctx不存在`)
+      log.warn(`setEnabledTools: session=${sessionId} agent/ctx不存在`)
       return
     }
     const tools = buildTools(ctx, enabledTools)
     agent.setTools(tools)
-    console.log(`[Agent] setEnabledTools session=${sessionId} tools=[${enabledTools.join(',')}]`)
+    log.info(`setEnabledTools session=${sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
   /** 获取指定 session 的消息列表 */
@@ -484,11 +486,11 @@ export class AgentService {
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     const agent = this.agents.get(sessionId)
     if (!agent) {
-      console.warn(`[Agent] setThinkingLevel: session=${sessionId} agent不存在`)
+      log.warn(`setThinkingLevel: session=${sessionId} agent不存在`)
       return
     }
     agent.setThinkingLevel(level)
-    console.log(`[Agent] setThinkingLevel=${level}`)
+    log.info(`setThinkingLevel=${level}`)
   }
 
   /**
@@ -519,7 +521,7 @@ export class AgentService {
         return text.slice(0, 30)
       }
     } catch (err) {
-      console.error(`[Agent] 生成标题失败: ${err}`)
+      log.error(`生成标题失败: ${err}`)
     }
     return null
   }
@@ -531,7 +533,7 @@ export class AgentService {
       agent.abort()
       this.agents.delete(sessionId)
       // 保留 pendingLogIds / Docker 容器，下次 createAgent 会自动复用
-      console.log(`[Agent] invalidate session=${sessionId}`)
+      log.info(`invalidate session=${sessionId}`)
     }
   }
 
@@ -544,7 +546,7 @@ export class AgentService {
       this.pendingLogIds.delete(sessionId)
       // 清理 Docker 容器
       dockerManager.destroyContainer(sessionId).catch(() => {})
-      console.log(`[Agent] 移除 session=${sessionId} 剩余=${this.agents.size}`)
+      log.info(`移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
 
@@ -557,14 +559,14 @@ export class AgentService {
   private forwardEvent(sessionId: string, event: AgentEvent): void {
     switch (event.type) {
       case 'agent_start':
-        console.log(`[Prompt] 开始 session=${sessionId}`)
+        log.info(`开始 session=${sessionId}`)
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end': {
-        console.log(`[Prompt] 结束 session=${sessionId}`)
+        log.info(`结束 session=${sessionId}`)
         // Docker 模式下，回复完成后销毁容器
         dockerManager.destroyContainer(sessionId).catch((err) =>
-            console.error(`[Docker] 销毁容器失败: ${err}`)
+            log.error(`销毁容器失败: ${err}`)
           ).then((destroyed) => {
             if (destroyed) this.emitDockerEvent(sessionId, 'container_destroyed')
           })
@@ -573,7 +575,7 @@ export class AgentService {
         if (endMessages) {
           for (const m of endMessages) {
             if (m.errorMessage) {
-              console.error(`[Agent] 流式错误: ${m.errorMessage}`)
+              log.error(`流式错误: ${m.errorMessage}`)
               this.sendToRenderer({ type: 'error', sessionId, error: m.errorMessage })
             }
           }
@@ -615,7 +617,7 @@ export class AgentService {
         if (this.isAssistantMessage(msg)) {
           // 检查流式响应中的错误（如 API 返回的错误）
           if (msg.stopReason === 'error' && msg.errorMessage) {
-            console.error(`[Agent] API 错误: ${msg.errorMessage}`)
+            log.error(`API 错误: ${msg.errorMessage}`)
             this.sendToRenderer({ type: 'error', sessionId, error: msg.errorMessage })
           }
           const logId = this.pendingLogIds.get(sessionId)?.shift()

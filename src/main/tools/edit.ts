@@ -10,6 +10,8 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
+import { createLogger } from '../logger'
+const log = createLogger('Tool:edit')
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -42,7 +44,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
     ) => {
       const config = resolveProjectConfig(ctx)
       const absolutePath = resolveToCwd(params.path, config.workingDirectory)
-      console.log(`[Tool: edit] ${absolutePath}`)
+      log.info(absolutePath)
 
       // 沙箱模式：路径越界检查
       if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {

@@ -3,6 +3,8 @@ import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import type { ModelCapabilities } from '../types'
+import { createLogger } from '../logger'
+const log = createLogger('LiteLLM')
 
 /** LiteLLM 模型条目（仅提取需要的字段） */
 interface LiteLLMModelEntry {
@@ -73,9 +75,9 @@ class LiteLLMService {
       this.parseAndLoad(raw)
       // 拉取成功，写入缓存
       this.writeCache(raw)
-      console.log(`[LiteLLM] 远程拉取成功，已加载 ${this.data.size} 个 chat 模型`)
+      log.info(`远程拉取成功，已加载 ${this.data.size} 个 chat 模型`)
     } catch (err) {
-      console.warn('[LiteLLM] 远程拉取失败，尝试加载本地缓存', (err as Error).message)
+      log.warn(`远程拉取失败，尝试加载本地缓存: ${(err as Error).message}`)
       if (!this.loadFromCache()) {
         this.loadFromBundled()
       }
@@ -207,7 +209,7 @@ class LiteLLMService {
     try {
       writeFileSync(this.cachePath, raw, 'utf-8')
     } catch (err) {
-      console.warn('[LiteLLM] 写入缓存失败', (err as Error).message)
+      log.warn(`写入缓存失败: ${(err as Error).message}`)
     }
   }
 
@@ -225,15 +227,15 @@ class LiteLLMService {
   private loadFromCache(): boolean {
     try {
       if (!existsSync(this.cachePath)) {
-        console.warn('[LiteLLM] 无本地缓存文件')
+        log.warn('无本地缓存文件')
         return false
       }
       const raw = readFileSync(this.cachePath, 'utf-8')
       this.parseAndLoad(raw)
-      console.log(`[LiteLLM] 从本地缓存加载 ${this.data.size} 个 chat 模型`)
+      log.info(`从本地缓存加载 ${this.data.size} 个 chat 模型`)
       return true
     } catch (err) {
-      console.warn('[LiteLLM] 加载缓存失败', (err as Error).message)
+      log.warn(`加载缓存失败: ${(err as Error).message}`)
       return false
     }
   }
@@ -243,14 +245,14 @@ class LiteLLMService {
     try {
       const path = this.bundledPath
       if (!existsSync(path)) {
-        console.warn('[LiteLLM] 内置兜底文件不存在', path)
+        log.warn(`内置兜底文件不存在: ${path}`)
         return
       }
       const raw = readFileSync(path, 'utf-8')
       this.parseAndLoad(raw)
-      console.log(`[LiteLLM] 从内置兜底文件加载 ${this.data.size} 个 chat 模型`)
+      log.info(`从内置兜底文件加载 ${this.data.size} 个 chat 模型`)
     } catch (err) {
-      console.warn('[LiteLLM] 加载内置文件失败', (err as Error).message)
+      log.warn(`加载内置文件失败: ${(err as Error).message}`)
     }
   }
 }
