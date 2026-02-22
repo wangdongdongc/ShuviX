@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { MessageSquarePlus, Sparkles, Container, AlertCircle, Folder } from 'lucide-react'
-import welcomeIcon from '../assets/ngnl_xiubi_blank_mini.jpg'
+import { Folder } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
-import { MessageBubble } from './MessageBubble'
-import { ToolCallBlock } from './ToolCallBlock'
+import { useChatActions } from '../hooks/useChatActions'
+import { useSessionMeta } from '../hooks/useSessionMeta'
+import { MessageRenderer, type VisibleItem } from './MessageRenderer'
+import { StreamingFooter } from './StreamingFooter'
+import { WelcomeView, EmptySessionHint } from './WelcomeView'
 import { AskPanel } from './AskPanel'
 import { InputArea } from './InputArea'
 
@@ -44,12 +44,6 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
 }
 
 /** 预处理消息列表中的可见项（过滤掉不渲染的消息） */
-interface VisibleItem {
-  msg: ChatMessage
-  meta?: any
-  pairedCallMeta?: any
-}
-
 function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): VisibleItem[] {
   const items: VisibleItem[] = []
   for (const msg of messages) {
@@ -78,27 +72,12 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
  * 使用 react-virtuoso 虚拟滚动，仅渲染可视区域内的消息
  */
 export function ChatView(): React.JSX.Element {
-  const { t } = useTranslation()
-  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, error, setError, toolExecutions } = useChatStore()
+  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
 
-  // 当前项目工作目录
-  const [projectPath, setProjectPath] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      setProjectPath(null)
-      return
-    }
-    // 恢复当前会话的工作目录和 enabledTools（由后端 service 层统一解析）
-    window.api.session.getById(activeSessionId).then((s) => {
-      setProjectPath(s?.workingDirectory || null)
-      if (s?.enabledTools) {
-        useChatStore.getState().setEnabledTools(s.enabledTools)
-      }
-    })
-  }, [activeSessionId])
+  const projectPath = useSessionMeta(activeSessionId)
+  const { handleRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } = useChatActions(activeSessionId)
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -116,68 +95,6 @@ export function ChatView(): React.JSX.Element {
     }
   }, [streamingContent, streamingThinking, messages])
 
-  /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
-  const handleRollback = useCallback(async (messageId: string) => {
-    if (!activeSessionId) return
-    if (!window.confirm(t('chat.rollbackConfirm'))) return
-    await window.api.message.rollback({ sessionId: activeSessionId, messageId })
-    // 重新拉取消息 + 重建 Agent
-    const msgs = await window.api.message.list(activeSessionId)
-    useChatStore.getState().setMessages(msgs)
-    await window.api.agent.init({ sessionId: activeSessionId })
-  }, [activeSessionId])
-
-  /** 重新生成最近一次助手回复（回退到用户消息前 + 重发） */
-  const handleRegenerate = useCallback(async (assistantMsgId: string) => {
-    if (!activeSessionId) return
-    const store = useChatStore.getState()
-    const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
-    // 向前查找最近的 user/text 消息
-    let lastUserText = ''
-    let userMsgId = ''
-    for (let j = idx - 1; j >= 0; j--) {
-      if (store.messages[j].role === 'user' && store.messages[j].type === 'text') {
-        lastUserText = store.messages[j].content
-        userMsgId = store.messages[j].id
-        break
-      }
-    }
-    if (!userMsgId) return
-    // 删除用户消息及之后的所有消息
-    await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
-    // 重新拉取消息 + 重建 Agent
-    const msgs = await window.api.message.list(activeSessionId)
-    store.setMessages(msgs)
-    await window.api.agent.init({ sessionId: activeSessionId })
-    // 重新保存用户消息并发送
-    const userMsg = await window.api.message.add({ sessionId: activeSessionId, role: 'user', content: lastUserText })
-    store.addMessage(userMsg)
-    await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
-  }, [activeSessionId])
-
-  /** 沙箱审批：用户允许/拒绝 bash 命令执行 */
-  const handleToolApproval = useCallback(async (toolCallId: string, approved: boolean) => {
-    await window.api.agent.approveToolCall({ toolCallId, approved })
-    // 审批后立即将本地状态切为 running（允许）或 error（拒绝），避免 UI 停留在 pending
-    const store = useChatStore.getState()
-    if (activeSessionId) {
-      store.updateToolExecution(activeSessionId, toolCallId, {
-        status: approved ? 'running' : 'error'
-      })
-    }
-  }, [activeSessionId])
-
-  /** ask 工具：用户选择回调 */
-  const handleUserInput = useCallback(async (toolCallId: string, selections: string[]) => {
-    await window.api.agent.respondToAsk({ toolCallId, selections })
-    const store = useChatStore.getState()
-    if (activeSessionId) {
-      store.updateToolExecution(activeSessionId, toolCallId, {
-        status: 'running'
-      })
-    }
-  }, [activeSessionId])
-
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -185,138 +102,16 @@ export function ChatView(): React.JSX.Element {
   }, [messages])
 
   /** 渲染单条可见消息 */
-  const renderItem = useCallback((_index: number, item: VisibleItem) => {
-    const { msg, meta, pairedCallMeta } = item
-
-    if (msg.type === 'docker_event') {
-      const isCreate = msg.content === 'container_created'
-      return (
-        <div className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
-          <Container size={12} />
-          <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
-        </div>
-      )
-    }
-
-    if (msg.type === 'tool_call') {
-      // 查找实时工具执行状态（流式期间有值，完成后回退到 running）
-      const liveExec = toolExecutions.find((te) => te.toolCallId === meta?.toolCallId)
-      return (
-        <ToolCallBlock
-          toolName={meta?.toolName || '未知工具'}
-          toolCallId={meta?.toolCallId}
-          args={meta?.args}
-          status={liveExec?.status || 'running'}
-          onApproval={handleToolApproval}
-        />
-      )
-    }
-
-    if (msg.type === 'tool_result') {
-      return (
-        <ToolCallBlock
-          toolName={meta?.toolName || '未知工具'}
-          args={pairedCallMeta?.args}
-          result={msg.content}
-          status={meta?.isError ? 'error' : 'done'}
-        />
-      )
-    }
-
-    return (
-      <MessageBubble
-        role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
-        content={msg.content}
-        metadata={msg.metadata}
-        model={msg.model}
-        onRollback={msg.id !== messages[messages.length - 1]?.id ? () => handleRollback(msg.id) : undefined}
-        onRegenerate={msg.id === lastAssistantTextId ? () => handleRegenerate(msg.id) : undefined}
-      />
-    )
-  }, [handleRollback, handleRegenerate, handleToolApproval, lastAssistantTextId, toolExecutions])
-
-  /** 流式内容 / 思考 / 加载指示器 / 错误提示（固定在列表底部） */
-  const Footer = useCallback(() => {
-    const store = useChatStore.getState()
-    const streaming = store.isStreaming
-    const content = store.streamingContent
-    const thinking = store.streamingThinking
-    const err = store.error
-
-    return (
-      <>
-        {/* 流式思考过程 */}
-        {streaming && thinking && (
-          <div className="mx-4 my-2">
-            <details open className="group">
-              <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
-                <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                <span className="animate-pulse">{t('chat.thinking')}</span>
-              </summary>
-              <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-                {thinking}
-              </div>
-            </details>
-          </div>
-        )}
-
-        {/* 流式输出的助手消息 */}
-        {streaming && content && (
-          <MessageBubble
-            role="assistant"
-            content={content}
-            isStreaming
-            model={useSettingsStore.getState().activeModel}
-          />
-        )}
-
-        {/* 等待响应的加载指示器 */}
-        {streaming && !content && !err && (
-          <div className="flex gap-3 px-4 py-3">
-            <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
-              <Sparkles size={14} className="text-text-secondary animate-pulse" />
-            </div>
-            <div className="flex items-center gap-1 pt-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '0ms' }} />
-              <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '150ms' }} />
-              <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
-
-        {/* 错误提示 */}
-        {err && (
-          <div className="mx-4 my-2 flex items-start gap-2.5 px-3.5 py-2.5 rounded-lg bg-error/10 border border-error/20">
-            <AlertCircle size={15} className="text-error flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-error font-medium mb-0.5">{t('chat.genFailed')}</p>
-              <p className="text-[11px] text-error/80 break-words whitespace-pre-wrap">{err}</p>
-            </div>
-            <button
-              onClick={() => setError(null)}
-              className="text-error/50 hover:text-error transition-colors flex-shrink-0"
-              title={t('common.close')}
-            >
-              ×
-            </button>
-          </div>
-        )}
-      </>
-    )
-  }, [setError, isStreaming, streamingContent, streamingThinking, error])
-
-  /** 创建新会话 */
-  const handleNewChat = async (): Promise<void> => {
-    const settings = useSettingsStore.getState()
-    const session = await window.api.session.create({
-      provider: settings.activeProvider,
-      model: settings.activeModel,
-      systemPrompt: settings.systemPrompt
-    })
-    const sessions = await window.api.session.list()
-    useChatStore.getState().setSessions(sessions)
-    useChatStore.getState().setActiveSessionId(session.id)
-  }
+  const renderItem = useCallback((_index: number, item: VisibleItem) => (
+    <MessageRenderer
+      item={item}
+      isLastMessage={item.msg.id === messages[messages.length - 1]?.id}
+      lastAssistantTextId={lastAssistantTextId}
+      onRollback={handleRollback}
+      onRegenerate={handleRegenerate}
+      onApproval={handleToolApproval}
+    />
+  ), [messages, lastAssistantTextId, handleRollback, handleRegenerate, handleToolApproval])
 
   return (
     <div className="flex flex-col h-full">
@@ -335,49 +130,18 @@ export function ChatView(): React.JSX.Element {
       </div>
 
       {!activeSessionId ? (
-        /* 空状态 — 欢迎页 */
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md px-6">
-            <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-6">
-              <img src={welcomeIcon} alt="ShuviX" className="w-full h-full object-cover" />
-            </div>
-            <h2 className="text-xl font-semibold text-text-primary mb-2">
-              {t('chat.welcomeTitle')}
-            </h2>
-            <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-              {t('chat.welcomeDesc')}
-            </p>
-            <button
-              onClick={handleNewChat}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
-            >
-              <MessageSquarePlus size={16} />
-              {t('chat.startNewChat')}
-            </button>
-          </div>
-        </div>
+        <WelcomeView onNewChat={handleNewChat} />
       ) : (
-        /* 聊天消息列表 */
         <>
           {messages.length === 0 && !isStreaming ? (
-            /* 空会话引导 */
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center px-6">
-                <div className="w-12 h-12 rounded-xl bg-bg-tertiary flex items-center justify-center mx-auto mb-4">
-                  <Sparkles size={24} className="text-text-tertiary" />
-                </div>
-                <p className="text-sm text-text-secondary">
-                  {t('chat.emptyHint')}
-                </p>
-              </div>
-            </div>
+            <EmptySessionHint />
           ) : (
             <Virtuoso
               ref={virtuosoRef}
               className="flex-1"
               data={visibleItems}
               itemContent={renderItem}
-              components={{ Footer }}
+              components={{ Footer: StreamingFooter }}
               followOutput="smooth"
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}
