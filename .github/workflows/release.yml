@@ -1,0 +1,55 @@
+# 自动构建并发布到 GitHub Releases
+# 触发条件：push 以 v 开头的 tag（如 v1.0.0）
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 构建产物需要写入 Release 的权限
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          # macOS（同时构建 x64 和 arm64）
+          - os: macos-latest
+            platform: mac
+          # Windows
+          - os: windows-latest
+            platform: win
+          # Linux
+          - os: ubuntu-latest
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Linux 构建 arm64 需要交叉编译工具链
+      - name: Install Linux arm64 toolchain
+        if: matrix.platform == 'linux'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & Publish
+        run: npx electron-vite build && npx electron-builder --${{ matrix.platform }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
