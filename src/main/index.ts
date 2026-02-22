@@ -6,11 +6,12 @@ import { agentService } from './services/agent'
 import { dockerManager } from './services/dockerManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
-import { initI18n } from './i18n'
+import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
+const isMac = process.platform === 'darwin'
 
 /** 打开独立设置窗口（单例） */
 function openSettingsWindow(): void {
@@ -26,10 +27,13 @@ function openSettingsWindow(): void {
     minWidth: 600,
     minHeight: 400,
     title: '设置',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 18 },
+    // macOS 使用隐藏标题栏 + 交通灯按钮，Windows/Linux 使用系统默认标题栏
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 16, y: 18 },
+      vibrancy: 'under-window'
+    } : {}),
     backgroundColor: '#0a0a0f',
-    vibrancy: 'under-window',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -63,7 +67,7 @@ function setupApplicationMenu(): void {
         { role: 'about' as const },
         { type: 'separator' as const },
         {
-          label: '设置…',
+          label: `${t('settings.title')}…`,
           accelerator: 'CommandOrControl+,',
           click: () => openSettingsWindow()
         },
@@ -128,11 +132,13 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     icon: join(__dirname, '../../resources/icon.png'),
-    // macOS 无边框窗口，使用系统交通灯按钮
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 18 },
+    // macOS 使用隐藏标题栏 + 交通灯按钮，Windows/Linux 使用系统默认标题栏
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 16, y: 18 },
+      vibrancy: 'under-window'
+    } : {}),
     backgroundColor: '#0a0a0f',
-    vibrancy: 'under-window',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

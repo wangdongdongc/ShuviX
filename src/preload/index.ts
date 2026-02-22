@@ -29,6 +29,8 @@ import type {
 const api = {
   // ============ 应用事件 ============
   app: {
+    /** 当前运行平台 */
+    platform: process.platform as 'darwin' | 'win32' | 'linux',
     /** 打开独立设置窗口 */
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
     /** 用系统默认浏览器打开外部链接 */

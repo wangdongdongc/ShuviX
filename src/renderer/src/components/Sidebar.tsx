@@ -137,8 +137,8 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary border-r border-border-secondary">
-      {/* macOS 窗口拖拽区 + 标题 */}
-      <div className="titlebar-drag flex items-center justify-between px-4 pt-10 pb-3">
+      {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
+      <div className={`titlebar-drag flex items-center justify-between px-4 pb-3 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}>
         <h1 className="text-sm font-semibold text-text-primary tracking-tight">{t('sidebar.title')}</h1>
         <button
           onClick={() => setShowCreateProject(true)}

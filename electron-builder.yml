@@ -1,20 +1,28 @@
-appId: com.electron.app
+appId: com.shuvix.app
 productName: ShuviX
 directories:
   buildResources: build
 files:
   - '!**/.vscode/*'
   - '!src/*'
+  - '!docs/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+# 启用原生模块重新编译（better-sqlite3 等）
+npmRebuild: true
 win:
   executableName: shuvix
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: ${name}-${version}-${arch}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -26,18 +34,34 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+        - arm64
+  maintainer: wangdongdongc
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
-npmRebuild: false
+  artifactName: ${name}-${version}-${arch}.${ext}
+deb:
+  artifactName: ${name}-${version}-${arch}.${ext}
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: wangdongdongc
+  repo: ShuviX

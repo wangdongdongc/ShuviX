@@ -58,14 +58,14 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
-/* macOS 窗口拖拽区 */
+/* 窗口拖拽区（macOS 无边框模式下用于拖动窗口） */
 .titlebar-drag {
   -webkit-app-region: drag;
 }
@@ -114,7 +114,7 @@ body {
 }
 
 .markdown-body code {
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Ubuntu Mono', 'Fira Code', monospace;
   font-size: calc(var(--app-font-size, 14px) - 1px);
   line-height: 1.4;
 }

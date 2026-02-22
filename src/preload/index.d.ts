@@ -120,6 +120,8 @@ interface AvailableModel extends ProviderModelInfo {
 /** 暴露给 Renderer 的 API 类型 */
 interface ShuviXAPI {
   app: {
+    /** 当前运行平台 */
+    platform: 'darwin' | 'win32' | 'linux'
     openSettings: () => Promise<{ success: boolean }>
     /** 用系统默认浏览器打开外部链接 */
     openExternal: (url: string) => Promise<{ success: boolean }>

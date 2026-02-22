@@ -115,8 +115,8 @@ export function ChatView(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      {/* macOS 窗口拖拽区 + 工作目录 */}
-      <div className="titlebar-drag h-12 flex-shrink-0 flex items-end justify-center pb-1.5">
+      {/* 窗口拖拽区 + 工作目录（macOS 为交通灯留出顶部空间） */}
+      <div className={`titlebar-drag flex-shrink-0 flex items-end justify-center pb-1.5 ${window.api.app.platform === 'darwin' ? 'h-12' : 'h-8'}`}>
         {projectPath && (
           <button
             onClick={() => window.api.app.openFolder(projectPath)}
