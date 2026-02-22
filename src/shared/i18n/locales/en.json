@@ -36,7 +36,6 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
-    "welcomeDesc": "A multi-model AI agent assistant with natural conversation and extensible capabilities.",
     "startNewChat": "Start New Chat",
     "emptyHint": "Send a message to start the conversation",
     "thinking": "Thinking…",
@@ -136,6 +135,7 @@
     "tabGeneral": "General",
     "tabProviders": "Providers",
     "tabHttpLogs": "HTTP Logs",
+    "tabAbout": "About",
     "theme": "Theme",
     "themeDark": "Dark",
     "themeLight": "Light",
@@ -192,6 +192,14 @@
     "capAudioInput": "Audio Input",
     "capAudioOutput": "Audio Output",
     "capPdfInput": "PDF Input"
+  },
+
+  "about": {
+    "description": "Your AI Assistant",
+    "version": "Version {{version}}",
+    "sourceCode": "Source Code",
+    "reportIssue": "Report Issue",
+    "license": "This project is open source software released under the MIT License."
   },
 
   "agent": {

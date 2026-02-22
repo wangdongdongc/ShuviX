@@ -36,7 +36,6 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
-    "welcomeDesc": "マルチモデル対応のAIエージェントアシスタント。自然な対話と拡張機能をサポートします。",
     "startNewChat": "新しいチャットを開始",
     "emptyHint": "メッセージを送信して会話を開始",
     "thinking": "思考中…",
@@ -136,6 +135,7 @@
     "tabGeneral": "一般",
     "tabProviders": "プロバイダー",
     "tabHttpLogs": "HTTPログ",
+    "tabAbout": "概要",
     "theme": "テーマ",
     "themeDark": "ダーク",
     "themeLight": "ライト",
@@ -192,6 +192,14 @@
     "capAudioInput": "音声入力",
     "capAudioOutput": "音声出力",
     "capPdfInput": "PDF入力"
+  },
+
+  "about": {
+    "description": "あなたのAIアシスタント",
+    "version": "バージョン {{version}}",
+    "sourceCode": "ソースコード",
+    "reportIssue": "問題を報告",
+    "license": "本プロジェクトは MIT ライセンスのもとで公開されているオープンソースソフトウェアです。"
   },
 
   "agent": {

@@ -144,9 +144,21 @@ function createWindow(): void {
   }
 }
 
+// 获取应用版本号
+ipcMain.handle('app:version', () => {
+  return app.getVersion()
+})
+
 // Sidebar 按钮触发打开设置窗口
 ipcMain.handle('app:open-settings', () => {
   openSettingsWindow()
+  return { success: true }
+})
+
+// 用系统默认浏览器打开外部链接
+ipcMain.handle('app:open-external', async (_event, url: string) => {
+  const { shell } = await import('electron')
+  await shell.openExternal(url)
   return { success: true }
 })
 

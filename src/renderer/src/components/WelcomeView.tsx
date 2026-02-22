@@ -19,7 +19,7 @@ export function WelcomeView({ onNewChat }: WelcomeViewProps): React.JSX.Element 
           {t('chat.welcomeTitle')}
         </h2>
         <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-          {t('chat.welcomeDesc')}
+          {t('about.description')}
         </p>
         <button
           onClick={onNewChat}

@@ -31,6 +31,8 @@ const api = {
   app: {
     /** 打开独立设置窗口 */
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
+    /** 用系统默认浏览器打开外部链接 */
+    openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
     /** 用系统默认应用打开 base64 图片 */
     openImage: (dataUrl: string) => ipcRenderer.invoke('app:open-image', dataUrl),
     /** 用系统文件管理器打开指定文件夹 */

@@ -1,10 +1,11 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText } from 'lucide-react'
+import { Settings, Layers, FileText, Info } from 'lucide-react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { TabButton } from './settings/TabButton'
 import { GeneralSettings } from './settings/GeneralSettings'
 import { ProviderSettings } from './settings/ProviderSettings'
 import { HttpLogSettings } from './settings/HttpLogSettings'
+import { AboutSettings } from './settings/AboutSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -43,6 +44,12 @@ export function SettingsPanel(): React.JSX.Element {
             active={activeSettingsTab === 'httpLogs'}
             onClick={() => setActiveSettingsTab('httpLogs')}
           />
+          <TabButton
+            icon={<Info size={14} />}
+            label={t('settings.tabAbout')}
+            active={activeSettingsTab === 'about'}
+            onClick={() => setActiveSettingsTab('about')}
+          />
         </div>
 
         {/* 右侧内容区 */}
@@ -50,6 +57,7 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'general' && <GeneralSettings />}
           {activeSettingsTab === 'providers' && <ProviderSettings />}
           {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}
+          {activeSettingsTab === 'about' && <AboutSettings />}
         </div>
       </div>
     </div>

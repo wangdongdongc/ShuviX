@@ -36,7 +36,6 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
-    "welcomeDesc": "一个基于多模型的 AI 智能体助手，支持自然对话和扩展能力。",
     "startNewChat": "开始新对话",
     "emptyHint": "发送一条消息开始对话",
     "thinking": "思考中…",
@@ -136,6 +135,7 @@
     "tabGeneral": "通用",
     "tabProviders": "提供商",
     "tabHttpLogs": "HTTP 日志",
+    "tabAbout": "关于",
     "theme": "主题",
     "themeDark": "深色",
     "themeLight": "浅色",
@@ -192,6 +192,14 @@
     "capAudioInput": "音频输入",
     "capAudioOutput": "音频输出",
     "capPdfInput": "PDF 文件输入"
+  },
+
+  "about": {
+    "description": "您的 AI 助手",
+    "version": "版本 {{version}}",
+    "sourceCode": "源代码仓库",
+    "reportIssue": "反馈问题",
+    "license": "本项目为开源软件，基于 MIT 许可证发布。"
   },
 
   "agent": {
