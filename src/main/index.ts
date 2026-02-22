@@ -21,8 +21,8 @@ function openSettingsWindow(): void {
   }
 
   settingsWindow = new BrowserWindow({
-    width: 720,
-    height: 560,
+    width: 820,
+    height: 620,
     minWidth: 600,
     minHeight: 400,
     title: '设置',
@@ -106,7 +106,7 @@ function setupApplicationMenu(): void {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1200,
+    width: 960,
     height: 800,
     minWidth: 800,
     minHeight: 600,
