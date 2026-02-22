@@ -192,7 +192,7 @@ interface ShuviXAPI {
     clear: () => Promise<{ success: boolean }>
   }
   docker: {
-    check: () => Promise<{ available: boolean }>
+    validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
   }
 }
 

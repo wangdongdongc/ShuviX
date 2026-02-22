@@ -21,12 +21,13 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
+  const [dockerError, setDockerError] = useState<string | null>(null)
 
   // 加载项目数据
   useEffect(() => {
     Promise.all([
       window.api.project.getById(projectId),
-      window.api.docker.check()
+      window.api.docker.validate()
     ]).then(([project, dockerResult]) => {
       if (project) {
         setName(project.name)
@@ -36,7 +37,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
         setDockerImage(project.dockerImage)
         setSandboxEnabled(project.sandboxEnabled === 1)
       }
-      setDockerAvailable(dockerResult.available)
+      setDockerAvailable(dockerResult.ok)
       setLoading(false)
     })
   }, [projectId])
@@ -61,7 +62,16 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   /** 保存所有变更 */
   const handleSave = async (): Promise<void> => {
     setSaving(true)
+    setDockerError(null)
     try {
+      // Docker 开启时先校验环境
+      if (dockerEnabled) {
+        const result = await window.api.docker.validate({ image: dockerImage })
+        if (!result.ok) {
+          setDockerError(t(`projectForm.${result.error}`))
+          return
+        }
+      }
       await window.api.project.update({
         id: projectId,
         name: name.trim() || undefined,
@@ -143,6 +153,31 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
             />
           </div>
 
+          {/* 沙箱模式 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <ShieldCheck size={12} />
+                {t('projectForm.sandbox')}
+              </label>
+              <button
+                onClick={() => setSandboxEnabled(!sandboxEnabled)}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.sandboxHint')}
+            </p>
+          </div>
+
           {/* Docker 隔离 */}
           <div className="border border-border-secondary rounded-lg p-3">
             <div className="flex items-center justify-between">
@@ -180,31 +215,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
                 ? t('projectForm.dockerNotFound')
                 : t('projectForm.dockerHint')}
             </p>
-          </div>
-
-          {/* 沙箱模式 */}
-          <div className="border border-border-secondary rounded-lg p-3">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-                <ShieldCheck size={12} />
-                {t('projectForm.sandbox')}
-              </label>
-              <button
-                onClick={() => setSandboxEnabled(!sandboxEnabled)}
-                className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
-                }`}
-              >
-                <span
-                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
-                  }`}
-                />
-              </button>
-            </div>
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {t('projectForm.sandboxHint')}
-            </p>
+            {dockerError && (
+              <p className="text-[10px] text-error mt-1.5">{dockerError}</p>
+            )}
           </div>
         </div>
 

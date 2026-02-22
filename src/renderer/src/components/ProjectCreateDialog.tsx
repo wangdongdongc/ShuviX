@@ -21,11 +21,12 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
+  const [dockerError, setDockerError] = useState<string | null>(null)
 
   // 检查 Docker 可用性
   useEffect(() => {
-    window.api.docker.check().then((result) => {
-      setDockerAvailable(result.available)
+    window.api.docker.validate().then((result) => {
+      setDockerAvailable(result.ok)
     })
   }, [])
 
@@ -55,7 +56,16 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const handleCreate = async (): Promise<void> => {
     if (!path.trim()) return
     setSaving(true)
+    setDockerError(null)
     try {
+      // Docker 开启时先校验环境
+      if (dockerEnabled) {
+        const result = await window.api.docker.validate({ image: dockerImage })
+        if (!result.ok) {
+          setDockerError(t(`projectForm.${result.error}`))
+          return
+        }
+      }
       const project = await window.api.project.create({
         name: name.trim() || undefined,
         path: path.trim(),
@@ -135,6 +145,31 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             />
           </div>
 
+          {/* 沙箱模式 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <ShieldCheck size={12} />
+                {t('projectForm.sandbox')}
+              </label>
+              <button
+                onClick={() => setSandboxEnabled(!sandboxEnabled)}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.sandboxHint')}
+            </p>
+          </div>
+
           {/* Docker 隔离 */}
           <div className="border border-border-secondary rounded-lg p-3">
             <div className="flex items-center justify-between">
@@ -172,31 +207,9 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 ? t('projectForm.dockerNotFound')
                 : t('projectForm.dockerHint')}
             </p>
-          </div>
-
-          {/* 沙箱模式 */}
-          <div className="border border-border-secondary rounded-lg p-3">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-                <ShieldCheck size={12} />
-                {t('projectForm.sandbox')}
-              </label>
-              <button
-                onClick={() => setSandboxEnabled(!sandboxEnabled)}
-                className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                  sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
-                }`}
-              >
-                <span
-                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                    sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
-                  }`}
-                />
-              </button>
-            </div>
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {t('projectForm.sandboxHint')}
-            </p>
+            {dockerError && (
+              <p className="text-[10px] text-error mt-1.5">{dockerError}</p>
+            )}
           </div>
         </div>
 

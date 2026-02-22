@@ -73,9 +73,9 @@ export function registerSessionHandlers(): void {
     }
   )
 
-  /** 检测 Docker 是否可用 */
-  ipcMain.handle('docker:check', () => {
-    return { available: dockerManager.isDockerAvailable() }
+  /** 校验 Docker 环境（不传 image 仅检查命令可用性，传 image 则完整校验） */
+  ipcMain.handle('docker:validate', async (_event, params?: { image?: string }) => {
+    return dockerManager.validateSetup(params?.image)
   })
 
   /** 打开文件夹选择对话框 */

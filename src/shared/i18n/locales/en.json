@@ -121,6 +121,9 @@
     "dockerImage": "Docker Image",
     "dockerNotFound": "Docker not detected. Please install and start Docker Desktop first.",
     "dockerHint": "When enabled, bash commands run in an isolated Docker container with the project path mounted.",
+    "dockerNotAvailable": "Docker command is not available. Please ensure Docker Desktop is installed and running.",
+    "dockerImageNotFound": "Image not found locally. Please run docker pull <image> first and try again.",
+    "dockerNoBash": "This image does not support bash. Please choose an image with bash (e.g. ubuntu:latest).",
     "sandbox": "Sandbox Mode",
     "sandboxHint": "When enabled, file tools are restricted to the workspace and bash commands require approval before execution."
   },

@@ -163,7 +163,7 @@ const api = {
 
   // ============ Docker ============
   docker: {
-    check: () => ipcRenderer.invoke('docker:check')
+    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params)
   }
 }
 

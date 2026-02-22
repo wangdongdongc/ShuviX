@@ -34,6 +34,52 @@ export class DockerManager {
     }
   }
 
+  /**
+   * 校验 Docker 环境
+   * - 不传 image：仅检查 Docker 命令是否可用
+   * - 传 image：完整校验（命令可用 → 镜像存在 → 镜像支持 bash）
+   * 返回 { ok, error? } — error 为具体失败原因的 i18n key
+   */
+  async validateSetup(image?: string): Promise<{ ok: boolean; error?: string }> {
+    // 1. Docker 命令可用
+    if (!this.isDockerAvailable()) {
+      return { ok: false, error: 'dockerNotAvailable' }
+    }
+
+    // 仅检查可用性时到此返回
+    if (!image) return { ok: true }
+
+    // 2. 镜像是否在本地存在（不自动 pull，避免长时间阻塞）
+    try {
+      const inspectResult = spawnSync('docker', ['image', 'inspect', image], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      if (inspectResult.status !== 0) {
+        return { ok: false, error: 'dockerImageNotFound' }
+      }
+    } catch {
+      return { ok: false, error: 'dockerImageNotFound' }
+    }
+
+    // 3. 镜像是否支持 bash
+    try {
+      const bashResult = spawnSync('docker', ['run', '--rm', image, 'bash', '-c', 'echo ok'], {
+        encoding: 'utf-8',
+        timeout: 15000,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      if (bashResult.status !== 0 || !bashResult.stdout?.includes('ok')) {
+        return { ok: false, error: 'dockerNoBash' }
+      }
+    } catch {
+      return { ok: false, error: 'dockerNoBash' }
+    }
+
+    return { ok: true }
+  }
+
   /** 为 session 确保容器运行中（已有则复用） */
   async ensureContainer(
     sessionId: string,
