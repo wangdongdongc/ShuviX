@@ -51,57 +51,73 @@ function openSettingsWindow(): void {
   })
 }
 
-/** 配置应用菜单（含设置快捷键） */
+/** 配置应用菜单（含系统常用快捷键） */
 function setupApplicationMenu(): void {
-  if (process.platform === 'darwin') {
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: app.name,
-        submenu: [
-          {
-            label: '设置…',
-            accelerator: 'CommandOrControl+,',
-            click: () => openSettingsWindow()
-          },
-          { type: 'separator' },
-          { role: 'services' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' }
-        ]
-      },
-      {
-        label: '编辑',
-        submenu: [
-          { role: 'undo' },
-          { role: 'redo' },
-          { type: 'separator' },
-          { role: 'cut' },
-          { role: 'copy' },
-          { role: 'paste' },
-          { role: 'selectAll' }
-        ]
-      },
-      {
-        label: '窗口',
-        submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'front' }]
-      },
-      // 开发模式下添加开发菜单
-      ...(is.dev ? [{
-        label: '开发',
-        submenu: [
-          { role: 'toggleDevTools' as const },
-          { role: 'reload' as const },
-          { role: 'forceReload' as const }
-        ]
-      }] : [])
-    ]
+  const isMac = process.platform === 'darwin'
 
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
-  }
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // macOS 应用菜单
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' as const },
+        { type: 'separator' as const },
+        {
+          label: '设置…',
+          accelerator: 'CommandOrControl+,',
+          click: () => openSettingsWindow()
+        },
+        { type: 'separator' as const },
+        { role: 'services' as const },
+        { type: 'separator' as const },
+        { role: 'hide' as const },
+        { role: 'hideOthers' as const },
+        { role: 'unhide' as const },
+        { type: 'separator' as const },
+        { role: 'quit' as const }
+      ]
+    }] : []),
+    // 编辑菜单（系统常用快捷键：撤销、重做、剪切、复制、粘贴、全选、删除）
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac ? [{ role: 'pasteAndMatchStyle' as const }] : []),
+        { role: 'delete' },
+        { type: 'separator' },
+        { role: 'selectAll' }
+      ]
+    },
+    // 窗口菜单
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { role: 'close' },
+        ...(isMac ? [
+          { type: 'separator' as const },
+          { role: 'front' as const }
+        ] : [])
+      ]
+    },
+    // 开发模式下添加开发菜单
+    ...(is.dev ? [{
+      label: 'Dev',
+      submenu: [
+        { role: 'toggleDevTools' as const },
+        { role: 'reload' as const },
+        { role: 'forceReload' as const }
+      ]
+    }] : [])
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 function createWindow(): void {
