@@ -42,7 +42,8 @@
     "genFailed": "Generation Failed",
     "containerCreated": "Container created",
     "containerDestroyed": "Container destroyed",
-    "rollbackConfirm": "Rolling back will delete all messages after this point. Continue?"
+    "rollbackConfirm": "Rollback to here",
+    "rollbackWarning": "This will delete all messages after this point. This action cannot be undone."
   },
 
   "input": {
@@ -179,6 +180,7 @@
     "allProviders": "All Providers",
     "allModels": "All Models",
     "noLogs": "No logs yet",
+    "clearLogsConfirm": "Are you sure you want to clear all HTTP request logs? This action cannot be undone.",
     "selectLogHint": "Select a log on the left to view request details.",
     "loadingLog": "Loading log details...",
     "logNotFound": "Log not found or has been cleared.",
@@ -186,6 +188,15 @@
     "session": "Session",
     "unknownSession": "Unknown session",
     "requestBody": "Request Body",
+    "payloadBasicParams": "Basic Parameters",
+    "payloadMessages": "Messages",
+    "payloadNoMessages": "No messages",
+    "payloadEmpty": "(empty)",
+    "payloadImage": "Image",
+    "payloadTool": "Tool",
+    "payloadToolDefs": "Tool Definitions",
+    "payloadBackToStructured": "← Back to structured view",
+    "payloadViewRawJson": "View raw JSON →",
     "capVision": "Image Input",
     "capImageOutput": "Image Output",
     "capFunctionCalling": "Function Calling",

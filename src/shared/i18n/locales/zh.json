@@ -42,7 +42,8 @@
     "genFailed": "生成失败",
     "containerCreated": "容器已创建",
     "containerDestroyed": "容器已销毁",
-    "rollbackConfirm": "回退到此处将删除之后的所有消息，是否继续？"
+    "rollbackConfirm": "回退到此处",
+    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
   },
 
   "input": {
@@ -179,6 +180,7 @@
     "allProviders": "全部提供商",
     "allModels": "全部模型",
     "noLogs": "暂无日志",
+    "clearLogsConfirm": "确定要清空所有 HTTP 请求日志吗？此操作不可恢复。",
     "selectLogHint": "请选择左侧日志查看请求体详情。",
     "loadingLog": "正在加载日志详情...",
     "logNotFound": "日志不存在或已被清理。",
@@ -186,6 +188,15 @@
     "session": "会话",
     "unknownSession": "未知会话",
     "requestBody": "请求体",
+    "payloadBasicParams": "基本参数",
+    "payloadMessages": "消息列表",
+    "payloadNoMessages": "无消息",
+    "payloadEmpty": "(空)",
+    "payloadImage": "图片",
+    "payloadTool": "工具",
+    "payloadToolDefs": "工具定义",
+    "payloadBackToStructured": "← 返回结构化视图",
+    "payloadViewRawJson": "查看原始 JSON →",
     "capVision": "图像输入",
     "capImageOutput": "图像生成",
     "capFunctionCalling": "工具调用",

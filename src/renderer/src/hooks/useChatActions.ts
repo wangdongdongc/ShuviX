@@ -1,12 +1,17 @@
-import { useCallback } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useState } from 'react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
 /** useChatActions 返回值类型 */
 export interface UseChatActionsReturn {
-  /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
-  handleRollback: (messageId: string) => Promise<void>
+  /** 请求回退（弹出确认弹窗） */
+  handleRollback: (messageId: string) => void
+  /** 待确认回退的消息 ID（非 null 时渲染确认弹窗） */
+  pendingRollbackId: string | null
+  /** 确认执行回退 */
+  confirmRollback: () => Promise<void>
+  /** 取消回退 */
+  cancelRollback: () => void
   /** 重新生成最近一次助手回复 */
   handleRegenerate: (assistantMsgId: string) => Promise<void>
   /** 沙箱审批：用户允许/拒绝工具调用 */
@@ -22,17 +27,29 @@ export interface UseChatActionsReturn {
  * @param activeSessionId 当前活动会话ID
  */
 export function useChatActions(activeSessionId: string | null): UseChatActionsReturn {
-  const { t } = useTranslation()
 
-  /** 回退到指定消息（删除之后的所有消息，重新初始化 Agent） */
-  const handleRollback = useCallback(async (messageId: string) => {
-    if (!activeSessionId) return
-    if (!window.confirm(t('chat.rollbackConfirm'))) return
-    await window.api.message.rollback({ sessionId: activeSessionId, messageId })
+  /** 待确认回退的消息 ID */
+  const [pendingRollbackId, setPendingRollbackId] = useState<string | null>(null)
+
+  /** 请求回退（设置待确认状态） */
+  const handleRollback = useCallback((messageId: string) => {
+    setPendingRollbackId(messageId)
+  }, [])
+
+  /** 确认执行回退 */
+  const confirmRollback = useCallback(async () => {
+    if (!activeSessionId || !pendingRollbackId) return
+    setPendingRollbackId(null)
+    await window.api.message.rollback({ sessionId: activeSessionId, messageId: pendingRollbackId })
     const msgs = await window.api.message.list(activeSessionId)
     useChatStore.getState().setMessages(msgs)
     await window.api.agent.init({ sessionId: activeSessionId })
-  }, [activeSessionId])
+  }, [activeSessionId, pendingRollbackId])
+
+  /** 取消回退 */
+  const cancelRollback = useCallback(() => {
+    setPendingRollbackId(null)
+  }, [])
 
   /** 重新生成最近一次助手回复（回退到用户消息前 + 重发） */
   const handleRegenerate = useCallback(async (assistantMsgId: string) => {
@@ -97,5 +114,5 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     useChatStore.getState().setActiveSessionId(session.id)
   }, [])
 
-  return { handleRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } satisfies UseChatActionsReturn
+  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } satisfies UseChatActionsReturn
 }

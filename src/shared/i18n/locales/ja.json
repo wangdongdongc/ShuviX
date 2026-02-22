@@ -42,7 +42,8 @@
     "genFailed": "生成失敗",
     "containerCreated": "コンテナが作成されました",
     "containerDestroyed": "コンテナが削除されました",
-    "rollbackConfirm": "ここまでロールバックすると、以降のすべてのメッセージが削除されます。続行しますか？"
+    "rollbackConfirm": "ここまでロールバック",
+    "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。"
   },
 
   "input": {
@@ -179,6 +180,7 @@
     "allProviders": "すべてのプロバイダー",
     "allModels": "すべてのモデル",
     "noLogs": "ログなし",
+    "clearLogsConfirm": "すべてのHTTPリクエストログを削除しますか？この操作は元に戻せません。",
     "selectLogHint": "左側のログを選択してリクエスト詳細を確認してください。",
     "loadingLog": "ログ詳細を読み込み中...",
     "logNotFound": "ログが存在しないか、クリアされました。",
@@ -186,6 +188,15 @@
     "session": "セッション",
     "unknownSession": "不明なセッション",
     "requestBody": "リクエストボディ",
+    "payloadBasicParams": "基本パラメータ",
+    "payloadMessages": "メッセージ一覧",
+    "payloadNoMessages": "メッセージなし",
+    "payloadEmpty": "(空)",
+    "payloadImage": "画像",
+    "payloadTool": "ツール",
+    "payloadToolDefs": "ツール定義",
+    "payloadBackToStructured": "← 構造化ビューに戻る",
+    "payloadViewRawJson": "生の JSON を表示 →",
     "capVision": "画像入力",
     "capImageOutput": "画像生成",
     "capFunctionCalling": "関数呼び出し",

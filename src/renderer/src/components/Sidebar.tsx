@@ -5,6 +5,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
+import { ConfirmDialog } from './ConfirmDialog'
 import type { Session } from '../stores/chatStore'
 
 /**
@@ -235,30 +236,14 @@ export function Sidebar(): React.JSX.Element {
 
       {/* 删除会话确认弹窗 */}
       {deletingSessionId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[340px] max-w-[90vw]">
-            <div className="px-5 py-4">
-              <h3 className="text-sm font-semibold text-text-primary mb-2">{t('sidebar.confirmDelete')}</h3>
-              <p className="text-xs text-text-secondary leading-relaxed">
-                {t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
-              <button
-                onClick={() => setDeletingSessionId(null)}
-                className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={() => doDelete(deletingSessionId)}
-                className="px-4 py-1.5 rounded-lg text-xs bg-error text-white hover:bg-error/90 transition-colors"
-              >
-                {t('common.delete')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title={t('sidebar.confirmDelete')}
+          description={<>{t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}</>}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => doDelete(deletingSessionId)}
+          onCancel={() => setDeletingSessionId(null)}
+        />
       )}
 
       {/* 新建项目弹窗 */}

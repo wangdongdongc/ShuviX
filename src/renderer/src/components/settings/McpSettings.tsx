@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, RefreshCw, Power, PowerOff, ChevronDown, ChevronRight, Wrench, Server } from 'lucide-react'
+import { ConfirmDialog } from '../ConfirmDialog'
 
 /** MCP Server 信息（从主进程返回） */
 interface McpServerInfo {
@@ -227,11 +228,21 @@ export function McpSettings(): React.JSX.Element {
     }
   }
 
-  /** 删除 */
-  const handleDelete = async (s: McpServerInfo): Promise<void> => {
-    if (!confirm(t('settings.mcpDeleteConfirm', { name: s.name }))) return
-    await window.api.mcp.delete(s.id)
-    if (expandedId === s.id) {
+  /** 待删除的 server（非 null 时渲染确认弹窗） */
+  const [deletingServer, setDeletingServer] = useState<McpServerInfo | null>(null)
+
+  /** 请求删除 */
+  const handleDelete = (s: McpServerInfo): void => {
+    setDeletingServer(s)
+  }
+
+  /** 确认删除 */
+  const confirmDelete = async (): Promise<void> => {
+    if (!deletingServer) return
+    const id = deletingServer.id
+    setDeletingServer(null)
+    await window.api.mcp.delete(id)
+    if (expandedId === id) {
       setExpandedId(null)
       setTools([])
     }
@@ -486,6 +497,16 @@ export function McpSettings(): React.JSX.Element {
             </div>
           ))}
         </div>
+      )}
+      {/* 删除 MCP Server 确认弹窗 */}
+      {deletingServer && (
+        <ConfirmDialog
+          title={t('settings.mcpDeleteConfirm', { name: deletingServer.name })}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeletingServer(null)}
+        />
       )}
     </div>
   )

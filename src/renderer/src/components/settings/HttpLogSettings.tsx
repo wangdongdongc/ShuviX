@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { PayloadViewer } from './PayloadViewer'
+import { ConfirmDialog } from '../ConfirmDialog'
 
 /** HTTP 日志设置 */
 export function HttpLogSettings(): React.JSX.Element {
@@ -30,6 +31,7 @@ export function HttpLogSettings(): React.JSX.Element {
   const [loadingList, setLoadingList] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([])
   const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([])
   const [filterSessionId, setFilterSessionId] = useState<string>('')
@@ -81,8 +83,10 @@ export function HttpLogSettings(): React.JSX.Element {
     }
   }
 
-  /** 清空日志 */
-  const handleClear = async (): Promise<void> => {
+  /** 清空日志（需用户确认） */
+  const handleClearRequest = (): void => setShowClearConfirm(true)
+  const handleClearConfirm = async (): Promise<void> => {
+    setShowClearConfirm(false)
     setClearing(true)
     try {
       await window.api.httpLog.clear()
@@ -149,7 +153,7 @@ export function HttpLogSettings(): React.JSX.Element {
               {t('common.refresh')}
             </button>
             <button
-              onClick={handleClear}
+              onClick={handleClearRequest}
               disabled={clearing || logs.length === 0}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
@@ -194,7 +198,7 @@ export function HttpLogSettings(): React.JSX.Element {
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        <div className="w-[320px] border-r border-border-secondary overflow-y-auto">
+        <div className="w-[200px] border-r border-border-secondary overflow-y-auto">
           {logs.length === 0 ? (
             <div className="px-4 py-6 text-xs text-text-tertiary">{t('settings.noLogs')}</div>
           ) : (
@@ -211,20 +215,10 @@ export function HttpLogSettings(): React.JSX.Element {
                         : 'border-transparent hover:border-border-primary hover:bg-bg-hover'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="text-[11px] text-text-secondary">{new Date(log.createdAt).toLocaleString()}</div>
-                      {log.totalTokens > 0 && (
-                        <div className="text-[10px] text-text-tertiary">{log.totalTokens} tokens</div>
-                      )}
-                    </div>
-                    <div className="mt-1 text-xs text-text-primary font-medium">
+                    <div className="text-[11px] text-text-primary font-medium">{new Date(log.createdAt).toLocaleString()}</div>
+                    <div className="mt-0.5 text-[10px] text-text-tertiary truncate">
                       {log.providerName || log.provider} / {log.model}
                     </div>
-                    {log.totalTokens > 0 && (
-                      <div className="mt-0.5 text-[10px] text-text-tertiary">
-                        in: {log.inputTokens} / out: {log.outputTokens}
-                      </div>
-                    )}
                   </button>
                 )
               })}
@@ -241,16 +235,22 @@ export function HttpLogSettings(): React.JSX.Element {
             <div className="text-xs text-text-tertiary">{t('settings.logNotFound')}</div>
           ) : (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-3 gap-3 text-xs">
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
                   <div className="text-text-tertiary">{t('settings.time')}</div>
                   <div className="text-text-primary mt-0.5 break-all">{new Date(selectedLog.createdAt).toLocaleString()}</div>
                 </div>
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
                   <div className="text-text-tertiary">{t('settings.session')}</div>
-                  <div className="text-text-primary mt-0.5">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || t('settings.unknownSession')}</div>
-                  <div className="text-[10px] text-text-tertiary mt-0.5 break-all">{selectedLog.sessionId}</div>
+                  <div className="text-text-primary mt-0.5 truncate">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || t('settings.unknownSession')}</div>
                 </div>
+                {(() => { const cur = logs.find((l) => l.id === selectedLogId); return cur && cur.totalTokens > 0 ? (
+                  <div className="bg-bg-tertiary rounded-md px-3 py-2">
+                    <div className="text-text-tertiary">Tokens</div>
+                    <div className="text-text-primary mt-0.5">{cur.totalTokens}</div>
+                    <div className="text-[10px] text-text-tertiary mt-0.5">in: {cur.inputTokens} / out: {cur.outputTokens}</div>
+                  </div>
+                ) : null })()}
               </div>
 
               <div className="text-xs text-text-secondary">{t('settings.requestBody')}</div>
@@ -259,6 +259,16 @@ export function HttpLogSettings(): React.JSX.Element {
           )}
         </div>
       </div>
+      {/* 清空日志确认弹窗 */}
+      {showClearConfirm && (
+        <ConfirmDialog
+          title={t('settings.clearLogsConfirm')}
+          confirmText={t('common.clear')}
+          cancelText={t('common.cancel')}
+          onConfirm={handleClearConfirm}
+          onCancel={() => setShowClearConfirm(false)}
+        />
+      )}
     </div>
   )
 }

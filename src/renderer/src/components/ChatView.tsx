@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder } from 'lucide-react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useChatActions } from '../hooks/useChatActions'
+import { ConfirmDialog } from './ConfirmDialog'
 import { useSessionMeta } from '../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
@@ -77,7 +79,8 @@ export function ChatView(): React.JSX.Element {
   const atBottomRef = useRef(true)
 
   const projectPath = useSessionMeta(activeSessionId)
-  const { handleRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } = useChatActions(activeSessionId)
+  const { t } = useTranslation()
+  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } = useChatActions(activeSessionId)
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -152,6 +155,17 @@ export function ChatView(): React.JSX.Element {
             />
           )}
 
+          {/* 回退确认弹窗 */}
+          {pendingRollbackId && (
+            <ConfirmDialog
+              title={t('chat.rollbackConfirm')}
+              description={t('chat.rollbackWarning')}
+              confirmText={t('common.confirm')}
+              cancelText={t('common.cancel')}
+              onConfirm={confirmRollback}
+              onCancel={cancelRollback}
+            />
+          )}
           {/* ask 工具浮动选项面板 */}
           <AskPanel onUserInput={handleUserInput} />
           {/* 输入区 */}

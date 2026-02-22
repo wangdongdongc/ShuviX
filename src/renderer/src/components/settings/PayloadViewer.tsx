@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Image, Wrench, MessageSquare, Bot, User, Settings, Code } from 'lucide-react'
 
 /** 可折叠区块 */
@@ -147,7 +148,7 @@ function extractToolCallsSummary(toolCalls: any[]): string {
 }
 
 /** 渲染消息的完整内容 */
-function MessageContent({ content, toolCalls, toolCallId, name }: { content: unknown; toolCalls?: any[]; toolCallId?: string; name?: string }): React.JSX.Element {
+function MessageContent({ content, toolCalls, toolCallId, name, t }: { content: unknown; toolCalls?: any[]; toolCallId?: string; name?: string; t: (key: string) => string }): React.JSX.Element {
   return (
     <div className="space-y-2">
       {/* tool result 的 tool_call_id */}
@@ -166,7 +167,7 @@ function MessageContent({ content, toolCalls, toolCallId, name }: { content: unk
         <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{content}</pre>
       ) : Array.isArray(content) ? (
         content.map((block: any, i: number) => (
-          <ContentBlock key={i} block={block} />
+          <ContentBlock key={i} block={block} t={t} />
         ))
       ) : content !== null && content !== undefined ? (
         <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{JSON.stringify(content, null, 2)}</pre>
@@ -192,7 +193,7 @@ function MessageContent({ content, toolCalls, toolCallId, name }: { content: unk
 }
 
 /** 渲染单个 content block */
-function ContentBlock({ block }: { block: any }): React.JSX.Element {
+function ContentBlock({ block, t }: { block: any; t: (key: string) => string }): React.JSX.Element {
   if (block.type === 'text') {
     return (
       <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{block.text}</pre>
@@ -206,7 +207,7 @@ function ContentBlock({ block }: { block: any }): React.JSX.Element {
         <div className="space-y-1">
           <div className="flex items-center gap-1 text-[10px] text-purple-400">
             <Image size={10} />
-            <span>图片 ({Math.round(url.length / 1024)}KB base64)</span>
+            <span>{t('settings.payloadImage')} ({Math.round(url.length / 1024)}KB base64)</span>
           </div>
           <img src={url} alt="图片" className="max-w-[200px] max-h-[150px] rounded-md border border-border-primary object-contain" />
         </div>
@@ -224,7 +225,7 @@ function ContentBlock({ block }: { block: any }): React.JSX.Element {
       <div className="space-y-1">
         <div className="flex items-center gap-1 text-[10px] text-purple-400">
           <Image size={10} />
-          <span>图片 ({block.media_type || block.mimeType || 'image'})</span>
+          <span>{t('settings.payloadImage')} ({block.media_type || block.mimeType || 'image'})</span>
         </div>
         {block.data && (
           <img
@@ -290,6 +291,7 @@ function ToolItem({ tool }: { tool: any }): React.JSX.Element {
  * 将 JSON 请求体解析为可折叠的结构化视图
  */
 export function PayloadViewer({ payload }: { payload: string }): React.JSX.Element {
+  const { t } = useTranslation()
   const [showRaw, setShowRaw] = useState(false)
 
   const parsed = useMemo(() => {
@@ -324,7 +326,7 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
           onClick={() => setShowRaw(false)}
           className="text-[11px] text-accent hover:text-accent-hover transition-colors"
         >
-          ← 返回结构化视图
+          {t('settings.payloadBackToStructured')}
         </button>
         <pre className="w-full min-h-[260px] rounded-lg border border-border-primary bg-bg-tertiary p-3 text-[11px] leading-relaxed text-text-primary overflow-auto whitespace-pre-wrap break-words">
           {payload}
@@ -336,20 +338,20 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
   return (
     <div className="space-y-2">
       {/* 基本参数 */}
-      <Section title="基本参数">
+      <Section title={t('settings.payloadBasicParams')}>
         <BasicParams data={parsed} />
       </Section>
 
       {/* 消息列表 */}
-      <Section title="消息列表" count={allMessages.length} defaultOpen>
+      <Section title={t('settings.payloadMessages')} count={allMessages.length} defaultOpen>
         {allMessages.length === 0 ? (
-          <div className="px-3 py-2 text-[11px] text-text-tertiary">无消息</div>
+          <div className="px-3 py-2 text-[11px] text-text-tertiary">{t('settings.payloadNoMessages')}</div>
         ) : (
           allMessages.map((msg: any, i: number) => {
             const role = msg.role || 'unknown'
             const { text, hasImage, hasToolCall } = extractSummary(msg.content)
             const toolCallsSummary = msg.tool_calls ? extractToolCallsSummary(msg.tool_calls) : ''
-            const summary = toolCallsSummary || truncate(text || '(空)', 80)
+            const summary = toolCallsSummary || truncate(text || t('settings.payloadEmpty'), 80)
 
             return (
               <CollapsibleItem
@@ -362,12 +364,12 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
                   <>
                     {hasImage && (
                       <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-purple-500/15 text-purple-400">
-                        <Image size={9} /> 图片
+                        <Image size={9} /> {t('settings.payloadImage')}
                       </span>
                     )}
                     {(hasToolCall || msg.tool_calls) && (
                       <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-orange-500/15 text-orange-400">
-                        <Wrench size={9} /> 工具
+                        <Wrench size={9} /> {t('settings.payloadTool')}
                       </span>
                     )}
                   </>
@@ -378,6 +380,7 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
                   toolCalls={msg.tool_calls}
                   toolCallId={msg.tool_call_id}
                   name={msg.name}
+                  t={t}
                 />
               </CollapsibleItem>
             )
@@ -387,7 +390,7 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
 
       {/* 工具定义 */}
       {tools.length > 0 && (
-        <Section title="工具定义" count={tools.length}>
+        <Section title={t('settings.payloadToolDefs')} count={tools.length}>
           {tools.map((tool: any, i: number) => (
             <ToolItem key={i} tool={tool} />
           ))}
@@ -399,7 +402,7 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
         onClick={() => setShowRaw(true)}
         className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
       >
-        查看原始 JSON →
+        {t('settings.payloadViewRawJson')}
       </button>
     </div>
   )
