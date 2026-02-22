@@ -1,13 +1,12 @@
 import { v7 as uuidv7 } from 'uuid'
-import { join } from 'path'
 import { rmSync, existsSync } from 'fs'
-import { app } from 'electron'
 import { sessionDao } from '../dao/sessionDao'
 import { messageDao } from '../dao/messageDao'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
 import { t } from '../i18n'
+import { getTempWorkspace } from '../utils/paths'
 import type { Session } from '../types'
 
 /**
@@ -26,7 +25,8 @@ export class SessionService {
     const session = sessionDao.findById(id)
     if (!session) return undefined
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
-    return { ...session, workingDirectory: project?.path || process.cwd() }
+    const workingDirectory = project?.path || getTempWorkspace(id)
+    return { ...session, workingDirectory }
   }
 
   /** 创建新会话 */
@@ -89,7 +89,7 @@ export class SessionService {
     httpLogDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
     // 清理临时会话工作目录
-    const tempDir = join(app.getPath('userData'), 'temp_workspace', id)
+    const tempDir = getTempWorkspace(id)
     if (existsSync(tempDir)) {
       try { rmSync(tempDir, { recursive: true, force: true }) } catch { /* 忽略 */ }
     }

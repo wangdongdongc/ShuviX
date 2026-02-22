@@ -317,10 +317,14 @@ export function ChatView(): React.JSX.Element {
       {/* macOS 窗口拖拽区 + 工作目录 */}
       <div className="titlebar-drag h-12 flex-shrink-0 flex items-end justify-center pb-1.5">
         {projectPath && (
-          <div className="titlebar-no-drag flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-text-tertiary max-w-[80%] truncate" title={projectPath}>
+          <button
+            onClick={() => window.api.app.openFolder(projectPath)}
+            className="titlebar-no-drag flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors max-w-[80%] truncate cursor-pointer"
+            title={projectPath}
+          >
             <Folder size={11} className="flex-shrink-0 text-text-tertiary/70" />
             <span className="truncate">{projectPath}</span>
-          </div>
+          </button>
         )}
       </div>
 

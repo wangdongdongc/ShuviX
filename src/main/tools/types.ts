@@ -3,11 +3,10 @@
  * 所有工具通过 ToolContext + resolveProjectConfig 获取运行时项目配置
  */
 
-import { join, resolve, sep } from 'path'
-import { mkdirSync, existsSync } from 'fs'
-import { app } from 'electron'
+import { resolve, sep } from 'path'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
+import { getTempWorkspace } from '../utils/paths'
 
 /** 项目配置（工具执行时动态查询） */
 export interface ProjectConfig {
@@ -38,15 +37,6 @@ export interface UserInputPayload {
   question: string
   options: Array<{ label: string; description: string }>
   allowMultiple: boolean
-}
-
-/** 获取临时会话的工作目录 */
-function getTempWorkspace(sessionId: string): string {
-  const dir = join(app.getPath('userData'), 'temp_workspace', sessionId)
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  }
-  return dir
 }
 
 /** 检查路径是否在工作目录内（沙箱路径越界检查） */

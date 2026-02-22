@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus, ExternalLink } from 'lucide-react'
+import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SessionEditDialog } from './SessionEditDialog'
@@ -24,19 +24,15 @@ export function Sidebar(): React.JSX.Element {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   // 项目名称/路径缓存
   const [projectNames, setProjectNames] = useState<Record<string, string>>({})
-  const [projectPaths, setProjectPaths] = useState<Record<string, string>>({})
 
-  // 异步加载项目名称和路径
+  // 异步加载项目名称
   useEffect(() => {
     window.api.project.list().then((projects) => {
       const nameMap: Record<string, string> = {}
-      const pathMap: Record<string, string> = {}
       for (const p of projects) {
         nameMap[p.id] = p.name
-        if (p.path) pathMap[p.id] = p.path
       }
       setProjectNames(nameMap)
-      setProjectPaths(pathMap)
     })
   }, [sessions, editingProjectId])
 
@@ -203,19 +199,6 @@ export function Sidebar(): React.JSX.Element {
                     >
                       <MessageSquarePlus size={13} />
                     </button>
-                    {/* 打开项目文件夹（仅有路径的项目显示） */}
-                    {!isTemp && projectPaths[groupKey] && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          window.api.app.openFolder(projectPaths[groupKey])
-                        }}
-                        className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-                        title={t('sidebar.openFolder')}
-                      >
-                        <ExternalLink size={12} />
-                      </button>
-                    )}
                     {/* 编辑项目（临时对话组不显示） */}
                     {!isTemp && (
                       <button
