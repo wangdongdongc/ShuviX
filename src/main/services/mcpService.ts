@@ -61,7 +61,7 @@ function extractTextFromContent(content: unknown[]): string {
  * 应用级单例，不绑定会话。所有会话通过 getAllAgentTools() 共享 MCP 工具。
  */
 class McpService {
-  /** serverId → 运行时连接 */
+  /** serverId → 运行时连接（仅保存连接状态，不作为工具数据源） */
   private connections = new Map<string, McpConnection>()
 
   // ─── 连接管理 ───
@@ -112,6 +112,10 @@ class McpService {
       conn.tools = result.tools as McpDiscoveredTool[]
       conn.status = 'connected'
       conn.error = undefined
+      // 工具列表持久化到 DB（唯一数据源）
+      mcpDao.updateCachedTools(serverId, JSON.stringify(conn.tools.map(t => ({
+        name: t.name, description: t.description ?? '', inputSchema: t.inputSchema
+      }))))
 
       log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
     } catch (err: any) {
@@ -171,18 +175,25 @@ class McpService {
     return this.connections.get(serverId)?.tools ?? []
   }
 
-  /** 获取某个 server 的工具信息（用于 IPC 返回给前端） */
+  /** 获取某个 server 的工具信息（用于 IPC 返回给前端）
+   *  统一从 DB 读取工具列表（唯一数据源），附加运行时连接状态 */
   getServerToolInfos(serverId: string): McpToolInfo[] {
     const server = mcpDao.findById(serverId)
     if (!server) return []
-    const conn = this.connections.get(serverId)
-    if (!conn || conn.status !== 'connected') return []
-    return conn.tools.map((t) => ({
+    const status = this.connections.get(serverId)?.status ?? 'disconnected'
+    let tools: McpDiscoveredTool[]
+    try {
+      tools = JSON.parse(server.cachedTools || '[]') as McpDiscoveredTool[]
+    } catch {
+      tools = []
+    }
+    return tools.map((t) => ({
       name: `mcp__${server.name}__${t.name}`,
       label: t.description || t.name,
       description: t.description ?? '',
       group: server.name,
-      serverId: server.id
+      serverId: server.id,
+      serverStatus: status
     }))
   }
 
@@ -259,9 +270,11 @@ class McpService {
     return this.getAllAgentTools().map((t) => t.name)
   }
 
-  /** 获取所有已连接 Server 的工具信息（用于 tools:list IPC） */
+  /** 获取所有 Server 的工具信息（用于 tools:list IPC）
+   *  包含已断开/禁用 server 的缓存工具（带 serverStatus 离线标识） */
   getAllToolInfos(): McpToolInfo[] {
-    return [...this.connections.keys()].flatMap((id) => this.getServerToolInfos(id))
+    const allServers = mcpDao.findAll()
+    return allServers.flatMap((s) => this.getServerToolInfos(s.id))
   }
 
   // ─── 内部方法 ───

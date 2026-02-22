@@ -41,8 +41,8 @@ export class McpDao {
   insert(server: McpServer): void {
     this.db
       .prepare(
-        `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, isEnabled, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, isEnabled, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         server.id,
@@ -54,6 +54,7 @@ export class McpDao {
         server.url,
         server.headers,
         server.isEnabled,
+        server.cachedTools || '[]',
         server.createdAt,
         server.updatedAt
       )
@@ -79,6 +80,11 @@ export class McpDao {
     values.push(Date.now())
     values.push(id)
     this.db.prepare(`UPDATE mcp_servers SET ${sets.join(', ')} WHERE id = ?`).run(...values)
+  }
+
+  /** 更新缓存的工具列表（JSON 字符串） */
+  updateCachedTools(id: string, tools: string): void {
+    this.db.prepare('UPDATE mcp_servers SET cachedTools = ? WHERE id = ?').run(tools, id)
   }
 
   /** 删除 MCP Server */

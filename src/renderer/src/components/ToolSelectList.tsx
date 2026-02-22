@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, Puzzle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight, Puzzle, WifiOff } from 'lucide-react'
 
 /** 工具信息 */
 export interface ToolItem {
   name: string
   label: string
   group?: string
+  /** MCP 工具所属 server 的连接状态 */
+  serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
 }
 
 interface ToolSelectListProps {
@@ -30,6 +33,7 @@ function mcpShortName(fullName: string): string {
  * 被 ToolPicker / ProjectEditDialog / ProjectCreateDialog 共用
  */
 export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolSelectListProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   // 紧凑模式下默认展开所有分组
@@ -107,8 +111,11 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
             const allChecked = groupTools.every(t => enabledTools.includes(t.name))
             const someChecked = groupTools.some(t => enabledTools.includes(t.name))
 
+            // 判断分组是否在线
+            const isOnline = groupTools.some(t => t.serverStatus === 'connected')
+
             return (
-              <div key={group} className={compact ? '' : 'border border-border-primary rounded-md overflow-hidden'}>
+              <div key={group} className={compact ? '' : `border rounded-md overflow-hidden ${isOnline ? 'border-border-primary' : 'border-red-500/30'}`}>
                 {/* MCP Server 分组头部 */}
                 <div className={`flex items-center gap-1.5 ${compact ? 'px-2 py-1.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}>
                   <button
@@ -124,8 +131,14 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
                     onChange={() => toggleGroup(groupTools)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <Puzzle size={11} className="text-purple-400 flex-shrink-0" />
-                  <span className="text-[11px] font-medium text-purple-400">{group}</span>
+                  <Puzzle size={11} className={isOnline ? 'text-purple-400' : 'text-red-400'} />
+                  <span className={`text-[11px] font-medium ${isOnline ? 'text-purple-400' : 'text-red-400'}`}>{group}</span>
+                  {!isOnline && (
+                    <span className="flex items-center gap-0.5 text-[10px] text-red-400" title={t('settings.mcpStatusDisconnected')}>
+                      <WifiOff size={10} />
+                      {t('settings.mcpStatusDisconnected')}
+                    </span>
+                  )}
                   <span className="text-[10px] text-text-tertiary ml-auto">{groupTools.length}</span>
                 </div>
 
@@ -136,8 +149,8 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
                       <label
                         key={tool.name}
                         className={compact
-                          ? 'flex items-center gap-2 w-full px-2 pl-7 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
-                          : 'flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5'
+                          ? `flex items-center gap-2 w-full px-2 pl-7 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
+                          : `flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5 ${!isOnline ? 'opacity-50' : ''}`
                         }
                       >
                         <input
@@ -146,7 +159,7 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
                           onChange={() => toggle(tool.name)}
                           className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                         />
-                        <span className="text-[11px] font-mono text-purple-300">{mcpShortName(tool.name)}</span>
+                        <span className={`text-[11px] font-mono ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}>{mcpShortName(tool.name)}</span>
                         <span className="text-[10px] text-text-tertiary truncate">{tool.label}</span>
                       </label>
                     ))}

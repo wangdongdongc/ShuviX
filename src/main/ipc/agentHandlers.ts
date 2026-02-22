@@ -72,11 +72,12 @@ export function registerAgentHandlers(): void {
       label: labelMap[name] || name,
       group: undefined as string | undefined
     }))
-    /** MCP 工具（带 group 字段用于 UI 分组） */
+    /** MCP 工具（带 group / serverStatus 字段用于 UI 分组和状态展示） */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({
       name: info.name,
       label: info.label,
-      group: info.group
+      group: info.group,
+      serverStatus: info.serverStatus
     }))
     return [...builtinTools, ...mcpTools]
   })

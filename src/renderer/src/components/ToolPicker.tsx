@@ -19,18 +19,27 @@ export function ToolPicker(): React.JSX.Element | null {
   const close = useCallback(() => setOpen(false), [])
   useClickOutside(toolsRef, close, open)
 
-  // 加载工具列表，并清理 enabledTools 中不存在的陈旧名称
-  useEffect(() => {
+  /** 拉取工具列表并清理陈旧名称 */
+  const fetchTools = useCallback(() => {
     window.api.tools.list().then(tools => {
       setAllTools(tools)
       const validNames = new Set(tools.map(t => t.name))
-      const cleaned = enabledTools.filter(n => validNames.has(n))
-      if (cleaned.length !== enabledTools.length) {
+      const currentEnabled = useChatStore.getState().enabledTools
+      const cleaned = currentEnabled.filter(n => validNames.has(n))
+      if (cleaned.length !== currentEnabled.length) {
         void handleChange(cleaned)
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 挂载时加载一次
+  useEffect(() => { fetchTools() }, [fetchTools])
+
+  // 每次打开下拉面板时实时刷新
+  useEffect(() => {
+    if (open) fetchTools()
+  }, [open, fetchTools])
 
   if (allTools.length === 0) return null
 

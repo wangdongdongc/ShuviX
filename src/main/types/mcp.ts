@@ -23,6 +23,8 @@ export interface McpServer {
   headers: string
   /** 是否启用 */
   isEnabled: number
+  /** 上次连接时发现的工具列表 JSON（持久化缓存） */
+  cachedTools: string
   createdAt: number
   updatedAt: number
 }
@@ -63,7 +65,7 @@ export interface McpServerInfo extends McpServer {
 
 /** MCP 工具信息（用于 IPC 返回给渲染进程） */
 export interface McpToolInfo {
-  /** 完整工具名：mcp:<serverName>:<toolName> */
+  /** 完整工具名：mcp__<serverName>__<toolName> */
   name: string
   /** 显示标签 */
   label: string
@@ -73,4 +75,6 @@ export interface McpToolInfo {
   group: string
   /** 所属 server ID */
   serverId: string
+  /** 所属 server 的连接状态 */
+  serverStatus: McpServerStatus
 }

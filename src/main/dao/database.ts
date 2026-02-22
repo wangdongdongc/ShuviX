@@ -36,6 +36,11 @@ class DatabaseManager {
     if (!cols.find((c) => c.name === 'sandboxEnabled')) {
       this.db.exec("ALTER TABLE projects ADD COLUMN sandboxEnabled INTEGER NOT NULL DEFAULT 1")
     }
+    // 为已有 mcp_servers 表添加 cachedTools 列（持久化最近一次发现的工具列表）
+    const mcpCols = this.db.pragma('table_info(mcp_servers)') as { name: string }[]
+    if (!mcpCols.find((c) => c.name === 'cachedTools')) {
+      this.db.exec("ALTER TABLE mcp_servers ADD COLUMN cachedTools TEXT NOT NULL DEFAULT '[]'")
+    }
   }
 
   /** 初始化数据库表 */
@@ -128,6 +133,7 @@ class DatabaseManager {
         url TEXT NOT NULL DEFAULT '',
         headers TEXT NOT NULL DEFAULT '{}',
         isEnabled INTEGER NOT NULL DEFAULT 1,
+        cachedTools TEXT NOT NULL DEFAULT '[]',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );
