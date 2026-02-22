@@ -70,6 +70,10 @@ const api = {
     respondToAsk: (params: { toolCallId: string; selections: string[] }) =>
       ipcRenderer.invoke('agent:respondToAsk', params),
 
+    /** 动态更新启用工具集 */
+    setEnabledTools: (params: { sessionId: string; tools: string[] }) =>
+      ipcRenderer.invoke('agent:setEnabledTools', params),
+
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: any) => void) => {
       const handler = (_: any, event: any): void => callback(event)
@@ -164,6 +168,11 @@ const api = {
   // ============ Docker ============
   docker: {
     validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params)
+  },
+
+  // ============ 工具 ============
+  tools: {
+    list: () => ipcRenderer.invoke('tools:list')
   }
 }
 

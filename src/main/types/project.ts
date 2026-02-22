@@ -27,6 +27,7 @@ export interface ProjectCreateParams {
   dockerEnabled?: boolean
   dockerImage?: string
   sandboxEnabled?: boolean
+  enabledTools?: string[]
 }
 
 /** IPC: 更新项目参数 */
@@ -38,6 +39,7 @@ export interface ProjectUpdateParams {
   dockerEnabled?: boolean
   dockerImage?: string
   sandboxEnabled?: boolean
+  enabledTools?: string[]
 }
 
 /** IPC: 删除项目参数 */

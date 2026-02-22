@@ -58,6 +58,7 @@
     "thinkMedium": "中等",
     "thinkHigh": "深度",
     "thinkXHigh": "极深",
+    "tools": "工具",
     "placeholderVision": "输入消息，可拖放或粘贴图片...",
     "placeholder": "输入消息... (Shift+Enter 换行)",
     "placeholderNoSession": "请先创建或选择一个对话",
@@ -125,7 +126,9 @@
     "dockerImageNotFound": "本地未找到该镜像，请先执行 docker pull <镜像名> 拉取后重试",
     "dockerNoBash": "该镜像不支持 bash 命令，请选择包含 bash 的镜像（如 ubuntu:latest）",
     "sandbox": "沙箱模式",
-    "sandboxHint": "开启后文件工具禁止访问工作区外的文件，Bash 命令需逐条确认后执行"
+    "sandboxHint": "开启后文件工具禁止访问工作区外的文件，Bash 命令需逐条确认后执行",
+    "tools": "工具配置",
+    "toolsHint": "选择该项目的会话中可用的工具，取消勾选的工具不会提供给 AI"
   },
 
   "settings": {

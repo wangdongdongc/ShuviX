@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { SessionEditDialog } from './SessionEditDialog'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import type { Session } from '../stores/chatStore'
@@ -17,7 +16,6 @@ const TEMP_GROUP_KEY = '__no_project__'
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
   const { sessions, activeSessionId, setActiveSessionId, sessionStreams } = useChatStore()
-  const [editingSession, setEditingSession] = useState<Session | null>(null)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -127,15 +125,6 @@ export function Sidebar(): React.JSX.Element {
         <button
           onClick={(e) => {
             e.stopPropagation()
-            setEditingSession(session)
-          }}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-        >
-          <Pencil size={12} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
             handleDelete(session.id)
           }}
           className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
@@ -235,14 +224,6 @@ export function Sidebar(): React.JSX.Element {
           <span>{t('sidebar.settings')}</span>
         </button>
       </div>
-
-      {/* 会话编辑弹窗 */}
-      {editingSession && (
-        <SessionEditDialog
-          session={editingSession}
-          onClose={() => setEditingSession(null)}
-        />
-      )}
 
       {/* 项目编辑弹窗 */}
       {editingProjectId && (

@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
-import { agentService } from '../services/agent'
+import { agentService, ALL_TOOL_NAMES } from '../services/agent'
 import type { AgentInitParams, AgentInitResult, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
+import { t } from '../i18n'
 
 /**
  * Agent 相关 IPC 处理器
@@ -46,5 +47,25 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:respondToAsk', (_event, params: { toolCallId: string; selections: string[] }) => {
     agentService.respondToAsk(params.toolCallId, params.selections)
     return { success: true }
+  })
+
+  /** 动态更新指定 session 的启用工具集 */
+  ipcMain.handle('agent:setEnabledTools', (_event, params: { sessionId: string; tools: string[] }) => {
+    agentService.setEnabledTools(params.sessionId, params.tools)
+    return { success: true }
+  })
+
+  /** 获取所有可用工具列表（名称 + 标签） */
+  ipcMain.handle('tools:list', () => {
+    /** 工具名称到 i18n label key 的映射 */
+    const labelMap: Record<string, string> = {
+      bash: t('tool.bashLabel'),
+      read: t('tool.readLabel'),
+      write: t('tool.writeLabel'),
+      edit: t('tool.editLabel'),
+      ask: t('tool.askLabel'),
+      now: t('tool.timeLabel')
+    }
+    return ALL_TOOL_NAMES.map((name) => ({ name, label: labelMap[name] || name }))
   })
 }

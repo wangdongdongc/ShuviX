@@ -37,6 +37,8 @@ export interface Session {
   updatedAt: number
   /** 项目工作目录（计算属性，由后端填充） */
   workingDirectory?: string | null
+  /** 当前生效的工具列表（计算属性，由后端解析：session > project > all） */
+  enabledTools?: string[]
 }
 
 /** 每个 session 的流式状态 */
@@ -81,6 +83,8 @@ interface ChatState {
   inputText: string
   /** 错误信息 */
   error: string | null
+  /** 当前会话启用的工具列表 */
+  enabledTools: string[]
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -109,6 +113,7 @@ interface ChatState {
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
   removeSession: (id: string) => void
+  setEnabledTools: (tools: string[]) => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -129,6 +134,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingImages: [],
   inputText: '',
   error: null,
+  enabledTools: [],
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) =>
@@ -253,5 +259,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
-    }))
+    })),
+  setEnabledTools: (tools) => set({ enabledTools: tools })
 }))

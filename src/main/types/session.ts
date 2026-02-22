@@ -13,6 +13,8 @@ export interface Session {
   updatedAt: number
   /** 项目工作目录（计算属性，由 service 层填充，DB 中不存在） */
   workingDirectory?: string | null
+  /** 当前生效的工具列表（计算属性，由 service 层解析：session > project > all） */
+  enabledTools?: string[]
 }
 
 /** IPC: 更新会话标题参数 */

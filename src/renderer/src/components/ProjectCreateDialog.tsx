@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, Container, ShieldCheck } from 'lucide-react'
+import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -22,11 +22,18 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [saving, setSaving] = useState(false)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const [dockerError, setDockerError] = useState<string | null>(null)
+  const [allTools, setAllTools] = useState<Array<{ name: string; label: string }>>([])
+  const [enabledTools, setEnabledTools] = useState<string[]>([])
 
-  // 检查 Docker 可用性
+  // 加载工具列表 + 检查 Docker 可用性
   useEffect(() => {
-    window.api.docker.validate().then((result) => {
-      setDockerAvailable(result.ok)
+    Promise.all([
+      window.api.docker.validate(),
+      window.api.tools.list()
+    ]).then(([dockerResult, tools]) => {
+      setDockerAvailable(dockerResult.ok)
+      setAllTools(tools)
+      setEnabledTools(tools.map((t) => t.name))
     })
   }, [])
 
@@ -72,7 +79,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         systemPrompt,
         dockerEnabled,
         dockerImage,
-        sandboxEnabled
+        sandboxEnabled,
+        enabledTools
       })
       onCreated?.(project.id)
       onClose()
@@ -167,6 +175,36 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             </div>
             <p className="text-[10px] text-text-tertiary mt-2">
               {t('projectForm.sandboxHint')}
+            </p>
+          </div>
+
+          {/* 工具配置 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
+              <Wrench size={12} />
+              {t('projectForm.tools')}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {allTools.map((tool) => (
+                <label key={tool.name} className="flex items-center gap-1.5 text-[11px] text-text-secondary cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => {
+                      setEnabledTools((prev) =>
+                        prev.includes(tool.name)
+                          ? prev.filter((n) => n !== tool.name)
+                          : [...prev, tool.name]
+                      )
+                    }}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5"
+                  />
+                  {tool.label}
+                </label>
+              ))}
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.toolsHint')}
             </p>
           </div>
 

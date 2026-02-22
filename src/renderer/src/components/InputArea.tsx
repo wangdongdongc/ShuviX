@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, ChevronDown, Brain, ImagePlus, X } from 'lucide-react'
+import { Send, Square, ChevronDown, Brain, ImagePlus, X, Wrench } from 'lucide-react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
@@ -19,7 +19,7 @@ function formatTokenCount(n: number): string {
  */
 export function InputArea(): React.JSX.Element {
   const { t } = useTranslation()
-  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage } = useChatStore()
+  const { inputText, setInputText, isStreaming, activeSessionId, setSessions, modelSupportsReasoning, thinkingLevel, setModelSupportsReasoning, setThinkingLevel, modelSupportsVision, setModelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, addPendingImage, removePendingImage, enabledTools, setEnabledTools } = useChatStore()
   const {
     availableModels,
     providers,
@@ -37,6 +37,14 @@ export function InputArea(): React.JSX.Element {
   const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const toolsRef = useRef<HTMLDivElement>(null)
+  const [toolsPickerOpen, setToolsPickerOpen] = useState(false)
+  const [allTools, setAllTools] = useState<Array<{ name: string; label: string }>>([])
+
+  // 加载工具列表
+  useEffect(() => {
+    window.api.tools.list().then(setAllTools)
+  }, [])
 
   /** 自动调整文本框高度 */
   useEffect(() => {
@@ -285,6 +293,40 @@ export function InputArea(): React.JSX.Element {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [thinkingPickerOpen])
 
+  /** 点击外部关闭工具选择器 */
+  useEffect(() => {
+    if (!toolsPickerOpen) return
+    const handleClickOutside = (event: MouseEvent): void => {
+      if (!toolsRef.current?.contains(event.target as Node)) {
+        setToolsPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [toolsPickerOpen])
+
+  /** 切换单个工具的启用状态 */
+  const handleToggleTool = async (toolName: string): Promise<void> => {
+    const newTools = enabledTools.includes(toolName)
+      ? enabledTools.filter((n) => n !== toolName)
+      : [...enabledTools, toolName]
+    setEnabledTools(newTools)
+    // 动态更新 Agent 工具集
+    if (activeSessionId) {
+      await window.api.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
+      // 持久化到 session modelMetadata
+      const currentMeta = (() => {
+        const s = useChatStore.getState().sessions.find((s) => s.id === activeSessionId)
+        try { return JSON.parse(s?.modelMetadata || '{}') } catch { return {} }
+      })()
+      currentMeta.enabledTools = newTools
+      await window.api.session.updateModelMetadata({
+        id: activeSessionId,
+        modelMetadata: JSON.stringify(currentMeta)
+      })
+    }
+  }
+
   /** 拖拽事件处理 */
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -483,6 +525,46 @@ export function InputArea(): React.JSX.Element {
                           >
                             {l.label}
                           </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 工具选择器 */}
+              {allTools.length > 0 && (
+                <div ref={toolsRef} className="relative">
+                  <button
+                    onClick={() => setToolsPickerOpen(!toolsPickerOpen)}
+                    className={`h-6 inline-flex items-center gap-1 px-2 rounded-md border bg-bg-primary/45 backdrop-blur-sm text-[10px] hover:bg-bg-primary/60 transition-colors ${
+                      enabledTools.length < allTools.length
+                        ? 'border-orange-500/50 text-orange-400'
+                        : 'border-border-primary/70 text-text-secondary hover:text-text-primary'
+                    }`}
+                    title={t('input.tools')}
+                  >
+                    <Wrench size={11} />
+                    <span>{enabledTools.length}/{allTools.length}</span>
+                  </button>
+
+                  {toolsPickerOpen && (
+                    <div className="absolute left-0 bottom-8 w-[160px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+                      <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.tools')}</div>
+                      <div className="py-1">
+                        {allTools.map((tool) => (
+                          <label
+                            key={tool.name}
+                            className="flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={enabledTools.includes(tool.name)}
+                              onChange={() => { void handleToggleTool(tool.name) }}
+                              className="rounded border-border-primary accent-accent w-3.5 h-3.5"
+                            />
+                            {tool.label}
+                          </label>
                         ))}
                       </div>
                     </div>

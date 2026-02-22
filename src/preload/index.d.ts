@@ -72,6 +72,8 @@ interface Session {
   updatedAt: number
   /** 项目工作目录（计算属性，由后端填充） */
   workingDirectory?: string | null
+  /** 当前生效的工具列表（计算属性，由后端解析：session > project > all） */
+  enabledTools?: string[]
 }
 
 /** 消息类型 */
@@ -135,6 +137,8 @@ interface ShuviXAPI {
     approveToolCall: (params: { toolCallId: string; approved: boolean }) => Promise<{ success: boolean }>
     /** 响应 ask 工具的用户选择 */
     respondToAsk: (params: { toolCallId: string; selections: string[] }) => Promise<{ success: boolean }>
+    /** 动态更新启用工具集 */
+    setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
   }
   provider: {
@@ -193,6 +197,9 @@ interface ShuviXAPI {
   }
   docker: {
     validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
+  }
+  tools: {
+    list: () => Promise<Array<{ name: string; label: string }>>
   }
 }
 

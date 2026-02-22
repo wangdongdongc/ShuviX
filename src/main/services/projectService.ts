@@ -30,9 +30,12 @@ export class ProjectService {
     dockerEnabled?: boolean
     dockerImage?: string
     sandboxEnabled?: boolean
+    enabledTools?: string[]
   }): Project {
     const now = Date.now()
     const id = uuidv7()
+    const settings: Record<string, any> = {}
+    if (params.enabledTools) settings.enabledTools = params.enabledTools
     const project: Project = {
       id,
       name: params.name || basename(params.path) || params.path,
@@ -41,7 +44,7 @@ export class ProjectService {
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || 'ubuntu:latest',
       sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
-      settings: '{}',
+      settings: JSON.stringify(settings),
       createdAt: now,
       updatedAt: now
     }
@@ -57,14 +60,24 @@ export class ProjectService {
     dockerEnabled?: boolean
     dockerImage?: string
     sandboxEnabled?: boolean
+    enabledTools?: string[]
   }): void {
+    // 处理 settings JSON 字段（合并而非覆盖）
+    let settingsUpdate: string | undefined
+    if (params.enabledTools !== undefined) {
+      const existing = projectDao.findById(id)
+      const current = (() => { try { return JSON.parse(existing?.settings || '{}') } catch { return {} } })()
+      current.enabledTools = params.enabledTools
+      settingsUpdate = JSON.stringify(current)
+    }
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.path !== undefined ? { path: params.path } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.dockerEnabled !== undefined ? { dockerEnabled: params.dockerEnabled ? 1 : 0 } : {}),
       ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
-      ...(params.sandboxEnabled !== undefined ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 } : {})
+      ...(params.sandboxEnabled !== undefined ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 } : {}),
+      ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })
   }
 

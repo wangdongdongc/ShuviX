@@ -58,6 +58,7 @@
     "thinkMedium": "中程度",
     "thinkHigh": "深い",
     "thinkXHigh": "最深",
+    "tools": "ツール",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
     "placeholderNoSession": "まずチャットを作成または選択してください",
@@ -125,7 +126,9 @@
     "dockerImageNotFound": "ローカルにイメージが見つかりません。先に docker pull <イメージ名> を実行してから再試行してください。",
     "dockerNoBash": "このイメージはbashをサポートしていません。bashを含むイメージ（例: ubuntu:latest）を選択してください。",
     "sandbox": "サンドボックスモード",
-    "sandboxHint": "有効にすると、ファイルツールはワークスペース外へのアクセスが制限され、Bashコマンドは実行前に承認が必要です。"
+    "sandboxHint": "有効にすると、ファイルツールはワークスペース外へのアクセスが制限され、Bashコマンドは実行前に承認が必要です。",
+    "tools": "ツール設定",
+    "toolsHint": "このプロジェクトのセッションで利用可能なツールを選択します。チェックを外したツールはAIに提供されません。"
   },
 
   "settings": {

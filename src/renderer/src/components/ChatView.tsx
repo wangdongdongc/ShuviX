@@ -91,7 +91,13 @@ export function ChatView(): React.JSX.Element {
       setProjectPath(null)
       return
     }
-    window.api.session.getById(activeSessionId).then((s) => setProjectPath(s?.workingDirectory || null))
+    // 恢复当前会话的工作目录和 enabledTools（由后端 service 层统一解析）
+    window.api.session.getById(activeSessionId).then((s) => {
+      setProjectPath(s?.workingDirectory || null)
+      if (s?.enabledTools) {
+        useChatStore.getState().setEnabledTools(s.enabledTools)
+      }
+    })
   }, [activeSessionId])
 
   // 跟踪用户是否在底部附近

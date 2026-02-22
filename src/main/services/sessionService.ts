@@ -7,6 +7,7 @@ import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
 import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
+import { resolveEnabledTools } from '../utils/tools'
 import type { Session } from '../types'
 
 /**
@@ -20,13 +21,14 @@ export class SessionService {
     return sessionDao.findAll()
   }
 
-  /** 获取单个会话（含计算属性 workingDirectory） */
+  /** 获取单个会话（含计算属性 workingDirectory、enabledTools） */
   getById(id: string): Session | undefined {
     const session = sessionDao.findById(id)
     if (!session) return undefined
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
-    return { ...session, workingDirectory }
+    const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
+    return { ...session, workingDirectory, enabledTools }
   }
 
   /** 创建新会话 */

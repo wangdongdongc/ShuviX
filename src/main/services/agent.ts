@@ -19,6 +19,23 @@ import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
 import { t } from '../i18n'
+import type { AgentTool } from '@mariozechner/pi-agent-core'
+import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
+export { ALL_TOOL_NAMES } from '../utils/tools'
+export type { ToolName } from '../utils/tools'
+
+/** 根据启用列表构建工具子集 */
+function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
+  const all: Record<string, AgentTool<any>> = {
+    now: createNowTool(),
+    bash: createBashTool(ctx),
+    read: createReadTool(ctx),
+    write: createWriteTool(ctx),
+    edit: createEditTool(ctx),
+    ask: createAskTool(ctx)
+  }
+  return enabledTools.filter((name) => name in all).map((name) => all[name])
+}
 
 /** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */
 function extractBase64(img: any): string {
@@ -143,6 +160,8 @@ export interface AgentStreamEvent {
  */
 export class AgentService {
   private agents = new Map<string, Agent>()
+  /** 每个 session 的 ToolContext，用于动态重建工具 */
+  private toolContexts = new Map<string, ToolContext>()
   private pendingLogIds = new Map<string, string[]>()
   /** 待审批的 bash 命令 Promise resolver，key = toolCallId */
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>()
@@ -264,22 +283,13 @@ export class AgentService {
         })
       }
     }
-    const tools = [
-      createNowTool(),
-      createBashTool(ctx),
-      createReadTool(ctx),
-      createWriteTool(ctx),
-      createEditTool(ctx),
-      createAskTool(ctx)
-    ]
+    this.toolContexts.set(sessionId, ctx)
+    const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
+    const tools = buildTools(ctx, enabledTools)
 
-    // 在 system prompt 中附加工具说明
-    let enhancedPrompt = systemPrompt
-    if (project?.path) {
-      enhancedPrompt += `\n\n${t('agent.promptSupplement')}`
-    }
-    // ask 工具引导始终追加（不依赖项目）
-    enhancedPrompt += `\n\n${t('agent.askToolGuidance')}`
+    // 在 system prompt 中附加工具引导（根据启用工具自动拼接）
+    const toolPrompts = buildToolPrompts(enabledTools, { hasProjectPath: !!project?.path })
+    const enhancedPrompt = toolPrompts ? `${systemPrompt}\n\n${toolPrompts}` : systemPrompt
 
     const agent = new Agent({
       initialState: {
@@ -433,6 +443,19 @@ export class AgentService {
     agent.setModel(resolvedModel)
     agent.setThinkingLevel(caps.reasoning ? 'medium' : 'off')
     console.log(`[Agent] 切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`)
+  }
+
+  /** 动态更新指定 session 的启用工具集 */
+  setEnabledTools(sessionId: string, enabledTools: string[]): void {
+    const agent = this.agents.get(sessionId)
+    const ctx = this.toolContexts.get(sessionId)
+    if (!agent || !ctx) {
+      console.warn(`[Agent] setEnabledTools: session=${sessionId} agent/ctx不存在`)
+      return
+    }
+    const tools = buildTools(ctx, enabledTools)
+    agent.setTools(tools)
+    console.log(`[Agent] setEnabledTools session=${sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
   /** 获取指定 session 的消息列表 */
