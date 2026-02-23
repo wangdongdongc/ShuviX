@@ -117,9 +117,23 @@ body {
 .dialog-overlay {
   animation: overlay-in 120ms ease-out;
 }
-
 .dialog-panel {
   animation: dialog-in 120ms ease-out;
+}
+
+@keyframes overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes dialog-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+.dialog-overlay.dialog-closing {
+  animation: overlay-out 120ms ease-in forwards;
+}
+.dialog-closing .dialog-panel {
+  animation: dialog-out 120ms ease-in forwards;
 }
 
 /* Markdown 内容样式 */

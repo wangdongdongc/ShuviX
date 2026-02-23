@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import appIcon from '../../assets/ngnl_xiubi_color_mini.jpg'
+import { useDialogClose } from '../../hooks/useDialogClose'
 
 /**
  * 通用确认弹窗 — 带自定义图标、标题、描述、确认/取消按钮
@@ -32,26 +33,27 @@ export function ConfirmDialog({
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
   const overlayRef = useRef<HTMLDivElement>(null)
+  const { closing, handleClose } = useDialogClose(onCancel)
 
   // ESC 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Escape') handleClose()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [onCancel])
+  }, [handleClose])
 
   // 点击遮罩关闭
   const handleOverlayClick = (e: React.MouseEvent): void => {
-    if (e.target === overlayRef.current) onCancel()
+    if (e.target === overlayRef.current) handleClose()
   }
 
   return (
     <div
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[360px] max-w-[90vw] dialog-panel">
         <div className="flex items-start gap-3 px-5 py-4">
@@ -69,7 +71,7 @@ export function ConfirmDialog({
         </div>
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
           <button
-            onClick={onCancel}
+            onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
           >
             {cancelText}

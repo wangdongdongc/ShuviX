@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
+import { useDialogClose } from '../../hooks/useDialogClose'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -14,6 +15,7 @@ interface ProjectCreateDialogProps {
  */
 export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogProps): React.JSX.Element {
   const { t } = useTranslation()
+  const { closing, handleClose } = useDialogClose(onClose)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
@@ -41,11 +43,11 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   // 按 Escape 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') handleClose()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  }, [handleClose])
 
   /** 选择文件夹 */
   const handleSelectFolder = async (): Promise<void> => {
@@ -91,13 +93,13 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}>
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw] dialog-panel">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
           <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
           >
             <X size={16} />
@@ -237,7 +239,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         {/* 底部按钮 */}
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
           >
             {t('common.cancel')}
