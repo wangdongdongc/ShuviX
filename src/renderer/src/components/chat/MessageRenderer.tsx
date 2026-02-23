@@ -17,7 +17,6 @@ interface MessageRendererProps {
   lastAssistantTextId: string | null
   onRollback: (messageId: string) => void
   onRegenerate: (assistantMsgId: string) => void
-  onApproval: (toolCallId: string, approved: boolean) => void
 }
 
 /**
@@ -29,8 +28,7 @@ export function MessageRenderer({
   isLastMessage,
   lastAssistantTextId,
   onRollback,
-  onRegenerate,
-  onApproval
+  onRegenerate
 }: MessageRendererProps): React.JSX.Element {
   const { t } = useTranslation()
   const { msg, meta, pairedCallMeta } = item
@@ -55,7 +53,6 @@ export function MessageRenderer({
         toolCallId={meta?.toolCallId}
         args={meta?.args}
         status={liveExec?.status || 'running'}
-        onApproval={onApproval}
       />
     )
   }

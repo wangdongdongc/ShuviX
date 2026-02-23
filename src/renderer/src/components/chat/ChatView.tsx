@@ -9,7 +9,7 @@ import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
-import { AskPanel } from './AskPanel'
+import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
 
 /** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
@@ -147,9 +147,8 @@ export function ChatView(): React.JSX.Element {
       lastAssistantTextId={lastAssistantTextId}
       onRollback={handleRollback}
       onRegenerate={handleRegenerate}
-      onApproval={handleToolApproval}
     />
-  ), [messages, lastAssistantTextId, handleRollback, handleRegenerate, handleToolApproval])
+  ), [messages, lastAssistantTextId, handleRollback, handleRegenerate])
 
   return (
     <div className="flex flex-col h-full">
@@ -225,8 +224,8 @@ export function ChatView(): React.JSX.Element {
               onCancel={cancelRollback}
             />
           )}
-          {/* ask 工具浮动选项面板 */}
-          <AskPanel onUserInput={handleUserInput} />
+          {/* 用户操作浮动面板（ask 提问 / bash 审批） */}
+          <UserActionPanel onUserInput={handleUserInput} onApproval={handleToolApproval} />
           {/* 输入区 */}
           <InputArea />
         </>

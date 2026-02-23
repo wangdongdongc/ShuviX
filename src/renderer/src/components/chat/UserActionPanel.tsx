@@ -1,29 +1,59 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, MessageCircleQuestion } from 'lucide-react'
+import { Check, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
-interface AskPanelProps {
-  /** 用户选择回调 */
+interface UserActionPanelProps {
+  /** ask 工具：用户选择回调 */
   onUserInput: (toolCallId: string, selections: string[]) => void
+  /** 沙箱审批：用户允许/拒绝工具调用 */
+  onApproval: (toolCallId: string, approved: boolean) => void
 }
 
 /**
- * Ask 浮动面板 — 渲染在输入框上方
- * 自动检测 pending_user_input 状态的 ask 工具执行，展示问题和可点击选项
+ * 用户操作浮动面板 — 悬浮在输入框上方
+ * 统一处理 AI 执行过程中需要用户介入的两种场景：
+ *   1. ask 工具提问（pending_user_input）— 展示问题和可选选项
+ *   2. bash 审批（pending_approval）— 展示待执行命令和允许/拒绝按钮
  */
-export function AskPanel({ onUserInput }: AskPanelProps): React.JSX.Element | null {
+export function UserActionPanel({ onUserInput, onApproval }: UserActionPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
-  // 从 store 查找当前处于 pending_user_input 状态的 ask 工具执行
+  // 从 store 查找当前需要用户操作的工具执行
   const pendingAsk = useChatStore((s) =>
     s.toolExecutions.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
   )
+  const pendingApproval = useChatStore((s) =>
+    s.toolExecutions.find((te) => te.status === 'pending_approval')
+  )
 
-  if (!pendingAsk) return null
+  // ask 优先（两者不会同时出现，但保险起见）
+  if (pendingAsk) {
+    return <AskContent pending={pendingAsk} selectedOptions={selectedOptions} setSelectedOptions={setSelectedOptions} onUserInput={onUserInput} t={t} />
+  }
+  if (pendingApproval) {
+    return <ApprovalContent pending={pendingApproval} onApproval={onApproval} t={t} />
+  }
+  return null
+}
 
-  const { toolCallId, args } = pendingAsk
+// ---------- ask 提问子内容 ----------
+
+function AskContent({
+  pending,
+  selectedOptions,
+  setSelectedOptions,
+  onUserInput,
+  t
+}: {
+  pending: { toolCallId: string; args?: any }
+  selectedOptions: Set<string>
+  setSelectedOptions: React.Dispatch<React.SetStateAction<Set<string>>>
+  onUserInput: (toolCallId: string, selections: string[]) => void
+  t: (key: string) => string
+}): React.JSX.Element {
+  const { toolCallId, args } = pending
   const question = args?.question || ''
   const options: Array<{ label: string; description: string }> = args?.options || []
   const allowMultiple = args?.allowMultiple ?? false
@@ -35,7 +65,6 @@ export function AskPanel({ onUserInput }: AskPanelProps): React.JSX.Element | nu
         if (next.has(label)) next.delete(label)
         else next.add(label)
       } else {
-        // 单选：直接切换
         if (next.has(label)) next.clear()
         else { next.clear(); next.add(label) }
       }
@@ -97,6 +126,55 @@ export function AskPanel({ onUserInput }: AskPanelProps): React.JSX.Element | nu
         {allowMultiple && (
           <span className="text-[10px] text-text-tertiary">{t('toolCall.multiSelectHint')}</span>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ---------- bash 审批子内容 ----------
+
+function ApprovalContent({
+  pending,
+  onApproval,
+  t
+}: {
+  pending: { toolCallId: string; toolName: string; args?: any }
+  onApproval: (toolCallId: string, approved: boolean) => void
+  t: (key: string) => string
+}): React.JSX.Element {
+  const { toolCallId, args } = pending
+  const command = args?.command || ''
+
+  return (
+    <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+      {/* 标题 */}
+      <div className="flex items-start gap-2 px-4 pt-3 pb-2">
+        <ShieldAlert size={16} className="text-warning flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-text-primary font-medium leading-snug">{t('toolCall.pendingApproval')}</p>
+      </div>
+
+      {/* 命令预览 */}
+      <div className="px-4 pb-2">
+        <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
+          {command}
+        </pre>
+      </div>
+
+      {/* 操作栏 */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border-secondary/50 bg-bg-tertiary/30">
+        <button
+          onClick={() => onApproval(toolCallId, true)}
+          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
+        >
+          {t('toolCall.allow')}
+        </button>
+        <button
+          onClick={() => onApproval(toolCallId, false)}
+          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+        >
+          {t('toolCall.deny')}
+        </button>
+        <span className="text-[10px] text-text-tertiary ml-1">{t('toolCall.sandboxHint')}</span>
       </div>
     </div>
   )

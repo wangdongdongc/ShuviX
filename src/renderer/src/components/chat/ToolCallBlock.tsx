@@ -9,8 +9,6 @@ interface ToolCallBlockProps {
   args?: any
   result?: string
   status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input'
-  /** 审批回调（仅 pending_approval 时使用） */
-  onApproval?: (toolCallId: string, approved: boolean) => void
 }
 
 /**
@@ -23,7 +21,6 @@ export function ToolCallBlock({
   args,
   result,
   status: propStatus,
-  onApproval,
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -109,30 +106,6 @@ export function ToolCallBlock({
           <span className="text-[10px]">{config.label}</span>
         </span>
       </button>
-
-      {/* 沙箱审批卡片（需要用户操作，保持醒目样式） */}
-      {status === 'pending_approval' && (
-        <div className="mt-1 mb-2 rounded-lg border border-warning/30 bg-bg-tertiary/50 px-3 py-2">
-          <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono">
-            {args?.command || ''}
-          </pre>
-          <div className="flex items-center gap-2 mt-2">
-            <button
-              onClick={() => toolCallId && onApproval?.(toolCallId, true)}
-              className="px-3 py-1 rounded-md text-[11px] font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
-            >
-              {t('toolCall.allow')}
-            </button>
-            <button
-              onClick={() => toolCallId && onApproval?.(toolCallId, false)}
-              className="px-3 py-1 rounded-md text-[11px] font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
-            >
-              {t('toolCall.deny')}
-            </button>
-            <span className="text-[10px] text-text-tertiary ml-1">{t('toolCall.sandboxHint')}</span>
-          </div>
-        </div>
-      )}
 
       {/* 展开详情 */}
       {expanded && status !== 'pending_approval' && status !== 'pending_user_input' && (
