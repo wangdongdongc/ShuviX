@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
@@ -21,6 +21,7 @@ export function Sidebar(): React.JSX.Element {
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const initialCollapseApplied = useRef(false)
   // 项目名称/路径缓存
   const [projectNames, setProjectNames] = useState<Record<string, string>>({})
 
@@ -34,6 +35,17 @@ export function Sidebar(): React.JSX.Element {
       setProjectNames(nameMap)
     })
   }, [sessions, editingProjectId])
+
+  // 首次加载时，将所有非临时项目组默认折叠
+  useEffect(() => {
+    if (initialCollapseApplied.current || sessions.length === 0) return
+    initialCollapseApplied.current = true
+    const projectKeys = new Set<string>()
+    for (const s of sessions) {
+      if (s.projectId) projectKeys.add(s.projectId)
+    }
+    if (projectKeys.size > 0) setCollapsedGroups(projectKeys)
+  }, [sessions])
 
   // 当前活动会话所属的项目组 key
   const activeGroupKey = useMemo(() => {
