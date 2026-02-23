@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder } from 'lucide-react'
@@ -74,11 +74,34 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
  * 使用 react-virtuoso 虚拟滚动，仅渲染可视区域内的消息
  */
 export function ChatView(): React.JSX.Element {
-  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId } = useChatStore()
+  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, sessions } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
 
-  const projectPath = useSessionMeta(activeSessionId)
+  const { projectPath } = useSessionMeta(activeSessionId)
+  const activeSession = sessions.find((s) => s.id === activeSessionId)
+  const sessionTitle = activeSession?.title || null
+
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+  const titleInputRef = useRef<HTMLInputElement>(null)
+
+  /** 开始编辑会话标题 */
+  const startEditTitle = (): void => {
+    if (!sessionTitle || !activeSessionId) return
+    setDraftTitle(sessionTitle)
+    setEditingTitle(true)
+    setTimeout(() => titleInputRef.current?.select(), 0)
+  }
+
+  /** 提交会话标题修改 */
+  const commitEditTitle = async (): Promise<void> => {
+    setEditingTitle(false)
+    const trimmed = draftTitle.trim()
+    if (!trimmed || !activeSessionId || trimmed === sessionTitle) return
+    await window.api.session.updateTitle({ id: activeSessionId, title: trimmed })
+    useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
+  }
   const { t } = useTranslation()
   const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } = useChatActions(activeSessionId)
 
@@ -118,15 +141,39 @@ export function ChatView(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      {/* 窗口拖拽区 + 工作目录（macOS 为交通灯留出顶部空间） */}
-      <div className={`titlebar-drag flex-shrink-0 flex items-end justify-center pb-1.5 ${window.api.app.platform === 'darwin' ? 'h-12' : 'h-8'}`}>
+      {/* 窗口拖拽区 + 会话标题 / 工作目录（macOS 为交通灯留出顶部空间） */}
+      <div className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}>
+        {sessionTitle && (
+          editingTitle ? (
+            <input
+              ref={titleInputRef}
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onBlur={() => void commitEditTitle()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void commitEditTitle()
+                if (e.key === 'Escape') setEditingTitle(false)
+              }}
+              className="titlebar-no-drag bg-transparent text-center text-xs font-medium text-text-primary outline-none border-b border-accent/50 px-2 py-0.5 max-w-[60%]"
+              autoFocus
+            />
+          ) : (
+            <button
+              onClick={startEditTitle}
+              className="titlebar-no-drag text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 max-w-[60%] truncate"
+              title={t('common.clickToEdit')}
+            >
+              {sessionTitle}
+            </button>
+          )
+        )}
         {projectPath && (
           <button
             onClick={() => window.api.app.openFolder(projectPath)}
-            className="titlebar-no-drag flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors max-w-[80%] truncate cursor-pointer"
+            className="titlebar-no-drag flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors max-w-[80%] truncate cursor-pointer"
             title={projectPath}
           >
-            <Folder size={11} className="flex-shrink-0 text-text-tertiary/70" />
+            <Folder size={10} className="flex-shrink-0 text-text-tertiary/70" />
             <span className="truncate">{projectPath}</span>
           </button>
         )}

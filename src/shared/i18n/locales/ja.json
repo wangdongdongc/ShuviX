@@ -15,7 +15,8 @@
     "clear": "クリア",
     "search": "検索",
     "confirm": "確認",
-    "custom": "カスタム"
+    "custom": "カスタム",
+    "clickToEdit": "クリックして編集"
   },
 
   "sidebar": {

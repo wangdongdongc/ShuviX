@@ -15,7 +15,8 @@
     "clear": "Clear",
     "search": "Search",
     "confirm": "Confirm",
-    "custom": "Custom"
+    "custom": "Custom",
+    "clickToEdit": "Click to edit"
   },
 
   "sidebar": {
