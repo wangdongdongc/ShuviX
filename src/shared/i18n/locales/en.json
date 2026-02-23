@@ -101,7 +101,9 @@
     "confirmSelection": "Confirm",
     "multiSelectHint": "Multiple selection allowed",
     "overrideApproval": "User rejected this operation. User feedback: {{text}}",
-    "overrideAsk": "User rejected the provided options. User feedback: {{text}}"
+    "overrideAsk": "User rejected the provided options. User feedback: {{text}}",
+    "shuvixProjectHint": "AI requests to modify project configuration",
+    "shuvixSettingHint": "AI requests to modify system settings"
   },
 
   "sessionEdit": {
@@ -280,6 +282,8 @@
     "defaultTitle": "New Chat",
     "promptSupplement": "You can use bash, read, write, and edit tools to operate on files in the current project directory. All relative paths are based on the project directory.",
     "askToolGuidance": "When you need the user to choose between multiple approaches, styles, configurations, or directions, you MUST use the ask tool to present clickable option cards. Do NOT list numbered options in plain text for the user to reply manually.",
+    "shuvixProjectGuidance": "You have the shuvix-project tool to read and modify the current project's configuration. Use action=\"get\" to view settings, action=\"update\" to change them (name, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, enabledTools). Update operations require user approval.",
+    "shuvixSettingGuidance": "You have the shuvix-setting tool to read and modify global application settings. Use action=\"get\" to view all settings, action=\"set\" with key and value to change one. Known keys: general.defaultProvider, general.defaultModel, general.systemPrompt, general.theme (dark|light|system), general.fontSize, general.language (zh|en|ja). Set operations require user approval.",
     "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
   },
 
@@ -319,6 +323,12 @@
     "askLabel": "Ask User",
     "askDesc": "Ask the user a question with predefined options and wait for their selection",
     "askNoSelection": "User made no selection",
-    "askUserSelected": "User selected: {{selections}}"
+    "askUserSelected": "User selected: {{selections}}",
+    "shuvixProjectLabel": "Project Config",
+    "shuvixSettingLabel": "System Settings",
+    "shuvixProjectNoProject": "Current session is not linked to a project. Cannot read or modify project configuration.",
+    "shuvixProjectUpdated": "Project configuration updated: {{fields}}",
+    "shuvixSettingUpdated": "Setting updated: {{key}} = {{value}}",
+    "approvalDenied": "User denied this operation"
   }
 }

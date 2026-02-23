@@ -101,7 +101,9 @@
     "confirmSelection": "确认选择",
     "multiSelectHint": "可多选",
     "overrideApproval": "用户拒绝了本次操作。用户反馈：{{text}}",
-    "overrideAsk": "用户拒绝了提供的选项。用户反馈：{{text}}"
+    "overrideAsk": "用户拒绝了提供的选项。用户反馈：{{text}}",
+    "shuvixProjectHint": "AI 请求修改项目配置",
+    "shuvixSettingHint": "AI 请求修改系统设置"
   },
 
   "sessionEdit": {
@@ -280,6 +282,8 @@
     "defaultTitle": "新对话",
     "promptSupplement": "你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。",
     "askToolGuidance": "当你需要用户在多个方案、风格、配置或方向中做出选择时，必须使用 ask 工具提供可点击的选项卡片。禁止用纯文本列出编号选项让用户手动回复。",
+    "shuvixProjectGuidance": "You have the shuvix-project tool to read and modify the current project's configuration. Use action=\"get\" to view settings, action=\"update\" to change them (name, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, enabledTools). Update operations require user approval.",
+    "shuvixSettingGuidance": "You have the shuvix-setting tool to read and modify global application settings. Use action=\"get\" to view all settings, action=\"set\" with key and value to change one. Known keys: general.defaultProvider, general.defaultModel, general.systemPrompt, general.theme (dark|light|system), general.fontSize, general.language (zh|en|ja). Set operations require user approval.",
     "titleGenPrompt": "你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。"
   },
 
@@ -319,6 +323,12 @@
     "askLabel": "向用户提问",
     "askDesc": "向用户提出问题并提供预定义选项，等待用户选择后继续",
     "askNoSelection": "用户未做出选择",
-    "askUserSelected": "用户选择了: {{selections}}"
+    "askUserSelected": "用户选择了: {{selections}}",
+    "shuvixProjectLabel": "项目配置",
+    "shuvixSettingLabel": "系统设置",
+    "shuvixProjectNoProject": "当前会话未关联项目，无法读取或修改项目配置",
+    "shuvixProjectUpdated": "项目配置已更新：{{fields}}",
+    "shuvixSettingUpdated": "设置已更新：{{key}} = {{value}}",
+    "approvalDenied": "用户拒绝了本次操作"
   }
 }

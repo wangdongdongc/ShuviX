@@ -65,7 +65,9 @@ export function registerAgentHandlers(): void {
       read: t('tool.readLabel'),
       write: t('tool.writeLabel'),
       edit: t('tool.editLabel'),
-      ask: t('tool.askLabel')
+      ask: t('tool.askLabel'),
+      'shuvix-project': t('tool.shuvixProjectLabel'),
+      'shuvix-setting': t('tool.shuvixSettingLabel')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,

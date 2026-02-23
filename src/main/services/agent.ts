@@ -13,6 +13,8 @@ import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
 import { createEditTool } from '../tools/edit'
 import { createAskTool } from '../tools/ask'
+import { createShuvixProjectTool } from '../tools/shuvixProject'
+import { createShuvixSettingTool } from '../tools/shuvixSetting'
 import { createSkillTool } from '../tools/skill'
 import { resolveProjectConfig, type ToolContext } from '../tools/types'
 import { dockerManager } from './dockerManager'
@@ -35,7 +37,9 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     read: createReadTool(ctx),
     write: createWriteTool(ctx),
     edit: createEditTool(ctx),
-    ask: createAskTool(ctx)
+    ask: createAskTool(ctx),
+    'shuvix-project': createShuvixProjectTool(ctx),
+    'shuvix-setting': createShuvixSettingTool(ctx)
   }
   // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
   const mcpAll: Record<string, AgentTool<any>> = {}
@@ -674,11 +678,15 @@ export class AgentService {
           }),
           model: sessionForTool?.model || ''
         })
-        // 检查 bash 工具是否需要沙箱审批（在 tool_start 事件中携带，避免需要额外事件）
+        // 检查工具是否需要用户审批（bash 沙箱模式 / shuvix-project update / shuvix-setting set）
         let approvalRequired = false
         if (event.toolName === 'bash') {
           const config = resolveProjectConfig({ sessionId })
           approvalRequired = config.sandboxEnabled
+        } else if (event.toolName === 'shuvix-project' && event.args?.action === 'update') {
+          approvalRequired = true
+        } else if (event.toolName === 'shuvix-setting' && event.args?.action === 'set') {
+          approvalRequired = true
         }
         // ask 工具始终需要用户输入（与 bash 审批同模式，直接在 tool_start 携带标记）
         const userInputRequired = event.toolName === 'ask'

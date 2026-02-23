@@ -131,7 +131,89 @@ function AskContent({
   )
 }
 
-// ---------- bash 审批子内容 ----------
+// ---------- 审批子内容（通用） ----------
+
+/** settings key → 设置页面对应的 i18n key（与 GeneralSettings 页面文案保持一致） */
+const SETTING_KEY_LABEL: Record<string, string> = {
+  'general.theme': 'settings.theme',
+  'general.language': 'settings.language',
+  'general.fontSize': 'settings.fontSize',
+  'general.defaultProvider': 'settings.defaultProvider',
+  'general.defaultModel': 'settings.defaultModel',
+  'general.systemPrompt': 'settings.systemPrompt'
+}
+
+/** project field → 项目编辑页面对应的 i18n key（与 ProjectEditDialog 页面文案保持一致） */
+const PROJECT_FIELD_LABEL: Record<string, string> = {
+  name: 'projectForm.name',
+  systemPrompt: 'projectForm.prompt',
+  dockerEnabled: 'projectForm.docker',
+  dockerImage: 'projectForm.dockerImage',
+  sandboxEnabled: 'projectForm.sandbox',
+  enabledTools: 'projectForm.tools'
+}
+
+/** 根据工具类型渲染变更预览 */
+function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): React.JSX.Element {
+  const { t } = useTranslation()
+
+  if (toolName === 'bash') {
+    // bash：代码块预览
+    return (
+      <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
+        {args?.command || ''}
+      </pre>
+    )
+  }
+
+  if (toolName === 'shuvix-setting') {
+    // 系统设置：展示可读标签 + key = value
+    const key = args?.key || ''
+    const value = args?.value ?? ''
+    const label = SETTING_KEY_LABEL[key] ? t(SETTING_KEY_LABEL[key]) : key
+    return (
+      <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1">
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-text-primary font-medium flex-shrink-0">{label}</span>
+          <span className="text-text-tertiary text-[10px] font-mono">({key})</span>
+        </div>
+        <div className="font-mono text-accent/90 break-all">{value}</div>
+      </div>
+    )
+  }
+
+  if (toolName === 'shuvix-project') {
+    // 项目配置：展示各字段可读标签 + 新值
+    const { action, ...fields } = args || {}
+    const entries = Object.entries(fields).filter(([, v]) => v !== undefined)
+    if (entries.length === 0) return <span className="text-[11px] text-text-tertiary">No changes</span>
+    return (
+      <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1.5">
+        {entries.map(([k, v]) => {
+          const label = PROJECT_FIELD_LABEL[k] ? t(PROJECT_FIELD_LABEL[k]) : k
+          return (
+            <div key={k}>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-text-primary font-medium flex-shrink-0">{label}</span>
+                <span className="text-text-tertiary text-[10px] font-mono">({k})</span>
+              </div>
+              <div className="font-mono text-accent/90 break-all mt-0.5">
+                {typeof v === 'string' ? v : JSON.stringify(v)}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // 其他工具：通用 JSON 预览
+  return (
+    <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
+      {JSON.stringify(args, null, 2)}
+    </pre>
+  )
+}
 
 function ApprovalContent({
   pending,
@@ -142,8 +224,13 @@ function ApprovalContent({
   onApproval: (toolCallId: string, approved: boolean) => void
   t: (key: string) => string
 }): React.JSX.Element {
-  const { toolCallId, args } = pending
-  const command = args?.command || ''
+  const { toolCallId, toolName, args } = pending
+
+  // 根据工具类型选择提示文案
+  const hint = toolName === 'bash' ? t('toolCall.sandboxHint')
+    : toolName === 'shuvix-project' ? t('toolCall.shuvixProjectHint')
+    : toolName === 'shuvix-setting' ? t('toolCall.shuvixSettingHint')
+    : t('toolCall.pendingApproval')
 
   return (
     <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
@@ -153,11 +240,9 @@ function ApprovalContent({
         <p className="text-sm text-text-primary font-medium leading-snug">{t('toolCall.pendingApproval')}</p>
       </div>
 
-      {/* 命令预览 */}
+      {/* 变更预览 */}
       <div className="px-4 pb-2">
-        <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
-          {command}
-        </pre>
+        <ApprovalPreview toolName={toolName} args={args} />
       </div>
 
       {/* 操作栏 */}
@@ -174,7 +259,7 @@ function ApprovalContent({
         >
           {t('toolCall.deny')}
         </button>
-        <span className="text-[10px] text-text-tertiary ml-1">{t('toolCall.sandboxHint')}</span>
+        <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
       </div>
     </div>
   )

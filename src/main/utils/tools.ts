@@ -8,7 +8,7 @@ import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
 
 /** 内置工具名称（固定顺序） */
-export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask'] as const
+export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'shuvix-project', 'shuvix-setting'] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 
 /** 获取所有可用工具名（内置 + MCP 动态 + 已安装 Skill） */
@@ -35,7 +35,9 @@ const TOOL_PROMPT_REGISTRY: Array<{
   condition?: (ctx: ToolPromptContext) => boolean
 }> = [
   { tools: ['bash', 'read', 'write', 'edit'], key: 'agent.promptSupplement', condition: (ctx) => ctx.hasProjectPath },
-  { tools: ['ask'], key: 'agent.askToolGuidance' }
+  { tools: ['ask'], key: 'agent.askToolGuidance' },
+  { tools: ['shuvix-project'], key: 'agent.shuvixProjectGuidance' },
+  { tools: ['shuvix-setting'], key: 'agent.shuvixSettingGuidance' }
 ]
 
 /** 根据启用的工具和上下文，构建需要追加到 system prompt 的文本 */

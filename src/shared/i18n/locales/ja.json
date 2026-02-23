@@ -101,7 +101,9 @@
     "confirmSelection": "確認",
     "multiSelectHint": "複数選択可",
     "overrideApproval": "ユーザーがこの操作を拒否しました。ユーザーのフィードバック：{{text}}",
-    "overrideAsk": "ユーザーが提供された選択肢を拒否しました。ユーザーのフィードバック：{{text}}"
+    "overrideAsk": "ユーザーが提供された選択肢を拒否しました。ユーザーのフィードバック：{{text}}",
+    "shuvixProjectHint": "AI がプロジェクト設定の変更を要求しています",
+    "shuvixSettingHint": "AI がシステム設定の変更を要求しています"
   },
 
   "sessionEdit": {
@@ -280,6 +282,8 @@
     "defaultTitle": "新規チャット",
     "promptSupplement": "bash、read、write、editツールを使用して、現在のプロジェクトディレクトリ内のファイルを操作できます。すべての相対パスはプロジェクトディレクトリに基づきます。",
     "askToolGuidance": "ユーザーに複数のアプローチ、スタイル、設定、方向から選んでもらう必要がある場合は、必ず ask ツールを使用してクリック可能な選択肢カードを提示してください。番号付きの選択肢をプレーンテキストで列挙しないでください。",
+    "shuvixProjectGuidance": "You have the shuvix-project tool to read and modify the current project's configuration. Use action=\"get\" to view settings, action=\"update\" to change them (name, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, enabledTools). Update operations require user approval.",
+    "shuvixSettingGuidance": "You have the shuvix-setting tool to read and modify global application settings. Use action=\"get\" to view all settings, action=\"set\" with key and value to change one. Known keys: general.defaultProvider, general.defaultModel, general.systemPrompt, general.theme (dark|light|system), general.fontSize, general.language (zh|en|ja). Set operations require user approval.",
     "titleGenPrompt": "あなたはタイトル生成アシスタントです。ユーザーとアシスタントの最初のやり取りに基づいて、簡潔なタイトルを生成してください（10語以内、引用符や句読点なし）。タイトルのみを出力し、他の内容は含めないでください。"
   },
 
@@ -315,6 +319,12 @@
     "unsupportedFormat": "サポートされていないファイル形式 ({{ext}}): {{path}}。テキストファイルおよび PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 形式をサポートしています。",
     "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
     "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました",
+    "shuvixProjectLabel": "プロジェクト設定",
+    "shuvixSettingLabel": "システム設定",
+    "shuvixProjectNoProject": "現在のセッションはプロジェクトにリンクされていません。プロジェクト設定を読み取りまたは変更できません。",
+    "shuvixProjectUpdated": "プロジェクト設定が更新されました：{{fields}}",
+    "shuvixSettingUpdated": "設定が更新されました：{{key}} = {{value}}",
+    "approvalDenied": "ユーザーがこの操作を拒否しました",
     "skillLabel": "Skill 指示セットを読み込み",
     "askLabel": "ユーザーに質問",
     "askDesc": "ユーザーに質問し、事前定義された選択肢から選んでもらいます",
