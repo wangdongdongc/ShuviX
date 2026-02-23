@@ -1,9 +1,9 @@
 import { useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
-import { useClickOutside } from '../hooks/useClickOutside'
+import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { useClickOutside } from '../../hooks/useClickOutside'
 
 /**
  * 模型选择器 — 两步式：先选 Provider，再选 Model

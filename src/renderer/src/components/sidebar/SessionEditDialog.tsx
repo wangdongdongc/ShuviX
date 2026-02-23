@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X, FolderOpen } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import type { Session } from '../stores/chatStore'
+import { useChatStore } from '../../stores/chatStore'
+import type { Session } from '../../stores/chatStore'
 
 interface ProjectOption {
   id: string

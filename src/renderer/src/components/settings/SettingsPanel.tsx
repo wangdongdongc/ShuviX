@@ -1,12 +1,12 @@
 import { useTranslation } from 'react-i18next'
 import { Settings, Layers, FileText, Info, Puzzle } from 'lucide-react'
-import { useSettingsStore } from '../stores/settingsStore'
-import { TabButton } from './settings/TabButton'
-import { GeneralSettings } from './settings/GeneralSettings'
-import { ProviderSettings } from './settings/ProviderSettings'
-import { HttpLogSettings } from './settings/HttpLogSettings'
-import { AboutSettings } from './settings/AboutSettings'
-import { McpSettings } from './settings/McpSettings'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { TabButton } from './TabButton'
+import { GeneralSettings } from './GeneralSettings'
+import { ProviderSettings } from './ProviderSettings'
+import { HttpLogSettings } from './HttpLogSettings'
+import { AboutSettings } from './AboutSettings'
+import { McpSettings } from './McpSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）

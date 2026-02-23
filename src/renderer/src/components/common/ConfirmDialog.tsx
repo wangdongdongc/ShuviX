@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import appIcon from '../assets/ngnl_xiubi_color_mini.jpg'
+import appIcon from '../../assets/ngnl_xiubi_color_mini.jpg'
 
 /**
  * 通用确认弹窗 — 带自定义图标、标题、描述、确认/取消按钮

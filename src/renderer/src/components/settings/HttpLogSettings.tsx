@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { PayloadViewer } from './PayloadViewer'
-import { ConfirmDialog } from '../ConfirmDialog'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** HTTP 日志设置 */
 export function HttpLogSettings(): React.JSX.Element {

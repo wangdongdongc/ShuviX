@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Container } from 'lucide-react'
-import { useChatStore, type ChatMessage } from '../stores/chatStore'
+import { useChatStore, type ChatMessage } from '../../stores/chatStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 

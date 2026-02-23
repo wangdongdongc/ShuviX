@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2, ShieldAlert, MessageCircleQuestion } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore } from '../../stores/chatStore'
 
 interface ToolCallBlockProps {
   toolName: string

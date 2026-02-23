@@ -1,9 +1,9 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Wrench } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import { useClickOutside } from '../hooks/useClickOutside'
-import { ToolSelectList, type ToolItem } from './ToolSelectList'
+import { useChatStore } from '../../stores/chatStore'
+import { useClickOutside } from '../../hooks/useClickOutside'
+import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
 /**
  * 工具选择器 — 动态切换会话启用的工具集

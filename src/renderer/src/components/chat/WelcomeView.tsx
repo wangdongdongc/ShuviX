@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { MessageSquarePlus, Sparkles } from 'lucide-react'
-import welcomeIcon from '../assets/ngnl_xiubi_blank_mini.jpg'
+import welcomeIcon from '../../assets/ngnl_xiubi_blank_mini.jpg'
 
 interface WelcomeViewProps {
   onNewChat: () => void

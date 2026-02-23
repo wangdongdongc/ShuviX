@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
+import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
-import { ConfirmDialog } from './ConfirmDialog'
-import type { Session } from '../stores/chatStore'
+import { ConfirmDialog } from '../common/ConfirmDialog'
+import type { Session } from '../../stores/chatStore'
 
 /**
  * 侧边栏 — 会话列表 + 新建对话 + 设置入口

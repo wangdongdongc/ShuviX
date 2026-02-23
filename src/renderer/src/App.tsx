@@ -2,9 +2,9 @@ import { useEffect, useCallback } from 'react'
 import i18next from 'i18next'
 import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
-import { Sidebar } from './components/Sidebar'
-import { ChatView } from './components/ChatView'
-import { SettingsPanel } from './components/SettingsPanel'
+import { Sidebar } from './components/sidebar/Sidebar'
+import { ChatView } from './components/chat/ChatView'
+import { SettingsPanel } from './components/settings/SettingsPanel'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'

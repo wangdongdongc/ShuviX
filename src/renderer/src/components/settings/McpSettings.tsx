@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, RefreshCw, Power, PowerOff, ChevronDown, ChevronRight, Wrench, Server } from 'lucide-react'
-import { ConfirmDialog } from '../ConfirmDialog'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** MCP Server 信息（从主进程返回） */
 interface McpServerInfo {

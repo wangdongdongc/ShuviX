@@ -1,8 +1,8 @@
 import { useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Brain } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import { useClickOutside } from '../hooks/useClickOutside'
+import { useChatStore } from '../../stores/chatStore'
+import { useClickOutside } from '../../hooks/useClickOutside'
 
 /**
  * 思考深度选择器 — 仅当模型支持 reasoning 时显示

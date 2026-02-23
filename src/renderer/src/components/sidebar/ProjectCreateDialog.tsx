@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
-import { ToolSelectList, type ToolItem } from './ToolSelectList'
+import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
-interface ProjectEditDialogProps {
-  projectId: string
+interface ProjectCreateDialogProps {
   onClose: () => void
+  /** 创建成功后回调，传入新项目 ID */
+  onCreated?: (projectId: string) => void
 }
 
 /**
- * 项目编辑弹窗 — 编辑项目名称、路径、system prompt、Docker 配置
+ * 新建项目弹窗 — 表单内容与编辑项目保持一致
  */
-export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps): React.JSX.Element | null {
+export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
@@ -20,45 +21,22 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   const [dockerImage, setDockerImage] = useState('ubuntu:latest')
   const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const [dockerError, setDockerError] = useState<string | null>(null)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
 
-  // 加载项目数据 + 工具列表 + Docker 可用性
+  // 加载工具列表 + 检查 Docker 可用性
   useEffect(() => {
     Promise.all([
-      window.api.project.getById(projectId),
       window.api.docker.validate(),
       window.api.tools.list()
-    ]).then(([project, dockerResult, tools]) => {
-      setAllTools(tools)
-      if (project) {
-        setName(project.name)
-        setPath(project.path)
-        setSystemPrompt(project.systemPrompt)
-        setDockerEnabled(project.dockerEnabled === 1)
-        setDockerImage(project.dockerImage)
-        setSandboxEnabled(project.sandboxEnabled === 1)
-        // 从 settings JSON 恢复 enabledTools
-        try {
-          const settings = JSON.parse(project.settings || '{}')
-          if (Array.isArray(settings.enabledTools)) {
-            setEnabledTools(settings.enabledTools)
-          } else {
-            setEnabledTools(tools.map((t) => t.name))
-          }
-        } catch {
-          setEnabledTools(tools.map((t) => t.name))
-        }
-      } else {
-        setEnabledTools(tools.map((t) => t.name))
-      }
+    ]).then(([dockerResult, tools]) => {
       setDockerAvailable(dockerResult.ok)
-      setLoading(false)
+      setAllTools(tools)
+      setEnabledTools(tools.map((t) => t.name))
     })
-  }, [projectId])
+  }, [])
 
   // 按 Escape 关闭
   useEffect(() => {
@@ -74,11 +52,17 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
     const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
     if (result) {
       setPath(result)
+      // 自动用文件夹名作为项目名
+      if (!name) {
+        const folderName = result.split('/').pop() || result.split('\\').pop() || ''
+        setName(folderName)
+      }
     }
   }
 
-  /** 保存所有变更 */
-  const handleSave = async (): Promise<void> => {
+  /** 创建项目 */
+  const handleCreate = async (): Promise<void> => {
+    if (!path.trim()) return
     setSaving(true)
     setDockerError(null)
     try {
@@ -90,30 +74,28 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
           return
         }
       }
-      await window.api.project.update({
-        id: projectId,
+      const project = await window.api.project.create({
         name: name.trim() || undefined,
-        path: path || undefined,
+        path: path.trim(),
         systemPrompt,
         dockerEnabled,
         dockerImage,
         sandboxEnabled,
         enabledTools
       })
+      onCreated?.(project.id)
       onClose()
     } finally {
       setSaving(false)
     }
   }
 
-  if (loading) return null
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay">
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw] dialog-panel">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
-          <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.editTitle')}</h2>
+          <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>
           <button
             onClick={onClose}
             className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
@@ -261,11 +243,11 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
             {t('common.cancel')}
           </button>
           <button
-            onClick={handleSave}
-            disabled={saving}
+            onClick={handleCreate}
+            disabled={saving || !path.trim()}
             className="px-4 py-1.5 rounded-lg text-xs bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50"
           >
-            {saving ? t('common.saving') : t('common.save')}
+            {saving ? t('common.creating') : t('common.create')}
           </button>
         </div>
       </div>

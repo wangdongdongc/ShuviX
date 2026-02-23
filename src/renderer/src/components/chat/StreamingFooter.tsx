@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Sparkles, AlertCircle } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
+import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
 
 /**

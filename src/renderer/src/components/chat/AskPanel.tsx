@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, MessageCircleQuestion } from 'lucide-react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore } from '../../stores/chatStore'
 
 interface AskPanelProps {
   /** 用户选择回调 */
