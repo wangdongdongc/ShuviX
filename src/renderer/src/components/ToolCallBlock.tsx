@@ -89,7 +89,7 @@ export function ToolCallBlock({
   const config = statusConfig[status]
 
   return (
-    <div className={`mx-4 my-2 rounded-lg border-l-2 ${config.borderColor} bg-bg-tertiary/50 overflow-hidden`}>
+    <div className={`ml-14 mr-4 my-2 rounded-lg border-l-2 ${config.borderColor} bg-bg-tertiary/50 overflow-hidden`}>
       {/* 头部 — 可点击展开 */}
       <button
         onClick={() => setExpanded(!expanded)}

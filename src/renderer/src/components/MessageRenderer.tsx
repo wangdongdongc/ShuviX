@@ -39,7 +39,7 @@ export function MessageRenderer({
   if (msg.type === 'docker_event') {
     const isCreate = msg.content === 'container_created'
     return (
-      <div className="flex items-center gap-1.5 mx-4 my-1 text-[11px] text-text-tertiary">
+      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
         <Container size={12} />
         <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
       </div>
