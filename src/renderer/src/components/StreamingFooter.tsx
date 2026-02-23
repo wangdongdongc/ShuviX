@@ -14,33 +14,19 @@ export function StreamingFooter(): React.JSX.Element {
 
   return (
     <>
-      {/* 流式思考过程 */}
-      {isStreaming && streamingThinking && (
-        <div className="mx-4 my-2">
-          <details open className="group">
-            <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
-              <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-              <span className="animate-pulse">{t('chat.thinking')}</span>
-            </summary>
-            <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-              {streamingThinking}
-            </div>
-          </details>
-        </div>
-      )}
-
-      {/* 流式输出的助手消息 */}
-      {isStreaming && streamingContent && (
+      {/* 流式输出的助手消息（thinking 也在气泡内渲染） */}
+      {isStreaming && (streamingContent || streamingThinking) && (
         <MessageBubble
           role="assistant"
-          content={streamingContent}
+          content={streamingContent || ''}
           isStreaming
+          streamingThinking={streamingThinking}
           model={useSettingsStore.getState().activeModel}
         />
       )}
 
       {/* 等待响应的加载指示器 */}
-      {isStreaming && !streamingContent && !error && (
+      {isStreaming && !streamingContent && !streamingThinking && !error && (
         <div className="flex gap-3 px-4 py-3">
           <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
             <Sparkles size={14} className="text-text-secondary animate-pulse" />

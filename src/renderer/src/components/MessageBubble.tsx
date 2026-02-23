@@ -99,6 +99,8 @@ interface MessageBubbleProps {
   content: string
   metadata?: string | null
   isStreaming?: boolean
+  /** 流式阶段的思考内容（实时更新） */
+  streamingThinking?: string | null
   /** 生成该消息的模型名称 */
   model?: string
   /** 回退到此消息（删除之后的所有消息） */
@@ -116,6 +118,7 @@ export const MessageBubble = memo(function MessageBubble({
   content,
   metadata,
   isStreaming,
+  streamingThinking,
   model,
   onRollback,
   onRegenerate
@@ -131,7 +134,8 @@ export const MessageBubble = memo(function MessageBubble({
     if (!metadata) return null
     try { return JSON.parse(metadata) } catch { return null }
   })()
-  const thinking = parsedMeta?.thinking || null
+  // 流式阶段优先使用实时 thinking，完成后从 metadata 读取
+  const thinking = streamingThinking || parsedMeta?.thinking || null
   const usage = parsedMeta?.usage as {
     input: number; output: number; total: number
     details?: Array<{ input: number; output: number; total: number; stopReason: string }>
@@ -235,12 +239,12 @@ export const MessageBubble = memo(function MessageBubble({
           </div>
         ) : (
           <>
-            {/* 思考过程（可折叠） */}
+            {/* 思考过程（可折叠，流式时默认展开并显示动画） */}
             {thinking && (
-              <details className="group mb-2">
+              <details open={!!streamingThinking} className="group mb-2">
                 <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
                   <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                  <span>{t('message.deepThought')}</span>
+                  <span className={streamingThinking ? 'animate-pulse' : ''}>{t('message.deepThought')}</span>
                 </summary>
                 <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                   {thinking}

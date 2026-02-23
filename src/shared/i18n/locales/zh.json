@@ -75,7 +75,7 @@
     "showSource": "显示源码",
     "rollback": "回退到此处",
     "regenerate": "重新生成",
-    "deepThought": "已深度思考",
+    "deepThought": "思考",
     "mermaidFailed": "Mermaid 渲染失败",
     "showDiagram": "显示图表",
     "rendering": "渲染中…",
