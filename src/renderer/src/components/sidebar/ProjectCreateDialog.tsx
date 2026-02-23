@@ -94,7 +94,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
 
   return (
     <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}>
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[420px] max-w-[90vw] dialog-panel">
+      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
           <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>
@@ -107,7 +107,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         </div>
 
         {/* 表单内容 */}
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
           {/* 项目名称 */}
           <div>
             <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.name')}</label>

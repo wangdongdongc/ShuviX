@@ -13,6 +13,7 @@ import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
 import { createEditTool } from '../tools/edit'
 import { createAskTool } from '../tools/ask'
+import { createSkillTool } from '../tools/skill'
 import { resolveProjectConfig, type ToolContext } from '../tools/types'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
@@ -26,7 +27,7 @@ const log = createLogger('Agent')
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
 
-/** 根据启用列表构建工具子集（内置 + MCP 合并） */
+/** 根据启用列表构建工具子集（内置 + MCP + Skill 合并） */
 function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
   // 内置工具
   const builtinAll: Record<string, AgentTool<any>> = {
@@ -36,14 +37,37 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     edit: createEditTool(ctx),
     ask: createAskTool(ctx)
   }
-  // MCP 工具（动态），key = "mcp:<serverName>:<toolName>"
+  // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
   const mcpAll: Record<string, AgentTool<any>> = {}
   for (const tool of mcpService.getAllAgentTools()) {
     mcpAll[tool.name] = tool
   }
-  // 合并后按 enabledTools 过滤
-  const all = { ...builtinAll, ...mcpAll }
-  return enabledTools.filter((name) => name in all).map((name) => all[name])
+
+  // 从 enabledTools 中提取 skill 名（skill:pdf → pdf）
+  const enabledSkillNames = enabledTools
+    .filter((n) => n.startsWith('skill:'))
+    .map((n) => n.slice(6))
+
+  // 合并内置 + MCP
+  const all: Record<string, AgentTool<any>> = { ...builtinAll, ...mcpAll }
+
+  // 有启用的 skill 时动态注册 skill 工具
+  if (enabledSkillNames.length > 0) {
+    all['skill'] = createSkillTool(enabledSkillNames)
+  }
+
+  // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理）
+  const regularTools = enabledTools
+    .filter((name) => !name.startsWith('skill:'))
+    .filter((name) => name in all)
+    .map((name) => all[name])
+
+  // 如果有 skill 工具，追加到末尾
+  if (enabledSkillNames.length > 0 && all['skill']) {
+    regularTools.push(all['skill'])
+  }
+
+  return regularTools
 }
 
 /** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */

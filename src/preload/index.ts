@@ -24,7 +24,9 @@ import type {
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
-  McpServerUpdateParams
+  McpServerUpdateParams,
+  SkillAddParams,
+  SkillUpdateParams
 } from '../main/types'
 
 /** 暴露给 Renderer 的 API */
@@ -199,6 +201,24 @@ const api = {
     disconnect: (id: string) => ipcRenderer.invoke('mcp:disconnect', id),
     /** 获取指定 server 已发现的工具列表 */
     getTools: (id: string) => ipcRenderer.invoke('mcp:getTools', id)
+  },
+
+  // ============ Skill 管理 ============
+  skill: {
+    /** 获取所有 Skill */
+    list: () => ipcRenderer.invoke('skill:list'),
+    /** 手动创建 Skill */
+    add: (params: SkillAddParams) => ipcRenderer.invoke('skill:add', params),
+    /** 更新 Skill */
+    update: (params: SkillUpdateParams) => ipcRenderer.invoke('skill:update', params),
+    /** 删除 Skill（按名称） */
+    delete: (name: string) => ipcRenderer.invoke('skill:delete', name),
+    /** 解析 SKILL.md 文本 */
+    parseMarkdown: (text: string) => ipcRenderer.invoke('skill:parseMarkdown', text),
+    /** 从本地目录导入 Skill（弹出文件夹选择器） */
+    importFromDir: () => ipcRenderer.invoke('skill:importFromDir'),
+    /** 获取 skills 根目录路径 */
+    getDir: () => ipcRenderer.invoke('skill:getDir')
   }
 }
 

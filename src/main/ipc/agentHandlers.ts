@@ -3,6 +3,7 @@ import { agentService, ALL_TOOL_NAMES } from '../services/agent'
 import type { AgentInitParams, AgentInitResult, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
 import { t } from '../i18n'
 import { mcpService } from '../services/mcpService'
+import { skillService } from '../services/skillService'
 
 /**
  * Agent 相关 IPC 处理器
@@ -78,6 +79,12 @@ export function registerAgentHandlers(): void {
       group: info.group,
       serverStatus: info.serverStatus
     }))
-    return [...builtinTools, ...mcpTools]
+    /** 已安装 Skill（使用 skill: 前缀，__skills__ 分组） */
+    const skillItems = skillService.findAll().map((s) => ({
+      name: `skill:${s.name}`,
+      label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
+      group: '__skills__'
+    }))
+    return [...builtinTools, ...mcpTools, ...skillItems]
   })
 }

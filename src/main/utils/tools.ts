@@ -5,14 +5,16 @@
 
 import { t } from '../i18n'
 import { mcpService } from '../services/mcpService'
+import { skillService } from '../services/skillService'
 
 /** 内置工具名称（固定顺序） */
 export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask'] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 
-/** 获取所有可用工具名（内置 + MCP 动态） */
+/** 获取所有可用工具名（内置 + MCP 动态 + 已安装 Skill） */
 export function getAllToolNames(): string[] {
-  return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames()]
+  const skillNames = skillService.findAll().map((s) => `skill:${s.name}`)
+  return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames(), ...skillNames]
 }
 
 /** 工具 prompt 构建上下文 */

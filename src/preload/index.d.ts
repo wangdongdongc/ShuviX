@@ -29,7 +29,10 @@ import type {
   McpServerAddParams,
   McpServerUpdateParams,
   McpServerInfo,
-  McpToolInfo
+  McpToolInfo,
+  Skill,
+  SkillAddParams,
+  SkillUpdateParams
 } from '../main/types'
 
 /** Agent 事件流类型 */
@@ -219,6 +222,15 @@ interface ShuviXAPI {
     connect: (id: string) => Promise<{ success: boolean }>
     disconnect: (id: string) => Promise<{ success: boolean }>
     getTools: (id: string) => Promise<McpToolInfo[]>
+  }
+  skill: {
+    list: () => Promise<Skill[]>
+    add: (params: SkillAddParams) => Promise<Skill>
+    update: (params: SkillUpdateParams) => Promise<{ success: boolean }>
+    delete: (name: string) => Promise<{ success: boolean }>
+    parseMarkdown: (text: string) => Promise<{ name: string; description: string; content: string } | null>
+    importFromDir: () => Promise<{ success: boolean; skill?: Skill; reason?: string }>
+    getDir: () => Promise<string>
   }
 }
 

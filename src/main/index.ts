@@ -170,6 +170,15 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // 拦截页面内导航（点击 <a href> 链接），阻止应用变成浏览器，改用系统默认浏览器打开
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // 允许开发环境的 HMR 热更新导航
+    const rendererUrl = process.env['ELECTRON_RENDERER_URL'] || ''
+    if (rendererUrl && url.startsWith(rendererUrl)) return
+    event.preventDefault()
+    shell.openExternal(url)
+  })
+
   // 开发环境加载 HMR URL，生产环境加载本地文件
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

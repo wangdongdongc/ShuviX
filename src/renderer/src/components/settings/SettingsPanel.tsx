@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText, Info, Puzzle } from 'lucide-react'
+import { Settings, Layers, FileText, Info, Puzzle, BookOpen } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
 import { GeneralSettings } from './GeneralSettings'
@@ -7,6 +7,7 @@ import { ProviderSettings } from './ProviderSettings'
 import { HttpLogSettings } from './HttpLogSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
+import { SkillSettings } from './SkillSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -46,6 +47,12 @@ export function SettingsPanel(): React.JSX.Element {
             onClick={() => setActiveSettingsTab('mcp')}
           />
           <TabButton
+            icon={<BookOpen size={14} />}
+            label={t('settings.tabSkills')}
+            active={activeSettingsTab === 'skills'}
+            onClick={() => setActiveSettingsTab('skills')}
+          />
+          <TabButton
             icon={<FileText size={14} />}
             label={t('settings.tabHttpLogs')}
             active={activeSettingsTab === 'httpLogs'}
@@ -64,6 +71,7 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'general' && <GeneralSettings />}
           {activeSettingsTab === 'providers' && <ProviderSettings />}
           {activeSettingsTab === 'mcp' && <McpSettings />}
+          {activeSettingsTab === 'skills' && <SkillSettings />}
           {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}
           {activeSettingsTab === 'about' && <AboutSettings />}
         </div>

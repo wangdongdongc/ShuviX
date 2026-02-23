@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Puzzle, WifiOff } from 'lucide-react'
+import { ChevronDown, ChevronRight, Puzzle, WifiOff, BookOpen } from 'lucide-react'
 
 /** 工具信息 */
 export interface ToolItem {
@@ -28,8 +28,16 @@ function mcpShortName(fullName: string): string {
   return parts.length >= 3 ? parts.slice(2).join('__') : fullName
 }
 
+/** Skill 分组标识常量 */
+const SKILLS_GROUP = '__skills__'
+
+/** 从 skill: 前缀名中提取短名（skill:pdf → pdf） */
+function skillShortName(fullName: string): string {
+  return fullName.startsWith('skill:') ? fullName.slice(6) : fullName
+}
+
 /**
- * 通用工具选择列表 — 支持内置工具和 MCP 工具分组
+ * 通用工具选择列表 — 支持内置工具、MCP 工具分组和 Skills 分组
  * 被 ToolPicker / ProjectEditDialog / ProjectCreateDialog 共用
  */
 export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolSelectListProps): React.JSX.Element {
@@ -73,9 +81,10 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
     })
   }
 
-  // 分离内置工具和 MCP 工具
+  // 分离三类：内置工具、MCP 工具、Skills
   const builtinTools = tools.filter(t => !t.group)
-  const mcpTools = tools.filter(t => t.group)
+  const mcpTools = tools.filter(t => t.group && t.group !== SKILLS_GROUP)
+  const skillTools = tools.filter(t => t.group === SKILLS_GROUP)
   const groups = [...new Set(mcpTools.map(t => t.group!))]
 
   return (
@@ -159,8 +168,8 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
                           onChange={() => toggle(tool.name)}
                           className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                         />
-                        <span className={`text-[11px] font-mono ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}>{mcpShortName(tool.name)}</span>
-                        <span className="text-[10px] text-text-tertiary truncate">{tool.label}</span>
+                        <span className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}>{mcpShortName(tool.name)}</span>
+                        <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">{tool.label}</span>
                       </label>
                     ))}
                   </div>
@@ -168,6 +177,65 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Skills 分组 */}
+      {skillTools.length > 0 && (
+        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
+          {(() => {
+            const isExpanded = expandedGroups.has(SKILLS_GROUP)
+            const allChecked = skillTools.every(t => enabledTools.includes(t.name))
+            const someChecked = skillTools.some(t => enabledTools.includes(t.name))
+
+            return (
+              <div className={compact ? '' : 'border rounded-md overflow-hidden border-emerald-500/30'}>
+                {/* Skills 分组头部 */}
+                <div className={`flex items-center gap-1.5 ${compact ? 'px-2 py-1.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}>
+                  <button
+                    onClick={() => toggleExpand(SKILLS_GROUP)}
+                    className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
+                  >
+                    {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </button>
+                  <input
+                    type="checkbox"
+                    checked={allChecked}
+                    ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
+                    onChange={() => toggleGroup(skillTools)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <BookOpen size={11} className="text-emerald-400" />
+                  <span className="text-[11px] font-medium text-emerald-400">Skills</span>
+                  <span className="text-[10px] text-text-tertiary ml-auto">{skillTools.length}</span>
+                </div>
+
+                {/* 展开的 Skill 列表 */}
+                {isExpanded && (
+                  <div className={compact ? 'py-0.5' : 'px-2 py-1.5 space-y-0.5'}>
+                    {skillTools.map(tool => (
+                      <label
+                        key={tool.name}
+                        className={compact
+                          ? 'flex items-center gap-2 w-full px-2 pl-7 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                          : 'flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={enabledTools.includes(tool.name)}
+                          onChange={() => toggle(tool.name)}
+                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                        />
+                        <span className="text-[11px] font-mono text-emerald-300 whitespace-nowrap flex-shrink-0">{skillShortName(tool.name)}</span>
+                        <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">{tool.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>
