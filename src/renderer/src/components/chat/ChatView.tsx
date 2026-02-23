@@ -104,7 +104,7 @@ export function ChatView(): React.JSX.Element {
     useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
   }
   const { t } = useTranslation()
-  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } = useChatActions(activeSessionId)
+  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleUserActionOverride, handleNewChat } = useChatActions(activeSessionId)
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -227,7 +227,7 @@ export function ChatView(): React.JSX.Element {
           {/* 用户操作浮动面板（ask 提问 / bash 审批） */}
           <UserActionPanel onUserInput={handleUserInput} onApproval={handleToolApproval} />
           {/* 输入区 */}
-          <InputArea />
+          <InputArea onUserActionOverride={handleUserActionOverride} />
         </>
       )}
     </div>

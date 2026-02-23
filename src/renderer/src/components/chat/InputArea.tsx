@@ -16,13 +16,23 @@ function formatTokenCount(n: number): string {
   return String(n)
 }
 
+interface InputAreaProps {
+  /** 用户通过输入框文本覆盖当前 pending action（审批拒绝 / ask 反馈） */
+  onUserActionOverride?: (text: string) => void
+}
+
 /**
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
  */
-export function InputArea(): React.JSX.Element {
+export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.Element {
   const { t } = useTranslation()
   const { inputText, setInputText, isStreaming, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
+
+  // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
+  const hasPendingAction = useChatStore((s) =>
+    s.toolExecutions.some((te) => te.status === 'pending_approval' || (te.status === 'pending_user_input' && te.toolName === 'ask'))
+  )
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -109,16 +119,31 @@ export function InputArea(): React.JSX.Element {
     window.api.agent.abort(activeSessionId)
   }
 
+  /** 用户通过输入框提交文本覆盖当前 pending action */
+  const handleOverrideSend = (): void => {
+    const text = inputText.trim()
+    if (!text || !onUserActionOverride) return
+    onUserActionOverride(text)
+    useChatStore.getState().setInputText('')
+  }
+
   /** 键盘事件处理 */
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      // pending action 时优先走 override 流程
+      if (hasPendingAction && inputText.trim()) {
+        handleOverrideSend()
+        return
+      }
       if (isStreaming) return
       handleSend()
     }
   }
 
-  const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !isStreaming && activeSessionId
+  // pending action 时输入框临时可用
+  const effectiveStreaming = isStreaming && !hasPendingAction
+  const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !effectiveStreaming && activeSessionId
 
   return (
     <div
@@ -211,14 +236,19 @@ export function InputArea(): React.JSX.Element {
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={activeSessionId ? (modelSupportsVision ? t('input.placeholderVision') : t('input.placeholder')) : t('input.placeholderNoSession')}
+              placeholder={
+                !activeSessionId ? t('input.placeholderNoSession')
+                : hasPendingAction ? t('input.placeholderOverride')
+                : modelSupportsVision ? t('input.placeholderVision')
+                : t('input.placeholder')
+              }
               disabled={!activeSessionId}
               rows={3}
               style={{ minHeight: `${minH}px` }}
               className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none disabled:opacity-50"
             />
 
-            {isStreaming ? (
+            {effectiveStreaming ? (
               <button
                 onClick={handleAbort}
                 className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
@@ -228,7 +258,7 @@ export function InputArea(): React.JSX.Element {
               </button>
             ) : (
               <button
-                onClick={handleSend}
+                onClick={hasPendingAction ? handleOverrideSend : handleSend}
                 disabled={!canSend}
                 className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
                   canSend

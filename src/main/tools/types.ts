@@ -26,8 +26,8 @@ export interface ToolContext {
   sessionId: string
   /** Docker 容器创建时回调 */
   onContainerCreated?: (containerId: string) => void
-  /** 沙箱模式下 bash 命令需用户确认，返回 true 表示允许执行 */
-  requestApproval?: (toolCallId: string, command: string) => Promise<boolean>
+  /** 沙箱模式下 bash 命令需用户确认，返回 approved=true 表示允许，reason 为用户拒绝时附加的说明 */
+  requestApproval?: (toolCallId: string, command: string) => Promise<{ approved: boolean; reason?: string }>
   /** ask 工具：向用户提问并等待选择结果，返回用户选中的 label 列表 */
   requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
 }

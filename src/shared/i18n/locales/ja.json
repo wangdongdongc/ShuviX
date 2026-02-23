@@ -64,6 +64,7 @@
     "tools": "ツール",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
+    "placeholderOverride": "同意できない？テキストで AI にフィードバック...",
     "placeholderNoSession": "まずチャットを作成または選択してください",
     "stopGen": "生成を停止",
     "send": "送信",
@@ -98,7 +99,9 @@
     "result": "結果",
     "pendingUserInput": "選択待ち",
     "confirmSelection": "確認",
-    "multiSelectHint": "複数選択可"
+    "multiSelectHint": "複数選択可",
+    "overrideApproval": "ユーザーがこの操作を拒否しました。ユーザーのフィードバック：{{text}}",
+    "overrideAsk": "ユーザーが提供された選択肢を拒否しました。ユーザーのフィードバック：{{text}}"
   },
 
   "sessionEdit": {

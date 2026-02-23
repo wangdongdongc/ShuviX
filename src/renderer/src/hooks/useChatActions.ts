@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
@@ -18,6 +19,8 @@ export interface UseChatActionsReturn {
   handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
+  /** 用户通过输入框文本覆盖当前 pending action（审批拒绝 / ask 反馈） */
+  handleUserActionOverride: (text: string) => Promise<void>
   /** 创建新会话 */
   handleNewChat: () => Promise<void>
 }
@@ -27,6 +30,7 @@ export interface UseChatActionsReturn {
  * @param activeSessionId 当前活动会话ID
  */
 export function useChatActions(activeSessionId: string | null): UseChatActionsReturn {
+  const { t } = useTranslation()
 
   /** 待确认回退的消息 ID */
   const [pendingRollbackId, setPendingRollbackId] = useState<string | null>(null)
@@ -114,5 +118,35 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     useChatStore.getState().setActiveSessionId(session.id)
   }, [])
 
-  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleNewChat } satisfies UseChatActionsReturn
+  /** 用户通过输入框文本覆盖当前 pending action */
+  const handleUserActionOverride = useCallback(async (text: string) => {
+    if (!activeSessionId) return
+    const store = useChatStore.getState()
+    const execs = store.sessionToolExecutions[activeSessionId] || []
+
+    // 检查是否有待审批的 bash 命令
+    const pendingApproval = execs.find((te) => te.status === 'pending_approval')
+    if (pendingApproval) {
+      await window.api.agent.approveToolCall({
+        toolCallId: pendingApproval.toolCallId,
+        approved: false,
+        reason: t('toolCall.overrideApproval', { text })
+      })
+      store.updateToolExecution(activeSessionId, pendingApproval.toolCallId, { status: 'error' })
+      return
+    }
+
+    // 检查是否有待用户输入的 ask 工具
+    const pendingAsk = execs.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
+    if (pendingAsk) {
+      await window.api.agent.respondToAsk({
+        toolCallId: pendingAsk.toolCallId,
+        selections: [t('toolCall.overrideAsk', { text })]
+      })
+      store.updateToolExecution(activeSessionId, pendingAsk.toolCallId, { status: 'running' })
+      return
+    }
+  }, [activeSessionId])
+
+  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleUserActionOverride, handleNewChat } satisfies UseChatActionsReturn
 }

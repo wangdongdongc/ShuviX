@@ -121,9 +121,9 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
 
       // 沙箱模式：bash 命令需用户确认
       if (config.sandboxEnabled && ctx.requestApproval) {
-        const approved = await ctx.requestApproval(toolCallId, params.command)
-        if (!approved) {
-          throw new Error(t('tool.sandboxBashDenied'))
+        const approval = await ctx.requestApproval(toolCallId, params.command)
+        if (!approval.approved) {
+          throw new Error(approval.reason || t('tool.sandboxBashDenied'))
         }
       }
 

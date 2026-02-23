@@ -73,7 +73,7 @@ const api = {
       ipcRenderer.invoke('agent:setThinkingLevel', params),
 
     /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-    approveToolCall: (params: { toolCallId: string; approved: boolean }) =>
+    approveToolCall: (params: { toolCallId: string; approved: boolean; reason?: string }) =>
       ipcRenderer.invoke('agent:approveToolCall', params),
 
     /** 响应 ask 工具的用户选择 */

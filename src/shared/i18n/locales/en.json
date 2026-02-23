@@ -64,6 +64,7 @@
     "tools": "Tools",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholder": "Type a message... (Shift+Enter for new line)",
+    "placeholderOverride": "Disagree? Type your feedback to AI...",
     "placeholderNoSession": "Please create or select a chat first",
     "stopGen": "Stop generation",
     "send": "Send",
@@ -98,7 +99,9 @@
     "result": "Result",
     "pendingUserInput": "Awaiting selection",
     "confirmSelection": "Confirm",
-    "multiSelectHint": "Multiple selection allowed"
+    "multiSelectHint": "Multiple selection allowed",
+    "overrideApproval": "User rejected this operation. User feedback: {{text}}",
+    "overrideAsk": "User rejected the provided options. User feedback: {{text}}"
   },
 
   "sessionEdit": {

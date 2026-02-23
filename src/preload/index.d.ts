@@ -147,7 +147,7 @@ interface ShuviXAPI {
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-    approveToolCall: (params: { toolCallId: string; approved: boolean }) => Promise<{ success: boolean }>
+    approveToolCall: (params: { toolCallId: string; approved: boolean; reason?: string }) => Promise<{ success: boolean }>
     /** 响应 ask 工具的用户选择 */
     respondToAsk: (params: { toolCallId: string; selections: string[] }) => Promise<{ success: boolean }>
     /** 动态更新启用工具集 */

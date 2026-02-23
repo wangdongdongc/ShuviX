@@ -40,8 +40,8 @@ export function registerAgentHandlers(): void {
   })
 
   /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-  ipcMain.handle('agent:approveToolCall', (_event, params: { toolCallId: string; approved: boolean }) => {
-    agentService.approveToolCall(params.toolCallId, params.approved)
+  ipcMain.handle('agent:approveToolCall', (_event, params: { toolCallId: string; approved: boolean; reason?: string }) => {
+    agentService.approveToolCall(params.toolCallId, params.approved, params.reason)
     return { success: true }
   })
 

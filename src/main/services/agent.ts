@@ -197,7 +197,7 @@ export class AgentService {
   private toolContexts = new Map<string, ToolContext>()
   private pendingLogIds = new Map<string, string[]>()
   /** 待审批的 bash 命令 Promise resolver，key = toolCallId */
-  private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>()
+  private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; reason?: string }) => void }>()
   /** 待用户选择的 ask 工具 Promise resolver，key = toolCallId */
   private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
   private mainWindow: BrowserWindow | null = null
@@ -292,7 +292,7 @@ export class AgentService {
         })
       },
       requestApproval: (toolCallId: string, command: string) => {
-        return new Promise<boolean>((resolve) => {
+        return new Promise<{ approved: boolean; reason?: string }>((resolve) => {
           this.pendingApprovals.set(toolCallId, { resolve })
           this.sendToRenderer({
             type: 'tool_approval_request',
@@ -402,10 +402,10 @@ export class AgentService {
   }
 
   /** 响应工具审批请求（前端用户点击允许/拒绝后调用） */
-  approveToolCall(toolCallId: string, approved: boolean): void {
+  approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
     const pending = this.pendingApprovals.get(toolCallId)
     if (pending) {
-      pending.resolve(approved)
+      pending.resolve({ approved, reason })
       this.pendingApprovals.delete(toolCallId)
     }
   }
@@ -425,7 +425,7 @@ export class AgentService {
     this.agents.get(sessionId)?.abort()
     // 取消所有待审批的 Promise
     for (const [id, pending] of this.pendingApprovals) {
-      pending.resolve(false)
+      pending.resolve({ approved: false })
       this.pendingApprovals.delete(id)
     }
     // 取消所有待用户选择的 Promise
