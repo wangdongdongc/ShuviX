@@ -77,6 +77,7 @@ export function ChatView(): React.JSX.Element {
   const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, sessions } = useChatStore()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
+  const scrollRafRef = useRef<number>(0)
 
   const { projectPath } = useSessionMeta(activeSessionId)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
@@ -115,11 +116,22 @@ export function ChatView(): React.JSX.Element {
   const visibleItems = useMemo(() => buildVisibleItems(messages, toolIndex), [messages, toolIndex])
 
   // 流式内容 / 新消息更新时，若用户在底部则自动滚动
+  // 使用 rAF 合并同帧内多次更新，behavior:'auto' 避免 smooth 动画重叠抖动
   useEffect(() => {
-    if (atBottomRef.current && virtuosoRef.current) {
-      virtuosoRef.current.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'smooth' })
-    }
+    if (!atBottomRef.current || !virtuosoRef.current) return
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    scrollRafRef.current = requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
+      scrollRafRef.current = 0
+    })
   }, [streamingContent, streamingThinking, messages])
+
+  // 组件卸载时清理 rAF
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
+    }
+  }, [])
 
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
@@ -192,13 +204,13 @@ export function ChatView(): React.JSX.Element {
               data={visibleItems}
               itemContent={renderItem}
               components={{ Footer: StreamingFooter }}
-              followOutput="smooth"
+              followOutput="auto"
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}
               increaseViewportBy={200}
               computeItemKey={(_index, item) => item.msg.id}
               atBottomStateChange={handleAtBottomChange}
-              atBottomThreshold={100}
+              atBottomThreshold={300}
             />
           )}
 
