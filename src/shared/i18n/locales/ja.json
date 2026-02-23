@@ -43,6 +43,8 @@
     "genFailed": "生成失敗",
     "containerCreated": "コンテナが作成されました",
     "containerDestroyed": "コンテナが削除されました",
+    "destroyReason_idle": "アイドルタイムアウト",
+    "destroyReason_session_deleted": "セッション削除",
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。"
   },

@@ -43,6 +43,8 @@
     "genFailed": "生成失败",
     "containerCreated": "容器已创建",
     "containerDestroyed": "容器已销毁",
+    "destroyReason_idle": "空闲超时",
+    "destroyReason_session_deleted": "会话已删除",
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
   },

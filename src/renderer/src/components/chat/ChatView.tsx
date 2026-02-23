@@ -49,8 +49,8 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
 function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): VisibleItem[] {
   const items: VisibleItem[] = []
   for (const msg of messages) {
-    // 跳过 system_notify
-    if (msg.role === 'system_notify') continue
+    // 跳过 system_notify（但保留 docker_event 类型）
+    if (msg.role === 'system_notify' && msg.type !== 'docker_event') continue
     // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
     if (msg.type === 'tool_call') {
       const meta = toolIndex.metaCache.get(msg.id)

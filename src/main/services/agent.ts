@@ -566,8 +566,15 @@ export class AgentService {
       agent.abort()
       this.agents.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
-      // 清理 Docker 容器
-      dockerManager.destroyContainer(sessionId).catch(() => {})
+      // 立刻清理 Docker 容器（会话删除）
+      dockerManager.destroyContainer(sessionId).then((containerId) => {
+        if (containerId) {
+          this.emitDockerEvent(sessionId, 'container_destroyed', {
+            containerId: containerId.slice(0, 12),
+            reason: 'session_deleted'
+          })
+        }
+      }).catch(() => {})
       log.info(`移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
@@ -586,12 +593,13 @@ export class AgentService {
         break
       case 'agent_end': {
         log.info(`结束 session=${sessionId}`)
-        // Docker 模式下，回复完成后销毁容器
-        dockerManager.destroyContainer(sessionId).catch((err) =>
-            log.error(`销毁容器失败: ${err}`)
-          ).then((destroyed) => {
-            if (destroyed) this.emitDockerEvent(sessionId, 'container_destroyed')
+        // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
+        dockerManager.scheduleDestroy(sessionId, (containerId) => {
+          this.emitDockerEvent(sessionId, 'container_destroyed', {
+            containerId: containerId.slice(0, 12),
+            reason: 'idle'
           })
+        })
         // 检查 agent_end 中的消息是否携带错误信息
         const endMessages = (event as any).messages as any[] | undefined
         if (endMessages) {

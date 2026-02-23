@@ -36,10 +36,21 @@ export function MessageRenderer({
 
   if (msg.type === 'docker_event') {
     const isCreate = msg.content === 'container_created'
+    let containerId = ''
+    let reason = ''
+    if (msg.metadata) {
+      try {
+        const meta = JSON.parse(msg.metadata)
+        containerId = meta.containerId || ''
+        reason = meta.reason || ''
+      } catch { /* 忽略 */ }
+    }
     return (
       <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
         <Container size={12} />
         <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
+        {containerId && <span className="font-mono opacity-60">{containerId}</span>}
+        {reason && <span className="opacity-50">({t(`chat.destroyReason_${reason}`)})</span>}
       </div>
     )
   }

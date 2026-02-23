@@ -1,7 +1,8 @@
 /**
  * Docker 容器管理器
  * 管理 per-session 的 Docker 容器生命周期
- * 容器在首次工具调用时创建，同一 AI 回复内复用，agent_end 后销毁
+ * 容器在首次工具调用时创建，同一 AI 回复内复用
+ * agent_end 后延迟销毁（空闲超时），新消息到来时取消定时器复用容器
  */
 
 import { spawn, spawnSync } from 'child_process'
@@ -11,15 +12,20 @@ const log = createLogger('Docker')
 /** 容器内固定工作目录，避免与容器自身路径冲突 */
 export const CONTAINER_WORKSPACE = '/isolated-docker-workspace'
 
-/** 容器信息 */
+/** 容器空闲超时时间（毫秒），超过此时间无命令执行则自动销毁 */
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟
+
+/** 容器信息（含可选的延迟销毁定时器） */
 interface ContainerInfo {
   containerId: string
   image: string
   workingDirectory: string
+  /** 空闲超时销毁定时器（agent_end 后设置，新命令到来时取消） */
+  destroyTimer?: ReturnType<typeof setTimeout>
 }
 
 export class DockerManager {
-  /** sessionId → 容器信息 */
+  /** sessionId → 容器信息（含延迟销毁定时器） */
   private containers = new Map<string, ContainerInfo>()
 
   /** 检测 Docker 是否可用 */
@@ -82,12 +88,15 @@ export class DockerManager {
     return { ok: true }
   }
 
-  /** 为 session 确保容器运行中（已有则复用） */
+  /** 为 session 确保容器运行中（已有则复用，自动取消待销毁定时器） */
   async ensureContainer(
     sessionId: string,
     image: string,
     workingDirectory: string
   ): Promise<{ containerId: string; isNew: boolean }> {
+    // 如果有待销毁定时器，取消它（复用容器）
+    this.cancelScheduledDestroy(sessionId)
+
     const existing = this.containers.get(sessionId)
     if (existing) {
       // 检查容器是否仍在运行
@@ -164,28 +173,45 @@ export class DockerManager {
     })
   }
 
-  /** 销毁指定 session 的容器 */
-  async destroyContainer(sessionId: string): Promise<boolean> {
+  /**
+   * 延迟销毁容器 — agent_end 后调用，空闲超时后自动销毁
+   * @param onDestroyed 实际销毁时的回调（用于发送 docker_event）
+   */
+  scheduleDestroy(sessionId: string, onDestroyed?: (containerId: string) => void): void {
+    const info = this.containers.get(sessionId)
+    if (!info) return
 
-    return new Promise((resolve, reject) => {
-      const info = this.containers.get(sessionId)
-      if (!info) {
-        resolve(false)
-        return
-      }
+    // 如果已有待销毁定时器，先取消
+    this.cancelScheduledDestroy(sessionId)
 
-      this.containers.delete(sessionId)
-      try {
-        spawnSync('docker', ['rm', '-f', info.containerId], {
-        timeout: 10000,
-        stdio: 'ignore'
-      })
-      } catch (e) {
-        reject(e)
-      }
-      log.info(`销毁容器 ${info.containerId.slice(0, 12)}`)
-      resolve(true)
-    })
+    const containerId = info.containerId
+    log.info(`容器 ${containerId.slice(0, 12)} 将在 ${IDLE_TIMEOUT_MS / 1000}s 空闲后销毁`)
+
+    info.destroyTimer = setTimeout(() => {
+      info.destroyTimer = undefined
+      this.doDestroy(sessionId).then((destroyed) => {
+        if (destroyed) onDestroyed?.(containerId)
+      }).catch((err) => log.error(`延迟销毁容器失败: ${err}`))
+    }, IDLE_TIMEOUT_MS)
+  }
+
+  /** 取消延迟销毁定时器（复用容器时调用） */
+  cancelScheduledDestroy(sessionId: string): boolean {
+    const info = this.containers.get(sessionId)
+    if (info?.destroyTimer) {
+      clearTimeout(info.destroyTimer)
+      info.destroyTimer = undefined
+      log.info(`取消容器 ${info.containerId.slice(0, 12)} 的延迟销毁`)
+      return true
+    }
+    return false
+  }
+
+  /** 立刻销毁指定 session 的容器（返回 containerId，未找到返回 null） */
+  async destroyContainer(sessionId: string): Promise<string | null> {
+    // 先取消可能存在的延迟销毁
+    this.cancelScheduledDestroy(sessionId)
+    return this.doDestroy(sessionId).then((destroyed) => destroyed)
   }
 
   /** 销毁所有容器（应用退出时调用） */
@@ -193,6 +219,7 @@ export class DockerManager {
     const entries = Array.from(this.containers.entries())
     this.containers.clear()
     for (const [_, info] of entries) {
+      if (info.destroyTimer) clearTimeout(info.destroyTimer)
       try {
         spawnSync('docker', ['rm', '-f', info.containerId], {
           timeout: 10000,
@@ -203,6 +230,25 @@ export class DockerManager {
         // 忽略错误
       }
     }
+  }
+
+  /** 内部执行实际销毁逻辑，返回 containerId 或 null */
+  private async doDestroy(sessionId: string): Promise<string | null> {
+    const info = this.containers.get(sessionId)
+    if (!info) return null
+
+    this.containers.delete(sessionId)
+    try {
+      spawnSync('docker', ['rm', '-f', info.containerId], {
+        timeout: 10000,
+        stdio: 'ignore'
+      })
+    } catch (e) {
+      log.error(`销毁容器失败: ${e}`)
+      return null
+    }
+    log.info(`销毁容器 ${info.containerId.slice(0, 12)}`)
+    return info.containerId
   }
 
   /** 创建并启动容器 */

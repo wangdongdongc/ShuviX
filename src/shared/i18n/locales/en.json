@@ -43,6 +43,8 @@
     "genFailed": "Generation Failed",
     "containerCreated": "Container created",
     "containerDestroyed": "Container destroyed",
+    "destroyReason_idle": "idle timeout",
+    "destroyReason_session_deleted": "session deleted",
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone."
   },
