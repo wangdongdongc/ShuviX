@@ -6,6 +6,8 @@
 import { t } from '../i18n'
 import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
+import { getSettingKeyDescriptions } from '../services/settingsService'
+import { getProjectFieldDescriptions } from '../services/projectService'
 
 /** 内置工具名称（固定顺序） */
 export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'shuvix-project', 'shuvix-setting'] as const
@@ -25,19 +27,28 @@ export interface ToolPromptContext {
 
 /**
  * 工具 prompt 注册表
- * 每个条目定义：当 tools 中任一工具启用时，追加对应 i18n key 的 prompt
+ * 每个条目定义：当 tools 中任一工具启用时，追加对应 prompt 文本
+ * - key: 使用 i18n key 的静态文本
+ * - textFn: 运行时动态生成文本（优先于 key，适合从注册表拼接字段列表）
  * condition 为可选额外条件（如需要项目路径）
  * 新增工具 prompt 只需在此追加一行即可
  */
 const TOOL_PROMPT_REGISTRY: Array<{
   tools: string[]
-  key: string
+  key?: string
+  textFn?: () => string
   condition?: (ctx: ToolPromptContext) => boolean
 }> = [
   { tools: ['bash', 'read', 'write', 'edit'], key: 'agent.promptSupplement', condition: (ctx) => ctx.hasProjectPath },
   { tools: ['ask'], key: 'agent.askToolGuidance' },
-  { tools: ['shuvix-project'], key: 'agent.shuvixProjectGuidance' },
-  { tools: ['shuvix-setting'], key: 'agent.shuvixSettingGuidance' }
+  {
+    tools: ['shuvix-project'],
+    textFn: () => `You have the shuvix-project tool to read and modify the current project's configuration. Use action="get" to view settings, action="update" to change them. Updatable fields: ${getProjectFieldDescriptions()}. Update operations require user approval.`
+  },
+  {
+    tools: ['shuvix-setting'],
+    textFn: () => `You have the shuvix-setting tool to read and modify global application settings. Use action="get" to view all settings, action="set" with key and value to change one. Known keys: ${getSettingKeyDescriptions()}. Set operations require user approval.`
+  }
 ]
 
 /** 根据启用的工具和上下文，构建需要追加到 system prompt 的文本 */
@@ -45,7 +56,7 @@ export function buildToolPrompts(enabledTools: string[], ctx: ToolPromptContext)
   return TOOL_PROMPT_REGISTRY
     .filter((entry) => entry.tools.some((name) => enabledTools.includes(name)))
     .filter((entry) => !entry.condition || entry.condition(ctx))
-    .map((entry) => t(entry.key))
+    .map((entry) => entry.textFn ? entry.textFn() : t(entry.key!))
     .join('\n\n')
 }
 

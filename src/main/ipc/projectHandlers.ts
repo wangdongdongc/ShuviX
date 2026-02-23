@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { projectService } from '../services/projectService'
+import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
 import type { ProjectCreateParams, ProjectUpdateParams, ProjectDeleteParams } from '../types'
 
 /**
@@ -31,5 +31,10 @@ export function registerProjectHandlers(): void {
   ipcMain.handle('project:delete', (_event, params: ProjectDeleteParams) => {
     projectService.delete(params.id)
     return { success: true }
+  })
+
+  /** 获取已知项目字段的元数据（labelKey + desc） */
+  ipcMain.handle('project:getKnownFields', () => {
+    return KNOWN_PROJECT_FIELDS
   })
 }

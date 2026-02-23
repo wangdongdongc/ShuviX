@@ -125,7 +125,9 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke('project:getById', id),
     create: (params: ProjectCreateParams) => ipcRenderer.invoke('project:create', params),
     update: (params: ProjectUpdateParams) => ipcRenderer.invoke('project:update', params),
-    delete: (params: ProjectDeleteParams) => ipcRenderer.invoke('project:delete', params)
+    delete: (params: ProjectDeleteParams) => ipcRenderer.invoke('project:delete', params),
+    /** 获取已知项目字段的元数据（labelKey + desc） */
+    getKnownFields: () => ipcRenderer.invoke('project:getKnownFields')
   },
 
   // ============ 会话管理 ============
@@ -165,7 +167,9 @@ const api = {
   settings: {
     getAll: () => ipcRenderer.invoke('settings:getAll'),
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
-    set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params)
+    set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params),
+    /** 获取已知设置 key 的元数据（labelKey + desc） */
+    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys')
   },
 
   // ============ HTTP 日志 ============

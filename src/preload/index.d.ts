@@ -124,6 +124,12 @@ interface AvailableModel extends ProviderModelInfo {
   providerName: string
 }
 
+/** 配置项元数据（设置 key / 项目字段共用） */
+interface ConfigMeta {
+  labelKey: string
+  desc: string
+}
+
 /** 暴露给 Renderer 的 API 类型 */
 interface ShuviXAPI {
   app: {
@@ -176,6 +182,8 @@ interface ShuviXAPI {
     create: (params: ProjectCreateParams) => Promise<Project>
     update: (params: ProjectUpdateParams) => Promise<{ success: boolean }>
     delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
+    /** 获取已知项目字段的元数据（labelKey + desc） */
+    getKnownFields: () => Promise<Record<string, ConfigMeta>>
   }
   session: {
     list: () => Promise<Session[]>
@@ -202,6 +210,8 @@ interface ShuviXAPI {
     getAll: () => Promise<Record<string, string>>
     get: (key: string) => Promise<string | undefined>
     set: (params: SettingsSetParams) => Promise<{ success: boolean }>
+    /** 获取已知设置 key 的元数据（labelKey + desc） */
+    getKnownKeys: () => Promise<Record<string, ConfigMeta>>
   }
   httpLog: {
     list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>

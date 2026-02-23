@@ -1,5 +1,36 @@
 import { settingsDao } from '../dao/settingsDao'
 
+// ---------- 设置元数据注册表 ----------
+
+export interface SettingMeta {
+  /** 对应设置页面的 i18n key（用于前端展示） */
+  labelKey: string
+  /** AI 可读描述（用于工具参数 description 和 prompt） */
+  desc: string
+}
+
+/**
+ * 所有已知系统设置的元数据注册表
+ * 新增设置时在此追加一行，工具参数描述、AI prompt、审批弹窗标签自动同步
+ */
+export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
+  'general.theme': { labelKey: 'settings.theme', desc: 'dark | light | system' },
+  'general.language': { labelKey: 'settings.language', desc: 'zh | en | ja' },
+  'general.fontSize': { labelKey: 'settings.fontSize', desc: 'number as string, 12-20' },
+  'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
+  'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
+  'general.systemPrompt': { labelKey: 'settings.systemPrompt', desc: 'global system prompt text' }
+}
+
+/** 所有已知设置 key 描述列表（供 AI prompt / 参数 description 使用） */
+export function getSettingKeyDescriptions(): string {
+  return Object.entries(KNOWN_SETTINGS)
+    .map(([key, e]) => `${key} (${e.desc})`)
+    .join(', ')
+}
+
+// ---------- 设置服务 ----------
+
 /**
  * 设置服务 — 编排设置相关的业务逻辑
  * 目前为薄封装，后续可扩展校验、缓存等逻辑

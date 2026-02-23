@@ -27,6 +27,12 @@ export interface AvailableModel extends ProviderModelInfo {
   providerName: string
 }
 
+/** 配置项元数据（与 preload ConfigMeta 保持一致） */
+export interface ConfigMeta {
+  labelKey: string
+  desc: string
+}
+
 interface SettingsState {
   /** 所有提供商列表（含禁用的） */
   providers: ProviderInfo[]
@@ -48,6 +54,10 @@ interface SettingsState {
   activeSettingsTab: 'general' | 'providers' | 'mcp' | 'skills' | 'httpLogs' | 'about'
   /** 是否已加载 */
   loaded: boolean
+  /** 系统设置 key 元数据（审批弹窗用） */
+  settingMeta: Record<string, ConfigMeta>
+  /** 项目字段元数据（审批弹窗用） */
+  projectFieldMeta: Record<string, ConfigMeta>
 
   // Actions
   setProviders: (providers: ProviderInfo[]) => void
@@ -60,6 +70,8 @@ interface SettingsState {
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (tab: 'general' | 'providers' | 'mcp' | 'skills' | 'httpLogs' | 'about') => void
   loadSettings: (settings: Record<string, string>) => void
+  /** 加载配置元数据（启动时调用一次） */
+  loadConfigMeta: (settingMeta: Record<string, ConfigMeta>, projectFieldMeta: Record<string, ConfigMeta>) => void
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
@@ -73,6 +85,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
+  settingMeta: {},
+  projectFieldMeta: {},
 
   setProviders: (providers) => set({ providers }),
   setAvailableModels: (models) => set({ availableModels: models }),
@@ -83,6 +97,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setFontSize: (size) => set({ fontSize: size }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
+
+  loadConfigMeta: (settingMeta, projectFieldMeta) => set({ settingMeta, projectFieldMeta }),
 
   /** 从 settings 表加载通用设置 */
   loadSettings: (settings) => {

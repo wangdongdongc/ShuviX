@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 interface UserActionPanelProps {
   /** ask 工具：用户选择回调 */
@@ -133,29 +134,10 @@ function AskContent({
 
 // ---------- 审批子内容（通用） ----------
 
-/** settings key → 设置页面对应的 i18n key（与 GeneralSettings 页面文案保持一致） */
-const SETTING_KEY_LABEL: Record<string, string> = {
-  'general.theme': 'settings.theme',
-  'general.language': 'settings.language',
-  'general.fontSize': 'settings.fontSize',
-  'general.defaultProvider': 'settings.defaultProvider',
-  'general.defaultModel': 'settings.defaultModel',
-  'general.systemPrompt': 'settings.systemPrompt'
-}
-
-/** project field → 项目编辑页面对应的 i18n key（与 ProjectEditDialog 页面文案保持一致） */
-const PROJECT_FIELD_LABEL: Record<string, string> = {
-  name: 'projectForm.name',
-  systemPrompt: 'projectForm.prompt',
-  dockerEnabled: 'projectForm.docker',
-  dockerImage: 'projectForm.dockerImage',
-  sandboxEnabled: 'projectForm.sandbox',
-  enabledTools: 'projectForm.tools'
-}
-
 /** 根据工具类型渲染变更预览 */
 function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): React.JSX.Element {
   const { t } = useTranslation()
+  const { settingMeta, projectFieldMeta } = useSettingsStore()
 
   if (toolName === 'bash') {
     // bash：代码块预览
@@ -170,7 +152,7 @@ function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): 
     // 系统设置：展示可读标签 + key = value
     const key = args?.key || ''
     const value = args?.value ?? ''
-    const label = SETTING_KEY_LABEL[key] ? t(SETTING_KEY_LABEL[key]) : key
+    const label = settingMeta[key] ? t(settingMeta[key].labelKey) : key
     return (
       <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1">
         <div className="flex items-baseline gap-1.5">
@@ -190,7 +172,7 @@ function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): 
     return (
       <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1.5">
         {entries.map(([k, v]) => {
-          const label = PROJECT_FIELD_LABEL[k] ? t(PROJECT_FIELD_LABEL[k]) : k
+          const label = projectFieldMeta[k] ? t(projectFieldMeta[k].labelKey) : k
           return (
             <div key={k}>
               <div className="flex items-baseline gap-1.5">

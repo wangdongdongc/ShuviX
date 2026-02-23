@@ -7,7 +7,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import type { ToolContext } from './types'
 import { sessionService } from '../services/sessionService'
-import { projectService } from '../services/projectService'
+import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
 import { t } from '../i18n'
 
 const ShuvixProjectParamsSchema = Type.Object({
@@ -28,7 +28,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
     name: 'shuvix-project',
     label: t('tool.shuvixProjectLabel'),
     description:
-      'Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Only works when the current session is linked to a project.',
+      `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`,
     parameters: ShuvixProjectParamsSchema,
     execute: async (
       toolCallId: string,

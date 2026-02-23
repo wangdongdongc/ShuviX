@@ -7,16 +7,15 @@ import { Type } from '@sinclair/typebox'
 import { BrowserWindow } from 'electron'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import type { ToolContext } from './types'
-import { settingsService } from '../services/settingsService'
-import { changeLanguage } from '../i18n'
-import { t } from '../i18n'
+import { settingsService, getSettingKeyDescriptions } from '../services/settingsService'
+import { changeLanguage, t } from '../i18n'
 
 const ShuvixSettingParamsSchema = Type.Object({
   action: Type.Union([Type.Literal('get'), Type.Literal('set')], {
     description: 'Action to perform: "get" to read all settings, "set" to update a single setting (requires user approval)'
   }),
   key: Type.Optional(Type.String({
-    description: 'Setting key to update. Known keys: general.defaultProvider, general.defaultModel, general.systemPrompt, general.theme (dark|light|system), general.fontSize (number as string), general.language (zh|en|ja)'
+    description: `Setting key to update. Known keys: ${getSettingKeyDescriptions()}`
   })),
   value: Type.Optional(Type.String({
     description: 'New value for the setting key (always a string)'

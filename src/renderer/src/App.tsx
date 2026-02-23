@@ -43,9 +43,14 @@ function App(): React.JSX.Element {
   /** 应用启动时加载数据（主窗口和设置窗口共用） */
   useEffect(() => {
     const init = async (): Promise<void> => {
-      // 加载通用设置
-      const settings = await window.api.settings.getAll()
+      // 加载通用设置 + 配置元数据
+      const [settings, settingMeta, projectFieldMeta] = await Promise.all([
+        window.api.settings.getAll(),
+        window.api.settings.getKnownKeys(),
+        window.api.project.getKnownFields()
+      ])
       useSettingsStore.getState().loadSettings(settings)
+      useSettingsStore.getState().loadConfigMeta(settingMeta, projectFieldMeta)
 
       // 同步前端 i18n 语言（优先用户设置，否则保持检测值）
       const savedLang = settings['general.language']

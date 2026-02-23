@@ -1,5 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { settingsService } from '../services/settingsService'
+import { settingsService, KNOWN_SETTINGS } from '../services/settingsService'
 import { changeLanguage } from '../i18n'
 import type { SettingsSetParams } from '../types'
 
@@ -16,6 +16,11 @@ export function registerSettingsHandlers(): void {
   /** 获取单个设置 */
   ipcMain.handle('settings:get', (_event, key: string) => {
     return settingsService.get(key)
+  })
+
+  /** 获取已知设置 key 的元数据（labelKey + desc） */
+  ipcMain.handle('settings:getKnownKeys', () => {
+    return KNOWN_SETTINGS
   })
 
   /** 保存设置，并广播通知所有窗口刷新 */

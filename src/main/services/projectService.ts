@@ -3,6 +3,37 @@ import { projectDao } from '../dao/projectDao'
 import type { Project } from '../types'
 import { basename } from 'path'
 
+// ---------- 项目字段元数据注册表 ----------
+
+export interface ProjectFieldMeta {
+  /** 对应项目编辑页面的 i18n key（用于前端展示） */
+  labelKey: string
+  /** AI 可读描述（用于工具参数 description 和 prompt） */
+  desc: string
+}
+
+/**
+ * 所有已知的项目可修改字段元数据注册表
+ * 新增字段时在此追加一行，工具参数描述、AI prompt、审批弹窗标签自动同步
+ */
+export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
+  name: { labelKey: 'projectForm.name', desc: 'Project display name' },
+  systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
+  dockerEnabled: { labelKey: 'projectForm.docker', desc: 'Enable Docker isolation (boolean)' },
+  dockerImage: { labelKey: 'projectForm.dockerImage', desc: 'Docker image name, e.g. "ubuntu:latest"' },
+  sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
+  enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' }
+}
+
+/** 所有已知项目字段描述列表（供 AI prompt / 参数 description 使用） */
+export function getProjectFieldDescriptions(): string {
+  return Object.entries(KNOWN_PROJECT_FIELDS)
+    .map(([field, e]) => `${field} (${e.desc})`)
+    .join(', ')
+}
+
+// ---------- 项目服务 ----------
+
 /**
  * 项目服务 — 编排项目相关的业务逻辑
  */
