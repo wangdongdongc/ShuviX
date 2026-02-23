@@ -76,7 +76,7 @@ body {
 
 /* 滚动条样式 */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -89,6 +89,17 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* 自动隐藏滚动条：默认透明，hover 时显现 */
+.auto-hide-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.auto-hide-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+}
+.auto-hide-scrollbar:hover::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
 

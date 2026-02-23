@@ -158,7 +158,7 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* 会话列表 */}
-      <div className="flex-1 overflow-y-auto px-2 py-1">
+      <div className="flex-1 overflow-y-auto px-2 py-1 auto-hide-scrollbar">
         {sessions.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('sidebar.emptyHint')}
