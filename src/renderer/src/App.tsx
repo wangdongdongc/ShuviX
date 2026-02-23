@@ -231,10 +231,8 @@ function App(): React.JSX.Element {
               metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined,
               model: session?.model || ''
             })
-            // 仅当该 session 是当前查看的会话时，才更新内存中的消息列表
-            if (sid === store.activeSessionId) {
-              store.addMessage(assistantMsg)
-            }
+            // 原子操作：单次 set() 同时清除流式状态并添加最终消息，避免页面闪动
+            store.finishStreaming(sid, assistantMsg)
 
             // 首次对话时后台让 AI 生成标题（对用户透明）
             const textMsgCount = store.messages.filter((m) => m.type === 'text' || !m.type).length
@@ -253,18 +251,15 @@ function App(): React.JSX.Element {
                 }).catch(() => {})
               }
             }
+          } else {
+            store.finishStreaming(sid)
           }
-          store.clearStreamingContent(sid)
-          store.clearToolExecutions(sid)
-          store.setIsStreaming(sid, false)
           break
         }
 
         case 'error':
           store.setError(event.error || 'Unknown error')
-          store.setIsStreaming(sid, false)
-          store.clearStreamingContent(sid)
-          store.clearToolExecutions(sid)
+          store.finishStreaming(sid)
           break
       }
     },

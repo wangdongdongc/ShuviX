@@ -114,6 +114,8 @@ interface ChatState {
   updateSessionProject: (id: string, projectId: string | null) => void
   removeSession: (id: string) => void
   setEnabledTools: (tools: string[]) => void
+  /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
+  finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -260,5 +262,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
     })),
-  setEnabledTools: (tools) => set({ enabledTools: tools })
+  setEnabledTools: (tools) => set({ enabledTools: tools }),
+
+  finishStreaming: (sessionId, finalMessage) =>
+    set((state) => {
+      // 清除该 session 的流式内容
+      const prevStream = state.sessionStreams[sessionId]
+      const updatedStream = prevStream
+        ? { ...prevStream, content: '', thinking: '', isStreaming: false }
+        : undefined
+      const newStreams = updatedStream
+        ? { ...state.sessionStreams, [sessionId]: updatedStream }
+        : state.sessionStreams
+
+      // 清除该 session 的工具执行状态
+      const { [sessionId]: _removed, ...restToolExecs } = state.sessionToolExecutions
+
+      // 添加最终消息（如有）
+      const newMessages = finalMessage && sessionId === state.activeSessionId
+        ? [...state.messages, finalMessage]
+        : state.messages
+
+      // 当前活跃会话时同步 UI 直读字段
+      const isActive = sessionId === state.activeSessionId
+      return {
+        sessionStreams: newStreams,
+        sessionToolExecutions: restToolExecs,
+        messages: newMessages,
+        ...(isActive ? {
+          streamingContent: '',
+          streamingThinking: '',
+          isStreaming: false,
+          toolExecutions: []
+        } : {})
+      }
+    })
 }))
