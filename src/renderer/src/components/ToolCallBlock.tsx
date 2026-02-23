@@ -41,46 +41,46 @@ export function ToolCallBlock({
     switch (toolName) {
       case 'bash': {
         const line = (args?.command || '').split('\n')[0]
-        return { icon: <Terminal size={14} className={ic} />, detail: line.length > 80 ? line.slice(0, 77) + '...' : line }
+        return { icon: <Terminal size={12} className={ic} />, detail: line.length > 80 ? line.slice(0, 77) + '...' : line }
       }
       case 'read':
-        return { icon: <FileText size={14} className={ic} />, detail: args?.path || '' }
+        return { icon: <FileText size={12} className={ic} />, detail: args?.path || '' }
       case 'write':
-        return { icon: <FileOutput size={14} className={ic} />, detail: args?.path || '' }
+        return { icon: <FileOutput size={12} className={ic} />, detail: args?.path || '' }
       case 'edit':
-        return { icon: <FilePen size={14} className={ic} />, detail: args?.path || '' }
+        return { icon: <FilePen size={12} className={ic} />, detail: args?.path || '' }
       case 'ask': {
         const q = (args?.question || '').slice(0, 60)
-        return { icon: <MessageCircleQuestion size={14} className={ic} />, detail: q + (args?.question?.length > 60 ? '...' : '') }
+        return { icon: <MessageCircleQuestion size={12} className={ic} />, detail: q + (args?.question?.length > 60 ? '...' : '') }
       }
       default:
-        return { icon: <Wrench size={14} className={ic} />, detail: '' }
+        return { icon: <Wrench size={12} className={ic} />, detail: '' }
     }
   })()
 
   const statusConfig: Record<string, { icon: React.ReactNode; label: string; borderColor: string }> = {
     running: {
-      icon: <Loader2 size={14} className="animate-spin text-accent" />,
+      icon: <Loader2 size={12} className="animate-spin text-accent" />,
       label: t('toolCall.running'),
       borderColor: 'border-accent/40'
     },
     done: {
-      icon: <Check size={14} className="text-success" />,
+      icon: <Check size={12} className="text-success" />,
       label: t('toolCall.done'),
       borderColor: 'border-success/40'
     },
     error: {
-      icon: <X size={14} className="text-error" />,
+      icon: <X size={12} className="text-error" />,
       label: t('toolCall.error'),
       borderColor: 'border-error/40'
     },
     pending_approval: {
-      icon: <ShieldAlert size={14} className="text-warning" />,
+      icon: <ShieldAlert size={12} className="text-warning" />,
       label: t('toolCall.pendingApproval'),
       borderColor: 'border-warning/40'
     },
     pending_user_input: {
-      icon: <MessageCircleQuestion size={14} className="text-accent" />,
+      icon: <MessageCircleQuestion size={12} className="text-accent" />,
       label: t('toolCall.pendingUserInput'),
       borderColor: 'border-accent/40'
     }
@@ -89,31 +89,31 @@ export function ToolCallBlock({
   const config = statusConfig[status]
 
   return (
-    <div className={`ml-14 mr-4 my-2 rounded-lg border-l-2 ${config.borderColor} bg-bg-tertiary/50 overflow-hidden`}>
-      {/* 头部 — 可点击展开 */}
+    <div className="ml-14 mr-4 my-0.5">
+      {/* 单行摘要 — 可点击展开详情 */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 transition-colors"
+        className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
       >
-        {icon}
-        <span className="text-xs font-medium text-text-primary flex-shrink-0">{toolName}</span>
-        {detail && <span className="flex-1 text-[11px] text-text-secondary truncate font-mono">{detail}</span>}
-        {!detail && <span className="flex-1" />}
-        <span className="flex items-center gap-1.5 text-[10px] text-text-tertiary flex-shrink-0">
-          {config.icon}
-          {config.label}
-        </span>
         {(args || result) && (
           expanded
-            ? <ChevronDown size={12} className="text-text-tertiary flex-shrink-0" />
-            : <ChevronRight size={12} className="text-text-tertiary flex-shrink-0" />
+            ? <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
+            : <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
         )}
+        {icon}
+        <span className="font-medium text-text-secondary flex-shrink-0">{toolName}</span>
+        {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}
+        {!detail && <span className="flex-1" />}
+        <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
+          {config.icon}
+          <span className="text-[10px]">{config.label}</span>
+        </span>
       </button>
 
-      {/* 沙箱审批：显示命令内容 + 允许/拒绝按钮 */}
+      {/* 沙箱审批卡片（需要用户操作，保持醒目样式） */}
       {status === 'pending_approval' && (
-        <div className="px-3 pb-2.5 border-t border-border-secondary/50">
-          <pre className="mt-2 text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono">
+        <div className="mt-1 mb-2 rounded-lg border border-warning/30 bg-bg-tertiary/50 px-3 py-2">
+          <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono">
             {args?.command || ''}
           </pre>
           <div className="flex items-center gap-2 mt-2">
@@ -134,21 +134,21 @@ export function ToolCallBlock({
         </div>
       )}
 
-      {/* 展开内容 */}
+      {/* 展开详情 */}
       {expanded && status !== 'pending_approval' && status !== 'pending_user_input' && (
-        <div className="px-3 pb-2.5 space-y-2 border-t border-border-secondary/50">
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {args && Object.keys(args).length > 0 && (
-            <div className="pt-2">
-              <div className="text-[10px] text-text-tertiary mb-1">{t('toolCall.params')}</div>
-              <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+            <div>
+              <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.params')}</div>
+              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
                 {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
               </pre>
             </div>
           )}
           {result && (
             <div>
-              <div className="text-[10px] text-text-tertiary mb-1">{t('toolCall.result')}</div>
-              <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded px-2 py-1.5 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+              <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
+              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
                 {result}
               </pre>
             </div>
