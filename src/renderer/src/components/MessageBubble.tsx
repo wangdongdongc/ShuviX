@@ -21,7 +21,60 @@ const mermaidSvgCache = new Map<string, string>()
 const mermaidViewState = new Map<string, boolean>() // code → showSource
 let mermaidIdCounter = 0
 
-/** Mermaid 代码块 → SVG 图表，支持源码/图表切换（懒渲染） */
+/** 代码块容器 — 带语言标签和复制按钮 */
+function CodeBlock({ node, children, ...props }: any): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+
+  // 从 hast 节点提取语言名称
+  const codeNode = node?.children?.[0] as any
+  const cls = codeNode?.properties?.className
+  const lang = (() => {
+    if (!cls) return ''
+    const arr = Array.isArray(cls) ? cls : [cls]
+    const match = arr.find((c: string) => c.startsWith('language-'))
+    return match ? match.replace('language-', '') : ''
+  })()
+
+  // 递归提取 hast 节点中的纯文本（用于复制）
+  const extractText = (n: any): string => {
+    if (n.type === 'text') return n.value || ''
+    if (n.children) return n.children.map(extractText).join('')
+    return ''
+  }
+  const rawCode = codeNode ? extractText(codeNode).replace(/\n$/, '') : ''
+
+  // 检测 mermaid
+  if (lang === 'mermaid' && rawCode) {
+    return <MermaidBlock code={rawCode} />
+  }
+
+  const handleCopy = (): void => {
+    navigator.clipboard.writeText(rawCode)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="relative group/code my-2">
+      {/* 语言标签 + 复制按钮 */}
+      <div className="flex items-center justify-between px-3 py-1 text-[10px] text-text-tertiary border border-border-primary border-b-0 rounded-t-lg bg-bg-tertiary/80">
+        <span className="font-medium uppercase tracking-wider">{lang || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 hover:text-text-secondary transition-colors"
+        >
+          {copied ? <Check size={10} className="text-success" /> : <Copy size={10} />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre {...props}>
+        {children}
+      </pre>
+    </div>
+  )
+}
+
+/** Mermaid 代码块 -> SVG 图表，支持源码/图表切换（懒渲染） */
 function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   const { t } = useTranslation()
   const [svgHtml, setSvgHtml] = useState<string | null>(mermaidSvgCache.get(code) ?? null)
@@ -262,27 +315,7 @@ export const MessageBubble = memo(function MessageBubble({
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight, rehypeRaw]}
                   components={{
-                    pre({ node, children, ...props }) {
-                      // 从 hast 节点检测 mermaid 代码块
-                      const codeNode = node?.children?.[0] as any
-                      if (codeNode?.tagName === 'code') {
-                        const cls = codeNode.properties?.className
-                        const isMermaid = Array.isArray(cls)
-                          ? cls.some((c: string) => c === 'language-mermaid')
-                          : typeof cls === 'string' && cls.includes('language-mermaid')
-                        if (isMermaid) {
-                          // 递归提取 hast 节点中的纯文本
-                          const extractText = (n: any): string => {
-                            if (n.type === 'text') return n.value || ''
-                            if (n.children) return n.children.map(extractText).join('')
-                            return ''
-                          }
-                          const code = extractText(codeNode).replace(/\n$/, '')
-                          if (code) return <MermaidBlock code={code} />
-                        }
-                      }
-                      return <pre {...props}>{children}</pre>
-                    }
+                    pre: CodeBlock
                   }}
                 >
                   {content}
