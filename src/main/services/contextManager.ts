@@ -22,8 +22,6 @@ const log = createLogger('Context')
 /** 保留最近 N 个 toolResult 消息的完整内容不压缩 */
 const KEEP_RECENT_TOOL_RESULTS = 6
 
-/** 保留最近 N 条 assistant 消息的 thinking 内容 */
-const KEEP_RECENT_THINKING = 1
 
 /** 上下文窗口使用比例（留余量给 system prompt + 输出 + 安全边际） */
 const CONTEXT_RATIO = 0.75
@@ -171,49 +169,7 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   return result
 }
 
-// ─── 第二层：移除旧 thinking ────────────────────────────────
-
-/**
- * 移除旧的 assistant 消息中的 thinking 内容
- * 只保留最近 N 条 assistant 消息的 thinking，其余全部移除
- */
-function removeOldThinking(messages: AgentMessage[]): AgentMessage[] {
-  // 收集所有含 thinking 的 assistant 消息索引
-  const thinkingIndices: number[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i] as any
-    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      if (msg.content.some((b: any) => b.type === 'thinking')) {
-        thinkingIndices.push(i)
-      }
-    }
-  }
-
-  if (thinkingIndices.length <= KEEP_RECENT_THINKING) return messages
-
-  // 需要移除 thinking 的索引集合（排除最近 N 个）
-  const removeSet = new Set(thinkingIndices.slice(0, -KEEP_RECENT_THINKING))
-
-  let removedCount = 0
-  const result: AgentMessage[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i] as any
-    if (removeSet.has(i)) {
-      const filtered = msg.content.filter((b: any) => b.type !== 'thinking')
-      result.push({ ...msg, content: filtered } as AgentMessage)
-      removedCount++
-    } else {
-      result.push(msg)
-    }
-  }
-
-  if (removedCount > 0) {
-    log.info(`第二层：移除了 ${removedCount} 条旧 assistant 消息的 thinking`)
-  }
-  return result
-}
-
-// ─── 第三层：滑动窗口截断 ───────────────────────────────────
+// ─── 第二层：滑动窗口截断 ─────────────────────────────────────
 
 /**
  * 滑动窗口截断（兜底）
@@ -262,15 +218,12 @@ export function createTransformContext(
     // 第一层：始终压缩旧 toolResult（近乎无损，高收益）
     let compressed = compressToolResults(messages)
 
-    // 第二层：始终移除旧 thinking（无损）
-    compressed = removeOldThinking(compressed)
-
     const afterBasicTokens = countAllTokens(compressed)
     if (afterBasicTokens < originalTokens) {
       log.info(`基础压缩：${originalTokens} → ${afterBasicTokens} tokens（节省 ${originalTokens - afterBasicTokens}）`)
     }
 
-    // 第三层：仅在超过阈值时执行滑动窗口截断（有损）
+    // 第二层：仅在超过阈值时执行滑动窗口截断（有损）
     if (afterBasicTokens > maxTokens) {
       compressed = slidingWindowTruncate(compressed, maxTokens)
       const finalTokens = countAllTokens(compressed)
