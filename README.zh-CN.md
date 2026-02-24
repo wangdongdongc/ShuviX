@@ -6,7 +6,7 @@
 
 🤖 你的桌面 AI 助手，让 AI 真正融入你的日常工作。
 
-<img src="./resources/icon.png" width="180" alt="ShuviX Logo">
+<img src="./resources/icon_mini.jpg" width="180" alt="ShuviX Logo">
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)](https://github.com/wangdongdongc/ShuviX/releases)
 [![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
