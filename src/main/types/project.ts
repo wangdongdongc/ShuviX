@@ -23,6 +23,8 @@ export interface Project {
   sandboxEnabled: number
   /** JSON 扩展字段（预留） */
   settings: string
+  /** 归档时间戳（0 表示未归档） */
+  archivedAt: number
   createdAt: number
   updatedAt: number
 }
@@ -37,6 +39,7 @@ export interface ProjectCreateParams {
   sandboxEnabled?: boolean
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
+  archived?: boolean
 }
 
 /** IPC: 更新项目参数 */
@@ -50,6 +53,7 @@ export interface ProjectUpdateParams {
   sandboxEnabled?: boolean
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
+  archived?: boolean
 }
 
 /** IPC: 删除项目参数 */

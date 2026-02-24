@@ -16,6 +16,20 @@ export class ProjectDao {
       .all() as Project[]
   }
 
+  /** 获取未归档项目，按更新时间倒序 */
+  findAllActive(): Project[] {
+    return this.db
+      .prepare('SELECT * FROM projects WHERE archivedAt = 0 ORDER BY updatedAt DESC')
+      .all() as Project[]
+  }
+
+  /** 获取已归档项目，按归档时间倒序 */
+  findAllArchived(): Project[] {
+    return this.db
+      .prepare('SELECT * FROM projects WHERE archivedAt > 0 ORDER BY archivedAt DESC')
+      .all() as Project[]
+  }
+
   /** 根据 ID 获取单个项目 */
   findById(id: string): Project | undefined {
     return this.db
@@ -34,7 +48,7 @@ export class ProjectDao {
   insert(project: Project): void {
     this.db
       .prepare(
-        'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, settings, archivedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         project.id,
@@ -45,13 +59,14 @@ export class ProjectDao {
         project.dockerImage,
         project.sandboxEnabled,
         project.settings,
+        project.archivedAt,
         project.createdAt,
         project.updatedAt
       )
   }
 
   /** 更新项目 */
-  update(id: string, fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'dockerEnabled' | 'dockerImage' | 'sandboxEnabled' | 'settings'>>): void {
+  update(id: string, fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'dockerEnabled' | 'dockerImage' | 'sandboxEnabled' | 'settings' | 'archivedAt'>>): void {
     const sets: string[] = []
     const values: any[] = []
     if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name) }
@@ -61,6 +76,7 @@ export class ProjectDao {
     if (fields.dockerImage !== undefined) { sets.push('dockerImage = ?'); values.push(fields.dockerImage) }
     if (fields.sandboxEnabled !== undefined) { sets.push('sandboxEnabled = ?'); values.push(fields.sandboxEnabled) }
     if (fields.settings !== undefined) { sets.push('settings = ?'); values.push(fields.settings) }
+    if (fields.archivedAt !== undefined) { sets.push('archivedAt = ?'); values.push(fields.archivedAt) }
     if (sets.length === 0) return
     sets.push('updatedAt = ?')
     values.push(Date.now())

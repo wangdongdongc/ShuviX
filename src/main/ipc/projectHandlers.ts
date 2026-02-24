@@ -11,6 +11,11 @@ export function registerProjectHandlers(): void {
     return projectService.list()
   })
 
+  /** 获取已归档项目 */
+  ipcMain.handle('project:listArchived', () => {
+    return projectService.listArchived()
+  })
+
   /** 获取单个项目 */
   ipcMain.handle('project:getById', (_event, id: string) => {
     return projectService.getById(id) || null

@@ -34,6 +34,11 @@ class DatabaseManager {
 
   /** 增量迁移 */
   private migrate(): void {
+    // 为已有 projects 表添加 archivedAt 列（新建表已包含该列）
+    const projectCols = this.db.pragma('table_info(projects)') as { name: string }[]
+    if (!projectCols.find((c) => c.name === 'archivedAt')) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN archivedAt INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   /** 初始化数据库表 */
@@ -112,6 +117,7 @@ class DatabaseManager {
         dockerImage TEXT NOT NULL DEFAULT '',
         sandboxEnabled INTEGER NOT NULL DEFAULT 1,
         settings TEXT NOT NULL DEFAULT '{}',
+        archivedAt INTEGER NOT NULL DEFAULT 0,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );

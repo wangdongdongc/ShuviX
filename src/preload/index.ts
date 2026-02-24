@@ -122,6 +122,7 @@ const api = {
   // ============ 项目管理 ============
   project: {
     list: () => ipcRenderer.invoke('project:list'),
+    listArchived: () => ipcRenderer.invoke('project:listArchived'),
     getById: (id: string) => ipcRenderer.invoke('project:getById', id),
     create: (params: ProjectCreateParams) => ipcRenderer.invoke('project:create', params),
     update: (params: ProjectUpdateParams) => ipcRenderer.invoke('project:update', params),

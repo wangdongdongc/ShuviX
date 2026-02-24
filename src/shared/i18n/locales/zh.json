@@ -22,6 +22,7 @@
   "sidebar": {
     "title": "项目",
     "tempChats": "临时对话",
+    "archivedProjects": "已归档项目",
     "unnamedProject": "未命名项目",
     "newChat": "新建对话",
     "openFolder": "打开文件夹",
@@ -32,7 +33,8 @@
     "confirmDelete": "确认删除",
     "deleteWarning": "该会话中已有消息记录，删除后将",
     "deleteWarningBold": "彻底删除所有消息",
-    "deleteWarningEnd": "，且无法恢复。确定要删除吗？"
+    "deleteWarningEnd": "，且无法恢复。确定要删除吗？",
+    "restoreProject": "恢复项目"
   },
 
   "chat": {
@@ -140,7 +142,11 @@
     "referenceDirs": "参考目录",
     "referenceDirsHint": "AI 可读取这些目录中的文件作为参考，沙箱模式下仅允许读取",
     "addRefDir": "添加目录",
-    "refDirNotePlaceholder": "注释（帮助 AI 理解目录用途）"
+    "refDirNotePlaceholder": "注释（帮助 AI 理解目录用途）",
+    "archiveProject": "归档项目",
+    "archiveConfirmTitle": "归档项目",
+    "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
+    "archiveConfirmAction": "确认归档"
   },
 
   "settings": {

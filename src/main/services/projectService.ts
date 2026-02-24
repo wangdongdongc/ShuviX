@@ -40,9 +40,14 @@ export function getProjectFieldDescriptions(): string {
  * 项目服务 — 编排项目相关的业务逻辑
  */
 export class ProjectService {
-  /** 获取所有项目 */
+  /** 获取未归档项目 */
   list(): Project[] {
-    return projectDao.findAll()
+    return projectDao.findAllActive()
+  }
+
+  /** 获取已归档项目 */
+  listArchived(): Project[] {
+    return projectDao.findAllArchived()
   }
 
   /** 获取单个项目 */
@@ -65,6 +70,7 @@ export class ProjectService {
     sandboxEnabled?: boolean
     enabledTools?: string[]
     referenceDirs?: Array<{ path: string; note?: string }>
+    archived?: boolean
   }): Project {
     const now = Date.now()
     const id = uuidv7()
@@ -80,6 +86,7 @@ export class ProjectService {
       dockerImage: params.dockerImage || '',
       sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
       settings: JSON.stringify(settings),
+      archivedAt: params.archived ? now : 0,
       createdAt: now,
       updatedAt: now
     }
@@ -97,6 +104,7 @@ export class ProjectService {
     sandboxEnabled?: boolean
     enabledTools?: string[]
     referenceDirs?: Array<{ path: string; note?: string }>
+    archived?: boolean
   }): void {
     // 处理 settings JSON 字段（合并而非覆盖）
     let settingsUpdate: string | undefined
@@ -114,6 +122,7 @@ export class ProjectService {
       ...(params.dockerEnabled !== undefined ? { dockerEnabled: params.dockerEnabled ? 1 : 0 } : {}),
       ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
       ...(params.sandboxEnabled !== undefined ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 } : {}),
+      ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })
   }

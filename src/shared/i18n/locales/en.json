@@ -22,6 +22,7 @@
   "sidebar": {
     "title": "Projects",
     "tempChats": "Temporary Chats",
+    "archivedProjects": "Archived Projects",
     "unnamedProject": "Unnamed Project",
     "newChat": "New Chat",
     "openFolder": "Open Folder",
@@ -32,7 +33,8 @@
     "confirmDelete": "Confirm Delete",
     "deleteWarning": "This session contains messages. Deleting it will ",
     "deleteWarningBold": "permanently delete all messages",
-    "deleteWarningEnd": " and cannot be recovered. Are you sure?"
+    "deleteWarningEnd": " and cannot be recovered. Are you sure?",
+    "restoreProject": "Restore Project"
   },
 
   "chat": {
@@ -140,7 +142,11 @@
     "referenceDirs": "Reference Directories",
     "referenceDirsHint": "AI can read files from these directories for reference. Read-only in sandbox mode.",
     "addRefDir": "Add Directory",
-    "refDirNotePlaceholder": "Note (helps AI understand the directory purpose)"
+    "refDirNotePlaceholder": "Note (helps AI understand the directory purpose)",
+    "archiveProject": "Archive Project",
+    "archiveConfirmTitle": "Archive Project",
+    "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
+    "archiveConfirmAction": "Archive"
   },
 
   "settings": {

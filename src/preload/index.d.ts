@@ -61,6 +61,7 @@ interface Project {
   dockerImage: string
   sandboxEnabled: number
   settings: string
+  archivedAt: number
   createdAt: number
   updatedAt: number
 }
@@ -178,6 +179,7 @@ interface ShuviXAPI {
   }
   project: {
     list: () => Promise<Project[]>
+    listArchived: () => Promise<Project[]>
     getById: (id: string) => Promise<Project | null>
     create: (params: ProjectCreateParams) => Promise<Project>
     update: (params: ProjectUpdateParams) => Promise<{ success: boolean }>

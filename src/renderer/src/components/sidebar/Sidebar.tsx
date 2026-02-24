@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
+import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus, RotateCcw } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
@@ -13,6 +13,7 @@ import type { Session } from '../../stores/chatStore'
  * 按项目（Project）分组展示
  */
 const TEMP_GROUP_KEY = '__no_project__'
+const ARCHIVED_GROUP_KEY = '__archived_projects__'
 
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
@@ -27,12 +28,20 @@ export function Sidebar(): React.JSX.Element {
 
   /** 所有项目（独立查询，不依赖 sessions） */
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([])
+  const [archivedProjects, setArchivedProjects] = useState<Array<{ id: string; name: string }>>([])
+
+  const reloadProjects = async (): Promise<void> => {
+    const [activeList, archivedList] = await Promise.all([
+      window.api.project.list(),
+      window.api.project.listArchived()
+    ])
+    setProjects(activeList.map((p) => ({ id: p.id, name: p.name })))
+    setArchivedProjects(archivedList.map((p) => ({ id: p.id, name: p.name })))
+  }
 
   // 加载项目列表（创建/编辑后也会刷新）
   useEffect(() => {
-    window.api.project.list().then((list) =>
-      setProjects(list.map((p) => ({ id: p.id, name: p.name })))
-    )
+    void reloadProjects()
   }, [editingProjectId])
 
   /** 项目 id → 名称 快查表 */
@@ -46,8 +55,10 @@ export function Sidebar(): React.JSX.Element {
   useEffect(() => {
     if (initialCollapseApplied.current || projects.length === 0) return
     initialCollapseApplied.current = true
-    setCollapsedGroups(new Set(projects.map((p) => p.id)))
-  }, [projects])
+    const initial = new Set(projects.map((p) => p.id))
+    if (archivedProjects.length > 0) initial.add(ARCHIVED_GROUP_KEY)
+    setCollapsedGroups(initial)
+  }, [projects, archivedProjects])
 
   // ---------- 分组逻辑：项目为骨架，会话填入 ----------
 
@@ -88,6 +99,12 @@ export function Sidebar(): React.JSX.Element {
 
     return sorted
   }, [projects, sessions, projectNames])
+
+  /** 恢复归档项目 */
+  const handleRestoreProject = async (projectId: string): Promise<void> => {
+    await window.api.project.update({ id: projectId, archived: false })
+    await reloadProjects()
+  }
 
   /** 在指定项目下创建新会话 */
   const handleNewChat = async (projectId?: string | null): Promise<void> => {
@@ -182,63 +199,96 @@ export function Sidebar(): React.JSX.Element {
 
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto px-2 py-1 auto-hide-scrollbar">
-        {sessions.length === 0 && Object.keys(projectNames).length === 0 ? (
+        {sessions.length === 0 && Object.keys(projectNames).length === 0 && archivedProjects.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('sidebar.emptyHint')}
           </div>
         ) : (
-          /* 按项目分组展示（项目按名称排序，临时对话始终最后） */
-          sortedGroups.map(([groupKey, groupSessions]) => {
-            const collapsed = collapsedGroups.has(groupKey)
-            const isTemp = groupKey === TEMP_GROUP_KEY
-            const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
-            return (
-              <div key={groupKey} className={`mb-1 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
+          <>
+            {/* 按项目分组展示（项目按名称排序，临时对话始终最后） */}
+            {sortedGroups.map(([groupKey, groupSessions]) => {
+              const collapsed = collapsedGroups.has(groupKey)
+              const isTemp = groupKey === TEMP_GROUP_KEY
+              const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
+              return (
+                <div key={groupKey} className={`mb-1 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
+                  <div className="flex items-center w-full px-2 py-1 text-[10px] group/header">
+                    <button
+                      onClick={() => toggleGroup(groupKey)}
+                      className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
+                        activeGroupKey === groupKey
+                          ? 'text-text-secondary'
+                          : isTemp
+                            ? 'text-text-tertiary/60 hover:text-text-tertiary'
+                            : 'text-text-tertiary hover:text-text-secondary'
+                      }`}
+                    >
+                      {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                      <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
+                    </button>
+                    {/* 项目操作按钮 */}
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleNewChat(isTemp ? null : groupKey)
+                        }}
+                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                        title={t('sidebar.newChat')}
+                      >
+                        <MessageSquarePlus size={11} />
+                      </button>
+                      {!isTemp && (
+                        <button
+                          onClick={() => setEditingProjectId(groupKey)}
+                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                          title={t('sidebar.editProject')}
+                        >
+                          <Pencil size={10} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {!collapsed && (
+                    <div className="ml-2 pl-1">
+                      {groupSessions.map(renderSessionItem)}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {/* 已归档项目 */}
+            {archivedProjects.length > 0 && (
+              <div className="mt-2 mb-1 rounded-md">
                 <div className="flex items-center w-full px-2 py-1 text-[10px] group/header">
                   <button
-                    onClick={() => toggleGroup(groupKey)}
-                    className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
-                      activeGroupKey === groupKey
-                        ? 'text-text-secondary'
-                        : isTemp
-                          ? 'text-text-tertiary/60 hover:text-text-tertiary'
-                          : 'text-text-tertiary hover:text-text-secondary'
-                    }`}
+                    onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
+                    className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary/70 hover:text-text-tertiary transition-colors"
                   >
-                    {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-                    <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
+                    {collapsedGroups.has(ARCHIVED_GROUP_KEY) ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                    <span className="truncate font-medium uppercase tracking-wider">{t('sidebar.archivedProjects')}</span>
                   </button>
-                  {/* 项目操作按钮 */}
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleNewChat(isTemp ? null : groupKey)
-                      }}
-                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                      title={t('sidebar.newChat')}
-                    >
-                      <MessageSquarePlus size={11} />
-                    </button>
-                    {!isTemp && (
-                      <button
-                        onClick={() => setEditingProjectId(groupKey)}
-                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                        title={t('sidebar.editProject')}
-                      >
-                        <Pencil size={10} />
-                      </button>
-                    )}
-                  </div>
                 </div>
-                {!collapsed && (
+                {!collapsedGroups.has(ARCHIVED_GROUP_KEY) && (
                   <div className="ml-2 pl-1">
-                    {groupSessions.map(renderSessionItem)}
+                    {archivedProjects.map((p) => (
+                      <div key={p.id} className="group flex items-center gap-2 px-3 py-[5px] text-text-tertiary">
+                        <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
+                        <button
+                          onClick={() => void handleRestoreProject(p.id)}
+                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary transition-colors"
+                          title={t('sidebar.restoreProject')}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-            )
-          })
+            )}
+          </>
         )}
       </div>
 
@@ -279,8 +329,7 @@ export function Sidebar(): React.JSX.Element {
           onClose={() => setShowCreateProject(false)}
           onCreated={async (projectId) => {
             // 刷新项目列表
-            const list = await window.api.project.list()
-            setProjects(list.map((p) => ({ id: p.id, name: p.name })))
+            await reloadProjects()
             // 自动在新项目下创建一个会话
             await handleNewChat(projectId)
           }}
