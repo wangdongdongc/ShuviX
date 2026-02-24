@@ -56,7 +56,7 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
       dockerEnabled: project.dockerEnabled === 1,
-      dockerImage: project.dockerImage || 'ubuntu:latest',
+      dockerImage: project.dockerImage || '',
       sandboxEnabled: project.sandboxEnabled === 1
     }
   }
@@ -65,7 +65,7 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
   return {
     workingDirectory: getTempWorkspace(ctx.sessionId),
     dockerEnabled: false,
-    dockerImage: 'ubuntu:latest',
+    dockerImage: '',
     sandboxEnabled: true
   }
 }

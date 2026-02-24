@@ -119,7 +119,7 @@ class DatabaseManager {
         path TEXT NOT NULL UNIQUE,
         systemPrompt TEXT NOT NULL DEFAULT '',
         dockerEnabled INTEGER NOT NULL DEFAULT 0,
-        dockerImage TEXT NOT NULL DEFAULT 'ubuntu:latest',
+        dockerImage TEXT NOT NULL DEFAULT '',
         sandboxEnabled INTEGER NOT NULL DEFAULT 1,
         settings TEXT NOT NULL DEFAULT '{}',
         createdAt INTEGER NOT NULL,

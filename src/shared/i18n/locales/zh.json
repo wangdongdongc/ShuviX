@@ -132,7 +132,7 @@
     "dockerHint": "开启后 Bash 命令将在 Docker 容器内隔离执行，项目路径会挂载到容器内",
     "dockerNotAvailable": "Docker 命令不可用，请确保 Docker Desktop 已安装并正在运行",
     "dockerImageNotFound": "本地未找到该镜像，请先执行 docker pull <镜像名> 拉取后重试",
-    "dockerNoBash": "该镜像不支持 bash 命令，请选择包含 bash 的镜像（如 ubuntu:latest）",
+    "dockerNoBash": "该镜像不支持 bash 命令，请选择包含 bash 的镜像（如 python:latest）",
     "sandbox": "沙箱模式",
     "sandboxHint": "开启后文件工具禁止访问工作区外的文件，Bash 命令需逐条确认后执行",
     "tools": "默认工具",

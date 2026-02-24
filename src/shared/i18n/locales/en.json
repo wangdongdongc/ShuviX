@@ -132,7 +132,7 @@
     "dockerHint": "When enabled, bash commands run in an isolated Docker container with the project path mounted.",
     "dockerNotAvailable": "Docker command is not available. Please ensure Docker Desktop is installed and running.",
     "dockerImageNotFound": "Image not found locally. Please run docker pull <image> first and try again.",
-    "dockerNoBash": "This image does not support bash. Please choose an image with bash (e.g. ubuntu:latest).",
+    "dockerNoBash": "This image does not support bash. Please choose an image with bash (e.g. python:latest).",
     "sandbox": "Sandbox Mode",
     "sandboxHint": "When enabled, file tools cannot access files outside the workspace, and bash commands require confirmation before execution",
     "tools": "Default Tools",

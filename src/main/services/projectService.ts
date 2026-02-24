@@ -20,7 +20,7 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   name: { labelKey: 'projectForm.name', desc: 'Project display name' },
   systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
   dockerEnabled: { labelKey: 'projectForm.docker', desc: 'Enable Docker isolation (boolean)' },
-  dockerImage: { labelKey: 'projectForm.dockerImage', desc: 'Docker image name, e.g. "ubuntu:latest"' },
+  dockerImage: { labelKey: 'projectForm.dockerImage', desc: 'Docker image name, e.g. "python:latest"' },
   sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' }
 }
@@ -73,7 +73,7 @@ export class ProjectService {
       path: params.path,
       systemPrompt: params.systemPrompt || '',
       dockerEnabled: params.dockerEnabled ? 1 : 0,
-      dockerImage: params.dockerImage || 'ubuntu:latest',
+      dockerImage: params.dockerImage || '',
       sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
       settings: JSON.stringify(settings),
       createdAt: now,

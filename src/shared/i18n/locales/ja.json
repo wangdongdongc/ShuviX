@@ -132,7 +132,7 @@
     "dockerHint": "有効にすると、Bashコマンドは隔離されたDockerコンテナ内で実行され、プロジェクトパスがマウントされます。",
     "dockerNotAvailable": "Dockerコマンドが利用できません。Docker Desktopがインストールされ、実行中であることを確認してください。",
     "dockerImageNotFound": "ローカルにイメージが見つかりません。先に docker pull <イメージ名> を実行してから再試行してください。",
-    "dockerNoBash": "このイメージはbashをサポートしていません。bashを含むイメージ（例: ubuntu:latest）を選択してください。",
+    "dockerNoBash": "このイメージはbashをサポートしていません。bashを含むイメージ（例: python:latest）を選択してください。",
     "sandbox": "サンドボックスモード",
     "sandboxHint": "有効にすると、ファイルツールはワークスペース外へのアクセスが制限され、Bashコマンドは実行前に承認が必要です。",
     "tools": "デフォルトツール",

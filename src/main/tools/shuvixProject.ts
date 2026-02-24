@@ -17,7 +17,7 @@ const ShuvixProjectParamsSchema = Type.Object({
   name: Type.Optional(Type.String({ description: 'Project display name' })),
   systemPrompt: Type.Optional(Type.String({ description: 'Project-level system prompt (applied together with global prompt)' })),
   dockerEnabled: Type.Optional(Type.Boolean({ description: 'Enable Docker isolation for bash commands' })),
-  dockerImage: Type.Optional(Type.String({ description: 'Docker image name (e.g. "ubuntu:latest", "node:20")' })),
+  dockerImage: Type.Optional(Type.String({ description: 'Docker image name (e.g. "python:latest", "node:20")' })),
   sandboxEnabled: Type.Optional(Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })),
   enabledTools: Type.Optional(Type.Array(Type.String(), { description: 'List of enabled tool names for new sessions in this project' }))
 })

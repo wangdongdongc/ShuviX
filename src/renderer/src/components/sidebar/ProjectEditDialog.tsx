@@ -20,7 +20,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [dockerEnabled, setDockerEnabled] = useState(false)
-  const [dockerImage, setDockerImage] = useState('ubuntu:latest')
+  const [dockerImage, setDockerImage] = useState('')
   const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -240,7 +240,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
                   value={dockerImage}
                   onChange={(e) => setDockerImage(e.target.value)}
                   className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
-                  placeholder="ubuntu:latest"
+                  placeholder="python:latest"
                 />
               </div>
             )}
