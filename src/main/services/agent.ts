@@ -7,6 +7,7 @@ import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
+import { getTempWorkspace } from '../utils/paths'
 import { messageDao } from '../dao/messageDao'
 import { createBashTool } from '../tools/bash'
 import { createReadTool } from '../tools/read'
@@ -237,11 +238,29 @@ export class AgentService {
     // 查询项目信息
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
 
-    // 合并 system prompt：全局 + 项目级
+    // 合并 system prompt：全局 + 项目级 + 参考目录
     const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
     let systemPrompt = globalPrompt
     if (project?.systemPrompt) {
       systemPrompt = `${globalPrompt}\n\n${project.systemPrompt}`
+    }
+    // 注入工作目录 + 参考目录信息
+    if (project) {
+      const workDir = session.workingDirectory || project.path
+      systemPrompt += `\n\nProject working directory: ${workDir}`
+
+      let referenceDirs: Array<{ path: string; note?: string }> = []
+      try {
+        const settings = JSON.parse(project.settings || '{}')
+        if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
+      } catch { /* 忽略 */ }
+      if (referenceDirs.length > 0) {
+        const lines = referenceDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
+        systemPrompt += `\n\nReference directories (read-only, you can read files from these directories but CANNOT write or edit):\n${lines.join('\n')}`
+      }
+    } else {
+      // 临时对话：注入临时工作目录
+      systemPrompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}`
     }
 
     // 查询提供商信息，判断是否内置

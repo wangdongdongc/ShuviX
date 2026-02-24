@@ -136,7 +136,11 @@
     "sandbox": "沙箱模式",
     "sandboxHint": "开启后文件工具禁止访问工作区外的文件，Bash 命令需逐条确认后执行",
     "tools": "默认工具",
-    "toolsHint": "新建会话时默认启用的工具，会话中可单独调整并覆盖此配置"
+    "toolsHint": "新建会话时默认启用的工具，会话中可单独调整并覆盖此配置",
+    "referenceDirs": "参考目录",
+    "referenceDirsHint": "AI 可读取这些目录中的文件作为参考，沙箱模式下仅允许读取",
+    "addRefDir": "添加目录",
+    "refDirNotePlaceholder": "注释（帮助 AI 理解目录用途）"
   },
 
   "settings": {

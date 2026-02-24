@@ -136,7 +136,11 @@
     "sandbox": "Sandbox Mode",
     "sandboxHint": "When enabled, file tools cannot access files outside the workspace, and bash commands require confirmation before execution",
     "tools": "Default Tools",
-    "toolsHint": "Tools enabled by default when creating a new session. Can be adjusted per session."
+    "toolsHint": "Tools enabled by default when creating a new session. Can be adjusted per session.",
+    "referenceDirs": "Reference Directories",
+    "referenceDirsHint": "AI can read files from these directories for reference. Read-only in sandbox mode.",
+    "addRefDir": "Add Directory",
+    "refDirNotePlaceholder": "Note (helps AI understand the directory purpose)"
   },
 
   "settings": {

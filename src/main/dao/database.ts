@@ -34,16 +34,6 @@ class DatabaseManager {
 
   /** 增量迁移 */
   private migrate(): void {
-    // 为已有 projects 表添加 sandboxEnabled 列（新建表已包含该列）
-    const cols = this.db.pragma('table_info(projects)') as { name: string }[]
-    if (!cols.find((c) => c.name === 'sandboxEnabled')) {
-      this.db.exec("ALTER TABLE projects ADD COLUMN sandboxEnabled INTEGER NOT NULL DEFAULT 1")
-    }
-    // 为已有 mcp_servers 表添加 cachedTools 列（持久化最近一次发现的工具列表）
-    const mcpCols = this.db.pragma('table_info(mcp_servers)') as { name: string }[]
-    if (!mcpCols.find((c) => c.name === 'cachedTools')) {
-      this.db.exec("ALTER TABLE mcp_servers ADD COLUMN cachedTools TEXT NOT NULL DEFAULT '[]'")
-    }
   }
 
   /** 初始化数据库表 */
@@ -116,7 +106,7 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        path TEXT NOT NULL UNIQUE,
+        path TEXT NOT NULL,
         systemPrompt TEXT NOT NULL DEFAULT '',
         dockerEnabled INTEGER NOT NULL DEFAULT 0,
         dockerImage TEXT NOT NULL DEFAULT '',

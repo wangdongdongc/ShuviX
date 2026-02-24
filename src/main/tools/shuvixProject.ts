@@ -19,7 +19,14 @@ const ShuvixProjectParamsSchema = Type.Object({
   dockerEnabled: Type.Optional(Type.Boolean({ description: 'Enable Docker isolation for bash commands' })),
   dockerImage: Type.Optional(Type.String({ description: 'Docker image name (e.g. "python:latest", "node:20")' })),
   sandboxEnabled: Type.Optional(Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })),
-  enabledTools: Type.Optional(Type.Array(Type.String(), { description: 'List of enabled tool names for new sessions in this project' }))
+  enabledTools: Type.Optional(Type.Array(Type.String(), { description: 'List of enabled tool names for new sessions in this project' })),
+  referenceDirs: Type.Optional(Type.Array(
+    Type.Object({
+      path: Type.String({ description: 'Absolute path to reference directory' }),
+      note: Type.Optional(Type.String({ description: 'Note to help AI understand the directory purpose' }))
+    }),
+    { description: 'Reference directories for AI to read (read-only in sandbox mode)' }
+  ))
 })
 
 /** 创建 shuvix-project 工具实例 */
@@ -40,6 +47,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
         dockerImage?: string
         sandboxEnabled?: boolean
         enabledTools?: string[]
+        referenceDirs?: Array<{ path: string; note?: string }>
       }
     ) => {
       // 查找当前会话所属项目
@@ -61,9 +69,11 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       if (params.action === 'get') {
         // 读取项目配置（无需审批）
         let enabledTools: string[] = []
+        let referenceDirs: Array<{ path: string; note?: string }> = []
         try {
           const settings = JSON.parse(project.settings || '{}')
           enabledTools = settings.enabledTools || []
+          referenceDirs = settings.referenceDirs || []
         } catch { /* 忽略 */ }
 
         const info = {
@@ -74,7 +84,8 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
           dockerEnabled: project.dockerEnabled === 1,
           dockerImage: project.dockerImage,
           sandboxEnabled: project.sandboxEnabled === 1,
-          enabledTools
+          enabledTools,
+          referenceDirs
         }
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }],
@@ -90,6 +101,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       if (params.dockerImage !== undefined) updates.dockerImage = params.dockerImage
       if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
       if (params.enabledTools !== undefined) updates.enabledTools = params.enabledTools
+      if (params.referenceDirs !== undefined) updates.referenceDirs = params.referenceDirs
 
       if (Object.keys(updates).length === 0) {
         return {

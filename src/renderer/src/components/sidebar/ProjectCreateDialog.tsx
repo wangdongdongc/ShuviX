@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
+import { X, FolderOpen, Container, ShieldCheck, Wrench, FolderSearch, Plus, Trash2 } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { DEFAULT_TOOL_NAMES } from '../../../../main/types/tools'
+import type { ReferenceDir } from '../../../../main/types/project'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -28,6 +29,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [dockerError, setDockerError] = useState<string | null>(null)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
+  const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
 
   // 加载工具列表 + 检查 Docker 可用性
   useEffect(() => {
@@ -85,7 +87,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         dockerEnabled,
         dockerImage,
         sandboxEnabled,
-        enabledTools
+        enabledTools,
+        referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined
       })
       onCreated?.(project.id)
       onClose()
@@ -122,27 +125,69 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
           </div>
 
           {/* 项目路径 */}
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-              <FolderOpen size={12} className="inline mr-1 -mt-0.5" />
+          <div className="border border-border-secondary rounded-lg p-3">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
+              <FolderOpen size={12} />
               {t('projectForm.path')}
             </label>
-            <div className="flex gap-2">
-              <input
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                className="flex-1 bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
-                placeholder={t('projectForm.pathPlaceholder')}
-              />
-              <button
-                onClick={handleSelectFolder}
-                className="px-3 py-2 bg-bg-secondary border border-border-primary rounded-lg text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors whitespace-nowrap"
-              >
-                {t('projectForm.selectFolder')}
-              </button>
-            </div>
-            <p className="text-[10px] text-text-tertiary mt-1">
+            {path && (
+              <div className="text-[11px] font-mono text-text-primary truncate mb-2" title={path}>{path}</div>
+            )}
+            <button
+              onClick={handleSelectFolder}
+              className="flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 transition-colors"
+            >
+              <Plus size={12} />
+              {t('projectForm.selectFolder')}
+            </button>
+            <p className="text-[10px] text-text-tertiary mt-2">
               {t('projectForm.pathHint')}
+            </p>
+          </div>
+
+          {/* 参考目录 */}
+          <div className="border border-border-secondary rounded-lg p-3">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
+              <FolderSearch size={12} />
+              {t('projectForm.referenceDirs')}
+            </label>
+            {referenceDirs.map((dir, idx) => (
+              <div key={idx} className="flex items-start gap-1.5 mb-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-mono text-text-primary truncate" title={dir.path}>{dir.path}</div>
+                  <input
+                    value={dir.note || ''}
+                    onChange={(e) => {
+                      const next = [...referenceDirs]
+                      next[idx] = { ...dir, note: e.target.value }
+                      setReferenceDirs(next)
+                    }}
+                    className="w-full bg-bg-secondary border border-border-primary rounded px-2 py-1 text-[10px] text-text-secondary outline-none focus:border-accent transition-colors mt-1"
+                    placeholder={t('projectForm.refDirNotePlaceholder')}
+                  />
+                </div>
+                <button
+                  onClick={() => setReferenceDirs(referenceDirs.filter((_, i) => i !== idx))}
+                  className="p-1 rounded hover:bg-bg-hover text-text-tertiary hover:text-red-400 transition-colors flex-shrink-0 mt-0.5"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={async () => {
+                const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
+                if (result && !referenceDirs.some(d => d.path === result)) {
+                  setReferenceDirs([...referenceDirs, { path: result }])
+                }
+              }}
+              className="flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 transition-colors"
+            >
+              <Plus size={12} />
+              {t('projectForm.addRefDir')}
+            </button>
+            <p className="text-[10px] text-text-tertiary mt-2">
+              {t('projectForm.referenceDirsHint')}
             </p>
           </div>
 

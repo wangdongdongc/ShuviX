@@ -1,3 +1,11 @@
+/** 参考目录条目 */
+export interface ReferenceDir {
+  /** 目录绝对路径 */
+  path: string
+  /** 用户注释（帮助 AI 理解目录用途） */
+  note?: string
+}
+
 /** 项目数据结构 */
 export interface Project {
   id: string
@@ -28,6 +36,7 @@ export interface ProjectCreateParams {
   dockerImage?: string
   sandboxEnabled?: boolean
   enabledTools?: string[]
+  referenceDirs?: ReferenceDir[]
 }
 
 /** IPC: 更新项目参数 */
@@ -40,6 +49,7 @@ export interface ProjectUpdateParams {
   dockerImage?: string
   sandboxEnabled?: boolean
   enabledTools?: string[]
+  referenceDirs?: ReferenceDir[]
 }
 
 /** IPC: 删除项目参数 */

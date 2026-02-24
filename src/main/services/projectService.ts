@@ -1,7 +1,8 @@
 import { v7 as uuidv7 } from 'uuid'
 import { projectDao } from '../dao/projectDao'
 import type { Project } from '../types'
-import { basename } from 'path'
+import { basename, resolve } from 'path'
+import { expandPath } from '../tools/utils/pathUtils'
 
 // ---------- 项目字段元数据注册表 ----------
 
@@ -22,7 +23,8 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   dockerEnabled: { labelKey: 'projectForm.docker', desc: 'Enable Docker isolation (boolean)' },
   dockerImage: { labelKey: 'projectForm.dockerImage', desc: 'Docker image name, e.g. "python:latest"' },
   sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
-  enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' }
+  enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
+  referenceDirs: { labelKey: 'projectForm.referenceDirs', desc: 'Reference directories for AI to read (array of {path, note?}), read-only in sandbox mode' }
 }
 
 /** 所有已知项目字段描述列表（供 AI prompt / 参数 description 使用） */
@@ -62,15 +64,17 @@ export class ProjectService {
     dockerImage?: string
     sandboxEnabled?: boolean
     enabledTools?: string[]
+    referenceDirs?: Array<{ path: string; note?: string }>
   }): Project {
     const now = Date.now()
     const id = uuidv7()
     const settings: Record<string, any> = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
+    if (params.referenceDirs) settings.referenceDirs = params.referenceDirs.map(d => ({ ...d, path: resolve(expandPath(d.path)) }))
     const project: Project = {
       id,
       name: params.name || basename(params.path) || params.path,
-      path: params.path,
+      path: resolve(expandPath(params.path)),
       systemPrompt: params.systemPrompt || '',
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || '',
@@ -92,18 +96,20 @@ export class ProjectService {
     dockerImage?: string
     sandboxEnabled?: boolean
     enabledTools?: string[]
+    referenceDirs?: Array<{ path: string; note?: string }>
   }): void {
     // 处理 settings JSON 字段（合并而非覆盖）
     let settingsUpdate: string | undefined
-    if (params.enabledTools !== undefined) {
+    if (params.enabledTools !== undefined || params.referenceDirs !== undefined) {
       const existing = projectDao.findById(id)
-      const current = (() => { try { return JSON.parse(existing?.settings || '{}') } catch { return {} } })()
-      current.enabledTools = params.enabledTools
+      const current = (() => { try { const p = JSON.parse(existing?.settings || '{}'); return (typeof p === 'object' && p !== null) ? p : {} } catch { return {} } })()
+      if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
+      if (params.referenceDirs !== undefined) current.referenceDirs = params.referenceDirs.map(d => ({ ...d, path: resolve(expandPath(d.path)) }))
       settingsUpdate = JSON.stringify(current)
     }
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
-      ...(params.path !== undefined ? { path: params.path } : {}),
+      ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.dockerEnabled !== undefined ? { dockerEnabled: params.dockerEnabled ? 1 : 0 } : {}),
       ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),

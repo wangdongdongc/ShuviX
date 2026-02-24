@@ -7,6 +7,7 @@ import { resolve, sep } from 'path'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
 import { getTempWorkspace } from '../utils/paths'
+import type { ReferenceDir } from '../types'
 
 /** 项目配置（工具执行时动态查询） */
 export interface ProjectConfig {
@@ -18,6 +19,8 @@ export interface ProjectConfig {
   dockerImage: string
   /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
   sandboxEnabled: boolean
+  /** 参考目录列表（沙箱模式下仅允许读取） */
+  referenceDirs: ReferenceDir[]
 }
 
 /** 工具上下文 — 所有工具共享的运行时信息 */
@@ -46,6 +49,15 @@ export function isPathWithinWorkspace(absolutePath: string, workingDirectory: st
   return resolved === base || resolved.startsWith(base + sep)
 }
 
+/** 检查路径是否在任一参考目录内（沙箱模式下仅允许读取） */
+export function isPathWithinReferenceDirs(absolutePath: string, referenceDirs: ReferenceDir[]): boolean {
+  const resolved = resolve(absolutePath)
+  return referenceDirs.some(dir => {
+    const base = resolve(dir.path)
+    return resolved === base || resolved.startsWith(base + sep)
+  })
+}
+
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
 export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
   const session = sessionService.getById(ctx.sessionId)
@@ -53,11 +65,17 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
 
   if (project) {
     // 有项目 → 使用项目配置
+    let referenceDirs: ReferenceDir[] = []
+    try {
+      const settings = JSON.parse(project.settings || '{}')
+      if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
+    } catch { /* 忽略 */ }
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
       dockerEnabled: project.dockerEnabled === 1,
       dockerImage: project.dockerImage || '',
-      sandboxEnabled: project.sandboxEnabled === 1
+      sandboxEnabled: project.sandboxEnabled === 1,
+      referenceDirs
     }
   }
 
@@ -66,6 +84,7 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
     workingDirectory: getTempWorkspace(ctx.sessionId),
     dockerEnabled: false,
     dockerImage: '',
-    sandboxEnabled: true
+    sandboxEnabled: true,
+    referenceDirs: []
   }
 }

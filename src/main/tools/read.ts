@@ -13,7 +13,7 @@ import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath } from './utils/pathUtils'
-import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
+import { resolveProjectConfig, isPathWithinWorkspace, isPathWithinReferenceDirs, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
@@ -100,8 +100,10 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       const absolutePath = resolveReadPath(params.path, config.workingDirectory)
       log.info(absolutePath)
 
-      // 沙箱模式：路径越界检查
-      if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
+      // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
+      if (config.sandboxEnabled
+        && !isPathWithinWorkspace(absolutePath, config.workingDirectory)
+        && !isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) {
         throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
       }
 
