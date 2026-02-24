@@ -9,6 +9,11 @@ import { spawn, spawnSync } from 'child_process'
 import { createLogger } from '../logger'
 const log = createLogger('Docker')
 
+/** 补充 macOS 打包应用中缺失的常见路径（Finder 启动时 PATH 极简） */
+const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
+const mergedPATH = [...new Set([...(process.env.PATH?.split(':') ?? []), ...EXTRA_PATHS])].join(':')
+const spawnEnv: NodeJS.ProcessEnv = { ...process.env, PATH: mergedPATH }
+
 /** 容器内固定工作目录，避免与容器自身路径冲突 */
 export const CONTAINER_WORKSPACE = '/isolated-docker-workspace'
 
@@ -34,7 +39,8 @@ export class DockerManager {
       const result = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
         encoding: 'utf-8',
         timeout: 5000,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
       return result.status === 0 && !!result.stdout.trim()
     } catch {
@@ -62,7 +68,8 @@ export class DockerManager {
       const inspectResult = spawnSync('docker', ['image', 'inspect', image], {
         encoding: 'utf-8',
         timeout: 5000,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
       if (inspectResult.status !== 0) {
         return { ok: false, error: 'dockerImageNotFound' }
@@ -76,7 +83,8 @@ export class DockerManager {
       const bashResult = spawnSync('docker', ['run', '--rm', image, 'bash', '-c', 'echo ok'], {
         encoding: 'utf-8',
         timeout: 15000,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
       if (bashResult.status !== 0 || !bashResult.stdout?.includes('ok')) {
         return { ok: false, error: 'dockerNoBash' }
@@ -134,7 +142,8 @@ export class DockerManager {
         containerId,
         'bash', '-c', command
       ], {
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
 
       let stdout = ''
@@ -223,7 +232,8 @@ export class DockerManager {
       try {
         spawnSync('docker', ['rm', '-f', info.containerId], {
           timeout: 10000,
-          stdio: 'ignore'
+          stdio: 'ignore',
+          env: spawnEnv
         })
         log.info(`清理容器 ${info.containerId.slice(0, 12)}`)
       } catch {
@@ -241,7 +251,8 @@ export class DockerManager {
     try {
       spawnSync('docker', ['rm', '-f', info.containerId], {
         timeout: 10000,
-        stdio: 'ignore'
+        stdio: 'ignore',
+        env: spawnEnv
       })
     } catch (e) {
       log.error(`销毁容器失败: ${e}`)
@@ -259,7 +270,7 @@ export class DockerManager {
   ): Promise<string> {
     // 先尝试移除同名旧容器
     try {
-      spawnSync('docker', ['rm', '-f', name], { timeout: 5000, stdio: 'ignore' })
+      spawnSync('docker', ['rm', '-f', name], { timeout: 5000, stdio: 'ignore', env: spawnEnv })
     } catch {
       // 忽略
     }
@@ -273,7 +284,8 @@ export class DockerManager {
         image,
         'tail', '-f', '/dev/null'
       ], {
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
 
       let stdout = ''
@@ -304,7 +316,8 @@ export class DockerManager {
       const result = spawnSync('docker', ['inspect', '-f', '{{.State.Running}}', containerId], {
         encoding: 'utf-8',
         timeout: 5000,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
       })
       return result.status === 0 && result.stdout.trim() === 'true'
     } catch {

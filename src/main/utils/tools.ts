@@ -8,14 +8,16 @@ import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
 import { getSettingKeyDescriptions } from '../services/settingsService'
 import { getProjectFieldDescriptions } from '../services/projectService'
+import { DEFAULT_TOOL_NAMES } from '../types/tools'
 
 /** 内置工具名称（固定顺序） */
 export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'shuvix-project', 'shuvix-setting'] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 
-/** 获取所有可用工具名（内置 + MCP 动态 + 已安装 Skill） */
+
+/** 获取所有可用工具名（内置 + MCP 动态 + 已启用 Skill） */
 export function getAllToolNames(): string[] {
-  const skillNames = skillService.findAll().map((s) => `skill:${s.name}`)
+  const skillNames = skillService.findEnabled().map((s) => `skill:${s.name}`)
   return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames(), ...skillNames]
 }
 
@@ -75,6 +77,6 @@ export function resolveEnabledTools(
     const settings = JSON.parse(projectSettings || '{}')
     if (Array.isArray(settings.enabledTools)) return settings.enabledTools
   } catch { /* 忽略 */ }
-  // 默认全部启用（内置 + MCP）
-  return getAllToolNames()
+  // 默认仅启用核心内置工具（不含 shuvix-project、shuvix-setting、MCP、skills）
+  return DEFAULT_TOOL_NAMES as unknown as string[]
 }

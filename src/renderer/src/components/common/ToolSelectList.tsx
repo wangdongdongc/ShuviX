@@ -9,6 +9,8 @@ export interface ToolItem {
   group?: string
   /** MCP 工具所属 server 的连接状态 */
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
+  /** Skill 的启用/禁用状态（仅 skill 类型工具） */
+  isEnabled?: boolean
 }
 
 interface ToolSelectListProps {

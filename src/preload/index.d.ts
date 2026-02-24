@@ -222,7 +222,7 @@ interface ShuviXAPI {
     validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
   }
   tools: {
-    list: () => Promise<Array<{ name: string; label: string; group?: string; serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' }>>
+    list: () => Promise<Array<{ name: string; label: string; group?: string; serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'; isEnabled?: boolean }>>
   }
   mcp: {
     list: () => Promise<McpServerInfo[]>

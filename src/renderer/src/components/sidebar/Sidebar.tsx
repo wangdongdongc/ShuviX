@@ -22,30 +22,34 @@ export function Sidebar(): React.JSX.Element {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const initialCollapseApplied = useRef(false)
-  // 项目名称/路径缓存
-  const [projectNames, setProjectNames] = useState<Record<string, string>>({})
 
-  // 异步加载项目名称
-  useEffect(() => {
-    window.api.project.list().then((projects) => {
-      const nameMap: Record<string, string> = {}
-      for (const p of projects) {
-        nameMap[p.id] = p.name
-      }
-      setProjectNames(nameMap)
-    })
-  }, [sessions, editingProjectId])
+  // ---------- 数据源：项目列表 + 会话列表 ----------
 
-  // 首次加载时，将所有非临时项目组默认折叠
+  /** 所有项目（独立查询，不依赖 sessions） */
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([])
+
+  // 加载项目列表（创建/编辑后也会刷新）
   useEffect(() => {
-    if (initialCollapseApplied.current || sessions.length === 0) return
+    window.api.project.list().then((list) =>
+      setProjects(list.map((p) => ({ id: p.id, name: p.name })))
+    )
+  }, [editingProjectId])
+
+  /** 项目 id → 名称 快查表 */
+  const projectNames = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const p of projects) map[p.id] = p.name
+    return map
+  }, [projects])
+
+  // 首次加载项目后，将所有项目组默认折叠
+  useEffect(() => {
+    if (initialCollapseApplied.current || projects.length === 0) return
     initialCollapseApplied.current = true
-    const projectKeys = new Set<string>()
-    for (const s of sessions) {
-      if (s.projectId) projectKeys.add(s.projectId)
-    }
-    if (projectKeys.size > 0) setCollapsedGroups(projectKeys)
-  }, [sessions])
+    setCollapsedGroups(new Set(projects.map((p) => p.id)))
+  }, [projects])
+
+  // ---------- 分组逻辑：项目为骨架，会话填入 ----------
 
   // 当前活动会话所属的项目组 key
   const activeGroupKey = useMemo(() => {
@@ -54,29 +58,36 @@ export function Sidebar(): React.JSX.Element {
     return s?.projectId || TEMP_GROUP_KEY
   }, [activeSessionId, sessions])
 
-  // 按 projectId 分组
-  const grouped = useMemo(() => {
-    const map = new Map<string, Session[]>()
-    for (const s of sessions) {
-      const key = s.projectId || TEMP_GROUP_KEY
-      const arr = map.get(key) || []
-      arr.push(s)
-      map.set(key, arr)
-    }
-    return map
-  }, [sessions])
-
-  // 对分组排序：项目按名称升序，临时对话始终放最后
+  // 按项目分组：先为每个项目建空组，再将会话分配进去，最后追加临时对话组
   const sortedGroups = useMemo(() => {
-    const entries = Array.from(grouped.entries())
-    return entries.sort(([keyA], [keyB]) => {
-      if (keyA === TEMP_GROUP_KEY) return 1
-      if (keyB === TEMP_GROUP_KEY) return -1
-      const nameA = (projectNames[keyA] || '').toLowerCase()
-      const nameB = (projectNames[keyB] || '').toLowerCase()
+    // 以项目列表为骨架
+    const map = new Map<string, Session[]>()
+    for (const p of projects) map.set(p.id, [])
+
+    // 将会话分配到对应项目，无项目的归入临时组
+    let tempSessions: Session[] = []
+    for (const s of sessions) {
+      if (s.projectId && map.has(s.projectId)) {
+        map.get(s.projectId)!.push(s)
+      } else {
+        tempSessions.push(s)
+      }
+    }
+
+    // 项目按名称排序
+    const sorted = Array.from(map.entries()).sort(([a], [b]) => {
+      const nameA = (projectNames[a] || '').toLowerCase()
+      const nameB = (projectNames[b] || '').toLowerCase()
       return nameA.localeCompare(nameB, 'zh-CN')
     })
-  }, [grouped, projectNames])
+
+    // 临时对话始终放最后（有会话时才显示）
+    if (tempSessions.length > 0) {
+      sorted.push([TEMP_GROUP_KEY, tempSessions])
+    }
+
+    return sorted
+  }, [projects, sessions, projectNames])
 
   /** 在指定项目下创建新会话 */
   const handleNewChat = async (projectId?: string | null): Promise<void> => {
@@ -171,7 +182,7 @@ export function Sidebar(): React.JSX.Element {
 
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto px-2 py-1 auto-hide-scrollbar">
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && Object.keys(projectNames).length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('sidebar.emptyHint')}
           </div>
@@ -267,11 +278,9 @@ export function Sidebar(): React.JSX.Element {
         <ProjectCreateDialog
           onClose={() => setShowCreateProject(false)}
           onCreated={async (projectId) => {
-            // 刷新项目名称缓存
-            const projects = await window.api.project.list()
-            const map: Record<string, string> = {}
-            for (const p of projects) { map[p.id] = p.name }
-            setProjectNames(map)
+            // 刷新项目列表
+            const list = await window.api.project.list()
+            setProjects(list.map((p) => ({ id: p.id, name: p.name })))
             // 自动在新项目下创建一个会话
             await handleNewChat(projectId)
           }}

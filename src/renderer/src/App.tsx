@@ -43,12 +43,18 @@ function App(): React.JSX.Element {
   /** 应用启动时加载数据（主窗口和设置窗口共用） */
   useEffect(() => {
     const init = async (): Promise<void> => {
+      const t0 = performance.now()
+      const lap = (label: string): void => {
+        console.log(`[Perf] ${label} — ${(performance.now() - t0).toFixed(0)}ms`)
+      }
+
       // 加载通用设置 + 配置元数据
       const [settings, settingMeta, projectFieldMeta] = await Promise.all([
         window.api.settings.getAll(),
         window.api.settings.getKnownKeys(),
         window.api.project.getKnownFields()
       ])
+      lap('settings + meta (parallel)')
       useSettingsStore.getState().loadSettings(settings)
       useSettingsStore.getState().loadConfigMeta(settingMeta, projectFieldMeta)
 
@@ -60,19 +66,24 @@ function App(): React.JSX.Element {
 
       // 加载提供商列表和可用模型
       const allProviders = await window.api.provider.listAll()
+      lap('provider.listAll')
       useSettingsStore.getState().setProviders(allProviders)
       const availableModels = await window.api.provider.listAvailableModels()
+      lap('provider.listAvailableModels')
       useSettingsStore.getState().setAvailableModels(availableModels)
 
       // 仅主窗口加载会话列表
       if (!isSettingsWindow) {
         const sessions = await window.api.session.list()
+        lap('session.list')
         useChatStore.getState().setSessions(sessions)
       }
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口
+      lap('renderer init done, waiting for paint')
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          lap('windowReady (after paint)')
           window.api.app.windowReady()
         })
       })

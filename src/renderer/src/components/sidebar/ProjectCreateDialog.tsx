@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
+import { DEFAULT_TOOL_NAMES } from '../../../../main/types/tools'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -36,7 +37,8 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
     ]).then(([dockerResult, tools]) => {
       setDockerAvailable(dockerResult.ok)
       setAllTools(tools)
-      setEnabledTools(tools.map((t) => t.name))
+      // 默认仅启用核心内置工具（不含 shuvix-project、shuvix-setting、MCP、skills）
+      setEnabledTools([...DEFAULT_TOOL_NAMES])
     })
   }, [])
 

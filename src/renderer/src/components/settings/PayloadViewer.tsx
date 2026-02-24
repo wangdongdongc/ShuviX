@@ -274,14 +274,16 @@ function ToolItem({ tool }: { tool: any }): React.JSX.Element {
       labelColor="text-orange-400"
       summary={truncate(desc, 60)}
     >
-      {fn.parameters && (
-        <pre className="text-[10px] text-text-secondary whitespace-pre-wrap break-words bg-bg-tertiary rounded-md p-2">
-          {JSON.stringify(fn.parameters, null, 2)}
-        </pre>
-      )}
-      {!fn.parameters && desc && (
-        <div className="text-[11px] text-text-secondary">{desc}</div>
-      )}
+      <div className="space-y-2">
+        {desc && (
+          <div className="text-[11px] text-text-secondary leading-relaxed">{desc}</div>
+        )}
+        {fn.parameters && (
+          <pre className="text-[10px] text-text-secondary whitespace-pre-wrap break-words bg-bg-tertiary rounded-md p-2">
+            {JSON.stringify(fn.parameters, null, 2)}
+          </pre>
+        )}
+      </div>
     </CollapsibleItem>
   )
 }

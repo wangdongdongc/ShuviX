@@ -10,6 +10,7 @@ import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
 import { createLogger } from './logger'
+import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
 
 let mainWindow: BrowserWindow | null = null
@@ -196,6 +197,7 @@ ipcMain.handle('app:version', () => {
 ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
   if (mainWindow && sender === mainWindow.webContents) {
+    mark('mainWindow visible (window-ready)')
     mainWindow.show()
   } else if (settingsWindow && !settingsWindow.isDestroyed() && sender === settingsWindow.webContents) {
     settingsWindow.show()
@@ -243,6 +245,7 @@ ipcMain.handle('app:open-image', async (_event, dataUrl: string) => {
 })
 
 app.whenReady().then(() => {
+  mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
 
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
@@ -253,29 +256,31 @@ app.whenReady().then(() => {
   }
 
   // 初始化 i18n（从 DB 读取用户语言偏好，无则跟随系统）
-  const savedLang = settingsDao.findByKey('general.language')
-  initI18n(savedLang || undefined)
+  measure('initI18n', () => {
+    const savedLang = settingsDao.findByKey('general.language')
+    initI18n(savedLang || undefined)
+  })
 
-  setupApplicationMenu()
+  measure('setupMenu', () => setupApplicationMenu())
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
   // 注册所有 IPC 处理器
-  registerIpcHandlers()
+  measure('registerIPC', () => registerIpcHandlers())
 
   // 启动时异步拉取 LiteLLM 模型数据，完成后自动补充模型能力信息
-  litellmService.init().then(() => {
+  measureAsync('litellmService.init', () => litellmService.init()).then(() => {
     providerService.fillAllMissingCapabilities()
   }).catch(() => {})
 
   // 启动所有已启用的 MCP Server
-  mcpService.connectAll().catch((err) => {
+  measureAsync('mcpService.connectAll', () => mcpService.connectAll()).catch((err) => {
     log.error(`connectAll failed: ${err}`)
   })
 
-  createWindow()
+  measure('createWindow', () => createWindow())
 
   app.on('activate', () => {
     // macOS dock 点击时重新创建窗口

@@ -30,6 +30,7 @@
     "diff": "^8.0.3",
     "electron-log": "^5.4.3",
     "i18next": "^25.8.13",
+    "js-tiktoken": "^1.0.21",
     "lucide-react": "^0.564.0",
     "markitdown-ts": "^0.0.10",
     "mermaid": "^11.12.3",

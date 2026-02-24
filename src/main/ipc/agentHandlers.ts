@@ -81,8 +81,8 @@ export function registerAgentHandlers(): void {
       group: info.group,
       serverStatus: info.serverStatus
     }))
-    /** 已安装 Skill（使用 skill: 前缀，__skills__ 分组） */
-    const skillItems = skillService.findAll().map((s) => ({
+    /** 已启用 Skill（使用 skill: 前缀，__skills__ 分组；disabled 的不展示） */
+    const skillItems = skillService.findEnabled().map((s) => ({
       name: `skill:${s.name}`,
       label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
       group: '__skills__'

@@ -147,7 +147,7 @@ export const MessageBubble = memo(function MessageBubble({
                 )
               } catch { return null }
             })()}
-            <div className="text-sm text-text-primary whitespace-pre-wrap leading-relaxed">
+            <div className="text-sm text-text-primary whitespace-pre-wrap break-all leading-relaxed">
               {content}
             </div>
           </div>

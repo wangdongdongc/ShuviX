@@ -24,6 +24,7 @@ import { t } from '../i18n'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
 import { mcpService } from './mcpService'
+import { createTransformContext } from './contextManager'
 import { createLogger } from '../logger'
 const log = createLogger('Agent')
 export { ALL_TOOL_NAMES } from '../utils/tools'
@@ -336,6 +337,7 @@ export class AgentService {
         messages: [],
         tools
       },
+      transformContext: createTransformContext(resolvedModel),
       streamFn: (streamModel, context, options) => {
         // 动态查找当前模型对应提供商的 apiKey（支持运行时切换提供商）
         const currentProvider = providerDao.findById(String(streamModel.provider))

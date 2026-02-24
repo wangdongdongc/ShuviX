@@ -1,16 +1,16 @@
-<img src="https://gw.alipayobjects.com/zos/antfincdn/R8sN%24GNdh6/language.svg" width="18"> English | [简体中文](./README.zh-CN.md)
+<img src="https://gw.alipayobjects.com/zos/antfincdn/R8sN%24GNdh6/language.svg" width="18"> 简体中文 | [English](./README.md)
 
 <div align="center">
 
 # ShuviX
 
-🤖 Your desktop AI assistant that truly integrates AI into your daily workflow.
+🤖 你的桌面 AI 助手，让 AI 真正融入你的日常工作。
 
 <img src="./resources/icon.png" width="180" alt="ShuviX Logo">
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)](https://github.com/wangdongdongc/ShuviX/releases)
 [![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
-[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](#-build)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](#-构建)
 [![Electron](https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 
 <p>
@@ -30,27 +30,27 @@
 
 </div>
 
-**ShuviX** is a desktop AI assistant. Connect to mainstream LLMs and operate local files and terminal directly through an agentic toolchain — making AI your true partner.
+**ShuviX** 是一款桌面端 AI 助手。连接主流大模型，通过智能体工具链直接操作本地文件和终端，让 AI 成为你的真正搭档。
 
-## ✨ Features
+## ✨ 特性
 
-- 🔄 **Multi-model switching** — Connect to mainstream LLMs and switch between them freely
-- 🛠️ **Agentic toolchain** — Built-in tools for file I/O, terminal execution, code search, and more
-- 📁 **Project sandbox** — Restrict AI access to project directories only; shell commands require user approval before execution
-- 🐳 **Docker isolation** — Optionally isolate command execution in Docker containers to protect the host environment
-- 💾 **Local-first** — All data stored in local SQLite, your privacy is fully protected
+- 🔄 **多模型自由切换** — 支持接入主流大语言模型，随时切换
+- 🛠️ **智能体工具链** — 内置文件读写、终端执行、代码搜索等核心工具
+- 📁 **项目沙箱** — 可限制 AI 仅访问项目目录内的文件，Shell 命令需经用户审批后执行
+- 🐳 **Docker 隔离** — 可选将命令执行隔离到 Docker 容器中，保护主机环境安全
+- 💾 **本地优先** — 所有数据存储在本地 SQLite，隐私无忧
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
 ```bash
-# Install dependencies
+# 安装依赖
 npm install
 
-# Start dev server
+# 启动开发服务器
 npm run dev
 ```
 
-## 📦 Build
+## 📦 构建
 
 ```bash
 npm run build:mac    # macOS
@@ -60,4 +60,4 @@ npm run build:linux  # Linux
 
 ## 📄 License
 
-This project is open source under the **MIT** license.
+本项目基于 **MIT** 许可证开源。

@@ -42,7 +42,7 @@ function defaultSpawn(
     }
 
     const { shell, args } = getShellConfig()
-    log.info(`(${cwd}): ${shell} ${args.join(' ')} ${command}`)
+    log.info(`(${cwd}): ${shell} ${args.join(' ')} ${command.slice(0, 50)}`)
 
     const child = spawn(shell, [...args, command], {
       cwd,

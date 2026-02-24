@@ -3,6 +3,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { v7 as uuidv7 } from 'uuid'
+import { mark, measure } from '../perf'
 
 /**
  * 数据库连接管理
@@ -12,6 +13,7 @@ class DatabaseManager {
   private db: Database.Database
 
   constructor() {
+    mark('database: constructor start')
     // 确保数据目录存在
     const userDataPath = app.getPath('userData')
     const dbDir = join(userDataPath, 'data')
@@ -20,13 +22,14 @@ class DatabaseManager {
     }
 
     const dbPath = join(dbDir, 'shuvix.db')
-    this.db = new Database(dbPath)
+    this.db = measure('database: open', () => new Database(dbPath))
 
     // 启用 WAL 模式，提升并发性能
     this.db.pragma('journal_mode = WAL')
 
-    this.initTables()
-    this.migrate()
+    measure('database: initTables', () => this.initTables())
+    measure('database: migrate', () => this.migrate())
+    mark('database: ready')
   }
 
   /** 增量迁移 */

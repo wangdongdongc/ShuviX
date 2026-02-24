@@ -147,6 +147,11 @@ body {
   margin: 0.4em 0;
 }
 
+.markdown-body a {
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+
 .markdown-body pre {
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border-primary);
@@ -186,13 +191,15 @@ body {
   border-collapse: collapse;
   margin: 0.5em 0;
   font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .markdown-body th, .markdown-body td {
   border: 1px solid var(--color-border-primary);
   padding: 4px 8px;
   text-align: left;
-  white-space: nowrap;
 }
 
 .markdown-body th {

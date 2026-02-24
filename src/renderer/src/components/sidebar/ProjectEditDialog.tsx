@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { X, FolderOpen, Container, ShieldCheck, Wrench } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
+import { DEFAULT_TOOL_NAMES } from '../../../../main/types/tools'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -49,13 +50,13 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
           if (Array.isArray(settings.enabledTools)) {
             setEnabledTools(settings.enabledTools)
           } else {
-            setEnabledTools(tools.map((t) => t.name))
+            setEnabledTools([...DEFAULT_TOOL_NAMES])
           }
         } catch {
-          setEnabledTools(tools.map((t) => t.name))
+          setEnabledTools([...DEFAULT_TOOL_NAMES])
         }
       } else {
-        setEnabledTools(tools.map((t) => t.name))
+        setEnabledTools([...DEFAULT_TOOL_NAMES])
       }
       setDockerAvailable(dockerResult.ok)
       setLoading(false)
