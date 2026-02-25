@@ -16,8 +16,6 @@ const ShuvixProjectParamsSchema = Type.Object({
   }),
   name: Type.Optional(Type.String({ description: 'Project display name' })),
   systemPrompt: Type.Optional(Type.String({ description: 'Project-level system prompt (applied together with global prompt)' })),
-  dockerEnabled: Type.Optional(Type.Boolean({ description: 'Enable Docker isolation for bash commands' })),
-  dockerImage: Type.Optional(Type.String({ description: 'Docker image name (e.g. "python:latest", "node:20")' })),
   sandboxEnabled: Type.Optional(Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })),
   enabledTools: Type.Optional(Type.Array(Type.String(), { description: 'List of enabled tool names for new sessions in this project' })),
   referenceDirs: Type.Optional(Type.Array(
@@ -43,8 +41,6 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
         action: 'get' | 'update'
         name?: string
         systemPrompt?: string
-        dockerEnabled?: boolean
-        dockerImage?: string
         sandboxEnabled?: boolean
         enabledTools?: string[]
         referenceDirs?: Array<{ path: string; note?: string }>
@@ -81,8 +77,6 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
           name: project.name,
           path: project.path,
           systemPrompt: project.systemPrompt || '(empty)',
-          dockerEnabled: project.dockerEnabled === 1,
-          dockerImage: project.dockerImage,
           sandboxEnabled: project.sandboxEnabled === 1,
           enabledTools,
           referenceDirs
@@ -97,8 +91,6 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       const updates: Record<string, any> = {}
       if (params.name !== undefined) updates.name = params.name
       if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
-      if (params.dockerEnabled !== undefined) updates.dockerEnabled = params.dockerEnabled
-      if (params.dockerImage !== undefined) updates.dockerImage = params.dockerImage
       if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
       if (params.enabledTools !== undefined) updates.enabledTools = params.enabledTools
       if (params.referenceDirs !== undefined) updates.referenceDirs = params.referenceDirs

@@ -20,8 +20,6 @@ export interface ProjectFieldMeta {
 export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   name: { labelKey: 'projectForm.name', desc: 'Project display name' },
   systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
-  dockerEnabled: { labelKey: 'projectForm.docker', desc: 'Enable Docker isolation (boolean)' },
-  dockerImage: { labelKey: 'projectForm.dockerImage', desc: 'Docker image name, e.g. "python:latest"' },
   sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
   referenceDirs: { labelKey: 'projectForm.referenceDirs', desc: 'Reference directories for AI to read (array of {path, note?}), read-only in sandbox mode' }

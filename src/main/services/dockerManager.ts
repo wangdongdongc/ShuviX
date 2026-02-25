@@ -100,7 +100,8 @@ export class DockerManager {
   async ensureContainer(
     sessionId: string,
     image: string,
-    workingDirectory: string
+    workingDirectory: string,
+    opts?: { memory?: string; cpus?: string }
   ): Promise<{ containerId: string; isNew: boolean }> {
     // 如果有待销毁定时器，取消它（复用容器）
     this.cancelScheduledDestroy(sessionId)
@@ -117,7 +118,7 @@ export class DockerManager {
 
     // 创建新容器
     const containerName = `shuvix-${sessionId.replace(/-/g, '')}`
-    const containerId = await this.createContainer(containerName, image, workingDirectory)
+    const containerId = await this.createContainer(containerName, image, workingDirectory, opts)
     this.containers.set(sessionId, { containerId, image, workingDirectory })
     log.info(`创建容器 ${containerId.slice(0, 12)}`)
     return { containerId, isNew: true }
@@ -266,7 +267,8 @@ export class DockerManager {
   private async createContainer(
     name: string,
     image: string,
-    workingDirectory: string
+    workingDirectory: string,
+    opts?: { memory?: string; cpus?: string }
   ): Promise<string> {
     // 先尝试移除同名旧容器
     try {
@@ -276,14 +278,18 @@ export class DockerManager {
     }
 
     return new Promise((resolve, reject) => {
-      const child = spawn('docker', [
+      const args = [
         'run', '-d', '--rm',
         '-v', `${workingDirectory}:${CONTAINER_WORKSPACE}`,
         '-w', CONTAINER_WORKSPACE,
-        '--name', name,
-        image,
-        'tail', '-f', '/dev/null'
-      ], {
+        '--name', name
+      ]
+      // 资源限制
+      if (opts?.memory) args.push('--memory', opts.memory)
+      if (opts?.cpus) args.push('--cpus', opts.cpus)
+      args.push(image, 'tail', '-f', '/dev/null')
+
+      const child = spawn('docker', args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: spawnEnv
       })

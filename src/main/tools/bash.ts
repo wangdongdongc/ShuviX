@@ -9,6 +9,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
 import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
+import { settingsService } from '../services/settingsService'
 import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -117,7 +118,13 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
     ) => {
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
       const config = resolveProjectConfig(ctx)
-      const useDocker = config.dockerEnabled && !!config.dockerImage
+
+      // 从全局设置读取 Docker 配置
+      const dockerEnabled = settingsService.get('tool.bash.dockerEnabled') === 'true'
+      const dockerImage = settingsService.get('tool.bash.dockerImage') || ''
+      const dockerMemory = settingsService.get('tool.bash.dockerMemory') || ''
+      const dockerCpus = settingsService.get('tool.bash.dockerCpus') || ''
+      const useDocker = dockerEnabled && !!dockerImage
 
       // 沙箱模式：bash 命令需用户确认
       if (config.sandboxEnabled && ctx.requestApproval) {
@@ -133,10 +140,11 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
         if (useDocker) {
           // Docker 模式：确保容器运行，在容器内执行
           const { containerId, isNew } = await dockerManager.ensureContainer(
-            ctx.sessionId, config.dockerImage, config.workingDirectory
+            ctx.sessionId, dockerImage, config.workingDirectory,
+            { memory: dockerMemory || undefined, cpus: dockerCpus || undefined }
           )
           if (isNew) ctx.onContainerCreated?.(containerId)
-          log.info(`(docker ${config.dockerImage}): ${params.command}`)
+          log.info(`(docker ${dockerImage}): ${params.command}`)
           result = await dockerManager.exec(containerId, params.command, CONTAINER_WORKSPACE, signal)
         } else {
           // 本地模式

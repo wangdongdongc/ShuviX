@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText, Info, Puzzle, BookOpen } from 'lucide-react'
+import { Settings, Layers, FileText, Info, Puzzle, BookOpen, Wrench } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
 import { GeneralSettings } from './GeneralSettings'
@@ -8,6 +8,7 @@ import { HttpLogSettings } from './HttpLogSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
+import { ToolSettings } from './ToolSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -41,6 +42,12 @@ export function SettingsPanel(): React.JSX.Element {
             onClick={() => setActiveSettingsTab('providers')}
           />
           <TabButton
+            icon={<Wrench size={14} />}
+            label={t('settings.tabTools')}
+            active={activeSettingsTab === 'tools'}
+            onClick={() => setActiveSettingsTab('tools')}
+          />
+          <TabButton
             icon={<Puzzle size={14} />}
             label={t('settings.tabMcp')}
             active={activeSettingsTab === 'mcp'}
@@ -70,6 +77,7 @@ export function SettingsPanel(): React.JSX.Element {
         <div className="flex-1 min-w-0 overflow-y-auto">
           {activeSettingsTab === 'general' && <GeneralSettings />}
           {activeSettingsTab === 'providers' && <ProviderSettings />}
+          {activeSettingsTab === 'tools' && <ToolSettings />}
           {activeSettingsTab === 'mcp' && <McpSettings />}
           {activeSettingsTab === 'skills' && <SkillSettings />}
           {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}

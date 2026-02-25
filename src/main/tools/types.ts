@@ -17,10 +17,6 @@ export const TOOL_ABORTED = 'Aborted'
 export interface ProjectConfig {
   /** 项目工作目录（宿主机路径） */
   workingDirectory: string
-  /** 是否启用 Docker 隔离 */
-  dockerEnabled: boolean
-  /** Docker 镜像名 */
-  dockerImage: string
   /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
   sandboxEnabled: boolean
   /** 参考目录列表（沙箱模式下仅允许读取） */
@@ -97,8 +93,6 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
     } catch { /* 忽略 */ }
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
-      dockerEnabled: project.dockerEnabled === 1,
-      dockerImage: project.dockerImage || '',
       sandboxEnabled: project.sandboxEnabled === 1,
       referenceDirs
     }
@@ -107,8 +101,6 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
   // 无项目（临时会话） → 使用 temp workspace，强制开启沙箱
   return {
     workingDirectory: getTempWorkspace(ctx.sessionId),
-    dockerEnabled: false,
-    dockerImage: '',
     sandboxEnabled: true,
     referenceDirs: []
   }

@@ -20,7 +20,7 @@ interface SettingsState {
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
-  activeSettingsTab: 'general' | 'providers' | 'mcp' | 'skills' | 'httpLogs' | 'about'
+  activeSettingsTab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'httpLogs' | 'about'
   /** 是否已加载 */
   loaded: boolean
   /** 系统设置 key 元数据（审批弹窗用） */
@@ -37,7 +37,7 @@ interface SettingsState {
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setFontSize: (size: number) => void
   setIsSettingsOpen: (open: boolean) => void
-  setActiveSettingsTab: (tab: 'general' | 'providers' | 'mcp' | 'skills' | 'httpLogs' | 'about') => void
+  setActiveSettingsTab: (tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'httpLogs' | 'about') => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */
   loadConfigMeta: (settingMeta: Record<string, ConfigMeta>, projectFieldMeta: Record<string, ConfigMeta>) => void

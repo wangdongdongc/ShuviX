@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, Container, ShieldCheck, Wrench, FolderSearch, Plus, Trash2 } from 'lucide-react'
+import { X, FolderOpen, ShieldCheck, Wrench, FolderSearch, Plus, Trash2 } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 
@@ -21,25 +21,17 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
-  const [dockerEnabled, setDockerEnabled] = useState(false)
-  const [dockerImage, setDockerImage] = useState('')
   const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
-  const [dockerError, setDockerError] = useState<string | null>(null)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
   const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
 
-  // 加载工具列表 + 检查 Docker 可用性
+  // 加载工具列表
   useEffect(() => {
-    Promise.all([
-      window.api.docker.validate(),
-      window.api.tools.list()
-    ]).then(([dockerResult, tools]) => {
-      setDockerAvailable(dockerResult.ok)
+    window.api.tools.list().then(tools => {
       setAllTools(tools)
-      // 默认使用"通用"模板（bash, read, write, ask）
+      // 默认使用“通用”模板（bash, read, write, ask）
       setEnabledTools(['bash', 'read', 'write', 'ask'])
     })
   }, [])
@@ -70,22 +62,11 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   const handleCreate = async (): Promise<void> => {
     if (!path.trim()) return
     setSaving(true)
-    setDockerError(null)
     try {
-      // Docker 开启时先校验环境
-      if (dockerEnabled) {
-        const result = await window.api.docker.validate({ image: dockerImage })
-        if (!result.ok) {
-          setDockerError(t(`projectForm.${result.error}`))
-          return
-        }
-      }
       const project = await window.api.project.create({
         name: name.trim() || undefined,
         path: path.trim(),
         systemPrompt,
-        dockerEnabled,
-        dockerImage,
         sandboxEnabled,
         enabledTools,
         referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined
@@ -240,47 +221,6 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             </p>
           </div>
 
-          {/* Docker 隔离 */}
-          <div className="border border-border-secondary rounded-lg p-3">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-                <Container size={12} />
-                {t('projectForm.docker')}
-              </label>
-              <button
-                onClick={() => dockerAvailable && setDockerEnabled(!dockerEnabled)}
-                disabled={!dockerAvailable}
-                className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                  dockerEnabled && dockerAvailable ? 'bg-accent' : 'bg-bg-hover'
-                } ${!dockerAvailable ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <span
-                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                    dockerEnabled ? 'left-[16px]' : 'left-[2px]'
-                  }`}
-                />
-              </button>
-            </div>
-            {dockerEnabled && (
-              <div className="mt-3">
-                <label className="block text-[10px] text-text-tertiary mb-1">{t('projectForm.dockerImage')}</label>
-                <input
-                  value={dockerImage}
-                  onChange={(e) => setDockerImage(e.target.value)}
-                  className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
-                  placeholder="python:latest"
-                />
-              </div>
-            )}
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {dockerAvailable === false
-                ? t('projectForm.dockerNotFound')
-                : t('projectForm.dockerHint')}
-            </p>
-            {dockerError && (
-              <p className="text-[10px] text-error mt-1.5">{dockerError}</p>
-            )}
-          </div>
         </div>
 
         {/* 底部按钮 */}
