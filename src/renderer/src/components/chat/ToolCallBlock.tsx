@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2, ShieldAlert, MessageCircleQuestion, BookOpen } from 'lucide-react'
+import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2, ShieldAlert, MessageCircleQuestion, BookOpen, FolderTree, Search, FileSearch2 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface ToolCallBlockProps {
@@ -51,6 +51,15 @@ export function ToolCallBlock({
         const q = (args?.question || '').slice(0, 60)
         return { icon: <MessageCircleQuestion size={12} className={ic} />, detail: q + (args?.question?.length > 60 ? '...' : '') }
       }
+      case 'ls':
+        return { icon: <FolderTree size={12} className={ic} />, detail: args?.path || '.' }
+      case 'grep': {
+        const pat = args?.pattern || ''
+        const inc = args?.include ? ` (${args.include})` : ''
+        return { icon: <Search size={12} className={ic} />, detail: pat + inc }
+      }
+      case 'glob':
+        return { icon: <FileSearch2 size={12} className={ic} />, detail: args?.pattern || '' }
       case 'skill':
         return { icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />, detail: args?.command || '' }
       default:
