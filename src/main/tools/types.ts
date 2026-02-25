@@ -4,6 +4,7 @@
  */
 
 import { resolve, sep } from 'path'
+import { t } from '../i18n'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
 import { getTempWorkspace } from '../utils/paths'
@@ -56,6 +57,27 @@ export function isPathWithinReferenceDirs(absolutePath: string, referenceDirs: R
     const base = resolve(dir.path)
     return resolved === base || resolved.startsWith(base + sep)
   })
+}
+
+/**
+ * 沙箱守卫：只读访问（workspace + referenceDirs 均允许）
+ * 用于 read、ls、grep、glob 等只读工具
+ */
+export function assertSandboxRead(config: ProjectConfig, absolutePath: string, displayPath?: string): void {
+  if (!config.sandboxEnabled) return
+  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
+  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
+  throw new Error(t('tool.sandboxBlocked', { path: displayPath ?? absolutePath, workspace: config.workingDirectory }))
+}
+
+/**
+ * 沙箱守卫：写入访问（仅 workspace 允许，referenceDirs 不可写）
+ * 用于 write、edit 等写入工具
+ */
+export function assertSandboxWrite(config: ProjectConfig, absolutePath: string, displayPath?: string): void {
+  if (!config.sandboxEnabled) return
+  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
+  throw new Error(t('tool.sandboxBlocked', { path: displayPath ?? absolutePath, workspace: config.workingDirectory }))
 }
 
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */

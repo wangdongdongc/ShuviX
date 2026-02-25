@@ -7,7 +7,7 @@ import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgSearch } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -58,10 +58,8 @@ export function createGrepTool(ctx: ToolContext): AgentTool<typeof GrepParamsSch
 
       log.info(`grep "${params.pattern}" in ${searchPath}`)
 
-      // 沙箱模式：路径越界检查
-      if (config.sandboxEnabled && !isPathWithinWorkspace(searchPath, config.workingDirectory)) {
-        throw new Error(t('tool.sandboxBlocked', { path: searchPath, workspace: config.workingDirectory }))
-      }
+      // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许）
+      assertSandboxRead(config, searchPath)
 
       // 验证目录存在
       let dirStat

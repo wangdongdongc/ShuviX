@@ -26,7 +26,9 @@ vi.mock('../types', () => ({
     const r = resolve(absolutePath)
     const base = resolve(workingDirectory)
     return r === base || r.startsWith(base + sep)
-  }
+  },
+  assertSandboxRead: () => {},
+  assertSandboxWrite: () => {}
 }))
 
 // mock i18n

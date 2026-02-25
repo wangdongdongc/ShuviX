@@ -25,7 +25,9 @@ vi.mock('../types', () => ({
     const base = resolve(workingDirectory)
     return resolved === base || resolved.startsWith(base + sep)
   },
-  isPathWithinReferenceDirs: () => false
+  isPathWithinReferenceDirs: () => false,
+  assertSandboxRead: () => {},
+  assertSandboxWrite: () => {}
 }))
 
 // mock i18n — 返回 key 本身（带参数展开）

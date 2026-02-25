@@ -16,7 +16,7 @@ import WordExtractor from 'word-extractor'
 import { truncateLine, truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
-import { resolveProjectConfig, isPathWithinWorkspace, isPathWithinReferenceDirs, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
@@ -114,11 +114,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       log.info(absolutePath)
 
       // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
-      if (config.sandboxEnabled
-        && !isPathWithinWorkspace(absolutePath, config.workingDirectory)
-        && !isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) {
-        throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
-      }
+      assertSandboxRead(config, absolutePath, params.path)
 
       try {
         // 获取文件/目录信息

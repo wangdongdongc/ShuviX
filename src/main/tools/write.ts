@@ -9,7 +9,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { assertNotModifiedSinceRead, withFileLock, recordRead, getReadTime } from './utils/fileTime'
-import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxWrite, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:write')
@@ -40,9 +40,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       log.info(absolutePath)
 
       // 沙箱模式：路径越界检查
-      if (config.sandboxEnabled && !isPathWithinWorkspace(absolutePath, config.workingDirectory)) {
-        throw new Error(t('tool.sandboxBlocked', { path: params.path, workspace: config.workingDirectory }))
-      }
+      assertSandboxWrite(config, absolutePath, params.path)
 
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
         (resolve, reject) => {
