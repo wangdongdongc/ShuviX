@@ -72,9 +72,22 @@ export function registerAgentHandlers(): void {
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel')
     }
+    const hintMap: Record<string, string> = {
+      bash: t('tool.bashHint'),
+      read: t('tool.readHint'),
+      write: t('tool.writeHint'),
+      edit: t('tool.editHint'),
+      ask: t('tool.askHint'),
+      ls: t('tool.lsHint'),
+      grep: t('tool.grepHint'),
+      glob: t('tool.globHint'),
+      'shuvix-project': t('tool.shuvixProjectHint'),
+      'shuvix-setting': t('tool.shuvixSettingHint')
+    }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,
       label: labelMap[name] || name,
+      hint: hintMap[name],
       group: undefined as string | undefined
     }))
     /** MCP 工具（带 group / serverStatus 字段用于 UI 分组和状态展示） */
