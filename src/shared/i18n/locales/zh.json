@@ -340,6 +340,8 @@
     "mustReadFirst": "写入前必须先读取文件 {{path}}，请先使用 read 工具读取。",
     "fileModifiedSinceRead": "文件 {{path}} 在上次读取后已被修改。\n上次修改: {{mtime}}\n上次读取: {{rtime}}\n\n请重新读取文件后再修改。",
     "lsLabel": "列出文件",
+    "grepLabel": "搜索内容",
+    "globLabel": "查找文件",
     "lsNotDirectory": "{{path}} 不是目录",
     "lsTruncated": "[结果已截断，仅显示前 {{limit}} 个文件。请缩小搜索范围或使用 bash + find 命令。]"
   }

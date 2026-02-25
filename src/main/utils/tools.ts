@@ -38,7 +38,7 @@ const TOOL_PROMPT_REGISTRY: Array<{
   textFn?: () => string
   condition?: (ctx: ToolPromptContext) => boolean
 }> = [
-  { tools: ['bash', 'read', 'write', 'edit'], key: 'agent.promptSupplement', condition: (ctx) => ctx.hasProjectPath },
+  { tools: ['bash', 'read', 'write', 'edit', 'ls', 'grep', 'glob'], key: 'agent.promptSupplement', condition: (ctx) => ctx.hasProjectPath },
   { tools: ['ask'], key: 'agent.askToolGuidance' },
   {
     tools: ['shuvix-project'],

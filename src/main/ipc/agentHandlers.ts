@@ -67,6 +67,8 @@ export function registerAgentHandlers(): void {
       edit: t('tool.editLabel'),
       ask: t('tool.askLabel'),
       ls: t('tool.lsLabel'),
+      grep: t('tool.grepLabel'),
+      glob: t('tool.globLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel')
     }

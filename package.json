@@ -28,6 +28,7 @@
     "@mariozechner/pi-agent-core": "^0.52.12",
     "@mariozechner/pi-ai": "^0.52.12",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@vscode/ripgrep": "^1.17.0",
     "better-sqlite3": "^12.6.2",
     "diff": "^8.0.3",
     "electron-log": "^5.4.3",

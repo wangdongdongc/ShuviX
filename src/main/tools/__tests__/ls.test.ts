@@ -1,10 +1,11 @@
 /**
  * ls 工具单元测试
- * 使用临时目录结构，mock resolveProjectConfig 和 i18n
+ * 使用临时目录结构（含 git init + .gitignore），mock resolveProjectConfig 和 i18n
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -62,28 +63,26 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 beforeAll(() => {
   mkdirSync(TEST_DIR, { recursive: true })
 
+  // 初始化 git 仓库（ripgrep 需要 .git 才能识别 .gitignore）
+  execSync('git init', { cwd: TEST_DIR, stdio: 'ignore' })
+
+  // 创建 .gitignore（ripgrep 会自动遵循）
+  writeFileSync(join(TEST_DIR, '.gitignore'), 'node_modules/\ndist/\n')
+
   // 基本目录结构
-  //   src/
-  //     index.ts
-  //     utils/
-  //       helper.ts
-  //   README.md
-  //   package.json
   mkdirSync(join(TEST_DIR, 'src', 'utils'), { recursive: true })
   writeFileSync(join(TEST_DIR, 'src', 'index.ts'), 'export {}')
   writeFileSync(join(TEST_DIR, 'src', 'utils', 'helper.ts'), 'export {}')
   writeFileSync(join(TEST_DIR, 'README.md'), '# Hello')
   writeFileSync(join(TEST_DIR, 'package.json'), '{}')
 
-  // 应被默认忽略的目录
+  // 被 .gitignore 忽略的目录
   mkdirSync(join(TEST_DIR, 'node_modules', 'foo'), { recursive: true })
   writeFileSync(join(TEST_DIR, 'node_modules', 'foo', 'index.js'), '')
-  mkdirSync(join(TEST_DIR, '.git', 'objects'), { recursive: true })
-  writeFileSync(join(TEST_DIR, '.git', 'config'), '')
   mkdirSync(join(TEST_DIR, 'dist'), { recursive: true })
   writeFileSync(join(TEST_DIR, 'dist', 'bundle.js'), '')
 
-  // 多文件目录（独立目录，避免影响其他测试的 LIMIT）
+  // 多文件目录（独立目录，无 git，用于截断测试）
   mkdirSync(MANY_DIR, { recursive: true })
   for (let i = 0; i < 120; i++) {
     writeFileSync(join(MANY_DIR, `file${String(i).padStart(3, '0')}.txt`), '')
@@ -100,7 +99,6 @@ describe('ls 工具 - 基本功能', () => {
     const tool = createListTool(ctx)
     const result = await tool.execute('tc1', { path: join(TEST_DIR, 'src') })
     const text = getText(result)
-    // 应包含子目录和文件
     expect(text).toContain('utils/')
     expect(text).toContain('index.ts')
     expect(text).toContain('helper.ts')
@@ -110,7 +108,6 @@ describe('ls 工具 - 基本功能', () => {
     const tool = createListTool(ctx)
     const result = await tool.execute('tc2', {})
     const text = getText(result)
-    // 应包含根目录文件
     expect(text).toContain('README.md')
     expect(text).toContain('package.json')
     expect(text).toContain('src/')
@@ -125,30 +122,35 @@ describe('ls 工具 - 基本功能', () => {
 })
 
 describe('ls 工具 - 忽略模式', () => {
-  it('默认忽略 node_modules、.git、dist', async () => {
+  it('.git 目录始终排除', async () => {
     const tool = createListTool(ctx)
     const result = await tool.execute('tc4', {})
     const text = getText(result)
+    // .git/ 目录内容不应出现（.gitignore 文件本身是正常文件）
+    expect(text).not.toContain('.git/')
+    expect(text).not.toContain('objects')
+    // .gitignore 文件应正常列出
+    expect(text).toContain('.gitignore')
+  })
+
+  it('.gitignore 中的 node_modules/dist 被忽略', async () => {
+    const tool = createListTool(ctx)
+    const result = await tool.execute('tc5', {})
+    const text = getText(result)
     expect(text).not.toContain('node_modules')
-    expect(text).not.toContain('.git')
     expect(text).not.toContain('dist')
     expect(text).not.toContain('bundle.js')
+    // 正常文件应存在
+    expect(text).toContain('README.md')
   })
 
-  it('includeIgnored=true 跳过默认忽略', async () => {
+  it('自定义 ignore glob 排除额外文件', async () => {
     const tool = createListTool(ctx)
-    const result = await tool.execute('tc5', { includeIgnored: true })
+    const result = await tool.execute('tc6', { ignore: ['src/**'] })
     const text = getText(result)
-    // 应能看到被忽略的目录内容
-    expect(text).toContain('node_modules/')
-  })
-
-  it('自定义 ignore 排除额外目录', async () => {
-    const tool = createListTool(ctx)
-    const result = await tool.execute('tc6', { ignore: ['src'] })
-    const text = getText(result)
-    // src 目录应被排除
+    // src 下文件应被排除
     expect(text).not.toContain('index.ts')
+    expect(text).not.toContain('helper.ts')
     // 其他文件应正常
     expect(text).toContain('README.md')
   })

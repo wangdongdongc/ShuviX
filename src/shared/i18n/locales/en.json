@@ -340,6 +340,8 @@
     "mustReadFirst": "You must read file {{path}} before overwriting it. Use the read tool first.",
     "fileModifiedSinceRead": "File {{path}} has been modified since it was last read.\nLast modification: {{mtime}}\nLast read: {{rtime}}\n\nPlease read the file again before modifying it.",
     "lsLabel": "List Files",
+    "grepLabel": "Search Content",
+    "globLabel": "Find Files",
     "lsNotDirectory": "{{path}} is not a directory",
     "lsTruncated": "[Results truncated, showing first {{limit}} files. Narrow your search or use bash + find command.]"
   }

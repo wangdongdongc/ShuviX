@@ -1,50 +1,18 @@
 /**
  * ls 工具 — 列出目录文件树
- * 从 opencode ListTool 移植，使用纯 Node.js 递归遍历
- * 支持默认 IGNORE_PATTERNS、自定义 ignore glob、includeIgnored 跳过默认排除
+ * 基于 @vscode/ripgrep 遍历文件（自动遵循 .gitignore），构建树形输出
  */
 
-import { readdir, stat } from 'fs/promises'
-import { join, relative, basename, dirname, resolve } from 'path'
+import { stat } from 'fs/promises'
+import { relative, basename, dirname, resolve, sep } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { resolveToCwd } from './utils/pathUtils'
+import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:ls')
-
-/** 默认忽略的目录模式（与 opencode 对齐） */
-export const IGNORE_PATTERNS = [
-  'node_modules',
-  '__pycache__',
-  '.git',
-  'dist',
-  'build',
-  'target',
-  'vendor',
-  'bin',
-  'obj',
-  '.idea',
-  '.vscode',
-  '.zig-cache',
-  'zig-out',
-  '.coverage',
-  'coverage',
-  'tmp',
-  'temp',
-  '.cache',
-  'cache',
-  'logs',
-  '.venv',
-  'venv',
-  'env',
-  '.next',
-  '.nuxt',
-  '.output',
-  '.turbo',
-  '.svelte-kit'
-]
 
 /** 最大返回文件数 */
 const LIMIT = 100
@@ -54,74 +22,22 @@ const LsParamsSchema = Type.Object({
     Type.String({ description: 'The directory path to list (optional, defaults to current working directory)' })
   ),
   ignore: Type.Optional(
-    Type.Array(Type.String(), { description: 'List of additional directory names to ignore' })
-  ),
-  includeIgnored: Type.Optional(
-    Type.Boolean({ description: 'Set to true to skip default ignore rules (e.g. to inspect node_modules)' })
+    Type.Array(Type.String(), { description: 'Additional glob patterns to exclude (e.g. "*.log", "tmp/")' })
   )
 })
-
-/**
- * 递归遍历目录，收集相对路径文件列表
- * 遇到 ignore 目录跳过，达到 limit 后提前中断
- */
-async function walkDir(
-  root: string,
-  currentDir: string,
-  ignoreDirs: Set<string>,
-  extraIgnore: string[],
-  files: string[],
-  limit: number
-): Promise<void> {
-  if (files.length >= limit) return
-
-  let entries
-  try {
-    entries = await readdir(currentDir, { withFileTypes: true })
-  } catch {
-    // 无权限或不存在，跳过
-    return
-  }
-
-  // 按名称排序（目录优先）
-  entries.sort((a, b) => {
-    const aIsDir = a.isDirectory() ? 0 : 1
-    const bIsDir = b.isDirectory() ? 0 : 1
-    if (aIsDir !== bIsDir) return aIsDir - bIsDir
-    return a.name.localeCompare(b.name)
-  })
-
-  for (const entry of entries) {
-    if (files.length >= limit) return
-
-    const name = entry.name
-
-    // 跳过隐藏文件（以 . 开头，但 .github 等常见目录除外）
-    if (name.startsWith('.') && ignoreDirs.has(name.slice(0).toLowerCase())) continue
-
-    if (entry.isDirectory()) {
-      // 检查是否在忽略列表中
-      if (ignoreDirs.has(name) || ignoreDirs.has(name.toLowerCase())) continue
-      // 检查额外 ignore（简单前缀匹配）
-      if (extraIgnore.some(pattern => name === pattern || name.startsWith(pattern))) continue
-
-      await walkDir(root, join(currentDir, name), ignoreDirs, extraIgnore, files, limit)
-    } else {
-      const relPath = relative(root, join(currentDir, name))
-      files.push(relPath)
-    }
-  }
-}
 
 /**
  * 从文件列表构建树形目录结构并渲染为缩进文本
  */
 function buildTree(files: string[]): string {
+  // 统一分隔符为 /
+  const normalized = files.map(f => f.split(sep).join('/'))
+
   // 构建目录→文件映射
   const dirs = new Set<string>()
   const filesByDir = new Map<string, string[]>()
 
-  for (const file of files) {
+  for (const file of normalized) {
     const dir = dirname(file)
     const parts = dir === '.' ? [] : dir.split('/')
 
@@ -173,11 +89,11 @@ export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchem
     name: 'ls',
     label: t('tool.lsLabel'),
     description:
-      'Lists files and directories in a given path as a tree structure. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional directories, or includeIgnored=true to skip default exclusion rules. You should generally prefer the bash tool with find/grep commands for precise searches.',
+      'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.',
     parameters: LsParamsSchema,
     execute: async (
       _toolCallId: string,
-      params: { path?: string; ignore?: string[]; includeIgnored?: boolean },
+      params: { path?: string; ignore?: string[] },
       signal?: AbortSignal
     ) => {
       if (signal?.aborted) throw new Error(t('tool.aborted'))
@@ -205,19 +121,25 @@ export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchem
         throw new Error(t('tool.lsNotDirectory', { path: searchPath }))
       }
 
-      // 构建忽略目录集合
-      const ignoreDirs = params.includeIgnored
-        ? new Set<string>()
-        : new Set(IGNORE_PATTERNS)
-      const extraIgnore = params.ignore || []
+      // 构建 glob 排除列表
+      const globs: string[] = []
+      if (params.ignore) {
+        for (const pattern of params.ignore) {
+          globs.push(`!${pattern}`)
+        }
+      }
 
-      // 递归遍历
-      const files: string[] = []
-      await walkDir(searchPath, searchPath, ignoreDirs, extraIgnore, files, LIMIT)
+      // 使用 ripgrep 列举文件（自动遵循 .gitignore）
+      const { files, truncated } = await rgFilesList({
+        cwd: searchPath,
+        glob: globs.length > 0 ? globs : undefined,
+        limit: LIMIT,
+        signal
+      })
 
-      const truncated = files.length >= LIMIT
+      // 排序后构建树形输出
+      files.sort()
 
-      // 构建树形输出
       const relPath = relative(config.workingDirectory, searchPath) || '.'
       const tree = buildTree(files)
       let output = `${relPath}/\n${tree}`

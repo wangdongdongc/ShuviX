@@ -12,6 +12,7 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  - node_modules/@vscode/ripgrep/**
 # 启用原生模块重新编译（better-sqlite3 等）
 npmRebuild: true
 # macOS 无开发者证书时，afterPack 钩子统一 ad-hoc 签名

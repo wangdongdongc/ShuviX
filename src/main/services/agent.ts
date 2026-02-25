@@ -15,6 +15,8 @@ import { createWriteTool } from '../tools/write'
 import { createEditTool } from '../tools/edit'
 import { createAskTool } from '../tools/ask'
 import { createListTool } from '../tools/ls'
+import { createGrepTool } from '../tools/grep'
+import { createGlobTool } from '../tools/glob'
 import { createShuvixProjectTool } from '../tools/shuvixProject'
 import { createShuvixSettingTool } from '../tools/shuvixSetting'
 import { createSkillTool } from '../tools/skill'
@@ -66,6 +68,8 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     edit: createEditTool(ctx),
     ask: createAskTool(ctx),
     ls: createListTool(ctx),
+    grep: createGrepTool(ctx),
+    glob: createGlobTool(ctx),
     'shuvix-project': createShuvixProjectTool(ctx),
     'shuvix-setting': createShuvixSettingTool(ctx)
   }
