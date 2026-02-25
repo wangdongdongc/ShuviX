@@ -14,6 +14,7 @@ import { createReadTool } from '../tools/read'
 import { createWriteTool } from '../tools/write'
 import { createEditTool } from '../tools/edit'
 import { createAskTool } from '../tools/ask'
+import { createListTool } from '../tools/ls'
 import { createShuvixProjectTool } from '../tools/shuvixProject'
 import { createShuvixSettingTool } from '../tools/shuvixSetting'
 import { createSkillTool } from '../tools/skill'
@@ -64,6 +65,7 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     write: createWriteTool(ctx),
     edit: createEditTool(ctx),
     ask: createAskTool(ctx),
+    ls: createListTool(ctx),
     'shuvix-project': createShuvixProjectTool(ctx),
     'shuvix-setting': createShuvixSettingTool(ctx)
   }

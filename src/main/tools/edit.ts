@@ -24,7 +24,7 @@ import {
 } from './utils/editDiff'
 
 const EditParamsSchema = Type.Object({
-  path: Type.String({ description: t('tool.paramWritePath') }),
+  path: Type.String({ description: 'The absolute path to the file to modify' }),
   oldText: Type.String({ description: 'Exact text to find and replace (must match exactly, including whitespace)' }),
   newText: Type.String({ description: 'New text to replace with' })
 })

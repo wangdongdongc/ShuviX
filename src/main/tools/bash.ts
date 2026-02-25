@@ -19,11 +19,11 @@ const DEFAULT_TIMEOUT = 120
 
 const BashParamsSchema = Type.Object({
   command: Type.String({
-    description: t('tool.paramCommand')
+    description: 'The shell command to execute. Supports pipes, redirects, and other bash features. Avoid commands that require interactive input.'
   }),
   timeout: Type.Optional(
     Type.Number({
-      description: t('tool.paramTimeout', { default: DEFAULT_TIMEOUT })
+      description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands.`
     })
   )
 })

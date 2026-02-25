@@ -318,14 +318,6 @@
     "editMultiMatch": "Found {{count}} matches in {{path}}. Text must be unique, please provide more context.",
     "editNoChange": "Replacement produced no change: {{path}}",
     "editSuccess": "Successfully replaced text in {{path}}.",
-    "paramPath": "File path to read (relative or absolute)",
-    "paramWritePath": "File path to write (relative or absolute)",
-    "paramWriteContent": "Content to write to the file",
-    "paramOffset": "Starting line number (from 1), for paginated reading of large files",
-    "paramLimit": "Maximum number of lines to read, used with offset",
-    "paramCommand": "Shell command to execute. Supports pipes, redirects, and other bash features. Avoid interactive commands.",
-    "paramTimeout": "Command timeout in seconds, default {{default}}s. Increase for long-running commands.",
-    "readDesc": "Read file or directory contents. Files support text (with pagination) and rich formats like PDF, Word, Excel, PowerPoint, HTML, Jupyter Notebook (auto-converted to Markdown). Directories return a sorted entry list.",
     "convertedHeader": "File: {{path}} ({{format}}, {{size}}) — converted to Markdown",
     "convertFailed": "Failed to convert file: {{path}}",
     "unsupportedFormat": "Unsupported file format ({{ext}}): {{path}}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.",
@@ -333,7 +325,6 @@
     "sandboxBashDenied": "Sandbox: user denied execution of this command",
     "skillLabel": "Load Skill instructions",
     "askLabel": "Ask User",
-    "askDesc": "Ask the user a question with predefined options and wait for their selection",
     "askNoSelection": "User made no selection",
     "askUserSelected": "User selected: {{selections}}",
     "shuvixProjectLabel": "Project Config",
@@ -347,6 +338,9 @@
     "dirPagination": "(Showing {{shown}} of {{total}} entries. Use offset={{next}} to continue.)",
     "dirAllEntries": "({{count}} entries)",
     "mustReadFirst": "You must read file {{path}} before overwriting it. Use the read tool first.",
-    "fileModifiedSinceRead": "File {{path}} has been modified since it was last read.\nLast modification: {{mtime}}\nLast read: {{rtime}}\n\nPlease read the file again before modifying it."
+    "fileModifiedSinceRead": "File {{path}} has been modified since it was last read.\nLast modification: {{mtime}}\nLast read: {{rtime}}\n\nPlease read the file again before modifying it.",
+    "lsLabel": "List Files",
+    "lsNotDirectory": "{{path}} is not a directory",
+    "lsTruncated": "[Results truncated, showing first {{limit}} files. Narrow your search or use bash + find command.]"
   }
 }

@@ -15,8 +15,8 @@ import { createLogger } from '../logger'
 const log = createLogger('Tool:write')
 
 const WriteParamsSchema = Type.Object({
-  path: Type.String({ description: t('tool.paramWritePath') }),
-  content: Type.String({ description: t('tool.paramWriteContent') })
+  path: Type.String({ description: 'The file path to write to (relative or absolute)' }),
+  content: Type.String({ description: 'The content to write to the file' })
 })
 
 /** 创建 write 工具实例 */

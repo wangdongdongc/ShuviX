@@ -79,16 +79,16 @@ function getWordExtractor(): WordExtractor {
 
 const ReadParamsSchema = Type.Object({
   path: Type.String({
-    description: t('tool.paramPath')
+    description: 'The file or directory path to read (relative or absolute)'
   }),
   offset: Type.Optional(
     Type.Number({
-      description: t('tool.paramOffset')
+      description: 'Starting line number (1-based) for paginated reading of large files'
     })
   ),
   limit: Type.Optional(
     Type.Number({
-      description: t('tool.paramLimit')
+      description: 'Maximum number of lines to read, used together with offset'
     })
   )
 })
@@ -99,7 +99,8 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
   return {
     name: 'read',
     label: t('tool.readLabel'),
-    description: t('tool.readDesc'),
+    description:
+      'Read file or directory contents. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).',
     parameters: ReadParamsSchema,
     execute: async (
       _toolCallId: string,

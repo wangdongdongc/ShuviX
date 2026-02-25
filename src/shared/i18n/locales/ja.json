@@ -318,14 +318,6 @@
     "editMultiMatch": "{{path}} で {{count}} か所の一致が見つかりました。テキストは一意である必要があります。より多くのコンテキストを提供してください。",
     "editNoChange": "置換で変更なし: {{path}}",
     "editSuccess": "{{path}} のテキストを正常に置換しました。",
-    "paramPath": "読み込むファイルパス（相対または絶対パス）",
-    "paramWritePath": "書き込むファイルパス（相対または絶対パス）",
-    "paramWriteContent": "ファイルに書き込む内容",
-    "paramOffset": "開始行番号（1から）、大きなファイルのページ読み込み用",
-    "paramLimit": "読み込む最大行数、offsetと併用",
-    "paramCommand": "実行するシェルコマンド。パイプ、リダイレクトなどのbash機能をサポート。対話型コマンドは避けてください。",
-    "paramTimeout": "コマンドタイムアウト（秒）、デフォルト {{default}}秒。長時間実行コマンドには大きな値を設定してください。",
-    "readDesc": "ファイルまたはディレクトリの内容を読み込みます。ファイルはテキスト（ページネーション対応）および PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook などのリッチフォーマット（自動 Markdown 変換）をサポート。ディレクトリはソート済みエントリリストを返します。",
     "convertedHeader": "ファイル: {{path}} ({{format}}, {{size}}) — Markdown に変換済み",
     "convertFailed": "ファイルの変換に失敗しました: {{path}}",
     "unsupportedFormat": "サポートされていないファイル形式 ({{ext}}): {{path}}。テキストファイルおよび PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 形式をサポートしています。",
@@ -339,7 +331,6 @@
     "approvalDenied": "ユーザーがこの操作を拒否しました",
     "skillLabel": "Skill 指示セットを読み込み",
     "askLabel": "ユーザーに質問",
-    "askDesc": "ユーザーに質問し、事前定義された選択肢から選んでもらいます",
     "askNoSelection": "ユーザーは選択しませんでした",
     "askUserSelected": "ユーザーが選択しました: {{selections}}",
     "dirHeader": "ディレクトリ: {{path}} ({{count}} エントリ)",
@@ -347,6 +338,9 @@
     "dirPagination": "({{total}} 中 {{shown}} エントリを表示。offset={{next}} で続きを表示。)",
     "dirAllEntries": "({{count}} エントリ)",
     "mustReadFirst": "ファイル {{path}} を上書きする前に読み込む必要があります。まず read ツールを使用してください。",
-    "fileModifiedSinceRead": "ファイル {{path}} は前回の読み込み以降に変更されています。\n最終変更: {{mtime}}\n前回の読み込み: {{rtime}}\n\nファイルを再度読み込んでから変更してください。"
+    "fileModifiedSinceRead": "ファイル {{path}} は前回の読み込み以降に変更されています。\n最終変更: {{mtime}}\n前回の読み込み: {{rtime}}\n\nファイルを再度読み込んでから変更してください。",
+    "lsLabel": "ファイル一覧",
+    "lsNotDirectory": "{{path}} はディレクトリではありません",
+    "lsTruncated": "[結果は切り詰められました。最初の {{limit}} ファイルのみ表示。検索範囲を絞るか、bash + find コマンドを使用してください。]"
   }
 }

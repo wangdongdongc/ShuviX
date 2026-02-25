@@ -318,14 +318,6 @@
     "editMultiMatch": "在 {{path}} 中找到 {{count}} 处匹配。文本必须唯一，请提供更多上下文。",
     "editNoChange": "替换未产生变化: {{path}}",
     "editSuccess": "成功替换 {{path}} 中的文本。",
-    "paramPath": "要读取的文件路径（相对或绝对路径）",
-    "paramWritePath": "要写入的文件路径（相对或绝对路径）",
-    "paramWriteContent": "要写入的文件内容",
-    "paramOffset": "起始行号（从 1 开始），用于分页读取大文件",
-    "paramLimit": "读取的最大行数，与 offset 配合使用",
-    "paramCommand": "要执行的 shell 命令。支持管道、重定向等 bash 特性。避免需要交互输入的命令。",
-    "paramTimeout": "命令超时时间（秒），默认 {{default}}s。长时间运行的命令建议加大此值。",
-        "readDesc": "读取文件或目录内容。文件支持纯文本（可分页）以及 PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook 等富文本格式（自动转换为 Markdown）。目录返回排序的条目列表。",
     "convertedHeader": "文件: {{path}} ({{format}}, {{size}}) — 已转换为 Markdown",
     "convertFailed": "无法转换文件: {{path}}",
     "unsupportedFormat": "不支持的文件格式 ({{ext}}): {{path}}。支持纯文本文件以及 PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 格式。",
@@ -333,7 +325,6 @@
     "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行",
     "skillLabel": "加载 Skill 指令集",
     "askLabel": "向用户提问",
-    "askDesc": "向用户提出问题并提供预定义选项，等待用户选择后继续",
     "askNoSelection": "用户未做出选择",
     "askUserSelected": "用户选择了: {{selections}}",
     "shuvixProjectLabel": "项目配置",
@@ -347,6 +338,9 @@
     "dirPagination": "(显示 {{shown}} / {{total}} 个条目。使用 offset={{next}} 继续。)",
     "dirAllEntries": "(共 {{count}} 个条目)",
     "mustReadFirst": "写入前必须先读取文件 {{path}}，请先使用 read 工具读取。",
-    "fileModifiedSinceRead": "文件 {{path}} 在上次读取后已被修改。\n上次修改: {{mtime}}\n上次读取: {{rtime}}\n\n请重新读取文件后再修改。"
+    "fileModifiedSinceRead": "文件 {{path}} 在上次读取后已被修改。\n上次修改: {{mtime}}\n上次读取: {{rtime}}\n\n请重新读取文件后再修改。",
+    "lsLabel": "列出文件",
+    "lsNotDirectory": "{{path}} 不是目录",
+    "lsTruncated": "[结果已截断，仅显示前 {{limit}} 个文件。请缩小搜索范围或使用 bash + find 命令。]"
   }
 }

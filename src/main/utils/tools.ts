@@ -8,11 +8,8 @@ import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
 import { getSettingKeyDescriptions } from '../services/settingsService'
 import { getProjectFieldDescriptions } from '../services/projectService'
-import { DEFAULT_TOOL_NAMES } from '../types/tools'
-
-/** 内置工具名称（固定顺序） */
-export const ALL_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask', 'shuvix-project', 'shuvix-setting'] as const
-export type ToolName = (typeof ALL_TOOL_NAMES)[number]
+import { ALL_TOOL_NAMES, DEFAULT_TOOL_NAMES } from '../types/tools'
+export { ALL_TOOL_NAMES, type ToolName } from '../types/tools'
 
 
 /** 获取所有可用工具名（内置 + MCP 动态 + 已启用 Skill） */
