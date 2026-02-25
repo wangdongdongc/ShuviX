@@ -30,7 +30,8 @@ export function ToolSettings(): React.JSX.Element {
   const [dockerImage, setDockerImage] = useState('')
   const [dockerMemory, setDockerMemory] = useState('512m')
   const [dockerCpus, setDockerCpus] = useState('1')
-  const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
+  // Docker 状态：null=加载中, 'ready'=可用, 'notInstalled'=未安装, 'notRunning'=引擎未启动
+  const [dockerStatus, setDockerStatus] = useState<'ready' | 'notInstalled' | 'notRunning' | null>(null)
 
   // 加载设置 + 检查 Docker 可用性
   useEffect(() => {
@@ -42,7 +43,11 @@ export function ToolSettings(): React.JSX.Element {
       setDockerImage(settings['tool.bash.dockerImage'] || '')
       setDockerMemory(settings['tool.bash.dockerMemory'] || '512m')
       setDockerCpus(settings['tool.bash.dockerCpus'] || '1')
-      setDockerAvailable(dockerResult.ok)
+      if (dockerResult.ok) {
+        setDockerStatus('ready')
+      } else {
+        setDockerStatus(dockerResult.error === 'dockerNotRunning' ? 'notRunning' : 'notInstalled')
+      }
     })
   }, [])
 
@@ -50,6 +55,8 @@ export function ToolSettings(): React.JSX.Element {
   const save = (key: string, value: string): void => {
     window.api.settings.set({ key, value })
   }
+
+  const dockerAvailable = dockerStatus === 'ready'
 
   /** 切换 Docker 启用 */
   const handleToggleDocker = (): void => {
@@ -97,9 +104,11 @@ export function ToolSettings(): React.JSX.Element {
             </button>
           </div>
           <p className="text-[10px] text-text-tertiary -mt-2">
-            {dockerAvailable === false
-              ? t('settings.toolBashDockerNotFound')
-              : t('settings.toolBashDockerHint')}
+            {dockerStatus === 'notInstalled'
+              ? t('settings.toolBashDockerNotInstalled')
+              : dockerStatus === 'notRunning'
+                ? t('settings.toolBashDockerNotRunning')
+                : t('settings.toolBashDockerHint')}
           </p>
 
           {/* Docker 开启后的详细配置 */}

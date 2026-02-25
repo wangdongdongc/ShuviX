@@ -139,10 +139,22 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
 
         if (useDocker) {
           // Docker 模式：确保容器运行，在容器内执行
-          const { containerId, isNew } = await dockerManager.ensureContainer(
-            ctx.sessionId, dockerImage, config.workingDirectory,
-            { memory: dockerMemory || undefined, cpus: dockerCpus || undefined }
-          )
+          let containerId: string
+          let isNew: boolean
+          try {
+            const container = await dockerManager.ensureContainer(
+              ctx.sessionId, dockerImage, config.workingDirectory,
+              { memory: dockerMemory || undefined, cpus: dockerCpus || undefined }
+            )
+            containerId = container.containerId
+            isNew = container.isNew
+          } catch {
+            // 容器创建失败时检查具体原因，给出明确提示
+            const status = dockerManager.getDockerStatus()
+            if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
+            if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
+            throw new Error(t('settings.toolBashDockerNotRunning'))
+          }
           if (isNew) ctx.onContainerCreated?.(containerId)
           log.info(`(docker ${dockerImage}): ${params.command}`)
           result = await dockerManager.exec(containerId, params.command, CONTAINER_WORKSPACE, signal)

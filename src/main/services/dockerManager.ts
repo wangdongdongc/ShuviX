@@ -33,19 +33,38 @@ export class DockerManager {
   /** sessionId → 容器信息（含延迟销毁定时器） */
   private containers = new Map<string, ContainerInfo>()
 
-  /** 检测 Docker 是否可用 */
-  isDockerAvailable(): boolean {
+  /** 检测 Docker 状态：'ready' | 'notInstalled' | 'notRunning' */
+  getDockerStatus(): 'ready' | 'notInstalled' | 'notRunning' {
     try {
-      const result = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+      // 先检查 CLI 是否存在
+      const cliResult = spawnSync('docker', ['--version'], {
         encoding: 'utf-8',
         timeout: 5000,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: spawnEnv
       })
-      return result.status === 0 && !!result.stdout.trim()
+      if (cliResult.status !== 0 || !cliResult.stdout?.trim()) {
+        return 'notInstalled'
+      }
+      // CLI 存在，检查引擎是否在运行
+      const serverResult = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv
+      })
+      if (serverResult.status !== 0 || !serverResult.stdout?.trim()) {
+        return 'notRunning'
+      }
+      return 'ready'
     } catch {
-      return false
+      return 'notInstalled'
     }
+  }
+
+  /** 检测 Docker 是否可用（向后兼容） */
+  isDockerAvailable(): boolean {
+    return this.getDockerStatus() === 'ready'
   }
 
   /**
@@ -55,9 +74,13 @@ export class DockerManager {
    * 返回 { ok, error? } — error 为具体失败原因的 i18n key
    */
   async validateSetup(image?: string): Promise<{ ok: boolean; error?: string }> {
-    // 1. Docker 命令可用
-    if (!this.isDockerAvailable()) {
-      return { ok: false, error: 'dockerNotAvailable' }
+    // 1. Docker 命令可用 + 引擎运行中
+    const status = this.getDockerStatus()
+    if (status === 'notInstalled') {
+      return { ok: false, error: 'dockerNotInstalled' }
+    }
+    if (status === 'notRunning') {
+      return { ok: false, error: 'dockerNotRunning' }
     }
 
     // 仅检查可用性时到此返回
