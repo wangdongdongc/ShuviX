@@ -305,14 +305,22 @@ export class AgentService {
       const workDir = session.workingDirectory || project.path
       systemPrompt += `\n\nProject working directory: ${workDir}`
 
-      let referenceDirs: Array<{ path: string; note?: string }> = []
+      let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []
       try {
         const settings = JSON.parse(project.settings || '{}')
         if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
       } catch { /* 忽略 */ }
       if (referenceDirs.length > 0) {
-        const lines = referenceDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
-        systemPrompt += `\n\nReference directories (read-only, you can read files from these directories but CANNOT write or edit):\n${lines.join('\n')}`
+        const readonlyDirs = referenceDirs.filter(d => (d.access ?? 'readonly') === 'readonly')
+        const readwriteDirs = referenceDirs.filter(d => d.access === 'readwrite')
+        if (readonlyDirs.length > 0) {
+          const lines = readonlyDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
+          systemPrompt += `\n\nReference directories (read-only, you can read files from these directories but CANNOT write or edit):\n${lines.join('\n')}`
+        }
+        if (readwriteDirs.length > 0) {
+          const lines = readwriteDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
+          systemPrompt += `\n\nReference directories (read-write, you can read AND write files in these directories):\n${lines.join('\n')}`
+        }
       }
     } else {
       // 临时对话：注入临时工作目录

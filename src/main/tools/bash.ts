@@ -8,7 +8,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
-import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
+import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
@@ -144,7 +144,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
           try {
             const container = await dockerManager.ensureContainer(
               ctx.sessionId, dockerImage, config.workingDirectory,
-              { memory: dockerMemory || undefined, cpus: dockerCpus || undefined }
+              { memory: dockerMemory || undefined, cpus: dockerCpus || undefined, referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined }
             )
             containerId = container.containerId
             isNew = container.isNew
@@ -157,7 +157,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
           }
           if (isNew) ctx.onContainerCreated?.(containerId)
           log.info(`(docker ${dockerImage}): ${params.command}`)
-          result = await dockerManager.exec(containerId, params.command, CONTAINER_WORKSPACE, signal)
+          result = await dockerManager.exec(containerId, params.command, config.workingDirectory, signal)
         } else {
           // 本地模式
           result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)

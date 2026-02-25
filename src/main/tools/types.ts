@@ -19,7 +19,7 @@ export interface ProjectConfig {
   workingDirectory: string
   /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
   sandboxEnabled: boolean
-  /** 参考目录列表（沙箱模式下仅允许读取） */
+  /** 参考目录列表（沙箱模式下按 access 属性控制读写权限） */
   referenceDirs: ReferenceDir[]
 }
 
@@ -49,10 +49,20 @@ export function isPathWithinWorkspace(absolutePath: string, workingDirectory: st
   return resolved === base || resolved.startsWith(base + sep)
 }
 
-/** 检查路径是否在任一参考目录内（沙箱模式下仅允许读取） */
+/** 检查路径是否在任一参考目录内 */
 export function isPathWithinReferenceDirs(absolutePath: string, referenceDirs: ReferenceDir[]): boolean {
   const resolved = resolve(absolutePath)
   return referenceDirs.some(dir => {
+    const base = resolve(dir.path)
+    return resolved === base || resolved.startsWith(base + sep)
+  })
+}
+
+/** 检查路径是否在某个 readwrite 参考目录内 */
+export function isPathWithinReadwriteReferenceDirs(absolutePath: string, referenceDirs: ReferenceDir[]): boolean {
+  const resolved = resolve(absolutePath)
+  return referenceDirs.some(dir => {
+    if ((dir.access ?? 'readonly') !== 'readwrite') return false
     const base = resolve(dir.path)
     return resolved === base || resolved.startsWith(base + sep)
   })
@@ -70,12 +80,13 @@ export function assertSandboxRead(config: ProjectConfig, absolutePath: string, d
 }
 
 /**
- * 沙箱守卫：写入访问（仅 workspace 允许，referenceDirs 不可写）
+ * 沙箱守卫：写入访问（workspace + readwrite 参考目录允许）
  * 用于 write、edit 等写入工具
  */
 export function assertSandboxWrite(config: ProjectConfig, absolutePath: string, displayPath?: string): void {
   if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
+  if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
   throw new Error(t('tool.sandboxBlocked', { path: displayPath ?? absolutePath, workspace: config.workingDirectory }))
 }
 

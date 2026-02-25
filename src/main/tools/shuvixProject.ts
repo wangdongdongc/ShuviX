@@ -21,9 +21,10 @@ const ShuvixProjectParamsSchema = Type.Object({
   referenceDirs: Type.Optional(Type.Array(
     Type.Object({
       path: Type.String({ description: 'Absolute path to reference directory' }),
-      note: Type.Optional(Type.String({ description: 'Note to help AI understand the directory purpose' }))
+      note: Type.Optional(Type.String({ description: 'Note to help AI understand the directory purpose' })),
+      access: Type.Optional(Type.Union([Type.Literal('readonly'), Type.Literal('readwrite')], { description: 'Access mode: readonly (default) or readwrite. In sandbox mode, readonly dirs only allow reading, readwrite dirs allow both.' }))
     }),
-    { description: 'Reference directories for AI to read (read-only in sandbox mode)' }
+    { description: 'Reference directories for AI to access. Each dir has an optional access mode (readonly/readwrite).' }
   ))
 })
 
@@ -43,7 +44,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
         systemPrompt?: string
         sandboxEnabled?: boolean
         enabledTools?: string[]
-        referenceDirs?: Array<{ path: string; note?: string }>
+        referenceDirs?: Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
       }
     ) => {
       // 查找当前会话所属项目
@@ -65,7 +66,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       if (params.action === 'get') {
         // 读取项目配置（无需审批）
         let enabledTools: string[] = []
-        let referenceDirs: Array<{ path: string; note?: string }> = []
+        let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []
         try {
           const settings = JSON.parse(project.settings || '{}')
           enabledTools = settings.enabledTools || []

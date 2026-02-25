@@ -22,7 +22,7 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
   sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
-  referenceDirs: { labelKey: 'projectForm.referenceDirs', desc: 'Reference directories for AI to read (array of {path, note?}), read-only in sandbox mode' }
+  referenceDirs: { labelKey: 'projectForm.referenceDirs', desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite' }
 }
 
 /** 所有已知项目字段描述列表（供 AI prompt / 参数 description 使用） */
@@ -30,6 +30,29 @@ export function getProjectFieldDescriptions(): string {
   return Object.entries(KNOWN_PROJECT_FIELDS)
     .map(([field, e]) => `${field} (${e.desc})`)
     .join(', ')
+}
+
+/**
+ * 参考目录去重：基于 resolve 后的绝对路径去重，同时排除与项目根路径相同的条目
+ * @param dirs 原始参考目录列表
+ * @param projectPath 项目根目录绝对路径（可选，传入时会过滤掉与之相同的条目）
+ */
+function deduplicateReferenceDirs(
+  dirs: Array<{ path: string; note?: string; access?: string }>,
+  projectPath?: string
+): Array<{ path: string; note?: string; access?: string }> {
+  const resolvedProjectPath = projectPath ? resolve(expandPath(projectPath)) : undefined
+  const seen = new Set<string>()
+  const result: Array<{ path: string; note?: string; access?: string }> = []
+  for (const d of dirs) {
+    const abs = resolve(expandPath(d.path))
+    // 跳过与项目根目录相同的条目
+    if (resolvedProjectPath && abs === resolvedProjectPath) continue
+    if (seen.has(abs)) continue
+    seen.add(abs)
+    result.push({ ...d, path: abs })
+  }
+  return result
 }
 
 // ---------- 项目服务 ----------
@@ -67,14 +90,14 @@ export class ProjectService {
     dockerImage?: string
     sandboxEnabled?: boolean
     enabledTools?: string[]
-    referenceDirs?: Array<{ path: string; note?: string }>
+    referenceDirs?: Array<{ path: string; note?: string; access?: string }>
     archived?: boolean
   }): Project {
     const now = Date.now()
     const id = uuidv7()
     const settings: Record<string, any> = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
-    if (params.referenceDirs) settings.referenceDirs = params.referenceDirs.map(d => ({ ...d, path: resolve(expandPath(d.path)) }))
+    if (params.referenceDirs) settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
     const project: Project = {
       id,
       name: params.name || basename(params.path) || params.path,
@@ -101,7 +124,7 @@ export class ProjectService {
     dockerImage?: string
     sandboxEnabled?: boolean
     enabledTools?: string[]
-    referenceDirs?: Array<{ path: string; note?: string }>
+    referenceDirs?: Array<{ path: string; note?: string; access?: string }>
     archived?: boolean
   }): void {
     // 处理 settings JSON 字段（合并而非覆盖）
@@ -110,7 +133,11 @@ export class ProjectService {
       const existing = projectDao.findById(id)
       const current = (() => { try { const p = JSON.parse(existing?.settings || '{}'); return (typeof p === 'object' && p !== null) ? p : {} } catch { return {} } })()
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
-      if (params.referenceDirs !== undefined) current.referenceDirs = params.referenceDirs.map(d => ({ ...d, path: resolve(expandPath(d.path)) }))
+      if (params.referenceDirs !== undefined) {
+        // 获取项目路径用于去重校验
+        const projPath = params.path ?? existing?.path
+        current.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, projPath)
+      }
       settingsUpdate = JSON.stringify(current)
     }
     projectDao.update(id, {

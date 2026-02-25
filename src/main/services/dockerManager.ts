@@ -7,15 +7,13 @@
 
 import { spawn, spawnSync } from 'child_process'
 import { createLogger } from '../logger'
+import type { ReferenceDir } from '../types'
 const log = createLogger('Docker')
 
 /** 补充 macOS 打包应用中缺失的常见路径（Finder 启动时 PATH 极简） */
 const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
 const mergedPATH = [...new Set([...(process.env.PATH?.split(':') ?? []), ...EXTRA_PATHS])].join(':')
 const spawnEnv: NodeJS.ProcessEnv = { ...process.env, PATH: mergedPATH }
-
-/** 容器内固定工作目录，避免与容器自身路径冲突 */
-export const CONTAINER_WORKSPACE = '/isolated-docker-workspace'
 
 /** 容器空闲超时时间（毫秒），超过此时间无命令执行则自动销毁 */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟
@@ -124,7 +122,7 @@ export class DockerManager {
     sessionId: string,
     image: string,
     workingDirectory: string,
-    opts?: { memory?: string; cpus?: string }
+    opts?: { memory?: string; cpus?: string; referenceDirs?: ReferenceDir[] }
   ): Promise<{ containerId: string; isNew: boolean }> {
     // 如果有待销毁定时器，取消它（复用容器）
     this.cancelScheduledDestroy(sessionId)
@@ -291,7 +289,7 @@ export class DockerManager {
     name: string,
     image: string,
     workingDirectory: string,
-    opts?: { memory?: string; cpus?: string }
+    opts?: { memory?: string; cpus?: string; referenceDirs?: ReferenceDir[] }
   ): Promise<string> {
     // 先尝试移除同名旧容器
     try {
@@ -303,10 +301,17 @@ export class DockerManager {
     return new Promise((resolve, reject) => {
       const args = [
         'run', '-d', '--rm',
-        '-v', `${workingDirectory}:${CONTAINER_WORKSPACE}`,
-        '-w', CONTAINER_WORKSPACE,
+        '-v', `${workingDirectory}:${workingDirectory}`,
+        '-w', workingDirectory,
         '--name', name
       ]
+      // 挂载参考目录（与宿主机路径一致）：readonly 用 :ro，readwrite 正常挂载
+      if (opts?.referenceDirs) {
+        for (const dir of opts.referenceDirs) {
+          const roFlag = (dir.access ?? 'readonly') === 'readonly' ? ':ro' : ''
+          args.push('-v', `${dir.path}:${dir.path}${roFlag}`)
+        }
+      }
       // 资源限制
       if (opts?.memory) args.push('--memory', opts.memory)
       if (opts?.cpus) args.push('--cpus', opts.cpus)
