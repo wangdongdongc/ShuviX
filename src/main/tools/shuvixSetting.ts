@@ -79,7 +79,7 @@ export function createShuvixSettingTool(ctx: ToolContext): AgentTool<typeof Shuv
       })
 
       return {
-        content: [{ type: 'text' as const, text: t('tool.shuvixSettingUpdated', { key: params.key, value: params.value }) }],
+        content: [{ type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }],
         details: { key: params.key, value: params.value }
       }
     }

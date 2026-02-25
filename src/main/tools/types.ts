@@ -10,6 +10,9 @@ import { sessionService } from '../services/sessionService'
 import { getTempWorkspace } from '../utils/paths'
 import type { ReferenceDir } from '../types'
 
+/** 中止操作的统一错误消息（用于 sentinel 检查） */
+export const TOOL_ABORTED = 'Aborted'
+
 /** 项目配置（工具执行时动态查询） */
 export interface ProjectConfig {
   /** 项目工作目录（宿主机路径） */

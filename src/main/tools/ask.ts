@@ -5,7 +5,7 @@
 
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import type { ToolContext } from './types'
+import { TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 
 const AskParamsSchema = Type.Object({
@@ -35,7 +35,7 @@ export function createAskTool(ctx: ToolContext): AgentTool<typeof AskParamsSchem
       params: { question: string; options: Array<{ label: string; description: string }>; allowMultiple?: boolean },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       if (!ctx.requestUserInput) {
         throw new Error('requestUserInput callback not available')
@@ -48,14 +48,14 @@ export function createAskTool(ctx: ToolContext): AgentTool<typeof AskParamsSchem
         allowMultiple: params.allowMultiple ?? false
       })
 
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       // 格式化用户选择为文本
       let text: string
       if (selections.length === 0) {
-        text = t('tool.askNoSelection')
+        text = 'User made no selection'
       } else {
-        text = t('tool.askUserSelected', { selections: selections.join(', ') })
+        text = `User selected: ${selections.join(', ')}`
       }
 
       return {

@@ -7,7 +7,7 @@ import { stat } from 'fs/promises'
 import { relative, basename, dirname, resolve, sep } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -96,7 +96,7 @@ export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchem
       params: { path?: string; ignore?: string[] },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       const config = resolveProjectConfig(ctx)
       const searchPath = params.path
@@ -113,10 +113,10 @@ export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchem
       try {
         dirStat = await stat(searchPath)
       } catch {
-        throw new Error(t('tool.fileNotFound', { path: searchPath }))
+        throw new Error(`Path not found: ${searchPath}`)
       }
       if (!dirStat.isDirectory()) {
-        throw new Error(t('tool.lsNotDirectory', { path: searchPath }))
+        throw new Error(`${searchPath} is not a directory`)
       }
 
       // 构建 glob 排除列表
@@ -143,7 +143,7 @@ export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchem
       let output = `${relPath}/\n${tree}`
 
       if (truncated) {
-        output += `\n${t('tool.lsTruncated', { limit: LIMIT })}`
+        output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`
       }
 
       return {

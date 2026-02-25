@@ -9,7 +9,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
 import { dockerManager, CONTAINER_WORKSPACE } from '../services/dockerManager'
-import { resolveProjectConfig, type ToolContext } from './types'
+import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:bash')
@@ -37,7 +37,7 @@ function defaultSpawn(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error(t('tool.aborted')))
+      reject(new Error(TOOL_ABORTED))
       return
     }
 
@@ -83,7 +83,7 @@ function defaultSpawn(
       if (signal) signal.removeEventListener('abort', onAbort)
 
       if (killed && signal?.aborted) {
-        reject(new Error(t('tool.aborted')))
+        reject(new Error(TOOL_ABORTED))
         return
       }
 
@@ -108,7 +108,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
     name: 'bash',
     label: t('tool.bashLabel'),
     description:
-      'Execute a bash command in the working directory. Use this for running shell commands, scripts, installing packages, etc. The command runs in a bash shell with pipe and redirect support.',
+      'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. IMPORTANT: Prefer built-in tools over shell commands when possible — use `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Only use bash when no built-in tool can accomplish the task.',
     parameters: BashParamsSchema,
     execute: async (
       toolCallId: string,
@@ -149,14 +149,14 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
 
         let text = ''
         if (truncated.truncated) {
-          text += `${t('tool.outputTruncated', { lines: truncated.originalLines, size: formatSize(truncated.originalBytes) })}\n\n`
+          text += `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n`
         }
         text += truncated.text
 
         if (result.exitCode === 124) {
-          text += `\n\n${t('tool.cmdTimeout', { timeout })}`
+          text += `\n\n[Command timed out (${timeout}s)]`
         } else if (result.exitCode !== 0) {
-          text += `\n\n${t('tool.exitCode', { code: result.exitCode })}`
+          text += `\n\n[Exit code: ${result.exitCode}]`
         }
 
         return {
@@ -167,8 +167,8 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
           }
         }
       } catch (err: any) {
-        if (err.message === t('tool.aborted')) throw err
-        throw new Error(t('tool.cmdFailed', { message: err.message }))
+        if (err.message === TOOL_ABORTED) throw err
+        throw new Error(`Command failed: ${err.message}`)
       }
     }
   }

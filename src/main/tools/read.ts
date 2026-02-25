@@ -16,7 +16,7 @@ import WordExtractor from 'word-extractor'
 import { truncateLine, truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
-import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
@@ -107,7 +107,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       params: { path: string; offset?: number; limit?: number },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       const config = resolveProjectConfig(ctx)
       const absolutePath = resolveReadPath(params.path, config.workingDirectory)
@@ -127,10 +127,10 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
         const fileStat = { size: s.size, isFile: s.isFile() }
         if (!fileStat.isFile) {
-          throw new Error(t('tool.notAFile', { path: params.path }))
+          throw new Error(`Not a file: ${params.path}`)
         }
 
-        if (signal?.aborted) throw new Error(t('tool.aborted'))
+        if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
         // 判断是否为富文本文件，使用 markitdown-ts 转换
         const ext = extname(absolutePath).toLowerCase()
@@ -145,12 +145,12 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
         // 已知二进制格式：直接拒绝
         if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
-          throw new Error(t('tool.unsupportedFormat', { path: params.path, ext }))
+          throw new Error(`Unsupported format (${ext}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`)
         }
 
         // 检测是否为二进制（只读取前 8KB，不加载整个文件）
         if (await isBinaryFile(absolutePath, fileStat.size)) {
-          throw new Error(t('tool.unsupportedFormat', { path: params.path, ext: ext || 'binary' }))
+          throw new Error(`Unsupported format (${ext || 'binary'}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`)
         }
 
         // 纯文本文件：流式逐行读取
@@ -159,20 +159,20 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
         recordRead(ctx.sessionId, absolutePath)
         return result
       } catch (err: any) {
-        if (err.message === t('tool.aborted')) throw err
+        if (err.message === TOOL_ABORTED) throw err
         if (err.code === 'ENOENT') {
           // 模糊匹配建议
           const suggestions = suggestSimilarFiles(absolutePath)
           if (suggestions.length > 0) {
             throw new Error(
-              t('tool.fileNotFound', { path: params.path }) +
+              `File not found: ${params.path}` +
               '\n\nDid you mean one of these?\n' +
               suggestions.join('\n')
             )
           }
-          throw new Error(t('tool.fileNotFound', { path: params.path }))
+          throw new Error(`File not found: ${params.path}`)
         }
-        throw new Error(t('tool.cmdFailed', { message: err.message }))
+        throw new Error(`Failed: ${err.message}`)
       }
     }
   }
@@ -198,14 +198,14 @@ async function readDirectory(
   const endIndex = start + shown
   const truncated = endIndex < total
 
-  let text = t('tool.dirHeader', { path: params.path, count: total }) + '\n'
+  let text = `Directory: ${params.path} (${total} entries)\n`
   if (params.offset || params.limit) {
-    text += t('tool.dirShowingEntries', { start: offset, end: offset + shown - 1 }) + '\n'
+    text += `Showing: entries ${offset}-${offset + shown - 1}\n`
   }
   text += '\n' + sliced.join('\n')
   text += '\n\n' + (truncated
-    ? t('tool.dirPagination', { shown, total, next: endIndex + 1 })
-    : t('tool.dirAllEntries', { count: total }))
+    ? `(Showing ${shown} of ${total} entries. Use offset=${endIndex + 1} to continue.)`
+    : `(${total} entries)`)
 
   return {
     content: [{ type: 'text' as const, text }],
@@ -225,12 +225,12 @@ async function readRichFile(
   fileSize: number,
   signal?: AbortSignal
 ) {
-  if (signal?.aborted) throw new Error(t('tool.aborted'))
+  if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const md = getMarkItDown()
   const result = await md.convert(absolutePath)
   if (!result || !result.markdown) {
-    throw new Error(t('tool.convertFailed', { path: displayPath }))
+    throw new Error(`Failed to convert: ${displayPath}`)
   }
 
   let text = result.markdown
@@ -238,15 +238,14 @@ async function readRichFile(
   // 截断处理
   const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
   if (truncated.truncated) {
-    text = `${t('tool.outputTruncated', { lines: text.split('\n').length, size: formatSize(fileSize) })}\n\n${truncated.text}`
+    text = `[Output truncated: ${text.split('\n').length} lines / ${formatSize(fileSize)}]\n\n${truncated.text}`
   } else {
     text = truncated.text
   }
 
   // 文件信息头
   const ext = extname(absolutePath).toLowerCase().slice(1).toUpperCase()
-  const header = t('tool.convertedHeader', { path: displayPath, format: ext, size: formatSize(fileSize) })
-  text = `${header}\n\n${text}`
+  text = `File: ${displayPath} (${ext}, ${formatSize(fileSize)}) — converted to Markdown\n\n${text}`
 
   return {
     content: [{ type: 'text' as const, text }],
@@ -268,26 +267,25 @@ async function readLegacyDoc(
   fileSize: number,
   signal?: AbortSignal
 ) {
-  if (signal?.aborted) throw new Error(t('tool.aborted'))
+  if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const extractor = getWordExtractor()
   const doc = await extractor.extract(absolutePath)
   let text = doc.getBody()?.trim()
   if (!text) {
-    throw new Error(t('tool.convertFailed', { path: displayPath }))
+    throw new Error(`Failed to convert: ${displayPath}`)
   }
 
   // 截断处理
   const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
   if (truncated.truncated) {
-    text = `${t('tool.outputTruncated', { lines: text.split('\n').length, size: formatSize(fileSize) })}\n\n${truncated.text}`
+    text = `[Output truncated: ${text.split('\n').length} lines / ${formatSize(fileSize)}]\n\n${truncated.text}`
   } else {
     text = truncated.text
   }
 
   // 文件信息头
-  const header = t('tool.convertedHeader', { path: displayPath, format: 'DOC', size: formatSize(fileSize) })
-  text = `${header}\n\n${text}`
+  text = `File: ${displayPath} (DOC, ${formatSize(fileSize)}) — converted to Markdown\n\n${text}`
 
   return {
     content: [{ type: 'text' as const, text }],
@@ -374,9 +372,9 @@ async function readTextFile(
   }
 
   // 文件信息头
-  const header = t('tool.fileHeader', { path: params.path, lines: totalLines, size: formatSize(fileStat.size) })
+  const header = `File: ${params.path} (${totalLines} lines, ${formatSize(fileStat.size)})`
   if (params.offset || params.limit) {
-    text = `${header}\n${t('tool.showingLines', { start: offset, end: lastReadLine })}\n\n${text}`
+    text = `${header}\nShowing: lines ${offset}-${lastReadLine}\n\n${text}`
   } else {
     text = `${header}\n\n${text}`
   }

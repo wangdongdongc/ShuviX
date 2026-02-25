@@ -9,7 +9,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { assertNotModifiedSinceRead, withFileLock, recordRead } from './utils/fileTime'
-import { resolveProjectConfig, assertSandboxWrite, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxWrite, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:edit')
@@ -55,7 +55,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
         details: { diff: string; firstChangedLine?: number } | undefined
       }>((resolve, reject) => {
         if (signal?.aborted) {
-          reject(new Error(t('tool.aborted')))
+          reject(new Error(TOOL_ABORTED))
           return
         }
 
@@ -63,7 +63,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
 
         const onAbort = (): void => {
           aborted = true
-          reject(new Error(t('tool.aborted')))
+          reject(new Error(TOOL_ABORTED))
         }
 
         if (signal) {
@@ -77,7 +77,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               await fsAccess(absolutePath, constants.R_OK | constants.W_OK)
             } catch {
               if (signal) signal.removeEventListener('abort', onAbort)
-              reject(new Error(t('tool.fileNotFound', { path: params.path })))
+              reject(new Error(`File not found: ${params.path}`))
               return
             }
 
@@ -106,7 +106,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               if (signal) signal.removeEventListener('abort', onAbort)
               reject(
                 new Error(
-                  t('tool.editNoMatch', { path: params.path })
+                  `No match found in ${params.path}. The oldText must match exactly, including all whitespace and newlines.`
                 )
               )
               return
@@ -121,7 +121,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               if (signal) signal.removeEventListener('abort', onAbort)
               reject(
                 new Error(
-                  t('tool.editMultiMatch', { path: params.path, count: occurrences })
+                  `Found ${occurrences} matches in ${params.path}. The text must be unique; provide more context.`
                 )
               )
               return
@@ -139,7 +139,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
             // 验证替换是否有效
             if (baseContent === newContent) {
               if (signal) signal.removeEventListener('abort', onAbort)
-              reject(new Error(t('tool.editNoChange', { path: params.path })))
+              reject(new Error(`No change produced: ${params.path}`))
               return
             }
 
@@ -159,7 +159,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               content: [
                 {
                   type: 'text',
-                  text: t('tool.editSuccess', { path: params.path })
+                  text: `Successfully edited ${params.path}`
                 }
               ],
               details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine }

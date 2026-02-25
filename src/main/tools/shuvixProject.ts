@@ -54,14 +54,14 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       const session = sessionService.getById(ctx.sessionId)
       if (!session?.projectId) {
         return {
-          content: [{ type: 'text' as const, text: t('tool.shuvixProjectNoProject') }],
+          content: [{ type: 'text' as const, text: 'No project linked to current session. Cannot read or modify project config.' }],
           details: undefined
         }
       }
       const project = projectService.getById(session.projectId)
       if (!project) {
         return {
-          content: [{ type: 'text' as const, text: t('tool.shuvixProjectNoProject') }],
+          content: [{ type: 'text' as const, text: 'No project linked to current session. Cannot read or modify project config.' }],
           details: undefined
         }
       }
@@ -126,7 +126,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       projectService.update(project.id, updates)
 
       return {
-        content: [{ type: 'text' as const, text: t('tool.shuvixProjectUpdated', { fields: Object.keys(updates).join(', ') }) }],
+        content: [{ type: 'text' as const, text: `Project config updated: ${Object.keys(updates).join(', ')}` }],
         details: { updatedFields: Object.keys(updates) }
       }
     }

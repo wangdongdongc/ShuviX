@@ -28,7 +28,8 @@ vi.mock('../types', () => ({
     return r === base || r.startsWith(base + sep)
   },
   assertSandboxRead: () => {},
-  assertSandboxWrite: () => {}
+  assertSandboxWrite: () => {},
+  TOOL_ABORTED: 'Aborted'
 }))
 
 // mock i18n
@@ -165,7 +166,7 @@ describe('ls 工具 - 截断', () => {
     expect(result.details.truncated).toBe(true)
     expect(result.details.count).toBe(100)
     const text = getText(result)
-    expect(text).toContain('lsTruncated')
+    expect(text).toContain('Results truncated')
   })
 })
 
@@ -176,7 +177,7 @@ describe('ls 工具 - 错误处理', () => {
       await tool.execute('tc8', { path: join(TEST_DIR, 'nonexistent') })
       expect.fail('应该抛错')
     } catch (err: any) {
-      expect(err.message).toContain('tool.fileNotFound')
+      expect(err.message).toContain('Path not found')
     }
   })
 
@@ -186,7 +187,7 @@ describe('ls 工具 - 错误处理', () => {
       await tool.execute('tc9', { path: join(TEST_DIR, 'README.md') })
       expect.fail('应该抛错')
     } catch (err: any) {
-      expect(err.message).toContain('lsNotDirectory')
+      expect(err.message).toContain('is not a directory')
     }
   })
 })

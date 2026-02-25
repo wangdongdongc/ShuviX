@@ -8,7 +8,7 @@ import { resolve, relative } from 'path'
 import { statSync } from 'fs'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -40,7 +40,7 @@ export function createGlobTool(ctx: ToolContext): AgentTool<typeof GlobParamsSch
       params: { pattern: string; path?: string },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       if (!params.pattern) {
         throw new Error('pattern is required')
@@ -61,10 +61,10 @@ export function createGlobTool(ctx: ToolContext): AgentTool<typeof GlobParamsSch
       try {
         dirStat = await stat(searchPath)
       } catch {
-        throw new Error(t('tool.fileNotFound', { path: searchPath }))
+        throw new Error(`Path not found: ${searchPath}`)
       }
       if (!dirStat.isDirectory()) {
-        throw new Error(t('tool.lsNotDirectory', { path: searchPath }))
+        throw new Error(`${searchPath} is not a directory`)
       }
 
       // 使用 ripgrep 列举匹配文件

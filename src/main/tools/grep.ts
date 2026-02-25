@@ -7,7 +7,7 @@ import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig, assertSandboxRead, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgSearch } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -45,7 +45,7 @@ export function createGrepTool(ctx: ToolContext): AgentTool<typeof GrepParamsSch
       params: { pattern: string; path?: string; include?: string },
       signal?: AbortSignal
     ) => {
-      if (signal?.aborted) throw new Error(t('tool.aborted'))
+      if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       if (!params.pattern) {
         throw new Error('pattern is required')
@@ -66,10 +66,10 @@ export function createGrepTool(ctx: ToolContext): AgentTool<typeof GrepParamsSch
       try {
         dirStat = await stat(searchPath)
       } catch {
-        throw new Error(t('tool.fileNotFound', { path: searchPath }))
+        throw new Error(`Path not found: ${searchPath}`)
       }
       if (!dirStat.isDirectory()) {
-        throw new Error(t('tool.lsNotDirectory', { path: searchPath }))
+        throw new Error(`${searchPath} is not a directory`)
       }
 
       // 使用 ripgrep 搜索

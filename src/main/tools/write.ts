@@ -9,7 +9,7 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
 import { assertNotModifiedSinceRead, withFileLock, recordRead, getReadTime } from './utils/fileTime'
-import { resolveProjectConfig, assertSandboxWrite, type ToolContext } from './types'
+import { resolveProjectConfig, assertSandboxWrite, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:write')
@@ -45,7 +45,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
         (resolve, reject) => {
           if (signal?.aborted) {
-            reject(new Error(t('tool.aborted')))
+            reject(new Error(TOOL_ABORTED))
             return
           }
 
@@ -53,7 +53,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
 
           const onAbort = (): void => {
             aborted = true
-            reject(new Error(t('tool.aborted')))
+            reject(new Error(TOOL_ABORTED))
           }
 
           if (signal) {
@@ -80,7 +80,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
               if (signal) signal.removeEventListener('abort', onAbort)
 
               resolve({
-                content: [{ type: 'text', text: t('tool.writeSuccess', { bytes: params.content.length, path: params.path }) }],
+                content: [{ type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }],
                 details: undefined
               })
             } catch (error: any) {

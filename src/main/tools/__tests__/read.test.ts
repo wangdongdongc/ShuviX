@@ -27,7 +27,8 @@ vi.mock('../types', () => ({
   },
   isPathWithinReferenceDirs: () => false,
   assertSandboxRead: () => {},
-  assertSandboxWrite: () => {}
+  assertSandboxWrite: () => {},
+  TOOL_ABORTED: 'Aborted'
 }))
 
 // mock i18n — 返回 key 本身（带参数展开）
@@ -180,8 +181,8 @@ describe('read 工具 - 目录读取', () => {
     const text = getText(result)
     expect(result.details.totalEntries).toBe(10)
     expect(result.details.truncated).toBe(true)
-    // 应包含分页提示（mock t() 将参数展开为 key=value 格式）
-    expect(text).toContain('next=4')
+    // 应包含分页提示
+    expect(text).toContain('offset=4')
   })
 })
 
@@ -202,7 +203,7 @@ describe('read 工具 - 文件不存在', () => {
       await tool.execute('tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
       expect.fail('应该抛错')
     } catch (err: any) {
-      expect(err.message).toContain('tool.fileNotFound')
+      expect(err.message).toContain('File not found')
       expect(err.message).not.toContain('Did you mean')
     }
   })
@@ -215,7 +216,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
       await tool.execute('tc9', { path: join(TEST_DIR, 'image.png') })
       expect.fail('应该抛错')
     } catch (err: any) {
-      expect(err.message).toContain('tool.unsupportedFormat')
+      expect(err.message).toContain('Unsupported format')
     }
   })
 
@@ -225,7 +226,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
       await tool.execute('tc10', { path: join(TEST_DIR, 'binary.dat') })
       expect.fail('应该抛错')
     } catch (err: any) {
-      expect(err.message).toContain('tool.unsupportedFormat')
+      expect(err.message).toContain('Unsupported format')
     }
   })
 })
