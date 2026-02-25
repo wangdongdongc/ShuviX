@@ -12,17 +12,17 @@ export class ProviderDao {
 
   // ============ 提供商操作 ============
 
-  /** 获取所有提供商，按 sortOrder 排序 */
+  /** 获取所有提供商，自定义在前，再按 sortOrder 排序 */
   findAll(): Provider[] {
     return this.db
-      .prepare('SELECT * FROM providers ORDER BY sortOrder ASC')
+      .prepare('SELECT * FROM providers ORDER BY isBuiltin ASC, sortOrder ASC')
       .all() as Provider[]
   }
 
-  /** 获取所有已启用的提供商 */
+  /** 获取所有已启用的提供商，自定义在前 */
   findEnabled(): Provider[] {
     return this.db
-      .prepare('SELECT * FROM providers WHERE isEnabled = 1 ORDER BY sortOrder ASC')
+      .prepare('SELECT * FROM providers WHERE isEnabled = 1 ORDER BY isBuiltin ASC, sortOrder ASC')
       .all() as Provider[]
   }
 
@@ -136,7 +136,7 @@ export class ProviderDao {
   findAllEnabledModels(): (ProviderModel & { providerName: string })[] {
     return this.db
       .prepare(`
-        SELECT pm.*, p.name as providerName
+        SELECT pm.*, COALESCE(NULLIF(p.displayName, ''), p.name) as providerName
         FROM provider_models pm
         JOIN providers p ON pm.providerId = p.id
         WHERE p.isEnabled = 1 AND pm.isEnabled = 1

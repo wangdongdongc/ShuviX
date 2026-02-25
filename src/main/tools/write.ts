@@ -8,6 +8,7 @@ import { dirname } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
+import { assertNotModifiedSinceRead, withFileLock, recordRead, getReadTime } from './utils/fileTime'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -63,10 +64,19 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
 
           ;(async () => {
             try {
+              // 仅当文件已存在且曾被读取过时，校验是否被外部修改（新建文件无需检查）
+              if (getReadTime(ctx.sessionId, absolutePath)) {
+                assertNotModifiedSinceRead(ctx.sessionId, absolutePath)
+              }
+
               await fsMkdir(dir, { recursive: true })
               if (aborted) return
 
-              await fsWriteFile(absolutePath, params.content, 'utf-8')
+              await withFileLock(absolutePath, async () => {
+                await fsWriteFile(absolutePath, params.content, 'utf-8')
+              })
+              // 写入后更新读取时间
+              recordRead(ctx.sessionId, absolutePath)
               if (aborted) return
 
               if (signal) signal.removeEventListener('abort', onAbort)

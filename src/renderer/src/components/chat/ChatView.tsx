@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder } from 'lucide-react'
-import { useChatStore, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectStreamingContent, selectStreamingThinking, selectIsStreaming, type ChatMessage } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
@@ -49,8 +49,8 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
 function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): VisibleItem[] {
   const items: VisibleItem[] = []
   for (const msg of messages) {
-    // 跳过 system_notify（但保留 docker_event 类型）
-    if (msg.role === 'system_notify' && msg.type !== 'docker_event') continue
+    // 跳过 system_notify（但保留 docker_event / error_event 类型）
+    if (msg.role === 'system_notify' && msg.type !== 'docker_event' && msg.type !== 'error_event') continue
     // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
     if (msg.type === 'tool_call') {
       const meta = toolIndex.metaCache.get(msg.id)
@@ -74,12 +74,15 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
  * 使用 react-virtuoso 虚拟滚动，仅渲染可视区域内的消息
  */
 export function ChatView(): React.JSX.Element {
-  const { messages, streamingContent, streamingThinking, isStreaming, activeSessionId, sessions } = useChatStore()
+  const { messages, activeSessionId, sessions } = useChatStore()
+  const streamingContent = useChatStore(selectStreamingContent)
+  const streamingThinking = useChatStore(selectStreamingThinking)
+  const isStreaming = useChatStore(selectIsStreaming)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
   const scrollRafRef = useRef<number>(0)
 
-  const { projectPath } = useSessionMeta(activeSessionId)
+  const { projectPath } = useSessionMeta()
   const activeSession = sessions.find((s) => s.id === activeSessionId)
   const sessionTitle = activeSession?.title || null
 
@@ -143,7 +146,6 @@ export function ChatView(): React.JSX.Element {
   const renderItem = useCallback((_index: number, item: VisibleItem) => (
     <MessageRenderer
       item={item}
-      isLastMessage={item.msg.id === messages[messages.length - 1]?.id}
       lastAssistantTextId={lastAssistantTextId}
       onRollback={handleRollback}
       onRegenerate={handleRegenerate}

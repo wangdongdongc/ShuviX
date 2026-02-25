@@ -1,30 +1,19 @@
-import { useState, useEffect } from 'react'
 import { useChatStore } from '../stores/chatStore'
 
 export interface SessionMeta {
   projectPath: string | null
+  agentMdLoaded: boolean
+  claudeMdLoaded: boolean
 }
 
 /**
- * 会话元信息 Hook — 会话切换时恢复 projectPath 和 enabledTools
- * @param activeSessionId 当前活动会话ID
+ * 会话元信息 Hook — 从 store 中读取（数据由 useSessionInit 写入）
+ * 不再单独发 IPC，避免与 agent.init 的时序竞争
  */
-export function useSessionMeta(activeSessionId: string | null): SessionMeta {
-  const [projectPath, setProjectPath] = useState<string | null>(null)
+export function useSessionMeta(): SessionMeta {
+  const projectPath = useChatStore((s) => s.projectPath)
+  const agentMdLoaded = useChatStore((s) => s.agentMdLoaded)
+  const claudeMdLoaded = useChatStore((s) => s.claudeMdLoaded)
 
-  useEffect(() => {
-    if (!activeSessionId) {
-      setProjectPath(null)
-      return
-    }
-    // 由后端 service 层统一解析 workingDirectory 和 enabledTools
-    window.api.session.getById(activeSessionId).then((s) => {
-      setProjectPath(s?.workingDirectory || null)
-      if (s?.enabledTools) {
-        useChatStore.getState().setEnabledTools(s.enabledTools)
-      }
-    })
-  }, [activeSessionId])
-
-  return { projectPath }
+  return { projectPath, agentMdLoaded, claudeMdLoaded }
 }

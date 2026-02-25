@@ -15,6 +15,10 @@ export interface Session {
   workingDirectory?: string | null
   /** 当前生效的工具列表（计算属性，由 service 层解析：session > project > all） */
   enabledTools?: string[]
+  /** 项目 AGENT.md 是否存在并已加载（计算属性） */
+  agentMdLoaded?: boolean
+  /** 项目 CLAUDE.md 是否存在并已加载（计算属性） */
+  claudeMdLoaded?: boolean
 }
 
 /** IPC: 更新会话标题参数 */

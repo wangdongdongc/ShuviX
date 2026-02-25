@@ -9,6 +9,18 @@ export const DEFAULT_MAX_LINES = 2000
 /** 默认最大字节数（50KB） */
 export const DEFAULT_MAX_BYTES = 50 * 1024
 
+/** 单行最大字符数 */
+export const MAX_LINE_LENGTH = 2000
+
+/** 单行截断后缀 */
+const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
+
+/** 截断超长单行（minified JS/CSS 等场景，避免浪费 token） */
+export function truncateLine(line: string): string {
+  if (line.length <= MAX_LINE_LENGTH) return line
+  return line.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX
+}
+
 /** 格式化文件大小 */
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`

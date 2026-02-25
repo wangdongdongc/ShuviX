@@ -29,6 +29,8 @@ class DatabaseManager {
 
     measure('database: initTables', () => this.initTables())
     measure('database: migrate', () => this.migrate())
+    // 种子数据在迁移之后执行，确保新列已存在
+    measure('database: seed', () => this.seedProviders())
     mark('database: ready')
   }
 
@@ -38,6 +40,23 @@ class DatabaseManager {
     const projectCols = this.db.pragma('table_info(projects)') as { name: string }[]
     if (!projectCols.find((c) => c.name === 'archivedAt')) {
       this.db.exec('ALTER TABLE projects ADD COLUMN archivedAt INTEGER NOT NULL DEFAULT 0')
+    }
+
+    // 为已有 providers 表添加 displayName 列
+    const providerCols = this.db.pragma('table_info(providers)') as { name: string }[]
+    if (!providerCols.find((c) => c.name === 'displayName')) {
+      this.db.exec("ALTER TABLE providers ADD COLUMN displayName TEXT NOT NULL DEFAULT ''")
+    }
+
+    // 旧版内置提供商名称迁移为 pi-ai slug（name 用作 getModel() 的 provider slug）
+    const renameMap: Record<string, { slug: string; displayName: string }> = {
+      'OpenAI': { slug: 'openai', displayName: 'OpenAI' },
+      'Anthropic': { slug: 'anthropic', displayName: 'Anthropic' },
+      'Google': { slug: 'google', displayName: 'Google' },
+    }
+    const renameStmt = this.db.prepare('UPDATE providers SET name = ?, displayName = ? WHERE name = ? AND isBuiltin = 1')
+    for (const [oldName, { slug, displayName }] of Object.entries(renameMap)) {
+      renameStmt.run(slug, displayName, oldName)
     }
   }
 
@@ -76,6 +95,7 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS providers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
+        displayName TEXT NOT NULL DEFAULT '',
         apiKey TEXT DEFAULT '',
         baseUrl TEXT DEFAULT '',
         apiProtocol TEXT NOT NULL DEFAULT 'openai-completions',
@@ -141,51 +161,50 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
-
-
-    // 种子数据：内置提供商和模型
-    this.seedProviders()
   }
 
-  /** 种子数据：预置提供商和模型列表 */
+  /**
+   * 种子数据：预置内置提供商
+   * 模型列表由 providerService.syncAllBuiltinModels() 在启动时从 pi-ai 注册表同步
+   */
   private seedProviders(): void {
     const now = Date.now()
 
-    const builtinProviders = [
-      { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0,
-        models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3-mini', 'o4-mini'],
-        defaultEnabled: ['gpt-4o-mini'] },
-      { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1,
-        models: ['claude-sonnet-4-20250514', 'claude-haiku-3-5-20241022', 'claude-opus-4-20250514'],
-        defaultEnabled: ['claude-sonnet-4-20250514'] },
-      { name: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2,
-        models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
-        defaultEnabled: ['gemini-2.5-flash'] }
+    // name 必须与 pi-ai 的 provider slug 一致（agent.ts 用 name.toLowerCase() 调 getModel()）
+    const builtinProviders: Array<{ name: string; displayName: string; baseUrl: string; apiProtocol: string; sortOrder: number }> = [
+      { name: 'openai', displayName: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0 },
+      { name: 'anthropic', displayName: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1 },
+      { name: 'google', displayName: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2 },
+      { name: 'xai', displayName: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1', apiProtocol: 'openai-completions', sortOrder: 3 },
+      { name: 'groq', displayName: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiProtocol: 'openai-completions', sortOrder: 4 },
+      { name: 'cerebras', displayName: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', apiProtocol: 'openai-completions', sortOrder: 5 },
+      { name: 'mistral', displayName: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', apiProtocol: 'openai-completions', sortOrder: 6 },
+      { name: 'openrouter', displayName: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiProtocol: 'openai-completions', sortOrder: 7 },
+      { name: 'minimax', displayName: 'MiniMax', baseUrl: 'https://api.minimaxi.chat/v1', apiProtocol: 'openai-completions', sortOrder: 8 },
+      { name: 'minimax-cn', displayName: 'MiniMax CN', baseUrl: 'https://api.minimax.chat/v1', apiProtocol: 'openai-completions', sortOrder: 9 },
+      { name: 'huggingface', displayName: 'Hugging Face', baseUrl: 'https://router.huggingface.co/v1', apiProtocol: 'openai-completions', sortOrder: 10 },
+      { name: 'opencode', displayName: 'OpenCode', baseUrl: 'https://opencode.ai/zen/v1', apiProtocol: 'openai-completions', sortOrder: 11 },
+      { name: 'kimi-coding', displayName: 'Kimi Coding', baseUrl: 'https://api.kimi.com/coding', apiProtocol: 'anthropic-messages', sortOrder: 12 },
+      { name: 'zai', displayName: 'ZAI (智谱)', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiProtocol: 'openai-completions', sortOrder: 13 },
     ]
 
-    const findByName = this.db.prepare('SELECT id FROM providers WHERE name = ?')
+    const findByName = this.db.prepare('SELECT id, displayName FROM providers WHERE name = ?')
     const insertProvider = this.db.prepare(
-      'INSERT INTO providers (id, name, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)'
+      'INSERT INTO providers (id, name, displayName, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)'
     )
-    const findModel = this.db.prepare('SELECT id FROM provider_models WHERE providerId = ? AND modelId = ?')
-    const insertModel = this.db.prepare(
-      'INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, ?, ?)'
+    const updateDisplayName = this.db.prepare(
+      'UPDATE providers SET displayName = ? WHERE id = ?'
     )
 
     const seedAll = this.db.transaction(() => {
       for (const p of builtinProviders) {
-        let existing = findByName.get(p.name) as { id: string } | undefined
+        const existing = findByName.get(p.name) as { id: string; displayName: string } | undefined
         if (!existing) {
-          const id = uuidv7()
-          insertProvider.run(id, p.name, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
-          existing = { id }
+          insertProvider.run(uuidv7(), p.name, p.displayName, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
+        } else if (!existing.displayName) {
+          // 旧数据迁移：补充 displayName
+          updateDisplayName.run(p.displayName, existing.id)
         }
-        const providerId = existing.id
-        p.models.forEach((modelId, idx) => {
-          if (!findModel.get(providerId, modelId)) {
-            insertModel.run(uuidv7(), providerId, modelId, p.defaultEnabled.includes(modelId) ? 1 : 0, idx)
-          }
-        })
       }
     })
     seedAll()

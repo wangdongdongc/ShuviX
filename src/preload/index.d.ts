@@ -35,6 +35,8 @@ import type {
   SkillUpdateParams
 } from '../main/types'
 
+declare global {
+
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
   type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request' | 'user_input_request'
@@ -82,6 +84,10 @@ interface Session {
   workingDirectory?: string | null
   /** 当前生效的工具列表（计算属性，由后端解析：session > project > all） */
   enabledTools?: string[]
+  /** 项目 AGENT.md 是否存在并已加载（计算属性） */
+  agentMdLoaded?: boolean
+  /** 项目 CLAUDE.md 是否存在并已加载（计算属性） */
+  claudeMdLoaded?: boolean
 }
 
 /** 消息类型 */
@@ -89,7 +95,7 @@ interface ChatMessage {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
+  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'error_event'
   content: string
   metadata: string | null
   model: string
@@ -100,6 +106,8 @@ interface ChatMessage {
 interface ProviderInfo {
   id: string
   name: string
+  /** 用户友好的显示名称（内置提供商使用，如 "OpenAI"） */
+  displayName: string
   apiKey: string
   baseUrl: string
   apiProtocol: 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
@@ -150,7 +158,7 @@ interface ShuviXAPI {
   agent: {
     init: (params: AgentInitParams) => Promise<AgentInitResult>
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
-    abort: (sessionId: string) => Promise<{ success: boolean }>
+    abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
@@ -246,9 +254,8 @@ interface ShuviXAPI {
   }
 }
 
-declare global {
   interface Window {
     electron: ElectronAPI
     api: ShuviXAPI
   }
-}
+} // declare global

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Eye, EyeOff, Save, ChevronDown, ChevronRight, Trash2, Plus, X, TriangleAlert } from 'lucide-react'
-import { useSettingsStore, type ProviderModelInfo } from '../../stores/settingsStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 /** 能力标签 key 列表（desc 通过 i18n 查找） */
 const CAPABILITY_KEYS = [
@@ -125,7 +125,7 @@ export function ProviderSettings(): React.JSX.Element {
       if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
         updates.apiKey = edits.apiKey
       }
-      if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
+      if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
         updates.baseUrl = edits.baseUrl
       }
       if (Object.keys(updates).length > 0) {
@@ -317,10 +317,10 @@ export function ProviderSettings(): React.JSX.Element {
                   {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </button>
                 <span className="flex-1 text-xs font-medium text-text-primary">
-                  {p.name}
-                  {!p.isBuiltin && (
-                    <span className="ml-1.5 text-[10px] text-text-tertiary font-normal">{t('settings.custom')}</span>
-                  )}
+                  {p.isBuiltin ? (
+                    <span className="mr-1 text-[10px] text-text-tertiary font-normal">{t('settings.builtin')}</span>
+                  ) : null}
+                  {p.displayName || p.name}
                 </span>
                 {/* 删除自定义提供商 */}
                 {!p.isBuiltin && (
@@ -356,7 +356,7 @@ export function ProviderSettings(): React.JSX.Element {
                         type={showKeys[p.id] ? 'text' : 'password'}
                         value={edits.apiKey ?? p.apiKey}
                         onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
-                        placeholder={t('settings.apiKeyPlaceholder', { name: p.name })}
+                        placeholder={t('settings.apiKeyPlaceholder', { name: p.displayName || p.name })}
                         className="flex-1 bg-transparent px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none"
                       />
                       <button
@@ -374,9 +374,12 @@ export function ProviderSettings(): React.JSX.Element {
                     <input
                       type="text"
                       value={edits.baseUrl ?? p.baseUrl}
-                      onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
+                      onChange={(e) => !p.isBuiltin && updateLocalEdit(p.id, 'baseUrl', e.target.value)}
+                      disabled={!!p.isBuiltin}
                       placeholder={t('settings.baseUrlPlaceholder')}
-                      className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
+                      className={`w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors ${
+                        p.isBuiltin ? 'opacity-60 cursor-not-allowed' : 'focus:border-accent/50'
+                      }`}
                     />
                   </div>
 

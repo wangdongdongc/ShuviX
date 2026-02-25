@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, selectToolExecutions } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 interface UserActionPanelProps {
@@ -22,12 +22,9 @@ export function UserActionPanel({ onUserInput, onApproval }: UserActionPanelProp
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
   // 从 store 查找当前需要用户操作的工具执行
-  const pendingAsk = useChatStore((s) =>
-    s.toolExecutions.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
-  )
-  const pendingApproval = useChatStore((s) =>
-    s.toolExecutions.find((te) => te.status === 'pending_approval')
-  )
+  const toolExecutions = useChatStore(selectToolExecutions)
+  const pendingAsk = toolExecutions.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
+  const pendingApproval = toolExecutions.find((te) => te.status === 'pending_approval')
 
   // ask 优先（两者不会同时出现，但保险起见）
   if (pendingAsk) {

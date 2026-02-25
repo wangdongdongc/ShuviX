@@ -21,10 +21,10 @@ export function registerAgentHandlers(): void {
     return { success: true }
   })
 
-  /** 中止指定 session 的生成 */
+  /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {
-    agentService.abort(sessionId)
-    return { success: true }
+    const savedMessage = agentService.abort(sessionId)
+    return { success: true, savedMessage: savedMessage || undefined }
   })
 
   /** 切换指定 session 的模型 */

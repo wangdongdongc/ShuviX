@@ -27,8 +27,9 @@ export function ToolCallBlock({
 
   // 从 store 读取实时工具执行状态，确保审批状态变更时组件能独立重渲染
   const liveStatus = useChatStore((s) => {
-    if (!toolCallId) return undefined
-    return s.toolExecutions.find((te) => te.toolCallId === toolCallId)?.status
+    if (!toolCallId || !s.activeSessionId) return undefined
+    const execs = s.sessionToolExecutions[s.activeSessionId]
+    return execs?.find((te) => te.toolCallId === toolCallId)?.status
   })
   const status = liveStatus || propStatus
 

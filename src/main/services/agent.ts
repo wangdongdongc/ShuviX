@@ -18,6 +18,7 @@ import { createShuvixProjectTool } from '../tools/shuvixProject'
 import { createShuvixSettingTool } from '../tools/shuvixSetting'
 import { createSkillTool } from '../tools/skill'
 import { resolveProjectConfig, type ToolContext } from '../tools/types'
+import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
@@ -27,9 +28,32 @@ import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
 import { mcpService } from './mcpService'
 import { createTransformContext } from './contextManager'
 import { createLogger } from '../logger'
+import { existsSync, readFileSync } from 'fs'
+import { join } from 'path'
 const log = createLogger('Agent')
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
+
+/**
+ * 内置提供商 → 环境变量名映射
+ * pi-ai SDK 通过环境变量获取 API Key，此处将用户在 DB 中配置的 key 注入 process.env
+ */
+const BUILTIN_ENV_MAP: Record<string, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  xai: 'XAI_API_KEY',
+  groq: 'GROQ_API_KEY',
+  cerebras: 'CEREBRAS_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  minimax: 'MINIMAX_API_KEY',
+  'minimax-cn': 'MINIMAX_CN_API_KEY',
+  huggingface: 'HF_TOKEN',
+  opencode: 'OPENCODE_API_KEY',
+  'kimi-coding': 'KIMI_API_KEY',
+  zai: 'ZAI_API_KEY',
+}
 
 /** 根据启用列表构建工具子集（内置 + MCP + Skill 合并） */
 function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
@@ -83,6 +107,24 @@ function extractBase64(img: any): string {
     return img.preview.split(',')[1]
   }
   return ''
+}
+
+/** 读取项目根目录指令文件（不存在或读取失败时返回空） */
+function readProjectInstructionMd(projectPath: string, fileName: 'AGENT.md' | 'CLAUDE.md'): string {
+  const filePath = join(projectPath, fileName)
+  if (!existsSync(filePath)) return ''
+  try {
+    return readFileSync(filePath, 'utf-8').trim()
+  } catch (err: any) {
+    log.warn(`读取 ${fileName} 失败: ${filePath} (${err?.message || String(err)})`)
+    return ''
+  }
+}
+
+/** 会话级项目指令文件加载状态（由 AgentService 统一维护） */
+interface ProjectInstructionLoadState {
+  agentMdLoaded: boolean
+  claudeMdLoaded: boolean
 }
 
 /**
@@ -199,6 +241,8 @@ export interface AgentStreamEvent {
  */
 export class AgentService {
   private agents = new Map<string, Agent>()
+  /** 每个 session 的 AGENT.md / CLAUDE.md 加载状态 */
+  private instructionLoadStates = new Map<string, ProjectInstructionLoadState>()
   /** 每个 session 的 ToolContext，用于动态重建工具 */
   private toolContexts = new Map<string, ToolContext>()
   private pendingLogIds = new Map<string, string[]>()
@@ -206,6 +250,8 @@ export class AgentService {
   private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; reason?: string }) => void }>()
   /** 待用户选择的 ask 工具 Promise resolver，key = toolCallId */
   private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
+  /** 每个 session 的流式内容缓冲区（后端累积 delta，用于 agent_end / abort 时统一落库） */
+  private streamBuffers = new Map<string, { content: string; thinking: string }>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -219,24 +265,28 @@ export class AgentService {
     const session = sessionDao.findById(sessionId)
     if (!session) {
       log.error(`创建失败，未找到 session=${sessionId}`)
-      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '' }
+      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '', workingDirectory: '', enabledTools: [], agentMdLoaded: false, claudeMdLoaded: false }
     }
 
     const provider = session.provider || ''
     const model = session.model || ''
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
-    const meta = { provider, model, capabilities, modelMetadata: session.modelMetadata || '' }
+    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+    const workingDirectory = project?.path || getTempWorkspace(sessionId)
+    const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
+    const meta = { provider, model, capabilities, modelMetadata: session.modelMetadata || '', workingDirectory, enabledTools }
 
     // 已存在则跳过（工具通过 resolveProjectConfig 动态获取配置，无需重建）
     if (this.agents.has(sessionId)) {
-      return { success: true, created: false, ...meta }
+      const instrState = this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false, claudeMdLoaded: false }
+      return { success: true, created: false, ...meta, ...instrState }
     }
 
     log.info(`创建 model=${model} session=${sessionId}`)
 
-    // 查询项目信息
-    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+    let agentMdLoaded = false
+    let claudeMdLoaded = false
 
     // 合并 system prompt：全局 + 项目级 + 参考目录
     const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
@@ -288,15 +338,10 @@ export class AgentService {
         ...(buildCustomProviderCompat(resolvedApi) ? { compat: buildCustomProviderCompat(resolvedApi) } : {})
       }
     } else {
-      // 内置提供商：通过 SDK 解析（用 name 小写作为 pi-ai 的 provider slug）
+      // 内置提供商：通过 SDK 解析（name 即 pi-ai 的 provider slug）
       const slug = (providerInfo?.name || '').toLowerCase()
       if (providerInfo?.apiKey) {
-        const envMap: Record<string, string> = {
-          openai: 'OPENAI_API_KEY',
-          anthropic: 'ANTHROPIC_API_KEY',
-          google: 'GOOGLE_API_KEY'
-        }
-        const envKey = envMap[slug]
+        const envKey = BUILTIN_ENV_MAP[slug]
         if (envKey) {
           process.env[envKey] = providerInfo.apiKey
         }
@@ -304,6 +349,10 @@ export class AgentService {
       resolvedModel = getModel(slug as any, model as any)
       if (providerInfo?.baseUrl) {
         resolvedModel.baseUrl = providerInfo.baseUrl
+      }
+      // 为 Kimi Coding 注入 coding agent 标识（Kimi API 要求特定 User-Agent）
+      if (resolvedModel.baseUrl?.includes('api.kimi.com')) {
+        resolvedModel.headers = { ...resolvedModel.headers, 'User-Agent': 'Claude-Code/1.0.0' }
       }
     }
 
@@ -341,7 +390,6 @@ export class AgentService {
       }
     }
     this.toolContexts.set(sessionId, ctx)
-    const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
     const tools = buildTools(ctx, enabledTools)
 
     // 在 system prompt 中附加工具引导（根据启用工具自动拼接）
@@ -386,6 +434,31 @@ export class AgentService {
       }
     })
 
+    // 将项目 AGENT.md / CLAUDE.md 作为独立的用户消息注入
+    if (project) {
+      const agentMd = readProjectInstructionMd(project.path, 'AGENT.md')
+      if (agentMd) {
+        agentMdLoaded = true
+        agent.state.messages.push({
+          role: 'user',
+          content: `Project AGENT.md instructions:\n${agentMd}`,
+          timestamp: Date.now()
+        } as any)
+      }
+
+      const claudeMd = readProjectInstructionMd(project.path, 'CLAUDE.md')
+      if (claudeMd) {
+        claudeMdLoaded = true
+        agent.state.messages.push({
+          role: 'user',
+          content: `Project CLAUDE.md instructions:\n${claudeMd}`,
+          timestamp: Date.now()
+        } as any)
+      }
+    }
+
+    this.instructionLoadStates.set(sessionId, { agentMdLoaded, claudeMdLoaded })
+
     this.agents.set(sessionId, agent)
 
     // 订阅 Agent 事件，转发到 Renderer（携带 sessionId）
@@ -402,7 +475,7 @@ export class AgentService {
       }
     }
 
-    return { success: true, created: true, ...meta }
+    return { success: true, created: true, ...meta, agentMdLoaded, claudeMdLoaded }
   }
 
   /** 向指定 session 的 Agent 发送消息（支持附带图片） */
@@ -444,8 +517,8 @@ export class AgentService {
     }
   }
 
-  /** 中止指定 session 的生成 */
-  abort(sessionId: string): void {
+  /** 中止指定 session 的生成；若已有部分内容则持久化并返回 */
+  abort(sessionId: string): Message | null {
     log.info(`中止 session=${sessionId}`)
     this.agents.get(sessionId)?.abort()
     // 取消所有待审批的 Promise
@@ -458,6 +531,8 @@ export class AgentService {
       pending.resolve([])
       this.pendingUserInputs.delete(id)
     }
+    // 持久化已生成的部分内容（与 agent_end 共用落库逻辑）
+    return this.persistStreamBuffer(sessionId)
   }
 
   /** 切换指定 session 的模型 */
@@ -492,9 +567,19 @@ export class AgentService {
       }
     } else {
       const slug = (providerInfo?.name || '').toLowerCase()
+      if (providerInfo?.apiKey) {
+        const envKey = BUILTIN_ENV_MAP[slug]
+        if (envKey) {
+          process.env[envKey] = providerInfo.apiKey
+        }
+      }
       resolvedModel = getModel(slug as any, model as any)
       if (baseUrl) {
         resolvedModel.baseUrl = baseUrl
+      }
+      // 为 Kimi Coding 注入 coding agent 标识
+      if (resolvedModel.baseUrl?.includes('api.kimi.com')) {
+        resolvedModel.headers = { ...resolvedModel.headers, 'User-Agent': 'Claude-Code/1.0.0' }
       }
     }
 
@@ -514,6 +599,11 @@ export class AgentService {
     const tools = buildTools(ctx, enabledTools)
     agent.setTools(tools)
     log.info(`setEnabledTools session=${sessionId} tools=[${enabledTools.join(',')}]`)
+  }
+
+  /** 获取会话的项目指令文件加载状态（由 AgentService 维护） */
+  getInstructionLoadState(sessionId: string): ProjectInstructionLoadState {
+    return this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false, claudeMdLoaded: false }
   }
 
   /** 获取指定 session 的消息列表 */
@@ -579,6 +669,8 @@ export class AgentService {
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
+      this.instructionLoadStates.delete(sessionId)
+      clearFileTimeSession(sessionId)
       // 保留 pendingLogIds / Docker 容器，下次 createAgent 会自动复用
       log.info(`invalidate session=${sessionId}`)
     }
@@ -590,7 +682,9 @@ export class AgentService {
     if (agent) {
       agent.abort()
       this.agents.delete(sessionId)
+      this.instructionLoadStates.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
+      clearFileTimeSession(sessionId)
       // 立刻清理 Docker 容器（会话删除）
       dockerManager.destroyContainer(sessionId).then((containerId) => {
         if (containerId) {
@@ -604,6 +698,55 @@ export class AgentService {
     }
   }
 
+  /**
+   * 将流式缓冲区内容持久化为 assistant 消息（agent_end / abort 共用）
+   * 同时同步到 Agent 内存上下文，确保后续 prompt 包含该消息
+   * @returns 已保存的消息，如果缓冲区为空则返回 null
+   */
+  private persistStreamBuffer(sessionId: string, extraMeta?: Record<string, any>): Message | null {
+    const buf = this.streamBuffers.get(sessionId)
+    if (!buf?.content) {
+      this.streamBuffers.delete(sessionId)
+      return null
+    }
+
+    const meta: Record<string, any> = { ...extraMeta }
+    if (buf.thinking) meta.thinking = buf.thinking
+    const session = sessionDao.findById(sessionId)
+
+    const msg = messageService.add({
+      sessionId,
+      role: 'assistant',
+      content: buf.content,
+      metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined,
+      model: session?.model || ''
+    })
+
+    // 同步到 Agent 内存上下文
+    this.appendAssistantToAgent(sessionId, buf.content, buf.thinking)
+    this.streamBuffers.delete(sessionId)
+    return msg
+  }
+
+  /** 向 Agent 内存上下文追加一条 assistant 消息（结构与 dbMessagesToAgentMessages 一致） */
+  private appendAssistantToAgent(sessionId: string, content: string, thinking?: string): void {
+    const agent = this.agents.get(sessionId)
+    if (!agent) return
+    const contentBlocks: any[] = []
+    if (thinking) contentBlocks.push({ type: 'thinking', thinking })
+    contentBlocks.push({ type: 'text', text: content })
+    agent.state.messages.push({
+      role: 'assistant',
+      content: contentBlocks,
+      api: 'openai-completions',
+      provider: '',
+      model: '',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: 'stop',
+      timestamp: Date.now()
+    } as any)
+  }
+
   /** 判断 AgentMessage 是否为 AssistantMessage */
   private isAssistantMessage(message: AgentMessage): message is AssistantMessage {
     return message !== null && 'role' in message && message.role === 'assistant'
@@ -614,6 +757,8 @@ export class AgentService {
     switch (event.type) {
       case 'agent_start':
         log.info(`开始 session=${sessionId}`)
+        // 清空流式缓冲区（新一轮生成）
+        this.streamBuffers.set(sessionId, { content: '', thinking: '' })
         this.sendToRenderer({ type: 'agent_start', sessionId })
         break
       case 'agent_end': {
@@ -654,14 +799,28 @@ export class AgentService {
         const totalUsage = details.reduce((acc, d) => ({
           input: acc.input + d.input, output: acc.output + d.output, cacheRead: acc.cacheRead + d.cacheRead, total: acc.total + d.total
         }), { input: 0, output: 0, cacheRead: 0, total: 0 })
-        this.sendToRenderer({ type: 'agent_end', sessionId, usage: { ...totalUsage, details } })
+        // 后端统一落库：将缓冲区内容持久化为 assistant 消息（携带 usage）
+        const savedMsg = this.persistStreamBuffer(sessionId, totalUsage.total > 0 ? { usage: { ...totalUsage, details } } : {})
+        this.sendToRenderer({
+          type: 'agent_end', sessionId,
+          usage: { ...totalUsage, details },
+          data: savedMsg ? JSON.stringify(savedMsg) : undefined
+        })
         break
       }
       case 'message_update': {
         const msgEvent = event.assistantMessageEvent
         if (msgEvent.type === 'text_delta') {
+          // 后端累积 delta（用于 agent_end / abort 时落库）
+          const buf = this.streamBuffers.get(sessionId) || { content: '', thinking: '' }
+          buf.content += msgEvent.delta || ''
+          this.streamBuffers.set(sessionId, buf)
+          // 仍转发给前端用于实时 UI 展示
           this.sendToRenderer({ type: 'text_delta', sessionId, data: msgEvent.delta })
         } else if (msgEvent.type === 'thinking_delta') {
+          const buf = this.streamBuffers.get(sessionId) || { content: '', thinking: '' }
+          buf.thinking += msgEvent.delta || ''
+          this.streamBuffers.set(sessionId, buf)
           this.sendToRenderer({ type: 'thinking_delta', sessionId, data: msgEvent.delta })
         }
         break

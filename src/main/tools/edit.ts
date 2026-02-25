@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } 
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveToCwd } from './utils/pathUtils'
+import { assertNotModifiedSinceRead, withFileLock, recordRead } from './utils/fileTime'
 import { resolveProjectConfig, isPathWithinWorkspace, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -84,6 +85,9 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
 
             if (aborted) return
 
+            // 校验文件是否在上次读取后被外部修改
+            assertNotModifiedSinceRead(ctx.sessionId, absolutePath)
+
             // 读取文件
             const buffer = await fsReadFile(absolutePath)
             const rawContent = buffer.toString('utf-8')
@@ -142,7 +146,11 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
             }
 
             const finalContent = bom + restoreLineEndings(newContent, originalEnding)
-            await fsWriteFile(absolutePath, finalContent, 'utf-8')
+            await withFileLock(absolutePath, async () => {
+              await fsWriteFile(absolutePath, finalContent, 'utf-8')
+            })
+            // 写入后更新读取时间，避免后续编辑被自己的写入触发警告
+            recordRead(ctx.sessionId, absolutePath)
 
             if (aborted) return
 

@@ -9,6 +9,7 @@ import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
 import { resolveEnabledTools } from '../utils/tools'
 import type { Session } from '../types'
+import { agentService } from './agent'
 
 /**
  * 会话服务 — 编排会话相关的业务逻辑
@@ -28,7 +29,8 @@ export class SessionService {
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
     const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
-    return { ...session, workingDirectory, enabledTools }
+    const { agentMdLoaded, claudeMdLoaded } = agentService.getInstructionLoadState(id)
+    return { ...session, workingDirectory, enabledTools, agentMdLoaded, claudeMdLoaded }
   }
 
   /** 创建新会话 */

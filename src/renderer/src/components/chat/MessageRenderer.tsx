@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import { Container } from 'lucide-react'
-import { useChatStore, type ChatMessage } from '../../stores/chatStore'
+import { Container, AlertCircle } from 'lucide-react'
+import { useChatStore, selectToolExecutions, type ChatMessage } from '../../stores/chatStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 
@@ -13,7 +13,6 @@ export interface VisibleItem {
 
 interface MessageRendererProps {
   item: VisibleItem
-  isLastMessage: boolean
   lastAssistantTextId: string | null
   onRollback: (messageId: string) => void
   onRegenerate: (assistantMsgId: string) => void
@@ -25,14 +24,22 @@ interface MessageRendererProps {
  */
 export function MessageRenderer({
   item,
-  isLastMessage,
   lastAssistantTextId,
   onRollback,
   onRegenerate
 }: MessageRendererProps): React.JSX.Element {
   const { t } = useTranslation()
   const { msg, meta, pairedCallMeta } = item
-  const toolExecutions = useChatStore((s) => s.toolExecutions)
+  const toolExecutions = useChatStore(selectToolExecutions)
+
+  if (msg.type === 'error_event') {
+    return (
+      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-error/90">
+        <AlertCircle size={12} />
+        <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+      </div>
+    )
+  }
 
   if (msg.type === 'docker_event') {
     const isCreate = msg.content === 'container_created'
@@ -85,7 +92,7 @@ export function MessageRenderer({
       content={msg.content}
       metadata={msg.metadata}
       model={msg.model}
-      onRollback={!isLastMessage ? () => onRollback(msg.id) : undefined}
+      onRollback={msg.role === 'user' && msg.type === 'text' ? () => onRollback(msg.id) : undefined}
       onRegenerate={msg.id === lastAssistantTextId ? () => onRegenerate(msg.id) : undefined}
     />
   )

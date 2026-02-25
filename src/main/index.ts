@@ -270,7 +270,10 @@ app.whenReady().then(() => {
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
 
-  // 启动时异步拉取 LiteLLM 模型数据，完成后自动补充模型能力信息
+  // 从 pi-ai 注册表同步内置提供商的模型列表 + 能力信息（同步操作，无需网络）
+  measure('syncBuiltinModels', () => providerService.syncAllBuiltinModels())
+
+  // 启动时异步拉取 LiteLLM 模型数据，完成后为自定义提供商补充模型能力信息
   measureAsync('litellmService.init', () => litellmService.init()).then(() => {
     providerService.fillAllMissingCapabilities()
   }).catch(() => {})

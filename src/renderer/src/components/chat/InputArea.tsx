@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, ImagePlus, X } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, selectIsStreaming, selectToolExecutions } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
+import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { ModelPicker } from './ModelPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { ToolPicker } from './ToolPicker'
@@ -27,12 +28,13 @@ interface InputAreaProps {
  */
 export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.Element {
   const { t } = useTranslation()
-  const { inputText, setInputText, isStreaming, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
+  const { inputText, setInputText, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
+  const isStreaming = useChatStore(selectIsStreaming)
+  const { projectPath, agentMdLoaded, claudeMdLoaded } = useSessionMeta()
 
   // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
-  const hasPendingAction = useChatStore((s) =>
-    s.toolExecutions.some((te) => te.status === 'pending_approval' || (te.status === 'pending_user_input' && te.toolName === 'ask'))
-  )
+  const toolExecutions = useChatStore(selectToolExecutions)
+  const hasPendingAction = toolExecutions.some((te) => te.status === 'pending_approval' || (te.status === 'pending_user_input' && te.toolName === 'ask'))
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -88,7 +90,6 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     store.clearPendingImages()
     store.setIsStreaming(activeSessionId, true)
     store.clearStreamingContent(activeSessionId)
-    store.setError(null)
 
     // 构造消息内容：文本 + 图片标记
     const contentText = text || t('input.imageOnly')
@@ -113,10 +114,14 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     await window.api.agent.prompt({ sessionId: activeSessionId, text: contentText, images: agentImages })
   }
 
-  /** 中止生成 */
-  const handleAbort = (): void => {
+  /** 中止生成（后端统一处理落库 + Agent 上下文同步） */
+  const handleAbort = async (): Promise<void> => {
     if (!activeSessionId) return
-    window.api.agent.abort(activeSessionId)
+    const sid = activeSessionId
+    const store = useChatStore.getState()
+    // 后端 abort 会持久化已生成的部分内容并返回已保存的消息
+    const result = await window.api.agent.abort(sid)
+    store.finishStreaming(sid, result.savedMessage ?? undefined)
   }
 
   /** 用户通过输入框提交文本覆盖当前 pending action */
@@ -144,6 +149,17 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   // pending action 时输入框临时可用
   const effectiveStreaming = isStreaming && !hasPendingAction
   const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !effectiveStreaming && activeSessionId
+  const loadedInstructionCount = Number(agentMdLoaded) + Number(claudeMdLoaded)
+  const instructionBadgeText = loadedInstructionCount === 2
+    ? 'AGENT.md + CLAUDE.md'
+    : loadedInstructionCount === 1
+      ? (agentMdLoaded ? 'AGENT.md' : 'CLAUDE.md')
+      : 'None'
+  const instructionDotClass = loadedInstructionCount === 2
+    ? 'bg-emerald-400/90'
+    : loadedInstructionCount === 1
+      ? 'bg-amber-400/90'
+      : 'bg-text-tertiary/45'
 
   return (
     <div
@@ -228,6 +244,36 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
               <ThinkingPicker />
               <ToolPicker />
+
+              {/* 项目指令文件加载状态 */}
+              {projectPath && (
+                <span className="relative inline-flex items-center group">
+                  <span
+                    className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors select-none"
+                    title={t('input.instructionsStatus')}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${instructionDotClass}`} />
+                    <span className="uppercase tracking-wide text-[10px] opacity-70">Instr</span>
+                    <span className="truncate max-w-[140px] text-text-secondary/90">{instructionBadgeText}</span>
+                  </span>
+
+                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
+                    <div className="text-[10px] text-text-tertiary mb-1">{t('input.instructionsStatus')}</div>
+                    <div className="flex items-center justify-between gap-3 text-[11px]">
+                      <span className="text-text-secondary">AGENT.md</span>
+                      <span className={agentMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
+                        {agentMdLoaded ? t('input.loaded') : t('input.notLoaded')}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-[11px] mt-0.5">
+                      <span className="text-text-secondary">CLAUDE.md</span>
+                      <span className={claudeMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
+                        {claudeMdLoaded ? t('input.loaded') : t('input.notLoaded')}
+                      </span>
+                    </div>
+                  </div>
+                </span>
+              )}
             </div>
 
             <textarea

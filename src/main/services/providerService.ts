@@ -1,7 +1,11 @@
 import { v7 as uuidv7 } from 'uuid'
+import { getModels } from '@mariozechner/pi-ai'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
+import { createLogger } from '../logger'
 import type { ApiProtocol, ModelCapabilities, Provider, ProviderModel } from '../types'
+
+const log = createLogger('ProviderService')
 
 /**
  * 提供商服务 — 编排提供商和模型的业务逻辑
@@ -129,6 +133,51 @@ export class ProviderService {
     const providers = providerDao.findAll()
     for (const p of providers) {
       this.fillMissingCapabilities(p.id, p.name, p.baseUrl)
+    }
+  }
+
+  /**
+   * 从 pi-ai 注册表同步单个内置提供商的模型列表 + 能力信息
+   * 已有模型不会被删除，仅新增缺失的模型并更新 capabilities
+   */
+  syncBuiltinModels(providerId: string, slug: string): { total: number; added: number } {
+    const piModels = getModels(slug as any)
+    if (!piModels || piModels.length === 0) return { total: 0, added: 0 }
+
+    const modelIds = piModels.map((m) => m.id)
+    const existingIds = new Set(providerDao.findModelsByProvider(providerId).map((m) => m.modelId))
+
+    // upsert 模型记录（新模型默认禁用）
+    providerDao.upsertModels(providerId, modelIds)
+
+    // 用 pi-ai 的数据填充 capabilities（覆盖已有值，保证与 pi-ai 同步）
+    const modelRows = providerDao.findModelsByProvider(providerId)
+    const piModelMap = new Map(piModels.map((m) => [m.id, m]))
+    for (const row of modelRows) {
+      const pm = piModelMap.get(row.modelId)
+      if (!pm) continue
+      const caps: ModelCapabilities = {
+        reasoning: pm.reasoning || false,
+        vision: (pm.input as string[])?.includes('image') || false,
+        maxInputTokens: pm.contextWindow,
+        maxOutputTokens: pm.maxTokens,
+      }
+      providerDao.updateModelCapabilities(row.id, JSON.stringify(caps))
+    }
+
+    const added = modelIds.filter((id) => !existingIds.has(id)).length
+    return { total: modelIds.length, added }
+  }
+
+  /** 为所有内置提供商同步模型（启动时调用） */
+  syncAllBuiltinModels(): void {
+    const builtins = providerDao.findAll().filter((p) => p.isBuiltin)
+    for (const p of builtins) {
+      const slug = p.name // name 就是 pi-ai slug
+      const result = this.syncBuiltinModels(p.id, slug)
+      if (result.total > 0) {
+        log.info(`同步 ${p.displayName || p.name}: ${result.total} 个模型（新增 ${result.added}）`)
+      }
     }
   }
 

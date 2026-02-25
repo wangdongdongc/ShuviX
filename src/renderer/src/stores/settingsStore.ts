@@ -1,37 +1,6 @@
 import { create } from 'zustand'
 
-/** 提供商信息（来自 DB） */
-export interface ProviderInfo {
-  id: string
-  name: string
-  apiKey: string
-  baseUrl: string
-  apiProtocol: 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
-  isBuiltin: number
-  isEnabled: number
-  sortOrder: number
-}
-
-/** 模型信息（来自 DB） */
-export interface ProviderModelInfo {
-  id: string
-  providerId: string
-  modelId: string
-  isEnabled: number
-  sortOrder: number
-  capabilities: string
-}
-
-/** 可用模型（含提供商名称，用于对话选择器） */
-export interface AvailableModel extends ProviderModelInfo {
-  providerName: string
-}
-
-/** 配置项元数据（与 preload ConfigMeta 保持一致） */
-export interface ConfigMeta {
-  labelKey: string
-  desc: string
-}
+// ProviderInfo / ProviderModelInfo / AvailableModel / ConfigMeta 类型定义在 src/preload/index.d.ts（全局可用）
 
 interface SettingsState {
   /** 所有提供商列表（含禁用的） */

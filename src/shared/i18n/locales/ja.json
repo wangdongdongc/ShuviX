@@ -64,10 +64,13 @@
     "thinkHigh": "深い",
     "thinkXHigh": "最深",
     "tools": "ツール",
+    "instructionsStatus": "指示ファイルの読み込み状態",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
     "placeholderOverride": "同意できない？テキストで AI にフィードバック...",
     "placeholderNoSession": "まずチャットを作成または選択してください",
+    "loaded": "読み込み済み",
+    "notLoaded": "未読み込み",
     "stopGen": "生成を停止",
     "send": "送信",
     "imageOnly": "(画像)"
@@ -187,6 +190,7 @@
     "noMatchingModels": "一致するモデルが見つかりません",
     "saved": "保存済み",
     "saveConfig": "設定を保存",
+    "builtin": "内蔵",
     "custom": "カスタム",
     "apiKeyPlaceholder": "{{name}} APIキーを入力",
     "baseUrlPlaceholder": "デフォルトURLを使用する場合は空欄",
@@ -321,7 +325,7 @@
     "paramLimit": "読み込む最大行数、offsetと併用",
     "paramCommand": "実行するシェルコマンド。パイプ、リダイレクトなどのbash機能をサポート。対話型コマンドは避けてください。",
     "paramTimeout": "コマンドタイムアウト（秒）、デフォルト {{default}}秒。長時間実行コマンドには大きな値を設定してください。",
-    "readDesc": "ファイルの内容を読み込みます。テキストファイル（ページネーション対応）および PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook などのリッチフォーマット（自動的に Markdown に変換）をサポートします。",
+    "readDesc": "ファイルまたはディレクトリの内容を読み込みます。ファイルはテキスト（ページネーション対応）および PDF、Word、Excel、PowerPoint、HTML、Jupyter Notebook などのリッチフォーマット（自動 Markdown 変換）をサポート。ディレクトリはソート済みエントリリストを返します。",
     "convertedHeader": "ファイル: {{path}} ({{format}}, {{size}}) — Markdown に変換済み",
     "convertFailed": "ファイルの変換に失敗しました: {{path}}",
     "unsupportedFormat": "サポートされていないファイル形式 ({{ext}}): {{path}}。テキストファイルおよび PDF、DOC、DOCX、XLSX、PPTX、HTML、IPYNB 形式をサポートしています。",
@@ -337,6 +341,12 @@
     "askLabel": "ユーザーに質問",
     "askDesc": "ユーザーに質問し、事前定義された選択肢から選んでもらいます",
     "askNoSelection": "ユーザーは選択しませんでした",
-    "askUserSelected": "ユーザーが選択しました: {{selections}}"
+    "askUserSelected": "ユーザーが選択しました: {{selections}}",
+    "dirHeader": "ディレクトリ: {{path}} ({{count}} エントリ)",
+    "dirShowingEntries": "表示: {{start}}-{{end}} 番目のエントリ",
+    "dirPagination": "({{total}} 中 {{shown}} エントリを表示。offset={{next}} で続きを表示。)",
+    "dirAllEntries": "({{count}} エントリ)",
+    "mustReadFirst": "ファイル {{path}} を上書きする前に読み込む必要があります。まず read ツールを使用してください。",
+    "fileModifiedSinceRead": "ファイル {{path}} は前回の読み込み以降に変更されています。\n最終変更: {{mtime}}\n前回の読み込み: {{rtime}}\n\nファイルを再度読み込んでから変更してください。"
   }
 }

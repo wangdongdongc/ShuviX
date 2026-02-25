@@ -3,9 +3,9 @@
  * 从 pi-coding-agent 移植，处理路径解析、~ 展开、macOS 特殊字符等
  */
 
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, readdirSync } from 'node:fs'
 import * as os from 'node:os'
-import { isAbsolute, resolve as resolvePath } from 'node:path'
+import { isAbsolute, resolve as resolvePath, dirname, basename, join } from 'node:path'
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g
 const NARROW_NO_BREAK_SPACE = '\u202F'
@@ -99,4 +99,27 @@ export function resolveReadPath(filePath: string, cwd: string): string {
   }
 
   return resolved
+}
+
+/**
+ * 文件不存在时，从父目录中模糊匹配近似文件名
+ * 返回最多 maxResults 个建议的绝对路径
+ */
+export function suggestSimilarFiles(absolutePath: string, maxResults = 3): string[] {
+  const dir = dirname(absolutePath)
+  const base = basename(absolutePath).toLowerCase()
+
+  try {
+    const entries = readdirSync(dir)
+    return entries
+      .filter((entry) => {
+        const lower = entry.toLowerCase()
+        return lower.includes(base) || base.includes(lower)
+      })
+      .map((entry) => join(dir, entry))
+      .slice(0, maxResults)
+  } catch {
+    // 父目录不存在或无权限
+    return []
+  }
 }

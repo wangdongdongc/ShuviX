@@ -5,14 +5,17 @@
  * 支持通过 word-extractor 提取旧版 .doc 文件文字
  */
 
-import { readFile as fsReadFile, stat as fsStat } from 'fs/promises'
+import { stat as fsStat, readdir as fsReaddir, open as fsOpen } from 'fs/promises'
+import { createReadStream } from 'fs'
+import { createInterface } from 'readline'
 import { extname } from 'path'
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
-import { truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
-import { resolveReadPath } from './utils/pathUtils'
+import { truncateLine, truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
+import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
+import { recordRead } from './utils/fileTime'
 import { resolveProjectConfig, isPathWithinWorkspace, isPathWithinReferenceDirs, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -42,13 +45,22 @@ const KNOWN_BINARY_EXTENSIONS = new Set([
   '.protobuf', '.pb'
 ])
 
-/** 检测 Buffer 是否为二进制内容（前 8KB 中是否包含 NULL 字节） */
-function isBinaryBuffer(buffer: Buffer): boolean {
-  const checkLen = Math.min(buffer.length, 8192)
-  for (let i = 0; i < checkLen; i++) {
-    if (buffer[i] === 0) return true
+/** 检测文件是否为二进制（只读取前 8KB，检查 NULL 字节） */
+async function isBinaryFile(filepath: string, fileSize: number): Promise<boolean> {
+  if (fileSize === 0) return false
+  const fh = await fsOpen(filepath, 'r')
+  try {
+    const sampleSize = Math.min(8192, fileSize)
+    const bytes = Buffer.alloc(sampleSize)
+    const result = await fh.read(bytes, 0, sampleSize, 0)
+    if (result.bytesRead === 0) return false
+    for (let i = 0; i < result.bytesRead; i++) {
+      if (bytes[i] === 0) return true
+    }
+    return false
+  } finally {
+    await fh.close()
   }
-  return false
 }
 
 /** 单例 MarkItDown 实例 */
@@ -108,8 +120,14 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       }
 
       try {
-        // 获取文件信息
+        // 获取文件/目录信息
         const s = await fsStat(absolutePath)
+
+        // 目录：列出条目
+        if (s.isDirectory()) {
+          return await readDirectory(absolutePath, params)
+        }
+
         const fileStat = { size: s.size, isFile: s.isFile() }
         if (!fileStat.isFile) {
           throw new Error(t('tool.notAFile', { path: params.path }))
@@ -133,21 +151,70 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
           throw new Error(t('tool.unsupportedFormat', { path: params.path, ext }))
         }
 
-        // 读取文件并检测是否为二进制
-        const buffer = await fsReadFile(absolutePath)
-        if (isBinaryBuffer(buffer)) {
+        // 检测是否为二进制（只读取前 8KB，不加载整个文件）
+        if (await isBinaryFile(absolutePath, fileStat.size)) {
           throw new Error(t('tool.unsupportedFormat', { path: params.path, ext: ext || 'binary' }))
         }
 
-        // 纯文本文件：原有逻辑
-        return await readTextFile(absolutePath, params, fileStat, buffer)
+        // 纯文本文件：流式逐行读取
+        const result = await readTextFile(absolutePath, params, fileStat)
+        // 记录读取时间（用于 edit/write 工具校验文件是否被外部修改）
+        recordRead(ctx.sessionId, absolutePath)
+        return result
       } catch (err: any) {
         if (err.message === t('tool.aborted')) throw err
         if (err.code === 'ENOENT') {
+          // 模糊匹配建议
+          const suggestions = suggestSimilarFiles(absolutePath)
+          if (suggestions.length > 0) {
+            throw new Error(
+              t('tool.fileNotFound', { path: params.path }) +
+              '\n\nDid you mean one of these?\n' +
+              suggestions.join('\n')
+            )
+          }
           throw new Error(t('tool.fileNotFound', { path: params.path }))
         }
         throw new Error(t('tool.cmdFailed', { message: err.message }))
       }
+    }
+  }
+}
+
+/**
+ * 目录读取：列出条目（目录加 / 后缀），排序，支持 offset/limit 分页
+ */
+async function readDirectory(
+  absolutePath: string,
+  params: { path: string; offset?: number; limit?: number }
+) {
+  const dirents = await fsReaddir(absolutePath, { withFileTypes: true })
+  const entries = dirents.map((d) => (d.isDirectory() ? d.name + '/' : d.name))
+  entries.sort((a, b) => a.localeCompare(b))
+
+  const limit = params.limit ?? DEFAULT_MAX_LINES
+  const offset = params.offset ?? 1
+  const start = offset - 1
+  const sliced = entries.slice(start, start + limit)
+  const total = entries.length
+  const shown = sliced.length
+  const endIndex = start + shown
+  const truncated = endIndex < total
+
+  let text = t('tool.dirHeader', { path: params.path, count: total }) + '\n'
+  if (params.offset || params.limit) {
+    text += t('tool.dirShowingEntries', { start: offset, end: offset + shown - 1 }) + '\n'
+  }
+  text += '\n' + sliced.join('\n')
+  text += '\n\n' + (truncated
+    ? t('tool.dirPagination', { shown, total, next: endIndex + 1 })
+    : t('tool.dirAllEntries', { count: total }))
+
+  return {
+    content: [{ type: 'text' as const, text }],
+    details: {
+      totalEntries: total,
+      truncated
     }
   }
 }
@@ -237,51 +304,82 @@ async function readLegacyDoc(
 }
 
 /**
- * 纯文本文件：原有逻辑（行号、分页、截断）
+ * 纯文本文件：流式逐行读取（行号、分页、单行截断、字节上限）
+ * 使用 readline 流式读取，遇到行数/字节截断点即 break，不需要将整个文件读入内存
  */
 async function readTextFile(
   absolutePath: string,
   params: { path: string; offset?: number; limit?: number },
-  fileStat: { size: number },
-  preReadBuffer?: Buffer
+  fileStat: { size: number }
 ) {
-  const buffer = preReadBuffer ?? await fsReadFile(absolutePath)
-  const content = buffer.toString('utf-8')
-  const allLines = content.split('\n')
-  const totalLines = allLines.length
+  const stream = createReadStream(absolutePath, { encoding: 'utf8' })
+  const rl = createInterface({ input: stream, crlfDelay: Infinity })
 
-  // 分页处理
-  let lines = allLines
-  let startLine = 1
-  if (params.offset && params.offset > 0) {
-    startLine = params.offset
-    lines = allLines.slice(startLine - 1)
+  const limit = params.limit ?? DEFAULT_MAX_LINES
+  const offset = params.offset ?? 1
+  const start = offset - 1
+  const raw: string[] = []
+  let bytes = 0
+  let lines = 0
+  let truncatedByBytes = false
+  let hasMoreLines = false
+
+  try {
+    for await (const text of rl) {
+      lines += 1
+      if (lines <= start) continue
+
+      if (raw.length >= limit) {
+        hasMoreLines = true
+        continue
+      }
+
+      // 单行截断（minified JS/CSS 等场景）
+      const line = truncateLine(text)
+      const size = Buffer.byteLength(line, 'utf-8') + (raw.length > 0 ? 1 : 0)
+      if (bytes + size > DEFAULT_MAX_BYTES) {
+        truncatedByBytes = true
+        hasMoreLines = true
+        break
+      }
+
+      raw.push(line)
+      bytes += size
+    }
+  } finally {
+    rl.close()
+    stream.destroy()
   }
-  if (params.limit && params.limit > 0) {
-    lines = lines.slice(0, params.limit)
-  }
+
+  const totalLines = lines
+  const lastReadLine = offset + raw.length - 1
+  const nextOffset = lastReadLine + 1
+  const truncated = hasMoreLines || truncatedByBytes
+
+  // 行号宽度对齐
+  const padWidth = String(totalLines).length
 
   // 添加行号
-  const numbered = lines.map((line, i) => {
-    const lineNum = startLine + i
-    return `${String(lineNum).padStart(String(totalLines).length, ' ')}│${line}`
+  const numbered = raw.map((line, i) => {
+    const lineNum = offset + i
+    return `${String(lineNum).padStart(padWidth, ' ')}│${line}`
   })
 
   let text = numbered.join('\n')
 
-  // 截断处理
-  const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
-  if (truncated.truncated) {
-    text = `${t('tool.outputTruncated', { lines: totalLines, size: formatSize(fileStat.size) })}\n\n${truncated.text}`
+  // 截断提示
+  if (truncatedByBytes) {
+    text += `\n\n(Output capped at ${formatSize(DEFAULT_MAX_BYTES)}. Showing lines ${offset}-${lastReadLine}. Use offset=${nextOffset} to continue.)`
+  } else if (hasMoreLines) {
+    text += `\n\n(Showing lines ${offset}-${lastReadLine} of ${totalLines}. Use offset=${nextOffset} to continue.)`
   } else {
-    text = truncated.text
+    text += `\n\n(End of file - total ${totalLines} lines)`
   }
 
-  // 添加文件信息头
+  // 文件信息头
   const header = t('tool.fileHeader', { path: params.path, lines: totalLines, size: formatSize(fileStat.size) })
   if (params.offset || params.limit) {
-    const endLine = startLine + lines.length - 1
-    text = `${header}\n${t('tool.showingLines', { start: startLine, end: endLine })}\n\n${text}`
+    text = `${header}\n${t('tool.showingLines', { start: offset, end: lastReadLine })}\n\n${text}`
   } else {
     text = `${header}\n\n${text}`
   }
@@ -291,7 +389,7 @@ async function readTextFile(
     details: {
       totalLines,
       fileSize: fileStat.size,
-      truncated: truncated.truncated
+      truncated
     }
   }
 }

@@ -64,10 +64,13 @@
     "thinkHigh": "Deep",
     "thinkXHigh": "Extreme",
     "tools": "Tools",
+    "instructionsStatus": "Instruction file load status",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholder": "Type a message... (Shift+Enter for new line)",
     "placeholderOverride": "Disagree? Type your feedback to AI...",
     "placeholderNoSession": "Please create or select a chat first",
+    "loaded": "Loaded",
+    "notLoaded": "Not loaded",
     "stopGen": "Stop generation",
     "send": "Send",
     "imageOnly": "(image)"
@@ -187,6 +190,7 @@
     "noMatchingModels": "No matching models found",
     "saved": "Saved",
     "saveConfig": "Save Configuration",
+    "builtin": "Built-in",
     "custom": "Custom",
     "apiKeyPlaceholder": "Enter {{name}} API Key",
     "baseUrlPlaceholder": "Leave empty to use default URL",
@@ -321,7 +325,7 @@
     "paramLimit": "Maximum number of lines to read, used with offset",
     "paramCommand": "Shell command to execute. Supports pipes, redirects, and other bash features. Avoid interactive commands.",
     "paramTimeout": "Command timeout in seconds, default {{default}}s. Increase for long-running commands.",
-    "readDesc": "Read file contents. Supports text files (with pagination) and rich formats like PDF, Word, Excel, PowerPoint, HTML, Jupyter Notebook (auto-converted to Markdown).",
+    "readDesc": "Read file or directory contents. Files support text (with pagination) and rich formats like PDF, Word, Excel, PowerPoint, HTML, Jupyter Notebook (auto-converted to Markdown). Directories return a sorted entry list.",
     "convertedHeader": "File: {{path}} ({{format}}, {{size}}) — converted to Markdown",
     "convertFailed": "Failed to convert file: {{path}}",
     "unsupportedFormat": "Unsupported file format ({{ext}}): {{path}}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.",
@@ -337,6 +341,12 @@
     "shuvixProjectNoProject": "Current session is not linked to a project. Cannot read or modify project configuration.",
     "shuvixProjectUpdated": "Project configuration updated: {{fields}}",
     "shuvixSettingUpdated": "Setting updated: {{key}} = {{value}}",
-    "approvalDenied": "User denied this operation"
+    "approvalDenied": "User denied this operation",
+    "dirHeader": "Directory: {{path}} ({{count}} entries)",
+    "dirShowingEntries": "Showing: entries {{start}}-{{end}}",
+    "dirPagination": "(Showing {{shown}} of {{total}} entries. Use offset={{next}} to continue.)",
+    "dirAllEntries": "({{count}} entries)",
+    "mustReadFirst": "You must read file {{path}} before overwriting it. Use the read tool first.",
+    "fileModifiedSinceRead": "File {{path}} has been modified since it was last read.\nLast modification: {{mtime}}\nLast read: {{rtime}}\n\nPlease read the file again before modifying it."
   }
 }

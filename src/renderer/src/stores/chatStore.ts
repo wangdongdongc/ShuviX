@@ -5,7 +5,7 @@ export interface ChatMessage {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event'
+  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'error_event'
   content: string
   metadata: string | null
   model: string
@@ -22,7 +22,7 @@ export interface ToolExecution {
   messageId?: string
 }
 
-/** 会话类型 */
+/** 会话类型（持久化字段，不含运行时计算属性） */
 export interface Session {
   id: string
   title: string
@@ -35,10 +35,6 @@ export interface Session {
   modelMetadata: string
   createdAt: number
   updatedAt: number
-  /** 项目工作目录（计算属性，由后端填充） */
-  workingDirectory?: string | null
-  /** 当前生效的工具列表（计算属性，由后端解析：session > project > all） */
-  enabledTools?: string[]
 }
 
 /** 每个 session 的流式状态 */
@@ -47,6 +43,9 @@ interface SessionStreamState {
   thinking: string
   isStreaming: boolean
 }
+
+/** 空数组常量，避免选择器每次返回新引用 */
+const EMPTY_TOOLS: ToolExecution[] = []
 
 interface ChatState {
   /** 所有会话 */
@@ -57,16 +56,8 @@ interface ChatState {
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
   sessionStreams: Record<string, SessionStreamState>
-  /** 当前会话的流式内容（UI 直接读取，自动同步自 sessionStreams） */
-  streamingContent: string
-  /** 当前会话的流式思考内容 */
-  streamingThinking: string
-  /** 当前会话是否正在生成（UI 直接读取，自动同步自 sessionStreams） */
-  isStreaming: boolean
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
-  /** 当前会话的工具执行实时状态（UI 直接读取） */
-  toolExecutions: ToolExecution[]
   /** 当前模型是否支持深度思考 */
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
@@ -81,10 +72,14 @@ interface ChatState {
   pendingImages: Array<{ data: string; mimeType: string; preview: string }>
   /** 输入框内容 */
   inputText: string
-  /** 错误信息 */
-  error: string | null
   /** 当前会话启用的工具列表 */
   enabledTools: string[]
+  /** 当前会话的项目工作目录 */
+  projectPath: string | null
+  /** AGENT.md 是否已加载 */
+  agentMdLoaded: boolean
+  /** CLAUDE.md 是否已加载 */
+  claudeMdLoaded: boolean
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -101,7 +96,6 @@ interface ChatState {
   updateToolExecution: (sessionId: string, toolCallId: string, updates: Partial<ToolExecution>) => void
   clearToolExecutions: (sessionId: string) => void
   setInputText: (text: string) => void
-  setError: (error: string | null) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
   setModelSupportsVision: (supports: boolean) => void
@@ -114,20 +108,33 @@ interface ChatState {
   updateSessionProject: (id: string, projectId: string | null) => void
   removeSession: (id: string) => void
   setEnabledTools: (tools: string[]) => void
+  setProjectPath: (path: string | null) => void
+  setAgentMdLoaded: (loaded: boolean) => void
+  setClaudeMdLoaded: (loaded: boolean) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
+
+// ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
+
+export const selectStreamingContent = (s: ChatState): string =>
+  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.content || '' : ''
+
+export const selectStreamingThinking = (s: ChatState): string =>
+  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.thinking || '' : ''
+
+export const selectIsStreaming = (s: ChatState): boolean =>
+  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
+
+export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
+  s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   messages: [],
   sessionStreams: {},
-  streamingContent: '',
-  streamingThinking: '',
-  isStreaming: false,
   sessionToolExecutions: {},
-  toolExecutions: [],
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
   modelSupportsVision: false,
@@ -135,23 +142,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   usedContextTokens: null,
   pendingImages: [],
   inputText: '',
-  error: null,
   enabledTools: [],
+  projectPath: null,
+  agentMdLoaded: false,
+  claudeMdLoaded: false,
 
   setSessions: (sessions) => set({ sessions }),
-  setActiveSessionId: (id) =>
-    set((state) => {
-      const stream = id ? state.sessionStreams[id] : undefined
-      const tools = id ? state.sessionToolExecutions[id] || [] : []
-      return {
-        activeSessionId: id,
-        streamingContent: stream?.content || '',
-        streamingThinking: stream?.thinking || '',
-        isStreaming: stream?.isStreaming || false,
-        toolExecutions: tools,
-        error: null
-      }
-    }),
+  setActiveSessionId: (id) => set({ activeSessionId: id }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
 
@@ -159,22 +156,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
       const updated = { ...prev, content: prev.content + delta }
-      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
-      return {
-        sessionStreams: newStreams,
-        ...(sessionId === state.activeSessionId ? { streamingContent: updated.content } : {})
-      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   appendStreamingThinking: (sessionId, delta) =>
     set((state) => {
       const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
       const updated = { ...prev, thinking: prev.thinking + delta }
-      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
-      return {
-        sessionStreams: newStreams,
-        ...(sessionId === state.activeSessionId ? { streamingThinking: updated.thinking } : {})
-      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   clearStreamingContent: (sessionId) =>
@@ -182,22 +171,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const prev = state.sessionStreams[sessionId]
       if (!prev) return {}
       const updated = { ...prev, content: '', thinking: '' }
-      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
-      return {
-        sessionStreams: newStreams,
-        ...(sessionId === state.activeSessionId ? { streamingContent: '', streamingThinking: '' } : {})
-      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   setIsStreaming: (sessionId, streaming) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', isStreaming: false }
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
       const updated = { ...prev, isStreaming: streaming }
-      const newStreams = { ...state.sessionStreams, [sessionId]: updated }
-      return {
-        sessionStreams: newStreams,
-        ...(sessionId === state.activeSessionId ? { isStreaming: streaming } : {})
-      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   getSessionStreamContent: (sessionId) => {
@@ -211,36 +192,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addToolExecution: (sessionId, exec) =>
     set((state) => {
       const prev = state.sessionToolExecutions[sessionId] || []
-      const updated = [...prev, exec]
-      const newMap = { ...state.sessionToolExecutions, [sessionId]: updated }
-      return {
-        sessionToolExecutions: newMap,
-        ...(sessionId === state.activeSessionId ? { toolExecutions: updated } : {})
-      }
+      return { sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: [...prev, exec] } }
     }),
 
   updateToolExecution: (sessionId, toolCallId, updates) =>
     set((state) => {
       const prev = state.sessionToolExecutions[sessionId] || []
       const updated = prev.map((t) => (t.toolCallId === toolCallId ? { ...t, ...updates } : t))
-      const newMap = { ...state.sessionToolExecutions, [sessionId]: updated }
-      return {
-        sessionToolExecutions: newMap,
-        ...(sessionId === state.activeSessionId ? { toolExecutions: updated } : {})
-      }
+      return { sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: updated } }
     }),
 
   clearToolExecutions: (sessionId) =>
     set((state) => {
       const { [sessionId]: _, ...rest } = state.sessionToolExecutions
-      return {
-        sessionToolExecutions: rest,
-        ...(sessionId === state.activeSessionId ? { toolExecutions: [] } : {})
-      }
+      return { sessionToolExecutions: rest }
     }),
 
   setInputText: (text) => set({ inputText: text }),
-  setError: (error) => set({ error }),
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
   setModelSupportsVision: (supports) => set({ modelSupportsVision: supports }),
@@ -263,6 +231,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
     })),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
+  setProjectPath: (path) => set({ projectPath: path }),
+  setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
+  setClaudeMdLoaded: (loaded) => set({ claudeMdLoaded: loaded }),
 
   finishStreaming: (sessionId, finalMessage) =>
     set((state) => {
@@ -283,18 +254,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? [...state.messages, finalMessage]
         : state.messages
 
-      // 当前活跃会话时同步 UI 直读字段
-      const isActive = sessionId === state.activeSessionId
       return {
         sessionStreams: newStreams,
         sessionToolExecutions: restToolExecs,
-        messages: newMessages,
-        ...(isActive ? {
-          streamingContent: '',
-          streamingThinking: '',
-          isStreaming: false,
-          toolExecutions: []
-        } : {})
+        messages: newMessages
       }
     })
 }))

@@ -128,7 +128,7 @@ export function ModelPicker(): React.JSX.Element {
                 onClick={() => handlePickProvider(p.id)}
                 className="w-full text-left px-2 py-1.5 text-[11px] text-text-primary hover:bg-bg-hover transition-colors"
               >
-                {p.name}
+                {p.displayName || p.name}
               </button>
             ))}
 

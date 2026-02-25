@@ -20,6 +20,8 @@ export interface ModelCapabilities {
 export interface Provider {
   id: string
   name: string
+  /** 用户友好的显示名称（内置提供商使用，如 "OpenAI"；自定义提供商可为空） */
+  displayName: string
   apiKey: string
   baseUrl: string
   apiProtocol: ApiProtocol

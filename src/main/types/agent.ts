@@ -18,6 +18,14 @@ export interface AgentInitResult {
   capabilities: ModelCapabilities
   /** 会话 modelMetadata（JSON 字符串） */
   modelMetadata: string
+  /** 项目工作目录 */
+  workingDirectory: string
+  /** 当前生效的工具列表 */
+  enabledTools: string[]
+  /** 项目 AGENT.md 是否已加载 */
+  agentMdLoaded: boolean
+  /** 项目 CLAUDE.md 是否已加载 */
+  claudeMdLoaded: boolean
 }
 
 /** 图片内容（base64） */

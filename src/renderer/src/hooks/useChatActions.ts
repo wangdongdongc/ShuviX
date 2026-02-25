@@ -44,10 +44,19 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   const confirmRollback = useCallback(async () => {
     if (!activeSessionId || !pendingRollbackId) return
     setPendingRollbackId(null)
-    await window.api.message.rollback({ sessionId: activeSessionId, messageId: pendingRollbackId })
+    const store = useChatStore.getState()
+    const target = store.messages.find((m) => m.id === pendingRollbackId)
+    // 只允许回退到用户输入的文本消息
+    if (!target || target.role !== 'user' || target.type !== 'text') return
+
+    const rollbackText = target.content
+    // 删除该用户消息及之后的所有消息
+    await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: pendingRollbackId })
     const msgs = await window.api.message.list(activeSessionId)
-    useChatStore.getState().setMessages(msgs)
+    store.setMessages(msgs)
     await window.api.agent.init({ sessionId: activeSessionId })
+    // 将用户消息内容回填到输入框，便于编辑后重新发送
+    store.setInputText(rollbackText)
   }, [activeSessionId, pendingRollbackId])
 
   /** 取消回退 */

@@ -80,7 +80,7 @@ export function Sidebar(): React.JSX.Element {
     for (const s of sessions) {
       if (s.projectId && map.has(s.projectId)) {
         map.get(s.projectId)!.push(s)
-      } else {
+      } else if (!s.projectId) {
         tempSessions.push(s)
       }
     }
@@ -157,7 +157,7 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group flex items-center gap-2 px-3 py-[5px] cursor-pointer ${
+      className={`group flex items-center gap-1.5 px-2.5 py-1 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
           : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
@@ -211,8 +211,8 @@ export function Sidebar(): React.JSX.Element {
               const isTemp = groupKey === TEMP_GROUP_KEY
               const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
               return (
-                <div key={groupKey} className={`mb-1 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
-                  <div className="flex items-center w-full px-2 py-1 text-[10px] group/header">
+                <div key={groupKey} className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
+                  <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                     <button
                       onClick={() => toggleGroup(groupKey)}
                       className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
@@ -250,7 +250,7 @@ export function Sidebar(): React.JSX.Element {
                     </div>
                   </div>
                   {!collapsed && (
-                    <div className="ml-2 pl-1">
+                    <div className="ml-1.5 pl-0.5">
                       {groupSessions.map(renderSessionItem)}
                     </div>
                   )}
@@ -260,8 +260,8 @@ export function Sidebar(): React.JSX.Element {
 
             {/* 已归档项目 */}
             {archivedProjects.length > 0 && (
-              <div className="mt-2 mb-1 rounded-md">
-                <div className="flex items-center w-full px-2 py-1 text-[10px] group/header">
+              <div className="mt-1.5 mb-0.5 rounded-md">
+                <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                   <button
                     onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
                     className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary/70 hover:text-text-tertiary transition-colors"
@@ -271,9 +271,9 @@ export function Sidebar(): React.JSX.Element {
                   </button>
                 </div>
                 {!collapsedGroups.has(ARCHIVED_GROUP_KEY) && (
-                  <div className="ml-2 pl-1">
+                  <div className="ml-1.5 pl-0.5">
                     {archivedProjects.map((p) => (
-                      <div key={p.id} className="group flex items-center gap-2 px-3 py-[5px] text-text-tertiary">
+                      <div key={p.id} className="group flex items-center gap-1.5 px-2.5 py-1 text-text-tertiary">
                         <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
                         <button
                           onClick={() => void handleRestoreProject(p.id)}
