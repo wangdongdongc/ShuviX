@@ -232,13 +232,16 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
               {/* 上下文用量指示器 */}
               {maxContextTokens > 0 && (
-                <span
-                  className="inline-flex items-center text-[11px] select-none"
-                  title={t('input.contextUsage', { used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-', max: maxContextTokens.toLocaleString() })}
-                >
-                  {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
-                  {' / '}
-                  {formatTokenCount(maxContextTokens)}
+                <span className="relative inline-flex items-center group/token">
+                  <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
+                    {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
+                    {' / '}
+                    {formatTokenCount(maxContextTokens)}
+                  </span>
+                  {/* 悬浮 tooltip：详细用量 */}
+                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
+                    <div className="text-[11px] text-text-primary">{t('input.contextUsage', { used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-', max: maxContextTokens.toLocaleString() })}</div>
+                  </div>
                 </span>
               )}
 

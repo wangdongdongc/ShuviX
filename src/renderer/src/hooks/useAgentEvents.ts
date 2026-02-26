@@ -32,14 +32,16 @@ export function useAgentEvents(): void {
           break
 
         case 'tool_start': {
-          // 根据工具类型设置初始状态：bash 沙箱审批 / ask 用户输入 / 其余直接运行
-          let initialStatus: 'running' | 'pending_approval' | 'pending_user_input' = 'running'
+          // 根据工具类型设置初始状态：bash 沙箱审批 / ask 用户输入 / ssh 凭据 / 其余直接运行
+          let initialStatus: 'running' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials' = 'running'
           if (event.approvalRequired) initialStatus = 'pending_approval'
           if (event.userInputRequired) initialStatus = 'pending_user_input'
+          if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
           store.addToolExecution(sid, {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
             args: event.toolArgs,
+            turnIndex: event.turnIndex,
             status: initialStatus,
             messageId: event.data
           })
@@ -67,6 +69,13 @@ export function useAgentEvents(): void {
           })
           break
 
+        case 'ssh_credential_request':
+          // ssh connect：切换状态为等待凭据输入
+          store.updateToolExecution(sid, event.toolCallId, {
+            status: 'pending_ssh_credentials'
+          })
+          break
+
         case 'tool_end':
           store.updateToolExecution(sid, event.toolCallId, {
             status: event.toolIsError ? 'error' : 'done',
@@ -86,6 +95,15 @@ export function useAgentEvents(): void {
             const msgs3 = await window.api.message.list(sid)
             const dockerMsg = msgs3.find((m) => m.id === event.data)
             if (dockerMsg) store.addMessage(dockerMsg)
+          }
+          break
+
+        case 'ssh_event':
+          // 仅当前活跃会话时添加 ssh_event 消息
+          if (sid === store.activeSessionId && event.data) {
+            const msgs4 = await window.api.message.list(sid)
+            const sshMsg = msgs4.find((m) => m.id === event.data)
+            if (sshMsg) store.addMessage(sshMsg)
           }
           break
 

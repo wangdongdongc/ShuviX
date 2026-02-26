@@ -130,7 +130,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
       if (config.sandboxEnabled && ctx.requestApproval) {
         const approval = await ctx.requestApproval(toolCallId, params.command)
         if (!approval.approved) {
-          throw new Error(approval.reason || t('tool.sandboxBashDenied'))
+          throw new Error(approval.reason || 'Sandbox: user denied execution of this command')
         }
       }
 

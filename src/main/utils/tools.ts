@@ -35,10 +35,14 @@ export interface ToolPromptContext {
 const TOOL_PROMPT_REGISTRY: Array<{
   tools: string[]
   key?: string
-  textFn?: () => string
+  textFn?: (matchedTools: string[]) => string
   condition?: (ctx: ToolPromptContext) => boolean
 }> = [
-  { tools: ['bash', 'read', 'write', 'edit', 'ls', 'grep', 'glob'], key: 'agent.promptSupplement', condition: (ctx) => ctx.hasProjectPath },
+  {
+    tools: ['bash', 'read', 'write', 'edit', 'ls', 'grep', 'glob'],
+    textFn: (matched) => `You can use the following tools to work with files in the current project directory: ${matched.join(', ')}. All relative paths are based on the project directory.`,
+    condition: (ctx) => ctx.hasProjectPath
+  },
   { tools: ['ask'], key: 'agent.askToolGuidance' },
   {
     tools: ['shuvix-project'],
@@ -47,6 +51,10 @@ const TOOL_PROMPT_REGISTRY: Array<{
   {
     tools: ['shuvix-setting'],
     textFn: () => `You have the shuvix-setting tool to read and modify global application settings. Use action="get" to view all settings, action="set" with key and value to change one. Known keys: ${getSettingKeyDescriptions()}. Set operations require user approval.`
+  },
+  {
+    tools: ['ssh'],
+    textFn: () => `You have the ssh tool to connect to a remote server via SSH and execute commands. Use action="connect" (no parameters — the user will provide host, username, and password through a secure UI dialog that you cannot see). Use action="exec" with a command to run it on the remote server (each command requires user approval). Use action="disconnect" to close the connection. You do NOT have access to any credentials — never ask the user for passwords in chat.`
   }
 ]
 
@@ -55,7 +63,10 @@ export function buildToolPrompts(enabledTools: string[], ctx: ToolPromptContext)
   return TOOL_PROMPT_REGISTRY
     .filter((entry) => entry.tools.some((name) => enabledTools.includes(name)))
     .filter((entry) => !entry.condition || entry.condition(ctx))
-    .map((entry) => entry.textFn ? entry.textFn() : t(entry.key!))
+    .map((entry) => {
+      const matched = entry.tools.filter((name) => enabledTools.includes(name))
+      return entry.textFn ? entry.textFn(matched) : t(entry.key!)
+    })
     .join('\n\n')
 }
 

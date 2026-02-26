@@ -111,7 +111,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       if (ctx.requestApproval) {
         const approval = await ctx.requestApproval(toolCallId, preview)
         if (!approval.approved) {
-          throw new Error(approval.reason || t('tool.approvalDenied'))
+          throw new Error(approval.reason || 'User denied this operation')
         }
       }
 

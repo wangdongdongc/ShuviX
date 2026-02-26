@@ -45,8 +45,11 @@
     "genFailed": "Generation Failed",
     "containerCreated": "Container created",
     "containerDestroyed": "Container destroyed",
+    "sshConnected": "SSH connection established",
+    "sshDisconnected": "SSH connection closed",
     "destroyReason_idle": "idle timeout",
     "destroyReason_session_deleted": "session deleted",
+    "turnCompressed": "compressed",
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone."
   },
@@ -55,6 +58,9 @@
     "switchModel": "Switch provider and model",
     "selectProvider": "Select Provider",
     "selectModel": "Select Model",
+    "searchModel": "Search models...",
+    "noModelMatch": "No matching models",
+    "noModels": "No models available",
     "uploadImage": "Upload image",
     "contextUsage": "Context usage: {{used}} / {{max}} tokens",
     "thinkingDepth": "Thinking Depth",
@@ -108,7 +114,27 @@
     "overrideApproval": "User rejected this operation. User feedback: {{text}}",
     "overrideAsk": "User rejected the provided options. User feedback: {{text}}",
     "shuvixProjectHint": "AI requests to modify project configuration",
-    "shuvixSettingHint": "AI requests to modify system settings"
+    "shuvixSettingHint": "AI requests to modify system settings",
+    "pendingSshCredentials": "Awaiting credentials"
+  },
+
+  "ssh": {
+    "credentialTitle": "SSH Remote Connection — Enter server credentials",
+    "host": "Host",
+    "port": "Port",
+    "username": "Username",
+    "authPassword": "Password",
+    "authKey": "Key",
+    "password": "Password",
+    "privateKey": "Private Key",
+    "privateKeyPlaceholder": "Paste private key content (PEM format)...",
+    "browseKey": "Browse",
+    "selectKeyFile": "Select Private Key File",
+    "passphrase": "Passphrase",
+    "passphrasePlaceholder": "Leave empty if none",
+    "connect": "Connect",
+    "cancel": "Cancel",
+    "credentialHint": "Credentials are used for this connection only — never saved or sent to AI"
   },
 
   "sessionEdit": {
@@ -149,6 +175,7 @@
     "referenceDirsHint": "AI can access files in these directories. Access mode controls read/write permissions in sandbox mode.",
     "addRefDir": "Add Directory",
     "refDirNotePlaceholder": "Note (helps AI understand the directory purpose)",
+    "refDirAccessLabel": "Reference directory access",
     "refDirAccessReadonly": "Read-only",
     "refDirAccessReadwrite": "Read-write",
     "archiveProject": "Archive Project",
@@ -313,7 +340,6 @@
 
   "agent": {
     "defaultTitle": "New Chat",
-    "promptSupplement": "You can use bash, read, write, and edit tools to operate on files in the current project directory. All relative paths are based on the project directory.",
     "askToolGuidance": "When you need the user to choose between multiple approaches, styles, configurations, or directions, you MUST use the ask tool to present clickable option cards. Do NOT list numbered options in plain text for the user to reply manually.",
     "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
   },
@@ -328,6 +354,7 @@
     "lsLabel": "List Files",
     "grepLabel": "Search Content",
     "globLabel": "Find Files",
+    "sshLabel": "SSH Remote",
     "shuvixProjectLabel": "Project Config",
     "shuvixSettingLabel": "System Settings",
     "bashHint": "Run terminal commands like installing packages, running scripts, or Git operations",
@@ -338,11 +365,9 @@
     "lsHint": "List files and folders in a directory as a tree structure",
     "grepHint": "Search file contents by keyword or regular expression",
     "globHint": "Find files by name pattern (e.g. *.ts)",
+    "sshHint": "Connect to a remote server via SSH and execute commands",
     "shuvixProjectHint": "View or modify the current project config (sandbox, Docker, etc.)",
     "shuvixSettingHint": "View or modify global app settings (language, theme, etc.)",
-    "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
-    "sandboxBlocked": "Sandbox: access denied to path outside workspace: {{path}}. Workspace: {{workspace}}",
-    "sandboxBashDenied": "Sandbox: user denied execution of this command",
-    "approvalDenied": "User denied this operation"
+    "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities"
   }
 }

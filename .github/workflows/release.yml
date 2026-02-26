@@ -33,7 +33,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # Linux 构建 arm64 需要交叉编译工具链
@@ -50,6 +50,8 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         run: npx electron-vite build && npx electron-builder --${{ matrix.platform }} --publish never

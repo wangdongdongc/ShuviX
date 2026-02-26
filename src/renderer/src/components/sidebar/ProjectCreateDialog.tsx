@@ -135,25 +135,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             {referenceDirs.map((dir, idx) => (
               <div key={idx} className="flex items-start gap-1.5 mb-2">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <div className="text-[11px] font-mono text-text-primary truncate flex-1" title={dir.path}>{dir.path}</div>
-                    <button
-                      onClick={() => {
-                        const next = [...referenceDirs]
-                        const current = dir.access ?? 'readonly'
-                        next[idx] = { ...dir, access: current === 'readonly' ? 'readwrite' : 'readonly' }
-                        setReferenceDirs(next)
-                      }}
-                      className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
-                        (dir.access ?? 'readonly') === 'readwrite'
-                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/30 hover:bg-amber-500/20'
-                          : 'bg-bg-secondary text-text-tertiary border-border-primary hover:bg-bg-hover'
-                      }`}
-                      title={(dir.access ?? 'readonly') === 'readwrite' ? t('projectForm.refDirAccessReadwrite') : t('projectForm.refDirAccessReadonly')}
-                    >
-                      {(dir.access ?? 'readonly') === 'readwrite' ? t('projectForm.refDirAccessReadwrite') : t('projectForm.refDirAccessReadonly')}
-                    </button>
-                  </div>
+                  <div className="text-[11px] font-mono text-text-primary truncate" title={dir.path}>{dir.path}</div>
                   <input
                     value={dir.note || ''}
                     onChange={(e) => {
@@ -225,6 +207,33 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
             <p className="text-[10px] text-text-tertiary mt-2">
               {t('projectForm.sandboxHint')}
             </p>
+            {/* 沙箱开启且有参考目录时，显示各目录的读写权限 */}
+            {sandboxEnabled && referenceDirs.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-border-secondary space-y-1.5">
+                <div className="text-[10px] text-text-tertiary mb-1">{t('projectForm.refDirAccessLabel')}</div>
+                {referenceDirs.map((dir, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5">
+                    <div className="text-[11px] font-mono text-text-secondary truncate flex-1" title={dir.path}>{dir.path.split('/').pop() || dir.path}</div>
+                    <button
+                      onClick={() => {
+                        const next = [...referenceDirs]
+                        const current = dir.access ?? 'readonly'
+                        next[idx] = { ...dir, access: current === 'readonly' ? 'readwrite' : 'readonly' }
+                        setReferenceDirs(next)
+                      }}
+                      className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                        (dir.access ?? 'readonly') === 'readwrite'
+                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/30 hover:bg-amber-500/20'
+                          : 'bg-bg-secondary text-text-tertiary border-border-primary hover:bg-bg-hover'
+                      }`}
+                      title={dir.path}
+                    >
+                      {(dir.access ?? 'readonly') === 'readwrite' ? t('projectForm.refDirAccessReadwrite') : t('projectForm.refDirAccessReadonly')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 工具配置 */}

@@ -17,12 +17,14 @@ import { createAskTool } from '../tools/ask'
 import { createListTool } from '../tools/ls'
 import { createGrepTool } from '../tools/grep'
 import { createGlobTool } from '../tools/glob'
+import { createSshTool } from '../tools/ssh'
 import { createShuvixProjectTool } from '../tools/shuvixProject'
 import { createShuvixSettingTool } from '../tools/shuvixSetting'
 import { createSkillTool } from '../tools/skill'
 import { resolveProjectConfig, type ToolContext } from '../tools/types'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
+import { sshManager } from './sshManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
 import { buildCustomProviderCompat } from './providerCompat'
 import { t } from '../i18n'
@@ -70,6 +72,7 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
     ls: createListTool(ctx),
     grep: createGrepTool(ctx),
     glob: createGlobTool(ctx),
+    ssh: createSshTool(ctx),
     'shuvix-project': createShuvixProjectTool(ctx),
     'shuvix-setting': createShuvixSettingTool(ctx)
   }
@@ -218,7 +221,7 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request' | 'user_input_request'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'ssh_event' | 'tool_approval_request' | 'user_input_request' | 'ssh_credential_request'
   sessionId: string
   data?: string
   error?: string
@@ -232,8 +235,12 @@ export interface AgentStreamEvent {
   approvalRequired?: boolean
   /** ask 工具始终需要用户输入 */
   userInputRequired?: boolean
+  /** ssh connect 需要用户输入凭据 */
+  sshCredentialRequired?: boolean
   /** ask 工具：用户输入请求数据 */
   userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
+  /** 当前 turn 编号（tool_start 时携带，用于 UI 区分同一 turn 的工具调用） */
+  turnIndex?: number
   // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
   usage?: {
     input: number; output: number; total: number
@@ -256,8 +263,12 @@ export class AgentService {
   private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; reason?: string }) => void }>()
   /** 待用户选择的 ask 工具 Promise resolver，key = toolCallId */
   private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
+  /** 待用户输入 SSH 凭据的 Promise resolver，key = toolCallId */
+  private pendingSshCredentials = new Map<string, { resolve: (credentials: import('../tools/types').SshCredentialPayload | null) => void }>()
   /** 每个 session 的流式内容缓冲区（后端累积 delta，用于 agent_end / abort 时统一落库） */
   private streamBuffers = new Map<string, { content: string; thinking: string }>()
+  /** 每个 session 的 turn 计数器（用于在 UI 中标记工具调用所属 turn） */
+  private turnCounters = new Map<string, number>()
   private mainWindow: BrowserWindow | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
@@ -401,6 +412,27 @@ export class AgentService {
             userInputPayload: payload
           })
         })
+      },
+      requestSshCredentials: (toolCallId: string) => {
+        return new Promise<import('../tools/types').SshCredentialPayload | null>((resolve) => {
+          this.pendingSshCredentials.set(toolCallId, { resolve })
+          this.sendToRenderer({
+            type: 'ssh_credential_request',
+            sessionId,
+            toolCallId,
+            toolName: 'ssh'
+          })
+        })
+      },
+      onSshConnected: (host, port, username) => {
+        this.emitSshEvent(sessionId, 'ssh_connected', {
+          host, port: String(port), username
+        })
+      },
+      onSshDisconnected: (host, port, username) => {
+        this.emitSshEvent(sessionId, 'ssh_disconnected', {
+          host, port: String(port), username
+        })
       }
     }
     this.toolContexts.set(sessionId, ctx)
@@ -531,6 +563,15 @@ export class AgentService {
     }
   }
 
+  /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
+  respondToSshCredentials(toolCallId: string, credentials: import('../tools/types').SshCredentialPayload | null): void {
+    const pending = this.pendingSshCredentials.get(toolCallId)
+    if (pending) {
+      pending.resolve(credentials)
+      this.pendingSshCredentials.delete(toolCallId)
+    }
+  }
+
   /** 中止指定 session 的生成；若已有部分内容则持久化并返回 */
   abort(sessionId: string): Message | null {
     log.info(`中止 session=${sessionId}`)
@@ -544,6 +585,11 @@ export class AgentService {
     for (const [id, pending] of this.pendingUserInputs) {
       pending.resolve([])
       this.pendingUserInputs.delete(id)
+    }
+    // 取消所有待 SSH 凭据输入的 Promise
+    for (const [id, pending] of this.pendingSshCredentials) {
+      pending.resolve(null)
+      this.pendingSshCredentials.delete(id)
     }
     // 持久化已生成的部分内容（与 agent_end 共用落库逻辑）
     return this.persistStreamBuffer(sessionId)
@@ -685,6 +731,8 @@ export class AgentService {
       this.agents.delete(sessionId)
       this.instructionLoadStates.delete(sessionId)
       clearFileTimeSession(sessionId)
+      // 断开 SSH 连接（回退时不保留）
+      sshManager.disconnect(sessionId).catch(() => {})
       // 保留 pendingLogIds / Docker 容器，下次 createAgent 会自动复用
       log.info(`invalidate session=${sessionId}`)
     }
@@ -708,6 +756,8 @@ export class AgentService {
           })
         }
       }).catch(() => {})
+      // 断开 SSH 连接
+      sshManager.disconnect(sessionId).catch(() => {})
       log.info(`移除 session=${sessionId} 剩余=${this.agents.size}`)
     }
   }
@@ -773,7 +823,18 @@ export class AgentService {
         log.info(`开始 session=${sessionId}`)
         // 清空流式缓冲区（新一轮生成）
         this.streamBuffers.set(sessionId, { content: '', thinking: '' })
+        // 重置 turn 计数器
+        this.turnCounters.set(sessionId, 0)
         this.sendToRenderer({ type: 'agent_start', sessionId })
+        break
+      case 'turn_start': {
+        const turnIdx = (this.turnCounters.get(sessionId) || 0) + 1
+        this.turnCounters.set(sessionId, turnIdx)
+        log.info(`Turn ${turnIdx} 开始 session=${sessionId}`)
+        break
+      }
+      case 'turn_end':
+        log.info(`Turn ${this.turnCounters.get(sessionId) || 0} 结束 session=${sessionId}`)
         break
       case 'agent_end': {
         log.info(`结束 session=${sessionId}`)
@@ -868,7 +929,8 @@ export class AgentService {
           metadata: JSON.stringify({
             toolCallId: event.toolCallId,
             toolName: event.toolName,
-            args: event.args
+            args: event.args,
+            turnIndex: this.turnCounters.get(sessionId) || 0
           }),
           model: sessionForTool?.model || ''
         })
@@ -881,9 +943,14 @@ export class AgentService {
           approvalRequired = true
         } else if (event.toolName === 'shuvix-setting' && event.args?.action === 'set') {
           approvalRequired = true
+        } else if (event.toolName === 'ssh' && event.args?.action === 'exec') {
+          // SSH exec 每条命令都需用户审批
+          approvalRequired = true
         }
         // ask 工具始终需要用户输入（与 bash 审批同模式，直接在 tool_start 携带标记）
         const userInputRequired = event.toolName === 'ask'
+        // ssh connect 需要用户输入凭据
+        const sshCredentialRequired = event.toolName === 'ssh' && event.args?.action === 'connect'
         this.sendToRenderer({
           type: 'tool_start',
           sessionId,
@@ -892,7 +959,9 @@ export class AgentService {
           toolArgs: event.args,
           data: toolCallMsg.id,
           approvalRequired,
-          userInputRequired
+          userInputRequired,
+          sshCredentialRequired,
+          turnIndex: this.turnCounters.get(sessionId) || 0
         })
         break
       }
@@ -938,6 +1007,18 @@ export class AgentService {
       metadata: extra ? JSON.stringify(extra) : null
     })
     this.sendToRenderer({ type: 'docker_event', sessionId, data: msg.id })
+  }
+
+  /** 持久化 ssh_event 消息并通知前端 */
+  private emitSshEvent(sessionId: string, action: string, extra?: Record<string, string>): void {
+    const msg = messageService.add({
+      sessionId,
+      role: 'system_notify',
+      type: 'ssh_event',
+      content: action,
+      metadata: extra ? JSON.stringify(extra) : null
+    })
+    this.sendToRenderer({ type: 'ssh_event', sessionId, data: msg.id })
   }
 
   /** 发送事件到 Renderer */

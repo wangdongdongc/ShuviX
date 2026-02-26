@@ -45,8 +45,11 @@
     "genFailed": "生成失败",
     "containerCreated": "容器已创建",
     "containerDestroyed": "容器已销毁",
+    "sshConnected": "SSH 连接已建立",
+    "sshDisconnected": "SSH 连接已断开",
     "destroyReason_idle": "空闲超时",
     "destroyReason_session_deleted": "会话已删除",
+    "turnCompressed": "压缩",
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
   },
@@ -55,6 +58,9 @@
     "switchModel": "切换提供商与模型",
     "selectProvider": "选择提供商",
     "selectModel": "选择模型",
+    "searchModel": "搜索模型...",
+    "noModelMatch": "没有匹配的模型",
+    "noModels": "暂无可用模型",
     "uploadImage": "上传图片",
     "contextUsage": "上下文用量：{{used}} / {{max}} tokens",
     "thinkingDepth": "思考深度",
@@ -108,7 +114,27 @@
     "overrideApproval": "用户拒绝了本次操作。用户反馈：{{text}}",
     "overrideAsk": "用户拒绝了提供的选项。用户反馈：{{text}}",
     "shuvixProjectHint": "AI 请求修改项目配置",
-    "shuvixSettingHint": "AI 请求修改系统设置"
+    "shuvixSettingHint": "AI 请求修改系统设置",
+    "pendingSshCredentials": "等待输入凭据"
+  },
+
+  "ssh": {
+    "credentialTitle": "SSH 远程连接 — 请输入服务器凭据",
+    "host": "主机地址",
+    "port": "端口",
+    "username": "用户名",
+    "authPassword": "密码",
+    "authKey": "密钥",
+    "password": "密码",
+    "privateKey": "私钥",
+    "privateKeyPlaceholder": "粘贴私钥内容（PEM 格式）...",
+    "browseKey": "浏览文件",
+    "selectKeyFile": "选择私钥文件",
+    "passphrase": "私钥口令",
+    "passphrasePlaceholder": "无口令可留空",
+    "connect": "连接",
+    "cancel": "取消",
+    "credentialHint": "凭据仅用于本次连接，不会保存，也不会发送给 AI"
   },
 
   "sessionEdit": {
@@ -149,6 +175,7 @@
     "referenceDirsHint": "AI 可访问这些目录中的文件，沙箱模式下按访问模式限制读写权限",
     "addRefDir": "添加目录",
     "refDirNotePlaceholder": "注释（帮助 AI 理解目录用途）",
+    "refDirAccessLabel": "参考目录访问权限",
     "refDirAccessReadonly": "只读",
     "refDirAccessReadwrite": "读写",
     "archiveProject": "归档项目",
@@ -313,9 +340,8 @@
 
   "agent": {
     "defaultTitle": "新对话",
-    "promptSupplement": "你可以使用 bash, read, write, edit 工具来操作当前项目目录下的文件系统。所有相对路径都基于当前项目目录。",
-    "askToolGuidance": "当你需要用户在多个方案、风格、配置或方向中做出选择时，必须使用 ask 工具提供可点击的选项卡片。禁止用纯文本列出编号选项让用户手动回复。",
-    "titleGenPrompt": "你是一个标题生成助手。根据用户和助手的首轮对话，生成一个简洁的标题（不超过20个字，不要加引号和标点符号）。只输出标题本身，不要有任何额外内容。"
+    "askToolGuidance": "When you need the user to choose between multiple approaches, styles, configurations, or directions, you MUST use the ask tool to present clickable option cards. Do NOT list numbered options in plain text for the user to reply manually.",
+    "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
   },
 
   "tool": {
@@ -328,6 +354,7 @@
     "lsLabel": "列出文件",
     "grepLabel": "搜索内容",
     "globLabel": "查找文件",
+    "sshLabel": "SSH 远程执行",
     "shuvixProjectLabel": "项目配置",
     "shuvixSettingLabel": "系统设置",
     "bashHint": "在终端中执行命令，如安装依赖、运行脚本、Git 操作等",
@@ -338,11 +365,9 @@
     "lsHint": "以树形结构列出目录中的文件和文件夹",
     "grepHint": "按关键词或正则表达式搜索文件内容",
     "globHint": "按文件名模式（如 *.ts）快速查找文件",
+    "sshHint": "通过 SSH 连接远程服务器并执行命令",
     "shuvixProjectHint": "查看或修改当前项目的配置（如沙箱、Docker 等）",
     "shuvixSettingHint": "查看或修改应用的全局设置（如语言、主题等）",
-    "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
-    "sandboxBlocked": "沙箱模式：禁止访问工作区外的路径 {{path}}。工作区: {{workspace}}",
-    "sandboxBashDenied": "沙箱模式：用户拒绝了该命令的执行",
-    "approvalDenied": "用户拒绝了本次操作"
+    "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力"
   }
 }

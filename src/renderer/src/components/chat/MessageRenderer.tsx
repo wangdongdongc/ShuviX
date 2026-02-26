@@ -1,14 +1,30 @@
 import { useTranslation } from 'react-i18next'
-import { Container, AlertCircle } from 'lucide-react'
+import { Container, AlertCircle, Terminal } from 'lucide-react'
 import { useChatStore, selectToolExecutions, type ChatMessage } from '../../stores/chatStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
+
+/** turn 分组信息（仅工具调用项携带） */
+export interface TurnGroupInfo {
+  /** 全局 turn 序号（0-based，按消息顺序递增） */
+  globalIndex: number
+  /** 是否是该 turn 组的第一项 */
+  isFirst: boolean
+  /** 是否是该 turn 组的最后一项 */
+  isLast: boolean
+  /** 该 turn 是否会被上下文压缩 */
+  willBeCompressed: boolean
+  /** 该 turn 组内的工具调用总数 */
+  groupSize: number
+}
 
 /** 可见消息项（由 ChatView 预处理后传入） */
 export interface VisibleItem {
   msg: ChatMessage
   meta?: any
   pairedCallMeta?: any
+  /** turn 分组信息（仅工具调用项携带） */
+  turnGroup?: TurnGroupInfo
 }
 
 interface MessageRendererProps {
@@ -62,27 +78,66 @@ export function MessageRenderer({
     )
   }
 
-  if (msg.type === 'tool_call') {
-    // 查找实时工具执行状态（流式期间有值，完成后回退到 running）
-    const liveExec = toolExecutions.find((te) => te.toolCallId === meta?.toolCallId)
+  if (msg.type === 'ssh_event') {
+    const isConnect = msg.content === 'ssh_connected'
+    let host = ''
+    let port = ''
+    let username = ''
+    if (msg.metadata) {
+      try {
+        const meta = JSON.parse(msg.metadata)
+        host = meta.host || ''
+        port = meta.port || ''
+        username = meta.username || ''
+      } catch { /* 忽略 */ }
+    }
+    const target = username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
     return (
+      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
+        <Terminal size={12} />
+        <span>{isConnect ? t('chat.sshConnected') : t('chat.sshDisconnected')}</span>
+        {target && <span className="font-mono opacity-60">{target}</span>}
+      </div>
+    )
+  }
+
+  if (msg.type === 'tool_call' || msg.type === 'tool_result') {
+    const isCall = msg.type === 'tool_call'
+    const liveExec = isCall ? toolExecutions.find((te) => te.toolCallId === meta?.toolCallId) : undefined
+
+    const toolBlock = isCall ? (
       <ToolCallBlock
         toolName={meta?.toolName || '未知工具'}
         toolCallId={meta?.toolCallId}
         args={meta?.args}
         status={liveExec?.status || 'running'}
       />
-    )
-  }
-
-  if (msg.type === 'tool_result') {
-    return (
+    ) : (
       <ToolCallBlock
         toolName={meta?.toolName || '未知工具'}
         args={pairedCallMeta?.args}
         result={msg.content}
         status={meta?.isError ? 'error' : 'done'}
       />
+    )
+
+    const tg = item.turnGroup
+    if (!tg) return <div className="ml-14 mr-4">{toolBlock}</div>
+
+    // 仅用背景色区分：奇偶 turn 交替底色 + 压缩 turn 降低透明度
+    const isOdd = tg.globalIndex % 2 === 1
+    return (
+      <div className={`ml-14 mr-4 ${
+        tg.isFirst ? 'mt-0.5 rounded-t' : ''
+      } ${
+        tg.isLast ? 'mb-0.5 rounded-b' : ''
+      } ${
+        isOdd ? 'bg-bg-secondary/30' : ''
+      } ${
+        tg.willBeCompressed ? 'opacity-50' : ''
+      }`}>
+        {toolBlock}
+      </div>
     )
   }
 

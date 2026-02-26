@@ -8,7 +8,7 @@ interface ToolCallBlockProps {
   toolCallId?: string
   args?: any
   result?: string
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input'
+  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
 }
 
 /**
@@ -60,6 +60,11 @@ export function ToolCallBlock({
       }
       case 'glob':
         return { icon: <FileSearch2 size={12} className={ic} />, detail: args?.pattern || '' }
+      case 'ssh': {
+        const action = args?.action || ''
+        const cmd = args?.command ? `: ${args.command.split('\n')[0].slice(0, 60)}` : ''
+        return { icon: <Terminal size={12} className="text-emerald-400 flex-shrink-0" />, detail: `${action}${cmd}` }
+      }
       case 'skill':
         return { icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />, detail: args?.command || '' }
       default:
@@ -92,13 +97,18 @@ export function ToolCallBlock({
       icon: <MessageCircleQuestion size={12} className="text-accent" />,
       label: t('toolCall.pendingUserInput'),
       borderColor: 'border-accent/40'
+    },
+    pending_ssh_credentials: {
+      icon: <Terminal size={12} className="text-accent" />,
+      label: t('toolCall.pendingSshCredentials'),
+      borderColor: 'border-accent/40'
     }
   }
 
   const config = statusConfig[status]
 
   return (
-    <div className="ml-14 mr-4 my-0.5">
+    <div className="my-0.5">
       {/* 单行摘要 — 可点击展开详情 */}
       <button
         onClick={() => setExpanded(!expanded)}

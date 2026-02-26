@@ -14,14 +14,11 @@ import { encodingForModel } from 'js-tiktoken'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
 import type { Model } from '@mariozechner/pi-ai'
 import { createLogger } from '../logger'
+import { KEEP_RECENT_TURNS } from '../../shared/constants'
 
 const log = createLogger('Context')
 
 // ─── 可调常量 ───────────────────────────────────────────────
-
-/** 保留最近 N 个 toolResult 消息的完整内容不压缩 */
-const KEEP_RECENT_TOOL_RESULTS = 6
-
 
 /** 上下文窗口使用比例（留余量给 system prompt + 输出 + 安全边际） */
 const CONTEXT_RATIO = 0.75
@@ -108,7 +105,7 @@ export function countAllTokens(messages: AgentMessage[]): number {
   return total
 }
 
-// ─── 第一层：压缩旧 toolResult ──────────────────────────────
+// ─── 第一层：按 turn 分组压缩旧 toolResult ──────────────────
 
 /** 将 toolResult 内容压缩为摘要（保留头尾几行） */
 function summarizeToolResult(text: string): string {
@@ -124,22 +121,48 @@ function summarizeToolResult(text: string): string {
 }
 
 /**
- * 压缩旧的 toolResult 消息
- * 按消息在数组中的倒数位置判断：保留最近 N 个 toolResult 不压缩，其余全部压缩
+ * 识别消息数组中的工具 turn
+ * 每组连续的 toolResult 消息视为一个 turn（对应一次 LLM 调用 + 工具执行）
+ * 返回每个 turn 包含的 toolResult 消息索引数组
  */
-function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
-  // 收集所有 toolResult 消息的索引
-  const toolResultIndices: number[] = []
+function identifyToolTurns(messages: AgentMessage[]): Array<number[]> {
+  const turns: Array<number[]> = []
+  let currentTurn: number[] = []
+
   for (let i = 0; i < messages.length; i++) {
     if ((messages[i] as any).role === 'toolResult') {
-      toolResultIndices.push(i)
+      currentTurn.push(i)
+    } else {
+      if (currentTurn.length > 0) {
+        turns.push(currentTurn)
+        currentTurn = []
+      }
     }
   }
+  if (currentTurn.length > 0) {
+    turns.push(currentTurn)
+  }
 
-  if (toolResultIndices.length <= KEEP_RECENT_TOOL_RESULTS) return messages
+  return turns
+}
 
-  // 需要压缩的 toolResult 索引集合（排除最近 N 个）
-  const compressSet = new Set(toolResultIndices.slice(0, -KEEP_RECENT_TOOL_RESULTS))
+/**
+ * 按 turn 分组压缩旧的 toolResult 消息
+ * 保留最近 KEEP_RECENT_TURNS 个 turn 的 toolResult 完整，其余全部压缩
+ */
+function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const turns = identifyToolTurns(messages)
+
+  if (turns.length <= KEEP_RECENT_TURNS) return messages
+
+  // 需要压缩的 turn（排除最近 N 个 turn）
+  const turnsToCompress = turns.slice(0, -KEEP_RECENT_TURNS)
+  const compressSet = new Set<number>()
+  for (const turn of turnsToCompress) {
+    for (const idx of turn) {
+      compressSet.add(idx)
+    }
+  }
 
   let compressedCount = 0
   const result: AgentMessage[] = []
@@ -164,7 +187,7 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   }
 
   if (compressedCount > 0) {
-    log.info(`第一层：压缩了 ${compressedCount} 个旧 toolResult`)
+    log.info(`第一层：压缩了 ${turnsToCompress.length} 个旧 turn 中的 ${compressedCount} 个 toolResult（保留最近 ${KEEP_RECENT_TURNS} 个 turn）`)
   }
   return result
 }

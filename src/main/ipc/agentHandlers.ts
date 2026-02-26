@@ -51,6 +51,12 @@ export function registerAgentHandlers(): void {
     return { success: true }
   })
 
+  /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
+  ipcMain.handle('agent:respondToSshCredentials', (_event, params: { toolCallId: string; credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null }) => {
+    agentService.respondToSshCredentials(params.toolCallId, params.credentials)
+    return { success: true }
+  })
+
   /** 动态更新指定 session 的启用工具集 */
   ipcMain.handle('agent:setEnabledTools', (_event, params: { sessionId: string; tools: string[] }) => {
     agentService.setEnabledTools(params.sessionId, params.tools)
@@ -69,6 +75,7 @@ export function registerAgentHandlers(): void {
       ls: t('tool.lsLabel'),
       grep: t('tool.grepLabel'),
       glob: t('tool.globLabel'),
+      ssh: t('tool.sshLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel')
     }
@@ -81,6 +88,7 @@ export function registerAgentHandlers(): void {
       ls: t('tool.lsHint'),
       grep: t('tool.grepHint'),
       glob: t('tool.globHint'),
+      ssh: t('tool.sshHint'),
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint')
     }

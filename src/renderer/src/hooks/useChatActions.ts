@@ -19,6 +19,8 @@ export interface UseChatActionsReturn {
   handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
+  /** SSH 凭据输入回调（凭据不经过大模型） */
+  handleSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => Promise<void>
   /** 用户通过输入框文本覆盖当前 pending action（审批拒绝 / ask 反馈） */
   handleUserActionOverride: (text: string) => Promise<void>
   /** 创建新会话 */
@@ -114,6 +116,17 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     }
   }, [activeSessionId])
 
+  /** SSH 凭据输入回调（凭据不经过大模型，直接传给 sshManager） */
+  const handleSshCredentials = useCallback(async (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => {
+    await window.api.agent.respondToSshCredentials({ toolCallId, credentials })
+    const store = useChatStore.getState()
+    if (activeSessionId) {
+      store.updateToolExecution(activeSessionId, toolCallId, {
+        status: credentials ? 'running' : 'error'
+      })
+    }
+  }, [activeSessionId])
+
   /** 创建新会话 */
   const handleNewChat = useCallback(async () => {
     const settings = useSettingsStore.getState()
@@ -155,7 +168,18 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       store.updateToolExecution(activeSessionId, pendingAsk.toolCallId, { status: 'running' })
       return
     }
+
+    // 检查是否有待 SSH 凭据输入
+    const pendingSsh = execs.find((te) => te.status === 'pending_ssh_credentials')
+    if (pendingSsh) {
+      await window.api.agent.respondToSshCredentials({
+        toolCallId: pendingSsh.toolCallId,
+        credentials: null
+      })
+      store.updateToolExecution(activeSessionId, pendingSsh.toolCallId, { status: 'error' })
+      return
+    }
   }, [activeSessionId])
 
-  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleUserActionOverride, handleNewChat } satisfies UseChatActionsReturn
+  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleSshCredentials, handleUserActionOverride, handleNewChat } satisfies UseChatActionsReturn
 }

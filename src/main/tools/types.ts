@@ -4,7 +4,6 @@
  */
 
 import { resolve, sep } from 'path'
-import { t } from '../i18n'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
 import { getTempWorkspace } from '../utils/paths'
@@ -33,6 +32,25 @@ export interface ToolContext {
   requestApproval?: (toolCallId: string, command: string) => Promise<{ approved: boolean; reason?: string }>
   /** ask 工具：向用户提问并等待选择结果，返回用户选中的 label 列表 */
   requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
+  /** ssh 工具：请求用户输入 SSH 凭据（密码或密钥），凭据不经过大模型 */
+  requestSshCredentials?: (toolCallId: string) => Promise<SshCredentialPayload | null>
+  /** ssh 连接建立时回调 */
+  onSshConnected?: (host: string, port: number, username: string) => void
+  /** ssh 连接断开时回调 */
+  onSshDisconnected?: (host: string, port: number, username: string) => void
+}
+
+/** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */
+export interface SshCredentialPayload {
+  host: string
+  port: number
+  username: string
+  /** 密码认证 */
+  password?: string
+  /** 私钥认证：私钥内容（PEM 格式） */
+  privateKey?: string
+  /** 私钥口令（如果私钥有加密） */
+  passphrase?: string
 }
 
 /** ask 工具的用户输入请求数据 */
@@ -76,7 +94,8 @@ export function assertSandboxRead(config: ProjectConfig, absolutePath: string, d
   if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
-  throw new Error(t('tool.sandboxBlocked', { path: displayPath ?? absolutePath, workspace: config.workingDirectory }))
+  const p = displayPath ?? absolutePath
+  throw new Error(`Sandbox: access denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`)
 }
 
 /**
@@ -87,7 +106,12 @@ export function assertSandboxWrite(config: ProjectConfig, absolutePath: string, 
   if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
-  throw new Error(t('tool.sandboxBlocked', { path: displayPath ?? absolutePath, workspace: config.workingDirectory }))
+  const p = displayPath ?? absolutePath
+  // 区分只读参考目录和完全越界
+  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) {
+    throw new Error(`Sandbox: write denied — ${p} is inside a read-only reference directory. You can only read files from this directory.`)
+  }
+  throw new Error(`Sandbox: write denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`)
 }
 
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */

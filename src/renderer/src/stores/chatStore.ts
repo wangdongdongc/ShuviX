@@ -5,7 +5,7 @@ export interface ChatMessage {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'error_event'
+  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'ssh_event' | 'error_event'
   content: string
   metadata: string | null
   model: string
@@ -17,7 +17,9 @@ export interface ToolExecution {
   toolCallId: string
   toolName: string
   args: any
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input'
+  /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
+  turnIndex?: number
+  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
   result?: string
   messageId?: string
 }

@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { agentService } from './services/agent'
 import { dockerManager } from './services/dockerManager'
+import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
@@ -295,6 +296,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
+  sshManager.disconnectAll().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

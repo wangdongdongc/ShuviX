@@ -39,7 +39,7 @@ declare global {
 
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'tool_approval_request' | 'user_input_request'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'ssh_event' | 'tool_approval_request' | 'user_input_request' | 'ssh_credential_request'
   sessionId: string
   data?: string
   error?: string
@@ -50,6 +50,7 @@ interface AgentStreamEvent {
   toolIsError?: boolean
   approvalRequired?: boolean
   userInputRequired?: boolean
+  sshCredentialRequired?: boolean
   userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
 }
 
@@ -165,6 +166,8 @@ interface ShuviXAPI {
     approveToolCall: (params: { toolCallId: string; approved: boolean; reason?: string }) => Promise<{ success: boolean }>
     /** 响应 ask 工具的用户选择 */
     respondToAsk: (params: { toolCallId: string; selections: string[] }) => Promise<{ success: boolean }>
+    /** 响应 SSH 凭据输入（凭据不经过大模型） */
+    respondToSshCredentials: (params: { toolCallId: string; credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null }) => Promise<{ success: boolean }>
     /** 动态更新启用工具集 */
     setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{ success: boolean }>
     onEvent: (callback: (event: AgentStreamEvent) => void) => () => void

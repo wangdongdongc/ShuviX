@@ -78,6 +78,21 @@ export function registerSessionHandlers(): void {
     return dockerManager.validateSetup(params?.image)
   })
 
+  /** 选择文件并读取其文本内容（用于 SSH 私钥等） */
+  ipcMain.handle('dialog:readTextFile', async (event, params?: { title?: string; filters?: Electron.FileFilter[] }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      title: params?.title || 'Select File',
+      properties: ['openFile'],
+      filters: params?.filters || [{ name: 'All Files', extensions: ['*'] }]
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const fs = await import('fs/promises')
+    const content = await fs.readFile(result.filePaths[0], 'utf-8')
+    return { path: result.filePaths[0], content }
+  })
+
   /** 打开文件夹选择对话框 */
   ipcMain.handle('dialog:openDirectory', async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)

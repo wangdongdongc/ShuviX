@@ -5,10 +5,16 @@
  */
 
 import { spawn } from 'child_process'
+import { existsSync } from 'node:original-fs'
 import { rgPath } from '@vscode/ripgrep'
-/** 获取 rg 二进制路径 */
+
+/**
+ * 获取 rg 二进制路径
+ * 打包后 @vscode/ripgrep 的 rgPath 仍指向 app.asar 内部，
+ * 但实际二进制由 asarUnpack 解压到 app.asar.unpacked，需要替换路径
+ */
 export function getRgPath(): string {
-  return rgPath
+  return rgPath.replace(/app\.asar(?=[/\\])/, 'app.asar.unpacked')
 }
 
 /**
@@ -136,11 +142,25 @@ async function* spawnRgLines(
 ): AsyncGenerator<string> {
   signal?.throwIfAborted()
 
-  const proc = spawn(getRgPath(), args, {
+  // 预检查 rg 二进制是否存在，避免 spawn 报出难以定位的 ENOTDIR/ENOENT
+  const bin = getRgPath()
+  if (!existsSync(bin)) {
+    throw new Error(`ripgrep binary not found: ${bin}`)
+  }
+
+  const proc = spawn(bin, args, {
     cwd,
     stdio: ['ignore', 'pipe', 'ignore'],
     // Windows 下不创建控制台窗口
     windowsHide: true
+  })
+
+  // 捕获 spawn 级别错误（如 ENOTDIR / EACCES）
+  let spawnError: Error | undefined
+  proc.on('error', (err: NodeJS.ErrnoException) => {
+    spawnError = new Error(
+      `rg spawn failed: ${err.code || err.message} (bin=${bin}, cwd=${cwd})`
+    )
   })
 
   // 中止时杀进程
@@ -161,6 +181,13 @@ async function* spawnRgLines(
     }
 
     if (buffer) yield buffer
+
+    // stdout 读完后检查是否有 spawn 错误
+    if (spawnError) throw spawnError
+  } catch (err) {
+    // 将 spawn 级别错误包装为可读信息重新抛出
+    if (spawnError) throw spawnError
+    throw err
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort)
     // 确保进程结束

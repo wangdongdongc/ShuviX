@@ -80,6 +80,10 @@ const api = {
     respondToAsk: (params: { toolCallId: string; selections: string[] }) =>
       ipcRenderer.invoke('agent:respondToAsk', params),
 
+    /** 响应 SSH 凭据输入（凭据不经过大模型） */
+    respondToSshCredentials: (params: { toolCallId: string; credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null }) =>
+      ipcRenderer.invoke('agent:respondToSshCredentials', params),
+
     /** 动态更新启用工具集 */
     setEnabledTools: (params: { sessionId: string; tools: string[] }) =>
       ipcRenderer.invoke('agent:setEnabledTools', params),

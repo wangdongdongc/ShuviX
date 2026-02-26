@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, MessageCircleQuestion, ShieldAlert } from 'lucide-react'
+import { Check, FolderOpen, KeyRound, Lock, MessageCircleQuestion, ShieldAlert, Terminal } from 'lucide-react'
 import { useChatStore, selectToolExecutions } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -9,6 +9,8 @@ interface UserActionPanelProps {
   onUserInput: (toolCallId: string, selections: string[]) => void
   /** 沙箱审批：用户允许/拒绝工具调用 */
   onApproval: (toolCallId: string, approved: boolean) => void
+  /** SSH 凭据输入回调（凭据不经过大模型） */
+  onSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => void
 }
 
 /**
@@ -17,7 +19,7 @@ interface UserActionPanelProps {
  *   1. ask 工具提问（pending_user_input）— 展示问题和可选选项
  *   2. bash 审批（pending_approval）— 展示待执行命令和允许/拒绝按钮
  */
-export function UserActionPanel({ onUserInput, onApproval }: UserActionPanelProps): React.JSX.Element | null {
+export function UserActionPanel({ onUserInput, onApproval, onSshCredentials }: UserActionPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
@@ -25,7 +27,12 @@ export function UserActionPanel({ onUserInput, onApproval }: UserActionPanelProp
   const toolExecutions = useChatStore(selectToolExecutions)
   const pendingAsk = toolExecutions.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
   const pendingApproval = toolExecutions.find((te) => te.status === 'pending_approval')
+  const pendingSsh = toolExecutions.find((te) => te.status === 'pending_ssh_credentials')
 
+  // SSH 凭据优先（需要立即处理）
+  if (pendingSsh) {
+    return <SshCredentialContent pending={pendingSsh} onSshCredentials={onSshCredentials} t={t} />
+  }
   // ask 优先（两者不会同时出现，但保险起见）
   if (pendingAsk) {
     return <AskContent pending={pendingAsk} selectedOptions={selectedOptions} setSelectedOptions={setSelectedOptions} onUserInput={onUserInput} t={t} />
@@ -239,6 +246,196 @@ function ApprovalContent({
           {t('toolCall.deny')}
         </button>
         <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
+      </div>
+    </div>
+  )
+}
+
+// ---------- SSH 凭据输入子内容 ----------
+
+type SshAuthMode = 'password' | 'key'
+
+function SshCredentialContent({
+  pending,
+  onSshCredentials,
+  t
+}: {
+  pending: { toolCallId: string }
+  onSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => void
+  t: (key: string) => string
+}): React.JSX.Element {
+  const { toolCallId } = pending
+  const [authMode, setAuthMode] = useState<SshAuthMode>('password')
+  const [host, setHost] = useState('')
+  const [port, setPort] = useState('22')
+  const [username, setUsername] = useState('')
+  // 密码模式
+  const [password, setPassword] = useState('')
+  // 密钥模式
+  const [privateKey, setPrivateKey] = useState('')
+  const [keyFileName, setKeyFileName] = useState('')
+  const [passphrase, setPassphrase] = useState('')
+
+  const canConnect = host.trim() && username.trim() && (
+    authMode === 'password' ? password.trim() : privateKey.trim()
+  )
+
+  const handleConnect = (): void => {
+    if (!canConnect) return
+    const base = { host: host.trim(), port: parseInt(port, 10) || 22, username: username.trim() }
+    if (authMode === 'password') {
+      onSshCredentials(toolCallId, { ...base, password })
+    } else {
+      onSshCredentials(toolCallId, {
+        ...base,
+        privateKey,
+        ...(passphrase ? { passphrase } : {})
+      })
+    }
+  }
+
+  const handleCancel = (): void => {
+    onSshCredentials(toolCallId, null)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // textarea 中 Enter 不触发提交
+    if (e.key === 'Enter' && canConnect && !(e.target instanceof HTMLTextAreaElement)) handleConnect()
+    if (e.key === 'Escape') handleCancel()
+  }
+
+  /** 浏览并读取私钥文件 */
+  const handleBrowseKey = async (): Promise<void> => {
+    const result = await window.electron.ipcRenderer.invoke('dialog:readTextFile', {
+      title: t('ssh.selectKeyFile'),
+      filters: [{ name: 'All Files', extensions: ['*'] }]
+    })
+    if (result?.content) {
+      setPrivateKey(result.content)
+      // 从路径提取文件名
+      const name = (result.path as string).split(/[/\\]/).pop() || ''
+      setKeyFileName(name)
+    }
+  }
+
+  const inputCls = 'w-full px-2.5 py-1.5 rounded-lg text-xs bg-bg-primary/50 border border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50 transition-colors'
+
+  return (
+    <div className="mx-3 mb-2 rounded-xl border border-accent/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+      {/* 标题 */}
+      <div className="flex items-start gap-2 px-4 pt-3 pb-2">
+        <Terminal size={16} className="text-accent flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-text-primary font-medium leading-snug">{t('ssh.credentialTitle')}</p>
+      </div>
+
+      {/* 表单 */}
+      <div className="flex flex-col gap-2 px-4 pb-2">
+        {/* 主机 + 端口 */}
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.host')}</label>
+            <input type="text" value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={handleKeyDown} placeholder="192.168.1.100" className={inputCls} autoFocus />
+          </div>
+          <div className="w-20">
+            <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.port')}</label>
+            <input type="text" value={port} onChange={(e) => setPort(e.target.value)} onKeyDown={handleKeyDown} placeholder="22" className={inputCls} />
+          </div>
+        </div>
+
+        {/* 用户名 */}
+        <div>
+          <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.username')}</label>
+          <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={handleKeyDown} placeholder="root" className={inputCls} />
+        </div>
+
+        {/* 认证模式切换 */}
+        <div className="flex gap-1 mt-0.5">
+          <button
+            onClick={() => setAuthMode('password')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+              authMode === 'password'
+                ? 'bg-accent/15 text-accent border border-accent/30'
+                : 'bg-bg-primary/30 text-text-tertiary border border-transparent hover:text-text-secondary'
+            }`}
+          >
+            <Lock size={11} />
+            {t('ssh.authPassword')}
+          </button>
+          <button
+            onClick={() => setAuthMode('key')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+              authMode === 'key'
+                ? 'bg-accent/15 text-accent border border-accent/30'
+                : 'bg-bg-primary/30 text-text-tertiary border border-transparent hover:text-text-secondary'
+            }`}
+          >
+            <KeyRound size={11} />
+            {t('ssh.authKey')}
+          </button>
+        </div>
+
+        {/* 密码模式 */}
+        {authMode === 'password' && (
+          <div>
+            <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.password')}</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={handleKeyDown} placeholder="••••••••" className={inputCls} />
+          </div>
+        )}
+
+        {/* 密钥模式 */}
+        {authMode === 'key' && (
+          <>
+            <div>
+              <div className="flex items-center justify-between mb-0.5">
+                <label className="text-[10px] text-text-tertiary">{t('ssh.privateKey')}</label>
+                <button
+                  onClick={handleBrowseKey}
+                  className="flex items-center gap-0.5 text-[10px] text-accent hover:text-accent/80 transition-colors"
+                >
+                  <FolderOpen size={10} />
+                  {t('ssh.browseKey')}
+                </button>
+              </div>
+              {keyFileName ? (
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs bg-bg-primary/50 border border-accent/30 text-text-primary">
+                  <KeyRound size={11} className="text-accent flex-shrink-0" />
+                  <span className="truncate">{keyFileName}</span>
+                  <button onClick={() => { setPrivateKey(''); setKeyFileName('') }} className="ml-auto text-text-tertiary hover:text-error text-[10px]">✕</button>
+                </div>
+              ) : (
+                <textarea
+                  value={privateKey}
+                  onChange={(e) => setPrivateKey(e.target.value)}
+                  placeholder={t('ssh.privateKeyPlaceholder')}
+                  rows={3}
+                  className={`${inputCls} resize-none font-mono text-[10px] leading-relaxed`}
+                />
+              )}
+            </div>
+            <div>
+              <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.passphrase')}</label>
+              <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} onKeyDown={handleKeyDown} placeholder={t('ssh.passphrasePlaceholder')} className={inputCls} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 操作栏 */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border-secondary/50 bg-bg-tertiary/30">
+        <button
+          onClick={handleConnect}
+          disabled={!canConnect}
+          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {t('ssh.connect')}
+        </button>
+        <button
+          onClick={handleCancel}
+          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+        >
+          {t('ssh.cancel')}
+        </button>
+        <span className="text-[10px] text-text-tertiary ml-1">{t('ssh.credentialHint')}</span>
       </div>
     </div>
   )

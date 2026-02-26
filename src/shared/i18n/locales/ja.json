@@ -45,8 +45,11 @@
     "genFailed": "生成失敗",
     "containerCreated": "コンテナが作成されました",
     "containerDestroyed": "コンテナが削除されました",
+    "sshConnected": "SSH 接続が確立されました",
+    "sshDisconnected": "SSH 接続が切断されました",
     "destroyReason_idle": "アイドルタイムアウト",
     "destroyReason_session_deleted": "セッション削除",
+    "turnCompressed": "圧縮",
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。"
   },
@@ -55,6 +58,9 @@
     "switchModel": "プロバイダーとモデルを切替",
     "selectProvider": "プロバイダーを選択",
     "selectModel": "モデルを選択",
+    "searchModel": "モデルを検索...",
+    "noModelMatch": "一致するモデルがありません",
+    "noModels": "利用可能なモデルがありません",
     "uploadImage": "画像をアップロード",
     "contextUsage": "コンテキスト使用量：{{used}} / {{max}} tokens",
     "thinkingDepth": "思考深度",
@@ -108,7 +114,27 @@
     "overrideApproval": "ユーザーがこの操作を拒否しました。ユーザーのフィードバック：{{text}}",
     "overrideAsk": "ユーザーが提供された選択肢を拒否しました。ユーザーのフィードバック：{{text}}",
     "shuvixProjectHint": "AI がプロジェクト設定の変更を要求しています",
-    "shuvixSettingHint": "AI がシステム設定の変更を要求しています"
+    "shuvixSettingHint": "AI がシステム設定の変更を要求しています",
+    "pendingSshCredentials": "認証情報入力待ち"
+  },
+
+  "ssh": {
+    "credentialTitle": "SSH リモート接続 — サーバーの認証情報を入力",
+    "host": "ホスト",
+    "port": "ポート",
+    "username": "ユーザー名",
+    "authPassword": "パスワード",
+    "authKey": "鍵",
+    "password": "パスワード",
+    "privateKey": "秘密鍵",
+    "privateKeyPlaceholder": "秘密鍵の内容を貼り付け（PEM 形式）...",
+    "browseKey": "参照",
+    "selectKeyFile": "秘密鍵ファイルを選択",
+    "passphrase": "パスフレーズ",
+    "passphrasePlaceholder": "なければ空欄",
+    "connect": "接続",
+    "cancel": "キャンセル",
+    "credentialHint": "認証情報はこの接続のみに使用され、保存や AI への送信は一切行いません"
   },
 
   "sessionEdit": {
@@ -149,6 +175,7 @@
     "referenceDirsHint": "AIがこれらのディレクトリのファイルにアクセスできます。サンドボックスモードではアクセスモードにより読み書き権限が制御されます。",
     "addRefDir": "ディレクトリを追加",
     "refDirNotePlaceholder": "メモ（AIがディレクトリの用途を理解するのに役立ちます）",
+    "refDirAccessLabel": "参照ディレクトリのアクセス権限",
     "refDirAccessReadonly": "読み取り専用",
     "refDirAccessReadwrite": "読み書き",
     "archiveProject": "プロジェクトをアーカイブ",
@@ -313,9 +340,8 @@
 
   "agent": {
     "defaultTitle": "新規チャット",
-    "promptSupplement": "bash、read、write、editツールを使用して、現在のプロジェクトディレクトリ内のファイルを操作できます。すべての相対パスはプロジェクトディレクトリに基づきます。",
-    "askToolGuidance": "ユーザーに複数のアプローチ、スタイル、設定、方向から選んでもらう必要がある場合は、必ず ask ツールを使用してクリック可能な選択肢カードを提示してください。番号付きの選択肢をプレーンテキストで列挙しないでください。",
-    "titleGenPrompt": "あなたはタイトル生成アシスタントです。ユーザーとアシスタントの最初のやり取りに基づいて、簡潔なタイトルを生成してください（10語以内、引用符や句読点なし）。タイトルのみを出力し、他の内容は含めないでください。"
+    "askToolGuidance": "When you need the user to choose between multiple approaches, styles, configurations, or directions, you MUST use the ask tool to present clickable option cards. Do NOT list numbered options in plain text for the user to reply manually.",
+    "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
   },
 
   "tool": {
@@ -328,6 +354,7 @@
     "lsLabel": "ファイル一覧",
     "grepLabel": "内容検索",
     "globLabel": "ファイル検索",
+    "sshLabel": "SSH リモート実行",
     "shuvixProjectLabel": "プロジェクト設定",
     "shuvixSettingLabel": "システム設定",
     "bashHint": "ターミナルでコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
@@ -338,11 +365,9 @@
     "lsHint": "ディレクトリ内のファイルとフォルダをツリー形式で一覧表示",
     "grepHint": "キーワードまたは正規表現でファイル内容を検索",
     "globHint": "ファイル名パターン（例: *.ts）でファイルを検索",
+    "sshHint": "SSH でリモートサーバーに接続してコマンドを実行",
     "shuvixProjectHint": "現在のプロジェクト設定を表示・変更（サンドボックス、Docker など）",
     "shuvixSettingHint": "アプリのグローバル設定を表示・変更（言語、テーマなど）",
-    "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
-    "sandboxBlocked": "サンドボックス: ワークスペース外のパスへのアクセスが拒否されました: {{path}}。ワークスペース: {{workspace}}",
-    "sandboxBashDenied": "サンドボックス: ユーザーがこのコマンドの実行を拒否しました",
-    "approvalDenied": "ユーザーがこの操作を拒否しました"
+    "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与"
   }
 }

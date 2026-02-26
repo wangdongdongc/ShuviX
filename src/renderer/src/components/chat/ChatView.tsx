@@ -7,6 +7,7 @@ import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
+import { KEEP_RECENT_TURNS } from '../../../../shared/constants'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
 import { UserActionPanel } from './UserActionPanel'
@@ -45,12 +46,22 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
   return { callMeta, pairedIds, metaCache }
 }
 
-/** 预处理消息列表中的可见项（过滤掉不渲染的消息） */
+/** 判断 VisibleItem 是否为工具调用项（tool_call 或 tool_result） */
+function isToolItem(item: VisibleItem): boolean {
+  return item.msg.type === 'tool_call' || item.msg.type === 'tool_result'
+}
+
+/** 获取工具项的 turnIndex（优先从 pairedCallMeta 取，回退到 meta） */
+function getItemTurnIndex(item: VisibleItem): number | undefined {
+  return item.pairedCallMeta?.turnIndex ?? item.meta?.turnIndex
+}
+
+/** 预处理消息列表中的可见项（过滤掉不渲染的消息，并计算 turn 分组信息） */
 function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): VisibleItem[] {
   const items: VisibleItem[] = []
   for (const msg of messages) {
-    // 跳过 system_notify（但保留 docker_event / error_event 类型）
-    if (msg.role === 'system_notify' && msg.type !== 'docker_event' && msg.type !== 'error_event') continue
+    // 跳过 system_notify（但保留 docker_event / ssh_event / error_event 类型）
+    if (msg.role === 'system_notify' && msg.type !== 'docker_event' && msg.type !== 'ssh_event' && msg.type !== 'error_event') continue
     // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
     if (msg.type === 'tool_call') {
       const meta = toolIndex.metaCache.get(msg.id)
@@ -66,6 +77,46 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
     }
     items.push({ msg })
   }
+
+  // ─── 计算 turn 分组信息 ─────────────────────────────────
+  // 识别连续的工具项分组（同一 turnIndex 的连续工具项为一组）
+  interface TurnGroup { startIdx: number; endIdx: number; turnIndex: number | undefined }
+  const turnGroups: TurnGroup[] = []
+  let i = 0
+  while (i < items.length) {
+    if (isToolItem(items[i])) {
+      const turnIdx = getItemTurnIndex(items[i])
+      const start = i
+      // 将相同 turnIndex 的连续工具项归为一组
+      while (i < items.length && isToolItem(items[i]) && getItemTurnIndex(items[i]) === turnIdx) {
+        i++
+      }
+      turnGroups.push({ startIdx: start, endIdx: i - 1, turnIndex: turnIdx })
+    } else {
+      i++
+    }
+  }
+
+  // 根据 KEEP_RECENT_TURNS 确定哪些 turn 将被压缩
+  const totalGroups = turnGroups.length
+  const compressThreshold = totalGroups - KEEP_RECENT_TURNS // globalIndex < threshold 的将被压缩
+
+  // 注入 turnGroup 信息到每个工具项
+  for (let gi = 0; gi < turnGroups.length; gi++) {
+    const g = turnGroups[gi]
+    const groupSize = g.endIdx - g.startIdx + 1
+    const willBeCompressed = gi < compressThreshold
+    for (let idx = g.startIdx; idx <= g.endIdx; idx++) {
+      items[idx].turnGroup = {
+        globalIndex: gi,
+        isFirst: idx === g.startIdx,
+        isLast: idx === g.endIdx,
+        willBeCompressed,
+        groupSize
+      }
+    }
+  }
+
   return items
 }
 
@@ -107,7 +158,7 @@ export function ChatView(): React.JSX.Element {
     useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
   }
   const { t } = useTranslation()
-  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleUserActionOverride, handleNewChat } = useChatActions(activeSessionId)
+  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleSshCredentials, handleUserActionOverride, handleNewChat } = useChatActions(activeSessionId)
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -226,8 +277,8 @@ export function ChatView(): React.JSX.Element {
               onCancel={cancelRollback}
             />
           )}
-          {/* 用户操作浮动面板（ask 提问 / bash 审批） */}
-          <UserActionPanel onUserInput={handleUserInput} onApproval={handleToolApproval} />
+          {/* 用户操作浮动面板（ask 提问 / bash 审批 / SSH 凭据） */}
+          <UserActionPanel onUserInput={handleUserInput} onApproval={handleToolApproval} onSshCredentials={handleSshCredentials} />
           {/* 输入区 */}
           <InputArea onUserActionOverride={handleUserActionOverride} />
         </>
