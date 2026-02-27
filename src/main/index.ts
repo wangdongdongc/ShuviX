@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Menu, ipcMain, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, Menu, ipcMain, nativeImage, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -143,10 +143,39 @@ function setupApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
+  const defaults = { width: 960, height: 800 }
+  try {
+    const raw = settingsDao.findByKey('window.mainBounds')
+    if (!raw) return defaults
+    const saved = JSON.parse(raw) as { x?: number; y?: number; width?: number; height?: number }
+    const w = Number(saved.width)
+    const h = Number(saved.height)
+    if (!w || !h || w < 800 || h < 600) return defaults
+
+    // 校验位置是否在可见屏幕范围内
+    if (saved.x != null && saved.y != null) {
+      const displays = screen.getAllDisplays()
+      const visible = displays.some((d) => {
+        const b = d.bounds
+        return saved.x! >= b.x - w + 100 && saved.x! < b.x + b.width - 100
+          && saved.y! >= b.y && saved.y! < b.y + b.height - 100
+      })
+      if (visible) return { width: w, height: h, x: Math.round(saved.x), y: Math.round(saved.y) }
+    }
+    return { width: w, height: h }
+  } catch {
+    return defaults
+  }
+}
+
 function createWindow(): void {
+  const bounds = getSavedWindowBounds()
+
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 800,
+    width: bounds.width,
+    height: bounds.height,
+    ...(bounds.x != null && bounds.y != null ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 800,
     minHeight: 600,
     show: false,
@@ -181,6 +210,13 @@ function createWindow(): void {
     shell.openExternal(url)
   })
 
+  // 关闭前保存窗口位置和尺寸
+  mainWindow.on('close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      settingsDao.upsert('window.mainBounds', JSON.stringify(mainWindow.getBounds()))
+    }
+  })
+
   // 开发环境加载 HMR URL，生产环境加载本地文件
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -194,9 +230,14 @@ ipcMain.handle('app:version', () => {
   return app.getVersion()
 })
 
-// React 挂载完成后显示对应窗口
+// React 挂载完成后显示对应窗口（同时应用已保存的 UI 缩放）
 ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
+  // 应用 UI 缩放设置
+  const uiZoom = Math.max(0.5, Math.min(2, Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1))
+  if (uiZoom !== 1) {
+    sender.setZoomFactor(uiZoom)
+  }
   if (mainWindow && sender === mainWindow.webContents) {
     mark('mainWindow visible (window-ready)')
     mainWindow.show()

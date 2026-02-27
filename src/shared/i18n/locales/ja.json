@@ -196,6 +196,7 @@
     "themeSystem": "システム",
     "language": "言語",
     "fontSize": "フォントサイズ",
+    "uiZoom": "UI ズーム",
     "defaultProvider": "デフォルトプロバイダー",
     "defaultModel": "デフォルトモデル",
     "systemPrompt": "システムプロンプト",

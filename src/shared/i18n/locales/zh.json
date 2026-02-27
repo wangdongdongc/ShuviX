@@ -196,6 +196,7 @@
     "themeSystem": "跟随系统",
     "language": "语言",
     "fontSize": "字体大小",
+    "uiZoom": "界面缩放",
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
     "systemPrompt": "系统提示词",

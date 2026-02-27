@@ -6,7 +6,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 export function GeneralSettings(): React.JSX.Element {
   const { t, i18n: i18nInstance } = useTranslation()
   const i18nLang = i18nInstance.language
-  const { systemPrompt, theme, fontSize, setSystemPrompt, setTheme, setFontSize, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
+  const { systemPrompt, theme, fontSize, uiZoom, setSystemPrompt, setTheme, setFontSize, setUiZoom, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
 
   useEffect(() => {
@@ -111,6 +111,30 @@ export function GeneralSettings(): React.JSX.Element {
             className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
           />
           <span className="text-[10px] text-text-tertiary">20</span>
+        </div>
+      </div>
+
+      {/* UI 缩放 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.uiZoom')} <span className="text-text-tertiary font-normal ml-1">{uiZoom}%</span>
+        </label>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-text-tertiary">50%</span>
+          <input
+            type="range"
+            min={50}
+            max={200}
+            step={10}
+            value={uiZoom}
+            onChange={(e) => {
+              const v = Number(e.target.value)
+              setUiZoom(v)
+              window.api.settings.set({ key: 'general.uiZoom', value: String(v) })
+            }}
+            className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
+          />
+          <span className="text-[10px] text-text-tertiary">200%</span>
         </div>
       </div>
 

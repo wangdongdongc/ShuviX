@@ -30,6 +30,13 @@ export function registerSettingsHandlers(): void {
     if (params.key === 'general.language') {
       changeLanguage(params.value)
     }
+    // UI 缩放变更时立即应用到所有窗口
+    if (params.key === 'general.uiZoom') {
+      const zoom = Math.max(0.5, Math.min(2, Number(params.value) / 100 || 1))
+      BrowserWindow.getAllWindows().forEach((win) => {
+        win.webContents.setZoomFactor(zoom)
+      })
+    }
     // 通知所有窗口设置已变更（主窗口监听后会刷新主题/字体等）
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send('app:settings-changed')

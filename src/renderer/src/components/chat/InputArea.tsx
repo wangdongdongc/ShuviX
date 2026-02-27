@@ -44,7 +44,14 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   const DRAG_MIN = 60
   const DRAG_MAX = 480
   const DEFAULT_MIN_H = 72
-  const [minH, setMinH] = useState(DEFAULT_MIN_H)
+  const [minH, setMinH] = useState(() => {
+    const stored = localStorage.getItem('inputMinHeight')
+    if (stored) {
+      const n = Number(stored)
+      if (Number.isFinite(n)) return Math.max(DRAG_MIN, Math.min(n, DRAG_MAX))
+    }
+    return DEFAULT_MIN_H
+  })
   const draggingRef = useRef(false)
 
   /** 自动调整文本框高度（内容超出时自动扩展） */
@@ -74,6 +81,9 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
       draggingRef.current = false
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
+      // 持久化拖拽后的输入框高度
+      const el = textareaRef.current
+      if (el) localStorage.setItem('inputMinHeight', String(el.offsetHeight))
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)

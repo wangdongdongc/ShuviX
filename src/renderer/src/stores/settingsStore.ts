@@ -17,6 +17,8 @@ interface SettingsState {
   theme: 'dark' | 'light' | 'system'
   /** 字体大小 (px) */
   fontSize: number
+  /** UI 缩放比例 (%) */
+  uiZoom: number
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -36,6 +38,7 @@ interface SettingsState {
   setSystemPrompt: (prompt: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setFontSize: (size: number) => void
+  setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'httpLogs' | 'about') => void
   loadSettings: (settings: Record<string, string>) => void
@@ -51,6 +54,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   systemPrompt: 'You are a helpful assistant.',
   theme: 'dark',
   fontSize: 14,
+  uiZoom: 100,
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -64,6 +68,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
   setTheme: (theme) => set({ theme }),
   setFontSize: (size) => set({ fontSize: size }),
+  setUiZoom: (zoom) => set({ uiZoom: zoom }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
 
@@ -77,6 +82,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       fontSize: Number(settings['general.fontSize']) || 14,
+      uiZoom: Number(settings['general.uiZoom']) || 100,
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁

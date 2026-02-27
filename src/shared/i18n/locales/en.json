@@ -196,6 +196,7 @@
     "themeSystem": "System",
     "language": "Language",
     "fontSize": "Font Size",
+    "uiZoom": "UI Zoom",
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
     "systemPrompt": "System Prompt",
