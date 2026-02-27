@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Sparkles } from 'lucide-react'
+import { MessageSquarePlus, FolderPlus, Sparkles } from 'lucide-react'
 import welcomeIcon from '../../assets/ngnl_xiubi_blank_mini.jpg'
 
 interface WelcomeViewProps {
   onNewChat: () => void
+  onCreateProject: () => void
 }
 
 /** 欢迎页 — 无活跃会话时显示 */
-export function WelcomeView({ onNewChat }: WelcomeViewProps): React.JSX.Element {
+export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div className="flex-1 flex items-center justify-center">
@@ -21,13 +22,22 @@ export function WelcomeView({ onNewChat }: WelcomeViewProps): React.JSX.Element 
         <p className="text-sm text-text-secondary mb-6 leading-relaxed">
           {t('about.description')}
         </p>
-        <button
-          onClick={onNewChat}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
-        >
-          <MessageSquarePlus size={16} />
-          {t('chat.startNewChat')}
-        </button>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={onNewChat}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
+          >
+            <MessageSquarePlus size={16} />
+            {t('chat.startNewChat')}
+          </button>
+          <button
+            onClick={onCreateProject}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors"
+          >
+            <FolderPlus size={16} />
+            {t('chat.createProject')}
+          </button>
+        </div>
       </div>
     </div>
   )

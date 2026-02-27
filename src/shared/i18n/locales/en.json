@@ -51,7 +51,8 @@
     "destroyReason_session_deleted": "session deleted",
     "turnCompressed": "compressed",
     "rollbackConfirm": "Rollback to here",
-    "rollbackWarning": "This will delete all messages after this point. This action cannot be undone."
+    "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",
+    "createProject": "Create Project"
   },
 
   "input": {

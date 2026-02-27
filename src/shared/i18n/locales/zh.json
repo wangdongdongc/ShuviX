@@ -51,7 +51,8 @@
     "destroyReason_session_deleted": "会话已删除",
     "turnCompressed": "压缩",
     "rollbackConfirm": "回退到此处",
-    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
+    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
+    "createProject": "创建新项目"
   },
 
   "input": {

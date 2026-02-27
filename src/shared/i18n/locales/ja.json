@@ -51,7 +51,8 @@
     "destroyReason_session_deleted": "セッション削除",
     "turnCompressed": "圧縮",
     "rollbackConfirm": "ここまでロールバック",
-    "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。"
+    "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。",
+    "createProject": "新規プロジェクト"
   },
 
   "input": {

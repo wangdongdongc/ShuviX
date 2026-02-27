@@ -118,6 +118,14 @@ export function Sidebar(): React.JSX.Element {
     const allSessions = await window.api.session.list()
     useChatStore.getState().setSessions(allSessions)
     setActiveSessionId(session.id)
+    // 自动展开所在项目组
+    const groupKey = projectId ?? TEMP_GROUP_KEY
+    setCollapsedGroups((prev) => {
+      if (!prev.has(groupKey)) return prev
+      const next = new Set(prev)
+      next.delete(groupKey)
+      return next
+    })
   }
 
   /** 切换会话 */
@@ -188,13 +196,25 @@ export function Sidebar(): React.JSX.Element {
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div className={`titlebar-drag flex items-center justify-between px-4 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}>
         <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">{t('sidebar.title')}</h1>
-        <button
-          onClick={() => setShowCreateProject(true)}
-          className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
-          title={t('sidebar.newProject')}
-        >
-          <FolderPlus size={15} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => {
+              const active = sessions.find((s) => s.id === activeSessionId)
+              handleNewChat(active?.projectId ?? null)
+            }}
+            className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-accent transition-colors"
+            title={t('sidebar.newChat')}
+          >
+            <MessageSquarePlus size={15} />
+          </button>
+          <button
+            onClick={() => setShowCreateProject(true)}
+            className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-amber-400 transition-colors"
+            title={t('sidebar.newProject')}
+          >
+            <FolderPlus size={15} />
+          </button>
+        </div>
       </div>
 
       {/* 会话列表 */}

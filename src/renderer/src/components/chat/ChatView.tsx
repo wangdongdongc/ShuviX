@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder } from 'lucide-react'
 import { useChatStore, selectStreamingContent, selectStreamingThinking, selectIsStreaming, type ChatMessage } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
@@ -10,6 +11,7 @@ import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { KEEP_RECENT_TURNS } from '../../../../shared/constants'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
+import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
 import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
 
@@ -140,6 +142,7 @@ export function ChatView(): React.JSX.Element {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const [showCreateProject, setShowCreateProject] = useState(false)
 
   /** 开始编辑会话标题 */
   const startEditTitle = (): void => {
@@ -244,7 +247,7 @@ export function ChatView(): React.JSX.Element {
       </div>
 
       {!activeSessionId ? (
-        <WelcomeView onNewChat={handleNewChat} />
+        <WelcomeView onNewChat={handleNewChat} onCreateProject={() => setShowCreateProject(true)} />
       ) : (
         <>
           {messages.length === 0 && !isStreaming ? (
@@ -282,6 +285,27 @@ export function ChatView(): React.JSX.Element {
           {/* 输入区 */}
           <InputArea onUserActionOverride={handleUserActionOverride} />
         </>
+      )}
+
+      {/* 新建项目弹窗（欢迎页触发） */}
+      {showCreateProject && (
+        <ProjectCreateDialog
+          onClose={() => setShowCreateProject(false)}
+          onCreated={async (projectId) => {
+            setShowCreateProject(false)
+            // 在新项目下创建一个会话并激活
+            const settings = useSettingsStore.getState()
+            const session = await window.api.session.create({
+              provider: settings.activeProvider,
+              model: settings.activeModel,
+              systemPrompt: settings.systemPrompt,
+              projectId
+            })
+            const allSessions = await window.api.session.list()
+            useChatStore.getState().setSessions(allSessions)
+            useChatStore.getState().setActiveSessionId(session.id)
+          }}
+        />
       )}
     </div>
   )
