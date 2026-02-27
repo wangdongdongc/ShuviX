@@ -64,6 +64,23 @@ export class SshManager {
         settled = true
         clearTimeout(timer)
         this.connections.set(sessionId, { client, host, port, username })
+
+        // 监听连接断开事件，自动清理过期的连接记录
+        const onDisconnect = (): void => {
+          // 确保当前连接未被新连接替换（防止 race condition）
+          if (this.connections.get(sessionId)?.client === client) {
+            this.cancelScheduledDestroy(sessionId)
+            this.connections.delete(sessionId)
+            log.info(`SSH 连接已断开（远端关闭）session=${sessionId}`)
+          }
+        }
+        client.on('close', onDisconnect)
+        client.on('end', onDisconnect)
+        client.on('error', (err) => {
+          log.error(`SSH 连接异常 session=${sessionId}: ${err.message}`)
+          onDisconnect()
+        })
+
         const authMethod = privateKey ? 'key' : 'password'
         log.info(`SSH 连接成功 (${authMethod}) ${username}@${host}:${port} session=${sessionId}`)
         resolve({ success: true })
@@ -84,7 +101,11 @@ export class SshManager {
         username,
         // 跳过 host key 验证（用户已确认连接意图）
         hostVerify: () => true,
-        readyTimeout: 15000
+        readyTimeout: 15000,
+        // 心跳保活：每 30 秒发送一次，连续 3 次无响应则断开
+        // 防止 NAT/防火墙因空闲超时丢弃连接
+        keepaliveInterval: 30000,
+        keepaliveCountMax: 3
       }
       if (privateKey) {
         connectConfig.privateKey = privateKey

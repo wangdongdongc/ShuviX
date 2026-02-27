@@ -175,7 +175,7 @@ Agent 流式事件通过 `window.api.agent.onEvent` 监听，事件类型包括�
 
 ### 指令文件
 
-- **AGENT.md** / **CLAUDE.md**：项目根目录的指令文件，创建 Agent 时自动读取并注入 system prompt
+- **AGENTS.MD**：项目根目录的指令文件，创建 Agent 时自动读取并注入 system prompt（兼容 `AGENT.md`）
 - 加载状态通过 `agent.init` 返回，前端展示在输入区底部
 
 ### 沙箱与安全

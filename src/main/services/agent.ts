@@ -118,22 +118,28 @@ function extractBase64(img: any): string {
   return ''
 }
 
-/** 读取项目根目录指令文件（不存在或读取失败时返回空） */
-function readProjectInstructionMd(projectPath: string, fileName: 'AGENT.md' | 'CLAUDE.md'): string {
-  const filePath = join(projectPath, fileName)
-  if (!existsSync(filePath)) return ''
-  try {
-    return readFileSync(filePath, 'utf-8').trim()
-  } catch (err: any) {
-    log.warn(`读取 ${fileName} 失败: ${filePath} (${err?.message || String(err)})`)
-    return ''
+/** 读取项目根目录指令文件（优先 AGENTS.MD，回退 AGENT.md；不存在或读取失败时返回空） */
+function readProjectAgentMd(projectPath: string): string {
+  // 优先 AGENTS.MD，兼容旧版 AGENT.md
+  for (const name of ['AGENTS.MD', 'AGENT.md']) {
+    const filePath = join(projectPath, name)
+    if (!existsSync(filePath)) continue
+    try {
+      const content = readFileSync(filePath, 'utf-8').trim()
+      if (content) {
+        log.info(`已加载项目指令文件: ${name}`)
+        return content
+      }
+    } catch (err: any) {
+      log.warn(`读取 ${name} 失败: ${filePath} (${err?.message || String(err)})`)
+    }
   }
+  return ''
 }
 
 /** 会话级项目指令文件加载状态（由 AgentService 统一维护） */
 interface ProjectInstructionLoadState {
   agentMdLoaded: boolean
-  claudeMdLoaded: boolean
 }
 
 /**
@@ -216,7 +222,65 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
 
     i++ // 未知类型跳过
   }
-  return result
+
+  // 后处理：修补中断导致的消息结构异常
+  // 场景1：abort 时 persistStreamBuffer 在 tool_call 和 tool_result 之间插入了 assistant text
+  // 场景2：tool_execution_end 未触发，tool_call 没有对应的 tool_result（孤儿 tool_call）
+  return repairToolCallPairing(result)
+}
+
+/**
+ * 修补 tool_call / tool_result 配对：
+ * - 跳过夹在 tool_call 和 tool_result 之间的 assistant text（abort 遗留）
+ * - 为缺失 tool_result 的 tool_call 补充合成的 error tool_result
+ */
+function repairToolCallPairing(messages: AgentMessage[]): AgentMessage[] {
+  const repaired: AgentMessage[] = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i] as any
+    // 非 toolCall assistant 消息直接保留
+    const toolCalls = msg.role === 'assistant' && Array.isArray(msg.content)
+      ? msg.content.filter((c: any) => c.type === 'toolCall')
+      : []
+    if (toolCalls.length === 0) {
+      repaired.push(msg)
+      continue
+    }
+
+    // 找到一条包含 toolCall 的 assistant 消息 → 收集对应的 toolResult
+    repaired.push(msg)
+    const pendingIds = new Set<string>(toolCalls.map((tc: any) => tc.id))
+    let j = i + 1
+    // 向前扫描：收集匹配的 toolResult，跳过夹在中间的 assistant text（abort 遗留）
+    while (j < messages.length && pendingIds.size > 0) {
+      const next = messages[j] as any
+      if (next.role === 'toolResult' && pendingIds.has(next.toolCallId)) {
+        repaired.push(next)
+        pendingIds.delete(next.toolCallId)
+        j++
+      } else if (next.role === 'toolResult') {
+        repaired.push(next)
+        j++
+      } else if (next.role === 'assistant') {
+        // 跳过 abort 时 persistStreamBuffer 遗留的 assistant text（不加入 repaired）
+        j++
+      } else {
+        // 遇到 user 消息等，停止扫描
+        break
+      }
+    }
+    // 为缺失的 toolResult 补充合成记录（标记为 error）
+    for (const id of pendingIds) {
+      const tc = toolCalls.find((c: any) => c.id === id)
+      repaired.push({
+        role: 'toolResult', toolCallId: id, toolName: tc?.name || '',
+        content: [{ type: 'text', text: 'Tool execution was interrupted.' }],
+        isError: true, timestamp: Date.now()
+      } as any)
+    }
+    i = j - 1 // 跳过已处理的消息
+  }
+  return repaired
 }
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
@@ -254,7 +318,7 @@ export interface AgentStreamEvent {
  */
 export class AgentService {
   private agents = new Map<string, Agent>()
-  /** 每个 session 的 AGENT.md / CLAUDE.md 加载状态 */
+  /** 每个 session 的 AGENT.md 加载状态 */
   private instructionLoadStates = new Map<string, ProjectInstructionLoadState>()
   /** 每个 session 的 ToolContext，用于动态重建工具 */
   private toolContexts = new Map<string, ToolContext>()
@@ -282,7 +346,7 @@ export class AgentService {
     const session = sessionDao.findById(sessionId)
     if (!session) {
       log.error(`创建失败，未找到 session=${sessionId}`)
-      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '', workingDirectory: '', enabledTools: [], agentMdLoaded: false, claudeMdLoaded: false }
+      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '', workingDirectory: '', enabledTools: [], agentMdLoaded: false }
     }
 
     const provider = session.provider || ''
@@ -296,14 +360,13 @@ export class AgentService {
 
     // 已存在则跳过（工具通过 resolveProjectConfig 动态获取配置，无需重建）
     if (this.agents.has(sessionId)) {
-      const instrState = this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false, claudeMdLoaded: false }
+      const instrState = this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false }
       return { success: true, created: false, ...meta, ...instrState }
     }
 
     log.info(`创建 model=${model} session=${sessionId}`)
 
     let agentMdLoaded = false
-    let claudeMdLoaded = false
 
     // 合并 system prompt：全局 + 项目级 + 参考目录
     const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
@@ -480,30 +543,20 @@ export class AgentService {
       }
     })
 
-    // 将项目 AGENT.md / CLAUDE.md 作为独立的用户消息注入
+    // 将项目 AGENTS.MD / AGENT.md 作为独立的用户消息注入
     if (project) {
-      const agentMd = readProjectInstructionMd(project.path, 'AGENT.md')
+      const agentMd = readProjectAgentMd(project.path)
       if (agentMd) {
         agentMdLoaded = true
         agent.state.messages.push({
           role: 'user',
-          content: `Project AGENT.md instructions:\n${agentMd}`,
-          timestamp: Date.now()
-        } as any)
-      }
-
-      const claudeMd = readProjectInstructionMd(project.path, 'CLAUDE.md')
-      if (claudeMd) {
-        claudeMdLoaded = true
-        agent.state.messages.push({
-          role: 'user',
-          content: `Project CLAUDE.md instructions:\n${claudeMd}`,
+          content: `Project AGENTS.MD instructions:\n${agentMd}`,
           timestamp: Date.now()
         } as any)
       }
     }
 
-    this.instructionLoadStates.set(sessionId, { agentMdLoaded, claudeMdLoaded })
+    this.instructionLoadStates.set(sessionId, { agentMdLoaded })
 
     this.agents.set(sessionId, agent)
 
@@ -521,7 +574,7 @@ export class AgentService {
       }
     }
 
-    return { success: true, created: true, ...meta, agentMdLoaded, claudeMdLoaded }
+    return { success: true, created: true, ...meta, agentMdLoaded }
   }
 
   /** 向指定 session 的 Agent 发送消息（支持附带图片） */
@@ -590,6 +643,18 @@ export class AgentService {
     for (const [id, pending] of this.pendingSshCredentials) {
       pending.resolve(null)
       this.pendingSshCredentials.delete(id)
+    }
+    // 检查是否有正在进行的工具调用（DB 中有 tool_call 但还没有对应的 tool_result）
+    // 如果有，不持久化 stream buffer，因为 buffer 中的文本是同一条 LLM 回复中工具调用之前的内容，
+    // 单独保存会插入到 tool_call 和 tool_result 之间，破坏消息配对导致 API 400 错误
+    const dbMsgs = messageDao.findBySessionId(sessionId)
+    if (dbMsgs.length > 0) {
+      const lastMsg = dbMsgs[dbMsgs.length - 1]
+      if (lastMsg.role === 'assistant' && lastMsg.type === 'tool_call') {
+        log.info(`中止时有未完成的工具调用，跳过 buffer 持久化 session=${sessionId}`)
+        this.streamBuffers.delete(sessionId)
+        return null
+      }
     }
     // 持久化已生成的部分内容（与 agent_end 共用落库逻辑）
     return this.persistStreamBuffer(sessionId)
@@ -663,7 +728,7 @@ export class AgentService {
 
   /** 获取会话的项目指令文件加载状态（由 AgentService 维护） */
   getInstructionLoadState(sessionId: string): ProjectInstructionLoadState {
-    return this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false, claudeMdLoaded: false }
+    return this.instructionLoadStates.get(sessionId) || { agentMdLoaded: false }
   }
 
   /** 获取指定 session 的消息列表 */

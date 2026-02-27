@@ -30,7 +30,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   const { t } = useTranslation()
   const { inputText, setInputText, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
-  const { projectPath, agentMdLoaded, claudeMdLoaded } = useSessionMeta()
+  const { projectPath, agentMdLoaded } = useSessionMeta()
 
   // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
   const toolExecutions = useChatStore(selectToolExecutions)
@@ -52,7 +52,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     const el = textareaRef.current
     if (!el || draggingRef.current) return
     el.style.height = 'auto'
-    el.style.height = Math.max(el.scrollHeight, minH) + 'px'
+    el.style.height = Math.min(Math.max(el.scrollHeight, minH), DRAG_MAX) + 'px'
   }, [inputText, minH])
 
   /** 拖拽手柄：向上拖增大输入区，向下拖缩小 */
@@ -149,17 +149,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   // pending action 时输入框临时可用
   const effectiveStreaming = isStreaming && !hasPendingAction
   const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !effectiveStreaming && activeSessionId
-  const loadedInstructionCount = Number(agentMdLoaded) + Number(claudeMdLoaded)
-  const instructionBadgeText = loadedInstructionCount === 2
-    ? 'AGENT.md + CLAUDE.md'
-    : loadedInstructionCount === 1
-      ? (agentMdLoaded ? 'AGENT.md' : 'CLAUDE.md')
-      : 'None'
-  const instructionDotClass = loadedInstructionCount === 2
-    ? 'bg-emerald-400/90'
-    : loadedInstructionCount === 1
-      ? 'bg-amber-400/90'
-      : 'bg-text-tertiary/45'
+  const instructionBadgeText = agentMdLoaded ? 'AGENTS.MD' : 'None'
+  const instructionDotClass = agentMdLoaded ? 'bg-emerald-400/90' : 'bg-text-tertiary/45'
 
   return (
     <div
@@ -263,15 +254,9 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                   <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
                     <div className="text-[10px] text-text-tertiary mb-1">{t('input.instructionsStatus')}</div>
                     <div className="flex items-center justify-between gap-3 text-[11px]">
-                      <span className="text-text-secondary">AGENT.md</span>
+                      <span className="text-text-secondary">AGENTS.MD</span>
                       <span className={agentMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
                         {agentMdLoaded ? t('input.loaded') : t('input.notLoaded')}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 text-[11px] mt-0.5">
-                      <span className="text-text-secondary">CLAUDE.md</span>
-                      <span className={claudeMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
-                        {claudeMdLoaded ? t('input.loaded') : t('input.notLoaded')}
                       </span>
                     </div>
                   </div>
@@ -294,7 +279,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               disabled={!activeSessionId}
               rows={3}
               style={{ minHeight: `${minH}px` }}
-              className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none disabled:opacity-50"
+              className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
             />
 
             {effectiveStreaming ? (

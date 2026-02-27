@@ -29,8 +29,8 @@ export class SessionService {
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
     const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
-    const { agentMdLoaded, claudeMdLoaded } = agentService.getInstructionLoadState(id)
-    return { ...session, workingDirectory, enabledTools, agentMdLoaded, claudeMdLoaded }
+    const { agentMdLoaded } = agentService.getInstructionLoadState(id)
+    return { ...session, workingDirectory, enabledTools, agentMdLoaded }
   }
 
   /** 创建新会话 */

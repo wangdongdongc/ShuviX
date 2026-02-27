@@ -3,7 +3,6 @@ import { useChatStore } from '../stores/chatStore'
 export interface SessionMeta {
   projectPath: string | null
   agentMdLoaded: boolean
-  claudeMdLoaded: boolean
 }
 
 /**
@@ -13,7 +12,6 @@ export interface SessionMeta {
 export function useSessionMeta(): SessionMeta {
   const projectPath = useChatStore((s) => s.projectPath)
   const agentMdLoaded = useChatStore((s) => s.agentMdLoaded)
-  const claudeMdLoaded = useChatStore((s) => s.claudeMdLoaded)
 
-  return { projectPath, agentMdLoaded, claudeMdLoaded }
+  return { projectPath, agentMdLoaded }
 }

@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  # ---- 构建阶段：三平台并行构建，产物上传为 artifacts ----
+  # ---- macOS / Windows 构建 ----
   build:
     strategy:
       matrix:
@@ -21,8 +21,6 @@ jobs:
             platform: mac
           - os: windows-latest
             platform: win
-          - os: ubuntu-22.04
-            platform: linux
 
     runs-on: ${{ matrix.os }}
 
@@ -35,18 +33,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-
-      # Linux 构建 arm64 需要交叉编译工具链
-      - name: Install Linux arm64 toolchain
-        if: matrix.platform == 'linux'
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-12-dev-arm64-cross
 
       - name: Install dependencies
         run: npm ci
@@ -72,14 +58,66 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.exe
+            !dist/*.blockmap
+          if-no-files-found: ignore
+
+  # ---- Linux 构建：在 Ubuntu 20.04 Docker 中编译，glibc 2.31 兼容 Ubuntu 20.04+ ----
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Linux packages in Docker (glibc 2.31)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e GITHUB_TOKEN \
+            -e DEBIAN_FRONTEND=noninteractive \
+            ubuntu:20.04 \
+            bash -c '
+              set -e
+
+              # 基础构建工具
+              apt-get update
+              apt-get install -y curl build-essential python3 fakeroot dpkg rpm git
+
+              # 安装 Node.js 22
+              curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+              apt-get install -y nodejs
+
+              # arm64 交叉编译工具链
+              dpkg --add-architecture arm64
+              sed -i "s/^deb /deb [arch=amd64] /" /etc/apt/sources.list
+              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list.d/arm64.list
+              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
+              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
+              apt-get update
+              apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-9-dev-arm64-cross
+
+              npm ci
+              npx electron-vite build
+              npx electron-builder --linux --publish never
+            '
+          # Docker 内创建的文件属主为 root，修正权限以便后续 upload
+          sudo chown -R $(id -u):$(id -g) dist/ || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: |
             dist/*.AppImage
             dist/*.deb
-            !dist/*.blockmap
           if-no-files-found: ignore
 
   # ---- 发布阶段：所有构建完成后创建 Release 并上传全部产物 ----
   publish:
-    needs: build
+    needs: [build, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

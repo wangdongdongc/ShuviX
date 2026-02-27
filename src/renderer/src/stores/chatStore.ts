@@ -80,8 +80,6 @@ interface ChatState {
   projectPath: string | null
   /** AGENT.md 是否已加载 */
   agentMdLoaded: boolean
-  /** CLAUDE.md 是否已加载 */
-  claudeMdLoaded: boolean
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -112,7 +110,6 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
-  setClaudeMdLoaded: (loaded: boolean) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -147,7 +144,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   enabledTools: [],
   projectPath: null,
   agentMdLoaded: false,
-  claudeMdLoaded: false,
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
@@ -235,7 +231,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
-  setClaudeMdLoaded: (loaded) => set({ claudeMdLoaded: loaded }),
 
   finishStreaming: (sessionId, finalMessage) =>
     set((state) => {

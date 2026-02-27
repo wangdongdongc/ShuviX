@@ -167,7 +167,15 @@ async function handleExec(
     }
   } catch (err: any) {
     if (err.message === TOOL_ABORTED || err.message === 'Aborted') throw err
-    throw new Error(`SSH command failed: ${err.message}`)
+    // 连接级错误，清理过期连接以便下次可直接重连
+    if (sshManager.isConnected(ctx.sessionId)) {
+      const connInfo = sshManager.getConnectionInfo(ctx.sessionId)
+      await sshManager.disconnect(ctx.sessionId)
+      if (connInfo) ctx.onSshDisconnected?.(connInfo.host, connInfo.port, connInfo.username)
+    }
+    throw new Error(
+      `SSH command failed: ${err.message}. The connection has been closed. Use ssh({ action: "connect" }) to reconnect.`
+    )
   }
 }
 

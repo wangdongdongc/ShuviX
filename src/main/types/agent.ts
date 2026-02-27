@@ -24,8 +24,6 @@ export interface AgentInitResult {
   enabledTools: string[]
   /** 项目 AGENT.md 是否已加载 */
   agentMdLoaded: boolean
-  /** 项目 CLAUDE.md 是否已加载 */
-  claudeMdLoaded: boolean
 }
 
 /** 图片内容（base64） */

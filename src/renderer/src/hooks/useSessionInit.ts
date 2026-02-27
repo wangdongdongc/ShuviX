@@ -45,7 +45,6 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setProjectPath(result.workingDirectory || null)
       store.setEnabledTools(result.enabledTools || [])
       store.setAgentMdLoaded(!!result.agentMdLoaded)
-      store.setClaudeMdLoaded(!!result.claudeMdLoaded)
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
       const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && m.metadata)

@@ -52,7 +52,7 @@ export function CodeBlock({ node, children, ...props }: any): React.JSX.Element 
   return (
     <div className="relative group/code my-2">
       {/* 语言标签 + 复制按钮 */}
-      <div className="flex items-center justify-between px-3 py-1 text-[10px] text-text-tertiary border border-border-primary border-b-0 rounded-t-lg bg-bg-tertiary/80">
+      <div className="flex items-center justify-between px-4 py-1.5 text-[10px] text-text-tertiary rounded-t-lg" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
         <span className="font-medium uppercase tracking-wider">{lang || 'code'}</span>
         <button
           onClick={handleCopy}
@@ -116,9 +116,9 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
   }
 
   return (
-    <div className="my-2 rounded-lg border border-border-primary bg-bg-tertiary/50 overflow-hidden">
+    <div className="my-2 rounded-lg overflow-hidden" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
       {/* 工具栏 */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-primary bg-bg-tertiary/80">
+      <div className="flex items-center justify-between px-4 py-1.5" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
         <span className="text-[10px] text-text-tertiary font-medium">Mermaid</span>
         <button
           onClick={handleToggle}
