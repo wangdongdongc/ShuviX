@@ -68,7 +68,7 @@ export function ProviderSettings(): React.JSX.Element {
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
   const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
   const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
-  const [saved, setSaved] = useState(false)
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [showAddForm, setShowAddForm] = useState(false)
   const [newProvider, setNewProvider] = useState({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' as const })
   const [addingProvider, setAddingProvider] = useState(false)
@@ -116,28 +116,48 @@ export function ProviderSettings(): React.JSX.Element {
     }))
   }
 
-  /** 保存提供商配置 */
-  const handleSave = async (): Promise<void> => {
-    for (const [pid, edits] of Object.entries(localEdits)) {
-      const provider = providers.find((p) => p.id === pid)
-      if (!provider) continue
-      const updates: { apiKey?: string; baseUrl?: string } = {}
-      if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
-        updates.apiKey = edits.apiKey
-      }
-      if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
-        updates.baseUrl = edits.baseUrl
-      }
-      if (Object.keys(updates).length > 0) {
-        await window.api.provider.updateConfig({ id: pid, ...updates })
-      }
+  /** 判断指定 provider 是否有真正变更 */
+  const hasEdits = (providerId: string): boolean => {
+    const edits = localEdits[providerId]
+    if (!edits) return false
+    const provider = providers.find((p) => p.id === providerId)
+    if (!provider) return false
+    if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) return true
+    if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) return true
+    return false
+  }
+
+  /** 保存单个提供商配置 */
+  const handleSaveProvider = async (providerId: string): Promise<void> => {
+    const edits = localEdits[providerId]
+    const provider = providers.find((p) => p.id === providerId)
+    if (!edits || !provider) return
+    const updates: { apiKey?: string; baseUrl?: string } = {}
+    if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
+      updates.apiKey = edits.apiKey
+    }
+    if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
+      updates.baseUrl = edits.baseUrl
+    }
+    if (Object.keys(updates).length > 0) {
+      await window.api.provider.updateConfig({ id: providerId, ...updates })
     }
     // 刷新
     const updated = await window.api.provider.listAll()
     setProviders(updated)
-    setLocalEdits({})
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setLocalEdits((prev) => {
+      const next = { ...prev }
+      delete next[providerId]
+      return next
+    })
+    setSavedIds((prev) => new Set(prev).add(providerId))
+    setTimeout(() => {
+      setSavedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(providerId)
+        return next
+      })
+    }, 2000)
   }
 
   /** 添加自定义提供商 */
@@ -383,6 +403,22 @@ export function ProviderSettings(): React.JSX.Element {
                     />
                   </div>
 
+                  {/* 保存按钮 */}
+                  {(hasEdits(p.id) || savedIds.has(p.id)) && (
+                    <button
+                      onClick={() => handleSaveProvider(p.id)}
+                      disabled={savedIds.has(p.id) || !hasEdits(p.id)}
+                      className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        savedIds.has(p.id)
+                          ? 'bg-success/20 text-success'
+                          : 'bg-accent text-white hover:bg-accent-hover'
+                      }`}
+                    >
+                      <Save size={14} />
+                      {savedIds.has(p.id) ? t('settings.saved') : t('settings.saveConfig')}
+                    </button>
+                  )}
+
                   {/* 模型列表 */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -508,18 +544,6 @@ export function ProviderSettings(): React.JSX.Element {
         })}
       </div>
 
-      {/* 保存 */}
-      <div className="px-5 py-4 border-t border-border-secondary">
-        <button
-          onClick={handleSave}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-            saved ? 'bg-success/20 text-success' : 'bg-accent text-white hover:bg-accent-hover'
-          }`}
-        >
-          <Save size={16} />
-          {saved ? t('settings.saved') : t('settings.saveConfig')}
-        </button>
-      </div>
     </div>
   )
 }

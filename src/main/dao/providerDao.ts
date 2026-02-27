@@ -1,6 +1,12 @@
 import { v7 as uuidv7 } from 'uuid'
 import { databaseManager } from './database'
+import { encrypt, decrypt } from '../services/crypto'
 import type { Provider, ProviderModel } from '../types'
+
+function decryptProvider<T extends Provider | undefined>(p: T): T {
+  if (!p) return p
+  return { ...p, apiKey: decrypt(p.apiKey) } as T
+}
 
 /**
  * Provider DAO — 提供商和模型表的纯数据访问操作
@@ -14,30 +20,33 @@ export class ProviderDao {
 
   /** 获取所有提供商，自定义在前，再按 sortOrder 排序 */
   findAll(): Provider[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM providers ORDER BY isBuiltin ASC, sortOrder ASC')
       .all() as Provider[]
+    return rows.map(decryptProvider)
   }
 
   /** 获取所有已启用的提供商，自定义在前 */
   findEnabled(): Provider[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM providers WHERE isEnabled = 1 ORDER BY isBuiltin ASC, sortOrder ASC')
       .all() as Provider[]
+    return rows.map(decryptProvider)
   }
 
   /** 根据 ID 获取提供商 */
   findById(id: string): Provider | undefined {
-    return this.db
+    const row = this.db
       .prepare('SELECT * FROM providers WHERE id = ?')
       .get(id) as Provider | undefined
+    return decryptProvider(row)
   }
 
   /** 更新提供商 API Key */
   updateApiKey(id: string, apiKey: string): void {
     this.db
       .prepare('UPDATE providers SET apiKey = ?, updatedAt = ? WHERE id = ?')
-      .run(apiKey, Date.now(), id)
+      .run(encrypt(apiKey), Date.now(), id)
   }
 
   /** 更新提供商 Base URL */
@@ -66,7 +75,7 @@ export class ProviderDao {
       .prepare(
         'INSERT INTO providers (id, name, apiKey, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?)'
       )
-      .run(provider.id, provider.name, provider.apiKey, provider.baseUrl, provider.apiProtocol, maxOrder + 1, now, now)
+      .run(provider.id, provider.name, encrypt(provider.apiKey), provider.baseUrl, provider.apiProtocol, maxOrder + 1, now, now)
   }
 
   /** 删除提供商及其模型（仅允许删除自定义提供商） */
