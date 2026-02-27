@@ -447,9 +447,10 @@ export class AgentService {
     // 创建工具集（通过 sessionId 动态查询项目配置）
     const ctx: ToolContext = {
       sessionId,
-      onContainerCreated: (containerId) => {
+      onContainerCreated: (containerId, image) => {
         this.emitDockerEvent(sessionId, 'container_created', {
-          containerId: containerId.slice(0, 12)
+          containerId: containerId.slice(0, 12),
+          image
         })
       },
       requestApproval: (toolCallId: string, command: string) => {

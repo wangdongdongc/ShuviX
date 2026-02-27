@@ -52,7 +52,12 @@
     "turnCompressed": "compressed",
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",
-    "createProject": "Create Project"
+    "createProject": "Create Project",
+    "dockerRunning": "Container running",
+    "sshActive": "SSH connected",
+    "destroyContainer": "Destroy container",
+    "disconnectSsh": "Disconnect SSH",
+    "destroyReason_manual": "manually destroyed"
   },
 
   "input": {

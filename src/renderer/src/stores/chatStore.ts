@@ -46,6 +46,12 @@ interface SessionStreamState {
   isStreaming: boolean
 }
 
+/** 每个 session 的活跃 Docker/SSH 资源信息 */
+export interface SessionResourceInfo {
+  docker?: { containerId: string; image: string } | null
+  ssh?: { host: string; port: number; username: string } | null
+}
+
 /** 空数组常量，避免选择器每次返回新引用 */
 const EMPTY_TOOLS: ToolExecution[] = []
 
@@ -80,6 +86,8 @@ interface ChatState {
   projectPath: string | null
   /** AGENT.md 是否已加载 */
   agentMdLoaded: boolean
+  /** 各 session 的活跃 Docker/SSH 资源信息 */
+  sessionResources: Record<string, SessionResourceInfo>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -110,6 +118,8 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
+  setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
+  setSessionSsh: (sessionId: string, info: { host: string; port: number; username: string } | null) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -144,6 +154,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   enabledTools: [],
   projectPath: null,
   agentMdLoaded: false,
+  sessionResources: {},
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
@@ -231,6 +242,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
+
+  setSessionDocker: (sessionId, info) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      return { sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, docker: info } } }
+    }),
+
+  setSessionSsh: (sessionId, info) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      return { sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } } }
+    }),
 
   finishStreaming: (sessionId, finalMessage) =>
     set((state) => {

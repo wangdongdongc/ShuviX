@@ -60,6 +60,13 @@ export class DockerManager {
     }
   }
 
+  /** 查询指定 session 的容器信息（不含敏感数据），无容器则返回 null */
+  getContainerInfo(sessionId: string): { containerId: string; image: string } | null {
+    const info = this.containers.get(sessionId)
+    if (!info) return null
+    return { containerId: info.containerId, image: info.image }
+  }
+
   /** 检测 Docker 是否可用（向后兼容） */
   isDockerAvailable(): boolean {
     return this.getDockerStatus() === 'ready'

@@ -231,6 +231,12 @@ interface ShuviXAPI {
   }
   docker: {
     validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
+    sessionStatus: (sessionId: string) => Promise<{ containerId: string; image: string } | null>
+    destroySession: (sessionId: string) => Promise<{ success: boolean }>
+  }
+  ssh: {
+    sessionStatus: (sessionId: string) => Promise<{ host: string; port: number; username: string } | null>
+    disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
   }
   tools: {
     list: () => Promise<Array<{ name: string; label: string; group?: string; serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'; isEnabled?: boolean }>>

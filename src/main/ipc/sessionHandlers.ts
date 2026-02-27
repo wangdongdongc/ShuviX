@@ -1,7 +1,9 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
+import { messageService } from '../services/messageService'
 import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
+import { sshManager } from '../services/sshManager'
 import type {
   Session,
   SessionUpdateModelConfigParams,
@@ -102,5 +104,55 @@ export function registerSessionHandlers(): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  /** 查询指定 session 的 Docker 容器状态 */
+  ipcMain.handle('docker:sessionStatus', (_event, sessionId: string) => {
+    return dockerManager.getContainerInfo(sessionId)
+  })
+
+  /** 查询指定 session 的 SSH 连接状态 */
+  ipcMain.handle('ssh:sessionStatus', (_event, sessionId: string) => {
+    return sshManager.getConnectionInfo(sessionId)
+  })
+
+  /** 手动销毁指定 session 的 Docker 容器 */
+  ipcMain.handle('docker:destroySession', async (event, sessionId: string) => {
+    const containerId = await dockerManager.destroyContainer(sessionId)
+    if (containerId) {
+      const msg = messageService.add({
+        sessionId,
+        role: 'system_notify',
+        type: 'docker_event',
+        content: 'container_destroyed',
+        metadata: JSON.stringify({ containerId: containerId.slice(0, 12), reason: 'manual' })
+      })
+      event.sender.send('agent:event', {
+        type: 'docker_event',
+        sessionId,
+        data: msg.id
+      })
+    }
+    return { success: !!containerId }
+  })
+
+  /** 手动断开指定 session 的 SSH 连接 */
+  ipcMain.handle('ssh:disconnectSession', async (event, sessionId: string) => {
+    const info = sshManager.getConnectionInfo(sessionId)
+    if (!info) return { success: false }
+    await sshManager.disconnect(sessionId)
+    const msg = messageService.add({
+      sessionId,
+      role: 'system_notify',
+      type: 'ssh_event',
+      content: 'ssh_disconnected',
+      metadata: JSON.stringify({ host: info.host, port: String(info.port), username: info.username, reason: 'manual' })
+    })
+    event.sender.send('agent:event', {
+      type: 'ssh_event',
+      sessionId,
+      data: msg.id
+    })
+    return { success: true }
   })
 }

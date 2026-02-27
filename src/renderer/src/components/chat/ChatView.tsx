@@ -14,6 +14,7 @@ import { WelcomeView, EmptySessionHint } from './WelcomeView'
 import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
 import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
+import { StatusBanner } from './StatusBanner'
 
 /** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
 interface ToolIndex {
@@ -245,6 +246,8 @@ export function ChatView(): React.JSX.Element {
           </button>
         )}
       </div>
+
+      {activeSessionId && <StatusBanner sessionId={activeSessionId} />}
 
       {!activeSessionId ? (
         <WelcomeView onNewChat={handleNewChat} onCreateProject={() => setShowCreateProject(true)} />

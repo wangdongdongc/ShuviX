@@ -186,7 +186,15 @@ const api = {
 
   // ============ Docker ============
   docker: {
-    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params)
+    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params),
+    sessionStatus: (sessionId: string) => ipcRenderer.invoke('docker:sessionStatus', sessionId),
+    destroySession: (sessionId: string) => ipcRenderer.invoke('docker:destroySession', sessionId)
+  },
+
+  // ============ SSH ============
+  ssh: {
+    sessionStatus: (sessionId: string) => ipcRenderer.invoke('ssh:sessionStatus', sessionId),
+    disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
   },
 
   // ============ 工具 ============

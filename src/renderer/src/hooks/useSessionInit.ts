@@ -68,6 +68,16 @@ export function useSessionInit(activeSessionId: string | null): void {
       const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'
       store.setThinkingLevel(restoredLevel)
       await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as any })
+
+      // 7. 查询 Docker/SSH 实时资源状态
+      const [dockerInfo, sshInfo] = await Promise.all([
+        window.api.docker.sessionStatus(activeSessionId),
+        window.api.ssh.sessionStatus(activeSessionId)
+      ])
+      if (!cancelled) {
+        store.setSessionDocker(activeSessionId, dockerInfo)
+        store.setSessionSsh(activeSessionId, sshInfo)
+      }
     }
     loadSession()
     return () => { cancelled = true }

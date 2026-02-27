@@ -52,7 +52,12 @@
     "turnCompressed": "压缩",
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
-    "createProject": "创建新项目"
+    "createProject": "创建新项目",
+    "dockerRunning": "容器运行中",
+    "sshActive": "SSH 已连接",
+    "destroyContainer": "销毁容器",
+    "disconnectSsh": "断开 SSH",
+    "destroyReason_manual": "手动销毁"
   },
 
   "input": {

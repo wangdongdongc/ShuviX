@@ -155,7 +155,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
             if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
             throw new Error(t('settings.toolBashDockerNotRunning'))
           }
-          if (isNew) ctx.onContainerCreated?.(containerId)
+          if (isNew) ctx.onContainerCreated?.(containerId, dockerImage)
           log.info(`(docker ${dockerImage}): ${params.command}`)
           result = await dockerManager.exec(containerId, params.command, config.workingDirectory, signal)
         } else {

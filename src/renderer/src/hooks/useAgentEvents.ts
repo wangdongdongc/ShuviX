@@ -89,23 +89,75 @@ export function useAgentEvents(): void {
           }
           break
 
-        case 'docker_event':
+        case 'docker_event': {
           // 仅当前活跃会话时添加 docker_event 消息
           if (sid === store.activeSessionId && event.data) {
             const msgs3 = await window.api.message.list(sid)
             const dockerMsg = msgs3.find((m) => m.id === event.data)
-            if (dockerMsg) store.addMessage(dockerMsg)
+            if (dockerMsg) {
+              store.addMessage(dockerMsg)
+              // 同步 sessionResources
+              try {
+                const meta = JSON.parse(dockerMsg.metadata || '{}')
+                if (dockerMsg.content === 'container_created') {
+                  store.setSessionDocker(sid, { containerId: meta.containerId || '', image: meta.image || '' })
+                } else if (dockerMsg.content === 'container_destroyed') {
+                  store.setSessionDocker(sid, null)
+                }
+              } catch { /* 忽略 */ }
+            }
+          } else if (event.data) {
+            // 非活跃会话：仅更新 sessionResources（确保切换后状态正确）
+            const msgs3 = await window.api.message.list(sid)
+            const dockerMsg = msgs3.find((m) => m.id === event.data)
+            if (dockerMsg) {
+              try {
+                const meta = JSON.parse(dockerMsg.metadata || '{}')
+                if (dockerMsg.content === 'container_created') {
+                  store.setSessionDocker(sid, { containerId: meta.containerId || '', image: meta.image || '' })
+                } else if (dockerMsg.content === 'container_destroyed') {
+                  store.setSessionDocker(sid, null)
+                }
+              } catch { /* 忽略 */ }
+            }
           }
           break
+        }
 
-        case 'ssh_event':
+        case 'ssh_event': {
           // 仅当前活跃会话时添加 ssh_event 消息
           if (sid === store.activeSessionId && event.data) {
             const msgs4 = await window.api.message.list(sid)
             const sshMsg = msgs4.find((m) => m.id === event.data)
-            if (sshMsg) store.addMessage(sshMsg)
+            if (sshMsg) {
+              store.addMessage(sshMsg)
+              // 同步 sessionResources
+              try {
+                const meta = JSON.parse(sshMsg.metadata || '{}')
+                if (sshMsg.content === 'ssh_connected') {
+                  store.setSessionSsh(sid, { host: meta.host || '', port: Number(meta.port) || 22, username: meta.username || '' })
+                } else if (sshMsg.content === 'ssh_disconnected') {
+                  store.setSessionSsh(sid, null)
+                }
+              } catch { /* 忽略 */ }
+            }
+          } else if (event.data) {
+            // 非活跃会话：仅更新 sessionResources
+            const msgs4 = await window.api.message.list(sid)
+            const sshMsg = msgs4.find((m) => m.id === event.data)
+            if (sshMsg) {
+              try {
+                const meta = JSON.parse(sshMsg.metadata || '{}')
+                if (sshMsg.content === 'ssh_connected') {
+                  store.setSessionSsh(sid, { host: meta.host || '', port: Number(meta.port) || 22, username: meta.username || '' })
+                } else if (sshMsg.content === 'ssh_disconnected') {
+                  store.setSessionSsh(sid, null)
+                }
+              } catch { /* 忽略 */ }
+            }
           }
           break
+        }
 
         case 'agent_end': {
           // 更新已占用上下文 token 数（total - output = prompt_tokens，包含 cached tokens）

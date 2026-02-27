@@ -52,7 +52,12 @@
     "turnCompressed": "圧縮",
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。",
-    "createProject": "新規プロジェクト"
+    "createProject": "新規プロジェクト",
+    "dockerRunning": "コンテナ実行中",
+    "sshActive": "SSH 接続中",
+    "destroyContainer": "コンテナを削除",
+    "disconnectSsh": "SSH を切断",
+    "destroyReason_manual": "手動削除"
   },
 
   "input": {
