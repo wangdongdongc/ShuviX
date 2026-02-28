@@ -1,9 +1,8 @@
 import Database from 'better-sqlite3'
-import { app } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
 import { v7 as uuidv7 } from 'uuid'
 import { mark, measure } from '../perf'
+import { getDataDir } from '../utils/paths'
 
 /**
  * 数据库连接管理
@@ -14,14 +13,7 @@ class DatabaseManager {
 
   constructor() {
     mark('database: constructor start')
-    // 确保数据目录存在
-    const userDataPath = app.getPath('userData')
-    const dbDir = join(userDataPath, 'data')
-    if (!existsSync(dbDir)) {
-      mkdirSync(dbDir, { recursive: true })
-    }
-
-    const dbPath = join(dbDir, 'shuvix.db')
+    const dbPath = join(getDataDir(), 'shuvix.db')
     this.db = measure('database: open', () => new Database(dbPath))
 
     // 启用 WAL 模式，提升并发性能

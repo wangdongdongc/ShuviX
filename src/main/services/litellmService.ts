@@ -1,9 +1,10 @@
-import { app } from 'electron'
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { app } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type { ModelCapabilities } from '../types'
 import { createLogger } from '../logger'
+import { getDataDir } from '../utils/paths'
 const log = createLogger('LiteLLM')
 
 /** LiteLLM 模型条目（仅提取需要的字段） */
@@ -61,11 +62,7 @@ class LiteLLMService {
 
   /** 本地缓存文件路径 */
   private get cachePath(): string {
-    const dataDir = join(app.getPath('userData'), 'data')
-    if (!existsSync(dataDir)) {
-      mkdirSync(dataDir, { recursive: true })
-    }
-    return join(dataDir, 'litellm-models.json')
+    return join(getDataDir(), 'litellm-models.json')
   }
 
   /** 应用启动时调用，异步拉取 + 缓存（不阻塞主流程） */

@@ -6,9 +6,9 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, cpSync } from 'fs'
 import { join } from 'path'
-import os from 'os'
 import type { Skill, SkillAddParams, SkillUpdateParams } from '../types'
 import log from 'electron-log/main'
+import { getUserConfigDir } from '../utils/paths'
 
 /** 配置文件结构 */
 interface SkillConfig {
@@ -21,7 +21,7 @@ class SkillService {
   private readonly skillsDir: string
 
   constructor() {
-    this.skillsDir = join(os.homedir(), '.shuvix', 'skills')
+    this.skillsDir = join(getUserConfigDir(), 'skills')
     this.ensureDir(this.skillsDir)
   }
 

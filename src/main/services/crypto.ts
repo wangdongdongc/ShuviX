@@ -1,7 +1,7 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import { app } from 'electron'
+import { getUserConfigDir } from '../utils/paths'
 
 const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
@@ -12,11 +12,7 @@ const PREFIX = '$SHUVIX_ENC$v1$'
 let cachedKey: Buffer | null = null
 
 function getKeyPath(): string {
-  const dbDir = join(app.getPath('userData'), 'data')
-  if (!existsSync(dbDir)) {
-    mkdirSync(dbDir, { recursive: true })
-  }
-  return join(dbDir, '.session-state')
+  return join(getUserConfigDir(), '.session-state')
 }
 
 function getOrCreateKey(): Buffer {
