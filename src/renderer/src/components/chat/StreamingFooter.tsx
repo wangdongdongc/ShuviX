@@ -1,5 +1,5 @@
 import { Sparkles } from 'lucide-react'
-import { useChatStore, selectIsStreaming, selectStreamingContent, selectStreamingThinking } from '../../stores/chatStore'
+import { useChatStore, selectIsStreaming, selectStreamingContent, selectStreamingThinking, selectStreamingImages } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
 
@@ -11,16 +11,18 @@ export function StreamingFooter(): React.JSX.Element {
   const isStreaming = useChatStore(selectIsStreaming)
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
+  const streamingImages = useChatStore(selectStreamingImages)
 
   return (
     <>
       {/* 流式输出的助手消息（thinking 也在气泡内渲染） */}
-      {isStreaming && (streamingContent || streamingThinking) && (
+      {isStreaming && (streamingContent || streamingThinking || streamingImages.length > 0) && (
         <MessageBubble
           role="assistant"
           content={streamingContent || ''}
           isStreaming
           streamingThinking={streamingThinking}
+          streamingImages={streamingImages}
           model={useSettingsStore.getState().activeModel}
         />
       )}

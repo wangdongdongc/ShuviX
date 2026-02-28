@@ -7,18 +7,20 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 /** HTTP 日志设置 */
 export function HttpLogSettings(): React.JSX.Element {
   const { t } = useTranslation()
-  const [logs, setLogs] = useState<Array<{
-    id: string
-    sessionId: string
-    sessionTitle: string
-    provider: string
-    providerName: string
-    model: string
-    inputTokens: number
-    outputTokens: number
-    totalTokens: number
-    createdAt: number
-  }>>([])
+  const [logs, setLogs] = useState<
+    Array<{
+      id: string
+      sessionId: string
+      sessionTitle: string
+      provider: string
+      providerName: string
+      model: string
+      inputTokens: number
+      outputTokens: number
+      totalTokens: number
+      createdAt: number
+    }>
+  >([])
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
   const [selectedLog, setSelectedLog] = useState<{
     id: string
@@ -26,6 +28,7 @@ export function HttpLogSettings(): React.JSX.Element {
     provider: string
     model: string
     payload: string
+    response: string
     createdAt: number
   } | null>(null)
   const [loadingList, setLoadingList] = useState(false)
@@ -51,7 +54,11 @@ export function HttpLogSettings(): React.JSX.Element {
   }
 
   /** 加载日志列表 */
-  const loadLogs = async (filters?: { sessionId?: string; provider?: string; model?: string }): Promise<void> => {
+  const loadLogs = async (filters?: {
+    sessionId?: string
+    provider?: string
+    model?: string
+  }): Promise<void> => {
     setLoadingList(true)
     try {
       const rows = await window.api.httpLog.list({
@@ -99,11 +106,14 @@ export function HttpLogSettings(): React.JSX.Element {
   }
 
   /** 当前筛选参数 */
-  const currentFilters = useMemo(() => ({
-    sessionId: filterSessionId || undefined,
-    provider: filterProvider || undefined,
-    model: filterModel || undefined
-  }), [filterSessionId, filterProvider, filterModel])
+  const currentFilters = useMemo(
+    () => ({
+      sessionId: filterSessionId || undefined,
+      provider: filterProvider || undefined,
+      model: filterModel || undefined
+    }),
+    [filterSessionId, filterProvider, filterModel]
+  )
 
   /** 从已加载日志中提取去重的模型列表（用于筛选下拉） */
   const modelOptions = useMemo(() => {
@@ -140,7 +150,9 @@ export function HttpLogSettings(): React.JSX.Element {
       <div className="px-5 py-4 border-b border-border-secondary space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-text-primary">{t('settings.httpLogTitle')}</h3>
+            <h3 className="text-sm font-semibold text-text-primary">
+              {t('settings.httpLogTitle')}
+            </h3>
             <p className="text-[11px] text-text-tertiary mt-1">{t('settings.httpLogDesc')}</p>
           </div>
           <div className="flex items-center gap-2">
@@ -171,17 +183,24 @@ export function HttpLogSettings(): React.JSX.Element {
           >
             <option value="">{t('settings.allSessions')}</option>
             {sessions.map((s) => (
-              <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>
+              <option key={s.id} value={s.id}>
+                {s.title || s.id.slice(0, 8)}
+              </option>
             ))}
           </select>
           <select
             value={filterProvider}
-            onChange={(e) => { setFilterProvider(e.target.value); setFilterModel('') }}
+            onChange={(e) => {
+              setFilterProvider(e.target.value)
+              setFilterModel('')
+            }}
             className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[140px]"
           >
             <option value="">{t('settings.allProviders')}</option>
             {providers.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
             ))}
           </select>
           <select
@@ -191,7 +210,9 @@ export function HttpLogSettings(): React.JSX.Element {
           >
             <option value="">{t('settings.allModels')}</option>
             {modelOptions.map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m} value={m}>
+                {m}
+              </option>
             ))}
           </select>
         </div>
@@ -215,7 +236,9 @@ export function HttpLogSettings(): React.JSX.Element {
                         : 'border-transparent hover:border-border-primary hover:bg-bg-hover'
                     }`}
                   >
-                    <div className="text-[11px] text-text-primary font-medium">{new Date(log.createdAt).toLocaleString()}</div>
+                    <div className="text-[11px] text-text-primary font-medium">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </div>
                     <div className="mt-0.5 text-[10px] text-text-tertiary truncate">
                       {log.providerName || log.provider} / {log.model}
                     </div>
@@ -238,23 +261,33 @@ export function HttpLogSettings(): React.JSX.Element {
               <div className="grid grid-cols-3 gap-3 text-xs">
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
                   <div className="text-text-tertiary">{t('settings.time')}</div>
-                  <div className="text-text-primary mt-0.5 break-all">{new Date(selectedLog.createdAt).toLocaleString()}</div>
+                  <div className="text-text-primary mt-0.5 break-all">
+                    {new Date(selectedLog.createdAt).toLocaleString()}
+                  </div>
                 </div>
                 <div className="bg-bg-tertiary rounded-md px-3 py-2">
                   <div className="text-text-tertiary">{t('settings.session')}</div>
-                  <div className="text-text-primary mt-0.5 truncate">{logs.find((l) => l.id === selectedLogId)?.sessionTitle || t('settings.unknownSession')}</div>
-                </div>
-                {(() => { const cur = logs.find((l) => l.id === selectedLogId); return cur && cur.totalTokens > 0 ? (
-                  <div className="bg-bg-tertiary rounded-md px-3 py-2">
-                    <div className="text-text-tertiary">Tokens</div>
-                    <div className="text-text-primary mt-0.5">{cur.totalTokens}</div>
-                    <div className="text-[10px] text-text-tertiary mt-0.5">in: {cur.inputTokens} / out: {cur.outputTokens}</div>
+                  <div className="text-text-primary mt-0.5 truncate">
+                    {logs.find((l) => l.id === selectedLogId)?.sessionTitle ||
+                      t('settings.unknownSession')}
                   </div>
-                ) : null })()}
+                </div>
+                {(() => {
+                  const cur = logs.find((l) => l.id === selectedLogId)
+                  return cur && cur.totalTokens > 0 ? (
+                    <div className="bg-bg-tertiary rounded-md px-3 py-2">
+                      <div className="text-text-tertiary">Tokens</div>
+                      <div className="text-text-primary mt-0.5">{cur.totalTokens}</div>
+                      <div className="text-[10px] text-text-tertiary mt-0.5">
+                        in: {cur.inputTokens} / out: {cur.outputTokens}
+                      </div>
+                    </div>
+                  ) : null
+                })()}
               </div>
 
               <div className="text-xs text-text-secondary">{t('settings.requestBody')}</div>
-              <PayloadViewer payload={selectedLog.payload} />
+              <PayloadViewer payload={selectedLog.payload} response={selectedLog.response} />
             </div>
           )}
         </div>

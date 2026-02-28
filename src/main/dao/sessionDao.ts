@@ -27,7 +27,7 @@ export class SessionDao {
   insert(session: Session): void {
     this.db
       .prepare(
-        'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         session.id,
@@ -37,6 +37,7 @@ export class SessionDao {
         session.model,
         session.systemPrompt,
         session.modelMetadata,
+        session.settings,
         session.createdAt,
         session.updatedAt
       )
@@ -82,6 +83,13 @@ export class SessionDao {
     this.db
       .prepare('UPDATE sessions SET modelMetadata = ?, updatedAt = ? WHERE id = ?')
       .run(modelMetadata, Date.now(), id)
+  }
+
+  /** 更新会话级配置（sshAutoApprove 等） */
+  updateSettings(id: string, settings: string): void {
+    this.db
+      .prepare('UPDATE sessions SET settings = ?, updatedAt = ? WHERE id = ?')
+      .run(settings, Date.now(), id)
   }
 
   /** 删除会话 */

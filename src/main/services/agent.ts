@@ -1,5 +1,13 @@
 import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
-import { type AssistantMessage, type Model, type Api, getModel, streamSimple, completeSimple } from '@mariozechner/pi-ai'
+import {
+  type AssistantMessage,
+  type TextContent,
+  type ThinkingContent,
+  type ImageContent,
+  streamSimple,
+  completeSimple
+} from '@mariozechner/pi-ai'
+import { streamSimpleGoogleWithImages } from './googleImageStream'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
@@ -9,308 +17,35 @@ import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
 import { messageDao } from '../dao/messageDao'
-import { createBashTool } from '../tools/bash'
-import { createReadTool } from '../tools/read'
-import { createWriteTool } from '../tools/write'
-import { createEditTool } from '../tools/edit'
-import { createAskTool } from '../tools/ask'
-import { createListTool } from '../tools/ls'
-import { createGrepTool } from '../tools/grep'
-import { createGlobTool } from '../tools/glob'
-import { createSshTool } from '../tools/ssh'
-import { createShuvixProjectTool } from '../tools/shuvixProject'
-import { createShuvixSettingTool } from '../tools/shuvixSetting'
-import { createSkillTool } from '../tools/skill'
-import { resolveProjectConfig, type ToolContext } from '../tools/types'
+import { type ToolContext } from '../tools/types'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
 import type { AgentInitResult, ModelCapabilities, ThinkingLevel, Message } from '../types'
-import { buildCustomProviderCompat } from './providerCompat'
 import { t } from '../i18n'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { resolveEnabledTools, buildToolPrompts } from '../utils/tools'
-import { mcpService } from './mcpService'
 import { createTransformContext } from './contextManager'
 import { createLogger } from '../logger'
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
+
+// 提取的子模块
+import { dbMessagesToAgentMessages } from './agentMessageConverter'
+import { buildTools } from './agentToolBuilder'
+import { resolveModel } from './agentModelResolver'
+import {
+  forwardAgentEvent,
+  readProjectAgentMd,
+  type AgentStreamEvent,
+  type ProjectInstructionLoadState,
+  type EventHandlerContext
+} from './agentEventHandler'
+
 const log = createLogger('Agent')
+
+// Re-exports（保持外部导入兼容）
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
-
-/**
- * 内置提供商 → 环境变量名映射
- * pi-ai SDK 通过环境变量获取 API Key，此处将用户在 DB 中配置的 key 注入 process.env
- */
-const BUILTIN_ENV_MAP: Record<string, string> = {
-  openai: 'OPENAI_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-  google: 'GOOGLE_API_KEY',
-  xai: 'XAI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  cerebras: 'CEREBRAS_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  'minimax-cn': 'MINIMAX_CN_API_KEY',
-  huggingface: 'HF_TOKEN',
-  opencode: 'OPENCODE_API_KEY',
-  'kimi-coding': 'KIMI_API_KEY',
-  zai: 'ZAI_API_KEY',
-}
-
-/** 根据启用列表构建工具子集（内置 + MCP + Skill 合并） */
-function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
-  // 内置工具
-  const builtinAll: Record<string, AgentTool<any>> = {
-    bash: createBashTool(ctx),
-    read: createReadTool(ctx),
-    write: createWriteTool(ctx),
-    edit: createEditTool(ctx),
-    ask: createAskTool(ctx),
-    ls: createListTool(ctx),
-    grep: createGrepTool(ctx),
-    glob: createGlobTool(ctx),
-    ssh: createSshTool(ctx),
-    'shuvix-project': createShuvixProjectTool(ctx),
-    'shuvix-setting': createShuvixSettingTool(ctx)
-  }
-  // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
-  const mcpAll: Record<string, AgentTool<any>> = {}
-  for (const tool of mcpService.getAllAgentTools()) {
-    mcpAll[tool.name] = tool
-  }
-
-  // 从 enabledTools 中提取 skill 名（skill:pdf → pdf）
-  const enabledSkillNames = enabledTools
-    .filter((n) => n.startsWith('skill:'))
-    .map((n) => n.slice(6))
-
-  // 合并内置 + MCP
-  const all: Record<string, AgentTool<any>> = { ...builtinAll, ...mcpAll }
-
-  // 有启用的 skill 时动态注册 skill 工具
-  if (enabledSkillNames.length > 0) {
-    all['skill'] = createSkillTool(enabledSkillNames)
-  }
-
-  // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理）
-  const regularTools = enabledTools
-    .filter((name) => !name.startsWith('skill:'))
-    .filter((name) => name in all)
-    .map((name) => all[name])
-
-  // 如果有 skill 工具，追加到末尾
-  if (enabledSkillNames.length > 0 && all['skill']) {
-    regularTools.push(all['skill'])
-  }
-
-  return regularTools
-}
-
-/** 从图片对象中提取 raw base64：优先用 data，否则从 preview (data URL) 截取 */
-function extractBase64(img: any): string {
-  if (img.data) return img.data
-  if (typeof img.preview === 'string' && img.preview.includes(',')) {
-    return img.preview.split(',')[1]
-  }
-  return ''
-}
-
-/** 读取项目根目录指令文件（优先 AGENTS.MD，回退 AGENT.md；不存在或读取失败时返回空） */
-function readProjectAgentMd(projectPath: string): string {
-  // 优先 AGENTS.MD，兼容旧版 AGENT.md
-  for (const name of ['AGENTS.MD', 'AGENT.md']) {
-    const filePath = join(projectPath, name)
-    if (!existsSync(filePath)) continue
-    try {
-      const content = readFileSync(filePath, 'utf-8').trim()
-      if (content) {
-        log.info(`已加载项目指令文件: ${name}`)
-        return content
-      }
-    } catch (err: any) {
-      log.warn(`读取 ${name} 失败: ${filePath} (${err?.message || String(err)})`)
-    }
-  }
-  return ''
-}
-
-/** 会话级项目指令文件加载状态（由 AgentService 统一维护） */
-interface ProjectInstructionLoadState {
-  agentMdLoaded: boolean
-}
-
-/**
- * 将数据库消息转换为 pi-agent-core 的 AgentMessage 格式
- * 处理 text / tool_call / tool_result 等类型，跳过 system_notify
- */
-export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
-  const result: AgentMessage[] = []
-  let i = 0
-  while (i < msgs.length) {
-    const msg = msgs[i]
-
-    // 跳过系统通知
-    if (msg.role === 'system_notify' || msg.role === 'system') { i++; continue }
-
-    // 用户消息（可能包含图片）
-    if (msg.role === 'user') {
-      let content: any = msg.content
-      if (msg.metadata) {
-        try {
-          const meta = JSON.parse(msg.metadata)
-          if (meta.images?.length) {
-            content = [
-              { type: 'text', text: msg.content },
-              ...meta.images.map((img: any) => ({ type: 'image', data: extractBase64(img), mimeType: img.mimeType }))
-            ]
-          }
-        } catch { /* 忽略 */ }
-      }
-      result.push({ role: 'user', content, timestamp: msg.createdAt } as any)
-      i++; continue
-    }
-
-    // 助手文本消息
-    if (msg.role === 'assistant' && msg.type === 'text') {
-      const contentBlocks: any[] = []
-      if (msg.metadata) {
-        try {
-          const meta = JSON.parse(msg.metadata)
-          if (meta.thinking) contentBlocks.push({ type: 'thinking', thinking: meta.thinking })
-        } catch { /* 忽略 */ }
-      }
-      contentBlocks.push({ type: 'text', text: msg.content })
-      result.push({
-        role: 'assistant', content: contentBlocks,
-        api: 'openai-completions', provider: '', model: '',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop', timestamp: msg.createdAt
-      } as any)
-      i++; continue
-    }
-
-    // 助手工具调用（连续的 tool_call 合并为一条 AssistantMessage）
-    if (msg.role === 'assistant' && msg.type === 'tool_call') {
-      const toolCalls: any[] = []
-      const ts = msg.createdAt
-      while (i < msgs.length && msgs[i].role === 'assistant' && msgs[i].type === 'tool_call') {
-        const meta = msgs[i].metadata ? JSON.parse(msgs[i].metadata!) : {}
-        toolCalls.push({ type: 'toolCall', id: meta.toolCallId || '', name: meta.toolName || '', arguments: meta.args || {} })
-        i++
-      }
-      result.push({
-        role: 'assistant', content: toolCalls,
-        api: 'openai-completions', provider: '', model: '',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'toolUse', timestamp: ts
-      } as any)
-      continue
-    }
-
-    // 工具结果消息
-    if (msg.role === 'tool' && msg.type === 'tool_result') {
-      const meta = msg.metadata ? JSON.parse(msg.metadata) : {}
-      result.push({
-        role: 'toolResult', toolCallId: meta.toolCallId || '', toolName: meta.toolName || '',
-        content: [{ type: 'text', text: msg.content }], isError: meta.isError || false, timestamp: msg.createdAt
-      } as any)
-      i++; continue
-    }
-
-    i++ // 未知类型跳过
-  }
-
-  // 后处理：修补中断导致的消息结构异常
-  // 场景1：abort 时 persistStreamBuffer 在 tool_call 和 tool_result 之间插入了 assistant text
-  // 场景2：tool_execution_end 未触发，tool_call 没有对应的 tool_result（孤儿 tool_call）
-  return repairToolCallPairing(result)
-}
-
-/**
- * 修补 tool_call / tool_result 配对：
- * - 跳过夹在 tool_call 和 tool_result 之间的 assistant text（abort 遗留）
- * - 为缺失 tool_result 的 tool_call 补充合成的 error tool_result
- */
-function repairToolCallPairing(messages: AgentMessage[]): AgentMessage[] {
-  const repaired: AgentMessage[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i] as any
-    // 非 toolCall assistant 消息直接保留
-    const toolCalls = msg.role === 'assistant' && Array.isArray(msg.content)
-      ? msg.content.filter((c: any) => c.type === 'toolCall')
-      : []
-    if (toolCalls.length === 0) {
-      repaired.push(msg)
-      continue
-    }
-
-    // 找到一条包含 toolCall 的 assistant 消息 → 收集对应的 toolResult
-    repaired.push(msg)
-    const pendingIds = new Set<string>(toolCalls.map((tc: any) => tc.id))
-    let j = i + 1
-    // 向前扫描：收集匹配的 toolResult，跳过夹在中间的 assistant text（abort 遗留）
-    while (j < messages.length && pendingIds.size > 0) {
-      const next = messages[j] as any
-      if (next.role === 'toolResult' && pendingIds.has(next.toolCallId)) {
-        repaired.push(next)
-        pendingIds.delete(next.toolCallId)
-        j++
-      } else if (next.role === 'toolResult') {
-        repaired.push(next)
-        j++
-      } else if (next.role === 'assistant') {
-        // 跳过 abort 时 persistStreamBuffer 遗留的 assistant text（不加入 repaired）
-        j++
-      } else {
-        // 遇到 user 消息等，停止扫描
-        break
-      }
-    }
-    // 为缺失的 toolResult 补充合成记录（标记为 error）
-    for (const id of pendingIds) {
-      const tc = toolCalls.find((c: any) => c.id === id)
-      repaired.push({
-        role: 'toolResult', toolCallId: id, toolName: tc?.name || '',
-        content: [{ type: 'text', text: 'Tool execution was interrupted.' }],
-        isError: true, timestamp: Date.now()
-      } as any)
-    }
-    i = j - 1 // 跳过已处理的消息
-  }
-  return repaired
-}
-
-// Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
-export interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'ssh_event' | 'tool_approval_request' | 'user_input_request' | 'ssh_credential_request'
-  sessionId: string
-  data?: string
-  error?: string
-  // 工具调用相关字段
-  toolCallId?: string
-  toolName?: string
-  toolArgs?: any
-  toolResult?: any
-  toolIsError?: boolean
-  /** bash 工具在沙箱模式下需要用户审批 */
-  approvalRequired?: boolean
-  /** ask 工具始终需要用户输入 */
-  userInputRequired?: boolean
-  /** ssh connect 需要用户输入凭据 */
-  sshCredentialRequired?: boolean
-  /** ask 工具：用户输入请求数据 */
-  userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
-  /** 当前 turn 编号（tool_start 时携带，用于 UI 区分同一 turn 的工具调用） */
-  turnIndex?: number
-  // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
-  usage?: {
-    input: number; output: number; total: number
-    details: Array<{ input: number; output: number; total: number; stopReason: string }>
-  }
-}
+export { dbMessagesToAgentMessages } from './agentMessageConverter'
+export type { AgentStreamEvent } from './agentEventHandler'
 
 /**
  * Agent 服务 — 管理多个独立的 Agent 实例，按 sessionId 隔离
@@ -324,20 +59,47 @@ export class AgentService {
   private toolContexts = new Map<string, ToolContext>()
   private pendingLogIds = new Map<string, string[]>()
   /** 待审批的 bash 命令 Promise resolver，key = toolCallId */
-  private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; reason?: string }) => void }>()
+  private pendingApprovals = new Map<
+    string,
+    { resolve: (result: { approved: boolean; reason?: string }) => void }
+  >()
   /** 待用户选择的 ask 工具 Promise resolver，key = toolCallId */
   private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
   /** 待用户输入 SSH 凭据的 Promise resolver，key = toolCallId */
-  private pendingSshCredentials = new Map<string, { resolve: (credentials: import('../tools/types').SshCredentialPayload | null) => void }>()
+  private pendingSshCredentials = new Map<
+    string,
+    { resolve: (credentials: import('../tools/types').SshCredentialPayload | null) => void }
+  >()
   /** 每个 session 的流式内容缓冲区（后端累积 delta，用于 agent_end / abort 时统一落库） */
-  private streamBuffers = new Map<string, { content: string; thinking: string }>()
+  private streamBuffers = new Map<
+    string,
+    { content: string; thinking: string; images: Array<{ data: string; mimeType: string; thoughtSignature?: string }> }
+  >()
   /** 每个 session 的 turn 计数器（用于在 UI 中标记工具调用所属 turn） */
   private turnCounters = new Map<string, number>()
   private mainWindow: BrowserWindow | null = null
+  /** 缓存的事件处理器上下文 */
+  private eventCtx: EventHandlerContext | null = null
 
   /** 绑定主窗口，用于发送 IPC 事件 */
   setWindow(window: BrowserWindow): void {
     this.mainWindow = window
+  }
+
+  /** 构建事件处理器上下文（延迟初始化） */
+  private getEventContext(): EventHandlerContext {
+    if (!this.eventCtx) {
+      this.eventCtx = {
+        streamBuffers: this.streamBuffers,
+        turnCounters: this.turnCounters,
+        pendingLogIds: this.pendingLogIds,
+        sendToRenderer: (e) => this.sendToRenderer(e),
+        persistStreamBuffer: (sid, meta) => this.persistStreamBuffer(sid, meta),
+        isAssistantMessage: (msg) => this.isAssistantMessage(msg),
+        emitDockerEvent: (sid, action, extra) => this.emitDockerEvent(sid, action, extra)
+      }
+    }
+    return this.eventCtx
   }
 
   /** 为指定 session 创建 Agent 实例（已存在则跳过）；返回会话元信息供前端同步 */
@@ -346,17 +108,36 @@ export class AgentService {
     const session = sessionDao.findById(sessionId)
     if (!session) {
       log.error(`创建失败，未找到 session=${sessionId}`)
-      return { success: false, created: false, provider: '', model: '', capabilities: {}, modelMetadata: '', workingDirectory: '', enabledTools: [], agentMdLoaded: false }
+      return {
+        success: false,
+        created: false,
+        provider: '',
+        model: '',
+        capabilities: {},
+        modelMetadata: '',
+        workingDirectory: '',
+        enabledTools: [],
+        agentMdLoaded: false
+      }
     }
 
     const provider = session.provider || ''
     const model = session.model || ''
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
-    const capabilities: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+    const capabilities: ModelCapabilities = modelRow?.capabilities
+      ? JSON.parse(modelRow.capabilities)
+      : {}
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = resolveEnabledTools(session.modelMetadata, project?.settings)
-    const meta = { provider, model, capabilities, modelMetadata: session.modelMetadata || '', workingDirectory, enabledTools }
+    const meta = {
+      provider,
+      model,
+      capabilities,
+      modelMetadata: session.modelMetadata || '',
+      workingDirectory,
+      enabledTools
+    }
 
     // 已存在则跳过（工具通过 resolveProjectConfig 动态获取配置，无需重建）
     if (this.agents.has(sessionId)) {
@@ -383,16 +164,22 @@ export class AgentService {
       try {
         const settings = JSON.parse(project.settings || '{}')
         if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
-      } catch { /* 忽略 */ }
+      } catch {
+        /* 忽略 */
+      }
       if (referenceDirs.length > 0) {
-        const readonlyDirs = referenceDirs.filter(d => (d.access ?? 'readonly') === 'readonly')
-        const readwriteDirs = referenceDirs.filter(d => d.access === 'readwrite')
+        const readonlyDirs = referenceDirs.filter((d) => (d.access ?? 'readonly') === 'readonly')
+        const readwriteDirs = referenceDirs.filter((d) => d.access === 'readwrite')
         if (readonlyDirs.length > 0) {
-          const lines = readonlyDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
+          const lines = readonlyDirs.map((d) =>
+            d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`
+          )
           systemPrompt += `\n\nReference directories (read-only, you can read files from these directories but CANNOT write or edit):\n${lines.join('\n')}`
         }
         if (readwriteDirs.length > 0) {
-          const lines = readwriteDirs.map(d => d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`)
+          const lines = readwriteDirs.map((d) =>
+            d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`
+          )
           systemPrompt += `\n\nReference directories (read-write, you can read AND write files in these directories):\n${lines.join('\n')}`
         }
       }
@@ -401,48 +188,8 @@ export class AgentService {
       systemPrompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}`
     }
 
-    // 查询提供商信息，判断是否内置
-    const providerInfo = providerDao.findById(provider)
-    const isBuiltin = providerInfo?.isBuiltin ?? false
-    let resolvedModel: Model<Api>
-    const caps = capabilities
-
-    if (!isBuiltin) {
-      // 自定义提供商：手动构造 Model 对象，用 capabilities 填充
-      const inputModalities: string[] = ['text']
-      if (caps.vision) inputModalities.push('image')
-      const resolvedApi = (providerInfo?.apiProtocol || 'openai-completions') as Api
-      resolvedModel = {
-        id: model,
-        name: model,
-        api: resolvedApi,
-        provider,
-        baseUrl: providerInfo?.baseUrl || '',
-        reasoning: caps.reasoning ?? false,
-        input: inputModalities as any,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: caps.maxInputTokens ?? 128000,
-        maxTokens: caps.maxOutputTokens ?? 16384,
-        ...(buildCustomProviderCompat(resolvedApi) ? { compat: buildCustomProviderCompat(resolvedApi) } : {})
-      }
-    } else {
-      // 内置提供商：通过 SDK 解析（name 即 pi-ai 的 provider slug）
-      const slug = (providerInfo?.name || '').toLowerCase()
-      if (providerInfo?.apiKey) {
-        const envKey = BUILTIN_ENV_MAP[slug]
-        if (envKey) {
-          process.env[envKey] = providerInfo.apiKey
-        }
-      }
-      resolvedModel = getModel(slug as any, model as any)
-      if (providerInfo?.baseUrl) {
-        resolvedModel.baseUrl = providerInfo.baseUrl
-      }
-      // 为 Kimi Coding 注入 coding agent 标识（Kimi API 要求特定 User-Agent）
-      if (resolvedModel.baseUrl?.includes('api.kimi.com')) {
-        resolvedModel.headers = { ...resolvedModel.headers, 'User-Agent': 'Claude-Code/1.0.0' }
-      }
-    }
+    // 统一模型解析
+    const resolvedModel = resolveModel({ provider, model, capabilities })
 
     // 创建工具集（通过 sessionId 动态查询项目配置）
     const ctx: ToolContext = {
@@ -465,7 +212,14 @@ export class AgentService {
           })
         })
       },
-      requestUserInput: (toolCallId: string, payload: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }) => {
+      requestUserInput: (
+        toolCallId: string,
+        payload: {
+          question: string
+          options: Array<{ label: string; description: string }>
+          allowMultiple: boolean
+        }
+      ) => {
         return new Promise<string[]>((resolve) => {
           this.pendingUserInputs.set(toolCallId, { resolve })
           this.sendToRenderer({
@@ -490,12 +244,16 @@ export class AgentService {
       },
       onSshConnected: (host, port, username) => {
         this.emitSshEvent(sessionId, 'ssh_connected', {
-          host, port: String(port), username
+          host,
+          port: String(port),
+          username
         })
       },
       onSshDisconnected: (host, port, username) => {
         this.emitSshEvent(sessionId, 'ssh_disconnected', {
-          host, port: String(port), username
+          host,
+          port: String(port),
+          username
         })
       }
     }
@@ -510,7 +268,7 @@ export class AgentService {
       initialState: {
         systemPrompt: enhancedPrompt,
         model: resolvedModel,
-        thinkingLevel: caps.reasoning ? 'medium' : 'off',
+        thinkingLevel: capabilities.reasoning ? 'medium' : 'off',
         messages: [],
         tools
       },
@@ -520,10 +278,10 @@ export class AgentService {
         const currentProvider = providerDao.findById(String(streamModel.provider))
         const resolvedApiKey = currentProvider?.apiKey
         try {
-          return streamSimple(streamModel, context, {
+          const streamOpts = {
             ...(options || {}),
             ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
-            onPayload: (payload) => {
+            onPayload: (payload: unknown) => {
               const logId = httpLogService.logRequest({
                 sessionId,
                 provider: String(streamModel.provider || provider),
@@ -534,11 +292,17 @@ export class AgentService {
               ids.push(logId)
               this.pendingLogIds.set(sessionId, ids)
             }
-          })
-        } catch (err: any) {
+          }
+          // Google API 使用支持图片输出的自定义流函数
+          if (streamModel.api === 'google-generative-ai') {
+            return streamSimpleGoogleWithImages(streamModel, context, streamOpts)
+          }
+          return streamSimple(streamModel, context, streamOpts)
+        } catch (err: unknown) {
           // streamFn 抛出同步错误时，立即通知渲染进程
-          log.error(`streamFn 错误: ${err.message}`)
-          this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
+          const message = err instanceof Error ? err.message : String(err)
+          log.error(`streamFn 错误: ${message}`)
+          this.sendToRenderer({ type: 'error', sessionId, error: message })
           throw err
         }
       }
@@ -553,7 +317,7 @@ export class AgentService {
           role: 'user',
           content: `Project AGENTS.MD instructions:\n${agentMd}`,
           timestamp: Date.now()
-        } as any)
+        })
       }
     }
 
@@ -579,7 +343,11 @@ export class AgentService {
   }
 
   /** 向指定 session 的 Agent 发送消息（支持附带图片） */
-  async prompt(sessionId: string, text: string, images?: Array<{ type: 'image'; data: string; mimeType: string }>): Promise<void> {
+  async prompt(
+    sessionId: string,
+    text: string,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+  ): Promise<void> {
     const agent = this.agents.get(sessionId)
     if (!agent) {
       log.warn(`prompt 失败，未找到 session=${sessionId}`)
@@ -587,15 +355,18 @@ export class AgentService {
       return
     }
 
-    log.info(`prompt session=${sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`)
+    log.info(
+      `prompt session=${sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
+    )
     try {
       if (images && images.length > 0) {
         await agent.prompt(text, images)
       } else {
         await agent.prompt(text)
       }
-    } catch (err: any) {
-      this.sendToRenderer({ type: 'error', sessionId, error: err.message || String(err) })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.sendToRenderer({ type: 'error', sessionId, error: message })
     }
   }
 
@@ -618,7 +389,10 @@ export class AgentService {
   }
 
   /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
-  respondToSshCredentials(toolCallId: string, credentials: import('../tools/types').SshCredentialPayload | null): void {
+  respondToSshCredentials(
+    toolCallId: string,
+    credentials: import('../tools/types').SshCredentialPayload | null
+  ): void {
     const pending = this.pendingSshCredentials.get(toolCallId)
     if (pending) {
       pending.resolve(credentials)
@@ -662,56 +436,34 @@ export class AgentService {
   }
 
   /** 切换指定 session 的模型 */
-  setModel(sessionId: string, provider: string, model: string, baseUrl?: string, apiProtocol?: string): void {
+  setModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    baseUrl?: string,
+    apiProtocol?: string
+  ): void {
     const agent = this.agents.get(sessionId)
     if (!agent) return
-
-    const providerInfo = providerDao.findById(provider)
-    const isBuiltin = providerInfo?.isBuiltin ?? false
-    let resolvedModel: Model<Api>
 
     // 从 DB 读取模型能力信息
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
 
-    if (!isBuiltin) {
-      const inputModalities: string[] = ['text']
-      if (caps.vision) inputModalities.push('image')
-      const resolvedApi = (apiProtocol || providerInfo?.apiProtocol || 'openai-completions') as Api
-      resolvedModel = {
-        id: model,
-        name: model,
-        api: resolvedApi,
-        provider,
-        baseUrl: baseUrl || providerInfo?.baseUrl || '',
-        reasoning: caps.reasoning ?? false,
-        input: inputModalities as any,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: caps.maxInputTokens ?? 128000,
-        maxTokens: caps.maxOutputTokens ?? 16384,
-        ...(buildCustomProviderCompat(resolvedApi) ? { compat: buildCustomProviderCompat(resolvedApi) } : {})
-      }
-    } else {
-      const slug = (providerInfo?.name || '').toLowerCase()
-      if (providerInfo?.apiKey) {
-        const envKey = BUILTIN_ENV_MAP[slug]
-        if (envKey) {
-          process.env[envKey] = providerInfo.apiKey
-        }
-      }
-      resolvedModel = getModel(slug as any, model as any)
-      if (baseUrl) {
-        resolvedModel.baseUrl = baseUrl
-      }
-      // 为 Kimi Coding 注入 coding agent 标识
-      if (resolvedModel.baseUrl?.includes('api.kimi.com')) {
-        resolvedModel.headers = { ...resolvedModel.headers, 'User-Agent': 'Claude-Code/1.0.0' }
-      }
-    }
+    // 统一模型解析
+    const resolvedModel = resolveModel({
+      provider,
+      model,
+      capabilities: caps,
+      baseUrl,
+      apiProtocol
+    })
 
     agent.setModel(resolvedModel)
     agent.setThinkingLevel(caps.reasoning ? 'medium' : 'off')
-    log.info(`切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`)
+    log.info(
+      `切换模型 session=${sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`
+    )
   }
 
   /** 动态更新指定 session 的启用工具集 */
@@ -733,7 +485,7 @@ export class AgentService {
   }
 
   /** 获取指定 session 的消息列表 */
-  getMessages(sessionId: string): any[] {
+  getMessages(sessionId: string): AgentMessage[] {
     return this.agents.get(sessionId)?.state.messages ?? []
   }
 
@@ -760,7 +512,11 @@ export class AgentService {
    * 让 AI 根据对话内容生成简短标题（后台静默调用，对用户透明）
    * 复用该 session 已有的模型配置
    */
-  async generateTitle(sessionId: string, userMessage: string, assistantMessage: string): Promise<string | null> {
+  async generateTitle(
+    sessionId: string,
+    userMessage: string,
+    assistantMessage: string
+  ): Promise<string | null> {
     const agent = this.agents.get(sessionId)
     if (!agent) return null
 
@@ -768,16 +524,29 @@ export class AgentService {
       // 查找当前模型对应提供商的 apiKey
       const currentProvider = providerDao.findById(String(agent.state.model.provider))
       const resolvedApiKey = currentProvider?.apiKey
-      const result = await completeSimple(agent.state.model, {
-        systemPrompt: t('agent.titleGenPrompt'),
-        messages: [
-          { role: 'user', content: [{ type: 'text', text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}` }], timestamp: Date.now() }
-        ]
-      }, resolvedApiKey ? { apiKey: resolvedApiKey } : {})
+      const result = await completeSimple(
+        agent.state.model,
+        {
+          systemPrompt: t('agent.titleGenPrompt'),
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}`
+                }
+              ],
+              timestamp: Date.now()
+            }
+          ]
+        },
+        resolvedApiKey ? { apiKey: resolvedApiKey } : {}
+      )
       // 从 AssistantMessage 中提取文本
       const text = result.content
-        ?.filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text)
+        ?.filter((c): c is TextContent => c.type === 'text')
+        .map((c) => c.text)
         .join('')
         .trim()
       if (text && text.length > 0) {
@@ -814,14 +583,17 @@ export class AgentService {
       this.pendingLogIds.delete(sessionId)
       clearFileTimeSession(sessionId)
       // 立刻清理 Docker 容器（会话删除）
-      dockerManager.destroyContainer(sessionId).then((containerId) => {
-        if (containerId) {
-          this.emitDockerEvent(sessionId, 'container_destroyed', {
-            containerId: containerId.slice(0, 12),
-            reason: 'session_deleted'
-          })
-        }
-      }).catch(() => {})
+      dockerManager
+        .destroyContainer(sessionId)
+        .then((containerId) => {
+          if (containerId) {
+            this.emitDockerEvent(sessionId, 'container_destroyed', {
+              containerId: containerId.slice(0, 12),
+              reason: 'session_deleted'
+            })
+          }
+        })
+        .catch(() => {})
       // 断开 SSH 连接
       sshManager.disconnect(sessionId).catch(() => {})
       log.info(`移除 session=${sessionId} 剩余=${this.agents.size}`)
@@ -833,48 +605,77 @@ export class AgentService {
    * 同时同步到 Agent 内存上下文，确保后续 prompt 包含该消息
    * @returns 已保存的消息，如果缓冲区为空则返回 null
    */
-  private persistStreamBuffer(sessionId: string, extraMeta?: Record<string, any>): Message | null {
+  private persistStreamBuffer(
+    sessionId: string,
+    extraMeta?: Record<string, unknown>
+  ): Message | null {
     const buf = this.streamBuffers.get(sessionId)
-    if (!buf?.content) {
+    if (!buf?.content && !buf?.images?.length) {
       this.streamBuffers.delete(sessionId)
       return null
     }
 
-    const meta: Record<string, any> = { ...extraMeta }
-    if (buf.thinking) meta.thinking = buf.thinking
+    const meta: Record<string, unknown> = { ...extraMeta }
+    if (buf!.thinking) meta.thinking = buf!.thinking
+    // 将图片数据转换为与用户图片一致的 data URL 格式（保留 thoughtSignature 用于会话恢复）
+    if (buf!.images?.length) {
+      meta.images = buf!.images.map((img) => ({
+        data: `data:${img.mimeType};base64,${img.data}`,
+        mimeType: img.mimeType,
+        ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
+      }))
+    }
     const session = sessionDao.findById(sessionId)
 
     const msg = messageService.add({
       sessionId,
       role: 'assistant',
-      content: buf.content,
+      content: buf!.content,
       metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined,
       model: session?.model || ''
     })
 
-    // 同步到 Agent 内存上下文
-    this.appendAssistantToAgent(sessionId, buf.content, buf.thinking)
+    // 同步到 Agent 内存上下文（含图片）
+    this.appendAssistantToAgent(sessionId, buf!.content, buf!.thinking, buf!.images)
     this.streamBuffers.delete(sessionId)
     return msg
   }
 
-  /** 向 Agent 内存上下文追加一条 assistant 消息（结构与 dbMessagesToAgentMessages 一致） */
-  private appendAssistantToAgent(sessionId: string, content: string, thinking?: string): void {
+  /**
+   * 将 AI 生成的图片同步到 Agent 内存上下文中的 assistant 消息。
+   *
+   * pi-agent-core 框架在流式响应期间已自动将 AssistantMessage 写入
+   * agent.state.messages，但其 content 不包含 ImageContent（图片存储在
+   * 非标准 _images 字段）。此方法在最后一条 assistant 消息的 content 中
+   * 补充 ImageContent 块，确保后续 injectModelImages 能正确注入图片。
+   *
+   * 注意：不再 push 新消息，避免产生重复的 assistant 条目导致
+   * injectModelImages 的顺序索引匹配失败。
+   */
+  private appendAssistantToAgent(
+    sessionId: string,
+    _content: string,
+    _thinking?: string,
+    images?: Array<{ data: string; mimeType: string; thoughtSignature?: string }>
+  ): void {
     const agent = this.agents.get(sessionId)
-    if (!agent) return
-    const contentBlocks: any[] = []
-    if (thinking) contentBlocks.push({ type: 'thinking', thinking })
-    contentBlocks.push({ type: 'text', text: content })
-    agent.state.messages.push({
-      role: 'assistant',
-      content: contentBlocks,
-      api: 'openai-completions',
-      provider: '',
-      model: '',
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: 'stop',
-      timestamp: Date.now()
-    } as any)
+    if (!agent || !images?.length) return
+
+    // 找到框架已写入的最后一条 assistant 消息，向其 content 追加 ImageContent
+    const messages = agent.state.messages
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (this.isAssistantMessage(msg)) {
+        const contentArr = msg.content as unknown as (TextContent | ThinkingContent | ImageContent)[]
+        for (const img of images) {
+          contentArr.push({
+            type: 'image', data: img.data, mimeType: img.mimeType,
+            ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
+          } as ImageContent)
+        }
+        break
+      }
+    }
   }
 
   /** 判断 AgentMessage 是否为 AssistantMessage */
@@ -882,185 +683,9 @@ export class AgentService {
     return message !== null && 'role' in message && message.role === 'assistant'
   }
 
-  /** 将 pi-agent-core 事件转换并发送到 Renderer */
+  /** 将 pi-agent-core 事件转换并发送到 Renderer（委托给 agentEventHandler） */
   private forwardEvent(sessionId: string, event: AgentEvent): void {
-    switch (event.type) {
-      case 'agent_start':
-        log.info(`开始 session=${sessionId}`)
-        // 清空流式缓冲区（新一轮生成）
-        this.streamBuffers.set(sessionId, { content: '', thinking: '' })
-        // 重置 turn 计数器
-        this.turnCounters.set(sessionId, 0)
-        this.sendToRenderer({ type: 'agent_start', sessionId })
-        break
-      case 'turn_start': {
-        const turnIdx = (this.turnCounters.get(sessionId) || 0) + 1
-        this.turnCounters.set(sessionId, turnIdx)
-        log.info(`Turn ${turnIdx} 开始 session=${sessionId}`)
-        break
-      }
-      case 'turn_end':
-        log.info(`Turn ${this.turnCounters.get(sessionId) || 0} 结束 session=${sessionId}`)
-        break
-      case 'agent_end': {
-        log.info(`结束 session=${sessionId}`)
-        // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
-        dockerManager.scheduleDestroy(sessionId, (containerId) => {
-          this.emitDockerEvent(sessionId, 'container_destroyed', {
-            containerId: containerId.slice(0, 12),
-            reason: 'idle'
-          })
-        })
-        // 检查 agent_end 中的消息是否携带错误信息
-        const endMessages = (event as any).messages as any[] | undefined
-        if (endMessages) {
-          for (const m of endMessages) {
-            if (m.errorMessage) {
-              log.error(`流式错误: ${m.errorMessage}`)
-              this.sendToRenderer({ type: 'error', sessionId, error: m.errorMessage })
-            }
-          }
-        }
-        // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
-        const details: Array<{ input: number; output: number; cacheRead: number; total: number; stopReason: string }> = []
-        const msgs = (event as any).messages as AgentMessage[] | undefined
-        if (msgs) {
-          for (const m of msgs) {
-            if (this.isAssistantMessage(m) && m.usage) {
-              details.push({
-                input: m.usage.input || 0,
-                output: m.usage.output || 0,
-                cacheRead: m.usage.cacheRead || 0,
-                total: m.usage.totalTokens || 0,
-                stopReason: m.stopReason || ''
-              })
-            }
-          }
-        }
-        const totalUsage = details.reduce((acc, d) => ({
-          input: acc.input + d.input, output: acc.output + d.output, cacheRead: acc.cacheRead + d.cacheRead, total: acc.total + d.total
-        }), { input: 0, output: 0, cacheRead: 0, total: 0 })
-        // 后端统一落库：将缓冲区内容持久化为 assistant 消息（携带 usage）
-        const savedMsg = this.persistStreamBuffer(sessionId, totalUsage.total > 0 ? { usage: { ...totalUsage, details } } : {})
-        this.sendToRenderer({
-          type: 'agent_end', sessionId,
-          usage: { ...totalUsage, details },
-          data: savedMsg ? JSON.stringify(savedMsg) : undefined
-        })
-        break
-      }
-      case 'message_update': {
-        const msgEvent = event.assistantMessageEvent
-        if (msgEvent.type === 'text_delta') {
-          // 后端累积 delta（用于 agent_end / abort 时落库）
-          const buf = this.streamBuffers.get(sessionId) || { content: '', thinking: '' }
-          buf.content += msgEvent.delta || ''
-          this.streamBuffers.set(sessionId, buf)
-          // 仍转发给前端用于实时 UI 展示
-          this.sendToRenderer({ type: 'text_delta', sessionId, data: msgEvent.delta })
-        } else if (msgEvent.type === 'thinking_delta') {
-          const buf = this.streamBuffers.get(sessionId) || { content: '', thinking: '' }
-          buf.thinking += msgEvent.delta || ''
-          this.streamBuffers.set(sessionId, buf)
-          this.sendToRenderer({ type: 'thinking_delta', sessionId, data: msgEvent.delta })
-        }
-        break
-      }
-      case 'message_end': {
-        // 如果是 assistant 消息，将 token 用量回填到对应的 HTTP 日志
-        const msg = event.message
-        if (this.isAssistantMessage(msg)) {
-          // 检查流式响应中的错误（如 API 返回的错误）
-          if (msg.stopReason === 'error' && msg.errorMessage) {
-            log.error(`API 错误: ${msg.errorMessage}`)
-            this.sendToRenderer({ type: 'error', sessionId, error: msg.errorMessage })
-          }
-          const logId = this.pendingLogIds.get(sessionId)?.shift()
-          if (logId) {
-            const usage = msg.usage
-            httpLogService.updateUsage(logId, usage.input, usage.output, usage.totalTokens)
-          }
-        }
-        this.sendToRenderer({ type: 'text_end', sessionId })
-        break
-      }
-      case 'tool_execution_start': {
-        // 持久化工具调用消息
-        const sessionForTool = sessionDao.findById(sessionId)
-        const toolCallMsg = messageService.add({
-          sessionId,
-          role: 'assistant',
-          type: 'tool_call',
-          content: '',
-          metadata: JSON.stringify({
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            args: event.args,
-            turnIndex: this.turnCounters.get(sessionId) || 0
-          }),
-          model: sessionForTool?.model || ''
-        })
-        // 检查工具是否需要用户审批（bash 沙箱模式 / shuvix-project update / shuvix-setting set）
-        let approvalRequired = false
-        if (event.toolName === 'bash') {
-          const config = resolveProjectConfig({ sessionId })
-          approvalRequired = config.sandboxEnabled
-        } else if (event.toolName === 'shuvix-project' && event.args?.action === 'update') {
-          approvalRequired = true
-        } else if (event.toolName === 'shuvix-setting' && event.args?.action === 'set') {
-          approvalRequired = true
-        } else if (event.toolName === 'ssh' && event.args?.action === 'exec') {
-          // SSH exec 每条命令都需用户审批
-          approvalRequired = true
-        }
-        // ask 工具始终需要用户输入（与 bash 审批同模式，直接在 tool_start 携带标记）
-        const userInputRequired = event.toolName === 'ask'
-        // ssh connect 需要用户输入凭据
-        const sshCredentialRequired = event.toolName === 'ssh' && event.args?.action === 'connect'
-        this.sendToRenderer({
-          type: 'tool_start',
-          sessionId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          toolArgs: event.args,
-          data: toolCallMsg.id,
-          approvalRequired,
-          userInputRequired,
-          sshCredentialRequired,
-          turnIndex: this.turnCounters.get(sessionId) || 0
-        })
-        break
-      }
-      case 'tool_execution_end': {
-        // 持久化工具结果消息
-        const resultContent = event.result?.content
-          ?.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
-          .join('\n') || ''
-        const toolResultMsg = messageService.add({
-          sessionId,
-          role: 'tool',
-          type: 'tool_result',
-          content: resultContent,
-          metadata: JSON.stringify({
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            isError: event.isError || false
-          })
-        })
-        this.sendToRenderer({
-          type: 'tool_end',
-          sessionId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          toolResult: resultContent,
-          toolIsError: event.isError || false,
-          data: toolResultMsg.id
-        })
-        break
-      }
-      default:
-        break
-    }
+    forwardAgentEvent(this.getEventContext(), sessionId, event)
   }
 
   /** 持久化 docker_event 消息并通知前端 */

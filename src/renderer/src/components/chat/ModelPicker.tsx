@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Search } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
+import type { ThinkingLevel } from '../../../../main/types'
 
 /**
  * 模型选择器 — 展开式供应商列表，支持搜索过滤模型名
@@ -92,7 +93,7 @@ export function ModelPicker(): React.JSX.Element {
         provider: providerId,
         model: modelId,
         baseUrl: providerInfo?.baseUrl || undefined,
-        apiProtocol: (providerInfo as any)?.apiProtocol || undefined
+        apiProtocol: providerInfo?.apiProtocol || undefined
       })
     }
 
@@ -107,7 +108,7 @@ export function ModelPicker(): React.JSX.Element {
     const newLevel = hasReasoning ? 'medium' : 'off'
     setThinkingLevel(newLevel)
     if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as any })
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as ThinkingLevel })
       await window.api.session.updateModelMetadata({
         id: activeSessionId,
         modelMetadata: JSON.stringify({ thinkingLevel: newLevel })

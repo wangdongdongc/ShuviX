@@ -89,7 +89,7 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       }
 
       // action === 'update'：需要审批
-      const updates: Record<string, any> = {}
+      const updates: Record<string, string | boolean | string[] | Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>> = {}
       if (params.name !== undefined) updates.name = params.name
       if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
       if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled

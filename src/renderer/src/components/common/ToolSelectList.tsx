@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Puzzle, WifiOff, BookOpen, Info } from 'lucide-react'
+import { ChevronDown, ChevronRight, Puzzle, WifiOff, BookOpen, Info, Search, Blocks, Cog } from 'lucide-react'
 
 /** 工具信息 */
 export interface ToolItem {
@@ -24,6 +24,8 @@ interface ToolSelectListProps {
   onChange: (enabledTools: string[]) => void
   /** 是否使用紧凑模式（如 ToolPicker 下拉面板） */
   compact?: boolean
+  /** 仅显示内置工具（隐藏 MCP / Skills） */
+  builtinOnly?: boolean
 }
 
 /** 从 MCP 全名中提取工具短名（mcp__server__tool → tool） */
@@ -35,11 +37,8 @@ function mcpShortName(fullName: string): string {
 /** Skill 分组标识常量 */
 const SKILLS_GROUP = '__skills__'
 
-/** 工具模板预设（仅影响内置工具，不影响 MCP/Skill） */
-const TOOL_PRESETS: Record<string, string[]> = {
-  general: ['bash', 'read', 'write', 'ask'],
-  code: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob']
-}
+/** 基于 ripgrep 的高性能检索工具 */
+const RIPGREP_TOOLS = new Set(['ls', 'grep', 'glob'])
 
 /** 从 skill: 前缀名中提取短名（skill:pdf → pdf） */
 function skillShortName(fullName: string): string {
@@ -50,7 +49,7 @@ function skillShortName(fullName: string): string {
  * 通用工具选择列表 — 支持内置工具、MCP 工具分组和 Skills 分组
  * 被 ToolPicker / ProjectEditDialog / ProjectCreateDialog 共用
  */
-export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolSelectListProps): React.JSX.Element {
+export function ToolSelectList({ tools, enabledTools, onChange, compact, builtinOnly }: ToolSelectListProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
@@ -91,95 +90,130 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
     })
   }
 
-  // 分离三类：内置工具、MCP 工具、Skills
-  const builtinTools = tools.filter(t => !t.group)
+  // 分离：内置工具（通用 + ripgrep + shuvix）、MCP 工具、Skills
+  const builtinTools = tools.filter(t => !t.group && !RIPGREP_TOOLS.has(t.name) && !t.name.startsWith('shuvix-'))
+  const ripgrepTools = tools.filter(t => !t.group && RIPGREP_TOOLS.has(t.name))
+  const shuvixTools = tools.filter(t => !t.group && t.name.startsWith('shuvix-'))
   const mcpTools = tools.filter(t => t.group && t.group !== SKILLS_GROUP)
   const skillTools = tools.filter(t => t.group === SKILLS_GROUP)
   const groups = [...new Set(mcpTools.map(t => t.group!))]
 
-  // 内置工具名称集合（用于预设切换时区分内置 vs 外部工具）
-  const builtinNames = useMemo(() => new Set(builtinTools.map(t => t.name)), [builtinTools])
-
-  /** 应用模板预设：替换内置工具勾选，保留 MCP/Skill 不变 */
-  const applyPreset = (presetKey: string): void => {
-    const presetTools = TOOL_PRESETS[presetKey] || []
-    const nonBuiltin = enabledTools.filter(n => !builtinNames.has(n))
-    onChange([...presetTools, ...nonBuiltin])
-  }
-
-  /** 判断当前勾选是否匹配某个预设 */
-  const isPresetActive = (presetKey: string): boolean => {
-    const presetTools = TOOL_PRESETS[presetKey] || []
-    const currentBuiltin = enabledTools.filter(n => builtinNames.has(n))
-    return currentBuiltin.length === presetTools.length && presetTools.every(n => currentBuiltin.includes(n))
-  }
-
   return (
     <div>
-      {/* 非紧凑模式：用户提醒 + 模板选项 */}
+      {/* 非紧凑模式：用户提醒 */}
       {!compact && (
-        <div className="mb-3 space-y-2">
+        <div className="mb-3">
           <p className="flex items-start gap-1.5 text-[10px] text-text-tertiary leading-relaxed">
             <Info size={12} className="flex-shrink-0 mt-px text-text-tertiary/60" />
             {t('projectForm.toolsReminder')}
           </p>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-text-tertiary mr-0.5">{t('projectForm.tools')}:</span>
-            {Object.keys(TOOL_PRESETS).map(key => (
-              <button
-                key={key}
-                onClick={() => applyPreset(key)}
-                className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
-                  isPresetActive(key)
-                    ? 'border-accent text-accent bg-accent/10'
-                    : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-                }`}
-              >
-                {t(`projectForm.toolsPreset${key.charAt(0).toUpperCase() + key.slice(1)}`)}
-              </button>
-            ))}
+        </div>
+      )}
+
+      {/* 通用工具组 */}
+      {builtinTools.length > 0 && (
+        <div className={compact ? 'py-0.5' : ''}>
+          <div className={compact ? '' : 'border border-border-secondary rounded-md overflow-hidden'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <Blocks size={11} className="text-text-secondary" />
+                <span className="text-[11px] font-medium text-text-secondary">{t('projectForm.toolsGeneralGroup')}</span>
+              </div>
+            )}
+            <div className={compact ? '' : 'px-2 pb-1.5 space-y-0.5'}>
+              {builtinTools.map(tool => (
+                <label
+                  key={tool.name}
+                  className={compact
+                    ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                    : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggle(tool.name)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
+                  <span className="text-[10px] text-text-tertiary truncate">{tool.label}{!compact && tool.hint ? ` — ${tool.hint}` : ''}</span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       )}
 
-      {/* 内置工具 */}
-      <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
-        {builtinTools.map(tool => (
-          <label
-            key={tool.name}
-            className={compact
-              ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
-              : 'flex items-start gap-1.5 cursor-pointer select-none py-0.5'
-            }
-          >
-            <input
-              type="checkbox"
-              checked={enabledTools.includes(tool.name)}
-              onChange={() => toggle(tool.name)}
-              className={`rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0 ${!compact ? 'mt-0.5' : ''}`}
-            />
-            {compact ? (
-              <>
-                <span className="text-[11px] font-mono text-accent">{tool.name}</span>
-                <span className="text-[10px] text-text-tertiary">{tool.label}</span>
-              </>
-            ) : (
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
-                  <span className="text-[10px] text-text-tertiary">{tool.label}</span>
-                </div>
-                {tool.hint && (
-                  <p className="text-[10px] text-text-tertiary/70 mt-0.5 leading-relaxed">{tool.hint}</p>
-                )}
+      {/* Ripgrep 高性能检索工具组 */}
+      {ripgrepTools.length > 0 && (
+        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
+          <div className={compact ? '' : 'border border-cyan-500/20 rounded-md overflow-hidden bg-cyan-500/[0.03]'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <Search size={11} className="text-cyan-400" />
+                <span className="text-[11px] font-medium text-cyan-400">{t('projectForm.toolsRipgrepGroup')}</span>
               </div>
             )}
-          </label>
-        ))}
-      </div>
+            <div className={compact ? 'py-0.5' : 'px-2 pb-1.5 space-y-0.5'}>
+              {ripgrepTools.map(tool => (
+                <label
+                  key={tool.name}
+                  className={compact
+                    ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                    : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggle(tool.name)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
+                  <span className="text-[10px] text-text-tertiary truncate">{tool.label}{!compact && tool.hint ? ` — ${tool.hint}` : ''}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ShuviX 系统工具组 */}
+      {shuvixTools.length > 0 && (
+        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
+          <div className={compact ? '' : 'border border-border-secondary rounded-md overflow-hidden bg-bg-secondary/30'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <Cog size={11} className="text-text-tertiary" />
+                <span className="text-[11px] font-medium text-text-tertiary">{t('projectForm.toolsShuvixGroup')}</span>
+              </div>
+            )}
+            <div className={compact ? 'py-0.5' : 'px-2 pb-1.5 space-y-0.5'}>
+              {shuvixTools.map(tool => (
+                <label
+                  key={tool.name}
+                  className={compact
+                    ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                    : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggle(tool.name)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
+                  <span className="text-[10px] text-text-tertiary truncate">{tool.label}{!compact && tool.hint ? ` — ${tool.hint}` : ''}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MCP 工具按 Server 分组 */}
-      {groups.length > 0 && (
+      {!builtinOnly && groups.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3 space-y-1.5'}>
           {groups.map(group => {
             const groupTools = mcpTools.filter(t => t.group === group)
@@ -248,12 +282,10 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
       )}
 
       {/* Skills 分组 */}
-      {skillTools.length > 0 && (
+      {!builtinOnly && skillTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
           {(() => {
             const isExpanded = expandedGroups.has(SKILLS_GROUP)
-            const allChecked = skillTools.every(t => enabledTools.includes(t.name))
-            const someChecked = skillTools.some(t => enabledTools.includes(t.name))
 
             return (
               <div className={compact ? '' : 'border rounded-md overflow-hidden border-emerald-500/30'}>
@@ -265,13 +297,6 @@ export function ToolSelectList({ tools, enabledTools, onChange, compact }: ToolS
                   >
                     {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
-                  <input
-                    type="checkbox"
-                    checked={allChecked}
-                    ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
-                    onChange={() => toggleGroup(skillTools)}
-                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                  />
                   <BookOpen size={11} className="text-emerald-400" />
                   <span className="text-[11px] font-medium text-emerald-400">Skills</span>
                   <span className="text-[10px] text-text-tertiary ml-auto">{skillTools.length}</span>

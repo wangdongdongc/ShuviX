@@ -233,11 +233,9 @@ ipcMain.handle('app:version', () => {
 // React 挂载完成后显示对应窗口（同时应用已保存的 UI 缩放）
 ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
-  // 应用 UI 缩放设置
-  const uiZoom = Math.max(0.5, Math.min(2, Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1))
-  if (uiZoom !== 1) {
-    sender.setZoomFactor(uiZoom)
-  }
+  // 应用 UI 缩放设置（基础倍率 1.1：100% 对应 zoomFactor 1.1）
+  const uiZoom = Math.max(0.5, Math.min(2.2, (Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1) * 1.1))
+  sender.setZoomFactor(uiZoom)
   if (mainWindow && sender === mainWindow.webContents) {
     mark('mainWindow visible (window-ready)')
     mainWindow.show()

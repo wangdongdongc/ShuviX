@@ -1,6 +1,85 @@
 import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, ChevronDown, Image, Wrench, MessageSquare, Bot, User, Settings, Code } from 'lucide-react'
+import {
+  ChevronRight,
+  ChevronDown,
+  Image,
+  Wrench,
+  MessageSquare,
+  Bot,
+  User,
+  Settings,
+  Code
+} from 'lucide-react'
+
+interface ContentBlock {
+  type?: string
+  text?: string
+  image_url?: { url?: string }
+  media_type?: string
+  mimeType?: string
+  data?: string
+  functionCall?: { name?: string; args?: unknown; arguments?: unknown }
+  functionResponse?: { name?: string; response?: unknown }
+  name?: string
+  arguments?: unknown
+  [key: string]: unknown
+}
+
+interface ToolCallEntry {
+  function?: { name?: string; arguments?: unknown }
+  name?: string
+  arguments?: unknown
+  args?: unknown
+  [key: string]: unknown
+}
+
+interface NormalizedMessage {
+  role: string
+  content?: unknown
+  tool_calls?: ToolCallEntry[]
+  tool_call_id?: string
+  name?: string
+  [key: string]: unknown
+}
+
+interface ToolDefinition {
+  function?: {
+    name?: string
+    description?: string
+    parameters?: unknown
+  }
+  name?: string
+  description?: string
+  parameters?: unknown
+  [key: string]: unknown
+}
+
+interface GeminiPart {
+  text?: string
+  inlineData?: { mimeType?: string; data?: string }
+  functionCall?: { name?: string; args?: unknown }
+  functionResponse?: { name?: string; response?: unknown }
+}
+
+interface GeminiContent {
+  role?: string
+  parts?: GeminiPart[]
+}
+
+interface GeminiConfig {
+  systemInstruction?: string | { parts?: Array<{ text?: string }> }
+  tools?: Array<{
+    functionDeclarations?: Array<{ name?: string; description?: string; parameters?: unknown }>
+  }>
+  [key: string]: unknown
+}
+
+interface ResponseData {
+  content?: ContentBlock[]
+  images?: Array<{ data: string; mimeType: string }>
+  [key: string]: unknown
+}
 
 /** 可折叠区块 */
 function Section({
@@ -56,18 +135,20 @@ function CollapsibleItem({
         className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 transition-colors"
       >
         <span className="flex-shrink-0 mt-0.5">
-          {open ? <ChevronDown size={10} className="text-text-tertiary" /> : <ChevronRight size={10} className="text-text-tertiary" />}
+          {open ? (
+            <ChevronDown size={10} className="text-text-tertiary" />
+          ) : (
+            <ChevronRight size={10} className="text-text-tertiary" />
+          )}
         </span>
         <span className="flex-shrink-0 mt-0.5">{icon}</span>
-        <span className={`flex-shrink-0 text-[10px] font-semibold uppercase mt-px ${labelColor}`}>{label}</span>
+        <span className={`flex-shrink-0 text-[10px] font-semibold uppercase mt-px ${labelColor}`}>
+          {label}
+        </span>
         {badge}
         <span className="flex-1 min-w-0 text-[11px] text-text-secondary truncate">{summary}</span>
       </button>
-      {open && (
-        <div className="px-3 pb-3 pl-[52px]">
-          {children}
-        </div>
-      )}
+      {open && <div className="px-3 pb-3 pl-[52px]">{children}</div>}
     </div>
   )
 }
@@ -114,7 +195,11 @@ function truncate(text: string, maxLen: number): string {
 }
 
 /** 从 content 中提取摘要文本 */
-function extractSummary(content: unknown): { text: string; hasImage: boolean; hasToolCall: boolean } {
+function extractSummary(content: unknown): {
+  text: string
+  hasImage: boolean
+  hasToolCall: boolean
+} {
   if (typeof content === 'string') {
     return { text: content.replace(/\n/g, ' '), hasImage: false, hasToolCall: false }
   }
@@ -140,15 +225,29 @@ function extractSummary(content: unknown): { text: string; hasImage: boolean; ha
 }
 
 /** 提取 tool_calls 摘要 */
-function extractToolCallsSummary(toolCalls: any[]): string {
-  return toolCalls.map((tc) => {
-    const name = tc.function?.name || tc.name || '?'
-    return `→ ${name}(...)`
-  }).join(', ')
+function extractToolCallsSummary(toolCalls: ToolCallEntry[]): string {
+  return toolCalls
+    .map((tc) => {
+      const name = tc.function?.name || tc.name || '?'
+      return `→ ${name}(...)`
+    })
+    .join(', ')
 }
 
 /** 渲染消息的完整内容 */
-function MessageContent({ content, toolCalls, toolCallId, name, t }: { content: unknown; toolCalls?: any[]; toolCallId?: string; name?: string; t: (key: string) => string }): React.JSX.Element {
+function MessageContent({
+  content,
+  toolCalls,
+  toolCallId,
+  name,
+  t
+}: {
+  content: unknown
+  toolCalls?: ToolCallEntry[]
+  toolCallId?: string
+  name?: string
+  t: (key: string) => string
+}): React.JSX.Element {
   return (
     <div className="space-y-2">
       {/* tool result 的 tool_call_id */}
@@ -164,19 +263,23 @@ function MessageContent({ content, toolCalls, toolCallId, name, t }: { content: 
       )}
       {/* content 部分 */}
       {typeof content === 'string' ? (
-        <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{content}</pre>
+        <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
+          {content}
+        </pre>
       ) : Array.isArray(content) ? (
-        content.map((block: any, i: number) => (
-          <ContentBlock key={i} block={block} t={t} />
+        content.map((block: ContentBlock, i: number) => (
+          <ContentBlockView key={i} block={block} t={t} />
         ))
       ) : content !== null && content !== undefined ? (
-        <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{JSON.stringify(content, null, 2)}</pre>
+        <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
+          {JSON.stringify(content, null, 2)}
+        </pre>
       ) : null}
       {/* tool_calls 部分 */}
       {toolCalls && toolCalls.length > 0 && (
         <div className="space-y-1.5">
           <div className="text-[10px] text-text-tertiary font-medium">tool_calls:</div>
-          {toolCalls.map((tc: any, i: number) => (
+          {toolCalls.map((tc: ToolCallEntry, i: number) => (
             <div key={i} className="bg-bg-tertiary rounded-md p-2">
               <div className="text-[11px] text-orange-400 font-medium">
                 {tc.function?.name || tc.name || '?'}
@@ -193,10 +296,18 @@ function MessageContent({ content, toolCalls, toolCallId, name, t }: { content: 
 }
 
 /** 渲染单个 content block */
-function ContentBlock({ block, t }: { block: any; t: (key: string) => string }): React.JSX.Element {
+function ContentBlockView({
+  block,
+  t
+}: {
+  block: ContentBlock
+  t: (key: string) => string
+}): React.JSX.Element {
   if (block.type === 'text') {
     return (
-      <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">{block.text}</pre>
+      <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
+        {block.text}
+      </pre>
     )
   }
   if (block.type === 'image_url') {
@@ -207,9 +318,15 @@ function ContentBlock({ block, t }: { block: any; t: (key: string) => string }):
         <div className="space-y-1">
           <div className="flex items-center gap-1 text-[10px] text-purple-400">
             <Image size={10} />
-            <span>{t('settings.payloadImage')} ({Math.round(url.length / 1024)}KB base64)</span>
+            <span>
+              {t('settings.payloadImage')} ({Math.round(url.length / 1024)}KB base64)
+            </span>
           </div>
-          <img src={url} alt="图片" className="max-w-[200px] max-h-[150px] rounded-md border border-border-primary object-contain" />
+          <img
+            src={url}
+            alt="图片"
+            className="max-w-[200px] max-h-[150px] rounded-md border border-border-primary object-contain"
+          />
         </div>
       )
     }
@@ -225,7 +342,9 @@ function ContentBlock({ block, t }: { block: any; t: (key: string) => string }):
       <div className="space-y-1">
         <div className="flex items-center gap-1 text-[10px] text-purple-400">
           <Image size={10} />
-          <span>{t('settings.payloadImage')} ({block.media_type || block.mimeType || 'image'})</span>
+          <span>
+            {t('settings.payloadImage')} ({block.media_type || block.mimeType || 'image'})
+          </span>
         </div>
         {block.data && (
           <img
@@ -237,9 +356,38 @@ function ContentBlock({ block, t }: { block: any; t: (key: string) => string }):
       </div>
     )
   }
+  // Google Gemini: functionCall block
+  if (block.type === 'functionCall' || block.functionCall) {
+    const fc = block.functionCall || block
+    return (
+      <div className="bg-bg-tertiary rounded-md p-2">
+        <div className="text-[11px] text-orange-400 font-medium">{fc.name || '?'}</div>
+        <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+          {JSON.stringify(fc.args || fc.arguments, null, 2)}
+        </pre>
+      </div>
+    )
+  }
+  // Google Gemini: functionResponse block
+  if (block.type === 'functionResponse' || block.functionResponse) {
+    const fr = block.functionResponse || block
+    return (
+      <div className="bg-bg-tertiary rounded-md p-2">
+        <div className="text-[11px] text-green-400 font-medium">
+          {'← '}
+          {fr.name || '?'}
+        </div>
+        <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+          {JSON.stringify(fr.response, null, 2)}
+        </pre>
+      </div>
+    )
+  }
   // 其他类型 fallback
   return (
-    <pre className="text-[10px] text-text-tertiary whitespace-pre-wrap break-words">{JSON.stringify(block, null, 2)}</pre>
+    <pre className="text-[10px] text-text-tertiary whitespace-pre-wrap break-words">
+      {JSON.stringify(block, null, 2)}
+    </pre>
   )
 }
 
@@ -263,7 +411,7 @@ function BasicParams({ data }: { data: Record<string, unknown> }): React.JSX.Ele
 }
 
 /** 渲染单个工具定义 */
-function ToolItem({ tool }: { tool: any }): React.JSX.Element {
+function ToolItem({ tool }: { tool: ToolDefinition }): React.JSX.Element {
   const fn = tool.function || tool
   const name = fn.name || '?'
   const desc = fn.description || ''
@@ -275,10 +423,8 @@ function ToolItem({ tool }: { tool: any }): React.JSX.Element {
       summary={truncate(desc, 60)}
     >
       <div className="space-y-2">
-        {desc && (
-          <div className="text-[11px] text-text-secondary leading-relaxed">{desc}</div>
-        )}
-        {fn.parameters && (
+        {desc && <div className="text-[11px] text-text-secondary leading-relaxed">{desc}</div>}
+        {fn.parameters != null && (
           <pre className="text-[10px] text-text-secondary whitespace-pre-wrap break-words bg-bg-tertiary rounded-md p-2">
             {JSON.stringify(fn.parameters, null, 2)}
           </pre>
@@ -289,20 +435,233 @@ function ToolItem({ tool }: { tool: any }): React.JSX.Element {
 }
 
 /**
+ * 将 Google Gemini 格式的 payload 归一化为 OpenAI/Anthropic 兼容结构，
+ * 使现有的 Messages / Tools / BasicParams 渲染逻辑可以复用。
+ */
+function normalizeGooglePayload(raw: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+
+  // 保留除 contents / config 以外的顶层字段（如 model）
+  for (const [key, value] of Object.entries(raw)) {
+    if (key !== 'contents' && key !== 'config') {
+      result[key] = value
+    }
+  }
+
+  // 将 config 内非特殊字段提升到顶层
+  const config = (raw.config || {}) as GeminiConfig
+  const configReservedKeys = new Set(['systemInstruction', 'tools'])
+  for (const [key, value] of Object.entries(config)) {
+    if (!configReservedKeys.has(key)) {
+      result[key] = value
+    }
+  }
+
+  // ---- 消息归一化 ----
+  const messages: NormalizedMessage[] = []
+
+  const sysInstr = config.systemInstruction
+  if (sysInstr) {
+    let sysText: string
+    if (typeof sysInstr === 'string') {
+      sysText = sysInstr
+    } else {
+      const parts: Array<{ text?: string }> = sysInstr.parts || []
+      sysText = parts
+        .map((p: { text?: string }) => p.text || '')
+        .filter(Boolean)
+        .join('\n')
+    }
+    if (sysText) {
+      messages.push({ role: 'system', content: sysText })
+    }
+  }
+
+  for (const item of (raw.contents || []) as GeminiContent[]) {
+    const role = item.role === 'model' ? 'assistant' : item.role || 'user'
+    const parts: GeminiPart[] = item.parts || []
+
+    const contentBlocks: ContentBlock[] = []
+    const toolCalls: ToolCallEntry[] = []
+    const toolResponses: Array<{ name?: string; response?: unknown }> = []
+
+    for (const part of parts) {
+      if (part.text !== undefined) {
+        contentBlocks.push({ type: 'text', text: part.text })
+      } else if (part.inlineData) {
+        contentBlocks.push({
+          type: 'image',
+          mimeType: part.inlineData.mimeType,
+          data: part.inlineData.data
+        })
+      } else if (part.functionCall) {
+        toolCalls.push({
+          function: {
+            name: part.functionCall.name,
+            arguments: part.functionCall.args
+          }
+        })
+      } else if (part.functionResponse) {
+        toolResponses.push(part.functionResponse)
+      }
+    }
+
+    for (const resp of toolResponses) {
+      messages.push({
+        role: 'tool',
+        name: resp.name,
+        content:
+          typeof resp.response === 'string' ? resp.response : JSON.stringify(resp.response, null, 2)
+      })
+    }
+
+    if (contentBlocks.length > 0 || toolCalls.length > 0) {
+      const msg: NormalizedMessage = { role }
+      if (
+        contentBlocks.length === 1 &&
+        contentBlocks[0].type === 'text' &&
+        toolCalls.length === 0
+      ) {
+        msg.content = contentBlocks[0].text
+      } else if (contentBlocks.length > 0) {
+        msg.content = contentBlocks
+      }
+      if (toolCalls.length > 0) {
+        msg.tool_calls = toolCalls
+      }
+      messages.push(msg)
+    }
+
+    if (contentBlocks.length === 0 && toolCalls.length === 0 && toolResponses.length === 0) {
+      messages.push({ role, content: '' })
+    }
+  }
+
+  result.messages = messages
+
+  // ---- 工具定义归一化 ----
+  const tools: ToolDefinition[] = []
+  for (const group of config.tools || []) {
+    for (const decl of group.functionDeclarations || []) {
+      tools.push({
+        function: {
+          name: decl.name,
+          description: decl.description,
+          parameters: decl.parameters
+        }
+      })
+    }
+  }
+  if (tools.length > 0) {
+    result.tools = tools
+  }
+
+  return result
+}
+
+/** AI 响应内容区块 */
+function ResponseSection({
+  data,
+  t
+}: {
+  data: ResponseData
+  t: (key: string) => string
+}): React.JSX.Element {
+  const content: ContentBlock[] = data.content || []
+  const images: Array<{ data: string; mimeType: string }> = data.images || []
+  const textBlocks = content.filter((b: ContentBlock) => b.type === 'text' && b.text)
+  const toolCalls = content.filter((b: ContentBlock) => b.type === 'toolCall')
+
+  return (
+    <Section title={t('settings.payloadResponse')} defaultOpen>
+      {/* 文本内容 */}
+      {textBlocks.length > 0 && (
+        <div className="px-3 py-2 space-y-1.5">
+          {textBlocks.map((block: ContentBlock, i: number) => (
+            <pre
+              key={i}
+              className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed"
+            >
+              {block.text}
+            </pre>
+          ))}
+        </div>
+      )}
+      {/* 工具调用 */}
+      {toolCalls.length > 0 && (
+        <div className="px-3 py-2 space-y-1.5">
+          <div className="text-[10px] text-text-tertiary font-medium">tool_calls:</div>
+          {toolCalls.map((tc: ContentBlock, i: number) => (
+            <div key={i} className="bg-bg-tertiary rounded-md p-2">
+              <div className="text-[11px] text-orange-400 font-medium">{tc.name || '?'}</div>
+              <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+                {JSON.stringify(tc.arguments, null, 2)}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* AI 生成的图片 */}
+      {images.length > 0 && (
+        <div className="px-3 py-2 space-y-2">
+          {images.map((img, i) => (
+            <div key={i} className="space-y-1">
+              <div className="flex items-center gap-1 text-[10px] text-purple-400">
+                <Image size={10} />
+                <span>
+                  {t('settings.payloadImage')} ({img.mimeType || 'image'})
+                </span>
+              </div>
+              <img
+                src={`data:${img.mimeType || 'image/png'};base64,${img.data}`}
+                alt="AI generated"
+                className="max-w-[300px] max-h-[300px] rounded-md border border-border-primary object-contain"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 空响应 */}
+      {textBlocks.length === 0 && toolCalls.length === 0 && images.length === 0 && (
+        <div className="px-3 py-2 text-[11px] text-text-tertiary">{t('settings.payloadEmpty')}</div>
+      )}
+    </Section>
+  )
+}
+
+/**
  * HTTP 日志 Payload 结构化查看器
  * 将 JSON 请求体解析为可折叠的结构化视图
  */
-export function PayloadViewer({ payload }: { payload: string }): React.JSX.Element {
+export function PayloadViewer({
+  payload,
+  response
+}: {
+  payload: string
+  response?: string
+}): React.JSX.Element {
   const { t } = useTranslation()
   const [showRaw, setShowRaw] = useState(false)
 
   const parsed = useMemo(() => {
     try {
-      return JSON.parse(payload)
+      const raw = JSON.parse(payload)
+      // 检测 Google Gemini 格式并归一化
+      const isGoogleFormat = Array.isArray(raw.contents) || raw.config?.systemInstruction
+      return isGoogleFormat ? normalizeGooglePayload(raw) : raw
     } catch {
       return null
     }
   }, [payload])
+
+  const parsedResponse = useMemo(() => {
+    if (!response) return null
+    try {
+      return JSON.parse(response)
+    } catch {
+      return null
+    }
+  }, [response])
 
   // 解析失败，回退到原始文本
   if (!parsed || typeof parsed !== 'object') {
@@ -313,11 +672,12 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
     )
   }
 
-  const messages: any[] = parsed.messages || []
-  const tools: any[] = parsed.tools || []
-  // Anthropic 格式的 system 字段
-  const systemBlocks: any[] = parsed.system
-    ? (typeof parsed.system === 'string' ? [{ role: 'system', content: parsed.system }] : [{ role: 'system', content: parsed.system }])
+  const messages = (parsed.messages || []) as NormalizedMessage[]
+  const tools = (parsed.tools || []) as ToolDefinition[]
+  const systemBlocks: NormalizedMessage[] = parsed.system
+    ? typeof parsed.system === 'string'
+      ? [{ role: 'system', content: parsed.system }]
+      : [{ role: 'system', content: parsed.system }]
     : []
   const allMessages = [...systemBlocks, ...messages]
 
@@ -347,9 +707,11 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
       {/* 消息列表 */}
       <Section title={t('settings.payloadMessages')} count={allMessages.length} defaultOpen>
         {allMessages.length === 0 ? (
-          <div className="px-3 py-2 text-[11px] text-text-tertiary">{t('settings.payloadNoMessages')}</div>
+          <div className="px-3 py-2 text-[11px] text-text-tertiary">
+            {t('settings.payloadNoMessages')}
+          </div>
         ) : (
-          allMessages.map((msg: any, i: number) => {
+          allMessages.map((msg: NormalizedMessage, i: number) => {
             const role = msg.role || 'unknown'
             const { text, hasImage, hasToolCall } = extractSummary(msg.content)
             const toolCallsSummary = msg.tool_calls ? extractToolCallsSummary(msg.tool_calls) : ''
@@ -393,11 +755,14 @@ export function PayloadViewer({ payload }: { payload: string }): React.JSX.Eleme
       {/* 工具定义 */}
       {tools.length > 0 && (
         <Section title={t('settings.payloadToolDefs')} count={tools.length}>
-          {tools.map((tool: any, i: number) => (
+          {tools.map((tool: ToolDefinition, i: number) => (
             <ToolItem key={i} tool={tool} />
           ))}
         </Section>
       )}
+
+      {/* AI 响应内容 */}
+      {parsedResponse && <ResponseSection data={parsedResponse} t={t} />}
 
       {/* 原始 JSON 切换 */}
       <button

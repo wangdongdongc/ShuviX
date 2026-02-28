@@ -4,3 +4,10 @@ out
 .DS_Store
 .eslintcache
 *.log*
+
+# AI/IDE 本地配置
+.claude/
+.windsurf/
+ 
+# TypeScript 增量编译缓存
+*.tsbuildinfo

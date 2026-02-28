@@ -24,6 +24,7 @@ import type {
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
   SessionUpdateProjectParams,
+  SessionUpdateSettingsParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -32,26 +33,37 @@ import type {
   McpToolInfo,
   Skill,
   SkillAddParams,
-  SkillUpdateParams
+  SkillUpdateParams,
+  SshCredential,
+  SshCredentialAddParams,
+  SshCredentialUpdateParams
 } from '../main/types'
 
 declare global {
 
 /** Agent 事件流类型 */
 interface AgentStreamEvent {
-  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'ssh_event' | 'tool_approval_request' | 'user_input_request' | 'ssh_credential_request'
+  type: 'text_delta' | 'text_end' | 'thinking_delta' | 'agent_start' | 'agent_end' | 'error' | 'tool_start' | 'tool_end' | 'docker_event' | 'ssh_event' | 'tool_approval_request' | 'user_input_request' | 'ssh_credential_request' | 'image_data'
   sessionId: string
   data?: string
   error?: string
   toolCallId?: string
   toolName?: string
-  toolArgs?: any
-  toolResult?: any
+  toolArgs?: Record<string, unknown>
+  toolResult?: string
   toolIsError?: boolean
   approvalRequired?: boolean
   userInputRequired?: boolean
   sshCredentialRequired?: boolean
   userInputPayload?: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
+  turnIndex?: number
+  usage?: {
+    input: number
+    output: number
+    cacheRead: number
+    total: number
+    details: Array<{ input: number; output: number; cacheRead: number; total: number; stopReason: string }>
+  }
 }
 
 /** 项目类型 */
@@ -79,6 +91,8 @@ interface Session {
   model: string
   systemPrompt: string
   modelMetadata: string
+  /** 会话级配置（JSON：sshAutoApprove 等） */
+  settings: string
   createdAt: number
   updatedAt: number
   /** 项目工作目录（计算属性，由后端填充） */
@@ -203,6 +217,7 @@ interface ShuviXAPI {
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
     updateModelMetadata: (params: SessionUpdateModelMetadataParams) => Promise<{ success: boolean }>
+    updateSettings: (params: SessionUpdateSettingsParams) => Promise<{ success: boolean }>
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
     /** 获取单个会话（含 workingDirectory） */
@@ -237,6 +252,13 @@ interface ShuviXAPI {
   ssh: {
     sessionStatus: (sessionId: string) => Promise<{ host: string; port: number; username: string } | null>
     disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
+  }
+  sshCredential: {
+    list: () => Promise<SshCredential[]>
+    add: (params: SshCredentialAddParams) => Promise<{ id: string }>
+    update: (params: SshCredentialUpdateParams) => Promise<{ success: boolean }>
+    delete: (id: string) => Promise<{ success: boolean }>
+    listNames: () => Promise<string[]>
   }
   tools: {
     list: () => Promise<Array<{ name: string; label: string; group?: string; serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'; isEnabled?: boolean }>>

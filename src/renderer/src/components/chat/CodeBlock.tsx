@@ -16,12 +16,19 @@ const mermaidSvgCache = new Map<string, string>()
 const mermaidViewState = new Map<string, boolean>() // code → showSource
 let mermaidIdCounter = 0
 
+interface HastNode {
+  type: string
+  value?: string
+  children?: HastNode[]
+  properties?: Record<string, unknown>
+}
+
 /** 代码块容器 — 带语言标签和复制按钮 */
-export function CodeBlock({ node, children, ...props }: any): React.JSX.Element {
+export function CodeBlock({ node, children, ...props }: { node?: HastNode; children?: React.ReactNode; [key: string]: unknown }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
 
   // 从 hast 节点提取语言名称
-  const codeNode = node?.children?.[0] as any
+  const codeNode = node?.children?.[0] as HastNode | undefined
   const cls = codeNode?.properties?.className
   const lang = (() => {
     if (!cls) return ''
@@ -31,7 +38,7 @@ export function CodeBlock({ node, children, ...props }: any): React.JSX.Element 
   })()
 
   // 递归提取 hast 节点中的纯文本（用于复制）
-  const extractText = (n: any): string => {
+  const extractText = (n: HastNode): string => {
     if (n.type === 'text') return n.value || ''
     if (n.children) return n.children.map(extractText).join('')
     return ''

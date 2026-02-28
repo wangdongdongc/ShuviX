@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Brain } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
+import type { ThinkingLevel } from '../../../../main/types'
 
 /**
  * 思考深度选择器 — 仅当模型支持 reasoning 时显示
@@ -32,7 +33,7 @@ export function ThinkingPicker(): React.JSX.Element | null {
     setThinkingLevel(level)
     setOpen(false)
     if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as any })
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as ThinkingLevel })
       // 持久化思考深度到会话
       await window.api.session.updateModelMetadata({
         id: activeSessionId,

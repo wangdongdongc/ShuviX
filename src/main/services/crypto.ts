@@ -35,7 +35,7 @@ function getOrCreateKey(): Buffer {
   writeFileSync(keyPath, key, { mode: 0o600 })
   cachedKey = key
   return key
-}
+} 
 
 export function encrypt(plaintext: string): string {
   if (!plaintext) return plaintext

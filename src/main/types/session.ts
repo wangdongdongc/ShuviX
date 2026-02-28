@@ -9,6 +9,8 @@ export interface Session {
   systemPrompt: string
   /** 模型相关设置（JSON：思考深度等） */
   modelMetadata: string
+  /** 会话级配置（JSON：sshAutoApprove 等） */
+  settings: string
   createdAt: number
   updatedAt: number
   /** 项目工作目录（计算属性，由 service 层填充，DB 中不存在） */
@@ -42,4 +44,10 @@ export interface SessionUpdateProjectParams {
 export interface SessionUpdateModelMetadataParams {
   id: string
   modelMetadata: string
+}
+
+/** IPC: 更新会话级配置参数 */
+export interface SessionUpdateSettingsParams {
+  id: string
+  settings: string
 }

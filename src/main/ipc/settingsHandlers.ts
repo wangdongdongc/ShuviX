@@ -32,7 +32,7 @@ export function registerSettingsHandlers(): void {
     }
     // UI 缩放变更时立即应用到所有窗口
     if (params.key === 'general.uiZoom') {
-      const zoom = Math.max(0.5, Math.min(2, Number(params.value) / 100 || 1))
+      const zoom = Math.max(0.5, Math.min(2.2, (Number(params.value) / 100 || 1) * 1.1))
       BrowserWindow.getAllWindows().forEach((win) => {
         win.webContents.setZoomFactor(zoom)
       })

@@ -158,9 +158,10 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
         // 记录读取时间（用于 edit/write 工具校验文件是否被外部修改）
         recordRead(ctx.sessionId, absolutePath)
         return result
-      } catch (err: any) {
-        if (err.message === TOOL_ABORTED) throw err
-        if (err.code === 'ENOENT') {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (errMsg === TOOL_ABORTED) throw err
+        if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
           // 模糊匹配建议
           const suggestions = suggestSimilarFiles(absolutePath)
           if (suggestions.length > 0) {
@@ -172,7 +173,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
           }
           throw new Error(`File not found: ${params.path}`)
         }
-        throw new Error(`Failed: ${err.message}`)
+        throw new Error(`Failed: ${errMsg}`)
       }
     }
   }

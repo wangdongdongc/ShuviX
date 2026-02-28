@@ -19,8 +19,8 @@ function ModelCapabilitiesEditor({
   capabilities,
   onUpdate
 }: {
-  capabilities: Record<string, any>
-  onUpdate: (caps: Record<string, any>) => Promise<void>
+  capabilities: Record<string, unknown>
+  onUpdate: (caps: Record<string, unknown>) => Promise<void>
 }): React.JSX.Element {
   const { t } = useTranslation()
   const toggle = (key: string): void => {
@@ -46,13 +46,13 @@ function ModelCapabilitiesEditor({
           </button>
         ))}
       </div>
-      {(capabilities.maxInputTokens || capabilities.maxOutputTokens) && (
+      {(capabilities.maxInputTokens || capabilities.maxOutputTokens) ? (
         <div className="mt-1.5 text-[10px] text-text-tertiary">
-          {capabilities.maxInputTokens && <span>{t('settings.context')}: {(capabilities.maxInputTokens / 1000).toFixed(0)}K</span>}
-          {capabilities.maxInputTokens && capabilities.maxOutputTokens && <span className="mx-1">·</span>}
-          {capabilities.maxOutputTokens && <span>{t('settings.maxOutput')}: {(capabilities.maxOutputTokens / 1000).toFixed(0)}K</span>}
+          {capabilities.maxInputTokens ? <span>{t('settings.context')}: {(Number(capabilities.maxInputTokens) / 1000).toFixed(0)}K</span> : null}
+          {capabilities.maxInputTokens && capabilities.maxOutputTokens ? <span className="mx-1">·</span> : null}
+          {capabilities.maxOutputTokens ? <span>{t('settings.maxOutput')}: {(Number(capabilities.maxOutputTokens) / 1000).toFixed(0)}K</span> : null}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -70,7 +70,7 @@ export function ProviderSettings(): React.JSX.Element {
   const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [showAddForm, setShowAddForm] = useState(false)
-  const [newProvider, setNewProvider] = useState({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' as const })
+  const [newProvider, setNewProvider] = useState<{ name: string; baseUrl: string; apiKey: string; apiProtocol: ProviderInfo['apiProtocol'] }>({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
   const [addingProvider, setAddingProvider] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null)
@@ -123,7 +123,7 @@ export function ProviderSettings(): React.JSX.Element {
     const provider = providers.find((p) => p.id === providerId)
     if (!provider) return false
     if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) return true
-    if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) return true
+    if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) return true
     return false
   }
 
@@ -136,7 +136,7 @@ export function ProviderSettings(): React.JSX.Element {
     if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
       updates.apiKey = edits.apiKey
     }
-    if (!provider.isBuiltin && edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
+    if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
       updates.baseUrl = edits.baseUrl
     }
     if (Object.keys(updates).length > 0) {
@@ -230,10 +230,10 @@ export function ProviderSettings(): React.JSX.Element {
         ...prev,
         [providerId]: t('settings.syncSuccess', { total: result.total, added: result.added })
       }))
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSyncMessages((prev) => ({
         ...prev,
-        [providerId]: err?.message || t('settings.syncFailed')
+        [providerId]: err instanceof Error ? err.message : t('settings.syncFailed')
       }))
     } finally {
       setSyncingProviderId(null)
@@ -299,7 +299,7 @@ export function ProviderSettings(): React.JSX.Element {
               <label className="block text-[11px] text-text-tertiary mb-1">{t('settings.apiProtocol')}</label>
               <select
                 value={newProvider.apiProtocol}
-                onChange={(e) => setNewProvider((p) => ({ ...p, apiProtocol: e.target.value as any }))}
+                onChange={(e) => setNewProvider((p) => ({ ...p, apiProtocol: e.target.value as ProviderInfo['apiProtocol'] }))}
                 className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
               >
                 <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
@@ -394,12 +394,9 @@ export function ProviderSettings(): React.JSX.Element {
                     <input
                       type="text"
                       value={edits.baseUrl ?? p.baseUrl}
-                      onChange={(e) => !p.isBuiltin && updateLocalEdit(p.id, 'baseUrl', e.target.value)}
-                      disabled={!!p.isBuiltin}
+                      onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
                       placeholder={t('settings.baseUrlPlaceholder')}
-                      className={`w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors ${
-                        p.isBuiltin ? 'opacity-60 cursor-not-allowed' : 'focus:border-accent/50'
-                      }`}
+                      className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors focus:border-accent/50"
                     />
                   </div>
 

@@ -7,6 +7,8 @@
 import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { sshManager } from '../services/sshManager'
+import { sshCredentialDao } from '../dao/sshCredentialDao'
+import { sessionDao } from '../dao/sessionDao'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
@@ -19,7 +21,10 @@ const DEFAULT_TIMEOUT = 120
 const SshParamsSchema = Type.Object({
   action: Type.Union(
     [Type.Literal('connect'), Type.Literal('exec'), Type.Literal('disconnect')],
-    { description: 'Action to perform: "connect" to establish SSH connection (credentials provided by user via UI), "exec" to run a command on the remote server, "disconnect" to close the connection.' }
+    { description: 'Action to perform: "connect" to establish SSH connection, "exec" to run a command on the remote server, "disconnect" to close the connection.' }
+  ),
+  credentialName: Type.Optional(
+    Type.String({ description: 'Name of a saved SSH credential for connect action. If provided, connects directly using the saved credential without prompting the user. If omitted, the user will be prompted via a secure UI dialog.' })
   ),
   command: Type.Optional(
     Type.String({ description: 'The command to execute on the remote server (required for exec action).' })
@@ -31,22 +36,30 @@ const SshParamsSchema = Type.Object({
 
 /** 创建 ssh 工具实例 */
 export function createSshTool(ctx: ToolContext): AgentTool<typeof SshParamsSchema> {
+  // 动态构建描述，包含已保存的凭据名称
+  const savedNames = sshCredentialDao.findAllNames()
+  let description = 'Connect to a remote server via SSH and execute commands.'
+  if (savedNames.length > 0) {
+    description += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
+  }
+  description += ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
+  description += ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
+
   return {
     name: 'ssh',
     label: t('tool.sshLabel'),
-    description:
-      'Connect to a remote server via SSH and execute commands. Use action="connect" to initiate a connection (user will provide credentials via a secure UI dialog — you do NOT need to provide host, username, or password). Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.',
+    description,
     parameters: SshParamsSchema,
     execute: async (
       toolCallId: string,
-      params: { action: 'connect' | 'exec' | 'disconnect'; command?: string; timeout?: number },
+      params: { action: 'connect' | 'exec' | 'disconnect'; credentialName?: string; command?: string; timeout?: number },
       signal?: AbortSignal
     ) => {
       if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
       switch (params.action) {
         case 'connect':
-          return handleConnect(ctx, toolCallId, signal)
+          return handleConnect(ctx, toolCallId, params.credentialName, signal)
         case 'exec':
           return handleExec(ctx, toolCallId, params.command, params.timeout, signal)
         case 'disconnect':
@@ -62,8 +75,9 @@ export function createSshTool(ctx: ToolContext): AgentTool<typeof SshParamsSchem
 async function handleConnect(
   ctx: ToolContext,
   toolCallId: string,
+  credentialName?: string,
   signal?: AbortSignal
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: any }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
   // 检查是否已有连接
   if (sshManager.isConnected(ctx.sessionId)) {
     const info = sshManager.getConnectionInfo(ctx.sessionId)
@@ -73,7 +87,48 @@ async function handleConnect(
     }
   }
 
-  // 请求用户输入凭据（通过 IPC 弹出 UI 弹窗）
+  // --- 路径 A：使用已保存的凭据 ---
+  if (credentialName) {
+    const saved = sshCredentialDao.findByName(credentialName)
+    if (!saved) {
+      const availableNames = sshCredentialDao.findAllNames()
+      const hint = availableNames.length > 0
+        ? ` Available saved credentials: [${availableNames.join(', ')}].`
+        : ' No saved credentials are configured.'
+      return {
+        content: [{ type: 'text', text: `No saved SSH credential found with name "${credentialName}".${hint} Use connect without credentialName to let the user enter credentials manually.` }],
+        details: { action: 'connect', success: false, credentialNotFound: true }
+      }
+    }
+
+    log.info(`使用保存的凭据 "${credentialName}" 连接 SSH session=${ctx.sessionId}`)
+    const credentials = {
+      host: saved.host,
+      port: saved.port,
+      username: saved.username,
+      password: saved.authType === 'password' ? saved.password : undefined,
+      privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
+      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
+    }
+
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    const result = await sshManager.connect(ctx.sessionId, credentials)
+    if (result.success) {
+      ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+      return {
+        content: [{ type: 'text', text: `Connected to remote server using saved credential "${credentialName}" successfully. You can now use exec to run commands.` }],
+        details: { action: 'connect', success: true, credentialName }
+      }
+    } else {
+      return {
+        content: [{ type: 'text', text: `Connection failed using saved credential "${credentialName}": ${result.error}. This credential was configured by the user in Settings > Tools > SSH Credentials — please inform them to check their SSH credential configuration.` }],
+        details: { action: 'connect', success: false, credentialName, error: result.error }
+      }
+    }
+  }
+
+  // --- 路径 B：原有 UI 弹窗流程（不变） ---
   if (!ctx.requestSshCredentials) {
     throw new Error('SSH credential input not available')
   }
@@ -116,7 +171,7 @@ async function handleExec(
   command: string | undefined,
   timeout: number | undefined,
   signal?: AbortSignal
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: any }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
   if (!command) {
     throw new Error('command is required for exec action')
   }
@@ -125,8 +180,13 @@ async function handleExec(
     throw new Error('No active SSH connection. Use ssh({ action: "connect" }) first.')
   }
 
-  // 每条命令都需用户审批
-  if (ctx.requestApproval) {
+  // 每条命令都需用户审批（会话开启 sshAutoApprove 时跳过）
+  let sshAutoApprove = false
+  try {
+    const sess = sessionDao.findById(ctx.sessionId)
+    sshAutoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
+  } catch { /* ignore */ }
+  if (ctx.requestApproval && !sshAutoApprove) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')
@@ -165,8 +225,9 @@ async function handleExec(
         truncated: truncated.truncated
       }
     }
-  } catch (err: any) {
-    if (err.message === TOOL_ABORTED || err.message === 'Aborted') throw err
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    if (errMsg === TOOL_ABORTED || errMsg === 'Aborted') throw err
     // 连接级错误，清理过期连接以便下次可直接重连
     if (sshManager.isConnected(ctx.sessionId)) {
       const connInfo = sshManager.getConnectionInfo(ctx.sessionId)
@@ -174,7 +235,7 @@ async function handleExec(
       if (connInfo) ctx.onSshDisconnected?.(connInfo.host, connInfo.port, connInfo.username)
     }
     throw new Error(
-      `SSH command failed: ${err.message}. The connection has been closed. Use ssh({ action: "connect" }) to reconnect.`
+      `SSH command failed: ${errMsg}. The connection has been closed. Use ssh({ action: "connect" }) to reconnect.`
     )
   }
 }
@@ -182,7 +243,7 @@ async function handleExec(
 /** 处理 disconnect 动作 */
 async function handleDisconnect(
   ctx: ToolContext
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: any }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
   if (!sshManager.isConnected(ctx.sessionId)) {
     return {
       content: [{ type: 'text', text: 'No active SSH connection to disconnect.' }],

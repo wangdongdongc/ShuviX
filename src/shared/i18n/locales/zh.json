@@ -34,7 +34,12 @@
     "deleteWarning": "该会话中已有消息记录，删除后将",
     "deleteWarningBold": "彻底删除所有消息",
     "deleteWarningEnd": "，且无法恢复。确定要删除吗？",
-    "restoreProject": "恢复项目"
+    "restoreProject": "恢复项目",
+    "deleteProject": "删除项目",
+    "confirmDeleteProject": "确认删除项目",
+    "deleteProjectWarning": "删除后将",
+    "deleteProjectWarningBold": "彻底删除该项目及其所有会话和消息",
+    "deleteProjectWarningEnd": "，且无法恢复。确定要删除吗？"
   },
 
   "chat": {
@@ -57,7 +62,9 @@
     "sshActive": "SSH 已连接",
     "destroyContainer": "销毁容器",
     "disconnectSsh": "断开 SSH",
-    "destroyReason_manual": "手动销毁"
+    "destroyReason_manual": "手动销毁",
+    "sshAutoApproveLabel": "SSH 免审批",
+    "sshAutoApproveWarning": "SSH 命令将自动执行，不再逐条审批。请勿在生产环境或重要服务器上开启此功能。"
   },
 
   "input": {
@@ -121,6 +128,8 @@
     "overrideAsk": "用户拒绝了提供的选项。用户反馈：{{text}}",
     "shuvixProjectHint": "AI 请求修改项目配置",
     "shuvixSettingHint": "AI 请求修改系统设置",
+    "sshHint": "SSH 远程命令需要用户审批后执行",
+    "allowAndSkip": "允许并跳过后续审批",
     "pendingSshCredentials": "等待输入凭据"
   },
 
@@ -140,7 +149,15 @@
     "passphrasePlaceholder": "无口令可留空",
     "connect": "连接",
     "cancel": "取消",
-    "credentialHint": "凭据仅用于本次连接，不会保存，也不会发送给 AI"
+    "credentialHint": "凭据仅用于本次连接，不会保存，也不会发送给 AI",
+    "securityWarning": "凭据仅用于本次连接，不会保存。请确认连接目标可信，AI 将在该服务器上执行命令。"
+  },
+
+  "sessionConfig": {
+    "title": "会话配置",
+    "sessionTitle": "会话标题",
+    "sshAutoApprove": "SSH 免审批",
+    "sshAutoApproveDesc": "开启后，SSH exec 命令将自动执行，不再逐条弹窗审批。请勿在生产环境或重要服务器上开启此功能。"
   },
 
   "sessionEdit": {
@@ -177,6 +194,9 @@
     "toolsPresetGeneral": "通用",
     "toolsPresetCode": "代码",
     "toolsHint": "新建会话时默认启用的工具，会话中可单独调整并覆盖此配置",
+    "toolsGeneralGroup": "通用工具",
+    "toolsRipgrepGroup": "高性能检索工具（适合大型代码库）",
+    "toolsShuvixGroup": "系统工具（读写项目和全局配置）",
     "referenceDirs": "参考目录",
     "referenceDirsHint": "AI 可访问这些目录中的文件，沙箱模式下按访问模式限制读写权限",
     "addRefDir": "添加目录",
@@ -187,7 +207,25 @@
     "archiveProject": "归档项目",
     "archiveConfirmTitle": "归档项目",
     "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
-    "archiveConfirmAction": "确认归档"
+    "archiveConfirmAction": "确认归档",
+    "wizardStepPurpose": "选择用途",
+    "wizardStepTools": "工具选择",
+    "wizardStepExtensions": "扩展能力",
+    "wizardStepProject": "项目配置",
+    "wizardStepAdvanced": "高级设置",
+    "wizardNext": "下一步",
+    "wizardPrev": "上一步",
+    "purposeTitle": "你想用 AI 做什么？",
+    "purposeDesc": "根据用途预选合适的工具配置",
+    "purposeCasual": "随便看看",
+    "purposeCasualDesc": "简单的工具就能组合出强大的智能体",
+    "purposeDev": "程序开发",
+    "purposeDevDesc": "代码编写、调试、文件读写等开发任务",
+    "extEmptyDesc": "你还没有配置任何扩展能力。MCP Server 和 Skills 可以为 AI 提供更多工具，前往设置页面添加。",
+    "extMcpDesc": "通过 MCP 协议连接外部工具服务，让 AI 获得数据库查询、API 调用等扩展能力。",
+    "extSkillDesc": "Skills 是可复用的提示词模板，让 AI 掌握特定领域的工作流程。",
+    "extGoSettings": "前往设置",
+    "extAvailableDesc": "选择要在项目中启用的扩展工具。"
   },
 
   "settings": {
@@ -257,6 +295,7 @@
     "payloadTool": "工具",
     "payloadToolDefs": "工具定义",
     "payloadBackToStructured": "← 返回结构化视图",
+    "payloadResponse": "响应",
     "payloadViewRawJson": "查看原始 JSON →",
     "capVision": "图像输入",
     "capImageOutput": "图像生成",
@@ -279,6 +318,23 @@
     "toolBashUnlimited": "不限制",
     "toolBashDockerNotInstalled": "未检测到 Docker，请先安装 Docker Desktop",
     "toolBashDockerNotRunning": "Docker 已安装但引擎未启动，请先启动 Docker Desktop",
+    "toolSshTitle": "SSH 凭据管理",
+    "toolSshDesc": "保存 SSH 连接凭据，AI 可通过凭据名称直接连接远程服务器，无需每次手动输入。",
+    "toolSshSecurityWarning": "SSH 凭据将加密存储在本地。请确保仅保存可信服务器的凭据，并注意保护私钥安全。AI 可使用已保存的凭据直接连接远程服务器并执行命令。",
+    "toolSshAdd": "添加凭据",
+    "toolSshName": "凭据名称",
+    "toolSshNamePlaceholder": "例如 production-server",
+    "toolSshNameHint": "AI 通过此名称引用凭据",
+    "toolSshEmpty": "暂无保存的 SSH 凭据",
+    "toolSshEmptyHint": "添加凭据后，AI 可直接连接远程服务器",
+    "toolSshDeleteConfirm": "确定删除 SSH 凭据「{{name}}」？",
+    "toolSshAuthPassword": "密码",
+    "toolSshAuthKey": "密钥",
+    "toolSshBrowseKey": "浏览文件",
+    "toolSshPrivateKeyPlaceholder": "粘贴私钥内容（PEM 格式）...",
+    "toolSshPassphrasePlaceholder": "无口令可留空",
+    "toolSshSaving": "保存中...",
+    "toolSshDuplicateName": "凭据名称已存在",
     "tabMcp": "MCP 服务",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "配置 MCP (Model Context Protocol) 服务器，为 AI 扩展更多工具能力。",

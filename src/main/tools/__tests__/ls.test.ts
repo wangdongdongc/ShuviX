@@ -176,8 +176,8 @@ describe('ls 工具 - 错误处理', () => {
     try {
       await tool.execute('tc8', { path: join(TEST_DIR, 'nonexistent') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('Path not found')
+    } catch (err: unknown) {
+      expect(err instanceof Error ? err.message : '').toContain('Path not found')
     }
   })
 
@@ -186,8 +186,8 @@ describe('ls 工具 - 错误处理', () => {
     try {
       await tool.execute('tc9', { path: join(TEST_DIR, 'README.md') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('is not a directory')
+    } catch (err: unknown) {
+      expect(err instanceof Error ? err.message : '').toContain('is not a directory')
     }
   })
 })

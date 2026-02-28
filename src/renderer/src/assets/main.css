@@ -136,6 +136,20 @@ body {
   animation: dialog-out 120ms ease-in forwards;
 }
 
+/* ========== 折叠/展开过渡 ========== */
+
+.collapse-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms ease-out;
+}
+.collapse-grid.expanded {
+  grid-template-rows: 1fr;
+}
+.collapse-grid > .collapse-inner {
+  overflow: hidden;
+}
+
 /* ========== Markdown Zen 样式 ========== */
 
 .markdown-body {

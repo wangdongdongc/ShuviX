@@ -7,6 +7,7 @@ import { registerProviderHandlers } from './providerHandlers'
 import { registerHttpLogHandlers } from './httpLogHandlers'
 import { registerMcpHandlers } from './mcpHandlers'
 import { registerSkillHandlers } from './skillHandlers'
+import { registerSshCredentialHandlers } from './sshCredentialHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -22,4 +23,5 @@ export function registerIpcHandlers(): void {
   registerHttpLogHandlers()
   registerMcpHandlers()
   registerSkillHandlers()
+  registerSshCredentialHandlers()
 }

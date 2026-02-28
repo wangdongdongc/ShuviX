@@ -164,7 +164,7 @@ export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSch
               ],
               details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine }
             })
-          } catch (error: any) {
+          } catch (error: unknown) {
             if (signal) signal.removeEventListener('abort', onAbort)
             if (!aborted) reject(error)
           }

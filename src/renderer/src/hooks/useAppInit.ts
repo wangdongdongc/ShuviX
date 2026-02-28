@@ -35,14 +35,12 @@ export function useAppInit(): void {
       }
 
       // 并行加载：提供商列表 + 可用模型 + 会话列表（仅主窗口）
-      const promises: [Promise<any>, Promise<any>, Promise<any> | null] = [
+      const promises: [Promise<ProviderInfo[]>, Promise<AvailableModel[]>, Promise<Session[] | null>] = [
         window.api.provider.listAll(),
         window.api.provider.listAvailableModels(),
-        !isSettingsWindow ? window.api.session.list() : null
+        !isSettingsWindow ? window.api.session.list() : Promise.resolve(null)
       ]
-      const [allProviders, availableModels, sessions] = await Promise.all(
-        promises.map((p) => p ?? Promise.resolve(null))
-      )
+      const [allProviders, availableModels, sessions] = await Promise.all(promises)
       lap('providers + models + sessions (parallel)')
 
       useSettingsStore.getState().setProviders(allProviders)

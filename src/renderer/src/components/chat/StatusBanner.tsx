@@ -1,5 +1,6 @@
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Container, Terminal, X } from 'lucide-react'
+import { Container, Terminal, TriangleAlert, X } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
@@ -13,7 +14,13 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const docker = resources?.docker
   const ssh = resources?.ssh
 
-  if (!docker && !ssh) return null
+  // 读取 session settings 中的 sshAutoApprove
+  const sessionSettings = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId)?.settings)
+  const sshAutoApprove = useMemo(() => {
+    try { return JSON.parse(sessionSettings || '{}').sshAutoApprove === true } catch { return false }
+  }, [sessionSettings])
+
+  if (!docker && !ssh && !sshAutoApprove) return null
 
   const handleDestroyDocker = async (): Promise<void> => {
     await window.api.docker.destroySession(sessionId)
@@ -21,6 +28,15 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   const handleDisconnectSsh = async (): Promise<void> => {
     await window.api.ssh.disconnectSession(sessionId)
+  }
+
+  /** 点击关闭 SSH 免审批 */
+  const handleDisableSshAutoApprove = async (): Promise<void> => {
+    const current = JSON.parse(sessionSettings || '{}')
+    const updated = { ...current, sshAutoApprove: false }
+    const json = JSON.stringify(updated)
+    await window.api.session.updateSettings({ id: sessionId, settings: json })
+    useChatStore.getState().updateSessionSettings(sessionId, json)
   }
 
   return (
@@ -55,6 +71,17 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
             <X size={10} />
           </button>
         </span>
+      )}
+      {sshAutoApprove && (
+        <button
+          onClick={handleDisableSshAutoApprove}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
+          title={t('chat.sshAutoApproveWarning')}
+        >
+          <TriangleAlert size={11} />
+          {t('chat.sshAutoApproveLabel')}
+          <X size={10} className="ml-0.5 opacity-60" />
+        </button>
       )}
     </div>
   )

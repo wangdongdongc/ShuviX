@@ -15,6 +15,8 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   /** 流式阶段的思考内容（实时更新） */
   streamingThinking?: string | null
+  /** 流式阶段的生成图片（实时更新） */
+  streamingImages?: Array<{ data: string; mimeType: string }>
   /** 生成该消息的模型名称 */
   model?: string
   /** 回退到此消息（删除之后的所有消息） */
@@ -33,6 +35,7 @@ export const MessageBubble = memo(function MessageBubble({
   metadata,
   isStreaming,
   streamingThinking,
+  streamingImages,
   model,
   onRollback,
   onRegenerate
@@ -176,7 +179,7 @@ export const MessageBubble = memo(function MessageBubble({
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight, rehypeRaw]}
                   components={{
-                    pre: CodeBlock
+                    pre: CodeBlock as never
                   }}
                 >
                   {content}
@@ -185,6 +188,33 @@ export const MessageBubble = memo(function MessageBubble({
                 {isStreaming && (
                   <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
                 )}
+              </div>
+            )}
+            {/* 助手生成的图片（持久化：从 metadata.images 加载） */}
+            {!isStreaming && parsedMeta?.images?.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {parsedMeta.images.map((img: { data: string; mimeType: string }, idx: number) => (
+                  <img
+                    key={idx}
+                    src={img.data}
+                    alt={t('message.generatedImage', { index: idx + 1, defaultValue: `Generated image ${idx + 1}` })}
+                    className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => window.api.app.openImage(img.data)}
+                  />
+                ))}
+              </div>
+            )}
+            {/* 流式阶段的生成图片（实时推送） */}
+            {isStreaming && streamingImages && streamingImages.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {streamingImages.map((img, idx) => (
+                  <img
+                    key={idx}
+                    src={img.data}
+                    alt={t('message.generatedImage', { index: idx + 1, defaultValue: `Generated image ${idx + 1}` })}
+                    className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
+                  />
+                ))}
               </div>
             )}
           </>

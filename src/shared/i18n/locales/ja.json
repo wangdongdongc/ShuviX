@@ -34,7 +34,12 @@
     "deleteWarning": "このセッションにはメッセージがあります。削除すると",
     "deleteWarningBold": "すべてのメッセージが完全に削除",
     "deleteWarningEnd": "され、復元できません。削除しますか？",
-    "restoreProject": "プロジェクトを復元"
+    "restoreProject": "プロジェクトを復元",
+    "deleteProject": "プロジェクトを削除",
+    "confirmDeleteProject": "プロジェクト削除の確認",
+    "deleteProjectWarning": "削除すると",
+    "deleteProjectWarningBold": "プロジェクトとすべてのセッション・メッセージが完全に削除",
+    "deleteProjectWarningEnd": "され、復元できません。削除しますか？"
   },
 
   "chat": {
@@ -57,7 +62,9 @@
     "sshActive": "SSH 接続中",
     "destroyContainer": "コンテナを削除",
     "disconnectSsh": "SSH を切断",
-    "destroyReason_manual": "手動削除"
+    "destroyReason_manual": "手動削除",
+    "sshAutoApproveLabel": "SSH 自動承認",
+    "sshAutoApproveWarning": "SSH コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。"
   },
 
   "input": {
@@ -121,6 +128,8 @@
     "overrideAsk": "ユーザーが提供された選択肢を拒否しました。ユーザーのフィードバック：{{text}}",
     "shuvixProjectHint": "AI がプロジェクト設定の変更を要求しています",
     "shuvixSettingHint": "AI がシステム設定の変更を要求しています",
+    "sshHint": "SSH リモートコマンドはユーザー承認後に実行されます",
+    "allowAndSkip": "許可して以降の承認をスキップ",
     "pendingSshCredentials": "認証情報入力待ち"
   },
 
@@ -140,7 +149,15 @@
     "passphrasePlaceholder": "なければ空欄",
     "connect": "接続",
     "cancel": "キャンセル",
-    "credentialHint": "認証情報はこの接続のみに使用され、保存や AI への送信は一切行いません"
+    "credentialHint": "認証情報はこの接続のみに使用され、保存や AI への送信は一切行いません",
+    "securityWarning": "認証情報はこの接続のみに使用され、保存されません。接続先が信頼できることを確認してください。AIはそのサーバーでコマンドを実行します。"
+  },
+
+  "sessionConfig": {
+    "title": "セッション設定",
+    "sessionTitle": "セッションタイトル",
+    "sshAutoApprove": "SSH 自動承認",
+    "sshAutoApproveDesc": "有効にすると、SSH exec コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。"
   },
 
   "sessionEdit": {
@@ -177,6 +194,9 @@
     "toolsPresetGeneral": "汎用",
     "toolsPresetCode": "コード",
     "toolsHint": "新しいセッション作成時にデフォルトで有効になるツール。セッション内で個別に変更できます。",
+    "toolsGeneralGroup": "汎用ツール",
+    "toolsRipgrepGroup": "高性能検索ツール（大規模コードベース向け）",
+    "toolsShuvixGroup": "システムツール（プロジェクトとグローバル設定の読み書き）",
     "referenceDirs": "参照ディレクトリ",
     "referenceDirsHint": "AIがこれらのディレクトリのファイルにアクセスできます。サンドボックスモードではアクセスモードにより読み書き権限が制御されます。",
     "addRefDir": "ディレクトリを追加",
@@ -187,7 +207,25 @@
     "archiveProject": "プロジェクトをアーカイブ",
     "archiveConfirmTitle": "プロジェクトをアーカイブ",
     "archiveConfirmDesc": "このプロジェクトは「アーカイブ済みプロジェクト」に移動され、後で復元できます。",
-    "archiveConfirmAction": "アーカイブ"
+    "archiveConfirmAction": "アーカイブ",
+    "wizardStepPurpose": "用途を選択",
+    "wizardStepTools": "ツール選択",
+    "wizardStepExtensions": "拡張機能",
+    "wizardStepProject": "プロジェクト設定",
+    "wizardStepAdvanced": "詳細設定",
+    "wizardNext": "次へ",
+    "wizardPrev": "戻る",
+    "purposeTitle": "AIで何をしたいですか？",
+    "purposeDesc": "用途に応じて適切なツールを事前選択します",
+    "purposeCasual": "ちょっと見てみる",
+    "purposeCasualDesc": "シンプルなツールで強力なエージェントを構築",
+    "purposeDev": "ソフトウェア開発",
+    "purposeDevDesc": "コーディング、デバッグ、ファイル読み書きなどの開発タスク",
+    "extEmptyDesc": "拡張機能がまだ設定されていません。MCP ServerとSkillsでAIに追加ツールを提供できます。設定ページで追加してください。",
+    "extMcpDesc": "MCPプロトコルで外部ツールサーバーに接続し、データベースクエリやAPI呼び出しなどの拡張機能をAIに提供します。",
+    "extSkillDesc": "Skillsは再利用可能なプロンプトテンプレートで、AIが特定のワークフローを習得するのに役立ちます。",
+    "extGoSettings": "設定へ移動",
+    "extAvailableDesc": "このプロジェクトで有効にする拡張ツールを選択してください。"
   },
 
   "settings": {
@@ -257,6 +295,7 @@
     "payloadTool": "ツール",
     "payloadToolDefs": "ツール定義",
     "payloadBackToStructured": "← 構造化ビューに戻る",
+    "payloadResponse": "レスポンス",
     "payloadViewRawJson": "生の JSON を表示 →",
     "capVision": "画像入力",
     "capImageOutput": "画像生成",
@@ -279,6 +318,23 @@
     "toolBashUnlimited": "無制限",
     "toolBashDockerNotInstalled": "Dockerが検出されません。Docker Desktopをインストールしてください。",
     "toolBashDockerNotRunning": "Dockerはインストール済みですが、エンジンが起動していません。Docker Desktopを起動してください。",
+    "toolSshTitle": "SSH 認証情報",
+    "toolSshDesc": "SSH 接続認証情報を保存します。AIは名前で保存済み認証情報を使用し、毎回入力する必要がありません。",
+    "toolSshSecurityWarning": "SSH 認証情報はローカルに暗号化して保存されます。信頼できるサーバーの認証情報のみを保存し、秘密鍵のセキュリティに注意してください。AIは保存済み認証情報を使用してリモートサーバーに直接接続し、コマンドを実行できます。",
+    "toolSshAdd": "認証情報を追加",
+    "toolSshName": "認証情報名",
+    "toolSshNamePlaceholder": "例: production-server",
+    "toolSshNameHint": "AIがこの認証情報を参照するための一意の名前",
+    "toolSshEmpty": "保存済みSSH認証情報はありません",
+    "toolSshEmptyHint": "認証情報を追加すると、AIがリモートサーバーに直接接続できます",
+    "toolSshDeleteConfirm": "SSH認証情報「{{name}}」を削除しますか？",
+    "toolSshAuthPassword": "パスワード",
+    "toolSshAuthKey": "鍵",
+    "toolSshBrowseKey": "参照",
+    "toolSshPrivateKeyPlaceholder": "PEM形式の秘密鍵を貼り付け...",
+    "toolSshPassphrasePlaceholder": "なければ空欄のまま",
+    "toolSshSaving": "保存中...",
+    "toolSshDuplicateName": "認証情報名が既に存在します",
     "tabMcp": "MCP",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "MCP (Model Context Protocol) サーバーを設定して、AIにツール機能を追加します。",

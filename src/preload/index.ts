@@ -18,16 +18,21 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
+  Session,
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
   SessionUpdateProjectParams,
+  SessionUpdateSettingsParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
   McpServerUpdateParams,
   SkillAddParams,
-  SkillUpdateParams
+  SkillUpdateParams,
+  SshCredentialAddParams,
+  SshCredentialUpdateParams
 } from '../main/types'
+import type { AgentStreamEvent } from '../main/services/agentEventHandler'
 
 /** 暴露给 Renderer 的 API */
 const api = {
@@ -89,8 +94,8 @@ const api = {
       ipcRenderer.invoke('agent:setEnabledTools', params),
 
     /** 监听 Agent 事件流 */
-    onEvent: (callback: (event: any) => void) => {
-      const handler = (_: any, event: any): void => callback(event)
+    onEvent: (callback: (event: AgentStreamEvent) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, event: AgentStreamEvent): void => callback(event)
       ipcRenderer.on('agent:event', handler)
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
@@ -138,7 +143,7 @@ const api = {
   // ============ 会话管理 ============
   session: {
     list: () => ipcRenderer.invoke('session:list'),
-    create: (params?: any) => ipcRenderer.invoke('session:create', params),
+    create: (params?: Partial<Session>) => ipcRenderer.invoke('session:create', params),
     updateTitle: (params: SessionUpdateTitleParams) =>
       ipcRenderer.invoke('session:updateTitle', params),
     updateModelConfig: (params: SessionUpdateModelConfigParams) =>
@@ -147,6 +152,8 @@ const api = {
       ipcRenderer.invoke('session:updateProject', params),
     updateModelMetadata: (params: SessionUpdateModelMetadataParams) =>
       ipcRenderer.invoke('session:updateModelMetadata', params),
+    updateSettings: (params: SessionUpdateSettingsParams) =>
+      ipcRenderer.invoke('session:updateSettings', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) =>
@@ -195,6 +202,15 @@ const api = {
   ssh: {
     sessionStatus: (sessionId: string) => ipcRenderer.invoke('ssh:sessionStatus', sessionId),
     disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
+  },
+
+  // ============ SSH 凭据管理 ============
+  sshCredential: {
+    list: () => ipcRenderer.invoke('sshCredential:list'),
+    add: (params: SshCredentialAddParams) => ipcRenderer.invoke('sshCredential:add', params),
+    update: (params: SshCredentialUpdateParams) => ipcRenderer.invoke('sshCredential:update', params),
+    delete: (id: string) => ipcRenderer.invoke('sshCredential:delete', id),
+    listNames: () => ipcRenderer.invoke('sshCredential:listNames')
   },
 
   // ============ 工具 ============

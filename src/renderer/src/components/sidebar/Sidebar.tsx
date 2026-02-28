@@ -21,6 +21,7 @@ export function Sidebar(): React.JSX.Element {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const initialCollapseApplied = useRef(false)
 
@@ -103,6 +104,23 @@ export function Sidebar(): React.JSX.Element {
   /** 恢复归档项目 */
   const handleRestoreProject = async (projectId: string): Promise<void> => {
     await window.api.project.update({ id: projectId, archived: false })
+    await reloadProjects()
+  }
+
+  /** 删除归档项目（含所有关联会话和消息） */
+  const doDeleteProject = async (projectId: string): Promise<void> => {
+    // 如果当前活跃会话属于该项目，先切走
+    const store = useChatStore.getState()
+    const activeSession = store.sessions.find(s => s.id === store.activeSessionId)
+    if (activeSession?.projectId === projectId) {
+      const other = store.sessions.find(s => s.projectId !== projectId)
+      if (other) store.setActiveSessionId(other.id)
+    }
+    await window.api.project.delete({ id: projectId })
+    // 刷新会话列表（已级联删除的会话需要从 store 移除）
+    const allSessions = await window.api.session.list()
+    store.setSessions(allSessions)
+    setDeletingProjectId(null)
     await reloadProjects()
   }
 
@@ -297,10 +315,17 @@ export function Sidebar(): React.JSX.Element {
                         <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
                         <button
                           onClick={() => void handleRestoreProject(p.id)}
-                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary transition-colors"
+                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary transition-colors opacity-0 group-hover:opacity-100"
                           title={t('sidebar.restoreProject')}
                         >
                           <RotateCcw size={11} />
+                        </button>
+                        <button
+                          onClick={() => setDeletingProjectId(p.id)}
+                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                          title={t('sidebar.deleteProject')}
+                        >
+                          <Trash2 size={11} />
                         </button>
                       </div>
                     ))}
@@ -340,6 +365,18 @@ export function Sidebar(): React.JSX.Element {
           cancelText={t('common.cancel')}
           onConfirm={() => doDelete(deletingSessionId)}
           onCancel={() => setDeletingSessionId(null)}
+        />
+      )}
+
+      {/* 删除项目确认弹窗 */}
+      {deletingProjectId && (
+        <ConfirmDialog
+          title={t('sidebar.confirmDeleteProject')}
+          description={<>{t('sidebar.deleteProjectWarning')}<span className="text-error font-medium">{t('sidebar.deleteProjectWarningBold')}</span>{t('sidebar.deleteProjectWarningEnd')}</>}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void doDeleteProject(deletingProjectId)}
+          onCancel={() => setDeletingProjectId(null)}
         />
       )}
 

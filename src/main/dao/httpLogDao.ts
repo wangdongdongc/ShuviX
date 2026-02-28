@@ -15,11 +15,23 @@ export class HttpLogDao {
       .prepare(
         'INSERT INTO http_logs (id, sessionId, provider, model, payload, inputTokens, outputTokens, totalTokens, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(log.id, log.sessionId, log.provider, log.model, log.payload, log.inputTokens, log.outputTokens, log.totalTokens, log.createdAt)
+      .run(
+        log.id,
+        log.sessionId,
+        log.provider,
+        log.model,
+        log.payload,
+        log.inputTokens,
+        log.outputTokens,
+        log.totalTokens,
+        log.createdAt
+      )
   }
 
   /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId/provider/model 筛选） */
-  list(params: { sessionId?: string; provider?: string; model?: string; limit?: number } = {}): HttpLogSummary[] {
+  list(
+    params: { sessionId?: string; provider?: string; model?: string; limit?: number } = {}
+  ): HttpLogSummary[] {
     const limit = params.limit ?? 200
     const conditions: string[] = []
     const values: unknown[] = []
@@ -54,18 +66,36 @@ export class HttpLogDao {
       .all(...values) as HttpLogSummary[]
   }
 
-  /** 根据 ID 获取完整日志（含 payload） */
+  /** 根据 ID 获取完整日志（含 payload 和 response） */
   getById(id: string): HttpLog | undefined {
     return this.db
-      .prepare('SELECT id, sessionId, provider, model, payload, inputTokens, outputTokens, totalTokens, createdAt FROM http_logs WHERE id = ?')
+      .prepare(
+        'SELECT id, sessionId, provider, model, payload, response, inputTokens, outputTokens, totalTokens, createdAt FROM http_logs WHERE id = ?'
+      )
       .get(id) as HttpLog | undefined
   }
 
-  /** 更新指定日志的 token 用量 */
-  updateUsage(id: string, inputTokens: number, outputTokens: number, totalTokens: number): void {
-    this.db
-      .prepare('UPDATE http_logs SET inputTokens = ?, outputTokens = ?, totalTokens = ? WHERE id = ?')
-      .run(inputTokens, outputTokens, totalTokens, id)
+  /** 更新指定日志的 token 用量和响应内容 */
+  updateUsage(
+    id: string,
+    inputTokens: number,
+    outputTokens: number,
+    totalTokens: number,
+    response?: string
+  ): void {
+    if (response) {
+      this.db
+        .prepare(
+          'UPDATE http_logs SET inputTokens = ?, outputTokens = ?, totalTokens = ?, response = ? WHERE id = ?'
+        )
+        .run(inputTokens, outputTokens, totalTokens, response, id)
+    } else {
+      this.db
+        .prepare(
+          'UPDATE http_logs SET inputTokens = ?, outputTokens = ?, totalTokens = ? WHERE id = ?'
+        )
+        .run(inputTokens, outputTokens, totalTokens, id)
+    }
   }
 
   /** 删除指定会话的所有日志 */

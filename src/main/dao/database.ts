@@ -48,6 +48,18 @@ class DatabaseManager {
       this.db.exec("ALTER TABLE providers ADD COLUMN displayName TEXT NOT NULL DEFAULT ''")
     }
 
+    // 为已有 sessions 表添加 settings 列（会话级配置：sshAutoApprove 等）
+    const sessionCols = this.db.pragma('table_info(sessions)') as { name: string }[]
+    if (!sessionCols.find((c) => c.name === 'settings')) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
+    }
+
+    // 为已有 http_logs 表添加 response 列（存储 AI 响应内容，含生成图片）
+    const httpLogCols = this.db.pragma('table_info(http_logs)') as { name: string }[]
+    if (!httpLogCols.find((c) => c.name === 'response')) {
+      this.db.exec("ALTER TABLE http_logs ADD COLUMN response TEXT NOT NULL DEFAULT ''")
+    }
+
     // 旧版内置提供商名称迁移为 pi-ai slug（name 用作 getModel() 的 provider slug）
     const renameMap: Record<string, { slug: string; displayName: string }> = {
       'OpenAI': { slug: 'openai', displayName: 'OpenAI' },
@@ -122,6 +134,7 @@ class DatabaseManager {
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         payload TEXT NOT NULL,
+        response TEXT NOT NULL DEFAULT '',
         inputTokens INTEGER DEFAULT 0,
         outputTokens INTEGER DEFAULT 0,
         totalTokens INTEGER DEFAULT 0,
@@ -157,6 +170,20 @@ class DatabaseManager {
         updatedAt INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS ssh_credentials (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        host TEXT NOT NULL,
+        port INTEGER NOT NULL DEFAULT 22,
+        username TEXT NOT NULL,
+        authType TEXT NOT NULL DEFAULT 'password',
+        password TEXT NOT NULL DEFAULT '',
+        privateKey TEXT NOT NULL DEFAULT '',
+        passphrase TEXT NOT NULL DEFAULT '',
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
@@ -174,7 +201,7 @@ class DatabaseManager {
     const builtinProviders: Array<{ name: string; displayName: string; baseUrl: string; apiProtocol: string; sortOrder: number }> = [
       { name: 'openai', displayName: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0 },
       { name: 'anthropic', displayName: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1 },
-      { name: 'google', displayName: 'Google', baseUrl: 'https://generativelanguage.googleapis.com', apiProtocol: 'google-generative-ai', sortOrder: 2 },
+      { name: 'google', displayName: 'Google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', apiProtocol: 'google-generative-ai', sortOrder: 2 },
       { name: 'xai', displayName: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1', apiProtocol: 'openai-completions', sortOrder: 3 },
       { name: 'groq', displayName: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiProtocol: 'openai-completions', sortOrder: 4 },
       { name: 'cerebras', displayName: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', apiProtocol: 'openai-completions', sortOrder: 5 },

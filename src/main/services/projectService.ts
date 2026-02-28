@@ -95,7 +95,7 @@ export class ProjectService {
   }): Project {
     const now = Date.now()
     const id = uuidv7()
-    const settings: Record<string, any> = {}
+    const settings: Record<string, string[] | Array<{ path: string; note?: string; access?: string }>> = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
     if (params.referenceDirs) settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
     const project: Project = {
@@ -152,7 +152,7 @@ export class ProjectService {
     })
   }
 
-  /** 删除项目（关联 session 的 projectId 会被置空） */
+  /** 删除项目及其所有关联会话和消息 */
   delete(id: string): void {
     projectDao.deleteById(id)
   }

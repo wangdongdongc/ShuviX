@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Folder } from 'lucide-react'
-import { useChatStore, selectStreamingContent, selectStreamingThinking, selectIsStreaming, type ChatMessage } from '../../stores/chatStore'
+import { Folder, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
+import { useChatStore, selectStreamingContent, selectStreamingThinking, selectStreamingImages, selectIsStreaming, type ChatMessage } from '../../stores/chatStore'
+import { useDialogClose } from '../../hooks/useDialogClose'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -19,18 +20,18 @@ import { StatusBanner } from './StatusBanner'
 /** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
 interface ToolIndex {
   /** toolCallId → tool_call 消息的解析后 meta */
-  callMeta: Map<string, any>
+  callMeta: Map<string, Record<string, unknown>>
   /** 已有配对 result 的 toolCallId 集合 */
   pairedIds: Set<string>
   /** msgId → 解析后的 meta */
-  metaCache: Map<string, any>
+  metaCache: Map<string, Record<string, unknown>>
 }
 
 /** 构建工具调用索引（纯函数，供 useMemo 缓存） */
 function buildToolIndex(messages: ChatMessage[]): ToolIndex {
-  const callMeta = new Map<string, any>()
+  const callMeta = new Map<string, Record<string, unknown>>()
   const pairedIds = new Set<string>()
-  const metaCache = new Map<string, any>()
+  const metaCache = new Map<string, Record<string, unknown>>()
 
   for (const m of messages) {
     if (!m.metadata) continue
@@ -56,7 +57,7 @@ function isToolItem(item: VisibleItem): boolean {
 
 /** 获取工具项的 turnIndex（优先从 pairedCallMeta 取，回退到 meta） */
 function getItemTurnIndex(item: VisibleItem): number | undefined {
-  return item.pairedCallMeta?.turnIndex ?? item.meta?.turnIndex
+  return (item.pairedCallMeta?.turnIndex as number | undefined) ?? (item.meta?.turnIndex as number | undefined)
 }
 
 /** 预处理消息列表中的可见项（过滤掉不渲染的消息，并计算 turn 分组信息） */
@@ -68,13 +69,15 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
     // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
     if (msg.type === 'tool_call') {
       const meta = toolIndex.metaCache.get(msg.id)
-      if (meta?.toolCallId && toolIndex.pairedIds.has(meta.toolCallId)) continue
+      const toolCallId = meta?.toolCallId as string | undefined
+      if (toolCallId && toolIndex.pairedIds.has(toolCallId)) continue
       items.push({ msg, meta })
       continue
     }
     if (msg.type === 'tool_result') {
       const meta = toolIndex.metaCache.get(msg.id)
-      const pairedCallMeta = meta?.toolCallId ? toolIndex.callMeta.get(meta.toolCallId) : undefined
+      const toolCallId = meta?.toolCallId as string | undefined
+      const pairedCallMeta = toolCallId ? toolIndex.callMeta.get(toolCallId) : undefined
       items.push({ msg, meta, pairedCallMeta })
       continue
     }
@@ -131,6 +134,7 @@ export function ChatView(): React.JSX.Element {
   const { messages, activeSessionId, sessions } = useChatStore()
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
+  const streamingImages = useChatStore(selectStreamingImages)
   const isStreaming = useChatStore(selectIsStreaming)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
@@ -144,6 +148,7 @@ export function ChatView(): React.JSX.Element {
   const [draftTitle, setDraftTitle] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
+  const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   /** 开始编辑会话标题 */
   const startEditTitle = (): void => {
@@ -182,7 +187,7 @@ export function ChatView(): React.JSX.Element {
       virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
       scrollRafRef.current = 0
     })
-  }, [streamingContent, streamingThinking, messages])
+  }, [streamingContent, streamingThinking, streamingImages, messages])
 
   // 组件卸载时清理 rAF
   useEffect(() => {
@@ -226,13 +231,22 @@ export function ChatView(): React.JSX.Element {
               autoFocus
             />
           ) : (
-            <button
-              onClick={startEditTitle}
-              className="titlebar-no-drag text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 max-w-[60%] truncate"
-              title={t('common.clickToEdit')}
-            >
-              {sessionTitle}
-            </button>
+            <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[70%]">
+              <button
+                onClick={startEditTitle}
+                className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
+                title={t('common.clickToEdit')}
+              >
+                {sessionTitle}
+              </button>
+              <button
+                onClick={() => setShowSessionConfig(true)}
+                className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+                title={t('sessionConfig.title')}
+              >
+                <Settings2 size={12} />
+              </button>
+            </div>
           )
         )}
         {projectPath && (
@@ -290,6 +304,14 @@ export function ChatView(): React.JSX.Element {
         </>
       )}
 
+      {/* 会话配置弹窗 */}
+      {showSessionConfig && activeSessionId && (
+        <SessionConfigDialog
+          sessionId={activeSessionId}
+          onClose={() => setShowSessionConfig(false)}
+        />
+      )}
+
       {/* 新建项目弹窗（欢迎页触发） */}
       {showCreateProject && (
         <ProjectCreateDialog
@@ -308,6 +330,163 @@ export function ChatView(): React.JSX.Element {
             useChatStore.getState().setSessions(allSessions)
             useChatStore.getState().setActiveSessionId(session.id)
           }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── 会话配置弹窗 ─────────────────────────────────
+
+function SessionConfigDialog({
+  sessionId,
+  onClose
+}: {
+  sessionId: string
+  onClose: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const { closing, handleClose } = useDialogClose(onClose)
+  const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
+  const [title, setTitle] = useState(session?.title || '')
+
+  // 解析 sshAutoApprove
+  const sessionSettings = useMemo(() => {
+    try { return JSON.parse(session?.settings || '{}') } catch { return {} }
+  }, [session?.settings])
+  const [sshAutoApprove, setSshAutoApprove] = useState(sessionSettings.sshAutoApprove === true)
+
+  // Escape 关闭
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') handleClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleClose])
+
+  /** 保存标题 */
+  const handleSaveTitle = async (): Promise<void> => {
+    const trimmed = title.trim()
+    if (!trimmed || trimmed === session?.title) return
+    await window.api.session.updateTitle({ id: sessionId, title: trimmed })
+    useChatStore.getState().updateSessionTitle(sessionId, trimmed)
+  }
+
+  // 删除确认
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
+  /** 点击删除：有消息时先确认，无消息直接删除 */
+  const handleRequestDelete = async (): Promise<void> => {
+    const msgs = await window.api.message.list(sessionId)
+    if (msgs.length > 0) {
+      setShowDeleteConfirm(true)
+    } else {
+      await doDeleteSession()
+    }
+  }
+
+  /** 执行删除 */
+  const doDeleteSession = async (): Promise<void> => {
+    await window.api.session.delete(sessionId)
+    useChatStore.getState().removeSession(sessionId)
+    onClose()
+  }
+
+  /** 切换 SSH 免审批 */
+  const handleToggleSshAutoApprove = async (): Promise<void> => {
+    const next = !sshAutoApprove
+    setSshAutoApprove(next)
+    const updated = { ...sessionSettings, sshAutoApprove: next }
+    const json = JSON.stringify(updated)
+    await window.api.session.updateSettings({ id: sessionId, settings: json })
+    useChatStore.getState().updateSessionSettings(sessionId, json)
+  }
+
+  return (
+    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`} onClick={handleClose}>
+      <div
+        className="w-80 bg-bg-primary border border-border-secondary rounded-xl shadow-xl overflow-hidden dialog-panel"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题栏 */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary/50 bg-bg-secondary/50">
+          <h3 className="text-sm font-semibold text-text-primary">{t('sessionConfig.title')}</h3>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="px-4 py-4 space-y-4">
+          {/* 会话标题 */}
+          <div>
+            <label className="block text-[10px] text-text-tertiary mb-1">{t('sessionConfig.sessionTitle')}</label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => void handleSaveTitle()}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveTitle() }}
+              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors"
+            />
+          </div>
+
+          {/* SSH 免审批 */}
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-secondary">{t('sessionConfig.sshAutoApprove')}</span>
+              <button
+                onClick={handleToggleSshAutoApprove}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  sshAutoApprove ? 'bg-amber-500' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    sshAutoApprove ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-1">{t('sessionConfig.sshAutoApproveDesc')}</p>
+            {sshAutoApprove && (
+              <div className="flex items-start gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
+                <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">{t('chat.sshAutoApproveWarning')}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 底部按钮 */}
+        <div className="px-4 py-3 border-t border-border-secondary/50 bg-bg-secondary/30 flex items-center justify-between">
+          <button
+            onClick={() => void handleRequestDelete()}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <Trash2 size={12} />
+            {t('common.delete')}
+          </button>
+          <button
+            onClick={handleClose}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+          >
+            {t('common.close')}
+          </button>
+        </div>
+      </div>
+
+      {/* 删除会话确认弹窗 */}
+      {showDeleteConfirm && (
+        <ConfirmDialog
+          title={t('sidebar.confirmDelete')}
+          description={<>{t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}</>}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void doDeleteSession()}
+          onCancel={() => setShowDeleteConfirm(false)}
         />
       )}
     </div>

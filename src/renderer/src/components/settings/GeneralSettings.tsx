@@ -125,7 +125,7 @@ export function GeneralSettings(): React.JSX.Element {
             type="range"
             min={50}
             max={200}
-            step={10}
+            step={5}
             value={uiZoom}
             onChange={(e) => {
               const v = Number(e.target.value)

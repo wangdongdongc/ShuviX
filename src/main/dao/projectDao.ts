@@ -68,7 +68,7 @@ export class ProjectDao {
   /** 更新项目 */
   update(id: string, fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'dockerEnabled' | 'dockerImage' | 'sandboxEnabled' | 'settings' | 'archivedAt'>>): void {
     const sets: string[] = []
-    const values: any[] = []
+    const values: (string | number)[] = []
     if (fields.name !== undefined) { sets.push('name = ?'); values.push(fields.name) }
     if (fields.path !== undefined) { sets.push('path = ?'); values.push(fields.path) }
     if (fields.systemPrompt !== undefined) { sets.push('systemPrompt = ?'); values.push(fields.systemPrompt) }
@@ -84,10 +84,9 @@ export class ProjectDao {
     this.db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values)
   }
 
-  /** 删除项目（关联 session 的 projectId 会被 SET NULL） */
+  /** 删除项目及其所有关联会话（消息通过 FK CASCADE 自动删除） */
   deleteById(id: string): void {
-    // 先将关联 session 的 projectId 置空
-    this.db.prepare('UPDATE sessions SET projectId = NULL WHERE projectId = ?').run(id)
+    this.db.prepare('DELETE FROM sessions WHERE projectId = ?').run(id)
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(id)
   }
 }

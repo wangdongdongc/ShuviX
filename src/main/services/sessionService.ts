@@ -46,6 +46,7 @@ export class SessionService {
       model: params?.model || this.getDefaultModel(),
       systemPrompt: params?.systemPrompt || 'You are a helpful assistant.',
       modelMetadata: params?.modelMetadata || '{}',
+      settings: params?.settings || '{}',
       createdAt: now,
       updatedAt: now
     }
@@ -71,6 +72,11 @@ export class SessionService {
   /** 更新模型元数据（思考深度等） */
   updateModelMetadata(id: string, modelMetadata: string): void {
     sessionDao.updateModelMetadata(id, modelMetadata)
+  }
+
+  /** 更新会话级配置（sshAutoApprove 等） */
+  updateSettings(id: string, settings: string): void {
+    sessionDao.updateSettings(id, settings)
   }
 
   /** 获取默认提供商 ID（第一个已启用的提供商） */

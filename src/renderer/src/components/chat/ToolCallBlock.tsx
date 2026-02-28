@@ -6,7 +6,7 @@ import { useChatStore } from '../../stores/chatStore'
 interface ToolCallBlockProps {
   toolName: string
   toolCallId?: string
-  args?: any
+  args?: Record<string, unknown>
   result?: string
   status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
 }
@@ -36,37 +36,38 @@ export function ToolCallBlock({
   // 根据工具类型生成摘要
   const { icon, detail } = (() => {
     const ic = 'text-text-tertiary flex-shrink-0'
+    const str = (v: unknown): string => (typeof v === 'string' ? v : '')
     switch (toolName) {
       case 'bash': {
-        const line = (args?.command || '').split('\n')[0]
+        const line = str(args?.command).split('\n')[0]
         return { icon: <Terminal size={12} className={ic} />, detail: line.length > 80 ? line.slice(0, 77) + '...' : line }
       }
       case 'read':
-        return { icon: <FileText size={12} className={ic} />, detail: args?.path || '' }
+        return { icon: <FileText size={12} className={ic} />, detail: str(args?.path) }
       case 'write':
-        return { icon: <FileOutput size={12} className={ic} />, detail: args?.path || '' }
+        return { icon: <FileOutput size={12} className={ic} />, detail: str(args?.path) }
       case 'edit':
-        return { icon: <FilePen size={12} className={ic} />, detail: args?.path || '' }
+        return { icon: <FilePen size={12} className={ic} />, detail: str(args?.path) }
       case 'ask': {
-        const q = (args?.question || '').slice(0, 60)
-        return { icon: <MessageCircleQuestion size={12} className={ic} />, detail: q + (args?.question?.length > 60 ? '...' : '') }
+        const q = str(args?.question).slice(0, 60)
+        return { icon: <MessageCircleQuestion size={12} className={ic} />, detail: q + (str(args?.question).length > 60 ? '...' : '') }
       }
       case 'ls':
-        return { icon: <FolderTree size={12} className={ic} />, detail: args?.path || '.' }
+        return { icon: <FolderTree size={12} className={ic} />, detail: str(args?.path) || '.' }
       case 'grep': {
-        const pat = args?.pattern || ''
+        const pat = str(args?.pattern)
         const inc = args?.include ? ` (${args.include})` : ''
         return { icon: <Search size={12} className={ic} />, detail: pat + inc }
       }
       case 'glob':
-        return { icon: <FileSearch2 size={12} className={ic} />, detail: args?.pattern || '' }
+        return { icon: <FileSearch2 size={12} className={ic} />, detail: str(args?.pattern) }
       case 'ssh': {
-        const action = args?.action || ''
-        const cmd = args?.command ? `: ${args.command.split('\n')[0].slice(0, 60)}` : ''
+        const action = str(args?.action)
+        const cmd = args?.command ? `: ${str(args.command).split('\n')[0].slice(0, 60)}` : ''
         return { icon: <Terminal size={12} className="text-emerald-400 flex-shrink-0" />, detail: `${action}${cmd}` }
       }
       case 'skill':
-        return { icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />, detail: args?.command || '' }
+        return { icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />, detail: str(args?.command) }
       default:
         return { icon: <Wrench size={12} className={ic} />, detail: '' }
     }

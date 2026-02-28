@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore, type ChatMessage } from '../stores/chatStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
@@ -10,7 +10,7 @@ const isSettingsWindow = window.location.hash === '#settings'
  */
 export function useAgentEvents(): void {
   const handleAgentEvent = useCallback(
-    async (event: any): Promise<void> => {
+    async (event: AgentStreamEvent): Promise<void> => {
       const store = useChatStore.getState()
       const sid: string = event.sessionId
 
@@ -31,6 +31,12 @@ export function useAgentEvents(): void {
         case 'text_end':
           break
 
+        case 'image_data':
+          if (event.data) {
+            store.appendStreamingImage(sid, JSON.parse(event.data))
+          }
+          break
+
         case 'tool_start': {
           // 根据工具类型设置初始状态：bash 沙箱审批 / ask 用户输入 / ssh 凭据 / 其余直接运行
           let initialStatus: 'running' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials' = 'running'
@@ -38,9 +44,9 @@ export function useAgentEvents(): void {
           if (event.userInputRequired) initialStatus = 'pending_user_input'
           if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
           store.addToolExecution(sid, {
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            args: event.toolArgs,
+            toolCallId: event.toolCallId || '',
+            toolName: event.toolName || '',
+            args: event.toolArgs ?? {},
             turnIndex: event.turnIndex,
             status: initialStatus,
             messageId: event.data
@@ -56,7 +62,7 @@ export function useAgentEvents(): void {
 
         case 'tool_approval_request':
           // 沙箱模式：bash 命令等待用户审批（备用路径，通常 tool_start 已携带 approvalRequired）
-          store.updateToolExecution(sid, event.toolCallId, {
+          store.updateToolExecution(sid, event.toolCallId || '', {
             status: 'pending_approval',
             args: event.toolArgs
           })
@@ -64,20 +70,20 @@ export function useAgentEvents(): void {
 
         case 'user_input_request':
           // ask 工具：仅切换状态为等待选择，不覆盖 args（tool_start 已携带完整参数）
-          store.updateToolExecution(sid, event.toolCallId, {
+          store.updateToolExecution(sid, event.toolCallId || '', {
             status: 'pending_user_input'
           })
           break
 
         case 'ssh_credential_request':
           // ssh connect：切换状态为等待凭据输入
-          store.updateToolExecution(sid, event.toolCallId, {
+          store.updateToolExecution(sid, event.toolCallId || '', {
             status: 'pending_ssh_credentials'
           })
           break
 
         case 'tool_end':
-          store.updateToolExecution(sid, event.toolCallId, {
+          store.updateToolExecution(sid, event.toolCallId || '', {
             status: event.toolIsError ? 'error' : 'done',
             result: event.toolResult
           })
@@ -176,9 +182,9 @@ export function useAgentEvents(): void {
           // 首次对话时后台让 AI 生成标题（对用户透明）
           if (savedMsg && sid === store.activeSessionId) {
             const sidMsgs = await window.api.message.list(sid)
-            const textMsgCount = sidMsgs.filter((m: any) => m.type === 'text' || !m.type).length
+            const textMsgCount = sidMsgs.filter((m: ChatMessage) => m.type === 'text' || !m.type).length
             if (textMsgCount <= 3) {
-              const userMsg = sidMsgs.find((m: any) => m.role === 'user')
+              const userMsg = sidMsgs.find((m: ChatMessage) => m.role === 'user')
               if (userMsg) {
                 window.api.session.generateTitle({
                   sessionId: sid,

@@ -21,8 +21,8 @@ export interface TurnGroupInfo {
 /** 可见消息项（由 ChatView 预处理后传入） */
 export interface VisibleItem {
   msg: ChatMessage
-  meta?: any
-  pairedCallMeta?: any
+  meta?: Record<string, unknown>
+  pairedCallMeta?: Record<string, unknown>
   /** turn 分组信息（仅工具调用项携带） */
   turnGroup?: TurnGroupInfo
 }
@@ -107,15 +107,15 @@ export function MessageRenderer({
 
     const toolBlock = isCall ? (
       <ToolCallBlock
-        toolName={meta?.toolName || '未知工具'}
-        toolCallId={meta?.toolCallId}
-        args={meta?.args}
+        toolName={(meta?.toolName as string) || '未知工具'}
+        toolCallId={meta?.toolCallId as string | undefined}
+        args={meta?.args as Record<string, unknown> | undefined}
         status={liveExec?.status || 'running'}
       />
     ) : (
       <ToolCallBlock
-        toolName={meta?.toolName || '未知工具'}
-        args={pairedCallMeta?.args}
+        toolName={(meta?.toolName as string) || '未知工具'}
+        args={pairedCallMeta?.args as Record<string, unknown> | undefined}
         result={msg.content}
         status={meta?.isError ? 'error' : 'done'}
       />

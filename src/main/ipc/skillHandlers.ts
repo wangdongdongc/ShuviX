@@ -45,8 +45,8 @@ export function registerSkillHandlers(): void {
     try {
       const skill = skillService.importFromDirectory(result.filePaths[0])
       return { success: true, skill }
-    } catch (e: any) {
-      return { success: false, reason: e.message }
+    } catch (e: unknown) {
+      return { success: false, reason: e instanceof Error ? e.message : String(e) }
     }
   })
 

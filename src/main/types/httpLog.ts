@@ -5,6 +5,7 @@ export interface HttpLog {
   provider: string
   model: string
   payload: string
+  response: string
   inputTokens: number
   outputTokens: number
   totalTokens: number

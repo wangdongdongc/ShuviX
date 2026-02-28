@@ -16,7 +16,7 @@ export interface ChatMessage {
 export interface ToolExecution {
   toolCallId: string
   toolName: string
-  args: any
+  args: Record<string, unknown>
   /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
   turnIndex?: number
   status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
@@ -35,6 +35,8 @@ export interface Session {
   systemPrompt: string
   /** 模型相关设置（JSON：思考深度等） */
   modelMetadata: string
+  /** 会话级配置（JSON：sshAutoApprove 等） */
+  settings: string
   createdAt: number
   updatedAt: number
 }
@@ -44,6 +46,7 @@ interface SessionStreamState {
   content: string
   thinking: string
   isStreaming: boolean
+  images: Array<{ data: string; mimeType: string }>
 }
 
 /** 每个 session 的活跃 Docker/SSH 资源信息 */
@@ -96,6 +99,7 @@ interface ChatState {
   addMessage: (message: ChatMessage) => void
   appendStreamingContent: (sessionId: string, delta: string) => void
   appendStreamingThinking: (sessionId: string, delta: string) => void
+  appendStreamingImage: (sessionId: string, image: { data: string; mimeType: string }) => void
   clearStreamingContent: (sessionId: string) => void
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
@@ -114,6 +118,7 @@ interface ChatState {
   clearPendingImages: () => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
+  updateSessionSettings: (id: string, settings: string) => void
   removeSession: (id: string) => void
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
@@ -134,6 +139,12 @@ export const selectStreamingThinking = (s: ChatState): string =>
 
 export const selectIsStreaming = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
+
+/** 空图片数组常量，避免选择器每次返回新引用 */
+const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
+
+export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeType: string }> =>
+  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.images || EMPTY_IMAGES : EMPTY_IMAGES
 
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
@@ -163,15 +174,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   appendStreamingContent: (sessionId, delta) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
       const updated = { ...prev, content: prev.content + delta }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   appendStreamingThinking: (sessionId, delta) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
       const updated = { ...prev, thinking: prev.thinking + delta }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+    }),
+
+  appendStreamingImage: (sessionId, image) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
+      const updated = { ...prev, images: [...prev.images, image] }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
@@ -179,13 +197,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const prev = state.sessionStreams[sessionId]
       if (!prev) return {}
-      const updated = { ...prev, content: '', thinking: '' }
+      const updated = { ...prev, content: '', thinking: '', images: [] }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   setIsStreaming: (sessionId, streaming) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false }
+      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
       const updated = { ...prev, isStreaming: streaming }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
@@ -234,6 +252,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, projectId } : s))
     })),
+  updateSessionSettings: (id, settings) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, settings } : s))
+    })),
   removeSession: (id) =>
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
@@ -260,7 +282,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 清除该 session 的流式内容
       const prevStream = state.sessionStreams[sessionId]
       const updatedStream = prevStream
-        ? { ...prevStream, content: '', thinking: '', isStreaming: false }
+        ? { ...prevStream, content: '', thinking: '', isStreaming: false, images: [] }
         : undefined
       const newStreams = updatedStream
         ? { ...state.sessionStreams, [sessionId]: updatedStream }

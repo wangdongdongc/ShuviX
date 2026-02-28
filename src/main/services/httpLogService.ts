@@ -28,6 +28,7 @@ export class HttpLogService {
       provider: params.provider,
       model: params.model,
       payload: this.stringifyPayload(params.payload),
+      response: '',
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
@@ -37,13 +38,24 @@ export class HttpLogService {
     return log.id
   }
 
-  /** 更新指定日志的 token 用量 */
-  updateUsage(id: string, inputTokens: number, outputTokens: number, totalTokens: number): void {
-    httpLogDao.updateUsage(id, inputTokens, outputTokens, totalTokens)
+  /** 更新指定日志的 token 用量和响应内容 */
+  updateUsage(
+    id: string,
+    inputTokens: number,
+    outputTokens: number,
+    totalTokens: number,
+    response?: string
+  ): void {
+    httpLogDao.updateUsage(id, inputTokens, outputTokens, totalTokens, response)
   }
 
   /** 获取日志列表（支持 sessionId/provider/model 筛选） */
-  list(params?: { sessionId?: string; provider?: string; model?: string; limit?: number }): HttpLogSummary[] {
+  list(params?: {
+    sessionId?: string
+    provider?: string
+    model?: string
+    limit?: number
+  }): HttpLogSummary[] {
     return httpLogDao.list(params)
   }
 

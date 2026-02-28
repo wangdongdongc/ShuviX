@@ -9,6 +9,7 @@ import type {
   SessionUpdateModelConfigParams,
   SessionUpdateModelMetadataParams,
   SessionUpdateProjectParams,
+  SessionUpdateSettingsParams,
   SessionUpdateTitleParams
 } from '../types'
 
@@ -48,6 +49,12 @@ export function registerSessionHandlers(): void {
   /** 更新模型元数据（思考深度等） */
   ipcMain.handle('session:updateModelMetadata', (_event, params: SessionUpdateModelMetadataParams) => {
     sessionService.updateModelMetadata(params.id, params.modelMetadata)
+    return { success: true }
+  })
+
+  /** 更新会话级配置（sshAutoApprove 等） */
+  ipcMain.handle('session:updateSettings', (_event, params: SessionUpdateSettingsParams) => {
+    sessionService.updateSettings(params.id, params.settings)
     return { success: true }
   })
 

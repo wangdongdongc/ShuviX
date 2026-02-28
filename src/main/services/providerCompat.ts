@@ -32,7 +32,7 @@ const DEFAULT_CUSTOM_COMPAT = {
 export function buildCustomProviderCompat(
   apiProtocol: string,
   overrides?: Partial<typeof DEFAULT_CUSTOM_COMPAT>
-): Record<string, any> | undefined {
+): Record<string, unknown> | undefined {
   if (apiProtocol !== 'openai-completions') {
     return undefined
   }

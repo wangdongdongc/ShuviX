@@ -192,8 +192,8 @@ describe('read 工具 - 文件不存在', () => {
     try {
       await tool.execute('tc7', { path: join(TEST_DIR, 'readme') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('Did you mean')
+    } catch (err: unknown) {
+      expect(err instanceof Error ? err.message : '').toContain('Did you mean')
     }
   })
 
@@ -202,9 +202,10 @@ describe('read 工具 - 文件不存在', () => {
     try {
       await tool.execute('tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('File not found')
-      expect(err.message).not.toContain('Did you mean')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      expect(msg).toContain('File not found')
+      expect(msg).not.toContain('Did you mean')
     }
   })
 })
@@ -215,8 +216,8 @@ describe('read 工具 - 二进制文件拒绝', () => {
     try {
       await tool.execute('tc9', { path: join(TEST_DIR, 'image.png') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('Unsupported format')
+    } catch (err: unknown) {
+      expect(err instanceof Error ? err.message : '').toContain('Unsupported format')
     }
   })
 
@@ -225,8 +226,8 @@ describe('read 工具 - 二进制文件拒绝', () => {
     try {
       await tool.execute('tc10', { path: join(TEST_DIR, 'binary.dat') })
       expect.fail('应该抛错')
-    } catch (err: any) {
-      expect(err.message).toContain('Unsupported format')
+    } catch (err: unknown) {
+      expect(err instanceof Error ? err.message : '').toContain('Unsupported format')
     }
   })
 })

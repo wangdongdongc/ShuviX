@@ -34,7 +34,12 @@
     "deleteWarning": "This session contains messages. Deleting it will ",
     "deleteWarningBold": "permanently delete all messages",
     "deleteWarningEnd": " and cannot be recovered. Are you sure?",
-    "restoreProject": "Restore Project"
+    "restoreProject": "Restore Project",
+    "deleteProject": "Delete Project",
+    "confirmDeleteProject": "Confirm Delete Project",
+    "deleteProjectWarning": "This will ",
+    "deleteProjectWarningBold": "permanently delete the project and all its sessions and messages",
+    "deleteProjectWarningEnd": ", and cannot be recovered. Are you sure?"
   },
 
   "chat": {
@@ -57,7 +62,9 @@
     "sshActive": "SSH connected",
     "destroyContainer": "Destroy container",
     "disconnectSsh": "Disconnect SSH",
-    "destroyReason_manual": "manually destroyed"
+    "destroyReason_manual": "manually destroyed",
+    "sshAutoApproveLabel": "SSH Auto-Approve",
+    "sshAutoApproveWarning": "SSH commands will execute automatically without approval. Do not enable this on production or critical servers."
   },
 
   "input": {
@@ -121,6 +128,8 @@
     "overrideAsk": "User rejected the provided options. User feedback: {{text}}",
     "shuvixProjectHint": "AI requests to modify project configuration",
     "shuvixSettingHint": "AI requests to modify system settings",
+    "sshHint": "SSH remote commands require user approval before execution",
+    "allowAndSkip": "Allow & Skip Future Approvals",
     "pendingSshCredentials": "Awaiting credentials"
   },
 
@@ -140,7 +149,15 @@
     "passphrasePlaceholder": "Leave empty if none",
     "connect": "Connect",
     "cancel": "Cancel",
-    "credentialHint": "Credentials are used for this connection only — never saved or sent to AI"
+    "credentialHint": "Credentials are used for this connection only — never saved or sent to AI",
+    "securityWarning": "Credentials are used for this connection only and will not be saved. Ensure you trust the target server — AI will execute commands on it."
+  },
+
+  "sessionConfig": {
+    "title": "Session Config",
+    "sessionTitle": "Session Title",
+    "sshAutoApprove": "SSH Auto-Approve",
+    "sshAutoApproveDesc": "When enabled, SSH exec commands run automatically without per-command approval. Do not enable this on production or critical servers."
   },
 
   "sessionEdit": {
@@ -177,6 +194,9 @@
     "toolsPresetGeneral": "General",
     "toolsPresetCode": "Code",
     "toolsHint": "Tools enabled by default when creating a new session. Can be adjusted per session.",
+    "toolsGeneralGroup": "General Tools",
+    "toolsRipgrepGroup": "High-performance search tools (for large codebases)",
+    "toolsShuvixGroup": "System tools (read/write project & global config)",
     "referenceDirs": "Reference Directories",
     "referenceDirsHint": "AI can access files in these directories. Access mode controls read/write permissions in sandbox mode.",
     "addRefDir": "Add Directory",
@@ -187,7 +207,25 @@
     "archiveProject": "Archive Project",
     "archiveConfirmTitle": "Archive Project",
     "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
-    "archiveConfirmAction": "Archive"
+    "archiveConfirmAction": "Archive",
+    "wizardStepPurpose": "Purpose",
+    "wizardStepTools": "Tools",
+    "wizardStepExtensions": "Extensions",
+    "wizardStepProject": "Project",
+    "wizardStepAdvanced": "Advanced",
+    "wizardNext": "Next",
+    "wizardPrev": "Back",
+    "purposeTitle": "What do you want to do with AI?",
+    "purposeDesc": "Pre-selects the right tools for your use case",
+    "purposeCasual": "Just Exploring",
+    "purposeCasualDesc": "Simple tools combine into a powerful agent",
+    "purposeDev": "Software Dev",
+    "purposeDevDesc": "Code writing, debugging, file I/O and other dev tasks",
+    "extEmptyDesc": "No extensions configured yet. MCP Servers and Skills give AI additional tools — head to Settings to add them.",
+    "extMcpDesc": "Connect external tool servers via MCP protocol, giving AI capabilities like database queries and API calls.",
+    "extSkillDesc": "Skills are reusable prompt templates that help AI master specific workflows.",
+    "extGoSettings": "Go to Settings",
+    "extAvailableDesc": "Select which extensions to enable for this project."
   },
 
   "settings": {
@@ -257,6 +295,7 @@
     "payloadTool": "Tool",
     "payloadToolDefs": "Tool Definitions",
     "payloadBackToStructured": "← Back to structured view",
+    "payloadResponse": "Response",
     "payloadViewRawJson": "View raw JSON →",
     "capVision": "Image Input",
     "capImageOutput": "Image Output",
@@ -279,6 +318,23 @@
     "toolBashUnlimited": "Unlimited",
     "toolBashDockerNotInstalled": "Docker not detected. Please install Docker Desktop first.",
     "toolBashDockerNotRunning": "Docker is installed but the engine is not running. Please start Docker Desktop.",
+    "toolSshTitle": "SSH Credentials",
+    "toolSshDesc": "Save SSH credentials for quick connection. AI can use saved credentials by name without prompting you each time.",
+    "toolSshSecurityWarning": "SSH credentials are encrypted and stored locally. Only save credentials for trusted servers. AI can use saved credentials to connect and execute commands directly.",
+    "toolSshAdd": "Add Credential",
+    "toolSshName": "Credential Name",
+    "toolSshNamePlaceholder": "e.g., production-server",
+    "toolSshNameHint": "Unique name the AI uses to reference this credential",
+    "toolSshEmpty": "No saved SSH credentials",
+    "toolSshEmptyHint": "Add credentials to let AI connect to remote servers directly",
+    "toolSshDeleteConfirm": "Delete SSH credential \"{{name}}\"?",
+    "toolSshAuthPassword": "Password",
+    "toolSshAuthKey": "Key",
+    "toolSshBrowseKey": "Browse",
+    "toolSshPrivateKeyPlaceholder": "Paste PEM key content...",
+    "toolSshPassphrasePlaceholder": "Leave empty if none",
+    "toolSshSaving": "Saving...",
+    "toolSshDuplicateName": "Credential name already exists",
     "tabMcp": "MCP",
     "mcpTitle": "MCP Server Management",
     "mcpDesc": "Configure MCP (Model Context Protocol) servers to extend AI with more tool capabilities.",

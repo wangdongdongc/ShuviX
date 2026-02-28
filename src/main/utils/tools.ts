@@ -8,6 +8,7 @@ import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
 import { getSettingKeyDescriptions } from '../services/settingsService'
 import { getProjectFieldDescriptions } from '../services/projectService'
+import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { ALL_TOOL_NAMES, DEFAULT_TOOL_NAMES } from '../types/tools'
 export { ALL_TOOL_NAMES, type ToolName } from '../types/tools'
 
@@ -54,7 +55,16 @@ const TOOL_PROMPT_REGISTRY: Array<{
   },
   {
     tools: ['ssh'],
-    textFn: () => `You have the ssh tool to connect to a remote server via SSH and execute commands. Use action="connect" (no parameters — the user will provide host, username, and password through a secure UI dialog that you cannot see). Use action="exec" with a command to run it on the remote server (each command requires user approval). Use action="disconnect" to close the connection. You do NOT have access to any credentials — never ask the user for passwords in chat.`
+    textFn: () => {
+      const savedNames = sshCredentialDao.findAllNames()
+      let prompt = 'You have the ssh tool to connect to a remote server via SSH and execute commands.'
+      if (savedNames.length > 0) {
+        prompt += ` The user has pre-configured SSH credentials: [${savedNames.join(', ')}]. Connect directly using: ssh({ action: "connect", credentialName: "<name>" }).`
+      }
+      prompt += ' Alternatively, use action="connect" without credentialName and the user will provide credentials through a secure UI dialog that you cannot see.'
+      prompt += ' Use action="exec" with a command to run it on the remote server (each command requires user approval). Use action="disconnect" to close the connection. You do NOT have access to any credentials — never ask the user for passwords in chat.'
+      return prompt
+    }
   }
 ]
 

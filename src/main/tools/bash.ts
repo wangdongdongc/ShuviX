@@ -186,9 +186,10 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
             truncated: truncated.truncated
           }
         }
-      } catch (err: any) {
-        if (err.message === TOOL_ABORTED) throw err
-        throw new Error(`Command failed: ${err.message}`)
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (errMsg === TOOL_ABORTED) throw err
+        throw new Error(`Command failed: ${errMsg}`)
       }
     }
   }

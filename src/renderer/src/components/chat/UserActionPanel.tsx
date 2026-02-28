@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, FolderOpen, KeyRound, Lock, MessageCircleQuestion, ShieldAlert, Terminal } from 'lucide-react'
+import { Check, ChevronDown, FolderOpen, KeyRound, Lock, MessageCircleQuestion, ShieldAlert, Terminal, TriangleAlert } from 'lucide-react'
 import { useChatStore, selectToolExecutions } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -52,16 +52,17 @@ function AskContent({
   onUserInput,
   t
 }: {
-  pending: { toolCallId: string; args?: any }
+  pending: { toolCallId: string; args?: Record<string, unknown> }
   selectedOptions: Set<string>
   setSelectedOptions: React.Dispatch<React.SetStateAction<Set<string>>>
   onUserInput: (toolCallId: string, selections: string[]) => void
   t: (key: string) => string
 }): React.JSX.Element {
   const { toolCallId, args } = pending
-  const question = args?.question || ''
-  const options: Array<{ label: string; description: string }> = args?.options || []
-  const allowMultiple = args?.allowMultiple ?? false
+  const question = (args?.question as string) || ''
+  const options = (args?.options as Array<{ label: string; description: string }>) || []
+  const allowMultiple = (args?.allowMultiple as boolean) ?? false
+  const [collapsed, setCollapsed] = useState(false)
 
   const handleToggle = (label: string): void => {
     setSelectedOptions((prev) => {
@@ -84,53 +85,62 @@ function AskContent({
   }
 
   return (
-    <div className="mx-3 mb-2 rounded-xl border border-accent/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
-      {/* 问题标题 */}
-      <div className="flex items-start gap-2 px-4 pt-3 pb-2">
-        <MessageCircleQuestion size={16} className="text-accent flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-text-primary font-medium leading-snug">{question}</p>
-      </div>
+    <div className="mx-3 mb-2 rounded-lg border border-border-secondary/60 bg-bg-secondary/80 backdrop-blur-sm shadow-md overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+      {/* 问题标题栏（可点击折叠/展开） */}
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-bg-hover/20 transition-colors"
+      >
+        <MessageCircleQuestion size={14} className="text-accent/70 flex-shrink-0" />
+        <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 truncate">{question}</p>
+        <ChevronDown size={13} className={`text-text-tertiary/60 flex-shrink-0 transition-transform duration-200 ${collapsed ? '-rotate-90' : 'rotate-0'}`} />
+      </button>
 
-      {/* 选项列表 */}
-      <div className="flex flex-col gap-1.5 px-4 pb-2">
-        {options.map((opt) => {
-          const isSelected = selectedOptions.has(opt.label)
-          return (
+      {/* 可折叠区域（带过渡动画） */}
+      <div className={`collapse-grid${collapsed ? '' : ' expanded'}`}>
+        <div className="collapse-inner">
+          {/* 选项列表 */}
+          <div className="flex flex-col gap-1 px-3 pb-2">
+            {options.map((opt) => {
+              const isSelected = selectedOptions.has(opt.label)
+              return (
+                <button
+                  key={opt.label}
+                  onClick={() => handleToggle(opt.label)}
+                  className={`flex items-start gap-2.5 px-3 py-2 rounded-md text-left transition-colors ${
+                    isSelected
+                      ? 'bg-accent/8 text-text-primary'
+                      : 'text-text-secondary hover:bg-bg-hover/40'
+                  }`}
+                >
+                  <div className={`mt-px w-3.5 h-3.5 rounded-sm flex-shrink-0 flex items-center justify-center border transition-colors ${
+                    isSelected ? 'border-accent bg-accent' : 'border-border-primary/60'
+                  }`}>
+                    {isSelected && <Check size={10} className="text-white" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-medium leading-snug">{opt.label}</div>
+                    {opt.description && <div className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">{opt.description}</div>}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* 确认栏 */}
+          <div className="flex items-center gap-2 px-4 py-2 border-t border-border-secondary/30">
             <button
-              key={opt.label}
-              onClick={() => handleToggle(opt.label)}
-              className={`flex items-start gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${
-                isSelected
-                  ? 'border-accent bg-accent/10 text-text-primary shadow-sm'
-                  : 'border-border-secondary bg-bg-primary/50 text-text-secondary hover:bg-bg-hover/50 hover:border-border-primary'
-              }`}
+              onClick={handleConfirm}
+              disabled={selectedOptions.size === 0}
+              className="px-3.5 py-1 rounded-md text-[11px] font-medium bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <div className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${
-                isSelected ? 'border-accent bg-accent' : 'border-border-primary'
-              }`}>
-                {isSelected && <Check size={11} className="text-white" />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium">{opt.label}</div>
-                {opt.description && <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">{opt.description}</div>}
-              </div>
+              {t('toolCall.confirmSelection')}
             </button>
-          )
-        })}
-      </div>
-
-      {/* 确认栏 */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border-secondary/50 bg-bg-tertiary/30">
-        <button
-          onClick={handleConfirm}
-          disabled={selectedOptions.size === 0}
-          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {t('toolCall.confirmSelection')}
-        </button>
-        {allowMultiple && (
-          <span className="text-[10px] text-text-tertiary">{t('toolCall.multiSelectHint')}</span>
-        )}
+            {allowMultiple && (
+              <span className="text-[10px] text-text-tertiary/60">{t('toolCall.multiSelectHint')}</span>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -139,7 +149,7 @@ function AskContent({
 // ---------- 审批子内容（通用） ----------
 
 /** 根据工具类型渲染变更预览 */
-function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): React.JSX.Element {
+function ApprovalPreview({ toolName, args }: { toolName: string; args?: Record<string, unknown> }): React.JSX.Element {
   const { t } = useTranslation()
   const { settingMeta, projectFieldMeta } = useSettingsStore()
 
@@ -147,15 +157,15 @@ function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): 
     // bash：代码块预览
     return (
       <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
-        {args?.command || ''}
+        {(args?.command as string) || ''}
       </pre>
     )
   }
 
   if (toolName === 'shuvix-setting') {
     // 系统设置：展示可读标签 + key = value
-    const key = args?.key || ''
-    const value = args?.value ?? ''
+    const key = (args?.key as string) || ''
+    const value = args?.value != null ? String(args.value) : ''
     const label = settingMeta[key] ? t(settingMeta[key].labelKey) : key
     return (
       <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1">
@@ -170,8 +180,7 @@ function ApprovalPreview({ toolName, args }: { toolName: string; args?: any }): 
 
   if (toolName === 'shuvix-project') {
     // 项目配置：展示各字段可读标签 + 新值
-    const { action, ...fields } = args || {}
-    const entries = Object.entries(fields).filter(([, v]) => v !== undefined)
+    const entries = Object.entries(args || {}).filter(([k, v]) => k !== 'action' && v !== undefined)
     if (entries.length === 0) return <span className="text-[11px] text-text-tertiary">No changes</span>
     return (
       <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1.5">
@@ -206,7 +215,7 @@ function ApprovalContent({
   onApproval,
   t
 }: {
-  pending: { toolCallId: string; toolName: string; args?: any }
+  pending: { toolCallId: string; toolName: string; args?: Record<string, unknown> }
   onApproval: (toolCallId: string, approved: boolean) => void
   t: (key: string) => string
 }): React.JSX.Element {
@@ -216,7 +225,22 @@ function ApprovalContent({
   const hint = toolName === 'bash' ? t('toolCall.sandboxHint')
     : toolName === 'shuvix-project' ? t('toolCall.shuvixProjectHint')
     : toolName === 'shuvix-setting' ? t('toolCall.shuvixSettingHint')
+    : toolName === 'ssh' ? t('toolCall.sshHint')
     : t('toolCall.pendingApproval')
+
+  /** SSH 审批：启用免审批 + 允许当前调用 */
+  const handleAllowAndSkip = async (): Promise<void> => {
+    const sessionId = useChatStore.getState().activeSessionId
+    if (sessionId) {
+      const session = useChatStore.getState().sessions.find((s) => s.id === sessionId)
+      const current = JSON.parse(session?.settings || '{}')
+      const updated = { ...current, sshAutoApprove: true }
+      const json = JSON.stringify(updated)
+      await window.api.session.updateSettings({ id: sessionId, settings: json })
+      useChatStore.getState().updateSessionSettings(sessionId, json)
+    }
+    onApproval(toolCallId, true)
+  }
 
   return (
     <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
@@ -245,6 +269,14 @@ function ApprovalContent({
         >
           {t('toolCall.deny')}
         </button>
+        {toolName === 'ssh' && (
+          <button
+            onClick={handleAllowAndSkip}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+          >
+            {t('toolCall.allowAndSkip')}
+          </button>
+        )}
         <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
       </div>
     </div>
@@ -418,6 +450,12 @@ function SshCredentialContent({
             </div>
           </>
         )}
+      </div>
+
+      {/* 安全提示 */}
+      <div className="flex items-start gap-2 mx-4 mb-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
+        <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
+        <p className="text-[10px] text-text-secondary leading-relaxed">{t('ssh.securityWarning')}</p>
       </div>
 
       {/* 操作栏 */}

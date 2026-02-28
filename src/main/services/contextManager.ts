@@ -12,7 +12,7 @@
 
 import { encodingForModel } from 'js-tiktoken'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
-import type { Model } from '@mariozechner/pi-ai'
+import type { Api, AssistantMessage, Model, TextContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai'
 import { createLogger } from '../logger'
 import { KEEP_RECENT_TURNS } from '../../shared/constants'
 
@@ -55,27 +55,38 @@ export function countTextTokens(text: string): number {
   }
 }
 
+function isUserMessage(msg: AgentMessage): msg is UserMessage {
+  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'user'
+}
+
+function isAssistantMessage(msg: AgentMessage): msg is AssistantMessage {
+  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'assistant'
+}
+
+function isToolResultMessage(msg: AgentMessage): msg is ToolResultMessage {
+  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'toolResult'
+}
+
 /** 计算单条 AgentMessage 的 token 数 */
 function countMessageTokens(msg: AgentMessage): number {
   if (!msg || typeof msg !== 'object' || !('role' in msg)) return 0
 
-  const m = msg as any
   // 固定开销：role + 结构化元数据
   let tokens = 4
 
-  if (m.role === 'user') {
-    if (typeof m.content === 'string') {
-      tokens += countTextTokens(m.content)
-    } else if (Array.isArray(m.content)) {
-      for (const block of m.content) {
+  if (isUserMessage(msg)) {
+    if (typeof msg.content === 'string') {
+      tokens += countTextTokens(msg.content)
+    } else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
         if (block.type === 'text') tokens += countTextTokens(block.text)
         // 图片按固定 token 估算（与 OpenAI vision 定价一致）
         if (block.type === 'image') tokens += 85
       }
     }
-  } else if (m.role === 'assistant') {
-    if (Array.isArray(m.content)) {
-      for (const block of m.content) {
+  } else if (isAssistantMessage(msg)) {
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
         if (block.type === 'text') tokens += countTextTokens(block.text)
         if (block.type === 'thinking') tokens += countTextTokens(block.thinking)
         if (block.type === 'toolCall') {
@@ -84,10 +95,10 @@ function countMessageTokens(msg: AgentMessage): number {
         }
       }
     }
-  } else if (m.role === 'toolResult') {
-    tokens += countTextTokens(m.toolName || '')
-    if (Array.isArray(m.content)) {
-      for (const block of m.content) {
+  } else if (isToolResultMessage(msg)) {
+    tokens += countTextTokens(msg.toolName || '')
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
         if (block.type === 'text') tokens += countTextTokens(block.text)
       }
     }
@@ -130,7 +141,7 @@ function identifyToolTurns(messages: AgentMessage[]): Array<number[]> {
   let currentTurn: number[] = []
 
   for (let i = 0; i < messages.length; i++) {
-    if ((messages[i] as any).role === 'toolResult') {
+    if (isToolResultMessage(messages[i])) {
       currentTurn.push(i)
     } else {
       if (currentTurn.length > 0) {
@@ -167,20 +178,17 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   let compressedCount = 0
   const result: AgentMessage[] = []
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i] as any
-    if (compressSet.has(i)) {
-      // 深拷贝并压缩 content
-      const compressed = { ...msg, content: [] as any[] }
-      if (Array.isArray(msg.content)) {
-        compressed.content = msg.content.map((block: any) => {
-          if (block.type === 'text' && block.text && block.text.length > 500) {
-            compressedCount++
-            return { type: 'text', text: summarizeToolResult(block.text) }
-          }
-          return block
-        })
-      }
-      result.push(compressed as AgentMessage)
+    const msg = messages[i]
+    if (compressSet.has(i) && isToolResultMessage(msg)) {
+      const compressedContent = msg.content.map((block: TextContent | import('@mariozechner/pi-ai').ImageContent) => {
+        if (block.type === 'text' && block.text && block.text.length > 500) {
+          compressedCount++
+          return { type: 'text' as const, text: summarizeToolResult(block.text) }
+        }
+        return block
+      })
+      const compressed: ToolResultMessage = { ...msg, content: compressedContent }
+      result.push(compressed)
     } else {
       result.push(msg)
     }
@@ -230,7 +238,7 @@ function slidingWindowTruncate(messages: AgentMessage[], maxTokens: number): Age
  *   - 第三层仅在超过上下文窗口阈值时执行（有损，丢弃旧消息）
  */
 export function createTransformContext(
-  model: Model<any>
+  model: Model<Api>
 ): (messages: AgentMessage[]) => Promise<AgentMessage[]> {
   return async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
     const maxTokens = Math.floor((model.contextWindow || 128000) * CONTEXT_RATIO)

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import type { ThinkingLevel } from '../../../main/types'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
@@ -67,7 +68,7 @@ export function useSessionInit(activeSessionId: string | null): void {
       const savedLevel = meta.thinkingLevel
       const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'
       store.setThinkingLevel(restoredLevel)
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as any })
+      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as ThinkingLevel })
 
       // 7. 查询 Docker/SSH 实时资源状态
       const [dockerInfo, sshInfo] = await Promise.all([

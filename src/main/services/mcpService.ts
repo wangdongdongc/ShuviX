@@ -10,6 +10,12 @@ import type { McpServer, McpServerStatus, McpToolInfo } from '../types'
 import { createLogger } from '../logger'
 const log = createLogger('MCP')
 
+interface McpToolDetails {
+  server: string
+  tool: string
+  isError?: boolean
+}
+
 /** MCP tools/list 返回的单个工具结构 */
 interface McpDiscoveredTool {
   name: string
@@ -44,12 +50,20 @@ function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): TSchema 
 /**
  * 将 MCP callTool 结果中的 content 块提取为纯文本
  */
+interface McpContentBlock {
+  type: string
+  text?: string
+  mimeType?: string
+  resource?: unknown
+}
+
 function extractTextFromContent(content: unknown[]): string {
   return content
-    .map((c: any) => {
-      if (c.type === 'text') return c.text
-      if (c.type === 'image') return `[image: ${c.mimeType}]`
-      if (c.type === 'resource') return JSON.stringify(c.resource)
+    .map((c) => {
+      const block = c as McpContentBlock
+      if (block.type === 'text') return block.text
+      if (block.type === 'image') return `[image: ${block.mimeType}]`
+      if (block.type === 'resource') return JSON.stringify(block.resource)
       return JSON.stringify(c)
     })
     .join('\n')
@@ -118,9 +132,9 @@ class McpService {
       }))))
 
       log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
-    } catch (err: any) {
+    } catch (err: unknown) {
       conn.status = 'error'
-      conn.error = err?.message || String(err)
+      conn.error = err instanceof Error ? err.message : String(err)
       log.error(`connect failed: ${server.name} ${conn.error}`)
     }
   }
@@ -133,8 +147,8 @@ class McpService {
     try {
       await conn.transport?.close()
       await conn.client?.close()
-    } catch (err: any) {
-      log.warn(`disconnect error: ${serverId} ${err?.message}`)
+    } catch (err: unknown) {
+      log.warn(`disconnect error: ${serverId} ${err instanceof Error ? err.message : String(err)}`)
     }
 
     this.connections.delete(serverId)
@@ -210,7 +224,8 @@ class McpService {
       throw new Error(`MCP server ${serverId} is not connected`)
     }
     const result = await conn.client.callTool({ name: toolName, arguments: args })
-    return { content: result.content as unknown[], isError: (result as any).isError }
+    const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
+    return { content: result.content as unknown[], isError }
   }
 
   // ─── 桥接层：MCP → AgentTool ───
@@ -220,16 +235,16 @@ class McpService {
     serverId: string,
     serverName: string,
     mcpTool: McpDiscoveredTool
-  ): AgentTool<any> {
+  ): AgentTool<TSchema, McpToolDetails> {
     const self = this
     return {
       name: `mcp__${serverName}__${mcpTool.name}`,
       label: mcpTool.description || mcpTool.name,
       description: mcpTool.description ?? '',
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<any>> => {
+      execute: async (_toolCallId, params): Promise<AgentToolResult<McpToolDetails>> => {
         try {
-          const result = await self.callTool(serverId, mcpTool.name, params)
+          const result = await self.callTool(serverId, mcpTool.name, params as Record<string, unknown>)
           const text = extractTextFromContent(result.content)
           if (result.isError) {
             return {
@@ -241,9 +256,9 @@ class McpService {
             content: [{ type: 'text', text }],
             details: { server: serverName, tool: mcpTool.name }
           }
-        } catch (err: any) {
+        } catch (err: unknown) {
           return {
-            content: [{ type: 'text', text: `[MCP Error] ${err?.message || String(err)}` }],
+            content: [{ type: 'text', text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}` }],
             details: { server: serverName, tool: mcpTool.name, isError: true }
           }
         }
@@ -252,7 +267,7 @@ class McpService {
   }
 
   /** 将单个 Server 的所有工具转为 AgentTool[] */
-  serverToAgentTools(serverId: string): AgentTool<any>[] {
+  serverToAgentTools(serverId: string): AgentTool<TSchema, McpToolDetails>[] {
     const conn = this.connections.get(serverId)
     if (!conn || conn.status !== 'connected') return []
     const server = mcpDao.findById(serverId)
@@ -261,7 +276,7 @@ class McpService {
   }
 
   /** 获取所有已连接 Server 的全部 AgentTool（flat 数组） */
-  getAllAgentTools(): AgentTool<any>[] {
+  getAllAgentTools(): AgentTool<TSchema, McpToolDetails>[] {
     return [...this.connections.keys()].flatMap((id) => this.serverToAgentTools(id))
   }
 

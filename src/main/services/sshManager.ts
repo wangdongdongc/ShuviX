@@ -5,7 +5,7 @@
  * 凭据仅存内存，不持久化
  */
 
-import { Client } from 'ssh2'
+import { Client, type ConnectConfig } from 'ssh2'
 import { createLogger } from '../logger'
 const log = createLogger('SSH')
 
@@ -95,12 +95,12 @@ export class SshManager {
       })
 
       // 根据凭据类型选择认证方式
-      const connectConfig: Record<string, unknown> = {
+      const connectConfig: ConnectConfig = {
         host,
         port,
         username,
         // 跳过 host key 验证（用户已确认连接意图）
-        hostVerify: () => true,
+        hostVerifier: () => true,
         readyTimeout: 15000,
         // 心跳保活：每 30 秒发送一次，连续 3 次无响应则断开
         // 防止 NAT/防火墙因空闲超时丢弃连接
@@ -114,7 +114,7 @@ export class SshManager {
         connectConfig.password = password
       }
 
-      client.connect(connectConfig as any)
+      client.connect(connectConfig)
     })
   }
 

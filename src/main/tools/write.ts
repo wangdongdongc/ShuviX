@@ -83,7 +83,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
                 content: [{ type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }],
                 details: undefined
               })
-            } catch (error: any) {
+            } catch (error: unknown) {
               if (signal) signal.removeEventListener('abort', onAbort)
               if (!aborted) reject(error)
             }
