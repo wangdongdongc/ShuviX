@@ -14,19 +14,19 @@
 
 ### 文件变更清单
 
-| # | 文件 | 动作 |
-|---|------|------|
-| 1 | `package.json` | `npm install electron-log` |
-| 2 | `src/main/logger.ts` | **新建** — 初始化 electron-log，配置格式/轮转/级别，导出带 tag 的 `createLogger(tag)` 工厂函数 |
-| 3 | `src/main/services/agent.ts` | 替换 19 处 `console.xxx` → `log.xxx` |
-| 4 | `src/main/services/litellmService.ts` | 替换 9 处 |
-| 5 | `src/main/services/mcpService.ts` | 替换 9 处 |
-| 6 | `src/main/services/dockerManager.ts` | 替换 3 处 |
-| 7 | `src/main/tools/bash.ts` | 替换 2 处 |
-| 8 | `src/main/tools/edit.ts` | 替换 1 处 |
-| 9 | `src/main/tools/read.ts` | 替换 1 处 |
-| 10 | `src/main/tools/write.ts` | 替换 1 处 |
-| 11 | `src/main/index.ts` | 替换 1 处 + 引入 logger 初始化 |
+| #   | 文件                                  | 动作                                                                                           |
+| --- | ------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | `package.json`                        | `npm install electron-log`                                                                     |
+| 2   | `src/main/logger.ts`                  | **新建** — 初始化 electron-log，配置格式/轮转/级别，导出带 tag 的 `createLogger(tag)` 工厂函数 |
+| 3   | `src/main/services/agent.ts`          | 替换 19 处 `console.xxx` → `log.xxx`                                                           |
+| 4   | `src/main/services/litellmService.ts` | 替换 9 处                                                                                      |
+| 5   | `src/main/services/mcpService.ts`     | 替换 9 处                                                                                      |
+| 6   | `src/main/services/dockerManager.ts`  | 替换 3 处                                                                                      |
+| 7   | `src/main/tools/bash.ts`              | 替换 2 处                                                                                      |
+| 8   | `src/main/tools/edit.ts`              | 替换 1 处                                                                                      |
+| 9   | `src/main/tools/read.ts`              | 替换 1 处                                                                                      |
+| 10  | `src/main/tools/write.ts`             | 替换 1 处                                                                                      |
+| 11  | `src/main/index.ts`                   | 替换 1 处 + 引入 logger 初始化                                                                 |
 
 ### logger.ts 设计
 
@@ -46,7 +46,7 @@ if (process.env.NODE_ENV === 'production') {
 
 /** 创建带模块标签的 logger */
 export function createLogger(tag: string) {
-  return log.scope(tag)  // electron-log 内置 scope 功能
+  return log.scope(tag) // electron-log 内置 scope 功能
 }
 
 export default log
@@ -68,11 +68,11 @@ const log = createLogger('Agent')
 
 ### 日志级别映射
 
-| 原调用 | 新调用 | 说明 |
-|--------|--------|------|
-| `console.log` | `log.info` | 常规信息 |
-| `console.warn` | `log.warn` | 警告 |
-| `console.error` | `log.error` | 错误 |
+| 原调用          | 新调用      | 说明     |
+| --------------- | ----------- | -------- |
+| `console.log`   | `log.info`  | 常规信息 |
+| `console.warn`  | `log.warn`  | 警告     |
+| `console.error` | `log.error` | 错误     |
 
 ### 日志文件位置
 

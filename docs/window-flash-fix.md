@@ -33,7 +33,7 @@ CSS 中 `:root` 默认是 dark 主题，`data-theme` 属性由 React 的 `useEff
 
 ```html
 <script>
-  ;(function() {
+  ;(function () {
     var t = localStorage.getItem('theme') || 'dark'
     if (t === 'system') {
       t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -69,7 +69,11 @@ ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
   if (mainWindow && sender === mainWindow.webContents) {
     mainWindow.show()
-  } else if (settingsWindow && !settingsWindow.isDestroyed() && sender === settingsWindow.webContents) {
+  } else if (
+    settingsWindow &&
+    !settingsWindow.isDestroyed() &&
+    sender === settingsWindow.webContents
+  ) {
     settingsWindow.show()
   }
 })
@@ -77,15 +81,15 @@ ipcMain.on('app:window-ready', (event) => {
 
 ## 涉及文件
 
-| 文件 | 改动 |
-|------|------|
-| `src/main/index.ts` | `getThemeBgColor()`、`show: false`、`app:window-ready` IPC 处理 |
-| `src/renderer/index.html` | `<head>` 内联脚本设置 `data-theme`、CSP 添加 `script-src 'unsafe-inline'` |
-| `src/renderer/src/App.tsx` | 数据加载完成后发送 `windowReady()` |
-| `src/renderer/src/stores/settingsStore.ts` | `loadSettings` 时同步主题到 `localStorage` |
-| `src/renderer/src/components/settings/GeneralSettings.tsx` | 切换主题时同步写入 `localStorage` |
-| `src/preload/index.ts` | 添加 `windowReady` IPC 方法 |
-| `src/preload/index.d.ts` | 添加 `windowReady` 类型声明 |
+| 文件                                                       | 改动                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `src/main/index.ts`                                        | `getThemeBgColor()`、`show: false`、`app:window-ready` IPC 处理           |
+| `src/renderer/index.html`                                  | `<head>` 内联脚本设置 `data-theme`、CSP 添加 `script-src 'unsafe-inline'` |
+| `src/renderer/src/App.tsx`                                 | 数据加载完成后发送 `windowReady()`                                        |
+| `src/renderer/src/stores/settingsStore.ts`                 | `loadSettings` 时同步主题到 `localStorage`                                |
+| `src/renderer/src/components/settings/GeneralSettings.tsx` | 切换主题时同步写入 `localStorage`                                         |
+| `src/preload/index.ts`                                     | 添加 `windowReady` IPC 方法                                               |
+| `src/preload/index.d.ts`                                   | 添加 `windowReady` 类型声明                                               |
 
 ## 关键要点
 

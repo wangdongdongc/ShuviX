@@ -21,20 +21,22 @@ export function ToolPicker(): React.JSX.Element | null {
 
   /** 拉取工具列表并清理陈旧名称 */
   const fetchTools = useCallback(() => {
-    window.api.tools.list().then(tools => {
+    window.api.tools.list().then((tools) => {
       setAllTools(tools)
-      const validNames = new Set(tools.map(t => t.name))
+      const validNames = new Set(tools.map((t) => t.name))
       const currentEnabled = useChatStore.getState().enabledTools
-      const cleaned = currentEnabled.filter(n => validNames.has(n))
+      const cleaned = currentEnabled.filter((n) => validNames.has(n))
       if (cleaned.length !== currentEnabled.length) {
         void handleChange(cleaned)
       }
     })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 挂载时加载一次
-  useEffect(() => { fetchTools() }, [fetchTools])
+  useEffect(() => {
+    fetchTools()
+  }, [fetchTools])
 
   // 每次打开下拉面板时实时刷新
   useEffect(() => {
@@ -44,18 +46,24 @@ export function ToolPicker(): React.JSX.Element | null {
   if (allTools.length === 0) return null
 
   // 仅统计在 allTools 中实际存在的已启用工具
-  const validNames = new Set(allTools.map(t => t.name))
-  const activeEnabledTools = enabledTools.filter(n => validNames.has(n))
+  const validNames = new Set(allTools.map((t) => t.name))
+  const activeEnabledTools = enabledTools.filter((n) => validNames.has(n))
   const activeCount = activeEnabledTools.length
   const totalCount = allTools.length
   const disabledCount = totalCount - activeCount
 
   // 分类统计已启用工具用于 tooltip
-  const enabledBuiltinTools = allTools.filter(t => !t.group && activeEnabledTools.includes(t.name))
-  const enabledMcpTools = allTools.filter(t => t.group && t.group !== '__skills__' && activeEnabledTools.includes(t.name))
-  const enabledSkillTools = allTools.filter(t => t.group === '__skills__' && activeEnabledTools.includes(t.name))
+  const enabledBuiltinTools = allTools.filter(
+    (t) => !t.group && activeEnabledTools.includes(t.name)
+  )
+  const enabledMcpTools = allTools.filter(
+    (t) => t.group && t.group !== '__skills__' && activeEnabledTools.includes(t.name)
+  )
+  const enabledSkillTools = allTools.filter(
+    (t) => t.group === '__skills__' && activeEnabledTools.includes(t.name)
+  )
   // 按 server 分组的 MCP 工具
-  const enabledMcpGroups = [...new Set(enabledMcpTools.map(t => t.group!))]
+  const enabledMcpGroups = [...new Set(enabledMcpTools.map((t) => t.group!))]
 
   /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
   const handleChange = async (newTools: string[]): Promise<void> => {
@@ -65,7 +73,11 @@ export function ToolPicker(): React.JSX.Element | null {
       // 持久化到 session modelMetadata
       const currentMeta = (() => {
         const s = useChatStore.getState().sessions.find((s) => s.id === activeSessionId)
-        try { return JSON.parse(s?.modelMetadata || '{}') } catch { return {} }
+        try {
+          return JSON.parse(s?.modelMetadata || '{}')
+        } catch {
+          return {}
+        }
       })()
       currentMeta.enabledTools = newTools
       await window.api.session.updateModelMetadata({
@@ -97,17 +109,17 @@ export function ToolPicker(): React.JSX.Element | null {
             {/* 内置工具 */}
             {enabledBuiltinTools.length > 0 && (
               <div className="text-[11px] text-text-primary">
-                {enabledBuiltinTools.map(t => t.name).join(', ')}
+                {enabledBuiltinTools.map((t) => t.name).join(', ')}
               </div>
             )}
             {/* MCP 工具按 server 分组 */}
-            {enabledMcpGroups.map(group => {
-              const tools = enabledMcpTools.filter(t => t.group === group)
+            {enabledMcpGroups.map((group) => {
+              const tools = enabledMcpTools.filter((t) => t.group === group)
               return (
                 <div key={group} className="flex items-center gap-1.5">
                   <span className="text-[10px] text-purple-400">[{group}]</span>
                   <span className="text-[11px] text-text-primary truncate">
-                    {tools.map(t => t.name.split('__').pop() || t.name).join(', ')}
+                    {tools.map((t) => t.name.split('__').pop() || t.name).join(', ')}
                   </span>
                 </div>
               )
@@ -117,7 +129,9 @@ export function ToolPicker(): React.JSX.Element | null {
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-emerald-400">[Skills]</span>
                 <span className="text-[11px] text-text-primary truncate">
-                  {enabledSkillTools.map(t => t.name.startsWith('skill:') ? t.name.slice(6) : t.name).join(', ')}
+                  {enabledSkillTools
+                    .map((t) => (t.name.startsWith('skill:') ? t.name.slice(6) : t.name))
+                    .join(', ')}
                 </span>
               </div>
             )}
@@ -127,12 +141,16 @@ export function ToolPicker(): React.JSX.Element | null {
 
       {open && (
         <div className="absolute left-0 bottom-8 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-          <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.tools')}</div>
+          <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">
+            {t('input.tools')}
+          </div>
           <div className="py-1">
             <ToolSelectList
               tools={allTools}
               enabledTools={enabledTools}
-              onChange={(tools) => { void handleChange(tools) }}
+              onChange={(tools) => {
+                void handleChange(tools)
+              }}
               compact
             />
           </div>

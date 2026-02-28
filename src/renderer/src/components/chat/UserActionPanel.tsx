@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, ChevronDown, FolderOpen, KeyRound, Lock, MessageCircleQuestion, ShieldAlert, Terminal, TriangleAlert } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  FolderOpen,
+  KeyRound,
+  Lock,
+  MessageCircleQuestion,
+  ShieldAlert,
+  Terminal,
+  TriangleAlert
+} from 'lucide-react'
 import { useChatStore, selectToolExecutions } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -10,7 +20,17 @@ interface UserActionPanelProps {
   /** 沙箱审批：用户允许/拒绝工具调用 */
   onApproval: (toolCallId: string, approved: boolean) => void
   /** SSH 凭据输入回调（凭据不经过大模型） */
-  onSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => void
+  onSshCredentials: (
+    toolCallId: string,
+    credentials: {
+      host: string
+      port: number
+      username: string
+      password?: string
+      privateKey?: string
+      passphrase?: string
+    } | null
+  ) => void
 }
 
 /**
@@ -19,13 +39,19 @@ interface UserActionPanelProps {
  *   1. ask 工具提问（pending_user_input）— 展示问题和可选选项
  *   2. bash 审批（pending_approval）— 展示待执行命令和允许/拒绝按钮
  */
-export function UserActionPanel({ onUserInput, onApproval, onSshCredentials }: UserActionPanelProps): React.JSX.Element | null {
+export function UserActionPanel({
+  onUserInput,
+  onApproval,
+  onSshCredentials
+}: UserActionPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
   // 从 store 查找当前需要用户操作的工具执行
   const toolExecutions = useChatStore(selectToolExecutions)
-  const pendingAsk = toolExecutions.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
+  const pendingAsk = toolExecutions.find(
+    (te) => te.status === 'pending_user_input' && te.toolName === 'ask'
+  )
   const pendingApproval = toolExecutions.find((te) => te.status === 'pending_approval')
   const pendingSsh = toolExecutions.find((te) => te.status === 'pending_ssh_credentials')
 
@@ -35,7 +61,15 @@ export function UserActionPanel({ onUserInput, onApproval, onSshCredentials }: U
   }
   // ask 优先（两者不会同时出现，但保险起见）
   if (pendingAsk) {
-    return <AskContent pending={pendingAsk} selectedOptions={selectedOptions} setSelectedOptions={setSelectedOptions} onUserInput={onUserInput} t={t} />
+    return (
+      <AskContent
+        pending={pendingAsk}
+        selectedOptions={selectedOptions}
+        setSelectedOptions={setSelectedOptions}
+        onUserInput={onUserInput}
+        t={t}
+      />
+    )
   }
   if (pendingApproval) {
     return <ApprovalContent pending={pendingApproval} onApproval={onApproval} t={t} />
@@ -72,7 +106,10 @@ function AskContent({
         else next.add(label)
       } else {
         if (next.has(label)) next.clear()
-        else { next.clear(); next.add(label) }
+        else {
+          next.clear()
+          next.add(label)
+        }
       }
       return next
     })
@@ -92,8 +129,13 @@ function AskContent({
         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-bg-hover/20 transition-colors"
       >
         <MessageCircleQuestion size={14} className="text-accent/70 flex-shrink-0" />
-        <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 truncate">{question}</p>
-        <ChevronDown size={13} className={`text-text-tertiary/60 flex-shrink-0 transition-transform duration-200 ${collapsed ? '-rotate-90' : 'rotate-0'}`} />
+        <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 truncate">
+          {question}
+        </p>
+        <ChevronDown
+          size={13}
+          className={`text-text-tertiary/60 flex-shrink-0 transition-transform duration-200 ${collapsed ? '-rotate-90' : 'rotate-0'}`}
+        />
       </button>
 
       {/* 可折叠区域（带过渡动画） */}
@@ -113,14 +155,20 @@ function AskContent({
                       : 'text-text-secondary hover:bg-bg-hover/40'
                   }`}
                 >
-                  <div className={`mt-px w-3.5 h-3.5 rounded-sm flex-shrink-0 flex items-center justify-center border transition-colors ${
-                    isSelected ? 'border-accent bg-accent' : 'border-border-primary/60'
-                  }`}>
+                  <div
+                    className={`mt-px w-3.5 h-3.5 rounded-sm flex-shrink-0 flex items-center justify-center border transition-colors ${
+                      isSelected ? 'border-accent bg-accent' : 'border-border-primary/60'
+                    }`}
+                  >
                     {isSelected && <Check size={10} className="text-white" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] font-medium leading-snug">{opt.label}</div>
-                    {opt.description && <div className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">{opt.description}</div>}
+                    {opt.description && (
+                      <div className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">
+                        {opt.description}
+                      </div>
+                    )}
                   </div>
                 </button>
               )
@@ -137,7 +185,9 @@ function AskContent({
               {t('toolCall.confirmSelection')}
             </button>
             {allowMultiple && (
-              <span className="text-[10px] text-text-tertiary/60">{t('toolCall.multiSelectHint')}</span>
+              <span className="text-[10px] text-text-tertiary/60">
+                {t('toolCall.multiSelectHint')}
+              </span>
             )}
           </div>
         </div>
@@ -149,7 +199,13 @@ function AskContent({
 // ---------- 审批子内容（通用） ----------
 
 /** 根据工具类型渲染变更预览 */
-function ApprovalPreview({ toolName, args }: { toolName: string; args?: Record<string, unknown> }): React.JSX.Element {
+function ApprovalPreview({
+  toolName,
+  args
+}: {
+  toolName: string
+  args?: Record<string, unknown>
+}): React.JSX.Element {
   const { t } = useTranslation()
   const { settingMeta, projectFieldMeta } = useSettingsStore()
 
@@ -181,7 +237,8 @@ function ApprovalPreview({ toolName, args }: { toolName: string; args?: Record<s
   if (toolName === 'shuvix-project') {
     // 项目配置：展示各字段可读标签 + 新值
     const entries = Object.entries(args || {}).filter(([k, v]) => k !== 'action' && v !== undefined)
-    if (entries.length === 0) return <span className="text-[11px] text-text-tertiary">No changes</span>
+    if (entries.length === 0)
+      return <span className="text-[11px] text-text-tertiary">No changes</span>
     return (
       <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1.5">
         {entries.map(([k, v]) => {
@@ -222,11 +279,16 @@ function ApprovalContent({
   const { toolCallId, toolName, args } = pending
 
   // 根据工具类型选择提示文案
-  const hint = toolName === 'bash' ? t('toolCall.sandboxHint')
-    : toolName === 'shuvix-project' ? t('toolCall.shuvixProjectHint')
-    : toolName === 'shuvix-setting' ? t('toolCall.shuvixSettingHint')
-    : toolName === 'ssh' ? t('toolCall.sshHint')
-    : t('toolCall.pendingApproval')
+  const hint =
+    toolName === 'bash'
+      ? t('toolCall.sandboxHint')
+      : toolName === 'shuvix-project'
+        ? t('toolCall.shuvixProjectHint')
+        : toolName === 'shuvix-setting'
+          ? t('toolCall.shuvixSettingHint')
+          : toolName === 'ssh'
+            ? t('toolCall.sshHint')
+            : t('toolCall.pendingApproval')
 
   /** SSH 审批：启用免审批 + 允许当前调用 */
   const handleAllowAndSkip = async (): Promise<void> => {
@@ -247,7 +309,9 @@ function ApprovalContent({
       {/* 标题 */}
       <div className="flex items-start gap-2 px-4 pt-3 pb-2">
         <ShieldAlert size={16} className="text-warning flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-text-primary font-medium leading-snug">{t('toolCall.pendingApproval')}</p>
+        <p className="text-sm text-text-primary font-medium leading-snug">
+          {t('toolCall.pendingApproval')}
+        </p>
       </div>
 
       {/* 变更预览 */}
@@ -293,7 +357,17 @@ function SshCredentialContent({
   t
 }: {
   pending: { toolCallId: string }
-  onSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => void
+  onSshCredentials: (
+    toolCallId: string,
+    credentials: {
+      host: string
+      port: number
+      username: string
+      password?: string
+      privateKey?: string
+      passphrase?: string
+    } | null
+  ) => void
   t: (key: string) => string
 }): React.JSX.Element {
   const { toolCallId } = pending
@@ -308,9 +382,10 @@ function SshCredentialContent({
   const [keyFileName, setKeyFileName] = useState('')
   const [passphrase, setPassphrase] = useState('')
 
-  const canConnect = host.trim() && username.trim() && (
-    authMode === 'password' ? password.trim() : privateKey.trim()
-  )
+  const canConnect =
+    host.trim() &&
+    username.trim() &&
+    (authMode === 'password' ? password.trim() : privateKey.trim())
 
   const handleConnect = (): void => {
     if (!canConnect) return
@@ -332,7 +407,8 @@ function SshCredentialContent({
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     // textarea 中 Enter 不触发提交
-    if (e.key === 'Enter' && canConnect && !(e.target instanceof HTMLTextAreaElement)) handleConnect()
+    if (e.key === 'Enter' && canConnect && !(e.target instanceof HTMLTextAreaElement))
+      handleConnect()
     if (e.key === 'Escape') handleCancel()
   }
 
@@ -350,14 +426,17 @@ function SshCredentialContent({
     }
   }
 
-  const inputCls = 'w-full px-2.5 py-1.5 rounded-lg text-xs bg-bg-primary/50 border border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50 transition-colors'
+  const inputCls =
+    'w-full px-2.5 py-1.5 rounded-lg text-xs bg-bg-primary/50 border border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50 transition-colors'
 
   return (
     <div className="mx-3 mb-2 rounded-xl border border-accent/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
       {/* 标题 */}
       <div className="flex items-start gap-2 px-4 pt-3 pb-2">
         <Terminal size={16} className="text-accent flex-shrink-0 mt-0.5" />
-        <p className="text-sm text-text-primary font-medium leading-snug">{t('ssh.credentialTitle')}</p>
+        <p className="text-sm text-text-primary font-medium leading-snug">
+          {t('ssh.credentialTitle')}
+        </p>
       </div>
 
       {/* 表单 */}
@@ -366,18 +445,40 @@ function SshCredentialContent({
         <div className="flex gap-2">
           <div className="flex-1">
             <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.host')}</label>
-            <input type="text" value={host} onChange={(e) => setHost(e.target.value)} onKeyDown={handleKeyDown} placeholder="192.168.1.100" className={inputCls} autoFocus />
+            <input
+              type="text"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="192.168.1.100"
+              className={inputCls}
+              autoFocus
+            />
           </div>
           <div className="w-20">
             <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.port')}</label>
-            <input type="text" value={port} onChange={(e) => setPort(e.target.value)} onKeyDown={handleKeyDown} placeholder="22" className={inputCls} />
+            <input
+              type="text"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="22"
+              className={inputCls}
+            />
           </div>
         </div>
 
         {/* 用户名 */}
         <div>
           <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.username')}</label>
-          <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={handleKeyDown} placeholder="root" className={inputCls} />
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="root"
+            className={inputCls}
+          />
         </div>
 
         {/* 认证模式切换 */}
@@ -409,8 +510,17 @@ function SshCredentialContent({
         {/* 密码模式 */}
         {authMode === 'password' && (
           <div>
-            <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.password')}</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={handleKeyDown} placeholder="••••••••" className={inputCls} />
+            <label className="text-[10px] text-text-tertiary mb-0.5 block">
+              {t('ssh.password')}
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="••••••••"
+              className={inputCls}
+            />
           </div>
         )}
 
@@ -432,7 +542,15 @@ function SshCredentialContent({
                 <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs bg-bg-primary/50 border border-accent/30 text-text-primary">
                   <KeyRound size={11} className="text-accent flex-shrink-0" />
                   <span className="truncate">{keyFileName}</span>
-                  <button onClick={() => { setPrivateKey(''); setKeyFileName('') }} className="ml-auto text-text-tertiary hover:text-error text-[10px]">✕</button>
+                  <button
+                    onClick={() => {
+                      setPrivateKey('')
+                      setKeyFileName('')
+                    }}
+                    className="ml-auto text-text-tertiary hover:text-error text-[10px]"
+                  >
+                    ✕
+                  </button>
                 </div>
               ) : (
                 <textarea
@@ -445,8 +563,17 @@ function SshCredentialContent({
               )}
             </div>
             <div>
-              <label className="text-[10px] text-text-tertiary mb-0.5 block">{t('ssh.passphrase')}</label>
-              <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} onKeyDown={handleKeyDown} placeholder={t('ssh.passphrasePlaceholder')} className={inputCls} />
+              <label className="text-[10px] text-text-tertiary mb-0.5 block">
+                {t('ssh.passphrase')}
+              </label>
+              <input
+                type="password"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={t('ssh.passphrasePlaceholder')}
+                className={inputCls}
+              />
             </div>
           </>
         )}
@@ -455,7 +582,9 @@ function SshCredentialContent({
       {/* 安全提示 */}
       <div className="flex items-start gap-2 mx-4 mb-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
         <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
-        <p className="text-[10px] text-text-secondary leading-relaxed">{t('ssh.securityWarning')}</p>
+        <p className="text-[10px] text-text-secondary leading-relaxed">
+          {t('ssh.securityWarning')}
+        </p>
       </div>
 
       {/* 操作栏 */}

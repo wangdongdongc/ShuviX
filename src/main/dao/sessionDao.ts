@@ -11,16 +11,12 @@ export class SessionDao {
 
   /** 获取所有会话，按更新时间倒序 */
   findAll(): Session[] {
-    return this.db
-      .prepare('SELECT * FROM sessions ORDER BY updatedAt DESC')
-      .all() as Session[]
+    return this.db.prepare('SELECT * FROM sessions ORDER BY updatedAt DESC').all() as Session[]
   }
 
   /** 根据 ID 获取单个会话 */
   findById(id: string): Session | undefined {
-    return this.db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(id) as Session | undefined
+    return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Session | undefined
   }
 
   /** 插入会话 */
@@ -59,9 +55,7 @@ export class SessionDao {
 
   /** 更新时间戳 */
   touch(id: string): void {
-    this.db
-      .prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?')
-      .run(Date.now(), id)
+    this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(Date.now(), id)
   }
 
   /** 更新会话所属项目 */

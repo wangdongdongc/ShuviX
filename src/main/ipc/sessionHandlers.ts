@@ -47,10 +47,13 @@ export function registerSessionHandlers(): void {
   })
 
   /** 更新模型元数据（思考深度等） */
-  ipcMain.handle('session:updateModelMetadata', (_event, params: SessionUpdateModelMetadataParams) => {
-    sessionService.updateModelMetadata(params.id, params.modelMetadata)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'session:updateModelMetadata',
+    (_event, params: SessionUpdateModelMetadataParams) => {
+      sessionService.updateModelMetadata(params.id, params.modelMetadata)
+      return { success: true }
+    }
+  )
 
   /** 更新会话级配置（sshAutoApprove 等） */
   ipcMain.handle('session:updateSettings', (_event, params: SessionUpdateSettingsParams) => {
@@ -73,8 +76,15 @@ export function registerSessionHandlers(): void {
   /** AI 自动生成会话标题（后台静默，对用户透明） */
   ipcMain.handle(
     'session:generateTitle',
-    async (_event, params: { sessionId: string; userMessage: string; assistantMessage: string }) => {
-      const title = await agentService.generateTitle(params.sessionId, params.userMessage, params.assistantMessage)
+    async (
+      _event,
+      params: { sessionId: string; userMessage: string; assistantMessage: string }
+    ) => {
+      const title = await agentService.generateTitle(
+        params.sessionId,
+        params.userMessage,
+        params.assistantMessage
+      )
       if (title) {
         sessionService.updateTitle(params.sessionId, title)
       }
@@ -88,19 +98,22 @@ export function registerSessionHandlers(): void {
   })
 
   /** 选择文件并读取其文本内容（用于 SSH 私钥等） */
-  ipcMain.handle('dialog:readTextFile', async (event, params?: { title?: string; filters?: Electron.FileFilter[] }) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (!win) return null
-    const result = await dialog.showOpenDialog(win, {
-      title: params?.title || 'Select File',
-      properties: ['openFile'],
-      filters: params?.filters || [{ name: 'All Files', extensions: ['*'] }]
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    const fs = await import('fs/promises')
-    const content = await fs.readFile(result.filePaths[0], 'utf-8')
-    return { path: result.filePaths[0], content }
-  })
+  ipcMain.handle(
+    'dialog:readTextFile',
+    async (event, params?: { title?: string; filters?: Electron.FileFilter[] }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return null
+      const result = await dialog.showOpenDialog(win, {
+        title: params?.title || 'Select File',
+        properties: ['openFile'],
+        filters: params?.filters || [{ name: 'All Files', extensions: ['*'] }]
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      const fs = await import('fs/promises')
+      const content = await fs.readFile(result.filePaths[0], 'utf-8')
+      return { path: result.filePaths[0], content }
+    }
+  )
 
   /** 打开文件夹选择对话框 */
   ipcMain.handle('dialog:openDirectory', async (event) => {
@@ -153,7 +166,12 @@ export function registerSessionHandlers(): void {
       role: 'system_notify',
       type: 'ssh_event',
       content: 'ssh_disconnected',
-      metadata: JSON.stringify({ host: info.host, port: String(info.port), username: info.username, reason: 'manual' })
+      metadata: JSON.stringify({
+        host: info.host,
+        port: String(info.port),
+        username: info.username,
+        reason: 'manual'
+      })
     })
     event.sender.send('agent:event', {
       type: 'ssh_event',

@@ -32,9 +32,12 @@ export function registerMessageHandlers(): void {
   })
 
   /** 从指定消息开始删除（含该消息，使 Agent 失效） */
-  ipcMain.handle('message:deleteFrom', (_event, params: { sessionId: string; messageId: string }) => {
-    messageService.deleteFromMessage(params.sessionId, params.messageId)
-    agentService.invalidateAgent(params.sessionId)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'message:deleteFrom',
+    (_event, params: { sessionId: string; messageId: string }) => {
+      messageService.deleteFromMessage(params.sessionId, params.messageId)
+      agentService.invalidateAgent(params.sessionId)
+      return { success: true }
+    }
+  )
 }

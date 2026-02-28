@@ -57,11 +57,7 @@ export function ConfirmDialog({
     >
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[360px] max-w-[90vw] dialog-panel">
         <div className="flex items-start gap-3 px-5 py-4">
-          <img
-            src={appIcon}
-            alt="icon"
-            className="w-10 h-10 rounded-lg flex-shrink-0 mt-0.5"
-          />
+          <img src={appIcon} alt="icon" className="w-10 h-10 rounded-lg flex-shrink-0 mt-0.5" />
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-text-primary mb-1">{title}</h3>
             {description && (
@@ -79,9 +75,7 @@ export function ConfirmDialog({
           <button
             onClick={onConfirm}
             className={`px-4 py-1.5 rounded-lg text-xs text-white transition-colors ${
-              danger
-                ? 'bg-error hover:bg-error/90'
-                : 'bg-accent hover:bg-accent-hover'
+              danger ? 'bg-error hover:bg-error/90' : 'bg-accent hover:bg-accent-hover'
             }`}
           >
             {confirmText}

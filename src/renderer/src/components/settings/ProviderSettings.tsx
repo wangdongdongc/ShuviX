@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, EyeOff, Save, ChevronDown, ChevronRight, Trash2, Plus, X, TriangleAlert } from 'lucide-react'
+import {
+  Eye,
+  EyeOff,
+  Save,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
+  Plus,
+  X,
+  TriangleAlert
+} from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 /** 能力标签 key 列表（desc 通过 i18n 查找） */
@@ -46,11 +56,21 @@ function ModelCapabilitiesEditor({
           </button>
         ))}
       </div>
-      {(capabilities.maxInputTokens || capabilities.maxOutputTokens) ? (
+      {capabilities.maxInputTokens || capabilities.maxOutputTokens ? (
         <div className="mt-1.5 text-[10px] text-text-tertiary">
-          {capabilities.maxInputTokens ? <span>{t('settings.context')}: {(Number(capabilities.maxInputTokens) / 1000).toFixed(0)}K</span> : null}
-          {capabilities.maxInputTokens && capabilities.maxOutputTokens ? <span className="mx-1">·</span> : null}
-          {capabilities.maxOutputTokens ? <span>{t('settings.maxOutput')}: {(Number(capabilities.maxOutputTokens) / 1000).toFixed(0)}K</span> : null}
+          {capabilities.maxInputTokens ? (
+            <span>
+              {t('settings.context')}: {(Number(capabilities.maxInputTokens) / 1000).toFixed(0)}K
+            </span>
+          ) : null}
+          {capabilities.maxInputTokens && capabilities.maxOutputTokens ? (
+            <span className="mx-1">·</span>
+          ) : null}
+          {capabilities.maxOutputTokens ? (
+            <span>
+              {t('settings.maxOutput')}: {(Number(capabilities.maxOutputTokens) / 1000).toFixed(0)}K
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -63,14 +83,21 @@ export function ProviderSettings(): React.JSX.Element {
   const { providers, setProviders, setAvailableModels } = useSettingsStore()
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
-  const [localEdits, setLocalEdits] = useState<Record<string, { apiKey?: string; baseUrl?: string }>>({})
+  const [localEdits, setLocalEdits] = useState<
+    Record<string, { apiKey?: string; baseUrl?: string }>
+  >({})
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
   const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
   const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [showAddForm, setShowAddForm] = useState(false)
-  const [newProvider, setNewProvider] = useState<{ name: string; baseUrl: string; apiKey: string; apiProtocol: ProviderInfo['apiProtocol'] }>({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
+  const [newProvider, setNewProvider] = useState<{
+    name: string
+    baseUrl: string
+    apiKey: string
+    apiProtocol: ProviderInfo['apiProtocol']
+  }>({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
   const [addingProvider, setAddingProvider] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null)
@@ -99,7 +126,11 @@ export function ProviderSettings(): React.JSX.Element {
   }
 
   /** 切换模型启用/禁用 */
-  const handleToggleModel = async (modelId: string, providerId: string, isEnabled: boolean): Promise<void> => {
+  const handleToggleModel = async (
+    modelId: string,
+    providerId: string,
+    isEnabled: boolean
+  ): Promise<void> => {
     await window.api.provider.toggleModelEnabled({ id: modelId, isEnabled })
     // 刷新该提供商的模型列表
     const models = await window.api.provider.listModels(providerId)
@@ -109,7 +140,11 @@ export function ProviderSettings(): React.JSX.Element {
   }
 
   /** 更新本地编辑状态 */
-  const updateLocalEdit = (providerId: string, field: 'apiKey' | 'baseUrl', value: string): void => {
+  const updateLocalEdit = (
+    providerId: string,
+    field: 'apiKey' | 'baseUrl',
+    value: string
+  ): void => {
     setLocalEdits((prev) => ({
       ...prev,
       [providerId]: { ...prev[providerId], [field]: value }
@@ -246,7 +281,9 @@ export function ProviderSettings(): React.JSX.Element {
         {/* Token 用量提示 */}
         <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
           <TriangleAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-text-secondary leading-relaxed">{t('settings.tokenUsageWarning')}</p>
+          <p className="text-[11px] text-text-secondary leading-relaxed">
+            {t('settings.tokenUsageWarning')}
+          </p>
         </div>
 
         {/* 添加自定义提供商按钮 */}
@@ -262,13 +299,20 @@ export function ProviderSettings(): React.JSX.Element {
         {showAddForm && (
           <div className="border border-accent/30 rounded-lg p-4 space-y-3 bg-accent/5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-primary">{t('settings.newProvider')}</span>
-              <button onClick={() => setShowAddForm(false)} className="text-text-tertiary hover:text-text-primary">
+              <span className="text-xs font-medium text-text-primary">
+                {t('settings.newProvider')}
+              </span>
+              <button
+                onClick={() => setShowAddForm(false)}
+                className="text-text-tertiary hover:text-text-primary"
+              >
                 <X size={14} />
               </button>
             </div>
             <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">{t('settings.providerName')}</label>
+              <label className="block text-[11px] text-text-tertiary mb-1">
+                {t('settings.providerName')}
+              </label>
               <input
                 value={newProvider.name}
                 onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value }))}
@@ -296,10 +340,17 @@ export function ProviderSettings(): React.JSX.Element {
               />
             </div>
             <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">{t('settings.apiProtocol')}</label>
+              <label className="block text-[11px] text-text-tertiary mb-1">
+                {t('settings.apiProtocol')}
+              </label>
               <select
                 value={newProvider.apiProtocol}
-                onChange={(e) => setNewProvider((p) => ({ ...p, apiProtocol: e.target.value as ProviderInfo['apiProtocol'] }))}
+                onChange={(e) =>
+                  setNewProvider((p) => ({
+                    ...p,
+                    apiProtocol: e.target.value as ProviderInfo['apiProtocol']
+                  }))
+                }
                 className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
               >
                 <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
@@ -338,14 +389,19 @@ export function ProviderSettings(): React.JSX.Element {
                 </button>
                 <span className="flex-1 text-xs font-medium text-text-primary">
                   {p.isBuiltin ? (
-                    <span className="mr-1 text-[10px] text-text-tertiary font-normal">{t('settings.builtin')}</span>
+                    <span className="mr-1 text-[10px] text-text-tertiary font-normal">
+                      {t('settings.builtin')}
+                    </span>
                   ) : null}
                   {p.displayName || p.name}
                 </span>
                 {/* 删除自定义提供商 */}
                 {!p.isBuiltin && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleDeleteProvider(p.id) }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDeleteProvider(p.id)
+                    }}
                     className="text-text-tertiary hover:text-danger transition-colors mr-1"
                     title={t('settings.deleteProvider')}
                   >
@@ -354,14 +410,19 @@ export function ProviderSettings(): React.JSX.Element {
                 )}
                 {/* 启用/禁用开关 */}
                 <button
-                  onClick={(e) => { e.stopPropagation(); handleToggleProvider(p.id, !p.isEnabled) }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleToggleProvider(p.id, !p.isEnabled)
+                  }}
                   className={`w-8 h-4.5 rounded-full relative transition-colors ${
                     p.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
                   }`}
                 >
-                  <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${
-                    p.isEnabled ? 'left-[18px]' : 'left-0.5'
-                  }`} />
+                  <span
+                    className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${
+                      p.isEnabled ? 'left-[18px]' : 'left-0.5'
+                    }`}
+                  />
                 </button>
               </div>
 
@@ -376,7 +437,9 @@ export function ProviderSettings(): React.JSX.Element {
                         type={showKeys[p.id] ? 'text' : 'password'}
                         value={edits.apiKey ?? p.apiKey}
                         onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
-                        placeholder={t('settings.apiKeyPlaceholder', { name: p.displayName || p.name })}
+                        placeholder={t('settings.apiKeyPlaceholder', {
+                          name: p.displayName || p.name
+                        })}
                         className="flex-1 bg-transparent px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none"
                       />
                       <button
@@ -419,17 +482,23 @@ export function ProviderSettings(): React.JSX.Element {
                   {/* 模型列表 */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <label className="block text-[11px] text-text-tertiary">{t('settings.modelManagement')}</label>
+                      <label className="block text-[11px] text-text-tertiary">
+                        {t('settings.modelManagement')}
+                      </label>
                       <button
                         onClick={() => handleSyncModels(p.id)}
                         disabled={syncingProviderId === p.id}
                         className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                       >
-                        {syncingProviderId === p.id ? t('settings.syncing') : t('settings.syncModels')}
+                        {syncingProviderId === p.id
+                          ? t('settings.syncing')
+                          : t('settings.syncModels')}
                       </button>
                     </div>
                     {syncMessages[p.id] && (
-                      <div className="text-[10px] text-text-tertiary mb-2">{syncMessages[p.id]}</div>
+                      <div className="text-[10px] text-text-tertiary mb-2">
+                        {syncMessages[p.id]}
+                      </div>
                     )}
 
                     {/* 手动添加模型 */}
@@ -467,10 +536,19 @@ export function ProviderSettings(): React.JSX.Element {
 
                     <div className="space-y-1">
                       {filteredModels.map((m) => {
-                        const caps = (() => { try { return JSON.parse(m.capabilities || '{}') } catch { return {} } })()
+                        const caps = (() => {
+                          try {
+                            return JSON.parse(m.capabilities || '{}')
+                          } catch {
+                            return {}
+                          }
+                        })()
                         const isModelExpanded = expandedModelId === m.id
                         return (
-                          <div key={m.id} className="rounded-md hover:bg-bg-hover transition-colors">
+                          <div
+                            key={m.id}
+                            className="rounded-md hover:bg-bg-hover transition-colors"
+                          >
                             <div className="flex items-center justify-between px-2 py-1.5">
                               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                                 <button
@@ -478,16 +556,42 @@ export function ProviderSettings(): React.JSX.Element {
                                   className="text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
                                   title={t('settings.editCapabilities')}
                                 >
-                                  {isModelExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                  {isModelExpanded ? (
+                                    <ChevronDown size={12} />
+                                  ) : (
+                                    <ChevronRight size={12} />
+                                  )}
                                 </button>
-                                <span className="text-xs text-text-primary font-mono truncate">{m.modelId}</span>
+                                <span className="text-xs text-text-primary font-mono truncate">
+                                  {m.modelId}
+                                </span>
                                 {/* 能力标签 */}
                                 <div className="flex items-center gap-1 shrink-0">
-                                  {caps.vision && <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">Vision</span>}
-                                  {caps.functionCalling && <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">Tools</span>}
-                                  {caps.reasoning && <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">Reasoning</span>}
-                                  {caps.imageOutput && <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">ImgOut</span>}
-                                  {caps.audioInput && <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">Audio</span>}
+                                  {caps.vision && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
+                                      Vision
+                                    </span>
+                                  )}
+                                  {caps.functionCalling && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
+                                      Tools
+                                    </span>
+                                  )}
+                                  {caps.reasoning && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
+                                      Reasoning
+                                    </span>
+                                  )}
+                                  {caps.imageOutput && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
+                                      ImgOut
+                                    </span>
+                                  )}
+                                  {caps.audioInput && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
+                                      Audio
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1.5">
@@ -507,9 +611,11 @@ export function ProviderSettings(): React.JSX.Element {
                                     m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
                                   }`}
                                 >
-                                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                                    m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                                  }`} />
+                                  <span
+                                    className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                                      m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                                    }`}
+                                  />
                                 </button>
                               </div>
                             </div>
@@ -518,7 +624,10 @@ export function ProviderSettings(): React.JSX.Element {
                               <ModelCapabilitiesEditor
                                 capabilities={caps}
                                 onUpdate={async (newCaps) => {
-                                  await window.api.provider.updateModelCapabilities({ id: m.id, capabilities: newCaps })
+                                  await window.api.provider.updateModelCapabilities({
+                                    id: m.id,
+                                    capabilities: newCaps
+                                  })
                                   const models = await window.api.provider.listModels(p.id)
                                   setProviderModels((prev) => ({ ...prev, [p.id]: models }))
                                 }}
@@ -540,7 +649,6 @@ export function ProviderSettings(): React.JSX.Element {
           )
         })}
       </div>
-
     </div>
   )
 }

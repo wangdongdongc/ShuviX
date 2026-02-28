@@ -36,22 +36,27 @@
 ## 实现步骤
 
 ### Step 1: 安装依赖
+
 - `npm install ssh2` + `npm install -D @types/ssh2`（纯 JS SSH 客户端，无需 native rebuild）
 
 ### Step 2: SSH 连接管理器
+
 - **新建** `src/main/services/sshManager.ts`
 - 类似 `DockerManager`：per-session 连接池 + 空闲超时
 - API: `connect(sessionId, host, port, username, password)` / `exec(sessionId, command, timeout, signal)` / `disconnect(sessionId)` / `disconnectAll()`
 - 连接状态查询：`getConnection(sessionId)`
 
 ### Step 3: SSH 工具实现
+
 - **新建** `src/main/tools/ssh.ts`
 - `createSshTool(ctx: ToolContext)` 遵循现有工具模式
 - connect 时通过 `ctx.requestSshCredentials` 向渲染端请求凭据
 - exec 时使用 sshManager 执行命令，输出截断复用 `truncateTail`
 
 ### Step 4: 工具注册（5 处）
+
 按 `/new-tool` checklist：
+
 - `src/main/types/tools.ts` — 加入 `ALL_TOOL_NAMES`（**不加入** `DEFAULT_TOOL_NAMES`，选配）
 - `src/main/services/agent.ts` — import + `buildTools.builtinAll` 注册 + ToolContext 增加 `requestSshCredentials` 回调 + `pendingSshCredentials` Map
 - `src/main/ipc/agentHandlers.ts` — 新增 `agent:respondToSshCredentials` handler
@@ -59,6 +64,7 @@
 - `src/main/tools/types.ts` — ToolContext 增加 `requestSshCredentials` 类型
 
 ### Step 5: 凭据输入 UI
+
 - `ToolContext` 新增 `requestSshCredentials` 回调（类似 `requestApproval`）
 - Agent 事件新增 `ssh_credential_request` 类型
 - `src/renderer/src/hooks/useAgentEvents.ts` — 处理 `ssh_credential_request`
@@ -68,19 +74,23 @@
 - `chatStore.ts` ToolExecution 新增 `pending_ssh_credentials` 状态
 
 ### Step 6: ToolCallBlock UI
+
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — ssh 工具图标 + 参数摘要（`Terminal` icon, 显示 host + command）
 
 ### Step 7: i18n
+
 - `zh.json` / `en.json` / `ja.json` 添加：
   - `tool.sshLabel`
   - `toolCall.sshConnecting` / `sshConnected` / `sshDisconnected` / `sshCredentialHint`
   - `ssh.host` / `ssh.username` / `ssh.password` / `ssh.connect` / `ssh.cancel`
 
 ### Step 8: Agent 清理
+
 - `agent.ts` 的 `removeAgent` / `invalidateAgent` 中调用 `sshManager.disconnect(sessionId)`
 - 应用退出时调用 `sshManager.disconnectAll()`
 
 ### Step 9: 编译 + 测试
+
 - `npx tsc --noEmit -p tsconfig.node.json --composite false`
 - `npx vitest run`
 

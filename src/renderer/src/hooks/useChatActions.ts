@@ -20,7 +20,17 @@ export interface UseChatActionsReturn {
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
   /** SSH 凭据输入回调（凭据不经过大模型） */
-  handleSshCredentials: (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => Promise<void>
+  handleSshCredentials: (
+    toolCallId: string,
+    credentials: {
+      host: string
+      port: number
+      username: string
+      password?: string
+      privateKey?: string
+      passphrase?: string
+    } | null
+  ) => Promise<void>
   /** 用户通过输入框文本覆盖当前 pending action（审批拒绝 / ask 反馈） */
   handleUserActionOverride: (text: string) => Promise<void>
   /** 创建新会话 */
@@ -53,7 +63,10 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
 
     const rollbackText = target.content
     // 删除该用户消息及之后的所有消息
-    await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: pendingRollbackId })
+    await window.api.message.deleteFrom({
+      sessionId: activeSessionId,
+      messageId: pendingRollbackId
+    })
     const msgs = await window.api.message.list(activeSessionId)
     store.setMessages(msgs)
     await window.api.agent.init({ sessionId: activeSessionId })
@@ -67,65 +80,91 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   }, [])
 
   /** 重新生成最近一次助手回复（回退到用户消息前 + 重发） */
-  const handleRegenerate = useCallback(async (assistantMsgId: string) => {
-    if (!activeSessionId) return
-    const store = useChatStore.getState()
-    const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
-    // 向前查找最近的 user/text 消息
-    let lastUserText = ''
-    let userMsgId = ''
-    for (let j = idx - 1; j >= 0; j--) {
-      if (store.messages[j].role === 'user' && store.messages[j].type === 'text') {
-        lastUserText = store.messages[j].content
-        userMsgId = store.messages[j].id
-        break
+  const handleRegenerate = useCallback(
+    async (assistantMsgId: string) => {
+      if (!activeSessionId) return
+      const store = useChatStore.getState()
+      const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
+      // 向前查找最近的 user/text 消息
+      let lastUserText = ''
+      let userMsgId = ''
+      for (let j = idx - 1; j >= 0; j--) {
+        if (store.messages[j].role === 'user' && store.messages[j].type === 'text') {
+          lastUserText = store.messages[j].content
+          userMsgId = store.messages[j].id
+          break
+        }
       }
-    }
-    if (!userMsgId) return
-    // 删除用户消息及之后的所有消息
-    await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
-    // 重新拉取消息 + 重建 Agent
-    const msgs = await window.api.message.list(activeSessionId)
-    store.setMessages(msgs)
-    await window.api.agent.init({ sessionId: activeSessionId })
-    // 重新保存用户消息并发送
-    const userMsg = await window.api.message.add({ sessionId: activeSessionId, role: 'user', content: lastUserText })
-    store.addMessage(userMsg)
-    await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
-  }, [activeSessionId])
+      if (!userMsgId) return
+      // 删除用户消息及之后的所有消息
+      await window.api.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
+      // 重新拉取消息 + 重建 Agent
+      const msgs = await window.api.message.list(activeSessionId)
+      store.setMessages(msgs)
+      await window.api.agent.init({ sessionId: activeSessionId })
+      // 重新保存用户消息并发送
+      const userMsg = await window.api.message.add({
+        sessionId: activeSessionId,
+        role: 'user',
+        content: lastUserText
+      })
+      store.addMessage(userMsg)
+      await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
+    },
+    [activeSessionId]
+  )
 
   /** 沙箱审批：用户允许/拒绝 bash 命令执行 */
-  const handleToolApproval = useCallback(async (toolCallId: string, approved: boolean) => {
-    await window.api.agent.approveToolCall({ toolCallId, approved })
-    const store = useChatStore.getState()
-    if (activeSessionId) {
-      store.updateToolExecution(activeSessionId, toolCallId, {
-        status: approved ? 'running' : 'error'
-      })
-    }
-  }, [activeSessionId])
+  const handleToolApproval = useCallback(
+    async (toolCallId: string, approved: boolean) => {
+      await window.api.agent.approveToolCall({ toolCallId, approved })
+      const store = useChatStore.getState()
+      if (activeSessionId) {
+        store.updateToolExecution(activeSessionId, toolCallId, {
+          status: approved ? 'running' : 'error'
+        })
+      }
+    },
+    [activeSessionId]
+  )
 
   /** ask 工具：用户选择回调 */
-  const handleUserInput = useCallback(async (toolCallId: string, selections: string[]) => {
-    await window.api.agent.respondToAsk({ toolCallId, selections })
-    const store = useChatStore.getState()
-    if (activeSessionId) {
-      store.updateToolExecution(activeSessionId, toolCallId, {
-        status: 'running'
-      })
-    }
-  }, [activeSessionId])
+  const handleUserInput = useCallback(
+    async (toolCallId: string, selections: string[]) => {
+      await window.api.agent.respondToAsk({ toolCallId, selections })
+      const store = useChatStore.getState()
+      if (activeSessionId) {
+        store.updateToolExecution(activeSessionId, toolCallId, {
+          status: 'running'
+        })
+      }
+    },
+    [activeSessionId]
+  )
 
   /** SSH 凭据输入回调（凭据不经过大模型，直接传给 sshManager） */
-  const handleSshCredentials = useCallback(async (toolCallId: string, credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null) => {
-    await window.api.agent.respondToSshCredentials({ toolCallId, credentials })
-    const store = useChatStore.getState()
-    if (activeSessionId) {
-      store.updateToolExecution(activeSessionId, toolCallId, {
-        status: credentials ? 'running' : 'error'
-      })
-    }
-  }, [activeSessionId])
+  const handleSshCredentials = useCallback(
+    async (
+      toolCallId: string,
+      credentials: {
+        host: string
+        port: number
+        username: string
+        password?: string
+        privateKey?: string
+        passphrase?: string
+      } | null
+    ) => {
+      await window.api.agent.respondToSshCredentials({ toolCallId, credentials })
+      const store = useChatStore.getState()
+      if (activeSessionId) {
+        store.updateToolExecution(activeSessionId, toolCallId, {
+          status: credentials ? 'running' : 'error'
+        })
+      }
+    },
+    [activeSessionId]
+  )
 
   /** 创建新会话 */
   const handleNewChat = useCallback(async () => {
@@ -141,45 +180,61 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   }, [])
 
   /** 用户通过输入框文本覆盖当前 pending action */
-  const handleUserActionOverride = useCallback(async (text: string) => {
-    if (!activeSessionId) return
-    const store = useChatStore.getState()
-    const execs = store.sessionToolExecutions[activeSessionId] || []
+  const handleUserActionOverride = useCallback(
+    async (text: string) => {
+      if (!activeSessionId) return
+      const store = useChatStore.getState()
+      const execs = store.sessionToolExecutions[activeSessionId] || []
 
-    // 检查是否有待审批的 bash 命令
-    const pendingApproval = execs.find((te) => te.status === 'pending_approval')
-    if (pendingApproval) {
-      await window.api.agent.approveToolCall({
-        toolCallId: pendingApproval.toolCallId,
-        approved: false,
-        reason: t('toolCall.overrideApproval', { text })
-      })
-      store.updateToolExecution(activeSessionId, pendingApproval.toolCallId, { status: 'error' })
-      return
-    }
+      // 检查是否有待审批的 bash 命令
+      const pendingApproval = execs.find((te) => te.status === 'pending_approval')
+      if (pendingApproval) {
+        await window.api.agent.approveToolCall({
+          toolCallId: pendingApproval.toolCallId,
+          approved: false,
+          reason: t('toolCall.overrideApproval', { text })
+        })
+        store.updateToolExecution(activeSessionId, pendingApproval.toolCallId, { status: 'error' })
+        return
+      }
 
-    // 检查是否有待用户输入的 ask 工具
-    const pendingAsk = execs.find((te) => te.status === 'pending_user_input' && te.toolName === 'ask')
-    if (pendingAsk) {
-      await window.api.agent.respondToAsk({
-        toolCallId: pendingAsk.toolCallId,
-        selections: [t('toolCall.overrideAsk', { text })]
-      })
-      store.updateToolExecution(activeSessionId, pendingAsk.toolCallId, { status: 'running' })
-      return
-    }
+      // 检查是否有待用户输入的 ask 工具
+      const pendingAsk = execs.find(
+        (te) => te.status === 'pending_user_input' && te.toolName === 'ask'
+      )
+      if (pendingAsk) {
+        await window.api.agent.respondToAsk({
+          toolCallId: pendingAsk.toolCallId,
+          selections: [t('toolCall.overrideAsk', { text })]
+        })
+        store.updateToolExecution(activeSessionId, pendingAsk.toolCallId, { status: 'running' })
+        return
+      }
 
-    // 检查是否有待 SSH 凭据输入
-    const pendingSsh = execs.find((te) => te.status === 'pending_ssh_credentials')
-    if (pendingSsh) {
-      await window.api.agent.respondToSshCredentials({
-        toolCallId: pendingSsh.toolCallId,
-        credentials: null
-      })
-      store.updateToolExecution(activeSessionId, pendingSsh.toolCallId, { status: 'error' })
-      return
-    }
-  }, [activeSessionId])
+      // 检查是否有待 SSH 凭据输入
+      const pendingSsh = execs.find((te) => te.status === 'pending_ssh_credentials')
+      if (pendingSsh) {
+        await window.api.agent.respondToSshCredentials({
+          toolCallId: pendingSsh.toolCallId,
+          credentials: null
+        })
+        store.updateToolExecution(activeSessionId, pendingSsh.toolCallId, { status: 'error' })
+        return
+      }
+    },
+    [activeSessionId]
+  )
 
-  return { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleSshCredentials, handleUserActionOverride, handleNewChat } satisfies UseChatActionsReturn
+  return {
+    handleRollback,
+    pendingRollbackId,
+    confirmRollback,
+    cancelRollback,
+    handleRegenerate,
+    handleToolApproval,
+    handleUserInput,
+    handleSshCredentials,
+    handleUserActionOverride,
+    handleNewChat
+  } satisfies UseChatActionsReturn
 }

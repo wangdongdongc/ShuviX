@@ -5,6 +5,7 @@
 ## 问题分析
 
 当前 `agent.state.messages` 无限累积，30 次工具调用的场景下：
+
 - 每次工具结果最大 50KB（`DEFAULT_MAX_BYTES`），但全部保留在上下文中
 - 每次 LLM 调用都发送 **全量历史**，input tokens 随轮次线性增长
 - 最终单次对话消耗上百万 tokens
@@ -29,6 +30,7 @@ transformContext?: (messages: AgentMessage[], signal?) => Promise<AgentMessage[]
 #### 第一层：压缩旧 tool_result（始终执行，高收益）
 
 保留最近 **6 个** `toolResult` 消息的完整内容，其余全部截断为摘要：
+
 - 保留前 3 行 + 末尾 2 行 + `[... 已省略 X 行，原始 Y 字符 ...]`
 - 仅压缩 text 内容超过 500 字符的 toolResult
 - 对应的 `tool_call` 消息（参数）保持不变
@@ -48,6 +50,7 @@ transformContext?: (messages: AgentMessage[], signal?) => Promise<AgentMessage[]
 ### 3. Token 估算（js-tiktoken）
 
 引入 `js-tiktoken`（OpenAI 官方纯 JS 实现，~3MB，无原生依赖）：
+
 - 使用 `cl100k_base` 编码器（GPT-4/Claude/Gemini 通用，误差 5-15%）
 - 首次加载词表 ~50ms，后续编码万级 token <5ms
 - 封装 `countTokens(messages)` 递归遍历 `AgentMessage.content` 累加
@@ -58,10 +61,10 @@ transformContext?: (messages: AgentMessage[], signal?) => Promise<AgentMessage[]
 
 ### 文件变更
 
-| 文件 | 变更 |
-|---|---|
+| 文件                                  | 变更                                                      |
+| ------------------------------------- | --------------------------------------------------------- |
 | `src/main/services/contextManager.ts` | **新建**，实现 `transformContext` + token 估算 + 三层压缩 |
-| `src/main/services/agent.ts` | 在 `new Agent({...})` 中传入 `transformContext` 钩子 |
+| `src/main/services/agent.ts`          | 在 `new Agent({...})` 中传入 `transformContext` 钩子      |
 
 ### 关键参数（可配置常量）
 

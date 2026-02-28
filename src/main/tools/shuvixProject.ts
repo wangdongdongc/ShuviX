@@ -12,29 +12,53 @@ import { t } from '../i18n'
 
 const ShuvixProjectParamsSchema = Type.Object({
   action: Type.Union([Type.Literal('get'), Type.Literal('update')], {
-    description: 'Action to perform: "get" to read current project config, "update" to modify fields (requires user approval)'
+    description:
+      'Action to perform: "get" to read current project config, "update" to modify fields (requires user approval)'
   }),
   name: Type.Optional(Type.String({ description: 'Project display name' })),
-  systemPrompt: Type.Optional(Type.String({ description: 'Project-level system prompt (applied together with global prompt)' })),
-  sandboxEnabled: Type.Optional(Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })),
-  enabledTools: Type.Optional(Type.Array(Type.String(), { description: 'List of enabled tool names for new sessions in this project' })),
-  referenceDirs: Type.Optional(Type.Array(
-    Type.Object({
-      path: Type.String({ description: 'Absolute path to reference directory' }),
-      note: Type.Optional(Type.String({ description: 'Note to help AI understand the directory purpose' })),
-      access: Type.Optional(Type.Union([Type.Literal('readonly'), Type.Literal('readwrite')], { description: 'Access mode: readonly (default) or readwrite. In sandbox mode, readonly dirs only allow reading, readwrite dirs allow both.' }))
-    }),
-    { description: 'Reference directories for AI to access. Each dir has an optional access mode (readonly/readwrite).' }
-  ))
+  systemPrompt: Type.Optional(
+    Type.String({
+      description: 'Project-level system prompt (applied together with global prompt)'
+    })
+  ),
+  sandboxEnabled: Type.Optional(
+    Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })
+  ),
+  enabledTools: Type.Optional(
+    Type.Array(Type.String(), {
+      description: 'List of enabled tool names for new sessions in this project'
+    })
+  ),
+  referenceDirs: Type.Optional(
+    Type.Array(
+      Type.Object({
+        path: Type.String({ description: 'Absolute path to reference directory' }),
+        note: Type.Optional(
+          Type.String({ description: 'Note to help AI understand the directory purpose' })
+        ),
+        access: Type.Optional(
+          Type.Union([Type.Literal('readonly'), Type.Literal('readwrite')], {
+            description:
+              'Access mode: readonly (default) or readwrite. In sandbox mode, readonly dirs only allow reading, readwrite dirs allow both.'
+          })
+        )
+      }),
+      {
+        description:
+          'Reference directories for AI to access. Each dir has an optional access mode (readonly/readwrite).'
+      }
+    )
+  )
 })
 
 /** 创建 shuvix-project 工具实例 */
-export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof ShuvixProjectParamsSchema> {
+export function createShuvixProjectTool(
+  ctx: ToolContext
+): AgentTool<typeof ShuvixProjectParamsSchema> {
   return {
     name: 'shuvix-project',
     label: t('tool.shuvixProjectLabel'),
-    description:
-      `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`,
+    description: `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`,
     parameters: ShuvixProjectParamsSchema,
     execute: async (
       toolCallId: string,
@@ -51,14 +75,24 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       const session = sessionService.getById(ctx.sessionId)
       if (!session?.projectId) {
         return {
-          content: [{ type: 'text' as const, text: 'No project linked to current session. Cannot read or modify project config.' }],
+          content: [
+            {
+              type: 'text' as const,
+              text: 'No project linked to current session. Cannot read or modify project config.'
+            }
+          ],
           details: undefined
         }
       }
       const project = projectService.getById(session.projectId)
       if (!project) {
         return {
-          content: [{ type: 'text' as const, text: 'No project linked to current session. Cannot read or modify project config.' }],
+          content: [
+            {
+              type: 'text' as const,
+              text: 'No project linked to current session. Cannot read or modify project config.'
+            }
+          ],
           details: undefined
         }
       }
@@ -71,7 +105,9 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
           const settings = JSON.parse(project.settings || '{}')
           enabledTools = settings.enabledTools || []
           referenceDirs = settings.referenceDirs || []
-        } catch { /* 忽略 */ }
+        } catch {
+          /* 忽略 */
+        }
 
         const info = {
           id: project.id,
@@ -89,7 +125,13 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       }
 
       // action === 'update'：需要审批
-      const updates: Record<string, string | boolean | string[] | Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>> = {}
+      const updates: Record<
+        string,
+        | string
+        | boolean
+        | string[]
+        | Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
+      > = {}
       if (params.name !== undefined) updates.name = params.name
       if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
       if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
@@ -98,7 +140,9 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
 
       if (Object.keys(updates).length === 0) {
         return {
-          content: [{ type: 'text' as const, text: 'No fields to update. Specify at least one field.' }],
+          content: [
+            { type: 'text' as const, text: 'No fields to update. Specify at least one field.' }
+          ],
           details: undefined
         }
       }
@@ -119,7 +163,12 @@ export function createShuvixProjectTool(ctx: ToolContext): AgentTool<typeof Shuv
       projectService.update(project.id, updates)
 
       return {
-        content: [{ type: 'text' as const, text: `Project config updated: ${Object.keys(updates).join(', ')}` }],
+        content: [
+          {
+            type: 'text' as const,
+            text: `Project config updated: ${Object.keys(updates).join(', ')}`
+          }
+        ],
         details: { updatedFields: Object.keys(updates) }
       }
     }

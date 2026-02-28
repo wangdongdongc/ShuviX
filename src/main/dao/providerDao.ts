@@ -36,9 +36,9 @@ export class ProviderDao {
 
   /** 根据 ID 获取提供商 */
   findById(id: string): Provider | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM providers WHERE id = ?')
-      .get(id) as Provider | undefined
+    const row = this.db.prepare('SELECT * FROM providers WHERE id = ?').get(id) as
+      | Provider
+      | undefined
     return decryptProvider(row)
   }
 
@@ -64,7 +64,13 @@ export class ProviderDao {
   }
 
   /** 插入自定义提供商（name 必须唯一） */
-  insert(provider: { id: string; name: string; baseUrl: string; apiKey: string; apiProtocol: string }): void {
+  insert(provider: {
+    id: string
+    name: string
+    baseUrl: string
+    apiKey: string
+    apiProtocol: string
+  }): void {
     const existing = this.db.prepare('SELECT id FROM providers WHERE name = ?').get(provider.name)
     if (existing) {
       throw new Error(`提供商名称"${provider.name}"已存在`)
@@ -75,7 +81,16 @@ export class ProviderDao {
       .prepare(
         'INSERT INTO providers (id, name, apiKey, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?)'
       )
-      .run(provider.id, provider.name, encrypt(provider.apiKey), provider.baseUrl, provider.apiProtocol, maxOrder + 1, now, now)
+      .run(
+        provider.id,
+        provider.name,
+        encrypt(provider.apiKey),
+        provider.baseUrl,
+        provider.apiProtocol,
+        maxOrder + 1,
+        now,
+        now
+      )
   }
 
   /** 删除提供商及其模型（仅允许删除自定义提供商） */
@@ -92,7 +107,9 @@ export class ProviderDao {
 
   /** 获取当前最大 sortOrder */
   private getMaxSortOrder(): number {
-    const row = this.db.prepare('SELECT MAX(sortOrder) as maxOrder FROM providers').get() as { maxOrder: number | null }
+    const row = this.db.prepare('SELECT MAX(sortOrder) as maxOrder FROM providers').get() as {
+      maxOrder: number | null
+    }
     return row?.maxOrder ?? -1
   }
 
@@ -108,7 +125,9 @@ export class ProviderDao {
   /** 获取某个提供商的已启用模型 */
   findEnabledModels(providerId: string): ProviderModel[] {
     return this.db
-      .prepare('SELECT * FROM provider_models WHERE providerId = ? AND isEnabled = 1 ORDER BY sortOrder ASC')
+      .prepare(
+        'SELECT * FROM provider_models WHERE providerId = ? AND isEnabled = 1 ORDER BY sortOrder ASC'
+      )
       .all(providerId) as ProviderModel[]
   }
 
@@ -144,13 +163,15 @@ export class ProviderDao {
   /** 获取所有已启用提供商的已启用模型（用于对话中的模型选择器） */
   findAllEnabledModels(): (ProviderModel & { providerName: string })[] {
     return this.db
-      .prepare(`
+      .prepare(
+        `
         SELECT pm.*, COALESCE(NULLIF(p.displayName, ''), p.name) as providerName
         FROM provider_models pm
         JOIN providers p ON pm.providerId = p.id
         WHERE p.isEnabled = 1 AND pm.isEnabled = 1
         ORDER BY p.sortOrder ASC, pm.sortOrder ASC
-      `)
+      `
+      )
       .all() as (ProviderModel & { providerName: string })[]
   }
 
@@ -182,7 +203,9 @@ export class ProviderDao {
       .prepare('SELECT MAX(sortOrder) as maxOrder FROM provider_models WHERE providerId = ?')
       .get(providerId) as { maxOrder: number | null }
     this.db
-      .prepare('INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 1, ?)')
+      .prepare(
+        'INSERT INTO provider_models (id, providerId, modelId, isEnabled, sortOrder) VALUES (?, ?, ?, 1, ?)'
+      )
       .run(uuidv7(), providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
   }
 

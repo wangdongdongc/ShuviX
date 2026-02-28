@@ -1,5 +1,11 @@
 /** 消息类型标识 */
-export type MessageType = 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'ssh_event' | 'error_event'
+export type MessageType =
+  | 'text'
+  | 'tool_call'
+  | 'tool_result'
+  | 'docker_event'
+  | 'ssh_event'
+  | 'error_event'
 
 /** 消息数据结构 */
 export interface Message {

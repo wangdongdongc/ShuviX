@@ -134,16 +134,16 @@ StreamingFooter 实时渲染      MessageBubble 持久渲染
 
 ## 文件清单
 
-| 文件 | 操作 |
-|------|------|
-| `package.json` | 添加 `@google/genai` 依赖 |
-| `src/main/services/googleImageStream.ts` | 新建 |
-| `src/main/services/agent.ts` | 修改 streamFn / streamBuffers / forwardEvent / persistStreamBuffer / AgentStreamEvent |
-| `src/renderer/src/stores/chatStore.ts` | 扩展 SessionStreamState / 新增 action + selector |
-| `src/renderer/src/hooks/useAgentEvents.ts` | 处理 image_data 事件 |
-| `src/renderer/src/components/chat/MessageBubble.tsx` | 新增 streamingImages prop + 助手图片渲染 |
-| `src/renderer/src/components/chat/StreamingFooter.tsx` | 传递 streamingImages，扩展显示条件 |
-| `src/renderer/src/components/chat/ChatView.tsx` | streamingImages 加入滚动依赖 |
+| 文件                                                   | 操作                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `package.json`                                         | 添加 `@google/genai` 依赖                                                             |
+| `src/main/services/googleImageStream.ts`               | 新建                                                                                  |
+| `src/main/services/agent.ts`                           | 修改 streamFn / streamBuffers / forwardEvent / persistStreamBuffer / AgentStreamEvent |
+| `src/renderer/src/stores/chatStore.ts`                 | 扩展 SessionStreamState / 新增 action + selector                                      |
+| `src/renderer/src/hooks/useAgentEvents.ts`             | 处理 image_data 事件                                                                  |
+| `src/renderer/src/components/chat/MessageBubble.tsx`   | 新增 streamingImages prop + 助手图片渲染                                              |
+| `src/renderer/src/components/chat/StreamingFooter.tsx` | 传递 streamingImages，扩展显示条件                                                    |
+| `src/renderer/src/components/chat/ChatView.tsx`        | streamingImages 加入滚动依赖                                                          |
 
 ## 未来兼容
 

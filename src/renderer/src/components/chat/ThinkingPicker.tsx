@@ -10,7 +10,8 @@ import type { ThinkingLevel } from '../../../../main/types'
  */
 export function ThinkingPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
-  const { activeSessionId, modelSupportsReasoning, thinkingLevel, setThinkingLevel } = useChatStore()
+  const { activeSessionId, modelSupportsReasoning, thinkingLevel, setThinkingLevel } =
+    useChatStore()
 
   const thinkingRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -33,7 +34,10 @@ export function ThinkingPicker(): React.JSX.Element | null {
     setThinkingLevel(level)
     setOpen(false)
     if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: level as ThinkingLevel })
+      await window.api.agent.setThinkingLevel({
+        sessionId: activeSessionId,
+        level: level as ThinkingLevel
+      })
       // 持久化思考深度到会话
       await window.api.session.updateModelMetadata({
         id: activeSessionId,
@@ -59,12 +63,16 @@ export function ThinkingPicker(): React.JSX.Element | null {
 
       {open && (
         <div className="absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-          <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">{t('input.thinkingDepth')}</div>
+          <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">
+            {t('input.thinkingDepth')}
+          </div>
           <div className="py-1">
             {levels.map((l) => (
               <button
                 key={l.value}
-                onClick={() => { void handleSetLevel(l.value) }}
+                onClick={() => {
+                  void handleSetLevel(l.value)
+                }}
                 className={`w-full text-left px-2 py-1.5 text-[11px] hover:bg-bg-hover transition-colors ${
                   thinkingLevel === l.value ? 'text-purple-400 font-medium' : 'text-text-primary'
                 }`}

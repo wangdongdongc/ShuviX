@@ -28,17 +28,31 @@ interface InputAreaProps {
  */
 export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.Element {
   const { t } = useTranslation()
-  const { inputText, setInputText, activeSessionId, modelSupportsVision, maxContextTokens, usedContextTokens, pendingImages, removePendingImage } = useChatStore()
+  const {
+    inputText,
+    setInputText,
+    activeSessionId,
+    modelSupportsVision,
+    maxContextTokens,
+    usedContextTokens,
+    pendingImages,
+    removePendingImage
+  } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
   const { projectPath, agentMdLoaded } = useSessionMeta()
 
   // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
   const toolExecutions = useChatStore(selectToolExecutions)
-  const hasPendingAction = toolExecutions.some((te) => te.status === 'pending_approval' || (te.status === 'pending_user_input' && te.toolName === 'ask'))
+  const hasPendingAction = toolExecutions.some(
+    (te) =>
+      te.status === 'pending_approval' ||
+      (te.status === 'pending_user_input' && te.toolName === 'ask')
+  )
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } = useImageUpload(modelSupportsVision)
+  const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
+    useImageUpload(modelSupportsVision)
 
   // 拖拽调节的 textarea 最小高度
   const DRAG_MIN = 60
@@ -63,31 +77,34 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   }, [inputText, minH])
 
   /** 拖拽手柄：向上拖增大输入区，向下拖缩小 */
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    draggingRef.current = true
-    const startY = e.clientY
-    const startH = minH
-    const onMove = (ev: MouseEvent): void => {
-      const delta = startY - ev.clientY
-      const newH = Math.max(DRAG_MIN, Math.min(startH + delta, DRAG_MAX))
-      setMinH(newH)
-      // 拖拽时直接设置 textarea 高度
-      if (textareaRef.current) {
-        textareaRef.current.style.height = newH + 'px'
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      draggingRef.current = true
+      const startY = e.clientY
+      const startH = minH
+      const onMove = (ev: MouseEvent): void => {
+        const delta = startY - ev.clientY
+        const newH = Math.max(DRAG_MIN, Math.min(startH + delta, DRAG_MAX))
+        setMinH(newH)
+        // 拖拽时直接设置 textarea 高度
+        if (textareaRef.current) {
+          textareaRef.current.style.height = newH + 'px'
+        }
       }
-    }
-    const onUp = (): void => {
-      draggingRef.current = false
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      // 持久化拖拽后的输入框高度
-      const el = textareaRef.current
-      if (el) localStorage.setItem('inputMinHeight', String(el.offsetHeight))
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [minH])
+      const onUp = (): void => {
+        draggingRef.current = false
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        // 持久化拖拽后的输入框高度
+        const el = textareaRef.current
+        if (el) localStorage.setItem('inputMinHeight', String(el.offsetHeight))
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [minH]
+  )
 
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
@@ -104,9 +121,12 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     // 构造消息内容：文本 + 图片标记
     const contentText = text || t('input.imageOnly')
     // 图片信息存入 metadata 用于消息气泡渲染
-    const metadata = images.length > 0
-      ? JSON.stringify({ images: images.map((img) => ({ mimeType: img.mimeType, preview: img.preview })) })
-      : undefined
+    const metadata =
+      images.length > 0
+        ? JSON.stringify({
+            images: images.map((img) => ({ mimeType: img.mimeType, preview: img.preview }))
+          })
+        : undefined
 
     // 保存用户消息到数据库
     const userMsg = await window.api.message.add({
@@ -118,10 +138,15 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     store.addMessage(userMsg)
 
     // 发送给 Agent（附带图片）
-    const agentImages = images.length > 0
-      ? images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType }))
-      : undefined
-    await window.api.agent.prompt({ sessionId: activeSessionId, text: contentText, images: agentImages })
+    const agentImages =
+      images.length > 0
+        ? images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType }))
+        : undefined
+    await window.api.agent.prompt({
+      sessionId: activeSessionId,
+      text: contentText,
+      images: agentImages
+    })
   }
 
   /** 中止生成（后端统一处理落库 + Agent 上下文同步） */
@@ -158,16 +183,17 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
   // pending action 时输入框临时可用
   const effectiveStreaming = isStreaming && !hasPendingAction
-  const canSend = (inputText.trim().length > 0 || pendingImages.length > 0) && !effectiveStreaming && activeSessionId
+  const canSend =
+    (inputText.trim().length > 0 || pendingImages.length > 0) &&
+    !effectiveStreaming &&
+    activeSessionId
   const instructionBadgeText = agentMdLoaded ? 'AGENTS.MD' : 'None'
   const instructionDotClass = agentMdLoaded ? 'bg-emerald-400/90' : 'bg-text-tertiary/45'
 
   return (
     <div
       className={`border-t bg-bg-secondary transition-colors ${
-        isDragging
-          ? 'border-accent border-dashed bg-accent/5'
-          : 'border-border-secondary'
+        isDragging ? 'border-accent border-dashed bg-accent/5' : 'border-border-secondary'
       }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -181,140 +207,152 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         <div className="w-8 h-0.5 rounded-full bg-border-secondary group-hover:bg-text-tertiary transition-colors" />
       </div>
       <div className="max-w-3xl mx-auto">
-          {/* 图片预览条 */}
-          {pendingImages.length > 0 && (
-            <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
-              {pendingImages.map((img, idx) => (
-                <div key={idx} className="relative flex-shrink-0 group/img">
-                  <img
-                    src={img.preview}
-                    alt={`附图 ${idx + 1}`}
-                    className="w-16 h-16 object-cover rounded-lg border border-border-primary"
-                  />
-                  <button
-                    onClick={() => removePendingImage(idx)}
-                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
-                  >
-                    <X size={10} />
-                  </button>
+        {/* 图片预览条 */}
+        {pendingImages.length > 0 && (
+          <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
+            {pendingImages.map((img, idx) => (
+              <div key={idx} className="relative flex-shrink-0 group/img">
+                <img
+                  src={img.preview}
+                  alt={`附图 ${idx + 1}`}
+                  className="w-16 h-16 object-cover rounded-lg border border-border-primary"
+                />
+                <button
+                  onClick={() => removePendingImage(idx)}
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="relative flex items-end gap-2">
+          {/* 左下角紧凑扩展位 */}
+          <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
+            <ModelPicker />
+
+            {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
+            {modelSupportsVision && (
+              <>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
+                  title={t('input.uploadImage')}
+                >
+                  <ImagePlus size={12} />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) void handleImageFiles(e.target.files)
+                    e.target.value = ''
+                  }}
+                />
+              </>
+            )}
+
+            {/* 上下文用量指示器 */}
+            {maxContextTokens > 0 && (
+              <span className="relative inline-flex items-center group/token">
+                <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
+                  {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
+                  {' / '}
+                  {formatTokenCount(maxContextTokens)}
+                </span>
+                {/* 悬浮 tooltip：详细用量 */}
+                <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
+                  <div className="text-[11px] text-text-primary">
+                    {t('input.contextUsage', {
+                      used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-',
+                      max: maxContextTokens.toLocaleString()
+                    })}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+              </span>
+            )}
 
-          <div className="relative flex items-end gap-2">
-            {/* 左下角紧凑扩展位 */}
-            <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
-              <ModelPicker />
+            <ThinkingPicker />
+            <ToolPicker />
 
-              {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
-              {modelSupportsVision && (
-                <>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
-                    title={t('input.uploadImage')}
-                  >
-                    <ImagePlus size={12} />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) void handleImageFiles(e.target.files)
-                      e.target.value = ''
-                    }}
-                  />
-                </>
-              )}
-
-              {/* 上下文用量指示器 */}
-              {maxContextTokens > 0 && (
-                <span className="relative inline-flex items-center group/token">
-                  <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
-                    {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
-                    {' / '}
-                    {formatTokenCount(maxContextTokens)}
+            {/* 项目指令文件加载状态 */}
+            {projectPath && (
+              <span className="relative inline-flex items-center group">
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors select-none"
+                  title={t('input.instructionsStatus')}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${instructionDotClass}`} />
+                  <span className="uppercase tracking-wide text-[10px] opacity-70">Instr</span>
+                  <span className="truncate max-w-[140px] text-text-secondary/90">
+                    {instructionBadgeText}
                   </span>
-                  {/* 悬浮 tooltip：详细用量 */}
-                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
-                    <div className="text-[11px] text-text-primary">{t('input.contextUsage', { used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-', max: maxContextTokens.toLocaleString() })}</div>
-                  </div>
                 </span>
-              )}
 
-              <ThinkingPicker />
-              <ToolPicker />
-
-              {/* 项目指令文件加载状态 */}
-              {projectPath && (
-                <span className="relative inline-flex items-center group">
-                  <span
-                    className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors select-none"
-                    title={t('input.instructionsStatus')}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${instructionDotClass}`} />
-                    <span className="uppercase tracking-wide text-[10px] opacity-70">Instr</span>
-                    <span className="truncate max-w-[140px] text-text-secondary/90">{instructionBadgeText}</span>
-                  </span>
-
-                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
-                    <div className="text-[10px] text-text-tertiary mb-1">{t('input.instructionsStatus')}</div>
-                    <div className="flex items-center justify-between gap-3 text-[11px]">
-                      <span className="text-text-secondary">AGENTS.MD</span>
-                      <span className={agentMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
-                        {agentMdLoaded ? t('input.loaded') : t('input.notLoaded')}
-                      </span>
-                    </div>
+                <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
+                  <div className="text-[10px] text-text-tertiary mb-1">
+                    {t('input.instructionsStatus')}
                   </div>
-                </span>
-              )}
-            </div>
-
-            <textarea
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={
-                !activeSessionId ? t('input.placeholderNoSession')
-                : hasPendingAction ? t('input.placeholderOverride')
-                : modelSupportsVision ? t('input.placeholderVision')
-                : t('input.placeholder')
-              }
-              disabled={!activeSessionId}
-              rows={3}
-              style={{ minHeight: `${minH}px` }}
-              className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
-            />
-
-            {effectiveStreaming ? (
-              <button
-                onClick={handleAbort}
-                className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
-                title={t('input.stopGen')}
-              >
-                <Square size={16} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                onClick={hasPendingAction ? handleOverrideSend : handleSend}
-                disabled={!canSend}
-                className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
-                  canSend
-                    ? 'bg-accent text-white hover:bg-accent-hover'
-                    : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
-                }`}
-                title={t('input.send')}
-              >
-                <Send size={16} />
-              </button>
+                  <div className="flex items-center justify-between gap-3 text-[11px]">
+                    <span className="text-text-secondary">AGENTS.MD</span>
+                    <span className={agentMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
+                      {agentMdLoaded ? t('input.loaded') : t('input.notLoaded')}
+                    </span>
+                  </div>
+                </div>
+              </span>
             )}
           </div>
+
+          <textarea
+            ref={textareaRef}
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={
+              !activeSessionId
+                ? t('input.placeholderNoSession')
+                : hasPendingAction
+                  ? t('input.placeholderOverride')
+                  : modelSupportsVision
+                    ? t('input.placeholderVision')
+                    : t('input.placeholder')
+            }
+            disabled={!activeSessionId}
+            rows={3}
+            style={{ minHeight: `${minH}px` }}
+            className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
+          />
+
+          {effectiveStreaming ? (
+            <button
+              onClick={handleAbort}
+              className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
+              title={t('input.stopGen')}
+            >
+              <Square size={16} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              onClick={hasPendingAction ? handleOverrideSend : handleSend}
+              disabled={!canSend}
+              className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
+                canSend
+                  ? 'bg-accent text-white hover:bg-accent-hover'
+                  : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
+              }`}
+              title={t('input.send')}
+            >
+              <Send size={16} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

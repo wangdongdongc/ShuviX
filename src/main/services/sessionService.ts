@@ -101,7 +101,11 @@ export class SessionService {
     // 清理临时会话工作目录
     const tempDir = getTempWorkspace(id)
     if (existsSync(tempDir)) {
-      try { rmSync(tempDir, { recursive: true, force: true }) } catch { /* 忽略 */ }
+      try {
+        rmSync(tempDir, { recursive: true, force: true })
+      } catch {
+        /* 忽略 */
+      }
     }
   }
 }

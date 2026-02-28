@@ -54,11 +54,13 @@ class DatabaseManager {
 
     // 旧版内置提供商名称迁移为 pi-ai slug（name 用作 getModel() 的 provider slug）
     const renameMap: Record<string, { slug: string; displayName: string }> = {
-      'OpenAI': { slug: 'openai', displayName: 'OpenAI' },
-      'Anthropic': { slug: 'anthropic', displayName: 'Anthropic' },
-      'Google': { slug: 'google', displayName: 'Google' },
+      OpenAI: { slug: 'openai', displayName: 'OpenAI' },
+      Anthropic: { slug: 'anthropic', displayName: 'Anthropic' },
+      Google: { slug: 'google', displayName: 'Google' }
     }
-    const renameStmt = this.db.prepare('UPDATE providers SET name = ?, displayName = ? WHERE name = ? AND isBuiltin = 1')
+    const renameStmt = this.db.prepare(
+      'UPDATE providers SET name = ?, displayName = ? WHERE name = ? AND isBuiltin = 1'
+    )
     for (const [oldName, { slug, displayName }] of Object.entries(renameMap)) {
       renameStmt.run(slug, displayName, oldName)
     }
@@ -190,36 +192,133 @@ class DatabaseManager {
     const now = Date.now()
 
     // name 必须与 pi-ai 的 provider slug 一致（agent.ts 用 name.toLowerCase() 调 getModel()）
-    const builtinProviders: Array<{ name: string; displayName: string; baseUrl: string; apiProtocol: string; sortOrder: number }> = [
-      { name: 'openai', displayName: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiProtocol: 'openai-completions', sortOrder: 0 },
-      { name: 'anthropic', displayName: 'Anthropic', baseUrl: 'https://api.anthropic.com', apiProtocol: 'anthropic-messages', sortOrder: 1 },
-      { name: 'google', displayName: 'Google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', apiProtocol: 'google-generative-ai', sortOrder: 2 },
-      { name: 'xai', displayName: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1', apiProtocol: 'openai-completions', sortOrder: 3 },
-      { name: 'groq', displayName: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiProtocol: 'openai-completions', sortOrder: 4 },
-      { name: 'cerebras', displayName: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', apiProtocol: 'openai-completions', sortOrder: 5 },
-      { name: 'mistral', displayName: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', apiProtocol: 'openai-completions', sortOrder: 6 },
-      { name: 'openrouter', displayName: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiProtocol: 'openai-completions', sortOrder: 7 },
-      { name: 'minimax', displayName: 'MiniMax', baseUrl: 'https://api.minimaxi.chat/v1', apiProtocol: 'openai-completions', sortOrder: 8 },
-      { name: 'minimax-cn', displayName: 'MiniMax CN', baseUrl: 'https://api.minimax.chat/v1', apiProtocol: 'openai-completions', sortOrder: 9 },
-      { name: 'huggingface', displayName: 'Hugging Face', baseUrl: 'https://router.huggingface.co/v1', apiProtocol: 'openai-completions', sortOrder: 10 },
-      { name: 'opencode', displayName: 'OpenCode', baseUrl: 'https://opencode.ai/zen/v1', apiProtocol: 'openai-completions', sortOrder: 11 },
-      { name: 'kimi-coding', displayName: 'Kimi Coding', baseUrl: 'https://api.kimi.com/coding', apiProtocol: 'anthropic-messages', sortOrder: 12 },
-      { name: 'zai', displayName: 'ZAI (智谱)', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiProtocol: 'openai-completions', sortOrder: 13 },
+    const builtinProviders: Array<{
+      name: string
+      displayName: string
+      baseUrl: string
+      apiProtocol: string
+      sortOrder: number
+    }> = [
+      {
+        name: 'openai',
+        displayName: 'OpenAI',
+        baseUrl: 'https://api.openai.com/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 0
+      },
+      {
+        name: 'anthropic',
+        displayName: 'Anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        apiProtocol: 'anthropic-messages',
+        sortOrder: 1
+      },
+      {
+        name: 'google',
+        displayName: 'Google',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        apiProtocol: 'google-generative-ai',
+        sortOrder: 2
+      },
+      {
+        name: 'xai',
+        displayName: 'xAI (Grok)',
+        baseUrl: 'https://api.x.ai/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 3
+      },
+      {
+        name: 'groq',
+        displayName: 'Groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 4
+      },
+      {
+        name: 'cerebras',
+        displayName: 'Cerebras',
+        baseUrl: 'https://api.cerebras.ai/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 5
+      },
+      {
+        name: 'mistral',
+        displayName: 'Mistral',
+        baseUrl: 'https://api.mistral.ai/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 6
+      },
+      {
+        name: 'openrouter',
+        displayName: 'OpenRouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 7
+      },
+      {
+        name: 'minimax',
+        displayName: 'MiniMax',
+        baseUrl: 'https://api.minimaxi.chat/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 8
+      },
+      {
+        name: 'minimax-cn',
+        displayName: 'MiniMax CN',
+        baseUrl: 'https://api.minimax.chat/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 9
+      },
+      {
+        name: 'huggingface',
+        displayName: 'Hugging Face',
+        baseUrl: 'https://router.huggingface.co/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 10
+      },
+      {
+        name: 'opencode',
+        displayName: 'OpenCode',
+        baseUrl: 'https://opencode.ai/zen/v1',
+        apiProtocol: 'openai-completions',
+        sortOrder: 11
+      },
+      {
+        name: 'kimi-coding',
+        displayName: 'Kimi Coding',
+        baseUrl: 'https://api.kimi.com/coding',
+        apiProtocol: 'anthropic-messages',
+        sortOrder: 12
+      },
+      {
+        name: 'zai',
+        displayName: 'ZAI (智谱)',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiProtocol: 'openai-completions',
+        sortOrder: 13
+      }
     ]
 
     const findByName = this.db.prepare('SELECT id, displayName FROM providers WHERE name = ?')
     const insertProvider = this.db.prepare(
       'INSERT INTO providers (id, name, displayName, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)'
     )
-    const updateDisplayName = this.db.prepare(
-      'UPDATE providers SET displayName = ? WHERE id = ?'
-    )
+    const updateDisplayName = this.db.prepare('UPDATE providers SET displayName = ? WHERE id = ?')
 
     const seedAll = this.db.transaction(() => {
       for (const p of builtinProviders) {
         const existing = findByName.get(p.name) as { id: string; displayName: string } | undefined
         if (!existing) {
-          insertProvider.run(uuidv7(), p.name, p.displayName, p.baseUrl, p.apiProtocol, p.sortOrder, now, now)
+          insertProvider.run(
+            uuidv7(),
+            p.name,
+            p.displayName,
+            p.baseUrl,
+            p.apiProtocol,
+            p.sortOrder,
+            now,
+            now
+          )
         } else if (!existing.displayName) {
           // 旧数据迁移：补充 displayName
           updateDisplayName.run(p.displayName, existing.id)

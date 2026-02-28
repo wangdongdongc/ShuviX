@@ -20,7 +20,8 @@ const DEFAULT_TIMEOUT = 120
 
 const BashParamsSchema = Type.Object({
   command: Type.String({
-    description: 'The shell command to execute. Supports pipes, redirects, and other bash features. Avoid commands that require interactive input.'
+    description:
+      'The shell command to execute. Supports pipes, redirects, and other bash features. Avoid commands that require interactive input.'
   }),
   timeout: Type.Optional(
     Type.Number({
@@ -103,14 +104,57 @@ function defaultSpawn(
   })
 }
 
+/** 读取 Docker 配置 */
+function getDockerConfig(): { useDocker: boolean; image: string; memory?: string; cpus?: string } {
+  const dockerEnabled = settingsService.get('tool.bash.dockerEnabled') === 'true'
+  const dockerImage = settingsService.get('tool.bash.dockerImage') || ''
+  const dockerMemory = settingsService.get('tool.bash.dockerMemory') || ''
+  const dockerCpus = settingsService.get('tool.bash.dockerCpus') || ''
+  return {
+    useDocker: dockerEnabled && !!dockerImage,
+    image: dockerImage,
+    memory: dockerMemory || undefined,
+    cpus: dockerCpus || undefined
+  }
+}
+
 /** 创建 bash 工具实例 */
-export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSchema> {
+export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSchema> & {
+  preExecute: (toolCallId: string, params: Record<string, unknown>) => Promise<void>
+} {
   return {
     name: 'bash',
     label: t('tool.bashLabel'),
     description:
       'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. IMPORTANT: Prefer built-in tools over shell commands when possible — use `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Only use bash when no built-in tool can accomplish the task.',
     parameters: BashParamsSchema,
+
+    /** 资源初始化：Docker 模式下确保容器运行 */
+    preExecute: async (_toolCallId: string, _params: Record<string, unknown>) => {
+      const docker = getDockerConfig()
+      if (!docker.useDocker) return
+
+      const config = resolveProjectConfig(ctx)
+      try {
+        const container = await dockerManager.ensureContainer(
+          ctx.sessionId,
+          docker.image,
+          config.workingDirectory,
+          {
+            memory: docker.memory,
+            cpus: docker.cpus,
+            referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined
+          }
+        )
+        if (container.isNew) ctx.onContainerCreated?.(container.containerId, docker.image)
+      } catch {
+        const status = dockerManager.getDockerStatus()
+        if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
+        if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
+        throw new Error(t('settings.toolBashDockerNotRunning'))
+      }
+    },
+
     execute: async (
       toolCallId: string,
       params: { command: string; timeout?: number },
@@ -118,13 +162,7 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
     ) => {
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
       const config = resolveProjectConfig(ctx)
-
-      // 从全局设置读取 Docker 配置
-      const dockerEnabled = settingsService.get('tool.bash.dockerEnabled') === 'true'
-      const dockerImage = settingsService.get('tool.bash.dockerImage') || ''
-      const dockerMemory = settingsService.get('tool.bash.dockerMemory') || ''
-      const dockerCpus = settingsService.get('tool.bash.dockerCpus') || ''
-      const useDocker = dockerEnabled && !!dockerImage
+      const docker = getDockerConfig()
 
       // 沙箱模式：bash 命令需用户确认
       if (config.sandboxEnabled && ctx.requestApproval) {
@@ -137,27 +175,19 @@ export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSch
       try {
         let result: { stdout: string; stderr: string; exitCode: number }
 
-        if (useDocker) {
-          // Docker 模式：确保容器运行，在容器内执行
-          let containerId: string
-          let isNew: boolean
-          try {
-            const container = await dockerManager.ensureContainer(
-              ctx.sessionId, dockerImage, config.workingDirectory,
-              { memory: dockerMemory || undefined, cpus: dockerCpus || undefined, referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined }
-            )
-            containerId = container.containerId
-            isNew = container.isNew
-          } catch {
-            // 容器创建失败时检查具体原因，给出明确提示
-            const status = dockerManager.getDockerStatus()
-            if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
-            if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
+        if (docker.useDocker) {
+          // Docker 模式：preExecute 已确保容器就绪，直接获取并执行
+          const containerInfo = dockerManager.getContainerInfo(ctx.sessionId)
+          if (!containerInfo) {
             throw new Error(t('settings.toolBashDockerNotRunning'))
           }
-          if (isNew) ctx.onContainerCreated?.(containerId, dockerImage)
-          log.info(`(docker ${dockerImage}): ${params.command}`)
-          result = await dockerManager.exec(containerId, params.command, config.workingDirectory, signal)
+          log.info(`(docker ${docker.image}): ${params.command}`)
+          result = await dockerManager.exec(
+            containerInfo.containerId,
+            params.command,
+            config.workingDirectory,
+            signal
+          )
         } else {
           // 本地模式
           result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)

@@ -45,9 +45,7 @@ describe('recordRead + getReadTime', () => {
 
 describe('assertNotModifiedSinceRead', () => {
   it('未读取过文件时抛错', () => {
-    expect(() => assertNotModifiedSinceRead(SESSION_ID, TEST_FILE)).toThrowError(
-      /must read file/i
-    )
+    expect(() => assertNotModifiedSinceRead(SESSION_ID, TEST_FILE)).toThrowError(/must read file/i)
   })
 
   it('文件未修改时通过（不抛错）', () => {
@@ -63,9 +61,7 @@ describe('assertNotModifiedSinceRead', () => {
     // 将文件 mtime 设置为未来时间
     const future = new Date(Date.now() + 5000)
     utimesSync(TEST_FILE, future, future)
-    expect(() => assertNotModifiedSinceRead(SESSION_ID, TEST_FILE)).toThrowError(
-      /modified since/i
-    )
+    expect(() => assertNotModifiedSinceRead(SESSION_ID, TEST_FILE)).toThrowError(/modified since/i)
   })
 
   it('文件被删除后允许写入（不抛错）', () => {

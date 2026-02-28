@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, RefreshCw, Power, PowerOff, ChevronDown, ChevronRight, Wrench, Server } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  RefreshCw,
+  Power,
+  PowerOff,
+  ChevronDown,
+  ChevronRight,
+  Wrench,
+  Server
+} from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** MCP Server 信息（从主进程返回） */
@@ -30,10 +40,13 @@ interface McpToolInfo {
 /** 状态指示灯颜色 */
 function StatusDot({ status }: { status: string }): React.JSX.Element {
   const color =
-    status === 'connected' ? 'bg-green-500' :
-    status === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-    status === 'error' ? 'bg-red-500' :
-    'bg-gray-400'
+    status === 'connected'
+      ? 'bg-green-500'
+      : status === 'connecting'
+        ? 'bg-yellow-500 animate-pulse'
+        : status === 'error'
+          ? 'bg-red-500'
+          : 'bg-gray-400'
   return <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
 }
 
@@ -61,17 +74,25 @@ function ToolDescItem({ tool }: { tool: McpToolInfo }): React.JSX.Element {
 /** 状态文案 */
 function statusText(status: string, t: (key: string) => string): string {
   switch (status) {
-    case 'connected': return t('settings.mcpStatusConnected')
-    case 'disconnected': return t('settings.mcpStatusDisconnected')
-    case 'connecting': return t('settings.mcpStatusConnecting')
-    case 'error': return t('settings.mcpStatusError')
-    default: return status
+    case 'connected':
+      return t('settings.mcpStatusConnected')
+    case 'disconnected':
+      return t('settings.mcpStatusDisconnected')
+    case 'connecting':
+      return t('settings.mcpStatusConnecting')
+    case 'error':
+      return t('settings.mcpStatusError')
+    default:
+      return status
   }
 }
 
 /** 解析多行文本为数组 */
 function linesToArray(text: string): string[] {
-  return text.split('\n').map(l => l.trim()).filter(Boolean)
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
 }
 
 /** 解析 KEY=VALUE 多行文本为对象 */
@@ -104,23 +125,35 @@ function linesToHeaders(text: string): Record<string, string> {
 
 /** JSON 数组转多行文本 */
 function arrayToLines(json: string): string {
-  try { return (JSON.parse(json) as string[]).join('\n') } catch { return '' }
+  try {
+    return (JSON.parse(json) as string[]).join('\n')
+  } catch {
+    return ''
+  }
 }
 
 /** JSON 对象转 KEY=VALUE 多行文本 */
 function kvToLines(json: string): string {
   try {
     const obj = JSON.parse(json)
-    return Object.entries(obj).map(([k, v]) => `${k}=${v}`).join('\n')
-  } catch { return '' }
+    return Object.entries(obj)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n')
+  } catch {
+    return ''
+  }
 }
 
 /** JSON 对象转 Key: Value 多行文本 */
 function headersToLines(json: string): string {
   try {
     const obj = JSON.parse(json)
-    return Object.entries(obj).map(([k, v]) => `${k}: ${v}`).join('\n')
-  } catch { return '' }
+    return Object.entries(obj)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n')
+  } catch {
+    return ''
+  }
 }
 
 /** MCP 设置页 */
@@ -276,7 +309,10 @@ export function McpSettings(): React.JSX.Element {
       {/* 添加按钮 */}
       {!showAdd && (
         <button
-          onClick={() => { resetForm(); setShowAdd(true) }}
+          onClick={() => {
+            resetForm()
+            setShowAdd(true)
+          }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
         >
           <Plus size={12} />
@@ -289,10 +325,12 @@ export function McpSettings(): React.JSX.Element {
         <div className="border border-border-secondary rounded-lg p-4 space-y-3 bg-bg-secondary">
           {/* 名称 */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpName')}</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1">
+              {t('settings.mcpName')}
+            </label>
             <input
               value={formName}
-              onChange={e => setFormName(e.target.value)}
+              onChange={(e) => setFormName(e.target.value)}
               className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
               placeholder={t('settings.mcpNamePlaceholder')}
             />
@@ -300,9 +338,11 @@ export function McpSettings(): React.JSX.Element {
 
           {/* 类型 */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpType')}</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1">
+              {t('settings.mcpType')}
+            </label>
             <div className="flex gap-2">
-              {(['stdio', 'http'] as const).map(tp => (
+              {(['stdio', 'http'] as const).map((tp) => (
                 <button
                   key={tp}
                   onClick={() => setFormType(tp)}
@@ -322,29 +362,35 @@ export function McpSettings(): React.JSX.Element {
           {formType === 'stdio' && (
             <>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpCommand')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.mcpCommand')}
+                </label>
                 <input
                   value={formCommand}
-                  onChange={e => setFormCommand(e.target.value)}
+                  onChange={(e) => setFormCommand(e.target.value)}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
                   placeholder={t('settings.mcpCommandPlaceholder')}
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpArgs')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.mcpArgs')}
+                </label>
                 <textarea
                   value={formArgs}
-                  onChange={e => setFormArgs(e.target.value)}
+                  onChange={(e) => setFormArgs(e.target.value)}
                   rows={3}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
                   placeholder={t('settings.mcpArgsPlaceholder')}
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpEnv')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.mcpEnv')}
+                </label>
                 <textarea
                   value={formEnv}
-                  onChange={e => setFormEnv(e.target.value)}
+                  onChange={(e) => setFormEnv(e.target.value)}
                   rows={2}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
                   placeholder={t('settings.mcpEnvPlaceholder')}
@@ -357,19 +403,23 @@ export function McpSettings(): React.JSX.Element {
           {formType === 'http' && (
             <>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpUrl')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.mcpUrl')}
+                </label>
                 <input
                   value={formUrl}
-                  onChange={e => setFormUrl(e.target.value)}
+                  onChange={(e) => setFormUrl(e.target.value)}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
                   placeholder={t('settings.mcpUrlPlaceholder')}
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.mcpHeaders')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.mcpHeaders')}
+                </label>
                 <textarea
                   value={formHeaders}
-                  onChange={e => setFormHeaders(e.target.value)}
+                  onChange={(e) => setFormHeaders(e.target.value)}
                   rows={2}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
                   placeholder={t('settings.mcpHeadersPlaceholder')}
@@ -406,7 +456,7 @@ export function McpSettings(): React.JSX.Element {
         </div>
       ) : (
         <div className="space-y-2">
-          {servers.map(s => (
+          {servers.map((s) => (
             <div key={s.id} className="border border-border-secondary rounded-lg overflow-hidden">
               {/* Server 头部 */}
               <div className="flex items-center gap-2 px-3 py-2.5 bg-bg-secondary">
@@ -428,9 +478,12 @@ export function McpSettings(): React.JSX.Element {
                 </span>
 
                 {/* 状态文字 */}
-                <span className={`text-[10px] ${s.status === 'error' ? 'text-red-400' : 'text-text-tertiary'}`}>
+                <span
+                  className={`text-[10px] ${s.status === 'error' ? 'text-red-400' : 'text-text-tertiary'}`}
+                >
                   {statusText(s.status, t)}
-                  {s.status === 'connected' && ` · ${t('settings.mcpToolCount', { count: s.toolCount })}`}
+                  {s.status === 'connected' &&
+                    ` · ${t('settings.mcpToolCount', { count: s.toolCount })}`}
                 </span>
 
                 {/* 操作按钮 */}
@@ -487,7 +540,7 @@ export function McpSettings(): React.JSX.Element {
                       <p className="text-[10px] text-text-tertiary mb-1.5">
                         {t('settings.mcpTools')} ({tools.length})
                       </p>
-                      {tools.map(tool => (
+                      {tools.map((tool) => (
                         <ToolDescItem key={tool.name} tool={tool} />
                       ))}
                     </div>

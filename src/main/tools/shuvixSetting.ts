@@ -12,18 +12,25 @@ import { changeLanguage, t } from '../i18n'
 
 const ShuvixSettingParamsSchema = Type.Object({
   action: Type.Union([Type.Literal('get'), Type.Literal('set')], {
-    description: 'Action to perform: "get" to read all settings, "set" to update a single setting (requires user approval)'
+    description:
+      'Action to perform: "get" to read all settings, "set" to update a single setting (requires user approval)'
   }),
-  key: Type.Optional(Type.String({
-    description: `Setting key to update. Known keys: ${getSettingKeyDescriptions()}`
-  })),
-  value: Type.Optional(Type.String({
-    description: 'New value for the setting key (always a string)'
-  }))
+  key: Type.Optional(
+    Type.String({
+      description: `Setting key to update. Known keys: ${getSettingKeyDescriptions()}`
+    })
+  ),
+  value: Type.Optional(
+    Type.String({
+      description: 'New value for the setting key (always a string)'
+    })
+  )
 })
 
 /** 创建 shuvix-setting 工具实例 */
-export function createShuvixSettingTool(ctx: ToolContext): AgentTool<typeof ShuvixSettingParamsSchema> {
+export function createShuvixSettingTool(
+  ctx: ToolContext
+): AgentTool<typeof ShuvixSettingParamsSchema> {
   return {
     name: 'shuvix-setting',
     label: t('tool.shuvixSettingLabel'),
@@ -50,7 +57,12 @@ export function createShuvixSettingTool(ctx: ToolContext): AgentTool<typeof Shuv
       // action === 'set'：需要审批
       if (!params.key || params.value === undefined) {
         return {
-          content: [{ type: 'text' as const, text: 'Both "key" and "value" are required when action is "set".' }],
+          content: [
+            {
+              type: 'text' as const,
+              text: 'Both "key" and "value" are required when action is "set".'
+            }
+          ],
           details: undefined
         }
       }
@@ -79,7 +91,9 @@ export function createShuvixSettingTool(ctx: ToolContext): AgentTool<typeof Shuv
       })
 
       return {
-        content: [{ type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }],
+        content: [
+          { type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }
+        ],
         details: { key: params.key, value: params.value }
       }
     }

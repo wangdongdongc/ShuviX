@@ -50,7 +50,7 @@ const api = {
     openFolder: (folderPath: string) => ipcRenderer.invoke('app:open-folder', folderPath),
     /** 通知主进程渲染已就绪，可以显示窗口 */
     windowReady: () => ipcRenderer.send('app:window-ready'),
-    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */ 
+    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
       ipcRenderer.on('app:settings-changed', handler)
@@ -70,8 +70,7 @@ const api = {
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
 
     /** 切换模型 */
-    setModel: (params: AgentSetModelParams) =>
-      ipcRenderer.invoke('agent:setModel', params),
+    setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
 
     /** 设置思考深度 */
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
@@ -86,8 +85,17 @@ const api = {
       ipcRenderer.invoke('agent:respondToAsk', params),
 
     /** 响应 SSH 凭据输入（凭据不经过大模型） */
-    respondToSshCredentials: (params: { toolCallId: string; credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null }) =>
-      ipcRenderer.invoke('agent:respondToSshCredentials', params),
+    respondToSshCredentials: (params: {
+      toolCallId: string
+      credentials: {
+        host: string
+        port: number
+        username: string
+        password?: string
+        privateKey?: string
+        passphrase?: string
+      } | null
+    }) => ipcRenderer.invoke('agent:respondToSshCredentials', params),
 
     /** 动态更新启用工具集 */
     setEnabledTools: (params: { sessionId: string; tools: string[] }) =>
@@ -95,7 +103,8 @@ const api = {
 
     /** 监听 Agent 事件流 */
     onEvent: (callback: (event: AgentStreamEvent) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, event: AgentStreamEvent): void => callback(event)
+      const handler = (_: Electron.IpcRendererEvent, event: AgentStreamEvent): void =>
+        callback(event)
       ipcRenderer.on('agent:event', handler)
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
@@ -116,14 +125,10 @@ const api = {
       ipcRenderer.invoke('provider:toggleModelEnabled', params),
     syncModels: (params: ProviderSyncModelsParams) =>
       ipcRenderer.invoke('provider:syncModels', params),
-    add: (params: ProviderAddParams) =>
-      ipcRenderer.invoke('provider:add', params),
-    delete: (params: ProviderDeleteParams) =>
-      ipcRenderer.invoke('provider:delete', params),
-    addModel: (params: ProviderAddModelParams) =>
-      ipcRenderer.invoke('provider:addModel', params),
-    deleteModel: (id: string) =>
-      ipcRenderer.invoke('provider:deleteModel', id),
+    add: (params: ProviderAddParams) => ipcRenderer.invoke('provider:add', params),
+    delete: (params: ProviderDeleteParams) => ipcRenderer.invoke('provider:delete', params),
+    addModel: (params: ProviderAddModelParams) => ipcRenderer.invoke('provider:addModel', params),
+    deleteModel: (id: string) => ipcRenderer.invoke('provider:deleteModel', id),
     updateModelCapabilities: (params: ProviderUpdateModelCapabilitiesParams) =>
       ipcRenderer.invoke('provider:updateModelCapabilities', params)
   },
@@ -156,18 +161,15 @@ const api = {
       ipcRenderer.invoke('session:updateSettings', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
-    delete: (id: string) =>
-      ipcRenderer.invoke('session:delete', id),
+    delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
-    getById: (id: string) =>
-      ipcRenderer.invoke('session:getById', id)
+    getById: (id: string) => ipcRenderer.invoke('session:getById', id)
   },
 
   // ============ 消息管理 ============
   message: {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),
-    add: (params: MessageAddParams) =>
-      ipcRenderer.invoke('message:add', params),
+    add: (params: MessageAddParams) => ipcRenderer.invoke('message:add', params),
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
     rollback: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('message:rollback', params),
@@ -208,7 +210,8 @@ const api = {
   sshCredential: {
     list: () => ipcRenderer.invoke('sshCredential:list'),
     add: (params: SshCredentialAddParams) => ipcRenderer.invoke('sshCredential:add', params),
-    update: (params: SshCredentialUpdateParams) => ipcRenderer.invoke('sshCredential:update', params),
+    update: (params: SshCredentialUpdateParams) =>
+      ipcRenderer.invoke('sshCredential:update', params),
     delete: (id: string) => ipcRenderer.invoke('sshCredential:delete', id),
     listNames: () => ipcRenderer.invoke('sshCredential:listNames')
   },

@@ -1,6 +1,15 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Settings, Trash2, Pencil, ChevronDown, ChevronRight, FolderPlus, RotateCcw } from 'lucide-react'
+import {
+  MessageSquarePlus,
+  Settings,
+  Trash2,
+  Pencil,
+  ChevronDown,
+  ChevronRight,
+  FolderPlus,
+  RotateCcw
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
@@ -111,9 +120,9 @@ export function Sidebar(): React.JSX.Element {
   const doDeleteProject = async (projectId: string): Promise<void> => {
     // 如果当前活跃会话属于该项目，先切走
     const store = useChatStore.getState()
-    const activeSession = store.sessions.find(s => s.id === store.activeSessionId)
+    const activeSession = store.sessions.find((s) => s.id === store.activeSessionId)
     if (activeSession?.projectId === projectId) {
-      const other = store.sessions.find(s => s.projectId !== projectId)
+      const other = store.sessions.find((s) => s.projectId !== projectId)
       if (other) store.setActiveSessionId(other.id)
     }
     await window.api.project.delete({ id: projectId })
@@ -212,8 +221,12 @@ export function Sidebar(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full bg-bg-primary border-r border-border-secondary/50">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
-      <div className={`titlebar-drag flex items-center justify-between px-4 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}>
-        <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">{t('sidebar.title')}</h1>
+      <div
+        className={`titlebar-drag flex items-center justify-between px-4 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
+      >
+        <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">
+          {t('sidebar.title')}
+        </h1>
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => {
@@ -237,7 +250,9 @@ export function Sidebar(): React.JSX.Element {
 
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto px-2 py-1 auto-hide-scrollbar">
-        {sessions.length === 0 && Object.keys(projectNames).length === 0 && archivedProjects.length === 0 ? (
+        {sessions.length === 0 &&
+        Object.keys(projectNames).length === 0 &&
+        archivedProjects.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('sidebar.emptyHint')}
           </div>
@@ -247,9 +262,14 @@ export function Sidebar(): React.JSX.Element {
             {sortedGroups.map(([groupKey, groupSessions]) => {
               const collapsed = collapsedGroups.has(groupKey)
               const isTemp = groupKey === TEMP_GROUP_KEY
-              const groupLabel = isTemp ? t('sidebar.tempChats') : (projectNames[groupKey] || t('sidebar.unnamedProject'))
+              const groupLabel = isTemp
+                ? t('sidebar.tempChats')
+                : projectNames[groupKey] || t('sidebar.unnamedProject')
               return (
-                <div key={groupKey} className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}>
+                <div
+                  key={groupKey}
+                  className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}
+                >
                   <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                     <button
                       onClick={() => toggleGroup(groupKey)}
@@ -262,7 +282,9 @@ export function Sidebar(): React.JSX.Element {
                       }`}
                     >
                       {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-                      <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
+                      <span className="truncate font-medium uppercase tracking-wider">
+                        {groupLabel}
+                      </span>
                     </button>
                     {/* 项目操作按钮 */}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
@@ -288,9 +310,7 @@ export function Sidebar(): React.JSX.Element {
                     </div>
                   </div>
                   {!collapsed && (
-                    <div className="ml-1.5 pl-0.5">
-                      {groupSessions.map(renderSessionItem)}
-                    </div>
+                    <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
                   )}
                 </div>
               )
@@ -304,14 +324,23 @@ export function Sidebar(): React.JSX.Element {
                     onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
                     className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary/70 hover:text-text-tertiary transition-colors"
                   >
-                    {collapsedGroups.has(ARCHIVED_GROUP_KEY) ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-                    <span className="truncate font-medium uppercase tracking-wider">{t('sidebar.archivedProjects')}</span>
+                    {collapsedGroups.has(ARCHIVED_GROUP_KEY) ? (
+                      <ChevronRight size={11} />
+                    ) : (
+                      <ChevronDown size={11} />
+                    )}
+                    <span className="truncate font-medium uppercase tracking-wider">
+                      {t('sidebar.archivedProjects')}
+                    </span>
                   </button>
                 </div>
                 {!collapsedGroups.has(ARCHIVED_GROUP_KEY) && (
                   <div className="ml-1.5 pl-0.5">
                     {archivedProjects.map((p) => (
-                      <div key={p.id} className="group flex items-center gap-1.5 px-2.5 py-1 text-text-tertiary">
+                      <div
+                        key={p.id}
+                        className="group flex items-center gap-1.5 px-2.5 py-1 text-text-tertiary"
+                      >
                         <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
                         <button
                           onClick={() => void handleRestoreProject(p.id)}
@@ -350,17 +379,20 @@ export function Sidebar(): React.JSX.Element {
 
       {/* 项目编辑弹窗 */}
       {editingProjectId && (
-        <ProjectEditDialog
-          projectId={editingProjectId}
-          onClose={() => setEditingProjectId(null)}
-        />
+        <ProjectEditDialog projectId={editingProjectId} onClose={() => setEditingProjectId(null)} />
       )}
 
       {/* 删除会话确认弹窗 */}
       {deletingSessionId && (
         <ConfirmDialog
           title={t('sidebar.confirmDelete')}
-          description={<>{t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}</>}
+          description={
+            <>
+              {t('sidebar.deleteWarning')}
+              <span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>
+              {t('sidebar.deleteWarningEnd')}
+            </>
+          }
           confirmText={t('common.delete')}
           cancelText={t('common.cancel')}
           onConfirm={() => doDelete(deletingSessionId)}
@@ -372,7 +404,15 @@ export function Sidebar(): React.JSX.Element {
       {deletingProjectId && (
         <ConfirmDialog
           title={t('sidebar.confirmDeleteProject')}
-          description={<>{t('sidebar.deleteProjectWarning')}<span className="text-error font-medium">{t('sidebar.deleteProjectWarningBold')}</span>{t('sidebar.deleteProjectWarningEnd')}</>}
+          description={
+            <>
+              {t('sidebar.deleteProjectWarning')}
+              <span className="text-error font-medium">
+                {t('sidebar.deleteProjectWarningBold')}
+              </span>
+              {t('sidebar.deleteProjectWarningEnd')}
+            </>
+          }
           confirmText={t('common.delete')}
           cancelText={t('common.cancel')}
           onConfirm={() => void doDeleteProject(deletingProjectId)}

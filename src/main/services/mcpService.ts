@@ -127,9 +127,16 @@ class McpService {
       conn.status = 'connected'
       conn.error = undefined
       // 工具列表持久化到 DB（唯一数据源）
-      mcpDao.updateCachedTools(serverId, JSON.stringify(conn.tools.map(t => ({
-        name: t.name, description: t.description ?? '', inputSchema: t.inputSchema
-      }))))
+      mcpDao.updateCachedTools(
+        serverId,
+        JSON.stringify(
+          conn.tools.map((t) => ({
+            name: t.name,
+            description: t.description ?? '',
+            inputSchema: t.inputSchema
+          }))
+        )
+      )
 
       log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
     } catch (err: unknown) {
@@ -244,7 +251,11 @@ class McpService {
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
       execute: async (_toolCallId, params): Promise<AgentToolResult<McpToolDetails>> => {
         try {
-          const result = await self.callTool(serverId, mcpTool.name, params as Record<string, unknown>)
+          const result = await self.callTool(
+            serverId,
+            mcpTool.name,
+            params as Record<string, unknown>
+          )
           const text = extractTextFromContent(result.content)
           if (result.isError) {
             return {
@@ -258,7 +269,12 @@ class McpService {
           }
         } catch (err: unknown) {
           return {
-            content: [{ type: 'text', text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}` }],
+            content: [
+              {
+                type: 'text',
+                text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
+              }
+            ],
             details: { server: serverName, tool: mcpTool.name, isError: true }
           }
         }
@@ -302,7 +318,7 @@ class McpService {
       return new StdioClientTransport({
         command: server.command,
         args,
-        env: { ...process.env as Record<string, string>, ...env }
+        env: { ...(process.env as Record<string, string>), ...env }
       })
     } else if (server.type === 'http') {
       const headers = this.parseJsonObject(server.headers)

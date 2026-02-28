@@ -48,10 +48,12 @@ function openSettingsWindow(): void {
     show: false,
     title: '设置',
     // macOS 使用隐藏标题栏 + 交通灯按钮
-    ...(isMac ? {
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 18 }
-    } : {}),
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: 16, y: 18 }
+        }
+      : {}),
     backgroundColor: getThemeBgColor(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -80,26 +82,30 @@ function setupApplicationMenu(): void {
 
   const template: Electron.MenuItemConstructorOptions[] = [
     // macOS 应用菜单
-    ...(isMac ? [{
-      label: app.name,
-      submenu: [
-        { role: 'about' as const },
-        { type: 'separator' as const },
-        {
-          label: `${t('settings.title')}…`,
-          accelerator: 'CommandOrControl+,',
-          click: () => openSettingsWindow()
-        },
-        { type: 'separator' as const },
-        { role: 'services' as const },
-        { type: 'separator' as const },
-        { role: 'hide' as const },
-        { role: 'hideOthers' as const },
-        { role: 'unhide' as const },
-        { type: 'separator' as const },
-        { role: 'quit' as const }
-      ]
-    }] : []),
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              {
+                label: `${t('settings.title')}…`,
+                accelerator: 'CommandOrControl+,',
+                click: () => openSettingsWindow()
+              },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     // 编辑菜单（系统常用快捷键：撤销、重做、剪切、复制、粘贴、全选、删除）
     {
       label: 'Edit',
@@ -123,21 +129,22 @@ function setupApplicationMenu(): void {
         { role: 'minimize' },
         { role: 'zoom' },
         { role: 'close' },
-        ...(isMac ? [
-          { type: 'separator' as const },
-          { role: 'front' as const }
-        ] : [])
+        ...(isMac ? [{ type: 'separator' as const }, { role: 'front' as const }] : [])
       ]
     },
     // 开发模式下添加开发菜单
-    ...(is.dev ? [{
-      label: 'Dev',
-      submenu: [
-        { role: 'toggleDevTools' as const },
-        { role: 'reload' as const },
-        { role: 'forceReload' as const }
-      ]
-    }] : [])
+    ...(is.dev
+      ? [
+          {
+            label: 'Dev',
+            submenu: [
+              { role: 'toggleDevTools' as const },
+              { role: 'reload' as const },
+              { role: 'forceReload' as const }
+            ]
+          }
+        ]
+      : [])
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
@@ -158,8 +165,12 @@ function getSavedWindowBounds(): { width: number; height: number; x?: number; y?
       const displays = screen.getAllDisplays()
       const visible = displays.some((d) => {
         const b = d.bounds
-        return saved.x! >= b.x - w + 100 && saved.x! < b.x + b.width - 100
-          && saved.y! >= b.y && saved.y! < b.y + b.height - 100
+        return (
+          saved.x! >= b.x - w + 100 &&
+          saved.x! < b.x + b.width - 100 &&
+          saved.y! >= b.y &&
+          saved.y! < b.y + b.height - 100
+        )
       })
       if (visible) return { width: w, height: h, x: Math.round(saved.x), y: Math.round(saved.y) }
     }
@@ -181,10 +192,12 @@ function createWindow(): void {
     show: false,
     icon: join(__dirname, '../../resources/icon.png'),
     // macOS 使用隐藏标题栏 + 交通灯按钮
-    ...(isMac ? {
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 18 }
-    } : {}),
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset',
+          trafficLightPosition: { x: 16, y: 18 }
+        }
+      : {}),
     backgroundColor: getThemeBgColor(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -234,12 +247,19 @@ ipcMain.handle('app:version', () => {
 ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
   // 应用 UI 缩放设置（基础倍率 1.1：100% 对应 zoomFactor 1.1）
-  const uiZoom = Math.max(0.5, Math.min(2.2, (Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1) * 1.1))
+  const uiZoom = Math.max(
+    0.5,
+    Math.min(2.2, (Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1) * 1.1)
+  )
   sender.setZoomFactor(uiZoom)
   if (mainWindow && sender === mainWindow.webContents) {
     mark('mainWindow visible (window-ready)')
     mainWindow.show()
-  } else if (settingsWindow && !settingsWindow.isDestroyed() && sender === settingsWindow.webContents) {
+  } else if (
+    settingsWindow &&
+    !settingsWindow.isDestroyed() &&
+    sender === settingsWindow.webContents
+  ) {
     settingsWindow.show()
   }
 })
@@ -314,9 +334,11 @@ app.whenReady().then(() => {
   measure('syncBuiltinModels', () => providerService.syncAllBuiltinModels())
 
   // 启动时异步拉取 LiteLLM 模型数据，完成后为自定义提供商补充模型能力信息
-  measureAsync('litellmService.init', () => litellmService.init()).then(() => {
-    providerService.fillAllMissingCapabilities()
-  }).catch(() => {})
+  measureAsync('litellmService.init', () => litellmService.init())
+    .then(() => {
+      providerService.fillAllMissingCapabilities()
+    })
+    .catch(() => {})
 
   // 启动所有已启用的 MCP Server
   measureAsync('mcpService.connectAll', () => mcpService.connectAll()).catch((err) => {

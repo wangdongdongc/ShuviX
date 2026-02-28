@@ -77,9 +77,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
       return cachedShellConfig
     }
 
-    throw new Error(
-      '未找到 bash shell。请安装 Git for Windows 或将 bash 添加到 PATH。'
-    )
+    throw new Error('未找到 bash shell。请安装 Git for Windows 或将 bash 添加到 PATH。')
   }
 
   // Unix: 优先 /bin/bash

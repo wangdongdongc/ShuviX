@@ -15,9 +15,15 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const ssh = resources?.ssh
 
   // 读取 session settings 中的 sshAutoApprove
-  const sessionSettings = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId)?.settings)
+  const sessionSettings = useChatStore(
+    (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
+  )
   const sshAutoApprove = useMemo(() => {
-    try { return JSON.parse(sessionSettings || '{}').sshAutoApprove === true } catch { return false }
+    try {
+      return JSON.parse(sessionSettings || '{}').sshAutoApprove === true
+    } catch {
+      return false
+    }
   }, [sessionSettings])
 
   if (!docker && !ssh && !sshAutoApprove) return null
@@ -44,7 +50,10 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
       {docker && (
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-500">
           <Container size={12} />
-          <span className="truncate max-w-[180px]" title={`${docker.image} (${docker.containerId})`}>
+          <span
+            className="truncate max-w-[180px]"
+            title={`${docker.image} (${docker.containerId})`}
+          >
             {docker.image}
             <span className="ml-1 opacity-60">{docker.containerId.slice(0, 12)}</span>
           </span>
@@ -60,7 +69,10 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
       {ssh && (
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-sky-500/10 text-sky-500">
           <Terminal size={12} />
-          <span className="truncate max-w-[160px]" title={`${ssh.username}@${ssh.host}:${ssh.port}`}>
+          <span
+            className="truncate max-w-[160px]"
+            title={`${ssh.username}@${ssh.host}:${ssh.port}`}
+          >
             {ssh.username}@{ssh.host}
           </span>
           <button

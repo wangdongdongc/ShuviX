@@ -19,40 +19,85 @@ const log = createLogger('Tool:ssh')
 const DEFAULT_TIMEOUT = 120
 
 const SshParamsSchema = Type.Object({
-  action: Type.Union(
-    [Type.Literal('connect'), Type.Literal('exec'), Type.Literal('disconnect')],
-    { description: 'Action to perform: "connect" to establish SSH connection, "exec" to run a command on the remote server, "disconnect" to close the connection.' }
-  ),
+  action: Type.Union([Type.Literal('connect'), Type.Literal('exec'), Type.Literal('disconnect')], {
+    description:
+      'Action to perform: "connect" to establish SSH connection, "exec" to run a command on the remote server, "disconnect" to close the connection.'
+  }),
   credentialName: Type.Optional(
-    Type.String({ description: 'Name of a saved SSH credential for connect action. If provided, connects directly using the saved credential without prompting the user. If omitted, the user will be prompted via a secure UI dialog.' })
+    Type.String({
+      description:
+        'Name of a saved SSH credential for connect action. If provided, connects directly using the saved credential without prompting the user. If omitted, the user will be prompted via a secure UI dialog.'
+    })
   ),
   command: Type.Optional(
-    Type.String({ description: 'The command to execute on the remote server (required for exec action).' })
+    Type.String({
+      description: 'The command to execute on the remote server (required for exec action).'
+    })
   ),
   timeout: Type.Optional(
-    Type.Number({ description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Only for exec action.` })
+    Type.Number({
+      description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Only for exec action.`
+    })
   )
 })
 
 /** 创建 ssh 工具实例 */
-export function createSshTool(ctx: ToolContext): AgentTool<typeof SshParamsSchema> {
+export function createSshTool(ctx: ToolContext): AgentTool<typeof SshParamsSchema> & {
+  preExecute: (toolCallId: string, params: Record<string, unknown>) => Promise<void>
+} {
   // 动态构建描述，包含已保存的凭据名称
   const savedNames = sshCredentialDao.findAllNames()
   let description = 'Connect to a remote server via SSH and execute commands.'
   if (savedNames.length > 0) {
     description += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
   }
-  description += ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
-  description += ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
+  description +=
+    ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
+  description +=
+    ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
 
   return {
     name: 'ssh',
     label: t('tool.sshLabel'),
     description,
     parameters: SshParamsSchema,
+
+    /** 资源初始化：使用保存凭据的 connect 场景提前建立连接 */
+    preExecute: async (_toolCallId: string, params: Record<string, unknown>) => {
+      // 仅处理 action=connect && credentialName 的场景
+      if (params.action !== 'connect' || !params.credentialName) return
+      // 已有连接则跳过
+      if (sshManager.isConnected(ctx.sessionId)) return
+
+      const credentialName = params.credentialName as string
+      const saved = sshCredentialDao.findByName(credentialName)
+      if (!saved) return // 凭据不存在，留给 execute 处理并返回明确错误
+
+      log.info(`[preExecute] 使用保存的凭据 "${credentialName}" 连接 SSH session=${ctx.sessionId}`)
+      const credentials = {
+        host: saved.host,
+        port: saved.port,
+        username: saved.username,
+        password: saved.authType === 'password' ? saved.password : undefined,
+        privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
+        passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
+      }
+
+      const result = await sshManager.connect(ctx.sessionId, credentials)
+      if (result.success) {
+        ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+      }
+      // 连接失败不抛异常，留给 execute 中的 handleConnect 返回明确错误消息
+    },
+
     execute: async (
       toolCallId: string,
-      params: { action: 'connect' | 'exec' | 'disconnect'; credentialName?: string; command?: string; timeout?: number },
+      params: {
+        action: 'connect' | 'exec' | 'disconnect'
+        credentialName?: string
+        command?: string
+        timeout?: number
+      },
       signal?: AbortSignal
     ) => {
       if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -82,7 +127,12 @@ async function handleConnect(
   if (sshManager.isConnected(ctx.sessionId)) {
     const info = sshManager.getConnectionInfo(ctx.sessionId)
     return {
-      content: [{ type: 'text', text: `Already connected to remote server. Use exec to run commands or disconnect first.` }],
+      content: [
+        {
+          type: 'text',
+          text: `Already connected to remote server. Use exec to run commands or disconnect first.`
+        }
+      ],
       details: { action: 'connect', alreadyConnected: true, host: info?.host }
     }
   }
@@ -92,11 +142,17 @@ async function handleConnect(
     const saved = sshCredentialDao.findByName(credentialName)
     if (!saved) {
       const availableNames = sshCredentialDao.findAllNames()
-      const hint = availableNames.length > 0
-        ? ` Available saved credentials: [${availableNames.join(', ')}].`
-        : ' No saved credentials are configured.'
+      const hint =
+        availableNames.length > 0
+          ? ` Available saved credentials: [${availableNames.join(', ')}].`
+          : ' No saved credentials are configured.'
       return {
-        content: [{ type: 'text', text: `No saved SSH credential found with name "${credentialName}".${hint} Use connect without credentialName to let the user enter credentials manually.` }],
+        content: [
+          {
+            type: 'text',
+            text: `No saved SSH credential found with name "${credentialName}".${hint} Use connect without credentialName to let the user enter credentials manually.`
+          }
+        ],
         details: { action: 'connect', success: false, credentialNotFound: true }
       }
     }
@@ -117,12 +173,22 @@ async function handleConnect(
     if (result.success) {
       ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
       return {
-        content: [{ type: 'text', text: `Connected to remote server using saved credential "${credentialName}" successfully. You can now use exec to run commands.` }],
+        content: [
+          {
+            type: 'text',
+            text: `Connected to remote server using saved credential "${credentialName}" successfully. You can now use exec to run commands.`
+          }
+        ],
         details: { action: 'connect', success: true, credentialName }
       }
     } else {
       return {
-        content: [{ type: 'text', text: `Connection failed using saved credential "${credentialName}": ${result.error}. This credential was configured by the user in Settings > Tools > SSH Credentials — please inform them to check their SSH credential configuration.` }],
+        content: [
+          {
+            type: 'text',
+            text: `Connection failed using saved credential "${credentialName}": ${result.error}. This credential was configured by the user in Settings > Tools > SSH Credentials — please inform them to check their SSH credential configuration.`
+          }
+        ],
         details: { action: 'connect', success: false, credentialName, error: result.error }
       }
     }
@@ -153,7 +219,12 @@ async function handleConnect(
     // 通知前端连接已建立
     ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
     return {
-      content: [{ type: 'text', text: 'Connected to remote server successfully. You can now use exec to run commands.' }],
+      content: [
+        {
+          type: 'text',
+          text: 'Connected to remote server successfully. You can now use exec to run commands.'
+        }
+      ],
       details: { action: 'connect', success: true }
     }
   } else {
@@ -185,7 +256,9 @@ async function handleExec(
   try {
     const sess = sessionDao.findById(ctx.sessionId)
     sshAutoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   if (ctx.requestApproval && !sshAutoApprove) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {

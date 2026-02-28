@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
-import { useChatStore, selectStreamingContent, selectStreamingThinking, selectStreamingImages, selectIsStreaming, type ChatMessage } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectStreamingContent,
+  selectStreamingThinking,
+  selectStreamingImages,
+  selectIsStreaming,
+  type ChatMessage
+} from '../../stores/chatStore'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatActions } from '../../hooks/useChatActions'
@@ -44,7 +51,9 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
         pairedIds.add(parsed.toolCallId)
         metaCache.set(m.id, parsed)
       }
-    } catch { /* 忽略解析失败 */ }
+    } catch {
+      /* 忽略解析失败 */
+    }
   }
 
   return { callMeta, pairedIds, metaCache }
@@ -57,7 +66,10 @@ function isToolItem(item: VisibleItem): boolean {
 
 /** 获取工具项的 turnIndex（优先从 pairedCallMeta 取，回退到 meta） */
 function getItemTurnIndex(item: VisibleItem): number | undefined {
-  return (item.pairedCallMeta?.turnIndex as number | undefined) ?? (item.meta?.turnIndex as number | undefined)
+  return (
+    (item.pairedCallMeta?.turnIndex as number | undefined) ??
+    (item.meta?.turnIndex as number | undefined)
+  )
 }
 
 /** 预处理消息列表中的可见项（过滤掉不渲染的消息，并计算 turn 分组信息） */
@@ -65,7 +77,13 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
   const items: VisibleItem[] = []
   for (const msg of messages) {
     // 跳过 system_notify（但保留 docker_event / ssh_event / error_event 类型）
-    if (msg.role === 'system_notify' && msg.type !== 'docker_event' && msg.type !== 'ssh_event' && msg.type !== 'error_event') continue
+    if (
+      msg.role === 'system_notify' &&
+      msg.type !== 'docker_event' &&
+      msg.type !== 'ssh_event' &&
+      msg.type !== 'error_event'
+    )
+      continue
     // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
     if (msg.type === 'tool_call') {
       const meta = toolIndex.metaCache.get(msg.id)
@@ -86,7 +104,11 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
 
   // ─── 计算 turn 分组信息 ─────────────────────────────────
   // 识别连续的工具项分组（同一 turnIndex 的连续工具项为一组）
-  interface TurnGroup { startIdx: number; endIdx: number; turnIndex: number | undefined }
+  interface TurnGroup {
+    startIdx: number
+    endIdx: number
+    turnIndex: number | undefined
+  }
   const turnGroups: TurnGroup[] = []
   let i = 0
   while (i < items.length) {
@@ -167,7 +189,18 @@ export function ChatView(): React.JSX.Element {
     useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
   }
   const { t } = useTranslation()
-  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate, handleToolApproval, handleUserInput, handleSshCredentials, handleUserActionOverride, handleNewChat } = useChatActions(activeSessionId)
+  const {
+    handleRollback,
+    pendingRollbackId,
+    confirmRollback,
+    cancelRollback,
+    handleRegenerate,
+    handleToolApproval,
+    handleUserInput,
+    handleSshCredentials,
+    handleUserActionOverride,
+    handleNewChat
+  } = useChatActions(activeSessionId)
 
   // 跟踪用户是否在底部附近
   const handleAtBottomChange = useCallback((atBottom: boolean) => {
@@ -203,21 +236,26 @@ export function ChatView(): React.JSX.Element {
   }, [messages])
 
   /** 渲染单条可见消息 */
-  const renderItem = useCallback((_index: number, item: VisibleItem) => (
-    <MessageRenderer
-      item={item}
-      lastAssistantTextId={lastAssistantTextId}
-      onRollback={handleRollback}
-      onRegenerate={handleRegenerate}
-    />
-  ), [messages, lastAssistantTextId, handleRollback, handleRegenerate])
+  const renderItem = useCallback(
+    (_index: number, item: VisibleItem) => (
+      <MessageRenderer
+        item={item}
+        lastAssistantTextId={lastAssistantTextId}
+        onRollback={handleRollback}
+        onRegenerate={handleRegenerate}
+      />
+    ),
+    [messages, lastAssistantTextId, handleRollback, handleRegenerate]
+  )
 
   return (
     <div className="flex flex-col h-full">
       {/* 窗口拖拽区 + 会话标题 / 工作目录（macOS 为交通灯留出顶部空间） */}
-      <div className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}>
-        {sessionTitle && (
-          editingTitle ? (
+      <div
+        className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}
+      >
+        {sessionTitle &&
+          (editingTitle ? (
             <input
               ref={titleInputRef}
               value={draftTitle}
@@ -247,8 +285,7 @@ export function ChatView(): React.JSX.Element {
                 <Settings2 size={12} />
               </button>
             </div>
-          )
-        )}
+          ))}
         {projectPath && (
           <button
             onClick={() => window.api.app.openFolder(projectPath)}
@@ -298,7 +335,11 @@ export function ChatView(): React.JSX.Element {
             />
           )}
           {/* 用户操作浮动面板（ask 提问 / bash 审批 / SSH 凭据） */}
-          <UserActionPanel onUserInput={handleUserInput} onApproval={handleToolApproval} onSshCredentials={handleSshCredentials} />
+          <UserActionPanel
+            onUserInput={handleUserInput}
+            onApproval={handleToolApproval}
+            onSshCredentials={handleSshCredentials}
+          />
           {/* 输入区 */}
           <InputArea onUserActionOverride={handleUserActionOverride} />
         </>
@@ -352,7 +393,11 @@ function SessionConfigDialog({
 
   // 解析 sshAutoApprove
   const sessionSettings = useMemo(() => {
-    try { return JSON.parse(session?.settings || '{}') } catch { return {} }
+    try {
+      return JSON.parse(session?.settings || '{}')
+    } catch {
+      return {}
+    }
   }, [session?.settings])
   const [sshAutoApprove, setSshAutoApprove] = useState(sessionSettings.sshAutoApprove === true)
 
@@ -404,7 +449,10 @@ function SessionConfigDialog({
   }
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`} onClick={handleClose}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+      onClick={handleClose}
+    >
       <div
         className="w-80 bg-bg-primary border border-border-secondary rounded-xl shadow-xl overflow-hidden dialog-panel"
         onClick={(e) => e.stopPropagation()}
@@ -423,12 +471,16 @@ function SessionConfigDialog({
         <div className="px-4 py-4 space-y-4">
           {/* 会话标题 */}
           <div>
-            <label className="block text-[10px] text-text-tertiary mb-1">{t('sessionConfig.sessionTitle')}</label>
+            <label className="block text-[10px] text-text-tertiary mb-1">
+              {t('sessionConfig.sessionTitle')}
+            </label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={() => void handleSaveTitle()}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveTitle() }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleSaveTitle()
+              }}
               className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors"
             />
           </div>
@@ -436,7 +488,9 @@ function SessionConfigDialog({
           {/* SSH 免审批 */}
           <div>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-secondary">{t('sessionConfig.sshAutoApprove')}</span>
+              <span className="text-xs font-medium text-text-secondary">
+                {t('sessionConfig.sshAutoApprove')}
+              </span>
               <button
                 onClick={handleToggleSshAutoApprove}
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${
@@ -450,11 +504,15 @@ function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary mt-1">{t('sessionConfig.sshAutoApproveDesc')}</p>
+            <p className="text-[10px] text-text-tertiary mt-1">
+              {t('sessionConfig.sshAutoApproveDesc')}
+            </p>
             {sshAutoApprove && (
               <div className="flex items-start gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
                 <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">{t('chat.sshAutoApproveWarning')}</p>
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
+                  {t('chat.sshAutoApproveWarning')}
+                </p>
               </div>
             )}
           </div>
@@ -482,7 +540,13 @@ function SessionConfigDialog({
       {showDeleteConfirm && (
         <ConfirmDialog
           title={t('sidebar.confirmDelete')}
-          description={<>{t('sidebar.deleteWarning')}<span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>{t('sidebar.deleteWarningEnd')}</>}
+          description={
+            <>
+              {t('sidebar.deleteWarning')}
+              <span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>
+              {t('sidebar.deleteWarningEnd')}
+            </>
+          }
           confirmText={t('common.delete')}
           cancelText={t('common.cancel')}
           onConfirm={() => void doDeleteSession()}

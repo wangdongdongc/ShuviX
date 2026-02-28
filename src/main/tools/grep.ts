@@ -22,10 +22,13 @@ const LIMIT = 100
 
 const GrepParamsSchema = Type.Object({
   pattern: Type.String({
-    description: 'The regex pattern to search for in file contents (e.g. "function\\s+\\w+", "TODO|FIXME")'
+    description:
+      'The regex pattern to search for in file contents (e.g. "function\\s+\\w+", "TODO|FIXME")'
   }),
   path: Type.Optional(
-    Type.String({ description: 'The directory to search in (optional, defaults to current working directory)' })
+    Type.String({
+      description: 'The directory to search in (optional, defaults to current working directory)'
+    })
   ),
   include: Type.Optional(
     Type.String({ description: 'File glob pattern to filter (e.g. "*.ts", "*.{js,jsx}")' })
@@ -105,9 +108,10 @@ export function createGrepTool(ctx: ToolContext): AgentTool<typeof GrepParamsSch
           outputLines.push(`${relPath}:`)
         }
 
-        const lineText = match.lineText.length > MAX_LINE_LENGTH
-          ? match.lineText.substring(0, MAX_LINE_LENGTH) + '...'
-          : match.lineText
+        const lineText =
+          match.lineText.length > MAX_LINE_LENGTH
+            ? match.lineText.substring(0, MAX_LINE_LENGTH) + '...'
+            : match.lineText
         outputLines.push(`  Line ${match.lineNum}: ${lineText}`)
       }
 

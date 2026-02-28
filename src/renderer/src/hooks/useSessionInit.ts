@@ -50,7 +50,11 @@ export function useSessionInit(activeSessionId: string | null): void {
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
       const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && m.metadata)
       const lastUsage = (() => {
-        try { return lastAssistant ? JSON.parse(lastAssistant.metadata!).usage : null } catch { return null }
+        try {
+          return lastAssistant ? JSON.parse(lastAssistant.metadata!).usage : null
+        } catch {
+          return null
+        }
       })()
       if (lastUsage) {
         const details = lastUsage.details
@@ -64,11 +68,20 @@ export function useSessionInit(activeSessionId: string | null): void {
       }
 
       // 6. 从 modelMetadata 恢复用户上次设置的思考深度
-      const meta = (() => { try { return JSON.parse(result.modelMetadata || '{}') } catch { return {} } })()
+      const meta = (() => {
+        try {
+          return JSON.parse(result.modelMetadata || '{}')
+        } catch {
+          return {}
+        }
+      })()
       const savedLevel = meta.thinkingLevel
-      const restoredLevel = hasReasoning ? (savedLevel || 'medium') : 'off'
+      const restoredLevel = hasReasoning ? savedLevel || 'medium' : 'off'
       store.setThinkingLevel(restoredLevel)
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: restoredLevel as ThinkingLevel })
+      await window.api.agent.setThinkingLevel({
+        sessionId: activeSessionId,
+        level: restoredLevel as ThinkingLevel
+      })
 
       // 7. 查询 Docker/SSH 实时资源状态
       const [dockerInfo, sshInfo] = await Promise.all([
@@ -81,6 +94,8 @@ export function useSessionInit(activeSessionId: string | null): void {
       }
     }
     loadSession()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [activeSessionId, loaded, setActiveProvider, setActiveModel])
 }

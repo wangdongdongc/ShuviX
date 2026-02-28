@@ -12,14 +12,29 @@ import type { ThinkingLevel } from '../../../../main/types'
  */
 export function ModelPicker(): React.JSX.Element {
   const { t } = useTranslation()
-  const { activeSessionId, setSessions, setModelSupportsReasoning, setThinkingLevel, setModelSupportsVision } = useChatStore()
-  const { availableModels, providers, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
+  const {
+    activeSessionId,
+    setSessions,
+    setModelSupportsReasoning,
+    setThinkingLevel,
+    setModelSupportsVision
+  } = useChatStore()
+  const {
+    availableModels,
+    providers,
+    activeProvider,
+    activeModel,
+    setActiveProvider,
+    setActiveModel
+  } = useSettingsStore()
 
   const pickerRef = useRef<HTMLDivElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   // 展开的供应商 ID 集合（默认展开当前选中的供应商）
-  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(() => new Set([activeProvider]))
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(
+    () => new Set([activeProvider])
+  )
 
   const closePicker = useCallback(() => {
     setPickerOpen(false)
@@ -36,9 +51,7 @@ export function ModelPicker(): React.JSX.Element {
     const map = new Map<string, typeof availableModels>()
     enabledProviders.forEach((p) => {
       const models = availableModels.filter(
-        (m) =>
-          m.providerId === p.id &&
-          m.modelId.toLowerCase().includes(searchQuery.toLowerCase())
+        (m) => m.providerId === p.id && m.modelId.toLowerCase().includes(searchQuery.toLowerCase())
       )
       map.set(p.id, models)
     })
@@ -98,8 +111,16 @@ export function ModelPicker(): React.JSX.Element {
     }
 
     // 根据新模型能力更新状态
-    const selectedModel = availableModels.find((m) => m.providerId === providerId && m.modelId === modelId)
-    const caps = (() => { try { return JSON.parse(selectedModel?.capabilities || '{}') } catch { return {} } })()
+    const selectedModel = availableModels.find(
+      (m) => m.providerId === providerId && m.modelId === modelId
+    )
+    const caps = (() => {
+      try {
+        return JSON.parse(selectedModel?.capabilities || '{}')
+      } catch {
+        return {}
+      }
+    })()
     const hasReasoning = !!caps.reasoning
     setModelSupportsReasoning(hasReasoning)
     setModelSupportsVision(!!caps.vision)
@@ -108,7 +129,10 @@ export function ModelPicker(): React.JSX.Element {
     const newLevel = hasReasoning ? 'medium' : 'off'
     setThinkingLevel(newLevel)
     if (activeSessionId) {
-      await window.api.agent.setThinkingLevel({ sessionId: activeSessionId, level: newLevel as ThinkingLevel })
+      await window.api.agent.setThinkingLevel({
+        sessionId: activeSessionId,
+        level: newLevel as ThinkingLevel
+      })
       await window.api.session.updateModelMetadata({
         id: activeSessionId,
         modelMetadata: JSON.stringify({ thinkingLevel: newLevel })
@@ -168,7 +192,9 @@ export function ModelPicker(): React.JSX.Element {
                   <button
                     onClick={() => toggleProviderExpand(provider.id)}
                     className={`w-full flex items-center justify-between px-3 py-2 text-[11px] transition-colors ${
-                      isActiveProvider ? 'bg-accent/10 text-accent' : 'text-text-primary hover:bg-bg-hover'
+                      isActiveProvider
+                        ? 'bg-accent/10 text-accent'
+                        : 'text-text-primary hover:bg-bg-hover'
                     }`}
                   >
                     <span className="font-medium">{provider.displayName || provider.name}</span>
@@ -182,7 +208,9 @@ export function ModelPicker(): React.JSX.Element {
                     <div className="py-1">
                       {models.length === 0 ? (
                         <div className="px-3 py-2 text-[10px] text-text-tertiary italic">
-                          {searchQuery ? t('input.noModelMatch') || 'No matching models' : t('input.noModels') || 'No models available'}
+                          {searchQuery
+                            ? t('input.noModelMatch') || 'No matching models'
+                            : t('input.noModels') || 'No models available'}
                         </div>
                       ) : (
                         models.map((m) => {
@@ -193,32 +221,45 @@ export function ModelPicker(): React.JSX.Element {
                               return {}
                             }
                           })()
-                          const isSelected = provider.id === activeProvider && m.modelId === activeModel
+                          const isSelected =
+                            provider.id === activeProvider && m.modelId === activeModel
                           return (
                             <button
                               key={m.id}
-                              onClick={() => { void handlePickModel(provider.id, m.modelId) }}
+                              onClick={() => {
+                                void handlePickModel(provider.id, m.modelId)
+                              }}
                               className={`w-full text-left px-3 py-1.5 transition-colors flex items-center gap-1.5 ${
                                 isSelected
                                   ? 'bg-accent/20 text-accent'
                                   : 'text-text-primary hover:bg-bg-hover'
                               }`}
                             >
-                              <span className={`text-[11px] truncate flex-1 ${isSelected ? 'font-medium' : ''}`}>
+                              <span
+                                className={`text-[11px] truncate flex-1 ${isSelected ? 'font-medium' : ''}`}
+                              >
                                 {m.modelId}
                               </span>
                               <div className="flex items-center gap-0.5 shrink-0">
                                 {caps.vision && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-blue-500/20 text-blue-400">Vision</span>
+                                  <span className="px-1 py-0.5 text-[8px] rounded bg-blue-500/20 text-blue-400">
+                                    Vision
+                                  </span>
                                 )}
                                 {caps.functionCalling && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-green-500/20 text-green-400">Tools</span>
+                                  <span className="px-1 py-0.5 text-[8px] rounded bg-green-500/20 text-green-400">
+                                    Tools
+                                  </span>
                                 )}
                                 {caps.reasoning && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-purple-500/20 text-purple-400">Reasoning</span>
+                                  <span className="px-1 py-0.5 text-[8px] rounded bg-purple-500/20 text-purple-400">
+                                    Reasoning
+                                  </span>
                                 )}
                                 {caps.imageOutput && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-orange-500/20 text-orange-400">ImgOut</span>
+                                  <span className="px-1 py-0.5 text-[8px] rounded bg-orange-500/20 text-orange-400">
+                                    ImgOut
+                                  </span>
                                 )}
                               </div>
                             </button>

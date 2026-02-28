@@ -33,17 +33,17 @@ export class SshCredentialDao {
 
   /** 根据 ID 获取凭据（解密） */
   findById(id: string): SshCredential | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM ssh_credentials WHERE id = ?')
-      .get(id) as SshCredential | undefined
+    const row = this.db.prepare('SELECT * FROM ssh_credentials WHERE id = ?').get(id) as
+      | SshCredential
+      | undefined
     return decryptCredential(row)
   }
 
   /** 根据名称获取凭据（解密） */
   findByName(name: string): SshCredential | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM ssh_credentials WHERE name = ?')
-      .get(name) as SshCredential | undefined
+    const row = this.db.prepare('SELECT * FROM ssh_credentials WHERE name = ?').get(name) as
+      | SshCredential
+      | undefined
     return decryptCredential(row)
   }
 

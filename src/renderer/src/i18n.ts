@@ -23,17 +23,15 @@ function resolveLocale(locale: string): string {
 /** 检测初始语言：优先用户设置，其次系统语言 */
 const detectedLang = resolveLocale(navigator.language)
 
-i18next
-  .use(initReactI18next)
-  .init({
-    lng: detectedLang,
-    fallbackLng: 'en',
-    interpolation: { escapeValue: false },
-    resources: {
-      zh: { translation: zh },
-      en: { translation: en },
-      ja: { translation: ja }
-    }
-  })
+i18next.use(initReactI18next).init({
+  lng: detectedLang,
+  fallbackLng: 'en',
+  interpolation: { escapeValue: false },
+  resources: {
+    zh: { translation: zh },
+    en: { translation: en },
+    ja: { translation: ja }
+  }
+})
 
 export default i18next

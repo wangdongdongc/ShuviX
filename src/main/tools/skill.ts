@@ -13,7 +13,8 @@ import { t } from '../i18n'
 
 const SkillParamsSchema = Type.Object({
   command: Type.String({
-    description: 'The skill name to load, or skill_name/file_path to read a companion file. E.g., "pdf", "brand-guide", "pdf/REFERENCE.md"'
+    description:
+      'The skill name to load, or skill_name/file_path to read a companion file. E.g., "pdf", "brand-guide", "pdf/REFERENCE.md"'
   })
 })
 
@@ -55,10 +56,7 @@ ${skillListXml}
     label: t('tool.skillLabel'),
     description,
     parameters: SkillParamsSchema,
-    execute: async (
-      _toolCallId: string,
-      params: { command: string }
-    ) => {
+    execute: async (_toolCallId: string, params: { command: string }) => {
       const cmd = params.command.trim()
       const slashIdx = cmd.indexOf('/')
 
@@ -70,7 +68,12 @@ ${skillListXml}
         const content = skillService.readCompanionFile(skillName, filePath)
         if (content === null) {
           return {
-            content: [{ type: 'text' as const, text: `File "${filePath}" not found in skill "${skillName}".` }],
+            content: [
+              {
+                type: 'text' as const,
+                text: `File "${filePath}" not found in skill "${skillName}".`
+              }
+            ],
             details: { skillName, file: filePath, error: true }
           }
         }
@@ -84,7 +87,12 @@ ${skillListXml}
       const skill = skillService.findByName(cmd)
       if (!skill) {
         return {
-          content: [{ type: 'text' as const, text: `Skill "${cmd}" not found. Available skills: ${skills.map((s) => s.name).join(', ')}` }],
+          content: [
+            {
+              type: 'text' as const,
+              text: `Skill "${cmd}" not found. Available skills: ${skills.map((s) => s.name).join(', ')}`
+            }
+          ],
           details: { skillName: cmd, error: true }
         }
       }

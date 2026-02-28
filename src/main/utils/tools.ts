@@ -12,7 +12,6 @@ import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { ALL_TOOL_NAMES, DEFAULT_TOOL_NAMES } from '../types/tools'
 export { ALL_TOOL_NAMES, type ToolName } from '../types/tools'
 
-
 /** 获取所有可用工具名（内置 + MCP 动态 + 已启用 Skill） */
 export function getAllToolNames(): string[] {
   const skillNames = skillService.findEnabled().map((s) => `skill:${s.name}`)
@@ -41,28 +40,34 @@ const TOOL_PROMPT_REGISTRY: Array<{
 }> = [
   {
     tools: ['bash', 'read', 'write', 'edit', 'ls', 'grep', 'glob'],
-    textFn: (matched) => `You can use the following tools to work with files in the current project directory: ${matched.join(', ')}. All relative paths are based on the project directory.`,
+    textFn: (matched) =>
+      `You can use the following tools to work with files in the current project directory: ${matched.join(', ')}. All relative paths are based on the project directory.`,
     condition: (ctx) => ctx.hasProjectPath
   },
   { tools: ['ask'], key: 'agent.askToolGuidance' },
   {
     tools: ['shuvix-project'],
-    textFn: () => `You have the shuvix-project tool to read and modify the current project's configuration. Use action="get" to view settings, action="update" to change them. Updatable fields: ${getProjectFieldDescriptions()}. Update operations require user approval.`
+    textFn: () =>
+      `You have the shuvix-project tool to read and modify the current project's configuration. Use action="get" to view settings, action="update" to change them. Updatable fields: ${getProjectFieldDescriptions()}. Update operations require user approval.`
   },
   {
     tools: ['shuvix-setting'],
-    textFn: () => `You have the shuvix-setting tool to read and modify global application settings. Use action="get" to view all settings, action="set" with key and value to change one. Known keys: ${getSettingKeyDescriptions()}. Set operations require user approval.`
+    textFn: () =>
+      `You have the shuvix-setting tool to read and modify global application settings. Use action="get" to view all settings, action="set" with key and value to change one. Known keys: ${getSettingKeyDescriptions()}. Set operations require user approval.`
   },
   {
     tools: ['ssh'],
     textFn: () => {
       const savedNames = sshCredentialDao.findAllNames()
-      let prompt = 'You have the ssh tool to connect to a remote server via SSH and execute commands.'
+      let prompt =
+        'You have the ssh tool to connect to a remote server via SSH and execute commands.'
       if (savedNames.length > 0) {
         prompt += ` The user has pre-configured SSH credentials: [${savedNames.join(', ')}]. Connect directly using: ssh({ action: "connect", credentialName: "<name>" }).`
       }
-      prompt += ' Alternatively, use action="connect" without credentialName and the user will provide credentials through a secure UI dialog that you cannot see.'
-      prompt += ' Use action="exec" with a command to run it on the remote server (each command requires user approval). Use action="disconnect" to close the connection. You do NOT have access to any credentials — never ask the user for passwords in chat.'
+      prompt +=
+        ' Alternatively, use action="connect" without credentialName and the user will provide credentials through a secure UI dialog that you cannot see.'
+      prompt +=
+        ' Use action="exec" with a command to run it on the remote server (each command requires user approval). Use action="disconnect" to close the connection. You do NOT have access to any credentials — never ask the user for passwords in chat.'
       return prompt
     }
   }
@@ -70,8 +75,9 @@ const TOOL_PROMPT_REGISTRY: Array<{
 
 /** 根据启用的工具和上下文，构建需要追加到 system prompt 的文本 */
 export function buildToolPrompts(enabledTools: string[], ctx: ToolPromptContext): string {
-  return TOOL_PROMPT_REGISTRY
-    .filter((entry) => entry.tools.some((name) => enabledTools.includes(name)))
+  return TOOL_PROMPT_REGISTRY.filter((entry) =>
+    entry.tools.some((name) => enabledTools.includes(name))
+  )
     .filter((entry) => !entry.condition || entry.condition(ctx))
     .map((entry) => {
       const matched = entry.tools.filter((name) => enabledTools.includes(name))
@@ -89,12 +95,16 @@ export function resolveEnabledTools(
   try {
     const meta = JSON.parse(sessionMeta || '{}')
     if (Array.isArray(meta.enabledTools)) return meta.enabledTools
-  } catch { /* 忽略 */ }
+  } catch {
+    /* 忽略 */
+  }
   // 其次使用 project settings
   try {
     const settings = JSON.parse(projectSettings || '{}')
     if (Array.isArray(settings.enabledTools)) return settings.enabledTools
-  } catch { /* 忽略 */ }
+  } catch {
+    /* 忽略 */
+  }
   // 默认仅启用核心内置工具（不含 shuvix-project、shuvix-setting、MCP、skills）
   return DEFAULT_TOOL_NAMES as unknown as string[]
 }

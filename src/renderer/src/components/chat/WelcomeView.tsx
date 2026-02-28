@@ -16,12 +16,8 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
         <div className="w-16 h-16 rounded-2xl overflow-hidden mx-auto mb-6">
           <img src={welcomeIcon} alt="ShuviX" className="w-full h-full object-cover" />
         </div>
-        <h2 className="text-xl font-semibold text-text-primary mb-2">
-          {t('chat.welcomeTitle')}
-        </h2>
-        <p className="text-sm text-text-secondary mb-6 leading-relaxed">
-          {t('about.description')}
-        </p>
+        <h2 className="text-xl font-semibold text-text-primary mb-2">{t('chat.welcomeTitle')}</h2>
+        <p className="text-sm text-text-secondary mb-6 leading-relaxed">{t('about.description')}</p>
         <div className="flex items-center justify-center gap-3">
           <button
             onClick={onNewChat}
@@ -52,9 +48,7 @@ export function EmptySessionHint(): React.JSX.Element {
         <div className="w-12 h-12 rounded-xl bg-bg-tertiary flex items-center justify-center mx-auto mb-4">
           <Sparkles size={24} className="text-text-tertiary" />
         </div>
-        <p className="text-sm text-text-secondary">
-          {t('chat.emptyHint')}
-        </p>
+        <p className="text-sm text-text-secondary">{t('chat.emptyHint')}</p>
       </div>
     </div>
   )

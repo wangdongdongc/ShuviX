@@ -12,7 +12,14 @@
 
 import { encodingForModel } from 'js-tiktoken'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
-import type { Api, AssistantMessage, Model, TextContent, ToolResultMessage, UserMessage } from '@mariozechner/pi-ai'
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+  TextContent,
+  ToolResultMessage,
+  UserMessage
+} from '@mariozechner/pi-ai'
 import { createLogger } from '../logger'
 import { KEEP_RECENT_TURNS } from '../../shared/constants'
 
@@ -180,13 +187,15 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     if (compressSet.has(i) && isToolResultMessage(msg)) {
-      const compressedContent = msg.content.map((block: TextContent | import('@mariozechner/pi-ai').ImageContent) => {
-        if (block.type === 'text' && block.text && block.text.length > 500) {
-          compressedCount++
-          return { type: 'text' as const, text: summarizeToolResult(block.text) }
+      const compressedContent = msg.content.map(
+        (block: TextContent | import('@mariozechner/pi-ai').ImageContent) => {
+          if (block.type === 'text' && block.text && block.text.length > 500) {
+            compressedCount++
+            return { type: 'text' as const, text: summarizeToolResult(block.text) }
+          }
+          return block
         }
-        return block
-      })
+      )
       const compressed: ToolResultMessage = { ...msg, content: compressedContent }
       result.push(compressed)
     } else {
@@ -195,7 +204,9 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   }
 
   if (compressedCount > 0) {
-    log.info(`第一层：压缩了 ${turnsToCompress.length} 个旧 turn 中的 ${compressedCount} 个 toolResult（保留最近 ${KEEP_RECENT_TURNS} 个 turn）`)
+    log.info(
+      `第一层：压缩了 ${turnsToCompress.length} 个旧 turn 中的 ${compressedCount} 个 toolResult（保留最近 ${KEEP_RECENT_TURNS} 个 turn）`
+    )
   }
   return result
 }
@@ -244,14 +255,18 @@ export function createTransformContext(
     const maxTokens = Math.floor((model.contextWindow || 128000) * CONTEXT_RATIO)
     const originalTokens = countAllTokens(messages)
 
-    log.info(`transformContext: ${messages.length} 条消息, ${originalTokens} tokens (阈值 ${maxTokens})`)
+    log.info(
+      `transformContext: ${messages.length} 条消息, ${originalTokens} tokens (阈值 ${maxTokens})`
+    )
 
     // 第一层：始终压缩旧 toolResult（近乎无损，高收益）
     let compressed = compressToolResults(messages)
 
     const afterBasicTokens = countAllTokens(compressed)
     if (afterBasicTokens < originalTokens) {
-      log.info(`基础压缩：${originalTokens} → ${afterBasicTokens} tokens（节省 ${originalTokens - afterBasicTokens}）`)
+      log.info(
+        `基础压缩：${originalTokens} → ${afterBasicTokens} tokens（节省 ${originalTokens - afterBasicTokens}）`
+      )
     }
 
     // 第二层：仅在超过阈值时执行滑动窗口截断（有损）

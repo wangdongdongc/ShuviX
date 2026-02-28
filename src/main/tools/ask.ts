@@ -32,7 +32,11 @@ export function createAskTool(ctx: ToolContext): AgentTool<typeof AskParamsSchem
     parameters: AskParamsSchema,
     execute: async (
       toolCallId: string,
-      params: { question: string; options: Array<{ label: string; description: string }>; allowMultiple?: boolean },
+      params: {
+        question: string
+        options: Array<{ label: string; description: string }>
+        allowMultiple?: boolean
+      },
       signal?: AbortSignal
     ) => {
       if (signal?.aborted) throw new Error(TOOL_ABORTED)

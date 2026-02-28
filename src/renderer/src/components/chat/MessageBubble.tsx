@@ -49,14 +49,22 @@ export const MessageBubble = memo(function MessageBubble({
   // 从 metadata 解析思考过程和 token 用量
   const parsedMeta = (() => {
     if (!metadata) return null
-    try { return JSON.parse(metadata) } catch { return null }
+    try {
+      return JSON.parse(metadata)
+    } catch {
+      return null
+    }
   })()
   // 流式阶段优先使用实时 thinking，完成后从 metadata 读取
   const thinking = streamingThinking || parsedMeta?.thinking || null
-  const usage = parsedMeta?.usage as {
-    input: number; output: number; total: number
-    details?: Array<{ input: number; output: number; total: number; stopReason: string }>
-  } | undefined
+  const usage = parsedMeta?.usage as
+    | {
+        input: number
+        output: number
+        total: number
+        details?: Array<{ input: number; output: number; total: number; stopReason: string }>
+      }
+    | undefined
 
   /** 复制消息内容 */
   const handleCopy = (): void => {
@@ -82,7 +90,7 @@ export const MessageBubble = memo(function MessageBubble({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {isUser ? t('message.you') : (model || 'Assistant')}
+            {isUser ? t('message.you') : model || 'Assistant'}
           </span>
           {/* 复制按钮 */}
           {!isStreaming && content && (
@@ -137,18 +145,22 @@ export const MessageBubble = memo(function MessageBubble({
                 if (!parsed.images?.length) return null
                 return (
                   <div className="flex flex-wrap gap-2 mb-2">
-                    {parsed.images.map((img: { preview: string; mimeType: string }, idx: number) => (
-                      <img
-                        key={idx}
-                        src={img.preview}
-                        alt={t('message.attachment', { index: idx + 1 })}
-                        className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => window.api.app.openImage(img.preview)}
-                      />
-                    ))}
+                    {parsed.images.map(
+                      (img: { preview: string; mimeType: string }, idx: number) => (
+                        <img
+                          key={idx}
+                          src={img.preview}
+                          alt={t('message.attachment', { index: idx + 1 })}
+                          className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                          onClick={() => window.api.app.openImage(img.preview)}
+                        />
+                      )
+                    )}
                   </div>
                 )
-              } catch { return null }
+              } catch {
+                return null
+              }
             })()}
             <div className="text-sm text-text-primary whitespace-pre-wrap break-all leading-relaxed">
               {content}
@@ -160,8 +172,22 @@ export const MessageBubble = memo(function MessageBubble({
             {thinking && (
               <details open={!!streamingThinking} className="group mb-2">
                 <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
-                  <svg className="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                  <span className={streamingThinking ? 'animate-pulse' : ''}>{t('message.deepThought')}</span>
+                  <svg
+                    className="w-3 h-3 transition-transform group-open:rotate-90"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                  <span className={streamingThinking ? 'animate-pulse' : ''}>
+                    {t('message.deepThought')}
+                  </span>
                 </summary>
                 <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
                   {thinking}
@@ -197,7 +223,10 @@ export const MessageBubble = memo(function MessageBubble({
                   <img
                     key={idx}
                     src={img.data}
-                    alt={t('message.generatedImage', { index: idx + 1, defaultValue: `Generated image ${idx + 1}` })}
+                    alt={t('message.generatedImage', {
+                      index: idx + 1,
+                      defaultValue: `Generated image ${idx + 1}`
+                    })}
                     className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
                     onClick={() => window.api.app.openImage(img.data)}
                   />
@@ -211,7 +240,10 @@ export const MessageBubble = memo(function MessageBubble({
                   <img
                     key={idx}
                     src={img.data}
-                    alt={t('message.generatedImage', { index: idx + 1, defaultValue: `Generated image ${idx + 1}` })}
+                    alt={t('message.generatedImage', {
+                      index: idx + 1,
+                      defaultValue: `Generated image ${idx + 1}`
+                    })}
                     className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
                   />
                 ))}
@@ -241,7 +273,10 @@ export const MessageBubble = memo(function MessageBubble({
                 </div>
               </details>
             ) : (
-              <span>tokens: {usage.input} in / {usage.output} out{usage.total ? ` · ${usage.total} total` : ''}</span>
+              <span>
+                tokens: {usage.input} in / {usage.output} out
+                {usage.total ? ` · ${usage.total} total` : ''}
+              </span>
             )}
           </div>
         )}

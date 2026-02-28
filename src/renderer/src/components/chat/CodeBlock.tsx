@@ -24,7 +24,15 @@ interface HastNode {
 }
 
 /** 代码块容器 — 带语言标签和复制按钮 */
-export function CodeBlock({ node, children, ...props }: { node?: HastNode; children?: React.ReactNode; [key: string]: unknown }): React.JSX.Element {
+export function CodeBlock({
+  node,
+  children,
+  ...props
+}: {
+  node?: HastNode
+  children?: React.ReactNode
+  [key: string]: unknown
+}): React.JSX.Element {
   const [copied, setCopied] = useState(false)
 
   // 从 hast 节点提取语言名称
@@ -59,7 +67,10 @@ export function CodeBlock({ node, children, ...props }: { node?: HastNode; child
   return (
     <div className="relative group/code my-2">
       {/* 语言标签 + 复制按钮 */}
-      <div className="flex items-center justify-between px-4 py-1.5 text-[10px] text-text-tertiary rounded-t-lg" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
+      <div
+        className="flex items-center justify-between px-4 py-1.5 text-[10px] text-text-tertiary rounded-t-lg"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
         <span className="font-medium uppercase tracking-wider">{lang || 'code'}</span>
         <button
           onClick={handleCopy}
@@ -69,9 +80,7 @@ export function CodeBlock({ node, children, ...props }: { node?: HastNode; child
           <span>{copied ? 'Copied' : 'Copy'}</span>
         </button>
       </div>
-      <pre {...props}>
-        {children}
-      </pre>
+      <pre {...props}>{children}</pre>
     </div>
   )
 }
@@ -117,15 +126,23 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
     return (
       <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3">
         <div className="text-[10px] text-orange-400 mb-1">{t('message.mermaidFailed')}</div>
-        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">{code}</pre>
+        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">
+          {code}
+        </pre>
       </div>
     )
   }
 
   return (
-    <div className="my-2 rounded-lg overflow-hidden" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
+    <div
+      className="my-2 rounded-lg overflow-hidden"
+      style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+    >
       {/* 工具栏 */}
-      <div className="flex items-center justify-between px-4 py-1.5" style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}>
+      <div
+        className="flex items-center justify-between px-4 py-1.5"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
         <span className="text-[10px] text-text-tertiary font-medium">Mermaid</span>
         <button
           onClick={handleToggle}
@@ -134,11 +151,19 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
           title={showSource ? t('message.showDiagram') : t('message.source')}
         >
           {showSource ? <FileText size={10} /> : <Code size={10} />}
-          <span>{rendering ? t('message.rendering') : showSource ? t('message.diagram') : t('message.source')}</span>
+          <span>
+            {rendering
+              ? t('message.rendering')
+              : showSource
+                ? t('message.diagram')
+                : t('message.source')}
+          </span>
         </button>
       </div>
       {showSource ? (
-        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">{code}</pre>
+        <pre className="p-3 text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed font-mono overflow-auto">
+          {code}
+        </pre>
       ) : (
         <div
           className="flex justify-center overflow-auto p-3 bg-white rounded-b-lg [&_svg]:max-w-full"

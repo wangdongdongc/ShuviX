@@ -6,17 +6,17 @@ ShuviX 是一个桌面 AI 智能体应用，基于 Electron + React + TypeScript
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 桌面运行时 | Electron |
-| 前端框架 | React 19 + TypeScript |
-| 构建工具 | electron-vite (Vite) |
-| 样式方案 | Tailwind CSS v4 |
-| 状态管理 | Zustand |
-| LLM 集成 | @mariozechner/pi-ai + pi-agent-core |
-| 数据持久化 | SQLite (better-sqlite3) |
-| 国际化 | i18next（zh / en / ja） |
-| 包管理器 | npm |
+| 层级       | 技术                                |
+| ---------- | ----------------------------------- |
+| 桌面运行时 | Electron                            |
+| 前端框架   | React 19 + TypeScript               |
+| 构建工具   | electron-vite (Vite)                |
+| 样式方案   | Tailwind CSS v4                     |
+| 状态管理   | Zustand                             |
+| LLM 集成   | @mariozechner/pi-ai + pi-agent-core |
+| 数据持久化 | SQLite (better-sqlite3)             |
+| 国际化     | i18next（zh / en / ja）             |
+| 包管理器   | npm                                 |
 
 ## 项目结构
 
@@ -105,6 +105,7 @@ Service Layer                ← 业务逻辑，编排 DAO + 外部服务
 ```
 
 **分层原则**：
+
 - **IPC** — 只做参数解构和路由，不含业务逻辑
 - **Service** — 编排跨 DAO 操作，处理业务规则
 - **DAO** — 一方法一 SQL，不调用其他 DAO
@@ -116,13 +117,13 @@ Service Layer                ← 业务逻辑，编排 DAO + 外部服务
 
 内置 5 个工具，覆盖编码场景：
 
-| 工具 | 功能 |
-|------|------|
-| `now` | 获取当前系统时间 |
-| `bash` | 执行 Shell 命令（沙箱模式下需审批） |
-| `read` | 读取文件（支持 PDF/Office/HTML 等富文本自动转 Markdown） |
-| `write` | 创建 / 覆写文件 |
-| `edit` | 精确文本替换 |
+| 工具    | 功能                                                     |
+| ------- | -------------------------------------------------------- |
+| `now`   | 获取当前系统时间                                         |
+| `bash`  | 执行 Shell 命令（沙箱模式下需审批）                      |
+| `read`  | 读取文件（支持 PDF/Office/HTML 等富文本自动转 Markdown） |
+| `write` | 创建 / 覆写文件                                          |
+| `edit`  | 精确文本替换                                             |
 
 ### 文件读取能力
 
@@ -137,6 +138,7 @@ Service Layer                ← 业务逻辑，编排 DAO + 外部服务
 ### 沙箱模式
 
 项目级安全沙箱：
+
 - `read`/`write`/`edit` — 路径越界检查，禁止访问工作区外文件
 - `bash` — 内联审批卡片，用户点击允许/拒绝
 - 临时会话自动开启沙箱，工作目录隔离

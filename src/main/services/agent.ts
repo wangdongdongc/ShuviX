@@ -8,6 +8,7 @@ import {
   completeSimple
 } from '@mariozechner/pi-ai'
 import { streamSimpleGoogleWithImages } from './googleImageStream'
+import { parallelCoordinator } from './parallelExecution'
 import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
@@ -73,7 +74,11 @@ export class AgentService {
   /** 每个 session 的流式内容缓冲区（后端累积 delta，用于 agent_end / abort 时统一落库） */
   private streamBuffers = new Map<
     string,
-    { content: string; thinking: string; images: Array<{ data: string; mimeType: string; thoughtSignature?: string }> }
+    {
+      content: string
+      thinking: string
+      images: Array<{ data: string; mimeType: string; thoughtSignature?: string }>
+    }
   >()
   /** 每个 session 的 turn 计数器（用于在 UI 中标记工具调用所属 turn） */
   private turnCounters = new Map<string, number>()
@@ -403,6 +408,7 @@ export class AgentService {
   /** 中止指定 session 的生成；若已有部分内容则持久化并返回 */
   abort(sessionId: string): Message | null {
     log.info(`中止 session=${sessionId}`)
+    parallelCoordinator.cancelBatch(sessionId)
     this.agents.get(sessionId)?.abort()
     // 取消所有待审批的 Promise
     for (const [id, pending] of this.pendingApprovals) {
@@ -563,6 +569,7 @@ export class AgentService {
     const agent = this.agents.get(sessionId)
     if (agent) {
       agent.abort()
+      parallelCoordinator.clearSession(sessionId)
       this.agents.delete(sessionId)
       this.instructionLoadStates.delete(sessionId)
       clearFileTimeSession(sessionId)
@@ -578,6 +585,7 @@ export class AgentService {
     const agent = this.agents.get(sessionId)
     if (agent) {
       agent.abort()
+      parallelCoordinator.clearSession(sessionId)
       this.agents.delete(sessionId)
       this.instructionLoadStates.delete(sessionId)
       this.pendingLogIds.delete(sessionId)
@@ -666,10 +674,16 @@ export class AgentService {
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i]
       if (this.isAssistantMessage(msg)) {
-        const contentArr = msg.content as unknown as (TextContent | ThinkingContent | ImageContent)[]
+        const contentArr = msg.content as unknown as (
+          | TextContent
+          | ThinkingContent
+          | ImageContent
+        )[]
         for (const img of images) {
           contentArr.push({
-            type: 'image', data: img.data, mimeType: img.mimeType,
+            type: 'image',
+            data: img.data,
+            mimeType: img.mimeType,
             ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
           } as ImageContent)
         }

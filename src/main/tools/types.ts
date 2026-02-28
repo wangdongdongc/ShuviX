@@ -29,7 +29,10 @@ export interface ToolContext {
   /** Docker 容器创建时回调 */
   onContainerCreated?: (containerId: string, image: string) => void
   /** 沙箱模式下 bash 命令需用户确认，返回 approved=true 表示允许，reason 为用户拒绝时附加的说明 */
-  requestApproval?: (toolCallId: string, command: string) => Promise<{ approved: boolean; reason?: string }>
+  requestApproval?: (
+    toolCallId: string,
+    command: string
+  ) => Promise<{ approved: boolean; reason?: string }>
   /** ask 工具：向用户提问并等待选择结果，返回用户选中的 label 列表 */
   requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
   /** ssh 工具：请求用户输入 SSH 凭据（密码或密钥），凭据不经过大模型 */
@@ -68,18 +71,24 @@ export function isPathWithinWorkspace(absolutePath: string, workingDirectory: st
 }
 
 /** 检查路径是否在任一参考目录内 */
-export function isPathWithinReferenceDirs(absolutePath: string, referenceDirs: ReferenceDir[]): boolean {
+export function isPathWithinReferenceDirs(
+  absolutePath: string,
+  referenceDirs: ReferenceDir[]
+): boolean {
   const resolved = resolve(absolutePath)
-  return referenceDirs.some(dir => {
+  return referenceDirs.some((dir) => {
     const base = resolve(dir.path)
     return resolved === base || resolved.startsWith(base + sep)
   })
 }
 
 /** 检查路径是否在某个 readwrite 参考目录内 */
-export function isPathWithinReadwriteReferenceDirs(absolutePath: string, referenceDirs: ReferenceDir[]): boolean {
+export function isPathWithinReadwriteReferenceDirs(
+  absolutePath: string,
+  referenceDirs: ReferenceDir[]
+): boolean {
   const resolved = resolve(absolutePath)
-  return referenceDirs.some(dir => {
+  return referenceDirs.some((dir) => {
     if ((dir.access ?? 'readonly') !== 'readwrite') return false
     const base = resolve(dir.path)
     return resolved === base || resolved.startsWith(base + sep)
@@ -90,28 +99,42 @@ export function isPathWithinReadwriteReferenceDirs(absolutePath: string, referen
  * 沙箱守卫：只读访问（workspace + referenceDirs 均允许）
  * 用于 read、ls、grep、glob 等只读工具
  */
-export function assertSandboxRead(config: ProjectConfig, absolutePath: string, displayPath?: string): void {
+export function assertSandboxRead(
+  config: ProjectConfig,
+  absolutePath: string,
+  displayPath?: string
+): void {
   if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
   const p = displayPath ?? absolutePath
-  throw new Error(`Sandbox: access denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`)
+  throw new Error(
+    `Sandbox: access denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`
+  )
 }
 
 /**
  * 沙箱守卫：写入访问（workspace + readwrite 参考目录允许）
  * 用于 write、edit 等写入工具
  */
-export function assertSandboxWrite(config: ProjectConfig, absolutePath: string, displayPath?: string): void {
+export function assertSandboxWrite(
+  config: ProjectConfig,
+  absolutePath: string,
+  displayPath?: string
+): void {
   if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
   const p = displayPath ?? absolutePath
   // 区分只读参考目录和完全越界
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) {
-    throw new Error(`Sandbox: write denied — ${p} is inside a read-only reference directory. You can only read files from this directory.`)
+    throw new Error(
+      `Sandbox: write denied — ${p} is inside a read-only reference directory. You can only read files from this directory.`
+    )
   }
-  throw new Error(`Sandbox: write denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`)
+  throw new Error(
+    `Sandbox: write denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`
+  )
 }
 
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
@@ -125,7 +148,9 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
     try {
       const settings = JSON.parse(project.settings || '{}')
       if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
-    } catch { /* 忽略 */ }
+    } catch {
+      /* 忽略 */
+    }
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
       sandboxEnabled: project.sandboxEnabled === 1,

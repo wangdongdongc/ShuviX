@@ -40,7 +40,10 @@ export class SshManager {
   private connections = new Map<string, SshConnectionInfo>()
 
   /** 建立 SSH 连接 */
-  async connect(sessionId: string, credentials: SshCredentials): Promise<{ success: boolean; error?: string }> {
+  async connect(
+    sessionId: string,
+    credentials: SshCredentials
+  ): Promise<{ success: boolean; error?: string }> {
     // 已有连接则先断开
     await this.disconnect(sessionId)
 
@@ -147,7 +150,11 @@ export class SshManager {
       const timer = setTimeout(() => {
         killed = true
         // ssh2 没有直接 kill stream 的方法，通过发送 signal
-        try { conn.client.end() } catch { /* 忽略 */ }
+        try {
+          conn.client.end()
+        } catch {
+          /* 忽略 */
+        }
         resolve({ stdout, stderr, exitCode: 124 })
       }, timeout * 1000)
 
@@ -155,7 +162,11 @@ export class SshManager {
       const onAbort = (): void => {
         killed = true
         clearTimeout(timer)
-        try { conn.client.end() } catch { /* 忽略 */ }
+        try {
+          conn.client.end()
+        } catch {
+          /* 忽略 */
+        }
         reject(new Error('Aborted'))
       }
       if (signal) signal.addEventListener('abort', onAbort, { once: true })

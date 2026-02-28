@@ -19,7 +19,13 @@ export interface ToolExecution {
   args: Record<string, unknown>
   /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
   turnIndex?: number
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
+  status:
+    | 'running'
+    | 'done'
+    | 'error'
+    | 'pending_approval'
+    | 'pending_user_input'
+    | 'pending_ssh_credentials'
   result?: string
   messageId?: string
 }
@@ -105,7 +111,11 @@ interface ChatState {
   getSessionStreamContent: (sessionId: string) => string
   getSessionStreamThinking: (sessionId: string) => string
   addToolExecution: (sessionId: string, exec: ToolExecution) => void
-  updateToolExecution: (sessionId: string, toolCallId: string, updates: Partial<ToolExecution>) => void
+  updateToolExecution: (
+    sessionId: string,
+    toolCallId: string,
+    updates: Partial<ToolExecution>
+  ) => void
   clearToolExecutions: (sessionId: string) => void
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
@@ -124,7 +134,10 @@ interface ChatState {
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
-  setSessionSsh: (sessionId: string, info: { host: string; port: number; username: string } | null) => void
+  setSessionSsh: (
+    sessionId: string,
+    info: { host: string; port: number; username: string } | null
+  ) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -174,21 +187,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   appendStreamingContent: (sessionId, delta) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
+      const prev = state.sessionStreams[sessionId] || {
+        content: '',
+        thinking: '',
+        isStreaming: false,
+        images: []
+      }
       const updated = { ...prev, content: prev.content + delta }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   appendStreamingThinking: (sessionId, delta) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
+      const prev = state.sessionStreams[sessionId] || {
+        content: '',
+        thinking: '',
+        isStreaming: false,
+        images: []
+      }
       const updated = { ...prev, thinking: prev.thinking + delta }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   appendStreamingImage: (sessionId, image) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
+      const prev = state.sessionStreams[sessionId] || {
+        content: '',
+        thinking: '',
+        isStreaming: false,
+        images: []
+      }
       const updated = { ...prev, images: [...prev.images, image] }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
@@ -203,7 +231,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setIsStreaming: (sessionId, streaming) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || { content: '', thinking: '', isStreaming: false, images: [] }
+      const prev = state.sessionStreams[sessionId] || {
+        content: '',
+        thinking: '',
+        isStreaming: false,
+        images: []
+      }
       const updated = { ...prev, isStreaming: streaming }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
@@ -219,7 +252,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addToolExecution: (sessionId, exec) =>
     set((state) => {
       const prev = state.sessionToolExecutions[sessionId] || []
-      return { sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: [...prev, exec] } }
+      return {
+        sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: [...prev, exec] }
+      }
     }),
 
   updateToolExecution: (sessionId, toolCallId, updates) =>
@@ -242,7 +277,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMaxContextTokens: (tokens) => set({ maxContextTokens: tokens }),
   setUsedContextTokens: (tokens) => set({ usedContextTokens: tokens }),
   addPendingImage: (image) => set((state) => ({ pendingImages: [...state.pendingImages, image] })),
-  removePendingImage: (index) => set((state) => ({ pendingImages: state.pendingImages.filter((_, i) => i !== index) })),
+  removePendingImage: (index) =>
+    set((state) => ({ pendingImages: state.pendingImages.filter((_, i) => i !== index) })),
   clearPendingImages: () => set({ pendingImages: [] }),
   updateSessionTitle: (id, title) =>
     set((state) => ({
@@ -268,13 +304,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSessionDocker: (sessionId, info) =>
     set((state) => {
       const prev = state.sessionResources[sessionId] || {}
-      return { sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, docker: info } } }
+      return {
+        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, docker: info } }
+      }
     }),
 
   setSessionSsh: (sessionId, info) =>
     set((state) => {
       const prev = state.sessionResources[sessionId] || {}
-      return { sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } } }
+      return {
+        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } }
+      }
     }),
 
   finishStreaming: (sessionId, finalMessage) =>
@@ -292,9 +332,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { [sessionId]: _removed, ...restToolExecs } = state.sessionToolExecutions
 
       // 添加最终消息（如有）
-      const newMessages = finalMessage && sessionId === state.activeSessionId
-        ? [...state.messages, finalMessage]
-        : state.messages
+      const newMessages =
+        finalMessage && sessionId === state.activeSessionId
+          ? [...state.messages, finalMessage]
+          : state.messages
 
       return {
         sessionStreams: newStreams,

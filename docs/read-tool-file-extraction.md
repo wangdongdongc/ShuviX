@@ -15,14 +15,14 @@
 
 ### 候选方案对比
 
-| 方案 | 支持格式 | `.doc` | `.ppt` | 输出质量 | 外部依赖 | 维护状态 |
-|------|---------|--------|--------|---------|---------|---------|
-| **markitdown-ts** | pdf, docx, xlsx, pptx, html, ipynb, zip | ❌ | ❌ | Markdown（结构保留好） | 无 | 活跃 |
-| **officeParser** | docx, pptx, xlsx, odt, odp, ods, pdf, rtf | ❌ | ❌ | AST / 纯文本 | 无 | 活跃 |
-| **word-extractor** | doc, docx | ✅ | ❌ | 纯文本 | 无 | 一般 |
-| **textract** | doc, docx, ppt, pptx, pdf, xls, xlsx... | ✅ | ✅ | 纯文本 | **需要 antiword、pdftotext 等** | 7年未更新 |
-| **office-text-extractor** | docx, pptx, xlsx, pdf | ❌ | ❌ | 纯文本 | 无 | 一般 |
-| **js-ppt** (SheetJS) | ppt | - | ⚠️ 质量差 | 纯文本 | 无 | 不活跃 |
+| 方案                      | 支持格式                                  | `.doc` | `.ppt`    | 输出质量               | 外部依赖                        | 维护状态  |
+| ------------------------- | ----------------------------------------- | ------ | --------- | ---------------------- | ------------------------------- | --------- |
+| **markitdown-ts**         | pdf, docx, xlsx, pptx, html, ipynb, zip   | ❌     | ❌        | Markdown（结构保留好） | 无                              | 活跃      |
+| **officeParser**          | docx, pptx, xlsx, odt, odp, ods, pdf, rtf | ❌     | ❌        | AST / 纯文本           | 无                              | 活跃      |
+| **word-extractor**        | doc, docx                                 | ✅     | ❌        | 纯文本                 | 无                              | 一般      |
+| **textract**              | doc, docx, ppt, pptx, pdf, xls, xlsx...   | ✅     | ✅        | 纯文本                 | **需要 antiword、pdftotext 等** | 7年未更新 |
+| **office-text-extractor** | docx, pptx, xlsx, pdf                     | ❌     | ❌        | 纯文本                 | 无                              | 一般      |
+| **js-ppt** (SheetJS)      | ppt                                       | -      | ⚠️ 质量差 | 纯文本                 | 无                              | 不活跃    |
 
 ### 关键结论
 
@@ -60,13 +60,13 @@
 
 ### 格式覆盖
 
-| 格式 | 处理方式 | 输出 |
-|------|---------|------|
-| `.pdf` `.docx` `.xlsx` `.xls` `.pptx` `.html` `.htm` `.ipynb` `.zip` | markitdown-ts | Markdown |
-| `.doc` | word-extractor | 纯文本 |
-| `.ppt` + 其他已知二进制 | 直接 throw 错误 | 错误提示 |
-| 未知扩展名但检测为二进制 | 读取前 8KB 检测 NULL 字节 | 错误提示 |
-| 纯文本文件 | 原有逻辑 | 带行号的文本 |
+| 格式                                                                 | 处理方式                  | 输出         |
+| -------------------------------------------------------------------- | ------------------------- | ------------ |
+| `.pdf` `.docx` `.xlsx` `.xls` `.pptx` `.html` `.htm` `.ipynb` `.zip` | markitdown-ts             | Markdown     |
+| `.doc`                                                               | word-extractor            | 纯文本       |
+| `.ppt` + 其他已知二进制                                              | 直接 throw 错误           | 错误提示     |
+| 未知扩展名但检测为二进制                                             | 读取前 8KB 检测 NULL 字节 | 错误提示     |
+| 纯文本文件                                                           | 原有逻辑                  | 带行号的文本 |
 
 ### 实现架构
 
@@ -98,9 +98,9 @@ resolve path → sandbox check → stat file
 
 ### i18n Key
 
-| Key | 用途 |
-|-----|------|
-| `tool.readDesc` | 工具描述（列出支持的格式） |
-| `tool.convertedHeader` | 转换后的文件头 |
-| `tool.convertFailed` | 转换失败提示 |
-| `tool.unsupportedFormat` | 不支持格式的错误提示 |
+| Key                      | 用途                       |
+| ------------------------ | -------------------------- |
+| `tool.readDesc`          | 工具描述（列出支持的格式） |
+| `tool.convertedHeader`   | 转换后的文件头             |
+| `tool.convertFailed`     | 转换失败提示               |
+| `tool.unsupportedFormat` | 不支持格式的错误提示       |

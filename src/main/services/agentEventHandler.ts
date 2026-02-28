@@ -5,12 +5,46 @@ import { messageService } from './messageService'
 import { sessionDao } from '../dao/sessionDao'
 import { resolveProjectConfig } from '../tools/types'
 import { dockerManager } from './dockerManager'
+import { parallelCoordinator } from './parallelExecution'
 import type { Message } from '../types'
 import { createLogger } from '../logger'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
 const log = createLogger('AgentEvent')
+
+/** 提前发送过 tool_start 的 toolCallId 集合（sessionId → Set），用于并行工具预展示 */
+const preEmittedToolCalls = new Map<string, Set<string>>()
+
+/** 检查工具是否需要用户审批/输入（复用于 handleMessageEnd 预展示和 handleToolExecutionStart） */
+function checkToolApproval(
+  sessionId: string,
+  toolName: string,
+  args: Record<string, unknown>
+): { approvalRequired: boolean; userInputRequired: boolean; sshCredentialRequired: boolean } {
+  let approvalRequired = false
+  if (toolName === 'bash') {
+    const config = resolveProjectConfig({ sessionId })
+    approvalRequired = config.sandboxEnabled
+  } else if (toolName === 'shuvix-project' && args?.action === 'update') {
+    approvalRequired = true
+  } else if (toolName === 'shuvix-setting' && args?.action === 'set') {
+    approvalRequired = true
+  } else if (toolName === 'ssh' && args?.action === 'exec') {
+    let sshAutoApprove = false
+    try {
+      const sess = sessionDao.findById(sessionId)
+      sshAutoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
+    } catch {
+      /* ignore */
+    }
+    approvalRequired = !sshAutoApprove
+  }
+  const userInputRequired = toolName === 'ask'
+  const sshCredentialRequired =
+    toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
+  return { approvalRequired, userInputRequired, sshCredentialRequired }
+}
 
 // Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
 export interface AgentStreamEvent {
@@ -91,7 +125,11 @@ export function readProjectAgentMd(projectPath: string): string {
 export interface EventHandlerContext {
   streamBuffers: Map<
     string,
-    { content: string; thinking: string; images: Array<{ data: string; mimeType: string; thoughtSignature?: string }> }
+    {
+      content: string
+      thinking: string
+      images: Array<{ data: string; mimeType: string; thoughtSignature?: string }>
+    }
   >
   turnCounters: Map<string, number>
   pendingLogIds: Map<string, string[]>
@@ -106,6 +144,7 @@ function handleAgentStart(ctx: EventHandlerContext, sessionId: string): void {
   log.info(`开始 session=${sessionId}`)
   ctx.streamBuffers.set(sessionId, { content: '', thinking: '', images: [] })
   ctx.turnCounters.set(sessionId, 0)
+  preEmittedToolCalls.delete(sessionId)
   ctx.sendToRenderer({ type: 'agent_start', sessionId })
 }
 
@@ -128,6 +167,7 @@ function handleAgentEnd(
   event: Extract<AgentEvent, { type: 'agent_end' }>
 ): void {
   log.info(`结束 session=${sessionId}`)
+  preEmittedToolCalls.delete(sessionId)
   // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
   dockerManager.scheduleDestroy(sessionId, (containerId) => {
     ctx.emitDockerEvent(sessionId, 'container_destroyed', {
@@ -263,7 +303,77 @@ function handleMessageEnd(
       }
     }
   }
+  // 注册并行执行 batch + 预展示：assistant 消息含 2+ toolCalls 时，提前发送 tool_start
+  let batchToolCalls: Array<{
+    id: string
+    name: string
+    arguments: Record<string, unknown>
+  }> | null = null
+  if (ctx.isAssistantMessage(msg)) {
+    const rawToolCalls = (
+      msg.content as Array<{
+        type: string
+        id?: string
+        name?: string
+        arguments?: Record<string, unknown>
+      }>
+    ).filter((c) => c.type === 'toolCall' && c.id && c.name)
+    if (rawToolCalls.length >= 2) {
+      batchToolCalls = rawToolCalls.map((tc) => ({
+        id: tc.id!,
+        name: tc.name!,
+        arguments: tc.arguments || {}
+      }))
+      parallelCoordinator.registerBatch(sessionId, batchToolCalls)
+    }
+  }
+
   ctx.sendToRenderer({ type: 'text_end', sessionId })
+
+  // 并行 batch 预展示：提前发送所有不需审批的工具 tool_start，让 UI 同时显示为执行中
+  if (batchToolCalls) {
+    const preEmitted = new Set<string>()
+    const sessionForTool = sessionDao.findById(sessionId)
+    const turnIndex = ctx.turnCounters.get(sessionId) || 0
+    for (const tc of batchToolCalls) {
+      const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
+        sessionId,
+        tc.name,
+        tc.arguments
+      )
+      // 需要用户交互的工具仍由框架按顺序触发，不预展示
+      if (approvalRequired || userInputRequired || sshCredentialRequired) continue
+      const toolCallMsg = messageService.add({
+        sessionId,
+        role: 'assistant',
+        type: 'tool_call',
+        content: '',
+        metadata: JSON.stringify({
+          toolCallId: tc.id,
+          toolName: tc.name,
+          args: tc.arguments,
+          turnIndex
+        }),
+        model: sessionForTool?.model || ''
+      })
+      ctx.sendToRenderer({
+        type: 'tool_start',
+        sessionId,
+        toolCallId: tc.id,
+        toolName: tc.name,
+        toolArgs: tc.arguments,
+        data: toolCallMsg.id,
+        approvalRequired: false,
+        userInputRequired: false,
+        sshCredentialRequired: false,
+        turnIndex
+      })
+      preEmitted.add(tc.id)
+    }
+    if (preEmitted.size > 0) {
+      preEmittedToolCalls.set(sessionId, preEmitted)
+    }
+  }
 }
 
 /** tool_execution_start 事件：持久化 tool_call、审批判断 */
@@ -272,6 +382,13 @@ function handleToolExecutionStart(
   sessionId: string,
   event: Extract<AgentEvent, { type: 'tool_execution_start' }>
 ): void {
+  // 并行 batch 预展示：如果已在 handleMessageEnd 中提前发送过 tool_start，跳过重复处理
+  const preEmitted = preEmittedToolCalls.get(sessionId)
+  if (preEmitted?.has(event.toolCallId)) {
+    preEmitted.delete(event.toolCallId)
+    if (preEmitted.size === 0) preEmittedToolCalls.delete(sessionId)
+    return
+  }
   const args = event.args as Record<string, unknown> | undefined
   // 持久化工具调用消息
   const sessionForTool = sessionDao.findById(sessionId)
@@ -288,31 +405,11 @@ function handleToolExecutionStart(
     }),
     model: sessionForTool?.model || ''
   })
-  // 检查工具是否需要用户审批（bash 沙箱模式 / shuvix-project update / shuvix-setting set）
-  let approvalRequired = false
-  if (event.toolName === 'bash') {
-    const config = resolveProjectConfig({ sessionId })
-    approvalRequired = config.sandboxEnabled
-  } else if (event.toolName === 'shuvix-project' && args?.action === 'update') {
-    approvalRequired = true
-  } else if (event.toolName === 'shuvix-setting' && args?.action === 'set') {
-    approvalRequired = true
-  } else if (event.toolName === 'ssh' && args?.action === 'exec') {
-    // SSH exec：如果会话开启了 sshAutoApprove 则跳过审批
-    let sshAutoApprove = false
-    try {
-      const sess = sessionDao.findById(sessionId)
-      sshAutoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
-    } catch {
-      /* ignore */
-    }
-    approvalRequired = !sshAutoApprove
-  }
-  // ask 工具始终需要用户输入（与 bash 审批同模式，直接在 tool_start 携带标记）
-  const userInputRequired = event.toolName === 'ask'
-  // ssh connect 需要用户输入凭据（使用已保存凭据时无需弹窗）
-  const sshCredentialRequired =
-    event.toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
+  const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
+    sessionId,
+    event.toolName,
+    args || {}
+  )
   ctx.sendToRenderer({
     type: 'tool_start',
     sessionId,

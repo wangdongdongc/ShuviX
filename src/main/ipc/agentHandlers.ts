@@ -1,6 +1,12 @@
 import { ipcMain } from 'electron'
 import { agentService, ALL_TOOL_NAMES } from '../services/agent'
-import type { AgentInitParams, AgentInitResult, AgentPromptParams, AgentSetModelParams, AgentSetThinkingLevelParams } from '../types'
+import type {
+  AgentInitParams,
+  AgentInitResult,
+  AgentPromptParams,
+  AgentSetModelParams,
+  AgentSetThinkingLevelParams
+} from '../types'
 import { t } from '../i18n'
 import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
@@ -29,7 +35,13 @@ export function registerAgentHandlers(): void {
 
   /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
-    agentService.setModel(params.sessionId, params.provider, params.model, params.baseUrl, params.apiProtocol)
+    agentService.setModel(
+      params.sessionId,
+      params.provider,
+      params.model,
+      params.baseUrl,
+      params.apiProtocol
+    )
     return { success: true }
   })
 
@@ -40,28 +52,53 @@ export function registerAgentHandlers(): void {
   })
 
   /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-  ipcMain.handle('agent:approveToolCall', (_event, params: { toolCallId: string; approved: boolean; reason?: string }) => {
-    agentService.approveToolCall(params.toolCallId, params.approved, params.reason)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'agent:approveToolCall',
+    (_event, params: { toolCallId: string; approved: boolean; reason?: string }) => {
+      agentService.approveToolCall(params.toolCallId, params.approved, params.reason)
+      return { success: true }
+    }
+  )
 
   /** 响应 ask 工具的用户选择 */
-  ipcMain.handle('agent:respondToAsk', (_event, params: { toolCallId: string; selections: string[] }) => {
-    agentService.respondToAsk(params.toolCallId, params.selections)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'agent:respondToAsk',
+    (_event, params: { toolCallId: string; selections: string[] }) => {
+      agentService.respondToAsk(params.toolCallId, params.selections)
+      return { success: true }
+    }
+  )
 
   /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
-  ipcMain.handle('agent:respondToSshCredentials', (_event, params: { toolCallId: string; credentials: { host: string; port: number; username: string; password?: string; privateKey?: string; passphrase?: string } | null }) => {
-    agentService.respondToSshCredentials(params.toolCallId, params.credentials)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'agent:respondToSshCredentials',
+    (
+      _event,
+      params: {
+        toolCallId: string
+        credentials: {
+          host: string
+          port: number
+          username: string
+          password?: string
+          privateKey?: string
+          passphrase?: string
+        } | null
+      }
+    ) => {
+      agentService.respondToSshCredentials(params.toolCallId, params.credentials)
+      return { success: true }
+    }
+  )
 
   /** 动态更新指定 session 的启用工具集 */
-  ipcMain.handle('agent:setEnabledTools', (_event, params: { sessionId: string; tools: string[] }) => {
-    agentService.setEnabledTools(params.sessionId, params.tools)
-    return { success: true }
-  })
+  ipcMain.handle(
+    'agent:setEnabledTools',
+    (_event, params: { sessionId: string; tools: string[] }) => {
+      agentService.setEnabledTools(params.sessionId, params.tools)
+      return { success: true }
+    }
+  )
 
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
   ipcMain.handle('tools:list', () => {

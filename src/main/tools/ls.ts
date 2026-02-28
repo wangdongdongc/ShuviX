@@ -19,10 +19,14 @@ const LIMIT = 100
 
 const LsParamsSchema = Type.Object({
   path: Type.Optional(
-    Type.String({ description: 'The directory path to list (optional, defaults to current working directory)' })
+    Type.String({
+      description: 'The directory path to list (optional, defaults to current working directory)'
+    })
   ),
   ignore: Type.Optional(
-    Type.Array(Type.String(), { description: 'Additional glob patterns to exclude (e.g. "*.log", "tmp/")' })
+    Type.Array(Type.String(), {
+      description: 'Additional glob patterns to exclude (e.g. "*.log", "tmp/")'
+    })
   )
 })
 
@@ -31,7 +35,7 @@ const LsParamsSchema = Type.Object({
  */
 function buildTree(files: string[]): string {
   // 统一分隔符为 /
-  const normalized = files.map(f => f.split(sep).join('/'))
+  const normalized = files.map((f) => f.split(sep).join('/'))
 
   // 构建目录→文件映射
   const dirs = new Set<string>()
@@ -64,7 +68,7 @@ function buildTree(files: string[]): string {
 
     // 子目录（排序）
     const children = Array.from(dirs)
-      .filter(d => dirname(d) === dirPath && d !== dirPath)
+      .filter((d) => dirname(d) === dirPath && d !== dirPath)
       .sort()
 
     for (const child of children) {

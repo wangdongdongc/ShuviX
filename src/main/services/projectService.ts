@@ -22,7 +22,10 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
   sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
-  referenceDirs: { labelKey: 'projectForm.referenceDirs', desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite' }
+  referenceDirs: {
+    labelKey: 'projectForm.referenceDirs',
+    desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite'
+  }
 }
 
 /** 所有已知项目字段描述列表（供 AI prompt / 参数 description 使用） */
@@ -95,9 +98,13 @@ export class ProjectService {
   }): Project {
     const now = Date.now()
     const id = uuidv7()
-    const settings: Record<string, string[] | Array<{ path: string; note?: string; access?: string }>> = {}
+    const settings: Record<
+      string,
+      string[] | Array<{ path: string; note?: string; access?: string }>
+    > = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
-    if (params.referenceDirs) settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
+    if (params.referenceDirs)
+      settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
     const project: Project = {
       id,
       name: params.name || basename(params.path) || params.path,
@@ -116,22 +123,32 @@ export class ProjectService {
   }
 
   /** 更新项目 */
-  update(id: string, params: {
-    name?: string
-    path?: string
-    systemPrompt?: string
-    dockerEnabled?: boolean
-    dockerImage?: string
-    sandboxEnabled?: boolean
-    enabledTools?: string[]
-    referenceDirs?: Array<{ path: string; note?: string; access?: string }>
-    archived?: boolean
-  }): void {
+  update(
+    id: string,
+    params: {
+      name?: string
+      path?: string
+      systemPrompt?: string
+      dockerEnabled?: boolean
+      dockerImage?: string
+      sandboxEnabled?: boolean
+      enabledTools?: string[]
+      referenceDirs?: Array<{ path: string; note?: string; access?: string }>
+      archived?: boolean
+    }
+  ): void {
     // 处理 settings JSON 字段（合并而非覆盖）
     let settingsUpdate: string | undefined
     if (params.enabledTools !== undefined || params.referenceDirs !== undefined) {
       const existing = projectDao.findById(id)
-      const current = (() => { try { const p = JSON.parse(existing?.settings || '{}'); return (typeof p === 'object' && p !== null) ? p : {} } catch { return {} } })()
+      const current = (() => {
+        try {
+          const p = JSON.parse(existing?.settings || '{}')
+          return typeof p === 'object' && p !== null ? p : {}
+        } catch {
+          return {}
+        }
+      })()
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
       if (params.referenceDirs !== undefined) {
         // 获取项目路径用于去重校验
@@ -144,9 +161,13 @@ export class ProjectService {
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
-      ...(params.dockerEnabled !== undefined ? { dockerEnabled: params.dockerEnabled ? 1 : 0 } : {}),
+      ...(params.dockerEnabled !== undefined
+        ? { dockerEnabled: params.dockerEnabled ? 1 : 0 }
+        : {}),
       ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
-      ...(params.sandboxEnabled !== undefined ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 } : {}),
+      ...(params.sandboxEnabled !== undefined
+        ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 }
+        : {}),
       ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })

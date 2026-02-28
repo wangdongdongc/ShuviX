@@ -6,7 +6,21 @@ import { useSettingsStore } from '../../stores/settingsStore'
 export function GeneralSettings(): React.JSX.Element {
   const { t, i18n: i18nInstance } = useTranslation()
   const i18nLang = i18nInstance.language
-  const { systemPrompt, theme, fontSize, uiZoom, setSystemPrompt, setTheme, setFontSize, setUiZoom, availableModels, activeProvider, activeModel, setActiveProvider, setActiveModel } = useSettingsStore()
+  const {
+    systemPrompt,
+    theme,
+    fontSize,
+    uiZoom,
+    setSystemPrompt,
+    setTheme,
+    setFontSize,
+    setUiZoom,
+    availableModels,
+    activeProvider,
+    activeModel,
+    setActiveProvider,
+    setActiveModel
+  } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
 
   useEffect(() => {
@@ -45,7 +59,9 @@ export function GeneralSettings(): React.JSX.Element {
     <div className="flex-1 px-5 py-5 space-y-6">
       {/* 主题 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.theme')}</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.theme')}
+        </label>
         <div className="flex gap-2">
           {(['dark', 'light', 'system'] as const).map((th) => (
             <button
@@ -61,7 +77,11 @@ export function GeneralSettings(): React.JSX.Element {
                   : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
               }`}
             >
-              {th === 'dark' ? t('settings.themeDark') : th === 'light' ? t('settings.themeLight') : t('settings.themeSystem')}
+              {th === 'dark'
+                ? t('settings.themeDark')
+                : th === 'light'
+                  ? t('settings.themeLight')
+                  : t('settings.themeSystem')}
             </button>
           ))}
         </div>
@@ -69,7 +89,9 @@ export function GeneralSettings(): React.JSX.Element {
 
       {/* 语言 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.language')}</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.language')}
+        </label>
         <div className="flex gap-2">
           {(['zh', 'en', 'ja'] as const).map((lng) => (
             <button
@@ -93,7 +115,8 @@ export function GeneralSettings(): React.JSX.Element {
       {/* 字体大小 */}
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.fontSize')} <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
+          {t('settings.fontSize')}{' '}
+          <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
         </label>
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-text-tertiary">12</span>
@@ -117,7 +140,8 @@ export function GeneralSettings(): React.JSX.Element {
       {/* UI 缩放 */}
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.uiZoom')} <span className="text-text-tertiary font-normal ml-1">{uiZoom}%</span>
+          {t('settings.uiZoom')}{' '}
+          <span className="text-text-tertiary font-normal ml-1">{uiZoom}%</span>
         </label>
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-text-tertiary">50%</span>
@@ -140,7 +164,9 @@ export function GeneralSettings(): React.JSX.Element {
 
       {/* 默认 Provider */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.defaultProvider')}</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.defaultProvider')}
+        </label>
         <select
           value={activeProvider}
           onChange={(e) => handleProviderChange(e.target.value)}
@@ -149,7 +175,9 @@ export function GeneralSettings(): React.JSX.Element {
           {enabledProviderIds.map((pid) => {
             const m = availableModels.find((am) => am.providerId === pid)
             return (
-              <option key={pid} value={pid}>{m?.providerName || pid}</option>
+              <option key={pid} value={pid}>
+                {m?.providerName || pid}
+              </option>
             )
           })}
         </select>
@@ -157,7 +185,9 @@ export function GeneralSettings(): React.JSX.Element {
 
       {/* 默认模型 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.defaultModel')}</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.defaultModel')}
+        </label>
         <select
           value={activeModel}
           onChange={(e) => handleModelChange(e.target.value)}
@@ -166,14 +196,18 @@ export function GeneralSettings(): React.JSX.Element {
           {availableModels
             .filter((m) => m.providerId === activeProvider)
             .map((m) => (
-              <option key={m.id} value={m.modelId}>{m.modelId}</option>
+              <option key={m.id} value={m.modelId}>
+                {m.modelId}
+              </option>
             ))}
         </select>
       </div>
 
       {/* 系统提示词 */}
       <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">{t('settings.systemPrompt')}</label>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.systemPrompt')}
+        </label>
         <textarea
           value={localSystemPrompt}
           onChange={(e) => setLocalSystemPrompt(e.target.value)}

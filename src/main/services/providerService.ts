@@ -44,7 +44,12 @@ export class ProviderService {
   }
 
   /** 添加自定义提供商 */
-  addCustomProvider(params: { name: string; baseUrl: string; apiKey: string; apiProtocol: ApiProtocol }): Provider {
+  addCustomProvider(params: {
+    name: string
+    baseUrl: string
+    apiKey: string
+    apiProtocol: ApiProtocol
+  }): Provider {
     const id = uuidv7()
     providerDao.insert({
       id,
@@ -160,7 +165,7 @@ export class ProviderService {
         reasoning: pm.reasoning || false,
         vision: (pm.input as string[])?.includes('image') || false,
         maxInputTokens: pm.contextWindow,
-        maxOutputTokens: pm.maxTokens,
+        maxOutputTokens: pm.maxTokens
       }
       providerDao.updateModelCapabilities(row.id, JSON.stringify(caps))
     }
@@ -185,7 +190,9 @@ export class ProviderService {
    * 从提供商 API 拉取并同步模型列表
    * 目前先支持 OpenAI
    */
-  async syncModelsFromProvider(providerId: string): Promise<{ providerId: string; total: number; added: number }> {
+  async syncModelsFromProvider(
+    providerId: string
+  ): Promise<{ providerId: string; total: number; added: number }> {
     const provider = providerDao.findById(providerId)
     if (!provider) {
       throw new Error(`未找到提供商：${providerId}`)
@@ -209,7 +216,9 @@ export class ProviderService {
       throw new Error('该协议类型暂不支持自动同步模型')
     }
 
-    const existingModelIds = new Set(providerDao.findModelsByProvider(providerId).map((m) => m.modelId))
+    const existingModelIds = new Set(
+      providerDao.findModelsByProvider(providerId).map((m) => m.modelId)
+    )
 
     providerDao.upsertModels(providerId, fetchedModelIds)
 
@@ -233,7 +242,9 @@ export class ProviderService {
   /** 从 Google Generative AI 拉取模型列表 */
   private async fetchGoogleModels(apiKey: string, baseUrl?: string): Promise<string[]> {
     // 兼容带或不带版本路径的 baseUrl（如 .../v1beta 或裸域名）
-    let normalizedBaseUrl = (baseUrl?.trim() || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '')
+    let normalizedBaseUrl = (
+      baseUrl?.trim() || 'https://generativelanguage.googleapis.com'
+    ).replace(/\/+$/, '')
     if (!normalizedBaseUrl.match(/\/v\d/)) {
       normalizedBaseUrl += '/v1beta'
     }
@@ -246,7 +257,7 @@ export class ProviderService {
       throw new Error(`Google 模型拉取失败（${response.status}）：${errText}`)
     }
 
-    const payload = await response.json() as { models?: Array<{ name?: string }> }
+    const payload = (await response.json()) as { models?: Array<{ name?: string }> }
     const modelIds = (payload.models || [])
       .map((item) => item.name?.replace(/^models\//, '').trim())
       .filter((id): id is string => Boolean(id))
@@ -275,7 +286,7 @@ export class ProviderService {
       throw new Error(`OpenAI 模型拉取失败（${response.status}）：${errText}`)
     }
 
-    const payload = await response.json() as { data?: Array<{ id?: string }> }
+    const payload = (await response.json()) as { data?: Array<{ id?: string }> }
     const modelIds = (payload.data || [])
       .map((item) => item.id?.trim())
       .filter((id): id is string => Boolean(id))

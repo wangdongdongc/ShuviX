@@ -315,7 +315,11 @@ export function streamGoogleWithImages(
               const imgMime = part.inlineData.mimeType || 'image/png'
               const imgData = part.inlineData.data || ''
               const imgThoughtSig = part.thoughtSignature
-              output._images.push({ data: imgData, mimeType: imgMime, ...(imgThoughtSig && { thoughtSignature: imgThoughtSig }) })
+              output._images.push({
+                data: imgData,
+                mimeType: imgMime,
+                ...(imgThoughtSig && { thoughtSignature: imgThoughtSig })
+              })
               // 同时写入 content，以便后续轮次 convertMessages 能包含图片上下文
               output.content.push({ type: 'image', data: imgData, mimeType: imgMime })
               continue

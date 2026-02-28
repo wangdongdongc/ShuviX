@@ -20,10 +20,13 @@ const LIMIT = 100
 
 const GlobParamsSchema = Type.Object({
   pattern: Type.String({
-    description: 'The glob pattern to match files against (e.g. "**/*.ts", "src/**/*.{js,jsx}", "*.json")'
+    description:
+      'The glob pattern to match files against (e.g. "**/*.ts", "src/**/*.{js,jsx}", "*.json")'
   }),
   path: Type.Optional(
-    Type.String({ description: 'The directory to search in (optional, defaults to current working directory)' })
+    Type.String({
+      description: 'The directory to search in (optional, defaults to current working directory)'
+    })
   )
 })
 
@@ -83,18 +86,20 @@ export function createGlobTool(ctx: ToolContext): AgentTool<typeof GlobParamsSch
       }
 
       // 获取 mtime 并按修改时间降序排序
-      const filesWithMtime = files.map(f => {
+      const filesWithMtime = files.map((f) => {
         const fullPath = resolve(searchPath, f)
         let mtime = 0
         try {
           mtime = statSync(fullPath).mtime.getTime()
-        } catch { /* 忽略 */ }
+        } catch {
+          /* 忽略 */
+        }
         return { path: f, mtime }
       })
       filesWithMtime.sort((a, b) => b.mtime - a.mtime)
 
       // 转为相对于工作目录的路径
-      const outputLines = filesWithMtime.map(f => {
+      const outputLines = filesWithMtime.map((f) => {
         const absPath = resolve(searchPath, f.path)
         return relative(config.workingDirectory, absPath)
       })

@@ -1,6 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, FolderOpen, ShieldCheck, Wrench, FolderSearch, Plus, Trash2, MessageCircle, Code2, ChevronRight, ChevronDown, Puzzle, BookOpen, Settings } from 'lucide-react'
+import {
+  X,
+  FolderOpen,
+  ShieldCheck,
+  Wrench,
+  FolderSearch,
+  Plus,
+  Trash2,
+  MessageCircle,
+  Code2,
+  ChevronRight,
+  ChevronDown,
+  Puzzle,
+  BookOpen,
+  Settings
+} from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 
@@ -29,7 +44,10 @@ const SKILLS_GROUP = '__skills__'
  * Step 3: 项目路径 + 名称
  * Step 4: 高级设置（系统提示词、沙箱、参考目录）
  */
-export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogProps): React.JSX.Element {
+export function ProjectCreateDialog({
+  onClose,
+  onCreated
+}: ProjectCreateDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
 
@@ -50,14 +68,14 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
 
   // 加载工具列表
   useEffect(() => {
-    window.api.tools.list().then(tools => {
+    window.api.tools.list().then((tools) => {
       setAllTools(tools)
     })
   }, [])
 
   // MCP / Skills 工具
-  const mcpTools = allTools.filter(t => t.group && t.group !== SKILLS_GROUP)
-  const skillTools = allTools.filter(t => t.group === SKILLS_GROUP)
+  const mcpTools = allTools.filter((t) => t.group && t.group !== SKILLS_GROUP)
+  const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
   const hasMcpOrSkills = mcpTools.length > 0 || skillTools.length > 0
 
   // 按 Escape 关闭（step 0 直接关闭，其他步骤回退）
@@ -99,29 +117,28 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
 
   /** 切换单个扩展工具 */
   const toggleExtTool = (toolName: string): void => {
-    setEnabledTools(prev =>
-      prev.includes(toolName)
-        ? prev.filter(n => n !== toolName)
-        : [...prev, toolName]
+    setEnabledTools((prev) =>
+      prev.includes(toolName) ? prev.filter((n) => n !== toolName) : [...prev, toolName]
     )
   }
 
   /** 切换扩展分组展开/收起 */
   const toggleExtExpand = (group: string): void => {
-    setExpandedExtGroups(prev => {
+    setExpandedExtGroups((prev) => {
       const next = new Set(prev)
-      if (next.has(group)) next.delete(group); else next.add(group)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
       return next
     })
   }
 
   /** 切换整个扩展分组 */
   const toggleExtGroup = (groupToolNames: string[]): void => {
-    const allChecked = groupToolNames.every(n => enabledTools.includes(n))
+    const allChecked = groupToolNames.every((n) => enabledTools.includes(n))
     if (allChecked) {
-      setEnabledTools(prev => prev.filter(n => !groupToolNames.includes(n)))
+      setEnabledTools((prev) => prev.filter((n) => !groupToolNames.includes(n)))
     } else {
-      setEnabledTools(prev => [...new Set([...prev, ...groupToolNames])])
+      setEnabledTools((prev) => [...new Set([...prev, ...groupToolNames])])
     }
   }
 
@@ -155,12 +172,16 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
   ]
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+    >
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel">
         {/* 标题栏 + 步骤指示器 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-text-primary">{t('projectForm.createTitle')}</h2>
+            <h2 className="text-sm font-semibold text-text-primary">
+              {t('projectForm.createTitle')}
+            </h2>
             <div className="flex items-center gap-1">
               {steps.map((label, i) => (
                 <div key={i} className="flex items-center gap-1">
@@ -192,7 +213,9 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
         {step === 0 && (
           <div className="px-5 py-6 flex-1 min-h-0">
             <div className="text-center mb-6">
-              <h3 className="text-sm font-medium text-text-primary">{t('projectForm.purposeTitle')}</h3>
+              <h3 className="text-sm font-medium text-text-primary">
+                {t('projectForm.purposeTitle')}
+              </h3>
               <p className="text-[11px] text-text-tertiary mt-1">{t('projectForm.purposeDesc')}</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -203,11 +226,18 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 }`}
               >
                 <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <MessageCircle size={20} className="text-text-secondary group-hover:text-accent transition-colors" />
+                  <MessageCircle
+                    size={20}
+                    className="text-text-secondary group-hover:text-accent transition-colors"
+                  />
                 </div>
                 <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">{t('projectForm.purposeCasual')}</div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">{t('projectForm.purposeCasualDesc')}</div>
+                  <div className="text-xs font-medium text-text-primary">
+                    {t('projectForm.purposeCasual')}
+                  </div>
+                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
+                    {t('projectForm.purposeCasualDesc')}
+                  </div>
                 </div>
               </button>
 
@@ -218,11 +248,18 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 }`}
               >
                 <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Code2 size={20} className="text-text-secondary group-hover:text-accent transition-colors" />
+                  <Code2
+                    size={20}
+                    className="text-text-secondary group-hover:text-accent transition-colors"
+                  />
                 </div>
                 <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">{t('projectForm.purposeDev')}</div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">{t('projectForm.purposeDevDesc')}</div>
+                  <div className="text-xs font-medium text-text-primary">
+                    {t('projectForm.purposeDev')}
+                  </div>
+                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
+                    {t('projectForm.purposeDevDesc')}
+                  </div>
                 </div>
               </button>
             </div>
@@ -238,10 +275,13 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                   <Wrench size={12} />
                   {t('projectForm.tools')}
                 </label>
-                <ToolSelectList tools={allTools} enabledTools={enabledTools} onChange={setEnabledTools} builtinOnly />
-                <p className="text-[10px] text-text-tertiary mt-2">
-                  {t('projectForm.toolsHint')}
-                </p>
+                <ToolSelectList
+                  tools={allTools}
+                  enabledTools={enabledTools}
+                  onChange={setEnabledTools}
+                  builtinOnly
+                />
+                <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.toolsHint')}</p>
               </div>
             </div>
 
@@ -318,19 +358,22 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
 
                   {/* MCP 工具 */}
                   {(() => {
-                    const mcpGroups = [...new Set(mcpTools.map(t => t.group!))]
+                    const mcpGroups = [...new Set(mcpTools.map((t) => t.group!))]
                     if (mcpGroups.length === 0) return null
-                    return mcpGroups.map(group => {
-                      const groupTools = mcpTools.filter(t => t.group === group)
-                      const names = groupTools.map(t => t.name)
-                      const allChecked = names.every(n => enabledTools.includes(n))
-                      const someChecked = names.some(n => enabledTools.includes(n))
-                      const isOnline = groupTools.some(t => t.serverStatus === 'connected')
+                    return mcpGroups.map((group) => {
+                      const groupTools = mcpTools.filter((t) => t.group === group)
+                      const names = groupTools.map((t) => t.name)
+                      const allChecked = names.every((n) => enabledTools.includes(n))
+                      const someChecked = names.some((n) => enabledTools.includes(n))
+                      const isOnline = groupTools.some((t) => t.serverStatus === 'connected')
 
                       const isExpanded = expandedExtGroups.has(group)
 
                       return (
-                        <div key={group} className={`border rounded-md overflow-hidden ${isOnline ? 'border-border-primary' : 'border-red-500/30'}`}>
+                        <div
+                          key={group}
+                          className={`border rounded-md overflow-hidden ${isOnline ? 'border-border-primary' : 'border-red-500/30'}`}
+                        >
                           <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
                             <button
                               onClick={() => toggleExtExpand(group)}
@@ -341,29 +384,54 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                             <input
                               type="checkbox"
                               checked={allChecked}
-                              ref={el => { if (el) el.indeterminate = someChecked && !allChecked }}
+                              ref={(el) => {
+                                if (el) el.indeterminate = someChecked && !allChecked
+                              }}
                               onChange={() => toggleExtGroup(names)}
                               className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                             />
-                            <Puzzle size={11} className={isOnline ? 'text-purple-400' : 'text-red-400'} />
-                            <span className={`text-[11px] font-medium ${isOnline ? 'text-purple-400' : 'text-red-400'}`}>{group}</span>
-                            <span className="text-[10px] text-text-tertiary/60 border border-border-secondary rounded px-1 py-px">MCP</span>
-                            <span className="text-[10px] text-text-tertiary ml-auto">{names.length}</span>
+                            <Puzzle
+                              size={11}
+                              className={isOnline ? 'text-purple-400' : 'text-red-400'}
+                            />
+                            <span
+                              className={`text-[11px] font-medium ${isOnline ? 'text-purple-400' : 'text-red-400'}`}
+                            >
+                              {group}
+                            </span>
+                            <span className="text-[10px] text-text-tertiary/60 border border-border-secondary rounded px-1 py-px">
+                              MCP
+                            </span>
+                            <span className="text-[10px] text-text-tertiary ml-auto">
+                              {names.length}
+                            </span>
                           </div>
                           {isExpanded && (
                             <div className="px-3 py-1.5 space-y-0.5">
-                              {groupTools.map(tool => {
-                                const shortName = tool.name.split('__').length >= 3 ? tool.name.split('__').slice(2).join('__') : tool.name
+                              {groupTools.map((tool) => {
+                                const shortName =
+                                  tool.name.split('__').length >= 3
+                                    ? tool.name.split('__').slice(2).join('__')
+                                    : tool.name
                                 return (
-                                  <label key={tool.name} className={`flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${!isOnline ? 'opacity-50' : ''}`}>
+                                  <label
+                                    key={tool.name}
+                                    className={`flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${!isOnline ? 'opacity-50' : ''}`}
+                                  >
                                     <input
                                       type="checkbox"
                                       checked={enabledTools.includes(tool.name)}
                                       onChange={() => toggleExtTool(tool.name)}
                                       className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                                     />
-                                    <span className={`text-[11px] font-mono flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}>{shortName}</span>
-                                    <span className="text-[10px] text-text-tertiary truncate">{tool.label}</span>
+                                    <span
+                                      className={`text-[11px] font-mono flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
+                                    >
+                                      {shortName}
+                                    </span>
+                                    <span className="text-[10px] text-text-tertiary truncate">
+                                      {tool.label}
+                                    </span>
                                   </label>
                                 )
                               })}
@@ -380,21 +448,32 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                       <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
                         <BookOpen size={11} className="text-emerald-400" />
                         <span className="text-[11px] font-medium text-emerald-400">Skills</span>
-                        <span className="text-[10px] text-text-tertiary ml-auto">{skillTools.length}</span>
+                        <span className="text-[10px] text-text-tertiary ml-auto">
+                          {skillTools.length}
+                        </span>
                       </div>
                       <div className="px-3 py-1.5 space-y-0.5">
-                        {skillTools.map(tool => {
-                          const shortName = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+                        {skillTools.map((tool) => {
+                          const shortName = tool.name.startsWith('skill:')
+                            ? tool.name.slice(6)
+                            : tool.name
                           return (
-                            <label key={tool.name} className="flex items-center gap-1.5 cursor-pointer select-none py-0.5">
+                            <label
+                              key={tool.name}
+                              className="flex items-center gap-1.5 cursor-pointer select-none py-0.5"
+                            >
                               <input
                                 type="checkbox"
                                 checked={enabledTools.includes(tool.name)}
                                 onChange={() => toggleExtTool(tool.name)}
                                 className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                               />
-                              <span className="text-[11px] font-mono text-emerald-300 flex-shrink-0">{shortName}</span>
-                              <span className="text-[10px] text-text-tertiary truncate">{tool.label}</span>
+                              <span className="text-[11px] font-mono text-emerald-300 flex-shrink-0">
+                                {shortName}
+                              </span>
+                              <span className="text-[10px] text-text-tertiary truncate">
+                                {tool.label}
+                              </span>
                             </label>
                           )
                         })}
@@ -436,7 +515,9 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
           <>
             <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
               <div className="border border-border-secondary rounded-lg p-3">
-                <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.name')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                  {t('projectForm.name')}
+                </label>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -451,7 +532,12 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                   {t('projectForm.path')}
                 </label>
                 {path && (
-                  <div className="text-[11px] font-mono text-text-primary truncate mb-2" title={path}>{path}</div>
+                  <div
+                    className="text-[11px] font-mono text-text-primary truncate mb-2"
+                    title={path}
+                  >
+                    {path}
+                  </div>
                 )}
                 <button
                   onClick={handleSelectFolder}
@@ -460,9 +546,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                   <Plus size={12} />
                   {t('projectForm.selectFolder')}
                 </button>
-                <p className="text-[10px] text-text-tertiary mt-2">
-                  {t('projectForm.pathHint')}
-                </p>
+                <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.pathHint')}</p>
               </div>
             </div>
 
@@ -498,7 +582,9 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
           <>
             <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.prompt')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                  {t('projectForm.prompt')}
+                </label>
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
@@ -532,15 +618,25 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 </p>
                 {sandboxEnabled && referenceDirs.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-border-secondary space-y-1.5">
-                    <div className="text-[10px] text-text-tertiary mb-1">{t('projectForm.refDirAccessLabel')}</div>
+                    <div className="text-[10px] text-text-tertiary mb-1">
+                      {t('projectForm.refDirAccessLabel')}
+                    </div>
                     {referenceDirs.map((dir, idx) => (
                       <div key={idx} className="flex items-center gap-1.5">
-                        <div className="text-[11px] font-mono text-text-secondary truncate flex-1" title={dir.path}>{dir.path.split('/').pop() || dir.path}</div>
+                        <div
+                          className="text-[11px] font-mono text-text-secondary truncate flex-1"
+                          title={dir.path}
+                        >
+                          {dir.path.split('/').pop() || dir.path}
+                        </div>
                         <button
                           onClick={() => {
                             const next = [...referenceDirs]
                             const current = dir.access ?? 'readonly'
-                            next[idx] = { ...dir, access: current === 'readonly' ? 'readwrite' : 'readonly' }
+                            next[idx] = {
+                              ...dir,
+                              access: current === 'readonly' ? 'readwrite' : 'readonly'
+                            }
                             setReferenceDirs(next)
                           }}
                           className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
@@ -550,7 +646,9 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                           }`}
                           title={dir.path}
                         >
-                          {(dir.access ?? 'readonly') === 'readwrite' ? t('projectForm.refDirAccessReadwrite') : t('projectForm.refDirAccessReadonly')}
+                          {(dir.access ?? 'readonly') === 'readwrite'
+                            ? t('projectForm.refDirAccessReadwrite')
+                            : t('projectForm.refDirAccessReadonly')}
                         </button>
                       </div>
                     ))}
@@ -566,7 +664,12 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 {referenceDirs.map((dir, idx) => (
                   <div key={idx} className="flex items-start gap-1.5 mb-2">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[11px] font-mono text-text-primary truncate" title={dir.path}>{dir.path}</div>
+                      <div
+                        className="text-[11px] font-mono text-text-primary truncate"
+                        title={dir.path}
+                      >
+                        {dir.path}
+                      </div>
                       <input
                         value={dir.note || ''}
                         onChange={(e) => {
@@ -589,7 +692,7 @@ export function ProjectCreateDialog({ onClose, onCreated }: ProjectCreateDialogP
                 <button
                   onClick={async () => {
                     const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
-                    if (result && !referenceDirs.some(d => d.path === result)) {
+                    if (result && !referenceDirs.some((d) => d.path === result)) {
                       setReferenceDirs([...referenceDirs, { path: result }])
                     }
                   }}

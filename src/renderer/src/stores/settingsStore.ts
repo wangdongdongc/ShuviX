@@ -40,10 +40,15 @@ interface SettingsState {
   setFontSize: (size: number) => void
   setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
-  setActiveSettingsTab: (tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'httpLogs' | 'about') => void
+  setActiveSettingsTab: (
+    tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'httpLogs' | 'about'
+  ) => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */
-  loadConfigMeta: (settingMeta: Record<string, ConfigMeta>, projectFieldMeta: Record<string, ConfigMeta>) => void
+  loadConfigMeta: (
+    settingMeta: Record<string, ConfigMeta>,
+    projectFieldMeta: Record<string, ConfigMeta>
+  ) => void
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({

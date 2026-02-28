@@ -13,7 +13,13 @@ import { Type } from '@sinclair/typebox'
 import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
-import { truncateLine, truncateHead, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
+import {
+  truncateLine,
+  truncateHead,
+  formatSize,
+  DEFAULT_MAX_LINES,
+  DEFAULT_MAX_BYTES
+} from './utils/truncate'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
 import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
@@ -23,26 +29,68 @@ const log = createLogger('Tool:read')
 
 /** markitdown-ts 支持转换的文件扩展名 */
 const RICH_FILE_EXTENSIONS = new Set([
-  '.pdf', '.docx', '.xlsx', '.xls', '.pptx',
-  '.html', '.htm',
-  '.ipynb', '.zip'
+  '.pdf',
+  '.docx',
+  '.xlsx',
+  '.xls',
+  '.pptx',
+  '.html',
+  '.htm',
+  '.ipynb',
+  '.zip'
 ])
 
 /** 已知的不支持二进制格式（直接拒绝读取，避免乱码） */
 const KNOWN_BINARY_EXTENSIONS = new Set([
-  '.ppt',                   // Office 旧版二进制格式（.doc 已由 word-extractor 处理，.xls 已在 RICH 集合中）
-  '.odt', '.ods', '.odp', // OpenDocument
+  '.ppt', // Office 旧版二进制格式（.doc 已由 word-extractor 处理，.xls 已在 RICH 集合中）
+  '.odt',
+  '.ods',
+  '.odp', // OpenDocument
   '.rtf',
-  '.exe', '.dll', '.so', '.dylib', // 可执行 / 库
-  '.bin', '.dat', '.db', '.sqlite',
-  '.class', '.pyc', '.o', '.obj',
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib', // 可执行 / 库
+  '.bin',
+  '.dat',
+  '.db',
+  '.sqlite',
+  '.class',
+  '.pyc',
+  '.o',
+  '.obj',
   '.wasm',
-  '.tar', '.gz', '.bz2', '.7z', '.rar',
-  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac', '.ogg', '.webm',
-  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.heic',
-  '.ttf', '.otf', '.woff', '.woff2',
-  '.iso', '.dmg', '.pkg',
-  '.protobuf', '.pb'
+  '.tar',
+  '.gz',
+  '.bz2',
+  '.7z',
+  '.rar',
+  '.mp3',
+  '.mp4',
+  '.avi',
+  '.mov',
+  '.wav',
+  '.flac',
+  '.ogg',
+  '.webm',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.bmp',
+  '.webp',
+  '.ico',
+  '.tiff',
+  '.heic',
+  '.ttf',
+  '.otf',
+  '.woff',
+  '.woff2',
+  '.iso',
+  '.dmg',
+  '.pkg',
+  '.protobuf',
+  '.pb'
 ])
 
 /** 检测文件是否为二进制（只读取前 8KB，检查 NULL 字节） */
@@ -95,7 +143,6 @@ const ReadParamsSchema = Type.Object({
 
 /** 创建 read 工具实例 */
 export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSchema> {
-
   return {
     name: 'read',
     label: t('tool.readLabel'),
@@ -145,12 +192,16 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 
         // 已知二进制格式：直接拒绝
         if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
-          throw new Error(`Unsupported format (${ext}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`)
+          throw new Error(
+            `Unsupported format (${ext}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
+          )
         }
 
         // 检测是否为二进制（只读取前 8KB，不加载整个文件）
         if (await isBinaryFile(absolutePath, fileStat.size)) {
-          throw new Error(`Unsupported format (${ext || 'binary'}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`)
+          throw new Error(
+            `Unsupported format (${ext || 'binary'}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
+          )
         }
 
         // 纯文本文件：流式逐行读取
@@ -161,14 +212,18 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err)
         if (errMsg === TOOL_ABORTED) throw err
-        if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (
+          err instanceof Error &&
+          'code' in err &&
+          (err as NodeJS.ErrnoException).code === 'ENOENT'
+        ) {
           // 模糊匹配建议
           const suggestions = suggestSimilarFiles(absolutePath)
           if (suggestions.length > 0) {
             throw new Error(
               `File not found: ${params.path}` +
-              '\n\nDid you mean one of these?\n' +
-              suggestions.join('\n')
+                '\n\nDid you mean one of these?\n' +
+                suggestions.join('\n')
             )
           }
           throw new Error(`File not found: ${params.path}`)
@@ -204,9 +259,11 @@ async function readDirectory(
     text += `Showing: entries ${offset}-${offset + shown - 1}\n`
   }
   text += '\n' + sliced.join('\n')
-  text += '\n\n' + (truncated
-    ? `(Showing ${shown} of ${total} entries. Use offset=${endIndex + 1} to continue.)`
-    : `(${total} entries)`)
+  text +=
+    '\n\n' +
+    (truncated
+      ? `(Showing ${shown} of ${total} entries. Use offset=${endIndex + 1} to continue.)`
+      : `(${total} entries)`)
 
   return {
     content: [{ type: 'text' as const, text }],

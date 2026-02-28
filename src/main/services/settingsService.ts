@@ -21,10 +21,22 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
   'general.systemPrompt': { labelKey: 'settings.systemPrompt', desc: 'global system prompt text' },
-  'tool.bash.dockerEnabled': { labelKey: 'settings.toolBashDocker', desc: 'true | false — run bash commands in Docker container' },
-  'tool.bash.dockerImage': { labelKey: 'settings.toolBashImage', desc: 'Docker image name, e.g. "python:latest"' },
-  'tool.bash.dockerMemory': { labelKey: 'settings.toolBashMemory', desc: 'Container memory limit, e.g. "512m", "1g", "2g" (empty = unlimited)' },
-  'tool.bash.dockerCpus': { labelKey: 'settings.toolBashCpus', desc: 'Container CPU limit, e.g. "0.5", "1", "2" (empty = unlimited)' }
+  'tool.bash.dockerEnabled': {
+    labelKey: 'settings.toolBashDocker',
+    desc: 'true | false — run bash commands in Docker container'
+  },
+  'tool.bash.dockerImage': {
+    labelKey: 'settings.toolBashImage',
+    desc: 'Docker image name, e.g. "python:latest"'
+  },
+  'tool.bash.dockerMemory': {
+    labelKey: 'settings.toolBashMemory',
+    desc: 'Container memory limit, e.g. "512m", "1g", "2g" (empty = unlimited)'
+  },
+  'tool.bash.dockerCpus': {
+    labelKey: 'settings.toolBashCpus',
+    desc: 'Container CPU limit, e.g. "0.5", "1", "2" (empty = unlimited)'
+  }
 }
 
 /** 所有已知设置 key 描述列表（供 AI prompt / 参数 description 使用） */

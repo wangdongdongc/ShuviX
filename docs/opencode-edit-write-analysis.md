@@ -35,19 +35,20 @@
 
 opencode 的 `replace()` 按优先级依次尝试 9 种匹配策略，大幅降低 AI 编辑失败率：
 
-| 序号 | Replacer | 策略说明 |
-|------|----------|----------|
-| 1 | **SimpleReplacer** | 精确匹配（直接返回 oldString） |
-| 2 | **LineTrimmedReplacer** | 逐行 trim 后匹配，找到后返回原始行内容 |
-| 3 | **BlockAnchorReplacer** | 首尾行作为锚点，中间行用 Levenshtein 相似度评分；单候选阈值 0.0，多候选阈值 0.3 |
-| 4 | **WhitespaceNormalizedReplacer** | 所有空白归一化为单个空格后匹配；支持子串匹配和多行 |
-| 5 | **IndentationFlexibleReplacer** | 去除最小公共缩进后匹配（缩进无关） |
-| 6 | **EscapeNormalizedReplacer** | 转义字符归一化（`\n`→换行等）后匹配 |
-| 7 | **TrimmedBoundaryReplacer** | 前后空白 trim 后匹配 |
-| 8 | **ContextAwareReplacer** | 首尾锚点 + 中间行 50% 匹配率阈值 |
-| 9 | **MultiOccurrenceReplacer** | 多次出现精确匹配（配合 replaceAll） |
+| 序号 | Replacer                         | 策略说明                                                                        |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------- |
+| 1    | **SimpleReplacer**               | 精确匹配（直接返回 oldString）                                                  |
+| 2    | **LineTrimmedReplacer**          | 逐行 trim 后匹配，找到后返回原始行内容                                          |
+| 3    | **BlockAnchorReplacer**          | 首尾行作为锚点，中间行用 Levenshtein 相似度评分；单候选阈值 0.0，多候选阈值 0.3 |
+| 4    | **WhitespaceNormalizedReplacer** | 所有空白归一化为单个空格后匹配；支持子串匹配和多行                              |
+| 5    | **IndentationFlexibleReplacer**  | 去除最小公共缩进后匹配（缩进无关）                                              |
+| 6    | **EscapeNormalizedReplacer**     | 转义字符归一化（`\n`→换行等）后匹配                                             |
+| 7    | **TrimmedBoundaryReplacer**      | 前后空白 trim 后匹配                                                            |
+| 8    | **ContextAwareReplacer**         | 首尾锚点 + 中间行 50% 匹配率阈值                                                |
+| 9    | **MultiOccurrenceReplacer**      | 多次出现精确匹配（配合 replaceAll）                                             |
 
 **匹配逻辑**：
+
 - 遍历 Replacer 链，每个 Replacer 是 Generator，yield 候选匹配
 - 找到唯一匹配（`indexOf === lastIndexOf`）即替换
 - 多个匹配 → 跳到下一个 Replacer
@@ -55,23 +56,24 @@ opencode 的 `replace()` 按优先级依次尝试 9 种匹配策略，大幅降�
 
 ## 四、与 shirobot 现状对比
 
-| 特性 | opencode | shirobot | 差距 |
-|------|----------|----------|------|
-| **多级 Replacer 容错链** | 9 种策略链式容错 | `fuzzyFindText` 单一模糊匹配 | ⭐⭐⭐ |
-| **LSP 诊断反馈** | 写入后反馈类型/语法错误给 AI | ❌ 无 | ⭐⭐⭐ |
-| **写前 diff 审批** | `ctx.ask({ permission, diff })` | ❌ 无 | ⭐⭐⭐ |
-| **`replaceAll` 参数** | ✅ 批量替换 | ❌ 仅唯一匹配 | ⭐⭐ |
-| **FileTime 防覆盖** | ✅ | ✅ 已实现 | ✅ 已对齐 |
-| **文件写锁** | `FileTime.withLock` | ✅ `withFileLock` | ✅ 已对齐 |
-| **diff 输出 trimDiff** | 去除公共缩进减少 token | ❌ 完整 diff | ⭐ |
-| **Snapshot (before/after)** | 记录 additions/deletions | ❌ | ⭐ |
-| **oldString 为空=新建** | ✅ | ❌ | ⭐ |
+| 特性                        | opencode                        | shirobot                     | 差距      |
+| --------------------------- | ------------------------------- | ---------------------------- | --------- |
+| **多级 Replacer 容错链**    | 9 种策略链式容错                | `fuzzyFindText` 单一模糊匹配 | ⭐⭐⭐    |
+| **LSP 诊断反馈**            | 写入后反馈类型/语法错误给 AI    | ❌ 无                        | ⭐⭐⭐    |
+| **写前 diff 审批**          | `ctx.ask({ permission, diff })` | ❌ 无                        | ⭐⭐⭐    |
+| **`replaceAll` 参数**       | ✅ 批量替换                     | ❌ 仅唯一匹配                | ⭐⭐      |
+| **FileTime 防覆盖**         | ✅                              | ✅ 已实现                    | ✅ 已对齐 |
+| **文件写锁**                | `FileTime.withLock`             | ✅ `withFileLock`            | ✅ 已对齐 |
+| **diff 输出 trimDiff**      | 去除公共缩进减少 token          | ❌ 完整 diff                 | ⭐        |
+| **Snapshot (before/after)** | 记录 additions/deletions        | ❌                           | ⭐        |
+| **oldString 为空=新建**     | ✅                              | ❌                           | ⭐        |
 
 ## 五、建议实施优先级
 
 ### P0（高价值、直接提升编辑成功率）
 
 #### 1. 多级 Replacer 容错链
+
 - **价值**：AI 经常搞错缩进、空白、转义字符，9 级容错可大幅减少编辑失败
 - **工作量**：~300 行核心逻辑 + 测试
 - **依赖**：无外部依赖
@@ -79,6 +81,7 @@ opencode 的 `replace()` 按优先级依次尝试 9 种匹配策略，大幅降�
 - **注意**：Generator 模式需适配到现有 edit 工具的 `fuzzyFindText`
 
 #### 2. LSP 诊断反馈
+
 - **价值**：形成"写→检→修"闭环，AI 可自动修复类型错误
 - **工作量**：大（需集成 LSP client，或利用 IDE 现有 LSP）
 - **依赖**：需要 LSP 基础设施
@@ -87,12 +90,14 @@ opencode 的 `replace()` 按优先级依次尝试 9 种匹配策略，大幅降�
 ### P1（中等价值）
 
 #### 3. 写前 diff 审批
+
 - **价值**：危险操作用户可审查，增强安全感
 - **工作量**：中等（需前端 UI 配合展示 diff）
 - **依赖**：前端 diff 查看器组件
 - **建议**：可先实现后端 ask 机制，前端逐步跟进
 
 #### 4. `replaceAll` 参数
+
 - **价值**：批量重命名变量等场景
 - **工作量**：~20 行
 - **建议**：简单，随 Replacer 链一起实现
@@ -100,14 +105,17 @@ opencode 的 `replace()` 按优先级依次尝试 9 种匹配策略，大幅降�
 ### P2（锦上添花）
 
 #### 5. `trimDiff` 去除公共缩进
+
 - **工作量**：~30 行
 - **建议**：减少 diff 输出 token，对嵌套代码效果明显
 
 #### 6. Snapshot (before/after + additions/deletions)
+
 - **工作量**：中等
 - **建议**：为后续撤销/历史功能打基础
 
 #### 7. oldString 为空视为新建文件
+
 - **工作量**：~10 行
 - **建议**：让 edit 工具兼具 write 能力
 

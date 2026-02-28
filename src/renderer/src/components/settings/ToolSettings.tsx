@@ -1,6 +1,18 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Terminal, Container, Loader2, Plus, Trash2, Pencil, KeyRound, Lock, X, FolderOpen, TriangleAlert } from 'lucide-react'
+import {
+  Terminal,
+  Container,
+  Loader2,
+  Plus,
+  Trash2,
+  Pencil,
+  KeyRound,
+  Lock,
+  X,
+  FolderOpen,
+  TriangleAlert
+} from 'lucide-react'
 
 /** 内存预设选项 */
 const MEMORY_OPTIONS = ['256m', '512m', '1g', '2g', ''] as const
@@ -46,7 +58,9 @@ export function ToolSettings(): React.JSX.Element {
   const [dockerMemory, setDockerMemory] = useState('512m')
   const [dockerCpus, setDockerCpus] = useState('1')
   // Docker 状态：null=加载中, 'ready'=可用, 'notInstalled'=未安装, 'notRunning'=引擎未启动
-  const [dockerStatus, setDockerStatus] = useState<'ready' | 'notInstalled' | 'notRunning' | null>(null)
+  const [dockerStatus, setDockerStatus] = useState<'ready' | 'notInstalled' | 'notRunning' | null>(
+    null
+  )
   const [loading, setLoading] = useState(true)
 
   // SSH 凭据状态
@@ -68,21 +82,20 @@ export function ToolSettings(): React.JSX.Element {
 
   // 加载设置 + 检查 Docker 可用性
   useEffect(() => {
-    Promise.all([
-      window.api.settings.getAll(),
-      window.api.docker.validate()
-    ]).then(([settings, dockerResult]) => {
-      setDockerEnabled(settings['tool.bash.dockerEnabled'] === 'true')
-      setDockerImage(settings['tool.bash.dockerImage'] || '')
-      setDockerMemory(settings['tool.bash.dockerMemory'] || '512m')
-      setDockerCpus(settings['tool.bash.dockerCpus'] || '1')
-      if (dockerResult.ok) {
-        setDockerStatus('ready')
-      } else {
-        setDockerStatus(dockerResult.error === 'dockerNotRunning' ? 'notRunning' : 'notInstalled')
+    Promise.all([window.api.settings.getAll(), window.api.docker.validate()]).then(
+      ([settings, dockerResult]) => {
+        setDockerEnabled(settings['tool.bash.dockerEnabled'] === 'true')
+        setDockerImage(settings['tool.bash.dockerImage'] || '')
+        setDockerMemory(settings['tool.bash.dockerMemory'] || '512m')
+        setDockerCpus(settings['tool.bash.dockerCpus'] || '1')
+        if (dockerResult.ok) {
+          setDockerStatus('ready')
+        } else {
+          setDockerStatus(dockerResult.error === 'dockerNotRunning' ? 'notRunning' : 'notInstalled')
+        }
+        setLoading(false)
       }
-      setLoading(false)
-    })
+    )
   }, [])
 
   // 加载 SSH 凭据
@@ -195,11 +208,14 @@ export function ToolSettings(): React.JSX.Element {
     }
   }
 
-  const sshFormValid = sshFormName.trim() && sshFormHost.trim() && sshFormUsername.trim() && (
-    sshFormAuthType === 'password' ? sshFormPassword.trim() : sshFormPrivateKey.trim()
-  )
+  const sshFormValid =
+    sshFormName.trim() &&
+    sshFormHost.trim() &&
+    sshFormUsername.trim() &&
+    (sshFormAuthType === 'password' ? sshFormPassword.trim() : sshFormPrivateKey.trim())
 
-  const inputCls = 'w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors'
+  const inputCls =
+    'w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors'
 
   return (
     <div className="flex-1 px-5 py-5 space-y-6 overflow-y-auto">
@@ -214,7 +230,9 @@ export function ToolSettings(): React.JSX.Element {
         {/* 标题栏 */}
         <div className="flex items-center gap-2 px-4 py-3 bg-bg-secondary">
           <Terminal size={14} className="text-accent" />
-          <span className="text-xs font-semibold text-text-primary">{t('settings.toolBashTitle')}</span>
+          <span className="text-xs font-semibold text-text-primary">
+            {t('settings.toolBashTitle')}
+          </span>
         </div>
 
         <div className="px-4 py-4 space-y-4">
@@ -232,7 +250,9 @@ export function ToolSettings(): React.JSX.Element {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Container size={12} className="text-text-secondary" />
-                  <span className="text-xs font-medium text-text-secondary">{t('settings.toolBashDocker')}</span>
+                  <span className="text-xs font-medium text-text-secondary">
+                    {t('settings.toolBashDocker')}
+                  </span>
                 </div>
                 <button
                   onClick={handleToggleDocker}
@@ -261,7 +281,9 @@ export function ToolSettings(): React.JSX.Element {
                 <div className="space-y-3 pl-0.5">
                   {/* 镜像 */}
                   <div>
-                    <label className="block text-[10px] text-text-tertiary mb-1">{t('settings.toolBashImage')}</label>
+                    <label className="block text-[10px] text-text-tertiary mb-1">
+                      {t('settings.toolBashImage')}
+                    </label>
                     <input
                       value={dockerImage}
                       onChange={(e) => setDockerImage(e.target.value)}
@@ -272,16 +294,23 @@ export function ToolSettings(): React.JSX.Element {
                   </div>
 
                   {/* 资源限制说明 */}
-                  <p className="text-[10px] text-text-tertiary">{t('settings.toolBashResourceHint')}</p>
+                  <p className="text-[10px] text-text-tertiary">
+                    {t('settings.toolBashResourceHint')}
+                  </p>
 
                   {/* 内存上限 */}
                   <div>
-                    <label className="block text-[10px] text-text-tertiary mb-1.5">{t('settings.toolBashMemory')}</label>
+                    <label className="block text-[10px] text-text-tertiary mb-1.5">
+                      {t('settings.toolBashMemory')}
+                    </label>
                     <div className="flex gap-1.5">
-                      {MEMORY_OPTIONS.map(opt => (
+                      {MEMORY_OPTIONS.map((opt) => (
                         <button
                           key={opt || '__unlimited'}
-                          onClick={() => { setDockerMemory(opt); save('tool.bash.dockerMemory', opt) }}
+                          onClick={() => {
+                            setDockerMemory(opt)
+                            save('tool.bash.dockerMemory', opt)
+                          }}
                           className={`px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors ${
                             dockerMemory === opt
                               ? 'border-accent text-accent bg-accent/10'
@@ -296,12 +325,17 @@ export function ToolSettings(): React.JSX.Element {
 
                   {/* CPU 限制 */}
                   <div>
-                    <label className="block text-[10px] text-text-tertiary mb-1.5">{t('settings.toolBashCpus')}</label>
+                    <label className="block text-[10px] text-text-tertiary mb-1.5">
+                      {t('settings.toolBashCpus')}
+                    </label>
                     <div className="flex gap-1.5">
-                      {CPU_OPTIONS.map(opt => (
+                      {CPU_OPTIONS.map((opt) => (
                         <button
                           key={opt || '__unlimited'}
-                          onClick={() => { setDockerCpus(opt); save('tool.bash.dockerCpus', opt) }}
+                          onClick={() => {
+                            setDockerCpus(opt)
+                            save('tool.bash.dockerCpus', opt)
+                          }}
                           className={`px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors ${
                             dockerCpus === opt
                               ? 'border-accent text-accent bg-accent/10'
@@ -325,7 +359,9 @@ export function ToolSettings(): React.JSX.Element {
         {/* 标题栏 */}
         <div className="flex items-center gap-2 px-4 py-3 bg-bg-secondary">
           <Terminal size={14} className="text-accent" />
-          <span className="text-xs font-semibold text-text-primary">{t('settings.toolSshTitle')}</span>
+          <span className="text-xs font-semibold text-text-primary">
+            {t('settings.toolSshTitle')}
+          </span>
         </div>
 
         <div className="px-4 py-4 space-y-3">
@@ -334,13 +370,18 @@ export function ToolSettings(): React.JSX.Element {
           {/* 安全提示 */}
           <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
             <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-[10px] text-text-secondary leading-relaxed">{t('settings.toolSshSecurityWarning')}</p>
+            <p className="text-[10px] text-text-secondary leading-relaxed">
+              {t('settings.toolSshSecurityWarning')}
+            </p>
           </div>
 
           {/* 添加按钮 */}
           {!showSshForm && (
             <button
-              onClick={() => { resetSshForm(); setShowSshForm(true) }}
+              onClick={() => {
+                resetSshForm()
+                setShowSshForm(true)
+              }}
               className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-border-secondary text-xs text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
             >
               <Plus size={14} />
@@ -355,27 +396,36 @@ export function ToolSettings(): React.JSX.Element {
                 <span className="text-xs font-medium text-text-primary">
                   {sshEditId ? t('settings.toolSshName') : t('settings.toolSshAdd')}
                 </span>
-                <button onClick={resetSshForm} className="text-text-tertiary hover:text-text-primary">
+                <button
+                  onClick={resetSshForm}
+                  className="text-text-tertiary hover:text-text-primary"
+                >
                   <X size={14} />
                 </button>
               </div>
 
               {/* 凭据名称 */}
               <div>
-                <label className="block text-[10px] text-text-tertiary mb-1">{t('settings.toolSshName')}</label>
+                <label className="block text-[10px] text-text-tertiary mb-1">
+                  {t('settings.toolSshName')}
+                </label>
                 <input
                   value={sshFormName}
                   onChange={(e) => setSshFormName(e.target.value)}
                   placeholder={t('settings.toolSshNamePlaceholder')}
                   className={inputCls}
                 />
-                <p className="text-[9px] text-text-tertiary mt-0.5">{t('settings.toolSshNameHint')}</p>
+                <p className="text-[9px] text-text-tertiary mt-0.5">
+                  {t('settings.toolSshNameHint')}
+                </p>
               </div>
 
               {/* 主机 + 端口 */}
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.host')}</label>
+                  <label className="block text-[10px] text-text-tertiary mb-1">
+                    {t('ssh.host')}
+                  </label>
                   <input
                     value={sshFormHost}
                     onChange={(e) => setSshFormHost(e.target.value)}
@@ -384,7 +434,9 @@ export function ToolSettings(): React.JSX.Element {
                   />
                 </div>
                 <div className="w-20">
-                  <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.port')}</label>
+                  <label className="block text-[10px] text-text-tertiary mb-1">
+                    {t('ssh.port')}
+                  </label>
                   <input
                     value={sshFormPort}
                     onChange={(e) => setSshFormPort(e.target.value)}
@@ -396,7 +448,9 @@ export function ToolSettings(): React.JSX.Element {
 
               {/* 用户名 */}
               <div>
-                <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.username')}</label>
+                <label className="block text-[10px] text-text-tertiary mb-1">
+                  {t('ssh.username')}
+                </label>
                 <input
                   value={sshFormUsername}
                   onChange={(e) => setSshFormUsername(e.target.value)}
@@ -434,7 +488,9 @@ export function ToolSettings(): React.JSX.Element {
               {/* 密码模式 */}
               {sshFormAuthType === 'password' && (
                 <div>
-                  <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.password')}</label>
+                  <label className="block text-[10px] text-text-tertiary mb-1">
+                    {t('ssh.password')}
+                  </label>
                   <input
                     type="password"
                     value={sshFormPassword}
@@ -450,7 +506,9 @@ export function ToolSettings(): React.JSX.Element {
                 <>
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-[10px] text-text-tertiary">{t('ssh.privateKey')}</label>
+                      <label className="text-[10px] text-text-tertiary">
+                        {t('ssh.privateKey')}
+                      </label>
                       <button
                         onClick={handleBrowseKey}
                         className="flex items-center gap-0.5 text-[10px] text-accent hover:text-accent/80 transition-colors"
@@ -464,7 +522,10 @@ export function ToolSettings(): React.JSX.Element {
                         <KeyRound size={11} className="text-accent flex-shrink-0" />
                         <span className="truncate">{sshFormKeyFileName}</span>
                         <button
-                          onClick={() => { setSshFormPrivateKey(''); setSshFormKeyFileName('') }}
+                          onClick={() => {
+                            setSshFormPrivateKey('')
+                            setSshFormKeyFileName('')
+                          }}
                           className="ml-auto text-text-tertiary hover:text-danger text-[10px]"
                         >
                           <X size={10} />
@@ -481,7 +542,9 @@ export function ToolSettings(): React.JSX.Element {
                     )}
                   </div>
                   <div>
-                    <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.passphrase')}</label>
+                    <label className="block text-[10px] text-text-tertiary mb-1">
+                      {t('ssh.passphrase')}
+                    </label>
                     <input
                       type="password"
                       value={sshFormPassphrase}
@@ -494,9 +557,7 @@ export function ToolSettings(): React.JSX.Element {
               )}
 
               {/* 错误提示 */}
-              {sshError && (
-                <p className="text-[10px] text-danger">{sshError}</p>
-              )}
+              {sshError && <p className="text-[10px] text-danger">{sshError}</p>}
 
               {/* 操作按钮 */}
               <div className="flex items-center gap-2">
@@ -505,7 +566,11 @@ export function ToolSettings(): React.JSX.Element {
                   disabled={!sshFormValid || sshSaving}
                   className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
-                  {sshSaving ? t('settings.toolSshSaving') : (sshEditId ? t('common.save') : t('common.add'))}
+                  {sshSaving
+                    ? t('settings.toolSshSaving')
+                    : sshEditId
+                      ? t('common.save')
+                      : t('common.add')}
                 </button>
                 <button
                   onClick={resetSshForm}
@@ -527,13 +592,19 @@ export function ToolSettings(): React.JSX.Element {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-text-primary truncate">{cred.name}</span>
-                      <span className={`px-1.5 py-0.5 text-[9px] rounded-md ${
-                        cred.authType === 'key'
-                          ? 'bg-blue-500/15 text-blue-400'
-                          : 'bg-green-500/15 text-green-400'
-                      }`}>
-                        {cred.authType === 'key' ? t('settings.toolSshAuthKey') : t('settings.toolSshAuthPassword')}
+                      <span className="text-xs font-medium text-text-primary truncate">
+                        {cred.name}
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 text-[9px] rounded-md ${
+                          cred.authType === 'key'
+                            ? 'bg-blue-500/15 text-blue-400'
+                            : 'bg-green-500/15 text-green-400'
+                        }`}
+                      >
+                        {cred.authType === 'key'
+                          ? t('settings.toolSshAuthKey')
+                          : t('settings.toolSshAuthPassword')}
                       </span>
                     </div>
                     <p className="text-[10px] text-text-tertiary mt-0.5 font-mono truncate">
@@ -576,11 +647,15 @@ export function ToolSettings(): React.JSX.Element {
                 </div>
               ))}
             </div>
-          ) : !showSshForm && (
-            <div className="text-center py-4">
-              <p className="text-[11px] text-text-tertiary">{t('settings.toolSshEmpty')}</p>
-              <p className="text-[10px] text-text-tertiary mt-0.5">{t('settings.toolSshEmptyHint')}</p>
-            </div>
+          ) : (
+            !showSshForm && (
+              <div className="text-center py-4">
+                <p className="text-[11px] text-text-tertiary">{t('settings.toolSshEmpty')}</p>
+                <p className="text-[10px] text-text-tertiary mt-0.5">
+                  {t('settings.toolSshEmptyHint')}
+                </p>
+              </div>
+            )
           )}
         </div>
       </div>

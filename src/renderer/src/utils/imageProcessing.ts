@@ -34,7 +34,8 @@ export function fileToImageData(file: File): Promise<ImageData> {
         }
 
         // 计算缩放尺寸（等比缩小到长边 MAX_EDGE）
-        let dw = w, dh = h
+        let dw = w,
+          dh = h
         if (needResize) {
           const ratio = MAX_EDGE / Math.max(w, h)
           dw = Math.round(w * ratio)

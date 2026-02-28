@@ -21,12 +21,11 @@ const WriteParamsSchema = Type.Object({
 
 /** 创建 write 工具实例 */
 export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsSchema> {
-
   return {
     name: 'write',
     label: t('tool.writeLabel'),
     description:
-      'Write content to a file. Creates the file if it doesn\'t exist, overwrites if it does. Automatically creates parent directories.',
+      "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
     parameters: WriteParamsSchema,
     execute: async (
       _toolCallId: string,
@@ -36,7 +35,7 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
       const config = resolveProjectConfig(ctx)
       const absolutePath = resolveToCwd(params.path, config.workingDirectory)
       const dir = dirname(absolutePath)
-      
+
       log.info(absolutePath)
 
       // 沙箱模式：路径越界检查
@@ -80,7 +79,9 @@ export function createWriteTool(ctx: ToolContext): AgentTool<typeof WriteParamsS
               if (signal) signal.removeEventListener('abort', onAbort)
 
               resolve({
-                content: [{ type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }],
+                content: [
+                  { type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }
+                ],
                 details: undefined
               })
             } catch (error: unknown) {

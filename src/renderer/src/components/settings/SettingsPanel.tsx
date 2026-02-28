@@ -21,7 +21,9 @@ export function SettingsPanel(): React.JSX.Element {
   return (
     <div className="h-full bg-bg-primary flex flex-col">
       {/* 头部拖拽区（macOS 为交通灯留出顶部空间） */}
-      <div className={`titlebar-drag flex items-center px-6 pb-4 border-b border-border-secondary bg-bg-secondary ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-4'}`}>
+      <div
+        className={`titlebar-drag flex items-center px-6 pb-4 border-b border-border-secondary bg-bg-secondary ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-4'}`}
+      >
         <h2 className="text-base font-semibold text-text-primary">{t('settings.title')}</h2>
       </div>
 

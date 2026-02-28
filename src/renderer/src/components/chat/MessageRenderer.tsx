@@ -66,7 +66,9 @@ export function MessageRenderer({
         const meta = JSON.parse(msg.metadata)
         containerId = meta.containerId || ''
         reason = meta.reason || ''
-      } catch { /* 忽略 */ }
+      } catch {
+        /* 忽略 */
+      }
     }
     return (
       <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
@@ -89,9 +91,12 @@ export function MessageRenderer({
         host = meta.host || ''
         port = meta.port || ''
         username = meta.username || ''
-      } catch { /* 忽略 */ }
+      } catch {
+        /* 忽略 */
+      }
     }
-    const target = username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
+    const target =
+      username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
     return (
       <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
         <Terminal size={12} />
@@ -103,7 +108,9 @@ export function MessageRenderer({
 
   if (msg.type === 'tool_call' || msg.type === 'tool_result') {
     const isCall = msg.type === 'tool_call'
-    const liveExec = isCall ? toolExecutions.find((te) => te.toolCallId === meta?.toolCallId) : undefined
+    const liveExec = isCall
+      ? toolExecutions.find((te) => te.toolCallId === meta?.toolCallId)
+      : undefined
 
     const toolBlock = isCall ? (
       <ToolCallBlock
@@ -127,15 +134,11 @@ export function MessageRenderer({
     // 仅用背景色区分：奇偶 turn 交替底色 + 压缩 turn 降低透明度
     const isOdd = tg.globalIndex % 2 === 1
     return (
-      <div className={`ml-14 mr-4 ${
-        tg.isFirst ? 'mt-0.5 rounded-t' : ''
-      } ${
-        tg.isLast ? 'mb-0.5 rounded-b' : ''
-      } ${
-        isOdd ? 'bg-bg-secondary/30' : ''
-      } ${
-        tg.willBeCompressed ? 'opacity-50' : ''
-      }`}>
+      <div
+        className={`ml-14 mr-4 ${tg.isFirst ? 'mt-0.5 rounded-t' : ''} ${
+          tg.isLast ? 'mb-0.5 rounded-b' : ''
+        } ${isOdd ? 'bg-bg-secondary/30' : ''} ${tg.willBeCompressed ? 'opacity-50' : ''}`}
+      >
         {toolBlock}
       </div>
     )

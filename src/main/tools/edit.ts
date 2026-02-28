@@ -25,13 +25,14 @@ import {
 
 const EditParamsSchema = Type.Object({
   path: Type.String({ description: 'The absolute path to the file to modify' }),
-  oldText: Type.String({ description: 'Exact text to find and replace (must match exactly, including whitespace)' }),
+  oldText: Type.String({
+    description: 'Exact text to find and replace (must match exactly, including whitespace)'
+  }),
   newText: Type.String({ description: 'New text to replace with' })
 })
 
 /** 创建 edit 工具实例 */
 export function createEditTool(ctx: ToolContext): AgentTool<typeof EditParamsSchema> {
-
   return {
     name: 'edit',
     label: t('tool.editLabel'),

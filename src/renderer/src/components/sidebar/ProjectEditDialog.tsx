@@ -15,7 +15,10 @@ interface ProjectEditDialogProps {
 /**
  * 项目编辑弹窗 — 编辑项目名称、路径、system prompt、Docker 配置
  */
-export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps): React.JSX.Element | null {
+export function ProjectEditDialog({
+  projectId,
+  onClose
+}: ProjectEditDialogProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
   const [name, setName] = useState('')
@@ -31,35 +34,34 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
 
   // 加载项目数据 + 工具列表
   useEffect(() => {
-    Promise.all([
-      window.api.project.getById(projectId),
-      window.api.tools.list()
-    ]).then(([project, tools]) => {
-      setAllTools(tools)
-      if (project) {
-        setName(project.name)
-        setPath(project.path)
-        setSystemPrompt(project.systemPrompt)
-        setSandboxEnabled(project.sandboxEnabled === 1)
-        // 从 settings JSON 恢复 enabledTools 和 referenceDirs
-        try {
-          const settings = JSON.parse(project.settings || '{}')
-          if (Array.isArray(settings.enabledTools)) {
-            setEnabledTools(settings.enabledTools)
-          } else {
+    Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
+      ([project, tools]) => {
+        setAllTools(tools)
+        if (project) {
+          setName(project.name)
+          setPath(project.path)
+          setSystemPrompt(project.systemPrompt)
+          setSandboxEnabled(project.sandboxEnabled === 1)
+          // 从 settings JSON 恢复 enabledTools 和 referenceDirs
+          try {
+            const settings = JSON.parse(project.settings || '{}')
+            if (Array.isArray(settings.enabledTools)) {
+              setEnabledTools(settings.enabledTools)
+            } else {
+              setEnabledTools([...DEFAULT_TOOL_NAMES])
+            }
+            if (Array.isArray(settings.referenceDirs)) {
+              setReferenceDirs(settings.referenceDirs)
+            }
+          } catch {
             setEnabledTools([...DEFAULT_TOOL_NAMES])
           }
-          if (Array.isArray(settings.referenceDirs)) {
-            setReferenceDirs(settings.referenceDirs)
-          }
-        } catch {
+        } else {
           setEnabledTools([...DEFAULT_TOOL_NAMES])
         }
-      } else {
-        setEnabledTools([...DEFAULT_TOOL_NAMES])
+        setLoading(false)
       }
-      setLoading(false)
-    })
+    )
   }, [projectId])
 
   // 按 Escape 关闭
@@ -113,7 +115,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
   if (loading) return null
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+    >
       <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
@@ -130,7 +134,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
         <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
           {/* 项目名称 */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.name')}</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+              {t('projectForm.name')}
+            </label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -146,7 +152,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
               {t('projectForm.path')}
             </label>
             {path && (
-              <div className="text-[11px] font-mono text-text-primary truncate mb-2" title={path}>{path}</div>
+              <div className="text-[11px] font-mono text-text-primary truncate mb-2" title={path}>
+                {path}
+              </div>
             )}
             <button
               onClick={handleSelectFolder}
@@ -155,9 +163,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
               <Plus size={12} />
               {t('projectForm.selectFolder')}
             </button>
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {t('projectForm.pathHint')}
-            </p>
+            <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.pathHint')}</p>
           </div>
 
           {/* 参考目录 */}
@@ -169,7 +175,12 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
             {referenceDirs.map((dir, idx) => (
               <div key={idx} className="flex items-start gap-1.5 mb-2">
                 <div className="flex-1 min-w-0">
-                  <div className="text-[11px] font-mono text-text-primary truncate" title={dir.path}>{dir.path}</div>
+                  <div
+                    className="text-[11px] font-mono text-text-primary truncate"
+                    title={dir.path}
+                  >
+                    {dir.path}
+                  </div>
                   <input
                     value={dir.note || ''}
                     onChange={(e) => {
@@ -192,7 +203,7 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
             <button
               onClick={async () => {
                 const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
-                if (result && !referenceDirs.some(d => d.path === result)) {
+                if (result && !referenceDirs.some((d) => d.path === result)) {
                   setReferenceDirs([...referenceDirs, { path: result }])
                 }
               }}
@@ -208,7 +219,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
 
           {/* 项目级 System Prompt */}
           <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">{t('projectForm.prompt')}</label>
+            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+              {t('projectForm.prompt')}
+            </label>
             <textarea
               value={systemPrompt}
               onChange={(e) => setSystemPrompt(e.target.value)}
@@ -238,21 +251,29 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {t('projectForm.sandboxHint')}
-            </p>
+            <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.sandboxHint')}</p>
             {/* 沙箱开启且有参考目录时，显示各目录的读写权限 */}
             {sandboxEnabled && referenceDirs.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border-secondary space-y-1.5">
-                <div className="text-[10px] text-text-tertiary mb-1">{t('projectForm.refDirAccessLabel')}</div>
+                <div className="text-[10px] text-text-tertiary mb-1">
+                  {t('projectForm.refDirAccessLabel')}
+                </div>
                 {referenceDirs.map((dir, idx) => (
                   <div key={idx} className="flex items-center gap-1.5">
-                    <div className="text-[11px] font-mono text-text-secondary truncate flex-1" title={dir.path}>{dir.path.split('/').pop() || dir.path}</div>
+                    <div
+                      className="text-[11px] font-mono text-text-secondary truncate flex-1"
+                      title={dir.path}
+                    >
+                      {dir.path.split('/').pop() || dir.path}
+                    </div>
                     <button
                       onClick={() => {
                         const next = [...referenceDirs]
                         const current = dir.access ?? 'readonly'
-                        next[idx] = { ...dir, access: current === 'readonly' ? 'readwrite' : 'readonly' }
+                        next[idx] = {
+                          ...dir,
+                          access: current === 'readonly' ? 'readwrite' : 'readonly'
+                        }
                         setReferenceDirs(next)
                       }}
                       className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors ${
@@ -262,7 +283,9 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
                       }`}
                       title={dir.path}
                     >
-                      {(dir.access ?? 'readonly') === 'readwrite' ? t('projectForm.refDirAccessReadwrite') : t('projectForm.refDirAccessReadonly')}
+                      {(dir.access ?? 'readonly') === 'readwrite'
+                        ? t('projectForm.refDirAccessReadwrite')
+                        : t('projectForm.refDirAccessReadonly')}
                     </button>
                   </div>
                 ))}
@@ -276,12 +299,13 @@ export function ProjectEditDialog({ projectId, onClose }: ProjectEditDialogProps
               <Wrench size={12} />
               {t('projectForm.tools')}
             </label>
-            <ToolSelectList tools={allTools} enabledTools={enabledTools} onChange={setEnabledTools} />
-            <p className="text-[10px] text-text-tertiary mt-2">
-              {t('projectForm.toolsHint')}
-            </p>
+            <ToolSelectList
+              tools={allTools}
+              enabledTools={enabledTools}
+              onChange={setEnabledTools}
+            />
+            <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.toolsHint')}</p>
           </div>
-
         </div>
 
         {/* 底部按钮 */}

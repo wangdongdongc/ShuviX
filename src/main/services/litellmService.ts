@@ -25,7 +25,8 @@ interface LiteLLMModelEntry {
   supported_output_modalities?: string[]
 }
 
-const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
+const LITELLM_URL =
+  'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const FETCH_TIMEOUT = 10_000
 
 /** 常见 baseUrl 域名 → LiteLLM provider slug 映射 */
@@ -95,7 +96,11 @@ class LiteLLMService {
    *   3) baseUrl 推断 slug + modelId 前缀匹配
    *   4) 反向索引后缀匹配（兜底）
    */
-  getModelCapabilities(modelId: string, providerSlug?: string, baseUrl?: string): ModelCapabilities | null {
+  getModelCapabilities(
+    modelId: string,
+    providerSlug?: string,
+    baseUrl?: string
+  ): ModelCapabilities | null {
     // 策略 1：直接匹配
     let entry = this.data.get(modelId)
 
@@ -132,7 +137,9 @@ class LiteLLMService {
       for (const [domain, slug] of Object.entries(BASE_URL_SLUG_MAP)) {
         if (hostname.includes(domain.split('.')[0])) return slug
       }
-    } catch { /* 无效 URL */ }
+    } catch {
+      /* 无效 URL */
+    }
     return null
   }
 
@@ -141,7 +148,8 @@ class LiteLLMService {
     const caps: ModelCapabilities = {}
 
     if (entry.supports_vision != null) caps.vision = entry.supports_vision
-    if (entry.supports_function_calling != null) caps.functionCalling = entry.supports_function_calling
+    if (entry.supports_function_calling != null)
+      caps.functionCalling = entry.supports_function_calling
     if (entry.supports_reasoning != null) caps.reasoning = entry.supports_reasoning
     if (entry.supports_audio_input != null) caps.audioInput = entry.supports_audio_input
     if (entry.supports_audio_output != null) caps.audioOutput = entry.supports_audio_output

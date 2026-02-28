@@ -3,17 +3,17 @@ export type ApiProtocol = 'openai-completions' | 'anthropic-messages' | 'google-
 
 /** 模型能力元数据 */
 export interface ModelCapabilities {
-  vision?: boolean           // 图像输入
-  imageOutput?: boolean      // 图像生成输出
-  functionCalling?: boolean  // 工具调用
-  reasoning?: boolean        // 推理/思考
+  vision?: boolean // 图像输入
+  imageOutput?: boolean // 图像生成输出
+  functionCalling?: boolean // 工具调用
+  reasoning?: boolean // 推理/思考
   audioInput?: boolean
   audioOutput?: boolean
   pdfInput?: boolean
   maxInputTokens?: number
   maxOutputTokens?: number
-  inputCostPerToken?: number   // 仅存储，暂不展示
-  outputCostPerToken?: number  // 仅存储，暂不展示
+  inputCostPerToken?: number // 仅存储，暂不展示
+  outputCostPerToken?: number // 仅存储，暂不展示
 }
 
 /** 提供商数据结构 */

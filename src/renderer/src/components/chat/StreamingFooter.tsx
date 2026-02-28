@@ -1,5 +1,11 @@
 import { Sparkles } from 'lucide-react'
-import { useChatStore, selectIsStreaming, selectStreamingContent, selectStreamingThinking, selectStreamingImages } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectIsStreaming,
+  selectStreamingContent,
+  selectStreamingThinking,
+  selectStreamingImages
+} from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { MessageBubble } from './MessageBubble'
 
@@ -34,9 +40,18 @@ export function StreamingFooter(): React.JSX.Element {
             <Sparkles size={14} className="text-text-secondary animate-pulse" />
           </div>
           <div className="flex items-center gap-1 pt-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '0ms' }} />
-            <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '150ms' }} />
-            <div className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '300ms' }} />
+            <div
+              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+              style={{ animationDelay: '0ms' }}
+            />
+            <div
+              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+              style={{ animationDelay: '150ms' }}
+            />
+            <div
+              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+              style={{ animationDelay: '300ms' }}
+            />
           </div>
         </div>
       )}

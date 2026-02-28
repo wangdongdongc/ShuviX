@@ -28,9 +28,7 @@ export function AboutSettings(): React.JSX.Element {
         <img src={logoImg} alt="ShuviX" className="w-16 h-16 rounded-2xl shadow-lg object-cover" />
         <div>
           <h3 className="text-lg font-semibold text-text-primary">ShuviX</h3>
-          <p className="text-xs text-text-tertiary mt-0.5">
-            {t('about.description')}
-          </p>
+          <p className="text-xs text-text-tertiary mt-0.5">{t('about.description')}</p>
           {appVersion && (
             <p className="text-[11px] text-text-tertiary mt-1">
               {t('about.version', { version: appVersion })}
@@ -57,7 +55,9 @@ export function AboutSettings(): React.JSX.Element {
           onClick={() => openLink(`${REPO_URL}/issues`)}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border-primary bg-bg-secondary hover:bg-bg-hover transition-colors group"
         >
-          <span className="w-[18px] text-center text-text-secondary group-hover:text-text-primary text-sm">🐛</span>
+          <span className="w-[18px] text-center text-text-secondary group-hover:text-text-primary text-sm">
+            🐛
+          </span>
           <div className="flex-1 text-left">
             <div className="text-xs font-medium text-text-primary">{t('about.reportIssue')}</div>
             <div className="text-[10px] text-text-tertiary mt-0.5">{REPO_URL}/issues</div>

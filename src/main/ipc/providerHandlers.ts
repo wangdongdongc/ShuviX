@@ -66,11 +66,14 @@ export function registerProviderHandlers(): void {
   })
 
   /** 切换模型启用状态 */
-  ipcMain.handle('provider:toggleModelEnabled', (_event, params: ProviderToggleModelEnabledParams) => {
-    providerService.toggleModelEnabled(params.id, params.isEnabled)
-    notifyProvidersChanged()
-    return { success: true }
-  })
+  ipcMain.handle(
+    'provider:toggleModelEnabled',
+    (_event, params: ProviderToggleModelEnabledParams) => {
+      providerService.toggleModelEnabled(params.id, params.isEnabled)
+      notifyProvidersChanged()
+      return { success: true }
+    }
+  )
 
   /** 从提供商 API 同步模型列表（支持 OpenAI 兼容协议） */
   ipcMain.handle('provider:syncModels', async (_event, params: ProviderSyncModelsParams) => {
@@ -108,9 +111,12 @@ export function registerProviderHandlers(): void {
   })
 
   /** 更新模型能力信息 */
-  ipcMain.handle('provider:updateModelCapabilities', (_event, params: ProviderUpdateModelCapabilitiesParams) => {
-    providerService.updateModelCapabilities(params.id, params.capabilities)
-    notifyProvidersChanged()
-    return { success: true }
-  })
+  ipcMain.handle(
+    'provider:updateModelCapabilities',
+    (_event, params: ProviderUpdateModelCapabilitiesParams) => {
+      providerService.updateModelCapabilities(params.id, params.capabilities)
+      notifyProvidersChanged()
+      return { success: true }
+    }
+  )
 }

@@ -4,7 +4,16 @@
  * 启用/禁用状态存储在 ~/.shuvix/skills/.config.json
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, cpSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  cpSync
+} from 'fs'
 import { join } from 'path'
 import type { Skill, SkillAddParams, SkillUpdateParams } from '../types'
 import log from 'electron-log/main'
@@ -73,7 +82,10 @@ class SkillService {
       if (colonIdx === -1) continue
       const key = line.slice(0, colonIdx).trim()
       // 移除引号包裹
-      const val = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '')
+      const val = line
+        .slice(colonIdx + 1)
+        .trim()
+        .replace(/^["']|["']$/g, '')
       if (key === 'name') name = val
       if (key === 'description') description = val
     }

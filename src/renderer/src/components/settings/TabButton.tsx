@@ -1,5 +1,10 @@
 /** Tab 按钮 */
-export function TabButton({ icon, label, active, onClick }: {
+export function TabButton({
+  icon,
+  label,
+  active,
+  onClick
+}: {
   icon: React.ReactNode
   label: string
   active: boolean

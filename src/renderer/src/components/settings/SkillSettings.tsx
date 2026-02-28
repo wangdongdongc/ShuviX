@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, Pencil, BookOpen, Power, PowerOff, FolderInput, FolderOpen } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  Pencil,
+  BookOpen,
+  Power,
+  PowerOff,
+  FolderInput,
+  FolderOpen
+} from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** Skill 信息（基于文件系统，name 为唯一标识） */
@@ -34,7 +43,9 @@ export function SkillSettings(): React.JSX.Element {
     setSkills(list)
   }, [])
 
-  useEffect(() => { loadSkills() }, [loadSkills])
+  useEffect(() => {
+    loadSkills()
+  }, [loadSkills])
 
   /** 重置表单 */
   const resetForm = (): void => {
@@ -146,7 +157,10 @@ export function SkillSettings(): React.JSX.Element {
       {!showForm && (
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => { resetForm(); setShowForm(true) }}
+            onClick={() => {
+              resetForm()
+              setShowForm(true)
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
           >
             <Plus size={12} />
@@ -171,7 +185,9 @@ export function SkillSettings(): React.JSX.Element {
 
       {/* 导入错误提示 */}
       {importError && (
-        <p className="text-[11px] text-red-400 bg-red-500/5 px-3 py-1.5 rounded-lg">{importError}</p>
+        <p className="text-[11px] text-red-400 bg-red-500/5 px-3 py-1.5 rounded-lg">
+          {importError}
+        </p>
       )}
 
       {/* 添加/编辑表单 */}
@@ -183,7 +199,9 @@ export function SkillSettings(): React.JSX.Element {
               <button
                 onClick={() => setPasteMode(false)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  !pasteMode ? 'bg-accent text-white' : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                  !pasteMode
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
                 }`}
               >
                 {t('settings.skillManual')}
@@ -191,7 +209,9 @@ export function SkillSettings(): React.JSX.Element {
               <button
                 onClick={() => setPasteMode(true)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  pasteMode ? 'bg-accent text-white' : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                  pasteMode
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
                 }`}
               >
                 {t('settings.skillPaste')}
@@ -202,10 +222,12 @@ export function SkillSettings(): React.JSX.Element {
           {/* 粘贴 SKILL.md 模式 */}
           {pasteMode && (
             <div className="space-y-2">
-              <label className="block text-xs font-medium text-text-secondary">{t('settings.skillPasteHint')}</label>
+              <label className="block text-xs font-medium text-text-secondary">
+                {t('settings.skillPasteHint')}
+              </label>
               <textarea
                 value={pasteText}
-                onChange={e => setPasteText(e.target.value)}
+                onChange={(e) => setPasteText(e.target.value)}
                 rows={10}
                 className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
                 placeholder="---\nname: my-skill\ndescription: ...\n---\n# Instructions..."
@@ -224,30 +246,36 @@ export function SkillSettings(): React.JSX.Element {
           {!pasteMode && (
             <>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.skillName')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.skillName')}
+                </label>
                 <input
                   value={formName}
-                  onChange={e => setFormName(e.target.value)}
+                  onChange={(e) => setFormName(e.target.value)}
                   disabled={!!editName}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono disabled:opacity-50"
                   placeholder="my-skill"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.skillDescription')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.skillDescription')}
+                </label>
                 <textarea
                   value={formDescription}
-                  onChange={e => setFormDescription(e.target.value)}
+                  onChange={(e) => setFormDescription(e.target.value)}
                   rows={2}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none"
                   placeholder={t('settings.skillDescriptionPlaceholder')}
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-text-secondary mb-1">{t('settings.skillContent')}</label>
+                <label className="block text-xs font-medium text-text-secondary mb-1">
+                  {t('settings.skillContent')}
+                </label>
                 <textarea
                   value={formContent}
-                  onChange={e => setFormContent(e.target.value)}
+                  onChange={(e) => setFormContent(e.target.value)}
                   rows={8}
                   className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
                   placeholder="# My Skill&#10;Instructions for Claude..."
@@ -284,16 +312,28 @@ export function SkillSettings(): React.JSX.Element {
         </div>
       ) : (
         <div className="space-y-2">
-          {skills.map(s => (
+          {skills.map((s) => (
             <div key={s.name} className="border border-border-secondary rounded-lg overflow-hidden">
               <div className="flex items-center gap-2 px-3 py-2.5 bg-bg-secondary">
-                <BookOpen size={14} className={s.isEnabled ? 'text-emerald-400' : 'text-text-tertiary'} />
+                <BookOpen
+                  size={14}
+                  className={s.isEnabled ? 'text-emerald-400' : 'text-text-tertiary'}
+                />
                 <div className="flex-1 min-w-0">
-                  <span className={`text-xs font-medium ${s.isEnabled ? 'text-text-primary' : 'text-text-tertiary'}`}>{s.name}</span>
+                  <span
+                    className={`text-xs font-medium ${s.isEnabled ? 'text-text-primary' : 'text-text-tertiary'}`}
+                  >
+                    {s.name}
+                  </span>
                   <p className="text-[10px] text-text-tertiary truncate">{s.description}</p>
                 </div>
                 {/* basePath 提示 */}
-                <span className="text-[9px] text-text-tertiary font-mono truncate max-w-[200px]" title={s.basePath}>{s.basePath}</span>
+                <span
+                  className="text-[9px] text-text-tertiary font-mono truncate max-w-[200px]"
+                  title={s.basePath}
+                >
+                  {s.basePath}
+                </span>
 
                 {/* 操作按钮 */}
                 <div className="flex items-center gap-1">

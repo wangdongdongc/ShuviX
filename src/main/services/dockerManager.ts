@@ -165,12 +165,7 @@ export class DockerManager {
         return
       }
 
-      const child = spawn('docker', [
-        'exec',
-        '-w', cwd,
-        containerId,
-        'bash', '-c', command
-      ], {
+      const child = spawn('docker', ['exec', '-w', cwd, containerId, 'bash', '-c', command], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: spawnEnv
       })
@@ -227,9 +222,11 @@ export class DockerManager {
 
     info.destroyTimer = setTimeout(() => {
       info.destroyTimer = undefined
-      this.doDestroy(sessionId).then((destroyed) => {
-        if (destroyed) onDestroyed?.(containerId)
-      }).catch((err) => log.error(`延迟销毁容器失败: ${err}`))
+      this.doDestroy(sessionId)
+        .then((destroyed) => {
+          if (destroyed) onDestroyed?.(containerId)
+        })
+        .catch((err) => log.error(`延迟销毁容器失败: ${err}`))
     }, IDLE_TIMEOUT_MS)
   }
 
@@ -307,10 +304,15 @@ export class DockerManager {
 
     return new Promise((resolve, reject) => {
       const args = [
-        'run', '-d', '--rm',
-        '-v', `${workingDirectory}:${workingDirectory}`,
-        '-w', workingDirectory,
-        '--name', name
+        'run',
+        '-d',
+        '--rm',
+        '-v',
+        `${workingDirectory}:${workingDirectory}`,
+        '-w',
+        workingDirectory,
+        '--name',
+        name
       ]
       // 挂载参考目录（与宿主机路径一致）：readonly 用 :ro，readwrite 正常挂载
       if (opts?.referenceDirs) {

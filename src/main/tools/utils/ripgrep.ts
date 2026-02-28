@@ -87,9 +87,12 @@ export async function rgSearch(input: {
   input.signal?.throwIfAborted()
 
   const args = [
-    '-nH', '--hidden', '--no-messages',
+    '-nH',
+    '--hidden',
+    '--no-messages',
     '--field-match-separator=|',
-    '--regexp', input.pattern
+    '--regexp',
+    input.pattern
   ]
   if (input.include) {
     args.push('--glob', input.include)
@@ -158,13 +161,13 @@ async function* spawnRgLines(
   // 捕获 spawn 级别错误（如 ENOTDIR / EACCES）
   let spawnError: Error | undefined
   proc.on('error', (err: NodeJS.ErrnoException) => {
-    spawnError = new Error(
-      `rg spawn failed: ${err.code || err.message} (bin=${bin}, cwd=${cwd})`
-    )
+    spawnError = new Error(`rg spawn failed: ${err.code || err.message} (bin=${bin}, cwd=${cwd})`)
   })
 
   // 中止时杀进程
-  const onAbort = (): void => { proc.kill() }
+  const onAbort = (): void => {
+    proc.kill()
+  }
   if (signal) signal.addEventListener('abort', onAbort, { once: true })
 
   try {

@@ -6,20 +6,20 @@ ShuviX 是一个基于 Electron 的桌面 AI 助手，支持多模型切换（Op
 
 ## 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 框架 | Electron 39 + electron-vite |
-| 渲染进程 | React 19 + TypeScript 5.9 |
-| 样式 | Tailwind CSS 4（`@tailwindcss/vite` 插件） |
-| 状态管理 | Zustand 5（`useChatStore` + `useSettingsStore`） |
-| 数据库 | better-sqlite3（WAL 模式） |
-| AI 核心 | `@mariozechner/pi-agent-core` + `@mariozechner/pi-ai` |
-| MCP | `@modelcontextprotocol/sdk` |
-| 包管理 | **npm**（非 pnpm/yarn），`postinstall` 含 `electron-rebuild` |
-| i18n | i18next（中/英/日三语） |
-| 图标 | lucide-react |
-| Markdown | react-markdown + remark-gfm + rehype-highlight |
-| 虚拟滚动 | react-virtuoso |
+| 层       | 技术                                                         |
+| -------- | ------------------------------------------------------------ |
+| 框架     | Electron 39 + electron-vite                                  |
+| 渲染进程 | React 19 + TypeScript 5.9                                    |
+| 样式     | Tailwind CSS 4（`@tailwindcss/vite` 插件）                   |
+| 状态管理 | Zustand 5（`useChatStore` + `useSettingsStore`）             |
+| 数据库   | better-sqlite3（WAL 模式）                                   |
+| AI 核心  | `@mariozechner/pi-agent-core` + `@mariozechner/pi-ai`        |
+| MCP      | `@modelcontextprotocol/sdk`                                  |
+| 包管理   | **npm**（非 pnpm/yarn），`postinstall` 含 `electron-rebuild` |
+| i18n     | i18next（中/英/日三语）                                      |
+| 图标     | lucide-react                                                 |
+| Markdown | react-markdown + remark-gfm + rehype-highlight               |
+| 虚拟滚动 | react-virtuoso                                               |
 
 ## 目录结构
 
@@ -168,6 +168,7 @@ Agent 流式事件通过 `window.api.agent.onEvent` 监听，事件类型包括�
 内置工具：`bash` / `read` / `write` / `edit` / `ask` / `shuvix-project` / `shuvix-setting`
 
 扩展工具：
+
 - **MCP 工具**：通过 MCP Server 动态注册，key 格式 `mcp__<serverName>__<toolName>`
 - **Skill 工具**：用户自定义 Markdown 脚本，key 格式 `skill:<name>`
 

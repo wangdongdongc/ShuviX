@@ -43,6 +43,7 @@ bash execute → sandboxEnabled? → requestApproval(toolCallId, command) → Pr
 #### resolveProjectConfig
 
 根据 `sessionId` 动态查询项目配置：
+
 - 有项目：从数据库读取 `sandboxEnabled` 和项目路径
 - 临时会话：`sandboxEnabled = true`，工作目录为 `temp_workspace/<sessionId>`
 
@@ -82,11 +83,11 @@ ipcMain.handle('agent:approveToolCall', (_, { toolCallId, approved }) => { ... }
 
 根据 status 显示不同 UI：
 
-| 状态 | 图标 | 颜色 | UI |
-|------|------|------|-----|
-| `running` | 旋转 Loader | 蓝色 | 工具名 + 参数摘要 |
-| `done` | Check | 绿色 | 工具名 + 结果 |
-| `error` | X | 红色 | 工具名 + 错误信息 |
+| 状态               | 图标        | 颜色 | UI                       |
+| ------------------ | ----------- | ---- | ------------------------ |
+| `running`          | 旋转 Loader | 蓝色 | 工具名 + 参数摘要        |
+| `done`             | Check       | 绿色 | 工具名 + 结果            |
+| `error`            | X           | 红色 | 工具名 + 错误信息        |
 | `pending_approval` | ShieldCheck | 黄色 | 命令内容 + 允许/拒绝按钮 |
 
 #### 项目对话框
@@ -105,16 +106,16 @@ ipcMain.handle('agent:approveToolCall', (_, { toolCallId, approved }) => { ... }
 
 ## 涉及文件
 
-| 层 | 文件 |
-|----|------|
-| 数据层 | `database.ts`, `project.ts`, `projectDao.ts`, `projectService.ts` |
+| 层     | 文件                                                                                  |
+| ------ | ------------------------------------------------------------------------------------- |
+| 数据层 | `database.ts`, `project.ts`, `projectDao.ts`, `projectService.ts`                     |
 | 工具层 | `tools/types.ts`, `tools/bash.ts`, `tools/read.ts`, `tools/write.ts`, `tools/edit.ts` |
-| Agent | `services/agent.ts` |
-| IPC | `ipc/agentHandlers.ts` |
-| 前端 | `App.tsx`, `ChatView.tsx`, `ToolCallBlock.tsx`, `chatStore.ts` |
-| 对话框 | `ProjectCreateDialog.tsx`, `ProjectEditDialog.tsx` |
-| i18n | `zh.json`, `en.json`, `ja.json` |
-| 类型 | `types/agent.ts`, `preload.d.ts` |
+| Agent  | `services/agent.ts`                                                                   |
+| IPC    | `ipc/agentHandlers.ts`                                                                |
+| 前端   | `App.tsx`, `ChatView.tsx`, `ToolCallBlock.tsx`, `chatStore.ts`                        |
+| 对话框 | `ProjectCreateDialog.tsx`, `ProjectEditDialog.tsx`                                    |
+| i18n   | `zh.json`, `en.json`, `ja.json`                                                       |
+| 类型   | `types/agent.ts`, `preload.d.ts`                                                      |
 
 ## 关键修复记录
 

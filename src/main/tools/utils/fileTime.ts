@@ -37,7 +37,9 @@ export function getReadTime(sessionId: string, filePath: string): Date | undefin
 export function assertNotModifiedSinceRead(sessionId: string, filePath: string): void {
   const time = getReadTime(sessionId, filePath)
   if (!time) {
-    throw new Error(`You must read file ${filePath} before overwriting it. Use the read tool first.`)
+    throw new Error(
+      `You must read file ${filePath} before overwriting it. Use the read tool first.`
+    )
   }
 
   let mtime: Date | undefined
@@ -52,9 +54,9 @@ export function assertNotModifiedSinceRead(sessionId: string, filePath: string):
   if (mtime && mtime.getTime() > time.getTime() + 50) {
     throw new Error(
       `File ${filePath} has been modified since it was last read.\n` +
-      `Last modification: ${mtime.toISOString()}\n` +
-      `Last read: ${time.toISOString()}\n\n` +
-      `Please read the file again before modifying it.`
+        `Last modification: ${mtime.toISOString()}\n` +
+        `Last read: ${time.toISOString()}\n\n` +
+        `Please read the file again before modifying it.`
     )
   }
 }

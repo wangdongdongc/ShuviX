@@ -1,6 +1,23 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Terminal, FileText, FilePen, FileOutput, Wrench, Check, X, ChevronDown, ChevronRight, Loader2, ShieldAlert, MessageCircleQuestion, BookOpen, FolderTree, Search, FileSearch2 } from 'lucide-react'
+import {
+  Terminal,
+  FileText,
+  FilePen,
+  FileOutput,
+  Wrench,
+  Check,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  ShieldAlert,
+  MessageCircleQuestion,
+  BookOpen,
+  FolderTree,
+  Search,
+  FileSearch2
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface ToolCallBlockProps {
@@ -8,7 +25,13 @@ interface ToolCallBlockProps {
   toolCallId?: string
   args?: Record<string, unknown>
   result?: string
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_user_input' | 'pending_ssh_credentials'
+  status:
+    | 'running'
+    | 'done'
+    | 'error'
+    | 'pending_approval'
+    | 'pending_user_input'
+    | 'pending_ssh_credentials'
 }
 
 /**
@@ -20,7 +43,7 @@ export function ToolCallBlock({
   toolCallId,
   args,
   result,
-  status: propStatus,
+  status: propStatus
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -40,7 +63,10 @@ export function ToolCallBlock({
     switch (toolName) {
       case 'bash': {
         const line = str(args?.command).split('\n')[0]
-        return { icon: <Terminal size={12} className={ic} />, detail: line.length > 80 ? line.slice(0, 77) + '...' : line }
+        return {
+          icon: <Terminal size={12} className={ic} />,
+          detail: line.length > 80 ? line.slice(0, 77) + '...' : line
+        }
       }
       case 'read':
         return { icon: <FileText size={12} className={ic} />, detail: str(args?.path) }
@@ -50,7 +76,10 @@ export function ToolCallBlock({
         return { icon: <FilePen size={12} className={ic} />, detail: str(args?.path) }
       case 'ask': {
         const q = str(args?.question).slice(0, 60)
-        return { icon: <MessageCircleQuestion size={12} className={ic} />, detail: q + (str(args?.question).length > 60 ? '...' : '') }
+        return {
+          icon: <MessageCircleQuestion size={12} className={ic} />,
+          detail: q + (str(args?.question).length > 60 ? '...' : '')
+        }
       }
       case 'ls':
         return { icon: <FolderTree size={12} className={ic} />, detail: str(args?.path) || '.' }
@@ -64,16 +93,25 @@ export function ToolCallBlock({
       case 'ssh': {
         const action = str(args?.action)
         const cmd = args?.command ? `: ${str(args.command).split('\n')[0].slice(0, 60)}` : ''
-        return { icon: <Terminal size={12} className="text-emerald-400 flex-shrink-0" />, detail: `${action}${cmd}` }
+        return {
+          icon: <Terminal size={12} className="text-emerald-400 flex-shrink-0" />,
+          detail: `${action}${cmd}`
+        }
       }
       case 'skill':
-        return { icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />, detail: str(args?.command) }
+        return {
+          icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
+          detail: str(args?.command)
+        }
       default:
         return { icon: <Wrench size={12} className={ic} />, detail: '' }
     }
   })()
 
-  const statusConfig: Record<string, { icon: React.ReactNode; label: string; borderColor: string }> = {
+  const statusConfig: Record<
+    string,
+    { icon: React.ReactNode; label: string; borderColor: string }
+  > = {
     running: {
       icon: <Loader2 size={12} className="animate-spin text-accent" />,
       label: t('toolCall.running'),
@@ -115,11 +153,12 @@ export function ToolCallBlock({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
       >
-        {(args || result) && (
-          expanded
-            ? <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
-            : <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
-        )}
+        {(args || result) &&
+          (expanded ? (
+            <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
+          ) : (
+            <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
+          ))}
         {icon}
         <span className="font-medium text-text-secondary flex-shrink-0">{toolName}</span>
         {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}

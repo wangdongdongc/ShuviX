@@ -12,15 +12,15 @@
 
 ## 现状分析
 
-| 组件 | 现状 |
-|------|------|
-| `AgentTool` 接口 | `{ name, label, description, parameters(TSchema), execute }` — 足够通用 |
-| `buildTools()` | 静态注册 6 个内置工具 (now/bash/read/write/edit/ask) |
-| `agent.setTools()` | 支持运行时动态替换工具集 |
-| `resolveEnabledTools()` | session > project settings > 默认全部（仅内置） |
-| `tools:list` IPC | 返回内置工具名 + i18n 标签 |
-| `ProjectEditDialog` | 工具勾选框，控制启用/禁用 |
-| Settings UI | 4 个 Tab: general / providers / httpLogs / about |
+| 组件                    | 现状                                                                    |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `AgentTool` 接口        | `{ name, label, description, parameters(TSchema), execute }` — 足够通用 |
+| `buildTools()`          | 静态注册 6 个内置工具 (now/bash/read/write/edit/ask)                    |
+| `agent.setTools()`      | 支持运行时动态替换工具集                                                |
+| `resolveEnabledTools()` | session > project settings > 默认全部（仅内置）                         |
+| `tools:list` IPC        | 返回内置工具名 + i18n 标签                                              |
+| `ProjectEditDialog`     | 工具勾选框，控制启用/禁用                                               |
+| Settings UI             | 4 个 Tab: general / providers / httpLogs / about                        |
 
 ## 整体架构
 
@@ -53,10 +53,10 @@
 
 同时支持两种 MCP 传输方式，一步到位：
 
-| 类型 | 配置 | 适用场景 |
-|------|------|----------|
+| 类型      | 配置                       | 适用场景                              |
+| --------- | -------------------------- | ------------------------------------- |
 | **stdio** | `command` + `args` + `env` | 本地进程：npx / docker / uvx / 二进制 |
-| **http** | `url` + `headers` | 远程服务：SSE / Streamable HTTP |
+| **http**  | `url` + `headers`          | 远程服务：SSE / Streamable HTTP       |
 
 - 用户添加 Server 时选择类型，UI 根据类型显示对应的配置字段
 - McpService 根据 `type` 创建 `StdioClientTransport` 或 `SSEClientTransport`
@@ -107,6 +107,7 @@ mcpService.connectAll()          mcpService.disconnectAll()
 ## 工具命名规则
 
 MCP 工具名采用 `mcp:<serverName>:<toolName>` 格式，例如：
+
 - `mcp:filesystem:read_file`
 - `mcp:github:create_issue`
 
@@ -150,13 +151,16 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 ```typescript
 class McpService {
   // 每个 server 维护一个连接实例
-  private connections: Map<serverId, {
-    client: Client,
-    transport: StdioClientTransport | SSEClientTransport,  // 根据 type 选择
-    tools: McpDiscoveredTool[],   // tools/list 返回的原始工具
-    status: 'connected' | 'disconnected' | 'error',
-    error?: string
-  }>
+  private connections: Map<
+    serverId,
+    {
+      client: Client
+      transport: StdioClientTransport | SSEClientTransport // 根据 type 选择
+      tools: McpDiscoveredTool[] // tools/list 返回的原始工具
+      status: 'connected' | 'disconnected' | 'error'
+      error?: string
+    }
+  >
 
   /** 连接 MCP Server（根据 type 自动选择 stdio/http transport），调用 tools/list 发现工具 */
   async connect(serverId: string): Promise<void>
@@ -171,12 +175,20 @@ class McpService {
   getServerTools(serverId: string): McpDiscoveredTool[]
 
   /** 调用 MCP 工具 */
-  async callTool(serverId: string, toolName: string, args: Record<string, unknown>): Promise<CallToolResult>
+  async callTool(
+    serverId: string,
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<CallToolResult>
 
   /** ---- 桥接层（两层结构） ---- */
 
   /** 将单个 MCP 工具转为 AgentTool */
-  private mcpToolToAgentTool(serverId: string, serverName: string, mcpTool: McpDiscoveredTool): AgentTool
+  private mcpToolToAgentTool(
+    serverId: string,
+    serverName: string,
+    mcpTool: McpDiscoveredTool
+  ): AgentTool
 
   /** 将单个 Server 的所有工具转为 AgentTool[] */
   serverToAgentTools(serverId: string): AgentTool[]
@@ -237,9 +249,12 @@ getAllAgentTools(): AgentTool[] {
 function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] {
   // 内置工具（不变）
   const builtinAll: Record<string, AgentTool<any>> = {
-    now: createNowTool(), bash: createBashTool(ctx),
-    read: createReadTool(ctx), write: createWriteTool(ctx),
-    edit: createEditTool(ctx), ask: createAskTool(ctx)
+    now: createNowTool(),
+    bash: createBashTool(ctx),
+    read: createReadTool(ctx),
+    write: createWriteTool(ctx),
+    edit: createEditTool(ctx),
+    ask: createAskTool(ctx)
   }
   // MCP 工具（动态），key = "mcp:serverName:toolName"
   const mcpAll: Record<string, AgentTool<any>> = {}
@@ -248,16 +263,18 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
   }
   // 合并后按 enabledTools 过滤
   const all = { ...builtinAll, ...mcpAll }
-  return enabledTools.filter(name => name in all).map(name => all[name])
+  return enabledTools.filter((name) => name in all).map((name) => all[name])
 }
 ```
 
 **修改** `src/main/utils/tools.ts`：
+
 - `ALL_TOOL_NAMES` 保持为内置工具常量
 - 新增 `getAllToolNames()` 动态函数 = 内置 + MCP 工具名
 - `resolveEnabledTools()` 默认值改为 `getAllToolNames()`（包含 MCP）
 
 **修改** `src/main/ipc/agentHandlers.ts` — `tools:list`：
+
 - 返回值同时包含内置工具和 MCP 工具
 - MCP 工具额外携带 `group: serverName` 字段供 UI 分组
 
@@ -266,13 +283,13 @@ function buildTools(ctx: ToolContext, enabledTools: string[]): AgentTool<any>[] 
 **新文件** `src/main/ipc/mcpHandlers.ts`：
 
 ```typescript
-ipcMain.handle('mcp:list')        // 列出所有配置的 MCP Server（含状态）
-ipcMain.handle('mcp:add')         // 添加 MCP Server
-ipcMain.handle('mcp:update')      // 更新配置
-ipcMain.handle('mcp:delete')      // 删除
-ipcMain.handle('mcp:connect')     // 手动连接
-ipcMain.handle('mcp:disconnect')  // 手动断开
-ipcMain.handle('mcp:getTools')    // 获取指定 server 已发现的工具列表
+ipcMain.handle('mcp:list') // 列出所有配置的 MCP Server（含状态）
+ipcMain.handle('mcp:add') // 添加 MCP Server
+ipcMain.handle('mcp:update') // 更新配置
+ipcMain.handle('mcp:delete') // 删除
+ipcMain.handle('mcp:connect') // 手动连接
+ipcMain.handle('mcp:disconnect') // 手动断开
+ipcMain.handle('mcp:getTools') // 获取指定 server 已发现的工具列表
 ```
 
 **修改** `handlers.ts`：注册 `registerMcpHandlers()`
@@ -283,6 +300,7 @@ ipcMain.handle('mcp:getTools')    // 获取指定 server 已发现的工具列�
 **新文件** `src/renderer/src/components/settings/McpSettings.tsx`
 
 功能：
+
 - 列表展示已配置的 MCP Server（名称、命令、状态指示灯🟢🔴）
 - 添加/编辑对话框：
   - **通用**：name
@@ -311,22 +329,22 @@ ipcMain.handle('mcp:getTools')    // 获取指定 server 已发现的工具列�
 
 ## 涉及文件
 
-| 操作 | 文件 |
-|------|------|
-| **新建** | `src/main/dao/mcpDao.ts` |
-| **新建** | `src/main/services/mcpService.ts` |
-| **新建** | `src/main/ipc/mcpHandlers.ts` |
-| **新建** | `src/renderer/src/components/settings/McpSettings.tsx` |
-| **修改** | `src/main/dao/database.ts` — 新增 `mcp_servers` 表 |
-| **修改** | `src/main/services/agent.ts` — `buildTools` 合并 MCP 工具 |
-| **修改** | `src/main/utils/tools.ts` — 动态工具列表 |
-| **修改** | `src/main/ipc/handlers.ts` — 注册 MCP handlers |
-| **修改** | `src/main/ipc/agentHandlers.ts` — `tools:list` 返回 MCP 工具 |
-| **修改** | `src/preload/index.ts` — 添加 `api.mcp.*` |
-| **修改** | `src/renderer/src/components/SettingsPanel.tsx` — 新增 Tab |
+| 操作     | 文件                                                           |
+| -------- | -------------------------------------------------------------- |
+| **新建** | `src/main/dao/mcpDao.ts`                                       |
+| **新建** | `src/main/services/mcpService.ts`                              |
+| **新建** | `src/main/ipc/mcpHandlers.ts`                                  |
+| **新建** | `src/renderer/src/components/settings/McpSettings.tsx`         |
+| **修改** | `src/main/dao/database.ts` — 新增 `mcp_servers` 表             |
+| **修改** | `src/main/services/agent.ts` — `buildTools` 合并 MCP 工具      |
+| **修改** | `src/main/utils/tools.ts` — 动态工具列表                       |
+| **修改** | `src/main/ipc/handlers.ts` — 注册 MCP handlers                 |
+| **修改** | `src/main/ipc/agentHandlers.ts` — `tools:list` 返回 MCP 工具   |
+| **修改** | `src/preload/index.ts` — 添加 `api.mcp.*`                      |
+| **修改** | `src/renderer/src/components/SettingsPanel.tsx` — 新增 Tab     |
 | **修改** | `src/renderer/src/components/ProjectEditDialog.tsx` — 分组显示 |
-| **修改** | `src/shared/i18n/locales/*.json` — MCP 相关文案 |
-| **修改** | `package.json` — 新增 `@modelcontextprotocol/sdk` |
+| **修改** | `src/shared/i18n/locales/*.json` — MCP 相关文案                |
+| **修改** | `package.json` — 新增 `@modelcontextprotocol/sdk`              |
 
 ## 新增依赖
 

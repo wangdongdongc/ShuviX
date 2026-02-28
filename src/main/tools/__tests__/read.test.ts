@@ -54,10 +54,18 @@ vi.mock('../../logger', () => ({
 
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
 vi.mock('markitdown-ts', () => ({
-  MarkItDown: class { convert() { return { markdown: '' } } }
+  MarkItDown: class {
+    convert() {
+      return { markdown: '' }
+    }
+  }
 }))
 vi.mock('word-extractor', () => ({
-  default: class { extract() { return { getBody: () => '' } } }
+  default: class {
+    extract() {
+      return { getBody: () => '' }
+    }
+  }
 }))
 
 import { createReadTool } from '../read'
