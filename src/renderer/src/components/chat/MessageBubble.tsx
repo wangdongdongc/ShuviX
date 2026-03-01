@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import { User, Copy, Check, Code, FileText, RotateCcw, RefreshCw } from 'lucide-react'
+import { copyToClipboard } from '../../utils/clipboard'
 import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
 import { CodeBlock } from './CodeBlock'
 
@@ -68,7 +69,7 @@ export const MessageBubble = memo(function MessageBubble({
 
   /** 复制消息内容 */
   const handleCopy = (): void => {
-    navigator.clipboard.writeText(content)
+    copyToClipboard(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

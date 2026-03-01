@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, Globe, Copy, X, Radio, Bot, Plug } from 'lucide-react'
+import { copyToClipboard } from '../../utils/clipboard'
 import type { Session } from '../../stores/chatStore'
 
 /** 前端类型定义 */
@@ -169,7 +170,7 @@ function WebUIDetail({
   const baseUrl = serverStatus.urls?.[0] || ''
 
   const handleCopy = (url: string): void => {
-    navigator.clipboard.writeText(url)
+    copyToClipboard(url)
     setCopiedUrl(url)
     setTimeout(() => setCopiedUrl(null), 2000)
   }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
+import { copyToClipboard } from '../../utils/clipboard'
 import mermaid from 'mermaid'
 
 // 初始化 mermaid（暗色主题，禁用自动启动）
@@ -59,7 +60,7 @@ export function CodeBlock({
   }
 
   const handleCopy = (): void => {
-    navigator.clipboard.writeText(rawCode)
+    copyToClipboard(rawCode)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

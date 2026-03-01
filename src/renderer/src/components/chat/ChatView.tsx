@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Copy, Folder, Globe, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
+import { copyToClipboard } from '../../utils/clipboard'
 import {
   useChatStore,
   selectStreamingContent,
@@ -494,7 +495,7 @@ function SessionConfigDialog({
   /** 复制分享链接 */
   const handleCopyShareUrl = (): void => {
     if (!shareUrl) return
-    navigator.clipboard.writeText(shareUrl)
+    copyToClipboard(shareUrl)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
