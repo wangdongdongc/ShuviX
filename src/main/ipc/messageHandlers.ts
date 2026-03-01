@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { chatGateway } from '../frontend'
+import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import type { MessageAddParams } from '../types'
 
 /**
@@ -8,33 +8,42 @@ import type { MessageAddParams } from '../types'
  */
 export function registerMessageHandlers(): void {
   /** 获取会话消息 */
-  ipcMain.handle('message:list', (_event, sessionId: string) => {
-    return chatGateway.listMessages(sessionId)
-  })
+  ipcMain.handle('message:list', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.listMessages(sessionId)
+    )
+  )
 
   /** 保存消息 */
-  ipcMain.handle('message:add', (_event, params: MessageAddParams) => {
-    return chatGateway.addMessage(params)
-  })
+  ipcMain.handle('message:add', (_event, params: MessageAddParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () =>
+      chatGateway.addMessage(params)
+    )
+  )
 
   /** 清空会话消息 */
-  ipcMain.handle('message:clear', (_event, sessionId: string) => {
-    chatGateway.clearMessages(sessionId)
-    return { success: true }
-  })
+  ipcMain.handle('message:clear', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () => {
+      chatGateway.clearMessages(sessionId)
+      return { success: true }
+    })
+  )
 
   /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
-  ipcMain.handle('message:rollback', (_event, params: { sessionId: string; messageId: string }) => {
-    chatGateway.rollbackMessage(params.sessionId, params.messageId)
-    return { success: true }
-  })
+  ipcMain.handle('message:rollback', (_event, params: { sessionId: string; messageId: string }) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.rollbackMessage(params.sessionId, params.messageId)
+      return { success: true }
+    })
+  )
 
   /** 从指定消息开始删除（含该消息，使 Agent 失效） */
   ipcMain.handle(
     'message:deleteFrom',
-    (_event, params: { sessionId: string; messageId: string }) => {
-      chatGateway.deleteFromMessage(params.sessionId, params.messageId)
-      return { success: true }
-    }
+    (_event, params: { sessionId: string; messageId: string }) =>
+      operationContext.run(createElectronContext(params.sessionId), () => {
+        chatGateway.deleteFromMessage(params.sessionId, params.messageId)
+        return { success: true }
+      })
   )
 }

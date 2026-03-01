@@ -28,3 +28,11 @@ export {
 export type { ChatGateway } from './ChatGateway'
 
 export { DefaultChatGateway, chatGateway } from './DefaultChatGateway'
+
+export type { OperationContext, OperationSource } from './OperationContext'
+export {
+  operationContext,
+  getOperationContext,
+  createElectronContext,
+  createWebUIContext
+} from './OperationContext'

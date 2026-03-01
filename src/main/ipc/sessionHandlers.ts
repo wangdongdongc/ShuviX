@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
 import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
-import { chatGateway } from '../frontend'
+import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import type {
   Session,
   SessionUpdateModelConfigParams,
@@ -126,22 +126,30 @@ export function registerSessionHandlers(): void {
   })
 
   /** 查询指定 session 的 Docker 容器状态 */
-  ipcMain.handle('docker:sessionStatus', (_event, sessionId: string) => {
-    return chatGateway.getDockerStatus(sessionId)
-  })
+  ipcMain.handle('docker:sessionStatus', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.getDockerStatus(sessionId)
+    )
+  )
 
   /** 查询指定 session 的 SSH 连接状态 */
-  ipcMain.handle('ssh:sessionStatus', (_event, sessionId: string) => {
-    return chatGateway.getSshStatus(sessionId)
-  })
+  ipcMain.handle('ssh:sessionStatus', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.getSshStatus(sessionId)
+    )
+  )
 
   /** 手动销毁指定 session 的 Docker 容器 */
-  ipcMain.handle('docker:destroySession', async (_event, sessionId: string) => {
-    return chatGateway.destroyDocker(sessionId)
-  })
+  ipcMain.handle('docker:destroySession', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.destroyDocker(sessionId)
+    )
+  )
 
   /** 手动断开指定 session 的 SSH 连接 */
-  ipcMain.handle('ssh:disconnectSession', async (_event, sessionId: string) => {
-    return chatGateway.disconnectSsh(sessionId)
-  })
+  ipcMain.handle('ssh:disconnectSession', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.disconnectSsh(sessionId)
+    )
+  )
 }

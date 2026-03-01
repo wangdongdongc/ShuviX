@@ -365,6 +365,121 @@ ws.on('message', async (raw) => {
 | `src/main/ipc/messageHandlers.ts`           | 全部委托 `chatGateway`，删除直接 Service import |
 | `src/main/ipc/sessionHandlers.ts`           | Docker/SSH 资源操作委托 `chatGateway`           |
 
+## 六、OperationContext：操作来源追踪
+
+### 动机
+
+ChatGateway 统一了上行操作入口，但所有方法只接收 `sessionId` + 操作参数，无法区分操作来源（Electron 本地用户 / WebUI 远程用户 / 未来的 Telegram Bot）。这导致：
+
+- 日志无法关联同一次操作的所有条目
+- 无法审计"谁在什么时候执行了什么操作"
+- 无法基于来源实施安全策略（如 WebUI 用户的权限限制）
+
+### OperationContext 类型定义
+
+```typescript
+// src/main/frontend/core/OperationContext.ts
+
+/** 操作来源 — 判别联合，新增前端只需添加新变体 */
+type OperationSource =
+  | { type: 'electron' }
+  | { type: 'webui'; ip: string; userAgent?: string; frontendId: string }
+  | { type: 'telegram'; botId: string; userId: string; chatId: string }
+
+/** 操作上下文 — 每次用户操作一个实例 */
+interface OperationContext {
+  requestId: string          // UUIDv4，日志关联 ID
+  source: OperationSource    // 操作来源
+  sessionId?: string         // 目标会话（部分操作无 session）
+  timestamp: number          // 操作进入后端的时间
+}
+```
+
+### AsyncLocalStorage 传播机制
+
+使用 Node.js 内置的 `AsyncLocalStorage`（类似 Go 的 `context.Context`），在入口点设置上下文，整个 async 调用链自动传播：
+
+```
+IPC handler ─────────┐
+REST route handler ───├──▶ operationContext.run(ctx, () => chatGateway.xxx())
+WS message handler ──┘        ↓ 自动传播到所有下游 async 调用
+                         agentService → tool.execute → logger
+                                                        ↓
+                                          自动附加 [requestId:source] 前缀
+```
+
+下游代码通过 `getOperationContext()` 隐式读取，**零签名改动**。
+
+### 入口点集成
+
+#### Electron IPC
+
+```typescript
+import { operationContext, createElectronContext } from '../frontend'
+
+ipcMain.handle('agent:prompt', (_e, params) =>
+  operationContext.run(createElectronContext(params.sessionId), async () => {
+    await chatGateway.prompt(params.sessionId, params.text, params.images)
+    return { success: true }
+  })
+)
+```
+
+#### WebUI REST
+
+```typescript
+import { operationContext, createWebUIContext } from '../core'
+
+function wrapRoute(handler) {
+  return (req, res) => {
+    const ctx = createWebUIContext(req.ip, 'webui-http', sessionId, req.headers['user-agent'])
+    operationContext.run(ctx, () => handler(req, res))
+  }
+}
+
+router.post('/sessions/:id/prompt', shareGuard, wrapRoute(async (req, res) => { ... }))
+```
+
+#### 新增前端（如 Telegram Bot）
+
+```typescript
+bot.on('message', async (msg) => {
+  const ctx = {
+    requestId: uuid(),
+    source: { type: 'telegram', botId, userId: msg.from.id, chatId: msg.chat.id },
+    sessionId, timestamp: Date.now()
+  }
+  operationContext.run(ctx, async () => {
+    await chatGateway.prompt(sessionId, msg.text)
+  })
+})
+```
+
+### 读取上下文
+
+```typescript
+import { getOperationContext } from './frontend/core/OperationContext'
+
+const ctx = getOperationContext()
+if (ctx) {
+  console.log(ctx.requestId, ctx.source.type)
+}
+```
+
+Logger 通过 `electron-log` hook 自动注入前缀，无需手动调用：
+
+```
+[14:32:05] [info](Agent) [a1b2c3d4:electron] prompt session=abc text=Hello...
+[14:32:06] [info](Agent) [f5e6d7c8:webui] prompt session=xyz text=Write...
+```
+
+### 未来扩展方向
+
+- **审计日志表**：在 SQLite 中新增 `audit_logs` 表，记录每次操作的 context + 结果
+- **消息来源标记**：`messages` 表增加 `source_type` / `source_ip` 字段
+- **基于来源的权限策略**：WebUI 用户限制工具调用范围、禁止敏感操作等
+- **速率限制**：基于 `source.ip` 对 WebUI 请求做频率限制
+
 ## 扩展指南
 
 集成新的前端传输层只需：
@@ -372,4 +487,5 @@ ws.on('message', async (raw) => {
 1. 实现 `ChatFrontend` 接口（下行 — 接收事件推送）
 2. 调用 `chatFrontendRegistry.bind(sessionId, frontend)` 绑定到目标会话
 3. 调用 `chatGateway.*` 方法（上行 — 执行会话内操作）
-4. 会话管理（创建/删除等）由管理端完成，不经过 `ChatGateway`
+4. 在入口点使用 `operationContext.run()` 注入操作来源上下文
+5. 会话管理（创建/删除等）由管理端完成，不经过 `ChatGateway`
