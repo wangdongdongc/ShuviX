@@ -6,11 +6,16 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import type { ThinkingLevel } from '../../../../main/types'
 
+interface ModelPickerProps {
+  /** 只读模式：仅显示当前模型名，不可点击选择 */
+  readonly?: boolean
+}
+
 /**
  * 模型选择器 — 展开式供应商列表，支持搜索过滤模型名
  * 选择后自动切换 Agent 模型并持久化到会话
  */
-export function ModelPicker(): React.JSX.Element {
+export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const {
     activeSessionId,
@@ -144,13 +149,19 @@ export function ModelPicker(): React.JSX.Element {
 
   return (
     <div ref={pickerRef} className="relative flex items-center group">
-      <button
-        onClick={togglePicker}
-        className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
-      >
-        <span className="max-w-[120px] truncate">{activeModel}</span>
-        <ChevronDown size={11} />
-      </button>
+      {isReadonly ? (
+        <span className="inline-flex items-center text-[11px] text-blue-400/70 cursor-default">
+          <span className="max-w-[120px] truncate">{activeModel}</span>
+        </span>
+      ) : (
+        <button
+          onClick={togglePicker}
+          className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
+        >
+          <span className="max-w-[120px] truncate">{activeModel}</span>
+          <ChevronDown size={11} />
+        </button>
+      )}
 
       {/* 悬浮 tooltip：完整模型名（展开时不显示） */}
       {!pickerOpen && (
@@ -159,7 +170,7 @@ export function ModelPicker(): React.JSX.Element {
         </div>
       )}
 
-      {pickerOpen && (
+      {!isReadonly && pickerOpen && (
         <div className="absolute left-0 bottom-8 w-[320px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden flex flex-col">
           {/* 搜索框 */}
           <div className="px-2 py-2 border-b border-border-secondary">

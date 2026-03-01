@@ -161,7 +161,14 @@
     "sshAutoApprove": "SSH 自動承認",
     "sshAutoApproveDesc": "有効にすると、SSH exec コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。",
     "lanShare": "LAN 共有",
-    "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションにアクセスできます。"
+    "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションにアクセスできます。",
+    "shareMode": "共有モード",
+    "shareModeReadonly": "読み取り専用",
+    "shareModeChat": "チャット可",
+    "shareModeFull": "フルアクセス",
+    "shareModeReadonlyDesc": "メッセージの閲覧のみ、入力や操作は不可",
+    "shareModeChatDesc": "メッセージ送信は可能、モデルやツールの設定変更は不可",
+    "shareModeFullDesc": "すべての機能と設定にフルアクセス"
   },
 
   "sessionEdit": {

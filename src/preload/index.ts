@@ -31,7 +31,8 @@ import type {
   SkillAddParams,
   SkillUpdateParams,
   SshCredentialAddParams,
-  SshCredentialUpdateParams
+  SshCredentialUpdateParams,
+  ShareMode
 } from '../main/types'
 import type { ChatEvent } from '../main/frontend'
 
@@ -249,11 +250,13 @@ const api = {
   // ============ WebUI 分享 ============
   webui: {
     /** 切换指定 session 的分享状态 */
-    setShared: (params: { sessionId: string; shared: boolean }) =>
+    setShared: (params: { sessionId: string; shared: boolean; mode?: ShareMode }) =>
       ipcRenderer.invoke('webui:setShared', params),
     /** 查询单个 session 是否已分享 */
     isShared: (sessionId: string) => ipcRenderer.invoke('webui:isShared', sessionId),
-    /** 获取所有已分享的 session ID 列表 */
+    /** 获取指定 session 的分享模式 */
+    getShareMode: (sessionId: string) => ipcRenderer.invoke('webui:getShareMode', sessionId),
+    /** 获取所有已分享的 session 列表（含模式） */
     listShared: () => ipcRenderer.invoke('webui:listShared'),
     /** 获取 WebUI 服务器状态 */
     serverStatus: () => ipcRenderer.invoke('webui:serverStatus')

@@ -30,8 +30,8 @@ export interface VisibleItem {
 interface MessageRendererProps {
   item: VisibleItem
   lastAssistantTextId: string | null
-  onRollback: (messageId: string) => void
-  onRegenerate: (assistantMsgId: string) => void
+  onRollback?: (messageId: string) => void
+  onRegenerate?: (assistantMsgId: string) => void
 }
 
 /**
@@ -150,8 +150,8 @@ export function MessageRenderer({
       content={msg.content}
       metadata={msg.metadata}
       model={msg.model}
-      onRollback={msg.role === 'user' && msg.type === 'text' ? () => onRollback(msg.id) : undefined}
-      onRegenerate={msg.id === lastAssistantTextId ? () => onRegenerate(msg.id) : undefined}
+      onRollback={msg.role === 'user' && msg.type === 'text' && onRollback ? () => onRollback(msg.id) : undefined}
+      onRegenerate={msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined}
     />
   )
 }

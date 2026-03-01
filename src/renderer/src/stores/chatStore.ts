@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 
+/** 分享模式类型（与后端 ShareMode 对齐） */
+export type ShareMode = 'readonly' | 'chat' | 'full'
+
 /** 聊天消息类型 */
 export interface ChatMessage {
   id: string
@@ -99,6 +102,8 @@ interface ChatState {
   sessionResources: Record<string, SessionResourceInfo>
   /** 已开启 WebUI 分享的 session ID 集合 */
   sharedSessionIds: Set<string>
+  /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
+  shareMode: ShareMode | null
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -135,6 +140,7 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
+  setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Set<string>) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
   setSessionSsh: (
@@ -165,6 +171,13 @@ export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeT
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
+/** 当前模式是否允许对话（chat / full / null=本地） */
+export const selectCanChat = (s: ChatState): boolean => s.shareMode !== 'readonly'
+
+/** 当前模式是否允许编辑配置（full / null=本地） */
+export const selectCanEdit = (s: ChatState): boolean =>
+  s.shareMode === 'full' || s.shareMode === null
+
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
@@ -183,6 +196,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentMdLoaded: false,
   sessionResources: {},
   sharedSessionIds: new Set(),
+  shareMode: null,
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
@@ -302,6 +316,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
     })),
+  setShareMode: (mode) => set({ shareMode: mode }),
   setSharedSessionIds: (ids) => set({ sharedSessionIds: ids }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),

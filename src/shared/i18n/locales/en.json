@@ -161,7 +161,14 @@
     "sshAutoApprove": "SSH Auto-Approve",
     "sshAutoApproveDesc": "When enabled, SSH exec commands run automatically without per-command approval. Do not enable this on production or critical servers.",
     "lanShare": "LAN Share",
-    "lanShareDesc": "When enabled, others on the same network can access this session via browser."
+    "lanShareDesc": "When enabled, others on the same network can access this session via browser.",
+    "shareMode": "Share Mode",
+    "shareModeReadonly": "Read Only",
+    "shareModeChat": "Chat",
+    "shareModeFull": "Full Access",
+    "shareModeReadonlyDesc": "View messages only, no input or actions",
+    "shareModeChatDesc": "Can send messages, but cannot change model or tool settings",
+    "shareModeFullDesc": "Full access to all features and settings"
   },
 
   "sessionEdit": {

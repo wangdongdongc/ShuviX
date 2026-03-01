@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, ImagePlus, X } from 'lucide-react'
-import { useChatStore, selectIsStreaming, selectToolExecutions } from '../../stores/chatStore'
+import { useChatStore, selectIsStreaming, selectToolExecutions, selectCanEdit } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { ModelPicker } from './ModelPicker'
@@ -39,6 +39,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     removePendingImage
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
+  const canEdit = useChatStore(selectCanEdit)
   const { projectPath, agentMdLoaded } = useSessionMeta()
 
   // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
@@ -231,7 +232,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         <div className="relative flex items-end gap-2">
           {/* 左下角紧凑扩展位 */}
           <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
-            <ModelPicker />
+            <ModelPicker readonly={!canEdit} />
 
             {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
             {modelSupportsVision && (
@@ -277,8 +278,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               </span>
             )}
 
-            <ThinkingPicker />
-            <ToolPicker />
+            {canEdit && <ThinkingPicker />}
+            {canEdit && <ToolPicker />}
 
             {/* 项目指令文件加载状态 */}
             {projectPath && (

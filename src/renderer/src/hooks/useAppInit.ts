@@ -52,8 +52,8 @@ export function useAppInit(): void {
       if (sessions) {
         useChatStore.getState().setSessions(sessions)
         // 加载 WebUI 分享状态
-        const sharedIds = await window.api.webui.listShared()
-        useChatStore.getState().setSharedSessionIds(new Set(sharedIds))
+        const sharedList = await window.api.webui.listShared()
+        useChatStore.getState().setSharedSessionIds(new Set(sharedList.map((s) => s.sessionId)))
       }
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口

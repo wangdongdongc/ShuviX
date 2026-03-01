@@ -2,6 +2,8 @@ import { createLogger } from '../logger'
 
 const log = createLogger('WebUI')
 
+export type ShareMode = 'readonly' | 'chat' | 'full'
+
 /** WebUIServer 接口（避免直接 import 造成循环依赖） */
 interface WebUIServerRef {
   isRunning(): boolean
@@ -16,7 +18,7 @@ interface WebUIServerRef {
  * 管理哪些 session 已开启局域网分享，按需启停 HTTP 服务器
  */
 class WebUIService {
-  private sharedSessions = new Set<string>()
+  private sharedSessions = new Map<string, ShareMode>()
   private serverRef: WebUIServerRef | null = null
 
   /** 由 WebUIServer 初始化时调用，注册自身引用 */
@@ -25,10 +27,10 @@ class WebUIService {
   }
 
   /** 开启/关闭指定 session 的分享 */
-  setShared(sessionId: string, shared: boolean): void {
+  setShared(sessionId: string, shared: boolean, mode: ShareMode = 'readonly'): void {
     if (shared) {
-      this.sharedSessions.add(sessionId)
-      log.info(`开启分享: session=${sessionId}`)
+      this.sharedSessions.set(sessionId, mode)
+      log.info(`开启分享: session=${sessionId} mode=${mode}`)
     } else {
       this.sharedSessions.delete(sessionId)
       log.info(`关闭分享: session=${sessionId}`)
@@ -41,9 +43,17 @@ class WebUIService {
     return this.sharedSessions.has(sessionId)
   }
 
-  /** 获取所有已分享 session ID */
-  listShared(): string[] {
-    return Array.from(this.sharedSessions)
+  /** 获取分享模式，未分享返回 null */
+  getShareMode(sessionId: string): ShareMode | null {
+    return this.sharedSessions.get(sessionId) ?? null
+  }
+
+  /** 获取所有已分享 session */
+  listShared(): Array<{ sessionId: string; mode: ShareMode }> {
+    return Array.from(this.sharedSessions.entries()).map(([sessionId, mode]) => ({
+      sessionId,
+      mode
+    }))
   }
 
   /** 获取服务器状态 */

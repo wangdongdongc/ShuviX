@@ -38,7 +38,8 @@ import type {
   SkillUpdateParams,
   SshCredential,
   SshCredentialAddParams,
-  SshCredentialUpdateParams
+  SshCredentialUpdateParams,
+  ShareMode
 } from '../main/types'
 
 declare global {
@@ -415,11 +416,14 @@ declare global {
       setShared: (params: {
         sessionId: string
         shared: boolean
+        mode?: ShareMode
       }) => Promise<{ success: boolean }>
       /** 查询单个 session 是否已分享 */
       isShared: (sessionId: string) => Promise<boolean>
-      /** 获取所有已分享的 session ID 列表 */
-      listShared: () => Promise<string[]>
+      /** 获取指定 session 的分享模式 */
+      getShareMode: (sessionId: string) => Promise<ShareMode | null>
+      /** 获取所有已分享的 session 列表（含模式） */
+      listShared: () => Promise<Array<{ sessionId: string; mode: ShareMode }>>
       /** 获取 WebUI 服务器状态 */
       serverStatus: () => Promise<{
         running: boolean

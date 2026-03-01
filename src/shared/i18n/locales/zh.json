@@ -161,7 +161,14 @@
     "sshAutoApprove": "SSH 免审批",
     "sshAutoApproveDesc": "开启后，SSH exec 命令将自动执行，不再逐条弹窗审批。请勿在生产环境或重要服务器上开启此功能。",
     "lanShare": "局域网分享",
-    "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。"
+    "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。",
+    "shareMode": "分享模式",
+    "shareModeReadonly": "只读",
+    "shareModeChat": "可对话",
+    "shareModeFull": "可编辑",
+    "shareModeReadonlyDesc": "仅查看消息记录，无法发送消息或操作",
+    "shareModeChatDesc": "可发送消息对话，但不能修改模型和工具配置",
+    "shareModeFullDesc": "完整功能，可修改所有配置"
   },
 
   "sessionEdit": {

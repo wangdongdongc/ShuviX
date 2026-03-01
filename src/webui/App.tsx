@@ -28,6 +28,10 @@ export default function WebApp(): React.JSX.Element {
       useSettingsStore.getState().setProviders(allProviders)
       useSettingsStore.getState().setAvailableModels(availableModels)
 
+      // 获取分享模式
+      const shareModeResult = await window.api.webui.getShareMode(SESSION_ID)
+      useChatStore.getState().setShareMode(shareModeResult)
+
       // 获取会话信息并设为活跃
       const sessionInfo = await window.api.session.getById(SESSION_ID)
       if (sessionInfo) {

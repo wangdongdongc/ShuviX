@@ -8,6 +8,8 @@ import {
   selectStreamingThinking,
   selectStreamingImages,
   selectIsStreaming,
+  selectCanChat,
+  selectCanEdit,
   type ChatMessage
 } from '../../stores/chatStore'
 import { useDialogClose } from '../../hooks/useDialogClose'
@@ -158,6 +160,8 @@ export function ChatView(): React.JSX.Element {
   const streamingThinking = useChatStore(selectStreamingThinking)
   const streamingImages = useChatStore(selectStreamingImages)
   const isStreaming = useChatStore(selectIsStreaming)
+  const canChat = useChatStore(selectCanChat)
+  const canEdit = useChatStore(selectCanEdit)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const atBottomRef = useRef(true)
   const scrollRafRef = useRef<number>(0)
@@ -241,11 +245,11 @@ export function ChatView(): React.JSX.Element {
       <MessageRenderer
         item={item}
         lastAssistantTextId={lastAssistantTextId}
-        onRollback={handleRollback}
-        onRegenerate={handleRegenerate}
+        onRollback={canEdit ? handleRollback : undefined}
+        onRegenerate={canEdit ? handleRegenerate : undefined}
       />
     ),
-    [messages, lastAssistantTextId, handleRollback, handleRegenerate]
+    [messages, lastAssistantTextId, handleRollback, handleRegenerate, canEdit]
   )
 
   return (
@@ -342,14 +346,16 @@ export function ChatView(): React.JSX.Element {
               onCancel={cancelRollback}
             />
           )}
-          {/* 用户操作浮动面板（ask 提问 / bash 审批 / SSH 凭据） */}
-          <UserActionPanel
-            onUserInput={handleUserInput}
-            onApproval={handleToolApproval}
-            onSshCredentials={handleSshCredentials}
-          />
-          {/* 输入区 */}
-          <InputArea onUserActionOverride={handleUserActionOverride} />
+          {/* 用户操作浮动面板（ask 提问 / bash 审批 / SSH 凭据）— readonly 隐藏 */}
+          {canChat && (
+            <UserActionPanel
+              onUserInput={handleUserInput}
+              onApproval={handleToolApproval}
+              onSshCredentials={handleSshCredentials}
+            />
+          )}
+          {/* 输入区 — readonly 隐藏 */}
+          {canChat && <InputArea onUserActionOverride={handleUserActionOverride} />}
         </>
       )}
 
@@ -409,17 +415,18 @@ function SessionConfigDialog({
   }, [session?.settings])
   const [sshAutoApprove, setSshAutoApprove] = useState(sessionSettings.sshAutoApprove === true)
 
-  // LAN 分享状态
-  const [lanShare, setLanShare] = useState(false)
+  // LAN 分享状态（null = 未分享）
+  type LocalShareMode = 'readonly' | 'chat' | 'full'
+  const [lanShareMode, setLanShareMode] = useState<LocalShareMode | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    window.api.webui.isShared(sessionId).then(setLanShare)
+    window.api.webui.getShareMode(sessionId).then(setLanShareMode)
   }, [sessionId])
 
   useEffect(() => {
-    if (lanShare) {
+    if (lanShareMode) {
       window.api.webui.serverStatus().then((status) => {
         if (status.running && status.urls && status.urls.length > 0) {
           setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
@@ -428,7 +435,7 @@ function SessionConfigDialog({
     } else {
       setShareUrl(null)
     }
-  }, [lanShare, sessionId])
+  }, [lanShareMode, sessionId])
 
   // Escape 关闭
   useEffect(() => {
@@ -467,12 +474,11 @@ function SessionConfigDialog({
     onClose()
   }
 
-  /** 切换 LAN 分享 */
-  const handleToggleLanShare = async (): Promise<void> => {
-    const next = !lanShare
-    setLanShare(next)
-    await window.api.webui.setShared({ sessionId, shared: next })
-    if (next) {
+  /** 切换 LAN 分享模式 */
+  const handleSetShareMode = async (mode: LocalShareMode | null): Promise<void> => {
+    setLanShareMode(mode)
+    await window.api.webui.setShared({ sessionId, shared: mode !== null, mode: mode ?? undefined })
+    if (mode) {
       const status = await window.api.webui.serverStatus()
       if (status.running && status.urls && status.urls.length > 0) {
         setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
@@ -482,7 +488,7 @@ function SessionConfigDialog({
     }
     // 更新 chatStore 中的分享列表
     const shared = await window.api.webui.listShared()
-    useChatStore.getState().setSharedSessionIds(new Set(shared))
+    useChatStore.getState().setSharedSessionIds(new Set(shared.map((s) => s.sessionId)))
   }
 
   /** 复制分享链接 */
@@ -579,20 +585,50 @@ function SessionConfigDialog({
                 {t('sessionConfig.lanShare')}
               </span>
               <button
-                onClick={() => void handleToggleLanShare()}
+                onClick={() => void handleSetShareMode(lanShareMode ? null : 'readonly')}
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                  lanShare ? 'bg-accent' : 'bg-bg-hover'
+                  lanShareMode ? 'bg-accent' : 'bg-bg-hover'
                 }`}
               >
                 <span
                   className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                    lanShare ? 'left-[16px]' : 'left-[2px]'
+                    lanShareMode ? 'left-[16px]' : 'left-[2px]'
                   }`}
                 />
               </button>
             </div>
             <p className="text-[10px] text-text-tertiary mt-1">{t('sessionConfig.lanShareDesc')}</p>
-            {lanShare && shareUrl && (
+
+            {/* 分享模式选择（仅在开启分享时显示） */}
+            {lanShareMode && (
+              <div className="mt-2 space-y-1.5">
+                <span className="text-[10px] text-text-tertiary">{t('sessionConfig.shareMode')}</span>
+                <div className="flex gap-1">
+                  {(['readonly', 'chat', 'full'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => void handleSetShareMode(mode)}
+                      className={`flex-1 px-2 py-1.5 rounded-md text-[10px] font-medium transition-colors border ${
+                        lanShareMode === mode
+                          ? 'bg-accent/15 text-accent border-accent/30'
+                          : 'bg-bg-tertiary text-text-tertiary border-border-primary hover:bg-bg-hover hover:text-text-secondary'
+                      }`}
+                    >
+                      {t(`sessionConfig.shareMode${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[9px] text-text-tertiary leading-relaxed">
+                  {lanShareMode === 'readonly'
+                    ? t('sessionConfig.shareModeReadonlyDesc')
+                    : lanShareMode === 'chat'
+                      ? t('sessionConfig.shareModeChatDesc')
+                      : t('sessionConfig.shareModeFullDesc')}
+                </p>
+              </div>
+            )}
+
+            {lanShareMode && shareUrl && (
               <div className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
                 <Globe size={11} className="text-accent shrink-0" />
                 <span className="text-[10px] text-text-secondary truncate flex-1">{shareUrl}</span>

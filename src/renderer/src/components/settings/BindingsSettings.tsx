@@ -30,7 +30,7 @@ export function BindingsSettings(): React.JSX.Element {
       window.api.webui.listShared(),
       window.api.session.list()
     ])
-    setSharedIds(new Set(shared))
+    setSharedIds(new Set(shared.map((s) => s.sessionId)))
     setSessions(allSessions)
   }, [])
 
@@ -39,7 +39,7 @@ export function BindingsSettings(): React.JSX.Element {
     Promise.all([window.api.webui.listShared(), window.api.session.list()]).then(
       ([shared, allSessions]) => {
         if (!cancelled) {
-          setSharedIds(new Set(shared))
+          setSharedIds(new Set(shared.map((s) => s.sessionId)))
           setSessions(allSessions)
         }
       }
