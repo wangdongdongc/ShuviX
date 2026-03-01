@@ -402,6 +402,23 @@ declare global {
       disconnect: (id: string) => Promise<{ success: boolean }>
       getTools: (id: string) => Promise<McpToolInfo[]>
     }
+    webui: {
+      /** 切换指定 session 的分享状态 */
+      setShared: (params: {
+        sessionId: string
+        shared: boolean
+      }) => Promise<{ success: boolean }>
+      /** 查询单个 session 是否已分享 */
+      isShared: (sessionId: string) => Promise<boolean>
+      /** 获取所有已分享的 session ID 列表 */
+      listShared: () => Promise<string[]>
+      /** 获取 WebUI 服务器状态 */
+      serverStatus: () => Promise<{
+        running: boolean
+        port?: number
+        urls?: string[]
+      }>
+    }
     skill: {
       list: () => Promise<Skill[]>
       add: (params: SkillAddParams) => Promise<Skill>

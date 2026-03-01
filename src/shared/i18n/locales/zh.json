@@ -16,7 +16,9 @@
     "search": "搜索",
     "confirm": "确认",
     "custom": "自定义",
-    "clickToEdit": "点击编辑"
+    "clickToEdit": "点击编辑",
+    "copy": "复制",
+    "copied": "已复制"
   },
 
   "sidebar": {
@@ -157,7 +159,9 @@
     "title": "会话配置",
     "sessionTitle": "会话标题",
     "sshAutoApprove": "SSH 免审批",
-    "sshAutoApproveDesc": "开启后，SSH exec 命令将自动执行，不再逐条弹窗审批。请勿在生产环境或重要服务器上开启此功能。"
+    "sshAutoApproveDesc": "开启后，SSH exec 命令将自动执行，不再逐条弹窗审批。请勿在生产环境或重要服务器上开启此功能。",
+    "lanShare": "局域网分享",
+    "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。"
   },
 
   "sessionEdit": {
@@ -371,6 +375,7 @@
     "mcpNameRequired": "名称不能为空",
     "mcpCommandRequired": "启动命令不能为空",
     "mcpUrlRequired": "服务地址不能为空",
+    "tabBindings": "会话绑定",
     "tabSkills": "Skills",
     "skillTitle": "Skill 管理",
     "skillDesc": "管理已安装的 Skills。Skills 是可复用的指令集，教 AI 如何完成特定任务。",
@@ -432,5 +437,23 @@
     "shuvixProjectHint": "查看或修改当前项目的配置（如沙箱、Docker 等）",
     "shuvixSettingHint": "查看或修改应用的全局设置（如语言、主题等）",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力"
+  },
+
+  "bindings": {
+    "title": "会话绑定",
+    "description": "管理各前端类型与会话的绑定关系。开启分享后，其他设备可通过对应渠道访问已绑定的会话。",
+    "webui": "WebUI",
+    "telegram": "Telegram Bot",
+    "websocket": "WebSocket API",
+    "comingSoon": "即将推出",
+    "running": "运行中",
+    "stopped": "已停止",
+    "sessionCount": "{{count}} 个会话",
+    "noSessions": "暂无绑定会话",
+    "noSessionsHint": "在对话页面的会话配置中开启「局域网分享」即可将会话绑定到 WebUI。",
+    "serverStatus": "服务状态",
+    "port": "端口",
+    "boundSessions": "已绑定会话",
+    "removeShare": "取消分享"
   }
 }

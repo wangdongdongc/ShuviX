@@ -97,6 +97,8 @@ interface ChatState {
   agentMdLoaded: boolean
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
+  /** 已开启 WebUI 分享的 session ID 集合 */
+  sharedSessionIds: Set<string>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -133,6 +135,7 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
+  setSharedSessionIds: (ids: Set<string>) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
   setSessionSsh: (
     sessionId: string,
@@ -179,6 +182,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   projectPath: null,
   agentMdLoaded: false,
   sessionResources: {},
+  sharedSessionIds: new Set(),
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
@@ -298,6 +302,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
     })),
+  setSharedSessionIds: (ids) => set({ sharedSessionIds: ids }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),

@@ -40,7 +40,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
-        run: npx electron-vite build && npx electron-builder --${{ matrix.platform }} --publish never
+        run: npx electron-vite build && npm run build:webui && npx electron-builder --${{ matrix.platform }} --publish never
 
       # Windows 构建多架构时会额外生成一个合并安装包（无 arch 后缀，体积翻倍），删除它
       - name: Remove universal Windows installer
@@ -101,6 +101,7 @@ jobs:
 
               npm ci
               npx electron-vite build
+              npm run build:webui
               npx electron-builder --linux --publish never
             '
           # Docker 内创建的文件属主为 root，修正权限以便后续 upload

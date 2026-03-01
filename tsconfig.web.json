@@ -4,6 +4,9 @@
     "src/renderer/src/env.d.ts",
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.tsx",
+    "src/webui/env.d.ts",
+    "src/webui/**/*",
+    "src/webui/**/*.tsx",
     "src/preload/*.d.ts",
     "src/main/types/**/*.ts",
     "src/shared/**/*"

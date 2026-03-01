@@ -238,6 +238,19 @@ const api = {
     getTools: (id: string) => ipcRenderer.invoke('mcp:getTools', id)
   },
 
+  // ============ WebUI 分享 ============
+  webui: {
+    /** 切换指定 session 的分享状态 */
+    setShared: (params: { sessionId: string; shared: boolean }) =>
+      ipcRenderer.invoke('webui:setShared', params),
+    /** 查询单个 session 是否已分享 */
+    isShared: (sessionId: string) => ipcRenderer.invoke('webui:isShared', sessionId),
+    /** 获取所有已分享的 session ID 列表 */
+    listShared: () => ipcRenderer.invoke('webui:listShared'),
+    /** 获取 WebUI 服务器状态 */
+    serverStatus: () => ipcRenderer.invoke('webui:serverStatus')
+  },
+
   // ============ Skill 管理 ============
   skill: {
     /** 获取所有 Skill */

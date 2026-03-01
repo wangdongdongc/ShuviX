@@ -16,7 +16,9 @@
     "search": "検索",
     "confirm": "確認",
     "custom": "カスタム",
-    "clickToEdit": "クリックして編集"
+    "clickToEdit": "クリックして編集",
+    "copy": "コピー",
+    "copied": "コピー済"
   },
 
   "sidebar": {
@@ -157,7 +159,9 @@
     "title": "セッション設定",
     "sessionTitle": "セッションタイトル",
     "sshAutoApprove": "SSH 自動承認",
-    "sshAutoApproveDesc": "有効にすると、SSH exec コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。"
+    "sshAutoApproveDesc": "有効にすると、SSH exec コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。",
+    "lanShare": "LAN 共有",
+    "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションにアクセスできます。"
   },
 
   "sessionEdit": {
@@ -371,6 +375,7 @@
     "mcpNameRequired": "名前は必須です",
     "mcpCommandRequired": "コマンドは必須です",
     "mcpUrlRequired": "サーバーURLは必須です",
+    "tabBindings": "セッション接続",
     "tabSkills": "Skills",
     "skillTitle": "Skill 管理",
     "skillDesc": "インストール済みの Skills を管理します。Skills は AI に特定のタスクの完了方法を教える再利用可能な指示セットです。",
@@ -432,5 +437,23 @@
     "shuvixProjectHint": "現在のプロジェクト設定を表示・変更（サンドボックス、Docker など）",
     "shuvixSettingHint": "アプリのグローバル設定を表示・変更（言語、テーマなど）",
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与"
+  },
+
+  "bindings": {
+    "title": "セッション接続",
+    "description": "フロントエンドタイプとセッションの接続を管理します。共有を有効にすると、他のデバイスが対応するチャネルからセッションにアクセスできます。",
+    "webui": "WebUI",
+    "telegram": "Telegram Bot",
+    "websocket": "WebSocket API",
+    "comingSoon": "近日公開",
+    "running": "実行中",
+    "stopped": "停止中",
+    "sessionCount": "{{count}} セッション",
+    "noSessions": "接続済みセッションなし",
+    "noSessionsHint": "セッション設定で「LAN 共有」を有効にすると、WebUI に接続されます。",
+    "serverStatus": "サーバー状態",
+    "port": "ポート",
+    "boundSessions": "接続済みセッション",
+    "removeShare": "共有を解除"
   }
 }

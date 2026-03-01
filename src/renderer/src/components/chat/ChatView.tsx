@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Folder, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Copy, Folder, Globe, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
 import {
   useChatStore,
   selectStreamingContent,
@@ -401,6 +401,27 @@ function SessionConfigDialog({
   }, [session?.settings])
   const [sshAutoApprove, setSshAutoApprove] = useState(sessionSettings.sshAutoApprove === true)
 
+  // LAN 分享状态
+  const [lanShare, setLanShare] = useState(false)
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    window.api.webui.isShared(sessionId).then(setLanShare)
+  }, [sessionId])
+
+  useEffect(() => {
+    if (lanShare) {
+      window.api.webui.serverStatus().then((status) => {
+        if (status.running && status.urls && status.urls.length > 0) {
+          setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
+        }
+      })
+    } else {
+      setShareUrl(null)
+    }
+  }, [lanShare, sessionId])
+
   // Escape 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -436,6 +457,32 @@ function SessionConfigDialog({
     await window.api.session.delete(sessionId)
     useChatStore.getState().removeSession(sessionId)
     onClose()
+  }
+
+  /** 切换 LAN 分享 */
+  const handleToggleLanShare = async (): Promise<void> => {
+    const next = !lanShare
+    setLanShare(next)
+    await window.api.webui.setShared({ sessionId, shared: next })
+    if (next) {
+      const status = await window.api.webui.serverStatus()
+      if (status.running && status.urls && status.urls.length > 0) {
+        setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
+      }
+    } else {
+      setShareUrl(null)
+    }
+    // 更新 chatStore 中的分享列表
+    const shared = await window.api.webui.listShared()
+    useChatStore.getState().setSharedSessionIds(new Set(shared))
+  }
+
+  /** 复制分享链接 */
+  const handleCopyShareUrl = (): void => {
+    if (!shareUrl) return
+    navigator.clipboard.writeText(shareUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   /** 切换 SSH 免审批 */
@@ -513,6 +560,41 @@ function SessionConfigDialog({
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
                   {t('chat.sshAutoApproveWarning')}
                 </p>
+              </div>
+            )}
+          </div>
+
+          {/* LAN 分享 */}
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-secondary">
+                {t('sessionConfig.lanShare')}
+              </span>
+              <button
+                onClick={() => void handleToggleLanShare()}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  lanShare ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    lanShare ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-1">{t('sessionConfig.lanShareDesc')}</p>
+            {lanShare && shareUrl && (
+              <div className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
+                <Globe size={11} className="text-accent shrink-0" />
+                <span className="text-[10px] text-text-secondary truncate flex-1">{shareUrl}</span>
+                <button
+                  onClick={handleCopyShareUrl}
+                  className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
+                  title={copied ? t('common.copied') : t('common.copy')}
+                >
+                  <Copy size={11} />
+                </button>
               </div>
             )}
           </div>

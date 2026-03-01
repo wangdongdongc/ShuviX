@@ -16,7 +16,9 @@
     "search": "Search",
     "confirm": "Confirm",
     "custom": "Custom",
-    "clickToEdit": "Click to edit"
+    "clickToEdit": "Click to edit",
+    "copy": "Copy",
+    "copied": "Copied"
   },
 
   "sidebar": {
@@ -157,7 +159,9 @@
     "title": "Session Config",
     "sessionTitle": "Session Title",
     "sshAutoApprove": "SSH Auto-Approve",
-    "sshAutoApproveDesc": "When enabled, SSH exec commands run automatically without per-command approval. Do not enable this on production or critical servers."
+    "sshAutoApproveDesc": "When enabled, SSH exec commands run automatically without per-command approval. Do not enable this on production or critical servers.",
+    "lanShare": "LAN Share",
+    "lanShareDesc": "When enabled, others on the same network can access this session via browser."
   },
 
   "sessionEdit": {
@@ -371,6 +375,7 @@
     "mcpNameRequired": "Name is required",
     "mcpCommandRequired": "Command is required",
     "mcpUrlRequired": "Server URL is required",
+    "tabBindings": "Bindings",
     "tabSkills": "Skills",
     "skillTitle": "Skill Management",
     "skillDesc": "Manage installed Skills. Skills are reusable instruction sets that teach AI how to complete specific tasks.",
@@ -432,5 +437,23 @@
     "shuvixProjectHint": "View or modify the current project config (sandbox, Docker, etc.)",
     "shuvixSettingHint": "View or modify global app settings (language, theme, etc.)",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities"
+  },
+
+  "bindings": {
+    "title": "Session Bindings",
+    "description": "Manage bindings between frontend types and sessions. Once shared, other devices can access bound sessions via the corresponding channel.",
+    "webui": "WebUI",
+    "telegram": "Telegram Bot",
+    "websocket": "WebSocket API",
+    "comingSoon": "Coming soon",
+    "running": "Running",
+    "stopped": "Stopped",
+    "sessionCount": "{{count}} session(s)",
+    "noSessions": "No bound sessions",
+    "noSessionsHint": "Enable \"LAN Share\" in a session's config to bind it to WebUI.",
+    "serverStatus": "Server Status",
+    "port": "Port",
+    "boundSessions": "Bound Sessions",
+    "removeShare": "Remove share"
   }
 }

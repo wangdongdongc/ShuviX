@@ -1,0 +1,12 @@
+@import '../../renderer/src/assets/main.css';
+
+/* 告知 Tailwind v4 扫描 renderer 组件中使用的 class */
+@source "../../renderer/src/**/*.tsx";
+@source "../../renderer/src/**/*.ts";
+
+/* WebUI 专用样式覆盖 */
+/* 移除 titlebar-drag 行为（浏览器中不需要） */
+.titlebar-drag {
+  -webkit-app-region: unset !important;
+  app-region: unset !important;
+}
