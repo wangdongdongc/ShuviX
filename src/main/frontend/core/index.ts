@@ -24,3 +24,7 @@ export {
   chatFrontendRegistry,
   INTERACTION_TIMEOUT_MS
 } from './ChatFrontendRegistry'
+
+export type { ChatGateway } from './ChatGateway'
+
+export { DefaultChatGateway, chatGateway } from './DefaultChatGateway'

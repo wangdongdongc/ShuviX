@@ -1,10 +1,8 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
-import { messageService } from '../services/messageService'
 import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
-import { sshManager } from '../services/sshManager'
-import { chatFrontendRegistry } from '../frontend'
+import { chatGateway } from '../frontend'
 import type {
   Session,
   SessionUpdateModelConfigParams,
@@ -129,56 +127,21 @@ export function registerSessionHandlers(): void {
 
   /** 查询指定 session 的 Docker 容器状态 */
   ipcMain.handle('docker:sessionStatus', (_event, sessionId: string) => {
-    return dockerManager.getContainerInfo(sessionId)
+    return chatGateway.getDockerStatus(sessionId)
   })
 
   /** 查询指定 session 的 SSH 连接状态 */
   ipcMain.handle('ssh:sessionStatus', (_event, sessionId: string) => {
-    return sshManager.getConnectionInfo(sessionId)
+    return chatGateway.getSshStatus(sessionId)
   })
 
   /** 手动销毁指定 session 的 Docker 容器 */
   ipcMain.handle('docker:destroySession', async (_event, sessionId: string) => {
-    const containerId = await dockerManager.destroyContainer(sessionId)
-    if (containerId) {
-      const msg = messageService.add({
-        sessionId,
-        role: 'system_notify',
-        type: 'docker_event',
-        content: 'container_destroyed',
-        metadata: JSON.stringify({ containerId: containerId.slice(0, 12), reason: 'manual' })
-      })
-      chatFrontendRegistry.broadcast({
-        type: 'docker_event',
-        sessionId,
-        messageId: msg.id
-      })
-    }
-    return { success: !!containerId }
+    return chatGateway.destroyDocker(sessionId)
   })
 
   /** 手动断开指定 session 的 SSH 连接 */
   ipcMain.handle('ssh:disconnectSession', async (_event, sessionId: string) => {
-    const info = sshManager.getConnectionInfo(sessionId)
-    if (!info) return { success: false }
-    await sshManager.disconnect(sessionId)
-    const msg = messageService.add({
-      sessionId,
-      role: 'system_notify',
-      type: 'ssh_event',
-      content: 'ssh_disconnected',
-      metadata: JSON.stringify({
-        host: info.host,
-        port: String(info.port),
-        username: info.username,
-        reason: 'manual'
-      })
-    })
-    chatFrontendRegistry.broadcast({
-      type: 'ssh_event',
-      sessionId,
-      messageId: msg.id
-    })
-    return { success: true }
+    return chatGateway.disconnectSsh(sessionId)
   })
 }

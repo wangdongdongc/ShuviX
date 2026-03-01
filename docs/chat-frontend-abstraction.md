@@ -32,78 +32,138 @@ src/main/frontend/
 
 ### 字段重命名（消除万能 `data` 歧义）
 
-| 旧字段 (`AgentStreamEvent`) | 新字段 (`ChatEvent`) | 出现于 |
-|--------|--------|--------|
-| `data` | `delta` | `text_delta`, `thinking_delta` |
-| `data` | `message` | `agent_end` |
-| `data` | `messageId` | `tool_start`, `tool_end`, `docker_event`, `ssh_event` |
-| `data` | `image` | `image_data` |
-| `toolResult` | `result` | `tool_end` |
-| `toolIsError` | `isError` | `tool_end` |
-| `userInputPayload` | `payload` | `user_input_request` |
+| 旧字段 (`AgentStreamEvent`) | 新字段 (`ChatEvent`) | 出现于                                                |
+| --------------------------- | -------------------- | ----------------------------------------------------- |
+| `data`                      | `delta`              | `text_delta`, `thinking_delta`                        |
+| `data`                      | `message`            | `agent_end`                                           |
+| `data`                      | `messageId`          | `tool_start`, `tool_end`, `docker_event`, `ssh_event` |
+| `data`                      | `image`              | `image_data`                                          |
+| `toolResult`                | `result`             | `tool_end`                                            |
+| `toolIsError`               | `isError`            | `tool_end`                                            |
+| `userInputPayload`          | `payload`            | `user_input_request`                                  |
 
 ### 类型定义
 
 ```typescript
 // core/types.ts — 零依赖
 
-interface ChatEventBase { sessionId: string }
+interface ChatEventBase {
+  sessionId: string
+}
 
 // 流式生成
-export interface ChatAgentStartEvent extends ChatEventBase { type: 'agent_start' }
-export interface ChatTextDeltaEvent extends ChatEventBase { type: 'text_delta'; delta: string }
-export interface ChatThinkingDeltaEvent extends ChatEventBase { type: 'thinking_delta'; delta: string }
-export interface ChatTextEndEvent extends ChatEventBase { type: 'text_end' }
+export interface ChatAgentStartEvent extends ChatEventBase {
+  type: 'agent_start'
+}
+export interface ChatTextDeltaEvent extends ChatEventBase {
+  type: 'text_delta'
+  delta: string
+}
+export interface ChatThinkingDeltaEvent extends ChatEventBase {
+  type: 'thinking_delta'
+  delta: string
+}
+export interface ChatTextEndEvent extends ChatEventBase {
+  type: 'text_end'
+}
 export interface ChatAgentEndEvent extends ChatEventBase {
   type: 'agent_end'
-  message?: string       // 持久化的 assistant 消息 (JSON string)
+  message?: string // 持久化的 assistant 消息 (JSON string)
   usage?: ChatTokenUsage
 }
 
 // 工具执行
 export interface ChatToolStartEvent extends ChatEventBase {
   type: 'tool_start'
-  toolCallId: string; toolName: string; toolArgs?: Record<string, unknown>
-  messageId?: string; turnIndex?: number
-  approvalRequired?: boolean; userInputRequired?: boolean; sshCredentialRequired?: boolean
+  toolCallId: string
+  toolName: string
+  toolArgs?: Record<string, unknown>
+  messageId?: string
+  turnIndex?: number
+  approvalRequired?: boolean
+  userInputRequired?: boolean
+  sshCredentialRequired?: boolean
 }
 export interface ChatToolEndEvent extends ChatEventBase {
   type: 'tool_end'
-  toolCallId: string; toolName: string
-  result?: string; isError?: boolean; messageId?: string
+  toolCallId: string
+  toolName: string
+  result?: string
+  isError?: boolean
+  messageId?: string
 }
 
 // 交互请求
 export interface ChatApprovalRequestEvent extends ChatEventBase {
   type: 'tool_approval_request'
-  toolCallId: string; toolName: string; toolArgs?: Record<string, unknown>
+  toolCallId: string
+  toolName: string
+  toolArgs?: Record<string, unknown>
 }
 export interface ChatInputRequestEvent extends ChatEventBase {
   type: 'user_input_request'
-  toolCallId: string; toolName: string
-  payload: { question: string; options: Array<{ label: string; description: string }>; allowMultiple: boolean }
+  toolCallId: string
+  toolName: string
+  payload: {
+    question: string
+    options: Array<{ label: string; description: string }>
+    allowMultiple: boolean
+  }
 }
 export interface ChatCredentialRequestEvent extends ChatEventBase {
   type: 'ssh_credential_request'
-  toolCallId: string; toolName: string
+  toolCallId: string
+  toolName: string
 }
 
 // 媒体 / 资源 / 错误
-export interface ChatImageDataEvent extends ChatEventBase { type: 'image_data'; image: string }
-export interface ChatDockerEvent extends ChatEventBase { type: 'docker_event'; messageId: string }
-export interface ChatSshEvent extends ChatEventBase { type: 'ssh_event'; messageId: string }
-export interface ChatErrorEvent extends ChatEventBase { type: 'error'; error: string }
+export interface ChatImageDataEvent extends ChatEventBase {
+  type: 'image_data'
+  image: string
+}
+export interface ChatDockerEvent extends ChatEventBase {
+  type: 'docker_event'
+  messageId: string
+}
+export interface ChatSshEvent extends ChatEventBase {
+  type: 'ssh_event'
+  messageId: string
+}
+export interface ChatErrorEvent extends ChatEventBase {
+  type: 'error'
+  error: string
+}
 
 // 联合类型
-export type ChatEvent = ChatAgentStartEvent | ChatTextDeltaEvent | ChatThinkingDeltaEvent
-  | ChatTextEndEvent | ChatAgentEndEvent | ChatToolStartEvent | ChatToolEndEvent
-  | ChatApprovalRequestEvent | ChatInputRequestEvent | ChatCredentialRequestEvent
-  | ChatImageDataEvent | ChatDockerEvent | ChatSshEvent | ChatErrorEvent
+export type ChatEvent =
+  | ChatAgentStartEvent
+  | ChatTextDeltaEvent
+  | ChatThinkingDeltaEvent
+  | ChatTextEndEvent
+  | ChatAgentEndEvent
+  | ChatToolStartEvent
+  | ChatToolEndEvent
+  | ChatApprovalRequestEvent
+  | ChatInputRequestEvent
+  | ChatCredentialRequestEvent
+  | ChatImageDataEvent
+  | ChatDockerEvent
+  | ChatSshEvent
+  | ChatErrorEvent
 
 // Token 用量
 export interface ChatTokenUsage {
-  input: number; output: number; cacheRead: number; total: number
-  details: Array<{ input: number; output: number; cacheRead: number; total: number; stopReason: string }>
+  input: number
+  output: number
+  cacheRead: number
+  total: number
+  details: Array<{
+    input: number
+    output: number
+    cacheRead: number
+    total: number
+    stopReason: string
+  }>
 }
 ```
 
@@ -111,10 +171,10 @@ export interface ChatTokenUsage {
 
 ```typescript
 export interface ChatFrontendCapabilities {
-  streaming?: boolean       // text_delta / thinking_delta / image_data
-  toolApproval?: boolean    // tool_approval_request
-  userInput?: boolean       // user_input_request
-  sshCredentials?: boolean  // ssh_credential_request
+  streaming?: boolean // text_delta / thinking_delta / image_data
+  toolApproval?: boolean // tool_approval_request
+  userInput?: boolean // user_input_request
+  sshCredentials?: boolean // ssh_credential_request
 }
 
 export interface ChatFrontend {
@@ -136,28 +196,28 @@ export class ChatFrontendRegistry {
   /** 会话级额外绑定：sessionId → (frontendId → ChatFrontend) */
   private sessionBindings = new Map<string, Map<string, ChatFrontend>>()
 
-  registerDefault(frontend: ChatFrontend): void    // 注册默认前端
-  bind(sessionId: string, frontend: ChatFrontend): void  // 绑定额外前端
-  unbind(sessionId: string, frontendId: string): void     // 解除绑定
-  unregister(frontendId: string): void             // 注销前端
-  getFrontends(sessionId: string): ChatFrontend[]  // 获取生效前端
+  registerDefault(frontend: ChatFrontend): void // 注册默认前端
+  bind(sessionId: string, frontend: ChatFrontend): void // 绑定额外前端
+  unbind(sessionId: string, frontendId: string): void // 解除绑定
+  unregister(frontendId: string): void // 注销前端
+  getFrontends(sessionId: string): ChatFrontend[] // 获取生效前端
   hasCapability(sessionId: string, cap: keyof ChatFrontendCapabilities): boolean
-  broadcast(event: ChatEvent): void                // 能力感知广播
+  broadcast(event: ChatEvent): void // 能力感知广播
 }
 
 export const chatFrontendRegistry = new ChatFrontendRegistry()
-export const INTERACTION_TIMEOUT_MS = 5 * 60 * 1000  // 交互请求超时 5 分钟
+export const INTERACTION_TIMEOUT_MS = 5 * 60 * 1000 // 交互请求超时 5 分钟
 ```
 
 ### 广播路由规则
 
-| 事件类型 | 发送给 |
-|----------|--------|
-| `text_delta`, `thinking_delta`, `image_data` | 仅 `streaming: true` 的前端 |
-| `tool_approval_request` | 仅 `toolApproval: true` 的前端 |
-| `user_input_request` | 仅 `userInput: true` 的前端 |
-| `ssh_credential_request` | 仅 `sshCredentials: true` 的前端 |
-| 其他所有事件 | 所有绑定前端 |
+| 事件类型                                     | 发送给                           |
+| -------------------------------------------- | -------------------------------- |
+| `text_delta`, `thinking_delta`, `image_data` | 仅 `streaming: true` 的前端      |
+| `tool_approval_request`                      | 仅 `toolApproval: true` 的前端   |
+| `user_input_request`                         | 仅 `userInput: true` 的前端      |
+| `ssh_credential_request`                     | 仅 `sshCredentials: true` 的前端 |
+| 其他所有事件                                 | 所有绑定前端                     |
 
 `broadcast()` 同时检查 `isAlive()`，自动清理已断开的前端。
 
@@ -180,7 +240,10 @@ chatFrontendRegistry.bind(sessionA.id, new TelegramFrontend(chatId, bot))
 export class ElectronFrontend implements ChatFrontend {
   readonly id = 'electron-main'
   readonly capabilities: ChatFrontendCapabilities = {
-    streaming: true, toolApproval: true, userInput: true, sshCredentials: true
+    streaming: true,
+    toolApproval: true,
+    userInput: true,
+    sshCredentials: true
   }
   constructor(private window: BrowserWindow) {}
   sendEvent(event: ChatEvent): void {
@@ -188,7 +251,9 @@ export class ElectronFrontend implements ChatFrontend {
       this.window.webContents.send('agent:event', event)
     }
   }
-  isAlive(): boolean { return !!this.window && !this.window.isDestroyed() }
+  isAlive(): boolean {
+    return !!this.window && !this.window.isDestroyed()
+  }
 }
 ```
 
@@ -219,11 +284,17 @@ requestApproval: (toolCallId: string, command: string) => {
     }, INTERACTION_TIMEOUT_MS)
     const origResolve = resolve
     this.pendingApprovals.set(toolCallId, {
-      resolve: (result) => { clearTimeout(timer); origResolve(result) }
+      resolve: (result) => {
+        clearTimeout(timer)
+        origResolve(result)
+      }
     })
     chatFrontendRegistry.broadcast({
-      type: 'tool_approval_request', sessionId, toolCallId,
-      toolName: 'bash', toolArgs: { command }
+      type: 'tool_approval_request',
+      sessionId,
+      toolCallId,
+      toolName: 'bash',
+      toolArgs: { command }
     })
   })
 }
@@ -246,21 +317,21 @@ declare global {
 
 ## 变更清单
 
-| 文件 | 改动 |
-|------|------|
-| `src/main/frontend/core/types.ts` | **新建** — ChatEvent 判别联合 |
-| `src/main/frontend/core/ChatFrontend.ts` | **新建** — 接口 + 能力声明 |
-| `src/main/frontend/core/ChatFrontendRegistry.ts` | **新建** — 会话级绑定注册中心 |
-| `src/main/frontend/core/index.ts` | **新建** — re-exports |
-| `src/main/frontend/electron/ElectronFrontend.ts` | **新建** — Electron 实现 |
-| `src/main/frontend/index.ts` | **新建** — 便利入口 |
-| `src/main/services/agentEventHandler.ts` | 删除 `AgentStreamEvent`；用 `ChatEvent` + `broadcastEvent` |
-| `src/main/services/agent.ts` | 删除 `BrowserWindow` 耦合；交互降级 + 超时 |
-| `src/main/index.ts` | `setWindow()` → `registerDefault()` |
-| `src/main/ipc/sessionHandlers.ts` | 2 处直接发送 → `chatFrontendRegistry.broadcast()` |
-| `src/preload/index.ts` | `AgentStreamEvent` → `ChatEvent` |
-| `src/preload/index.d.ts` | `AgentStreamEvent` → `ChatEvent` 全局声明 |
-| `src/renderer/src/hooks/useAgentEvents.ts` | 事件字段访问更新 |
+| 文件                                             | 改动                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| `src/main/frontend/core/types.ts`                | **新建** — ChatEvent 判别联合                              |
+| `src/main/frontend/core/ChatFrontend.ts`         | **新建** — 接口 + 能力声明                                 |
+| `src/main/frontend/core/ChatFrontendRegistry.ts` | **新建** — 会话级绑定注册中心                              |
+| `src/main/frontend/core/index.ts`                | **新建** — re-exports                                      |
+| `src/main/frontend/electron/ElectronFrontend.ts` | **新建** — Electron 实现                                   |
+| `src/main/frontend/index.ts`                     | **新建** — 便利入口                                        |
+| `src/main/services/agentEventHandler.ts`         | 删除 `AgentStreamEvent`；用 `ChatEvent` + `broadcastEvent` |
+| `src/main/services/agent.ts`                     | 删除 `BrowserWindow` 耦合；交互降级 + 超时                 |
+| `src/main/index.ts`                              | `setWindow()` → `registerDefault()`                        |
+| `src/main/ipc/sessionHandlers.ts`                | 2 处直接发送 → `chatFrontendRegistry.broadcast()`          |
+| `src/preload/index.ts`                           | `AgentStreamEvent` → `ChatEvent`                           |
+| `src/preload/index.d.ts`                         | `AgentStreamEvent` → `ChatEvent` 全局声明                  |
+| `src/renderer/src/hooks/useAgentEvents.ts`       | 事件字段访问更新                                           |
 
 ## 扩展指南
 

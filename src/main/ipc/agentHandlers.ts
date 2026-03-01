@@ -1,41 +1,36 @@
 import { ipcMain } from 'electron'
-import { agentService, ALL_TOOL_NAMES } from '../services/agent'
+import { chatGateway } from '../frontend'
 import type {
   AgentInitParams,
-  AgentInitResult,
   AgentPromptParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
-import { t } from '../i18n'
-import { mcpService } from '../services/mcpService'
-import { skillService } from '../services/skillService'
 
 /**
  * Agent 相关 IPC 处理器
- * 所有操作均通过 sessionId 指定目标 Agent
+ * 所有操作均通过 sessionId 指定目标 Agent，委托给 ChatGateway
  */
 export function registerAgentHandlers(): void {
   /** 初始化指定 session 的 Agent（后端自行查询所有所需信息） */
-  ipcMain.handle('agent:init', (_event, params: AgentInitParams): AgentInitResult => {
-    return agentService.createAgent(params.sessionId)
+  ipcMain.handle('agent:init', (_event, params: AgentInitParams) => {
+    return chatGateway.initAgent(params.sessionId)
   })
 
   /** 向指定 session 发送消息（支持附带图片） */
   ipcMain.handle('agent:prompt', async (_event, params: AgentPromptParams) => {
-    await agentService.prompt(params.sessionId, params.text, params.images)
+    await chatGateway.prompt(params.sessionId, params.text, params.images)
     return { success: true }
   })
 
   /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */
   ipcMain.handle('agent:abort', (_event, sessionId: string) => {
-    const savedMessage = agentService.abort(sessionId)
-    return { success: true, savedMessage: savedMessage || undefined }
+    return chatGateway.abort(sessionId)
   })
 
   /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) => {
-    agentService.setModel(
+    chatGateway.setModel(
       params.sessionId,
       params.provider,
       params.model,
@@ -47,7 +42,7 @@ export function registerAgentHandlers(): void {
 
   /** 设置指定 session 的思考深度 */
   ipcMain.handle('agent:setThinkingLevel', (_event, params: AgentSetThinkingLevelParams) => {
-    agentService.setThinkingLevel(params.sessionId, params.level)
+    chatGateway.setThinkingLevel(params.sessionId, params.level)
     return { success: true }
   })
 
@@ -55,7 +50,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'agent:approveToolCall',
     (_event, params: { toolCallId: string; approved: boolean; reason?: string }) => {
-      agentService.approveToolCall(params.toolCallId, params.approved, params.reason)
+      chatGateway.approveToolCall(params.toolCallId, params.approved, params.reason)
       return { success: true }
     }
   )
@@ -64,7 +59,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'agent:respondToAsk',
     (_event, params: { toolCallId: string; selections: string[] }) => {
-      agentService.respondToAsk(params.toolCallId, params.selections)
+      chatGateway.respondToAsk(params.toolCallId, params.selections)
       return { success: true }
     }
   )
@@ -86,7 +81,7 @@ export function registerAgentHandlers(): void {
         } | null
       }
     ) => {
-      agentService.respondToSshCredentials(params.toolCallId, params.credentials)
+      chatGateway.respondToSshCredentials(params.toolCallId, params.credentials)
       return { success: true }
     }
   )
@@ -95,59 +90,13 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'agent:setEnabledTools',
     (_event, params: { sessionId: string; tools: string[] }) => {
-      agentService.setEnabledTools(params.sessionId, params.tools)
+      chatGateway.setEnabledTools(params.sessionId, params.tools)
       return { success: true }
     }
   )
 
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
   ipcMain.handle('tools:list', () => {
-    /** 内置工具 */
-    const labelMap: Record<string, string> = {
-      bash: t('tool.bashLabel'),
-      read: t('tool.readLabel'),
-      write: t('tool.writeLabel'),
-      edit: t('tool.editLabel'),
-      ask: t('tool.askLabel'),
-      ls: t('tool.lsLabel'),
-      grep: t('tool.grepLabel'),
-      glob: t('tool.globLabel'),
-      ssh: t('tool.sshLabel'),
-      'shuvix-project': t('tool.shuvixProjectLabel'),
-      'shuvix-setting': t('tool.shuvixSettingLabel')
-    }
-    const hintMap: Record<string, string> = {
-      bash: t('tool.bashHint'),
-      read: t('tool.readHint'),
-      write: t('tool.writeHint'),
-      edit: t('tool.editHint'),
-      ask: t('tool.askHint'),
-      ls: t('tool.lsHint'),
-      grep: t('tool.grepHint'),
-      glob: t('tool.globHint'),
-      ssh: t('tool.sshHint'),
-      'shuvix-project': t('tool.shuvixProjectHint'),
-      'shuvix-setting': t('tool.shuvixSettingHint')
-    }
-    const builtinTools = ALL_TOOL_NAMES.map((name) => ({
-      name,
-      label: labelMap[name] || name,
-      hint: hintMap[name],
-      group: undefined as string | undefined
-    }))
-    /** MCP 工具（带 group / serverStatus 字段用于 UI 分组和状态展示） */
-    const mcpTools = mcpService.getAllToolInfos().map((info) => ({
-      name: info.name,
-      label: info.label,
-      group: info.group,
-      serverStatus: info.serverStatus
-    }))
-    /** 已启用 Skill（使用 skill: 前缀，__skills__ 分组；disabled 的不展示） */
-    const skillItems = skillService.findEnabled().map((s) => ({
-      name: `skill:${s.name}`,
-      label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
-      group: '__skills__'
-    }))
-    return [...builtinTools, ...mcpTools, ...skillItems]
+    return chatGateway.listTools()
   })
 }
