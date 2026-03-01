@@ -14,6 +14,9 @@
 [![Electron](https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 
 <p>
+  <a href="https://github.com/wangdongdongc/ShuviX/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Latest-13B84A?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMjEgMTV2NGEyIDIgMCAwIDEtMiAySDVhMiAyIDAgMCAxLTItMnYtNCIvPjxwb2x5bGluZSBwb2ludHM9IjcgMTAgMTIgMTUgMTcgMTAiLz48bGluZSB4MT0iMTIiIHkxPSIxNSIgeDI9IjEyIiB5Mj0iMyIvPjwvc3ZnPg==&logoColor=white" alt="Download" />
+  </a>
   <a href="https://github.com/wangdongdongc/ShuviX">
     <img src="https://img.shields.io/badge/GitHub-000000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" />
   </a>
@@ -39,6 +42,14 @@
 - 📁 **项目沙箱** — 可限制 AI 仅访问项目目录内的文件，Shell 命令需经用户审批后执行
 - 🐳 **Docker 隔离** — 可选将命令执行隔离到 Docker 容器中，保护主机环境安全
 - 💾 **本地优先** — 所有数据存储在本地 SQLite，隐私无忧
+
+## 🖼️ 界面预览
+
+> 提供简洁的对话界面，集成 Markdown 渲染、代码高亮与工具调用可视化，让每一次交互都清晰可控。
+
+<div align="center">
+<img src="./resources/shuivx-demo-basic.jpeg" width="680" alt="ShuviX 界面预览">
+</div>
 
 ## 🚀 快速开始
 

@@ -14,6 +14,9 @@
 [![Electron](https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 
 <p>
+  <a href="https://github.com/wangdongdongc/ShuviX/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Latest-13B84A?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cGF0aCBkPSJNMjEgMTV2NGEyIDIgMCAwIDEtMiAySDVhMiAyIDAgMCAxLTItMnYtNCIvPjxwb2x5bGluZSBwb2ludHM9IjcgMTAgMTIgMTUgMTcgMTAiLz48bGluZSB4MT0iMTIiIHkxPSIxNSIgeDI9IjEyIiB5Mj0iMyIvPjwvc3ZnPg==&logoColor=white" alt="Download" />
+  </a>
   <a href="https://github.com/wangdongdongc/ShuviX">
     <img src="https://img.shields.io/badge/GitHub-000000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" />
   </a>
@@ -39,6 +42,14 @@
 - 📁 **Project sandbox** — Restrict AI access to project directories only; shell commands require user approval before execution
 - 🐳 **Docker isolation** — Optionally isolate command execution in Docker containers to protect the host environment
 - 💾 **Local-first** — All data stored in local SQLite, your privacy is fully protected
+
+## 🖼️ Preview
+
+> A clean conversational interface with Markdown rendering, syntax highlighting, and tool call visualization — every interaction is clear and controllable.
+
+<div align="center">
+<img src="./resources/shuivx-demo-basic.jpeg" width="680" alt="ShuviX Preview">
+</div>
 
 ## 🚀 Quick Start
 
