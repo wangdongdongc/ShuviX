@@ -266,7 +266,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   clearToolExecutions: (sessionId) =>
     set((state) => {
-      const { [sessionId]: _, ...rest } = state.sessionToolExecutions
+      const rest = { ...state.sessionToolExecutions }
+      delete rest[sessionId]
       return { sessionToolExecutions: rest }
     }),
 
@@ -329,7 +330,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : state.sessionStreams
 
       // 清除该 session 的工具执行状态
-      const { [sessionId]: _removed, ...restToolExecs } = state.sessionToolExecutions
+      const restToolExecs = { ...state.sessionToolExecutions }
+      delete restToolExecs[sessionId]
 
       // 添加最终消息（如有）
       const newMessages =

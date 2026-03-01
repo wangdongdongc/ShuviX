@@ -14,11 +14,18 @@ const SESSION_ID = 'test-session'
 // mock types 模块（完全替换，不加载原始模块避免触发 Electron/DB 依赖）
 vi.mock('../types', () => ({
   BaseTool: class {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
     async securityCheck(..._args: unknown[]): Promise<void> {}
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async executeInternal(..._args: unknown[]): Promise<unknown> {
       return {}
     }
-    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
+    async execute(
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      onUpdate?: unknown
+    ): Promise<unknown> {
       await this.securityCheck(toolCallId, params, signal)
       return this.executeInternal(toolCallId, params, signal, onUpdate)
     }
@@ -65,14 +72,14 @@ vi.mock('../../logger', () => ({
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
 vi.mock('markitdown-ts', () => ({
   MarkItDown: class {
-    convert() {
+    convert(): { markdown: string } {
       return { markdown: '' }
     }
   }
 }))
 vi.mock('word-extractor', () => ({
   default: class {
-    extract() {
+    extract(): { getBody: () => string } {
       return { getBody: () => '' }
     }
   }

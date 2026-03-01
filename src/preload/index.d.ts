@@ -9,7 +9,6 @@ import type {
   HttpLogListParams,
   HttpLogSummary,
   MessageAddParams,
-  ModelCapabilities,
   ProjectCreateParams,
   ProjectUpdateParams,
   ProjectDeleteParams,

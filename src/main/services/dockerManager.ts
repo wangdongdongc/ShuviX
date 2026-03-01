@@ -253,7 +253,7 @@ export class DockerManager {
   async destroyAll(): Promise<void> {
     const entries = Array.from(this.containers.entries())
     this.containers.clear()
-    for (const [_, info] of entries) {
+    for (const [, info] of entries) {
       if (info.destroyTimer) clearTimeout(info.destroyTimer)
       try {
         spawnSync('docker', ['rm', '-f', info.containerId], {
