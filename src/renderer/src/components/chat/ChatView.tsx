@@ -255,7 +255,7 @@ export function ChatView(): React.JSX.Element {
         className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}
       >
         {sessionTitle &&
-          (editingTitle ? (
+          (editingTitle && window.api.app.platform !== 'web' ? (
             <input
               ref={titleInputRef}
               value={draftTitle}
@@ -270,20 +270,28 @@ export function ChatView(): React.JSX.Element {
             />
           ) : (
             <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[70%]">
-              <button
-                onClick={startEditTitle}
-                className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
-                title={t('common.clickToEdit')}
-              >
-                {sessionTitle}
-              </button>
-              <button
-                onClick={() => setShowSessionConfig(true)}
-                className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
-                title={t('sessionConfig.title')}
-              >
-                <Settings2 size={12} />
-              </button>
+              {window.api.app.platform !== 'web' ? (
+                <button
+                  onClick={startEditTitle}
+                  className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
+                  title={t('common.clickToEdit')}
+                >
+                  {sessionTitle}
+                </button>
+              ) : (
+                <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate">
+                  {sessionTitle}
+                </span>
+              )}
+              {window.api.app.platform !== 'web' && (
+                <button
+                  onClick={() => setShowSessionConfig(true)}
+                  className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+                  title={t('sessionConfig.title')}
+                >
+                  <Settings2 size={12} />
+                </button>
+              )}
             </div>
           ))}
         {projectPath && (
@@ -345,8 +353,8 @@ export function ChatView(): React.JSX.Element {
         </>
       )}
 
-      {/* 会话配置弹窗 */}
-      {showSessionConfig && activeSessionId && (
+      {/* 会话配置弹窗（WebUI 中不显示） */}
+      {window.api.app.platform !== 'web' && showSessionConfig && activeSessionId && (
         <SessionConfigDialog
           sessionId={activeSessionId}
           onClose={() => setShowSessionConfig(false)}

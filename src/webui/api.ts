@@ -89,7 +89,7 @@ const noopVoid = (): void => {}
 export function createWebApi(): typeof window.api {
   return {
     app: {
-      platform: 'web' as unknown as 'darwin' | 'win32' | 'linux',
+      platform: 'web',
       openSettings: noop,
       openExternal: async (url: string) => {
         window.open(url, '_blank')

@@ -181,35 +181,7 @@ export function createApiRouter(): Router {
     }
   })
 
-  router.put('/sessions/:id/title', shareGuard, (req, res) => {
-    try {
-      sessionService.updateTitle(getSessionId(req), req.body.title)
-      res.json({ success: true })
-    } catch (e) {
-      log.warn(`PUT title 失败: ${e}`)
-      res.status(500).json({ error: 'Internal error' })
-    }
-  })
-
-  router.put('/sessions/:id/settings', shareGuard, (req, res) => {
-    try {
-      sessionService.updateSettings(getSessionId(req), req.body.settings)
-      res.json({ success: true })
-    } catch (e) {
-      log.warn(`PUT settings 失败: ${e}`)
-      res.status(500).json({ error: 'Internal error' })
-    }
-  })
-
-  router.put('/sessions/:id/model-metadata', shareGuard, (req, res) => {
-    try {
-      sessionService.updateModelMetadata(getSessionId(req), req.body.modelMetadata)
-      res.json({ success: true })
-    } catch (e) {
-      log.warn(`PUT model-metadata 失败: ${e}`)
-      res.status(500).json({ error: 'Internal error' })
-    }
-  })
+  // title / settings / model-metadata 修改接口不对 WebUI 开放
 
   // ─── 资源操作 ──────────────────────────────────
 

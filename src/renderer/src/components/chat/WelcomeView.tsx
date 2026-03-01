@@ -18,22 +18,24 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
         </div>
         <h2 className="text-xl font-semibold text-text-primary mb-2">{t('chat.welcomeTitle')}</h2>
         <p className="text-sm text-text-secondary mb-6 leading-relaxed">{t('about.description')}</p>
-        <div className="flex items-center justify-center gap-3">
-          <button
-            onClick={onNewChat}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
-          >
-            <MessageSquarePlus size={16} />
-            {t('chat.startNewChat')}
-          </button>
-          <button
-            onClick={onCreateProject}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors"
-          >
-            <FolderPlus size={16} />
-            {t('chat.createProject')}
-          </button>
-        </div>
+        {window.api.app.platform !== 'web' && (
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={onNewChat}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
+            >
+              <MessageSquarePlus size={16} />
+              {t('chat.startNewChat')}
+            </button>
+            <button
+              onClick={onCreateProject}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 transition-colors"
+            >
+              <FolderPlus size={16} />
+              {t('chat.createProject')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
