@@ -7,6 +7,7 @@ import { resolveProjectConfig } from '../tools/types'
 import { dockerManager } from './dockerManager'
 import { parallelCoordinator } from './parallelExecution'
 import type { Message } from '../types'
+import type { ChatEvent } from '../frontend'
 import { createLogger } from '../logger'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -44,55 +45,6 @@ function checkToolApproval(
   const sshCredentialRequired =
     toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
   return { approvalRequired, userInputRequired, sshCredentialRequired }
-}
-
-// Agent 事件类型（用于 IPC 通信，每个事件都携带 sessionId）
-export interface AgentStreamEvent {
-  type:
-    | 'text_delta'
-    | 'text_end'
-    | 'thinking_delta'
-    | 'agent_start'
-    | 'agent_end'
-    | 'error'
-    | 'tool_start'
-    | 'tool_end'
-    | 'docker_event'
-    | 'ssh_event'
-    | 'tool_approval_request'
-    | 'user_input_request'
-    | 'ssh_credential_request'
-    | 'image_data'
-  sessionId: string
-  data?: string
-  error?: string
-  // 工具调用相关字段
-  toolCallId?: string
-  toolName?: string
-  toolArgs?: Record<string, unknown>
-  toolResult?: string
-  toolIsError?: boolean
-  /** bash 工具在沙箱模式下需要用户审批 */
-  approvalRequired?: boolean
-  /** ask 工具始终需要用户输入 */
-  userInputRequired?: boolean
-  /** ssh connect 需要用户输入凭据 */
-  sshCredentialRequired?: boolean
-  /** ask 工具：用户输入请求数据 */
-  userInputPayload?: {
-    question: string
-    options: Array<{ label: string; description: string }>
-    allowMultiple: boolean
-  }
-  /** 当前 turn 编号（tool_start 时携带，用于 UI 区分同一 turn 的工具调用） */
-  turnIndex?: number
-  // token 用量（agent_end 时携带：总计 + 各次 LLM 调用明细）
-  usage?: {
-    input: number
-    output: number
-    total: number
-    details: Array<{ input: number; output: number; total: number; stopReason: string }>
-  }
 }
 
 /** 会话级项目指令文件加载状态（由 AgentService 统一维护） */
@@ -133,7 +85,7 @@ export interface EventHandlerContext {
   >
   turnCounters: Map<string, number>
   pendingLogIds: Map<string, string[]>
-  sendToRenderer: (event: AgentStreamEvent) => void
+  broadcastEvent: (event: ChatEvent) => void
   persistStreamBuffer: (sessionId: string, extraMeta?: Record<string, unknown>) => Message | null
   isAssistantMessage: (message: AgentMessage) => message is AssistantMessage
   emitDockerEvent: (sessionId: string, action: string, extra?: Record<string, string>) => void
@@ -145,7 +97,7 @@ function handleAgentStart(ctx: EventHandlerContext, sessionId: string): void {
   ctx.streamBuffers.set(sessionId, { content: '', thinking: '', images: [] })
   ctx.turnCounters.set(sessionId, 0)
   preEmittedToolCalls.delete(sessionId)
-  ctx.sendToRenderer({ type: 'agent_start', sessionId })
+  ctx.broadcastEvent({ type: 'agent_start', sessionId })
 }
 
 /** turn_start 事件：递增 turn 计数器 */
@@ -180,7 +132,7 @@ function handleAgentEnd(
   for (const m of endMessages) {
     if (ctx.isAssistantMessage(m) && m.errorMessage) {
       log.error(`流式错误: ${m.errorMessage}`)
-      ctx.sendToRenderer({ type: 'error', sessionId, error: m.errorMessage })
+      ctx.broadcastEvent({ type: 'error', sessionId, error: m.errorMessage })
     }
   }
   // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
@@ -216,11 +168,11 @@ function handleAgentEnd(
     sessionId,
     totalUsage.total > 0 ? { usage: { ...totalUsage, details } } : {}
   )
-  ctx.sendToRenderer({
+  ctx.broadcastEvent({
     type: 'agent_end',
     sessionId,
     usage: { ...totalUsage, details },
-    data: savedMsg ? JSON.stringify(savedMsg) : undefined
+    message: savedMsg ? JSON.stringify(savedMsg) : undefined
   })
 }
 
@@ -237,12 +189,12 @@ function handleMessageUpdate(
     buf.content += msgEvent.delta || ''
     ctx.streamBuffers.set(sessionId, buf)
     // 仍转发给前端用于实时 UI 展示
-    ctx.sendToRenderer({ type: 'text_delta', sessionId, data: msgEvent.delta })
+    ctx.broadcastEvent({ type: 'text_delta', sessionId, delta: msgEvent.delta || '' })
   } else if (msgEvent.type === 'thinking_delta') {
     const buf = ctx.streamBuffers.get(sessionId) || { content: '', thinking: '', images: [] }
     buf.thinking += msgEvent.delta || ''
     ctx.streamBuffers.set(sessionId, buf)
-    ctx.sendToRenderer({ type: 'thinking_delta', sessionId, data: msgEvent.delta })
+    ctx.broadcastEvent({ type: 'thinking_delta', sessionId, delta: msgEvent.delta || '' })
   }
 }
 
@@ -258,7 +210,7 @@ function handleMessageEnd(
     // 检查流式响应中的错误（如 API 返回的错误）
     if (msg.stopReason === 'error' && msg.errorMessage) {
       log.error(`API 错误: ${msg.errorMessage}`)
-      ctx.sendToRenderer({ type: 'error', sessionId, error: msg.errorMessage })
+      ctx.broadcastEvent({ type: 'error', sessionId, error: msg.errorMessage })
     }
     const logId = ctx.pendingLogIds.get(sessionId)?.shift()
     const msgWithImages = msg as AssistantMessage & {
@@ -292,10 +244,10 @@ function handleMessageEnd(
       }
       // 实时推送图片到前端
       for (const img of images) {
-        ctx.sendToRenderer({
+        ctx.broadcastEvent({
           type: 'image_data',
           sessionId,
-          data: JSON.stringify({
+          image: JSON.stringify({
             data: `data:${img.mimeType};base64,${img.data}`,
             mimeType: img.mimeType
           })
@@ -328,7 +280,7 @@ function handleMessageEnd(
     }
   }
 
-  ctx.sendToRenderer({ type: 'text_end', sessionId })
+  ctx.broadcastEvent({ type: 'text_end', sessionId })
 
   // 并行 batch 预展示：提前发送所有不需审批的工具 tool_start，让 UI 同时显示为执行中
   if (batchToolCalls) {
@@ -356,13 +308,13 @@ function handleMessageEnd(
         }),
         model: sessionForTool?.model || ''
       })
-      ctx.sendToRenderer({
+      ctx.broadcastEvent({
         type: 'tool_start',
         sessionId,
         toolCallId: tc.id,
         toolName: tc.name,
         toolArgs: tc.arguments,
-        data: toolCallMsg.id,
+        messageId: toolCallMsg.id,
         approvalRequired: false,
         userInputRequired: false,
         sshCredentialRequired: false,
@@ -410,13 +362,13 @@ function handleToolExecutionStart(
     event.toolName,
     args || {}
   )
-  ctx.sendToRenderer({
+  ctx.broadcastEvent({
     type: 'tool_start',
     sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
     toolArgs: args,
-    data: toolCallMsg.id,
+    messageId: toolCallMsg.id,
     approvalRequired,
     userInputRequired,
     sshCredentialRequired,
@@ -447,14 +399,14 @@ function handleToolExecutionEnd(
       isError: event.isError || false
     })
   })
-  ctx.sendToRenderer({
+  ctx.broadcastEvent({
     type: 'tool_end',
     sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
-    toolResult: resultContent,
-    toolIsError: event.isError || false,
-    data: toolResultMsg.id
+    result: resultContent,
+    isError: event.isError || false,
+    messageId: toolResultMsg.id
   })
 }
 

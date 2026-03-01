@@ -39,40 +39,27 @@ import type {
 } from '../main/types'
 
 declare global {
-  /** Agent 事件流类型 */
-  interface AgentStreamEvent {
-    type:
-      | 'text_delta'
-      | 'text_end'
-      | 'thinking_delta'
-      | 'agent_start'
-      | 'agent_end'
-      | 'error'
-      | 'tool_start'
-      | 'tool_end'
-      | 'docker_event'
-      | 'ssh_event'
-      | 'tool_approval_request'
-      | 'user_input_request'
-      | 'ssh_credential_request'
-      | 'image_data'
+  /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
+  interface ChatEventBase {
     sessionId: string
-    data?: string
-    error?: string
-    toolCallId?: string
-    toolName?: string
-    toolArgs?: Record<string, unknown>
-    toolResult?: string
-    toolIsError?: boolean
-    approvalRequired?: boolean
-    userInputRequired?: boolean
-    sshCredentialRequired?: boolean
-    userInputPayload?: {
-      question: string
-      options: Array<{ label: string; description: string }>
-      allowMultiple: boolean
-    }
-    turnIndex?: number
+  }
+  interface ChatAgentStartEvent extends ChatEventBase {
+    type: 'agent_start'
+  }
+  interface ChatTextDeltaEvent extends ChatEventBase {
+    type: 'text_delta'
+    delta: string
+  }
+  interface ChatThinkingDeltaEvent extends ChatEventBase {
+    type: 'thinking_delta'
+    delta: string
+  }
+  interface ChatTextEndEvent extends ChatEventBase {
+    type: 'text_end'
+  }
+  interface ChatAgentEndEvent extends ChatEventBase {
+    type: 'agent_end'
+    message?: string
     usage?: {
       input: number
       output: number
@@ -87,6 +74,78 @@ declare global {
       }>
     }
   }
+  interface ChatToolStartEvent extends ChatEventBase {
+    type: 'tool_start'
+    toolCallId: string
+    toolName: string
+    toolArgs?: Record<string, unknown>
+    messageId?: string
+    turnIndex?: number
+    approvalRequired?: boolean
+    userInputRequired?: boolean
+    sshCredentialRequired?: boolean
+  }
+  interface ChatToolEndEvent extends ChatEventBase {
+    type: 'tool_end'
+    toolCallId: string
+    toolName: string
+    result?: string
+    isError?: boolean
+    messageId?: string
+  }
+  interface ChatApprovalRequestEvent extends ChatEventBase {
+    type: 'tool_approval_request'
+    toolCallId: string
+    toolName: string
+    toolArgs?: Record<string, unknown>
+  }
+  interface ChatInputRequestEvent extends ChatEventBase {
+    type: 'user_input_request'
+    toolCallId: string
+    toolName: string
+    payload: {
+      question: string
+      options: Array<{ label: string; description: string }>
+      allowMultiple: boolean
+    }
+  }
+  interface ChatCredentialRequestEvent extends ChatEventBase {
+    type: 'ssh_credential_request'
+    toolCallId: string
+    toolName: string
+  }
+  interface ChatImageDataEvent extends ChatEventBase {
+    type: 'image_data'
+    image: string
+  }
+  interface ChatDockerEvent extends ChatEventBase {
+    type: 'docker_event'
+    messageId: string
+  }
+  interface ChatSshEvent extends ChatEventBase {
+    type: 'ssh_event'
+    messageId: string
+  }
+  interface ChatErrorEvent extends ChatEventBase {
+    type: 'error'
+    error: string
+  }
+
+  type ChatEvent =
+    | ChatAgentStartEvent
+    | ChatTextDeltaEvent
+    | ChatThinkingDeltaEvent
+    | ChatTextEndEvent
+    | ChatAgentEndEvent
+    | ChatToolStartEvent
+    | ChatToolEndEvent
+    | ChatApprovalRequestEvent
+    | ChatInputRequestEvent
+    | ChatCredentialRequestEvent
+    | ChatImageDataEvent
+    | ChatDockerEvent
+    | ChatSshEvent
+    | ChatErrorEvent
 
   /** 项目类型 */
   interface Project {
@@ -228,7 +287,7 @@ declare global {
         sessionId: string
         tools: string[]
       }) => Promise<{ success: boolean }>
-      onEvent: (callback: (event: AgentStreamEvent) => void) => () => void
+      onEvent: (callback: (event: ChatEvent) => void) => () => void
     }
     provider: {
       listAll: () => Promise<ProviderInfo[]>

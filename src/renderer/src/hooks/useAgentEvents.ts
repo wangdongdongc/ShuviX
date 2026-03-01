@@ -9,7 +9,7 @@ const isSettingsWindow = window.location.hash === '#settings'
  * 处理所有 session 的 Agent 事件，按 sessionId 隔离状态
  */
 export function useAgentEvents(): void {
-  const handleAgentEvent = useCallback(async (event: AgentStreamEvent): Promise<void> => {
+  const handleAgentEvent = useCallback(async (event: ChatEvent): Promise<void> => {
     const store = useChatStore.getState()
     const sid: string = event.sessionId
 
@@ -20,20 +20,18 @@ export function useAgentEvents(): void {
         break
 
       case 'text_delta':
-        store.appendStreamingContent(sid, event.data || '')
+        store.appendStreamingContent(sid, event.delta)
         break
 
       case 'thinking_delta':
-        store.appendStreamingThinking(sid, event.data || '')
+        store.appendStreamingThinking(sid, event.delta)
         break
 
       case 'text_end':
         break
 
       case 'image_data':
-        if (event.data) {
-          store.appendStreamingImage(sid, JSON.parse(event.data))
-        }
+        store.appendStreamingImage(sid, JSON.parse(event.image))
         break
 
       case 'tool_start': {
@@ -47,17 +45,17 @@ export function useAgentEvents(): void {
         if (event.userInputRequired) initialStatus = 'pending_user_input'
         if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
         store.addToolExecution(sid, {
-          toolCallId: event.toolCallId || '',
-          toolName: event.toolName || '',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
           args: event.toolArgs ?? {},
           turnIndex: event.turnIndex,
           status: initialStatus,
-          messageId: event.data
+          messageId: event.messageId
         })
         // 仅当前活跃会话时添加到消息列表（tool_call 消息已在 main 进程持久化）
-        if (sid === store.activeSessionId && event.data) {
+        if (sid === store.activeSessionId && event.messageId) {
           const msgs = await window.api.message.list(sid)
-          const toolCallMsg = msgs.find((m) => m.id === event.data)
+          const toolCallMsg = msgs.find((m) => m.id === event.messageId)
           if (toolCallMsg) store.addMessage(toolCallMsg)
         }
         break
@@ -65,7 +63,7 @@ export function useAgentEvents(): void {
 
       case 'tool_approval_request':
         // 沙箱模式：bash 命令等待用户审批（备用路径，通常 tool_start 已携带 approvalRequired）
-        store.updateToolExecution(sid, event.toolCallId || '', {
+        store.updateToolExecution(sid, event.toolCallId, {
           status: 'pending_approval',
           args: event.toolArgs
         })
@@ -73,36 +71,36 @@ export function useAgentEvents(): void {
 
       case 'user_input_request':
         // ask 工具：仅切换状态为等待选择，不覆盖 args（tool_start 已携带完整参数）
-        store.updateToolExecution(sid, event.toolCallId || '', {
+        store.updateToolExecution(sid, event.toolCallId, {
           status: 'pending_user_input'
         })
         break
 
       case 'ssh_credential_request':
         // ssh connect：切换状态为等待凭据输入
-        store.updateToolExecution(sid, event.toolCallId || '', {
+        store.updateToolExecution(sid, event.toolCallId, {
           status: 'pending_ssh_credentials'
         })
         break
 
       case 'tool_end':
-        store.updateToolExecution(sid, event.toolCallId || '', {
-          status: event.toolIsError ? 'error' : 'done',
-          result: event.toolResult
+        store.updateToolExecution(sid, event.toolCallId, {
+          status: event.isError ? 'error' : 'done',
+          result: event.result
         })
         // 仅当前活跃会话时添加 tool_result 消息
-        if (sid === store.activeSessionId && event.data) {
+        if (sid === store.activeSessionId && event.messageId) {
           const msgs2 = await window.api.message.list(sid)
-          const toolResultMsg = msgs2.find((m) => m.id === event.data)
+          const toolResultMsg = msgs2.find((m) => m.id === event.messageId)
           if (toolResultMsg) store.addMessage(toolResultMsg)
         }
         break
 
       case 'docker_event': {
         // 仅当前活跃会话时添加 docker_event 消息
-        if (sid === store.activeSessionId && event.data) {
+        if (sid === store.activeSessionId) {
           const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m) => m.id === event.data)
+          const dockerMsg = msgs3.find((m) => m.id === event.messageId)
           if (dockerMsg) {
             store.addMessage(dockerMsg)
             // 同步 sessionResources
@@ -120,10 +118,10 @@ export function useAgentEvents(): void {
               /* 忽略 */
             }
           }
-        } else if (event.data) {
+        } else {
           // 非活跃会话：仅更新 sessionResources（确保切换后状态正确）
           const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m) => m.id === event.data)
+          const dockerMsg = msgs3.find((m) => m.id === event.messageId)
           if (dockerMsg) {
             try {
               const meta = JSON.parse(dockerMsg.metadata || '{}')
@@ -145,9 +143,9 @@ export function useAgentEvents(): void {
 
       case 'ssh_event': {
         // 仅当前活跃会话时添加 ssh_event 消息
-        if (sid === store.activeSessionId && event.data) {
+        if (sid === store.activeSessionId) {
           const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m) => m.id === event.data)
+          const sshMsg = msgs4.find((m) => m.id === event.messageId)
           if (sshMsg) {
             store.addMessage(sshMsg)
             // 同步 sessionResources
@@ -166,10 +164,10 @@ export function useAgentEvents(): void {
               /* 忽略 */
             }
           }
-        } else if (event.data) {
+        } else {
           // 非活跃会话：仅更新 sessionResources
           const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m) => m.id === event.data)
+          const sshMsg = msgs4.find((m) => m.id === event.messageId)
           if (sshMsg) {
             try {
               const meta = JSON.parse(sshMsg.metadata || '{}')
@@ -201,7 +199,7 @@ export function useAgentEvents(): void {
           store.setUsedContextTokens(promptTokens > 0 ? promptTokens : null)
         }
         // 后端已统一落库，直接从事件中取已保存的 assistant 消息
-        const savedMsg = event.data ? JSON.parse(event.data) : null
+        const savedMsg = event.message ? JSON.parse(event.message) : null
         store.finishStreaming(sid, savedMsg ?? undefined)
 
         // 首次对话时后台让 AI 生成标题（对用户透明）

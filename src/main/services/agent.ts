@@ -9,7 +9,6 @@ import {
 } from '@mariozechner/pi-ai'
 import { streamSimpleGoogleWithImages } from './googleImageStream'
 import { parallelCoordinator } from './parallelExecution'
-import type { BrowserWindow } from 'electron'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
@@ -35,10 +34,10 @@ import { resolveModel } from './agentModelResolver'
 import {
   forwardAgentEvent,
   readProjectAgentMd,
-  type AgentStreamEvent,
   type ProjectInstructionLoadState,
   type EventHandlerContext
 } from './agentEventHandler'
+import { chatFrontendRegistry, INTERACTION_TIMEOUT_MS } from '../frontend'
 
 const log = createLogger('Agent')
 
@@ -46,7 +45,7 @@ const log = createLogger('Agent')
 export { ALL_TOOL_NAMES } from '../utils/tools'
 export type { ToolName } from '../utils/tools'
 export { dbMessagesToAgentMessages } from './agentMessageConverter'
-export type { AgentStreamEvent } from './agentEventHandler'
+export type { ChatEvent } from '../frontend'
 
 /**
  * Agent 服务 — 管理多个独立的 Agent 实例，按 sessionId 隔离
@@ -82,14 +81,8 @@ export class AgentService {
   >()
   /** 每个 session 的 turn 计数器（用于在 UI 中标记工具调用所属 turn） */
   private turnCounters = new Map<string, number>()
-  private mainWindow: BrowserWindow | null = null
   /** 缓存的事件处理器上下文 */
   private eventCtx: EventHandlerContext | null = null
-
-  /** 绑定主窗口，用于发送 IPC 事件 */
-  setWindow(window: BrowserWindow): void {
-    this.mainWindow = window
-  }
 
   /** 构建事件处理器上下文（延迟初始化） */
   private getEventContext(): EventHandlerContext {
@@ -98,7 +91,7 @@ export class AgentService {
         streamBuffers: this.streamBuffers,
         turnCounters: this.turnCounters,
         pendingLogIds: this.pendingLogIds,
-        sendToRenderer: (e) => this.sendToRenderer(e),
+        broadcastEvent: (e) => chatFrontendRegistry.broadcast(e),
         persistStreamBuffer: (sid, meta) => this.persistStreamBuffer(sid, meta),
         isAssistantMessage: (msg) => this.isAssistantMessage(msg),
         emitDockerEvent: (sid, action, extra) => this.emitDockerEvent(sid, action, extra)
@@ -206,9 +199,25 @@ export class AgentService {
         })
       },
       requestApproval: (toolCallId: string, command: string) => {
+        if (!chatFrontendRegistry.hasCapability(sessionId, 'toolApproval')) {
+          return Promise.resolve({ approved: false, reason: 'no frontend supports approval' })
+        }
         return new Promise<{ approved: boolean; reason?: string }>((resolve) => {
           this.pendingApprovals.set(toolCallId, { resolve })
-          this.sendToRenderer({
+          const timer = setTimeout(() => {
+            if (this.pendingApprovals.delete(toolCallId)) {
+              resolve({ approved: false, reason: 'approval timeout' })
+            }
+          }, INTERACTION_TIMEOUT_MS)
+          // 清理 timer 的包装
+          const origResolve = resolve
+          this.pendingApprovals.set(toolCallId, {
+            resolve: (result) => {
+              clearTimeout(timer)
+              origResolve(result)
+            }
+          })
+          chatFrontendRegistry.broadcast({
             type: 'tool_approval_request',
             sessionId,
             toolCallId,
@@ -225,21 +234,47 @@ export class AgentService {
           allowMultiple: boolean
         }
       ) => {
+        if (!chatFrontendRegistry.hasCapability(sessionId, 'userInput')) {
+          return Promise.resolve([])
+        }
         return new Promise<string[]>((resolve) => {
-          this.pendingUserInputs.set(toolCallId, { resolve })
-          this.sendToRenderer({
+          const timer = setTimeout(() => {
+            if (this.pendingUserInputs.delete(toolCallId)) {
+              resolve([])
+            }
+          }, INTERACTION_TIMEOUT_MS)
+          this.pendingUserInputs.set(toolCallId, {
+            resolve: (selections) => {
+              clearTimeout(timer)
+              resolve(selections)
+            }
+          })
+          chatFrontendRegistry.broadcast({
             type: 'user_input_request',
             sessionId,
             toolCallId,
             toolName: 'ask',
-            userInputPayload: payload
+            payload
           })
         })
       },
       requestSshCredentials: (toolCallId: string) => {
+        if (!chatFrontendRegistry.hasCapability(sessionId, 'sshCredentials')) {
+          return Promise.resolve(null)
+        }
         return new Promise<import('../tools/types').SshCredentialPayload | null>((resolve) => {
-          this.pendingSshCredentials.set(toolCallId, { resolve })
-          this.sendToRenderer({
+          const timer = setTimeout(() => {
+            if (this.pendingSshCredentials.delete(toolCallId)) {
+              resolve(null)
+            }
+          }, INTERACTION_TIMEOUT_MS)
+          this.pendingSshCredentials.set(toolCallId, {
+            resolve: (credentials) => {
+              clearTimeout(timer)
+              resolve(credentials)
+            }
+          })
+          chatFrontendRegistry.broadcast({
             type: 'ssh_credential_request',
             sessionId,
             toolCallId,
@@ -307,7 +342,7 @@ export class AgentService {
           // streamFn 抛出同步错误时，立即通知渲染进程
           const message = err instanceof Error ? err.message : String(err)
           log.error(`streamFn 错误: ${message}`)
-          this.sendToRenderer({ type: 'error', sessionId, error: message })
+          chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: message })
           throw err
         }
       }
@@ -356,7 +391,7 @@ export class AgentService {
     const agent = this.agents.get(sessionId)
     if (!agent) {
       log.warn(`prompt 失败，未找到 session=${sessionId}`)
-      this.sendToRenderer({ type: 'error', sessionId, error: 'Agent 未初始化' })
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
 
@@ -371,7 +406,7 @@ export class AgentService {
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
-      this.sendToRenderer({ type: 'error', sessionId, error: message })
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: message })
     }
   }
 
@@ -711,7 +746,7 @@ export class AgentService {
       content: action,
       metadata: extra ? JSON.stringify(extra) : null
     })
-    this.sendToRenderer({ type: 'docker_event', sessionId, data: msg.id })
+    chatFrontendRegistry.broadcast({ type: 'docker_event', sessionId, messageId: msg.id })
   }
 
   /** 持久化 ssh_event 消息并通知前端 */
@@ -723,14 +758,7 @@ export class AgentService {
       content: action,
       metadata: extra ? JSON.stringify(extra) : null
     })
-    this.sendToRenderer({ type: 'ssh_event', sessionId, data: msg.id })
-  }
-
-  /** 发送事件到 Renderer */
-  private sendToRenderer(event: AgentStreamEvent): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('agent:event', event)
-    }
+    chatFrontendRegistry.broadcast({ type: 'ssh_event', sessionId, messageId: msg.id })
   }
 }
 

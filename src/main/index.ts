@@ -2,7 +2,6 @@ import { app, shell, BrowserWindow, Menu, ipcMain, nativeImage, screen } from 'e
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
-import { agentService } from './services/agent'
 import { dockerManager } from './services/dockerManager'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
@@ -10,6 +9,7 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
+import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -206,8 +206,8 @@ function createWindow(): void {
     }
   })
 
-  // 绑定 Agent 服务到主窗口
-  agentService.setWindow(mainWindow)
+  // 注册 Electron 主窗口为默认前端
+  chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)

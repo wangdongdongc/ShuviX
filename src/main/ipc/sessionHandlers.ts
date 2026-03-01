@@ -4,6 +4,7 @@ import { messageService } from '../services/messageService'
 import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
 import { sshManager } from '../services/sshManager'
+import { chatFrontendRegistry } from '../frontend'
 import type {
   Session,
   SessionUpdateModelConfigParams,
@@ -137,7 +138,7 @@ export function registerSessionHandlers(): void {
   })
 
   /** 手动销毁指定 session 的 Docker 容器 */
-  ipcMain.handle('docker:destroySession', async (event, sessionId: string) => {
+  ipcMain.handle('docker:destroySession', async (_event, sessionId: string) => {
     const containerId = await dockerManager.destroyContainer(sessionId)
     if (containerId) {
       const msg = messageService.add({
@@ -147,17 +148,17 @@ export function registerSessionHandlers(): void {
         content: 'container_destroyed',
         metadata: JSON.stringify({ containerId: containerId.slice(0, 12), reason: 'manual' })
       })
-      event.sender.send('agent:event', {
+      chatFrontendRegistry.broadcast({
         type: 'docker_event',
         sessionId,
-        data: msg.id
+        messageId: msg.id
       })
     }
     return { success: !!containerId }
   })
 
   /** 手动断开指定 session 的 SSH 连接 */
-  ipcMain.handle('ssh:disconnectSession', async (event, sessionId: string) => {
+  ipcMain.handle('ssh:disconnectSession', async (_event, sessionId: string) => {
     const info = sshManager.getConnectionInfo(sessionId)
     if (!info) return { success: false }
     await sshManager.disconnect(sessionId)
@@ -173,10 +174,10 @@ export function registerSessionHandlers(): void {
         reason: 'manual'
       })
     })
-    event.sender.send('agent:event', {
+    chatFrontendRegistry.broadcast({
       type: 'ssh_event',
       sessionId,
-      data: msg.id
+      messageId: msg.id
     })
     return { success: true }
   })

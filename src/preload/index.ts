@@ -32,7 +32,7 @@ import type {
   SshCredentialAddParams,
   SshCredentialUpdateParams
 } from '../main/types'
-import type { AgentStreamEvent } from '../main/services/agentEventHandler'
+import type { ChatEvent } from '../main/frontend'
 
 /** 暴露给 Renderer 的 API */
 const api = {
@@ -102,9 +102,8 @@ const api = {
       ipcRenderer.invoke('agent:setEnabledTools', params),
 
     /** 监听 Agent 事件流 */
-    onEvent: (callback: (event: AgentStreamEvent) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, event: AgentStreamEvent): void =>
-        callback(event)
+    onEvent: (callback: (event: ChatEvent) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, event: ChatEvent): void => callback(event)
       ipcRenderer.on('agent:event', handler)
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
