@@ -1,16 +1,4 @@
-/** HTTP 请求日志数据结构 */
-export interface HttpLog {
-  id: string
-  sessionId: string
-  provider: string
-  model: string
-  payload: string
-  response: string
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
-  createdAt: number
-}
+export type { HttpLog } from '../dao/types'
 
 /** HTTP 请求日志列表项（不含 payload，含会话标题） */
 export interface HttpLogSummary {

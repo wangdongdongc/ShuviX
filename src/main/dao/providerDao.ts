@@ -1,7 +1,8 @@
 import { v7 as uuidv7 } from 'uuid'
-import { databaseManager } from './database'
+import { BaseDao } from './database'
 import { encrypt, decrypt } from '../services/crypto'
-import type { Provider, ProviderModel } from '../types'
+import type { Provider, ProviderModel } from './types'
+import type { AvailableModel } from '../types'
 
 function decryptProvider<T extends Provider | undefined>(p: T): T {
   if (!p) return p
@@ -11,11 +12,7 @@ function decryptProvider<T extends Provider | undefined>(p: T): T {
 /**
  * Provider DAO — 提供商和模型表的纯数据访问操作
  */
-export class ProviderDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class ProviderDao extends BaseDao {
   // ============ 提供商操作 ============
 
   /** 获取所有提供商，自定义在前，再按 sortOrder 排序 */
@@ -161,7 +158,7 @@ export class ProviderDao {
   }
 
   /** 获取所有已启用提供商的已启用模型（用于对话中的模型选择器） */
-  findAllEnabledModels(): (ProviderModel & { providerName: string })[] {
+  findAllEnabledModels(): AvailableModel[] {
     return this.db
       .prepare(
         `
@@ -172,7 +169,7 @@ export class ProviderDao {
         ORDER BY p.sortOrder ASC, pm.sortOrder ASC
       `
       )
-      .all() as (ProviderModel & { providerName: string })[]
+      .all() as AvailableModel[]
   }
 
   /** 更新模型启用状态 */

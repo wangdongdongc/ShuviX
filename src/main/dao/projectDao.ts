@@ -1,14 +1,10 @@
-import { databaseManager } from './database'
-import type { Project } from '../types'
+import { BaseDao } from './database'
+import type { Project } from './types'
 
 /**
  * Project DAO — 项目表的纯数据访问操作
  */
-export class ProjectDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class ProjectDao extends BaseDao {
   /** 获取所有项目，按更新时间倒序 */
   findAll(): Project[] {
     return this.db.prepare('SELECT * FROM projects ORDER BY updatedAt DESC').all() as Project[]

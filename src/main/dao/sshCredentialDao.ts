@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
-import { databaseManager } from './database'
+import { BaseDao } from './database'
 import { encrypt, decrypt } from '../services/crypto'
-import type { SshCredential } from '../types'
+import type { SshCredential } from './types'
 
 /** 解密凭据中的敏感字段 */
 function decryptCredential<T extends SshCredential | undefined>(c: T): T {
@@ -18,11 +18,7 @@ function decryptCredential<T extends SshCredential | undefined>(c: T): T {
  * SSH Credential DAO — ssh_credentials 表的纯数据访问操作
  * 敏感字段（password / privateKey / passphrase）加密存储
  */
-export class SshCredentialDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class SshCredentialDao extends BaseDao {
   /** 获取所有凭据（解密） */
   findAll(): SshCredential[] {
     const rows = this.db

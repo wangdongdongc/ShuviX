@@ -1,14 +1,10 @@
-import { databaseManager } from './database'
-import type { Settings } from '../types'
+import { BaseDao } from './database'
+import type { Settings } from './types'
 
 /**
  * Settings DAO — 设置表的纯数据访问操作
  */
-export class SettingsDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class SettingsDao extends BaseDao {
   /** 根据 key 获取设置值 */
   findByKey(key: string): string | undefined {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as

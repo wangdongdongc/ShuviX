@@ -341,3 +341,10 @@ class DatabaseManager {
 
 // 全局单例
 export const databaseManager = new DatabaseManager()
+
+/** DAO 基类 — 提供数据库连接访问 */
+export abstract class BaseDao {
+  protected get db(): Database.Database {
+    return databaseManager.getDb()
+  }
+}

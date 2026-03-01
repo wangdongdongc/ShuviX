@@ -1,14 +1,10 @@
-import { databaseManager } from './database'
-import type { Session } from '../types'
+import { BaseDao } from './database'
+import type { Session } from './types'
 
 /**
  * Session DAO — 会话表的纯数据访问操作
  */
-export class SessionDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class SessionDao extends BaseDao {
   /** 获取所有会话，按更新时间倒序 */
   findAll(): Session[] {
     return this.db.prepare('SELECT * FROM sessions ORDER BY updatedAt DESC').all() as Session[]

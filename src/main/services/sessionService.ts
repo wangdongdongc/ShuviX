@@ -8,7 +8,7 @@ import { projectDao } from '../dao/projectDao'
 import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
 import { resolveEnabledTools } from '../utils/tools'
-import type { Session } from '../types'
+import type { Session, SessionInfo } from '../types'
 import { agentService } from './agent'
 
 /**
@@ -23,7 +23,7 @@ export class SessionService {
   }
 
   /** 获取单个会话（含计算属性 workingDirectory、enabledTools） */
-  getById(id: string): Session | undefined {
+  getById(id: string): SessionInfo | undefined {
     const session = sessionDao.findById(id)
     if (!session) return undefined
     const project = session.projectId ? projectDao.findById(session.projectId) : undefined

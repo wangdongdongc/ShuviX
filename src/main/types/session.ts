@@ -1,23 +1,13 @@
-/** 会话数据结构 */
-export interface Session {
-  id: string
-  title: string
-  /** 所属项目 ID（null 表示临时会话） */
-  projectId: string | null
-  provider: string
-  model: string
-  systemPrompt: string
-  /** 模型相关设置（JSON：思考深度等） */
-  modelMetadata: string
-  /** 会话级配置（JSON：sshAutoApprove 等） */
-  settings: string
-  createdAt: number
-  updatedAt: number
-  /** 项目工作目录（计算属性，由 service 层填充，DB 中不存在） */
+export type { Session } from '../dao/types'
+import type { Session } from '../dao/types'
+
+/** 会话完整信息（含 service 层计算属性，用于 IPC 返回给渲染进程） */
+export interface SessionInfo extends Session {
+  /** 项目工作目录（由 service 层填充） */
   workingDirectory?: string | null
-  /** 当前生效的工具列表（计算属性，由 service 层解析：session > project > all） */
+  /** 当前生效的工具列表（由 service 层解析：session > project > all） */
   enabledTools?: string[]
-  /** 项目 AGENT.md 是否存在并已加载（计算属性） */
+  /** 项目 AGENT.md 是否存在并已加载 */
   agentMdLoaded?: boolean
 }
 

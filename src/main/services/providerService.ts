@@ -3,7 +3,13 @@ import { getModels } from '@mariozechner/pi-ai'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
 import { createLogger } from '../logger'
-import type { ApiProtocol, ModelCapabilities, Provider, ProviderModel } from '../types'
+import type {
+  ApiProtocol,
+  AvailableModel,
+  ModelCapabilities,
+  Provider,
+  ProviderModel
+} from '../types'
 
 const log = createLogger('ProviderService')
 
@@ -79,7 +85,7 @@ export class ProviderService {
   }
 
   /** 获取所有可用模型（已启用提供商 + 已启用模型，用于对话中的选择器） */
-  listAvailableModels(): (ProviderModel & { providerName: string })[] {
+  listAvailableModels(): AvailableModel[] {
     return providerDao.findAllEnabledModels()
   }
 

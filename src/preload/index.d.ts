@@ -104,7 +104,7 @@ declare global {
     updatedAt: number
   }
 
-  /** 会话类型 */
+  /** 会话类型（对应 DB 表 sessions） */
   interface Session {
     id: string
     title: string
@@ -118,11 +118,15 @@ declare global {
     settings: string
     createdAt: number
     updatedAt: number
-    /** 项目工作目录（计算属性，由后端填充） */
+  }
+
+  /** 会话完整信息（含计算属性） */
+  interface SessionInfo extends Session {
+    /** 项目工作目录（由后端填充） */
     workingDirectory?: string | null
-    /** 当前生效的工具列表（计算属性，由后端解析：session > project > all） */
+    /** 当前生效的工具列表（由后端解析：session > project > all） */
     enabledTools?: string[]
-    /** 项目 AGENT.md 是否存在并已加载（计算属性） */
+    /** 项目 AGENT.md 是否存在并已加载 */
     agentMdLoaded?: boolean
   }
 
@@ -275,8 +279,8 @@ declare global {
         assistantMessage: string
       }) => Promise<{ title: string | null }>
       delete: (id: string) => Promise<{ success: boolean }>
-      /** 获取单个会话（含 workingDirectory） */
-      getById: (id: string) => Promise<Session | null>
+      /** 获取单个会话（含计算属性） */
+      getById: (id: string) => Promise<SessionInfo | null>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>

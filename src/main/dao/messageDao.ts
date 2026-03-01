@@ -1,14 +1,10 @@
-import { databaseManager } from './database'
-import type { Message } from '../types'
+import { BaseDao } from './database'
+import type { Message } from './types'
 
 /**
  * Message DAO — 消息表的纯数据访问操作
  */
-export class MessageDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class MessageDao extends BaseDao {
   /** 获取某个会话的所有消息，按时间升序 */
   findBySessionId(sessionId: string): Message[] {
     return this.db

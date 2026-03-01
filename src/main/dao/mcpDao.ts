@@ -1,14 +1,10 @@
-import { databaseManager } from './database'
-import type { McpServer } from '../types'
+import { BaseDao } from './database'
+import type { McpServer } from './types'
 
 /**
  * MCP Server DAO — mcp_servers 表的纯数据访问操作
  */
-export class McpDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class McpDao extends BaseDao {
   /** 获取所有 MCP Server，按创建时间排序 */
   findAll(): McpServer[] {
     return this.db.prepare('SELECT * FROM mcp_servers ORDER BY createdAt ASC').all() as McpServer[]

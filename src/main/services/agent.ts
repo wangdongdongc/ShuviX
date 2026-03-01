@@ -162,7 +162,7 @@ export class AgentService {
     }
     // 注入工作目录 + 参考目录信息
     if (project) {
-      const workDir = session.workingDirectory || project.path
+      const workDir = workingDirectory || project.path
       systemPrompt += `\n\nProject working directory: ${workDir}`
 
       let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []

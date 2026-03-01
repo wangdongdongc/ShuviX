@@ -1,5 +1,5 @@
-/** API 协议类型（用户可选） */
-export type ApiProtocol = 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+export type { ApiProtocol, Provider, ProviderModel } from '../dao/types'
+import type { ApiProtocol, ProviderModel } from '../dao/types'
 
 /** 模型能力元数据 */
 export interface ModelCapabilities {
@@ -16,30 +16,9 @@ export interface ModelCapabilities {
   outputCostPerToken?: number // 仅存储，暂不展示
 }
 
-/** 提供商数据结构 */
-export interface Provider {
-  id: string
-  name: string
-  /** 用户友好的显示名称（内置提供商使用，如 "OpenAI"；自定义提供商可为空） */
-  displayName: string
-  apiKey: string
-  baseUrl: string
-  apiProtocol: ApiProtocol
-  isBuiltin: number // 0=自定义, 1=内置
-  isEnabled: number // 0=禁用, 1=启用
-  sortOrder: number
-  createdAt: number
-  updatedAt: number
-}
-
-/** 提供商模型数据结构 */
-export interface ProviderModel {
-  id: string
-  providerId: string
-  modelId: string
-  isEnabled: number // 0=禁用, 1=启用
-  sortOrder: number
-  capabilities: string // JSON 字符串，解析为 ModelCapabilities
+/** 可用模型（含提供商显示名称，对应 findAllEnabledModels JOIN 结果） */
+export interface AvailableModel extends ProviderModel {
+  providerName: string
 }
 
 /** IPC: 更新提供商配置参数 */

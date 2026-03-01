@@ -1,8 +1,4 @@
-/** 设置数据结构 */
-export interface Settings {
-  key: string
-  value: string
-}
+export type { Settings } from '../dao/types'
 
 /** IPC: 写入设置参数 */
 export interface SettingsSetParams {

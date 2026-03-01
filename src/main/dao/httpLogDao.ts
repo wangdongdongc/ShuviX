@@ -1,14 +1,11 @@
-import { databaseManager } from './database'
-import type { HttpLog, HttpLogSummary } from '../types'
+import { BaseDao } from './database'
+import type { HttpLog } from './types'
+import type { HttpLogSummary } from '../types'
 
 /**
  * HTTP 日志 DAO — 请求日志表的纯数据访问操作
  */
-export class HttpLogDao {
-  private get db() {
-    return databaseManager.getDb()
-  }
-
+export class HttpLogDao extends BaseDao {
   /** 写入一条 HTTP 请求日志 */
   insert(log: HttpLog): void {
     this.db
