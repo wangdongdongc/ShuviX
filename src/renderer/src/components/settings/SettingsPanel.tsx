@@ -1,5 +1,15 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText, Info, Puzzle, BookOpen, Wrench, Share2 } from 'lucide-react'
+import {
+  Settings,
+  Layers,
+  FileText,
+  Info,
+  Puzzle,
+  BookOpen,
+  Wrench,
+  Share2,
+  ClipboardList
+} from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
 import { GeneralSettings } from './GeneralSettings'
@@ -10,6 +20,7 @@ import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
+import { OperationLogSettings } from './OperationLogSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -75,6 +86,12 @@ export function SettingsPanel(): React.JSX.Element {
             onClick={() => setActiveSettingsTab('httpLogs')}
           />
           <TabButton
+            icon={<ClipboardList size={14} />}
+            label={t('settings.tabOperationLogs')}
+            active={activeSettingsTab === 'operationLogs'}
+            onClick={() => setActiveSettingsTab('operationLogs')}
+          />
+          <TabButton
             icon={<Info size={14} />}
             label={t('settings.tabAbout')}
             active={activeSettingsTab === 'about'}
@@ -91,6 +108,7 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'skills' && <SkillSettings />}
           {activeSettingsTab === 'bindings' && <BindingsSettings />}
           {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}
+          {activeSettingsTab === 'operationLogs' && <OperationLogSettings />}
           {activeSettingsTab === 'about' && <AboutSettings />}
         </div>
       </div>

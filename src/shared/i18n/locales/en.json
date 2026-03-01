@@ -280,6 +280,8 @@
     "httpLogTitle": "HTTP Request Logs",
     "httpLogDesc": "Each AI request is logged for auditing and debugging.",
     "allSessions": "All Sessions",
+    "searchSession": "Search sessions...",
+    "noMatchSession": "No matching sessions",
     "allProviders": "All Providers",
     "allModels": "All Models",
     "noLogs": "No logs yet",
@@ -395,7 +397,27 @@
     "skillDisable": "Disable",
     "skillDeleteConfirm": "Delete Skill \"{{name}}\"? This will remove the entire skill directory.",
     "skillImportDir": "Import from Directory",
-    "skillOpenDir": "Open Skills Directory"
+    "skillOpenDir": "Open Skills Directory",
+    "tabOperationLogs": "Usage Logs",
+    "operationLogTitle": "Usage Logs",
+    "operationLogDesc": "Records all user operations for auditing and tracing.",
+    "allSources": "All Sources",
+    "allActions": "All Actions",
+    "opSource": "Source",
+    "opSummary": "Summary",
+    "opDetail": "Detail",
+    "opAction": {
+      "label": "Action",
+      "prompt": "Send Message",
+      "abort": "Abort Generation",
+      "initAgent": "Initialize Agent",
+      "setModel": "Switch Model",
+      "setThinkingLevel": "Set Thinking Level",
+      "setEnabledTools": "Update Tools",
+      "approveToolCall": "Approve Tool Call",
+      "destroyDocker": "Destroy Docker Container",
+      "disconnectSsh": "Disconnect SSH"
+    }
   },
 
   "about": {

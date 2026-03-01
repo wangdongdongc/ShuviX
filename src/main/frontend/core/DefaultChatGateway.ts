@@ -8,6 +8,7 @@ import { sshManager } from '../../services/sshManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
+import { operationLogService } from '../../services/operationLogService'
 import { t } from '../../i18n'
 
 /**
@@ -17,7 +18,9 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
   initAgent(sessionId: string): AgentInitResult {
-    return agentService.createAgent(sessionId)
+    const result = agentService.createAgent(sessionId)
+    operationLogService.log('initAgent', '')
+    return result
   }
 
   async prompt(
@@ -25,11 +28,14 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
+    const preview = text.length > 80 ? text.slice(0, 80) + '...' : text
+    operationLogService.log('prompt', preview)
     await agentService.prompt(sessionId, text, images)
   }
 
   abort(sessionId: string): { success: boolean; savedMessage?: Message } {
     const savedMessage = agentService.abort(sessionId)
+    operationLogService.log('abort', '')
     return { success: true, savedMessage: savedMessage || undefined }
   }
 
@@ -37,6 +43,10 @@ export class DefaultChatGateway implements ChatGateway {
 
   approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
     agentService.approveToolCall(toolCallId, approved, reason)
+    operationLogService.log(
+      'approveToolCall',
+      `${approved ? 'approved' : 'rejected'}${reason ? `: ${reason}` : ''}`
+    )
   }
 
   respondToAsk(toolCallId: string, selections: string[]): void {
@@ -57,14 +67,18 @@ export class DefaultChatGateway implements ChatGateway {
     apiProtocol?: string
   ): void {
     agentService.setModel(sessionId, provider, model, baseUrl, apiProtocol)
+    operationLogService.log('setModel', `${provider} / ${model}`)
   }
 
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     agentService.setThinkingLevel(sessionId, level)
+    operationLogService.log('setThinkingLevel', level)
   }
 
   setEnabledTools(sessionId: string, tools: string[]): void {
     agentService.setEnabledTools(sessionId, tools)
+    const preview = tools.slice(0, 5).join(', ') + (tools.length > 5 ? '...' : '')
+    operationLogService.log('setEnabledTools', preview)
   }
 
   // ─── 消息操作 ─────────────────────────────────
@@ -108,6 +122,7 @@ export class DefaultChatGateway implements ChatGateway {
         metadata: JSON.stringify({ containerId: containerId.slice(0, 12), reason: 'manual' })
       })
       chatFrontendRegistry.broadcast({ type: 'docker_event', sessionId, messageId: msg.id })
+      operationLogService.log('destroyDocker', containerId.slice(0, 12))
     }
     return { success: !!containerId }
   }
@@ -133,6 +148,7 @@ export class DefaultChatGateway implements ChatGateway {
       })
     })
     chatFrontendRegistry.broadcast({ type: 'ssh_event', sessionId, messageId: msg.id })
+    operationLogService.log('disconnectSsh', info.host)
     return { success: true }
   }
 

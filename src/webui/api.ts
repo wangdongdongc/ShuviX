@@ -232,6 +232,12 @@ export function createWebApi(): typeof window.api {
       clear: noop
     },
 
+    operationLog: {
+      list: () => Promise.resolve([]),
+      get: () => Promise.resolve(undefined),
+      clear: noop
+    },
+
     docker: {
       validate: () => Promise.resolve({ ok: false }),
       sessionStatus: (sid) => api(`/sessions/${sid}/docker`),

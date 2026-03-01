@@ -178,9 +178,22 @@ class DatabaseManager {
         updatedAt INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS operation_logs (
+        id TEXT PRIMARY KEY,
+        action TEXT NOT NULL,
+        sessionId TEXT,
+        sourceType TEXT NOT NULL,
+        sourceDetail TEXT,
+        summary TEXT NOT NULL,
+        detail TEXT,
+        requestId TEXT NOT NULL,
+        createdAt INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_operation_logs_createdAt ON operation_logs(createdAt DESC);
     `)
   }
 

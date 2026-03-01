@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { PayloadViewer } from './PayloadViewer'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { SessionPicker } from '../common/SessionPicker'
 
 /** HTTP 日志设置 */
 export function HttpLogSettings(): React.JSX.Element {
@@ -35,17 +36,10 @@ export function HttpLogSettings(): React.JSX.Element {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
-  const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([])
   const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([])
   const [filterSessionId, setFilterSessionId] = useState<string>('')
   const [filterProvider, setFilterProvider] = useState<string>('')
   const [filterModel, setFilterModel] = useState<string>('')
-
-  /** 加载会话列表（用于筛选下拉） */
-  const loadSessions = async (): Promise<void> => {
-    const list = await window.api.session.list()
-    setSessions(list.map((s) => ({ id: s.id, title: s.title })))
-  }
 
   /** 加载提供商列表（用于筛选下拉） */
   const loadProviders = async (): Promise<void> => {
@@ -123,7 +117,6 @@ export function HttpLogSettings(): React.JSX.Element {
   }, [logs])
 
   useEffect(() => {
-    loadSessions()
     loadProviders()
     loadLogs()
   }, [])
@@ -176,18 +169,7 @@ export function HttpLogSettings(): React.JSX.Element {
         </div>
         {/* 筛选条件 */}
         <div className="flex items-center gap-2">
-          <select
-            value={filterSessionId}
-            onChange={(e) => setFilterSessionId(e.target.value)}
-            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[160px]"
-          >
-            <option value="">{t('settings.allSessions')}</option>
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title || s.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
+          <SessionPicker value={filterSessionId} onChange={setFilterSessionId} />
           <select
             value={filterProvider}
             onChange={(e) => {

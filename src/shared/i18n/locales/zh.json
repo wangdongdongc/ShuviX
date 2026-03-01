@@ -280,6 +280,8 @@
     "httpLogTitle": "HTTP 请求日志",
     "httpLogDesc": "每次请求 AI 时会记录请求体，便于审计和排查。",
     "allSessions": "全部会话",
+    "searchSession": "搜索会话...",
+    "noMatchSession": "无匹配会话",
     "allProviders": "全部提供商",
     "allModels": "全部模型",
     "noLogs": "暂无日志",
@@ -395,7 +397,27 @@
     "skillDisable": "禁用",
     "skillDeleteConfirm": "确定要删除 Skill「{{name}}」吗？这将移除整个 skill 目录。",
     "skillImportDir": "从目录导入",
-    "skillOpenDir": "打开 Skills 目录"
+    "skillOpenDir": "打开 Skills 目录",
+    "tabOperationLogs": "使用日志",
+    "operationLogTitle": "使用日志",
+    "operationLogDesc": "记录所有用户操作，便于审计和回溯。",
+    "allSources": "全部来源",
+    "allActions": "全部操作",
+    "opSource": "操作来源",
+    "opSummary": "摘要",
+    "opDetail": "详情",
+    "opAction": {
+      "label": "操作类型",
+      "prompt": "发送消息",
+      "abort": "中止生成",
+      "initAgent": "初始化 Agent",
+      "setModel": "切换模型",
+      "setThinkingLevel": "设置思考深度",
+      "setEnabledTools": "更新工具集",
+      "approveToolCall": "审批工具调用",
+      "destroyDocker": "销毁 Docker 容器",
+      "disconnectSsh": "断开 SSH 连接"
+    }
   },
 
   "about": {

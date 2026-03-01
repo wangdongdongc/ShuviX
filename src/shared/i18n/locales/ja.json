@@ -280,6 +280,8 @@
     "httpLogTitle": "HTTPリクエストログ",
     "httpLogDesc": "AIリクエストごとにリクエストボディが記録され、監査やデバッグに利用できます。",
     "allSessions": "すべてのセッション",
+    "searchSession": "セッションを検索...",
+    "noMatchSession": "一致するセッションなし",
     "allProviders": "すべてのプロバイダー",
     "allModels": "すべてのモデル",
     "noLogs": "ログなし",
@@ -395,7 +397,27 @@
     "skillDisable": "無効化",
     "skillDeleteConfirm": "Skill「{{name}}」を削除しますか？Skill ディレクトリ全体が削除されます。",
     "skillImportDir": "ディレクトリからインポート",
-    "skillOpenDir": "Skills ディレクトリを開く"
+    "skillOpenDir": "Skills ディレクトリを開く",
+    "tabOperationLogs": "操作ログ",
+    "operationLogTitle": "操作ログ",
+    "operationLogDesc": "すべてのユーザー操作を記録し、監査と追跡に活用します。",
+    "allSources": "すべてのソース",
+    "allActions": "すべての操作",
+    "opSource": "操作元",
+    "opSummary": "概要",
+    "opDetail": "詳細",
+    "opAction": {
+      "label": "操作種別",
+      "prompt": "メッセージ送信",
+      "abort": "生成中止",
+      "initAgent": "Agent 初期化",
+      "setModel": "モデル切替",
+      "setThinkingLevel": "思考レベル設定",
+      "setEnabledTools": "ツール更新",
+      "approveToolCall": "ツール呼び出し承認",
+      "destroyDocker": "Docker コンテナ破棄",
+      "disconnectSsh": "SSH 切断"
+    }
   },
 
   "about": {
