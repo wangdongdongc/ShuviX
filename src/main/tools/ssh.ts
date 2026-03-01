@@ -5,12 +5,11 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
-import { TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:ssh')
@@ -41,77 +40,83 @@ const SshParamsSchema = Type.Object({
   )
 })
 
-/** 创建 ssh 工具实例 */
-export function createSshTool(ctx: ToolContext): AgentTool<typeof SshParamsSchema> & {
-  preExecute: (toolCallId: string, params: Record<string, unknown>) => Promise<void>
-} {
-  // 动态构建描述，包含已保存的凭据名称
-  const savedNames = sshCredentialDao.findAllNames()
-  let description = 'Connect to a remote server via SSH and execute commands.'
-  if (savedNames.length > 0) {
-    description += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
+export class SshTool extends BaseTool<typeof SshParamsSchema> {
+  readonly name = 'ssh'
+  readonly label = t('tool.sshLabel')
+  readonly description: string
+  readonly parameters = SshParamsSchema
+
+  constructor(private ctx: ToolContext) {
+    super()
+    // 动态构建描述，包含已保存的凭据名称
+    const savedNames = sshCredentialDao.findAllNames()
+    let desc = 'Connect to a remote server via SSH and execute commands.'
+    if (savedNames.length > 0) {
+      desc += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
+    }
+    desc +=
+      ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
+    desc +=
+      ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
+    this.description = desc
   }
-  description +=
-    ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
-  description +=
-    ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
 
-  return {
-    name: 'ssh',
-    label: t('tool.sshLabel'),
-    description,
-    parameters: SshParamsSchema,
+  /** 资源初始化：使用保存凭据的 connect 场景提前建立连接 */
+  async preExecute(_toolCallId: string, params: Record<string, unknown>): Promise<void> {
+    // 仅处理 action=connect && credentialName 的场景
+    if (params.action !== 'connect' || !params.credentialName) return
+    // 已有连接则跳过
+    if (sshManager.isConnected(this.ctx.sessionId)) return
 
-    /** 资源初始化：使用保存凭据的 connect 场景提前建立连接 */
-    preExecute: async (_toolCallId: string, params: Record<string, unknown>) => {
-      // 仅处理 action=connect && credentialName 的场景
-      if (params.action !== 'connect' || !params.credentialName) return
-      // 已有连接则跳过
-      if (sshManager.isConnected(ctx.sessionId)) return
+    const credentialName = params.credentialName as string
+    const saved = sshCredentialDao.findByName(credentialName)
+    if (!saved) return // 凭据不存在，留给 execute 处理并返回明确错误
 
-      const credentialName = params.credentialName as string
-      const saved = sshCredentialDao.findByName(credentialName)
-      if (!saved) return // 凭据不存在，留给 execute 处理并返回明确错误
+    log.info(
+      `[preExecute] 使用保存的凭据 "${credentialName}" 连接 SSH session=${this.ctx.sessionId}`
+    )
+    const credentials = {
+      host: saved.host,
+      port: saved.port,
+      username: saved.username,
+      password: saved.authType === 'password' ? saved.password : undefined,
+      privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
+      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
+    }
 
-      log.info(`[preExecute] 使用保存的凭据 "${credentialName}" 连接 SSH session=${ctx.sessionId}`)
-      const credentials = {
-        host: saved.host,
-        port: saved.port,
-        username: saved.username,
-        password: saved.authType === 'password' ? saved.password : undefined,
-        privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
-        passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
-      }
+    const result = await sshManager.connect(this.ctx.sessionId, credentials)
+    if (result.success) {
+      this.ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+    }
+    // 连接失败不抛异常，留给 execute 中的 handleConnect 返回明确错误消息
+  }
 
-      const result = await sshManager.connect(ctx.sessionId, credentials)
-      if (result.success) {
-        ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
-      }
-      // 连接失败不抛异常，留给 execute 中的 handleConnect 返回明确错误消息
+  /** 安全检查 — 审批为动作特定的动态条件性审批，留在 executeInternal 中 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
+
+  protected async executeInternal(
+    toolCallId: string,
+    params: {
+      action: 'connect' | 'exec' | 'disconnect'
+      credentialName?: string
+      command?: string
+      timeout?: number
     },
+    signal?: AbortSignal
+  ): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    execute: async (
-      toolCallId: string,
-      params: {
-        action: 'connect' | 'exec' | 'disconnect'
-        credentialName?: string
-        command?: string
-        timeout?: number
-      },
-      signal?: AbortSignal
-    ) => {
-      if (signal?.aborted) throw new Error(TOOL_ABORTED)
-
-      switch (params.action) {
-        case 'connect':
-          return handleConnect(ctx, toolCallId, params.credentialName, signal)
-        case 'exec':
-          return handleExec(ctx, toolCallId, params.command, params.timeout, signal)
-        case 'disconnect':
-          return handleDisconnect(ctx)
-        default:
-          throw new Error(`Unknown action: ${params.action}`)
-      }
+    switch (params.action) {
+      case 'connect':
+        return handleConnect(this.ctx, toolCallId, params.credentialName, signal)
+      case 'exec':
+        return handleExec(this.ctx, toolCallId, params.command, params.timeout, signal)
+      case 'disconnect':
+        return handleDisconnect(this.ctx)
+      default:
+        throw new Error(`Unknown action: ${params.action}`)
     }
   }
 }

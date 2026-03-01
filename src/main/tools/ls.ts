@@ -6,8 +6,13 @@
 import { stat } from 'fs/promises'
 import { relative, basename, dirname, resolve, sep } from 'path'
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
+import {
+  BaseTool,
+  resolveProjectConfig,
+  assertSandboxRead,
+  TOOL_ABORTED,
+  type ToolContext
+} from './types'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -87,76 +92,99 @@ function buildTree(files: string[]): string {
   return renderDir('.', 0)
 }
 
-/** 创建 ls 工具实例 */
-export function createListTool(ctx: ToolContext): AgentTool<typeof LsParamsSchema> {
-  return {
-    name: 'ls',
-    label: t('tool.lsLabel'),
-    description:
-      'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.',
-    parameters: LsParamsSchema,
-    execute: async (
-      _toolCallId: string,
-      params: { path?: string; ignore?: string[] },
-      signal?: AbortSignal
-    ) => {
-      if (signal?.aborted) throw new Error(TOOL_ABORTED)
+/** ls 工具 */
+export class ListTool extends BaseTool<typeof LsParamsSchema> {
+  readonly name = 'ls'
+  readonly label = t('tool.lsLabel')
+  readonly description =
+    'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.'
+  readonly parameters = LsParamsSchema
 
-      const config = resolveProjectConfig(ctx)
-      const searchPath = params.path
-        ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
-        : config.workingDirectory
+  constructor(private ctx: ToolContext) {
+    super()
+  }
 
-      log.info(`ls ${searchPath}`)
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
 
-      // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许）
-      assertSandboxRead(config, searchPath)
+  protected async securityCheck(
+    _toolCallId: string,
+    params: { path?: string; ignore?: string[] },
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-      // 验证目录存在
-      let dirStat
-      try {
-        dirStat = await stat(searchPath)
-      } catch {
-        throw new Error(`Path not found: ${searchPath}`)
+    const config = resolveProjectConfig(this.ctx)
+    const searchPath = params.path
+      ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
+      : config.workingDirectory
+
+    // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许）
+    assertSandboxRead(config, searchPath)
+  }
+
+  protected async executeInternal(
+    _toolCallId: string,
+    params: { path?: string; ignore?: string[] },
+    signal?: AbortSignal
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: { path: string; count: number; truncated: boolean }
+  }> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    const config = resolveProjectConfig(this.ctx)
+    const searchPath = params.path
+      ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
+      : config.workingDirectory
+
+    log.info(`ls ${searchPath}`)
+
+    // 验证目录存在
+    let dirStat
+    try {
+      dirStat = await stat(searchPath)
+    } catch {
+      throw new Error(`Path not found: ${searchPath}`)
+    }
+    if (!dirStat.isDirectory()) {
+      throw new Error(`${searchPath} is not a directory`)
+    }
+
+    // 构建 glob 排除列表
+    const globs: string[] = []
+    if (params.ignore) {
+      for (const pattern of params.ignore) {
+        globs.push(`!${pattern}`)
       }
-      if (!dirStat.isDirectory()) {
-        throw new Error(`${searchPath} is not a directory`)
-      }
+    }
 
-      // 构建 glob 排除列表
-      const globs: string[] = []
-      if (params.ignore) {
-        for (const pattern of params.ignore) {
-          globs.push(`!${pattern}`)
-        }
-      }
+    // 使用 ripgrep 列举文件（自动遵循 .gitignore）
+    const { files, truncated } = await rgFilesList({
+      cwd: searchPath,
+      glob: globs.length > 0 ? globs : undefined,
+      limit: LIMIT,
+      signal
+    })
 
-      // 使用 ripgrep 列举文件（自动遵循 .gitignore）
-      const { files, truncated } = await rgFilesList({
-        cwd: searchPath,
-        glob: globs.length > 0 ? globs : undefined,
-        limit: LIMIT,
-        signal
-      })
+    // 排序后构建树形输出
+    files.sort()
 
-      // 排序后构建树形输出
-      files.sort()
+    const relPath = relative(config.workingDirectory, searchPath) || '.'
+    const tree = buildTree(files)
+    let output = `${relPath}/\n${tree}`
 
-      const relPath = relative(config.workingDirectory, searchPath) || '.'
-      const tree = buildTree(files)
-      let output = `${relPath}/\n${tree}`
+    if (truncated) {
+      output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`
+    }
 
-      if (truncated) {
-        output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`
-      }
-
-      return {
-        content: [{ type: 'text' as const, text: output }],
-        details: {
-          path: searchPath,
-          count: files.length,
-          truncated
-        }
+    return {
+      content: [{ type: 'text' as const, text: output }],
+      details: {
+        path: searchPath,
+        count: files.length,
+        truncated
       }
     }
   }

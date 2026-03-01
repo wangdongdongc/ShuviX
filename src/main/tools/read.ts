@@ -10,7 +10,6 @@ import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { extname } from 'path'
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import {
@@ -22,10 +21,46 @@ import {
 } from './utils/truncate'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
-import { resolveProjectConfig, assertSandboxRead, TOOL_ABORTED, type ToolContext } from './types'
+import {
+  BaseTool,
+  resolveProjectConfig,
+  assertSandboxRead,
+  TOOL_ABORTED,
+  type ToolContext
+} from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
+
+/** 目录读取的 details */
+interface DirectoryDetails {
+  totalEntries: number
+  truncated: boolean
+}
+
+/** 富文本 / 旧版 doc 转换后的 details */
+interface ConvertedDetails {
+  fileSize: number
+  format: string
+  converted: boolean
+  truncated: boolean
+}
+
+/** 纯文本文件读取的 details */
+interface TextFileDetails {
+  totalLines: number
+  fileSize: number
+  truncated: boolean
+}
+
+/** details 的所有可能类型 */
+type ReadDetails = DirectoryDetails | ConvertedDetails | TextFileDetails
+
+/** 工具返回结果（content 固定为文本数组，details 按场景特化） */
+interface ReadResult<D extends ReadDetails = ReadDetails> {
+  content: Array<{ type: 'text'; text: string }>
+  details: D
+}
 
 /** markitdown-ts 支持转换的文件扩展名 */
 const RICH_FILE_EXTENSIONS = new Set([
@@ -141,95 +176,113 @@ const ReadParamsSchema = Type.Object({
   )
 })
 
-/** 创建 read 工具实例 */
-export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSchema> {
-  return {
-    name: 'read',
-    label: t('tool.readLabel'),
-    description:
-      'Read file or directory contents. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).',
-    parameters: ReadParamsSchema,
-    execute: async (
-      _toolCallId: string,
-      params: { path: string; offset?: number; limit?: number },
-      signal?: AbortSignal
-    ) => {
+/** Read 工具类 */
+export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
+  readonly name = 'read'
+  readonly label = t('tool.readLabel')
+  readonly description =
+    'Read file or directory contents. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).'
+  readonly parameters = ReadParamsSchema
+
+  constructor(private ctx: ToolContext) {
+    super()
+  }
+
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
+
+  protected async securityCheck(
+    _toolCallId: string,
+    params: { path: string; offset?: number; limit?: number },
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    const config = resolveProjectConfig(this.ctx)
+    const absolutePath = resolveReadPath(params.path, config.workingDirectory)
+
+    // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
+    assertSandboxRead(config, absolutePath, params.path)
+  }
+
+  protected async executeInternal(
+    _toolCallId: string,
+    params: { path: string; offset?: number; limit?: number },
+    signal?: AbortSignal
+  ): Promise<ReadResult> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    const config = resolveProjectConfig(this.ctx)
+    const absolutePath = resolveReadPath(params.path, config.workingDirectory)
+    log.info(absolutePath)
+
+    try {
+      // 获取文件/目录信息
+      const s = await fsStat(absolutePath)
+
+      // 目录：列出条目
+      if (s.isDirectory()) {
+        return await readDirectory(absolutePath, params)
+      }
+
+      const fileStat = { size: s.size, isFile: s.isFile() }
+      if (!fileStat.isFile) {
+        throw new Error(`Not a file: ${params.path}`)
+      }
+
       if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-      const config = resolveProjectConfig(ctx)
-      const absolutePath = resolveReadPath(params.path, config.workingDirectory)
-      log.info(absolutePath)
-
-      // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
-      assertSandboxRead(config, absolutePath, params.path)
-
-      try {
-        // 获取文件/目录信息
-        const s = await fsStat(absolutePath)
-
-        // 目录：列出条目
-        if (s.isDirectory()) {
-          return await readDirectory(absolutePath, params)
-        }
-
-        const fileStat = { size: s.size, isFile: s.isFile() }
-        if (!fileStat.isFile) {
-          throw new Error(`Not a file: ${params.path}`)
-        }
-
-        if (signal?.aborted) throw new Error(TOOL_ABORTED)
-
-        // 判断是否为富文本文件，使用 markitdown-ts 转换
-        const ext = extname(absolutePath).toLowerCase()
-        if (RICH_FILE_EXTENSIONS.has(ext)) {
-          return await readRichFile(absolutePath, params.path, fileStat.size, signal)
-        }
-
-        // 旧版 Word .doc 文件：使用 word-extractor 提取文字
-        if (ext === '.doc') {
-          return await readLegacyDoc(absolutePath, params.path, fileStat.size, signal)
-        }
-
-        // 已知二进制格式：直接拒绝
-        if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
-          throw new Error(
-            `Unsupported format (${ext}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
-          )
-        }
-
-        // 检测是否为二进制（只读取前 8KB，不加载整个文件）
-        if (await isBinaryFile(absolutePath, fileStat.size)) {
-          throw new Error(
-            `Unsupported format (${ext || 'binary'}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
-          )
-        }
-
-        // 纯文本文件：流式逐行读取
-        const result = await readTextFile(absolutePath, params, fileStat)
-        // 记录读取时间（用于 edit/write 工具校验文件是否被外部修改）
-        recordRead(ctx.sessionId, absolutePath)
-        return result
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        if (errMsg === TOOL_ABORTED) throw err
-        if (
-          err instanceof Error &&
-          'code' in err &&
-          (err as NodeJS.ErrnoException).code === 'ENOENT'
-        ) {
-          // 模糊匹配建议
-          const suggestions = suggestSimilarFiles(absolutePath)
-          if (suggestions.length > 0) {
-            throw new Error(
-              `File not found: ${params.path}` +
-                '\n\nDid you mean one of these?\n' +
-                suggestions.join('\n')
-            )
-          }
-          throw new Error(`File not found: ${params.path}`)
-        }
-        throw new Error(`Failed: ${errMsg}`)
+      // 判断是否为富文本文件，使用 markitdown-ts 转换
+      const ext = extname(absolutePath).toLowerCase()
+      if (RICH_FILE_EXTENSIONS.has(ext)) {
+        return await readRichFile(absolutePath, params.path, fileStat.size, signal)
       }
+
+      // 旧版 Word .doc 文件：使用 word-extractor 提取文字
+      if (ext === '.doc') {
+        return await readLegacyDoc(absolutePath, params.path, fileStat.size, signal)
+      }
+
+      // 已知二进制格式：直接拒绝
+      if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
+        throw new Error(
+          `Unsupported format (${ext}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
+        )
+      }
+
+      // 检测是否为二进制（只读取前 8KB，不加载整个文件）
+      if (await isBinaryFile(absolutePath, fileStat.size)) {
+        throw new Error(
+          `Unsupported format (${ext || 'binary'}): ${params.path}. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.`
+        )
+      }
+
+      // 纯文本文件：流式逐行读取
+      const result = await readTextFile(absolutePath, params, fileStat)
+      // 记录读取时间（用于 edit/write 工具校验文件是否被外部修改）
+      recordRead(this.ctx.sessionId, absolutePath)
+      return result
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (errMsg === TOOL_ABORTED) throw err
+      if (
+        err instanceof Error &&
+        'code' in err &&
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        // 模糊匹配建议
+        const suggestions = suggestSimilarFiles(absolutePath)
+        if (suggestions.length > 0) {
+          throw new Error(
+            `File not found: ${params.path}` +
+              '\n\nDid you mean one of these?\n' +
+              suggestions.join('\n')
+          )
+        }
+        throw new Error(`File not found: ${params.path}`)
+      }
+      throw new Error(`Failed: ${errMsg}`)
     }
   }
 }
@@ -240,7 +293,7 @@ export function createReadTool(ctx: ToolContext): AgentTool<typeof ReadParamsSch
 async function readDirectory(
   absolutePath: string,
   params: { path: string; offset?: number; limit?: number }
-) {
+): Promise<ReadResult<DirectoryDetails>> {
   const dirents = await fsReaddir(absolutePath, { withFileTypes: true })
   const entries = dirents.map((d) => (d.isDirectory() ? d.name + '/' : d.name))
   entries.sort((a, b) => a.localeCompare(b))
@@ -282,7 +335,7 @@ async function readRichFile(
   displayPath: string,
   fileSize: number,
   signal?: AbortSignal
-) {
+): Promise<ReadResult<ConvertedDetails>> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const md = getMarkItDown()
@@ -324,7 +377,7 @@ async function readLegacyDoc(
   displayPath: string,
   fileSize: number,
   signal?: AbortSignal
-) {
+): Promise<ReadResult<ConvertedDetails>> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const extractor = getWordExtractor()
@@ -364,7 +417,7 @@ async function readTextFile(
   absolutePath: string,
   params: { path: string; offset?: number; limit?: number },
   fileStat: { size: number }
-) {
+): Promise<ReadResult<TextFileDetails>> {
   const stream = createReadStream(absolutePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream, crlfDelay: Infinity })
 

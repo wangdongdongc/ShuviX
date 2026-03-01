@@ -4,8 +4,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
-import { TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 
 const AskParamsSchema = Type.Object({
@@ -22,52 +21,67 @@ const AskParamsSchema = Type.Object({
   )
 })
 
-/** 创建 ask 工具实例 */
-export function createAskTool(ctx: ToolContext): AgentTool<typeof AskParamsSchema> {
-  return {
-    name: 'ask',
-    label: t('tool.askLabel'),
-    description:
-      'Present a question with clickable options to the user. You MUST use this tool instead of listing options in text whenever you need the user to choose between approaches, styles, configurations, or any decision point. Do NOT list numbered options in plain text — always call this tool so the user can click to select.',
-    parameters: AskParamsSchema,
-    execute: async (
-      toolCallId: string,
-      params: {
-        question: string
-        options: Array<{ label: string; description: string }>
-        allowMultiple?: boolean
-      },
-      signal?: AbortSignal
-    ) => {
-      if (signal?.aborted) throw new Error(TOOL_ABORTED)
+/** ask 工具 */
+export class AskTool extends BaseTool<typeof AskParamsSchema> {
+  readonly name = 'ask'
+  readonly label = t('tool.askLabel')
+  readonly description =
+    'Present a question with clickable options to the user. You MUST use this tool instead of listing options in text whenever you need the user to choose between approaches, styles, configurations, or any decision point. Do NOT list numbered options in plain text — always call this tool so the user can click to select.'
+  readonly parameters = AskParamsSchema
 
-      if (!ctx.requestUserInput) {
-        throw new Error('requestUserInput callback not available')
-      }
+  constructor(private ctx: ToolContext) {
+    super()
+  }
 
-      // 挂起 Promise，等待用户在前端选择
-      const selections = await ctx.requestUserInput(toolCallId, {
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
+
+  /** 安全检查 — 无确定性安全约束 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
+
+  protected async executeInternal(
+    toolCallId: string,
+    params: {
+      question: string
+      options: Array<{ label: string; description: string }>
+      allowMultiple?: boolean
+    },
+    signal?: AbortSignal
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: { question: string; selections: string[] }
+  }> {
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    if (!this.ctx.requestUserInput) {
+      throw new Error('requestUserInput callback not available')
+    }
+
+    // 挂起 Promise，等待用户在前端选择
+    const selections = await this.ctx.requestUserInput(toolCallId, {
+      question: params.question,
+      options: params.options,
+      allowMultiple: params.allowMultiple ?? false
+    })
+
+    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    // 格式化用户选择为文本
+    let text: string
+    if (selections.length === 0) {
+      text = 'User made no selection'
+    } else {
+      text = `User selected: ${selections.join(', ')}`
+    }
+
+    return {
+      content: [{ type: 'text' as const, text }],
+      details: {
         question: params.question,
-        options: params.options,
-        allowMultiple: params.allowMultiple ?? false
-      })
-
-      if (signal?.aborted) throw new Error(TOOL_ABORTED)
-
-      // 格式化用户选择为文本
-      let text: string
-      if (selections.length === 0) {
-        text = 'User made no selection'
-      } else {
-        text = `User selected: ${selections.join(', ')}`
-      }
-
-      return {
-        content: [{ type: 'text' as const, text }],
-        details: {
-          question: params.question,
-          selections
-        }
+        selections
       }
     }
   }

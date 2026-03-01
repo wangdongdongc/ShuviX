@@ -4,8 +4,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
-import type { ToolContext } from './types'
+import { BaseTool, type ToolContext } from './types'
 import { sessionService } from '../services/sessionService'
 import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
 import { t } from '../i18n'
@@ -51,126 +50,138 @@ const ShuvixProjectParamsSchema = Type.Object({
   )
 })
 
-/** 创建 shuvix-project 工具实例 */
-export function createShuvixProjectTool(
-  ctx: ToolContext
-): AgentTool<typeof ShuvixProjectParamsSchema> {
-  return {
-    name: 'shuvix-project',
-    label: t('tool.shuvixProjectLabel'),
-    description: `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`,
-    parameters: ShuvixProjectParamsSchema,
-    execute: async (
-      toolCallId: string,
-      params: {
-        action: 'get' | 'update'
-        name?: string
-        systemPrompt?: string
-        sandboxEnabled?: boolean
-        enabledTools?: string[]
-        referenceDirs?: Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
-      }
-    ) => {
-      // 查找当前会话所属项目
-      const session = sessionService.getById(ctx.sessionId)
-      if (!session?.projectId) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: 'No project linked to current session. Cannot read or modify project config.'
-            }
-          ],
-          details: undefined
-        }
-      }
-      const project = projectService.getById(session.projectId)
-      if (!project) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: 'No project linked to current session. Cannot read or modify project config.'
-            }
-          ],
-          details: undefined
-        }
-      }
+export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema> {
+  readonly name = 'shuvix-project'
+  readonly label = t('tool.shuvixProjectLabel')
+  readonly description = `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`
+  readonly parameters = ShuvixProjectParamsSchema
 
-      if (params.action === 'get') {
-        // 读取项目配置（无需审批）
-        let enabledTools: string[] = []
-        let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []
-        try {
-          const settings = JSON.parse(project.settings || '{}')
-          enabledTools = settings.enabledTools || []
-          referenceDirs = settings.referenceDirs || []
-        } catch {
-          /* 忽略 */
-        }
+  constructor(private ctx: ToolContext) {
+    super()
+  }
 
-        const info = {
-          id: project.id,
-          name: project.name,
-          path: project.path,
-          systemPrompt: project.systemPrompt || '(empty)',
-          sandboxEnabled: project.sandboxEnabled === 1,
-          enabledTools,
-          referenceDirs
-        }
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }],
-          details: info
-        }
-      }
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
 
-      // action === 'update'：需要审批
-      const updates: Record<
-        string,
-        | string
-        | boolean
-        | string[]
-        | Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
-      > = {}
-      if (params.name !== undefined) updates.name = params.name
-      if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
-      if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
-      if (params.enabledTools !== undefined) updates.enabledTools = params.enabledTools
-      if (params.referenceDirs !== undefined) updates.referenceDirs = params.referenceDirs
+  /** 安全检查 — 审批为动态条件性（update action），留在 executeInternal 中 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
 
-      if (Object.keys(updates).length === 0) {
-        return {
-          content: [
-            { type: 'text' as const, text: 'No fields to update. Specify at least one field.' }
-          ],
-          details: undefined
-        }
-      }
-
-      // 构建可读预览文本用于审批弹窗
-      const preview = Object.entries(updates)
-        .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
-        .join('\n')
-
-      if (ctx.requestApproval) {
-        const approval = await ctx.requestApproval(toolCallId, preview)
-        if (!approval.approved) {
-          throw new Error(approval.reason || 'User denied this operation')
-        }
-      }
-
-      // 执行更新
-      projectService.update(project.id, updates)
-
+  protected async executeInternal(
+    toolCallId: string,
+    params: {
+      action: 'get' | 'update'
+      name?: string
+      systemPrompt?: string
+      sandboxEnabled?: boolean
+      enabledTools?: string[]
+      referenceDirs?: Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
+    }
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: Record<string, unknown> | undefined
+  }> {
+    // 查找当前会话所属项目
+    const session = sessionService.getById(this.ctx.sessionId)
+    if (!session?.projectId) {
       return {
         content: [
           {
             type: 'text' as const,
-            text: `Project config updated: ${Object.keys(updates).join(', ')}`
+            text: 'No project linked to current session. Cannot read or modify project config.'
           }
         ],
-        details: { updatedFields: Object.keys(updates) }
+        details: undefined
       }
+    }
+    const project = projectService.getById(session.projectId)
+    if (!project) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'No project linked to current session. Cannot read or modify project config.'
+          }
+        ],
+        details: undefined
+      }
+    }
+
+    if (params.action === 'get') {
+      // 读取项目配置（无需审批）
+      let enabledTools: string[] = []
+      let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []
+      try {
+        const settings = JSON.parse(project.settings || '{}')
+        enabledTools = settings.enabledTools || []
+        referenceDirs = settings.referenceDirs || []
+      } catch {
+        /* 忽略 */
+      }
+
+      const info = {
+        id: project.id,
+        name: project.name,
+        path: project.path,
+        systemPrompt: project.systemPrompt || '(empty)',
+        sandboxEnabled: project.sandboxEnabled === 1,
+        enabledTools,
+        referenceDirs
+      }
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }],
+        details: info
+      }
+    }
+
+    // action === 'update'：需要审批
+    const updates: Record<
+      string,
+      | string
+      | boolean
+      | string[]
+      | Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
+    > = {}
+    if (params.name !== undefined) updates.name = params.name
+    if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
+    if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
+    if (params.enabledTools !== undefined) updates.enabledTools = params.enabledTools
+    if (params.referenceDirs !== undefined) updates.referenceDirs = params.referenceDirs
+
+    if (Object.keys(updates).length === 0) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'No fields to update. Specify at least one field.' }
+        ],
+        details: undefined
+      }
+    }
+
+    // 构建可读预览文本用于审批弹窗
+    const preview = Object.entries(updates)
+      .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+      .join('\n')
+
+    if (this.ctx.requestApproval) {
+      const approval = await this.ctx.requestApproval(toolCallId, preview)
+      if (!approval.approved) {
+        throw new Error(approval.reason || 'User denied this operation')
+      }
+    }
+
+    // 执行更新
+    projectService.update(project.id, updates)
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Project config updated: ${Object.keys(updates).join(', ')}`
+        }
+      ],
+      details: { updatedFields: Object.keys(updates) }
     }
   }
 }

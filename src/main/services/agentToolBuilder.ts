@@ -1,17 +1,17 @@
 import type { AgentState } from '@mariozechner/pi-agent-core'
-import { createBashTool } from '../tools/bash'
-import { createReadTool } from '../tools/read'
-import { createWriteTool } from '../tools/write'
-import { createEditTool } from '../tools/edit'
-import { createAskTool } from '../tools/ask'
-import { createListTool } from '../tools/ls'
-import { createGrepTool } from '../tools/grep'
-import { createGlobTool } from '../tools/glob'
-import { createSshTool } from '../tools/ssh'
-import { createShuvixProjectTool } from '../tools/shuvixProject'
-import { createShuvixSettingTool } from '../tools/shuvixSetting'
-import { createSkillTool } from '../tools/skill'
-import type { ToolContext } from '../tools/types'
+import { BashTool } from '../tools/bash'
+import { ReadTool } from '../tools/read'
+import { WriteTool } from '../tools/write'
+import { EditTool } from '../tools/edit'
+import { AskTool } from '../tools/ask'
+import { ListTool } from '../tools/ls'
+import { GrepTool } from '../tools/grep'
+import { GlobTool } from '../tools/glob'
+import { SshTool } from '../tools/ssh'
+import { ShuvixProjectTool } from '../tools/shuvixProject'
+import { ShuvixSettingTool } from '../tools/shuvixSetting'
+import { SkillTool } from '../tools/skill'
+import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
 import { parallelCoordinator } from './parallelExecution'
 
@@ -19,11 +19,9 @@ type AnyAgentTool = AgentState['tools'][number]
 
 /** 包装单个工具的 execute 方法，接入并行执行协调器 */
 function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentTool {
-  const originalExecute = tool.execute
-  // 从工具对象读取可选的 preExecute 生命周期函数（duck typing）
-  const preExecute = (tool as unknown as Record<string, unknown>).preExecute as
-    | ((toolCallId: string, params: Record<string, unknown>) => Promise<void>)
-    | undefined
+  const originalExecute = tool instanceof BaseTool ? tool.execute.bind(tool) : tool.execute
+  // BaseTool 实例直接读取 preExecute；MCP 等外部工具无此方法
+  const preExecute = tool instanceof BaseTool ? tool.preExecute.bind(tool) : undefined
   parallelCoordinator.registerExecutor(sessionId, tool.name, tool, originalExecute, preExecute)
 
   return {
@@ -48,17 +46,17 @@ function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentToo
 export function buildTools(ctx: ToolContext, enabledTools: string[]): AnyAgentTool[] {
   // 内置工具
   const builtinAll: Record<string, AnyAgentTool> = {
-    bash: createBashTool(ctx),
-    read: createReadTool(ctx),
-    write: createWriteTool(ctx),
-    edit: createEditTool(ctx),
-    ask: createAskTool(ctx),
-    ls: createListTool(ctx),
-    grep: createGrepTool(ctx),
-    glob: createGlobTool(ctx),
-    ssh: createSshTool(ctx),
-    'shuvix-project': createShuvixProjectTool(ctx),
-    'shuvix-setting': createShuvixSettingTool(ctx)
+    bash: new BashTool(ctx),
+    read: new ReadTool(ctx),
+    write: new WriteTool(ctx),
+    edit: new EditTool(ctx),
+    ask: new AskTool(ctx),
+    ls: new ListTool(ctx),
+    grep: new GrepTool(ctx),
+    glob: new GlobTool(ctx),
+    ssh: new SshTool(ctx),
+    'shuvix-project': new ShuvixProjectTool(ctx),
+    'shuvix-setting': new ShuvixSettingTool(ctx)
   }
   // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
   const mcpAll: Record<string, AnyAgentTool> = {}
@@ -76,7 +74,7 @@ export function buildTools(ctx: ToolContext, enabledTools: string[]): AnyAgentTo
 
   // 有启用的 skill 时动态注册 skill 工具
   if (enabledSkillNames.length > 0) {
-    all['skill'] = createSkillTool(enabledSkillNames)
+    all['skill'] = new SkillTool(enabledSkillNames)
   }
 
   // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理）

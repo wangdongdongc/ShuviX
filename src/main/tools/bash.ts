@@ -5,12 +5,11 @@
 
 import { spawn } from 'child_process'
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
-import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:bash')
@@ -118,109 +117,116 @@ function getDockerConfig(): { useDocker: boolean; image: string; memory?: string
   }
 }
 
-/** 创建 bash 工具实例 */
-export function createBashTool(ctx: ToolContext): AgentTool<typeof BashParamsSchema> & {
-  preExecute: (toolCallId: string, params: Record<string, unknown>) => Promise<void>
-} {
-  return {
-    name: 'bash',
-    label: t('tool.bashLabel'),
-    description:
-      'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. IMPORTANT: Prefer built-in tools over shell commands when possible — use `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Only use bash when no built-in tool can accomplish the task.',
-    parameters: BashParamsSchema,
+export class BashTool extends BaseTool<typeof BashParamsSchema> {
+  readonly name = 'bash'
+  readonly label = t('tool.bashLabel')
+  readonly description =
+    'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. IMPORTANT: Prefer built-in tools over shell commands when possible — use `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Only use bash when no built-in tool can accomplish the task.'
+  readonly parameters = BashParamsSchema
 
-    /** 资源初始化：Docker 模式下确保容器运行 */
-    preExecute: async (_toolCallId: string, _params: Record<string, unknown>) => {
-      const docker = getDockerConfig()
-      if (!docker.useDocker) return
+  constructor(private ctx: ToolContext) {
+    super()
+  }
 
-      const config = resolveProjectConfig(ctx)
-      try {
-        const container = await dockerManager.ensureContainer(
-          ctx.sessionId,
-          docker.image,
+  /** 资源初始化：Docker 模式下确保容器运行 */
+  async preExecute(): Promise<void> {
+    const docker = getDockerConfig()
+    if (!docker.useDocker) return
+
+    const config = resolveProjectConfig(this.ctx)
+    try {
+      const container = await dockerManager.ensureContainer(
+        this.ctx.sessionId,
+        docker.image,
+        config.workingDirectory,
+        {
+          memory: docker.memory,
+          cpus: docker.cpus,
+          referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined
+        }
+      )
+      if (container.isNew) this.ctx.onContainerCreated?.(container.containerId, docker.image)
+    } catch {
+      const status = dockerManager.getDockerStatus()
+      if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
+      if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
+      throw new Error(t('settings.toolBashDockerNotRunning'))
+    }
+  }
+
+  /** 安全检查 — requestApproval 为动态条件性审批，留在 executeInternal 中 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
+
+  protected async executeInternal(
+    toolCallId: string,
+    params: { command: string; timeout?: number },
+    signal?: AbortSignal
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: { exitCode: number; truncated: boolean }
+  }> {
+    const timeout = params.timeout ?? DEFAULT_TIMEOUT
+    const config = resolveProjectConfig(this.ctx)
+    const docker = getDockerConfig()
+
+    // 沙箱模式：bash 命令需用户确认
+    if (config.sandboxEnabled && this.ctx.requestApproval) {
+      const approval = await this.ctx.requestApproval(toolCallId, params.command)
+      if (!approval.approved) {
+        throw new Error(approval.reason || 'Sandbox: user denied execution of this command')
+      }
+    }
+
+    try {
+      let result: { stdout: string; stderr: string; exitCode: number }
+
+      if (docker.useDocker) {
+        // Docker 模式：preExecute 已确保容器就绪，直接获取并执行
+        const containerInfo = dockerManager.getContainerInfo(this.ctx.sessionId)
+        if (!containerInfo) {
+          throw new Error(t('settings.toolBashDockerNotRunning'))
+        }
+        log.info(`(docker ${docker.image}): ${params.command}`)
+        result = await dockerManager.exec(
+          containerInfo.containerId,
+          params.command,
           config.workingDirectory,
-          {
-            memory: docker.memory,
-            cpus: docker.cpus,
-            referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined
-          }
+          signal
         )
-        if (container.isNew) ctx.onContainerCreated?.(container.containerId, docker.image)
-      } catch {
-        const status = dockerManager.getDockerStatus()
-        if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
-        if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
-        throw new Error(t('settings.toolBashDockerNotRunning'))
+      } else {
+        // 本地模式
+        result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)
       }
-    },
+      const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
 
-    execute: async (
-      toolCallId: string,
-      params: { command: string; timeout?: number },
-      signal?: AbortSignal
-    ) => {
-      const timeout = params.timeout ?? DEFAULT_TIMEOUT
-      const config = resolveProjectConfig(ctx)
-      const docker = getDockerConfig()
+      // 截断过长的输出
+      const truncated = truncateTail(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
 
-      // 沙箱模式：bash 命令需用户确认
-      if (config.sandboxEnabled && ctx.requestApproval) {
-        const approval = await ctx.requestApproval(toolCallId, params.command)
-        if (!approval.approved) {
-          throw new Error(approval.reason || 'Sandbox: user denied execution of this command')
-        }
+      let text = ''
+      if (truncated.truncated) {
+        text += `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n`
+      }
+      text += truncated.text
+
+      if (result.exitCode === 124) {
+        text += `\n\n[Command timed out (${timeout}s)]`
+      } else if (result.exitCode !== 0) {
+        text += `\n\n[Exit code: ${result.exitCode}]`
       }
 
-      try {
-        let result: { stdout: string; stderr: string; exitCode: number }
-
-        if (docker.useDocker) {
-          // Docker 模式：preExecute 已确保容器就绪，直接获取并执行
-          const containerInfo = dockerManager.getContainerInfo(ctx.sessionId)
-          if (!containerInfo) {
-            throw new Error(t('settings.toolBashDockerNotRunning'))
-          }
-          log.info(`(docker ${docker.image}): ${params.command}`)
-          result = await dockerManager.exec(
-            containerInfo.containerId,
-            params.command,
-            config.workingDirectory,
-            signal
-          )
-        } else {
-          // 本地模式
-          result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)
+      return {
+        content: [{ type: 'text' as const, text }],
+        details: {
+          exitCode: result.exitCode,
+          truncated: truncated.truncated
         }
-        const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
-
-        // 截断过长的输出
-        const truncated = truncateTail(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
-
-        let text = ''
-        if (truncated.truncated) {
-          text += `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n`
-        }
-        text += truncated.text
-
-        if (result.exitCode === 124) {
-          text += `\n\n[Command timed out (${timeout}s)]`
-        } else if (result.exitCode !== 0) {
-          text += `\n\n[Exit code: ${result.exitCode}]`
-        }
-
-        return {
-          content: [{ type: 'text' as const, text }],
-          details: {
-            exitCode: result.exitCode,
-            truncated: truncated.truncated
-          }
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        if (errMsg === TOOL_ABORTED) throw err
-        throw new Error(`Command failed: ${errMsg}`)
       }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (errMsg === TOOL_ABORTED) throw err
+      throw new Error(`Command failed: ${errMsg}`)
     }
   }
 }

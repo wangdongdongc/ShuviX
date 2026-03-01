@@ -13,6 +13,16 @@ const SESSION_ID = 'test-session'
 
 // mock types 模块（完全替换，不加载原始模块避免触发 Electron/DB 依赖）
 vi.mock('../types', () => ({
+  BaseTool: class {
+    async securityCheck(..._args: unknown[]): Promise<void> {}
+    async executeInternal(..._args: unknown[]): Promise<unknown> {
+      return {}
+    }
+    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
+      await this.securityCheck(toolCallId, params, signal)
+      return this.executeInternal(toolCallId, params, signal, onUpdate)
+    }
+  },
   resolveProjectConfig: () => ({
     workingDirectory: TEST_DIR,
     dockerEnabled: false,
@@ -68,7 +78,7 @@ vi.mock('word-extractor', () => ({
   }
 }))
 
-import { createReadTool } from '../read'
+import { ReadTool } from '../read'
 import type { ToolContext } from '../types'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
@@ -126,7 +136,7 @@ afterAll(() => {
 
 describe('read 工具 - 纯文本文件', () => {
   it('读取纯文本文件返回带行号的内容', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc1', { path: join(TEST_DIR, 'hello.txt') })
     const text = getText(result)
     // 应包含行号
@@ -135,7 +145,7 @@ describe('read 工具 - 纯文本文件', () => {
   })
 
   it('分页读取 offset/limit', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc2', {
       path: join(TEST_DIR, 'hello.txt'),
       offset: 2,
@@ -149,16 +159,16 @@ describe('read 工具 - 纯文本文件', () => {
   })
 
   it('空文件正常返回', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc3', { path: join(TEST_DIR, 'empty.txt') })
     expect(getText(result)).toBeDefined()
-    expect(result.details.totalLines).toBeLessThanOrEqual(1)
+    expect((result.details as { totalLines: number }).totalLines).toBeLessThanOrEqual(1)
   })
 })
 
 describe('read 工具 - 单行截断', () => {
   it('超长单行被截断到 2000 字符', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc4', { path: join(TEST_DIR, 'minified.js') })
     const text = getText(result)
     // 第一行应被截断
@@ -170,7 +180,7 @@ describe('read 工具 - 单行截断', () => {
 
 describe('read 工具 - 目录读取', () => {
   it('读取目录返回排序的条目列表', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc5', { path: join(TEST_DIR, 'subdir') })
     const text = getText(result)
     // 目录条目加 / 后缀
@@ -180,15 +190,16 @@ describe('read 工具 - 目录读取', () => {
   })
 
   it('目录分页 offset/limit', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc6', {
       path: join(TEST_DIR, 'bigdir'),
       offset: 1,
       limit: 3
     })
     const text = getText(result)
-    expect(result.details.totalEntries).toBe(10)
-    expect(result.details.truncated).toBe(true)
+    const details = result.details as { totalEntries: number; truncated: boolean }
+    expect(details.totalEntries).toBe(10)
+    expect(details.truncated).toBe(true)
     // 应包含分页提示
     expect(text).toContain('offset=4')
   })
@@ -196,7 +207,7 @@ describe('read 工具 - 目录读取', () => {
 
 describe('read 工具 - 文件不存在', () => {
   it('有近似文件时返回 Did you mean', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     try {
       await tool.execute('tc7', { path: join(TEST_DIR, 'readme') })
       expect.fail('应该抛错')
@@ -206,7 +217,7 @@ describe('read 工具 - 文件不存在', () => {
   })
 
   it('无近似文件时返回普通 fileNotFound', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     try {
       await tool.execute('tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
       expect.fail('应该抛错')
@@ -220,7 +231,7 @@ describe('read 工具 - 文件不存在', () => {
 
 describe('read 工具 - 二进制文件拒绝', () => {
   it('已知扩展名直接拒绝', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     try {
       await tool.execute('tc9', { path: join(TEST_DIR, 'image.png') })
       expect.fail('应该抛错')
@@ -230,7 +241,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
   })
 
   it('NULL 字节检测拒绝', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     try {
       await tool.execute('tc10', { path: join(TEST_DIR, 'binary.dat') })
       expect.fail('应该抛错')
@@ -242,12 +253,12 @@ describe('read 工具 - 二进制文件拒绝', () => {
 
 describe('read 工具 - 大文件字节上限', () => {
   it('超 50KB 时截断并提示 offset', async () => {
-    const tool = createReadTool(ctx)
+    const tool = new ReadTool(ctx)
     const result = await tool.execute('tc11', {
       path: join(TEST_DIR, 'largedir', 'large.txt')
     })
     const text = getText(result)
-    expect(result.details.truncated).toBe(true)
+    expect((result.details as { truncated: boolean }).truncated).toBe(true)
     // 应包含截断提示
     expect(text).toContain('offset=')
   })

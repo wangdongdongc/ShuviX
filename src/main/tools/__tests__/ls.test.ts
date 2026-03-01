@@ -15,6 +15,16 @@ const SESSION_ID = 'test-session-ls'
 
 // mock types 模块（完全替换，避免触发 Electron/DB 依赖）
 vi.mock('../types', () => ({
+  BaseTool: class {
+    async securityCheck(..._args: unknown[]): Promise<void> {}
+    async executeInternal(..._args: unknown[]): Promise<unknown> {
+      return {}
+    }
+    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
+      await this.securityCheck(toolCallId, params, signal)
+      return this.executeInternal(toolCallId, params, signal, onUpdate)
+    }
+  },
   resolveProjectConfig: () => ({
     workingDirectory: TEST_DIR,
     dockerEnabled: false,
@@ -53,7 +63,7 @@ vi.mock('../../logger', () => ({
   })
 }))
 
-import { createListTool } from '../ls'
+import { ListTool } from '../ls'
 import type { ToolContext } from '../types'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
@@ -99,7 +109,7 @@ afterAll(() => {
 
 describe('ls 工具 - 基本功能', () => {
   it('列出目录树结构', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc1', { path: join(TEST_DIR, 'src') })
     const text = getText(result)
     expect(text).toContain('utils/')
@@ -108,7 +118,7 @@ describe('ls 工具 - 基本功能', () => {
   })
 
   it('默认使用工作目录', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc2', {})
     const text = getText(result)
     expect(text).toContain('README.md')
@@ -117,16 +127,17 @@ describe('ls 工具 - 基本功能', () => {
   })
 
   it('返回文件计数', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc3', { path: join(TEST_DIR, 'src') })
-    expect(result.details.count).toBe(2) // index.ts + helper.ts
-    expect(result.details.truncated).toBe(false)
+    const details = result.details as { count: number; truncated: boolean }
+    expect(details.count).toBe(2) // index.ts + helper.ts
+    expect(details.truncated).toBe(false)
   })
 })
 
 describe('ls 工具 - 忽略模式', () => {
   it('.git 目录始终排除', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc4', {})
     const text = getText(result)
     // .git/ 目录内容不应出现（.gitignore 文件本身是正常文件）
@@ -137,7 +148,7 @@ describe('ls 工具 - 忽略模式', () => {
   })
 
   it('.gitignore 中的 node_modules/dist 被忽略', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc5', {})
     const text = getText(result)
     expect(text).not.toContain('node_modules')
@@ -148,7 +159,7 @@ describe('ls 工具 - 忽略模式', () => {
   })
 
   it('自定义 ignore glob 排除额外文件', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc6', { ignore: ['src/**'] })
     const text = getText(result)
     // src 下文件应被排除
@@ -161,10 +172,11 @@ describe('ls 工具 - 忽略模式', () => {
 
 describe('ls 工具 - 截断', () => {
   it('超过 LIMIT 时截断并提示', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     const result = await tool.execute('tc7', { path: MANY_DIR })
-    expect(result.details.truncated).toBe(true)
-    expect(result.details.count).toBe(100)
+    const details = result.details as { count: number; truncated: boolean }
+    expect(details.truncated).toBe(true)
+    expect(details.count).toBe(100)
     const text = getText(result)
     expect(text).toContain('Results truncated')
   })
@@ -172,7 +184,7 @@ describe('ls 工具 - 截断', () => {
 
 describe('ls 工具 - 错误处理', () => {
   it('路径不存在时抛错', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     try {
       await tool.execute('tc8', { path: join(TEST_DIR, 'nonexistent') })
       expect.fail('应该抛错')
@@ -182,7 +194,7 @@ describe('ls 工具 - 错误处理', () => {
   })
 
   it('路径是文件时抛错', async () => {
-    const tool = createListTool(ctx)
+    const tool = new ListTool(ctx)
     try {
       await tool.execute('tc9', { path: join(TEST_DIR, 'README.md') })
       expect.fail('应该抛错')

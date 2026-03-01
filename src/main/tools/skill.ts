@@ -7,7 +7,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
+import { BaseTool } from './types'
 import { skillService } from '../services/skillService'
 import { t } from '../i18n'
 
@@ -18,20 +18,30 @@ const SkillParamsSchema = Type.Object({
   })
 })
 
-/** 创建 skill 工具实例（仅当有已启用 skill 时调用） */
-export function createSkillTool(enabledSkillNames: string[]): AgentTool<typeof SkillParamsSchema> {
-  // 从文件系统加载已启用且在 enabledSkillNames 中的 skill
-  const skills = skillService.findEnabled().filter((s) => enabledSkillNames.includes(s.name))
+/** skill 工具 */
+export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
+  readonly name = 'skill'
+  readonly label = t('tool.skillLabel')
+  readonly description: string
+  readonly parameters = SkillParamsSchema
 
-  // 构建 <available_skills> XML 嵌入 tool description
-  const skillListXml = skills
-    .map(
-      (s) =>
-        `<skill>\n  <name>${s.name}</name>\n  <description>${s.description}</description>\n</skill>`
-    )
-    .join('\n')
+  private skills: ReturnType<typeof skillService.findEnabled>
 
-  const description = `Execute a skill within the main conversation.
+  constructor(enabledSkillNames: string[]) {
+    super()
+
+    // 从文件系统加载已启用且在 enabledSkillNames 中的 skill
+    this.skills = skillService.findEnabled().filter((s) => enabledSkillNames.includes(s.name))
+
+    // 构建 <available_skills> XML 嵌入 tool description
+    const skillListXml = this.skills
+      .map(
+        (s) =>
+          `<skill>\n  <name>${s.name}</name>\n  <description>${s.description}</description>\n</skill>`
+      )
+      .join('\n')
+
+    this.description = `Execute a skill within the main conversation.
 
 <skills_instructions>
 When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.
@@ -50,59 +60,69 @@ Important:
 <available_skills>
 ${skillListXml}
 </available_skills>`
+  }
 
-  return {
-    name: 'skill',
-    label: t('tool.skillLabel'),
-    description,
-    parameters: SkillParamsSchema,
-    execute: async (_toolCallId: string, params: { command: string }) => {
-      const cmd = params.command.trim()
-      const slashIdx = cmd.indexOf('/')
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
 
-      // 判断是加载 skill 还是读取伴随文件
-      if (slashIdx > 0) {
-        // command: "pdf/REFERENCE.md" — 读取伴随文件
-        const skillName = cmd.slice(0, slashIdx)
-        const filePath = cmd.slice(slashIdx + 1)
-        const content = skillService.readCompanionFile(skillName, filePath)
-        if (content === null) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `File "${filePath}" not found in skill "${skillName}".`
-              }
-            ],
-            details: { skillName, file: filePath, error: true }
-          }
-        }
-        return {
-          content: [{ type: 'text' as const, text: content }],
-          details: { skillName, file: filePath }
-        }
-      }
+  /** 安全检查 — 只读操作，无确定性安全约束 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
 
-      // command: "pdf" — 加载 skill 主内容
-      const skill = skillService.findByName(cmd)
-      if (!skill) {
+  protected async executeInternal(
+    _toolCallId: string,
+    params: { command: string }
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: { skillName: string; file?: string; error?: boolean }
+  }> {
+    const cmd = params.command.trim()
+    const slashIdx = cmd.indexOf('/')
+
+    // 判断是加载 skill 还是读取伴随文件
+    if (slashIdx > 0) {
+      // command: "pdf/REFERENCE.md" — 读取伴随文件
+      const skillName = cmd.slice(0, slashIdx)
+      const filePath = cmd.slice(slashIdx + 1)
+      const content = skillService.readCompanionFile(skillName, filePath)
+      if (content === null) {
         return {
           content: [
             {
               type: 'text' as const,
-              text: `Skill "${cmd}" not found. Available skills: ${skills.map((s) => s.name).join(', ')}`
+              text: `File "${filePath}" not found in skill "${skillName}".`
             }
           ],
-          details: { skillName: cmd, error: true }
+          details: { skillName, file: filePath, error: true }
         }
       }
-
-      // 返回 skill 内容，附带目录路径提示
-      const header = `[Skill: ${skill.name} | Directory: ${skill.basePath}]\n\n`
       return {
-        content: [{ type: 'text' as const, text: `${header}${skill.content}` }],
-        details: { skillName: skill.name }
+        content: [{ type: 'text' as const, text: content }],
+        details: { skillName, file: filePath }
       }
+    }
+
+    // command: "pdf" — 加载 skill 主内容
+    const skill = skillService.findByName(cmd)
+    if (!skill) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Skill "${cmd}" not found. Available skills: ${this.skills.map((s) => s.name).join(', ')}`
+          }
+        ],
+        details: { skillName: cmd, error: true }
+      }
+    }
+
+    // 返回 skill 内容，附带目录路径提示
+    const header = `[Skill: ${skill.name} | Directory: ${skill.basePath}]\n\n`
+    return {
+      content: [{ type: 'text' as const, text: `${header}${skill.content}` }],
+      details: { skillName: skill.name }
     }
   }
 }

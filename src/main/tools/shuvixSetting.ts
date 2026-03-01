@@ -5,8 +5,7 @@
 
 import { Type } from '@sinclair/typebox'
 import { BrowserWindow } from 'electron'
-import type { AgentTool } from '@mariozechner/pi-agent-core'
-import type { ToolContext } from './types'
+import { BaseTool, type ToolContext } from './types'
 import { settingsService, getSettingKeyDescriptions } from '../services/settingsService'
 import { changeLanguage, t } from '../i18n'
 
@@ -27,75 +26,87 @@ const ShuvixSettingParamsSchema = Type.Object({
   )
 })
 
-/** 创建 shuvix-setting 工具实例 */
-export function createShuvixSettingTool(
-  ctx: ToolContext
-): AgentTool<typeof ShuvixSettingParamsSchema> {
-  return {
-    name: 'shuvix-setting',
-    label: t('tool.shuvixSettingLabel'),
-    description:
-      'Read or update global application settings. Use action="get" to view all current settings as key-value pairs. Use action="set" with key and value to update a single setting (requires user approval). Call multiple times to update multiple settings.',
-    parameters: ShuvixSettingParamsSchema,
-    execute: async (
-      toolCallId: string,
-      params: {
-        action: 'get' | 'set'
-        key?: string
-        value?: string
+export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema> {
+  readonly name = 'shuvix-setting'
+  readonly label = t('tool.shuvixSettingLabel')
+  readonly description =
+    'Read or update global application settings. Use action="get" to view all current settings as key-value pairs. Use action="set" with key and value to update a single setting (requires user approval). Call multiple times to update multiple settings.'
+  readonly parameters = ShuvixSettingParamsSchema
+
+  constructor(private ctx: ToolContext) {
+    super()
+  }
+
+  async preExecute(): Promise<void> {
+    /* no-op */
+  }
+
+  /** 安全检查 — 审批为动态条件性（set action），留在 executeInternal 中 */
+  protected async securityCheck(): Promise<void> {
+    /* no-op */
+  }
+
+  protected async executeInternal(
+    toolCallId: string,
+    params: {
+      action: 'get' | 'set'
+      key?: string
+      value?: string
+    }
+  ): Promise<{
+    content: Array<{ type: 'text'; text: string }>
+    details: Record<string, unknown> | undefined
+  }> {
+    if (params.action === 'get') {
+      // 读取全部设置（无需审批）
+      const all = settingsService.getAll()
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(all, null, 2) }],
+        details: all
       }
-    ) => {
-      if (params.action === 'get') {
-        // 读取全部设置（无需审批）
-        const all = settingsService.getAll()
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(all, null, 2) }],
-          details: all
-        }
-      }
+    }
 
-      // action === 'set'：需要审批
-      if (!params.key || params.value === undefined) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: 'Both "key" and "value" are required when action is "set".'
-            }
-          ],
-          details: undefined
-        }
-      }
-
-      // 构建可读预览文本用于审批弹窗
-      const preview = `${params.key} = ${params.value}`
-
-      if (ctx.requestApproval) {
-        const approval = await ctx.requestApproval(toolCallId, preview)
-        if (!approval.approved) {
-          throw new Error(approval.reason || 'User denied this operation')
-        }
-      }
-
-      // 执行设置
-      settingsService.set(params.key, params.value)
-
-      // 语言变更时同步主进程 i18n（与 settingsHandlers 逻辑保持一致）
-      if (params.key === 'general.language') {
-        changeLanguage(params.value)
-      }
-
-      // 广播通知所有窗口刷新（主题/字体等即时生效）
-      BrowserWindow.getAllWindows().forEach((win) => {
-        win.webContents.send('app:settings-changed')
-      })
-
+    // action === 'set'：需要审批
+    if (!params.key || params.value === undefined) {
       return {
         content: [
-          { type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }
+          {
+            type: 'text' as const,
+            text: 'Both "key" and "value" are required when action is "set".'
+          }
         ],
-        details: { key: params.key, value: params.value }
+        details: undefined
       }
+    }
+
+    // 构建可读预览文本用于审批弹窗
+    const preview = `${params.key} = ${params.value}`
+
+    if (this.ctx.requestApproval) {
+      const approval = await this.ctx.requestApproval(toolCallId, preview)
+      if (!approval.approved) {
+        throw new Error(approval.reason || 'User denied this operation')
+      }
+    }
+
+    // 执行设置
+    settingsService.set(params.key, params.value)
+
+    // 语言变更时同步主进程 i18n（与 settingsHandlers 逻辑保持一致）
+    if (params.key === 'general.language') {
+      changeLanguage(params.value)
+    }
+
+    // 广播通知所有窗口刷新（主题/字体等即时生效）
+    BrowserWindow.getAllWindows().forEach((win) => {
+      win.webContents.send('app:settings-changed')
+    })
+
+    return {
+      content: [
+        { type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }
+      ],
+      details: { key: params.key, value: params.value }
     }
   }
 }
