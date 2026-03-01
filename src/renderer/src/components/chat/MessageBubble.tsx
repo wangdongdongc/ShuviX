@@ -90,8 +90,21 @@ export const MessageBubble = memo(function MessageBubble({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {isUser ? t('message.you') : model || 'Assistant'}
+            {isUser ? t('message.user') : model || 'Assistant'}
           </span>
+          {/* 非 Electron 来源标识 */}
+          {isUser && parsedMeta?.source && (
+            <span className="text-[10px] text-text-tertiary">
+              ·{' '}
+              <span className="text-text-tertiary/80">
+                {parsedMeta.source.type === 'webui'
+                  ? `WebUI${parsedMeta.source.ip ? ` (${parsedMeta.source.ip})` : ''}`
+                  : parsedMeta.source.type === 'telegram'
+                    ? `Telegram${parsedMeta.source.userId ? ` (${parsedMeta.source.userId})` : ''}`
+                    : parsedMeta.source.type}
+              </span>
+            </span>
+          )}
           {/* 复制按钮 */}
           {!isStreaming && content && (
             <button

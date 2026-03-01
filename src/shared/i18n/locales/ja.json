@@ -98,7 +98,7 @@
   },
 
   "message": {
-    "you": "あなた",
+    "user": "ユーザー",
     "copy": "コピー",
     "showRendered": "レンダリングを表示",
     "showSource": "ソースを表示",

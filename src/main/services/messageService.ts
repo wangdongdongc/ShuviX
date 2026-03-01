@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { messageDao } from '../dao/messageDao'
 import { sessionDao } from '../dao/sessionDao'
+import { getOperationContext } from '../frontend/core/OperationContext'
 import type { Message } from '../types'
 
 /**
@@ -22,13 +23,25 @@ export class MessageService {
     metadata?: string | null
     model?: string
   }): Message {
+    // 对 user 消息，自动注入来源信息到 metadata（非 electron 来源时）
+    let metadata = params.metadata ?? null
+    if (params.role === 'user') {
+      const ctx = getOperationContext()
+      if (ctx && ctx.source.type !== 'electron') {
+        const existing = metadata ? JSON.parse(metadata) : {}
+        const { type, ...rest } = ctx.source
+        existing.source = { type, ...rest }
+        metadata = JSON.stringify(existing)
+      }
+    }
+
     const message: Message = {
       id: uuidv7(),
       sessionId: params.sessionId,
       role: params.role,
       type: params.type || 'text',
       content: params.content,
-      metadata: params.metadata ?? null,
+      metadata,
       model: params.model || '',
       createdAt: Date.now()
     }

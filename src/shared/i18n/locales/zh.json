@@ -98,7 +98,7 @@
   },
 
   "message": {
-    "you": "你",
+    "user": "用户",
     "copy": "复制",
     "showRendered": "显示渲染",
     "showSource": "显示源码",

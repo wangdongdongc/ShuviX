@@ -98,7 +98,7 @@
   },
 
   "message": {
-    "you": "You",
+    "user": "User",
     "copy": "Copy",
     "showRendered": "Show rendered",
     "showSource": "Show source",
