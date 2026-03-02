@@ -8,7 +8,15 @@ export interface ChatMessage {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-  type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'ssh_event' | 'error_event'
+  type:
+    | 'text'
+    | 'tool_call'
+    | 'tool_result'
+    | 'step_text'
+    | 'step_thinking'
+    | 'docker_event'
+    | 'ssh_event'
+    | 'error_event'
   content: string
   metadata: string | null
   model: string

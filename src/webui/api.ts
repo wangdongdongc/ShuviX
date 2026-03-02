@@ -95,10 +95,6 @@ export function createWebApi(): typeof window.api {
         window.open(url, '_blank')
         return { success: true }
       },
-      openImage: async (dataUrl: string) => {
-        window.open(dataUrl, '_blank')
-        return { success: true }
-      },
       openFolder: noop,
       windowReady: noopVoid,
       onSettingsChanged: () => () => {}

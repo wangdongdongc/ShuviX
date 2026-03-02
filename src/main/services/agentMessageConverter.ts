@@ -42,8 +42,13 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
   while (i < msgs.length) {
     const msg = msgs[i]
 
-    // 跳过系统通知
-    if (msg.role === 'system_notify' || msg.role === 'system') {
+    // 跳过系统通知和中间步骤（step 纯展示，不参与 LLM 上下文）
+    if (
+      msg.role === 'system_notify' ||
+      msg.role === 'system' ||
+      msg.type === 'step_text' ||
+      msg.type === 'step_thinking'
+    ) {
       i++
       continue
     }

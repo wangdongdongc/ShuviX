@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
-import { messageDao } from '../dao/messageDao'
+import { messageService } from './messageService'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
@@ -95,7 +95,7 @@ export class SessionService {
 
   /** 删除会话（同时清理关联消息、HTTP 日志和临时工作目录） */
   delete(id: string): void {
-    messageDao.deleteBySessionId(id)
+    messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
     // 清理临时会话工作目录

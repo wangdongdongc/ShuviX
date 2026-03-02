@@ -16,7 +16,6 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
-import { messageDao } from '../dao/messageDao'
 import { type ToolContext } from '../tools/types'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
@@ -371,7 +370,7 @@ export class AgentService {
     })
 
     // 恢复历史消息到 Agent 上下文（正确处理 tool_call / tool_result / 图片等类型）
-    const dbMsgs = messageDao.findBySessionId(sessionId)
+    const dbMsgs = messageService.listBySession(sessionId)
     if (dbMsgs.length > 0) {
       const agentMessages = dbMessagesToAgentMessages(dbMsgs)
       for (const msg of agentMessages) {
@@ -463,16 +462,27 @@ export class AgentService {
     // 检查是否有正在进行的工具调用（DB 中有 tool_call 但还没有对应的 tool_result）
     // 如果有，不持久化 stream buffer，因为 buffer 中的文本是同一条 LLM 回复中工具调用之前的内容，
     // 单独保存会插入到 tool_call 和 tool_result 之间，破坏消息配对导致 API 400 错误
-    const dbMsgs = messageDao.findBySessionId(sessionId)
-    if (dbMsgs.length > 0) {
-      const lastMsg = dbMsgs[dbMsgs.length - 1]
-      if (lastMsg.role === 'assistant' && lastMsg.type === 'tool_call') {
-        log.info(`中止时有未完成的工具调用，跳过 buffer 持久化 session=${sessionId}`)
-        this.streamBuffers.delete(sessionId)
-        return null
-      }
+    const lastMsg = messageService.findLastBySession(sessionId)
+    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.type === 'tool_call') {
+      log.info(`中止时有未完成的工具调用，跳过 buffer 持久化 session=${sessionId}`)
+      this.streamBuffers.delete(sessionId)
+      return null
     }
-    // 持久化已生成的部分内容（与 agent_end 共用落库逻辑）
+    // 中止时也将 thinking 独立落库为 step_thinking（不广播事件，下次加载会话时从 DB 恢复）
+    const buf = this.streamBuffers.get(sessionId)
+    if (buf?.thinking) {
+      const session = sessionDao.findById(sessionId)
+      messageService.add({
+        sessionId,
+        role: 'assistant',
+        type: 'step_thinking',
+        content: buf.thinking,
+        metadata: JSON.stringify({ turnIndex: this.turnCounters.get(sessionId) || 0 }),
+        model: session?.model || ''
+      })
+      buf.thinking = ''
+    }
+    // 持久化已生成的部分内容（与 agent_end 共用落库逻辑，不含 thinking）
     return this.persistStreamBuffer(sessionId)
   }
 
@@ -659,7 +669,7 @@ export class AgentService {
     }
 
     const meta: Record<string, unknown> = { ...extraMeta }
-    if (buf!.thinking) meta.thinking = buf!.thinking
+    // thinking 统一由调用方提前落库为 step_thinking，此处不再写入 metadata
     // 将图片数据转换为与用户图片一致的 data URL 格式（保留 thoughtSignature 用于会话恢复）
     if (buf!.images?.length) {
       meta.images = buf!.images.map((img) => ({

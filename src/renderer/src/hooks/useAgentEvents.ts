@@ -30,6 +30,15 @@ export function useAgentEvents(): void {
       case 'text_end':
         break
 
+      case 'step_end': {
+        // 中间轮次步骤已持久化：清除流式内容 + 同步添加 step 消息到列表
+        store.clearStreamingContent(sid)
+        if (sid === store.activeSessionId && event.message) {
+          store.addMessage(JSON.parse(event.message))
+        }
+        break
+      }
+
       case 'image_data':
         store.appendStreamingImage(sid, JSON.parse(event.image))
         break

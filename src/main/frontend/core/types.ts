@@ -35,6 +35,14 @@ export interface ChatTextEndEvent extends ChatEventBase {
   type: 'text_end'
 }
 
+/** 中间轮次步骤已持久化（step_thinking / step_text） */
+export interface ChatStepEndEvent extends ChatEventBase {
+  type: 'step_end'
+  messageId: string
+  /** 持久化的 step 消息 (JSON string)，前端可直接解析避免异步查询 */
+  message?: string
+}
+
 /** Agent 完成本轮生成 */
 export interface ChatAgentEndEvent extends ChatEventBase {
   type: 'agent_end'
@@ -144,6 +152,7 @@ export type ChatEvent =
   | ChatTextDeltaEvent
   | ChatThinkingDeltaEvent
   | ChatTextEndEvent
+  | ChatStepEndEvent
   | ChatAgentEndEvent
   | ChatToolStartEvent
   | ChatToolEndEvent

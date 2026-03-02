@@ -2,7 +2,7 @@ import { BaseDao } from './database'
 import type { Message } from './types'
 
 /**
- * Message DAO — 消息表的纯数据访问操作
+ * Message DAO — messages 表的纯数据访问操作
  */
 export class MessageDao extends BaseDao {
   /** 获取某个会话的所有消息，按时间升序 */
@@ -35,9 +35,34 @@ export class MessageDao extends BaseDao {
     return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Message | undefined
   }
 
+  /** 跨表查找：先查 messages，未找到再查 message_steps */
+  findByIdAcrossTables(id: string): Message | undefined {
+    const msg = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as
+      | Message
+      | undefined
+    if (msg) return msg
+    return this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
+      | Message
+      | undefined
+  }
+
   /** 删除某个会话的所有消息 */
   deleteBySessionId(sessionId: string): void {
     this.db.prepare('DELETE FROM messages WHERE sessionId = ?').run(sessionId)
+  }
+
+  /** 按时间戳删除：删除 createdAt > timestamp 的记录 */
+  deleteAfterTimestamp(sessionId: string, createdAt: number): number {
+    return this.db
+      .prepare('DELETE FROM messages WHERE sessionId = ? AND createdAt > ?')
+      .run(sessionId, createdAt).changes
+  }
+
+  /** 按时间戳删除：删除 createdAt >= timestamp 的记录 */
+  deleteFromTimestamp(sessionId: string, createdAt: number): number {
+    return this.db
+      .prepare('DELETE FROM messages WHERE sessionId = ? AND createdAt >= ?')
+      .run(sessionId, createdAt).changes
   }
 
   /** 删除指定消息之后的所有消息（不含该消息本身） */
@@ -59,4 +84,69 @@ export class MessageDao extends BaseDao {
   }
 }
 
+/**
+ * MessageStep DAO — message_steps 表的纯数据访问操作
+ * 与 MessageDao 列完全一致，存放工具调用/结果等中间步骤
+ */
+export class MessageStepDao extends BaseDao {
+  /** 获取某个会话的所有步骤消息，按时间升序 */
+  findBySessionId(sessionId: string): Message[] {
+    return this.db
+      .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt ASC')
+      .all(sessionId) as Message[]
+  }
+
+  /** 插入步骤消息 */
+  insert(message: Message): void {
+    this.db
+      .prepare(
+        'INSERT INTO message_steps (id, sessionId, role, type, content, metadata, model, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        message.id,
+        message.sessionId,
+        message.role,
+        message.type,
+        message.content,
+        message.metadata,
+        message.model,
+        message.createdAt
+      )
+  }
+
+  /** 根据 ID 获取单条步骤消息 */
+  findById(id: string): Message | undefined {
+    return this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
+      | Message
+      | undefined
+  }
+
+  /** 删除某个会话的所有步骤消息 */
+  deleteBySessionId(sessionId: string): void {
+    this.db.prepare('DELETE FROM message_steps WHERE sessionId = ?').run(sessionId)
+  }
+
+  /** 按时间戳删除：删除 createdAt > timestamp 的记录 */
+  deleteAfterTimestamp(sessionId: string, createdAt: number): number {
+    return this.db
+      .prepare('DELETE FROM message_steps WHERE sessionId = ? AND createdAt > ?')
+      .run(sessionId, createdAt).changes
+  }
+
+  /** 按时间戳删除：删除 createdAt >= timestamp 的记录 */
+  deleteFromTimestamp(sessionId: string, createdAt: number): number {
+    return this.db
+      .prepare('DELETE FROM message_steps WHERE sessionId = ? AND createdAt >= ?')
+      .run(sessionId, createdAt).changes
+  }
+
+  /** 获取某个会话的最后一条步骤消息 */
+  findLastBySessionId(sessionId: string): Message | undefined {
+    return this.db
+      .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1')
+      .get(sessionId) as Message | undefined
+  }
+}
+
 export const messageDao = new MessageDao()
+export const messageStepDao = new MessageStepDao()

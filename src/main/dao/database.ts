@@ -190,7 +190,20 @@ class DatabaseManager {
         createdAt INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS message_steps (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        role TEXT NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        metadata TEXT DEFAULT '{}',
+        createdAt INTEGER NOT NULL,
+        FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
+      CREATE INDEX IF NOT EXISTS idx_message_steps_session ON message_steps(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
       CREATE INDEX IF NOT EXISTS idx_operation_logs_createdAt ON operation_logs(createdAt DESC);

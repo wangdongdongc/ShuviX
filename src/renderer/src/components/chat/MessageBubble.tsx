@@ -165,8 +165,7 @@ export const MessageBubble = memo(function MessageBubble({
                           key={idx}
                           src={img.preview}
                           alt={t('message.attachment', { index: idx + 1 })}
-                          className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                          onClick={() => window.api.app.openImage(img.preview)}
+                          className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain"
                         />
                       )
                     )}
@@ -241,8 +240,7 @@ export const MessageBubble = memo(function MessageBubble({
                       index: idx + 1,
                       defaultValue: `Generated image ${idx + 1}`
                     })}
-                    className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() => window.api.app.openImage(img.data)}
+                    className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
                   />
                 ))}
               </div>

@@ -3,6 +3,7 @@ import { Container, AlertCircle, Terminal } from 'lucide-react'
 import { useChatStore, selectToolExecutions, type ChatMessage } from '../../stores/chatStore'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
+import { StepBlock } from './StepBlock'
 
 /** turn 分组信息（仅工具调用项携带） */
 export interface TurnGroupInfo {
@@ -102,6 +103,20 @@ export function MessageRenderer({
         <Terminal size={12} />
         <span>{isConnect ? t('chat.sshConnected') : t('chat.sshDisconnected')}</span>
         {target && <span className="font-mono opacity-60">{target}</span>}
+      </div>
+    )
+  }
+
+  if (msg.type === 'step_thinking' || msg.type === 'step_text') {
+    const tg = item.turnGroup
+    const isOdd = tg ? tg.globalIndex % 2 === 1 : false
+    return (
+      <div
+        className={`ml-14 mr-4 ${tg?.isFirst ? 'mt-0.5 rounded-t' : ''} ${
+          tg?.isLast ? 'mb-0.5 rounded-b' : ''
+        } ${isOdd ? 'bg-bg-secondary/30' : ''} ${tg?.willBeCompressed ? 'opacity-50' : ''}`}
+      >
+        <StepBlock message={msg} />
       </div>
     )
   }

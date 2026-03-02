@@ -3,6 +3,8 @@ export type MessageType =
   | 'text'
   | 'tool_call'
   | 'tool_result'
+  | 'step_text'
+  | 'step_thinking'
   | 'docker_event'
   | 'ssh_event'
   | 'error_event'

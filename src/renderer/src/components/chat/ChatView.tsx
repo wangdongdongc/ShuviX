@@ -62,9 +62,14 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
   return { callMeta, pairedIds, metaCache }
 }
 
-/** 判断 VisibleItem 是否为工具调用项（tool_call 或 tool_result） */
+/** 判断 VisibleItem 是否为 turn 分组项（工具调用/结果 + 中间步骤） */
 function isToolItem(item: VisibleItem): boolean {
-  return item.msg.type === 'tool_call' || item.msg.type === 'tool_result'
+  return (
+    item.msg.type === 'tool_call' ||
+    item.msg.type === 'tool_result' ||
+    item.msg.type === 'step_text' ||
+    item.msg.type === 'step_thinking'
+  )
 }
 
 /** 获取工具项的 turnIndex（优先从 pairedCallMeta 取，回退到 meta） */
@@ -100,6 +105,19 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
       const toolCallId = meta?.toolCallId as string | undefined
       const pairedCallMeta = toolCallId ? toolIndex.callMeta.get(toolCallId) : undefined
       items.push({ msg, meta, pairedCallMeta })
+      continue
+    }
+    // 中间步骤（step_text / step_thinking）：解析 metadata 获取 turnIndex
+    if (msg.type === 'step_text' || msg.type === 'step_thinking') {
+      let meta: Record<string, unknown> | undefined
+      if (msg.metadata) {
+        try {
+          meta = JSON.parse(msg.metadata)
+        } catch {
+          /* 忽略 */
+        }
+      }
+      items.push({ msg, meta })
       continue
     }
     items.push({ msg })

@@ -61,6 +61,11 @@ declare global {
   interface ChatTextEndEvent extends ChatEventBase {
     type: 'text_end'
   }
+  interface ChatStepEndEvent extends ChatEventBase {
+    type: 'step_end'
+    messageId: string
+    message?: string
+  }
   interface ChatAgentEndEvent extends ChatEventBase {
     type: 'agent_end'
     message?: string
@@ -140,6 +145,7 @@ declare global {
     | ChatTextDeltaEvent
     | ChatThinkingDeltaEvent
     | ChatTextEndEvent
+    | ChatStepEndEvent
     | ChatAgentEndEvent
     | ChatToolStartEvent
     | ChatToolEndEvent
@@ -249,8 +255,6 @@ declare global {
       openSettings: () => Promise<{ success: boolean }>
       /** 用系统默认浏览器打开外部链接 */
       openExternal: (url: string) => Promise<{ success: boolean }>
-      /** 用系统默认应用打开 base64 图片 */
-      openImage: (dataUrl: string) => Promise<{ success: boolean }>
       /** 用系统文件管理器打开指定文件夹 */
       openFolder: (folderPath: string) => Promise<{ success: boolean }>
       /** 通知主进程渲染已就绪，可以显示窗口 */

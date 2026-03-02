@@ -163,7 +163,28 @@ function handleAgentEnd(
     }),
     { input: 0, output: 0, cacheRead: 0, total: 0 }
   )
-  // 后端统一落库：将缓冲区内容持久化为 assistant 消息（携带 usage）
+  // 最后一轮 thinking 也独立落库为 step_thinking（与中间轮次一致）
+  const buf = ctx.streamBuffers.get(sessionId)
+  if (buf?.thinking) {
+    const session = sessionDao.findById(sessionId)
+    const turnIndex = ctx.turnCounters.get(sessionId) || 0
+    const thinkingMsg = messageService.add({
+      sessionId,
+      role: 'assistant',
+      type: 'step_thinking',
+      content: buf.thinking,
+      metadata: JSON.stringify({ turnIndex }),
+      model: session?.model || ''
+    })
+    ctx.broadcastEvent({
+      type: 'step_end',
+      sessionId,
+      messageId: thinkingMsg.id,
+      message: JSON.stringify(thinkingMsg)
+    })
+    buf.thinking = ''
+  }
+  // 后端统一落库：将缓冲区内容持久化为 assistant 消息（携带 usage，不含 thinking）
   const savedMsg = ctx.persistStreamBuffer(
     sessionId,
     totalUsage.total > 0 ? { usage: { ...totalUsage, details } } : {}
@@ -255,29 +276,83 @@ function handleMessageEnd(
       }
     }
   }
-  // 注册并行执行 batch + 预展示：assistant 消息含 2+ toolCalls 时，提前发送 tool_start
-  let batchToolCalls: Array<{
-    id: string
-    name: string
-    arguments: Record<string, unknown>
-  }> | null = null
+  // 提取本次 LLM 回复中的工具调用（复用于 step 持久化和 batch 注册）
+  let rawToolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = []
   if (ctx.isAssistantMessage(msg)) {
-    const rawToolCalls = (
+    rawToolCalls = (
       msg.content as Array<{
         type: string
         id?: string
         name?: string
         arguments?: Record<string, unknown>
       }>
-    ).filter((c) => c.type === 'toolCall' && c.id && c.name)
-    if (rawToolCalls.length >= 2) {
-      batchToolCalls = rawToolCalls.map((tc) => ({
-        id: tc.id!,
-        name: tc.name!,
-        arguments: tc.arguments || {}
-      }))
-      parallelCoordinator.registerBatch(sessionId, batchToolCalls)
+    )
+      .filter((c) => c.type === 'toolCall' && c.id && c.name)
+      .map((tc) => ({ id: tc.id!, name: tc.name!, arguments: tc.arguments || {} }))
+  }
+
+  // 中间轮次 step 持久化：有工具调用 → 将 buffer 拆分为 step_thinking + step_text 落库
+  if (rawToolCalls.length > 0) {
+    const buf = ctx.streamBuffers.get(sessionId)
+    if (buf) {
+      const session = sessionDao.findById(sessionId)
+      const turnIndex = ctx.turnCounters.get(sessionId) || 0
+      const model = session?.model || ''
+
+      // 1) 思考 → step_thinking
+      if (buf.thinking) {
+        const thinkingMsg = messageService.add({
+          sessionId,
+          role: 'assistant',
+          type: 'step_thinking',
+          content: buf.thinking,
+          metadata: JSON.stringify({ turnIndex }),
+          model
+        })
+        ctx.broadcastEvent({
+          type: 'step_end',
+          sessionId,
+          messageId: thinkingMsg.id,
+          message: JSON.stringify(thinkingMsg)
+        })
+      }
+
+      // 2) 文本 → step_text（如有图片一并存入 metadata）
+      if (buf.content || buf.images.length) {
+        const meta: Record<string, unknown> = { turnIndex }
+        if (buf.images.length) {
+          meta.images = buf.images.map((img) => ({
+            data: `data:${img.mimeType};base64,${img.data}`,
+            mimeType: img.mimeType,
+            ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
+          }))
+        }
+        const textMsg = messageService.add({
+          sessionId,
+          role: 'assistant',
+          type: 'step_text',
+          content: buf.content,
+          metadata: JSON.stringify(meta),
+          model
+        })
+        ctx.broadcastEvent({
+          type: 'step_end',
+          sessionId,
+          messageId: textMsg.id,
+          message: JSON.stringify(textMsg)
+        })
+      }
+
+      // 重置 buffer：下一轮从空开始累积
+      ctx.streamBuffers.set(sessionId, { content: '', thinking: '', images: [] })
     }
+  }
+
+  // 注册并行执行 batch：2+ 工具调用时注册 batch 供 parallelCoordinator 协调
+  let batchToolCalls: typeof rawToolCalls | null = null
+  if (rawToolCalls.length >= 2) {
+    batchToolCalls = rawToolCalls
+    parallelCoordinator.registerBatch(sessionId, batchToolCalls)
   }
 
   ctx.broadcastEvent({ type: 'text_end', sessionId })
