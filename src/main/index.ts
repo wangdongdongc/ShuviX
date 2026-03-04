@@ -10,6 +10,7 @@ import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
+import { telegramBotServer } from './frontend/telegram'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -338,6 +339,7 @@ app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
+  telegramBotServer.stop().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

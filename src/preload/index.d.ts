@@ -24,9 +24,10 @@ import type {
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
   SessionUpdateModelConfigParams,
-  SessionUpdateModelMetadataParams,
+  SessionUpdateThinkingLevelParams,
+  SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateSettingsParams,
+  SessionUpdateSshAutoApproveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -73,11 +74,13 @@ declare global {
       input: number
       output: number
       cacheRead: number
+      cacheWrite: number
       total: number
       details: Array<{
         input: number
         output: number
         cacheRead: number
+        cacheWrite: number
         total: number
         stopReason: string
       }>
@@ -139,6 +142,10 @@ declare global {
     type: 'error'
     error: string
   }
+  interface ChatUserMessageEvent extends ChatEventBase {
+    type: 'user_message'
+    message: string
+  }
 
   type ChatEvent =
     | ChatAgentStartEvent
@@ -156,6 +163,20 @@ declare global {
     | ChatDockerEvent
     | ChatSshEvent
     | ChatErrorEvent
+    | ChatUserMessageEvent
+
+  /** 参考目录条目 */
+  interface ReferenceDir {
+    path: string
+    note?: string
+    access?: 'readonly' | 'readwrite'
+  }
+
+  /** 项目扩展配置 */
+  interface ProjectSettings {
+    enabledTools?: string[]
+    referenceDirs?: ReferenceDir[]
+  }
 
   /** 项目类型 */
   interface Project {
@@ -166,10 +187,21 @@ declare global {
     dockerEnabled: number
     dockerImage: string
     sandboxEnabled: number
-    settings: string
+    settings: ProjectSettings
     archivedAt: number
     createdAt: number
     updatedAt: number
+  }
+
+  /** 模型相关元数据 */
+  interface SessionModelMetadata {
+    thinkingLevel?: string
+    enabledTools?: string[]
+  }
+
+  /** 会话级配置 */
+  interface SessionSettings {
+    sshAutoApprove?: boolean
   }
 
   /** 会话类型（对应 DB 表 sessions） */
@@ -181,9 +213,9 @@ declare global {
     provider: string
     model: string
     systemPrompt: string
-    modelMetadata: string
-    /** 会话级配置（JSON：sshAutoApprove 等） */
-    settings: string
+    modelMetadata: SessionModelMetadata
+    /** 会话级配置（SSH 免审批等） */
+    settings: SessionSettings
     createdAt: number
     updatedAt: number
   }
@@ -198,17 +230,29 @@ declare global {
     agentMdLoaded?: boolean
   }
 
-  /** 消息类型 */
-  interface ChatMessage {
-    id: string
-    sessionId: string
-    role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-    type: 'text' | 'tool_call' | 'tool_result' | 'docker_event' | 'error_event'
-    content: string
-    metadata: string | null
-    model: string
-    createdAt: number
-  }
+  // ---- 消息相关类型（从 shared 统一引用，消除重复定义） ----
+  type ImageMeta = import('../shared/types/chatMessage').ImageMeta
+  type UsageInfo = import('../shared/types/chatMessage').UsageInfo
+  type MessageMetadata = import('../shared/types/chatMessage').MessageMetadata
+  type UserTextMeta = import('../shared/types/chatMessage').UserTextMeta
+  type AssistantTextMeta = import('../shared/types/chatMessage').AssistantTextMeta
+  type ToolCallMeta = import('../shared/types/chatMessage').ToolCallMeta
+  type ToolResultMeta = import('../shared/types/chatMessage').ToolResultMeta
+  type StepTextMeta = import('../shared/types/chatMessage').StepTextMeta
+  type StepThinkingMeta = import('../shared/types/chatMessage').StepThinkingMeta
+  type DockerEventMeta = import('../shared/types/chatMessage').DockerEventMeta
+  type SshEventMeta = import('../shared/types/chatMessage').SshEventMeta
+  type MessageBase = import('../shared/types/chatMessage').MessageBase
+  type UserTextMessage = import('../shared/types/chatMessage').UserTextMessage
+  type AssistantTextMessage = import('../shared/types/chatMessage').AssistantTextMessage
+  type ToolCallMessage = import('../shared/types/chatMessage').ToolCallMessage
+  type ToolResultMessage = import('../shared/types/chatMessage').ToolResultMessage
+  type StepTextMessage = import('../shared/types/chatMessage').StepTextMessage
+  type StepThinkingMessage = import('../shared/types/chatMessage').StepThinkingMessage
+  type DockerEventMessage = import('../shared/types/chatMessage').DockerEventMessage
+  type SshEventMessage = import('../shared/types/chatMessage').SshEventMessage
+  type ErrorEventMessage = import('../shared/types/chatMessage').ErrorEventMessage
+  type ChatMessage = import('../shared/types/chatMessage').ChatMessage
 
   /** 提供商类型 */
   interface ProviderInfo {
@@ -335,10 +379,15 @@ declare global {
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
       updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-      updateModelMetadata: (
-        params: SessionUpdateModelMetadataParams
+      updateThinkingLevel: (
+        params: SessionUpdateThinkingLevelParams
       ) => Promise<{ success: boolean }>
-      updateSettings: (params: SessionUpdateSettingsParams) => Promise<{ success: boolean }>
+      updateEnabledTools: (
+        params: SessionUpdateEnabledToolsParams
+      ) => Promise<{ success: boolean }>
+      updateSshAutoApprove: (
+        params: SessionUpdateSshAutoApproveParams
+      ) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
         userMessage: string
@@ -351,6 +400,7 @@ declare global {
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
       add: (params: MessageAddParams) => Promise<ChatMessage>
+      addErrorEvent: (params: { sessionId: string; content: string }) => Promise<ErrorEventMessage>
       clear: (sessionId: string) => Promise<{ success: boolean }>
       /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
@@ -434,6 +484,35 @@ declare global {
         port?: number
         urls?: string[]
       }>
+    }
+    telegram: {
+      /** 获取 Bot Token */
+      getBotToken: () => Promise<string>
+      /** 设置 Bot Token */
+      setBotToken: (token: string) => Promise<{ success: boolean }>
+      /** 验证 Bot Token */
+      validateToken: (token: string) => Promise<{
+        valid: boolean
+        username?: string
+        id?: number
+        error?: string
+      }>
+      /** 获取允许的用户 ID 列表 */
+      getAllowedUsers: () => Promise<number[]>
+      /** 设置允许的用户 ID 列表 */
+      setAllowedUsers: (userIds: number[]) => Promise<{ success: boolean }>
+      /** 切换指定 session 的 Telegram 绑定状态 */
+      setShared: (params: { sessionId: string; shared: boolean }) => Promise<{ success: boolean }>
+      /** 查询单个 session 是否已绑定 */
+      isShared: (sessionId: string) => Promise<boolean>
+      /** 获取所有已绑定的 session 列表 */
+      listShared: () => Promise<string[]>
+      /** 获取 Bot 运行状态 */
+      botStatus: () => Promise<{ running: boolean }>
+      /** 启动 Bot */
+      startBot: () => Promise<{ success: boolean }>
+      /** 停止 Bot */
+      stopBot: () => Promise<{ success: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

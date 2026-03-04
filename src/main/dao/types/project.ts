@@ -1,3 +1,16 @@
+/** 参考目录条目 */
+export interface ReferenceDir {
+  path: string
+  note?: string
+  access?: 'readonly' | 'readwrite'
+}
+
+/** 项目扩展配置 */
+export interface ProjectSettings {
+  enabledTools?: string[]
+  referenceDirs?: ReferenceDir[]
+}
+
 /** 项目数据结构（对应 DB 表 projects） */
 export interface Project {
   id: string
@@ -13,8 +26,8 @@ export interface Project {
   dockerImage: string
   /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
   sandboxEnabled: number
-  /** JSON 扩展字段（预留） */
-  settings: string
+  /** 项目扩展配置 */
+  settings: ProjectSettings
   /** 归档时间戳（0 表示未归档） */
   archivedAt: number
   createdAt: number

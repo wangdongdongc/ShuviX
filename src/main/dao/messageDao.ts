@@ -1,5 +1,23 @@
 import { BaseDao } from './database'
-import type { Message } from './types'
+import type { Message, MessageMetadata } from './types'
+
+/** DB 原始行类型（metadata 在 DB 中为字符串） */
+type MessageRow = Omit<Message, 'metadata'> & { metadata: string | null }
+
+/** 安全解析 JSON，失败返回 null */
+function safeParseMeta(json: string | null | undefined): MessageMetadata | null {
+  if (!json) return null
+  try {
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+/** 将 DB 行的 metadata 字符串解析为类型化对象 */
+function parseRow(row: MessageRow): Message {
+  return { ...row, metadata: safeParseMeta(row.metadata) }
+}
 
 /**
  * Message DAO — messages 表的纯数据访问操作
@@ -7,9 +25,10 @@ import type { Message } from './types'
 export class MessageDao extends BaseDao {
   /** 获取某个会话的所有消息，按时间升序 */
   findBySessionId(sessionId: string): Message[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM messages WHERE sessionId = ? ORDER BY createdAt ASC')
-      .all(sessionId) as Message[]
+      .all(sessionId) as MessageRow[]
+    return rows.map(parseRow)
   }
 
   /** 插入消息 */
@@ -24,7 +43,7 @@ export class MessageDao extends BaseDao {
         message.role,
         message.type,
         message.content,
-        message.metadata,
+        message.metadata ? JSON.stringify(message.metadata) : null,
         message.model,
         message.createdAt
       )
@@ -32,18 +51,22 @@ export class MessageDao extends BaseDao {
 
   /** 根据 ID 获取单条消息 */
   findById(id: string): Message | undefined {
-    return this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as Message | undefined
+    const row = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as
+      | MessageRow
+      | undefined
+    return row ? parseRow(row) : undefined
   }
 
   /** 跨表查找：先查 messages，未找到再查 message_steps */
   findByIdAcrossTables(id: string): Message | undefined {
     const msg = this.db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as
-      | Message
+      | MessageRow
       | undefined
-    if (msg) return msg
-    return this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
-      | Message
+    if (msg) return parseRow(msg)
+    const step = this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
+      | MessageRow
       | undefined
+    return step ? parseRow(step) : undefined
   }
 
   /** 删除某个会话的所有消息 */
@@ -91,9 +114,10 @@ export class MessageDao extends BaseDao {
 export class MessageStepDao extends BaseDao {
   /** 获取某个会话的所有步骤消息，按时间升序 */
   findBySessionId(sessionId: string): Message[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt ASC')
-      .all(sessionId) as Message[]
+      .all(sessionId) as MessageRow[]
+    return rows.map(parseRow)
   }
 
   /** 插入步骤消息 */
@@ -108,7 +132,7 @@ export class MessageStepDao extends BaseDao {
         message.role,
         message.type,
         message.content,
-        message.metadata,
+        message.metadata ? JSON.stringify(message.metadata) : null,
         message.model,
         message.createdAt
       )
@@ -116,9 +140,10 @@ export class MessageStepDao extends BaseDao {
 
   /** 根据 ID 获取单条步骤消息 */
   findById(id: string): Message | undefined {
-    return this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
-      | Message
+    const row = this.db.prepare('SELECT * FROM message_steps WHERE id = ?').get(id) as
+      | MessageRow
       | undefined
+    return row ? parseRow(row) : undefined
   }
 
   /** 删除某个会话的所有步骤消息 */
@@ -142,9 +167,10 @@ export class MessageStepDao extends BaseDao {
 
   /** 获取某个会话的最后一条步骤消息 */
   findLastBySessionId(sessionId: string): Message | undefined {
-    return this.db
+    const row = this.db
       .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1')
-      .get(sessionId) as Message | undefined
+      .get(sessionId) as MessageRow | undefined
+    return row ? parseRow(row) : undefined
   }
 }
 

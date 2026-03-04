@@ -66,7 +66,9 @@
     "disconnectSsh": "SSH を切断",
     "destroyReason_manual": "手動削除",
     "sshAutoApproveLabel": "SSH 自動承認",
-    "sshAutoApproveWarning": "SSH コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。"
+    "sshAutoApproveWarning": "SSH コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。",
+    "lanShareLabel": "LAN 共有",
+    "telegramLabel": "Telegram"
   },
 
   "input": {
@@ -110,7 +112,10 @@
     "rendering": "レンダリング中…",
     "diagram": "図表",
     "source": "ソース",
-    "attachment": "添付画像 {{index}}"
+    "attachment": "添付画像 {{index}}",
+    "cacheRead": "キャッシュ読取",
+    "cacheWrite": "キャッシュ書込",
+    "nCalls": "回呼出"
   },
 
   "toolCall": {
@@ -168,7 +173,9 @@
     "shareModeFull": "フルアクセス",
     "shareModeReadonlyDesc": "メッセージの閲覧のみ、入力や操作は不可",
     "shareModeChatDesc": "メッセージ送信は可能、モデルやツールの設定変更は不可",
-    "shareModeFullDesc": "すべての機能と設定にフルアクセス"
+    "shareModeFullDesc": "すべての機能と設定にフルアクセス",
+    "telegramShare": "Telegram Bot",
+    "telegramShareDesc": "有効にすると、Telegram Bot ユーザーがこのセッションと直接チャットできます。先に設定で Bot Token を構成してください。"
   },
 
   "sessionEdit": {
@@ -417,7 +424,7 @@
       "label": "操作種別",
       "prompt": "メッセージ送信",
       "abort": "生成中止",
-      "initAgent": "Agent 初期化",
+      "startChat": "チャット開始",
       "setModel": "モデル切替",
       "setThinkingLevel": "思考レベル設定",
       "setEnabledTools": "ツール更新",
@@ -483,6 +490,21 @@
     "serverStatus": "サーバー状態",
     "port": "ポート",
     "boundSessions": "接続済みセッション",
-    "removeShare": "共有を解除"
+    "removeShare": "共有を解除",
+    "telegramBotToken": "Bot トークン",
+    "telegramBotTokenHint": "Telegram の @BotFather からトークンを取得",
+    "telegramValidate": "検証",
+    "telegramValidating": "検証中...",
+    "telegramTokenValid": "有効: @{{username}}",
+    "telegramTokenInvalid": "無効なトークン",
+    "telegramAllowedUsers": "許可ユーザー",
+    "telegramAllowedUsersHint": "操作を許可する Telegram ユーザー ID。空欄で全員許可。",
+    "telegramAddUser": "ユーザー ID を追加",
+    "telegramBotStatus": "Bot 状態",
+    "telegramStartBot": "Bot を起動",
+    "telegramStopBot": "Bot を停止",
+    "telegramNoToken": "まず Bot トークンを設定してください",
+    "telegramBoundSessions": "接続済みセッション",
+    "telegramNoSessionsHint": "セッション設定で「Telegram」を有効にすると、Bot に接続されます。"
   }
 }

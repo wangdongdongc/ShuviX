@@ -1,32 +1,27 @@
-import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Container, Terminal, TriangleAlert, X } from 'lucide-react'
+import { Container, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
   sessionId: string
 }
 
-/** Docker/SSH 实时状态横幅 — 紧贴 titlebar 下方 */
+/** Docker/SSH/分享 实时状态横幅 — 紧贴 titlebar 下方 */
 export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const resources = useChatStore((s) => s.sessionResources[sessionId])
   const docker = resources?.docker
   const ssh = resources?.ssh
 
-  // 读取 session settings 中的 sshAutoApprove
-  const sessionSettings = useChatStore(
-    (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
+  const sshAutoApprove = useChatStore(
+    (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings.sshAutoApprove === true
   )
-  const sshAutoApprove = useMemo(() => {
-    try {
-      return JSON.parse(sessionSettings || '{}').sshAutoApprove === true
-    } catch {
-      return false
-    }
-  }, [sessionSettings])
 
-  if (!docker && !ssh && !sshAutoApprove) return null
+  // 分享状态
+  const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
+  const isTelegramShared = useChatStore((s) => s.telegramSharedSessionIds.has(sessionId))
+
+  if (!docker && !ssh && !sshAutoApprove && !lanShareMode && !isTelegramShared) return null
 
   const handleDestroyDocker = async (): Promise<void> => {
     await window.api.docker.destroySession(sessionId)
@@ -38,11 +33,22 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   /** 点击关闭 SSH 免审批 */
   const handleDisableSshAutoApprove = async (): Promise<void> => {
-    const current = JSON.parse(sessionSettings || '{}')
-    const updated = { ...current, sshAutoApprove: false }
-    const json = JSON.stringify(updated)
-    await window.api.session.updateSettings({ id: sessionId, settings: json })
-    useChatStore.getState().updateSessionSettings(sessionId, json)
+    await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: false })
+    useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: false })
+  }
+
+  /** 点击关闭局域网分享 */
+  const handleDisableLanShare = async (): Promise<void> => {
+    await window.api.webui.setShared({ sessionId, shared: false })
+    const shared = await window.api.webui.listShared()
+    useChatStore.getState().setSharedSessionIds(new Map(shared.map((s) => [s.sessionId, s.mode])))
+  }
+
+  /** 点击取消 Telegram 绑定 */
+  const handleDisableTelegram = async (): Promise<void> => {
+    await window.api.telegram.setShared({ sessionId, shared: false })
+    const shared = await window.api.telegram.listShared()
+    useChatStore.getState().setTelegramSharedSessionIds(new Set(shared))
   }
 
   return (
@@ -92,6 +98,31 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
         >
           <TriangleAlert size={11} />
           {t('chat.sshAutoApproveLabel')}
+          <X size={10} className="ml-0.5 opacity-60" />
+        </button>
+      )}
+      {lanShareMode && (
+        <button
+          onClick={handleDisableLanShare}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+          title={t('sessionConfig.lanShareDesc')}
+        >
+          <Globe size={11} />
+          {t('chat.lanShareLabel')}
+          <span className="opacity-60">
+            ({t(`sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}`)})
+          </span>
+          <X size={10} className="ml-0.5 opacity-60" />
+        </button>
+      )}
+      {isTelegramShared && (
+        <button
+          onClick={handleDisableTelegram}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
+          title={t('sessionConfig.telegramShareDesc')}
+        >
+          <MessageCircle size={11} />
+          {t('chat.telegramLabel')}
           <X size={10} className="ml-0.5 opacity-60" />
         </button>
       )}

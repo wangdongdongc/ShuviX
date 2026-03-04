@@ -39,9 +39,9 @@ export function ThinkingPicker(): React.JSX.Element | null {
         level: level as ThinkingLevel
       })
       // 持久化思考深度到会话
-      await window.api.session.updateModelMetadata({
+      await window.api.session.updateThinkingLevel({
         id: activeSessionId,
-        modelMetadata: JSON.stringify({ thinkingLevel: level })
+        thinkingLevel: level
       })
     }
   }

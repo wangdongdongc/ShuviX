@@ -34,5 +34,6 @@ export {
   operationContext,
   getOperationContext,
   createElectronContext,
+  createTelegramContext,
   createWebUIContext
 } from './OperationContext'

@@ -129,7 +129,7 @@ export function createApiRouter(): Router {
 
   router.post('/sessions/:id/init', modeGuard('chat'), wrapRoute((req, res) => {
     try {
-      const result = chatGateway.initAgent(getSessionId(req))
+      const result = chatGateway.startChat(getSessionId(req))
       res.json(result)
     } catch (e) {
       log.warn(`POST init 失败: ${e}`)

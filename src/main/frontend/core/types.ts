@@ -145,6 +145,15 @@ export interface ChatErrorEvent extends ChatEventBase {
   error: string
 }
 
+// ─── 用户消息 ──────────────────────────────────────────
+
+/** 用户消息已持久化事件（外部前端提交 prompt 时通知其他前端） */
+export interface ChatUserMessageEvent extends ChatEventBase {
+  type: 'user_message'
+  /** 持久化的 user 消息 (JSON string) */
+  message: string
+}
+
 // ─── 联合类型 ──────────────────────────────────────────
 
 export type ChatEvent =
@@ -163,6 +172,7 @@ export type ChatEvent =
   | ChatDockerEvent
   | ChatSshEvent
   | ChatErrorEvent
+  | ChatUserMessageEvent
 
 // ─── 辅助类型 ──────────────────────────────────────────
 
@@ -171,11 +181,13 @@ export interface ChatTokenUsage {
   input: number
   output: number
   cacheRead: number
+  cacheWrite: number
   total: number
   details: Array<{
     input: number
     output: number
     cacheRead: number
+    cacheWrite: number
     total: number
     stopReason: string
   }>

@@ -1,4 +1,4 @@
-export type { Session } from '../dao/types'
+export type { Session, SessionModelMetadata, SessionSettings } from '../dao/types'
 import type { Session } from '../dao/types'
 
 /** 会话完整信息（含 service 层计算属性，用于 IPC 返回给渲染进程） */
@@ -30,14 +30,20 @@ export interface SessionUpdateProjectParams {
   projectId: string | null
 }
 
-/** IPC: 更新会话模型元数据参数 */
-export interface SessionUpdateModelMetadataParams {
+/** IPC: 更新会话思考深度参数 */
+export interface SessionUpdateThinkingLevelParams {
   id: string
-  modelMetadata: string
+  thinkingLevel: string
 }
 
-/** IPC: 更新会话级配置参数 */
-export interface SessionUpdateSettingsParams {
+/** IPC: 更新会话启用工具列表参数 */
+export interface SessionUpdateEnabledToolsParams {
   id: string
-  settings: string
+  enabledTools: string[]
+}
+
+/** IPC: 更新 SSH 命令免审批参数 */
+export interface SessionUpdateSshAutoApproveParams {
+  id: string
+  sshAutoApprove: boolean
 }

@@ -12,10 +12,10 @@ import type {
  * 所有操作均通过 sessionId 指定目标 Agent，委托给 ChatGateway
  */
 export function registerAgentHandlers(): void {
-  /** 初始化指定 session 的 Agent（后端自行查询所有所需信息） */
+  /** 开启对话（后端自行查询所有所需信息） */
   ipcMain.handle('agent:init', (_event, params: AgentInitParams) =>
     operationContext.run(createElectronContext(params.sessionId), () =>
-      chatGateway.initAgent(params.sessionId)
+      chatGateway.startChat(params.sessionId)
     )
   )
 

@@ -146,17 +146,10 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
 
   if (project) {
     // 有项目 → 使用项目配置
-    let referenceDirs: ReferenceDir[] = []
-    try {
-      const settings = JSON.parse(project.settings || '{}')
-      if (Array.isArray(settings.referenceDirs)) referenceDirs = settings.referenceDirs
-    } catch {
-      /* 忽略 */
-    }
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
       sandboxEnabled: project.sandboxEnabled === 1,
-      referenceDirs
+      referenceDirs: project.settings?.referenceDirs || []
     }
   }
 

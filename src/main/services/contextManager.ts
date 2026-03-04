@@ -1,26 +1,19 @@
 /**
  * 上下文管理器 — 在每次 LLM 调用前自动压缩历史上下文，防止 token 爆炸
  *
- * 利用 pi-agent-core 的 transformContext 钩子，仅修改发送给 LLM 的副本，
- * 不影响 agent.state.messages 原始数据和 DB 持久化数据。
+ * 利用 pi-agent-core 的 transformContext 钩子。
  *
- * 三层渐进压缩策略：
- *   1. 压缩旧 toolResult 内容（高收益）
- *   2. 移除旧 thinking 内容
- *   3. 滑动窗口截断（兜底）
+ * 两层渐进压缩策略：
+ *   1. 延迟压缩旧 toolResult 内容（仅当 token 超过 60% 上下文窗口时触发，
+ *      压缩后原地修改 agent.state.messages 以维持缓存前缀稳定性）
+ *   2. 滑动窗口截断（兜底，仅超过 75% 时执行，返回新数组不修改原始消息列表）
  */
 
-import { encodingForModel } from 'js-tiktoken'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
-import type {
-  Api,
-  AssistantMessage,
-  Model,
-  TextContent,
-  ToolResultMessage,
-  UserMessage
-} from '@mariozechner/pi-ai'
+import type { Api, Model, TextContent } from '@mariozechner/pi-ai'
 import { createLogger } from '../logger'
+import { isToolResultMessage } from '../utils/messageGuards'
+import { countAllTokens, countMessageTokens } from '../utils/tokenCounter'
 import { KEEP_RECENT_TURNS } from '../../shared/constants'
 
 const log = createLogger('Context')
@@ -29,6 +22,9 @@ const log = createLogger('Context')
 
 /** 上下文窗口使用比例（留余量给 system prompt + 输出 + 安全边际） */
 const CONTEXT_RATIO = 0.75
+
+/** 第一层压缩触发比例 — 仅当 token 超过此比例才开始压缩旧 toolResult */
+const COMPRESSION_TRIGGER_RATIO = 0.6
 
 /** 滑动窗口兜底时保留的最近消息条数（包括 user/assistant/toolResult） */
 const KEEP_RECENT_MESSAGES = 20
@@ -39,91 +35,10 @@ const SUMMARY_HEAD_LINES = 3
 /** 压缩后保留的 toolResult 尾部行数 */
 const SUMMARY_TAIL_LINES = 2
 
-// ─── Token 计数 ─────────────────────────────────────────────
+/** 已压缩标记（用于幂等检测，避免二次压缩） */
+const COMPRESSED_MARKER = '[... 已省略'
 
-/** 懒加载的 tiktoken 编码器实例（cl100k_base，兼容 GPT-4 / Claude / Gemini） */
-let encoder: ReturnType<typeof encodingForModel> | null = null
-
-function getEncoder(): ReturnType<typeof encodingForModel> {
-  if (!encoder) {
-    encoder = encodingForModel('gpt-4o')
-  }
-  return encoder
-}
-
-/** 计算单段文本的 token 数 */
-export function countTextTokens(text: string): number {
-  if (!text) return 0
-  try {
-    return getEncoder().encode(text).length
-  } catch {
-    // 编码失败时降级为字符估算
-    return Math.ceil(text.length / 3)
-  }
-}
-
-function isUserMessage(msg: AgentMessage): msg is UserMessage {
-  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'user'
-}
-
-function isAssistantMessage(msg: AgentMessage): msg is AssistantMessage {
-  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'assistant'
-}
-
-function isToolResultMessage(msg: AgentMessage): msg is ToolResultMessage {
-  return typeof msg === 'object' && msg !== null && 'role' in msg && msg.role === 'toolResult'
-}
-
-/** 计算单条 AgentMessage 的 token 数 */
-function countMessageTokens(msg: AgentMessage): number {
-  if (!msg || typeof msg !== 'object' || !('role' in msg)) return 0
-
-  // 固定开销：role + 结构化元数据
-  let tokens = 4
-
-  if (isUserMessage(msg)) {
-    if (typeof msg.content === 'string') {
-      tokens += countTextTokens(msg.content)
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'text') tokens += countTextTokens(block.text)
-        // 图片按固定 token 估算（与 OpenAI vision 定价一致）
-        if (block.type === 'image') tokens += 85
-      }
-    }
-  } else if (isAssistantMessage(msg)) {
-    if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'text') tokens += countTextTokens(block.text)
-        if (block.type === 'thinking') tokens += countTextTokens(block.thinking)
-        if (block.type === 'toolCall') {
-          tokens += countTextTokens(block.name)
-          tokens += countTextTokens(JSON.stringify(block.arguments))
-        }
-      }
-    }
-  } else if (isToolResultMessage(msg)) {
-    tokens += countTextTokens(msg.toolName || '')
-    if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'text') tokens += countTextTokens(block.text)
-      }
-    }
-  }
-
-  return tokens
-}
-
-/** 计算消息数组的总 token 数 */
-export function countAllTokens(messages: AgentMessage[]): number {
-  let total = 0
-  for (const msg of messages) {
-    total += countMessageTokens(msg)
-  }
-  return total
-}
-
-// ─── 第一层：按 turn 分组压缩旧 toolResult ──────────────────
+// ─── 第一层：按 turn 分组延迟压缩旧 toolResult ──────────────────
 
 /** 将 toolResult 内容压缩为摘要（保留头尾几行） */
 function summarizeToolResult(text: string): string {
@@ -165,15 +80,18 @@ function identifyToolTurns(messages: AgentMessage[]): Array<number[]> {
 }
 
 /**
- * 按 turn 分组压缩旧的 toolResult 消息
- * 保留最近 KEEP_RECENT_TURNS 个 turn 的 toolResult 完整，其余全部压缩
+ * 原地压缩旧 toolResult 消息（直接修改 agent.state.messages 中的对象）
+ *
+ * 与旧版 compressToolResults 的关键区别：
+ * - 直接修改原始消息对象的 content[].text，而非创建副本
+ * - 压缩后内容在后续 LLM 调用中保持稳定，维持前缀缓存一致性
+ * - 幂等：已压缩的块（含 COMPRESSED_MARKER）不会被二次压缩
  */
-function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
+function compressToolResultsInPlace(messages: AgentMessage[]): void {
   const turns = identifyToolTurns(messages)
 
-  if (turns.length <= KEEP_RECENT_TURNS) return messages
+  if (turns.length <= KEEP_RECENT_TURNS) return
 
-  // 需要压缩的 turn（排除最近 N 个 turn）
   const turnsToCompress = turns.slice(0, -KEEP_RECENT_TURNS)
   const compressSet = new Set<number>()
   for (const turn of turnsToCompress) {
@@ -183,32 +101,27 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
   }
 
   let compressedCount = 0
-  const result: AgentMessage[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]
-    if (compressSet.has(i) && isToolResultMessage(msg)) {
-      const compressedContent = msg.content.map(
-        (block: TextContent | import('@mariozechner/pi-ai').ImageContent) => {
-          if (block.type === 'text' && block.text && block.text.length > 500) {
-            compressedCount++
-            return { type: 'text' as const, text: summarizeToolResult(block.text) }
-          }
-          return block
-        }
-      )
-      const compressed: ToolResultMessage = { ...msg, content: compressedContent }
-      result.push(compressed)
-    } else {
-      result.push(msg)
+  for (const idx of compressSet) {
+    const msg = messages[idx]
+    if (!isToolResultMessage(msg)) continue
+
+    for (let j = 0; j < msg.content.length; j++) {
+      const block = msg.content[j] as TextContent
+      if (block.type === 'text' && block.text && block.text.length > 500) {
+        // 幂等守卫：跳过已压缩的块
+        if (block.text.includes(COMPRESSED_MARKER)) continue
+        compressedCount++
+        // 原地修改 text 属性
+        block.text = summarizeToolResult(block.text)
+      }
     }
   }
 
   if (compressedCount > 0) {
     log.info(
-      `第一层：压缩了 ${turnsToCompress.length} 个旧 turn 中的 ${compressedCount} 个 toolResult（保留最近 ${KEEP_RECENT_TURNS} 个 turn）`
+      `第一层（原地）：压缩了 ${turnsToCompress.length} 个旧 turn 中的 ${compressedCount} 个 toolResult（保留最近 ${KEEP_RECENT_TURNS} 个 turn）`
     )
   }
-  return result
 }
 
 // ─── 第二层：滑动窗口截断 ─────────────────────────────────────
@@ -216,6 +129,7 @@ function compressToolResults(messages: AgentMessage[]): AgentMessage[] {
 /**
  * 滑动窗口截断（兜底）
  * 保留第一条 user 消息（任务上下文）+ 最近 N 条消息，丢弃中间部分
+ * 返回新数组，不修改原始消息列表（避免破坏 agent 的工具关联）
  */
 function slidingWindowTruncate(messages: AgentMessage[], maxTokens: number): AgentMessage[] {
   if (messages.length <= KEEP_RECENT_MESSAGES + 1) return messages
@@ -236,7 +150,7 @@ function slidingWindowTruncate(messages: AgentMessage[], maxTokens: number): Age
 
   if (dropIndices.size === 0) return messages
 
-  log.info(`第三层：丢弃 ${dropIndices.size} 条消息，剩余约 ${currentTokens} tokens`)
+  log.info(`第二层：丢弃 ${dropIndices.size} 条消息，剩余约 ${currentTokens} tokens`)
   return messages.filter((_, i) => !dropIndices.has(i))
 }
 
@@ -244,38 +158,44 @@ function slidingWindowTruncate(messages: AgentMessage[], maxTokens: number): Age
 
 /**
  * 创建 transformContext 函数，传入 Agent 构造器
- * 每次 LLM 调用前自动执行三层压缩：
- *   - 第一层、第二层始终执行（近乎无损，大幅减少每次调用的 token 数）
- *   - 第三层仅在超过上下文窗口阈值时执行（有损，丢弃旧消息）
+ * 每次 LLM 调用前自动执行两层压缩：
+ *   - 第一层：仅在 token 超过 60% 上下文窗口时触发，原地压缩旧 toolResult
+ *     （短对话不压缩 → 前缀缓存完美命中）
+ *   - 第二层：仅在超过 75% 上下文窗口阈值时执行滑动窗口截断（有损，丢弃旧消息）
  */
 export function createTransformContext(
   model: Model<Api>
 ): (messages: AgentMessage[]) => Promise<AgentMessage[]> {
   return async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
-    const maxTokens = Math.floor((model.contextWindow || 128000) * CONTEXT_RATIO)
+    const contextWindow = model.contextWindow || 128000
+    const maxTokens = Math.floor(contextWindow * CONTEXT_RATIO)
+    const compressionTrigger = Math.floor(contextWindow * COMPRESSION_TRIGGER_RATIO)
     const originalTokens = countAllTokens(messages)
 
     log.info(
-      `transformContext: ${messages.length} 条消息, ${originalTokens} tokens (阈值 ${maxTokens})`
+      `transformContext: ${messages.length} 条消息, ${originalTokens} tokens (压缩阈值 ${compressionTrigger}, 窗口阈值 ${maxTokens})`
     )
 
-    // 第一层：始终压缩旧 toolResult（近乎无损，高收益）
-    let compressed = compressToolResults(messages)
+    // 第一层：延迟压缩 — 仅在 token 超过触发阈值时才压缩旧 toolResult
+    // 短对话完全不压缩，前缀缓存可以正常工作
+    if (originalTokens > compressionTrigger) {
+      compressToolResultsInPlace(messages)
+      const afterTokens = countAllTokens(messages)
+      if (afterTokens < originalTokens) {
+        log.info(
+          `延迟压缩：${originalTokens} → ${afterTokens} tokens（节省 ${originalTokens - afterTokens}）`
+        )
+      }
 
-    const afterBasicTokens = countAllTokens(compressed)
-    if (afterBasicTokens < originalTokens) {
-      log.info(
-        `基础压缩：${originalTokens} → ${afterBasicTokens} tokens（节省 ${originalTokens - afterBasicTokens}）`
-      )
+      // 第二层：仅在压缩后仍超过窗口阈值时执行滑动窗口截断（有损）
+      if (afterTokens > maxTokens) {
+        const truncated = slidingWindowTruncate(messages, maxTokens)
+        const finalTokens = countAllTokens(truncated)
+        log.info(`滑动窗口截断：${afterTokens} → ${finalTokens} tokens`)
+        return truncated
+      }
     }
 
-    // 第二层：仅在超过阈值时执行滑动窗口截断（有损）
-    if (afterBasicTokens > maxTokens) {
-      compressed = slidingWindowTruncate(compressed, maxTokens)
-      const finalTokens = countAllTokens(compressed)
-      log.info(`滑动窗口截断：${afterBasicTokens} → ${finalTokens} tokens`)
-    }
-
-    return compressed
+    return messages
   }
 }

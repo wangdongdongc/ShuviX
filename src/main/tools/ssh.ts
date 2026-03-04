@@ -257,14 +257,8 @@ async function handleExec(
   }
 
   // 每条命令都需用户审批（会话开启 sshAutoApprove 时跳过）
-  let sshAutoApprove = false
-  try {
-    const sess = sessionDao.findById(ctx.sessionId)
-    sshAutoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
-  } catch {
-    /* ignore */
-  }
-  if (ctx.requestApproval && !sshAutoApprove) {
+  const sess = sessionDao.findById(ctx.sessionId)
+  if (ctx.requestApproval && !sess?.settings.sshAutoApprove) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')

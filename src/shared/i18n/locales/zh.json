@@ -66,7 +66,9 @@
     "disconnectSsh": "断开 SSH",
     "destroyReason_manual": "手动销毁",
     "sshAutoApproveLabel": "SSH 免审批",
-    "sshAutoApproveWarning": "SSH 命令将自动执行，不再逐条审批。请勿在生产环境或重要服务器上开启此功能。"
+    "sshAutoApproveWarning": "SSH 命令将自动执行，不再逐条审批。请勿在生产环境或重要服务器上开启此功能。",
+    "lanShareLabel": "局域网分享",
+    "telegramLabel": "Telegram"
   },
 
   "input": {
@@ -110,7 +112,10 @@
     "rendering": "渲染中…",
     "diagram": "图表",
     "source": "源码",
-    "attachment": "附图 {{index}}"
+    "attachment": "附图 {{index}}",
+    "cacheRead": "缓存读取",
+    "cacheWrite": "缓存写入",
+    "nCalls": "次调用"
   },
 
   "toolCall": {
@@ -168,7 +173,9 @@
     "shareModeFull": "可编辑",
     "shareModeReadonlyDesc": "仅查看消息记录，无法发送消息或操作",
     "shareModeChatDesc": "可发送消息对话，但不能修改模型和工具配置",
-    "shareModeFullDesc": "完整功能，可修改所有配置"
+    "shareModeFullDesc": "完整功能，可修改所有配置",
+    "telegramShare": "Telegram Bot",
+    "telegramShareDesc": "开启后，Telegram Bot 用户可直接与此会话对话。需先在设置中配置 Bot Token。"
   },
 
   "sessionEdit": {
@@ -417,7 +424,7 @@
       "label": "操作类型",
       "prompt": "发送消息",
       "abort": "中止生成",
-      "initAgent": "初始化 Agent",
+      "startChat": "开启对话",
       "setModel": "切换模型",
       "setThinkingLevel": "设置思考深度",
       "setEnabledTools": "更新工具集",
@@ -483,6 +490,21 @@
     "serverStatus": "服务状态",
     "port": "端口",
     "boundSessions": "已绑定会话",
-    "removeShare": "取消分享"
+    "removeShare": "取消分享",
+    "telegramBotToken": "Bot Token",
+    "telegramBotTokenHint": "从 Telegram @BotFather 获取",
+    "telegramValidate": "验证",
+    "telegramValidating": "验证中...",
+    "telegramTokenValid": "有效: @{{username}}",
+    "telegramTokenInvalid": "无效 Token",
+    "telegramAllowedUsers": "允许的用户",
+    "telegramAllowedUsersHint": "填写 Telegram 用户 ID，留空允许所有人",
+    "telegramAddUser": "添加用户 ID",
+    "telegramBotStatus": "Bot 状态",
+    "telegramStartBot": "启动 Bot",
+    "telegramStopBot": "停止 Bot",
+    "telegramNoToken": "请先设置 Bot Token",
+    "telegramBoundSessions": "已绑定会话",
+    "telegramNoSessionsHint": "在对话页面的会话配置中开启「Telegram」即可将会话绑定到 Bot。"
   }
 }

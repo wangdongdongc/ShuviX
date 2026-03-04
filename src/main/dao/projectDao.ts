@@ -1,5 +1,22 @@
 import { BaseDao } from './database'
-import type { Project } from './types'
+import type { Project, ProjectSettings } from './types'
+
+/** DB 原始行类型（settings 在 DB 中为 JSON 字符串） */
+type ProjectRow = Omit<Project, 'settings'> & { settings: string }
+
+/** 安全解析 JSON，失败返回空对象 */
+function safeParse(json: string | undefined | null): ProjectSettings {
+  try {
+    return JSON.parse(json || '{}')
+  } catch {
+    return {}
+  }
+}
+
+/** 将 DB 行的 settings 字符串解析为类型化对象 */
+function parseRow(row: ProjectRow): Project {
+  return { ...row, settings: safeParse(row.settings) }
+}
 
 /**
  * Project DAO — 项目表的纯数据访问操作
@@ -7,31 +24,42 @@ import type { Project } from './types'
 export class ProjectDao extends BaseDao {
   /** 获取所有项目，按更新时间倒序 */
   findAll(): Project[] {
-    return this.db.prepare('SELECT * FROM projects ORDER BY updatedAt DESC').all() as Project[]
+    const rows = this.db
+      .prepare('SELECT * FROM projects ORDER BY updatedAt DESC')
+      .all() as ProjectRow[]
+    return rows.map(parseRow)
   }
 
   /** 获取未归档项目，按更新时间倒序 */
   findAllActive(): Project[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM projects WHERE archivedAt = 0 ORDER BY updatedAt DESC')
-      .all() as Project[]
+      .all() as ProjectRow[]
+    return rows.map(parseRow)
   }
 
   /** 获取已归档项目，按归档时间倒序 */
   findAllArchived(): Project[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM projects WHERE archivedAt > 0 ORDER BY archivedAt DESC')
-      .all() as Project[]
+      .all() as ProjectRow[]
+    return rows.map(parseRow)
   }
 
   /** 根据 ID 获取单个项目 */
   findById(id: string): Project | undefined {
-    return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined
+    const row = this.db
+      .prepare('SELECT * FROM projects WHERE id = ?')
+      .get(id) as ProjectRow | undefined
+    return row ? parseRow(row) : undefined
   }
 
   /** 根据路径查找项目 */
   findByPath(path: string): Project | undefined {
-    return this.db.prepare('SELECT * FROM projects WHERE path = ?').get(path) as Project | undefined
+    const row = this.db
+      .prepare('SELECT * FROM projects WHERE path = ?')
+      .get(path) as ProjectRow | undefined
+    return row ? parseRow(row) : undefined
   }
 
   /** 插入项目 */
@@ -48,7 +76,7 @@ export class ProjectDao extends BaseDao {
         project.dockerEnabled,
         project.dockerImage,
         project.sandboxEnabled,
-        project.settings,
+        JSON.stringify(project.settings),
         project.archivedAt,
         project.createdAt,
         project.updatedAt
@@ -100,7 +128,7 @@ export class ProjectDao extends BaseDao {
     }
     if (fields.settings !== undefined) {
       sets.push('settings = ?')
-      values.push(fields.settings)
+      values.push(JSON.stringify(fields.settings))
     }
     if (fields.archivedAt !== undefined) {
       sets.push('archivedAt = ?')

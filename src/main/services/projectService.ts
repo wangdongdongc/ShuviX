@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { projectDao } from '../dao/projectDao'
-import type { Project } from '../types'
+import type { Project, ProjectSettings, ReferenceDir } from '../types'
 import { basename, resolve } from 'path'
 import { expandPath } from '../tools/utils/pathUtils'
 
@@ -41,15 +41,14 @@ export function getProjectFieldDescriptions(): string {
  * @param projectPath 项目根目录绝对路径（可选，传入时会过滤掉与之相同的条目）
  */
 function deduplicateReferenceDirs(
-  dirs: Array<{ path: string; note?: string; access?: string }>,
+  dirs: ReferenceDir[],
   projectPath?: string
-): Array<{ path: string; note?: string; access?: string }> {
+): ReferenceDir[] {
   const resolvedProjectPath = projectPath ? resolve(expandPath(projectPath)) : undefined
   const seen = new Set<string>()
-  const result: Array<{ path: string; note?: string; access?: string }> = []
+  const result: ReferenceDir[] = []
   for (const d of dirs) {
     const abs = resolve(expandPath(d.path))
-    // 跳过与项目根目录相同的条目
     if (resolvedProjectPath && abs === resolvedProjectPath) continue
     if (seen.has(abs)) continue
     seen.add(abs)
@@ -93,15 +92,12 @@ export class ProjectService {
     dockerImage?: string
     sandboxEnabled?: boolean
     enabledTools?: string[]
-    referenceDirs?: Array<{ path: string; note?: string; access?: string }>
+    referenceDirs?: ReferenceDir[]
     archived?: boolean
   }): Project {
     const now = Date.now()
     const id = uuidv7()
-    const settings: Record<
-      string,
-      string[] | Array<{ path: string; note?: string; access?: string }>
-    > = {}
+    const settings: ProjectSettings = {}
     if (params.enabledTools) settings.enabledTools = params.enabledTools
     if (params.referenceDirs)
       settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
@@ -113,7 +109,7 @@ export class ProjectService {
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || '',
       sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
-      settings: JSON.stringify(settings),
+      settings,
       archivedAt: params.archived ? now : 0,
       createdAt: now,
       updatedAt: now
@@ -133,29 +129,21 @@ export class ProjectService {
       dockerImage?: string
       sandboxEnabled?: boolean
       enabledTools?: string[]
-      referenceDirs?: Array<{ path: string; note?: string; access?: string }>
+      referenceDirs?: ReferenceDir[]
       archived?: boolean
     }
   ): void {
-    // 处理 settings JSON 字段（合并而非覆盖）
-    let settingsUpdate: string | undefined
+    // 处理 settings 字段（合并而非覆盖）
+    let settingsUpdate: ProjectSettings | undefined
     if (params.enabledTools !== undefined || params.referenceDirs !== undefined) {
       const existing = projectDao.findById(id)
-      const current = (() => {
-        try {
-          const p = JSON.parse(existing?.settings || '{}')
-          return typeof p === 'object' && p !== null ? p : {}
-        } catch {
-          return {}
-        }
-      })()
+      const current: ProjectSettings = { ...(existing?.settings || {}) }
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
       if (params.referenceDirs !== undefined) {
-        // 获取项目路径用于去重校验
         const projPath = params.path ?? existing?.path
         current.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, projPath)
       }
-      settingsUpdate = JSON.stringify(current)
+      settingsUpdate = current
     }
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),

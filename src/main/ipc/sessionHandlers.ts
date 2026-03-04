@@ -1,14 +1,14 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
-import { agentService } from '../services/agent'
 import { dockerManager } from '../services/dockerManager'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import type {
   Session,
   SessionUpdateModelConfigParams,
-  SessionUpdateModelMetadataParams,
+  SessionUpdateThinkingLevelParams,
+  SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateSettingsParams,
+  SessionUpdateSshAutoApproveParams,
   SessionUpdateTitleParams
 } from '../types'
 
@@ -45,29 +45,40 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 更新模型元数据（思考深度等） */
+  /** 更新思考深度 */
   ipcMain.handle(
-    'session:updateModelMetadata',
-    (_event, params: SessionUpdateModelMetadataParams) => {
-      sessionService.updateModelMetadata(params.id, params.modelMetadata)
+    'session:updateThinkingLevel',
+    (_event, params: SessionUpdateThinkingLevelParams) => {
+      sessionService.updateThinkingLevel(params.id, params.thinkingLevel)
       return { success: true }
     }
   )
 
-  /** 更新会话级配置（sshAutoApprove 等） */
-  ipcMain.handle('session:updateSettings', (_event, params: SessionUpdateSettingsParams) => {
-    sessionService.updateSettings(params.id, params.settings)
-    return { success: true }
-  })
+  /** 更新会话启用工具列表 */
+  ipcMain.handle(
+    'session:updateEnabledTools',
+    (_event, params: SessionUpdateEnabledToolsParams) => {
+      sessionService.updateEnabledTools(params.id, params.enabledTools)
+      return { success: true }
+    }
+  )
+
+  /** 更新 SSH 命令免审批 */
+  ipcMain.handle(
+    'session:updateSshAutoApprove',
+    (_event, params: SessionUpdateSshAutoApproveParams) => {
+      sessionService.updateSshAutoApprove(params.id, params.sshAutoApprove)
+      return { success: true }
+    }
+  )
 
   /** 获取单个会话（含 workingDirectory） */
   ipcMain.handle('session:getById', (_event, id: string) => {
     return sessionService.getById(id) || null
   })
 
-  /** 删除会话（同时清理 Agent 内存实例 + Docker 容器） */
+  /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
   ipcMain.handle('session:delete', (_event, id: string) => {
-    agentService.removeAgent(id)
     sessionService.delete(id)
     return { success: true }
   })
@@ -79,11 +90,10 @@ export function registerSessionHandlers(): void {
       _event,
       params: { sessionId: string; userMessage: string; assistantMessage: string }
     ) => {
-      const title = await agentService.generateTitle(
-        params.sessionId,
-        params.userMessage,
-        params.assistantMessage
-      )
+      const title =
+        (await sessionService
+          .getAgentSession(params.sessionId)
+          ?.generateTitle(params.userMessage, params.assistantMessage)) ?? null
       if (title) {
         sessionService.updateTitle(params.sessionId, title)
       }

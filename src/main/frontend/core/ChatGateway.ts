@@ -13,8 +13,8 @@ import type { SshCredentialPayload } from '../../tools/types'
 export interface ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
-  /** 初始化 Agent（加载历史消息、项目指令等） */
-  initAgent(sessionId: string): AgentInitResult
+  /** 开启对话（加载历史消息、项目指令等） */
+  startChat(sessionId: string): AgentInitResult
 
   /** 发送用户消息 */
   prompt(

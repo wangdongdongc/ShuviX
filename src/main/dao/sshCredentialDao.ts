@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
-import { encrypt, decrypt } from '../services/crypto'
+import { encrypt, decrypt } from '../utils/crypto'
 import type { SshCredential } from './types'
 
 /** 解密凭据中的敏感字段 */

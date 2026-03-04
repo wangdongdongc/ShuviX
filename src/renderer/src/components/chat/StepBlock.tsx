@@ -3,10 +3,10 @@ import { Brain, MessageSquareText, ChevronDown, ChevronRight } from 'lucide-reac
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import type { ChatMessage } from '../../stores/chatStore'
+import type { StepTextMessage, StepThinkingMessage } from '../../stores/chatStore'
 
 interface StepBlockProps {
-  message: ChatMessage
+  message: StepTextMessage | StepThinkingMessage
 }
 
 /**

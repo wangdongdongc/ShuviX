@@ -94,13 +94,8 @@ function requiresSerial(
 
   // ssh exec：检查是否自动审批
   if (toolName === 'ssh' && rawArgs.action === 'exec') {
-    try {
-      const sess = sessionDao.findById(sessionId)
-      const autoApprove = JSON.parse(sess?.settings || '{}').sshAutoApprove === true
-      return !autoApprove
-    } catch {
-      return true
-    }
+    const sess = sessionDao.findById(sessionId)
+    return !sess?.settings.sshAutoApprove
   }
 
   // shuvix-project update / shuvix-setting set

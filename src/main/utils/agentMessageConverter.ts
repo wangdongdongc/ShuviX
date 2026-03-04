@@ -8,14 +8,7 @@ import type {
   ToolResultMessage,
   UserMessage
 } from '@mariozechner/pi-ai'
-import type { Message } from '../types'
-
-interface ImageMeta {
-  data?: string
-  preview?: string
-  mimeType: string
-  thoughtSignature?: string
-}
+import type { Message, ImageMeta } from '../types'
 
 /** 从图片对象中提取 raw base64：处理 data URL 格式和纯 base64 */
 export function extractBase64(img: ImageMeta): string {
@@ -56,22 +49,16 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
     // 用户消息（可能包含图片）
     if (msg.role === 'user') {
       let content: string | (TextContent | ImageContent)[] = msg.content
-      if (msg.metadata) {
-        try {
-          const meta: { images?: ImageMeta[] } = JSON.parse(msg.metadata)
-          if (meta.images?.length) {
-            content = [
-              { type: 'text', text: msg.content },
-              ...meta.images.map((img: ImageMeta) => ({
-                type: 'image' as const,
-                data: extractBase64(img),
-                mimeType: img.mimeType
-              }))
-            ]
-          }
-        } catch {
-          /* 忽略 */
-        }
+      const meta = msg.metadata
+      if (meta?.images?.length) {
+        content = [
+          { type: 'text', text: msg.content },
+          ...meta.images.map((img) => ({
+            type: 'image' as const,
+            data: extractBase64(img),
+            mimeType: img.mimeType
+          }))
+        ]
       }
       const userMsg: UserMessage = { role: 'user', content, timestamp: msg.createdAt }
       result.push(userMsg)
@@ -82,22 +69,18 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
     // 助手文本消息
     if (msg.role === 'assistant' && msg.type === 'text') {
       const contentBlocks: (TextContent | ThinkingContent | ToolCall)[] = []
-      if (msg.metadata) {
-        try {
-          const meta: { thinking?: string; images?: ImageMeta[] } = JSON.parse(msg.metadata)
-          if (meta.thinking) contentBlocks.push({ type: 'thinking', thinking: meta.thinking })
-          if (meta.images?.length) {
-            for (const img of meta.images) {
-              contentBlocks.push({
-                type: 'image',
-                data: extractBase64(img),
-                mimeType: img.mimeType,
-                ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
-              } as unknown as TextContent)
-            }
+      const meta = msg.metadata
+      if (meta) {
+        if (meta.thinking) contentBlocks.push({ type: 'thinking', thinking: meta.thinking })
+        if (meta.images?.length) {
+          for (const img of meta.images) {
+            contentBlocks.push({
+              type: 'image',
+              data: extractBase64(img),
+              mimeType: img.mimeType,
+              ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
+            } as unknown as TextContent)
           }
-        } catch {
-          /* 忽略 */
         }
       }
       contentBlocks.push({ type: 'text', text: msg.content })
@@ -128,12 +111,12 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
       const toolCalls: ToolCall[] = []
       const ts = msg.createdAt
       while (i < msgs.length && msgs[i].role === 'assistant' && msgs[i].type === 'tool_call') {
-        const meta: Record<string, unknown> = msgs[i].metadata ? JSON.parse(msgs[i].metadata!) : {}
+        const meta = msgs[i].metadata
         toolCalls.push({
           type: 'toolCall',
-          id: (meta.toolCallId as string) || '',
-          name: (meta.toolName as string) || '',
-          arguments: (meta.args as Record<string, unknown>) || {}
+          id: (meta?.toolCallId as string) || '',
+          name: (meta?.toolName as string) || '',
+          arguments: (meta?.args as Record<string, unknown>) || {}
         })
         i++
       }
@@ -160,13 +143,13 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
 
     // 工具结果消息
     if (msg.role === 'tool' && msg.type === 'tool_result') {
-      const meta: Record<string, unknown> = msg.metadata ? JSON.parse(msg.metadata) : {}
+      const meta = msg.metadata
       const toolResultMsg: ToolResultMessage = {
         role: 'toolResult',
-        toolCallId: (meta.toolCallId as string) || '',
-        toolName: (meta.toolName as string) || '',
+        toolCallId: (meta?.toolCallId as string) || '',
+        toolName: (meta?.toolName as string) || '',
         content: [{ type: 'text', text: msg.content }],
-        isError: (meta.isError as boolean) || false,
+        isError: (meta?.isError as boolean) || false,
         timestamp: msg.createdAt
       }
       result.push(toolResultMsg)

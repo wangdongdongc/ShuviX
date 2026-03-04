@@ -1,27 +1,32 @@
 import { create } from 'zustand'
 
+// 消息相关类型从 preload 全局声明导入（ChatMessage 判别联合 + per-type 接口）
+export type {
+  ChatMessage,
+  UserTextMessage,
+  AssistantTextMessage,
+  ToolCallMessage,
+  ToolResultMessage,
+  StepTextMessage,
+  StepThinkingMessage,
+  DockerEventMessage,
+  SshEventMessage,
+  ErrorEventMessage,
+  MessageMetadata,
+  ImageMeta,
+  UsageInfo,
+  UserTextMeta,
+  AssistantTextMeta,
+  ToolCallMeta,
+  ToolResultMeta,
+  StepTextMeta,
+  StepThinkingMeta,
+  DockerEventMeta,
+  SshEventMeta
+}
+
 /** 分享模式类型（与后端 ShareMode 对齐） */
 export type ShareMode = 'readonly' | 'chat' | 'full'
-
-/** 聊天消息类型 */
-export interface ChatMessage {
-  id: string
-  sessionId: string
-  role: 'user' | 'assistant' | 'system' | 'tool' | 'system_notify'
-  type:
-    | 'text'
-    | 'tool_call'
-    | 'tool_result'
-    | 'step_text'
-    | 'step_thinking'
-    | 'docker_event'
-    | 'ssh_event'
-    | 'error_event'
-  content: string
-  metadata: string | null
-  model: string
-  createdAt: number
-}
 
 /** 工具执行实时状态（流式期间的临时状态） */
 export interface ToolExecution {
@@ -41,6 +46,17 @@ export interface ToolExecution {
   messageId?: string
 }
 
+/** 模型相关元数据 */
+export interface SessionModelMetadata {
+  thinkingLevel?: string
+  enabledTools?: string[]
+}
+
+/** 会话级配置 */
+export interface SessionSettings {
+  sshAutoApprove?: boolean
+}
+
 /** 会话类型（持久化字段，不含运行时计算属性） */
 export interface Session {
   id: string
@@ -50,10 +66,10 @@ export interface Session {
   provider: string
   model: string
   systemPrompt: string
-  /** 模型相关设置（JSON：思考深度等） */
-  modelMetadata: string
-  /** 会话级配置（JSON：sshAutoApprove 等） */
-  settings: string
+  /** 模型相关设置（思考深度、工具列表等） */
+  modelMetadata: SessionModelMetadata
+  /** 会话级配置（SSH 免审批等） */
+  settings: SessionSettings
   createdAt: number
   updatedAt: number
 }
@@ -108,8 +124,10 @@ interface ChatState {
   agentMdLoaded: boolean
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
-  /** 已开启 WebUI 分享的 session ID 集合 */
-  sharedSessionIds: Set<string>
+  /** 已开启 WebUI 分享的 session ID → 分享模式 */
+  sharedSessionIds: Map<string, ShareMode>
+  /** 已开启 Telegram 绑定的 session ID 集合 */
+  telegramSharedSessionIds: Set<string>
   /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
   shareMode: ShareMode | null
 
@@ -143,13 +161,14 @@ interface ChatState {
   clearPendingImages: () => void
   updateSessionTitle: (id: string, title: string) => void
   updateSessionProject: (id: string, projectId: string | null) => void
-  updateSessionSettings: (id: string, settings: string) => void
+  updateSessionSettings: (id: string, patch: Partial<SessionSettings>) => void
   removeSession: (id: string) => void
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
   setShareMode: (mode: ShareMode | null) => void
-  setSharedSessionIds: (ids: Set<string>) => void
+  setSharedSessionIds: (ids: Map<string, ShareMode>) => void
+  setTelegramSharedSessionIds: (ids: Set<string>) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
   setSessionSsh: (
     sessionId: string,
@@ -203,7 +222,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   projectPath: null,
   agentMdLoaded: false,
   sessionResources: {},
-  sharedSessionIds: new Set(),
+  sharedSessionIds: new Map(),
+  telegramSharedSessionIds: new Set(),
   shareMode: null,
 
   setSessions: (sessions) => set({ sessions }),
@@ -315,9 +335,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, projectId } : s))
     })),
-  updateSessionSettings: (id, settings) =>
+  updateSessionSettings: (id, patch) =>
     set((state) => ({
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, settings } : s))
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, settings: { ...s.settings, ...patch } } : s
+      )
     })),
   removeSession: (id) =>
     set((state) => ({
@@ -325,7 +347,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeSessionId: state.activeSessionId === id ? null : state.activeSessionId
     })),
   setShareMode: (mode) => set({ shareMode: mode }),
-  setSharedSessionIds: (ids) => set({ sharedSessionIds: ids }),
+  setSharedSessionIds: (ids: Map<string, ShareMode>) => set({ sharedSessionIds: ids }),
+  setTelegramSharedSessionIds: (ids) => set({ telegramSharedSessionIds: ids }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),

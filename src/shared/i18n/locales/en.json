@@ -66,7 +66,9 @@
     "disconnectSsh": "Disconnect SSH",
     "destroyReason_manual": "manually destroyed",
     "sshAutoApproveLabel": "SSH Auto-Approve",
-    "sshAutoApproveWarning": "SSH commands will execute automatically without approval. Do not enable this on production or critical servers."
+    "sshAutoApproveWarning": "SSH commands will execute automatically without approval. Do not enable this on production or critical servers.",
+    "lanShareLabel": "LAN Shared",
+    "telegramLabel": "Telegram"
   },
 
   "input": {
@@ -110,7 +112,10 @@
     "rendering": "Rendering…",
     "diagram": "Diagram",
     "source": "Source",
-    "attachment": "Image {{index}}"
+    "attachment": "Image {{index}}",
+    "cacheRead": "cache read",
+    "cacheWrite": "cache write",
+    "nCalls": "calls"
   },
 
   "toolCall": {
@@ -168,7 +173,9 @@
     "shareModeFull": "Full Access",
     "shareModeReadonlyDesc": "View messages only, no input or actions",
     "shareModeChatDesc": "Can send messages, but cannot change model or tool settings",
-    "shareModeFullDesc": "Full access to all features and settings"
+    "shareModeFullDesc": "Full access to all features and settings",
+    "telegramShare": "Telegram Bot",
+    "telegramShareDesc": "When enabled, Telegram Bot users can chat with this session directly. Bot Token must be configured in Settings first."
   },
 
   "sessionEdit": {
@@ -417,7 +424,7 @@
       "label": "Action",
       "prompt": "Send Message",
       "abort": "Abort Generation",
-      "initAgent": "Initialize Agent",
+      "startChat": "Start Chat",
       "setModel": "Switch Model",
       "setThinkingLevel": "Set Thinking Level",
       "setEnabledTools": "Update Tools",
@@ -483,6 +490,21 @@
     "serverStatus": "Server Status",
     "port": "Port",
     "boundSessions": "Bound Sessions",
-    "removeShare": "Remove share"
+    "removeShare": "Remove share",
+    "telegramBotToken": "Bot Token",
+    "telegramBotTokenHint": "Get a token from @BotFather on Telegram",
+    "telegramValidate": "Validate",
+    "telegramValidating": "Validating...",
+    "telegramTokenValid": "Valid: @{{username}}",
+    "telegramTokenInvalid": "Invalid token",
+    "telegramAllowedUsers": "Allowed Users",
+    "telegramAllowedUsersHint": "Telegram user IDs allowed to interact. Leave empty to allow all.",
+    "telegramAddUser": "Add User ID",
+    "telegramBotStatus": "Bot Status",
+    "telegramStartBot": "Start Bot",
+    "telegramStopBot": "Stop Bot",
+    "telegramNoToken": "Set a bot token to get started",
+    "telegramBoundSessions": "Bound Sessions",
+    "telegramNoSessionsHint": "Enable \"Telegram\" in a session's config to bind it to the bot."
   }
 }

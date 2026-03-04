@@ -294,12 +294,8 @@ function ApprovalContent({
   const handleAllowAndSkip = async (): Promise<void> => {
     const sessionId = useChatStore.getState().activeSessionId
     if (sessionId) {
-      const session = useChatStore.getState().sessions.find((s) => s.id === sessionId)
-      const current = JSON.parse(session?.settings || '{}')
-      const updated = { ...current, sshAutoApprove: true }
-      const json = JSON.stringify(updated)
-      await window.api.session.updateSettings({ id: sessionId, settings: json })
-      useChatStore.getState().updateSessionSettings(sessionId, json)
+      await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: true })
+      useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: true })
     }
     onApproval(toolCallId, true)
   }

@@ -43,19 +43,15 @@ export function ProjectEditDialog({
           setPath(project.path)
           setSystemPrompt(project.systemPrompt)
           setSandboxEnabled(project.sandboxEnabled === 1)
-          // 从 settings JSON 恢复 enabledTools 和 referenceDirs
-          try {
-            const settings = JSON.parse(project.settings || '{}')
-            if (Array.isArray(settings.enabledTools)) {
-              setEnabledTools(settings.enabledTools)
-            } else {
-              setEnabledTools([...DEFAULT_TOOL_NAMES])
-            }
-            if (Array.isArray(settings.referenceDirs)) {
-              setReferenceDirs(settings.referenceDirs)
-            }
-          } catch {
+          // 从 settings 恢复 enabledTools 和 referenceDirs
+          const settings = project.settings || {}
+          if (Array.isArray(settings.enabledTools)) {
+            setEnabledTools(settings.enabledTools)
+          } else {
             setEnabledTools([...DEFAULT_TOOL_NAMES])
+          }
+          if (Array.isArray(settings.referenceDirs)) {
+            setReferenceDirs(settings.referenceDirs)
           }
         } else {
           setEnabledTools([...DEFAULT_TOOL_NAMES])

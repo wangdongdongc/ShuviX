@@ -121,27 +121,15 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
     // 构造消息内容：文本 + 图片标记
     const contentText = text || t('input.imageOnly')
-    // 图片信息存入 metadata 用于消息气泡渲染
-    const metadata =
-      images.length > 0
-        ? JSON.stringify({
-            images: images.map((img) => ({ mimeType: img.mimeType, preview: img.preview }))
-          })
-        : undefined
 
-    // 保存用户消息到数据库
-    const userMsg = await window.api.message.add({
-      sessionId: activeSessionId,
-      role: 'user',
-      content: contentText,
-      metadata
-    })
-    store.addMessage(userMsg)
-
-    // 发送给 Agent（附带图片）
+    // 发送给 Agent（附带图片），后端统一持久化用户消息
     const agentImages =
       images.length > 0
-        ? images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType }))
+        ? images.map((img) => ({
+            type: 'image' as const,
+            data: img.data,
+            mimeType: img.mimeType
+          }))
         : undefined
     await window.api.agent.prompt({
       sessionId: activeSessionId,

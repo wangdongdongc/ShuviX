@@ -184,13 +184,18 @@ export function createWebApi(): typeof window.api {
           body: JSON.stringify(p)
         }),
       updateProject: noop,
-      updateModelMetadata: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/model-metadata`, {
+      updateThinkingLevel: (p) =>
+        api(`/sessions/${(p as { id: string }).id}/thinking-level`, {
           method: 'PUT',
           body: JSON.stringify(p)
         }),
-      updateSettings: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/settings`, {
+      updateEnabledTools: (p) =>
+        api(`/sessions/${(p as { id: string }).id}/enabled-tools`, {
+          method: 'PUT',
+          body: JSON.stringify(p)
+        }),
+      updateSshAutoApprove: (p) =>
+        api(`/sessions/${(p as { id: string }).id}/ssh-auto-approve`, {
           method: 'PUT',
           body: JSON.stringify(p)
         }),

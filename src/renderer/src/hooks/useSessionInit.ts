@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
-import { useChatStore } from '../stores/chatStore'
+import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import type { ThinkingLevel } from '../../../main/types'
+
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
@@ -48,17 +48,13 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setAgentMdLoaded(!!result.agentMdLoaded)
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
-      const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant' && m.metadata)
-      const lastUsage = (() => {
-        try {
-          return lastAssistant ? JSON.parse(lastAssistant.metadata!).usage : null
-        } catch {
-          return null
-        }
-      })()
+      const lastAssistant = [...msgs].reverse().find(
+        (m): m is AssistantTextMessage => m.role === 'assistant' && m.type === 'text' && !!m.metadata
+      )
+      const lastUsage = lastAssistant?.metadata?.usage ?? null
       if (lastUsage) {
         const details = lastUsage.details
-        const last = details?.length > 0 ? details[details.length - 1] : null
+        const last = (details?.length ?? 0) > 0 ? details![details!.length - 1] : null
         const promptTokens = last
           ? (last.total || 0) - (last.output || 0)
           : (lastUsage.total || 0) - (lastUsage.output || 0)
@@ -67,21 +63,11 @@ export function useSessionInit(activeSessionId: string | null): void {
         store.setUsedContextTokens(null)
       }
 
-      // 6. 从 modelMetadata 恢复用户上次设置的思考深度
-      const meta = (() => {
-        try {
-          return JSON.parse(result.modelMetadata || '{}')
-        } catch {
-          return {}
-        }
-      })()
-      const savedLevel = meta.thinkingLevel
-      const restoredLevel = hasReasoning ? savedLevel || 'medium' : 'off'
+      // 6. 从 modelMetadata 恢复思考深度（仅同步 UI 状态，后端已在创建时初始化）
+      const restoredLevel = hasReasoning
+        ? result.modelMetadata.thinkingLevel || 'medium'
+        : 'off'
       store.setThinkingLevel(restoredLevel)
-      await window.api.agent.setThinkingLevel({
-        sessionId: activeSessionId,
-        level: restoredLevel as ThinkingLevel
-      })
 
       // 7. 查询 Docker/SSH 实时资源状态
       const [dockerInfo, sshInfo] = await Promise.all([

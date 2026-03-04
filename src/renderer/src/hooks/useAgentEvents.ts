@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useChatStore, type ChatMessage } from '../stores/chatStore'
+import { useChatStore, type ChatMessage, type DockerEventMessage, type SshEventMessage } from '../stores/chatStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
@@ -14,6 +14,13 @@ export function useAgentEvents(): void {
     const sid: string = event.sessionId
 
     switch (event.type) {
+      case 'user_message':
+        // 用户消息已由后端持久化，同步到本地 store（仅活跃会话）
+        if (sid === store.activeSessionId && event.message) {
+          store.addMessage(JSON.parse(event.message))
+        }
+        break
+
       case 'agent_start':
         store.setIsStreaming(sid, true)
         store.clearStreamingContent(sid)
@@ -109,41 +116,31 @@ export function useAgentEvents(): void {
         // 仅当前活跃会话时添加 docker_event 消息
         if (sid === store.activeSessionId) {
           const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m) => m.id === event.messageId)
+          const dockerMsg = msgs3.find((m): m is DockerEventMessage => m.id === event.messageId && m.type === 'docker_event')
           if (dockerMsg) {
             store.addMessage(dockerMsg)
             // 同步 sessionResources
-            try {
-              const meta = JSON.parse(dockerMsg.metadata || '{}')
-              if (dockerMsg.content === 'container_created') {
-                store.setSessionDocker(sid, {
-                  containerId: meta.containerId || '',
-                  image: meta.image || ''
-                })
-              } else if (dockerMsg.content === 'container_destroyed') {
-                store.setSessionDocker(sid, null)
-              }
-            } catch {
-              /* 忽略 */
+            if (dockerMsg.content === 'container_created') {
+              store.setSessionDocker(sid, {
+                containerId: dockerMsg.metadata?.containerId || '',
+                image: dockerMsg.metadata?.image || ''
+              })
+            } else if (dockerMsg.content === 'container_destroyed') {
+              store.setSessionDocker(sid, null)
             }
           }
         } else {
           // 非活跃会话：仅更新 sessionResources（确保切换后状态正确）
           const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m) => m.id === event.messageId)
+          const dockerMsg = msgs3.find((m): m is DockerEventMessage => m.id === event.messageId && m.type === 'docker_event')
           if (dockerMsg) {
-            try {
-              const meta = JSON.parse(dockerMsg.metadata || '{}')
-              if (dockerMsg.content === 'container_created') {
-                store.setSessionDocker(sid, {
-                  containerId: meta.containerId || '',
-                  image: meta.image || ''
-                })
-              } else if (dockerMsg.content === 'container_destroyed') {
-                store.setSessionDocker(sid, null)
-              }
-            } catch {
-              /* 忽略 */
+            if (dockerMsg.content === 'container_created') {
+              store.setSessionDocker(sid, {
+                containerId: dockerMsg.metadata?.containerId || '',
+                image: dockerMsg.metadata?.image || ''
+              })
+            } else if (dockerMsg.content === 'container_destroyed') {
+              store.setSessionDocker(sid, null)
             }
           }
         }
@@ -154,43 +151,33 @@ export function useAgentEvents(): void {
         // 仅当前活跃会话时添加 ssh_event 消息
         if (sid === store.activeSessionId) {
           const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m) => m.id === event.messageId)
+          const sshMsg = msgs4.find((m): m is SshEventMessage => m.id === event.messageId && m.type === 'ssh_event')
           if (sshMsg) {
             store.addMessage(sshMsg)
             // 同步 sessionResources
-            try {
-              const meta = JSON.parse(sshMsg.metadata || '{}')
-              if (sshMsg.content === 'ssh_connected') {
-                store.setSessionSsh(sid, {
-                  host: meta.host || '',
-                  port: Number(meta.port) || 22,
-                  username: meta.username || ''
-                })
-              } else if (sshMsg.content === 'ssh_disconnected') {
-                store.setSessionSsh(sid, null)
-              }
-            } catch {
-              /* 忽略 */
+            if (sshMsg.content === 'ssh_connected') {
+              store.setSessionSsh(sid, {
+                host: sshMsg.metadata?.host || '',
+                port: Number(sshMsg.metadata?.port) || 22,
+                username: sshMsg.metadata?.username || ''
+              })
+            } else if (sshMsg.content === 'ssh_disconnected') {
+              store.setSessionSsh(sid, null)
             }
           }
         } else {
           // 非活跃会话：仅更新 sessionResources
           const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m) => m.id === event.messageId)
+          const sshMsg = msgs4.find((m): m is SshEventMessage => m.id === event.messageId && m.type === 'ssh_event')
           if (sshMsg) {
-            try {
-              const meta = JSON.parse(sshMsg.metadata || '{}')
-              if (sshMsg.content === 'ssh_connected') {
-                store.setSessionSsh(sid, {
-                  host: meta.host || '',
-                  port: Number(meta.port) || 22,
-                  username: meta.username || ''
-                })
-              } else if (sshMsg.content === 'ssh_disconnected') {
-                store.setSessionSsh(sid, null)
-              }
-            } catch {
-              /* 忽略 */
+            if (sshMsg.content === 'ssh_connected') {
+              store.setSessionSsh(sid, {
+                host: sshMsg.metadata?.host || '',
+                port: Number(sshMsg.metadata?.port) || 22,
+                username: sshMsg.metadata?.username || ''
+              })
+            } else if (sshMsg.content === 'ssh_disconnected') {
+              store.setSessionSsh(sid, null)
             }
           }
         }
@@ -243,10 +230,8 @@ export function useAgentEvents(): void {
         store.finishStreaming(sid)
         {
           const content = event.error || 'Unknown error'
-          const errorMsg = await window.api.message.add({
+          const errorMsg = await window.api.message.addErrorEvent({
             sessionId: sid,
-            role: 'system_notify',
-            type: 'error_event',
             content
           })
           if (sid === store.activeSessionId) {

@@ -1,7 +1,7 @@
 import { type Model, type Api, type KnownProvider, getModel } from '@mariozechner/pi-ai'
 import { providerDao } from '../dao/providerDao'
 import type { ModelCapabilities } from '../types'
-import { buildCustomProviderCompat } from './providerCompat'
+import { buildCustomProviderCompat } from '../utils/providerCompat'
 
 /**
  * 内置提供商 → 环境变量名映射

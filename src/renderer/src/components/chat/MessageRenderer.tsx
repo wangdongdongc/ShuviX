@@ -1,31 +1,16 @@
 import { useTranslation } from 'react-i18next'
 import { Container, AlertCircle, Terminal } from 'lucide-react'
-import { useChatStore, selectToolExecutions, type ChatMessage } from '../../stores/chatStore'
-import { MessageBubble } from './MessageBubble'
-import { ToolCallBlock } from './ToolCallBlock'
-import { StepBlock } from './StepBlock'
-
-/** turn 分组信息（仅工具调用项携带） */
-export interface TurnGroupInfo {
-  /** 全局 turn 序号（0-based，按消息顺序递增） */
-  globalIndex: number
-  /** 是否是该 turn 组的第一项 */
-  isFirst: boolean
-  /** 是否是该 turn 组的最后一项 */
-  isLast: boolean
-  /** 该 turn 是否会被上下文压缩 */
-  willBeCompressed: boolean
-  /** 该 turn 组内的工具调用总数 */
-  groupSize: number
-}
+import type { ChatMessage, ToolCallMeta, DockerEventMessage, SshEventMessage, ErrorEventMessage } from '../../stores/chatStore'
+import { UserBubble } from './UserBubble'
+import { AssistantBubble } from './AssistantBubble'
+import type { StepItem, StepMessage } from './types'
 
 /** 可见消息项（由 ChatView 预处理后传入） */
 export interface VisibleItem {
   msg: ChatMessage
-  meta?: Record<string, unknown>
-  pairedCallMeta?: Record<string, unknown>
-  /** turn 分组信息（仅工具调用项携带） */
-  turnGroup?: TurnGroupInfo
+  pairedCallMeta?: ToolCallMeta
+  /** 内嵌的中间步骤（仅 assistant text 消息携带） */
+  steps?: VisibleItem[]
 }
 
 interface MessageRendererProps {
@@ -35,9 +20,50 @@ interface MessageRendererProps {
   onRegenerate?: (assistantMsgId: string) => void
 }
 
+function DockerEventBlock({ msg }: { msg: DockerEventMessage }): React.JSX.Element {
+  const { t } = useTranslation()
+  const isCreate = msg.content === 'container_created'
+  const containerId = msg.metadata?.containerId || ''
+  const reason = msg.metadata?.reason || ''
+  return (
+    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
+      <Container size={12} />
+      <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
+      {containerId && <span className="font-mono opacity-60">{containerId}</span>}
+      {reason && <span className="opacity-50">({t(`chat.destroyReason_${reason}`)})</span>}
+    </div>
+  )
+}
+
+function SshEventBlock({ msg }: { msg: SshEventMessage }): React.JSX.Element {
+  const { t } = useTranslation()
+  const isConnect = msg.content === 'ssh_connected'
+  const host = msg.metadata?.host || ''
+  const port = msg.metadata?.port || ''
+  const username = msg.metadata?.username || ''
+  const target =
+    username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
+  return (
+    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
+      <Terminal size={12} />
+      <span>{isConnect ? t('chat.sshConnected') : t('chat.sshDisconnected')}</span>
+      {target && <span className="font-mono opacity-60">{target}</span>}
+    </div>
+  )
+}
+
+function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-error/90">
+      <AlertCircle size={12} />
+      <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+    </div>
+  )
+}
+
 /**
  * 消息渲染器 — 根据消息类型分发渲染
- * 独立组件，替代 ChatView 中的 renderItem useCallback
+ * step/tool 消息已合并到 assistant text 的 AssistantBubble 内部，不再独立渲染
  */
 export function MessageRenderer({
   item,
@@ -45,127 +71,41 @@ export function MessageRenderer({
   onRollback,
   onRegenerate
 }: MessageRendererProps): React.JSX.Element {
-  const { t } = useTranslation()
-  const { msg, meta, pairedCallMeta } = item
-  const toolExecutions = useChatStore(selectToolExecutions)
+  const { msg } = item
 
-  if (msg.type === 'error_event') {
-    return (
-      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-error/90">
-        <AlertCircle size={12} />
-        <span className="whitespace-pre-wrap break-words">{msg.content}</span>
-      </div>
-    )
+  switch (msg.type) {
+    case 'error_event':
+      return <ErrorEventBlock msg={msg} />
+    case 'docker_event':
+      return <DockerEventBlock msg={msg} />
+    case 'ssh_event':
+      return <SshEventBlock msg={msg} />
   }
 
-  if (msg.type === 'docker_event') {
-    const isCreate = msg.content === 'container_created'
-    let containerId = ''
-    let reason = ''
-    if (msg.metadata) {
-      try {
-        const meta = JSON.parse(msg.metadata)
-        containerId = meta.containerId || ''
-        reason = meta.reason || ''
-      } catch {
-        /* 忽略 */
-      }
-    }
+  // 将 VisibleItem.steps 转换为 StepItem[]（窄化 msg 类型）
+  const steps: StepItem[] | undefined = item.steps?.map((s) => ({
+    msg: s.msg as StepMessage,
+    pairedCallMeta: s.pairedCallMeta
+  }))
+
+  // 用户消息
+  if (msg.role === 'user' && msg.type === 'text') {
     return (
-      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
-        <Container size={12} />
-        <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
-        {containerId && <span className="font-mono opacity-60">{containerId}</span>}
-        {reason && <span className="opacity-50">({t(`chat.destroyReason_${reason}`)})</span>}
-      </div>
-    )
-  }
-
-  if (msg.type === 'ssh_event') {
-    const isConnect = msg.content === 'ssh_connected'
-    let host = ''
-    let port = ''
-    let username = ''
-    if (msg.metadata) {
-      try {
-        const meta = JSON.parse(msg.metadata)
-        host = meta.host || ''
-        port = meta.port || ''
-        username = meta.username || ''
-      } catch {
-        /* 忽略 */
-      }
-    }
-    const target =
-      username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
-    return (
-      <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
-        <Terminal size={12} />
-        <span>{isConnect ? t('chat.sshConnected') : t('chat.sshDisconnected')}</span>
-        {target && <span className="font-mono opacity-60">{target}</span>}
-      </div>
-    )
-  }
-
-  if (msg.type === 'step_thinking' || msg.type === 'step_text') {
-    const tg = item.turnGroup
-    const isOdd = tg ? tg.globalIndex % 2 === 1 : false
-    return (
-      <div
-        className={`ml-14 mr-4 ${tg?.isFirst ? 'mt-0.5 rounded-t' : ''} ${
-          tg?.isLast ? 'mb-0.5 rounded-b' : ''
-        } ${isOdd ? 'bg-bg-secondary/30' : ''} ${tg?.willBeCompressed ? 'opacity-50' : ''}`}
-      >
-        <StepBlock message={msg} />
-      </div>
-    )
-  }
-
-  if (msg.type === 'tool_call' || msg.type === 'tool_result') {
-    const isCall = msg.type === 'tool_call'
-    const liveExec = isCall
-      ? toolExecutions.find((te) => te.toolCallId === meta?.toolCallId)
-      : undefined
-
-    const toolBlock = isCall ? (
-      <ToolCallBlock
-        toolName={(meta?.toolName as string) || '未知工具'}
-        toolCallId={meta?.toolCallId as string | undefined}
-        args={meta?.args as Record<string, unknown> | undefined}
-        status={liveExec?.status || 'running'}
-      />
-    ) : (
-      <ToolCallBlock
-        toolName={(meta?.toolName as string) || '未知工具'}
-        args={pairedCallMeta?.args as Record<string, unknown> | undefined}
-        result={msg.content}
-        status={meta?.isError ? 'error' : 'done'}
+      <UserBubble
+        msg={msg}
+        onRollback={onRollback ? () => onRollback(msg.id) : undefined}
       />
     )
-
-    const tg = item.turnGroup
-    if (!tg) return <div className="ml-14 mr-4">{toolBlock}</div>
-
-    // 仅用背景色区分：奇偶 turn 交替底色 + 压缩 turn 降低透明度
-    const isOdd = tg.globalIndex % 2 === 1
-    return (
-      <div
-        className={`ml-14 mr-4 ${tg.isFirst ? 'mt-0.5 rounded-t' : ''} ${
-          tg.isLast ? 'mb-0.5 rounded-b' : ''
-        } ${isOdd ? 'bg-bg-secondary/30' : ''} ${tg.willBeCompressed ? 'opacity-50' : ''}`}
-      >
-        {toolBlock}
-      </div>
-    )
   }
 
+  // 助手消息（含 synthetic orphan messages）
+  // switch 已排除事件类型，if 已排除 user text；剩余 step/tool 类型在实际流程中
+  // 不会走到这里（它们被收入 steps 数组），但 TS 无法静态推断，需显式断言
+  const assistantMsg = msg as import('../../stores/chatStore').AssistantTextMessage
   return (
-    <MessageBubble
-      role={msg.role as 'user' | 'assistant' | 'system' | 'tool'}
-      content={msg.content}
-      metadata={msg.metadata}
-      model={msg.model}
-      onRollback={msg.role === 'user' && msg.type === 'text' && onRollback ? () => onRollback(msg.id) : undefined}
+    <AssistantBubble
+      msg={assistantMsg}
+      steps={steps}
       onRegenerate={msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined}
     />
   )

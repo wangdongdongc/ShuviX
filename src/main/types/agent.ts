@@ -1,4 +1,5 @@
 import type { ModelCapabilities } from './provider'
+import type { SessionModelMetadata } from './session'
 
 /** Agent 初始化参数（仅需 sessionId，后端自行查询其余信息） */
 export interface AgentInitParams {
@@ -16,8 +17,8 @@ export interface AgentInitResult {
   model: string
   /** 模型能力 */
   capabilities: ModelCapabilities
-  /** 会话 modelMetadata（JSON 字符串） */
-  modelMetadata: string
+  /** 会话模型元数据 */
+  modelMetadata: SessionModelMetadata
   /** 项目工作目录 */
   workingDirectory: string
   /** 当前生效的工具列表 */

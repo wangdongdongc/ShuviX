@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
-import type { MessageAddParams } from '../types'
+import { messageService } from '../services/messageService'
+import type { MessageAddParams, ErrorEventAddParams } from '../types'
 
 /**
  * 消息管理 IPC 处理器
@@ -45,5 +46,12 @@ export function registerMessageHandlers(): void {
         chatGateway.deleteFromMessage(params.sessionId, params.messageId)
         return { success: true }
       })
+  )
+
+  /** 新增 error_event 消息（类型化便捷入口） */
+  ipcMain.handle('message:addErrorEvent', (_event, params: ErrorEventAddParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () =>
+      messageService.addErrorEvent(params)
+    )
   )
 }

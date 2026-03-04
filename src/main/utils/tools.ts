@@ -88,23 +88,13 @@ export function buildToolPrompts(enabledTools: string[], ctx: ToolPromptContext)
 
 /** 解析会话的 enabledTools（session 覆盖 > project settings > 全部） */
 export function resolveEnabledTools(
-  sessionMeta: string | undefined,
-  projectSettings: string | undefined
+  sessionEnabledTools: string[] | undefined,
+  projectSettings: { enabledTools?: string[] } | undefined
 ): string[] {
   // 优先使用 session 级别覆盖
-  try {
-    const meta = JSON.parse(sessionMeta || '{}')
-    if (Array.isArray(meta.enabledTools)) return meta.enabledTools
-  } catch {
-    /* 忽略 */
-  }
+  if (Array.isArray(sessionEnabledTools)) return sessionEnabledTools
   // 其次使用 project settings
-  try {
-    const settings = JSON.parse(projectSettings || '{}')
-    if (Array.isArray(settings.enabledTools)) return settings.enabledTools
-  } catch {
-    /* 忽略 */
-  }
+  if (Array.isArray(projectSettings?.enabledTools)) return projectSettings.enabledTools
   // 默认仅启用核心内置工具（不含 shuvix-project、shuvix-setting、MCP、skills）
   return DEFAULT_TOOL_NAMES as unknown as string[]
 }

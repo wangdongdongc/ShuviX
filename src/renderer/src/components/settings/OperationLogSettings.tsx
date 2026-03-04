@@ -8,7 +8,7 @@ import { SessionPicker } from '../common/SessionPicker'
 const ACTION_COLORS: Record<string, string> = {
   prompt: 'bg-blue-500/20 text-blue-400',
   abort: 'bg-red-500/20 text-red-400',
-  initAgent: 'bg-cyan-500/20 text-cyan-400',
+  startChat: 'bg-cyan-500/20 text-cyan-400',
   setModel: 'bg-purple-500/20 text-purple-400',
   setThinkingLevel: 'bg-amber-500/20 text-amber-400',
   setEnabledTools: 'bg-teal-500/20 text-teal-400',

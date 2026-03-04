@@ -1,7 +1,8 @@
 import type { ChatGateway } from './ChatGateway'
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
 import type { SshCredentialPayload } from '../../tools/types'
-import { agentService, ALL_TOOL_NAMES } from '../../services/agent'
+import { sessionService } from '../../services/sessionService'
+import { ALL_TOOL_NAMES } from '../../utils/tools'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
@@ -17,9 +18,9 @@ import { t } from '../../i18n'
 export class DefaultChatGateway implements ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
-  initAgent(sessionId: string): AgentInitResult {
-    const result = agentService.createAgent(sessionId)
-    operationLogService.log('initAgent', '')
+  startChat(sessionId: string): AgentInitResult {
+    const result = sessionService.initAgent(sessionId)
+    operationLogService.log('startChat', '')
     return result
   }
 
@@ -28,13 +29,32 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
-    const preview = text.length > 80 ? text.slice(0, 80) + '...' : text
-    operationLogService.log('prompt', preview)
-    await agentService.prompt(sessionId, text, images)
+    const textPreview = text.length > 80 ? text.slice(0, 80) + '...' : text
+    operationLogService.log('prompt', textPreview)
+    const session = sessionService.getAgentSession(sessionId)
+    if (!session) {
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
+      return
+    }
+    // 统一持久化用户消息并通知所有前端
+    const userImages =
+      images && images.length > 0
+        ? images.map((img) => ({
+            mimeType: img.mimeType,
+            preview: `data:${img.mimeType};base64,${img.data}`
+          }))
+        : undefined
+    const userMsg = messageService.addUserText({ sessionId, content: text, images: userImages })
+    chatFrontendRegistry.broadcast({
+      type: 'user_message',
+      sessionId,
+      message: JSON.stringify(userMsg)
+    })
+    await session.prompt(text, images)
   }
 
   abort(sessionId: string): { success: boolean; savedMessage?: Message } {
-    const savedMessage = agentService.abort(sessionId)
+    const savedMessage = sessionService.getAgentSession(sessionId)?.abort() || null
     operationLogService.log('abort', '')
     return { success: true, savedMessage: savedMessage || undefined }
   }
@@ -42,7 +62,7 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── 交互响应 ─────────────────────────────────
 
   approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
-    agentService.approveToolCall(toolCallId, approved, reason)
+    sessionService.approveToolCall(toolCallId, approved, reason)
     operationLogService.log(
       'approveToolCall',
       `${approved ? 'approved' : 'rejected'}${reason ? `: ${reason}` : ''}`
@@ -50,11 +70,11 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   respondToAsk(toolCallId: string, selections: string[]): void {
-    agentService.respondToAsk(toolCallId, selections)
+    sessionService.respondToAsk(toolCallId, selections)
   }
 
   respondToSshCredentials(toolCallId: string, credentials: SshCredentialPayload | null): void {
-    agentService.respondToSshCredentials(toolCallId, credentials)
+    sessionService.respondToSshCredentials(toolCallId, credentials)
   }
 
   // ─── 运行时调整 ────────────────────────────────
@@ -66,17 +86,17 @@ export class DefaultChatGateway implements ChatGateway {
     baseUrl?: string,
     apiProtocol?: string
   ): void {
-    agentService.setModel(sessionId, provider, model, baseUrl, apiProtocol)
+    sessionService.getAgentSession(sessionId)?.setModel(provider, model, baseUrl, apiProtocol)
     operationLogService.log('setModel', `${provider} / ${model}`)
   }
 
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
-    agentService.setThinkingLevel(sessionId, level)
+    sessionService.getAgentSession(sessionId)?.setThinkingLevel(level)
     operationLogService.log('setThinkingLevel', level)
   }
 
   setEnabledTools(sessionId: string, tools: string[]): void {
-    agentService.setEnabledTools(sessionId, tools)
+    sessionService.getAgentSession(sessionId)?.setEnabledTools(tools)
     const preview = tools.slice(0, 5).join(', ') + (tools.length > 5 ? '...' : '')
     operationLogService.log('setEnabledTools', preview)
   }
@@ -97,12 +117,12 @@ export class DefaultChatGateway implements ChatGateway {
 
   rollbackMessage(sessionId: string, messageId: string): void {
     messageService.rollbackToMessage(sessionId, messageId)
-    agentService.invalidateAgent(sessionId)
+    sessionService.invalidateAgent(sessionId)
   }
 
   deleteFromMessage(sessionId: string, messageId: string): void {
     messageService.deleteFromMessage(sessionId, messageId)
-    agentService.invalidateAgent(sessionId)
+    sessionService.invalidateAgent(sessionId)
   }
 
   // ─── 资源操作 ──────────────────────────────────
@@ -114,12 +134,11 @@ export class DefaultChatGateway implements ChatGateway {
   async destroyDocker(sessionId: string): Promise<{ success: boolean }> {
     const containerId = await dockerManager.destroyContainer(sessionId)
     if (containerId) {
-      const msg = messageService.add({
+      const msg = messageService.addDockerEvent({
         sessionId,
-        role: 'system_notify',
-        type: 'docker_event',
         content: 'container_destroyed',
-        metadata: JSON.stringify({ containerId: containerId.slice(0, 12), reason: 'manual' })
+        containerId: containerId.slice(0, 12),
+        reason: 'manual'
       })
       chatFrontendRegistry.broadcast({ type: 'docker_event', sessionId, messageId: msg.id })
       operationLogService.log('destroyDocker', containerId.slice(0, 12))
@@ -135,17 +154,13 @@ export class DefaultChatGateway implements ChatGateway {
     const info = sshManager.getConnectionInfo(sessionId)
     if (!info) return { success: false }
     await sshManager.disconnect(sessionId)
-    const msg = messageService.add({
+    const msg = messageService.addSshEvent({
       sessionId,
-      role: 'system_notify',
-      type: 'ssh_event',
       content: 'ssh_disconnected',
-      metadata: JSON.stringify({
-        host: info.host,
-        port: String(info.port),
-        username: info.username,
-        reason: 'manual'
-      })
+      host: info.host,
+      port: String(info.port),
+      username: info.username,
+      reason: 'manual'
     })
     chatFrontendRegistry.broadcast({ type: 'ssh_event', sessionId, messageId: msg.id })
     operationLogService.log('disconnectSsh', info.host)

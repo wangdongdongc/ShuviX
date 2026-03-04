@@ -11,7 +11,10 @@ import {
   selectIsStreaming,
   selectCanChat,
   selectCanEdit,
-  type ChatMessage
+  type ChatMessage,
+  type AssistantTextMessage,
+  type ToolCallMeta,
+  type ShareMode
 } from '../../stores/chatStore'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -19,7 +22,6 @@ import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
-import { KEEP_RECENT_TURNS } from '../../../../shared/constants'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
 import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
@@ -27,64 +29,87 @@ import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
 
-/** 工具调用索引：预解析 metadata，O(1) 查找配对关系 */
+/** 工具调用索引：O(1) 查找配对关系 */
 interface ToolIndex {
-  /** toolCallId → tool_call 消息的解析后 meta */
-  callMeta: Map<string, Record<string, unknown>>
+  /** toolCallId → tool_call 消息的 metadata */
+  callMeta: Map<string, ToolCallMeta>
   /** 已有配对 result 的 toolCallId 集合 */
   pairedIds: Set<string>
-  /** msgId → 解析后的 meta */
-  metaCache: Map<string, Record<string, unknown>>
 }
 
 /** 构建工具调用索引（纯函数，供 useMemo 缓存） */
 function buildToolIndex(messages: ChatMessage[]): ToolIndex {
-  const callMeta = new Map<string, Record<string, unknown>>()
+  const callMeta = new Map<string, ToolCallMeta>()
   const pairedIds = new Set<string>()
-  const metaCache = new Map<string, Record<string, unknown>>()
 
   for (const m of messages) {
-    if (!m.metadata) continue
-    try {
-      const parsed = JSON.parse(m.metadata)
-      if (m.type === 'tool_call' && parsed.toolCallId) {
-        callMeta.set(parsed.toolCallId, parsed)
-        metaCache.set(m.id, parsed)
-      } else if (m.type === 'tool_result' && parsed.toolCallId) {
-        pairedIds.add(parsed.toolCallId)
-        metaCache.set(m.id, parsed)
-      }
-    } catch {
-      /* 忽略解析失败 */
+    if (m.type === 'tool_call' && m.metadata?.toolCallId) {
+      callMeta.set(m.metadata.toolCallId, m.metadata)
+    } else if (m.type === 'tool_result' && m.metadata?.toolCallId) {
+      pairedIds.add(m.metadata.toolCallId)
     }
   }
 
-  return { callMeta, pairedIds, metaCache }
+  return { callMeta, pairedIds }
 }
 
-/** 判断 VisibleItem 是否为 turn 分组项（工具调用/结果 + 中间步骤） */
-function isToolItem(item: VisibleItem): boolean {
+/** 判断消息是否为中间步骤/工具项 */
+function isStepOrToolMsg(msg: ChatMessage): boolean {
   return (
-    item.msg.type === 'tool_call' ||
-    item.msg.type === 'tool_result' ||
-    item.msg.type === 'step_text' ||
-    item.msg.type === 'step_thinking'
+    msg.type === 'tool_call' ||
+    msg.type === 'tool_result' ||
+    msg.type === 'step_text' ||
+    msg.type === 'step_thinking'
   )
 }
 
-/** 获取工具项的 turnIndex（优先从 pairedCallMeta 取，回退到 meta） */
-function getItemTurnIndex(item: VisibleItem): number | undefined {
-  return (
-    (item.pairedCallMeta?.turnIndex as number | undefined) ??
-    (item.meta?.turnIndex as number | undefined)
-  )
+/** 将消息构建为步骤项（处理工具配对）；已配对的 tool_call 返回 null */
+function msgToStepItem(
+  msg: ChatMessage,
+  toolIndex: ToolIndex
+): VisibleItem | null {
+  if (msg.type === 'tool_call') {
+    const toolCallId = msg.metadata?.toolCallId
+    // 已配对的 tool_call 跳过（由 tool_result 合并展示）
+    if (toolCallId && toolIndex.pairedIds.has(toolCallId)) return null
+    return { msg }
+  }
+  if (msg.type === 'tool_result') {
+    const toolCallId = msg.metadata?.toolCallId
+    const pairedCallMeta = toolCallId ? toolIndex.callMeta.get(toolCallId) : undefined
+    return { msg, pairedCallMeta }
+  }
+  // step_text / step_thinking
+  return { msg }
 }
 
-/** 预处理消息列表中的可见项（过滤掉不渲染的消息，并计算 turn 分组信息） */
-function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): VisibleItem[] {
+/**
+ * 预处理消息列表：将 step/tool 消息合并到后续的 assistant text 消息中
+ * @param isStreaming 当前是否正在流式生成（流式中的 steps 不进入 items，由 StreamingFooter 展示）
+ */
+function buildVisibleItems(
+  messages: ChatMessage[],
+  toolIndex: ToolIndex,
+  isStreaming: boolean
+): VisibleItem[] {
   const items: VisibleItem[] = []
-  for (const msg of messages) {
-    // 跳过 system_notify（但保留 docker_event / ssh_event / error_event 类型）
+  const stepBuffer: VisibleItem[] = []
+
+  // 流式中：找到最后一个 user text 消息的索引，之后的 step/tool 不加入 items
+  let streamCutoff = -1
+  if (isStreaming) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user' && messages[i].type === 'text') {
+        streamCutoff = i
+        break
+      }
+    }
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+
+    // 跳过 system_notify（但保留 docker_event / ssh_event / error_event）
     if (
       msg.role === 'system_notify' &&
       msg.type !== 'docker_event' &&
@@ -92,81 +117,89 @@ function buildVisibleItems(messages: ChatMessage[], toolIndex: ToolIndex): Visib
       msg.type !== 'error_event'
     )
       continue
-    // 跳过已有配对结果的 tool_call（由 tool_result 合并渲染）
-    if (msg.type === 'tool_call') {
-      const meta = toolIndex.metaCache.get(msg.id)
-      const toolCallId = meta?.toolCallId as string | undefined
-      if (toolCallId && toolIndex.pairedIds.has(toolCallId)) continue
-      items.push({ msg, meta })
+
+    // 流式中：最后一个 user text 之后的 step/tool 消息跳过（由 StreamingFooter 展示）
+    if (isStreaming && streamCutoff >= 0 && i > streamCutoff && isStepOrToolMsg(msg)) continue
+
+    // step/tool 消息 → 收集到 buffer
+    if (isStepOrToolMsg(msg)) {
+      const stepItem = msgToStepItem(msg, toolIndex)
+      if (stepItem) stepBuffer.push(stepItem)
       continue
     }
-    if (msg.type === 'tool_result') {
-      const meta = toolIndex.metaCache.get(msg.id)
-      const toolCallId = meta?.toolCallId as string | undefined
-      const pairedCallMeta = toolCallId ? toolIndex.callMeta.get(toolCallId) : undefined
-      items.push({ msg, meta, pairedCallMeta })
+
+    // 非 step/tool 消息：先 flush buffer
+    if (msg.role === 'assistant' && msg.type === 'text') {
+      // assistant text → 将 buffer 中的 steps 附加到这条消息
+      items.push({ msg, steps: stepBuffer.length > 0 ? [...stepBuffer] : undefined })
+      stepBuffer.length = 0
       continue
     }
-    // 中间步骤（step_text / step_thinking）：解析 metadata 获取 turnIndex
-    if (msg.type === 'step_text' || msg.type === 'step_thinking') {
-      let meta: Record<string, unknown> | undefined
-      if (msg.metadata) {
-        try {
-          meta = JSON.parse(msg.metadata)
-        } catch {
-          /* 忽略 */
-        }
+
+    // user text / docker_event / ssh_event / error_event 等
+    // 如果有未消费的 steps（如 agent 中断），先创建一个空 assistant bubble 承载它们
+    if (stepBuffer.length > 0) {
+      const syntheticMsg: AssistantTextMessage = {
+        id: `orphan-${stepBuffer[0].msg.id}`,
+        sessionId: msg.sessionId,
+        role: 'assistant',
+        type: 'text',
+        content: '',
+        metadata: null,
+        model: stepBuffer[0].msg.model || '',
+        createdAt: stepBuffer[0].msg.createdAt
       }
-      items.push({ msg, meta })
-      continue
+      items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
+      stepBuffer.length = 0
     }
     items.push({ msg })
   }
 
-  // ─── 计算 turn 分组信息 ─────────────────────────────────
-  // 识别连续的工具项分组（同一 turnIndex 的连续工具项为一组）
-  interface TurnGroup {
-    startIdx: number
-    endIdx: number
-    turnIndex: number | undefined
-  }
-  const turnGroups: TurnGroup[] = []
-  let i = 0
-  while (i < items.length) {
-    if (isToolItem(items[i])) {
-      const turnIdx = getItemTurnIndex(items[i])
-      const start = i
-      // 将相同 turnIndex 的连续工具项归为一组
-      while (i < items.length && isToolItem(items[i]) && getItemTurnIndex(items[i]) === turnIdx) {
-        i++
-      }
-      turnGroups.push({ startIdx: start, endIdx: i - 1, turnIndex: turnIdx })
-    } else {
-      i++
+  // 尾部残留 steps（非流式场景下 agent 中断）
+  if (stepBuffer.length > 0 && !isStreaming) {
+    const syntheticMsg: ChatMessage = {
+      id: `orphan-${stepBuffer[0].msg.id}`,
+      sessionId: stepBuffer[0].msg.sessionId,
+      role: 'assistant',
+      type: 'text',
+      content: '',
+      metadata: null,
+      model: stepBuffer[0].msg.model || '',
+      createdAt: stepBuffer[0].msg.createdAt
     }
-  }
-
-  // 根据 KEEP_RECENT_TURNS 确定哪些 turn 将被压缩
-  const totalGroups = turnGroups.length
-  const compressThreshold = totalGroups - KEEP_RECENT_TURNS // globalIndex < threshold 的将被压缩
-
-  // 注入 turnGroup 信息到每个工具项
-  for (let gi = 0; gi < turnGroups.length; gi++) {
-    const g = turnGroups[gi]
-    const groupSize = g.endIdx - g.startIdx + 1
-    const willBeCompressed = gi < compressThreshold
-    for (let idx = g.startIdx; idx <= g.endIdx; idx++) {
-      items[idx].turnGroup = {
-        globalIndex: gi,
-        isFirst: idx === g.startIdx,
-        isLast: idx === g.endIdx,
-        willBeCompressed,
-        groupSize
-      }
-    }
+    items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
+    stepBuffer.length = 0
   }
 
   return items
+}
+
+/**
+ * 提取流式中的 steps（最后一个 user text 之后的 step/tool 消息）
+ * 这些 steps 在 StreamingFooter 的气泡中渲染
+ */
+function extractStreamingSteps(
+  messages: ChatMessage[],
+  toolIndex: ToolIndex
+): VisibleItem[] {
+  // 找到最后一个 user text 消息
+  let lastUserIdx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user' && messages[i].type === 'text') {
+      lastUserIdx = i
+      break
+    }
+  }
+  if (lastUserIdx < 0) return []
+
+  const steps: VisibleItem[] = []
+  for (let i = lastUserIdx + 1; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!isStepOrToolMsg(msg)) continue
+    const stepItem = msgToStepItem(msg, toolIndex)
+    if (stepItem) steps.push(stepItem)
+  }
+  return steps
 }
 
 /**
@@ -232,7 +265,14 @@ export function ChatView(): React.JSX.Element {
 
   // 预构建工具调用索引 + 可见消息列表，messages 不变时复用缓存
   const toolIndex = useMemo(() => buildToolIndex(messages), [messages])
-  const visibleItems = useMemo(() => buildVisibleItems(messages, toolIndex), [messages, toolIndex])
+  const visibleItems = useMemo(
+    () => buildVisibleItems(messages, toolIndex, isStreaming),
+    [messages, toolIndex, isStreaming]
+  )
+  const streamingSteps = useMemo(
+    () => (isStreaming ? extractStreamingSteps(messages, toolIndex) : []),
+    [isStreaming, messages, toolIndex]
+  )
 
   // 流式内容 / 新消息更新时，若用户在底部则自动滚动
   // 使用 rAF 合并同帧内多次更新，behavior:'auto' 避免 smooth 动画重叠抖动
@@ -343,6 +383,7 @@ export function ChatView(): React.JSX.Element {
               className="flex-1"
               data={visibleItems}
               itemContent={renderItem}
+              context={{ streamingSteps }}
               components={{ Footer: StreamingFooter }}
               followOutput="auto"
               initialTopMostItemIndex={visibleItems.length - 1}
@@ -424,37 +465,31 @@ function SessionConfigDialog({
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   const [title, setTitle] = useState(session?.title || '')
 
-  // 解析 sshAutoApprove
-  const sessionSettings = useMemo(() => {
-    try {
-      return JSON.parse(session?.settings || '{}')
-    } catch {
-      return {}
-    }
-  }, [session?.settings])
-  const [sshAutoApprove, setSshAutoApprove] = useState(sessionSettings.sshAutoApprove === true)
+  const [sshAutoApprove, setSshAutoApprove] = useState(session?.settings.sshAutoApprove === true)
 
   // LAN 分享状态（null = 未分享）
-  type LocalShareMode = 'readonly' | 'chat' | 'full'
-  const [lanShareMode, setLanShareMode] = useState<LocalShareMode | null>(null)
+  const [lanShareMode, setLanShareMode] = useState<ShareMode | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  useEffect(() => {
-    window.api.webui.getShareMode(sessionId).then(setLanShareMode)
-  }, [sessionId])
+  // Telegram 绑定状态
+  const [telegramShared, setTelegramShared] = useState(false)
 
   useEffect(() => {
-    if (lanShareMode) {
-      window.api.webui.serverStatus().then((status) => {
-        if (status.running && status.urls && status.urls.length > 0) {
-          setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
-        }
-      })
-    } else {
-      setShareUrl(null)
-    }
-  }, [lanShareMode, sessionId])
+    window.api.webui.getShareMode(sessionId).then((mode) => {
+      setLanShareMode(mode)
+      if (mode) {
+        window.api.webui.serverStatus().then((status) => {
+          if (status.running && status.urls && status.urls.length > 0) {
+            setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
+          }
+        })
+      } else {
+        setShareUrl(null)
+      }
+    })
+    window.api.telegram.isShared(sessionId).then(setTelegramShared)
+  }, [sessionId])
 
   // Escape 关闭
   useEffect(() => {
@@ -494,7 +529,7 @@ function SessionConfigDialog({
   }
 
   /** 切换 LAN 分享模式 */
-  const handleSetShareMode = async (mode: LocalShareMode | null): Promise<void> => {
+  const handleSetShareMode = async (mode: ShareMode | null): Promise<void> => {
     setLanShareMode(mode)
     await window.api.webui.setShared({ sessionId, shared: mode !== null, mode: mode ?? undefined })
     if (mode) {
@@ -507,7 +542,7 @@ function SessionConfigDialog({
     }
     // 更新 chatStore 中的分享列表
     const shared = await window.api.webui.listShared()
-    useChatStore.getState().setSharedSessionIds(new Set(shared.map((s) => s.sessionId)))
+    useChatStore.getState().setSharedSessionIds(new Map(shared.map((s) => [s.sessionId, s.mode])))
   }
 
   /** 复制分享链接 */
@@ -518,14 +553,22 @@ function SessionConfigDialog({
     setTimeout(() => setCopied(false), 2000)
   }
 
+  /** 切换 Telegram 绑定 */
+  const handleToggleTelegram = async (): Promise<void> => {
+    const next = !telegramShared
+    setTelegramShared(next)
+    await window.api.telegram.setShared({ sessionId, shared: next })
+    // 更新 chatStore 中的 Telegram 分享列表
+    const shared = await window.api.telegram.listShared()
+    useChatStore.getState().setTelegramSharedSessionIds(new Set(shared))
+  }
+
   /** 切换 SSH 免审批 */
   const handleToggleSshAutoApprove = async (): Promise<void> => {
     const next = !sshAutoApprove
     setSshAutoApprove(next)
-    const updated = { ...sessionSettings, sshAutoApprove: next }
-    const json = JSON.stringify(updated)
-    await window.api.session.updateSettings({ id: sessionId, settings: json })
-    useChatStore.getState().updateSessionSettings(sessionId, json)
+    await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: next })
+    useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: next })
   }
 
   return (
@@ -621,7 +664,9 @@ function SessionConfigDialog({
             {/* 分享模式选择（仅在开启分享时显示） */}
             {lanShareMode && (
               <div className="mt-2 space-y-1.5">
-                <span className="text-[10px] text-text-tertiary">{t('sessionConfig.shareMode')}</span>
+                <span className="text-[10px] text-text-tertiary">
+                  {t('sessionConfig.shareMode')}
+                </span>
                 <div className="flex gap-1">
                   {(['readonly', 'chat', 'full'] as const).map((mode) => (
                     <button
@@ -660,6 +705,30 @@ function SessionConfigDialog({
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Telegram 绑定 */}
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-secondary">
+                {t('sessionConfig.telegramShare')}
+              </span>
+              <button
+                onClick={() => void handleToggleTelegram()}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  telegramShared ? 'bg-accent' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    telegramShared ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-1">
+              {t('sessionConfig.telegramShareDesc')}
+            </p>
           </div>
         </div>
 

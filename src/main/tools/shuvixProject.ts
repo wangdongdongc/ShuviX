@@ -111,15 +111,8 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
 
     if (params.action === 'get') {
       // 读取项目配置（无需审批）
-      let enabledTools: string[] = []
-      let referenceDirs: Array<{ path: string; note?: string; access?: string }> = []
-      try {
-        const settings = JSON.parse(project.settings || '{}')
-        enabledTools = settings.enabledTools || []
-        referenceDirs = settings.referenceDirs || []
-      } catch {
-        /* 忽略 */
-      }
+      const enabledTools = project.settings?.enabledTools || []
+      const referenceDirs = project.settings?.referenceDirs || []
 
       const info = {
         id: project.id,

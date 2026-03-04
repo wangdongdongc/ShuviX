@@ -21,9 +21,10 @@ import type {
   ProviderUpdateModelCapabilitiesParams,
   Session,
   SessionUpdateModelConfigParams,
-  SessionUpdateModelMetadataParams,
+  SessionUpdateThinkingLevelParams,
+  SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateSettingsParams,
+  SessionUpdateSshAutoApproveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -154,10 +155,12 @@ const api = {
       ipcRenderer.invoke('session:updateModelConfig', params),
     updateProject: (params: SessionUpdateProjectParams) =>
       ipcRenderer.invoke('session:updateProject', params),
-    updateModelMetadata: (params: SessionUpdateModelMetadataParams) =>
-      ipcRenderer.invoke('session:updateModelMetadata', params),
-    updateSettings: (params: SessionUpdateSettingsParams) =>
-      ipcRenderer.invoke('session:updateSettings', params),
+    updateThinkingLevel: (params: SessionUpdateThinkingLevelParams) =>
+      ipcRenderer.invoke('session:updateThinkingLevel', params),
+    updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
+      ipcRenderer.invoke('session:updateEnabledTools', params),
+    updateSshAutoApprove: (params: SessionUpdateSshAutoApproveParams) =>
+      ipcRenderer.invoke('session:updateSshAutoApprove', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
@@ -169,6 +172,8 @@ const api = {
   message: {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),
     add: (params: MessageAddParams) => ipcRenderer.invoke('message:add', params),
+    addErrorEvent: (params: { sessionId: string; content: string }) =>
+      ipcRenderer.invoke('message:addErrorEvent', params),
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
     rollback: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('message:rollback', params),
@@ -258,6 +263,34 @@ const api = {
     listShared: () => ipcRenderer.invoke('webui:listShared'),
     /** 获取 WebUI 服务器状态 */
     serverStatus: () => ipcRenderer.invoke('webui:serverStatus')
+  },
+
+  // ============ Telegram Bot ============
+  telegram: {
+    /** 获取 Bot Token */
+    getBotToken: () => ipcRenderer.invoke('telegram:getBotToken'),
+    /** 设置 Bot Token */
+    setBotToken: (token: string) => ipcRenderer.invoke('telegram:setBotToken', token),
+    /** 验证 Bot Token */
+    validateToken: (token: string) => ipcRenderer.invoke('telegram:validateToken', token),
+    /** 获取允许的用户 ID 列表 */
+    getAllowedUsers: () => ipcRenderer.invoke('telegram:getAllowedUsers'),
+    /** 设置允许的用户 ID 列表 */
+    setAllowedUsers: (userIds: number[]) =>
+      ipcRenderer.invoke('telegram:setAllowedUsers', userIds),
+    /** 切换指定 session 的 Telegram 绑定状态 */
+    setShared: (params: { sessionId: string; shared: boolean }) =>
+      ipcRenderer.invoke('telegram:setShared', params),
+    /** 查询单个 session 是否已绑定 */
+    isShared: (sessionId: string) => ipcRenderer.invoke('telegram:isShared', sessionId),
+    /** 获取所有已绑定的 session 列表 */
+    listShared: () => ipcRenderer.invoke('telegram:listShared'),
+    /** 获取 Bot 运行状态 */
+    botStatus: () => ipcRenderer.invoke('telegram:botStatus'),
+    /** 启动 Bot */
+    startBot: () => ipcRenderer.invoke('telegram:startBot'),
+    /** 停止 Bot */
+    stopBot: () => ipcRenderer.invoke('telegram:stopBot')
   },
 
   // ============ Skill 管理 ============

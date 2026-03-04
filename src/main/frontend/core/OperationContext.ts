@@ -28,6 +28,21 @@ export function createElectronContext(sessionId?: string): OperationContext {
   return { requestId: uuid(), source: { type: 'electron' }, sessionId, timestamp: Date.now() }
 }
 
+/** 工厂：Telegram Bot 上下文 */
+export function createTelegramContext(
+  botId: string,
+  userId: string,
+  chatId: string,
+  sessionId?: string
+): OperationContext {
+  return {
+    requestId: uuid(),
+    source: { type: 'telegram', botId, userId, chatId },
+    sessionId,
+    timestamp: Date.now()
+  }
+}
+
 /** 工厂：WebUI HTTP/WS 上下文 */
 export function createWebUIContext(
   ip: string,

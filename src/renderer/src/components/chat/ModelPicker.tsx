@@ -138,9 +138,9 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
         sessionId: activeSessionId,
         level: newLevel as ThinkingLevel
       })
-      await window.api.session.updateModelMetadata({
+      await window.api.session.updateThinkingLevel({
         id: activeSessionId,
-        modelMetadata: JSON.stringify({ thinkingLevel: newLevel })
+        thinkingLevel: newLevel
       })
     }
 

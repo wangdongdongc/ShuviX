@@ -71,18 +71,9 @@ export function ToolPicker(): React.JSX.Element | null {
     if (activeSessionId) {
       await window.api.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
       // 持久化到 session modelMetadata
-      const currentMeta = (() => {
-        const s = useChatStore.getState().sessions.find((s) => s.id === activeSessionId)
-        try {
-          return JSON.parse(s?.modelMetadata || '{}')
-        } catch {
-          return {}
-        }
-      })()
-      currentMeta.enabledTools = newTools
-      await window.api.session.updateModelMetadata({
+      await window.api.session.updateEnabledTools({
         id: activeSessionId,
-        modelMetadata: JSON.stringify(currentMeta)
+        enabledTools: newTools
       })
     }
   }

@@ -102,13 +102,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       const msgs = await window.api.message.list(activeSessionId)
       store.setMessages(msgs)
       await window.api.agent.init({ sessionId: activeSessionId })
-      // 重新保存用户消息并发送
-      const userMsg = await window.api.message.add({
-        sessionId: activeSessionId,
-        role: 'user',
-        content: lastUserText
-      })
-      store.addMessage(userMsg)
+      // 重新发送（后端统一持久化用户消息）
       await window.api.agent.prompt({ sessionId: activeSessionId, text: lastUserText })
     },
     [activeSessionId]
@@ -222,7 +216,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         return
       }
     },
-    [activeSessionId]
+    [activeSessionId, t]
   )
 
   return {

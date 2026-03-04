@@ -1,5 +1,52 @@
 import { BaseDao } from './database'
-import type { Session } from './types'
+import type { Session, SessionModelMetadata, SessionSettings } from './types'
+
+/** DB 原始行类型（JSON 字段在 DB 中为字符串） */
+type SessionRow = Omit<Session, 'modelMetadata' | 'settings'> & {
+  modelMetadata: string
+  settings: string
+}
+
+/** 安全解析 JSON，失败返回空对象 */
+function safeParse<T>(json: string | undefined | null): T {
+  try {
+    return JSON.parse(json || '{}')
+  } catch {
+    return {} as T
+  }
+}
+
+/** 将 DB 行的 JSON 字符串字段解析为类型化对象 */
+function parseRow(row: SessionRow): Session {
+  return {
+    ...row,
+    modelMetadata: safeParse<SessionModelMetadata>(row.modelMetadata),
+    settings: safeParse<SessionSettings>(row.settings)
+  }
+}
+
+/**
+ * 构建 json_set patch SQL 片段和绑定值
+ * 字符串/数值/布尔直接绑定；数组/对象用 json() 包裹
+ */
+function buildJsonPatch(patch: Record<string, unknown>): {
+  setClauses: string
+  values: unknown[]
+} {
+  const entries = Object.entries(patch).filter(([, v]) => v !== undefined)
+  const setClauses = entries
+    .map(([key, v]) => {
+      const needsJson = typeof v === 'object' && v !== null
+      return needsJson ? `'$.${key}', json(?)` : `'$.${key}', ?`
+    })
+    .join(', ')
+  const values = entries.map(([, v]) => {
+    if (typeof v === 'object' && v !== null) return JSON.stringify(v)
+    if (typeof v === 'boolean') return v ? 1 : 0
+    return v
+  })
+  return { setClauses, values }
+}
 
 /**
  * Session DAO — 会话表的纯数据访问操作
@@ -7,12 +54,18 @@ import type { Session } from './types'
 export class SessionDao extends BaseDao {
   /** 获取所有会话，按更新时间倒序 */
   findAll(): Session[] {
-    return this.db.prepare('SELECT * FROM sessions ORDER BY updatedAt DESC').all() as Session[]
+    const rows = this.db
+      .prepare('SELECT * FROM sessions ORDER BY updatedAt DESC')
+      .all() as SessionRow[]
+    return rows.map(parseRow)
   }
 
   /** 根据 ID 获取单个会话 */
   findById(id: string): Session | undefined {
-    return this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Session | undefined
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(id) as SessionRow | undefined
+    return row ? parseRow(row) : undefined
   }
 
   /** 插入会话 */
@@ -28,8 +81,8 @@ export class SessionDao extends BaseDao {
         session.provider,
         session.model,
         session.systemPrompt,
-        session.modelMetadata,
-        session.settings,
+        JSON.stringify(session.modelMetadata),
+        JSON.stringify(session.settings),
         session.createdAt,
         session.updatedAt
       )
@@ -63,23 +116,32 @@ export class SessionDao extends BaseDao {
 
   /** 查找指定项目下的所有会话 */
   findByProjectId(projectId: string): Session[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC')
-      .all(projectId) as Session[]
+      .all(projectId) as SessionRow[]
+    return rows.map(parseRow)
   }
 
-  /** 更新模型元数据（思考深度等） */
-  updateModelMetadata(id: string, modelMetadata: string): void {
+  /** 更新模型元数据（patch 语义：仅更新传入的字段，其余保留） */
+  updateModelMetadata(id: string, patch: SessionModelMetadata): void {
+    const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
+    if (!setClauses) return
     this.db
-      .prepare('UPDATE sessions SET modelMetadata = ?, updatedAt = ? WHERE id = ?')
-      .run(modelMetadata, Date.now(), id)
+      .prepare(
+        `UPDATE sessions SET modelMetadata = json_set(COALESCE(modelMetadata, '{}'), ${setClauses}), updatedAt = ? WHERE id = ?`
+      )
+      .run(...values, Date.now(), id)
   }
 
-  /** 更新会话级配置（sshAutoApprove 等） */
-  updateSettings(id: string, settings: string): void {
+  /** 更新会话级配置（patch 语义：仅更新传入的字段，其余保留） */
+  updateSettings(id: string, patch: SessionSettings): void {
+    const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
+    if (!setClauses) return
     this.db
-      .prepare('UPDATE sessions SET settings = ?, updatedAt = ? WHERE id = ?')
-      .run(settings, Date.now(), id)
+      .prepare(
+        `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), ${setClauses}), updatedAt = ? WHERE id = ?`
+      )
+      .run(...values, Date.now(), id)
   }
 
   /** 删除会话 */
