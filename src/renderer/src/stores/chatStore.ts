@@ -127,8 +127,8 @@ interface ChatState {
   sessionResources: Record<string, SessionResourceInfo>
   /** 已开启 WebUI 分享的 session ID → 分享模式 */
   sharedSessionIds: Map<string, ShareMode>
-  /** Telegram 绑定关系：sessionId → botId */
-  telegramBindings: Map<string, string>
+  /** Telegram 绑定关系：sessionId → { botId, username } */
+  telegramBindings: Map<string, { botId: string; username: string }>
   /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
   shareMode: ShareMode | null
 
@@ -169,7 +169,7 @@ interface ChatState {
   setAgentMdLoaded: (loaded: boolean) => void
   setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Map<string, ShareMode>) => void
-  setTelegramBindings: (bindings: Map<string, string>) => void
+  setTelegramBindings: (bindings: Map<string, { botId: string; username: string }>) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
   setSessionSsh: (
     sessionId: string,

@@ -578,7 +578,8 @@ function SessionConfigDialog({
     useChatStore.getState().updateSessionSettings(sessionId, { telegramBotId: botId ?? undefined })
     const bindings = new Map(useChatStore.getState().telegramBindings)
     if (botId) {
-      bindings.set(sessionId, botId)
+      const bot = telegramBots.find((b) => b.id === botId)
+      bindings.set(sessionId, { botId, username: bot?.username ?? '' })
     } else {
       bindings.delete(sessionId)
     }

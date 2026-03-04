@@ -9,6 +9,7 @@ import {
   ChevronRight,
   FolderPlus,
   Globe,
+  MessageCircle,
   RotateCcw
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
@@ -27,7 +28,7 @@ const ARCHIVED_GROUP_KEY = '__archived_projects__'
 
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
-  const { sessions, activeSessionId, setActiveSessionId, sessionStreams, sharedSessionIds } =
+  const { sessions, activeSessionId, setActiveSessionId, sessionStreams, sharedSessionIds, telegramBindings } =
     useChatStore()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
@@ -203,6 +204,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
         <span className="truncate">{session.title}</span>
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
+        {telegramBindings.has(session.id) && <MessageCircle size={10} className="text-blue-500 shrink-0" />}
         {sessionStreams[session.id]?.isStreaming && (
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
