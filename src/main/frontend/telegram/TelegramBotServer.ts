@@ -10,12 +10,14 @@ const log = createLogger('Telegram:Bot')
 
 /**
  * Telegram Bot 服务器 — 管理 grammY Bot 生命周期
- * 对标 WebUIServer，通过 telegramService.registerServer() 打破循环依赖
+ * 每个注册的 Bot 一个实例，由 TelegramService 创建和管理
  */
-class TelegramBotServer {
+export class TelegramBotServer {
   private bot: Bot | null = null
   /** chatId → TelegramFrontend */
   private activeFrontends = new Map<number, TelegramFrontend>()
+
+  constructor(private readonly botId: string) {}
 
   /** 启动 Bot（long polling） */
   async start(token: string): Promise<void> {
@@ -205,7 +207,7 @@ class TelegramBotServer {
 
     // ─── 启动 long polling ────────────────────────
 
-    log.info('启动 Telegram Bot...')
+    log.info(`启动 Telegram Bot (id=${this.botId})...`)
 
     // 显式删除可能残留的 webhook（webhook 存在时 long polling 收不到 callback_query）
     await bot.api.deleteWebhook().catch((err) => {
@@ -236,7 +238,7 @@ class TelegramBotServer {
     this.activeFrontends.clear()
     await this.bot.stop()
     this.bot = null
-    log.info('Telegram Bot 已停止')
+    log.info(`Telegram Bot 已停止 (id=${this.botId})`)
   }
 
   isRunning(): boolean {
@@ -263,21 +265,21 @@ class TelegramBotServer {
 
   private isAllowedUser(userId: number | undefined): boolean {
     if (!userId) return false
-    return telegramService.isAllowedUser(userId)
+    return telegramService.isAllowedUser(this.botId, userId)
   }
 
-  /** 确保 chat 已绑定 frontend，未绑定时自动接入第一个共享 session */
+  /** 确保 chat 已绑定 frontend，未绑定时自动接入绑定的 session */
   private async ensureFrontend(ctx: Context): Promise<TelegramFrontend | null> {
     const chatId = ctx.chat!.id
     const existing = this.activeFrontends.get(chatId)
     if (existing) return existing
 
-    const shared = telegramService.listShared()
-    if (shared.length === 0) {
-      await ctx.reply('No shared sessions. Enable Telegram sharing in ShuviX.')
+    const boundSessionId = telegramService.getBoundSessionId(this.botId)
+    if (!boundSessionId) {
+      await ctx.reply('No session bound to this bot. Bind a session in ShuviX.')
       return null
     }
-    this.bindChat(chatId, shared[0], ctx.from!.id)
+    this.bindChat(chatId, boundSessionId, ctx.from!.id)
     return this.activeFrontends.get(chatId)!
   }
 
@@ -323,8 +325,3 @@ class TelegramBotServer {
     return this.activeFrontends.get(chatId)
   }
 }
-
-/** 全局单例 */
-export const telegramBotServer = new TelegramBotServer()
-// 注册到 telegramService，打破循环依赖
-telegramService.registerServer(telegramBotServer)

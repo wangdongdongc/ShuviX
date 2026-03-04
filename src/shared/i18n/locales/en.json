@@ -174,8 +174,9 @@
     "shareModeReadonlyDesc": "View messages only, no input or actions",
     "shareModeChatDesc": "Can send messages, but cannot change model or tool settings",
     "shareModeFullDesc": "Full access to all features and settings",
-    "telegramShare": "Telegram Bot",
-    "telegramShareDesc": "When enabled, Telegram Bot users can chat with this session directly. Bot Token must be configured in Settings first."
+    "telegramBot": "Telegram Bot",
+    "telegramBotDesc": "Select a Telegram bot to bind to this session. Configure bots in Settings > Bindings.",
+    "telegramNone": "None (unbound)"
   },
 
   "sessionEdit": {
@@ -491,20 +492,23 @@
     "port": "Port",
     "boundSessions": "Bound Sessions",
     "removeShare": "Remove share",
+    "telegramAddBot": "Add Bot",
+    "telegramBotName": "Bot Name",
+    "telegramBotNameHint": "A friendly name for this bot",
     "telegramBotToken": "Bot Token",
     "telegramBotTokenHint": "Get a token from @BotFather on Telegram",
-    "telegramValidate": "Validate",
-    "telegramValidating": "Validating...",
-    "telegramTokenValid": "Valid: @{{username}}",
+    "telegramValidating": "Adding...",
     "telegramTokenInvalid": "Invalid token",
     "telegramAllowedUsers": "Allowed Users",
     "telegramAllowedUsersHint": "Telegram user IDs allowed to interact. Leave empty to allow all.",
     "telegramAddUser": "Add User ID",
-    "telegramBotStatus": "Bot Status",
-    "telegramStartBot": "Start Bot",
-    "telegramStopBot": "Stop Bot",
-    "telegramNoToken": "Set a bot token to get started",
-    "telegramBoundSessions": "Bound Sessions",
-    "telegramNoSessionsHint": "Enable \"Telegram\" in a session's config to bind it to the bot."
+    "telegramStartBot": "Start",
+    "telegramStopBot": "Stop",
+    "telegramDeleteBot": "Delete",
+    "telegramDeleteConfirm": "Delete this bot? Session bindings will be removed.",
+    "telegramNoBots": "No bots registered. Click \"Add Bot\" to get started.",
+    "telegramBoundTo": "Bound: {{title}}",
+    "telegramUnbound": "Unbound",
+    "telegramEditAllowedUsers": "Allowed Users"
   }
 }

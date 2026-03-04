@@ -40,7 +40,12 @@ import type {
   SshCredential,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
-  ShareMode
+  ShareMode,
+  TelegramBotAddParams,
+  TelegramBotUpdateParams,
+  TelegramBotInfo,
+  TelegramBindSessionParams,
+  TelegramUnbindSessionParams
 } from '../main/types'
 
 declare global {
@@ -202,6 +207,7 @@ declare global {
   /** 会话级配置 */
   interface SessionSettings {
     sshAutoApprove?: boolean
+    telegramBotId?: string
   }
 
   /** 会话类型（对应 DB 表 sessions） */
@@ -486,10 +492,14 @@ declare global {
       }>
     }
     telegram: {
-      /** 获取 Bot Token */
-      getBotToken: () => Promise<string>
-      /** 设置 Bot Token */
-      setBotToken: (token: string) => Promise<{ success: boolean }>
+      /** 列出所有注册的 Bot（含运行时状态） */
+      listBots: () => Promise<TelegramBotInfo[]>
+      /** 添加 Bot（自动验证 token） */
+      addBot: (params: TelegramBotAddParams) => Promise<TelegramBotInfo>
+      /** 更新 Bot 配置 */
+      updateBot: (params: TelegramBotUpdateParams) => Promise<{ success: boolean }>
+      /** 删除 Bot */
+      deleteBot: (id: string) => Promise<{ success: boolean }>
       /** 验证 Bot Token */
       validateToken: (token: string) => Promise<{
         valid: boolean
@@ -497,22 +507,18 @@ declare global {
         id?: number
         error?: string
       }>
-      /** 获取允许的用户 ID 列表 */
-      getAllowedUsers: () => Promise<number[]>
-      /** 设置允许的用户 ID 列表 */
-      setAllowedUsers: (userIds: number[]) => Promise<{ success: boolean }>
-      /** 切换指定 session 的 Telegram 绑定状态 */
-      setShared: (params: { sessionId: string; shared: boolean }) => Promise<{ success: boolean }>
-      /** 查询单个 session 是否已绑定 */
-      isShared: (sessionId: string) => Promise<boolean>
-      /** 获取所有已绑定的 session 列表 */
-      listShared: () => Promise<string[]>
+      /** 绑定 session 到 bot */
+      bindSession: (params: TelegramBindSessionParams) => Promise<{ success: boolean }>
+      /** 解绑 session */
+      unbindSession: (params: TelegramUnbindSessionParams) => Promise<{ success: boolean }>
+      /** 获取 session 绑定的 bot ID */
+      getSessionBotId: (sessionId: string) => Promise<string | null>
+      /** 启动指定 Bot */
+      startBot: (botId: string) => Promise<{ success: boolean }>
+      /** 停止指定 Bot */
+      stopBot: (botId: string) => Promise<{ success: boolean }>
       /** 获取 Bot 运行状态 */
-      botStatus: () => Promise<{ running: boolean }>
-      /** 启动 Bot */
-      startBot: () => Promise<{ success: boolean }>
-      /** 停止 Bot */
-      stopBot: () => Promise<{ success: boolean }>
+      getBotStatus: (botId: string) => Promise<{ running: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

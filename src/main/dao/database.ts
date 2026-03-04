@@ -202,6 +202,17 @@ class DatabaseManager {
         FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS telegram_bots (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        token TEXT NOT NULL,
+        username TEXT NOT NULL DEFAULT '',
+        allowedUsers TEXT NOT NULL DEFAULT '[]',
+        isEnabled INTEGER NOT NULL DEFAULT 1,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
       CREATE INDEX IF NOT EXISTS idx_message_steps_session ON message_steps(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);

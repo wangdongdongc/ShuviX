@@ -55,6 +55,7 @@ export interface SessionModelMetadata {
 /** 会话级配置 */
 export interface SessionSettings {
   sshAutoApprove?: boolean
+  telegramBotId?: string
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -126,8 +127,8 @@ interface ChatState {
   sessionResources: Record<string, SessionResourceInfo>
   /** 已开启 WebUI 分享的 session ID → 分享模式 */
   sharedSessionIds: Map<string, ShareMode>
-  /** 已开启 Telegram 绑定的 session ID 集合 */
-  telegramSharedSessionIds: Set<string>
+  /** Telegram 绑定关系：sessionId → botId */
+  telegramBindings: Map<string, string>
   /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
   shareMode: ShareMode | null
 
@@ -168,7 +169,7 @@ interface ChatState {
   setAgentMdLoaded: (loaded: boolean) => void
   setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Map<string, ShareMode>) => void
-  setTelegramSharedSessionIds: (ids: Set<string>) => void
+  setTelegramBindings: (bindings: Map<string, string>) => void
   setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
   setSessionSsh: (
     sessionId: string,
@@ -223,7 +224,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentMdLoaded: false,
   sessionResources: {},
   sharedSessionIds: new Map(),
-  telegramSharedSessionIds: new Set(),
+  telegramBindings: new Map(),
   shareMode: null,
 
   setSessions: (sessions) => set({ sessions }),
@@ -348,7 +349,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
   setShareMode: (mode) => set({ shareMode: mode }),
   setSharedSessionIds: (ids: Map<string, ShareMode>) => set({ sharedSessionIds: ids }),
-  setTelegramSharedSessionIds: (ids) => set({ telegramSharedSessionIds: ids }),
+  setTelegramBindings: (bindings) => set({ telegramBindings: bindings }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),

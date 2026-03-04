@@ -54,9 +54,12 @@ export function useAppInit(): void {
         // 加载 WebUI 分享状态
         const sharedList = await window.api.webui.listShared()
         useChatStore.getState().setSharedSessionIds(new Map(sharedList.map((s) => [s.sessionId, s.mode])))
-        // 加载 Telegram 绑定状态
-        const telegramShared = await window.api.telegram.listShared()
-        useChatStore.getState().setTelegramSharedSessionIds(new Set(telegramShared))
+        // 从 session settings 构建 Telegram 绑定关系
+        const telegramBindings = new Map<string, string>()
+        for (const s of sessions) {
+          if (s.settings?.telegramBotId) telegramBindings.set(s.id, s.settings.telegramBotId)
+        }
+        useChatStore.getState().setTelegramBindings(telegramBindings)
       }
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口

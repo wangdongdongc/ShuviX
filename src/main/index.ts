@@ -10,7 +10,7 @@ import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
-import { telegramBotServer } from './frontend/telegram'
+import { telegramService } from './services/telegramService'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -326,6 +326,11 @@ app.whenReady().then(() => {
     log.error(`connectAll failed: ${err}`)
   })
 
+  // 恢复有绑定 session 的 Telegram Bot
+  telegramService.autoStartBots().catch((err) => {
+    log.error(`telegram autoStartBots failed: ${err}`)
+  })
+
   measure('createWindow', () => createWindow())
 
   app.on('activate', () => {
@@ -339,7 +344,7 @@ app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
-  telegramBotServer.stop().catch(() => {})
+  telegramService.stopAll().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

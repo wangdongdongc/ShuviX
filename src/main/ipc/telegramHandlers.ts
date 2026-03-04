@@ -1,26 +1,53 @@
 import { ipcMain } from 'electron'
 import { telegramService } from '../services/telegramService'
-// 副作用导入：触发 TelegramBotServer 实例化 + 注册到 telegramService
-import '../frontend/telegram/TelegramBotServer'
+import type {
+  TelegramBotAddParams,
+  TelegramBotUpdateParams,
+  TelegramBindSessionParams,
+  TelegramUnbindSessionParams
+} from '../types'
 
 /**
- * Telegram Bot 管理 IPC 处理器
+ * Telegram Bot 管理 IPC 处理器（多 Bot 版）
  */
 export function registerTelegramHandlers(): void {
-  // ─── Bot Token ────────────────────────────────
+  // ─── Bot CRUD ────────────────────────────────
 
-  ipcMain.handle('telegram:getBotToken', () => telegramService.getBotToken() || '')
+  ipcMain.handle('telegram:listBots', () => telegramService.listBots())
 
-  ipcMain.handle('telegram:setBotToken', async (_event, token: string) => {
-    telegramService.setBotToken(token)
-    if (telegramService.getBotStatus().running) {
-      await telegramService.stopBot()
-      if (token) await telegramService.startBot()
+  ipcMain.handle('telegram:addBot', async (_event, params: TelegramBotAddParams) => {
+    // 先验证 token
+    const { Bot } = await import('grammy')
+    const tempBot = new Bot(params.token)
+    const me = await tempBot.api.getMe()
+    return telegramService.addBot({
+      id: String(me.id),
+      name: me.first_name,
+      token: params.token,
+      username: me.username
+    })
+  })
+
+  ipcMain.handle('telegram:updateBot', async (_event, params: TelegramBotUpdateParams) => {
+    // 如果 token 变更，先验证并获取 bot info
+    let username: string | undefined
+    if (params.token) {
+      const { Bot } = await import('grammy')
+      const tempBot = new Bot(params.token)
+      const me = await tempBot.api.getMe()
+      username = me.username
     }
+    await telegramService.updateBot({ ...params, username })
     return { success: true }
   })
 
-  /** 验证 Bot Token（临时创建 Bot 调用 getMe） */
+  ipcMain.handle('telegram:deleteBot', async (_event, id: string) => {
+    await telegramService.deleteBot(id)
+    return { success: true }
+  })
+
+  // ─── Token 验证 ──────────────────────────────
+
   ipcMain.handle('telegram:validateToken', async (_event, token: string) => {
     try {
       const { Bot } = await import('grammy')
@@ -32,41 +59,35 @@ export function registerTelegramHandlers(): void {
     }
   })
 
-  // ─── 允许的用户 ──────────────────────────────
+  // ─── Session 绑定 ────────────────────────────
 
-  ipcMain.handle('telegram:getAllowedUsers', () => telegramService.getAllowedUsers())
-
-  ipcMain.handle('telegram:setAllowedUsers', (_event, userIds: number[]) => {
-    telegramService.setAllowedUsers(userIds)
+  ipcMain.handle('telegram:bindSession', async (_event, params: TelegramBindSessionParams) => {
+    await telegramService.bindSession(params.botId, params.sessionId)
     return { success: true }
   })
 
-  // ─── 会话绑定 ────────────────────────────────
-
-  ipcMain.handle('telegram:setShared', (_event, params: { sessionId: string; shared: boolean }) => {
-    telegramService.setShared(params.sessionId, params.shared)
+  ipcMain.handle('telegram:unbindSession', async (_event, params: TelegramUnbindSessionParams) => {
+    await telegramService.unbindSession(params.sessionId)
     return { success: true }
   })
 
-  ipcMain.handle('telegram:isShared', (_event, sessionId: string) => {
-    return telegramService.isShared(sessionId)
+  ipcMain.handle('telegram:getSessionBotId', (_event, sessionId: string) => {
+    return telegramService.getSessionBotId(sessionId)
   })
 
-  ipcMain.handle('telegram:listShared', () => {
-    return telegramService.listShared()
-  })
+  // ─── Bot 生命周期 ────────────────────────────
 
-  // ─── Bot 状态与控制 ──────────────────────────
-
-  ipcMain.handle('telegram:botStatus', () => telegramService.getBotStatus())
-
-  ipcMain.handle('telegram:startBot', async () => {
-    await telegramService.startBot()
+  ipcMain.handle('telegram:startBot', async (_event, botId: string) => {
+    await telegramService.startBot(botId)
     return { success: true }
   })
 
-  ipcMain.handle('telegram:stopBot', async () => {
-    await telegramService.stopBot()
+  ipcMain.handle('telegram:stopBot', async (_event, botId: string) => {
+    await telegramService.stopBot(botId)
     return { success: true }
+  })
+
+  ipcMain.handle('telegram:getBotStatus', (_event, botId: string) => {
+    return telegramService.getBotStatus(botId)
   })
 }

@@ -174,8 +174,9 @@
     "shareModeReadonlyDesc": "仅查看消息记录，无法发送消息或操作",
     "shareModeChatDesc": "可发送消息对话，但不能修改模型和工具配置",
     "shareModeFullDesc": "完整功能，可修改所有配置",
-    "telegramShare": "Telegram Bot",
-    "telegramShareDesc": "开启后，Telegram Bot 用户可直接与此会话对话。需先在设置中配置 Bot Token。"
+    "telegramBot": "Telegram Bot",
+    "telegramBotDesc": "选择一个 Telegram Bot 绑定到此会话。Bot 需在设置 > 绑定中配置。",
+    "telegramNone": "无（未绑定）"
   },
 
   "sessionEdit": {
@@ -491,20 +492,23 @@
     "port": "端口",
     "boundSessions": "已绑定会话",
     "removeShare": "取消分享",
+    "telegramAddBot": "添加 Bot",
+    "telegramBotName": "Bot 名称",
+    "telegramBotNameHint": "为此 Bot 设置一个便于识别的名称",
     "telegramBotToken": "Bot Token",
     "telegramBotTokenHint": "从 Telegram @BotFather 获取",
-    "telegramValidate": "验证",
-    "telegramValidating": "验证中...",
-    "telegramTokenValid": "有效: @{{username}}",
+    "telegramValidating": "添加中...",
     "telegramTokenInvalid": "无效 Token",
     "telegramAllowedUsers": "允许的用户",
     "telegramAllowedUsersHint": "填写 Telegram 用户 ID，留空允许所有人",
     "telegramAddUser": "添加用户 ID",
-    "telegramBotStatus": "Bot 状态",
-    "telegramStartBot": "启动 Bot",
-    "telegramStopBot": "停止 Bot",
-    "telegramNoToken": "请先设置 Bot Token",
-    "telegramBoundSessions": "已绑定会话",
-    "telegramNoSessionsHint": "在对话页面的会话配置中开启「Telegram」即可将会话绑定到 Bot。"
+    "telegramStartBot": "启动",
+    "telegramStopBot": "停止",
+    "telegramDeleteBot": "删除",
+    "telegramDeleteConfirm": "删除此 Bot？相关会话绑定将被移除。",
+    "telegramNoBots": "尚无已注册的 Bot。点击「添加 Bot」开始。",
+    "telegramBoundTo": "已绑定: {{title}}",
+    "telegramUnbound": "未绑定",
+    "telegramEditAllowedUsers": "允许的用户"
   }
 }

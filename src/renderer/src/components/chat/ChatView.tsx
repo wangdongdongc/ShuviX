@@ -472,8 +472,11 @@ function SessionConfigDialog({
   const [shareUrl, setShareUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  // Telegram 绑定状态
-  const [telegramShared, setTelegramShared] = useState(false)
+  // Telegram Bot 绑定
+  const [telegramBots, setTelegramBots] = useState<
+    Array<{ id: string; name: string; username: string; boundSessionId: string | null }>
+  >([])
+  const [boundBotId, setBoundBotId] = useState<string | null>(null)
 
   useEffect(() => {
     window.api.webui.getShareMode(sessionId).then((mode) => {
@@ -488,7 +491,14 @@ function SessionConfigDialog({
         setShareUrl(null)
       }
     })
-    window.api.telegram.isShared(sessionId).then(setTelegramShared)
+    // 加载 Telegram Bot 列表 + 当前绑定
+    Promise.all([
+      window.api.telegram.listBots(),
+      window.api.telegram.getSessionBotId(sessionId)
+    ]).then(([bots, botId]) => {
+      setTelegramBots(bots.map((b) => ({ id: b.id, name: b.name, username: b.username, boundSessionId: b.boundSessionId })))
+      setBoundBotId(botId)
+    })
   }, [sessionId])
 
   // Escape 关闭
@@ -553,14 +563,29 @@ function SessionConfigDialog({
     setTimeout(() => setCopied(false), 2000)
   }
 
-  /** 切换 Telegram 绑定 */
-  const handleToggleTelegram = async (): Promise<void> => {
-    const next = !telegramShared
-    setTelegramShared(next)
-    await window.api.telegram.setShared({ sessionId, shared: next })
-    // 更新 chatStore 中的 Telegram 分享列表
-    const shared = await window.api.telegram.listShared()
-    useChatStore.getState().setTelegramSharedSessionIds(new Set(shared))
+  /** 选择 Telegram Bot 绑定 */
+  const handleSelectTelegramBot = async (botId: string | null): Promise<void> => {
+    // 先解绑当前
+    if (boundBotId) {
+      await window.api.telegram.unbindSession({ sessionId })
+    }
+    // 再绑定新 Bot
+    if (botId) {
+      await window.api.telegram.bindSession({ botId, sessionId })
+    }
+    setBoundBotId(botId)
+    // 更新 chatStore
+    useChatStore.getState().updateSessionSettings(sessionId, { telegramBotId: botId ?? undefined })
+    const bindings = new Map(useChatStore.getState().telegramBindings)
+    if (botId) {
+      bindings.set(sessionId, botId)
+    } else {
+      bindings.delete(sessionId)
+    }
+    useChatStore.getState().setTelegramBindings(bindings)
+    // 刷新 bot 列表（绑定状态变化）
+    const bots = await window.api.telegram.listBots()
+    setTelegramBots(bots.map((b) => ({ id: b.id, name: b.name, username: b.username, boundSessionId: b.boundSessionId })))
   }
 
   /** 切换 SSH 免审批 */
@@ -707,27 +732,27 @@ function SessionConfigDialog({
             )}
           </div>
 
-          {/* Telegram 绑定 */}
+          {/* Telegram Bot 绑定 */}
           <div>
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-secondary">
-                {t('sessionConfig.telegramShare')}
-              </span>
-              <button
-                onClick={() => void handleToggleTelegram()}
-                className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                  telegramShared ? 'bg-accent' : 'bg-bg-hover'
-                }`}
-              >
-                <span
-                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                    telegramShared ? 'left-[16px]' : 'left-[2px]'
-                  }`}
-                />
-              </button>
+            <div className="text-xs font-medium text-text-secondary mb-1">
+              {t('sessionConfig.telegramBot')}
             </div>
+            <select
+              value={boundBotId ?? ''}
+              onChange={(e) => void handleSelectTelegramBot(e.target.value || null)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-border-primary bg-bg-primary text-text-primary focus:outline-none focus:border-accent"
+            >
+              <option value="">{t('sessionConfig.telegramNone')}</option>
+              {telegramBots
+                .filter((b) => !b.boundSessionId || b.boundSessionId === sessionId)
+                .map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}{b.username ? ` (@${b.username})` : ''}
+                  </option>
+                ))}
+            </select>
             <p className="text-[10px] text-text-tertiary mt-1">
-              {t('sessionConfig.telegramShareDesc')}
+              {t('sessionConfig.telegramBotDesc')}
             </p>
           </div>
         </div>

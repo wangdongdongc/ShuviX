@@ -10,6 +10,8 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   /** SSH 命令免审批 */
   sshAutoApprove?: boolean
+  /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
+  telegramBotId?: string
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

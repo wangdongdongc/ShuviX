@@ -33,7 +33,11 @@ import type {
   SkillUpdateParams,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
-  ShareMode
+  ShareMode,
+  TelegramBotAddParams,
+  TelegramBotUpdateParams,
+  TelegramBindSessionParams,
+  TelegramUnbindSessionParams
 } from '../main/types'
 import type { ChatEvent } from '../main/frontend'
 
@@ -265,32 +269,34 @@ const api = {
     serverStatus: () => ipcRenderer.invoke('webui:serverStatus')
   },
 
-  // ============ Telegram Bot ============
+  // ============ Telegram Bot（多 Bot） ============
   telegram: {
-    /** 获取 Bot Token */
-    getBotToken: () => ipcRenderer.invoke('telegram:getBotToken'),
-    /** 设置 Bot Token */
-    setBotToken: (token: string) => ipcRenderer.invoke('telegram:setBotToken', token),
+    /** 列出所有注册的 Bot（含运行时状态） */
+    listBots: () => ipcRenderer.invoke('telegram:listBots'),
+    /** 添加 Bot（自动验证 token） */
+    addBot: (params: TelegramBotAddParams) => ipcRenderer.invoke('telegram:addBot', params),
+    /** 更新 Bot 配置 */
+    updateBot: (params: TelegramBotUpdateParams) =>
+      ipcRenderer.invoke('telegram:updateBot', params),
+    /** 删除 Bot */
+    deleteBot: (id: string) => ipcRenderer.invoke('telegram:deleteBot', id),
     /** 验证 Bot Token */
     validateToken: (token: string) => ipcRenderer.invoke('telegram:validateToken', token),
-    /** 获取允许的用户 ID 列表 */
-    getAllowedUsers: () => ipcRenderer.invoke('telegram:getAllowedUsers'),
-    /** 设置允许的用户 ID 列表 */
-    setAllowedUsers: (userIds: number[]) =>
-      ipcRenderer.invoke('telegram:setAllowedUsers', userIds),
-    /** 切换指定 session 的 Telegram 绑定状态 */
-    setShared: (params: { sessionId: string; shared: boolean }) =>
-      ipcRenderer.invoke('telegram:setShared', params),
-    /** 查询单个 session 是否已绑定 */
-    isShared: (sessionId: string) => ipcRenderer.invoke('telegram:isShared', sessionId),
-    /** 获取所有已绑定的 session 列表 */
-    listShared: () => ipcRenderer.invoke('telegram:listShared'),
+    /** 绑定 session 到 bot */
+    bindSession: (params: TelegramBindSessionParams) =>
+      ipcRenderer.invoke('telegram:bindSession', params),
+    /** 解绑 session */
+    unbindSession: (params: TelegramUnbindSessionParams) =>
+      ipcRenderer.invoke('telegram:unbindSession', params),
+    /** 获取 session 绑定的 bot ID */
+    getSessionBotId: (sessionId: string) =>
+      ipcRenderer.invoke('telegram:getSessionBotId', sessionId),
+    /** 启动指定 Bot */
+    startBot: (botId: string) => ipcRenderer.invoke('telegram:startBot', botId),
+    /** 停止指定 Bot */
+    stopBot: (botId: string) => ipcRenderer.invoke('telegram:stopBot', botId),
     /** 获取 Bot 运行状态 */
-    botStatus: () => ipcRenderer.invoke('telegram:botStatus'),
-    /** 启动 Bot */
-    startBot: () => ipcRenderer.invoke('telegram:startBot'),
-    /** 停止 Bot */
-    stopBot: () => ipcRenderer.invoke('telegram:stopBot')
+    getBotStatus: (botId: string) => ipcRenderer.invoke('telegram:getBotStatus', botId)
   },
 
   // ============ Skill 管理 ============

@@ -144,6 +144,34 @@ export class SessionDao extends BaseDao {
       .run(...values, Date.now(), id)
   }
 
+  /** 查找绑定了指定 Telegram Bot 的会话 */
+  findByTelegramBotId(botId: string): Session | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM sessions WHERE json_extract(settings, '$.telegramBotId') = ? LIMIT 1"
+      )
+      .get(botId) as SessionRow | undefined
+    return row ? parseRow(row) : undefined
+  }
+
+  /** 清除指定 session 的 telegramBotId（设为 null） */
+  clearTelegramBotId(sessionId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE id = ?`
+      )
+      .run(Date.now(), sessionId)
+  }
+
+  /** 清除所有绑定到指定 bot 的 session 的 telegramBotId */
+  clearAllTelegramBotBindings(botId: string): void {
+    this.db
+      .prepare(
+        `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE json_extract(settings, '$.telegramBotId') = ?`
+      )
+      .run(Date.now(), botId)
+  }
+
   /** 删除会话 */
   deleteById(id: string): void {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id)

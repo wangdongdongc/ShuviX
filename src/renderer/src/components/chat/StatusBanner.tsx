@@ -19,9 +19,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   // 分享状态
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
-  const isTelegramShared = useChatStore((s) => s.telegramSharedSessionIds.has(sessionId))
+  const isTelegramBound = useChatStore((s) => s.telegramBindings.has(sessionId))
 
-  if (!docker && !ssh && !sshAutoApprove && !lanShareMode && !isTelegramShared) return null
+  if (!docker && !ssh && !sshAutoApprove && !lanShareMode && !isTelegramBound) return null
 
   const handleDestroyDocker = async (): Promise<void> => {
     await window.api.docker.destroySession(sessionId)
@@ -46,9 +46,11 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   /** 点击取消 Telegram 绑定 */
   const handleDisableTelegram = async (): Promise<void> => {
-    await window.api.telegram.setShared({ sessionId, shared: false })
-    const shared = await window.api.telegram.listShared()
-    useChatStore.getState().setTelegramSharedSessionIds(new Set(shared))
+    await window.api.telegram.unbindSession({ sessionId })
+    useChatStore.getState().updateSessionSettings(sessionId, { telegramBotId: undefined })
+    const bindings = new Map(useChatStore.getState().telegramBindings)
+    bindings.delete(sessionId)
+    useChatStore.getState().setTelegramBindings(bindings)
   }
 
   return (
@@ -115,7 +117,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           <X size={10} className="ml-0.5 opacity-60" />
         </button>
       )}
-      {isTelegramShared && (
+      {isTelegramBound && (
         <button
           onClick={handleDisableTelegram}
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"

@@ -93,7 +93,7 @@ export class SessionService {
     sessionDao.updateSettings(id, { sshAutoApprove })
   }
 
-  /** 删除会话（同时清理 AgentSession、消息、HTTP 日志和临时工作目录） */
+  /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */
   delete(id: string): void {
     // 先清理运行时 AgentSession
     const agent = this.agentSessions.get(id)
@@ -102,6 +102,10 @@ export class SessionService {
       this.agentSessions.delete(id)
       log.info(`移除 AgentSession session=${id} 剩余=${this.agentSessions.size}`)
     }
+    // 清理 Telegram 绑定（异步，不阻塞删除）
+    import('./telegramService').then(({ telegramService }) => {
+      telegramService.unbindSession(id).catch(() => {})
+    })
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)

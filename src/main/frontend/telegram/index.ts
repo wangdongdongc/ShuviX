@@ -1,2 +1,2 @@
 export { TelegramFrontend } from './TelegramFrontend'
-export { telegramBotServer } from './TelegramBotServer'
+export { TelegramBotServer } from './TelegramBotServer'
