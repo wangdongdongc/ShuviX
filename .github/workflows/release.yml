@@ -84,11 +84,14 @@ jobs:
 
               # 基础构建工具
               apt-get update
-              apt-get install -y curl build-essential python3 fakeroot dpkg rpm git gcc-10 g++-10
+              apt-get install -y curl build-essential python3 fakeroot dpkg rpm git software-properties-common
 
-              # 使用 GCC 10（cpu-features 等原生模块需要 -std=gnu++20，GCC 9 不支持）
-              update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
-              update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+              # GCC 11（Electron 39 头文件需要 <source_location>，GCC 10 不支持）
+              add-apt-repository -y ppa:ubuntu-toolchain-r/test
+              apt-get update
+              apt-get install -y gcc-11 g++-11
+              update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+              update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
 
               # 安装 Node.js 22
               curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -101,7 +104,7 @@ jobs:
               echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
               echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
               apt-get update
-              apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-9-dev-arm64-cross
+              apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
 
               npm ci
               npx electron-vite build
