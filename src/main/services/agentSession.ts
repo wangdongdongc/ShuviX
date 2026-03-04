@@ -202,10 +202,17 @@ export class AgentSession {
             session.addPendingLogId(logId)
           }
         }
-        if (streamModel.api === 'google-generative-ai') {
-          return streamSimpleGoogleWithImages(streamModel, context, streamOpts)
+        // 内置提供商：还原 SDK 可识别的 provider slug（如 "openrouter"、"anthropic"）
+        // ShuviX 用内部 ID 覆盖了 model.provider，需要还原以使 SDK 内部逻辑正常工作
+        const effectiveModel =
+          currentProvider?.isBuiltin && currentProvider.name
+            ? { ...streamModel, provider: currentProvider.name.toLowerCase() }
+            : streamModel
+
+        if (effectiveModel.api === 'google-generative-ai') {
+          return streamSimpleGoogleWithImages(effectiveModel, context, streamOpts)
         }
-        return streamSimple(streamModel, context, streamOpts)
+        return streamSimple(effectiveModel, context, streamOpts)
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err)
         log.error(`streamFn 错误: ${message}`)
