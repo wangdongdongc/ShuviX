@@ -89,8 +89,48 @@ export interface SessionResourceInfo {
   ssh?: { host: string; port: number; username: string } | null
 }
 
+/** 子智能体内部工具执行（临时，不持久化） */
+export interface SubAgentToolExecution {
+  toolCallId: string
+  toolName: string
+  args: Record<string, unknown>
+  status: 'running' | 'done' | 'error'
+  result?: string
+}
+
+/** 子智能体 token 用量 */
+export interface SubAgentUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+  details: Array<{
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+    stopReason: string
+  }>
+}
+
+/** 子智能体执行状态 */
+export interface SubAgentExecution {
+  subAgentId: string
+  subAgentType: string
+  description: string
+  /** 关联主 Agent 的 explore 工具调用 */
+  parentToolCallId?: string
+  status: 'running' | 'done' | 'error'
+  tools: SubAgentToolExecution[]
+  result?: string
+  usage?: SubAgentUsage
+}
+
 /** 空数组常量，避免选择器每次返回新引用 */
 const EMPTY_TOOLS: ToolExecution[] = []
+const EMPTY_SUBAGENTS: SubAgentExecution[] = []
 
 interface ChatState {
   /** 所有会话 */
@@ -103,6 +143,8 @@ interface ChatState {
   sessionStreams: Record<string, SessionStreamState>
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
+  /** 各 session 的子智能体执行状态（按 sessionId 隔离，临时，不持久化） */
+  sessionSubAgentExecutions: Record<string, SubAgentExecution[]>
   /** 当前模型是否支持深度思考 */
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
@@ -151,6 +193,15 @@ interface ChatState {
     updates: Partial<ToolExecution>
   ) => void
   clearToolExecutions: (sessionId: string) => void
+  addSubAgentExecution: (sessionId: string, exec: SubAgentExecution) => void
+  addSubAgentTool: (sessionId: string, subAgentId: string, tool: SubAgentToolExecution) => void
+  updateSubAgentTool: (
+    sessionId: string,
+    subAgentId: string,
+    toolCallId: string,
+    updates: Partial<SubAgentToolExecution>
+  ) => void
+  endSubAgentExecution: (sessionId: string, subAgentId: string, result?: string, usage?: SubAgentUsage) => void
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
@@ -199,6 +250,11 @@ export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeT
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
+export const selectSubAgentExecutions = (s: ChatState): SubAgentExecution[] =>
+  s.activeSessionId
+    ? s.sessionSubAgentExecutions[s.activeSessionId] || EMPTY_SUBAGENTS
+    : EMPTY_SUBAGENTS
+
 /** 当前模式是否允许对话（chat / full / null=本地） */
 export const selectCanChat = (s: ChatState): boolean => s.shareMode !== 'readonly'
 
@@ -212,6 +268,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
+  sessionSubAgentExecutions: {},
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
   modelSupportsVision: false,
@@ -318,6 +375,57 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return { sessionToolExecutions: rest }
     }),
 
+  addSubAgentExecution: (sessionId, exec) =>
+    set((state) => {
+      const prev = state.sessionSubAgentExecutions[sessionId] || []
+      return {
+        sessionSubAgentExecutions: {
+          ...state.sessionSubAgentExecutions,
+          [sessionId]: [...prev, exec]
+        }
+      }
+    }),
+
+  addSubAgentTool: (sessionId, subAgentId, tool) =>
+    set((state) => {
+      const prev = state.sessionSubAgentExecutions[sessionId] || []
+      const updated = prev.map((sa) =>
+        sa.subAgentId === subAgentId ? { ...sa, tools: [...sa.tools, tool] } : sa
+      )
+      return {
+        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
+      }
+    }),
+
+  updateSubAgentTool: (sessionId, subAgentId, toolCallId, updates) =>
+    set((state) => {
+      const prev = state.sessionSubAgentExecutions[sessionId] || []
+      const updated = prev.map((sa) =>
+        sa.subAgentId === subAgentId
+          ? {
+              ...sa,
+              tools: sa.tools.map((t) =>
+                t.toolCallId === toolCallId ? { ...t, ...updates } : t
+              )
+            }
+          : sa
+      )
+      return {
+        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
+      }
+    }),
+
+  endSubAgentExecution: (sessionId, subAgentId, result, usage) =>
+    set((state) => {
+      const prev = state.sessionSubAgentExecutions[sessionId] || []
+      const updated = prev.map((sa) =>
+        sa.subAgentId === subAgentId ? { ...sa, status: 'done' as const, result, usage } : sa
+      )
+      return {
+        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
+      }
+    }),
+
   setInputText: (text) => set({ inputText: text }),
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
@@ -385,6 +493,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restToolExecs = { ...state.sessionToolExecutions }
       delete restToolExecs[sessionId]
 
+      // 清除该 session 的子智能体执行状态
+      const restSubAgents = { ...state.sessionSubAgentExecutions }
+      delete restSubAgents[sessionId]
+
       // 添加最终消息（如有）
       const newMessages =
         finalMessage && sessionId === state.activeSessionId
@@ -394,6 +506,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionStreams: newStreams,
         sessionToolExecutions: restToolExecs,
+        sessionSubAgentExecutions: restSubAgents,
         messages: newMessages
       }
     })

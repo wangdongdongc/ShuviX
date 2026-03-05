@@ -10,7 +10,8 @@ import { parallelCoordinator } from './parallelExecution'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
-import { buildTools } from './agentToolBuilder'
+import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
+import { subAgentManager } from './subAgent'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
@@ -95,6 +96,7 @@ export class AgentSession {
   // 核心
   private agent: Agent
   private toolContext: ToolContext
+  private subAgentCtx: SubAgentBuildContext | undefined
   private instructionLoadState: ProjectInstructionLoadState
 
   // 交互回调 pending Map（keyed by toolCallId）
@@ -123,11 +125,13 @@ export class AgentSession {
     sessionId: string,
     agent: Agent,
     toolContext: ToolContext,
+    subAgentCtx: SubAgentBuildContext | undefined,
     instructionLoadState: ProjectInstructionLoadState
   ) {
     this.sessionId = sessionId
     this.agent = agent
     this.toolContext = toolContext
+    this.subAgentCtx = subAgentCtx
     this.instructionLoadState = instructionLoadState
 
     // 订阅 Agent 事件，转发到 Renderer
@@ -173,7 +177,6 @@ export class AgentSession {
       }
     }
 
-    const tools = buildTools(toolContext, enabledTools)
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
@@ -221,6 +224,14 @@ export class AgentSession {
       }
     }
 
+    // 构建子智能体上下文（使 explore 等子智能体工具可用）
+    const subAgentCtx: SubAgentBuildContext = {
+      parentModel: resolvedModel,
+      parentStreamFn: streamFn,
+      broadcastEvent: (e) => chatFrontendRegistry.broadcast(e)
+    }
+    const tools = buildTools(toolContext, enabledTools, subAgentCtx)
+
     const agent = new Agent({
       initialState: {
         systemPrompt: enhancedPrompt,
@@ -245,7 +256,7 @@ export class AgentSession {
       })
     }
 
-    session = new AgentSession(sessionId, agent, toolContext, { agentMdLoaded: !!agentMd })
+    session = new AgentSession(sessionId, agent, toolContext, subAgentCtx, { agentMdLoaded: !!agentMd })
 
     // 恢复历史消息到 Agent 上下文
     const dbMsgs = messageService.listBySession(sessionId)
@@ -284,6 +295,7 @@ export class AgentSession {
   abort(): Message | null {
     log.info(`中止 session=${this.sessionId}`)
     parallelCoordinator.cancelBatch(this.sessionId)
+    subAgentManager.abortAll(this.sessionId)
     this.agent.abort()
     // 只取消本 session 的 pending 项
     for (const [, pending] of this.pendingApprovals) {
@@ -346,7 +358,7 @@ export class AgentSession {
 
   /** 动态更新启用工具集 */
   setEnabledTools(enabledTools: string[]): void {
-    const tools = buildTools(this.toolContext, enabledTools)
+    const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx)
     this.agent.setTools(tools)
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
@@ -543,6 +555,7 @@ export class AgentSession {
   /** 使 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
   invalidate(): void {
     this.agent.abort()
+    subAgentManager.destroyAll(this.sessionId)
     parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
@@ -552,6 +565,7 @@ export class AgentSession {
   /** 完全销毁（删除会话时调用，含 Docker 清理） */
   destroy(): void {
     this.agent.abort()
+    subAgentManager.destroyAll(this.sessionId)
     parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     dockerManager

@@ -225,6 +225,37 @@ export function useAgentEvents(): void {
         break
       }
 
+      case 'subagent_start':
+        store.addSubAgentExecution(sid, {
+          subAgentId: event.subAgentId,
+          subAgentType: event.subAgentType,
+          description: event.description,
+          parentToolCallId: event.parentToolCallId,
+          status: 'running',
+          tools: []
+        })
+        break
+
+      case 'subagent_end':
+        store.endSubAgentExecution(sid, event.subAgentId, event.result, event.usage)
+        break
+
+      case 'subagent_tool_start':
+        store.addSubAgentTool(sid, event.subAgentId, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.toolArgs ?? {},
+          status: 'running'
+        })
+        break
+
+      case 'subagent_tool_end':
+        store.updateSubAgentTool(sid, event.subAgentId, event.toolCallId, {
+          status: event.isError ? 'error' : 'done',
+          result: event.result
+        })
+        break
+
       case 'error':
         // 错误以独立提示消息形式写入会话（不再使用底部错误条/弹窗）
         store.finishStreaming(sid)

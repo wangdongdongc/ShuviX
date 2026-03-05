@@ -137,7 +137,18 @@
     "shuvixSettingHint": "AI requests to modify system settings",
     "sshHint": "SSH remote commands require user approval before execution",
     "allowAndSkip": "Allow & Skip Future Approvals",
-    "pendingSshCredentials": "Awaiting credentials"
+    "pendingSshCredentials": "Awaiting credentials",
+    "stepThinking": "thinking",
+    "stepText": "text"
+  },
+
+  "subAgent": {
+    "running": "Running",
+    "done": "Done",
+    "error": "Error",
+    "params": "Parameters",
+    "result": "Result",
+    "internalTools": "Internal tools"
   },
 
   "ssh": {
@@ -216,6 +227,8 @@
     "toolsGeneralGroup": "General Tools",
     "toolsRipgrepGroup": "High-performance search tools (for large codebases)",
     "toolsShuvixGroup": "System tools (read/write project & global config)",
+    "toolsSubAgentGroup": "Sub-Agents",
+    "toolsSubAgentDesc": "Delegate tasks to autonomous sub-agents running in isolated contexts.",
     "referenceDirs": "Additional Folders",
     "referenceDirsHint": "AI can access files in these directories. Access mode controls read/write permissions in sandbox mode.",
     "addRefDir": "Add Directory",
@@ -473,7 +486,9 @@
     "sshHint": "Connect to a remote server via SSH and execute commands",
     "shuvixProjectHint": "View or modify the current project config (sandbox, Docker, etc.)",
     "shuvixSettingHint": "View or modify global app settings (language, theme, etc.)",
-    "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities"
+    "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
+    "exploreLabel": "Explore",
+    "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure"
   },
 
   "bindings": {

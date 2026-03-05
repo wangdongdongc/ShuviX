@@ -56,6 +56,20 @@ const TOOL_PROMPT_REGISTRY: Array<{
       `You have the shuvix-setting tool to read and modify global application settings. Use action="get" to view all settings, action="set" with key and value to change one. Known keys: ${getSettingKeyDescriptions()}. Set operations require user approval.`
   },
   {
+    tools: ['explore'],
+    textFn: () => {
+      return `You have the "explore" tool to delegate read-only codebase exploration to a sub-agent running in an isolated context. The explore sub-agent is a search specialist that can find files by patterns, search code by keywords, and answer questions about the codebase. Specify the desired thoroughness: "quick", "medium", or "very thorough".
+
+IMPORTANT guidelines for using the explore tool:
+- Use explore for broad codebase exploration and context gathering — this saves your context window.
+- Do NOT use explore when you already know the specific file path (use Read directly) or are searching within 2-3 known files.
+- The sub-agent does NOT share your conversation history — you MUST provide complete context in the prompt parameter.
+- Specify exactly what information the agent should return in its final response.
+- You can launch multiple explore tools concurrently in a single message for parallel exploration.
+- The result is returned only to you — summarize findings for the user.`
+    }
+  },
+  {
     tools: ['ssh'],
     textFn: () => {
       const savedNames = sshCredentialDao.findAllNames()

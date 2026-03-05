@@ -188,7 +188,8 @@ export class DefaultChatGateway implements ChatGateway {
       glob: t('tool.globLabel'),
       ssh: t('tool.sshLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
-      'shuvix-setting': t('tool.shuvixSettingLabel')
+      'shuvix-setting': t('tool.shuvixSettingLabel'),
+      explore: t('tool.exploreLabel')
     }
     const hintMap: Record<string, string> = {
       bash: t('tool.bashHint'),
@@ -201,13 +202,14 @@ export class DefaultChatGateway implements ChatGateway {
       glob: t('tool.globHint'),
       ssh: t('tool.sshHint'),
       'shuvix-project': t('tool.shuvixProjectHint'),
-      'shuvix-setting': t('tool.shuvixSettingHint')
+      'shuvix-setting': t('tool.shuvixSettingHint'),
+      explore: t('tool.exploreHint')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,
       label: labelMap[name] || name,
       hint: hintMap[name],
-      group: undefined as string | undefined
+      group: name === 'explore' ? '__subagents__' : (undefined as string | undefined)
     }))
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({

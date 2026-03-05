@@ -137,7 +137,18 @@
     "shuvixSettingHint": "AI 请求修改系统设置",
     "sshHint": "SSH 远程命令需要用户审批后执行",
     "allowAndSkip": "允许并跳过后续审批",
-    "pendingSshCredentials": "等待输入凭据"
+    "pendingSshCredentials": "等待输入凭据",
+    "stepThinking": "思考",
+    "stepText": "文本"
+  },
+
+  "subAgent": {
+    "running": "运行中",
+    "done": "完成",
+    "error": "出错",
+    "params": "参数",
+    "result": "结果",
+    "internalTools": "内部工具"
   },
 
   "ssh": {
@@ -216,6 +227,8 @@
     "toolsGeneralGroup": "通用工具",
     "toolsRipgrepGroup": "高性能检索工具（适合大型代码库）",
     "toolsShuvixGroup": "系统工具（读写项目和全局配置）",
+    "toolsSubAgentGroup": "子智能体",
+    "toolsSubAgentDesc": "将任务委派给运行在独立上下文中的自主子智能体。",
     "referenceDirs": "引用更多文件夹",
     "referenceDirsHint": "AI 可访问这些目录中的文件，沙箱模式下按访问模式限制读写权限",
     "addRefDir": "添加目录",
@@ -473,7 +486,9 @@
     "sshHint": "通过 SSH 连接远程服务器并执行命令",
     "shuvixProjectHint": "查看或修改当前项目的配置（如沙箱、Docker 等）",
     "shuvixSettingHint": "查看或修改应用的全局设置（如语言、主题等）",
-    "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力"
+    "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
+    "exploreLabel": "探索",
+    "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构"
   },
 
   "bindings": {

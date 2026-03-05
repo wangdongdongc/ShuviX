@@ -9,7 +9,7 @@ import {
   Info,
   Search,
   Blocks,
-  Cog
+  Bot
 } from 'lucide-react'
 
 /** 工具信息 */
@@ -46,6 +46,9 @@ function mcpShortName(fullName: string): string {
 
 /** Skill 分组标识常量 */
 const SKILLS_GROUP = '__skills__'
+
+/** 子智能体分组标识常量 */
+const SUBAGENTS_GROUP = '__subagents__'
 
 /** 基于 ripgrep 的高性能检索工具 */
 const RIPGREP_TOOLS = new Set(['ls', 'grep', 'glob'])
@@ -105,13 +108,19 @@ export function ToolSelectList({
     })
   }
 
-  // 分离：内置工具（通用 + ripgrep + shuvix）、MCP 工具、Skills
+  // 分离：内置工具（通用 + ripgrep + 子智能体）、MCP 工具、Skills
+  // shuvix-project / shuvix-setting 暂不在选择器中展示
   const builtinTools = tools.filter(
-    (t) => !t.group && !RIPGREP_TOOLS.has(t.name) && !t.name.startsWith('shuvix-')
+    (t) =>
+      !t.group &&
+      !RIPGREP_TOOLS.has(t.name) &&
+      !t.name.startsWith('shuvix-')
   )
   const ripgrepTools = tools.filter((t) => !t.group && RIPGREP_TOOLS.has(t.name))
-  const shuvixTools = tools.filter((t) => !t.group && t.name.startsWith('shuvix-'))
-  const mcpTools = tools.filter((t) => t.group && t.group !== SKILLS_GROUP)
+  const subAgentTools = tools.filter((t) => t.group === SUBAGENTS_GROUP)
+  const mcpTools = tools.filter(
+    (t) => t.group && t.group !== SKILLS_GROUP && t.group !== SUBAGENTS_GROUP
+  )
   const skillTools = tools.filter((t) => t.group === SKILLS_GROUP)
   const groups = [...new Set(mcpTools.map((t) => t.group!))]
 
@@ -215,26 +224,31 @@ export function ToolSelectList({
         </div>
       )}
 
-      {/* ShuviX 系统工具组 */}
-      {shuvixTools.length > 0 && (
+      {/* 子智能体工具组 */}
+      {subAgentTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
           <div
             className={
               compact
                 ? ''
-                : 'border border-border-secondary rounded-md overflow-hidden bg-bg-secondary/30'
+                : 'border border-amber-500/20 rounded-md overflow-hidden bg-amber-500/[0.03]'
             }
           >
             {!compact && (
-              <div className="flex items-center gap-1.5 px-2 py-1.5">
-                <Cog size={11} className="text-text-tertiary" />
-                <span className="text-[11px] font-medium text-text-tertiary">
-                  {t('projectForm.toolsShuvixGroup')}
-                </span>
+              <div className="px-2 py-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Bot size={11} className="text-amber-400" />
+                  <span className="text-[11px] font-medium text-amber-400">
+                    {t('projectForm.toolsSubAgentGroup')}
+                  </span>
+                </div>
+                <p className="text-[10px] text-text-tertiary leading-relaxed mt-1">
+                  {t('projectForm.toolsSubAgentDesc')}
+                </p>
               </div>
             )}
             <div className={compact ? 'py-0.5' : 'px-2 pb-1.5 space-y-0.5'}>
-              {shuvixTools.map((tool) => (
+              {subAgentTools.map((tool) => (
                 <label
                   key={tool.name}
                   className={
@@ -249,7 +263,7 @@ export function ToolSelectList({
                     onChange={() => toggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
+                  <span className="text-[11px] font-mono text-amber-300">{tool.name}</span>
                   <span className="text-[10px] text-text-tertiary truncate">
                     {tool.label}
                     {!compact && tool.hint ? ` — ${tool.hint}` : ''}

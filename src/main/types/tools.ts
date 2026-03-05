@@ -10,7 +10,8 @@ export const ALL_TOOL_NAMES = [
   'glob',
   'ssh',
   'shuvix-project',
-  'shuvix-setting'
+  'shuvix-setting',
+  'explore'
 ] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 

@@ -9,6 +9,10 @@
 
 interface ChatEventBase {
   sessionId: string
+  /** 子智能体 task ID（来自子智能体的事件会携带此字段） */
+  subAgentId?: string
+  /** 子智能体类型名（如 'explore'） */
+  subAgentType?: string
 }
 
 // ─── 流式生成 ──────────────────────────────────────────
@@ -137,6 +141,47 @@ export interface ChatSshEvent extends ChatEventBase {
   messageId: string
 }
 
+// ─── 子智能体 ──────────────────────────────────────────────
+
+/** 子智能体开始执行 */
+export interface ChatSubAgentStartEvent extends ChatEventBase {
+  type: 'subagent_start'
+  subAgentId: string
+  subAgentType: string
+  description: string
+  parentToolCallId?: string
+}
+
+/** 子智能体执行完成 */
+export interface ChatSubAgentEndEvent extends ChatEventBase {
+  type: 'subagent_end'
+  subAgentId: string
+  subAgentType: string
+  result?: string
+  usage?: ChatTokenUsage
+}
+
+/** 子智能体内部工具开始 */
+export interface ChatSubAgentToolStartEvent extends ChatEventBase {
+  type: 'subagent_tool_start'
+  subAgentId: string
+  subAgentType: string
+  toolCallId: string
+  toolName: string
+  toolArgs?: Record<string, unknown>
+}
+
+/** 子智能体内部工具完成 */
+export interface ChatSubAgentToolEndEvent extends ChatEventBase {
+  type: 'subagent_tool_end'
+  subAgentId: string
+  subAgentType: string
+  toolCallId: string
+  toolName: string
+  result?: string
+  isError?: boolean
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -171,6 +216,10 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatDockerEvent
   | ChatSshEvent
+  | ChatSubAgentStartEvent
+  | ChatSubAgentEndEvent
+  | ChatSubAgentToolStartEvent
+  | ChatSubAgentToolEndEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
 

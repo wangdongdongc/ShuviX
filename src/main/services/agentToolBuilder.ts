@@ -1,4 +1,5 @@
-import type { AgentState } from '@mariozechner/pi-agent-core'
+import type { AgentState, StreamFn } from '@mariozechner/pi-agent-core'
+import type { Api, Model } from '@mariozechner/pi-ai'
 import { BashTool } from '../tools/bash'
 import { ReadTool } from '../tools/read'
 import { WriteTool } from '../tools/write'
@@ -11,11 +12,20 @@ import { SshTool } from '../tools/ssh'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
 import { SkillTool } from '../tools/skill'
+import { ExploreTool } from '../tools/explore'
 import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
 import { parallelCoordinator } from './parallelExecution'
+import type { ChatEvent } from '../frontend'
 
 type AnyAgentTool = AgentState['tools'][number]
+
+/** 子智能体构建上下文（仅主 Agent 有，子智能体不传此参数以防递归） */
+export interface SubAgentBuildContext {
+  parentModel: Model<Api>
+  parentStreamFn: StreamFn
+  broadcastEvent: (event: ChatEvent) => void
+}
 
 /** 包装单个工具的 execute 方法，接入并行执行协调器 */
 function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentTool {
@@ -43,7 +53,11 @@ function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentToo
 }
 
 /** 根据启用列表构建工具子集（内置 + MCP + Skill 合并） */
-export function buildTools(ctx: ToolContext, enabledTools: string[]): AnyAgentTool[] {
+export function buildTools(
+  ctx: ToolContext,
+  enabledTools: string[],
+  subAgentCtx?: SubAgentBuildContext
+): AnyAgentTool[] {
   // 内置工具
   const builtinAll: Record<string, AnyAgentTool> = {
     bash: new BashTool(ctx),
@@ -57,6 +71,16 @@ export function buildTools(ctx: ToolContext, enabledTools: string[]): AnyAgentTo
     ssh: new SshTool(ctx),
     'shuvix-project': new ShuvixProjectTool(ctx),
     'shuvix-setting': new ShuvixSettingTool(ctx)
+  }
+
+  // explore 工具仅在主 Agent 有 SubAgentBuildContext 时注册（子智能体不传此参数，天然防递归）
+  if (subAgentCtx && enabledTools.includes('explore')) {
+    builtinAll['explore'] = new ExploreTool(
+      ctx,
+      subAgentCtx.parentModel,
+      subAgentCtx.parentStreamFn,
+      subAgentCtx.broadcastEvent
+    )
   }
   // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
   const mcpAll: Record<string, AnyAgentTool> = {}

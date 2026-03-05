@@ -13,6 +13,8 @@ export type {
   ChatImageDataEvent,
   ChatDockerEvent,
   ChatSshEvent,
+  ChatSubAgentStartEvent,
+  ChatSubAgentEndEvent,
   ChatErrorEvent,
   ChatTokenUsage
 } from './types'

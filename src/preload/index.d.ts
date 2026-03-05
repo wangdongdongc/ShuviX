@@ -143,6 +143,51 @@ declare global {
     type: 'ssh_event'
     messageId: string
   }
+  interface ChatSubAgentStartEvent extends ChatEventBase {
+    type: 'subagent_start'
+    subAgentId: string
+    subAgentType: string
+    description: string
+    parentToolCallId?: string
+  }
+  interface ChatSubAgentEndEvent extends ChatEventBase {
+    type: 'subagent_end'
+    subAgentId: string
+    subAgentType: string
+    result?: string
+    usage?: {
+      input: number
+      output: number
+      cacheRead: number
+      cacheWrite: number
+      total: number
+      details: Array<{
+        input: number
+        output: number
+        cacheRead: number
+        cacheWrite: number
+        total: number
+        stopReason: string
+      }>
+    }
+  }
+  interface ChatSubAgentToolStartEvent extends ChatEventBase {
+    type: 'subagent_tool_start'
+    subAgentId: string
+    subAgentType: string
+    toolCallId: string
+    toolName: string
+    toolArgs?: Record<string, unknown>
+  }
+  interface ChatSubAgentToolEndEvent extends ChatEventBase {
+    type: 'subagent_tool_end'
+    subAgentId: string
+    subAgentType: string
+    toolCallId: string
+    toolName: string
+    result?: string
+    isError?: boolean
+  }
   interface ChatErrorEvent extends ChatEventBase {
     type: 'error'
     error: string
@@ -167,6 +212,10 @@ declare global {
     | ChatImageDataEvent
     | ChatDockerEvent
     | ChatSshEvent
+    | ChatSubAgentStartEvent
+    | ChatSubAgentEndEvent
+    | ChatSubAgentToolStartEvent
+    | ChatSubAgentToolEndEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
 

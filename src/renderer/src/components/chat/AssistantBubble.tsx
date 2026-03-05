@@ -10,6 +10,7 @@ import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
 import { CodeBlock } from './CodeBlock'
 import { StepBlock } from './StepBlock'
 import { ToolCallBlock } from './ToolCallBlock'
+import { SubAgentBlock } from './SubAgentBlock'
 import type { AssistantTextMessage } from '../../stores/chatStore'
 import type { StepItem } from './types'
 
@@ -102,10 +103,21 @@ export const AssistantBubble = memo(function AssistantBubble({
                 return <StepBlock key={step.msg.id} message={step.msg} />
               }
               if (step.msg.type === 'tool_call') {
+                const toolName = step.msg.metadata?.toolName || ''
+                if (toolName === 'explore') {
+                  return (
+                    <SubAgentBlock
+                      key={step.msg.id}
+                      toolCallId={step.msg.metadata?.toolCallId}
+                      args={step.msg.metadata?.args}
+                      status="running"
+                    />
+                  )
+                }
                 return (
                   <ToolCallBlock
                     key={step.msg.id}
-                    toolName={step.msg.metadata?.toolName || ''}
+                    toolName={toolName}
                     toolCallId={step.msg.metadata?.toolCallId}
                     args={step.msg.metadata?.args}
                     status="running"
@@ -113,10 +125,22 @@ export const AssistantBubble = memo(function AssistantBubble({
                 )
               }
               if (step.msg.type === 'tool_result') {
+                const toolName = step.msg.metadata?.toolName || ''
+                if (toolName === 'explore') {
+                  return (
+                    <SubAgentBlock
+                      key={step.msg.id}
+                      toolCallId={step.pairedCallMeta?.toolCallId}
+                      args={step.pairedCallMeta?.args}
+                      result={step.msg.content}
+                      status={step.msg.metadata?.isError ? 'error' : 'done'}
+                    />
+                  )
+                }
                 return (
                   <ToolCallBlock
                     key={step.msg.id}
-                    toolName={step.msg.metadata?.toolName || ''}
+                    toolName={toolName}
                     args={step.pairedCallMeta?.args}
                     result={step.msg.content}
                     status={step.msg.metadata?.isError ? 'error' : 'done'}

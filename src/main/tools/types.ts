@@ -28,6 +28,8 @@ export interface ProjectConfig {
 export interface ToolContext {
   /** 当前会话 ID（通过它查询项目配置 + Docker 容器管理） */
   sessionId: string
+  /** 并行执行协调器的 key 覆盖（默认使用 sessionId；子智能体使用独立 key 避免冲突） */
+  parallelSessionKey?: string
   /** Docker 容器创建时回调 */
   onContainerCreated?: (containerId: string, image: string) => void
   /** 沙箱模式下 bash 命令需用户确认，返回 approved=true 表示允许，reason 为用户拒绝时附加的说明 */

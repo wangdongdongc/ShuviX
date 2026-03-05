@@ -137,7 +137,18 @@
     "shuvixSettingHint": "AI がシステム設定の変更を要求しています",
     "sshHint": "SSH リモートコマンドはユーザー承認後に実行されます",
     "allowAndSkip": "許可して以降の承認をスキップ",
-    "pendingSshCredentials": "認証情報入力待ち"
+    "pendingSshCredentials": "認証情報入力待ち",
+    "stepThinking": "思考",
+    "stepText": "テキスト"
+  },
+
+  "subAgent": {
+    "running": "実行中",
+    "done": "完了",
+    "error": "エラー",
+    "params": "パラメータ",
+    "result": "結果",
+    "internalTools": "内部ツール"
   },
 
   "ssh": {
@@ -216,6 +227,8 @@
     "toolsGeneralGroup": "汎用ツール",
     "toolsRipgrepGroup": "高性能検索ツール（大規模コードベース向け）",
     "toolsShuvixGroup": "システムツール（プロジェクトとグローバル設定の読み書き）",
+    "toolsSubAgentGroup": "サブエージェント",
+    "toolsSubAgentDesc": "独立したコンテキストで自律的に動作するサブエージェントにタスクを委譲します。",
     "referenceDirs": "追加フォルダ",
     "referenceDirsHint": "AIがこれらのディレクトリのファイルにアクセスできます。サンドボックスモードではアクセスモードにより読み書き権限が制御されます。",
     "addRefDir": "ディレクトリを追加",
@@ -473,7 +486,9 @@
     "sshHint": "SSH でリモートサーバーに接続してコマンドを実行",
     "shuvixProjectHint": "現在のプロジェクト設定を表示・変更（サンドボックス、Docker など）",
     "shuvixSettingHint": "アプリのグローバル設定を表示・変更（言語、テーマなど）",
-    "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与"
+    "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
+    "exploreLabel": "探索",
+    "exploreHint": "読み取り専用コードベース検索サブエージェント、ファイル検索・コード検索・プロジェクト構造探索に対応"
   },
 
   "bindings": {
