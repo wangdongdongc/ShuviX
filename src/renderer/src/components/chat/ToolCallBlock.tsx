@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { DiffViewer } from './DiffViewer'
 import {
   Terminal,
   FileText,
@@ -191,26 +192,7 @@ export function ToolCallBlock({
             </div>
           )}
           {details?.type === 'edit' && details.diff && (
-            <div>
-              <div className="text-[10px] text-text-tertiary mb-0.5">Diff</div>
-              <pre className="text-[11px] bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-48 whitespace-pre-wrap break-words leading-relaxed">
-                {details.diff.split('\n').map((line, i) => {
-                  const cls = line.startsWith('+')
-                    ? 'text-green-400'
-                    : line.startsWith('-')
-                      ? 'text-red-400'
-                      : line.startsWith('@')
-                        ? 'text-blue-400'
-                        : 'text-text-secondary'
-                  return (
-                    <span key={i} className={cls}>
-                      {line}
-                      {'\n'}
-                    </span>
-                  )
-                })}
-              </pre>
-            </div>
+            <DiffViewer diff={details.diff} />
           )}
           {result && !(details?.type === 'edit' && details.diff) && (
             <div>
