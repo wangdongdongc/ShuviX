@@ -10,6 +10,8 @@ export type {
   AssistantTextMeta,
   ToolCallMeta,
   ToolResultMeta,
+  ToolResultDetails,
+  EditToolDetails,
   StepTextMeta,
   StepThinkingMeta,
   DockerEventMeta,

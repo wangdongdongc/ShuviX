@@ -5,6 +5,8 @@
  * 零外部依赖，作为前后端通信的唯一契约。
  */
 
+import type { ToolResultDetails } from '../../../shared/types/chatMessage'
+
 // ─── 基础 ──────────────────────────────────────────────
 
 interface ChatEventBase {
@@ -87,6 +89,8 @@ export interface ChatToolEndEvent extends ChatEventBase {
   isError?: boolean
   /** 持久化的 tool_result 消息 ID */
   messageId?: string
+  /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
+  details?: ToolResultDetails
 }
 
 // ─── 交互请求 ──────────────────────────────────────────

@@ -43,10 +43,8 @@ export function StepBlock({ message }: StepBlockProps): React.JSX.Element {
         )}
         {icon}
         <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>
-        {!expanded && preview && (
-          <span className="flex-1 truncate font-mono opacity-70">{preview}</span>
-        )}
-        {(expanded || !preview) && <span className="flex-1" />}
+        {preview && <span className="flex-1 truncate font-mono opacity-70">{preview}</span>}
+        {!preview && <span className="flex-1" />}
         <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
           <Check size={12} className="text-success" />
           <span className="text-[10px]">{t('toolCall.done')}</span>

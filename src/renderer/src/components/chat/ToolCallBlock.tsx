@@ -19,13 +19,15 @@ import {
   Search,
   FileSearch2
 } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, type ToolResultDetails } from '../../stores/chatStore'
 
 interface ToolCallBlockProps {
   toolName: string
   toolCallId?: string
   args?: Record<string, unknown>
   result?: string
+  /** 工具特定的结构化详情（持久化消息传入） */
+  details?: ToolResultDetails
   status:
     | 'running'
     | 'done'
@@ -44,18 +46,20 @@ export function ToolCallBlock({
   toolCallId,
   args,
   result,
+  details: propDetails,
   status: propStatus
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
 
   // 从 store 读取实时工具执行状态，确保审批状态变更时组件能独立重渲染
-  const liveStatus = useChatStore((s) => {
+  const liveExec = useChatStore((s) => {
     if (!toolCallId || !s.activeSessionId) return undefined
     const execs = s.sessionToolExecutions[s.activeSessionId]
-    return execs?.find((te) => te.toolCallId === toolCallId)?.status
+    return execs?.find((te) => te.toolCallId === toolCallId)
   })
-  const status = liveStatus || propStatus
+  const status = liveExec?.status || propStatus
+  const details = liveExec?.details || propDetails
 
   // 根据工具类型生成摘要
   const { icon, detail } = (() => {
@@ -186,7 +190,29 @@ export function ToolCallBlock({
               </pre>
             </div>
           )}
-          {result && (
+          {details?.type === 'edit' && details.diff && (
+            <div>
+              <div className="text-[10px] text-text-tertiary mb-0.5">Diff</div>
+              <pre className="text-[11px] bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-48 whitespace-pre-wrap break-words leading-relaxed">
+                {details.diff.split('\n').map((line, i) => {
+                  const cls = line.startsWith('+')
+                    ? 'text-green-400'
+                    : line.startsWith('-')
+                      ? 'text-red-400'
+                      : line.startsWith('@')
+                        ? 'text-blue-400'
+                        : 'text-text-secondary'
+                  return (
+                    <span key={i} className={cls}>
+                      {line}
+                      {'\n'}
+                    </span>
+                  )
+                })}
+              </pre>
+            </div>
+          )}
+          {result && !(details?.type === 'edit' && details.diff) && (
             <div>
               <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
               <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">

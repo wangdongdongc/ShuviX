@@ -15,6 +15,8 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { EditToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:edit')
@@ -66,18 +68,12 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
     _toolCallId: string,
     params: { path: string; oldText: string; newText: string },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { diff: string; firstChangedLine?: number } | undefined
-  }> {
+  ): Promise<AgentToolResult<EditToolDetails>> {
     const config = resolveProjectConfig(this.ctx)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
     log.info(absolutePath)
 
-    return new Promise<{
-      content: Array<{ type: 'text'; text: string }>
-      details: { diff: string; firstChangedLine?: number } | undefined
-    }>((resolve, reject) => {
+    return new Promise<AgentToolResult<EditToolDetails>>((resolve, reject) => {
       if (signal?.aborted) {
         reject(new Error(TOOL_ABORTED))
         return
@@ -168,7 +164,11 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
                 text: `Successfully edited ${params.path}`
               }
             ],
-            details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine }
+            details: {
+              type: 'edit',
+              diff: diffResult.diff,
+              firstChangedLine: diffResult.firstChangedLine
+            }
           })
         } catch (error: unknown) {
           if (signal) signal.removeEventListener('abort', onAbort)

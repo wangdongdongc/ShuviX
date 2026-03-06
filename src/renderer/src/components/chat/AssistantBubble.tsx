@@ -143,6 +143,7 @@ export const AssistantBubble = memo(function AssistantBubble({
                     toolName={toolName}
                     args={step.pairedCallMeta?.args}
                     result={step.msg.content}
+                    details={step.msg.metadata?.details}
                     status={step.msg.metadata?.isError ? 'error' : 'done'}
                   />
                 )

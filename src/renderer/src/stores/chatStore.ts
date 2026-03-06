@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { ToolResultDetails } from '../../../shared/types/chatMessage'
 
 // 消息相关类型从 preload 全局声明导入（ChatMessage 判别联合 + per-type 接口）
 export type {
@@ -24,6 +25,7 @@ export type {
   DockerEventMeta,
   SshEventMeta
 }
+export type { ToolResultDetails }
 
 /** 分享模式类型（与后端 ShareMode 对齐） */
 export type ShareMode = 'readonly' | 'chat' | 'full'
@@ -43,6 +45,8 @@ export interface ToolExecution {
     | 'pending_user_input'
     | 'pending_ssh_credentials'
   result?: string
+  /** 工具特定的结构化详情（edit diff 等） */
+  details?: ToolResultDetails
   messageId?: string
 }
 

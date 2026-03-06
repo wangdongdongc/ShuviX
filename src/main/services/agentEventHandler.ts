@@ -7,7 +7,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { resolveProjectConfig } from '../tools/types'
 import { dockerManager } from './dockerManager'
 import { parallelCoordinator } from './parallelExecution'
-import type { Message, MessageMetadata } from '../types'
+import type { Message, MessageMetadata, ToolResultDetails } from '../types'
 import type { ChatEvent } from '../frontend'
 import { createLogger } from '../logger'
 import { existsSync, readFileSync } from 'fs'
@@ -422,17 +422,26 @@ function handleToolExecutionEnd(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'tool_execution_end' }>
 ): void {
-  const result = event.result as { content?: Array<TextContent | ImageContent> } | undefined
+  const result = event.result as
+    | {
+        content?: Array<TextContent | ImageContent>
+        details?: ToolResultDetails
+      }
+    | undefined
   const resultContent =
     result?.content
       ?.map((c: TextContent | ImageContent) => (c.type === 'text' ? c.text : JSON.stringify(c)))
       .join('\n') || ''
+  // 工具已返回强类型 details，直接透传到持久化和前端
+  const toolDetails = result?.details
+
   const toolResultMsg = messageService.addToolResult({
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
     content: resultContent,
-    isError: event.isError || false
+    isError: event.isError || false,
+    details: toolDetails
   })
   ctx.broadcastEvent({
     type: 'tool_end',
@@ -441,7 +450,8 @@ function handleToolExecutionEnd(
     toolName: event.toolName,
     result: resultContent,
     isError: event.isError || false,
-    messageId: toolResultMsg.id
+    messageId: toolResultMsg.id,
+    details: toolDetails
   })
 }
 

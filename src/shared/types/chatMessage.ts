@@ -46,6 +46,7 @@ export interface MessageMetadata {
   args?: Record<string, unknown>
   // —— tool_result ——
   isError?: boolean
+  details?: ToolResultDetails
   // —— step / tool_call ——
   turnIndex?: number
   // —— docker_event ——
@@ -81,11 +82,24 @@ export interface ToolCallMeta {
   turnIndex?: number
 }
 
+// ---- 工具结构化详情（按工具类型判别） ----
+
+/** edit 工具详情：统一 diff */
+export interface EditToolDetails {
+  type: 'edit'
+  diff: string
+  firstChangedLine?: number
+}
+
+/** 工具结构化详情联合类型 — 未来新增工具详情在此扩展 */
+export type ToolResultDetails = EditToolDetails
+
 /** 工具结果元数据 */
 export interface ToolResultMeta {
   toolCallId: string
   toolName: string
   isError?: boolean
+  details?: ToolResultDetails
 }
 
 /** 中间步骤文本元数据 */

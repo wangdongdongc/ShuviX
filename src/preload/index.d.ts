@@ -45,7 +45,8 @@ import type {
   TelegramBotUpdateParams,
   TelegramBotInfo,
   TelegramBindSessionParams,
-  TelegramUnbindSessionParams
+  TelegramUnbindSessionParams,
+  ToolResultDetails
 } from '../main/types'
 
 declare global {
@@ -109,6 +110,8 @@ declare global {
     result?: string
     isError?: boolean
     messageId?: string
+    /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
+    details?: ToolResultDetails
   }
   interface ChatApprovalRequestEvent extends ChatEventBase {
     type: 'tool_approval_request'

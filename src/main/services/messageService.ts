@@ -9,6 +9,7 @@ import type {
   AssistantTextMessage,
   ToolCallMessage,
   ToolResultMessage,
+  ToolResultDetails,
   StepTextMessage,
   StepThinkingMessage,
   DockerEventMessage,
@@ -189,6 +190,7 @@ export class MessageService {
     toolName: string
     content: string
     isError?: boolean
+    details?: ToolResultDetails
   }): ToolResultMessage {
     return this.add({
       sessionId: p.sessionId,
@@ -198,7 +200,8 @@ export class MessageService {
       metadata: {
         toolCallId: p.toolCallId,
         toolName: p.toolName,
-        isError: p.isError || false
+        isError: p.isError || false,
+        details: p.details
       }
     }) as unknown as ToolResultMessage
   }

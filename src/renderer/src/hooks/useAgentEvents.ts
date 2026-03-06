@@ -102,7 +102,8 @@ export function useAgentEvents(): void {
       case 'tool_end':
         store.updateToolExecution(sid, event.toolCallId, {
           status: event.isError ? 'error' : 'done',
-          result: event.result
+          result: event.result,
+          details: event.details
         })
         // 仅当前活跃会话时添加 tool_result 消息
         if (sid === store.activeSessionId && event.messageId) {
