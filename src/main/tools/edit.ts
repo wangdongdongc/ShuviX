@@ -20,13 +20,12 @@ import { createLogger } from '../logger'
 const log = createLogger('Tool:edit')
 import {
   detectLineEnding,
-  fuzzyFindText,
   generateDiffString,
-  normalizeForFuzzyMatch,
   normalizeToLF,
   restoreLineEndings,
   stripBom
 } from './utils/editDiff'
+import { replaceWithFallback } from './utils/replacers'
 
 const EditParamsSchema = Type.Object({
   path: Type.String({ description: 'The absolute path to the file to modify' }),
@@ -124,45 +123,27 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
           const normalizedOldText = normalizeToLF(params.oldText)
           const normalizedNewText = normalizeToLF(params.newText)
 
-          // 模糊匹配查找
-          const matchResult = fuzzyFindText(normalizedContent, normalizedOldText)
-
-          if (!matchResult.found) {
-            if (signal) signal.removeEventListener('abort', onAbort)
-            reject(
-              new Error(
-                `No match found in ${params.path}. The oldText must match exactly, including all whitespace and newlines.`
-              )
+          // 多级回退链匹配 + 替换
+          let replaceResult: { content: string; replacerName: string }
+          try {
+            replaceResult = replaceWithFallback(
+              normalizedContent,
+              normalizedOldText,
+              normalizedNewText
             )
-            return
-          }
-
-          // 检查唯一性
-          const fuzzyContent = normalizeForFuzzyMatch(normalizedContent)
-          const fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText)
-          const occurrences = fuzzyContent.split(fuzzyOldText).length - 1
-
-          if (occurrences > 1) {
+          } catch (err: unknown) {
             if (signal) signal.removeEventListener('abort', onAbort)
-            reject(
-              new Error(
-                `Found ${occurrences} matches in ${params.path}. The text must be unique; provide more context.`
-              )
-            )
+            const msg = err instanceof Error ? err.message : String(err)
+            reject(new Error(`${params.path}: ${msg}`))
             return
           }
 
           if (aborted) return
 
-          // 执行替换
-          const baseContent = matchResult.contentForReplacement
-          const newContent =
-            baseContent.substring(0, matchResult.index) +
-            normalizedNewText +
-            baseContent.substring(matchResult.index + matchResult.matchLength)
+          const newContent = replaceResult.content
 
           // 验证替换是否有效
-          if (baseContent === newContent) {
+          if (normalizedContent === newContent) {
             if (signal) signal.removeEventListener('abort', onAbort)
             reject(new Error(`No change produced: ${params.path}`))
             return
@@ -179,7 +160,7 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
 
           if (signal) signal.removeEventListener('abort', onAbort)
 
-          const diffResult = generateDiffString(baseContent, newContent)
+          const diffResult = generateDiffString(normalizedContent, newContent)
           resolve({
             content: [
               {
