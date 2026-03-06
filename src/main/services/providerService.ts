@@ -114,9 +114,9 @@ export class ProviderService {
     providerDao.deleteModel(id)
   }
 
-  /** 更新模型能力信息 */
-  updateModelCapabilities(id: string, capabilities: ModelCapabilities): void {
-    providerDao.updateModelCapabilities(id, JSON.stringify(capabilities))
+  /** 更新模型能力（patch 语义） */
+  patchCapabilities(id: string, patch: Partial<ModelCapabilities>): void {
+    providerDao.patchCapabilities(id, patch)
   }
 
   /**
@@ -134,7 +134,7 @@ export class ProviderService {
 
       const caps = litellmService.getModelCapabilities(m.modelId, slug, baseUrl)
       if (caps && Object.keys(caps).length > 0) {
-        providerDao.updateModelCapabilities(m.id, JSON.stringify(caps))
+        providerDao.patchCapabilities(m.id, caps)
       }
     }
   }
@@ -173,7 +173,7 @@ export class ProviderService {
         maxInputTokens: pm.contextWindow,
         maxOutputTokens: pm.maxTokens
       }
-      providerDao.updateModelCapabilities(row.id, JSON.stringify(caps))
+      providerDao.patchCapabilities(row.id, caps)
     }
 
     const added = modelIds.filter((id) => !existingIds.has(id)).length

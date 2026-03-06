@@ -1,8 +1,9 @@
 import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
+import { buildJsonPatch } from './utils'
 import { encrypt, decrypt } from '../utils/crypto'
 import type { Provider, ProviderModel } from './types'
-import type { AvailableModel } from '../types'
+import type { AvailableModel, ModelCapabilities } from '../types'
 
 function decryptProvider<T extends Provider | undefined>(p: T): T {
   if (!p) return p
@@ -206,11 +207,15 @@ export class ProviderDao extends BaseDao {
       .run(uuidv7(), providerId, modelId, (maxOrder?.maxOrder ?? -1) + 1)
   }
 
-  /** 更新模型能力信息 */
-  updateModelCapabilities(id: string, capabilities: string): void {
+  /** 更新模型能力（patch 语义：仅更新传入的字段，其余保留） */
+  patchCapabilities(id: string, patch: Partial<ModelCapabilities>): void {
+    const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
+    if (!setClauses) return
     this.db
-      .prepare('UPDATE provider_models SET capabilities = ? WHERE id = ?')
-      .run(capabilities, id)
+      .prepare(
+        `UPDATE provider_models SET capabilities = json_set(COALESCE(capabilities, '{}'), ${setClauses}) WHERE id = ?`
+      )
+      .run(...values, id)
   }
 
   /** 删除单个模型 */

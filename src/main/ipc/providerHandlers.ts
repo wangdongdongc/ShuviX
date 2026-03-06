@@ -114,7 +114,7 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     'provider:updateModelCapabilities',
     (_event, params: ProviderUpdateModelCapabilitiesParams) => {
-      providerService.updateModelCapabilities(params.id, params.capabilities)
+      providerService.patchCapabilities(params.id, params.capabilities)
       notifyProvidersChanged()
       return { success: true }
     }

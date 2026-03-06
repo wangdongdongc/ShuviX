@@ -1,4 +1,5 @@
 import { BaseDao } from './database'
+import { buildJsonPatch } from './utils'
 import type { Session, SessionModelMetadata, SessionSettings } from './types'
 
 /** DB 原始行类型（JSON 字段在 DB 中为字符串） */
@@ -23,29 +24,6 @@ function parseRow(row: SessionRow): Session {
     modelMetadata: safeParse<SessionModelMetadata>(row.modelMetadata),
     settings: safeParse<SessionSettings>(row.settings)
   }
-}
-
-/**
- * 构建 json_set patch SQL 片段和绑定值
- * 字符串/数值/布尔直接绑定；数组/对象用 json() 包裹
- */
-function buildJsonPatch(patch: Record<string, unknown>): {
-  setClauses: string
-  values: unknown[]
-} {
-  const entries = Object.entries(patch).filter(([, v]) => v !== undefined)
-  const setClauses = entries
-    .map(([key, v]) => {
-      const needsJson = typeof v === 'object' && v !== null
-      return needsJson ? `'$.${key}', json(?)` : `'$.${key}', ?`
-    })
-    .join(', ')
-  const values = entries.map(([, v]) => {
-    if (typeof v === 'object' && v !== null) return JSON.stringify(v)
-    if (typeof v === 'boolean') return v ? 1 : 0
-    return v
-  })
-  return { setClauses, values }
 }
 
 /**

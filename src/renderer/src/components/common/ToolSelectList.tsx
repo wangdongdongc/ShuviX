@@ -119,7 +119,7 @@ export function ToolSelectList({
   const ripgrepTools = tools.filter((t) => !t.group && RIPGREP_TOOLS.has(t.name))
   const subAgentTools = tools.filter((t) => t.group === SUBAGENTS_GROUP)
   const mcpTools = tools.filter(
-    (t) => t.group && t.group !== SKILLS_GROUP && t.group !== SUBAGENTS_GROUP
+    (t) => t.group && !t.group.startsWith('__')
   )
   const skillTools = tools.filter((t) => t.group === SKILLS_GROUP)
   const groups = [...new Set(mcpTools.map((t) => t.group!))]

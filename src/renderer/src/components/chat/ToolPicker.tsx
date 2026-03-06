@@ -57,7 +57,7 @@ export function ToolPicker(): React.JSX.Element | null {
     (t) => !t.group && activeEnabledTools.includes(t.name)
   )
   const enabledMcpTools = allTools.filter(
-    (t) => t.group && t.group !== '__skills__' && activeEnabledTools.includes(t.name)
+    (t) => t.group && !t.group.startsWith('__') && activeEnabledTools.includes(t.name)
   )
   const enabledSkillTools = allTools.filter(
     (t) => t.group === '__skills__' && activeEnabledTools.includes(t.name)

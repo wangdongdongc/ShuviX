@@ -69,7 +69,7 @@ export function ProjectCreateDialog({
   }, [])
 
   // MCP / Skills 工具
-  const mcpTools = allTools.filter((t) => t.group && t.group !== SKILLS_GROUP)
+  const mcpTools = allTools.filter((t) => t.group && !t.group.startsWith('__'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
   const hasMcpOrSkills = mcpTools.length > 0 || skillTools.length > 0
 

@@ -9,73 +9,12 @@ import {
   Trash2,
   Plus,
   X,
+  SlidersHorizontal,
   TriangleAlert
 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
-
-/** 能力标签 key 列表（desc 通过 i18n 查找） */
-const CAPABILITY_KEYS = [
-  { key: 'vision', label: 'Vision', descKey: 'settings.capVision' },
-  { key: 'imageOutput', label: 'Image Output', descKey: 'settings.capImageOutput' },
-  { key: 'functionCalling', label: 'Function Calling', descKey: 'settings.capFunctionCalling' },
-  { key: 'reasoning', label: 'Reasoning', descKey: 'settings.capReasoning' },
-  { key: 'audioInput', label: 'Audio Input', descKey: 'settings.capAudioInput' },
-  { key: 'audioOutput', label: 'Audio Output', descKey: 'settings.capAudioOutput' },
-  { key: 'pdfInput', label: 'PDF Input', descKey: 'settings.capPdfInput' }
-] as const
-
-/** 模型能力编辑器 */
-function ModelCapabilitiesEditor({
-  capabilities,
-  onUpdate
-}: {
-  capabilities: Record<string, unknown>
-  onUpdate: (caps: Record<string, unknown>) => Promise<void>
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const toggle = (key: string): void => {
-    const updated = { ...capabilities, [key]: !capabilities[key] }
-    onUpdate(updated)
-  }
-
-  return (
-    <div className="px-4 pb-2 pt-1">
-      <div className="flex flex-wrap gap-1.5">
-        {CAPABILITY_KEYS.map(({ key, label, descKey }) => (
-          <button
-            key={key}
-            onClick={() => toggle(key)}
-            className={`px-2 py-1 text-[10px] rounded-md border transition-colors ${
-              capabilities[key]
-                ? 'border-accent/50 bg-accent/10 text-accent'
-                : 'border-border-primary bg-bg-tertiary text-text-tertiary hover:text-text-secondary'
-            }`}
-            title={t(descKey)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {capabilities.maxInputTokens || capabilities.maxOutputTokens ? (
-        <div className="mt-1.5 text-[10px] text-text-tertiary">
-          {capabilities.maxInputTokens ? (
-            <span>
-              {t('settings.context')}: {(Number(capabilities.maxInputTokens) / 1000).toFixed(0)}K
-            </span>
-          ) : null}
-          {capabilities.maxInputTokens && capabilities.maxOutputTokens ? (
-            <span className="mx-1">·</span>
-          ) : null}
-          {capabilities.maxOutputTokens ? (
-            <span>
-              {t('settings.maxOutput')}: {(Number(capabilities.maxOutputTokens) / 1000).toFixed(0)}K
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
+import { AddProviderDialog } from './AddProviderDialog'
+import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
 
 /** 提供商设置 */
 export function ProviderSettings(): React.JSX.Element {
@@ -91,16 +30,14 @@ export function ProviderSettings(): React.JSX.Element {
   const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
   const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [newProvider, setNewProvider] = useState<{
-    name: string
-    baseUrl: string
-    apiKey: string
-    apiProtocol: ProviderInfo['apiProtocol']
-  }>({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
-  const [addingProvider, setAddingProvider] = useState(false)
+  const [showAddDialog, setShowAddDialog] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
-  const [expandedModelId, setExpandedModelId] = useState<string | null>(null)
+  const [editingModel, setEditingModel] = useState<{
+    id: string
+    providerId: string
+    modelId: string
+    caps: Record<string, unknown>
+  } | null>(null)
 
   /** 展开提供商时加载其模型列表 */
   const handleToggleExpand = async (providerId: string): Promise<void> => {
@@ -195,26 +132,18 @@ export function ProviderSettings(): React.JSX.Element {
     }, 2000)
   }
 
-  /** 添加自定义提供商 */
-  const handleAddProvider = async (): Promise<void> => {
-    if (!newProvider.name.trim() || !newProvider.baseUrl.trim()) return
-    setAddingProvider(true)
-    try {
-      await window.api.provider.add({
-        name: newProvider.name.trim(),
-        baseUrl: newProvider.baseUrl.trim(),
-        apiKey: newProvider.apiKey.trim(),
-        apiProtocol: newProvider.apiProtocol
-      })
-      const updated = await window.api.provider.listAll()
-      setProviders(updated)
-      const available = await window.api.provider.listAvailableModels()
-      setAvailableModels(available)
-      setNewProvider({ name: '', baseUrl: '', apiKey: '', apiProtocol: 'openai-completions' })
-      setShowAddForm(false)
-    } finally {
-      setAddingProvider(false)
-    }
+  /** 添加自定义提供商（由 AddProviderDialog 回调） */
+  const handleAddProvider = async (provider: {
+    name: string
+    baseUrl: string
+    apiKey: string
+    apiProtocol: ProviderInfo['apiProtocol']
+  }): Promise<void> => {
+    await window.api.provider.add(provider)
+    const updated = await window.api.provider.listAll()
+    setProviders(updated)
+    const available = await window.api.provider.listAvailableModels()
+    setAvailableModels(available)
   }
 
   /** 删除自定义提供商 */
@@ -288,84 +217,19 @@ export function ProviderSettings(): React.JSX.Element {
 
         {/* 添加自定义提供商按钮 */}
         <button
-          onClick={() => setShowAddForm(!showAddForm)}
+          onClick={() => setShowAddDialog(true)}
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-border-secondary text-xs text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
         >
           <Plus size={14} />
           {t('settings.addProvider')}
         </button>
 
-        {/* 添加表单 */}
-        {showAddForm && (
-          <div className="border border-accent/30 rounded-lg p-4 space-y-3 bg-accent/5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-primary">
-                {t('settings.newProvider')}
-              </span>
-              <button
-                onClick={() => setShowAddForm(false)}
-                className="text-text-tertiary hover:text-text-primary"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">
-                {t('settings.providerName')}
-              </label>
-              <input
-                value={newProvider.name}
-                onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value }))}
-                placeholder={t('settings.providerNamePlaceholder')}
-                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
-              <input
-                value={newProvider.baseUrl}
-                onChange={(e) => setNewProvider((p) => ({ ...p, baseUrl: e.target.value }))}
-                placeholder="https://api.example.com/v1"
-                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
-              <input
-                type="password"
-                value={newProvider.apiKey}
-                onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
-                placeholder="sk-..."
-                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-text-tertiary mb-1">
-                {t('settings.apiProtocol')}
-              </label>
-              <select
-                value={newProvider.apiProtocol}
-                onChange={(e) =>
-                  setNewProvider((p) => ({
-                    ...p,
-                    apiProtocol: e.target.value as ProviderInfo['apiProtocol']
-                  }))
-                }
-                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
-              >
-                <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
-                <option value="anthropic-messages">Anthropic Messages</option>
-                <option value="google-generative-ai">Google Generative AI</option>
-              </select>
-            </div>
-            <button
-              onClick={handleAddProvider}
-              disabled={addingProvider || !newProvider.name.trim() || !newProvider.baseUrl.trim()}
-              className="w-full px-3 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {addingProvider ? t('common.adding') : t('common.add')}
-            </button>
-          </div>
+        {/* 添加提供商弹窗 */}
+        {showAddDialog && (
+          <AddProviderDialog
+            onAdd={handleAddProvider}
+            onClose={() => setShowAddDialog(false)}
+          />
         )}
 
         {providers.map((p) => {
@@ -543,25 +407,12 @@ export function ProviderSettings(): React.JSX.Element {
                             return {}
                           }
                         })()
-                        const isModelExpanded = expandedModelId === m.id
                         return (
                           <div
                             key={m.id}
-                            className="rounded-md hover:bg-bg-hover transition-colors"
+                            className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors"
                           >
-                            <div className="flex items-center justify-between px-2 py-1.5">
                               <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                <button
-                                  onClick={() => setExpandedModelId(isModelExpanded ? null : m.id)}
-                                  className="text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
-                                  title={t('settings.editCapabilities')}
-                                >
-                                  {isModelExpanded ? (
-                                    <ChevronDown size={12} />
-                                  ) : (
-                                    <ChevronRight size={12} />
-                                  )}
-                                </button>
                                 <span className="text-xs text-text-primary font-mono truncate">
                                   {m.modelId}
                                 </span>
@@ -595,6 +446,21 @@ export function ProviderSettings(): React.JSX.Element {
                                 </div>
                               </div>
                               <div className="flex items-center gap-1.5">
+                                {/* 编辑能力 */}
+                                <button
+                                  onClick={() =>
+                                    setEditingModel({
+                                      id: m.id,
+                                      providerId: p.id,
+                                      modelId: m.modelId,
+                                      caps
+                                    })
+                                  }
+                                  className="text-text-tertiary hover:text-text-secondary transition-colors"
+                                  title={t('settings.editCapabilities')}
+                                >
+                                  <SlidersHorizontal size={12} />
+                                </button>
                                 {/* 自定义提供商的模型可删除 */}
                                 {!p.isBuiltin && (
                                   <button
@@ -618,21 +484,6 @@ export function ProviderSettings(): React.JSX.Element {
                                   />
                                 </button>
                               </div>
-                            </div>
-                            {/* 能力编辑展开面板 */}
-                            {isModelExpanded && (
-                              <ModelCapabilitiesEditor
-                                capabilities={caps}
-                                onUpdate={async (newCaps) => {
-                                  await window.api.provider.updateModelCapabilities({
-                                    id: m.id,
-                                    capabilities: newCaps
-                                  })
-                                  const models = await window.api.provider.listModels(p.id)
-                                  setProviderModels((prev) => ({ ...prev, [p.id]: models }))
-                                }}
-                              />
-                            )}
                           </div>
                         )
                       })}
@@ -649,6 +500,23 @@ export function ProviderSettings(): React.JSX.Element {
           )
         })}
       </div>
+
+      {/* 模型能力编辑弹窗 */}
+      {editingModel && (
+        <ModelCapabilitiesDialog
+          modelId={editingModel.modelId}
+          capabilities={editingModel.caps}
+          onSave={async (newCaps) => {
+            await window.api.provider.updateModelCapabilities({
+              id: editingModel.id,
+              capabilities: newCaps
+            })
+            const models = await window.api.provider.listModels(editingModel.providerId)
+            setProviderModels((prev) => ({ ...prev, [editingModel.providerId]: models }))
+          }}
+          onClose={() => setEditingModel(null)}
+        />
+      )}
     </div>
   )
 }

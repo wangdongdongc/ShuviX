@@ -469,7 +469,7 @@ function SessionConfigDialog({
 
   // LAN 分享状态（null = 未分享）
   const [lanShareMode, setLanShareMode] = useState<ShareMode | null>(null)
-  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [shareUrls, setShareUrls] = useState<string[]>([])
   const [copied, setCopied] = useState(false)
 
   // Telegram Bot 绑定
@@ -484,11 +484,11 @@ function SessionConfigDialog({
       if (mode) {
         window.api.webui.serverStatus().then((status) => {
           if (status.running && status.urls && status.urls.length > 0) {
-            setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
+            setShareUrls(status.urls.map((u) => `${u}/shuvix/sessions/${sessionId}`))
           }
         })
       } else {
-        setShareUrl(null)
+        setShareUrls([])
       }
     })
     // 加载 Telegram Bot 列表 + 当前绑定
@@ -545,10 +545,10 @@ function SessionConfigDialog({
     if (mode) {
       const status = await window.api.webui.serverStatus()
       if (status.running && status.urls && status.urls.length > 0) {
-        setShareUrl(`${status.urls[0]}/shuvix/sessions/${sessionId}`)
+        setShareUrls(status.urls.map((u) => `${u}/shuvix/sessions/${sessionId}`))
       }
     } else {
-      setShareUrl(null)
+      setShareUrls([])
     }
     // 更新 chatStore 中的分享列表
     const shared = await window.api.webui.listShared()
@@ -556,9 +556,8 @@ function SessionConfigDialog({
   }
 
   /** 复制分享链接 */
-  const handleCopyShareUrl = (): void => {
-    if (!shareUrl) return
-    copyToClipboard(shareUrl)
+  const handleCopyShareUrl = (url: string): void => {
+    copyToClipboard(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -718,17 +717,21 @@ function SessionConfigDialog({
               </div>
             )}
 
-            {lanShareMode && shareUrl && (
-              <div className="mt-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
-                <Globe size={11} className="text-accent shrink-0" />
-                <span className="text-[10px] text-text-secondary truncate flex-1">{shareUrl}</span>
-                <button
-                  onClick={handleCopyShareUrl}
-                  className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
-                  title={copied ? t('common.copied') : t('common.copy')}
-                >
-                  <Copy size={11} />
-                </button>
+            {lanShareMode && shareUrls.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1">
+                {shareUrls.map((url) => (
+                  <div key={url} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
+                    <Globe size={11} className="text-accent shrink-0" />
+                    <span className="text-[10px] text-text-secondary truncate flex-1">{url}</span>
+                    <button
+                      onClick={() => handleCopyShareUrl(url)}
+                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
+                      title={copied ? t('common.copied') : t('common.copy')}
+                    >
+                      <Copy size={11} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
