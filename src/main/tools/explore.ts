@@ -7,6 +7,7 @@
 
 import { Type } from '@sinclair/typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { ExploreToolDetails } from '../../shared/types/chatMessage'
 import type { Api, Model } from '@mariozechner/pi-ai'
 import type { StreamFn } from '@mariozechner/pi-agent-core'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
@@ -85,7 +86,7 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
       task_id?: string
     },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<unknown>> {
+  ): Promise<AgentToolResult<ExploreToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const { taskId, result } = await subAgentManager.runTask({
@@ -112,6 +113,7 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
     return {
       content: [{ type: 'text' as const, text: output }],
       details: {
+        type: 'explore',
         taskId,
         subAgentType: 'explore',
         description: params.description

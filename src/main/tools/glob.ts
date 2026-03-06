@@ -14,6 +14,8 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { GlobToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -75,10 +77,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     _toolCallId: string,
     params: { pattern: string; path?: string },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { count: number; truncated: boolean }
-  }> {
+  ): Promise<AgentToolResult<GlobToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx)
@@ -110,7 +109,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     if (files.length === 0) {
       return {
         content: [{ type: 'text' as const, text: 'No files found' }],
-        details: { count: 0, truncated: false }
+        details: { type: 'glob', count: 0, truncated: false }
       }
     }
 
@@ -143,6 +142,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     return {
       content: [{ type: 'text' as const, text: outputLines.join('\n') }],
       details: {
+        type: 'glob',
         count: files.length,
         truncated
       }

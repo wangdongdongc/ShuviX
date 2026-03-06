@@ -6,15 +6,9 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { Type, type TSchema } from '@sinclair/typebox'
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import { mcpDao } from '../dao/mcpDao'
-import type { McpServer, McpServerStatus, McpToolInfo } from '../types'
+import type { McpServer, McpServerStatus, McpToolInfo, McpToolDetails } from '../types'
 import { createLogger } from '../logger'
 const log = createLogger('MCP')
-
-interface McpToolDetails {
-  server: string
-  tool: string
-  isError?: boolean
-}
 
 /** MCP tools/list 返回的单个工具结构 */
 interface McpDiscoveredTool {
@@ -260,12 +254,12 @@ class McpService {
           if (result.isError) {
             return {
               content: [{ type: 'text', text: `[MCP Error] ${text}` }],
-              details: { server: serverName, tool: mcpTool.name, isError: true }
+              details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
             }
           }
           return {
             content: [{ type: 'text', text }],
-            details: { server: serverName, tool: mcpTool.name }
+            details: { type: 'mcp', server: serverName, tool: mcpTool.name }
           }
         } catch (err: unknown) {
           return {
@@ -275,7 +269,7 @@ class McpService {
                 text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
               }
             ],
-            details: { server: serverName, tool: mcpTool.name, isError: true }
+            details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
           }
         }
       }

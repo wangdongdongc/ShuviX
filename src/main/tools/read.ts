@@ -28,39 +28,14 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { ReadToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
 
-/** 目录读取的 details */
-interface DirectoryDetails {
-  totalEntries: number
-  truncated: boolean
-}
-
-/** 富文本 / 旧版 doc 转换后的 details */
-interface ConvertedDetails {
-  fileSize: number
-  format: string
-  converted: boolean
-  truncated: boolean
-}
-
-/** 纯文本文件读取的 details */
-interface TextFileDetails {
-  totalLines: number
-  fileSize: number
-  truncated: boolean
-}
-
-/** details 的所有可能类型 */
-type ReadDetails = DirectoryDetails | ConvertedDetails | TextFileDetails
-
-/** 工具返回结果（content 固定为文本数组，details 按场景特化） */
-interface ReadResult<D extends ReadDetails = ReadDetails> {
-  content: Array<{ type: 'text'; text: string }>
-  details: D
-}
+/** 工具返回结果类型别名 */
+type ReadResult = AgentToolResult<ReadToolDetails>
 
 /** markitdown-ts 支持转换的文件扩展名 */
 const RICH_FILE_EXTENSIONS = new Set([
@@ -293,7 +268,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
 async function readDirectory(
   absolutePath: string,
   params: { path: string; offset?: number; limit?: number }
-): Promise<ReadResult<DirectoryDetails>> {
+): Promise<ReadResult> {
   const dirents = await fsReaddir(absolutePath, { withFileTypes: true })
   const entries = dirents.map((d) => (d.isDirectory() ? d.name + '/' : d.name))
   entries.sort((a, b) => a.localeCompare(b))
@@ -321,6 +296,7 @@ async function readDirectory(
   return {
     content: [{ type: 'text' as const, text }],
     details: {
+      type: 'read',
       totalEntries: total,
       truncated
     }
@@ -335,7 +311,7 @@ async function readRichFile(
   displayPath: string,
   fileSize: number,
   signal?: AbortSignal
-): Promise<ReadResult<ConvertedDetails>> {
+): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const md = getMarkItDown()
@@ -361,6 +337,7 @@ async function readRichFile(
   return {
     content: [{ type: 'text' as const, text }],
     details: {
+      type: 'read',
       fileSize,
       format: ext,
       converted: true,
@@ -377,7 +354,7 @@ async function readLegacyDoc(
   displayPath: string,
   fileSize: number,
   signal?: AbortSignal
-): Promise<ReadResult<ConvertedDetails>> {
+): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const extractor = getWordExtractor()
@@ -401,6 +378,7 @@ async function readLegacyDoc(
   return {
     content: [{ type: 'text' as const, text }],
     details: {
+      type: 'read',
       fileSize,
       format: 'DOC',
       converted: true,
@@ -417,7 +395,7 @@ async function readTextFile(
   absolutePath: string,
   params: { path: string; offset?: number; limit?: number },
   fileStat: { size: number }
-): Promise<ReadResult<TextFileDetails>> {
+): Promise<ReadResult> {
   const stream = createReadStream(absolutePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream, crlfDelay: Infinity })
 
@@ -493,6 +471,7 @@ async function readTextFile(
   return {
     content: [{ type: 'text' as const, text }],
     details: {
+      type: 'read',
       totalLines,
       fileSize: fileStat.size,
       truncated

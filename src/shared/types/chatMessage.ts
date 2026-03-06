@@ -82,7 +82,7 @@ export interface ToolCallMeta {
   turnIndex?: number
 }
 
-// ---- 工具结构化详情（按工具类型判别） ----
+// ---- 工具结构化详情（按工具 type 判别） ----
 
 /** edit 工具详情：统一 diff */
 export interface EditToolDetails {
@@ -91,8 +91,121 @@ export interface EditToolDetails {
   firstChangedLine?: number
 }
 
-/** 工具结构化详情联合类型 — 未来新增工具详情在此扩展 */
-export type ToolResultDetails = EditToolDetails
+/** bash 工具详情 */
+export interface BashToolDetails {
+  type: 'bash'
+  exitCode: number
+  truncated: boolean
+}
+
+/** read 工具详情（目录 / 富文本转换 / 纯文本三种场景的扁平超集） */
+export interface ReadToolDetails {
+  type: 'read'
+  totalLines?: number
+  totalEntries?: number
+  fileSize?: number
+  format?: string
+  converted?: boolean
+  truncated: boolean
+}
+
+/** glob 工具详情 */
+export interface GlobToolDetails {
+  type: 'glob'
+  count: number
+  truncated: boolean
+}
+
+/** grep 工具详情 */
+export interface GrepToolDetails {
+  type: 'grep'
+  matches: number
+  truncated: boolean
+}
+
+/** ls 工具详情 */
+export interface LsToolDetails {
+  type: 'ls'
+  path: string
+  count: number
+  truncated: boolean
+}
+
+/** ask 工具详情 */
+export interface AskToolDetails {
+  type: 'ask'
+  question: string
+  selections: string[]
+}
+
+/** ssh 工具详情（connect / exec / disconnect 三种 action 的扁平超集） */
+export interface SshToolDetails {
+  type: 'ssh'
+  action: 'connect' | 'exec' | 'disconnect'
+  success?: boolean
+  exitCode?: number
+  truncated?: boolean
+  wasConnected?: boolean
+  credentialName?: string
+  error?: string
+  alreadyConnected?: boolean
+  cancelled?: boolean
+  credentialNotFound?: boolean
+  host?: string
+}
+
+/** skill 工具详情 */
+export interface SkillToolDetails {
+  type: 'skill'
+  skillName: string
+  file?: string
+  error?: boolean
+}
+
+/** explore 子智能体工具详情 */
+export interface ExploreToolDetails {
+  type: 'explore'
+  taskId: string
+  subAgentType: string
+  description: string
+}
+
+/** shuvix-setting 工具详情 */
+export interface ShuvixSettingToolDetails {
+  type: 'shuvix-setting'
+  key?: string
+  value?: string
+}
+
+/** shuvix-project 工具详情 */
+export interface ShuvixProjectToolDetails {
+  type: 'shuvix-project'
+  updatedFields?: string[]
+}
+
+/** MCP 工具详情 */
+export interface McpToolDetails {
+  type: 'mcp'
+  server: string
+  tool: string
+  isError?: boolean
+}
+
+/** 工具结构化详情联合类型 — 按 type 字段判别 */
+export type ToolResultDetails =
+  | EditToolDetails
+  | BashToolDetails
+  | ReadToolDetails
+  | GlobToolDetails
+  | GrepToolDetails
+  | LsToolDetails
+  | AskToolDetails
+  | SshToolDetails
+  | SkillToolDetails
+  | ExploreToolDetails
+  | ShuvixSettingToolDetails
+  | ShuvixProjectToolDetails
+  | McpToolDetails
 
 /** 工具结果元数据 */
 export interface ToolResultMeta {

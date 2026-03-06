@@ -8,6 +8,8 @@
 
 import { Type } from '@sinclair/typebox'
 import { BaseTool } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { SkillToolDetails } from '../../shared/types/chatMessage'
 import { skillService } from '../services/skillService'
 import { t } from '../i18n'
 
@@ -74,10 +76,7 @@ ${skillListXml}
   protected async executeInternal(
     _toolCallId: string,
     params: { command: string }
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { skillName: string; file?: string; error?: boolean }
-  }> {
+  ): Promise<AgentToolResult<SkillToolDetails>> {
     const cmd = params.command.trim()
     const slashIdx = cmd.indexOf('/')
 
@@ -95,12 +94,12 @@ ${skillListXml}
               text: `File "${filePath}" not found in skill "${skillName}".`
             }
           ],
-          details: { skillName, file: filePath, error: true }
+          details: { type: 'skill', skillName, file: filePath, error: true }
         }
       }
       return {
         content: [{ type: 'text' as const, text: content }],
-        details: { skillName, file: filePath }
+        details: { type: 'skill', skillName, file: filePath }
       }
     }
 
@@ -114,7 +113,7 @@ ${skillListXml}
             text: `Skill "${cmd}" not found. Available skills: ${this.skills.map((s) => s.name).join(', ')}`
           }
         ],
-        details: { skillName: cmd, error: true }
+        details: { type: 'skill', skillName: cmd, error: true }
       }
     }
 
@@ -122,7 +121,7 @@ ${skillListXml}
     const header = `[Skill: ${skill.name} | Directory: ${skill.basePath}]\n\n`
     return {
       content: [{ type: 'text' as const, text: `${header}${skill.content}` }],
-      details: { skillName: skill.name }
+      details: { type: 'skill', skillName: skill.name }
     }
   }
 }

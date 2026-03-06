@@ -10,6 +10,8 @@ import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { SshToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:ssh')
@@ -105,7 +107,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       timeout?: number
     },
     signal?: AbortSignal
-  ): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
+  ): Promise<AgentToolResult<SshToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     switch (params.action) {
@@ -127,7 +129,7 @@ async function handleConnect(
   toolCallId: string,
   credentialName?: string,
   signal?: AbortSignal
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
+): Promise<AgentToolResult<SshToolDetails>> {
   // 检查是否已有连接
   if (sshManager.isConnected(ctx.sessionId)) {
     const info = sshManager.getConnectionInfo(ctx.sessionId)
@@ -138,7 +140,7 @@ async function handleConnect(
           text: `Already connected to remote server. Use exec to run commands or disconnect first.`
         }
       ],
-      details: { action: 'connect', alreadyConnected: true, host: info?.host }
+      details: { type: 'ssh', action: 'connect', alreadyConnected: true, host: info?.host }
     }
   }
 
@@ -158,7 +160,7 @@ async function handleConnect(
             text: `No saved SSH credential found with name "${credentialName}".${hint} Use connect without credentialName to let the user enter credentials manually.`
           }
         ],
-        details: { action: 'connect', success: false, credentialNotFound: true }
+        details: { type: 'ssh', action: 'connect', success: false, credentialNotFound: true }
       }
     }
 
@@ -184,7 +186,7 @@ async function handleConnect(
             text: `Connected to remote server using saved credential "${credentialName}" successfully. You can now use exec to run commands.`
           }
         ],
-        details: { action: 'connect', success: true, credentialName }
+        details: { type: 'ssh', action: 'connect', success: true, credentialName }
       }
     } else {
       return {
@@ -194,7 +196,7 @@ async function handleConnect(
             text: `Connection failed using saved credential "${credentialName}": ${result.error}. This credential was configured by the user in Settings > Tools > SSH Credentials — please inform them to check their SSH credential configuration.`
           }
         ],
-        details: { action: 'connect', success: false, credentialName, error: result.error }
+        details: { type: 'ssh', action: 'connect', success: false, credentialName, error: result.error }
       }
     }
   }
@@ -213,7 +215,7 @@ async function handleConnect(
   if (!credentials) {
     return {
       content: [{ type: 'text', text: 'User cancelled SSH connection.' }],
-      details: { action: 'connect', cancelled: true }
+      details: { type: 'ssh', action: 'connect', cancelled: true }
     }
   }
 
@@ -230,12 +232,12 @@ async function handleConnect(
           text: 'Connected to remote server successfully. You can now use exec to run commands.'
         }
       ],
-      details: { action: 'connect', success: true }
+      details: { type: 'ssh', action: 'connect', success: true }
     }
   } else {
     return {
       content: [{ type: 'text', text: `SSH connection failed: ${result.error}` }],
-      details: { action: 'connect', success: false, error: result.error }
+      details: { type: 'ssh', action: 'connect', success: false, error: result.error }
     }
   }
 }
@@ -247,7 +249,7 @@ async function handleExec(
   command: string | undefined,
   timeout: number | undefined,
   signal?: AbortSignal
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
+): Promise<AgentToolResult<SshToolDetails>> {
   if (!command) {
     throw new Error('command is required for exec action')
   }
@@ -292,6 +294,7 @@ async function handleExec(
     return {
       content: [{ type: 'text' as const, text }],
       details: {
+        type: 'ssh',
         action: 'exec',
         exitCode: result.exitCode,
         truncated: truncated.truncated
@@ -315,11 +318,11 @@ async function handleExec(
 /** 处理 disconnect 动作 */
 async function handleDisconnect(
   ctx: ToolContext
-): Promise<{ content: Array<{ type: 'text'; text: string }>; details: Record<string, unknown> }> {
+): Promise<AgentToolResult<SshToolDetails>> {
   if (!sshManager.isConnected(ctx.sessionId)) {
     return {
       content: [{ type: 'text', text: 'No active SSH connection to disconnect.' }],
-      details: { action: 'disconnect', wasConnected: false }
+      details: { type: 'ssh', action: 'disconnect', wasConnected: false }
     }
   }
 
@@ -330,6 +333,6 @@ async function handleDisconnect(
   if (connInfo) ctx.onSshDisconnected?.(connInfo.host, connInfo.port, connInfo.username)
   return {
     content: [{ type: 'text', text: 'SSH connection closed.' }],
-    details: { action: 'disconnect', wasConnected: true }
+    details: { type: 'ssh', action: 'disconnect', wasConnected: true }
   }
 }

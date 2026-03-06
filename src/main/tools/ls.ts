@@ -13,6 +13,8 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { LsToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -128,10 +130,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
     _toolCallId: string,
     params: { path?: string; ignore?: string[] },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { path: string; count: number; truncated: boolean }
-  }> {
+  ): Promise<AgentToolResult<LsToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx)
@@ -182,6 +181,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
     return {
       content: [{ type: 'text' as const, text: output }],
       details: {
+        type: 'ls',
         path: searchPath,
         count: files.length,
         truncated

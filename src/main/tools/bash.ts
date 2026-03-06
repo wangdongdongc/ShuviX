@@ -10,6 +10,8 @@ import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/s
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { BashToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:bash')
@@ -163,10 +165,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     toolCallId: string,
     params: { command: string; timeout?: number },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { exitCode: number; truncated: boolean }
-  }> {
+  ): Promise<AgentToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx)
     const docker = getDockerConfig()
@@ -219,6 +218,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       return {
         content: [{ type: 'text' as const, text }],
         details: {
+          type: 'bash',
           exitCode: result.exitCode,
           truncated: truncated.truncated
         }

@@ -5,6 +5,8 @@
 
 import { Type } from '@sinclair/typebox'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AskToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 
 const AskParamsSchema = Type.Object({
@@ -50,10 +52,7 @@ export class AskTool extends BaseTool<typeof AskParamsSchema> {
       allowMultiple?: boolean
     },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { question: string; selections: string[] }
-  }> {
+  ): Promise<AgentToolResult<AskToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     if (!this.ctx.requestUserInput) {
@@ -80,6 +79,7 @@ export class AskTool extends BaseTool<typeof AskParamsSchema> {
     return {
       content: [{ type: 'text' as const, text }],
       details: {
+        type: 'ask',
         question: params.question,
         selections
       }

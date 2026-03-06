@@ -15,6 +15,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:write')
@@ -55,17 +56,14 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
     _toolCallId: string,
     params: { path: string; content: string },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: undefined
-  }> {
+  ): Promise<AgentToolResult<undefined>> {
     const config = resolveProjectConfig(this.ctx)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
     const dir = dirname(absolutePath)
 
     log.info(absolutePath)
 
-    return new Promise<{ content: Array<{ type: 'text'; text: string }>; details: undefined }>(
+    return new Promise<AgentToolResult<undefined>>(
       (resolve, reject) => {
         if (signal?.aborted) {
           reject(new Error(TOOL_ABORTED))

@@ -13,6 +13,8 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { GrepToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgSearch } from './utils/ripgrep'
 import { t } from '../i18n'
@@ -80,10 +82,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     _toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
     signal?: AbortSignal
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: { matches: number; truncated: boolean }
-  }> {
+  ): Promise<AgentToolResult<GrepToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx)
@@ -116,7 +115,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     if (matches.length === 0) {
       return {
         content: [{ type: 'text' as const, text: 'No matches found' }],
-        details: { matches: 0, truncated: false }
+        details: { type: 'grep', matches: 0, truncated: false }
       }
     }
 
@@ -154,6 +153,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     return {
       content: [{ type: 'text' as const, text: outputLines.join('\n') }],
       details: {
+        type: 'grep',
         matches: matches.length,
         truncated
       }

@@ -6,6 +6,8 @@
 import { Type } from '@sinclair/typebox'
 import { BrowserWindow } from 'electron'
 import { BaseTool, type ToolContext } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { ShuvixSettingToolDetails } from '../../shared/types/chatMessage'
 import { settingsService, getSettingKeyDescriptions } from '../services/settingsService'
 import { changeLanguage, t } from '../i18n'
 
@@ -53,16 +55,13 @@ export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema
       key?: string
       value?: string
     }
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: Record<string, unknown> | undefined
-  }> {
+  ): Promise<AgentToolResult<ShuvixSettingToolDetails | undefined>> {
     if (params.action === 'get') {
       // 读取全部设置（无需审批）
       const all = settingsService.getAll()
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(all, null, 2) }],
-        details: all
+        details: undefined
       }
     }
 
@@ -106,7 +105,7 @@ export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema
       content: [
         { type: 'text' as const, text: `Setting updated: ${params.key} = ${params.value}` }
       ],
-      details: { key: params.key, value: params.value }
+      details: { type: 'shuvix-setting', key: params.key, value: params.value }
     }
   }
 }

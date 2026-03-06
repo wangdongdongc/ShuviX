@@ -5,6 +5,8 @@
 
 import { Type } from '@sinclair/typebox'
 import { BaseTool, type ToolContext } from './types'
+import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { ShuvixProjectToolDetails } from '../../shared/types/chatMessage'
 import { sessionService } from '../services/sessionService'
 import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
 import { t } from '../i18n'
@@ -79,10 +81,7 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
       enabledTools?: string[]
       referenceDirs?: Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
     }
-  ): Promise<{
-    content: Array<{ type: 'text'; text: string }>
-    details: Record<string, unknown> | undefined
-  }> {
+  ): Promise<AgentToolResult<ShuvixProjectToolDetails | undefined>> {
     // 查找当前会话所属项目
     const session = sessionService.getById(this.ctx.sessionId)
     if (!session?.projectId) {
@@ -125,7 +124,7 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
       }
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(info, null, 2) }],
-        details: info
+        details: undefined
       }
     }
 
@@ -174,7 +173,7 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
           text: `Project config updated: ${Object.keys(updates).join(', ')}`
         }
       ],
-      details: { updatedFields: Object.keys(updates) }
+      details: { type: 'shuvix-project', updatedFields: Object.keys(updates) }
     }
   }
 }
