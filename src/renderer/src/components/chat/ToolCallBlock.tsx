@@ -62,6 +62,20 @@ export function ToolCallBlock({
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
 
+  // 编辑成功且有 diff
+  const hasEditDiff = details?.type === 'edit' && !!details.diff && status === 'done'
+
+  // 截断文件路径，优先展示末尾文件名
+  const truncatePath = (p: string, max = 60): string => {
+    if (p.length <= max) return p
+    const sep = p.lastIndexOf('/')
+    if (sep === -1) return p.slice(-max)
+    const name = p.slice(sep) // /filename.ts
+    if (name.length >= max) return '...' + name.slice(-(max - 3))
+    const remaining = max - name.length - 3 // 3 for "..."
+    return remaining > 0 ? '...' + p.slice(sep - remaining, sep) + name : '...' + name
+  }
+
   // 根据工具类型生成摘要
   const { icon, detail } = (() => {
     const ic = 'text-text-tertiary flex-shrink-0'
@@ -75,11 +89,11 @@ export function ToolCallBlock({
         }
       }
       case 'read':
-        return { icon: <FileText size={12} className={ic} />, detail: str(args?.path) }
+        return { icon: <FileText size={12} className={ic} />, detail: truncatePath(str(args?.path)) }
       case 'write':
-        return { icon: <FileOutput size={12} className={ic} />, detail: str(args?.path) }
+        return { icon: <FileOutput size={12} className={ic} />, detail: truncatePath(str(args?.path)) }
       case 'edit':
-        return { icon: <FilePen size={12} className={ic} />, detail: str(args?.path) }
+        return { icon: <FilePen size={12} className={ic} />, detail: truncatePath(str(args?.path)) }
       case 'ask': {
         const q = str(args?.question).slice(0, 60)
         return {
@@ -164,7 +178,7 @@ export function ToolCallBlock({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
       >
-        {(args || result) &&
+        {(args || result || hasEditDiff) &&
           (expanded ? (
             <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
           ) : (
@@ -180,8 +194,15 @@ export function ToolCallBlock({
         </span>
       </button>
 
+      {/* 编辑成功时展示 DiffViewer */}
+      {expanded && hasEditDiff && details?.type === 'edit' && (
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
+          <DiffViewer diff={details.diff!} />
+        </div>
+      )}
+
       {/* 展开详情 */}
-      {expanded && status !== 'pending_approval' && status !== 'pending_user_input' && (
+      {expanded && !hasEditDiff && status !== 'pending_approval' && status !== 'pending_user_input' && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {args && Object.keys(args).length > 0 && (
             <div>
@@ -191,10 +212,7 @@ export function ToolCallBlock({
               </pre>
             </div>
           )}
-          {details?.type === 'edit' && details.diff && (
-            <DiffViewer diff={details.diff} />
-          )}
-          {result && !(details?.type === 'edit' && details.diff) && (
+          {result && (
             <div>
               <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
               <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">

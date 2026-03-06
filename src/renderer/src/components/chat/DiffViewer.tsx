@@ -1,5 +1,4 @@
-import { useRef, useState, useEffect, useMemo } from 'react'
-import { Columns2, Rows3 } from 'lucide-react'
+import { useRef, useEffect, useMemo, useState } from 'react'
 
 interface DiffLine {
   type: 'add' | 'remove' | 'context' | 'separator'
@@ -155,7 +154,6 @@ interface DiffViewerProps {
 export function DiffViewer({ diff }: DiffViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
-  const [forceMode, setForceMode] = useState<'split' | 'unified' | null>(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -171,22 +169,10 @@ export function DiffViewer({ diff }: DiffViewerProps): React.JSX.Element {
   const parsed = useMemo(() => parseDiffString(diff), [diff])
   const sideBySide = useMemo(() => buildSideBySide(parsed), [parsed])
 
-  const isSplit = forceMode ? forceMode === 'split' : width > 500
+  const isSplit = width > 500
 
   return (
     <div ref={containerRef}>
-      <div className="flex items-center justify-between mb-0.5">
-        <div className="text-[10px] text-text-tertiary">Diff</div>
-        <button
-          onClick={() => setForceMode(isSplit ? 'unified' : 'split')}
-          className="flex items-center gap-0.5 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
-          title={isSplit ? 'Unified view' : 'Split view'}
-        >
-          {isSplit ? <Rows3 size={10} /> : <Columns2 size={10} />}
-          <span>{isSplit ? 'Unified' : 'Split'}</span>
-        </button>
-      </div>
-
       <div className="rounded border border-border-secondary/50 overflow-hidden text-[11px] font-mono leading-[18px]">
         <div className="overflow-auto max-h-[400px]">
           {isSplit ? (
@@ -225,10 +211,14 @@ function UnifiedView({ lines }: { lines: DiffLine[] }): React.JSX.Element {
 
           return (
             <tr key={i} className={bgColors[line.type]}>
-              <td className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[line.type]}`}>
+              <td
+                className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[line.type]}`}
+              >
                 {line.oldLineNum ?? ''}
               </td>
-              <td className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[line.type]}`}>
+              <td
+                className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[line.type]}`}
+              >
                 {line.newLineNum ?? ''}
               </td>
               <td className={`px-2 whitespace-pre ${textColors[line.type]}`}>
@@ -245,12 +235,14 @@ function UnifiedView({ lines }: { lines: DiffLine[] }): React.JSX.Element {
 
 function SplitView({ rows }: { rows: SideBySideLine[] }): React.JSX.Element {
   return (
-    <table className="w-full border-collapse table-fixed">
+    <table className="w-full border-collapse">
       <tbody>
         {rows.map((row, i) => (
           <tr key={i}>
             {/* Left side (old) */}
-            <td className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[row.left.type]}`}>
+            <td
+              className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[row.left.type]}`}
+            >
               {row.left.lineNum ?? ''}
             </td>
             <td className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.left.type]} ${textColors[row.left.type]} border-r border-border-secondary/30`}>
@@ -270,7 +262,9 @@ function SplitView({ rows }: { rows: SideBySideLine[] }): React.JSX.Element {
             </td>
 
             {/* Right side (new) */}
-            <td className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[row.right.type]}`}>
+            <td
+              className={`w-[1px] whitespace-nowrap px-1 text-right select-none border-r border-border-secondary/30 ${gutterColors[row.right.type]}`}
+            >
               {row.right.lineNum ?? ''}
             </td>
             <td className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.right.type]} ${textColors[row.right.type]}`}>
