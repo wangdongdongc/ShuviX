@@ -5,6 +5,7 @@
 
 import { Worker } from 'worker_threads'
 import { resolve, join } from 'path'
+import { existsSync } from 'fs'
 import { app } from 'electron'
 import type { MountConfig, WorkerResponse } from '../tools/utils/pythonWorker'
 import type { ProjectConfig } from '../tools/types'
@@ -34,6 +35,17 @@ class PythonWorkerManager {
       return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'pythonWorker.js')
     }
     return resolve(__dirname, 'pythonWorker.js')
+  }
+
+  /** 获取预装 wheel 文件目录路径 */
+  private getWheelsDir(): string | undefined {
+    const candidates = app.isPackaged
+      ? [join(process.resourcesPath, 'pyodide-wheels')]
+      : [resolve(__dirname, '../../resources/pyodide-wheels')]
+    for (const dir of candidates) {
+      if (existsSync(dir)) return dir
+    }
+    return undefined
   }
 
   /** 从 ProjectConfig 构建挂载配置 */
@@ -142,7 +154,8 @@ class PythonWorkerManager {
 
       // 发送初始化消息
       const mounts = this.buildMounts(config)
-      worker.postMessage({ type: 'init', mounts })
+      const wheelsDir = this.getWheelsDir()
+      worker.postMessage({ type: 'init', mounts, wheelsDir })
     })
   }
 

@@ -110,7 +110,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
       {python && (
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-yellow-500/10 text-yellow-500">
           <Code size={12} />
-          <span>Python (Pyodide)</span>
+          <span>{t('chat.pythonWasmRuntime')}</span>
           <button
             onClick={handleDestroyPython}
             className="ml-0.5 rounded hover:bg-yellow-500/20 transition-colors p-0.5"

@@ -65,6 +65,7 @@
     "destroyContainer": "Destroy container",
     "disconnectSsh": "Disconnect SSH",
     "destroyPython": "Terminate Python runtime",
+    "pythonWasmRuntime": "Python WASM Runtime",
     "destroyReason_manual": "manually destroyed",
     "bashAutoApproveLabel": "Bash Auto-Approve",
     "bashAutoApproveWarning": "All bash commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",

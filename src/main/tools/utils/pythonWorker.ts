@@ -10,6 +10,8 @@ import { parentPort } from 'worker_threads'
 interface InitMessage {
   type: 'init'
   mounts: MountConfig[]
+  /** 预装 wheel 文件的目录路径 */
+  wheelsDir?: string
 }
 
 interface ExecuteMessage {
@@ -59,7 +61,7 @@ function mkdirRecursive(fs: any, path: string): void {
   }
 }
 
-async function init(mounts: MountConfig[]): Promise<void> {
+async function init(mounts: MountConfig[], wheelsDir?: string): Promise<void> {
   const { loadPyodide } = await import('pyodide')
   pyodide = await loadPyodide({})
 
@@ -107,6 +109,24 @@ _builtins.open = _guarded_open
 `,
       { globals: persistentGlobals as any }
     )
+  }
+
+  // 预装本地 wheel 包（离线加载，无需联网）
+  if (wheelsDir) {
+    const fs = await import('fs')
+    try {
+      const files = fs.readdirSync(wheelsDir).filter((f: string) => f.endsWith('.whl'))
+      if (files.length > 0) {
+        const wheelPaths = files.map((f: string) => `${wheelsDir}/${f}`)
+        await pyodide.loadPackage(wheelPaths)
+      }
+    } catch (err) {
+      // 预装失败不阻塞初始化，仅记录
+      parentPort!.postMessage({
+        type: 'error',
+        error: `Warning: failed to load pre-bundled packages: ${err instanceof Error ? err.message : String(err)}`
+      } satisfies WorkerResponse)
+    }
   }
 
   parentPort!.postMessage({ type: 'ready' } satisfies WorkerResponse)
@@ -213,7 +233,7 @@ else:
 parentPort!.on('message', async (msg: InitMessage | ExecuteMessage) => {
   if (msg.type === 'init') {
     try {
-      await init(msg.mounts)
+      await init(msg.mounts, msg.wheelsDir)
     } catch (err: unknown) {
       parentPort!.postMessage({
         type: 'error',

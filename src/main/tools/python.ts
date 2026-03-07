@@ -41,7 +41,8 @@ export class PythonTool extends BaseTool<typeof PythonParamsSchema> {
 - The last expression value is automatically displayed (no need for print())
 - Variables and imports persist across multiple calls within the same session (use \`_\` to reference the last result)
 - The Python environment is Pyodide (WASM), not native Python. Standard library is available, but some C-extension modules (multiprocessing, ctypes, etc.) are not
-- Install pure-Python packages from PyPI via the \`packages\` parameter (uses micropip)
+- Pre-installed packages: pyyaml, beautifulsoup4, regex, python-dateutil, pytz — use them directly without installation
+- Install additional pure-Python packages from PyPI via the \`packages\` parameter (uses micropip)
 - Project files are accessible at their original host paths (e.g. open('/Users/xxx/project/file.txt'))
 - Use this tool for data processing, calculations, scripting, and any task that benefits from Python`
   readonly parameters = PythonParamsSchema
