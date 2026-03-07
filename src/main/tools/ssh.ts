@@ -260,8 +260,8 @@ async function handleExec(
   }
 
   // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
-  const sess = sessionDao.findById(ctx.sessionId)
-  if (ctx.requestApproval && !sess?.settings.sshAutoApprove && !isCommandAllowed(sess?.settings.sshAllowList, command)) {
+  const sess = sessionDao.pickSettings(ctx.sessionId, ['sshAutoApprove', 'sshAllowList'])
+  if (ctx.requestApproval && !sess?.sshAutoApprove && !isCommandAllowed(sess?.sshAllowList, command)) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')

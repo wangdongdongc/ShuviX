@@ -23,20 +23,20 @@ function checkToolApproval(
 ): { approvalRequired: boolean; userInputRequired: boolean; sshCredentialRequired: boolean } {
   let approvalRequired = false
   if (toolName === 'bash') {
-    const sess = sessionDao.findById(sessionId)
-    if (!sess?.settings.bashAutoApprove) {
+    const sess = sessionDao.pickSettings(sessionId, ['bashAutoApprove', 'bashAllowList'])
+    if (!sess?.bashAutoApprove) {
       const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowed(sess?.settings.bashAllowList, command)
+      approvalRequired = !isCommandAllowed(sess?.bashAllowList, command)
     }
   } else if (toolName === 'shuvix-project' && args?.action === 'update') {
     approvalRequired = true
   } else if (toolName === 'shuvix-setting' && args?.action === 'set') {
     approvalRequired = true
   } else if (toolName === 'ssh' && args?.action === 'exec') {
-    const sess = sessionDao.findById(sessionId)
-    if (!sess?.settings.sshAutoApprove) {
+    const sess = sessionDao.pickSettings(sessionId, ['sshAutoApprove', 'sshAllowList'])
+    if (!sess?.sshAutoApprove) {
       const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowed(sess?.settings.sshAllowList, command)
+      approvalRequired = !isCommandAllowed(sess?.sshAllowList, command)
     }
   }
   const userInputRequired = toolName === 'ask'
@@ -179,7 +179,7 @@ function handleAgentEnd(
   // 最后一轮 thinking 也独立落库为 step_thinking（与中间轮次一致）
   const buf = ctx.state.streamBuffer
   if (buf.thinking) {
-    const session = sessionDao.findById(ctx.sessionId)
+    const session = sessionDao.pick(ctx.sessionId, ['model'])
     const thinkingMsg = messageService.addStepThinking({
       sessionId: ctx.sessionId,
       content: buf.thinking,
@@ -298,7 +298,7 @@ function handleMessageEnd(
   // 中间轮次 step 持久化：有工具调用 → 将 buffer 拆分为 step_thinking + step_text 落库
   if (rawToolCalls.length > 0) {
     const buf = ctx.state.streamBuffer
-    const session = sessionDao.findById(ctx.sessionId)
+    const session = sessionDao.pick(ctx.sessionId, ['model'])
     const turnIndex = ctx.state.turnCounter
     const model = session?.model || ''
 
@@ -357,7 +357,7 @@ function handleMessageEnd(
 
   // 并行 batch 预展示
   if (batchToolCalls) {
-    const sessionForTool = sessionDao.findById(ctx.sessionId)
+    const sessionForTool = sessionDao.pick(ctx.sessionId, ['model'])
     const turnIndex = ctx.state.turnCounter
     for (const tc of batchToolCalls) {
       const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
@@ -403,7 +403,7 @@ function handleToolExecutionStart(
     return
   }
   const args = event.args as Record<string, unknown> | undefined
-  const sessionForTool = sessionDao.findById(ctx.sessionId)
+  const sessionForTool = sessionDao.pick(ctx.sessionId, ['model'])
   const toolUseMsg = messageService.addToolUse({
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,

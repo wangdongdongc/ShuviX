@@ -79,10 +79,10 @@ function requiresSerial(
 
   // bash：始终需要审批（免审批或允许列表匹配时跳过）
   if (toolName === 'bash') {
-    const sess = sessionDao.findById(sessionId)
-    if (sess?.settings.bashAutoApprove) return false
+    const sess = sessionDao.pickSettings(sessionId, ['bashAutoApprove', 'bashAllowList'])
+    if (sess?.bashAutoApprove) return false
     const command = (rawArgs.command as string) || ''
-    return !isCommandAllowed(sess?.settings.bashAllowList, command)
+    return !isCommandAllowed(sess?.bashAllowList, command)
   }
 
   // ssh connect（无 credentialName）需要凭据输入
@@ -92,10 +92,10 @@ function requiresSerial(
 
   // ssh exec：检查是否自动审批或允许列表匹配
   if (toolName === 'ssh' && rawArgs.action === 'exec') {
-    const sess = sessionDao.findById(sessionId)
-    if (sess?.settings.sshAutoApprove) return false
+    const sess = sessionDao.pickSettings(sessionId, ['sshAutoApprove', 'sshAllowList'])
+    if (sess?.sshAutoApprove) return false
     const command = (rawArgs.command as string) || ''
-    return !isCommandAllowed(sess?.settings.sshAllowList, command)
+    return !isCommandAllowed(sess?.sshAllowList, command)
   }
 
   // shuvix-project update / shuvix-setting set

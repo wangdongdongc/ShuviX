@@ -46,6 +46,45 @@ export class SessionDao extends BaseDao {
     return row ? parseRow(row) : undefined
   }
 
+  /** 按需查询：只 SELECT 指定字段，JSON 字段仅在需要时解析 */
+  pick<K extends keyof Session>(id: string, fields: K[]): Pick<Session, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row = this.db.prepare(`SELECT ${columns} FROM sessions WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    const result = { ...row } as Record<string, unknown>
+    if ('modelMetadata' in row) {
+      result.modelMetadata = safeParse<SessionModelMetadata>(row.modelMetadata as string)
+    }
+    if ('settings' in row) {
+      result.settings = safeParse<SessionSettings>(row.settings as string)
+    }
+    return result as Pick<Session, K>
+  }
+
+  /** 从 settings JSON 中按需提取指定字段（使用 json_extract，无需解析整个 JSON） */
+  pickSettings<K extends keyof SessionSettings>(
+    id: string,
+    keys: K[]
+  ): Pick<SessionSettings, K> | undefined {
+    const selects = keys
+      .map((k) => `json_extract(settings, '$.${String(k)}') as ${String(k)}`)
+      .join(', ')
+    const row = this.db.prepare(`SELECT ${selects} FROM sessions WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    // json_extract 对数组/对象返回 JSON 字符串，需二次解析
+    for (const k of keys) {
+      const v = row[String(k)]
+      if (typeof v === 'string' && v.startsWith('[')) {
+        row[String(k)] = JSON.parse(v)
+      }
+    }
+    return row as Pick<SessionSettings, K>
+  }
+
   /** 插入会话 */
   insert(session: Session): void {
     this.db

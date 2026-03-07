@@ -321,7 +321,7 @@ export class AgentSession {
     // 中止时将 thinking 独立落库为 step_thinking
     const buf = this.eventState.streamBuffer
     if (buf.thinking) {
-      const session = sessionDao.findById(this.sessionId)
+      const session = sessionDao.pick(this.sessionId, ['model'])
       messageService.addStepThinking({
         sessionId: this.sessionId,
         content: buf.thinking,
@@ -626,7 +626,7 @@ export class AgentSession {
         ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
       }))
     }
-    const session = sessionDao.findById(this.sessionId)
+    const session = sessionDao.pick(this.sessionId, ['model'])
 
     const msg = messageService.addAssistantText({
       sessionId: this.sessionId,

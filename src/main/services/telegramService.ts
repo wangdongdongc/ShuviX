@@ -143,8 +143,8 @@ class TelegramService {
   /** 绑定 session 到 bot（1:1，先解除已有绑定） */
   async bindSession(botId: string, sessionId: string): Promise<void> {
     // 解除 session 的旧绑定
-    const session = sessionDao.findById(sessionId)
-    if (session?.settings?.telegramBotId) {
+    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
+    if (session?.telegramBotId) {
       await this.unbindSession(sessionId)
     }
 
@@ -168,8 +168,8 @@ class TelegramService {
 
   /** 解绑 session */
   async unbindSession(sessionId: string): Promise<void> {
-    const session = sessionDao.findById(sessionId)
-    const botId = session?.settings?.telegramBotId
+    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
+    const botId = session?.telegramBotId
     if (!botId) return
 
     sessionDao.clearTelegramBotId(sessionId)
@@ -187,8 +187,8 @@ class TelegramService {
 
   /** 获取 session 绑定的 bot ID */
   getSessionBotId(sessionId: string): string | null {
-    const session = sessionDao.findById(sessionId)
-    return session?.settings?.telegramBotId ?? null
+    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
+    return session?.telegramBotId ?? null
   }
 
   /** 获取 bot 绑定的 session ID（1:1） */

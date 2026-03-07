@@ -106,8 +106,8 @@ export class SessionService {
 
   /** 批量添加通配符模式到 Bash 允许列表 */
   addBashAllowListPatterns(id: string, patterns: string[]): void {
-    const sess = sessionDao.findById(id)
-    const list = sess?.settings.bashAllowList || []
+    const sess = sessionDao.pickSettings(id, ['bashAllowList'])
+    const list = sess?.bashAllowList || []
     const newEntries = patterns.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { bashAllowList: [...list, ...newEntries] })
@@ -116,15 +116,15 @@ export class SessionService {
 
   /** 从 Bash 允许列表移除命令 */
   removeBashAllowListEntry(id: string, command: string): void {
-    const sess = sessionDao.findById(id)
-    const list = (sess?.settings.bashAllowList || []).filter((c) => c !== command)
+    const sess = sessionDao.pickSettings(id, ['bashAllowList'])
+    const list = (sess?.bashAllowList || []).filter((c) => c !== command)
     sessionDao.updateSettings(id, { bashAllowList: list })
   }
 
   /** 批量添加通配符模式到 SSH 允许列表 */
   addSshAllowListPatterns(id: string, patterns: string[]): void {
-    const sess = sessionDao.findById(id)
-    const list = sess?.settings.sshAllowList || []
+    const sess = sessionDao.pickSettings(id, ['sshAllowList'])
+    const list = sess?.sshAllowList || []
     const newEntries = patterns.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { sshAllowList: [...list, ...newEntries] })
@@ -133,8 +133,8 @@ export class SessionService {
 
   /** 从 SSH 允许列表移除命令 */
   removeSshAllowListEntry(id: string, command: string): void {
-    const sess = sessionDao.findById(id)
-    const list = (sess?.settings.sshAllowList || []).filter((c) => c !== command)
+    const sess = sessionDao.pickSettings(id, ['sshAllowList'])
+    const list = (sess?.sshAllowList || []).filter((c) => c !== command)
     sessionDao.updateSettings(id, { sshAllowList: list })
   }
 
@@ -175,7 +175,7 @@ export class SessionService {
 
   /** 初始化 Agent（已存在则跳过）；返回会话元信息供前端同步 */
   initAgent(sessionId: string): AgentInitResult {
-    const session = sessionDao.findById(sessionId)
+    const session = sessionDao.pick(sessionId, ['provider', 'model', 'projectId', 'modelMetadata'])
     if (!session) {
       log.error(`创建失败，未找到 session=${sessionId}`)
       return {
