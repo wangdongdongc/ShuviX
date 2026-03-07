@@ -39,12 +39,15 @@ export interface WorkerResponse {
 
 // ---- Pyodide 运行时 ----
 
-let pyodide: Awaited<ReturnType<typeof import('pyodide').loadPyodide>> | null = null
-let persistentGlobals: unknown = null
+type PyodideInstance = Awaited<ReturnType<typeof import('pyodide').loadPyodide>>
+type PyProxy = PyodideInstance['globals']
+
+let pyodide: PyodideInstance | null = null
+let persistentGlobals: PyProxy | null = null
 let readonlyPaths: string[] = []
 
 /** 递归创建目录 */
-function mkdirRecursive(fs: any, path: string): void {
+function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, path: string): void {
   const parts = path.split('/').filter(Boolean)
   let current = ''
   for (const part of parts) {
@@ -83,7 +86,7 @@ async function init(mounts: MountConfig[], wheelsDir?: string): Promise<void> {
 import sys
 sys.path.insert(0, '')
 `,
-    { globals: persistentGlobals as any }
+    { globals: persistentGlobals as PyProxy }
   )
 
   // 注入只读路径保护（hook builtins.open）
@@ -107,7 +110,7 @@ def _guarded_open(file, mode='r', *args, **kwargs):
 
 _builtins.open = _guarded_open
 `,
-      { globals: persistentGlobals as any }
+      { globals: persistentGlobals as PyProxy }
     )
   }
 
@@ -197,12 +200,12 @@ else:
         exec(compile(_tree, '<input>', 'exec'))
 `
 
-    await pyodide.runPythonAsync(replCode, { globals: persistentGlobals as any })
+    await pyodide.runPythonAsync(replCode, { globals: persistentGlobals as PyProxy })
 
     // 获取返回值
     let returnValue: string | undefined
     try {
-      const result = (persistentGlobals as any).get('_result')
+      const result = persistentGlobals!.get('_result')
       if (result !== undefined && result !== null) {
         returnValue = String(result)
       }

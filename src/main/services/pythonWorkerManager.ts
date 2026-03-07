@@ -50,9 +50,7 @@ class PythonWorkerManager {
 
   /** 从 ProjectConfig 构建挂载配置 */
   private buildMounts(config: ProjectConfig): MountConfig[] {
-    const mounts: MountConfig[] = [
-      { hostPath: config.workingDirectory, access: 'readwrite' }
-    ]
+    const mounts: MountConfig[] = [{ hostPath: config.workingDirectory, access: 'readwrite' }]
     for (const ref of config.referenceDirs) {
       mounts.push({
         hostPath: ref.path,
@@ -63,11 +61,7 @@ class PythonWorkerManager {
   }
 
   /** 确保 worker 已初始化并就绪 */
-  async ensureReady(
-    sessionId: string,
-    config: ProjectConfig,
-    onReady?: () => void
-  ): Promise<void> {
+  async ensureReady(sessionId: string, config: ProjectConfig, onReady?: () => void): Promise<void> {
     // 已有并就绪
     const existing = this.workers.get(sessionId)
     if (existing?.ready) return
