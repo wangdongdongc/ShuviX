@@ -29,8 +29,10 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListParams,
-  SessionSshAllowListParams,
+  SessionBashAllowListAddParams,
+  SessionBashAllowListRemoveParams,
+  SessionSshAllowListAddParams,
+  SessionSshAllowListRemoveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -455,10 +457,11 @@ declare global {
       updateSshAutoApprove: (
         params: SessionUpdateSshAutoApproveParams
       ) => Promise<{ success: boolean }>
-      addBashAllowListEntry: (params: SessionBashAllowListParams) => Promise<{ success: boolean }>
-      removeBashAllowListEntry: (params: SessionBashAllowListParams) => Promise<{ success: boolean }>
-      addSshAllowListEntry: (params: SessionSshAllowListParams) => Promise<{ success: boolean }>
-      removeSshAllowListEntry: (params: SessionSshAllowListParams) => Promise<{ success: boolean }>
+      previewAllowPatterns: (command: string) => Promise<string[]>
+      addBashAllowListPatterns: (params: SessionBashAllowListAddParams) => Promise<{ success: boolean }>
+      removeBashAllowListEntry: (params: SessionBashAllowListRemoveParams) => Promise<{ success: boolean }>
+      addSshAllowListPatterns: (params: SessionSshAllowListAddParams) => Promise<{ success: boolean }>
+      removeSshAllowListEntry: (params: SessionSshAllowListRemoveParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
         userMessage: string

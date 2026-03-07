@@ -54,14 +54,26 @@ export interface SessionUpdateSshAutoApproveParams {
   sshAutoApprove: boolean
 }
 
-/** IPC: 更新 Bash 命令允许列表参数 */
-export interface SessionBashAllowListParams {
+/** IPC: 批量添加 Bash 允许列表模式 */
+export interface SessionBashAllowListAddParams {
+  id: string
+  patterns: string[]
+}
+
+/** IPC: 移除 Bash 允许列表条目 */
+export interface SessionBashAllowListRemoveParams {
   id: string
   command: string
 }
 
-/** IPC: 更新 SSH 命令允许列表参数 */
-export interface SessionSshAllowListParams {
+/** IPC: 批量添加 SSH 允许列表模式 */
+export interface SessionSshAllowListAddParams {
+  id: string
+  patterns: string[]
+}
+
+/** IPC: 移除 SSH 允许列表条目 */
+export interface SessionSshAllowListRemoveParams {
   id: string
   command: string
 }

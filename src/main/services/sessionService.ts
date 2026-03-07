@@ -99,11 +99,15 @@ export class SessionService {
     sessionDao.updateSettings(id, { sshAutoApprove })
   }
 
-  /** 添加命令到 Bash 允许列表（复合命令自动拆解 → 生成通配符模式） */
-  addBashAllowListEntry(id: string, command: string): void {
+  /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB） */
+  previewAllowPatterns(command: string): string[] {
+    return [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+  }
+
+  /** 批量添加通配符模式到 Bash 允许列表 */
+  addBashAllowListPatterns(id: string, patterns: string[]): void {
     const sess = sessionDao.findById(id)
     const list = sess?.settings.bashAllowList || []
-    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
     const newEntries = patterns.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { bashAllowList: [...list, ...newEntries] })
@@ -117,11 +121,10 @@ export class SessionService {
     sessionDao.updateSettings(id, { bashAllowList: list })
   }
 
-  /** 添加命令到 SSH 允许列表（复合命令自动拆解 → 生成通配符模式） */
-  addSshAllowListEntry(id: string, command: string): void {
+  /** 批量添加通配符模式到 SSH 允许列表 */
+  addSshAllowListPatterns(id: string, patterns: string[]): void {
     const sess = sessionDao.findById(id)
     const list = sess?.settings.sshAllowList || []
-    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
     const newEntries = patterns.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { sshAllowList: [...list, ...newEntries] })

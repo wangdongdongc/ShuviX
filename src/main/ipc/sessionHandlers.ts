@@ -10,8 +10,10 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListParams,
-  SessionSshAllowListParams,
+  SessionBashAllowListAddParams,
+  SessionBashAllowListRemoveParams,
+  SessionSshAllowListAddParams,
+  SessionSshAllowListRemoveParams,
   SessionUpdateTitleParams
 } from '../types'
 
@@ -84,11 +86,16 @@ export function registerSessionHandlers(): void {
     }
   )
 
-  /** 添加命令到 Bash 允许列表 */
+  /** 预览命令拆解后的通配符模式 */
+  ipcMain.handle('session:previewAllowPatterns', (_event, command: string) => {
+    return sessionService.previewAllowPatterns(command)
+  })
+
+  /** 批量添加模式到 Bash 允许列表 */
   ipcMain.handle(
-    'session:addBashAllowListEntry',
-    (_event, params: SessionBashAllowListParams) => {
-      sessionService.addBashAllowListEntry(params.id, params.command)
+    'session:addBashAllowListPatterns',
+    (_event, params: SessionBashAllowListAddParams) => {
+      sessionService.addBashAllowListPatterns(params.id, params.patterns)
       return { success: true }
     }
   )
@@ -96,17 +103,17 @@ export function registerSessionHandlers(): void {
   /** 从 Bash 允许列表移除命令 */
   ipcMain.handle(
     'session:removeBashAllowListEntry',
-    (_event, params: SessionBashAllowListParams) => {
+    (_event, params: SessionBashAllowListRemoveParams) => {
       sessionService.removeBashAllowListEntry(params.id, params.command)
       return { success: true }
     }
   )
 
-  /** 添加命令到 SSH 允许列表 */
+  /** 批量添加模式到 SSH 允许列表 */
   ipcMain.handle(
-    'session:addSshAllowListEntry',
-    (_event, params: SessionSshAllowListParams) => {
-      sessionService.addSshAllowListEntry(params.id, params.command)
+    'session:addSshAllowListPatterns',
+    (_event, params: SessionSshAllowListAddParams) => {
+      sessionService.addSshAllowListPatterns(params.id, params.patterns)
       return { success: true }
     }
   )
@@ -114,7 +121,7 @@ export function registerSessionHandlers(): void {
   /** 从 SSH 允许列表移除命令 */
   ipcMain.handle(
     'session:removeSshAllowListEntry',
-    (_event, params: SessionSshAllowListParams) => {
+    (_event, params: SessionSshAllowListRemoveParams) => {
       sessionService.removeSshAllowListEntry(params.id, params.command)
       return { success: true }
     }

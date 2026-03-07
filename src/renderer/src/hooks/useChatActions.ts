@@ -17,8 +17,8 @@ export interface UseChatActionsReturn {
   handleRegenerate: (assistantMsgId: string) => Promise<void>
   /** 审批：用户允许/拒绝工具调用 */
   handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
-  /** 审批：允许并记住（加入允许列表） */
-  handleAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => Promise<void>
+  /** 审批：允许并记住（加入允许列表，用户已筛选模式） */
+  handleAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => Promise<void>
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
   /** SSH 凭据输入回调（凭据不经过大模型） */
@@ -124,16 +124,22 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     [activeSessionId]
   )
 
-  /** 审批：允许并记住（加入允许列表 + 批准当前命令） */
+  /** 审批：允许并记住（用户筛选后的模式加入允许列表 + 批准当前命令） */
   const handleAllowAndRemember = useCallback(
-    async (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => {
-      if (activeSessionId) {
+    async (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => {
+      if (activeSessionId && patterns.length > 0) {
         if (toolType === 'bash') {
-          await window.api.session.addBashAllowListEntry({ id: activeSessionId, command })
+          await window.api.session.addBashAllowListPatterns({
+            id: activeSessionId,
+            patterns
+          })
         } else {
-          await window.api.session.addSshAllowListEntry({ id: activeSessionId, command })
+          await window.api.session.addSshAllowListPatterns({
+            id: activeSessionId,
+            patterns
+          })
         }
-        // 从后端重新获取会话以同步拆解后的允许列表
+        // 从后端重新获取会话以同步允许列表
         const updated = await window.api.session.getById(activeSessionId)
         if (updated) {
           useChatStore.getState().updateSessionSettings(activeSessionId, {

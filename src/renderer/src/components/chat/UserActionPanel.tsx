@@ -19,8 +19,8 @@ interface UserActionPanelProps {
   onUserInput: (toolCallId: string, selections: string[]) => void
   /** 审批：用户允许/拒绝工具调用 */
   onApproval: (toolCallId: string, approved: boolean) => void
-  /** 审批：允许并记住（加入允许列表） */
-  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => void
+  /** 审批：允许并记住（用户筛选后的模式加入允许列表） */
+  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => void
   /** SSH 凭据输入回调（凭据不经过大模型） */
   onSshCredentials: (
     toolCallId: string,
@@ -278,10 +278,14 @@ function ApprovalContent({
 }: {
   pending: { toolCallId: string; toolName: string; args?: Record<string, unknown> }
   onApproval: (toolCallId: string, approved: boolean) => void
-  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => void
+  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => void
   t: (key: string) => string
 }): React.JSX.Element {
   const { toolCallId, toolName, args } = pending
+
+  // 模式预览状态：null = 初始视图，string[] = 展示模式列表
+  const [previewPatterns, setPreviewPatterns] = useState<string[] | null>(null)
+  const [loadingPatterns, setLoadingPatterns] = useState(false)
 
   // 根据工具类型选择提示文案
   const hint =
@@ -298,6 +302,29 @@ function ApprovalContent({
   const command = (args?.command as string) || ''
   const canRemember = (toolName === 'bash' || toolName === 'ssh') && command
 
+  /** 点击「允许并记住」→ 加载模式预览 */
+  const handleShowPatterns = async (): Promise<void> => {
+    setLoadingPatterns(true)
+    try {
+      const patterns = await window.api.session.previewAllowPatterns(command)
+      setPreviewPatterns(patterns)
+    } finally {
+      setLoadingPatterns(false)
+    }
+  }
+
+  /** 从预览列表移除某个模式 */
+  const handleRemovePattern = (pattern: string): void => {
+    setPreviewPatterns((prev) => prev?.filter((p) => p !== pattern) ?? null)
+  }
+
+  /** 确认：保存筛选后的模式 + 批准命令 */
+  const handleConfirmPatterns = (): void => {
+    if (previewPatterns && previewPatterns.length > 0) {
+      onAllowAndRemember(toolCallId, toolName as 'bash' | 'ssh', previewPatterns)
+    }
+  }
+
   return (
     <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
       {/* 标题 */}
@@ -313,29 +340,90 @@ function ApprovalContent({
         <ApprovalPreview toolName={toolName} args={args} />
       </div>
 
+      {/* 模式预览面板（点击「允许并记住」后展示） */}
+      {previewPatterns !== null && (
+        <div className="mx-4 mb-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5">
+          <p className="text-[11px] text-text-secondary font-medium mb-1.5">
+            {t('toolCall.patternsToAllow')}
+          </p>
+          <div className="flex flex-col gap-1">
+            {previewPatterns.map((pattern) => (
+              <div
+                key={pattern}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-bg-primary/50 border border-border-secondary/50"
+              >
+                <code className="flex-1 text-[11px] font-mono text-text-primary truncate">
+                  {pattern}
+                </code>
+                <button
+                  onClick={() => handleRemovePattern(pattern)}
+                  className="text-text-tertiary hover:text-error text-xs flex-shrink-0 transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+          {previewPatterns.length === 0 && (
+            <p className="text-[10px] text-text-tertiary italic">
+              {t('toolCall.noPatternsLeft')}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* 操作栏 */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-t border-border-secondary/50 bg-bg-tertiary/30">
-        <button
-          onClick={() => onApproval(toolCallId, true)}
-          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
-        >
-          {t('toolCall.allow')}
-        </button>
-        {canRemember && (
-          <button
-            onClick={() => onAllowAndRemember(toolCallId, toolName as 'bash' | 'ssh', command)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
-          >
-            {t('toolCall.allowAndRemember')}
-          </button>
+        {previewPatterns === null ? (
+          <>
+            {/* 初始视图：Allow / Allow & Remember / Deny */}
+            <button
+              onClick={() => onApproval(toolCallId, true)}
+              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
+            >
+              {t('toolCall.allow')}
+            </button>
+            {canRemember && (
+              <button
+                onClick={handleShowPatterns}
+                disabled={loadingPatterns}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+              >
+                {t('toolCall.allowAndRemember')}
+              </button>
+            )}
+            <button
+              onClick={() => onApproval(toolCallId, false)}
+              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {t('toolCall.deny')}
+            </button>
+            <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
+          </>
+        ) : (
+          <>
+            {/* 模式确认视图：Confirm / Back / Deny */}
+            <button
+              onClick={handleConfirmPatterns}
+              disabled={previewPatterns.length === 0}
+              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t('toolCall.confirmAllow')}
+            </button>
+            <button
+              onClick={() => setPreviewPatterns(null)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {t('common.back')}
+            </button>
+            <button
+              onClick={() => onApproval(toolCallId, false)}
+              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {t('toolCall.deny')}
+            </button>
+          </>
         )}
-        <button
-          onClick={() => onApproval(toolCallId, false)}
-          className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
-        >
-          {t('toolCall.deny')}
-        </button>
-        <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
       </div>
     </div>
   )

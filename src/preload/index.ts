@@ -26,8 +26,10 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListParams,
-  SessionSshAllowListParams,
+  SessionBashAllowListAddParams,
+  SessionBashAllowListRemoveParams,
+  SessionSshAllowListAddParams,
+  SessionSshAllowListRemoveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -170,13 +172,15 @@ const api = {
       ipcRenderer.invoke('session:updateBashAutoApprove', params),
     updateSshAutoApprove: (params: SessionUpdateSshAutoApproveParams) =>
       ipcRenderer.invoke('session:updateSshAutoApprove', params),
-    addBashAllowListEntry: (params: SessionBashAllowListParams) =>
-      ipcRenderer.invoke('session:addBashAllowListEntry', params),
-    removeBashAllowListEntry: (params: SessionBashAllowListParams) =>
+    previewAllowPatterns: (command: string) =>
+      ipcRenderer.invoke('session:previewAllowPatterns', command),
+    addBashAllowListPatterns: (params: SessionBashAllowListAddParams) =>
+      ipcRenderer.invoke('session:addBashAllowListPatterns', params),
+    removeBashAllowListEntry: (params: SessionBashAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeBashAllowListEntry', params),
-    addSshAllowListEntry: (params: SessionSshAllowListParams) =>
-      ipcRenderer.invoke('session:addSshAllowListEntry', params),
-    removeSshAllowListEntry: (params: SessionSshAllowListParams) =>
+    addSshAllowListPatterns: (params: SessionSshAllowListAddParams) =>
+      ipcRenderer.invoke('session:addSshAllowListPatterns', params),
+    removeSshAllowListEntry: (params: SessionSshAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeSshAllowListEntry', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
