@@ -10,6 +10,7 @@ import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
+import { isCommandAllowed } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SshToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -258,9 +259,9 @@ async function handleExec(
     throw new Error('No active SSH connection. Use ssh({ action: "connect" }) first.')
   }
 
-  // 每条命令都需用户审批（会话开启 sshAutoApprove 时跳过）
+  // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
   const sess = sessionDao.findById(ctx.sessionId)
-  if (ctx.requestApproval && !sess?.settings.sshAutoApprove) {
+  if (ctx.requestApproval && !sess?.settings.sshAutoApprove && !isCommandAllowed(sess?.settings.sshAllowList, command)) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')

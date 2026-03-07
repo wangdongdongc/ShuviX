@@ -189,6 +189,7 @@ export function ChatView(): React.JSX.Element {
     cancelRollback,
     handleRegenerate,
     handleToolApproval,
+    handleAllowAndRemember,
     handleUserInput,
     handleSshCredentials,
     handleUserActionOverride,
@@ -347,6 +348,7 @@ export function ChatView(): React.JSX.Element {
             <UserActionPanel
               onUserInput={handleUserInput}
               onApproval={handleToolApproval}
+              onAllowAndRemember={handleAllowAndRemember}
               onSshCredentials={handleSshCredentials}
             />
           )}
@@ -401,7 +403,10 @@ function SessionConfigDialog({
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   const [title, setTitle] = useState(session?.title || '')
 
+  const [bashAutoApprove, setBashAutoApprove] = useState(session?.settings.bashAutoApprove === true)
+  const [bashAllowList, setBashAllowList] = useState<string[]>(session?.settings.bashAllowList || [])
   const [sshAutoApprove, setSshAutoApprove] = useState(session?.settings.sshAutoApprove === true)
+  const [sshAllowList, setSshAllowList] = useState<string[]>(session?.settings.sshAllowList || [])
 
   // LAN 分享状态（null = 未分享）
   const [lanShareMode, setLanShareMode] = useState<ShareMode | null>(null)
@@ -524,12 +529,41 @@ function SessionConfigDialog({
     setTelegramBots(bots.map((b) => ({ id: b.id, name: b.name, username: b.username, boundSessionId: b.boundSessionId })))
   }
 
+  /** 切换 Bash 免审批 */
+  const handleToggleBashAutoApprove = async (): Promise<void> => {
+    const next = !bashAutoApprove
+    setBashAutoApprove(next)
+    await window.api.session.updateBashAutoApprove({ id: sessionId, bashAutoApprove: next })
+    useChatStore.getState().updateSessionSettings(sessionId, { bashAutoApprove: next })
+  }
+
   /** 切换 SSH 免审批 */
   const handleToggleSshAutoApprove = async (): Promise<void> => {
     const next = !sshAutoApprove
     setSshAutoApprove(next)
     await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: next })
     useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: next })
+  }
+
+  /** 删除允许列表条目 */
+  const handleRemoveAllowEntry = async (
+    toolType: 'bash' | 'ssh',
+    command: string
+  ): Promise<void> => {
+    if (toolType === 'bash') {
+      await window.api.session.removeBashAllowListEntry({ id: sessionId, command })
+    } else {
+      await window.api.session.removeSshAllowListEntry({ id: sessionId, command })
+    }
+    if (toolType === 'bash') {
+      const next = bashAllowList.filter((c) => c !== command)
+      setBashAllowList(next)
+      useChatStore.getState().updateSessionSettings(sessionId, { bashAllowList: next })
+    } else {
+      const next = sshAllowList.filter((c) => c !== command)
+      setSshAllowList(next)
+      useChatStore.getState().updateSessionSettings(sessionId, { sshAllowList: next })
+    }
   }
 
   return (
@@ -569,6 +603,61 @@ function SessionConfigDialog({
             />
           </div>
 
+          {/* Bash 免审批 */}
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-secondary">
+                {t('sessionConfig.bashAutoApprove')}
+              </span>
+              <button
+                onClick={handleToggleBashAutoApprove}
+                className={`relative w-8 h-[18px] rounded-full transition-colors ${
+                  bashAutoApprove ? 'bg-amber-500' : 'bg-bg-hover'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    bashAutoApprove ? 'left-[16px]' : 'left-[2px]'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[10px] text-text-tertiary mt-1">
+              {t('sessionConfig.bashAutoApproveDesc')}
+            </p>
+            {bashAutoApprove && (
+              <div className="flex items-start gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
+                <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
+                  {t('chat.bashAutoApproveWarning')}
+                </p>
+              </div>
+            )}
+            {!bashAutoApprove && bashAllowList.length > 0 && (
+              <div className="mt-2 space-y-1">
+                <span className="text-[10px] text-text-tertiary">
+                  {t('sessionConfig.allowedCommands')}
+                </span>
+                {bashAllowList.map((cmd) => (
+                  <div
+                    key={cmd}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary/60 border border-border-primary/50"
+                  >
+                    <code className="text-[10px] font-mono text-text-secondary truncate flex-1">
+                      {cmd}
+                    </code>
+                    <button
+                      onClick={() => void handleRemoveAllowEntry('bash', cmd)}
+                      className="text-text-tertiary hover:text-red-500 transition-colors shrink-0"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* SSH 免审批 */}
           <div>
             <div className="flex items-center justify-between">
@@ -597,6 +686,29 @@ function SessionConfigDialog({
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
                   {t('chat.sshAutoApproveWarning')}
                 </p>
+              </div>
+            )}
+            {!sshAutoApprove && sshAllowList.length > 0 && (
+              <div className="mt-2 space-y-1">
+                <span className="text-[10px] text-text-tertiary">
+                  {t('sessionConfig.allowedCommands')}
+                </span>
+                {sshAllowList.map((cmd) => (
+                  <div
+                    key={cmd}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary/60 border border-border-primary/50"
+                  >
+                    <code className="text-[10px] font-mono text-text-secondary truncate flex-1">
+                      {cmd}
+                    </code>
+                    <button
+                      onClick={() => void handleRemoveAllowEntry('ssh', cmd)}
+                      className="text-text-tertiary hover:text-red-500 transition-colors shrink-0"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>

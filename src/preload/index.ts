@@ -24,7 +24,10 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
+  SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
+  SessionBashAllowListParams,
+  SessionSshAllowListParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -163,8 +166,18 @@ const api = {
       ipcRenderer.invoke('session:updateThinkingLevel', params),
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
       ipcRenderer.invoke('session:updateEnabledTools', params),
+    updateBashAutoApprove: (params: SessionUpdateBashAutoApproveParams) =>
+      ipcRenderer.invoke('session:updateBashAutoApprove', params),
     updateSshAutoApprove: (params: SessionUpdateSshAutoApproveParams) =>
       ipcRenderer.invoke('session:updateSshAutoApprove', params),
+    addBashAllowListEntry: (params: SessionBashAllowListParams) =>
+      ipcRenderer.invoke('session:addBashAllowListEntry', params),
+    removeBashAllowListEntry: (params: SessionBashAllowListParams) =>
+      ipcRenderer.invoke('session:removeBashAllowListEntry', params),
+    addSshAllowListEntry: (params: SessionSshAllowListParams) =>
+      ipcRenderer.invoke('session:addSshAllowListEntry', params),
+    removeSshAllowListEntry: (params: SessionSshAllowListParams) =>
+      ipcRenderer.invoke('session:removeSshAllowListEntry', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),

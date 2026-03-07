@@ -27,7 +27,10 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
+  SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
+  SessionBashAllowListParams,
+  SessionSshAllowListParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -264,7 +267,10 @@ declare global {
 
   /** 会话级配置 */
   interface SessionSettings {
+    bashAutoApprove?: boolean
+    bashAllowList?: string[]
     sshAutoApprove?: boolean
+    sshAllowList?: string[]
     telegramBotId?: string
   }
 
@@ -443,9 +449,16 @@ declare global {
       updateEnabledTools: (
         params: SessionUpdateEnabledToolsParams
       ) => Promise<{ success: boolean }>
+      updateBashAutoApprove: (
+        params: SessionUpdateBashAutoApproveParams
+      ) => Promise<{ success: boolean }>
       updateSshAutoApprove: (
         params: SessionUpdateSshAutoApproveParams
       ) => Promise<{ success: boolean }>
+      addBashAllowListEntry: (params: SessionBashAllowListParams) => Promise<{ success: boolean }>
+      removeBashAllowListEntry: (params: SessionBashAllowListParams) => Promise<{ success: boolean }>
+      addSshAllowListEntry: (params: SessionSshAllowListParams) => Promise<{ success: boolean }>
+      removeSshAllowListEntry: (params: SessionSshAllowListParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
         userMessage: string

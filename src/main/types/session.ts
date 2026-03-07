@@ -42,8 +42,26 @@ export interface SessionUpdateEnabledToolsParams {
   enabledTools: string[]
 }
 
+/** IPC: 更新 Bash 命令免审批参数 */
+export interface SessionUpdateBashAutoApproveParams {
+  id: string
+  bashAutoApprove: boolean
+}
+
 /** IPC: 更新 SSH 命令免审批参数 */
 export interface SessionUpdateSshAutoApproveParams {
   id: string
   sshAutoApprove: boolean
+}
+
+/** IPC: 更新 Bash 命令允许列表参数 */
+export interface SessionBashAllowListParams {
+  id: string
+  command: string
+}
+
+/** IPC: 更新 SSH 命令允许列表参数 */
+export interface SessionSshAllowListParams {
+  id: string
+  command: string
 }

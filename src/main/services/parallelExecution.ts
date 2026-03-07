@@ -17,7 +17,7 @@
 
 import { validateToolArguments, type Tool } from '@mariozechner/pi-ai'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
-import { resolveProjectConfig } from '../tools/types'
+import { isCommandAllowed } from '../tools/utils/allowList'
 import { sessionDao } from '../dao/sessionDao'
 import { createLogger } from '../logger'
 
@@ -77,14 +77,12 @@ function requiresSerial(
   // ask 工具始终需要用户输入
   if (toolName === 'ask') return true
 
-  // bash：sandbox 模式需要审批
+  // bash：始终需要审批（免审批或允许列表匹配时跳过）
   if (toolName === 'bash') {
-    try {
-      const config = resolveProjectConfig({ sessionId })
-      return config.sandboxEnabled
-    } catch {
-      return true // 无法确定时保守串行
-    }
+    const sess = sessionDao.findById(sessionId)
+    if (sess?.settings.bashAutoApprove) return false
+    const command = (rawArgs.command as string) || ''
+    return !isCommandAllowed(sess?.settings.bashAllowList, command)
   }
 
   // ssh connect（无 credentialName）需要凭据输入
@@ -92,10 +90,12 @@ function requiresSerial(
     return true
   }
 
-  // ssh exec：检查是否自动审批
+  // ssh exec：检查是否自动审批或允许列表匹配
   if (toolName === 'ssh' && rawArgs.action === 'exec') {
     const sess = sessionDao.findById(sessionId)
-    return !sess?.settings.sshAutoApprove
+    if (sess?.settings.sshAutoApprove) return false
+    const command = (rawArgs.command as string) || ''
+    return !isCommandAllowed(sess?.settings.sshAllowList, command)
   }
 
   // shuvix-project update / shuvix-setting set

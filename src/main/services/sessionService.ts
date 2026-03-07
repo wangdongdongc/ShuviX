@@ -88,9 +88,46 @@ export class SessionService {
     sessionDao.updateModelMetadata(id, { enabledTools })
   }
 
+  /** 更新 Bash 命令免审批 */
+  updateBashAutoApprove(id: string, bashAutoApprove: boolean): void {
+    sessionDao.updateSettings(id, { bashAutoApprove })
+  }
+
   /** 更新 SSH 命令免审批 */
   updateSshAutoApprove(id: string, sshAutoApprove: boolean): void {
     sessionDao.updateSettings(id, { sshAutoApprove })
+  }
+
+  /** 添加命令到 Bash 允许列表 */
+  addBashAllowListEntry(id: string, command: string): void {
+    const sess = sessionDao.findById(id)
+    const list = sess?.settings.bashAllowList || []
+    if (!list.includes(command)) {
+      sessionDao.updateSettings(id, { bashAllowList: [...list, command] })
+    }
+  }
+
+  /** 从 Bash 允许列表移除命令 */
+  removeBashAllowListEntry(id: string, command: string): void {
+    const sess = sessionDao.findById(id)
+    const list = (sess?.settings.bashAllowList || []).filter((c) => c !== command)
+    sessionDao.updateSettings(id, { bashAllowList: list })
+  }
+
+  /** 添加命令到 SSH 允许列表 */
+  addSshAllowListEntry(id: string, command: string): void {
+    const sess = sessionDao.findById(id)
+    const list = sess?.settings.sshAllowList || []
+    if (!list.includes(command)) {
+      sessionDao.updateSettings(id, { sshAllowList: [...list, command] })
+    }
+  }
+
+  /** 从 SSH 允许列表移除命令 */
+  removeSshAllowListEntry(id: string, command: string): void {
+    const sess = sessionDao.findById(id)
+    const list = (sess?.settings.sshAllowList || []).filter((c) => c !== command)
+    sessionDao.updateSettings(id, { sshAllowList: list })
   }
 
   /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */

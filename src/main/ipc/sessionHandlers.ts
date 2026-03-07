@@ -8,7 +8,10 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
+  SessionUpdateBashAutoApproveParams,
   SessionUpdateSshAutoApproveParams,
+  SessionBashAllowListParams,
+  SessionSshAllowListParams,
   SessionUpdateTitleParams
 } from '../types'
 
@@ -63,11 +66,56 @@ export function registerSessionHandlers(): void {
     }
   )
 
+  /** 更新 Bash 命令免审批 */
+  ipcMain.handle(
+    'session:updateBashAutoApprove',
+    (_event, params: SessionUpdateBashAutoApproveParams) => {
+      sessionService.updateBashAutoApprove(params.id, params.bashAutoApprove)
+      return { success: true }
+    }
+  )
+
   /** 更新 SSH 命令免审批 */
   ipcMain.handle(
     'session:updateSshAutoApprove',
     (_event, params: SessionUpdateSshAutoApproveParams) => {
       sessionService.updateSshAutoApprove(params.id, params.sshAutoApprove)
+      return { success: true }
+    }
+  )
+
+  /** 添加命令到 Bash 允许列表 */
+  ipcMain.handle(
+    'session:addBashAllowListEntry',
+    (_event, params: SessionBashAllowListParams) => {
+      sessionService.addBashAllowListEntry(params.id, params.command)
+      return { success: true }
+    }
+  )
+
+  /** 从 Bash 允许列表移除命令 */
+  ipcMain.handle(
+    'session:removeBashAllowListEntry',
+    (_event, params: SessionBashAllowListParams) => {
+      sessionService.removeBashAllowListEntry(params.id, params.command)
+      return { success: true }
+    }
+  )
+
+  /** 添加命令到 SSH 允许列表 */
+  ipcMain.handle(
+    'session:addSshAllowListEntry',
+    (_event, params: SessionSshAllowListParams) => {
+      sessionService.addSshAllowListEntry(params.id, params.command)
+      return { success: true }
+    }
+  )
+
+  /** 从 SSH 允许列表移除命令 */
+  ipcMain.handle(
+    'session:removeSshAllowListEntry',
+    (_event, params: SessionSshAllowListParams) => {
+      sessionService.removeSshAllowListEntry(params.id, params.command)
       return { success: true }
     }
   )

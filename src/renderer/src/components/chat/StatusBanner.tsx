@@ -13,15 +13,18 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const docker = resources?.docker
   const ssh = resources?.ssh
 
-  const sshAutoApprove = useChatStore(
-    (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings.sshAutoApprove === true
+  const sessionSettings = useChatStore(
+    (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
   )
+  const bashAutoApprove = sessionSettings?.bashAutoApprove === true
+  const sshAutoApprove = sessionSettings?.sshAutoApprove === true
 
   // 分享状态
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
 
-  if (!docker && !ssh && !sshAutoApprove && !lanShareMode && !telegramBinding) return null
+  if (!docker && !ssh && !bashAutoApprove && !sshAutoApprove && !lanShareMode && !telegramBinding)
+    return null
 
   const handleDestroyDocker = async (): Promise<void> => {
     await window.api.docker.destroySession(sessionId)
@@ -29,6 +32,12 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   const handleDisconnectSsh = async (): Promise<void> => {
     await window.api.ssh.disconnectSession(sessionId)
+  }
+
+  /** 点击关闭 Bash 免审批 */
+  const handleDisableBashAutoApprove = async (): Promise<void> => {
+    await window.api.session.updateBashAutoApprove({ id: sessionId, bashAutoApprove: false })
+    useChatStore.getState().updateSessionSettings(sessionId, { bashAutoApprove: false })
   }
 
   /** 点击关闭 SSH 免审批 */
@@ -91,6 +100,17 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
             <X size={10} />
           </button>
         </span>
+      )}
+      {bashAutoApprove && (
+        <button
+          onClick={handleDisableBashAutoApprove}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
+          title={t('chat.bashAutoApproveWarning')}
+        >
+          <TriangleAlert size={11} />
+          {t('chat.bashAutoApproveLabel')}
+          <X size={10} className="ml-0.5 opacity-60" />
+        </button>
       )}
       {sshAutoApprove && (
         <button

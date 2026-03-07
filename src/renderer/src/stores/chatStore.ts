@@ -52,7 +52,10 @@ export interface SessionModelMetadata {
 
 /** 会话级配置 */
 export interface SessionSettings {
+  bashAutoApprove?: boolean
+  bashAllowList?: string[]
   sshAutoApprove?: boolean
+  sshAllowList?: string[]
   telegramBotId?: string
 }
 

@@ -10,6 +10,8 @@ import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/s
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
+import { sessionDao } from '../dao/sessionDao'
+import { isCommandAllowed } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BashToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -170,11 +172,14 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     const config = resolveProjectConfig(this.ctx)
     const docker = getDockerConfig()
 
-    // 沙箱模式：bash 命令需用户确认
-    if (config.sandboxEnabled && this.ctx.requestApproval) {
-      const approval = await this.ctx.requestApproval(toolCallId, params.command)
-      if (!approval.approved) {
-        throw new Error(approval.reason || 'Sandbox: user denied execution of this command')
+    // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
+    if (this.ctx.requestApproval) {
+      const sess = sessionDao.findById(this.ctx.sessionId)
+      if (!sess?.settings.bashAutoApprove && !isCommandAllowed(sess?.settings.bashAllowList, params.command)) {
+        const approval = await this.ctx.requestApproval(toolCallId, params.command)
+        if (!approval.approved) {
+          throw new Error(approval.reason || 'User denied execution of this command')
+        }
       }
     }
 

@@ -17,8 +17,10 @@ import { useSettingsStore } from '../../stores/settingsStore'
 interface UserActionPanelProps {
   /** ask 工具：用户选择回调 */
   onUserInput: (toolCallId: string, selections: string[]) => void
-  /** 沙箱审批：用户允许/拒绝工具调用 */
+  /** 审批：用户允许/拒绝工具调用 */
   onApproval: (toolCallId: string, approved: boolean) => void
+  /** 审批：允许并记住（加入允许列表） */
+  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => void
   /** SSH 凭据输入回调（凭据不经过大模型） */
   onSshCredentials: (
     toolCallId: string,
@@ -42,6 +44,7 @@ interface UserActionPanelProps {
 export function UserActionPanel({
   onUserInput,
   onApproval,
+  onAllowAndRemember,
   onSshCredentials
 }: UserActionPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -72,7 +75,7 @@ export function UserActionPanel({
     )
   }
   if (pendingApproval) {
-    return <ApprovalContent pending={pendingApproval} onApproval={onApproval} t={t} />
+    return <ApprovalContent pending={pendingApproval} onApproval={onApproval} onAllowAndRemember={onAllowAndRemember} t={t} />
   }
   return null
 }
@@ -270,10 +273,12 @@ function ApprovalPreview({
 function ApprovalContent({
   pending,
   onApproval,
+  onAllowAndRemember,
   t
 }: {
   pending: { toolCallId: string; toolName: string; args?: Record<string, unknown> }
   onApproval: (toolCallId: string, approved: boolean) => void
+  onAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => void
   t: (key: string) => string
 }): React.JSX.Element {
   const { toolCallId, toolName, args } = pending
@@ -281,7 +286,7 @@ function ApprovalContent({
   // 根据工具类型选择提示文案
   const hint =
     toolName === 'bash'
-      ? t('toolCall.sandboxHint')
+      ? t('toolCall.bashHint')
       : toolName === 'shuvix-project'
         ? t('toolCall.shuvixProjectHint')
         : toolName === 'shuvix-setting'
@@ -290,15 +295,8 @@ function ApprovalContent({
             ? t('toolCall.sshHint')
             : t('toolCall.pendingApproval')
 
-  /** SSH 审批：启用免审批 + 允许当前调用 */
-  const handleAllowAndSkip = async (): Promise<void> => {
-    const sessionId = useChatStore.getState().activeSessionId
-    if (sessionId) {
-      await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: true })
-      useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: true })
-    }
-    onApproval(toolCallId, true)
-  }
+  const command = (args?.command as string) || ''
+  const canRemember = (toolName === 'bash' || toolName === 'ssh') && command
 
   return (
     <div className="mx-3 mb-2 rounded-xl border border-warning/30 bg-bg-secondary/90 backdrop-blur-sm shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
@@ -323,20 +321,20 @@ function ApprovalContent({
         >
           {t('toolCall.allow')}
         </button>
+        {canRemember && (
+          <button
+            onClick={() => onAllowAndRemember(toolCallId, toolName as 'bash' | 'ssh', command)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+          >
+            {t('toolCall.allowAndRemember')}
+          </button>
+        )}
         <button
           onClick={() => onApproval(toolCallId, false)}
           className="px-4 py-1.5 rounded-lg text-xs font-medium bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
         >
           {t('toolCall.deny')}
         </button>
-        {toolName === 'ssh' && (
-          <button
-            onClick={handleAllowAndSkip}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
-          >
-            {t('toolCall.allowAndSkip')}
-          </button>
-        )}
         <span className="text-[10px] text-text-tertiary ml-1">{hint}</span>
       </div>
     </div>

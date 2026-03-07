@@ -15,8 +15,10 @@ export interface UseChatActionsReturn {
   cancelRollback: () => void
   /** 重新生成最近一次助手回复 */
   handleRegenerate: (assistantMsgId: string) => Promise<void>
-  /** 沙箱审批：用户允许/拒绝工具调用 */
+  /** 审批：用户允许/拒绝工具调用 */
   handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
+  /** 审批：允许并记住（加入允许列表） */
+  handleAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => Promise<void>
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
   /** SSH 凭据输入回调（凭据不经过大模型） */
@@ -108,7 +110,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     [activeSessionId]
   )
 
-  /** 沙箱审批：用户允许/拒绝 bash 命令执行 */
+  /** 审批：用户允许/拒绝工具调用 */
   const handleToolApproval = useCallback(
     async (toolCallId: string, approved: boolean) => {
       await window.api.agent.approveToolCall({ toolCallId, approved })
@@ -117,6 +119,32 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         store.updateToolExecution(activeSessionId, toolCallId, {
           status: approved ? 'running' : 'error'
         })
+      }
+    },
+    [activeSessionId]
+  )
+
+  /** 审批：允许并记住（加入允许列表 + 批准当前命令） */
+  const handleAllowAndRemember = useCallback(
+    async (toolCallId: string, toolType: 'bash' | 'ssh', command: string) => {
+      if (activeSessionId) {
+        if (toolType === 'bash') {
+          await window.api.session.addBashAllowListEntry({ id: activeSessionId, command })
+        } else {
+          await window.api.session.addSshAllowListEntry({ id: activeSessionId, command })
+        }
+        const store = useChatStore.getState()
+        const sess = store.sessions.find((s) => s.id === activeSessionId)
+        const listKey = toolType === 'bash' ? 'bashAllowList' : 'sshAllowList'
+        const currentList = sess?.settings[listKey] || []
+        store.updateSessionSettings(activeSessionId, {
+          [listKey]: [...currentList, command]
+        })
+      }
+      await window.api.agent.approveToolCall({ toolCallId, approved: true })
+      const store = useChatStore.getState()
+      if (activeSessionId) {
+        store.updateToolExecution(activeSessionId, toolCallId, { status: 'running' })
       }
     },
     [activeSessionId]
@@ -226,6 +254,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     cancelRollback,
     handleRegenerate,
     handleToolApproval,
+    handleAllowAndRemember,
     handleUserInput,
     handleSshCredentials,
     handleUserActionOverride,
