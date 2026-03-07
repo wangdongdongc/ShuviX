@@ -60,7 +60,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
     desc +=
       ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
     desc +=
-      ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution.'
+      ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution. You do NOT have access to any credentials — never ask the user for passwords in chat.'
     this.description = desc
   }
 

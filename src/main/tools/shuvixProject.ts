@@ -8,7 +8,7 @@ import { BaseTool, type ToolContext } from './types'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { ShuvixProjectToolDetails } from '../../shared/types/chatMessage'
 import { sessionService } from '../services/sessionService'
-import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
+import { projectService, getProjectFieldDescriptions } from '../services/projectService'
 import { t } from '../i18n'
 
 const ShuvixProjectParamsSchema = Type.Object({
@@ -55,7 +55,7 @@ const ShuvixProjectParamsSchema = Type.Object({
 export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema> {
   readonly name = 'shuvix-project'
   readonly label = t('tool.shuvixProjectLabel')
-  readonly description = `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${Object.keys(KNOWN_PROJECT_FIELDS).join(', ')}. Only works when the current session is linked to a project.`
+  readonly description = `Read or update the current project configuration. Use action="get" to view all project settings. Use action="update" with any combination of optional fields to modify them (requires user approval). Updatable fields: ${getProjectFieldDescriptions()}. Only works when the current session is linked to a project.`
   readonly parameters = ShuvixProjectParamsSchema
 
   constructor(private ctx: ToolContext) {

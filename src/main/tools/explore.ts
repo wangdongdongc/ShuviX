@@ -36,7 +36,7 @@ function buildExploreDescription(): string {
   const exploreType = getSubAgentTypes().find((t) => t.name === 'explore')
   const desc = exploreType?.description ?? 'Read-only codebase search specialist.'
 
-  return `Launch a read-only sub-agent to explore the codebase autonomously in an isolated context.
+  return `Launch a read-only sub-agent to explore the codebase autonomously in an isolated context. Use explore for broad codebase exploration and context gathering — this saves your context window.
 
 ${desc}
 
@@ -47,7 +47,7 @@ When NOT to use this tool:
 
 Usage notes:
 - Launch multiple explore agents concurrently whenever possible (multiple tool calls in one message)
-- The sub-agent does NOT share your conversation history — provide complete context in the prompt
+- The sub-agent does NOT share your conversation history — you MUST provide complete context in the prompt parameter
 - The result is returned only to you, not visible to the user — summarize it for the user
 - Specify what information the agent should return in its final response
 - Each invocation starts fresh unless you provide task_id to resume a previous session`

@@ -33,7 +33,6 @@ import { streamSimpleGoogleWithImages } from './googleImageStream'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
-import { buildToolPrompts } from '../utils/tools'
 import { createTransformContext } from './contextManager'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { createLogger } from '../logger'
@@ -65,7 +64,7 @@ function buildSystemPrompt(
   }
   if (project) {
     const workDir = workingDirectory || project.path
-    prompt += `\n\nProject working directory: ${workDir}`
+    prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory.`
 
     const referenceDirs = project.settings?.referenceDirs || []
     if (referenceDirs.length > 0) {
@@ -181,8 +180,6 @@ export class AgentSession {
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
-    const toolPrompts = buildToolPrompts(enabledTools, { hasProjectPath: !!project?.path })
-    const enhancedPrompt = toolPrompts ? `${systemPrompt}\n\n${toolPrompts}` : systemPrompt
 
     // 构建 streamFn（回调通过闭包引用 session）
     const streamFn = (
@@ -239,7 +236,7 @@ export class AgentSession {
 
     const agent = new Agent({
       initialState: {
-        systemPrompt: enhancedPrompt,
+        systemPrompt,
         model: resolvedModel,
         thinkingLevel: capabilities.reasoning
           ? (modelMetadata?.thinkingLevel as ThinkingLevel) || 'medium'

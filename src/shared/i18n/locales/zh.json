@@ -488,7 +488,6 @@
 
   "agent": {
     "defaultTitle": "新对话",
-    "askToolGuidance": "When you need the user to choose between multiple approaches, styles, configurations, or directions, you MUST use the ask tool to present clickable option cards. Do NOT list numbered options in plain text for the user to reply manually.",
     "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
   },
 

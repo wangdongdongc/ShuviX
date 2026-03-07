@@ -31,8 +31,7 @@ const ShuvixSettingParamsSchema = Type.Object({
 export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema> {
   readonly name = 'shuvix-setting'
   readonly label = t('tool.shuvixSettingLabel')
-  readonly description =
-    'Read or update global application settings. Use action="get" to view all current settings as key-value pairs. Use action="set" with key and value to update a single setting (requires user approval). Call multiple times to update multiple settings.'
+  readonly description = `Read or update global application settings. Use action="get" to view all current settings as key-value pairs. Use action="set" with key and value to update a single setting (requires user approval). Call multiple times to update multiple settings. Known keys: ${getSettingKeyDescriptions()}`
   readonly parameters = ShuvixSettingParamsSchema
 
   constructor(private ctx: ToolContext) {
