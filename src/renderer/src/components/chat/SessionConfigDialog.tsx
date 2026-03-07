@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Copy, Globe, Terminal, Trash2, TriangleAlert, Wifi, X } from 'lucide-react'
+import { Bot, Copy, Globe, Terminal, Trash2, TriangleAlert, X } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useChatStore, type ShareMode } from '../../stores/chatStore'
 import { useDialogClose } from '../../hooks/useDialogClose'
@@ -187,7 +187,7 @@ export function SessionConfigDialog({
       onClick={handleClose}
     >
       <div
-        className="w-80 bg-bg-primary border border-border-secondary rounded-xl shadow-xl overflow-hidden dialog-panel"
+        className="w-[520px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 标题栏 */}
@@ -201,7 +201,7 @@ export function SessionConfigDialog({
           </button>
         </div>
 
-        <div className="px-4 py-4 space-y-4">
+        <div className="px-4 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
           {/* 会话标题 */}
           <div>
             <label className="block text-[10px] text-text-tertiary mb-1">
@@ -241,9 +241,6 @@ export function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary">
-              {t('sessionConfig.bashAutoApproveDesc')}
-            </p>
             {bashAutoApprove && (
               <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
                 <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
@@ -253,26 +250,26 @@ export function SessionConfigDialog({
               </div>
             )}
             {!bashAutoApprove && bashAllowList.length > 0 && (
-              <div className="border-t border-border-secondary pt-2 space-y-1">
+              <div className="border-t border-border-secondary pt-2">
                 <span className="text-[10px] text-text-tertiary">
                   {t('sessionConfig.allowedCommands')}
                 </span>
-                {bashAllowList.map((cmd) => (
-                  <div
-                    key={cmd}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary/60 border border-border-primary/50"
-                  >
-                    <code className="text-[10px] font-mono text-text-secondary truncate flex-1">
-                      {cmd}
-                    </code>
-                    <button
-                      onClick={() => void handleRemoveAllowEntry('bash', cmd)}
-                      className="text-text-tertiary hover:text-red-500 transition-colors shrink-0"
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {bashAllowList.map((cmd) => (
+                    <span
+                      key={cmd}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-bg-tertiary text-[10px] font-mono text-text-secondary"
                     >
-                      <X size={10} />
-                    </button>
-                  </div>
-                ))}
+                      {cmd}
+                      <button
+                        onClick={() => void handleRemoveAllowEntry('bash', cmd)}
+                        className="text-text-tertiary hover:text-red-500 transition-colors"
+                      >
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -280,7 +277,7 @@ export function SessionConfigDialog({
           {/* SSH 审批分组 */}
           <div className="border border-border-secondary rounded-lg p-3 space-y-2">
             <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-              <Wifi size={12} />
+              <Terminal size={12} />
               {t('sessionConfig.sshGroup')}
             </label>
             <div className="flex items-center justify-between">
@@ -300,9 +297,6 @@ export function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary">
-              {t('sessionConfig.sshAutoApproveDesc')}
-            </p>
             {sshAutoApprove && (
               <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
                 <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
@@ -312,26 +306,26 @@ export function SessionConfigDialog({
               </div>
             )}
             {!sshAutoApprove && sshAllowList.length > 0 && (
-              <div className="border-t border-border-secondary pt-2 space-y-1">
+              <div className="border-t border-border-secondary pt-2">
                 <span className="text-[10px] text-text-tertiary">
                   {t('sessionConfig.allowedCommands')}
                 </span>
-                {sshAllowList.map((cmd) => (
-                  <div
-                    key={cmd}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-tertiary/60 border border-border-primary/50"
-                  >
-                    <code className="text-[10px] font-mono text-text-secondary truncate flex-1">
-                      {cmd}
-                    </code>
-                    <button
-                      onClick={() => void handleRemoveAllowEntry('ssh', cmd)}
-                      className="text-text-tertiary hover:text-red-500 transition-colors shrink-0"
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {sshAllowList.map((cmd) => (
+                    <span
+                      key={cmd}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-bg-tertiary text-[10px] font-mono text-text-secondary"
                     >
-                      <X size={10} />
-                    </button>
-                  </div>
-                ))}
+                      {cmd}
+                      <button
+                        onClick={() => void handleRemoveAllowEntry('ssh', cmd)}
+                        className="text-text-tertiary hover:text-red-500 transition-colors"
+                      >
+                        <X size={9} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>

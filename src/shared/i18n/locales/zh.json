@@ -181,12 +181,10 @@
   "sessionConfig": {
     "title": "会话配置",
     "sessionTitle": "会话标题",
-    "bashAutoApprove": "Bash 免审批",
-    "bashAutoApproveDesc": "开启后，所有 Bash 命令将自动执行，不再逐条弹窗审批。请谨慎使用。",
-    "sshAutoApprove": "SSH 免审批",
-    "sshAutoApproveDesc": "开启后，SSH exec 命令将自动执行，不再逐条弹窗审批。请勿在生产环境或重要服务器上开启此功能。",
+    "bashAutoApprove": "命令执行免审批",
+    "sshAutoApprove": "命令执行免审批",
     "allowedCommands": "允许的命令",
-    "lanShare": "局域网分享",
+    "lanShare": "开启局域网共享",
     "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。",
     "shareMode": "分享模式",
     "shareModeReadonly": "只读",
@@ -198,9 +196,9 @@
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "选择一个 Telegram Bot 绑定到此会话。Bot 需在设置 > 绑定中配置。",
     "telegramNone": "无（未绑定）",
-    "bashGroup": "Bash 审批",
-    "sshGroup": "SSH 审批",
-    "lanShareGroup": "局域网分享",
+    "bashGroup": "Bash 工具",
+    "sshGroup": "SSH 工具",
+    "lanShareGroup": "WebUI",
     "telegramGroup": "Telegram Bot"
   },
 

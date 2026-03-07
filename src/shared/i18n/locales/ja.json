@@ -181,12 +181,10 @@
   "sessionConfig": {
     "title": "セッション設定",
     "sessionTitle": "セッションタイトル",
-    "bashAutoApprove": "Bash 自動承認",
-    "bashAutoApproveDesc": "有効にすると、すべての Bash コマンドが承認なしで自動実行されます。注意してご使用ください。",
-    "sshAutoApprove": "SSH 自動承認",
-    "sshAutoApproveDesc": "有効にすると、SSH exec コマンドは承認なしで自動実行されます。本番環境や重要なサーバーではこの機能を有効にしないでください。",
+    "bashAutoApprove": "コマンド自動承認",
+    "sshAutoApprove": "コマンド自動承認",
     "allowedCommands": "許可されたコマンド",
-    "lanShare": "LAN 共有",
+    "lanShare": "LAN 共有を有効化",
     "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションにアクセスできます。",
     "shareMode": "共有モード",
     "shareModeReadonly": "読み取り専用",
@@ -198,9 +196,9 @@
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "Telegram Bot を選択してこのセッションに接続します。先に設定で Bot を登録してください。",
     "telegramNone": "なし",
-    "bashGroup": "Bash 承認",
-    "sshGroup": "SSH 承認",
-    "lanShareGroup": "LAN 共有",
+    "bashGroup": "Bash ツール",
+    "sshGroup": "SSH ツール",
+    "lanShareGroup": "WebUI",
     "telegramGroup": "Telegram Bot"
   },
 

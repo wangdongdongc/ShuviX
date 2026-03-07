@@ -181,12 +181,10 @@
   "sessionConfig": {
     "title": "Session Config",
     "sessionTitle": "Session Title",
-    "bashAutoApprove": "Bash Auto-Approve",
-    "bashAutoApproveDesc": "When enabled, all bash commands run automatically without per-command approval. Use with caution.",
-    "sshAutoApprove": "SSH Auto-Approve",
-    "sshAutoApproveDesc": "When enabled, SSH exec commands run automatically without per-command approval. Do not enable this on production or critical servers.",
+    "bashAutoApprove": "Auto-Approve Commands",
+    "sshAutoApprove": "Auto-Approve Commands",
     "allowedCommands": "Allowed Commands",
-    "lanShare": "LAN Share",
+    "lanShare": "Enable LAN Sharing",
     "lanShareDesc": "When enabled, others on the same network can access this session via browser.",
     "shareMode": "Share Mode",
     "shareModeReadonly": "Read Only",
@@ -198,9 +196,9 @@
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "Select a Telegram bot to bind to this session. Configure bots in Settings > Bindings.",
     "telegramNone": "None (unbound)",
-    "bashGroup": "Bash Approval",
-    "sshGroup": "SSH Approval",
-    "lanShareGroup": "LAN Share",
+    "bashGroup": "Bash Tool",
+    "sshGroup": "SSH Tool",
+    "lanShareGroup": "WebUI",
     "telegramGroup": "Telegram Bot"
   },
 
