@@ -201,6 +201,11 @@ body {
   background: var(--color-text-tertiary);
 }
 
+/* 完全隐藏滚动条（保留滚动功能） */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* 弹窗动画 */
 @keyframes overlay-in {
   from {
