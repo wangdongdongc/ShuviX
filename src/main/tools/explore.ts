@@ -91,7 +91,6 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
 
     const { taskId, result } = await subAgentManager.runTask({
       parentSessionId: this.ctx.sessionId,
-      parentToolContext: this.ctx,
       parentToolCallId: _toolCallId,
       taskId: params.task_id,
       subAgentType: 'explore',

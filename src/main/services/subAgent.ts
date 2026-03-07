@@ -131,7 +131,6 @@ function buildSubAgentTools(ctx: ToolContext, subAgentType: SubAgentType): AnyAg
 
 export interface RunTaskParams {
   parentSessionId: string
-  parentToolContext: ToolContext
   /** 父级工具调用 ID（用于前端关联子智能体与 explore 工具调用） */
   parentToolCallId?: string
   taskId?: string
@@ -155,7 +154,6 @@ class SubAgentManager {
   async runTask(params: RunTaskParams): Promise<{ taskId: string; result: string }> {
     const {
       parentSessionId,
-      parentToolContext,
       subAgentType: typeName,
       prompt,
       parentModel,
@@ -182,7 +180,7 @@ class SubAgentManager {
         log.info(`Resuming sub-agent task=${taskId} type=${typeName}`)
       } else {
         log.warn(`Sub-agent task=${taskId} not found, creating new session`)
-        session = this.createSession(parentSessionId, agentType, parentToolContext, parentModel, parentStreamFn, onEvent)
+        session = this.createSession(parentSessionId, agentType, parentModel, parentStreamFn, onEvent)
       }
     } else {
       // 并发数检查
@@ -190,7 +188,7 @@ class SubAgentManager {
       if (existing && existing.size >= this.MAX_CONCURRENT) {
         throw new Error(`Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`)
       }
-      session = this.createSession(parentSessionId, agentType, parentToolContext, parentModel, parentStreamFn, onEvent)
+      session = this.createSession(parentSessionId, agentType, parentModel, parentStreamFn, onEvent)
     }
 
     // 链接父级中止信号
@@ -272,7 +270,6 @@ class SubAgentManager {
   private createSession(
     parentSessionId: string,
     agentType: SubAgentType,
-    parentToolContext: ToolContext,
     parentModel: Model<Api>,
     parentStreamFn: StreamFn,
     onEvent: (event: ChatEvent) => void
@@ -282,7 +279,7 @@ class SubAgentManager {
 
     // 子智能体的 ToolContext：继承 sessionId（沙箱配置），独立的 parallelSessionKey
     const subToolContext: ToolContext = {
-      sessionId: parentToolContext.sessionId,
+      sessionId: parentSessionId,
       parallelSessionKey: parallelKey
       // 不提供交互回调：子智能体不需要 requestApproval/requestUserInput/requestSshCredentials
     }
