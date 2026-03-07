@@ -8,8 +8,6 @@ export type MessageType =
   | 'tool_use'
   | 'step_text'
   | 'step_thinking'
-  | 'docker_event'
-  | 'ssh_event'
   | 'error_event'
 
 /** 消息数据结构（对应 DB 表 messages / message_steps） */

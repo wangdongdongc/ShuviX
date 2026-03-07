@@ -49,14 +49,6 @@ export interface MessageMetadata {
   details?: ToolResultDetails
   // —— step / tool_call ——
   turnIndex?: number
-  // —— docker_event ——
-  containerId?: string
-  image?: string
-  reason?: string
-  // —— ssh_event ——
-  host?: string
-  port?: string
-  username?: string
 }
 
 // ---- per-type metadata 接口 ----
@@ -220,21 +212,6 @@ export interface StepThinkingMeta {
   turnIndex?: number
 }
 
-/** Docker 事件元数据 */
-export interface DockerEventMeta {
-  containerId?: string
-  image?: string
-  reason?: string
-}
-
-/** SSH 事件元数据 */
-export interface SshEventMeta {
-  host?: string
-  port?: string
-  username?: string
-  reason?: string
-}
-
 // error_event 无 metadata
 
 // ---- 判别联合基础 ----
@@ -279,18 +256,6 @@ export interface StepThinkingMessage extends MessageBase {
   metadata: StepThinkingMeta | null
 }
 
-export interface DockerEventMessage extends MessageBase {
-  role: 'system_notify'
-  type: 'docker_event'
-  metadata: DockerEventMeta | null
-}
-
-export interface SshEventMessage extends MessageBase {
-  role: 'system_notify'
-  type: 'ssh_event'
-  metadata: SshEventMeta | null
-}
-
 export interface ErrorEventMessage extends MessageBase {
   role: 'system_notify'
   type: 'error_event'
@@ -304,6 +269,4 @@ export type ChatMessage =
   | ToolUseMessage
   | StepTextMessage
   | StepThinkingMessage
-  | DockerEventMessage
-  | SshEventMessage
   | ErrorEventMessage

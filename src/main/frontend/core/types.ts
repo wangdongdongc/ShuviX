@@ -133,16 +133,22 @@ export interface ChatImageDataEvent extends ChatEventBase {
 
 // ─── 资源事件 ──────────────────────────────────────────
 
-/** Docker 容器生命周期事件 */
+/** Docker 容器生命周期事件（轻量通知，不持久化为消息） */
 export interface ChatDockerEvent extends ChatEventBase {
   type: 'docker_event'
-  messageId: string
+  action: 'container_created' | 'container_destroyed'
+  containerId?: string
+  image?: string
+  reason?: string
 }
 
-/** SSH 连接生命周期事件 */
+/** SSH 连接生命周期事件（轻量通知，不持久化为消息） */
 export interface ChatSshEvent extends ChatEventBase {
   type: 'ssh_event'
-  messageId: string
+  action: 'ssh_connected' | 'ssh_disconnected'
+  host?: string
+  port?: number
+  username?: string
 }
 
 // ─── 子智能体 ──────────────────────────────────────────────

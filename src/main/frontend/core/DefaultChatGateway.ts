@@ -134,13 +134,13 @@ export class DefaultChatGateway implements ChatGateway {
   async destroyDocker(sessionId: string): Promise<{ success: boolean }> {
     const containerId = await dockerManager.destroyContainer(sessionId)
     if (containerId) {
-      const msg = messageService.addDockerEvent({
+      chatFrontendRegistry.broadcast({
+        type: 'docker_event',
         sessionId,
-        content: 'container_destroyed',
+        action: 'container_destroyed',
         containerId: containerId.slice(0, 12),
         reason: 'manual'
       })
-      chatFrontendRegistry.broadcast({ type: 'docker_event', sessionId, messageId: msg.id })
       operationLogService.log('destroyDocker', containerId.slice(0, 12))
     }
     return { success: !!containerId }
@@ -154,15 +154,14 @@ export class DefaultChatGateway implements ChatGateway {
     const info = sshManager.getConnectionInfo(sessionId)
     if (!info) return { success: false }
     await sshManager.disconnect(sessionId)
-    const msg = messageService.addSshEvent({
+    chatFrontendRegistry.broadcast({
+      type: 'ssh_event',
       sessionId,
-      content: 'ssh_disconnected',
+      action: 'ssh_disconnected',
       host: info.host,
-      port: String(info.port),
-      username: info.username,
-      reason: 'manual'
+      port: info.port,
+      username: info.username
     })
-    chatFrontendRegistry.broadcast({ type: 'ssh_event', sessionId, messageId: msg.id })
     operationLogService.log('disconnectSsh', info.host)
     return { success: true }
   }

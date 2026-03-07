@@ -11,8 +11,6 @@ import type {
   ToolResultDetails,
   StepTextMessage,
   StepThinkingMessage,
-  DockerEventMessage,
-  SshEventMessage,
   ErrorEventMessage,
   ImageMeta
 } from '../types'
@@ -229,48 +227,6 @@ export class MessageService {
       metadata,
       model: p.model
     }) as unknown as StepTextMessage
-  }
-
-  addDockerEvent(p: {
-    sessionId: string
-    content: string
-    containerId?: string
-    image?: string
-    reason?: string
-  }): DockerEventMessage {
-    const metadata: MessageMetadata = {}
-    if (p.containerId !== undefined) metadata.containerId = p.containerId
-    if (p.image !== undefined) metadata.image = p.image
-    if (p.reason !== undefined) metadata.reason = p.reason
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'system_notify',
-      type: 'docker_event',
-      content: p.content,
-      metadata: Object.keys(metadata).length > 0 ? metadata : null
-    }) as unknown as DockerEventMessage
-  }
-
-  addSshEvent(p: {
-    sessionId: string
-    content: string
-    host?: string
-    port?: string
-    username?: string
-    reason?: string
-  }): SshEventMessage {
-    const metadata: MessageMetadata = {}
-    if (p.host !== undefined) metadata.host = p.host
-    if (p.port !== undefined) metadata.port = p.port
-    if (p.username !== undefined) metadata.username = p.username
-    if (p.reason !== undefined) metadata.reason = p.reason
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'system_notify',
-      type: 'ssh_event',
-      content: p.content,
-      metadata: Object.keys(metadata).length > 0 ? metadata : null
-    }) as unknown as SshEventMessage
   }
 
   addErrorEvent(p: { sessionId: string; content: string }): ErrorEventMessage {

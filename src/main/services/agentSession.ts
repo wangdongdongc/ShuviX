@@ -171,10 +171,10 @@ export class AgentSession {
       requestUserInput: (toolCallId, payload) => session.requestUserInput(toolCallId, payload),
       requestSshCredentials: (toolCallId) => session.requestSshCredential(toolCallId),
       onSshConnected: (host, port, username) => {
-        session.emitSshEvent('ssh_connected', { host, port: String(port), username })
+        session.emitSshEvent('ssh_connected', { host, port, username })
       },
       onSshDisconnected: (host, port, username) => {
-        session.emitSshEvent('ssh_disconnected', { host, port: String(port), username })
+        session.emitSshEvent('ssh_disconnected', { host, port, username })
       }
     }
 
@@ -671,36 +671,33 @@ export class AgentSession {
     }
   }
 
-  /** 持久化 docker_event 消息并通知前端（public: 供 ToolContext 闭包调用） */
-  emitDockerEvent(action: string, extra?: MessageMetadata): void {
-    const msg = messageService.addDockerEvent({
+  /** 通知前端 Docker 容器生命周期事件（不持久化为消息） */
+  emitDockerEvent(
+    action: 'container_created' | 'container_destroyed',
+    extra?: { containerId?: string; image?: string; reason?: string }
+  ): void {
+    chatFrontendRegistry.broadcast({
+      type: 'docker_event',
       sessionId: this.sessionId,
-      content: action,
+      action,
       containerId: extra?.containerId,
       image: extra?.image,
       reason: extra?.reason
     })
-    chatFrontendRegistry.broadcast({
-      type: 'docker_event',
-      sessionId: this.sessionId,
-      messageId: msg.id
-    })
   }
 
-  /** 持久化 ssh_event 消息并通知前端（public: 供 ToolContext 闭包调用） */
-  emitSshEvent(action: string, extra?: MessageMetadata): void {
-    const msg = messageService.addSshEvent({
-      sessionId: this.sessionId,
-      content: action,
-      host: extra?.host,
-      port: extra?.port,
-      username: extra?.username,
-      reason: extra?.reason
-    })
+  /** 通知前端 SSH 连接生命周期事件（不持久化为消息） */
+  emitSshEvent(
+    action: 'ssh_connected' | 'ssh_disconnected',
+    extra?: { host?: string; port?: number; username?: string }
+  ): void {
     chatFrontendRegistry.broadcast({
       type: 'ssh_event',
       sessionId: this.sessionId,
-      messageId: msg.id
+      action,
+      host: extra?.host,
+      port: extra?.port,
+      username: extra?.username
     })
   }
 }

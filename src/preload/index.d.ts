@@ -140,11 +140,17 @@ declare global {
   }
   interface ChatDockerEvent extends ChatEventBase {
     type: 'docker_event'
-    messageId: string
+    action: 'container_created' | 'container_destroyed'
+    containerId?: string
+    image?: string
+    reason?: string
   }
   interface ChatSshEvent extends ChatEventBase {
     type: 'ssh_event'
-    messageId: string
+    action: 'ssh_connected' | 'ssh_disconnected'
+    host?: string
+    port?: number
+    username?: string
   }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
@@ -297,16 +303,12 @@ declare global {
   type ToolUseMeta = import('../shared/types/chatMessage').ToolUseMeta
   type StepTextMeta = import('../shared/types/chatMessage').StepTextMeta
   type StepThinkingMeta = import('../shared/types/chatMessage').StepThinkingMeta
-  type DockerEventMeta = import('../shared/types/chatMessage').DockerEventMeta
-  type SshEventMeta = import('../shared/types/chatMessage').SshEventMeta
   type MessageBase = import('../shared/types/chatMessage').MessageBase
   type UserTextMessage = import('../shared/types/chatMessage').UserTextMessage
   type AssistantTextMessage = import('../shared/types/chatMessage').AssistantTextMessage
   type ToolUseMessage = import('../shared/types/chatMessage').ToolUseMessage
   type StepTextMessage = import('../shared/types/chatMessage').StepTextMessage
   type StepThinkingMessage = import('../shared/types/chatMessage').StepThinkingMessage
-  type DockerEventMessage = import('../shared/types/chatMessage').DockerEventMessage
-  type SshEventMessage = import('../shared/types/chatMessage').SshEventMessage
   type ErrorEventMessage = import('../shared/types/chatMessage').ErrorEventMessage
   type ChatMessage = import('../shared/types/chatMessage').ChatMessage
 

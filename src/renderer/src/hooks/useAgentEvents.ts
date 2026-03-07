@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useChatStore, type ChatMessage, type DockerEventMessage, type SshEventMessage } from '../stores/chatStore'
+import { useChatStore, type ChatMessage } from '../stores/chatStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
@@ -113,77 +113,28 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'docker_event': {
-        // 仅当前活跃会话时添加 docker_event 消息
-        if (sid === store.activeSessionId) {
-          const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m): m is DockerEventMessage => m.id === event.messageId && m.type === 'docker_event')
-          if (dockerMsg) {
-            store.addMessage(dockerMsg)
-            // 同步 sessionResources
-            if (dockerMsg.content === 'container_created') {
-              store.setSessionDocker(sid, {
-                containerId: dockerMsg.metadata?.containerId || '',
-                image: dockerMsg.metadata?.image || ''
-              })
-            } else if (dockerMsg.content === 'container_destroyed') {
-              store.setSessionDocker(sid, null)
-            }
-          }
+      case 'docker_event':
+        if (event.action === 'container_created') {
+          store.setSessionDocker(sid, {
+            containerId: event.containerId || '',
+            image: event.image || ''
+          })
         } else {
-          // 非活跃会话：仅更新 sessionResources（确保切换后状态正确）
-          const msgs3 = await window.api.message.list(sid)
-          const dockerMsg = msgs3.find((m): m is DockerEventMessage => m.id === event.messageId && m.type === 'docker_event')
-          if (dockerMsg) {
-            if (dockerMsg.content === 'container_created') {
-              store.setSessionDocker(sid, {
-                containerId: dockerMsg.metadata?.containerId || '',
-                image: dockerMsg.metadata?.image || ''
-              })
-            } else if (dockerMsg.content === 'container_destroyed') {
-              store.setSessionDocker(sid, null)
-            }
-          }
+          store.setSessionDocker(sid, null)
         }
         break
-      }
 
-      case 'ssh_event': {
-        // 仅当前活跃会话时添加 ssh_event 消息
-        if (sid === store.activeSessionId) {
-          const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m): m is SshEventMessage => m.id === event.messageId && m.type === 'ssh_event')
-          if (sshMsg) {
-            store.addMessage(sshMsg)
-            // 同步 sessionResources
-            if (sshMsg.content === 'ssh_connected') {
-              store.setSessionSsh(sid, {
-                host: sshMsg.metadata?.host || '',
-                port: Number(sshMsg.metadata?.port) || 22,
-                username: sshMsg.metadata?.username || ''
-              })
-            } else if (sshMsg.content === 'ssh_disconnected') {
-              store.setSessionSsh(sid, null)
-            }
-          }
+      case 'ssh_event':
+        if (event.action === 'ssh_connected') {
+          store.setSessionSsh(sid, {
+            host: event.host || '',
+            port: event.port || 22,
+            username: event.username || ''
+          })
         } else {
-          // 非活跃会话：仅更新 sessionResources
-          const msgs4 = await window.api.message.list(sid)
-          const sshMsg = msgs4.find((m): m is SshEventMessage => m.id === event.messageId && m.type === 'ssh_event')
-          if (sshMsg) {
-            if (sshMsg.content === 'ssh_connected') {
-              store.setSessionSsh(sid, {
-                host: sshMsg.metadata?.host || '',
-                port: Number(sshMsg.metadata?.port) || 22,
-                username: sshMsg.metadata?.username || ''
-              })
-            } else if (sshMsg.content === 'ssh_disconnected') {
-              store.setSessionSsh(sid, null)
-            }
-          }
+          store.setSessionSsh(sid, null)
         }
         break
-      }
 
       case 'agent_end': {
         // 更新已占用上下文 token 数（total - output = prompt_tokens，包含 cached tokens）

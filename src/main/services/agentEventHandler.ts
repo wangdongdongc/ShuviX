@@ -87,7 +87,10 @@ export interface SessionEventHandlerContext {
   state: SessionEventState
   broadcastEvent: (event: ChatEvent) => void
   persistStreamBuffer: (extraMeta?: MessageMetadata) => Message | null
-  emitDockerEvent: (action: string, extra?: MessageMetadata) => void
+  emitDockerEvent: (
+    action: 'container_created' | 'container_destroyed',
+    extra?: { containerId?: string; image?: string; reason?: string }
+  ) => void
 }
 
 // ─── Handler 实现 ────────────────────────────────────────

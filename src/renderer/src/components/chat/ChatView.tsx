@@ -58,14 +58,8 @@ function buildVisibleItems(
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
 
-    // 跳过 system_notify（但保留 docker_event / ssh_event / error_event）
-    if (
-      msg.role === 'system_notify' &&
-      msg.type !== 'docker_event' &&
-      msg.type !== 'ssh_event' &&
-      msg.type !== 'error_event'
-    )
-      continue
+    // 跳过 system_notify（但保留 error_event）
+    if (msg.role === 'system_notify' && msg.type !== 'error_event') continue
 
     // 流式中：最后一个 user text 之后的 step/tool 消息跳过（由 StreamingFooter 展示）
     if (isStreaming && streamCutoff >= 0 && i > streamCutoff && isStepOrToolMsg(msg)) continue
@@ -84,7 +78,7 @@ function buildVisibleItems(
       continue
     }
 
-    // user text / docker_event / ssh_event / error_event 等
+    // user text / error_event 等
     // 如果有未消费的 steps（如 agent 中断），先创建一个空 assistant bubble 承载它们
     if (stepBuffer.length > 0) {
       const syntheticMsg: AssistantTextMessage = {

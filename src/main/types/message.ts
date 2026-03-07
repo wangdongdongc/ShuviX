@@ -25,16 +25,12 @@ export type {
   McpToolDetails,
   StepTextMeta,
   StepThinkingMeta,
-  DockerEventMeta,
-  SshEventMeta,
   MessageBase,
   UserTextMessage,
   AssistantTextMessage,
   ToolUseMessage,
   StepTextMessage,
   StepThinkingMessage,
-  DockerEventMessage,
-  SshEventMessage,
   ErrorEventMessage,
   ChatMessage
 } from '../../shared/types/chatMessage'

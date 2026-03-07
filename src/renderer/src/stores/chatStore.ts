@@ -9,8 +9,6 @@ export type {
   ToolUseMessage,
   StepTextMessage,
   StepThinkingMessage,
-  DockerEventMessage,
-  SshEventMessage,
   ErrorEventMessage,
   MessageMetadata,
   ImageMeta,
@@ -19,9 +17,7 @@ export type {
   AssistantTextMeta,
   ToolUseMeta,
   StepTextMeta,
-  StepThinkingMeta,
-  DockerEventMeta,
-  SshEventMeta
+  StepThinkingMeta
 }
 export type { ToolResultDetails }
 

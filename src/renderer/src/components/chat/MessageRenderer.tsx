@@ -1,6 +1,5 @@
-import { useTranslation } from 'react-i18next'
-import { Container, AlertCircle, Terminal } from 'lucide-react'
-import type { ChatMessage, DockerEventMessage, SshEventMessage, ErrorEventMessage } from '../../stores/chatStore'
+import { AlertCircle } from 'lucide-react'
+import type { ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import type { StepItem, StepMessage } from './types'
@@ -17,38 +16,6 @@ interface MessageRendererProps {
   lastAssistantTextId: string | null
   onRollback?: (messageId: string) => void
   onRegenerate?: (assistantMsgId: string) => void
-}
-
-function DockerEventBlock({ msg }: { msg: DockerEventMessage }): React.JSX.Element {
-  const { t } = useTranslation()
-  const isCreate = msg.content === 'container_created'
-  const containerId = msg.metadata?.containerId || ''
-  const reason = msg.metadata?.reason || ''
-  return (
-    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
-      <Container size={12} />
-      <span>{isCreate ? t('chat.containerCreated') : t('chat.containerDestroyed')}</span>
-      {containerId && <span className="font-mono opacity-60">{containerId}</span>}
-      {reason && <span className="opacity-50">({t(`chat.destroyReason_${reason}`)})</span>}
-    </div>
-  )
-}
-
-function SshEventBlock({ msg }: { msg: SshEventMessage }): React.JSX.Element {
-  const { t } = useTranslation()
-  const isConnect = msg.content === 'ssh_connected'
-  const host = msg.metadata?.host || ''
-  const port = msg.metadata?.port || ''
-  const username = msg.metadata?.username || ''
-  const target =
-    username && host ? `${username}@${host}${port && port !== '22' ? ':' + port : ''}` : ''
-  return (
-    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-text-tertiary">
-      <Terminal size={12} />
-      <span>{isConnect ? t('chat.sshConnected') : t('chat.sshDisconnected')}</span>
-      {target && <span className="font-mono opacity-60">{target}</span>}
-    </div>
-  )
 }
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
@@ -75,10 +42,6 @@ export function MessageRenderer({
   switch (msg.type) {
     case 'error_event':
       return <ErrorEventBlock msg={msg} />
-    case 'docker_event':
-      return <DockerEventBlock msg={msg} />
-    case 'ssh_event':
-      return <SshEventBlock msg={msg} />
   }
 
   // 将 VisibleItem.steps 转换为 StepItem[]（窄化 msg 类型）
