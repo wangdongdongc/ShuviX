@@ -80,6 +80,8 @@ export interface BashToolDetails {
   type: 'bash'
   exitCode: number
   truncated: boolean
+  /** 是否在 Docker 容器中执行 */
+  docker?: boolean
 }
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本三种场景的扁平超集） */

@@ -18,7 +18,8 @@ import {
   Bot,
   FolderTree,
   Search,
-  FileSearch2
+  FileSearch2,
+  Container
 } from 'lucide-react'
 import { useChatStore, type ToolResultDetails } from '../../stores/chatStore'
 
@@ -83,8 +84,9 @@ export function ToolCallBlock({
     switch (toolName) {
       case 'bash': {
         const line = str(args?.command).split('\n')[0]
+        const isDocker = details?.type === 'bash' && details.docker
         return {
-          icon: <Terminal size={12} className={ic} />,
+          icon: isDocker ? <Container size={12} className="text-emerald-500 flex-shrink-0" /> : <Terminal size={12} className={ic} />,
           detail: line.length > 80 ? line.slice(0, 77) + '...' : line
         }
       }
@@ -114,7 +116,7 @@ export function ToolCallBlock({
         const action = str(args?.action)
         const cmd = args?.command ? `: ${str(args.command).split('\n')[0].slice(0, 60)}` : ''
         return {
-          icon: <Terminal size={12} className="text-emerald-400 flex-shrink-0" />,
+          icon: <Terminal size={12} className="text-sky-500 flex-shrink-0" />,
           detail: `${action}${cmd}`
         }
       }

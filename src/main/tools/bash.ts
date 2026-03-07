@@ -220,7 +220,8 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         details: {
           type: 'bash',
           exitCode: result.exitCode,
-          truncated: truncated.truncated
+          truncated: truncated.truncated,
+          docker: docker.useDocker || undefined
         }
       }
     } catch (err: unknown) {
