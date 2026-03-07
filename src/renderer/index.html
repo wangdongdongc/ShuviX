@@ -10,11 +10,15 @@
     <script>
       // 在 CSS 加载前同步设置主题，避免闪烁
       ;(function () {
-        var t = localStorage.getItem('theme') || 'dark'
-        if (t === 'system') {
-          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        var mode = localStorage.getItem('theme') || 'dark'
+        if (mode === 'system') {
+          mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         }
-        document.documentElement.setAttribute('data-theme', t)
+        var themeId =
+          mode === 'light'
+            ? localStorage.getItem('lightTheme') || 'light'
+            : localStorage.getItem('darkTheme') || 'dark'
+        document.documentElement.setAttribute('data-theme', themeId)
       })()
     </script>
   </head>

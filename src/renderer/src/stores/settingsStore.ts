@@ -2,6 +2,11 @@ import { create } from 'zustand'
 
 // ProviderInfo / ProviderModelInfo / AvailableModel / ConfigMeta 类型定义在 src/preload/index.d.ts（全局可用）
 
+/** 深色系主题 ID */
+export type DarkThemeId = 'dark' | 'github-dark' | 'nord' | 'tokyo-night'
+/** 浅色系主题 ID */
+export type LightThemeId = 'light' | 'github-light' | 'solarized-light'
+
 interface SettingsState {
   /** 所有提供商列表（含禁用的） */
   providers: ProviderInfo[]
@@ -13,8 +18,12 @@ interface SettingsState {
   activeModel: string
   /** 系统提示词 */
   systemPrompt: string
-  /** 主题 */
+  /** 主题模式 */
   theme: 'dark' | 'light' | 'system'
+  /** 深色模式使用的具体主题 */
+  darkTheme: DarkThemeId
+  /** 浅色模式使用的具体主题 */
+  lightTheme: LightThemeId
   /** 字体大小 (px) */
   fontSize: number
   /** UI 缩放比例 (%) */
@@ -46,6 +55,8 @@ interface SettingsState {
   setActiveModel: (model: string) => void
   setSystemPrompt: (prompt: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
+  setDarkTheme: (theme: DarkThemeId) => void
+  setLightTheme: (theme: LightThemeId) => void
   setFontSize: (size: number) => void
   setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
@@ -67,6 +78,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   activeModel: '',
   systemPrompt: 'You are a helpful assistant.',
   theme: 'dark',
+  darkTheme: 'dark',
+  lightTheme: 'light',
   fontSize: 14,
   uiZoom: 100,
   isSettingsOpen: false,
@@ -81,6 +94,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setActiveModel: (model) => set({ activeModel: model }),
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
   setTheme: (theme) => set({ theme }),
+  setDarkTheme: (darkTheme) => set({ darkTheme }),
+  setLightTheme: (lightTheme) => set({ lightTheme }),
   setFontSize: (size) => set({ fontSize: size }),
   setUiZoom: (zoom) => set({ uiZoom: zoom }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
@@ -90,16 +105,22 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   /** 从 settings 表加载通用设置 */
   loadSettings: (settings) => {
+    const darkTheme = (settings['general.darkTheme'] as DarkThemeId) || 'dark'
+    const lightTheme = (settings['general.lightTheme'] as LightThemeId) || 'light'
     set({
       activeProvider: settings['general.defaultProvider'] || '',
       activeModel: settings['general.defaultModel'] || '',
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
+      darkTheme,
+      lightTheme,
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁
     localStorage.setItem('theme', settings['general.theme'] || 'dark')
+    localStorage.setItem('darkTheme', darkTheme)
+    localStorage.setItem('lightTheme', lightTheme)
   }
 }))

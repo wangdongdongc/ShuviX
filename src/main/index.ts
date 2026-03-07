@@ -19,15 +19,35 @@ let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 const isMac = process.platform === 'darwin'
 
+/** 各主题对应的窗口背景色（用于创建窗口时避免白闪） */
+const THEME_BG_COLORS: Record<string, string> = {
+  dark: '#0a0a0f',
+  'github-dark': '#0d1117',
+  nord: '#2e3440',
+  'tokyo-night': '#1a1b26',
+  light: '#ffffff',
+  'github-light': '#ffffff',
+  'solarized-light': '#fdf6e3'
+}
+
 /** 根据用户主题设置返回窗口背景色 */
 function getThemeBgColor(): string {
   try {
-    const theme = settingsDao.findByKey('general.theme') || 'dark'
-    if (theme === 'system') {
+    const mode = settingsDao.findByKey('general.theme') || 'dark'
+    let themeId: string
+    if (mode === 'system') {
       const { nativeTheme } = require('electron')
-      return nativeTheme.shouldUseDarkColors ? '#0a0a0f' : '#ffffff'
+      const resolved = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+      themeId =
+        resolved === 'light'
+          ? settingsDao.findByKey('general.lightTheme') || 'light'
+          : settingsDao.findByKey('general.darkTheme') || 'dark'
+    } else if (mode === 'light') {
+      themeId = settingsDao.findByKey('general.lightTheme') || 'light'
+    } else {
+      themeId = settingsDao.findByKey('general.darkTheme') || 'dark'
     }
-    return theme === 'light' ? '#ffffff' : '#0a0a0f'
+    return THEME_BG_COLORS[themeId] || '#0a0a0f'
   } catch {
     return '#0a0a0f'
   }

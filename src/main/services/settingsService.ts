@@ -15,6 +15,14 @@ export interface SettingMeta {
  */
 export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.theme': { labelKey: 'settings.theme', desc: 'dark | light | system' },
+  'general.darkTheme': {
+    labelKey: 'settings.darkThemeVariant',
+    desc: 'dark | github-dark | nord | tokyo-night'
+  },
+  'general.lightTheme': {
+    labelKey: 'settings.lightThemeVariant',
+    desc: 'light | github-light | solarized-light'
+  },
   'general.language': { labelKey: 'settings.language', desc: 'zh | en | ja' },
   'general.fontSize': { labelKey: 'settings.fontSize', desc: 'number as string, 12-20' },
   'general.uiZoom': { labelKey: 'settings.uiZoom', desc: 'number as string, 50-200 (percent)' },

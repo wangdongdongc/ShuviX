@@ -12,15 +12,17 @@
   --color-text-primary: var(--theme-text-primary);
   --color-text-secondary: var(--theme-text-secondary);
   --color-text-tertiary: var(--theme-text-tertiary);
-  --color-accent: #6366f1;
-  --color-accent-hover: #818cf8;
-  --color-accent-muted: rgba(99, 102, 241, 0.15);
+  --color-accent: var(--theme-accent);
+  --color-accent-hover: var(--theme-accent-hover);
+  --color-accent-muted: var(--theme-accent-muted);
   --color-success: #22c55e;
   --color-error: #ef4444;
   --color-warning: #f59e0b;
 }
 
-/* 暗色主题（默认） */
+/* ========== 深色主题 ========== */
+
+/* 默认深色（Default Dark） */
 :root,
 [data-theme='dark'] {
   --theme-bg-primary: #0a0a0f;
@@ -33,9 +35,65 @@
   --theme-text-primary: #e8e8f0;
   --theme-text-secondary: #9898b0;
   --theme-text-tertiary: #686880;
+  --theme-accent: #6366f1;
+  --theme-accent-hover: #818cf8;
+  --theme-accent-muted: rgba(99, 102, 241, 0.15);
 }
 
-/* 浅色主题 */
+/* GitHub Dark */
+[data-theme='github-dark'] {
+  --theme-bg-primary: #0d1117;
+  --theme-bg-secondary: #161b22;
+  --theme-bg-tertiary: #21262d;
+  --theme-bg-hover: #292e36;
+  --theme-bg-active: #30363d;
+  --theme-border-primary: #30363d;
+  --theme-border-secondary: #21262d;
+  --theme-text-primary: #e6edf3;
+  --theme-text-secondary: #8b949e;
+  --theme-text-tertiary: #6e7681;
+  --theme-accent: #58a6ff;
+  --theme-accent-hover: #79c0ff;
+  --theme-accent-muted: rgba(88, 166, 255, 0.15);
+}
+
+/* Nord */
+[data-theme='nord'] {
+  --theme-bg-primary: #2e3440;
+  --theme-bg-secondary: #3b4252;
+  --theme-bg-tertiary: #434c5e;
+  --theme-bg-hover: #4c566a;
+  --theme-bg-active: #556078;
+  --theme-border-primary: #4c566a;
+  --theme-border-secondary: #3b4252;
+  --theme-text-primary: #eceff4;
+  --theme-text-secondary: #d8dee9;
+  --theme-text-tertiary: #81a1c1;
+  --theme-accent: #88c0d0;
+  --theme-accent-hover: #8fbcbb;
+  --theme-accent-muted: rgba(136, 192, 208, 0.15);
+}
+
+/* Tokyo Night */
+[data-theme='tokyo-night'] {
+  --theme-bg-primary: #1a1b26;
+  --theme-bg-secondary: #1f2335;
+  --theme-bg-tertiary: #292e42;
+  --theme-bg-hover: #33384e;
+  --theme-bg-active: #3b4261;
+  --theme-border-primary: #3b4261;
+  --theme-border-secondary: #292e42;
+  --theme-text-primary: #c0caf5;
+  --theme-text-secondary: #a9b1d6;
+  --theme-text-tertiary: #565f89;
+  --theme-accent: #bb9af7;
+  --theme-accent-hover: #c4a7f7;
+  --theme-accent-muted: rgba(187, 154, 247, 0.15);
+}
+
+/* ========== 浅色主题 ========== */
+
+/* 默认浅色（Default Light） */
 [data-theme='light'] {
   --theme-bg-primary: #ffffff;
   --theme-bg-secondary: #f5f5f7;
@@ -47,6 +105,43 @@
   --theme-text-primary: #1a1a2e;
   --theme-text-secondary: #5a5a72;
   --theme-text-tertiary: #8a8aa0;
+  --theme-accent: #6366f1;
+  --theme-accent-hover: #818cf8;
+  --theme-accent-muted: rgba(99, 102, 241, 0.15);
+}
+
+/* GitHub Light */
+[data-theme='github-light'] {
+  --theme-bg-primary: #ffffff;
+  --theme-bg-secondary: #f6f8fa;
+  --theme-bg-tertiary: #eaeef2;
+  --theme-bg-hover: #dce1e6;
+  --theme-bg-active: #d0d7de;
+  --theme-border-primary: #d0d7de;
+  --theme-border-secondary: #e1e4e8;
+  --theme-text-primary: #1f2328;
+  --theme-text-secondary: #656d76;
+  --theme-text-tertiary: #8b949e;
+  --theme-accent: #0969da;
+  --theme-accent-hover: #0550ae;
+  --theme-accent-muted: rgba(9, 105, 218, 0.12);
+}
+
+/* Solarized Light */
+[data-theme='solarized-light'] {
+  --theme-bg-primary: #fdf6e3;
+  --theme-bg-secondary: #eee8d5;
+  --theme-bg-tertiary: #e4ddc8;
+  --theme-bg-hover: #ddd6c1;
+  --theme-bg-active: #d3ccb7;
+  --theme-border-primary: #d3ccb7;
+  --theme-border-secondary: #e4ddc8;
+  --theme-text-primary: #657b83;
+  --theme-text-secondary: #839496;
+  --theme-text-tertiary: #93a1a1;
+  --theme-accent: #2aa198;
+  --theme-accent-hover: #268bd2;
+  --theme-accent-muted: rgba(42, 161, 152, 0.12);
 }
 
 /* 全局基础样式 */
@@ -371,112 +466,222 @@ body {
   color: var(--color-text-primary);
 }
 
-/* 暗色主题 token 配色 */
+/* 暗色主题 token 配色（所有深色系主题共用） */
 [data-theme='dark'] .hljs-keyword,
 [data-theme='dark'] .hljs-selector-tag,
-[data-theme='dark'] .hljs-built_in {
+[data-theme='dark'] .hljs-built_in,
+[data-theme='github-dark'] .hljs-keyword,
+[data-theme='github-dark'] .hljs-selector-tag,
+[data-theme='github-dark'] .hljs-built_in,
+[data-theme='nord'] .hljs-keyword,
+[data-theme='nord'] .hljs-selector-tag,
+[data-theme='nord'] .hljs-built_in,
+[data-theme='tokyo-night'] .hljs-keyword,
+[data-theme='tokyo-night'] .hljs-selector-tag,
+[data-theme='tokyo-night'] .hljs-built_in {
   color: #ff7b72;
 }
 [data-theme='dark'] .hljs-string,
-[data-theme='dark'] .hljs-attr {
+[data-theme='dark'] .hljs-attr,
+[data-theme='github-dark'] .hljs-string,
+[data-theme='github-dark'] .hljs-attr,
+[data-theme='nord'] .hljs-string,
+[data-theme='nord'] .hljs-attr,
+[data-theme='tokyo-night'] .hljs-string,
+[data-theme='tokyo-night'] .hljs-attr {
   color: #a5d6ff;
 }
 [data-theme='dark'] .hljs-number,
-[data-theme='dark'] .hljs-literal {
+[data-theme='dark'] .hljs-literal,
+[data-theme='github-dark'] .hljs-number,
+[data-theme='github-dark'] .hljs-literal,
+[data-theme='nord'] .hljs-number,
+[data-theme='nord'] .hljs-literal,
+[data-theme='tokyo-night'] .hljs-number,
+[data-theme='tokyo-night'] .hljs-literal {
   color: #79c0ff;
 }
 [data-theme='dark'] .hljs-comment,
-[data-theme='dark'] .hljs-doctag {
+[data-theme='dark'] .hljs-doctag,
+[data-theme='github-dark'] .hljs-comment,
+[data-theme='github-dark'] .hljs-doctag,
+[data-theme='nord'] .hljs-comment,
+[data-theme='nord'] .hljs-doctag,
+[data-theme='tokyo-night'] .hljs-comment,
+[data-theme='tokyo-night'] .hljs-doctag {
   color: #8b949e;
   font-style: italic;
 }
 [data-theme='dark'] .hljs-function,
-[data-theme='dark'] .hljs-title {
+[data-theme='dark'] .hljs-title,
+[data-theme='github-dark'] .hljs-function,
+[data-theme='github-dark'] .hljs-title,
+[data-theme='nord'] .hljs-function,
+[data-theme='nord'] .hljs-title,
+[data-theme='tokyo-night'] .hljs-function,
+[data-theme='tokyo-night'] .hljs-title {
   color: #d2a8ff;
 }
 [data-theme='dark'] .hljs-type,
-[data-theme='dark'] .hljs-title.class_ {
+[data-theme='dark'] .hljs-title.class_,
+[data-theme='github-dark'] .hljs-type,
+[data-theme='github-dark'] .hljs-title.class_,
+[data-theme='nord'] .hljs-type,
+[data-theme='nord'] .hljs-title.class_,
+[data-theme='tokyo-night'] .hljs-type,
+[data-theme='tokyo-night'] .hljs-title.class_ {
   color: #ffa657;
 }
-[data-theme='dark'] .hljs-params {
+[data-theme='dark'] .hljs-params,
+[data-theme='github-dark'] .hljs-params,
+[data-theme='nord'] .hljs-params,
+[data-theme='tokyo-night'] .hljs-params {
   color: #c9d1d9;
 }
-[data-theme='dark'] .hljs-meta {
+[data-theme='dark'] .hljs-meta,
+[data-theme='github-dark'] .hljs-meta,
+[data-theme='nord'] .hljs-meta,
+[data-theme='tokyo-night'] .hljs-meta {
   color: #79c0ff;
 }
 [data-theme='dark'] .hljs-variable,
-[data-theme='dark'] .hljs-template-variable {
+[data-theme='dark'] .hljs-template-variable,
+[data-theme='github-dark'] .hljs-variable,
+[data-theme='github-dark'] .hljs-template-variable,
+[data-theme='nord'] .hljs-variable,
+[data-theme='nord'] .hljs-template-variable,
+[data-theme='tokyo-night'] .hljs-variable,
+[data-theme='tokyo-night'] .hljs-template-variable {
   color: #ffa657;
 }
-[data-theme='dark'] .hljs-selector-class {
+[data-theme='dark'] .hljs-selector-class,
+[data-theme='github-dark'] .hljs-selector-class,
+[data-theme='nord'] .hljs-selector-class,
+[data-theme='tokyo-night'] .hljs-selector-class {
   color: #7ee787;
 }
-[data-theme='dark'] .hljs-addition {
+[data-theme='dark'] .hljs-addition,
+[data-theme='github-dark'] .hljs-addition,
+[data-theme='nord'] .hljs-addition,
+[data-theme='tokyo-night'] .hljs-addition {
   color: #aff5b4;
   background: rgba(46, 160, 67, 0.15);
 }
-[data-theme='dark'] .hljs-deletion {
+[data-theme='dark'] .hljs-deletion,
+[data-theme='github-dark'] .hljs-deletion,
+[data-theme='nord'] .hljs-deletion,
+[data-theme='tokyo-night'] .hljs-deletion {
   color: #ffdcd7;
   background: rgba(248, 81, 73, 0.15);
 }
-[data-theme='dark'] .hljs-regexp {
+[data-theme='dark'] .hljs-regexp,
+[data-theme='github-dark'] .hljs-regexp,
+[data-theme='nord'] .hljs-regexp,
+[data-theme='tokyo-night'] .hljs-regexp {
   color: #7ee787;
 }
-[data-theme='dark'] .hljs-symbol {
+[data-theme='dark'] .hljs-symbol,
+[data-theme='github-dark'] .hljs-symbol,
+[data-theme='nord'] .hljs-symbol,
+[data-theme='tokyo-night'] .hljs-symbol {
   color: #79c0ff;
 }
 
-/* 浅色主题 token 配色 */
+/* 浅色主题 token 配色（所有浅色系主题共用） */
 [data-theme='light'] .hljs-keyword,
 [data-theme='light'] .hljs-selector-tag,
-[data-theme='light'] .hljs-built_in {
+[data-theme='light'] .hljs-built_in,
+[data-theme='github-light'] .hljs-keyword,
+[data-theme='github-light'] .hljs-selector-tag,
+[data-theme='github-light'] .hljs-built_in,
+[data-theme='solarized-light'] .hljs-keyword,
+[data-theme='solarized-light'] .hljs-selector-tag,
+[data-theme='solarized-light'] .hljs-built_in {
   color: #cf222e;
 }
 [data-theme='light'] .hljs-string,
-[data-theme='light'] .hljs-attr {
+[data-theme='light'] .hljs-attr,
+[data-theme='github-light'] .hljs-string,
+[data-theme='github-light'] .hljs-attr,
+[data-theme='solarized-light'] .hljs-string,
+[data-theme='solarized-light'] .hljs-attr {
   color: #0a3069;
 }
 [data-theme='light'] .hljs-number,
-[data-theme='light'] .hljs-literal {
+[data-theme='light'] .hljs-literal,
+[data-theme='github-light'] .hljs-number,
+[data-theme='github-light'] .hljs-literal,
+[data-theme='solarized-light'] .hljs-number,
+[data-theme='solarized-light'] .hljs-literal {
   color: #0550ae;
 }
 [data-theme='light'] .hljs-comment,
-[data-theme='light'] .hljs-doctag {
+[data-theme='light'] .hljs-doctag,
+[data-theme='github-light'] .hljs-comment,
+[data-theme='github-light'] .hljs-doctag,
+[data-theme='solarized-light'] .hljs-comment,
+[data-theme='solarized-light'] .hljs-doctag {
   color: #6e7781;
   font-style: italic;
 }
 [data-theme='light'] .hljs-function,
-[data-theme='light'] .hljs-title {
+[data-theme='light'] .hljs-title,
+[data-theme='github-light'] .hljs-function,
+[data-theme='github-light'] .hljs-title,
+[data-theme='solarized-light'] .hljs-function,
+[data-theme='solarized-light'] .hljs-title {
   color: #8250df;
 }
 [data-theme='light'] .hljs-type,
-[data-theme='light'] .hljs-title.class_ {
+[data-theme='light'] .hljs-title.class_,
+[data-theme='github-light'] .hljs-type,
+[data-theme='github-light'] .hljs-title.class_,
+[data-theme='solarized-light'] .hljs-type,
+[data-theme='solarized-light'] .hljs-title.class_ {
   color: #953800;
 }
-[data-theme='light'] .hljs-params {
+[data-theme='light'] .hljs-params,
+[data-theme='github-light'] .hljs-params,
+[data-theme='solarized-light'] .hljs-params {
   color: #24292f;
 }
-[data-theme='light'] .hljs-meta {
+[data-theme='light'] .hljs-meta,
+[data-theme='github-light'] .hljs-meta,
+[data-theme='solarized-light'] .hljs-meta {
   color: #0550ae;
 }
 [data-theme='light'] .hljs-variable,
-[data-theme='light'] .hljs-template-variable {
+[data-theme='light'] .hljs-template-variable,
+[data-theme='github-light'] .hljs-variable,
+[data-theme='github-light'] .hljs-template-variable,
+[data-theme='solarized-light'] .hljs-variable,
+[data-theme='solarized-light'] .hljs-template-variable {
   color: #953800;
 }
-[data-theme='light'] .hljs-selector-class {
+[data-theme='light'] .hljs-selector-class,
+[data-theme='github-light'] .hljs-selector-class,
+[data-theme='solarized-light'] .hljs-selector-class {
   color: #116329;
 }
-[data-theme='light'] .hljs-addition {
+[data-theme='light'] .hljs-addition,
+[data-theme='github-light'] .hljs-addition,
+[data-theme='solarized-light'] .hljs-addition {
   color: #116329;
   background: rgba(46, 160, 67, 0.1);
 }
-[data-theme='light'] .hljs-deletion {
+[data-theme='light'] .hljs-deletion,
+[data-theme='github-light'] .hljs-deletion,
+[data-theme='solarized-light'] .hljs-deletion {
   color: #82071e;
   background: rgba(248, 81, 73, 0.1);
 }
-[data-theme='light'] .hljs-regexp {
+[data-theme='light'] .hljs-regexp,
+[data-theme='github-light'] .hljs-regexp,
+[data-theme='solarized-light'] .hljs-regexp {
   color: #116329;
 }
-[data-theme='light'] .hljs-symbol {
+[data-theme='light'] .hljs-symbol,
+[data-theme='github-light'] .hljs-symbol,
+[data-theme='solarized-light'] .hljs-symbol {
   color: #0550ae;
 }

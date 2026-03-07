@@ -22,7 +22,7 @@ const isSettingsWindow = window.location.hash === '#settings'
  */
 function App(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
-  const { theme, fontSize } = useSettingsStore()
+  const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
 
   // ========== 核心流程 hook ==========
   useAppInit()
@@ -36,10 +36,13 @@ function App(): React.JSX.Element {
     document.documentElement.style.setProperty('--app-font-size', `${fontSize}px`)
   }, [fontSize])
 
-  /** 主题切换：根据 theme 状态设置 data-theme 属性 */
+  /** 主题切换：根据 theme 模式 + darkTheme/lightTheme 设置 data-theme 属性 */
   useEffect(() => {
-    const applyTheme = (resolved: 'dark' | 'light'): void => {
-      document.documentElement.setAttribute('data-theme', resolved)
+    const resolveThemeId = (mode: 'dark' | 'light'): string =>
+      mode === 'dark' ? darkTheme : lightTheme
+
+    const applyTheme = (mode: 'dark' | 'light'): void => {
+      document.documentElement.setAttribute('data-theme', resolveThemeId(mode))
     }
 
     if (theme === 'system') {
@@ -52,7 +55,7 @@ function App(): React.JSX.Element {
       applyTheme(theme)
       return undefined
     }
-  }, [theme])
+  }, [theme, darkTheme, lightTheme])
 
   // ========== 渲染 ==========
 

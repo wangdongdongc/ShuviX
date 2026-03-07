@@ -11,7 +11,7 @@ import { SESSION_ID } from './api'
  * 复用 renderer 的 ChatView，不含 Sidebar/Settings
  */
 export default function WebApp(): React.JSX.Element {
-  const { theme, fontSize } = useSettingsStore()
+  const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
 
   // ─── 初始化：加载设置 + 设置当前 session ───
   useEffect(() => {
@@ -53,8 +53,11 @@ export default function WebApp(): React.JSX.Element {
   }, [fontSize])
 
   useEffect(() => {
-    const applyTheme = (resolved: 'dark' | 'light'): void => {
-      document.documentElement.setAttribute('data-theme', resolved)
+    const resolveThemeId = (mode: 'dark' | 'light'): string =>
+      mode === 'dark' ? darkTheme : lightTheme
+
+    const applyTheme = (mode: 'dark' | 'light'): void => {
+      document.documentElement.setAttribute('data-theme', resolveThemeId(mode))
     }
     if (theme === 'system') {
       const mq = window.matchMedia('(prefers-color-scheme: dark)')
@@ -66,7 +69,7 @@ export default function WebApp(): React.JSX.Element {
       applyTheme(theme)
       return undefined
     }
-  }, [theme])
+  }, [theme, darkTheme, lightTheme])
 
   return (
     <div className="h-screen flex flex-col bg-bg-primary text-text-primary">

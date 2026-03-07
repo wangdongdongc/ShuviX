@@ -1,6 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { useSettingsStore, type DarkThemeId, type LightThemeId } from '../../stores/settingsStore'
+
+const DARK_THEMES: { id: DarkThemeId; labelKey: string }[] = [
+  { id: 'dark', labelKey: 'settings.themeDefaultDark' },
+  { id: 'github-dark', labelKey: 'settings.themeGitHubDark' },
+  { id: 'nord', labelKey: 'settings.themeNord' },
+  { id: 'tokyo-night', labelKey: 'settings.themeTokyoNight' }
+]
+
+const LIGHT_THEMES: { id: LightThemeId; labelKey: string }[] = [
+  { id: 'light', labelKey: 'settings.themeDefaultLight' },
+  { id: 'github-light', labelKey: 'settings.themeGitHubLight' },
+  { id: 'solarized-light', labelKey: 'settings.themeSolarizedLight' }
+]
 
 /** 通用设置（所有修改即时保存） */
 export function GeneralSettings(): React.JSX.Element {
@@ -9,10 +22,14 @@ export function GeneralSettings(): React.JSX.Element {
   const {
     systemPrompt,
     theme,
+    darkTheme,
+    lightTheme,
     fontSize,
     uiZoom,
     setSystemPrompt,
     setTheme,
+    setDarkTheme,
+    setLightTheme,
     setFontSize,
     setUiZoom,
     availableModels,
@@ -57,7 +74,7 @@ export function GeneralSettings(): React.JSX.Element {
 
   return (
     <div className="flex-1 px-5 py-5 space-y-6">
-      {/* 主题 */}
+      {/* 主题模式 */}
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-2">
           {t('settings.theme')}
@@ -82,6 +99,58 @@ export function GeneralSettings(): React.JSX.Element {
                 : th === 'light'
                   ? t('settings.themeLight')
                   : t('settings.themeSystem')}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 深色主题变体 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.darkThemeVariant')}
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {DARK_THEMES.map((th) => (
+            <button
+              key={th.id}
+              onClick={() => {
+                setDarkTheme(th.id)
+                localStorage.setItem('darkTheme', th.id)
+                window.api.settings.set({ key: 'general.darkTheme', value: th.id })
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                darkTheme === th.id
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+            >
+              {t(th.labelKey)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 浅色主题变体 */}
+      <div>
+        <label className="block text-xs font-medium text-text-secondary mb-2">
+          {t('settings.lightThemeVariant')}
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {LIGHT_THEMES.map((th) => (
+            <button
+              key={th.id}
+              onClick={() => {
+                setLightTheme(th.id)
+                localStorage.setItem('lightTheme', th.id)
+                window.api.settings.set({ key: 'general.lightTheme', value: th.id })
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                lightTheme === th.id
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              }`}
+            >
+              {t(th.labelKey)}
             </button>
           ))}
         </div>
