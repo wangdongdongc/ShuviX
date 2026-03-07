@@ -204,6 +204,16 @@ describe('多轮共享作用域', () => {
 })
 
 describe('文件系统挂载 — 项目目录 (readwrite)', () => {
+  it('工作目录为项目目录', async () => {
+    const r = await exec(SESSION_ID, 'import os; os.getcwd()')
+    expect(getOutput(r)).toContain(PROJECT_DIR)
+  })
+
+  it('相对路径读取项目文件', async () => {
+    const r = await exec(SESSION_ID, `open('data.txt').read()`)
+    expect(getOutput(r)).toContain('hello from project')
+  })
+
   it('读取项目目录文件', async () => {
     const r = await exec(SESSION_ID, `open('${PROJECT_DIR}/data.txt').read()`)
     expect(getOutput(r)).toContain('hello from project')

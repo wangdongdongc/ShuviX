@@ -19,12 +19,12 @@ const DEFAULT_TIMEOUT = 30
 const PythonParamsSchema = Type.Object({
   code: Type.String({
     description:
-      'Python code to execute. Runs in interactive REPL mode — the last expression value is automatically displayed (no need for print). Variables and imports persist across calls within the same session.'
+      'Python code to execute. Runs in interactive REPL mode — the last expression value is automatically displayed (no need for print). Variables and imports persist across calls within the same session. Do not attempt to install packages in code (no micropip/pip/import micropip) — use the `packages` parameter instead.'
   }),
   packages: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        'Python packages to install via micropip before execution (e.g. ["requests", "beautifulsoup4"]). Only pure-Python packages from PyPI are supported.'
+        'Python packages to install before execution (e.g. ["pandas", "requests"]). This is the ONLY way to install packages — do not use micropip/pip/import in code. Only pure-Python PyPI packages are supported; C-extension packages will fail.'
     })
   ),
   timeout: Type.Optional(
@@ -41,9 +41,9 @@ export class PythonTool extends BaseTool<typeof PythonParamsSchema> {
 - The last expression value is automatically displayed (no need for print())
 - Variables and imports persist across multiple calls within the same session (use \`_\` to reference the last result)
 - The Python environment is Pyodide (WASM), not native Python. Standard library is available, but some C-extension modules (multiprocessing, ctypes, etc.) are not
-- Pre-installed packages: pyyaml, beautifulsoup4, regex, python-dateutil, pytz — use them directly without installation
-- Install additional pure-Python packages from PyPI via the \`packages\` parameter (uses micropip)
-- Project files are accessible at their original host paths (e.g. open('/Users/xxx/project/file.txt'))
+- Pre-installed packages: pyyaml, beautifulsoup4, regex, python-dateutil, pytz — import them directly (e.g. \`import yaml\`, \`from bs4 import BeautifulSoup\`)
+- To install additional packages, use the \`packages\` parameter of this tool (e.g. \`packages: ["pandas"]\`). Do NOT use micropip, pip, or pyodide.loadPackage in code — they will fail. Only pure-Python PyPI packages are supported
+- The working directory is set to the project root, so relative paths work (e.g. open('data.csv')). Absolute paths also work
 - Use this tool for data processing, calculations, scripting, and any task that benefits from Python`
   readonly parameters = PythonParamsSchema
 

@@ -10,6 +10,8 @@ import { parentPort } from 'worker_threads'
 interface InitMessage {
   type: 'init'
   mounts: MountConfig[]
+  /** 项目工作目录（用于设置 Python 的 cwd） */
+  workingDirectory: string
   /** 预装 wheel 文件的目录路径 */
   wheelsDir?: string
 }
@@ -64,7 +66,7 @@ function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, p
   }
 }
 
-async function init(mounts: MountConfig[], wheelsDir?: string): Promise<void> {
+async function init(mounts: MountConfig[], workingDirectory: string, wheelsDir?: string): Promise<void> {
   const { loadPyodide } = await import('pyodide')
   pyodide = await loadPyodide({})
 
@@ -78,6 +80,9 @@ async function init(mounts: MountConfig[], wheelsDir?: string): Promise<void> {
       readonlyPaths.push(mount.hostPath)
     }
   }
+
+  // 设置工作目录为项目目录
+  pyodide.runPython(`import os; os.chdir(${JSON.stringify(workingDirectory)})`)
 
   // 创建持久化全局作用域
   persistentGlobals = pyodide.globals.get('dict')()
@@ -241,7 +246,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
   if (msg.type === 'init') {
     execQueue = execQueue.then(async () => {
       try {
-        await init(msg.mounts, msg.wheelsDir)
+        await init(msg.mounts, msg.workingDirectory, msg.wheelsDir)
       } catch (err: unknown) {
         parentPort!.postMessage({
           type: 'error',

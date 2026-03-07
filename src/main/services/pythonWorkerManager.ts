@@ -153,7 +153,12 @@ class PythonWorkerManager {
       // 发送初始化消息
       const mounts = this.buildMounts(config)
       const wheelsDir = this.getWheelsDir()
-      worker.postMessage({ type: 'init', mounts, wheelsDir })
+      worker.postMessage({
+        type: 'init',
+        mounts,
+        workingDirectory: config.workingDirectory,
+        wheelsDir
+      })
     })
   }
 
