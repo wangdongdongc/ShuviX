@@ -106,7 +106,60 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
       continue
     }
 
-    // 助手工具调用（连续的 tool_call 合并为一条 AssistantMessage）
+    // 新格式：tool_use（连续的 tool_use 合并为一条 AssistantMessage + 各自的 ToolResult）
+    if (msg.role === 'assistant' && msg.type === 'tool_use') {
+      const toolCalls: ToolCall[] = []
+      const toolResults: ToolResultMessage[] = []
+      const ts = msg.createdAt
+      while (i < msgs.length && msgs[i].role === 'assistant' && msgs[i].type === 'tool_use') {
+        const m = msgs[i]
+        const meta = m.metadata
+        toolCalls.push({
+          type: 'toolCall',
+          id: (meta?.toolCallId as string) || '',
+          name: (meta?.toolName as string) || '',
+          arguments: (meta?.args as Record<string, unknown>) || {}
+        })
+        // 有 content 说明已完成；否则为中断未完成
+        if (m.content) {
+          toolResults.push({
+            role: 'toolResult',
+            toolCallId: (meta?.toolCallId as string) || '',
+            toolName: (meta?.toolName as string) || '',
+            content: [{ type: 'text', text: m.content }],
+            isError: (meta?.isError as boolean) || false,
+            timestamp: m.createdAt
+          })
+        } else {
+          toolResults.push({
+            role: 'toolResult',
+            toolCallId: (meta?.toolCallId as string) || '',
+            toolName: (meta?.toolName as string) || '',
+            content: [{ type: 'text', text: 'Tool execution was interrupted.' }],
+            isError: true,
+            timestamp: m.createdAt
+          })
+        }
+        i++
+      }
+      const toolAssistantMsg: AssistantMessage = {
+        role: 'assistant',
+        content: toolCalls,
+        api: 'openai-completions',
+        provider: '',
+        model: '',
+        usage: {
+          input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+        },
+        stopReason: 'toolUse',
+        timestamp: ts
+      }
+      result.push(toolAssistantMsg, ...toolResults)
+      continue
+    }
+
+    // @deprecated 旧格式兼容：助手工具调用（连续的 tool_call 合并为一条 AssistantMessage）
     if (msg.role === 'assistant' && msg.type === 'tool_call') {
       const toolCalls: ToolCall[] = []
       const ts = msg.createdAt
@@ -141,7 +194,7 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
       continue
     }
 
-    // 工具结果消息
+    // @deprecated 旧格式兼容：工具结果消息
     if (msg.role === 'tool' && msg.type === 'tool_result') {
       const meta = msg.metadata
       const toolResultMsg: ToolResultMessage = {

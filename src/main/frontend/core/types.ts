@@ -66,7 +66,7 @@ export interface ChatToolStartEvent extends ChatEventBase {
   toolCallId: string
   toolName: string
   toolArgs?: Record<string, unknown>
-  /** 持久化的 tool_call 消息 ID */
+  /** 持久化的 tool_use 消息 ID */
   messageId?: string
   /** 当前 turn 编号（UI 分组用） */
   turnIndex?: number
@@ -87,7 +87,7 @@ export interface ChatToolEndEvent extends ChatEventBase {
   result?: string
   /** 是否为错误结果 */
   isError?: boolean
-  /** 持久化的 tool_result 消息 ID */
+  /** 持久化的 tool_use 消息 ID（与 tool_start 相同） */
   messageId?: string
   /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
   details?: ToolResultDetails

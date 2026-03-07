@@ -102,6 +102,34 @@ export const AssistantBubble = memo(function AssistantBubble({
               if (step.msg.type === 'step_thinking' || step.msg.type === 'step_text') {
                 return <StepBlock key={step.msg.id} message={step.msg} />
               }
+              if (step.msg.type === 'tool_use') {
+                const meta = step.msg.metadata
+                const toolName = meta?.toolName || ''
+                const status = step.msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
+                if (toolName === 'explore') {
+                  return (
+                    <SubAgentBlock
+                      key={step.msg.id}
+                      toolCallId={meta?.toolCallId}
+                      args={meta?.args}
+                      result={step.msg.content || undefined}
+                      status={status}
+                    />
+                  )
+                }
+                return (
+                  <ToolCallBlock
+                    key={step.msg.id}
+                    toolName={toolName}
+                    toolCallId={meta?.toolCallId}
+                    args={meta?.args}
+                    result={step.msg.content || undefined}
+                    details={meta?.details}
+                    status={status}
+                  />
+                )
+              }
+              // @deprecated 旧格式兼容
               if (step.msg.type === 'tool_call') {
                 const toolName = step.msg.metadata?.toolName || ''
                 if (toolName === 'explore') {
@@ -124,6 +152,7 @@ export const AssistantBubble = memo(function AssistantBubble({
                   />
                 )
               }
+              // @deprecated 旧格式兼容
               if (step.msg.type === 'tool_result') {
                 const toolName = step.msg.metadata?.toolName || ''
                 if (toolName === 'explore') {

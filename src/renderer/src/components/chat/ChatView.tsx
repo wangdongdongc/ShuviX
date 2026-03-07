@@ -29,7 +29,7 @@ import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
 
-/** 工具调用索引：O(1) 查找配对关系 */
+/** 工具调用索引：O(1) 查找配对关系 @deprecated 仅用于旧 tool_call/tool_result 格式兼容 */
 interface ToolIndex {
   /** toolCallId → tool_call 消息的 metadata */
   callMeta: Map<string, ToolCallMeta>
@@ -37,7 +37,7 @@ interface ToolIndex {
   pairedIds: Set<string>
 }
 
-/** 构建工具调用索引（纯函数，供 useMemo 缓存） */
+/** 构建工具调用索引（纯函数，供 useMemo 缓存） @deprecated 仅用于旧 tool_call/tool_result 格式兼容 */
 function buildToolIndex(messages: ChatMessage[]): ToolIndex {
   const callMeta = new Map<string, ToolCallMeta>()
   const pairedIds = new Set<string>()
@@ -56,6 +56,7 @@ function buildToolIndex(messages: ChatMessage[]): ToolIndex {
 /** 判断消息是否为中间步骤/工具项 */
 function isStepOrToolMsg(msg: ChatMessage): boolean {
   return (
+    msg.type === 'tool_use' ||
     msg.type === 'tool_call' ||
     msg.type === 'tool_result' ||
     msg.type === 'step_text' ||
@@ -68,9 +69,11 @@ function msgToStepItem(
   msg: ChatMessage,
   toolIndex: ToolIndex
 ): VisibleItem | null {
+  // 新格式：tool_use 直接返回，无需配对
+  if (msg.type === 'tool_use') return { msg }
+  // @deprecated 旧格式兼容
   if (msg.type === 'tool_call') {
     const toolCallId = msg.metadata?.toolCallId
-    // 已配对的 tool_call 跳过（由 tool_result 合并展示）
     if (toolCallId && toolIndex.pairedIds.has(toolCallId)) return null
     return { msg }
   }

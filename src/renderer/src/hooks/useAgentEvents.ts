@@ -105,11 +105,11 @@ export function useAgentEvents(): void {
           result: event.result,
           details: event.details
         })
-        // 仅当前活跃会话时添加 tool_result 消息
+        // tool_end 与 tool_start 共享同一条 tool_use 记录，原地替换而非新增
         if (sid === store.activeSessionId && event.messageId) {
           const msgs2 = await window.api.message.list(sid)
-          const toolResultMsg = msgs2.find((m) => m.id === event.messageId)
-          if (toolResultMsg) store.addMessage(toolResultMsg)
+          const toolUseMsg = msgs2.find((m) => m.id === event.messageId)
+          if (toolUseMsg) store.replaceMessage(event.messageId, toolUseMsg)
         }
         break
 

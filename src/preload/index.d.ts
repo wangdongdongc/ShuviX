@@ -296,6 +296,7 @@ declare global {
   type AssistantTextMeta = import('../shared/types/chatMessage').AssistantTextMeta
   type ToolCallMeta = import('../shared/types/chatMessage').ToolCallMeta
   type ToolResultMeta = import('../shared/types/chatMessage').ToolResultMeta
+  type ToolUseMeta = import('../shared/types/chatMessage').ToolUseMeta
   type StepTextMeta = import('../shared/types/chatMessage').StepTextMeta
   type StepThinkingMeta = import('../shared/types/chatMessage').StepThinkingMeta
   type DockerEventMeta = import('../shared/types/chatMessage').DockerEventMeta
@@ -305,6 +306,7 @@ declare global {
   type AssistantTextMessage = import('../shared/types/chatMessage').AssistantTextMessage
   type ToolCallMessage = import('../shared/types/chatMessage').ToolCallMessage
   type ToolResultMessage = import('../shared/types/chatMessage').ToolResultMessage
+  type ToolUseMessage = import('../shared/types/chatMessage').ToolUseMessage
   type StepTextMessage = import('../shared/types/chatMessage').StepTextMessage
   type StepThinkingMessage = import('../shared/types/chatMessage').StepThinkingMessage
   type DockerEventMessage = import('../shared/types/chatMessage').DockerEventMessage

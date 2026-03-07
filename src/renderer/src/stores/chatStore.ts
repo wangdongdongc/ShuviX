@@ -8,6 +8,7 @@ export type {
   AssistantTextMessage,
   ToolCallMessage,
   ToolResultMessage,
+  ToolUseMessage,
   StepTextMessage,
   StepThinkingMessage,
   DockerEventMessage,
@@ -20,6 +21,7 @@ export type {
   AssistantTextMeta,
   ToolCallMeta,
   ToolResultMeta,
+  ToolUseMeta,
   StepTextMeta,
   StepThinkingMeta,
   DockerEventMeta,
@@ -183,6 +185,7 @@ interface ChatState {
   setActiveSessionId: (id: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
+  replaceMessage: (id: string, message: ChatMessage) => void
   appendStreamingContent: (sessionId: string, delta: string) => void
   appendStreamingThinking: (sessionId: string, delta: string) => void
   appendStreamingImage: (sessionId: string, image: { data: string; mimeType: string }) => void
@@ -292,6 +295,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setActiveSessionId: (id) => set({ activeSessionId: id }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  replaceMessage: (id, message) =>
+    set((state) => ({
+      messages: state.messages.map((m) => (m.id === id ? message : m))
+    })),
 
   appendStreamingContent: (sessionId, delta) =>
     set((state) => {

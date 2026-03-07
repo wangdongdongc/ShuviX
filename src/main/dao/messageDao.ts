@@ -1,4 +1,5 @@
 import { BaseDao } from './database'
+import { buildJsonPatch } from './utils'
 import type { Message, MessageMetadata } from './types'
 
 /** DB 原始行类型（metadata 在 DB 中为字符串） */
@@ -163,6 +164,22 @@ export class MessageStepDao extends BaseDao {
     return this.db
       .prepare('DELETE FROM message_steps WHERE sessionId = ? AND createdAt >= ?')
       .run(sessionId, createdAt).changes
+  }
+
+  /** 更新步骤消息的 content 字段 */
+  updateContent(id: string, content: string): void {
+    this.db.prepare('UPDATE message_steps SET content = ? WHERE id = ?').run(content, id)
+  }
+
+  /** 更新步骤消息的 metadata（patch 语义：仅更新传入的字段，其余保留） */
+  patchMetadata(id: string, patch: Partial<MessageMetadata>): void {
+    const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
+    if (!setClauses) return
+    this.db
+      .prepare(
+        `UPDATE message_steps SET metadata = json_set(COALESCE(metadata, '{}'), ${setClauses}) WHERE id = ?`
+      )
+      .run(...values, id)
   }
 
   /** 获取某个会话的最后一条步骤消息 */

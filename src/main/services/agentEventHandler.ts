@@ -77,6 +77,8 @@ export interface SessionEventState {
   pendingLogIds: string[]
   /** 已预展示的 toolCallId 集合（并行 batch 预展示用） */
   preEmittedToolCalls: Set<string>
+  /** toolCallId → tool_use 消息 ID 的映射（用于 completeToolUse） */
+  toolUseMessageIds: Map<string, string>
 }
 
 /** 事件处理器上下文 — per-session 直接引用，不再使用共享 Map */
@@ -96,6 +98,7 @@ function handleAgentStart(ctx: SessionEventHandlerContext): void {
   ctx.state.streamBuffer = { content: '', thinking: '', images: [] }
   ctx.state.turnCounter = 0
   ctx.state.preEmittedToolCalls.clear()
+  ctx.state.toolUseMessageIds.clear()
   ctx.broadcastEvent({ type: 'agent_start', sessionId: ctx.sessionId })
 }
 
@@ -117,6 +120,7 @@ function handleAgentEnd(
 ): void {
   log.info(`结束 session=${ctx.sessionId}`)
   ctx.state.preEmittedToolCalls.clear()
+  ctx.state.toolUseMessageIds.clear()
   // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
   dockerManager.scheduleDestroy(ctx.sessionId, (containerId) => {
     ctx.emitDockerEvent('container_destroyed', {
@@ -353,7 +357,7 @@ function handleMessageEnd(
         tc.arguments
       )
       if (approvalRequired || userInputRequired || sshCredentialRequired) continue
-      const toolCallMsg = messageService.addToolCall({
+      const toolUseMsg = messageService.addToolUse({
         sessionId: ctx.sessionId,
         toolCallId: tc.id,
         toolName: tc.name,
@@ -361,13 +365,14 @@ function handleMessageEnd(
         turnIndex,
         model: sessionForTool?.model || ''
       })
+      ctx.state.toolUseMessageIds.set(tc.id, toolUseMsg.id)
       ctx.broadcastEvent({
         type: 'tool_start',
         sessionId: ctx.sessionId,
         toolCallId: tc.id,
         toolName: tc.name,
         toolArgs: tc.arguments,
-        messageId: toolCallMsg.id,
+        messageId: toolUseMsg.id,
         approvalRequired: false,
         userInputRequired: false,
         sshCredentialRequired: false,
@@ -390,7 +395,7 @@ function handleToolExecutionStart(
   }
   const args = event.args as Record<string, unknown> | undefined
   const sessionForTool = sessionDao.findById(ctx.sessionId)
-  const toolCallMsg = messageService.addToolCall({
+  const toolUseMsg = messageService.addToolUse({
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
@@ -398,6 +403,7 @@ function handleToolExecutionStart(
     turnIndex: ctx.state.turnCounter,
     model: sessionForTool?.model || ''
   })
+  ctx.state.toolUseMessageIds.set(event.toolCallId, toolUseMsg.id)
   const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
     ctx.sessionId,
     event.toolName,
@@ -409,7 +415,7 @@ function handleToolExecutionStart(
     toolCallId: event.toolCallId,
     toolName: event.toolName,
     toolArgs: args,
-    messageId: toolCallMsg.id,
+    messageId: toolUseMsg.id,
     approvalRequired,
     userInputRequired,
     sshCredentialRequired,
@@ -435,14 +441,17 @@ function handleToolExecutionEnd(
   // 工具已返回强类型 details，直接透传到持久化和前端
   const toolDetails = result?.details
 
-  const toolResultMsg = messageService.addToolResult({
-    sessionId: ctx.sessionId,
-    toolCallId: event.toolCallId,
-    toolName: event.toolName,
-    content: resultContent,
-    isError: event.isError || false,
-    details: toolDetails
-  })
+  // 查找对应的 tool_use 消息 ID 并原地更新
+  const toolUseMessageId = ctx.state.toolUseMessageIds.get(event.toolCallId)
+  if (toolUseMessageId) {
+    messageService.completeToolUse({
+      messageId: toolUseMessageId,
+      content: resultContent,
+      isError: event.isError || false,
+      details: toolDetails
+    })
+    ctx.state.toolUseMessageIds.delete(event.toolCallId)
+  }
   ctx.broadcastEvent({
     type: 'tool_end',
     sessionId: ctx.sessionId,
@@ -450,7 +459,7 @@ function handleToolExecutionEnd(
     toolName: event.toolName,
     result: resultContent,
     isError: event.isError || false,
-    messageId: toolResultMsg.id,
+    messageId: toolUseMessageId,
     details: toolDetails
   })
 }
