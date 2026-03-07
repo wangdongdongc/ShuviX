@@ -99,7 +99,7 @@ export class MessageService {
 
   /** 回退到指定消息：删除该消息之后的所有消息（跨两表） */
   rollbackToMessage(sessionId: string, messageId: string): void {
-    const target = messageDao.findByIdAcrossTables(messageId)
+    const target = messageDao.pickAcrossTables(messageId, ['createdAt'])
     if (!target) return
     messageDao.deleteAfterTimestamp(sessionId, target.createdAt)
     messageStepDao.deleteAfterTimestamp(sessionId, target.createdAt)
@@ -107,7 +107,7 @@ export class MessageService {
 
   /** 从指定消息开始删除（含该消息本身及之后的所有消息，跨两表） */
   deleteFromMessage(sessionId: string, messageId: string): void {
-    const target = messageDao.findByIdAcrossTables(messageId)
+    const target = messageDao.pickAcrossTables(messageId, ['createdAt'])
     if (!target) return
     messageDao.deleteFromTimestamp(sessionId, target.createdAt)
     messageStepDao.deleteFromTimestamp(sessionId, target.createdAt)

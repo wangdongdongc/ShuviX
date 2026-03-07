@@ -59,7 +59,7 @@ export function registerMcpHandlers(): void {
     mcpDao.update(params.id, fields)
 
     // 配置变更后重连
-    const server = mcpDao.findById(params.id)
+    const server = mcpDao.pick(params.id, ['isEnabled'])
     if (server && server.isEnabled) {
       await mcpService.disconnect(params.id)
       await mcpService.connect(params.id)

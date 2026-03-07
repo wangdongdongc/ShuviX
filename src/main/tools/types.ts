@@ -144,7 +144,9 @@ export function assertSandboxWrite(
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
 export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
   const session = sessionService.getById(ctx.sessionId)
-  const project = session?.projectId ? projectDao.findById(session.projectId) : undefined
+  const project = session?.projectId
+    ? projectDao.pick(session.projectId, ['path', 'sandboxEnabled', 'settings'])
+    : undefined
 
   if (project) {
     // 有项目 → 使用项目配置

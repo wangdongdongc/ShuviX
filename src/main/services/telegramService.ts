@@ -50,7 +50,13 @@ class TelegramService {
     username: string
   }): TelegramBotInfo {
     telegramBotDao.insert(params)
-    const bot = telegramBotDao.findById(params.id)!
+    const bot = telegramBotDao.pick(params.id, [
+      'id',
+      'name',
+      'username',
+      'createdAt',
+      'updatedAt'
+    ])!
     return {
       id: bot.id,
       name: bot.name,
@@ -101,12 +107,12 @@ class TelegramService {
 
   async startBot(botId: string): Promise<void> {
     if (this.botServers.has(botId)) return
-    const bot = telegramBotDao.findById(botId)
+    const bot = telegramBotDao.pick(botId, ['token', 'username'])
     if (!bot || !bot.token) return
 
     // 延迟 import 避免模块加载顺序问题
     const { TelegramBotServer } = await import('../frontend/telegram/TelegramBotServer')
-    const server = new TelegramBotServer(bot.id)
+    const server = new TelegramBotServer(botId)
     this.botServers.set(botId, server)
     try {
       await server.start(bot.token)
@@ -160,7 +166,7 @@ class TelegramService {
     log.info(`绑定 session=${sessionId} → bot=${botId}`)
 
     // 自动启动 bot
-    const bot = telegramBotDao.findById(botId)
+    const bot = telegramBotDao.pick(botId, ['isEnabled'])
     if (bot?.isEnabled && !this.botServers.has(botId)) {
       this.startBot(botId).catch((err) => log.error(`Bot 自动启动失败: ${err}`))
     }
@@ -200,7 +206,7 @@ class TelegramService {
   // ─── 用户访问控制 ───────────────────────────
 
   isAllowedUser(botId: string, userId: number): boolean {
-    const bot = telegramBotDao.findById(botId)
+    const bot = telegramBotDao.pick(botId, ['allowedUsers'])
     if (!bot) return false
     let allowed: number[] = []
     try {

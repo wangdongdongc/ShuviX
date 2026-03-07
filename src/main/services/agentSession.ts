@@ -190,7 +190,11 @@ export class AgentSession {
       context: Parameters<typeof streamSimple>[1],
       options?: Parameters<typeof streamSimple>[2]
     ): ReturnType<typeof streamSimple> => {
-      const currentProvider = providerDao.findById(String(streamModel.provider))
+      const currentProvider = providerDao.pick(String(streamModel.provider), [
+        'apiKey',
+        'isBuiltin',
+        'name'
+      ])
       const resolvedApiKey = currentProvider?.apiKey
       try {
         const streamOpts = {
@@ -387,7 +391,7 @@ export class AgentSession {
   /** AI 生成简短标题 */
   async generateTitle(userMessage: string, assistantMessage: string): Promise<string | null> {
     try {
-      const currentProvider = providerDao.findById(String(this.agent.state.model.provider))
+      const currentProvider = providerDao.pick(String(this.agent.state.model.provider), ['apiKey'])
       const resolvedApiKey = currentProvider?.apiKey
       const result = await completeSimple(
         this.agent.state.model,

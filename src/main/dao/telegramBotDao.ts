@@ -34,6 +34,19 @@ export class TelegramBotDao extends BaseDao {
     return rows.map(decryptBot)
   }
 
+  /** 按需查询：只 SELECT 指定字段，token 仅在需要时解密 */
+  pick<K extends keyof TelegramBot>(id: string, fields: K[]): Pick<TelegramBot, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row = this.stmt(`SELECT ${columns} FROM telegram_bots WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    if ('token' in row) {
+      row.token = decrypt(row.token as string)
+    }
+    return row as Pick<TelegramBot, K>
+  }
+
   /** 插入 Bot（token 加密），id 为 Telegram bot numeric ID */
   insert(bot: { id: string; name: string; token: string; username: string }): void {
     const now = Date.now()

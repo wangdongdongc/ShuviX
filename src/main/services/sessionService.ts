@@ -34,7 +34,9 @@ export class SessionService {
   getById(id: string): SessionInfo | undefined {
     const session = sessionDao.findById(id)
     if (!session) return undefined
-    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+    const project = session.projectId
+      ? projectDao.pick(session.projectId, ['path', 'settings'])
+      : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
     const enabledTools = resolveEnabledTools(session.modelMetadata.enabledTools, project?.settings)
     const { agentMdLoaded } = this.agentSessions.get(id)?.getInstructionLoadState() || {
@@ -197,7 +199,9 @@ export class SessionService {
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
       : {}
-    const project = session.projectId ? projectDao.findById(session.projectId) : undefined
+    const project = session.projectId
+      ? projectDao.pick(session.projectId, ['path', 'settings'])
+      : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = resolveEnabledTools(session.modelMetadata.enabledTools, project?.settings)
     const meta = {

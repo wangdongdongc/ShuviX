@@ -31,6 +31,14 @@ export class McpDao extends BaseDao {
       | undefined
   }
 
+  /** 按需查询：只 SELECT 指定字段 */
+  pick<K extends keyof McpServer>(id: string, fields: K[]): Pick<McpServer, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    return this.stmt(`SELECT ${columns} FROM mcp_servers WHERE id = ?`).get(id) as
+      | Pick<McpServer, K>
+      | undefined
+  }
+
   /** 插入 MCP Server */
   insert(server: McpServer): void {
     this.db

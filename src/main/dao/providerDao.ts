@@ -40,6 +40,19 @@ export class ProviderDao extends BaseDao {
     return decryptProvider(row)
   }
 
+  /** 按需查询：只 SELECT 指定字段，apiKey 仅在需要时解密 */
+  pick<K extends keyof Provider>(id: string, fields: K[]): Pick<Provider, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row = this.stmt(`SELECT ${columns} FROM providers WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    if ('apiKey' in row) {
+      row.apiKey = decrypt(row.apiKey as string)
+    }
+    return row as Pick<Provider, K>
+  }
+
   /** 更新提供商 API Key */
   updateApiKey(id: string, apiKey: string): void {
     this.db
@@ -93,7 +106,7 @@ export class ProviderDao extends BaseDao {
 
   /** 删除提供商及其模型（仅允许删除自定义提供商） */
   delete(id: string): boolean {
-    const provider = this.findById(id)
+    const provider = this.pick(id, ['isBuiltin'])
     if (!provider || provider.isBuiltin) return false
     const deleteTx = this.db.transaction(() => {
       this.db.prepare('DELETE FROM provider_models WHERE providerId = ?').run(id)

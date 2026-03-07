@@ -78,6 +78,39 @@ export class MessageDao extends BaseDao {
     return step ? parseRow(step) : undefined
   }
 
+  /** 按需查询：只 SELECT 指定字段，metadata 仅在需要时解析 */
+  pick<K extends keyof Message>(id: string, fields: K[]): Pick<Message, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row = this.stmt(`SELECT ${columns} FROM messages WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    if ('metadata' in row) {
+      row.metadata = safeParseMeta(row.metadata as string | null)
+    }
+    return row as Pick<Message, K>
+  }
+
+  /** 按需跨表查找：先查 messages，未找到再查 message_steps */
+  pickAcrossTables<K extends keyof Message>(
+    id: string,
+    fields: K[]
+  ): Pick<Message, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row =
+      (this.stmt(`SELECT ${columns} FROM messages WHERE id = ?`).get(id) as
+        | Record<string, unknown>
+        | undefined) ??
+      (this.stmt(`SELECT ${columns} FROM message_steps WHERE id = ?`).get(id) as
+        | Record<string, unknown>
+        | undefined)
+    if (!row) return undefined
+    if ('metadata' in row) {
+      row.metadata = safeParseMeta(row.metadata as string | null)
+    }
+    return row as Pick<Message, K>
+  }
+
   /** 删除某个会话的所有消息 */
   deleteBySessionId(sessionId: string): void {
     this.db.prepare('DELETE FROM messages WHERE sessionId = ?').run(sessionId)
@@ -99,7 +132,7 @@ export class MessageDao extends BaseDao {
 
   /** 删除指定消息之后的所有消息（不含该消息本身） */
   deleteAfterMessage(sessionId: string, messageId: string): number {
-    const target = this.findById(messageId)
+    const target = this.pick(messageId, ['createdAt'])
     if (!target) return 0
     return this.db
       .prepare('DELETE FROM messages WHERE sessionId = ? AND createdAt > ?')
@@ -108,7 +141,7 @@ export class MessageDao extends BaseDao {
 
   /** 删除指定消息及其之后的所有消息（含该消息本身） */
   deleteFromMessage(sessionId: string, messageId: string): number {
-    const target = this.findById(messageId)
+    const target = this.pick(messageId, ['createdAt'])
     if (!target) return 0
     return this.db
       .prepare('DELETE FROM messages WHERE sessionId = ? AND createdAt >= ?')

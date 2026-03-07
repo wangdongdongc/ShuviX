@@ -62,6 +62,19 @@ export class ProjectDao extends BaseDao {
     return row ? parseRow(row) : undefined
   }
 
+  /** 按需查询：只 SELECT 指定字段，settings 仅在需要时解析 */
+  pick<K extends keyof Project>(id: string, fields: K[]): Pick<Project, K> | undefined {
+    const columns = fields.map((f) => String(f)).join(', ')
+    const row = this.stmt(`SELECT ${columns} FROM projects WHERE id = ?`).get(id) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return undefined
+    if ('settings' in row) {
+      row.settings = safeParse(row.settings as string)
+    }
+    return row as Pick<Project, K>
+  }
+
   /** 插入项目 */
   insert(project: Project): void {
     this.db

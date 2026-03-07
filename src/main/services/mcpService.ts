@@ -193,7 +193,7 @@ class McpService {
   /** 获取某个 server 的工具信息（用于 IPC 返回给前端）
    *  统一从 DB 读取工具列表（唯一数据源），附加运行时连接状态 */
   getServerToolInfos(serverId: string): McpToolInfo[] {
-    const server = mcpDao.findById(serverId)
+    const server = mcpDao.pick(serverId, ['id', 'name', 'cachedTools'])
     if (!server) return []
     const status = this.connections.get(serverId)?.status ?? 'disconnected'
     let tools: McpDiscoveredTool[]
@@ -280,7 +280,7 @@ class McpService {
   serverToAgentTools(serverId: string): AgentTool<TSchema, McpToolDetails>[] {
     const conn = this.connections.get(serverId)
     if (!conn || conn.status !== 'connected') return []
-    const server = mcpDao.findById(serverId)
+    const server = mcpDao.pick(serverId, ['name'])
     if (!server) return []
     return conn.tools.map((t) => this.mcpToolToAgentTool(serverId, server.name, t))
   }

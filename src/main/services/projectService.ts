@@ -136,7 +136,7 @@ export class ProjectService {
     // 处理 settings 字段（合并而非覆盖）
     let settingsUpdate: ProjectSettings | undefined
     if (params.enabledTools !== undefined || params.referenceDirs !== undefined) {
-      const existing = projectDao.findById(id)
+      const existing = projectDao.pick(id, ['settings', 'path'])
       const current: ProjectSettings = { ...(existing?.settings || {}) }
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
       if (params.referenceDirs !== undefined) {

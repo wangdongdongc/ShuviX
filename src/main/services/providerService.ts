@@ -103,7 +103,7 @@ export class ProviderService {
   addModel(providerId: string, modelId: string): void {
     providerDao.insertModel(providerId, modelId)
     // 插入后自动补充能力信息
-    const provider = providerDao.findById(providerId)
+    const provider = providerDao.pick(providerId, ['name', 'baseUrl'])
     if (provider) {
       this.fillMissingCapabilities(providerId, provider.name, provider.baseUrl)
     }
@@ -199,7 +199,7 @@ export class ProviderService {
   async syncModelsFromProvider(
     providerId: string
   ): Promise<{ providerId: string; total: number; added: number }> {
-    const provider = providerDao.findById(providerId)
+    const provider = providerDao.pick(providerId, ['apiKey', 'apiProtocol', 'baseUrl', 'name'])
     if (!provider) {
       throw new Error(`未找到提供商：${providerId}`)
     }
