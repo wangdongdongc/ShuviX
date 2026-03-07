@@ -57,7 +57,7 @@ interface BatchEntry {
   name: string
   rawArgs: Record<string, unknown>
   serial: boolean
-  /** 预执行的 Promise（仅 parallel 工具） */
+  /** 预执行的 Promise（仅 parallel 工具，reject 代表工具执行失败） */
   resultPromise?: Promise<AgentToolResult<unknown>>
 }
 
@@ -213,7 +213,7 @@ class ParallelExecutionCoordinator {
       await this.launchAll(sessionId, batch, signal)
     }
 
-    // 返回预执行结果
+    // 返回预执行结果（reject 自然传播到框架，由框架设置 isError）
     if (entry.resultPromise) {
       return entry.resultPromise
     }
@@ -230,7 +230,7 @@ class ParallelExecutionCoordinator {
     )
   }
 
-  /** 串行路径：preExecute → execute */
+  /** 串行路径：preExecute → execute（preExecute 失败直接抛出，让框架设置 isError） */
   private async serialExecute(
     sessionId: string,
     toolName: string,
@@ -242,16 +242,7 @@ class ParallelExecutionCoordinator {
   ): Promise<AgentToolResult<unknown>> {
     const toolEntry = this.executors.get(sessionId)?.get(toolName)
     if (toolEntry?.preExecute) {
-      try {
-        await toolEntry.preExecute(toolCallId, params)
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
-          ],
-          details: {}
-        }
-      }
+      await toolEntry.preExecute(toolCallId, params)
     }
     return originalExecute(toolCallId, params, signal, onUpdate)
   }
@@ -305,12 +296,8 @@ class ParallelExecutionCoordinator {
         })
         prepared.push({ entry, toolEntry, validatedArgs })
       } catch (err) {
-        entry.resultPromise = Promise.resolve({
-          content: [
-            { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
-          ],
-          details: {}
-        })
+        entry.resultPromise = Promise.reject(err)
+        entry.resultPromise.catch(() => {}) // 抑制 unhandled rejection（框架 await 时会捕获）
       }
     }
 
@@ -320,32 +307,20 @@ class ParallelExecutionCoordinator {
       try {
         await toolEntry.preExecute(entry.id, validatedArgs)
       } catch (err) {
-        // preExecute 失败 → 存储 error result，跳过 execute
-        entry.resultPromise = Promise.resolve({
-          content: [
-            { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
-          ],
-          details: {}
-        })
+        entry.resultPromise = Promise.reject(err)
+        entry.resultPromise.catch(() => {}) // 抑制 unhandled rejection
       }
     }
 
     // ─── Phase 2: 并行启动 execute ──────────────────────────
     let launchedCount = 0
     for (const { entry, toolEntry, validatedArgs } of prepared) {
-      // 跳过 preExecute 已失败的 entry（已有 resultPromise）
+      // 跳过已失败的 entry（已有 resultPromise）
       if (entry.resultPromise) continue
 
-      entry.resultPromise = toolEntry
-        .execute(entry.id, validatedArgs, batchAbort.signal, undefined)
-        .catch(
-          (err): AgentToolResult<unknown> => ({
-            content: [
-              { type: 'text' as const, text: err instanceof Error ? err.message : String(err) }
-            ],
-            details: {}
-          })
-        )
+      // 不 catch — reject 自然传播到框架
+      entry.resultPromise = toolEntry.execute(entry.id, validatedArgs, batchAbort.signal, undefined)
+      entry.resultPromise.catch(() => {}) // 抑制 unhandled rejection
 
       launchedCount++
     }

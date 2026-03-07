@@ -23,12 +23,20 @@ function parseRow(row: MessageRow): Message {
 /**
  * Message DAO — messages 表的纯数据访问操作
  */
+/** messages 表中的合法消息类型 */
+const MESSAGE_TYPES = ['text', 'docker_event', 'ssh_event', 'error_event']
+/** message_steps 表中的合法消息类型 */
+const STEP_TYPES = ['tool_use', 'step_text', 'step_thinking']
+
 export class MessageDao extends BaseDao {
-  /** 获取某个会话的所有消息，按时间升序 */
+  /** 获取某个会话的所有消息，按时间升序（仅读取当前合法类型，忽略旧格式数据） */
   findBySessionId(sessionId: string): Message[] {
+    const placeholders = MESSAGE_TYPES.map(() => '?').join(',')
     const rows = this.db
-      .prepare('SELECT * FROM messages WHERE sessionId = ? ORDER BY createdAt ASC')
-      .all(sessionId) as MessageRow[]
+      .prepare(
+        `SELECT * FROM messages WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt ASC`
+      )
+      .all(sessionId, ...MESSAGE_TYPES) as MessageRow[]
     return rows.map(parseRow)
   }
 
@@ -113,11 +121,14 @@ export class MessageDao extends BaseDao {
  * 与 MessageDao 列完全一致，存放工具调用/结果等中间步骤
  */
 export class MessageStepDao extends BaseDao {
-  /** 获取某个会话的所有步骤消息，按时间升序 */
+  /** 获取某个会话的所有步骤消息，按时间升序（仅读取当前合法类型，忽略旧格式数据） */
   findBySessionId(sessionId: string): Message[] {
+    const placeholders = STEP_TYPES.map(() => '?').join(',')
     const rows = this.db
-      .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt ASC')
-      .all(sessionId) as MessageRow[]
+      .prepare(
+        `SELECT * FROM message_steps WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt ASC`
+      )
+      .all(sessionId, ...STEP_TYPES) as MessageRow[]
     return rows.map(parseRow)
   }
 
@@ -182,11 +193,14 @@ export class MessageStepDao extends BaseDao {
       .run(...values, id)
   }
 
-  /** 获取某个会话的最后一条步骤消息 */
+  /** 获取某个会话的最后一条步骤消息（仅读取当前合法类型） */
   findLastBySessionId(sessionId: string): Message | undefined {
+    const placeholders = STEP_TYPES.map(() => '?').join(',')
     const row = this.db
-      .prepare('SELECT * FROM message_steps WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1')
-      .get(sessionId) as MessageRow | undefined
+      .prepare(
+        `SELECT * FROM message_steps WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt DESC LIMIT 1`
+      )
+      .get(sessionId, ...STEP_TYPES) as MessageRow | undefined
     return row ? parseRow(row) : undefined
   }
 }
