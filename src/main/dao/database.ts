@@ -379,9 +379,27 @@ class DatabaseManager {
 // 全局单例
 export const databaseManager = new DatabaseManager()
 
-/** DAO 基类 — 提供数据库连接访问 */
+/** DAO 基类 — 提供数据库连接访问与 prepared statement 缓存 */
 export abstract class BaseDao {
+  private static stmtCache = new Map<string, Database.Statement>()
+  private static stmtCacheDb: Database.Database | null = null
+
   protected get db(): Database.Database {
     return databaseManager.getDb()
+  }
+
+  /** 获取或创建缓存的 prepared statement（DB 实例变更时自动清空缓存） */
+  protected stmt(sql: string): Database.Statement {
+    const currentDb = this.db
+    if (BaseDao.stmtCacheDb !== currentDb) {
+      BaseDao.stmtCache.clear()
+      BaseDao.stmtCacheDb = currentDb
+    }
+    let s = BaseDao.stmtCache.get(sql)
+    if (!s) {
+      s = currentDb.prepare(sql)
+      BaseDao.stmtCache.set(sql, s)
+    }
+    return s
   }
 }

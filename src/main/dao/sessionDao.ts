@@ -49,7 +49,7 @@ export class SessionDao extends BaseDao {
   /** 按需查询：只 SELECT 指定字段，JSON 字段仅在需要时解析 */
   pick<K extends keyof Session>(id: string, fields: K[]): Pick<Session, K> | undefined {
     const columns = fields.map((f) => String(f)).join(', ')
-    const row = this.db.prepare(`SELECT ${columns} FROM sessions WHERE id = ?`).get(id) as
+    const row = this.stmt(`SELECT ${columns} FROM sessions WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
     if (!row) return undefined
@@ -71,7 +71,7 @@ export class SessionDao extends BaseDao {
     const selects = keys
       .map((k) => `json_extract(settings, '$.${String(k)}') as ${String(k)}`)
       .join(', ')
-    const row = this.db.prepare(`SELECT ${selects} FROM sessions WHERE id = ?`).get(id) as
+    const row = this.stmt(`SELECT ${selects} FROM sessions WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
     if (!row) return undefined
