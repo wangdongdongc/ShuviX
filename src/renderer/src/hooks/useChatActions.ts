@@ -133,13 +133,14 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         } else {
           await window.api.session.addSshAllowListEntry({ id: activeSessionId, command })
         }
-        const store = useChatStore.getState()
-        const sess = store.sessions.find((s) => s.id === activeSessionId)
-        const listKey = toolType === 'bash' ? 'bashAllowList' : 'sshAllowList'
-        const currentList = sess?.settings[listKey] || []
-        store.updateSessionSettings(activeSessionId, {
-          [listKey]: [...currentList, command]
-        })
+        // 从后端重新获取会话以同步拆解后的允许列表
+        const updated = await window.api.session.getById(activeSessionId)
+        if (updated) {
+          useChatStore.getState().updateSessionSettings(activeSessionId, {
+            bashAllowList: updated.settings.bashAllowList,
+            sshAllowList: updated.settings.sshAllowList
+          })
+        }
       }
       await window.api.agent.approveToolCall({ toolCallId, approved: true })
       const store = useChatStore.getState()

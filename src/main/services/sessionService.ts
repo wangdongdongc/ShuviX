@@ -8,6 +8,7 @@ import { projectDao } from '../dao/projectDao'
 import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
 import { resolveEnabledTools } from '../utils/tools'
+import { splitCommand, toPattern } from '../tools/utils/allowList'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
 import type { SshCredentialPayload } from '../tools/types'
@@ -98,12 +99,14 @@ export class SessionService {
     sessionDao.updateSettings(id, { sshAutoApprove })
   }
 
-  /** 添加命令到 Bash 允许列表 */
+  /** 添加命令到 Bash 允许列表（复合命令自动拆解 → 生成通配符模式） */
   addBashAllowListEntry(id: string, command: string): void {
     const sess = sessionDao.findById(id)
     const list = sess?.settings.bashAllowList || []
-    if (!list.includes(command)) {
-      sessionDao.updateSettings(id, { bashAllowList: [...list, command] })
+    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+    const newEntries = patterns.filter((p) => !list.includes(p))
+    if (newEntries.length > 0) {
+      sessionDao.updateSettings(id, { bashAllowList: [...list, ...newEntries] })
     }
   }
 
@@ -114,12 +117,14 @@ export class SessionService {
     sessionDao.updateSettings(id, { bashAllowList: list })
   }
 
-  /** 添加命令到 SSH 允许列表 */
+  /** 添加命令到 SSH 允许列表（复合命令自动拆解 → 生成通配符模式） */
   addSshAllowListEntry(id: string, command: string): void {
     const sess = sessionDao.findById(id)
     const list = sess?.settings.sshAllowList || []
-    if (!list.includes(command)) {
-      sessionDao.updateSettings(id, { sshAllowList: [...list, command] })
+    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+    const newEntries = patterns.filter((p) => !list.includes(p))
+    if (newEntries.length > 0) {
+      sessionDao.updateSettings(id, { sshAllowList: [...list, ...newEntries] })
     }
   }
 
