@@ -99,7 +99,20 @@ export const AssistantBubble = memo(function AssistantBubble({
         {steps && steps.length > 0 && (
           <div className="mb-2 space-y-0.5">
             {steps.map((step) => {
-              if (step.msg.type === 'step_thinking' || step.msg.type === 'step_text') {
+              if (step.msg.type === 'step_text') {
+                return (
+                  <div key={step.msg.id} className="markdown-body text-sm">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                      components={{ pre: CodeBlock as never }}
+                    >
+                      {step.msg.content}
+                    </ReactMarkdown>
+                  </div>
+                )
+              }
+              if (step.msg.type === 'step_thinking') {
                 return <StepBlock key={step.msg.id} message={step.msg} />
               }
               if (step.msg.type === 'tool_use') {
