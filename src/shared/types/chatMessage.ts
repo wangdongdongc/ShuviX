@@ -74,14 +74,6 @@ export interface AssistantTextMeta {
   usage?: UsageInfo
 }
 
-/** 工具调用元数据 @deprecated 旧格式，新代码请使用 ToolUseMeta */
-export interface ToolCallMeta {
-  toolCallId: string
-  toolName: string
-  args?: Record<string, unknown>
-  turnIndex?: number
-}
-
 // ---- 工具结构化详情（按工具 type 判别） ----
 
 /** edit 工具详情：统一 diff */
@@ -207,15 +199,7 @@ export type ToolResultDetails =
   | ShuvixProjectToolDetails
   | McpToolDetails
 
-/** 工具结果元数据 @deprecated 旧格式，新代码请使用 ToolUseMeta */
-export interface ToolResultMeta {
-  toolCallId: string
-  toolName: string
-  isError?: boolean
-  details?: ToolResultDetails
-}
-
-/** 工具使用元数据（统一 tool_call + tool_result） */
+/** 工具使用元数据 */
 export interface ToolUseMeta {
   toolCallId: string
   toolName: string
@@ -277,20 +261,6 @@ export interface AssistantTextMessage extends MessageBase {
   metadata: AssistantTextMeta | null
 }
 
-/** @deprecated 旧格式，新代码请使用 ToolUseMessage */
-export interface ToolCallMessage extends MessageBase {
-  role: 'assistant'
-  type: 'tool_call'
-  metadata: ToolCallMeta | null
-}
-
-/** @deprecated 旧格式，新代码请使用 ToolUseMessage */
-export interface ToolResultMessage extends MessageBase {
-  role: 'tool'
-  type: 'tool_result'
-  metadata: ToolResultMeta | null
-}
-
 export interface ToolUseMessage extends MessageBase {
   role: 'assistant'
   type: 'tool_use'
@@ -331,8 +301,6 @@ export interface ErrorEventMessage extends MessageBase {
 export type ChatMessage =
   | UserTextMessage
   | AssistantTextMessage
-  | ToolCallMessage
-  | ToolResultMessage
   | ToolUseMessage
   | StepTextMessage
   | StepThinkingMessage

@@ -313,11 +313,7 @@ export class AgentSession {
     this.pendingSshCredentials.clear()
     // 检查是否有未完成的工具调用
     const lastMsg = messageService.findLastBySession(this.sessionId)
-    if (
-      lastMsg &&
-      lastMsg.role === 'assistant' &&
-      (lastMsg.type === 'tool_call' || lastMsg.type === 'tool_use')
-    ) {
+    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.type === 'tool_use') {
       log.info(`中止时有未完成的工具调用，跳过 buffer 持久化 session=${this.sessionId}`)
       this.eventState.streamBuffer = { content: '', thinking: '', images: [] }
       return null

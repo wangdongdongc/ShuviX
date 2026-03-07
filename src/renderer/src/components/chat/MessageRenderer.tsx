@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Container, AlertCircle, Terminal } from 'lucide-react'
-import type { ChatMessage, ToolCallMeta, DockerEventMessage, SshEventMessage, ErrorEventMessage } from '../../stores/chatStore'
+import type { ChatMessage, DockerEventMessage, SshEventMessage, ErrorEventMessage } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import type { StepItem, StepMessage } from './types'
@@ -8,7 +8,6 @@ import type { StepItem, StepMessage } from './types'
 /** 可见消息项（由 ChatView 预处理后传入） */
 export interface VisibleItem {
   msg: ChatMessage
-  pairedCallMeta?: ToolCallMeta
   /** 内嵌的中间步骤（仅 assistant text 消息携带） */
   steps?: VisibleItem[]
 }
@@ -84,8 +83,7 @@ export function MessageRenderer({
 
   // 将 VisibleItem.steps 转换为 StepItem[]（窄化 msg 类型）
   const steps: StepItem[] | undefined = item.steps?.map((s) => ({
-    msg: s.msg as StepMessage,
-    pairedCallMeta: s.pairedCallMeta
+    msg: s.msg as StepMessage
   }))
 
   // 用户消息

@@ -5,8 +5,6 @@ import type { MessageMetadata } from '../../../shared/types/chatMessage'
 /** 消息类型标识 */
 export type MessageType =
   | 'text'
-  | 'tool_call' // @deprecated 旧格式，新代码请使用 'tool_use'
-  | 'tool_result' // @deprecated 旧格式，新代码请使用 'tool_use'
   | 'tool_use'
   | 'step_text'
   | 'step_thinking'

@@ -7,8 +7,6 @@ import type {
   ChatMessage,
   UserTextMessage,
   AssistantTextMessage,
-  ToolCallMessage,
-  ToolResultMessage,
   ToolUseMessage,
   ToolResultDetails,
   StepTextMessage,
@@ -21,7 +19,7 @@ import type {
 import { narrowMessage } from '../types'
 
 /** 路由到 message_steps 的消息类型 */
-const STEP_TYPES = new Set(['tool_call', 'tool_result', 'tool_use', 'step_text', 'step_thinking'])
+const STEP_TYPES = new Set(['tool_use', 'step_text', 'step_thinking'])
 
 /** 归并两个按 createdAt 升序的数组，相同时间戳用 id 字典序作 tiebreaker */
 function mergeSorted(a: Message[], b: Message[]): Message[] {
@@ -160,53 +158,6 @@ export class MessageService {
       metadata: p.metadata,
       model: p.model
     }) as unknown as AssistantTextMessage
-  }
-
-  /** @deprecated 旧格式，新代码请使用 addToolUse */
-  addToolCall(p: {
-    sessionId: string
-    toolCallId: string
-    toolName: string
-    args?: Record<string, unknown>
-    turnIndex?: number
-    model: string
-  }): ToolCallMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'tool_call',
-      content: '',
-      metadata: {
-        toolCallId: p.toolCallId,
-        toolName: p.toolName,
-        args: p.args,
-        turnIndex: p.turnIndex
-      },
-      model: p.model
-    }) as unknown as ToolCallMessage
-  }
-
-  /** @deprecated 旧格式，新代码请使用 addToolUse + completeToolUse */
-  addToolResult(p: {
-    sessionId: string
-    toolCallId: string
-    toolName: string
-    content: string
-    isError?: boolean
-    details?: ToolResultDetails
-  }): ToolResultMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'tool',
-      type: 'tool_result',
-      content: p.content,
-      metadata: {
-        toolCallId: p.toolCallId,
-        toolName: p.toolName,
-        isError: p.isError || false,
-        details: p.details
-      }
-    }) as unknown as ToolResultMessage
   }
 
   addToolUse(p: {

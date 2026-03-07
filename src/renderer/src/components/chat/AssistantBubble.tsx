@@ -129,54 +129,6 @@ export const AssistantBubble = memo(function AssistantBubble({
                   />
                 )
               }
-              // @deprecated 旧格式兼容
-              if (step.msg.type === 'tool_call') {
-                const toolName = step.msg.metadata?.toolName || ''
-                if (toolName === 'explore') {
-                  return (
-                    <SubAgentBlock
-                      key={step.msg.id}
-                      toolCallId={step.msg.metadata?.toolCallId}
-                      args={step.msg.metadata?.args}
-                      status="running"
-                    />
-                  )
-                }
-                return (
-                  <ToolCallBlock
-                    key={step.msg.id}
-                    toolName={toolName}
-                    toolCallId={step.msg.metadata?.toolCallId}
-                    args={step.msg.metadata?.args}
-                    status="running"
-                  />
-                )
-              }
-              // @deprecated 旧格式兼容
-              if (step.msg.type === 'tool_result') {
-                const toolName = step.msg.metadata?.toolName || ''
-                if (toolName === 'explore') {
-                  return (
-                    <SubAgentBlock
-                      key={step.msg.id}
-                      toolCallId={step.pairedCallMeta?.toolCallId}
-                      args={step.pairedCallMeta?.args}
-                      result={step.msg.content}
-                      status={step.msg.metadata?.isError ? 'error' : 'done'}
-                    />
-                  )
-                }
-                return (
-                  <ToolCallBlock
-                    key={step.msg.id}
-                    toolName={toolName}
-                    args={step.pairedCallMeta?.args}
-                    result={step.msg.content}
-                    details={step.msg.metadata?.details}
-                    status={step.msg.metadata?.isError ? 'error' : 'done'}
-                  />
-                )
-              }
               return null
             })}
           </div>

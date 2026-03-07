@@ -13,7 +13,6 @@ import {
   selectCanEdit,
   type ChatMessage,
   type AssistantTextMessage,
-  type ToolCallMeta,
   type ShareMode
 } from '../../stores/chatStore'
 import { useDialogClose } from '../../hooks/useDialogClose'
@@ -29,61 +28,9 @@ import { UserActionPanel } from './UserActionPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
 
-/** 工具调用索引：O(1) 查找配对关系 @deprecated 仅用于旧 tool_call/tool_result 格式兼容 */
-interface ToolIndex {
-  /** toolCallId → tool_call 消息的 metadata */
-  callMeta: Map<string, ToolCallMeta>
-  /** 已有配对 result 的 toolCallId 集合 */
-  pairedIds: Set<string>
-}
-
-/** 构建工具调用索引（纯函数，供 useMemo 缓存） @deprecated 仅用于旧 tool_call/tool_result 格式兼容 */
-function buildToolIndex(messages: ChatMessage[]): ToolIndex {
-  const callMeta = new Map<string, ToolCallMeta>()
-  const pairedIds = new Set<string>()
-
-  for (const m of messages) {
-    if (m.type === 'tool_call' && m.metadata?.toolCallId) {
-      callMeta.set(m.metadata.toolCallId, m.metadata)
-    } else if (m.type === 'tool_result' && m.metadata?.toolCallId) {
-      pairedIds.add(m.metadata.toolCallId)
-    }
-  }
-
-  return { callMeta, pairedIds }
-}
-
 /** 判断消息是否为中间步骤/工具项 */
 function isStepOrToolMsg(msg: ChatMessage): boolean {
-  return (
-    msg.type === 'tool_use' ||
-    msg.type === 'tool_call' ||
-    msg.type === 'tool_result' ||
-    msg.type === 'step_text' ||
-    msg.type === 'step_thinking'
-  )
-}
-
-/** 将消息构建为步骤项（处理工具配对）；已配对的 tool_call 返回 null */
-function msgToStepItem(
-  msg: ChatMessage,
-  toolIndex: ToolIndex
-): VisibleItem | null {
-  // 新格式：tool_use 直接返回，无需配对
-  if (msg.type === 'tool_use') return { msg }
-  // @deprecated 旧格式兼容
-  if (msg.type === 'tool_call') {
-    const toolCallId = msg.metadata?.toolCallId
-    if (toolCallId && toolIndex.pairedIds.has(toolCallId)) return null
-    return { msg }
-  }
-  if (msg.type === 'tool_result') {
-    const toolCallId = msg.metadata?.toolCallId
-    const pairedCallMeta = toolCallId ? toolIndex.callMeta.get(toolCallId) : undefined
-    return { msg, pairedCallMeta }
-  }
-  // step_text / step_thinking
-  return { msg }
+  return msg.type === 'tool_use' || msg.type === 'step_text' || msg.type === 'step_thinking'
 }
 
 /**
@@ -92,7 +39,6 @@ function msgToStepItem(
  */
 function buildVisibleItems(
   messages: ChatMessage[],
-  toolIndex: ToolIndex,
   isStreaming: boolean
 ): VisibleItem[] {
   const items: VisibleItem[] = []
@@ -126,8 +72,7 @@ function buildVisibleItems(
 
     // step/tool 消息 → 收集到 buffer
     if (isStepOrToolMsg(msg)) {
-      const stepItem = msgToStepItem(msg, toolIndex)
-      if (stepItem) stepBuffer.push(stepItem)
+      stepBuffer.push({ msg })
       continue
     }
 
@@ -181,10 +126,7 @@ function buildVisibleItems(
  * 提取流式中的 steps（最后一个 user text 之后的 step/tool 消息）
  * 这些 steps 在 StreamingFooter 的气泡中渲染
  */
-function extractStreamingSteps(
-  messages: ChatMessage[],
-  toolIndex: ToolIndex
-): VisibleItem[] {
+function extractStreamingSteps(messages: ChatMessage[]): VisibleItem[] {
   // 找到最后一个 user text 消息
   let lastUserIdx = -1
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -198,9 +140,7 @@ function extractStreamingSteps(
   const steps: VisibleItem[] = []
   for (let i = lastUserIdx + 1; i < messages.length; i++) {
     const msg = messages[i]
-    if (!isStepOrToolMsg(msg)) continue
-    const stepItem = msgToStepItem(msg, toolIndex)
-    if (stepItem) steps.push(stepItem)
+    if (isStepOrToolMsg(msg)) steps.push({ msg })
   }
   return steps
 }
@@ -266,15 +206,14 @@ export function ChatView(): React.JSX.Element {
     atBottomRef.current = atBottom
   }, [])
 
-  // 预构建工具调用索引 + 可见消息列表，messages 不变时复用缓存
-  const toolIndex = useMemo(() => buildToolIndex(messages), [messages])
+  // 预构建可见消息列表，messages 不变时复用缓存
   const visibleItems = useMemo(
-    () => buildVisibleItems(messages, toolIndex, isStreaming),
-    [messages, toolIndex, isStreaming]
+    () => buildVisibleItems(messages, isStreaming),
+    [messages, isStreaming]
   )
   const streamingSteps = useMemo(
-    () => (isStreaming ? extractStreamingSteps(messages, toolIndex) : []),
-    [isStreaming, messages, toolIndex]
+    () => (isStreaming ? extractStreamingSteps(messages) : []),
+    [isStreaming, messages]
   )
 
   // 流式内容 / 新消息更新时，若用户在底部则自动滚动

@@ -31,8 +31,7 @@ export function StreamingFooter({ context }: StreamingFooterProps): React.JSX.El
   const steps: StepItem[] | undefined =
     context?.streamingSteps && context.streamingSteps.length > 0
       ? context.streamingSteps.map((s) => ({
-          msg: s.msg as StepMessage,
-          pairedCallMeta: s.pairedCallMeta
+          msg: s.msg as StepMessage
         }))
       : undefined
 
