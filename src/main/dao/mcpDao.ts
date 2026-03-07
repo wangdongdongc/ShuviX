@@ -7,28 +7,24 @@ import type { McpServer } from './types'
 export class McpDao extends BaseDao {
   /** 获取所有 MCP Server，按创建时间排序 */
   findAll(): McpServer[] {
-    return this.db.prepare('SELECT * FROM mcp_servers ORDER BY createdAt ASC').all() as McpServer[]
+    return this.stmt('SELECT * FROM mcp_servers ORDER BY createdAt ASC').all() as McpServer[]
   }
 
   /** 获取所有已启用的 MCP Server */
   findEnabled(): McpServer[] {
-    return this.db
-      .prepare('SELECT * FROM mcp_servers WHERE isEnabled = 1 ORDER BY createdAt ASC')
-      .all() as McpServer[]
+    return this.stmt(
+      'SELECT * FROM mcp_servers WHERE isEnabled = 1 ORDER BY createdAt ASC'
+    ).all() as McpServer[]
   }
 
   /** 根据 ID 获取单个 MCP Server */
   findById(id: string): McpServer | undefined {
-    return this.db.prepare('SELECT * FROM mcp_servers WHERE id = ?').get(id) as
-      | McpServer
-      | undefined
+    return this.stmt('SELECT * FROM mcp_servers WHERE id = ?').get(id) as McpServer | undefined
   }
 
   /** 根据名称查找（名称唯一） */
   findByName(name: string): McpServer | undefined {
-    return this.db.prepare('SELECT * FROM mcp_servers WHERE name = ?').get(name) as
-      | McpServer
-      | undefined
+    return this.stmt('SELECT * FROM mcp_servers WHERE name = ?').get(name) as McpServer | undefined
   }
 
   /** 按需查询：只 SELECT 指定字段 */
@@ -41,25 +37,23 @@ export class McpDao extends BaseDao {
 
   /** 插入 MCP Server */
   insert(server: McpServer): void {
-    this.db
-      .prepare(
-        `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, isEnabled, cachedTools, createdAt, updatedAt)
+    this.stmt(
+      `INSERT INTO mcp_servers (id, name, type, command, args, env, url, headers, isEnabled, cachedTools, createdAt, updatedAt)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        server.id,
-        server.name,
-        server.type,
-        server.command,
-        server.args,
-        server.env,
-        server.url,
-        server.headers,
-        server.isEnabled,
-        server.cachedTools || '[]',
-        server.createdAt,
-        server.updatedAt
-      )
+    ).run(
+      server.id,
+      server.name,
+      server.type,
+      server.command,
+      server.args,
+      server.env,
+      server.url,
+      server.headers,
+      server.isEnabled,
+      server.cachedTools || '[]',
+      server.createdAt,
+      server.updatedAt
+    )
   }
 
   /** 更新 MCP Server */
@@ -115,12 +109,12 @@ export class McpDao extends BaseDao {
 
   /** 更新缓存的工具列表（JSON 字符串） */
   updateCachedTools(id: string, tools: string): void {
-    this.db.prepare('UPDATE mcp_servers SET cachedTools = ? WHERE id = ?').run(tools, id)
+    this.stmt('UPDATE mcp_servers SET cachedTools = ? WHERE id = ?').run(tools, id)
   }
 
   /** 删除 MCP Server */
   deleteById(id: string): void {
-    this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id)
+    this.stmt('DELETE FROM mcp_servers WHERE id = ?').run(id)
   }
 }
 

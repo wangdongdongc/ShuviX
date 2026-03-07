@@ -8,21 +8,19 @@ import type { OperationLogSummary } from '../types'
 export class OperationLogDao extends BaseDao {
   /** 写入一条操作日志 */
   insert(log: OperationLog): void {
-    this.db
-      .prepare(
-        'INSERT INTO operation_logs (id, action, sessionId, sourceType, sourceDetail, summary, detail, requestId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        log.id,
-        log.action,
-        log.sessionId,
-        log.sourceType,
-        log.sourceDetail,
-        log.summary,
-        log.detail,
-        log.requestId,
-        log.createdAt
-      )
+    this.stmt(
+      'INSERT INTO operation_logs (id, action, sessionId, sourceType, sourceDetail, summary, detail, requestId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      log.id,
+      log.action,
+      log.sessionId,
+      log.sourceType,
+      log.sourceDetail,
+      log.summary,
+      log.detail,
+      log.requestId,
+      log.createdAt
+    )
   }
 
   /** 获取日志列表（按时间倒序，支持筛选） */
@@ -63,14 +61,14 @@ export class OperationLogDao extends BaseDao {
 
   /** 根据 ID 获取完整日志（含 detail） */
   getById(id: string): OperationLog | undefined {
-    return this.db
-      .prepare('SELECT * FROM operation_logs WHERE id = ?')
-      .get(id) as OperationLog | undefined
+    return this.stmt('SELECT * FROM operation_logs WHERE id = ?').get(id) as
+      | OperationLog
+      | undefined
   }
 
   /** 清空所有日志 */
   clear(): void {
-    this.db.prepare('DELETE FROM operation_logs').run()
+    this.stmt('DELETE FROM operation_logs').run()
   }
 }
 

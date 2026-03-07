@@ -32,17 +32,13 @@ function parseRow(row: SessionRow): Session {
 export class SessionDao extends BaseDao {
   /** 获取所有会话，按更新时间倒序 */
   findAll(): Session[] {
-    const rows = this.db
-      .prepare('SELECT * FROM sessions ORDER BY updatedAt DESC')
-      .all() as SessionRow[]
+    const rows = this.stmt('SELECT * FROM sessions ORDER BY updatedAt DESC').all() as SessionRow[]
     return rows.map(parseRow)
   }
 
   /** 根据 ID 获取单个会话 */
   findById(id: string): Session | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM sessions WHERE id = ?')
-      .get(id) as SessionRow | undefined
+    const row = this.stmt('SELECT * FROM sessions WHERE id = ?').get(id) as SessionRow | undefined
     return row ? parseRow(row) : undefined
   }
 
@@ -87,55 +83,60 @@ export class SessionDao extends BaseDao {
 
   /** 插入会话 */
   insert(session: Session): void {
-    this.db
-      .prepare(
-        'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        session.id,
-        session.title,
-        session.projectId,
-        session.provider,
-        session.model,
-        session.systemPrompt,
-        JSON.stringify(session.modelMetadata),
-        JSON.stringify(session.settings),
-        session.createdAt,
-        session.updatedAt
-      )
+    this.stmt(
+      'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      session.id,
+      session.title,
+      session.projectId,
+      session.provider,
+      session.model,
+      session.systemPrompt,
+      JSON.stringify(session.modelMetadata),
+      JSON.stringify(session.settings),
+      session.createdAt,
+      session.updatedAt
+    )
   }
 
   /** 更新标题和时间戳 */
   updateTitle(id: string, title: string): void {
-    this.db
-      .prepare('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?')
-      .run(title, Date.now(), id)
+    this.stmt('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(
+      title,
+      Date.now(),
+      id
+    )
   }
 
   /** 更新会话模型配置（provider/model） */
   updateModelConfig(id: string, provider: string, model: string): void {
-    this.db
-      .prepare('UPDATE sessions SET provider = ?, model = ?, updatedAt = ? WHERE id = ?')
-      .run(provider, model, Date.now(), id)
+    this.stmt('UPDATE sessions SET provider = ?, model = ?, updatedAt = ? WHERE id = ?').run(
+      provider,
+      model,
+      Date.now(),
+      id
+    )
   }
 
   /** 更新时间戳 */
   touch(id: string): void {
-    this.db.prepare('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(Date.now(), id)
+    this.stmt('UPDATE sessions SET updatedAt = ? WHERE id = ?').run(Date.now(), id)
   }
 
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
-    this.db
-      .prepare('UPDATE sessions SET projectId = ?, updatedAt = ? WHERE id = ?')
-      .run(projectId, Date.now(), id)
+    this.stmt('UPDATE sessions SET projectId = ?, updatedAt = ? WHERE id = ?').run(
+      projectId,
+      Date.now(),
+      id
+    )
   }
 
   /** 查找指定项目下的所有会话 */
   findByProjectId(projectId: string): Session[] {
-    const rows = this.db
-      .prepare('SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC')
-      .all(projectId) as SessionRow[]
+    const rows = this.stmt(
+      'SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC'
+    ).all(projectId) as SessionRow[]
     return rows.map(parseRow)
   }
 
@@ -163,35 +164,29 @@ export class SessionDao extends BaseDao {
 
   /** 查找绑定了指定 Telegram Bot 的会话 */
   findByTelegramBotId(botId: string): Session | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT * FROM sessions WHERE json_extract(settings, '$.telegramBotId') = ? LIMIT 1"
-      )
-      .get(botId) as SessionRow | undefined
+    const row = this.stmt(
+      "SELECT * FROM sessions WHERE json_extract(settings, '$.telegramBotId') = ? LIMIT 1"
+    ).get(botId) as SessionRow | undefined
     return row ? parseRow(row) : undefined
   }
 
   /** 清除指定 session 的 telegramBotId（设为 null） */
   clearTelegramBotId(sessionId: string): void {
-    this.db
-      .prepare(
-        `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE id = ?`
-      )
-      .run(Date.now(), sessionId)
+    this.stmt(
+      `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE id = ?`
+    ).run(Date.now(), sessionId)
   }
 
   /** 清除所有绑定到指定 bot 的 session 的 telegramBotId */
   clearAllTelegramBotBindings(botId: string): void {
-    this.db
-      .prepare(
-        `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE json_extract(settings, '$.telegramBotId') = ?`
-      )
-      .run(Date.now(), botId)
+    this.stmt(
+      `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE json_extract(settings, '$.telegramBotId') = ?`
+    ).run(Date.now(), botId)
   }
 
   /** 删除会话 */
   deleteById(id: string): void {
-    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id)
+    this.stmt('DELETE FROM sessions WHERE id = ?').run(id)
   }
 }
 

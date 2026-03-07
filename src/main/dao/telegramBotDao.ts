@@ -14,23 +14,23 @@ function decryptBot<T extends TelegramBot | undefined>(b: T): T {
  */
 export class TelegramBotDao extends BaseDao {
   findAll(): TelegramBot[] {
-    const rows = this.db
-      .prepare('SELECT * FROM telegram_bots ORDER BY createdAt ASC')
-      .all() as TelegramBot[]
+    const rows = this.stmt(
+      'SELECT * FROM telegram_bots ORDER BY createdAt ASC'
+    ).all() as TelegramBot[]
     return rows.map(decryptBot)
   }
 
   findById(id: string): TelegramBot | undefined {
-    const row = this.db.prepare('SELECT * FROM telegram_bots WHERE id = ?').get(id) as
+    const row = this.stmt('SELECT * FROM telegram_bots WHERE id = ?').get(id) as
       | TelegramBot
       | undefined
     return decryptBot(row)
   }
 
   findEnabled(): TelegramBot[] {
-    const rows = this.db
-      .prepare('SELECT * FROM telegram_bots WHERE isEnabled = 1 ORDER BY createdAt ASC')
-      .all() as TelegramBot[]
+    const rows = this.stmt(
+      'SELECT * FROM telegram_bots WHERE isEnabled = 1 ORDER BY createdAt ASC'
+    ).all() as TelegramBot[]
     return rows.map(decryptBot)
   }
 
@@ -50,12 +50,10 @@ export class TelegramBotDao extends BaseDao {
   /** 插入 Bot（token 加密），id 为 Telegram bot numeric ID */
   insert(bot: { id: string; name: string; token: string; username: string }): void {
     const now = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO telegram_bots (id, name, token, username, allowedUsers, isEnabled, createdAt, updatedAt)
+    this.stmt(
+      `INSERT INTO telegram_bots (id, name, token, username, allowedUsers, isEnabled, createdAt, updatedAt)
          VALUES (?, ?, ?, ?, '[]', 1, ?, ?)`
-      )
-      .run(bot.id, bot.name, encrypt(bot.token), bot.username, now, now)
+    ).run(bot.id, bot.name, encrypt(bot.token), bot.username, now, now)
   }
 
   /** 更新 Bot（token 如有变更则重新加密） */
@@ -99,7 +97,7 @@ export class TelegramBotDao extends BaseDao {
   }
 
   deleteById(id: string): void {
-    this.db.prepare('DELETE FROM telegram_bots WHERE id = ?').run(id)
+    this.stmt('DELETE FROM telegram_bots WHERE id = ?').run(id)
   }
 }
 

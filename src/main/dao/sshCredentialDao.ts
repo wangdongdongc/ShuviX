@@ -21,15 +21,15 @@ function decryptCredential<T extends SshCredential | undefined>(c: T): T {
 export class SshCredentialDao extends BaseDao {
   /** 获取所有凭据（解密） */
   findAll(): SshCredential[] {
-    const rows = this.db
-      .prepare('SELECT * FROM ssh_credentials ORDER BY createdAt ASC')
-      .all() as SshCredential[]
+    const rows = this.stmt(
+      'SELECT * FROM ssh_credentials ORDER BY createdAt ASC'
+    ).all() as SshCredential[]
     return rows.map(decryptCredential)
   }
 
   /** 根据 ID 获取凭据（解密） */
   findById(id: string): SshCredential | undefined {
-    const row = this.db.prepare('SELECT * FROM ssh_credentials WHERE id = ?').get(id) as
+    const row = this.stmt('SELECT * FROM ssh_credentials WHERE id = ?').get(id) as
       | SshCredential
       | undefined
     return decryptCredential(row)
@@ -37,7 +37,7 @@ export class SshCredentialDao extends BaseDao {
 
   /** 根据名称获取凭据（解密） */
   findByName(name: string): SshCredential | undefined {
-    const row = this.db.prepare('SELECT * FROM ssh_credentials WHERE name = ?').get(name) as
+    const row = this.stmt('SELECT * FROM ssh_credentials WHERE name = ?').get(name) as
       | SshCredential
       | undefined
     return decryptCredential(row)
@@ -45,9 +45,9 @@ export class SshCredentialDao extends BaseDao {
 
   /** 仅获取所有凭据名称（无需解密，供工具描述注入） */
   findAllNames(): string[] {
-    const rows = this.db
-      .prepare('SELECT name FROM ssh_credentials ORDER BY createdAt ASC')
-      .all() as { name: string }[]
+    const rows = this.stmt('SELECT name FROM ssh_credentials ORDER BY createdAt ASC').all() as {
+      name: string
+    }[]
     return rows.map((r) => r.name)
   }
 
@@ -62,32 +62,28 @@ export class SshCredentialDao extends BaseDao {
     privateKey?: string
     passphrase?: string
   }): string {
-    const existing = this.db
-      .prepare('SELECT id FROM ssh_credentials WHERE name = ?')
-      .get(credential.name)
+    const existing = this.stmt('SELECT id FROM ssh_credentials WHERE name = ?').get(credential.name)
     if (existing) {
       throw new Error(`SSH credential name "${credential.name}" already exists`)
     }
     const id = uuidv7()
     const now = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO ssh_credentials (id, name, host, port, username, authType, password, privateKey, passphrase, createdAt, updatedAt)
+    this.stmt(
+      `INSERT INTO ssh_credentials (id, name, host, port, username, authType, password, privateKey, passphrase, createdAt, updatedAt)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        id,
-        credential.name,
-        credential.host,
-        credential.port,
-        credential.username,
-        credential.authType,
-        encrypt(credential.password || ''),
-        encrypt(credential.privateKey || ''),
-        encrypt(credential.passphrase || ''),
-        now,
-        now
-      )
+    ).run(
+      id,
+      credential.name,
+      credential.host,
+      credential.port,
+      credential.username,
+      credential.authType,
+      encrypt(credential.password || ''),
+      encrypt(credential.privateKey || ''),
+      encrypt(credential.passphrase || ''),
+      now,
+      now
+    )
     return id
   }
 
@@ -148,7 +144,7 @@ export class SshCredentialDao extends BaseDao {
 
   /** 删除凭据 */
   deleteById(id: string): void {
-    this.db.prepare('DELETE FROM ssh_credentials WHERE id = ?').run(id)
+    this.stmt('DELETE FROM ssh_credentials WHERE id = ?').run(id)
   }
 }
 
