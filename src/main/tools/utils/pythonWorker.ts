@@ -1,0 +1,226 @@
+/**
+ * Python Worker — 在 worker_threads 中运行 Pyodide WASM Python 运行时
+ * 支持 REPL 交互模式、多轮共享作用域、NODEFS 文件系统挂载
+ */
+
+import { parentPort } from 'worker_threads'
+
+// ---- 消息协议 ----
+
+interface InitMessage {
+  type: 'init'
+  mounts: MountConfig[]
+}
+
+interface ExecuteMessage {
+  type: 'execute'
+  id: string
+  code: string
+  packages?: string[]
+}
+
+export interface MountConfig {
+  /** 宿主机路径 */
+  hostPath: string
+  /** 访问模式 */
+  access: 'readonly' | 'readwrite'
+}
+
+export interface WorkerResponse {
+  type: 'ready' | 'result' | 'error'
+  id?: string
+  stdout?: string
+  stderr?: string
+  returnValue?: string
+  error?: string
+}
+
+// ---- Pyodide 运行时 ----
+
+let pyodide: Awaited<ReturnType<typeof import('pyodide').loadPyodide>> | null = null
+let persistentGlobals: unknown = null
+let readonlyPaths: string[] = []
+
+/** 递归创建目录 */
+function mkdirRecursive(fs: any, path: string): void {
+  const parts = path.split('/').filter(Boolean)
+  let current = ''
+  for (const part of parts) {
+    current += '/' + part
+    try {
+      fs.stat(current)
+    } catch {
+      try {
+        fs.mkdir(current)
+      } catch {
+        // 已存在
+      }
+    }
+  }
+}
+
+async function init(mounts: MountConfig[]): Promise<void> {
+  const { loadPyodide } = await import('pyodide')
+  pyodide = await loadPyodide({})
+
+  // 挂载文件系统（路径与宿主机一致）
+  const FS = pyodide.FS
+  readonlyPaths = []
+  for (const mount of mounts) {
+    mkdirRecursive(FS, mount.hostPath)
+    FS.mount(FS.filesystems.NODEFS, { root: mount.hostPath }, mount.hostPath)
+    if (mount.access === 'readonly') {
+      readonlyPaths.push(mount.hostPath)
+    }
+  }
+
+  // 创建持久化全局作用域
+  persistentGlobals = pyodide.globals.get('dict')()
+  pyodide.runPython(
+    `
+import sys
+sys.path.insert(0, '')
+`,
+    { globals: persistentGlobals as any }
+  )
+
+  // 注入只读路径保护（hook builtins.open）
+  if (readonlyPaths.length > 0) {
+    const pathsRepr = readonlyPaths.map((p) => `"${p.replace(/"/g, '\\"')}"`).join(', ')
+    pyodide.runPython(
+      `
+import builtins as _builtins
+import os as _os
+
+_readonly_paths = [${pathsRepr}]
+_original_open = _builtins.open
+
+def _guarded_open(file, mode='r', *args, **kwargs):
+    if isinstance(file, str) and any(c in mode for c in 'wxa+'):
+        abs_path = _os.path.abspath(file)
+        for rp in _readonly_paths:
+            if abs_path == rp or abs_path.startswith(rp + _os.sep):
+                raise PermissionError(f"Write denied: {abs_path} is inside a read-only directory")
+    return _original_open(file, mode, *args, **kwargs)
+
+_builtins.open = _guarded_open
+`,
+      { globals: persistentGlobals as any }
+    )
+  }
+
+  parentPort!.postMessage({ type: 'ready' } satisfies WorkerResponse)
+}
+
+async function execute(id: string, code: string, packages?: string[]): Promise<void> {
+  if (!pyodide || !persistentGlobals) {
+    parentPort!.postMessage({
+      type: 'error',
+      id,
+      error: 'Pyodide runtime not initialized'
+    } satisfies WorkerResponse)
+    return
+  }
+
+  // 安装请求的包
+  if (packages && packages.length > 0) {
+    try {
+      await pyodide.loadPackage('micropip')
+      const micropip = pyodide.pyimport('micropip')
+      for (const pkg of packages) {
+        await micropip.install(pkg)
+      }
+    } catch (err: unknown) {
+      parentPort!.postMessage({
+        type: 'error',
+        id,
+        stdout: '',
+        stderr: '',
+        error: `Failed to install packages: ${err instanceof Error ? err.message : String(err)}`
+      } satisfies WorkerResponse)
+      return
+    }
+  }
+
+  // 捕获 stdout/stderr
+  const stdout: string[] = []
+  const stderr: string[] = []
+  pyodide.setStdout({ batched: (msg: string) => stdout.push(msg) })
+  pyodide.setStderr({ batched: (msg: string) => stderr.push(msg) })
+
+  try {
+    // REPL 交互模式：将代码按 'single' 模式编译（最后一个表达式自动输出）
+    // 策略：先尝试 exec 模式编译整体代码，提取最后一个表达式单独用 single 模式
+    const replCode = `
+import ast as _ast, sys as _sys
+
+_code = ${JSON.stringify(code)}
+try:
+    _tree = _ast.parse(_code, mode='exec')
+except SyntaxError:
+    # 语法错误让后面的 exec 报出
+    exec(_code)
+    _result = None
+else:
+    _result = None
+    if _tree.body and isinstance(_tree.body[-1], _ast.Expr):
+        # 最后一条是表达式 → 拆分：前面用 exec，最后一条用 eval
+        _last_expr = _tree.body.pop()
+        if _tree.body:
+            exec(compile(_ast.Module(body=_tree.body, type_ignores=[]), '<input>', 'exec'))
+        _result = eval(compile(_ast.Expression(body=_last_expr.value), '<input>', 'eval'))
+        if _result is not None:
+            _repr = repr(_result)
+            print(_repr)
+            _ = _result
+    else:
+        exec(compile(_tree, '<input>', 'exec'))
+`
+
+    await pyodide.runPythonAsync(replCode, { globals: persistentGlobals as any })
+
+    // 获取返回值
+    let returnValue: string | undefined
+    try {
+      const result = (persistentGlobals as any).get('_result')
+      if (result !== undefined && result !== null) {
+        returnValue = String(result)
+      }
+    } catch {
+      // _result 可能不存在
+    }
+
+    parentPort!.postMessage({
+      type: 'result',
+      id,
+      stdout: stdout.join('\n'),
+      stderr: stderr.join('\n'),
+      returnValue
+    } satisfies WorkerResponse)
+  } catch (err: unknown) {
+    parentPort!.postMessage({
+      type: 'error',
+      id,
+      stdout: stdout.join('\n'),
+      stderr: stderr.join('\n'),
+      error: err instanceof Error ? err.message : String(err)
+    } satisfies WorkerResponse)
+  }
+}
+
+// ---- 消息处理 ----
+
+parentPort!.on('message', async (msg: InitMessage | ExecuteMessage) => {
+  if (msg.type === 'init') {
+    try {
+      await init(msg.mounts)
+    } catch (err: unknown) {
+      parentPort!.postMessage({
+        type: 'error',
+        error: `Failed to initialize Pyodide: ${err instanceof Error ? err.message : String(err)}`
+      } satisfies WorkerResponse)
+    }
+  } else if (msg.type === 'execute') {
+    await execute(msg.id, msg.code, msg.packages)
+  }
+})

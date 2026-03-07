@@ -130,6 +130,14 @@ export function ToolCallBlock({
           icon: <Bot size={12} className="text-amber-500 flex-shrink-0" />,
           detail: str(args?.description)
         }
+      case 'python': {
+        const code = str(args?.code)
+        const firstLine = code.split('\n')[0]
+        return {
+          icon: <Terminal size={12} className="text-yellow-500 flex-shrink-0" />,
+          detail: firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine
+        }
+      }
       default:
         return { icon: <Wrench size={12} className={ic} />, detail: '' }
     }

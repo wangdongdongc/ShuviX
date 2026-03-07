@@ -85,6 +85,12 @@ export interface ChatGateway {
   /** 断开 SSH 连接 */
   disconnectSsh(sessionId: string): Promise<{ success: boolean }>
 
+  /** 查询 Python 运行时状态 */
+  getPythonStatus(sessionId: string): { ready: boolean } | null
+
+  /** 销毁 Python 运行时 */
+  destroyPython(sessionId: string): { success: boolean }
+
   // ─── 工具发现 ──────────────────────────────────
 
   /** 获取所有可用工具列表 */

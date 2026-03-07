@@ -238,6 +238,12 @@ const api = {
     disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
   },
 
+  // ============ Python ============
+  python: {
+    sessionStatus: (sessionId: string) => ipcRenderer.invoke('python:sessionStatus', sessionId),
+    destroySession: (sessionId: string) => ipcRenderer.invoke('python:destroySession', sessionId)
+  },
+
   // ============ SSH 凭据管理 ============
   sshCredential: {
     list: () => ipcRenderer.invoke('sshCredential:list'),

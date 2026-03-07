@@ -69,14 +69,16 @@ export function useSessionInit(activeSessionId: string | null): void {
         : 'off'
       store.setThinkingLevel(restoredLevel)
 
-      // 7. 查询 Docker/SSH 实时资源状态
-      const [dockerInfo, sshInfo] = await Promise.all([
+      // 7. 查询 Docker/SSH/Python 实时资源状态
+      const [dockerInfo, sshInfo, pythonInfo] = await Promise.all([
         window.api.docker.sessionStatus(activeSessionId),
-        window.api.ssh.sessionStatus(activeSessionId)
+        window.api.ssh.sessionStatus(activeSessionId),
+        window.api.python.sessionStatus(activeSessionId)
       ])
       if (!cancelled) {
         store.setSessionDocker(activeSessionId, dockerInfo)
         store.setSessionSsh(activeSessionId, sshInfo)
+        store.setSessionPython(activeSessionId, pythonInfo)
       }
     }
     loadSession()

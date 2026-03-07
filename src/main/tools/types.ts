@@ -45,6 +45,10 @@ export interface ToolContext {
   onSshConnected?: (host: string, port: number, username: string) => void
   /** ssh 连接断开时回调 */
   onSshDisconnected?: (host: string, port: number, username: string) => void
+  /** Python 运行时就绪回调 */
+  onPythonReady?: () => void
+  /** Python 运行时销毁回调 */
+  onPythonDestroyed?: () => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

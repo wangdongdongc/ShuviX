@@ -157,6 +157,10 @@ declare global {
     port?: number
     username?: string
   }
+  interface ChatPythonEvent extends ChatEventBase {
+    type: 'python_event'
+    action: 'runtime_ready' | 'runtime_destroyed'
+  }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
     subAgentId: string
@@ -226,6 +230,7 @@ declare global {
     | ChatImageDataEvent
     | ChatDockerEvent
     | ChatSshEvent
+    | ChatPythonEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
     | ChatSubAgentToolStartEvent
@@ -511,6 +516,10 @@ declare global {
         sessionId: string
       ) => Promise<{ host: string; port: number; username: string } | null>
       disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
+    }
+    python: {
+      sessionStatus: (sessionId: string) => Promise<{ ready: boolean } | null>
+      destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }
     sshCredential: {
       list: () => Promise<SshCredential[]>

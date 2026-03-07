@@ -169,6 +169,15 @@ export interface ShuvixProjectToolDetails {
   updatedFields?: string[]
 }
 
+/** Python 工具详情 */
+export interface PythonToolDetails {
+  type: 'python'
+  hasError: boolean
+  truncated: boolean
+  packages?: string[]
+  executionTime?: number
+}
+
 /** MCP 工具详情 */
 export interface McpToolDetails {
   type: 'mcp'
@@ -191,6 +200,7 @@ export type ToolResultDetails =
   | ExploreToolDetails
   | ShuvixSettingToolDetails
   | ShuvixProjectToolDetails
+  | PythonToolDetails
   | McpToolDetails
 
 /** 工具使用元数据 */

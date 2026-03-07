@@ -84,10 +84,11 @@ interface SessionStreamState {
   images: Array<{ data: string; mimeType: string }>
 }
 
-/** 每个 session 的活跃 Docker/SSH 资源信息 */
+/** 每个 session 的活跃 Docker/SSH/Python 资源信息 */
 export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
   ssh?: { host: string; port: number; username: string } | null
+  python?: { ready: boolean } | null
 }
 
 /** 子智能体内部工具执行（临时，不持久化） */
@@ -228,6 +229,7 @@ interface ChatState {
     sessionId: string,
     info: { host: string; port: number; username: string } | null
   ) => void
+  setSessionPython: (sessionId: string, info: { ready: boolean } | null) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -481,6 +483,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const prev = state.sessionResources[sessionId] || {}
       return {
         sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } }
+      }
+    }),
+
+  setSessionPython: (sessionId, info) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      return {
+        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, python: info } }
       }
     }),
 

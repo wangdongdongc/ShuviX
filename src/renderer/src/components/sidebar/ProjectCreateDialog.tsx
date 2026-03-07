@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import {
   X,
   Wrench,
-  MessageCircle,
   Code2,
+  Terminal,
   ChevronRight,
   ChevronDown,
   Puzzle,
@@ -25,7 +25,8 @@ interface ProjectCreateDialogProps {
 
 /** 用途预设：工具名称列表 */
 const PURPOSE_PRESETS: Record<string, string[]> = {
-  casual: ['bash', 'read', 'write', 'edit', 'ask'],
+  bash: ['bash', 'read', 'ask'],
+  python: ['read', 'python', 'ask'],
   dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob']
 }
 
@@ -34,7 +35,7 @@ const SKILLS_GROUP = '__skills__'
 
 /**
  * 新建项目弹窗 — 渐进式引导配置
- * Step 0: 选择用途（随便看看 / 程序开发）→ 预选工具
+ * Step 0: 选择用途（通用 Bash / 通用 Python / 程序开发）→ 预选工具
  * Step 1: 工具选择（仅内置工具）
  * Step 2: 扩展能力（MCP / Skills 引导）
  * Step 3: 项目配置（名称 + 提示词 + 路径 + 参考目录 + 沙箱）
@@ -88,7 +89,7 @@ export function ProjectCreateDialog({
   /** 选择用途 → 预选工具 → 进入工具选择步骤 */
   const handlePurposeSelect = (key: string): void => {
     setPurpose(key)
-    setEnabledTools(PURPOSE_PRESETS[key] || PURPOSE_PRESETS.casual)
+    setEnabledTools(PURPOSE_PRESETS[key] || PURPOSE_PRESETS.bash)
     setSandboxEnabled(true)
     setStep(1)
   }
@@ -212,25 +213,47 @@ export function ProjectCreateDialog({
               </h3>
               <p className="text-[11px] text-text-tertiary mt-1">{t('projectForm.purposeDesc')}</p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
-                onClick={() => handlePurposeSelect('casual')}
+                onClick={() => handlePurposeSelect('bash')}
                 className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'casual' ? 'border-accent bg-accent/5' : 'border-border-secondary'
+                  purpose === 'bash' ? 'border-accent bg-accent/5' : 'border-border-secondary'
                 }`}
               >
                 <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <MessageCircle
+                  <Terminal
                     size={20}
                     className="text-text-secondary group-hover:text-accent transition-colors"
                   />
                 </div>
                 <div className="text-center">
                   <div className="text-xs font-medium text-text-primary">
-                    {t('projectForm.purposeCasual')}
+                    {t('projectForm.purposeBash')}
                   </div>
                   <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
-                    {t('projectForm.purposeCasualDesc')}
+                    {t('projectForm.purposeBashDesc')}
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => handlePurposeSelect('python')}
+                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
+                  purpose === 'python' ? 'border-accent bg-accent/5' : 'border-border-secondary'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
+                  <Code2
+                    size={20}
+                    className="text-text-secondary group-hover:text-accent transition-colors"
+                  />
+                </div>
+                <div className="text-center">
+                  <div className="text-xs font-medium text-text-primary">
+                    {t('projectForm.purposePython')}
+                  </div>
+                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
+                    {t('projectForm.purposePythonDesc')}
                   </div>
                 </div>
               </button>
@@ -242,7 +265,7 @@ export function ProjectCreateDialog({
                 }`}
               >
                 <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Code2
+                  <Wrench
                     size={20}
                     className="text-text-secondary group-hover:text-accent transition-colors"
                   />

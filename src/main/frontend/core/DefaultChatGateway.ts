@@ -6,6 +6,7 @@ import { ALL_TOOL_NAMES } from '../../utils/tools'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
+import { pythonWorkerManager } from '../../services/pythonWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
@@ -166,6 +167,23 @@ export class DefaultChatGateway implements ChatGateway {
     return { success: true }
   }
 
+  getPythonStatus(sessionId: string): { ready: boolean } | null {
+    return pythonWorkerManager.isActive(sessionId) ? { ready: true } : null
+  }
+
+  destroyPython(sessionId: string): { success: boolean } {
+    const active = pythonWorkerManager.isActive(sessionId)
+    if (!active) return { success: false }
+    pythonWorkerManager.terminate(sessionId)
+    chatFrontendRegistry.broadcast({
+      type: 'python_event',
+      sessionId,
+      action: 'runtime_destroyed'
+    })
+    operationLogService.log('destroyPython', sessionId)
+    return { success: true }
+  }
+
   // ─── 工具发现 ──────────────────────────────────
 
   listTools(): Array<{
@@ -186,6 +204,7 @@ export class DefaultChatGateway implements ChatGateway {
       grep: t('tool.grepLabel'),
       glob: t('tool.globLabel'),
       ssh: t('tool.sshLabel'),
+      python: t('tool.pythonLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel'),
       explore: t('tool.exploreLabel')
@@ -200,6 +219,7 @@ export class DefaultChatGateway implements ChatGateway {
       grep: t('tool.grepHint'),
       glob: t('tool.globHint'),
       ssh: t('tool.sshHint'),
+      python: t('tool.pythonHint'),
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint'),
       explore: t('tool.exploreHint')
