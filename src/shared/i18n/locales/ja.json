@@ -197,7 +197,11 @@
     "shareModeFullDesc": "すべての機能と設定にフルアクセス",
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "Telegram Bot を選択してこのセッションに接続します。先に設定で Bot を登録してください。",
-    "telegramNone": "なし"
+    "telegramNone": "なし",
+    "bashGroup": "Bash 承認",
+    "sshGroup": "SSH 承認",
+    "lanShareGroup": "LAN 共有",
+    "telegramGroup": "Telegram Bot"
   },
 
   "sessionEdit": {

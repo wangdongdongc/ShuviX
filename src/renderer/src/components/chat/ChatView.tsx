@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Copy, Folder, Globe, Settings2, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Bot, Copy, Folder, Globe, Settings2, Terminal, Trash2, TriangleAlert, Wifi, X } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import {
   useChatStore,
@@ -603,10 +603,14 @@ function SessionConfigDialog({
             />
           </div>
 
-          {/* Bash 免审批 */}
-          <div>
+          {/* Bash 审批分组 */}
+          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              <Terminal size={12} />
+              {t('sessionConfig.bashGroup')}
+            </label>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-secondary">
+              <span className="text-xs text-text-secondary">
                 {t('sessionConfig.bashAutoApprove')}
               </span>
               <button
@@ -622,11 +626,11 @@ function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary mt-1">
+            <p className="text-[10px] text-text-tertiary">
               {t('sessionConfig.bashAutoApproveDesc')}
             </p>
             {bashAutoApprove && (
-              <div className="flex items-start gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
+              <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
                 <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
                   {t('chat.bashAutoApproveWarning')}
@@ -634,7 +638,7 @@ function SessionConfigDialog({
               </div>
             )}
             {!bashAutoApprove && bashAllowList.length > 0 && (
-              <div className="mt-2 space-y-1">
+              <div className="border-t border-border-secondary pt-2 space-y-1">
                 <span className="text-[10px] text-text-tertiary">
                   {t('sessionConfig.allowedCommands')}
                 </span>
@@ -658,10 +662,14 @@ function SessionConfigDialog({
             )}
           </div>
 
-          {/* SSH 免审批 */}
-          <div>
+          {/* SSH 审批分组 */}
+          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              <Wifi size={12} />
+              {t('sessionConfig.sshGroup')}
+            </label>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-secondary">
+              <span className="text-xs text-text-secondary">
                 {t('sessionConfig.sshAutoApprove')}
               </span>
               <button
@@ -677,11 +685,11 @@ function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary mt-1">
+            <p className="text-[10px] text-text-tertiary">
               {t('sessionConfig.sshAutoApproveDesc')}
             </p>
             {sshAutoApprove && (
-              <div className="flex items-start gap-1.5 mt-2 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
+              <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
                 <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
                   {t('chat.sshAutoApproveWarning')}
@@ -689,7 +697,7 @@ function SessionConfigDialog({
               </div>
             )}
             {!sshAutoApprove && sshAllowList.length > 0 && (
-              <div className="mt-2 space-y-1">
+              <div className="border-t border-border-secondary pt-2 space-y-1">
                 <span className="text-[10px] text-text-tertiary">
                   {t('sessionConfig.allowedCommands')}
                 </span>
@@ -713,10 +721,14 @@ function SessionConfigDialog({
             )}
           </div>
 
-          {/* LAN 分享 */}
-          <div>
+          {/* LAN 分享分组 */}
+          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              <Globe size={12} />
+              {t('sessionConfig.lanShareGroup')}
+            </label>
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-text-secondary">
+              <span className="text-xs text-text-secondary">
                 {t('sessionConfig.lanShare')}
               </span>
               <button
@@ -724,7 +736,7 @@ function SessionConfigDialog({
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${
                   lanShareMode ? 'bg-accent' : 'bg-bg-hover'
                 }`}
-              >
+              > 
                 <span
                   className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
                     lanShareMode ? 'left-[16px]' : 'left-[2px]'
@@ -732,11 +744,10 @@ function SessionConfigDialog({
                 />
               </button>
             </div>
-            <p className="text-[10px] text-text-tertiary mt-1">{t('sessionConfig.lanShareDesc')}</p>
+            <p className="text-[10px] text-text-tertiary">{t('sessionConfig.lanShareDesc')}</p>
 
-            {/* 分享模式选择（仅在开启分享时显示） */}
             {lanShareMode && (
-              <div className="mt-2 space-y-1.5">
+              <div className="border-t border-border-secondary pt-2 space-y-1.5">
                 <span className="text-[10px] text-text-tertiary">
                   {t('sessionConfig.shareMode')}
                 </span>
@@ -766,7 +777,7 @@ function SessionConfigDialog({
             )}
 
             {lanShareMode && shareUrls.length > 0 && (
-              <div className="mt-2 flex flex-col gap-1">
+              <div className="border-t border-border-secondary pt-2 flex flex-col gap-1">
                 {shareUrls.map((url) => (
                   <div key={url} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
                     <Globe size={11} className="text-accent shrink-0" />
@@ -784,11 +795,12 @@ function SessionConfigDialog({
             )}
           </div>
 
-          {/* Telegram Bot 绑定 */}
-          <div>
-            <div className="text-xs font-medium text-text-secondary mb-1">
-              {t('sessionConfig.telegramBot')}
-            </div>
+          {/* Telegram Bot 分组 */}
+          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+              <Bot size={12} />
+              {t('sessionConfig.telegramGroup')}
+            </label>
             <select
               value={boundBotId ?? ''}
               onChange={(e) => void handleSelectTelegramBot(e.target.value || null)}
@@ -803,7 +815,7 @@ function SessionConfigDialog({
                   </option>
                 ))}
             </select>
-            <p className="text-[10px] text-text-tertiary mt-1">
+            <p className="text-[10px] text-text-tertiary">
               {t('sessionConfig.telegramBotDesc')}
             </p>
           </div>

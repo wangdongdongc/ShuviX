@@ -197,7 +197,11 @@
     "shareModeFullDesc": "完整功能，可修改所有配置",
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "选择一个 Telegram Bot 绑定到此会话。Bot 需在设置 > 绑定中配置。",
-    "telegramNone": "无（未绑定）"
+    "telegramNone": "无（未绑定）",
+    "bashGroup": "Bash 审批",
+    "sshGroup": "SSH 审批",
+    "lanShareGroup": "局域网分享",
+    "telegramGroup": "Telegram Bot"
   },
 
   "sessionEdit": {

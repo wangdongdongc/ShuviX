@@ -197,7 +197,11 @@
     "shareModeFullDesc": "Full access to all features and settings",
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "Select a Telegram bot to bind to this session. Configure bots in Settings > Bindings.",
-    "telegramNone": "None (unbound)"
+    "telegramNone": "None (unbound)",
+    "bashGroup": "Bash Approval",
+    "sshGroup": "SSH Approval",
+    "lanShareGroup": "LAN Share",
+    "telegramGroup": "Telegram Bot"
   },
 
   "sessionEdit": {
