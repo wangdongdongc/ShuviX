@@ -69,7 +69,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       throw new Error('pattern is required')
     }
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
@@ -85,7 +85,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   ): Promise<AgentToolResult<GrepToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory

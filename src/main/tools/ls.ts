@@ -117,7 +117,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   ): Promise<void> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
@@ -133,7 +133,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   ): Promise<AgentToolResult<LsToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory

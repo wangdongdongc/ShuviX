@@ -57,7 +57,7 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
     _toolCallId: string,
     params: { path: string; oldText: string; newText: string }
   ): Promise<void> {
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
 
     // 沙箱模式：路径越界检查
@@ -69,7 +69,7 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
     params: { path: string; oldText: string; newText: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<EditToolDetails>> {
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
     log.info(absolutePath)
 

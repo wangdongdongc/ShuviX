@@ -45,7 +45,7 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
     _toolCallId: string,
     params: { path: string; content: string }
   ): Promise<void> {
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
 
     // 沙箱模式：路径越界检查
@@ -57,7 +57,7 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
     params: { path: string; content: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
     const dir = dirname(absolutePath)
 

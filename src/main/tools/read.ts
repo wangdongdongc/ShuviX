@@ -174,7 +174,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   ): Promise<void> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveReadPath(params.path, config.workingDirectory)
 
     // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
@@ -188,7 +188,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   ): Promise<ReadResult> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveReadPath(params.path, config.workingDirectory)
     log.info(absolutePath)
 

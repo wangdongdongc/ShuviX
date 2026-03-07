@@ -142,8 +142,8 @@ export function assertSandboxWrite(
 }
 
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
-export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
-  const session = sessionService.getById(ctx.sessionId)
+export function resolveProjectConfig(sessionId: string): ProjectConfig {
+  const session = sessionService.getById(sessionId)
   const project = session?.projectId
     ? projectDao.pick(session.projectId, ['path', 'sandboxEnabled', 'settings'])
     : undefined
@@ -159,7 +159,7 @@ export function resolveProjectConfig(ctx: ToolContext): ProjectConfig {
 
   // 无项目（临时会话） → 使用 temp workspace，强制开启沙箱
   return {
-    workingDirectory: getTempWorkspace(ctx.sessionId),
+    workingDirectory: getTempWorkspace(sessionId),
     sandboxEnabled: true,
     referenceDirs: []
   }

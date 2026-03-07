@@ -64,7 +64,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       throw new Error('pattern is required')
     }
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
@@ -80,7 +80,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   ): Promise<AgentToolResult<GlobToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const searchPath = params.path
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory

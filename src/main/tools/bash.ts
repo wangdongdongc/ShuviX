@@ -137,7 +137,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     const docker = getDockerConfig()
     if (!docker.useDocker) return
 
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     try {
       const container = await dockerManager.ensureContainer(
         this.ctx.sessionId,
@@ -169,7 +169,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     signal?: AbortSignal
   ): Promise<AgentToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
-    const config = resolveProjectConfig(this.ctx)
+    const config = resolveProjectConfig(this.ctx.sessionId)
     const docker = getDockerConfig()
 
     // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
