@@ -228,19 +228,25 @@ else:
   }
 }
 
+// ---- 执行队列（确保同一 worker 内串行执行，避免 stdout/stderr handler 竞争） ----
+
+let execQueue: Promise<void> = Promise.resolve()
+
 // ---- 消息处理 ----
 
-parentPort!.on('message', async (msg: InitMessage | ExecuteMessage) => {
+parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
   if (msg.type === 'init') {
-    try {
-      await init(msg.mounts, msg.wheelsDir)
-    } catch (err: unknown) {
-      parentPort!.postMessage({
-        type: 'error',
-        error: `Failed to initialize Pyodide: ${err instanceof Error ? err.message : String(err)}`
-      } satisfies WorkerResponse)
-    }
+    execQueue = execQueue.then(async () => {
+      try {
+        await init(msg.mounts, msg.wheelsDir)
+      } catch (err: unknown) {
+        parentPort!.postMessage({
+          type: 'error',
+          error: `Failed to initialize Pyodide: ${err instanceof Error ? err.message : String(err)}`
+        } satisfies WorkerResponse)
+      }
+    })
   } else if (msg.type === 'execute') {
-    await execute(msg.id, msg.code, msg.packages)
+    execQueue = execQueue.then(() => execute(msg.id, msg.code, msg.packages))
   }
 })

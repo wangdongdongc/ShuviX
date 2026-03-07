@@ -144,12 +144,16 @@ class PythonWorkerManager {
 
       worker.on('exit', (code) => {
         log.info(`Python worker exited (session ${sessionId}, code ${code})`)
-        for (const [, req] of entry.pending) {
-          clearTimeout(req.timer)
-          req.reject(new Error(`Worker exited with code ${code}`))
+        // Only clean up if this is still the current entry for this session
+        // (avoid race: old worker exit deleting a newly created entry)
+        if (this.workers.get(sessionId) === entry) {
+          for (const [, req] of entry.pending) {
+            clearTimeout(req.timer)
+            req.reject(new Error(`Worker exited with code ${code}`))
+          }
+          entry.pending.clear()
+          this.workers.delete(sessionId)
         }
-        entry.pending.clear()
-        this.workers.delete(sessionId)
       })
 
       // 发送初始化消息
