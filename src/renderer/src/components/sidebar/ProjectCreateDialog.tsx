@@ -4,12 +4,14 @@ import {
   X,
   Wrench,
   Code2,
+  Database,
   Terminal,
   ChevronRight,
   ChevronDown,
   Puzzle,
   BookOpen,
-  Settings
+  Settings,
+  Info
 } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
@@ -27,7 +29,8 @@ interface ProjectCreateDialogProps {
 const PURPOSE_PRESETS: Record<string, string[]> = {
   bash: ['bash', 'read', 'ask'],
   python: ['read', 'python', 'ask'],
-  dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob']
+  sql: ['read', 'sql', 'ask'],
+  dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore']
 }
 
 /** Skills 分组标识 */
@@ -213,7 +216,7 @@ export function ProjectCreateDialog({
               </h3>
               <p className="text-[11px] text-text-tertiary mt-1">{t('projectForm.purposeDesc')}</p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-4 gap-3">
               <button
                 onClick={() => handlePurposeSelect('bash')}
                 className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
@@ -259,6 +262,28 @@ export function ProjectCreateDialog({
               </button>
 
               <button
+                onClick={() => handlePurposeSelect('sql')}
+                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
+                  purpose === 'sql' ? 'border-accent bg-accent/5' : 'border-border-secondary'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
+                  <Database
+                    size={20}
+                    className="text-text-secondary group-hover:text-accent transition-colors"
+                  />
+                </div>
+                <div className="text-center">
+                  <div className="text-xs font-medium text-text-primary">
+                    {t('projectForm.purposeSQL')}
+                  </div>
+                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
+                    {t('projectForm.purposeSQLDesc')}
+                  </div>
+                </div>
+              </button>
+
+              <button
                 onClick={() => handlePurposeSelect('dev')}
                 className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
                   purpose === 'dev' ? 'border-accent bg-accent/5' : 'border-border-secondary'
@@ -286,7 +311,15 @@ export function ProjectCreateDialog({
         {/* ========== Step 1: 工具选择（仅内置） ========== */}
         {step === 1 && (
           <>
-            <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0">
+            <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0 space-y-3">
+              {purpose && (
+                <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
+                  <Info size={14} className="text-accent shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-text-secondary leading-relaxed">
+                    {t(`projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`)}
+                  </p>
+                </div>
+              )}
               <div className="border border-border-secondary rounded-lg p-3">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
                   <Wrench size={12} />
