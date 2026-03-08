@@ -24,8 +24,10 @@ export interface AvailableModel extends ProviderModel {
 /** IPC: 更新提供商配置参数 */
 export interface ProviderUpdateConfigParams {
   id: string
+  name?: string
   apiKey?: string
   baseUrl?: string
+  apiProtocol?: ApiProtocol
 }
 
 /** IPC: 切换提供商启用状态参数 */

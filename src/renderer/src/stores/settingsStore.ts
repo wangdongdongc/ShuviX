@@ -112,13 +112,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   loadConfigMeta: (settingMeta, projectFieldMeta) => set({ settingMeta, projectFieldMeta }),
 
-  /** 从 settings 表加载通用设置 */
+  /** 从 settings 表加载通用设置（不覆盖当前会话的 activeProvider/activeModel） */
   loadSettings: (settings) => {
     const darkTheme = (settings['general.darkTheme'] as DarkThemeId) || 'dark'
     const lightTheme = (settings['general.lightTheme'] as LightThemeId) || 'light'
     set({
-      activeProvider: settings['general.defaultProvider'] || '',
-      activeModel: settings['general.defaultModel'] || '',
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       darkTheme,

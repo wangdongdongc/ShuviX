@@ -27,6 +27,9 @@ export function useAppInit(): void {
       lap('settings + meta (parallel)')
       useSettingsStore.getState().loadSettings(settings)
       useSettingsStore.getState().loadConfigMeta(settingMeta, projectFieldMeta)
+      // 初始化时将全局默认值作为 fallback，useSessionInit 切换会话后会覆盖
+      useSettingsStore.getState().setActiveProvider(settings['general.defaultProvider'] || '')
+      useSettingsStore.getState().setActiveModel(settings['general.defaultModel'] || '')
 
       // 同步前端 i18n 语言（优先用户设置，否则保持检测值）
       const savedLang = settings['general.language']

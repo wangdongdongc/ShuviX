@@ -34,13 +34,22 @@ export class ProviderService {
     return providerDao.findById(id)
   }
 
-  /** 更新提供商配置（apiKey、baseUrl） */
-  updateConfig(id: string, config: { apiKey?: string; baseUrl?: string }): void {
+  /** 更新提供商配置（name、apiKey、baseUrl、apiProtocol） */
+  updateConfig(
+    id: string,
+    config: { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ApiProtocol }
+  ): void {
+    if (config.name !== undefined) {
+      providerDao.updateName(id, config.name)
+    }
     if (config.apiKey !== undefined) {
       providerDao.updateApiKey(id, config.apiKey)
     }
     if (config.baseUrl !== undefined) {
       providerDao.updateBaseUrl(id, config.baseUrl)
+    }
+    if (config.apiProtocol !== undefined) {
+      providerDao.updateApiProtocol(id, config.apiProtocol)
     }
   }
 

@@ -38,11 +38,13 @@ export function registerProviderHandlers(): void {
     return providerService.getById(id)
   })
 
-  /** 更新提供商配置（apiKey、baseUrl） */
+  /** 更新提供商配置（name、apiKey、baseUrl、apiProtocol） */
   ipcMain.handle('provider:updateConfig', (_event, params: ProviderUpdateConfigParams) => {
     providerService.updateConfig(params.id, {
+      name: params.name,
       apiKey: params.apiKey,
-      baseUrl: params.baseUrl
+      baseUrl: params.baseUrl,
+      apiProtocol: params.apiProtocol
     })
     notifyProvidersChanged()
     return { success: true }

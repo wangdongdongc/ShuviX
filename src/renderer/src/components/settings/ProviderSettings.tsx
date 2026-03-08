@@ -23,7 +23,7 @@ export function ProviderSettings(): React.JSX.Element {
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [localEdits, setLocalEdits] = useState<
-    Record<string, { apiKey?: string; baseUrl?: string }>
+    Record<string, { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ProviderInfo['apiProtocol'] }>
   >({})
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
@@ -79,7 +79,7 @@ export function ProviderSettings(): React.JSX.Element {
   /** 更新本地编辑状态 */
   const updateLocalEdit = (
     providerId: string,
-    field: 'apiKey' | 'baseUrl',
+    field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol',
     value: string
   ): void => {
     setLocalEdits((prev) => ({
@@ -94,8 +94,10 @@ export function ProviderSettings(): React.JSX.Element {
     if (!edits) return false
     const provider = providers.find((p) => p.id === providerId)
     if (!provider) return false
+    if (edits.name !== undefined && edits.name !== provider.name) return true
     if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) return true
     if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) return true
+    if (edits.apiProtocol !== undefined && edits.apiProtocol !== provider.apiProtocol) return true
     return false
   }
 
@@ -104,12 +106,18 @@ export function ProviderSettings(): React.JSX.Element {
     const edits = localEdits[providerId]
     const provider = providers.find((p) => p.id === providerId)
     if (!edits || !provider) return
-    const updates: { apiKey?: string; baseUrl?: string } = {}
+    const updates: { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ProviderInfo['apiProtocol'] } = {}
+    if (edits.name !== undefined && edits.name !== provider.name) {
+      updates.name = edits.name
+    }
     if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) {
       updates.apiKey = edits.apiKey
     }
     if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) {
       updates.baseUrl = edits.baseUrl
+    }
+    if (edits.apiProtocol !== undefined && edits.apiProtocol !== provider.apiProtocol) {
+      updates.apiProtocol = edits.apiProtocol
     }
     if (Object.keys(updates).length > 0) {
       await window.api.provider.updateConfig({ id: providerId, ...updates })
@@ -290,6 +298,21 @@ export function ProviderSettings(): React.JSX.Element {
               {/* 展开内容 */}
               {isExpanded && (
                 <div className="px-4 py-3 space-y-3 border-t border-border-secondary">
+                  {/* 自定义提供商：名称 */}
+                  {!p.isBuiltin && (
+                    <div>
+                      <label className="block text-[11px] text-text-tertiary mb-1">
+                        {t('settings.providerName')}
+                      </label>
+                      <input
+                        type="text"
+                        value={edits.name ?? p.name}
+                        onChange={(e) => updateLocalEdit(p.id, 'name', e.target.value)}
+                        placeholder={t('settings.providerNamePlaceholder')}
+                        className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors focus:border-accent/50"
+                      />
+                    </div>
+                  )}
                   {/* API Key */}
                   <div>
                     <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
@@ -323,6 +346,24 @@ export function ProviderSettings(): React.JSX.Element {
                       className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors focus:border-accent/50"
                     />
                   </div>
+
+                  {/* 自定义提供商：接口类型 */}
+                  {!p.isBuiltin && (
+                    <div>
+                      <label className="block text-[11px] text-text-tertiary mb-1">
+                        {t('settings.apiProtocol')}
+                      </label>
+                      <select
+                        value={edits.apiProtocol ?? p.apiProtocol}
+                        onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
+                        className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+                      >
+                        <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
+                        <option value="anthropic-messages">Anthropic Messages</option>
+                        <option value="google-generative-ai">Google Generative AI</option>
+                      </select>
+                    </div>
+                  )}
 
                   {/* 保存按钮 */}
                   {(hasEdits(p.id) || savedIds.has(p.id)) && (

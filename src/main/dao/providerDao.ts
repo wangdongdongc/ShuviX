@@ -60,6 +60,22 @@ export class ProviderDao extends BaseDao {
     )
   }
 
+  /** 更新提供商名称（仅自定义提供商） */
+  updateName(id: string, name: string): void {
+    this.stmt('UPDATE providers SET name = ?, updatedAt = ? WHERE id = ? AND isBuiltin = 0').run(
+      name,
+      Date.now(),
+      id
+    )
+  }
+
+  /** 更新提供商接口协议（仅自定义提供商） */
+  updateApiProtocol(id: string, apiProtocol: string): void {
+    this.stmt(
+      'UPDATE providers SET apiProtocol = ?, updatedAt = ? WHERE id = ? AND isBuiltin = 0'
+    ).run(apiProtocol, Date.now(), id)
+  }
+
   /** 更新提供商 Base URL */
   updateBaseUrl(id: string, baseUrl: string): void {
     this.stmt('UPDATE providers SET baseUrl = ?, updatedAt = ? WHERE id = ?').run(
