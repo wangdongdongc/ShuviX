@@ -158,9 +158,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({
         )}
         <Bot size={12} className="text-text-tertiary flex-shrink-0" />
         <span className="font-medium text-text-secondary flex-shrink-0">explore</span>
-        {description && (
-          <span className="flex-1 truncate font-mono opacity-70">{description}</span>
-        )}
+        {description && <span className="flex-1 truncate font-mono opacity-70">{description}</span>}
         {!description && <span className="flex-1" />}
         <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
           {statusIcon}

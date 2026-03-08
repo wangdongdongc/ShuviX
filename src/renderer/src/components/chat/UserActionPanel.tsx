@@ -75,7 +75,14 @@ export function UserActionPanel({
     )
   }
   if (pendingApproval) {
-    return <ApprovalContent pending={pendingApproval} onApproval={onApproval} onAllowAndRemember={onAllowAndRemember} t={t} />
+    return (
+      <ApprovalContent
+        pending={pendingApproval}
+        onApproval={onApproval}
+        onAllowAndRemember={onAllowAndRemember}
+        t={t}
+      />
+    )
   }
   return null
 }
@@ -365,9 +372,7 @@ function ApprovalContent({
             ))}
           </div>
           {previewPatterns.length === 0 && (
-            <p className="text-[10px] text-text-tertiary italic">
-              {t('toolCall.noPatternsLeft')}
-            </p>
+            <p className="text-[10px] text-text-tertiary italic">{t('toolCall.noPatternsLeft')}</p>
           )}
         </div>
       )}

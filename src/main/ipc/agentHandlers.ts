@@ -29,9 +29,7 @@ export function registerAgentHandlers(): void {
 
   /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */
   ipcMain.handle('agent:abort', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.abort(sessionId)
-    )
+    operationContext.run(createElectronContext(sessionId), () => chatGateway.abort(sessionId))
   )
 
   /** 切换指定 session 的模型 */
@@ -111,8 +109,6 @@ export function registerAgentHandlers(): void {
 
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
   ipcMain.handle('tools:list', () =>
-    operationContext.run(createElectronContext(), () =>
-      chatGateway.listTools()
-    )
+    operationContext.run(createElectronContext(), () => chatGateway.listTools())
   )
 }

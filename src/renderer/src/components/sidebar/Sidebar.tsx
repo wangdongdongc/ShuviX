@@ -28,8 +28,14 @@ const ARCHIVED_GROUP_KEY = '__archived_projects__'
 
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
-  const { sessions, activeSessionId, setActiveSessionId, sessionStreams, sharedSessionIds, telegramBindings } =
-    useChatStore()
+  const {
+    sessions,
+    activeSessionId,
+    setActiveSessionId,
+    sessionStreams,
+    sharedSessionIds,
+    telegramBindings
+  } = useChatStore()
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -89,7 +95,7 @@ export function Sidebar(): React.JSX.Element {
     for (const p of projects) map.set(p.id, [])
 
     // 将会话分配到对应项目，无项目的归入临时组
-    let tempSessions: Session[] = []
+    const tempSessions: Session[] = []
     for (const s of sessions) {
       if (s.projectId && map.has(s.projectId)) {
         map.get(s.projectId)!.push(s)
@@ -204,7 +210,9 @@ export function Sidebar(): React.JSX.Element {
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
         <span className="truncate">{session.title}</span>
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
-        {telegramBindings.has(session.id) && <MessageCircle size={10} className="text-blue-500 shrink-0" />}
+        {telegramBindings.has(session.id) && (
+          <MessageCircle size={10} className="text-blue-500 shrink-0" />
+        )}
         {sessionStreams[session.id]?.isStreaming && (
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}

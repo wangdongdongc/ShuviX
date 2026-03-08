@@ -3,12 +3,7 @@ export type { ImageMeta, UsageInfo, MessageMetadata } from '../../../shared/type
 import type { MessageMetadata } from '../../../shared/types/chatMessage'
 
 /** 消息类型标识 */
-export type MessageType =
-  | 'text'
-  | 'tool_use'
-  | 'step_text'
-  | 'step_thinking'
-  | 'error_event'
+export type MessageType = 'text' | 'tool_use' | 'step_text' | 'step_thinking' | 'error_event'
 
 /** 消息数据结构（对应 DB 表 messages / message_steps） */
 export interface Message {

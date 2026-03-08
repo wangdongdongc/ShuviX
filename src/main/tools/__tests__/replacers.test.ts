@@ -93,7 +93,7 @@ describe('ExactReplacer', () => {
 describe('UnicodeNormalizedReplacer', () => {
   it('智能单引号 → 普通单引号', () => {
     //          文件中用了智能引号 '…'
-    const content = "const s = \u2018hello\u2019"
+    const content = 'const s = \u2018hello\u2019'
     //          LLM 输出普通引号
     const oldText = "const s = 'hello'"
     const matches = UnicodeNormalizedReplacer.findMatches(content, oldText)
@@ -203,18 +203,10 @@ describe('WhitespaceNormalizedReplacer', () => {
 describe('IndentationFlexibleReplacer', () => {
   it('2 空格 vs 4 空格缩进', () => {
     // 场景：文件用 4 空格，LLM 输出 2 空格
-    const content = [
-      'function hello() {',
-      '    console.log("hi");',
-      '    return true;',
-      '}'
-    ].join('\n')
-    const oldText = [
-      'function hello() {',
-      '  console.log("hi");',
-      '  return true;',
-      '}'
-    ].join('\n')
+    const content = ['function hello() {', '    console.log("hi");', '    return true;', '}'].join(
+      '\n'
+    )
+    const oldText = ['function hello() {', '  console.log("hi");', '  return true;', '}'].join('\n')
     const matches = IndentationFlexibleReplacer.findMatches(content, oldText)
     expect(matches).toHaveLength(1)
     expect(content.substring(matches[0].index, matches[0].index + matches[0].length)).toBe(content)
@@ -222,16 +214,8 @@ describe('IndentationFlexibleReplacer', () => {
 
   it('多缩进一层', () => {
     // 场景：文件在嵌套内（8空格），LLM 从顶层写起（4空格）
-    const content = [
-      '        if (true) {',
-      '            doSomething();',
-      '        }'
-    ].join('\n')
-    const oldText = [
-      '    if (true) {',
-      '        doSomething();',
-      '    }'
-    ].join('\n')
+    const content = ['        if (true) {', '            doSomething();', '        }'].join('\n')
+    const oldText = ['    if (true) {', '        doSomething();', '    }'].join('\n')
     const matches = IndentationFlexibleReplacer.findMatches(content, oldText)
     expect(matches).toHaveLength(1)
   })
@@ -242,19 +226,13 @@ describe('IndentationFlexibleReplacer', () => {
   })
 
   it('相对缩进结构不同时不匹配', () => {
-    const content = [
-      'function hello() {',
-      '    console.log("hi");',
-      '    return true;',
-      '}'
-    ].join('\n')
+    const content = ['function hello() {', '    console.log("hi");', '    return true;', '}'].join(
+      '\n'
+    )
     // LLM 错误地把 return 和 console.log 放在不同层级
-    const oldText = [
-      'function hello() {',
-      '  console.log("hi");',
-      '      return true;',
-      '}'
-    ].join('\n')
+    const oldText = ['function hello() {', '  console.log("hi");', '      return true;', '}'].join(
+      '\n'
+    )
     const matches = IndentationFlexibleReplacer.findMatches(content, oldText)
     expect(matches).toHaveLength(0)
   })
@@ -264,18 +242,8 @@ describe('IndentationFlexibleReplacer', () => {
 
 describe('BlockAnchorReplacer', () => {
   it('首尾锚定 + 中间行完全匹配', () => {
-    const content = [
-      'function hello() {',
-      '  console.log("hi");',
-      '  return true;',
-      '}'
-    ].join('\n')
-    const oldText = [
-      'function hello() {',
-      '  console.log("hi");',
-      '  return true;',
-      '}'
-    ].join('\n')
+    const content = ['function hello() {', '  console.log("hi");', '  return true;', '}'].join('\n')
+    const oldText = ['function hello() {', '  console.log("hi");', '  return true;', '}'].join('\n')
     // 精确匹配会被 ExactReplacer 处理，但 BlockAnchor 也应能找到
     const matches = BlockAnchorReplacer.findMatches(content, oldText)
     expect(matches).toHaveLength(1)
@@ -302,11 +270,7 @@ describe('BlockAnchorReplacer', () => {
   })
 
   it('首行不匹配时找不到', () => {
-    const content = [
-      'function hello() {',
-      '  return true;',
-      '}'
-    ].join('\n')
+    const content = ['function hello() {', '  return true;', '}'].join('\n')
     const oldText = [
       'function goodbye() {', // 首行不同
       '  return true;',
@@ -317,11 +281,7 @@ describe('BlockAnchorReplacer', () => {
   })
 
   it('末行不匹配时找不到', () => {
-    const content = [
-      'function hello() {',
-      '  return true;',
-      '}'
-    ].join('\n')
+    const content = ['function hello() {', '  return true;', '}'].join('\n')
     const oldText = [
       'function hello() {',
       '  return true;',
@@ -349,12 +309,7 @@ describe('BlockAnchorReplacer', () => {
       '}'
     ].join('\n')
     // 搜索更接近第二个函数
-    const oldText = [
-      'function test() {',
-      '  console.log("second");',
-      '  return 2;',
-      '}'
-    ].join('\n')
+    const oldText = ['function test() {', '  console.log("second");', '  return 2;', '}'].join('\n')
     const matches = BlockAnchorReplacer.findMatches(content, oldText)
     expect(matches).toHaveLength(1)
     // 应该选择第二个（相似度更高）
@@ -373,7 +328,7 @@ describe('replaceWithFallback', () => {
   })
 
   it('Unicode 差异走第 2 级', () => {
-    const content = "const s = \u2018hello\u2019"
+    const content = 'const s = \u2018hello\u2019'
     const result = replaceWithFallback(content, "const s = 'hello'", "const s = 'world'")
     expect(result.replacerName).toBe('UnicodeNormalized')
     expect(result.content).toContain('world')
@@ -420,11 +375,7 @@ describe('replaceWithFallback', () => {
       '  return name;',
       '}'
     ].join('\n')
-    const newText = [
-      'function greet() {',
-      '  return "hello world";',
-      '}'
-    ].join('\n')
+    const newText = ['function greet() {', '  return "hello world";', '}'].join('\n')
     const result = replaceWithFallback(content, oldText, newText)
     expect(result.replacerName).toBe('BlockAnchor')
     expect(result.content).toContain('return "hello world"')

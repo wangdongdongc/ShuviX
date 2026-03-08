@@ -63,55 +63,53 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
 
     log.info(absolutePath)
 
-    return new Promise<AgentToolResult<undefined>>(
-      (resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error(TOOL_ABORTED))
-          return
-        }
-
-        let aborted = false
-
-        const onAbort = (): void => {
-          aborted = true
-          reject(new Error(TOOL_ABORTED))
-        }
-
-        if (signal) {
-          signal.addEventListener('abort', onAbort, { once: true })
-        }
-
-        ;(async () => {
-          try {
-            // 仅当文件已存在且曾被读取过时，校验是否被外部修改（新建文件无需检查）
-            if (getReadTime(this.ctx.sessionId, absolutePath)) {
-              assertNotModifiedSinceRead(this.ctx.sessionId, absolutePath)
-            }
-
-            await fsMkdir(dir, { recursive: true })
-            if (aborted) return
-
-            await withFileLock(absolutePath, async () => {
-              await fsWriteFile(absolutePath, params.content, 'utf-8')
-            })
-            // 写入后更新读取时间
-            recordRead(this.ctx.sessionId, absolutePath)
-            if (aborted) return
-
-            if (signal) signal.removeEventListener('abort', onAbort)
-
-            resolve({
-              content: [
-                { type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }
-              ],
-              details: undefined
-            })
-          } catch (error: unknown) {
-            if (signal) signal.removeEventListener('abort', onAbort)
-            if (!aborted) reject(error)
-          }
-        })()
+    return new Promise<AgentToolResult<undefined>>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error(TOOL_ABORTED))
+        return
       }
-    )
+
+      let aborted = false
+
+      const onAbort = (): void => {
+        aborted = true
+        reject(new Error(TOOL_ABORTED))
+      }
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+
+      ;(async () => {
+        try {
+          // 仅当文件已存在且曾被读取过时，校验是否被外部修改（新建文件无需检查）
+          if (getReadTime(this.ctx.sessionId, absolutePath)) {
+            assertNotModifiedSinceRead(this.ctx.sessionId, absolutePath)
+          }
+
+          await fsMkdir(dir, { recursive: true })
+          if (aborted) return
+
+          await withFileLock(absolutePath, async () => {
+            await fsWriteFile(absolutePath, params.content, 'utf-8')
+          })
+          // 写入后更新读取时间
+          recordRead(this.ctx.sessionId, absolutePath)
+          if (aborted) return
+
+          if (signal) signal.removeEventListener('abort', onAbort)
+
+          resolve({
+            content: [
+              { type: 'text', text: `Wrote ${params.content.length} bytes to ${params.path}` }
+            ],
+            details: undefined
+          })
+        } catch (error: unknown) {
+          if (signal) signal.removeEventListener('abort', onAbort)
+          if (!aborted) reject(error)
+        }
+      })()
+    })
   }
 }

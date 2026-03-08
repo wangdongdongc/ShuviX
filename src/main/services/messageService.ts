@@ -124,17 +124,19 @@ export class MessageService {
     const msgs = messageDao.findBySessionId(sessionId)
     const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined
     const lastStep = messageStepDao.findLastBySessionId(sessionId)
-    const last = !lastMsg ? lastStep : !lastStep ? lastMsg : lastStep.createdAt > lastMsg.createdAt ? lastStep : lastMsg
+    const last = !lastMsg
+      ? lastStep
+      : !lastStep
+        ? lastMsg
+        : lastStep.createdAt > lastMsg.createdAt
+          ? lastStep
+          : lastMsg
     return last ? narrowMessage(last) : undefined
   }
 
   // ─── 类型化工厂方法 ───────────────────────────────
 
-  addUserText(p: {
-    sessionId: string
-    content: string
-    images?: ImageMeta[]
-  }): UserTextMessage {
+  addUserText(p: { sessionId: string; content: string; images?: ImageMeta[] }): UserTextMessage {
     return this.add({
       sessionId: p.sessionId,
       role: 'user',

@@ -175,7 +175,8 @@ export function ToolCallBlock({
         const sqlDetails = details?.type === 'sql' ? details : null
         const sqlMeta: string[] = []
         if (sqlDetails?.rowCount != null) sqlMeta.push(`${sqlDetails.rowCount} rows`)
-        if (sqlDetails?.executionTime) sqlMeta.push(`${(sqlDetails.executionTime / 1000).toFixed(1)}s`)
+        if (sqlDetails?.executionTime)
+          sqlMeta.push(`${(sqlDetails.executionTime / 1000).toFixed(1)}s`)
         if (sqlDetails?.extensions?.length) sqlMeta.push(sqlDetails.extensions.join(', '))
         const sqlMetaSuffix = sqlMeta.length > 0 ? ` (${sqlMeta.join(' · ')})` : ''
         return {

@@ -39,10 +39,7 @@ export interface WorkerResponse {
 let db: any = null
 
 /** 递归创建目录 */
-function mkdirRecursive(
-  fs: { stat(p: string): void; mkdir(p: string): void },
-  path: string
-): void {
+function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, path: string): void {
   const parts = path.split('/').filter(Boolean)
   let current = ''
   for (const part of parts) {

@@ -19,7 +19,9 @@ export function SessionConfigDialog({
   const [title, setTitle] = useState(session?.title || '')
 
   const [bashAutoApprove, setBashAutoApprove] = useState(session?.settings.bashAutoApprove === true)
-  const [bashAllowList, setBashAllowList] = useState<string[]>(session?.settings.bashAllowList || [])
+  const [bashAllowList, setBashAllowList] = useState<string[]>(
+    session?.settings.bashAllowList || []
+  )
   const [sshAutoApprove, setSshAutoApprove] = useState(session?.settings.sshAutoApprove === true)
   const [sshAllowList, setSshAllowList] = useState<string[]>(session?.settings.sshAllowList || [])
 
@@ -52,7 +54,14 @@ export function SessionConfigDialog({
       window.api.telegram.listBots(),
       window.api.telegram.getSessionBotId(sessionId)
     ]).then(([bots, botId]) => {
-      setTelegramBots(bots.map((b) => ({ id: b.id, name: b.name, username: b.username, boundSessionId: b.boundSessionId })))
+      setTelegramBots(
+        bots.map((b) => ({
+          id: b.id,
+          name: b.name,
+          username: b.username,
+          boundSessionId: b.boundSessionId
+        }))
+      )
       setBoundBotId(botId)
     })
   }, [sessionId])
@@ -141,7 +150,14 @@ export function SessionConfigDialog({
     useChatStore.getState().setTelegramBindings(bindings)
     // 刷新 bot 列表（绑定状态变化）
     const bots = await window.api.telegram.listBots()
-    setTelegramBots(bots.map((b) => ({ id: b.id, name: b.name, username: b.username, boundSessionId: b.boundSessionId })))
+    setTelegramBots(
+      bots.map((b) => ({
+        id: b.id,
+        name: b.name,
+        username: b.username,
+        boundSessionId: b.boundSessionId
+      }))
+    )
   }
 
   /** 切换 Bash 免审批 */
@@ -337,9 +353,7 @@ export function SessionConfigDialog({
               {t('sessionConfig.lanShareGroup')}
             </label>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-text-secondary">
-                {t('sessionConfig.lanShare')}
-              </span>
+              <span className="text-xs text-text-secondary">{t('sessionConfig.lanShare')}</span>
               <button
                 onClick={() => void handleSetShareMode(lanShareMode ? null : 'readonly')}
                 className={`relative w-8 h-[18px] rounded-full transition-colors ${
@@ -388,7 +402,10 @@ export function SessionConfigDialog({
             {lanShareMode && shareUrls.length > 0 && (
               <div className="border-t border-border-secondary pt-2 flex flex-col gap-1">
                 {shareUrls.map((url) => (
-                  <div key={url} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary">
+                  <div
+                    key={url}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-bg-tertiary border border-border-primary"
+                  >
                     <Globe size={11} className="text-accent shrink-0" />
                     <span className="text-[10px] text-text-secondary truncate flex-1">{url}</span>
                     <button
@@ -420,13 +437,12 @@ export function SessionConfigDialog({
                 .filter((b) => !b.boundSessionId || b.boundSessionId === sessionId)
                 .map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.name}{b.username ? ` (@${b.username})` : ''}
+                    {b.name}
+                    {b.username ? ` (@${b.username})` : ''}
                   </option>
                 ))}
             </select>
-            <p className="text-[10px] text-text-tertiary">
-              {t('sessionConfig.telegramBotDesc')}
-            </p>
+            <p className="text-[10px] text-text-tertiary">{t('sessionConfig.telegramBotDesc')}</p>
           </div>
         </div>
 

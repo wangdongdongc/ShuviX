@@ -221,10 +221,7 @@ describe('文件系统挂载 — 项目目录 (readwrite)', () => {
 
   it('写入项目目录文件', async () => {
     const newFile = join(PROJECT_DIR, 'new_from_python.txt')
-    await exec(
-      SESSION_ID,
-      `f = open('${newFile}', 'w')\nf.write('written by python')\nf.close()`
-    )
+    await exec(SESSION_ID, `f = open('${newFile}', 'w')\nf.write('written by python')\nf.close()`)
     // Verify file exists on host
     expect(existsSync(newFile)).toBe(true)
     expect(readFileSync(newFile, 'utf-8')).toBe('written by python')
@@ -239,10 +236,7 @@ describe('文件系统挂载 — 引用目录 (readwrite)', () => {
 
   it('写入 readwrite 引用目录', async () => {
     const newFile = join(REF_RW_DIR, 'new_rw.txt')
-    await exec(
-      SESSION_ID,
-      `f = open('${newFile}', 'w')\nf.write('rw written')\nf.close()`
-    )
+    await exec(SESSION_ID, `f = open('${newFile}', 'w')\nf.write('rw written')\nf.close()`)
     expect(existsSync(newFile)).toBe(true)
     expect(readFileSync(newFile, 'utf-8')).toBe('rw written')
   })

@@ -373,9 +373,7 @@ function TelegramDetail({
           <ArrowLeft size={14} />
         </button>
         <Bot size={16} className="text-text-secondary" />
-        <h3 className="text-sm font-semibold text-text-primary flex-1">
-          {t('bindings.telegram')}
-        </h3>
+        <h3 className="text-sm font-semibold text-text-primary flex-1">{t('bindings.telegram')}</h3>
         <button
           onClick={() => setShowAddForm(true)}
           className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors"

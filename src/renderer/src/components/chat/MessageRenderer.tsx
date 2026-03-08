@@ -51,12 +51,7 @@ export function MessageRenderer({
 
   // 用户消息
   if (msg.role === 'user' && msg.type === 'text') {
-    return (
-      <UserBubble
-        msg={msg}
-        onRollback={onRollback ? () => onRollback(msg.id) : undefined}
-      />
-    )
+    return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
   }
 
   // 助手消息（含 synthetic orphan messages）
@@ -67,7 +62,9 @@ export function MessageRenderer({
     <AssistantBubble
       msg={assistantMsg}
       steps={steps}
-      onRegenerate={msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined}
+      onRegenerate={
+        msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined
+      }
     />
   )
 }

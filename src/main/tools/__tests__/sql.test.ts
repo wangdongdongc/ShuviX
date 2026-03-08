@@ -101,7 +101,10 @@ beforeAll(async () => {
   mkdirSync(REF_RO_DIR, { recursive: true })
 
   // Create test CSV files
-  writeFileSync(join(PROJECT_DIR, 'data.csv'), 'id,name,score\n1,Alice,95.5\n2,Bob,87.3\n3,Carol,91.0\n')
+  writeFileSync(
+    join(PROJECT_DIR, 'data.csv'),
+    'id,name,score\n1,Alice,95.5\n2,Bob,87.3\n3,Carol,91.0\n'
+  )
   writeFileSync(join(REF_RW_DIR, 'rw_data.csv'), 'id,value\n10,aaa\n20,bbb\n')
   writeFileSync(join(REF_RO_DIR, 'ro_data.csv'), 'id,label\n100,x\n200,y\n')
 
@@ -209,7 +212,7 @@ describe('多轮共享状态', () => {
   it('函数跨调用保留', async () => {
     await exec(
       SESSION_ID,
-      "CREATE FUNCTION test_add(a int, b int) RETURNS int AS $$ SELECT a + b $$ LANGUAGE SQL"
+      'CREATE FUNCTION test_add(a int, b int) RETURNS int AS $$ SELECT a + b $$ LANGUAGE SQL'
     )
     const r = await exec(SESSION_ID, 'SELECT test_add(3, 4) AS sum')
     expect(r.type).toBe('result')
@@ -232,10 +235,7 @@ describe('多轮共享状态', () => {
 
 describe('结果格式化', () => {
   it('psql 风格表格输出', async () => {
-    const r = await exec(
-      SESSION_ID,
-      "SELECT 1 AS id, 'Alice' AS name UNION ALL SELECT 2, 'Bob'"
-    )
+    const r = await exec(SESSION_ID, "SELECT 1 AS id, 'Alice' AS name UNION ALL SELECT 2, 'Bob'")
     const output = getOutput(r)
     // 表头
     expect(output).toContain('id')
@@ -256,10 +256,7 @@ describe('结果格式化', () => {
   })
 
   it('多结果集用空行分隔', async () => {
-    const r = await exec(
-      SESSION_ID,
-      "SELECT 'first' AS tag; SELECT 'second' AS tag"
-    )
+    const r = await exec(SESSION_ID, "SELECT 'first' AS tag; SELECT 'second' AS tag")
     const output = getOutput(r)
     expect(output).toContain('first')
     expect(output).toContain('second')
@@ -287,13 +284,10 @@ describe('文件系统挂载 — 项目目录', () => {
   })
 
   it('COPY TO 写出文件到项目目录', async () => {
-    await exec(SESSION_ID, "CREATE TABLE csv_export(id int, msg text)")
+    await exec(SESSION_ID, 'CREATE TABLE csv_export(id int, msg text)')
     await exec(SESSION_ID, "INSERT INTO csv_export VALUES(1, 'exported')")
     const outPath = join(PROJECT_DIR, 'export_out.csv')
-    await exec(
-      SESSION_ID,
-      `COPY csv_export TO '${outPath}' WITH (FORMAT csv, HEADER true)`
-    )
+    await exec(SESSION_ID, `COPY csv_export TO '${outPath}' WITH (FORMAT csv, HEADER true)`)
     // Verify file exists on host
     expect(existsSync(outPath)).toBe(true)
     const content = readFileSync(outPath, 'utf-8')
@@ -334,11 +328,7 @@ describe('文件系统挂载 — 引用目录', () => {
 
 describe('扩展加载', () => {
   it('pg_trgm — 模糊匹配', async () => {
-    const r = await exec(
-      SESSION_ID,
-      "SELECT similarity('hello', 'helo') AS sim",
-      ['pg_trgm']
-    )
+    const r = await exec(SESSION_ID, "SELECT similarity('hello', 'helo') AS sim", ['pg_trgm'])
     expect(r.type).toBe('result')
     const output = getOutput(r)
     // similarity returns a float between 0 and 1
@@ -346,22 +336,14 @@ describe('扩展加载', () => {
   })
 
   it('uuid-ossp — UUID 生成', async () => {
-    const r = await exec(
-      SESSION_ID,
-      'SELECT uuid_generate_v4() AS uuid',
-      ['uuid-ossp']
-    )
+    const r = await exec(SESSION_ID, 'SELECT uuid_generate_v4() AS uuid', ['uuid-ossp'])
     expect(r.type).toBe('result')
     // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     expect(getOutput(r)).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
   })
 
   it('citext — 大小写不敏感比较', async () => {
-    await exec(
-      SESSION_ID,
-      'CREATE TABLE ci_test(name citext)',
-      ['citext']
-    )
+    await exec(SESSION_ID, 'CREATE TABLE ci_test(name citext)', ['citext'])
     await exec(SESSION_ID, "INSERT INTO ci_test VALUES('Hello')")
     const r = await exec(SESSION_ID, "SELECT * FROM ci_test WHERE name = 'hello'")
     expect(r.type).toBe('result')

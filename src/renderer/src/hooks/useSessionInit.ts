@@ -2,7 +2,6 @@ import { useEffect } from 'react'
 import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
-
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash === '#settings'
 
@@ -48,9 +47,12 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setAgentMdLoaded(!!result.agentMdLoaded)
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
-      const lastAssistant = [...msgs].reverse().find(
-        (m): m is AssistantTextMessage => m.role === 'assistant' && m.type === 'text' && !!m.metadata
-      )
+      const lastAssistant = [...msgs]
+        .reverse()
+        .find(
+          (m): m is AssistantTextMessage =>
+            m.role === 'assistant' && m.type === 'text' && !!m.metadata
+        )
       const lastUsage = lastAssistant?.metadata?.usage ?? null
       if (lastUsage) {
         const details = lastUsage.details
@@ -64,9 +66,7 @@ export function useSessionInit(activeSessionId: string | null): void {
       }
 
       // 6. 从 modelMetadata 恢复思考深度（仅同步 UI 状态，后端已在创建时初始化）
-      const restoredLevel = hasReasoning
-        ? result.modelMetadata.thinkingLevel || 'medium'
-        : 'off'
+      const restoredLevel = hasReasoning ? result.modelMetadata.thinkingLevel || 'medium' : 'off'
       store.setThinkingLevel(restoredLevel)
 
       // 7. 查询 Docker/SSH/Python/SQL 实时资源状态

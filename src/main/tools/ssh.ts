@@ -197,7 +197,13 @@ async function handleConnect(
             text: `Connection failed using saved credential "${credentialName}": ${result.error}. This credential was configured by the user in Settings > Tools > SSH Credentials — please inform them to check their SSH credential configuration.`
           }
         ],
-        details: { type: 'ssh', action: 'connect', success: false, credentialName, error: result.error }
+        details: {
+          type: 'ssh',
+          action: 'connect',
+          success: false,
+          credentialName,
+          error: result.error
+        }
       }
     }
   }
@@ -261,7 +267,11 @@ async function handleExec(
 
   // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
   const sess = sessionDao.pickSettings(ctx.sessionId, ['sshAutoApprove', 'sshAllowList'])
-  if (ctx.requestApproval && !sess?.sshAutoApprove && !isCommandAllowed(sess?.sshAllowList, command)) {
+  if (
+    ctx.requestApproval &&
+    !sess?.sshAutoApprove &&
+    !isCommandAllowed(sess?.sshAllowList, command)
+  ) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')
@@ -317,9 +327,7 @@ async function handleExec(
 }
 
 /** 处理 disconnect 动作 */
-async function handleDisconnect(
-  ctx: ToolContext
-): Promise<AgentToolResult<SshToolDetails>> {
+async function handleDisconnect(ctx: ToolContext): Promise<AgentToolResult<SshToolDetails>> {
   if (!sshManager.isConnected(ctx.sessionId)) {
     return {
       content: [{ type: 'text', text: 'No active SSH connection to disconnect.' }],

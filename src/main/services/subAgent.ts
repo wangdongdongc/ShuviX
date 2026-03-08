@@ -5,7 +5,12 @@
  * 纯内存管理，不写 DB，父会话销毁时统一清理。
  */
 
-import { Agent, type AgentEvent, type AgentMessage, type StreamFn } from '@mariozechner/pi-agent-core'
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type StreamFn
+} from '@mariozechner/pi-agent-core'
 import type { Api, Model } from '@mariozechner/pi-ai'
 import { isAssistantMessage } from '../utils/messageGuards'
 import type { ChatTokenUsage } from '../frontend'
@@ -110,8 +115,16 @@ function buildSubAgentTools(ctx: ToolContext, subAgentType: SubAgentType): AnyAg
       // 包装并行执行（复用父级的 parallelCoordinator，用独立 key 隔离）
       const originalExecute = tool.execute.bind(tool)
       const preExecute =
-        'preExecute' in tool ? (tool as { preExecute: (...a: unknown[]) => Promise<void> }).preExecute.bind(tool) : undefined
-      parallelCoordinator.registerExecutor(parallelKey, tool.name, tool, originalExecute, preExecute)
+        'preExecute' in tool
+          ? (tool as { preExecute: (...a: unknown[]) => Promise<void> }).preExecute.bind(tool)
+          : undefined
+      parallelCoordinator.registerExecutor(
+        parallelKey,
+        tool.name,
+        tool,
+        originalExecute,
+        preExecute
+      )
       return {
         ...tool,
         execute: async (
@@ -121,7 +134,15 @@ function buildSubAgentTools(ctx: ToolContext, subAgentType: SubAgentType): AnyAg
           onUpdate?: (partialResult: unknown) => void
         ) => {
           await Promise.resolve()
-          return parallelCoordinator.execute(parallelKey, toolCallId, tool.name, params, signal, onUpdate, originalExecute)
+          return parallelCoordinator.execute(
+            parallelKey,
+            toolCallId,
+            tool.name,
+            params,
+            signal,
+            onUpdate,
+            originalExecute
+          )
         }
       } as AnyAgentTool
     })
@@ -180,13 +201,21 @@ class SubAgentManager {
         log.info(`Resuming sub-agent task=${taskId} type=${typeName}`)
       } else {
         log.warn(`Sub-agent task=${taskId} not found, creating new session`)
-        session = this.createSession(parentSessionId, agentType, parentModel, parentStreamFn, onEvent)
+        session = this.createSession(
+          parentSessionId,
+          agentType,
+          parentModel,
+          parentStreamFn,
+          onEvent
+        )
       }
     } else {
       // 并发数检查
       const existing = this.sessions.get(parentSessionId)
       if (existing && existing.size >= this.MAX_CONCURRENT) {
-        throw new Error(`Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`)
+        throw new Error(
+          `Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`
+        )
       }
       session = this.createSession(parentSessionId, agentType, parentModel, parentStreamFn, onEvent)
     }

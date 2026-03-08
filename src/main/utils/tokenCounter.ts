@@ -4,11 +4,7 @@
 
 import { encodingForModel } from 'js-tiktoken'
 import type { AgentMessage } from '@mariozechner/pi-agent-core'
-import {
-  isAssistantMessage,
-  isToolResultMessage,
-  isUserMessage
-} from './messageGuards'
+import { isAssistantMessage, isToolResultMessage, isUserMessage } from './messageGuards'
 
 /** 懒加载的 tiktoken 编码器实例（cl100k_base，兼容 GPT-4 / Claude / Gemini） */
 let encoder: ReturnType<typeof encodingForModel> | null = null

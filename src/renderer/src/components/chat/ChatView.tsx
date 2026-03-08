@@ -35,10 +35,7 @@ function isStepOrToolMsg(msg: ChatMessage): boolean {
  * 预处理消息列表：将 step/tool 消息合并到后续的 assistant text 消息中
  * @param isStreaming 当前是否正在流式生成（流式中的 steps 不进入 items，由 StreamingFooter 展示）
  */
-function buildVisibleItems(
-  messages: ChatMessage[],
-  isStreaming: boolean
-): VisibleItem[] {
+function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
   const items: VisibleItem[] = []
   const stepBuffer: VisibleItem[] = []
 

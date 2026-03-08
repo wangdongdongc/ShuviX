@@ -205,7 +205,12 @@ interface ChatState {
     toolCallId: string,
     updates: Partial<SubAgentToolExecution>
   ) => void
-  endSubAgentExecution: (sessionId: string, subAgentId: string, result?: string, usage?: SubAgentUsage) => void
+  endSubAgentExecution: (
+    sessionId: string,
+    subAgentId: string,
+    result?: string,
+    usage?: SubAgentUsage
+  ) => void
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
@@ -414,9 +419,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sa.subAgentId === subAgentId
           ? {
               ...sa,
-              tools: sa.tools.map((t) =>
-                t.toolCallId === toolCallId ? { ...t, ...updates } : t
-              )
+              tools: sa.tools.map((t) => (t.toolCallId === toolCallId ? { ...t, ...updates } : t))
             }
           : sa
       )

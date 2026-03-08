@@ -226,10 +226,7 @@ export function ProviderSettings(): React.JSX.Element {
 
         {/* 添加提供商弹窗 */}
         {showAddDialog && (
-          <AddProviderDialog
-            onAdd={handleAddProvider}
-            onClose={() => setShowAddDialog(false)}
-          />
+          <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
         )}
 
         {providers.map((p) => {
@@ -412,78 +409,78 @@ export function ProviderSettings(): React.JSX.Element {
                             key={m.id}
                             className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors"
                           >
-                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                <span className="text-xs text-text-primary font-mono truncate">
-                                  {m.modelId}
-                                </span>
-                                {/* 能力标签 */}
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {caps.vision && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
-                                      Vision
-                                    </span>
-                                  )}
-                                  {caps.functionCalling && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
-                                      Tools
-                                    </span>
-                                  )}
-                                  {caps.reasoning && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
-                                      Reasoning
-                                    </span>
-                                  )}
-                                  {caps.imageOutput && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
-                                      ImgOut
-                                    </span>
-                                  )}
-                                  {caps.audioInput && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
-                                      Audio
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                {/* 编辑能力 */}
-                                <button
-                                  onClick={() =>
-                                    setEditingModel({
-                                      id: m.id,
-                                      providerId: p.id,
-                                      modelId: m.modelId,
-                                      caps
-                                    })
-                                  }
-                                  className="text-text-tertiary hover:text-text-secondary transition-colors"
-                                  title={t('settings.editCapabilities')}
-                                >
-                                  <SlidersHorizontal size={12} />
-                                </button>
-                                {/* 自定义提供商的模型可删除 */}
-                                {!p.isBuiltin && (
-                                  <button
-                                    onClick={() => handleDeleteModel(m.id, p.id)}
-                                    className="text-text-tertiary hover:text-danger transition-colors"
-                                    title={t('settings.deleteModel')}
-                                  >
-                                    <X size={12} />
-                                  </button>
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                              <span className="text-xs text-text-primary font-mono truncate">
+                                {m.modelId}
+                              </span>
+                              {/* 能力标签 */}
+                              <div className="flex items-center gap-1 shrink-0">
+                                {caps.vision && (
+                                  <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
+                                    Vision
+                                  </span>
                                 )}
-                                <button
-                                  onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
-                                  className={`w-7 h-4 rounded-full relative transition-colors ${
-                                    m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                                  }`}
-                                >
-                                  <span
-                                    className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                                      m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                                    }`}
-                                  />
-                                </button>
+                                {caps.functionCalling && (
+                                  <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
+                                    Tools
+                                  </span>
+                                )}
+                                {caps.reasoning && (
+                                  <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
+                                    Reasoning
+                                  </span>
+                                )}
+                                {caps.imageOutput && (
+                                  <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
+                                    ImgOut
+                                  </span>
+                                )}
+                                {caps.audioInput && (
+                                  <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
+                                    Audio
+                                  </span>
+                                )}
                               </div>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {/* 编辑能力 */}
+                              <button
+                                onClick={() =>
+                                  setEditingModel({
+                                    id: m.id,
+                                    providerId: p.id,
+                                    modelId: m.modelId,
+                                    caps
+                                  })
+                                }
+                                className="text-text-tertiary hover:text-text-secondary transition-colors"
+                                title={t('settings.editCapabilities')}
+                              >
+                                <SlidersHorizontal size={12} />
+                              </button>
+                              {/* 自定义提供商的模型可删除 */}
+                              {!p.isBuiltin && (
+                                <button
+                                  onClick={() => handleDeleteModel(m.id, p.id)}
+                                  className="text-text-tertiary hover:text-danger transition-colors"
+                                  title={t('settings.deleteModel')}
+                                >
+                                  <X size={12} />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
+                                className={`w-7 h-4 rounded-full relative transition-colors ${
+                                  m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+                                }`}
+                              >
+                                <span
+                                  className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                                    m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                                  }`}
+                                />
+                              </button>
+                            </div>
                           </div>
                         )
                       })}

@@ -175,11 +175,7 @@ export function DiffViewer({ diff }: DiffViewerProps): React.JSX.Element {
     <div ref={containerRef}>
       <div className="rounded border border-border-secondary/50 overflow-hidden text-[11px] font-mono leading-[18px]">
         <div className="overflow-auto max-h-[400px]">
-          {isSplit ? (
-            <SplitView rows={sideBySide} />
-          ) : (
-            <UnifiedView lines={parsed} />
-          )}
+          {isSplit ? <SplitView rows={sideBySide} /> : <UnifiedView lines={parsed} />}
         </div>
       </div>
     </div>
@@ -245,7 +241,9 @@ function SplitView({ rows }: { rows: SideBySideLine[] }): React.JSX.Element {
             >
               {row.left.lineNum ?? ''}
             </td>
-            <td className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.left.type]} ${textColors[row.left.type]} border-r border-border-secondary/30`}>
+            <td
+              className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.left.type]} ${textColors[row.left.type]} border-r border-border-secondary/30`}
+            >
               {row.left.type === 'separator' ? (
                 <span className="text-text-tertiary italic">...</span>
               ) : row.left.type === 'remove' ? (
@@ -267,7 +265,9 @@ function SplitView({ rows }: { rows: SideBySideLine[] }): React.JSX.Element {
             >
               {row.right.lineNum ?? ''}
             </td>
-            <td className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.right.type]} ${textColors[row.right.type]}`}>
+            <td
+              className={`w-1/2 px-2 whitespace-pre overflow-hidden text-ellipsis ${bgColors[row.right.type]} ${textColors[row.right.type]}`}
+            >
               {row.right.type === 'separator' ? (
                 <span className="text-text-tertiary italic">...</span>
               ) : row.right.type === 'add' ? (

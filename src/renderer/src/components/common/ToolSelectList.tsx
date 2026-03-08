@@ -111,16 +111,11 @@ export function ToolSelectList({
   // 分离：内置工具（通用 + ripgrep + 子智能体）、MCP 工具、Skills
   // shuvix-project / shuvix-setting 暂不在选择器中展示
   const builtinTools = tools.filter(
-    (t) =>
-      !t.group &&
-      !RIPGREP_TOOLS.has(t.name) &&
-      !t.name.startsWith('shuvix-')
+    (t) => !t.group && !RIPGREP_TOOLS.has(t.name) && !t.name.startsWith('shuvix-')
   )
   const ripgrepTools = tools.filter((t) => !t.group && RIPGREP_TOOLS.has(t.name))
   const subAgentTools = tools.filter((t) => t.group === SUBAGENTS_GROUP)
-  const mcpTools = tools.filter(
-    (t) => t.group && !t.group.startsWith('__')
-  )
+  const mcpTools = tools.filter((t) => t.group && !t.group.startsWith('__'))
   const skillTools = tools.filter((t) => t.group === SKILLS_GROUP)
   const groups = [...new Set(mcpTools.map((t) => t.group!))]
 

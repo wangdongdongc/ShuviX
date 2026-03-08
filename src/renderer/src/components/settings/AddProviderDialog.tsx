@@ -46,7 +46,12 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
     if (!canSubmit) return
     setAdding(true)
     try {
-      await onAdd({ name: name.trim(), baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), apiProtocol })
+      await onAdd({
+        name: name.trim(),
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        apiProtocol
+      })
       handleClose()
     } finally {
       setAdding(false)

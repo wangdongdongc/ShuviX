@@ -1,5 +1,14 @@
 import { useTranslation } from 'react-i18next'
-import { Code, Container, Database, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
+import {
+  Code,
+  Container,
+  Database,
+  Globe,
+  MessageCircle,
+  Terminal,
+  TriangleAlert,
+  X
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
@@ -25,7 +34,16 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
 
-  if (!docker && !ssh && !python && !sql && !bashAutoApprove && !sshAutoApprove && !lanShareMode && !telegramBinding)
+  if (
+    !docker &&
+    !ssh &&
+    !python &&
+    !sql &&
+    !bashAutoApprove &&
+    !sshAutoApprove &&
+    !lanShareMode &&
+    !telegramBinding
+  )
     return null
 
   const handleDestroyDocker = async (): Promise<void> => {
@@ -170,7 +188,11 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           <Globe size={11} />
           {t('chat.lanShareLabel')}
           <span className="opacity-60">
-            ({t(`sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}`)})
+            (
+            {t(
+              `sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}`
+            )}
+            )
           </span>
           <X size={10} className="ml-0.5 opacity-60" />
         </button>

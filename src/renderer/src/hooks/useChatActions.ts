@@ -18,7 +18,11 @@ export interface UseChatActionsReturn {
   /** 审批：用户允许/拒绝工具调用 */
   handleToolApproval: (toolCallId: string, approved: boolean) => Promise<void>
   /** 审批：允许并记住（加入允许列表，用户已筛选模式） */
-  handleAllowAndRemember: (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => Promise<void>
+  handleAllowAndRemember: (
+    toolCallId: string,
+    toolType: 'bash' | 'ssh',
+    patterns: string[]
+  ) => Promise<void>
   /** ask 工具：用户选择回调 */
   handleUserInput: (toolCallId: string, selections: string[]) => Promise<void>
   /** SSH 凭据输入回调（凭据不经过大模型） */

@@ -12,7 +12,11 @@ interface ModelCapabilitiesDialogProps {
 /** 布尔能力定义 */
 const BOOL_CAPS = [
   { key: 'vision', labelKey: 'settings.capVision', descKey: 'settings.capVisionDesc' },
-  { key: 'imageOutput', labelKey: 'settings.capImageOutput', descKey: 'settings.capImageOutputDesc' },
+  {
+    key: 'imageOutput',
+    labelKey: 'settings.capImageOutput',
+    descKey: 'settings.capImageOutputDesc'
+  },
   {
     key: 'functionCalling',
     labelKey: 'settings.capFunctionCalling',

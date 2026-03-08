@@ -1,7 +1,12 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, ImagePlus, X } from 'lucide-react'
-import { useChatStore, selectIsStreaming, selectToolExecutions, selectCanEdit } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectIsStreaming,
+  selectToolExecutions,
+  selectCanEdit
+} from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { ModelPicker } from './ModelPicker'

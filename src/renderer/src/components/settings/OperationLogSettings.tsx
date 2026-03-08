@@ -156,9 +156,7 @@ export function OperationLogSettings(): React.JSX.Element {
             <h3 className="text-sm font-semibold text-text-primary">
               {t('settings.operationLogTitle')}
             </h3>
-            <p className="text-[11px] text-text-tertiary mt-1">
-              {t('settings.operationLogDesc')}
-            </p>
+            <p className="text-[11px] text-text-tertiary mt-1">{t('settings.operationLogDesc')}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -271,9 +269,7 @@ export function OperationLogSettings(): React.JSX.Element {
                       <div className="bg-bg-tertiary rounded-md px-3 py-2 text-[11px] space-y-1">
                         {sourceDetails.map((item, i) => (
                           <div key={i} className="flex gap-2">
-                            <span className="text-text-tertiary flex-shrink-0">
-                              {item.label}:
-                            </span>
+                            <span className="text-text-tertiary flex-shrink-0">{item.label}:</span>
                             <span className="text-text-secondary break-all">{item.value}</span>
                           </div>
                         ))}

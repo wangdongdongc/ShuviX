@@ -101,10 +101,7 @@ export function ProjectFileSystem({
         {referenceDirs.map((dir, idx) => (
           <div key={idx} className="flex items-start gap-1.5 mb-2">
             <div className="flex-1 min-w-0">
-              <div
-                className="text-[11px] font-mono text-text-primary truncate"
-                title={dir.path}
-              >
+              <div className="text-[11px] font-mono text-text-primary truncate" title={dir.path}>
                 {dir.path}
               </div>
               <input
@@ -138,9 +135,7 @@ export function ProjectFileSystem({
           <Plus size={12} />
           {t('projectForm.addRefDir')}
         </button>
-        <p className="text-[10px] text-text-tertiary mt-2">
-          {t('projectForm.referenceDirsHint')}
-        </p>
+        <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.referenceDirsHint')}</p>
       </div>
 
       <div className="border-t border-border-secondary" />

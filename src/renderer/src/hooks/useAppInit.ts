@@ -53,7 +53,9 @@ export function useAppInit(): void {
         useChatStore.getState().setSessions(sessions)
         // 加载 WebUI 分享状态
         const sharedList = await window.api.webui.listShared()
-        useChatStore.getState().setSharedSessionIds(new Map(sharedList.map((s) => [s.sessionId, s.mode])))
+        useChatStore
+          .getState()
+          .setSharedSessionIds(new Map(sharedList.map((s) => [s.sessionId, s.mode])))
         // 从 session settings + bot 列表构建 Telegram 绑定关系
         const telegramBindings = new Map<string, { botId: string; username: string }>()
         const botList = await window.api.telegram.listBots()

@@ -241,8 +241,6 @@ export function registerSessionHandlers(): void {
 
   /** 手动销毁指定 session 的 SQL 运行时 */
   ipcMain.handle('sql:destroySession', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.destroySql(sessionId)
-    )
+    operationContext.run(createElectronContext(sessionId), () => chatGateway.destroySql(sessionId))
   )
 }

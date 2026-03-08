@@ -39,13 +39,11 @@ export function registerMessageHandlers(): void {
   )
 
   /** 从指定消息开始删除（含该消息，使 Agent 失效） */
-  ipcMain.handle(
-    'message:deleteFrom',
-    (_event, params: { sessionId: string; messageId: string }) =>
-      operationContext.run(createElectronContext(params.sessionId), () => {
-        chatGateway.deleteFromMessage(params.sessionId, params.messageId)
-        return { success: true }
-      })
+  ipcMain.handle('message:deleteFrom', (_event, params: { sessionId: string; messageId: string }) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.deleteFromMessage(params.sessionId, params.messageId)
+      return { success: true }
+    })
   )
 
   /** 新增 error_event 消息（类型化便捷入口） */

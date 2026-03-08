@@ -40,10 +40,7 @@ export function getProjectFieldDescriptions(): string {
  * @param dirs 原始参考目录列表
  * @param projectPath 项目根目录绝对路径（可选，传入时会过滤掉与之相同的条目）
  */
-function deduplicateReferenceDirs(
-  dirs: ReferenceDir[],
-  projectPath?: string
-): ReferenceDir[] {
+function deduplicateReferenceDirs(dirs: ReferenceDir[], projectPath?: string): ReferenceDir[] {
   const resolvedProjectPath = projectPath ? resolve(expandPath(projectPath)) : undefined
   const seen = new Set<string>()
   const result: ReferenceDir[] = []

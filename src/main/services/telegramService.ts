@@ -43,12 +43,7 @@ class TelegramService {
   }
 
   /** 添加 Bot（token 验证后传入 id/username） */
-  addBot(params: {
-    id: string
-    name: string
-    token: string
-    username: string
-  }): TelegramBotInfo {
+  addBot(params: { id: string; name: string; token: string; username: string }): TelegramBotInfo {
     telegramBotDao.insert(params)
     const bot = telegramBotDao.pick(params.id, [
       'id',

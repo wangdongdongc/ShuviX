@@ -66,7 +66,11 @@ function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, p
   }
 }
 
-async function init(mounts: MountConfig[], workingDirectory: string, wheelsDir?: string): Promise<void> {
+async function init(
+  mounts: MountConfig[],
+  workingDirectory: string,
+  wheelsDir?: string
+): Promise<void> {
   const { loadPyodide } = await import('pyodide')
   pyodide = await loadPyodide({})
 

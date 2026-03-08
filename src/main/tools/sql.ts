@@ -53,9 +53,7 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
 
   async preExecute(): Promise<void> {
     const config = resolveProjectConfig(this.ctx.sessionId)
-    await sqlWorkerManager.ensureReady(this.ctx.sessionId, config, () =>
-      this.ctx.onSqlReady?.()
-    )
+    await sqlWorkerManager.ensureReady(this.ctx.sessionId, config, () => this.ctx.onSqlReady?.())
   }
 
   protected async securityCheck(

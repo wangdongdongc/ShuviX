@@ -18,7 +18,13 @@ import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
 import { pythonWorkerManager } from './pythonWorkerManager'
 import { sqlWorkerManager } from './sqlWorkerManager'
-import type { ModelCapabilities, ThinkingLevel, Message, MessageMetadata, ProjectSettings } from '../types'
+import type {
+  ModelCapabilities,
+  ThinkingLevel,
+  Message,
+  MessageMetadata,
+  ProjectSettings
+} from '../types'
 import type { SessionModelMetadata } from '../dao/types'
 import { t } from '../i18n'
 import {
@@ -55,7 +61,9 @@ export interface AgentSessionCreateParams {
 
 /** 合并系统提示词：全局 + 项目级 + 参考目录 + 工作目录 */
 function buildSystemPrompt(
-  project: { path: string; systemPrompt?: string | null; settings?: ProjectSettings | null } | undefined,
+  project:
+    | { path: string; systemPrompt?: string | null; settings?: ProjectSettings | null }
+    | undefined,
   workingDirectory: string,
   sessionId: string
 ): string {
@@ -194,7 +202,6 @@ export class AgentSession {
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
-
     // 构建 streamFn（回调通过闭包引用 session）
     const streamFn = (
       streamModel: Parameters<typeof streamSimple>[0],
@@ -272,7 +279,9 @@ export class AgentSession {
       })
     }
 
-    session = new AgentSession(sessionId, agent, toolContext, subAgentCtx, { agentMdLoaded: !!agentMd })
+    session = new AgentSession(sessionId, agent, toolContext, subAgentCtx, {
+      agentMdLoaded: !!agentMd
+    })
 
     // 恢复历史消息到 Agent 上下文
     const dbMsgs = messageService.listBySession(sessionId)

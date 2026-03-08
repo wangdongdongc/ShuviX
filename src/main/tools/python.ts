@@ -54,10 +54,8 @@ export class PythonTool extends BaseTool<typeof PythonParamsSchema> {
   async preExecute(): Promise<void> {
     // 懒初始化 — 首次调用时创建 worker
     const config = resolveProjectConfig(this.ctx.sessionId)
-    await pythonWorkerManager.ensureReady(
-      this.ctx.sessionId,
-      config,
-      () => this.ctx.onPythonReady?.()
+    await pythonWorkerManager.ensureReady(this.ctx.sessionId, config, () =>
+      this.ctx.onPythonReady?.()
     )
   }
 

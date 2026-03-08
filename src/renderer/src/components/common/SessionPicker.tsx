@@ -175,11 +175,7 @@ export function SessionPicker({ value, onChange }: SessionPickerProps): React.JS
                       onClick={() => toggleGroup(group.key)}
                       className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
                     >
-                      {isCollapsed ? (
-                        <ChevronRight size={10} />
-                      ) : (
-                        <ChevronDown size={10} />
-                      )}
+                      {isCollapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
                       <span className="truncate">{group.label}</span>
                       <span className="ml-auto text-[9px] opacity-60">{group.items.length}</span>
                     </button>

@@ -440,7 +440,11 @@ const REPLACER_CHAIN: Replacer[] = [
  * @returns 替换结果，包含新内容和命中的替换器名称
  * @throws 找不到匹配或无法确定唯一匹配时抛错
  */
-export function replaceWithFallback(content: string, oldText: string, newText: string): ReplaceResult {
+export function replaceWithFallback(
+  content: string,
+  oldText: string,
+  newText: string
+): ReplaceResult {
   let lastMultipleCount = 0
 
   for (const replacer of REPLACER_CHAIN) {

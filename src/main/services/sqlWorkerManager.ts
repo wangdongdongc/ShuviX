@@ -49,11 +49,7 @@ class SqlWorkerManager {
   }
 
   /** 确保 worker 已初始化并就绪 */
-  async ensureReady(
-    sessionId: string,
-    config: ProjectConfig,
-    onReady?: () => void
-  ): Promise<void> {
+  async ensureReady(sessionId: string, config: ProjectConfig, onReady?: () => void): Promise<void> {
     const existing = this.workers.get(sessionId)
     if (existing?.ready) return
 

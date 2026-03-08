@@ -458,9 +458,7 @@ declare global {
       updateThinkingLevel: (
         params: SessionUpdateThinkingLevelParams
       ) => Promise<{ success: boolean }>
-      updateEnabledTools: (
-        params: SessionUpdateEnabledToolsParams
-      ) => Promise<{ success: boolean }>
+      updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       updateBashAutoApprove: (
         params: SessionUpdateBashAutoApproveParams
       ) => Promise<{ success: boolean }>
@@ -468,10 +466,18 @@ declare global {
         params: SessionUpdateSshAutoApproveParams
       ) => Promise<{ success: boolean }>
       previewAllowPatterns: (command: string) => Promise<string[]>
-      addBashAllowListPatterns: (params: SessionBashAllowListAddParams) => Promise<{ success: boolean }>
-      removeBashAllowListEntry: (params: SessionBashAllowListRemoveParams) => Promise<{ success: boolean }>
-      addSshAllowListPatterns: (params: SessionSshAllowListAddParams) => Promise<{ success: boolean }>
-      removeSshAllowListEntry: (params: SessionSshAllowListRemoveParams) => Promise<{ success: boolean }>
+      addBashAllowListPatterns: (
+        params: SessionBashAllowListAddParams
+      ) => Promise<{ success: boolean }>
+      removeBashAllowListEntry: (
+        params: SessionBashAllowListRemoveParams
+      ) => Promise<{ success: boolean }>
+      addSshAllowListPatterns: (
+        params: SessionSshAllowListAddParams
+      ) => Promise<{ success: boolean }>
+      removeSshAllowListEntry: (
+        params: SessionSshAllowListRemoveParams
+      ) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
         userMessage: string
