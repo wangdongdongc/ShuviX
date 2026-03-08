@@ -17,6 +17,7 @@ asarUnpack:
   - resources/**
   - out/main/pythonWorker.js
   - out/main/sqlWorker.js
+  - out/main/chunks/**
   - node_modules/@vscode/ripgrep/**
   - node_modules/pyodide/**
   - node_modules/@electric-sql/pglite/**
