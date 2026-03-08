@@ -15,6 +15,8 @@ extraResources:
     to: pyodide-wheels
 asarUnpack:
   - resources/**
+  - out/main/pythonWorker.js
+  - out/main/sqlWorker.js
   - node_modules/@vscode/ripgrep/**
   - node_modules/pyodide/**
 # 启用原生模块重新编译（better-sqlite3 等）
