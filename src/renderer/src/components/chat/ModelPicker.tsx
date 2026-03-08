@@ -156,7 +156,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
       ) : (
         <button
           onClick={togglePicker}
-          className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors"
+          className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors border border-blue-400/30 hover:border-blue-400/50 rounded px-1.5 py-0.5"
         >
           <span className="max-w-[120px] truncate">{activeModel}</span>
           <ChevronDown size={11} />

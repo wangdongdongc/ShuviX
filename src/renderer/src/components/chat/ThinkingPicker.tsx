@@ -50,10 +50,10 @@ export function ThinkingPicker(): React.JSX.Element | null {
     <div ref={thinkingRef} className="relative flex items-center">
       <button
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1 text-[11px] transition-colors ${
+        className={`inline-flex items-center gap-1 text-[11px] transition-colors border rounded px-1.5 py-0.5 ${
           thinkingLevel !== 'off'
-            ? 'text-purple-400 hover:text-purple-300'
-            : 'text-purple-400/50 hover:text-purple-400'
+            ? 'text-purple-400 hover:text-purple-300 border-purple-400/30 hover:border-purple-400/50'
+            : 'text-purple-400/50 hover:text-purple-400 border-purple-400/30 hover:border-purple-400/50'
         }`}
         title={t('input.thinkingDepth')}
       >

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wrench } from 'lucide-react'
+import { Wrench, Server, BookOpen } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
@@ -48,11 +48,8 @@ export function ToolPicker(): React.JSX.Element | null {
   // 仅统计在 allTools 中实际存在的已启用工具
   const validNames = new Set(allTools.map((t) => t.name))
   const activeEnabledTools = enabledTools.filter((n) => validNames.has(n))
-  const activeCount = activeEnabledTools.length
-  const totalCount = allTools.length
-  const disabledCount = totalCount - activeCount
 
-  // 分类统计已启用工具用于 tooltip
+  // 分类统计
   const enabledBuiltinTools = allTools.filter(
     (t) => !t.group && activeEnabledTools.includes(t.name)
   )
@@ -64,6 +61,10 @@ export function ToolPicker(): React.JSX.Element | null {
   )
   // 按 server 分组的 MCP 工具
   const enabledMcpGroups = [...new Set(enabledMcpTools.map((t) => t.group!))]
+
+  // 是否有 MCP / Skill 工具可用（影响标签是否显示）
+  const hasMcpTools = allTools.some((t) => t.group && !t.group.startsWith('__'))
+  const hasSkillTools = allTools.some((t) => t.group === '__skills__')
 
   /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
   const handleChange = async (newTools: string[]): Promise<void> => {
@@ -82,18 +83,26 @@ export function ToolPicker(): React.JSX.Element | null {
     <div ref={toolsRef} className="relative flex items-center group">
       <button
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1 text-[11px] transition-colors ${
-          disabledCount > 0
-            ? 'text-amber-400 hover:text-amber-300'
-            : 'text-amber-400/50 hover:text-amber-400'
-        }`}
+        className="inline-flex items-center gap-1 text-[11px] text-amber-400/70 hover:text-amber-400 transition-colors border border-amber-400/30 hover:border-amber-400/50 rounded px-1.5 py-0.5"
       >
         <Wrench size={11} />
-        {disabledCount > 0 && <span>-{disabledCount}</span>}
+        <span>{enabledBuiltinTools.length}</span>
+        {hasMcpTools && (
+          <span className="inline-flex items-center gap-0.5 text-purple-400/80">
+            <Server size={10} />
+            <span>{enabledMcpGroups.length}</span>
+          </span>
+        )}
+        {hasSkillTools && (
+          <span className="inline-flex items-center gap-0.5 text-emerald-400/80">
+            <BookOpen size={10} />
+            <span>{enabledSkillTools.length}</span>
+          </span>
+        )}
       </button>
 
       {/* 悬浮 tooltip：已启用的工具列表（展开时不显示） */}
-      {!open && activeCount > 0 && (
+      {!open && activeEnabledTools.length > 0 && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[200px] max-w-[280px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
           <div className="text-[10px] text-text-tertiary mb-1">{t('input.tools')}</div>
           <div className="space-y-1 max-h-40 overflow-y-auto">

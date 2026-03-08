@@ -225,7 +225,17 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         <div className="relative flex items-end gap-2">
           {/* 左下角紧凑扩展位 */}
           <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
-            <ModelPicker readonly={!canEdit} />
+            {/* Pickers 组：可选择项紧凑排列在最左 */}
+            <div className="flex items-center gap-1.5">
+              <ModelPicker readonly={!canEdit} />
+              {canEdit && <ThinkingPicker />}
+              {canEdit && <ToolPicker />}
+            </div>
+
+            {/* 分隔线 */}
+            {(modelSupportsVision || maxContextTokens > 0 || projectPath) && (
+              <span className="h-3 w-px bg-border-secondary" />
+            )}
 
             {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
             {modelSupportsVision && (
@@ -270,9 +280,6 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                 </div>
               </span>
             )}
-
-            {canEdit && <ThinkingPicker />}
-            {canEdit && <ToolPicker />}
 
             {/* 项目指令文件加载状态 */}
             {projectPath && (
