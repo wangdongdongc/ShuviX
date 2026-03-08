@@ -236,7 +236,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
       } catch (err: unknown) {
         parentPort!.postMessage({
           type: 'error',
-          error: `Failed to initialize PGLite: ${err instanceof Error ? err.message : String(err)}`
+          error: `Failed to initialize PGLite: ${err instanceof Error ? err.message : (typeof err === 'object' && err !== null ? JSON.stringify(err) : String(err))}`
         } satisfies WorkerResponse)
       }
     })
