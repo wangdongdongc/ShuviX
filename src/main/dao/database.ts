@@ -20,50 +20,8 @@ class DatabaseManager {
     this.db.pragma('journal_mode = WAL')
 
     measure('database: initTables', () => this.initTables())
-    measure('database: migrate', () => this.migrate())
-    // 种子数据在迁移之后执行，确保新列已存在
     measure('database: seed', () => this.seedProviders())
     mark('database: ready')
-  }
-
-  /** 增量迁移 */
-  private migrate(): void {
-    // 为已有 projects 表添加 archivedAt 列（新建表已包含该列）
-    const projectCols = this.db.pragma('table_info(projects)') as { name: string }[]
-    if (!projectCols.find((c) => c.name === 'archivedAt')) {
-      this.db.exec('ALTER TABLE projects ADD COLUMN archivedAt INTEGER NOT NULL DEFAULT 0')
-    }
-
-    // 为已有 providers 表添加 displayName 列
-    const providerCols = this.db.pragma('table_info(providers)') as { name: string }[]
-    if (!providerCols.find((c) => c.name === 'displayName')) {
-      this.db.exec("ALTER TABLE providers ADD COLUMN displayName TEXT NOT NULL DEFAULT ''")
-    }
-
-    // 为已有 sessions 表添加 settings 列（会话级配置：sshAutoApprove 等）
-    const sessionCols = this.db.pragma('table_info(sessions)') as { name: string }[]
-    if (!sessionCols.find((c) => c.name === 'settings')) {
-      this.db.exec("ALTER TABLE sessions ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'")
-    }
-
-    // 为已有 http_logs 表添加 response 列（存储 AI 响应内容，含生成图片）
-    const httpLogCols = this.db.pragma('table_info(http_logs)') as { name: string }[]
-    if (!httpLogCols.find((c) => c.name === 'response')) {
-      this.db.exec("ALTER TABLE http_logs ADD COLUMN response TEXT NOT NULL DEFAULT ''")
-    }
-
-    // 旧版内置提供商名称迁移为 pi-ai slug（name 用作 getModel() 的 provider slug）
-    const renameMap: Record<string, { slug: string; displayName: string }> = {
-      OpenAI: { slug: 'openai', displayName: 'OpenAI' },
-      Anthropic: { slug: 'anthropic', displayName: 'Anthropic' },
-      Google: { slug: 'google', displayName: 'Google' }
-    }
-    const renameStmt = this.db.prepare(
-      'UPDATE providers SET name = ?, displayName = ? WHERE name = ? AND isBuiltin = 1'
-    )
-    for (const [oldName, { slug, displayName }] of Object.entries(renameMap)) {
-      renameStmt.run(slug, displayName, oldName)
-    }
   }
 
   /** 初始化数据库表 */
@@ -77,6 +35,7 @@ class DatabaseManager {
         model TEXT NOT NULL DEFAULT '',
         systemPrompt TEXT NOT NULL DEFAULT 'You are a helpful assistant.',
         modelMetadata TEXT NOT NULL DEFAULT '',
+        settings TEXT NOT NULL DEFAULT '{}',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );

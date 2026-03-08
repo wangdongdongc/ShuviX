@@ -19,6 +19,7 @@ asarUnpack:
   - out/main/sqlWorker.js
   - node_modules/@vscode/ripgrep/**
   - node_modules/pyodide/**
+  - node_modules/@electric-sql/pglite/**
 # 启用原生模块重新编译（better-sqlite3 等）
 npmRebuild: true
 # 从源码编译原生模块，避免 prebuild-install 下载的预编译二进制依赖更高版本 GLIBC
