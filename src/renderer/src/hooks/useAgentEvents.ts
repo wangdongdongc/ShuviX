@@ -144,6 +144,14 @@ export function useAgentEvents(): void {
         }
         break
 
+      case 'sql_event':
+        if (event.action === 'runtime_ready') {
+          store.setSessionSql(sid, { ready: true })
+        } else {
+          store.setSessionSql(sid, null)
+        }
+        break
+
       case 'agent_end': {
         // 更新已占用上下文 token 数（total - output = prompt_tokens，包含 cached tokens）
         if (event.usage && sid === store.activeSessionId) {

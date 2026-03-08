@@ -157,6 +157,12 @@ export interface ChatPythonEvent extends ChatEventBase {
   action: 'runtime_ready' | 'runtime_destroyed'
 }
 
+/** SQL 运行时生命周期事件（轻量通知，不持久化为消息） */
+export interface ChatSqlEvent extends ChatEventBase {
+  type: 'sql_event'
+  action: 'runtime_ready' | 'runtime_destroyed'
+}
+
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /** 子智能体开始执行 */
@@ -233,6 +239,7 @@ export type ChatEvent =
   | ChatDockerEvent
   | ChatSshEvent
   | ChatPythonEvent
+  | ChatSqlEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent
   | ChatSubAgentToolStartEvent

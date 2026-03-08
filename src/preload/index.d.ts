@@ -161,6 +161,10 @@ declare global {
     type: 'python_event'
     action: 'runtime_ready' | 'runtime_destroyed'
   }
+  interface ChatSqlEvent extends ChatEventBase {
+    type: 'sql_event'
+    action: 'runtime_ready' | 'runtime_destroyed'
+  }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
     subAgentId: string
@@ -231,6 +235,7 @@ declare global {
     | ChatDockerEvent
     | ChatSshEvent
     | ChatPythonEvent
+    | ChatSqlEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
     | ChatSubAgentToolStartEvent
@@ -518,6 +523,10 @@ declare global {
       disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
     }
     python: {
+      sessionStatus: (sessionId: string) => Promise<{ ready: boolean } | null>
+      destroySession: (sessionId: string) => Promise<{ success: boolean }>
+    }
+    sql: {
       sessionStatus: (sessionId: string) => Promise<{ ready: boolean } | null>
       destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }

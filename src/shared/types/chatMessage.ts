@@ -178,6 +178,17 @@ export interface PythonToolDetails {
   executionTime?: number
 }
 
+/** SQL 工具详情 */
+export interface SqlToolDetails {
+  type: 'sql'
+  hasError: boolean
+  truncated: boolean
+  rowCount?: number
+  columnCount?: number
+  extensions?: string[]
+  executionTime?: number
+}
+
 /** MCP 工具详情 */
 export interface McpToolDetails {
   type: 'mcp'
@@ -201,6 +212,7 @@ export type ToolResultDetails =
   | ShuvixSettingToolDetails
   | ShuvixProjectToolDetails
   | PythonToolDetails
+  | SqlToolDetails
   | McpToolDetails
 
 /** 工具使用元数据 */

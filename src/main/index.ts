@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { dockerManager } from './services/dockerManager'
 import { pythonWorkerManager } from './services/pythonWorkerManager'
+import { sqlWorkerManager } from './services/sqlWorkerManager'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -366,6 +367,7 @@ app.on('before-quit', () => {
   mcpService.disconnectAll().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
   pythonWorkerManager.terminateAll()
+  sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
 })
 

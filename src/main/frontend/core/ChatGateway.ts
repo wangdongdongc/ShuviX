@@ -91,6 +91,12 @@ export interface ChatGateway {
   /** 销毁 Python 运行时 */
   destroyPython(sessionId: string): { success: boolean }
 
+  /** 查询 SQL 运行时状态 */
+  getSqlStatus(sessionId: string): { ready: boolean } | null
+
+  /** 销毁 SQL 运行时 */
+  destroySql(sessionId: string): { success: boolean }
+
   // ─── 工具发现 ──────────────────────────────────
 
   /** 获取所有可用工具列表 */

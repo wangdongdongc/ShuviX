@@ -231,4 +231,18 @@ export function registerSessionHandlers(): void {
       chatGateway.destroyPython(sessionId)
     )
   )
+
+  /** 查询指定 session 的 SQL 运行时状态 */
+  ipcMain.handle('sql:sessionStatus', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.getSqlStatus(sessionId)
+    )
+  )
+
+  /** 手动销毁指定 session 的 SQL 运行时 */
+  ipcMain.handle('sql:destroySession', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.destroySql(sessionId)
+    )
+  )
 }

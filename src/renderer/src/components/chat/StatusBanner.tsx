@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { Code, Container, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
+import { Code, Container, Database, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
@@ -13,6 +13,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const docker = resources?.docker
   const ssh = resources?.ssh
   const python = resources?.python
+  const sql = resources?.sql
 
   const sessionSettings = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
@@ -24,7 +25,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
 
-  if (!docker && !ssh && !python && !bashAutoApprove && !sshAutoApprove && !lanShareMode && !telegramBinding)
+  if (!docker && !ssh && !python && !sql && !bashAutoApprove && !sshAutoApprove && !lanShareMode && !telegramBinding)
     return null
 
   const handleDestroyDocker = async (): Promise<void> => {
@@ -38,6 +39,11 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const handleDestroyPython = async (): Promise<void> => {
     await window.api.python.destroySession(sessionId)
     useChatStore.getState().setSessionPython(sessionId, null)
+  }
+
+  const handleDestroySql = async (): Promise<void> => {
+    await window.api.sql.destroySession(sessionId)
+    useChatStore.getState().setSessionSql(sessionId, null)
   }
 
   /** 点击关闭 Bash 免审批 */
@@ -115,6 +121,19 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
             onClick={handleDestroyPython}
             className="ml-0.5 rounded hover:bg-yellow-500/20 transition-colors p-0.5"
             title={t('chat.destroyPython')}
+          >
+            <X size={10} />
+          </button>
+        </span>
+      )}
+      {sql && (
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400">
+          <Database size={12} />
+          <span>{t('chat.sqlWasmRuntime')}</span>
+          <button
+            onClick={handleDestroySql}
+            className="ml-0.5 rounded hover:bg-blue-500/20 transition-colors p-0.5"
+            title={t('chat.destroySql')}
           >
             <X size={10} />
           </button>

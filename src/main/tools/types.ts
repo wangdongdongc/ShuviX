@@ -49,6 +49,10 @@ export interface ToolContext {
   onPythonReady?: () => void
   /** Python 运行时销毁回调 */
   onPythonDestroyed?: () => void
+  /** SQL 运行时就绪回调 */
+  onSqlReady?: () => void
+  /** SQL 运行时销毁回调 */
+  onSqlDestroyed?: () => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

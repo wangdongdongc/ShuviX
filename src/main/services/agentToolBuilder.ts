@@ -10,6 +10,7 @@ import { GrepTool } from '../tools/grep'
 import { GlobTool } from '../tools/glob'
 import { SshTool } from '../tools/ssh'
 import { PythonTool } from '../tools/python'
+import { SqlTool } from '../tools/sql'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
 import { SkillTool } from '../tools/skill'
@@ -71,6 +72,7 @@ export function buildTools(
     glob: new GlobTool(ctx),
     ssh: new SshTool(ctx),
     python: new PythonTool(ctx),
+    sql: new SqlTool(ctx),
     'shuvix-project': new ShuvixProjectTool(ctx),
     'shuvix-setting': new ShuvixSettingTool(ctx)
   }
