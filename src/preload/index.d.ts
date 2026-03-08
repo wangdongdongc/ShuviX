@@ -372,7 +372,7 @@ declare global {
     app: {
       /** 当前运行平台 */
       platform: 'darwin' | 'win32' | 'linux' | 'web'
-      openSettings: () => Promise<{ success: boolean }>
+      openSettings: (tab?: string) => Promise<{ success: boolean }>
       /** 用系统默认浏览器打开外部链接 */
       openExternal: (url: string) => Promise<{ success: boolean }>
       /** 用系统文件管理器打开指定文件夹 */

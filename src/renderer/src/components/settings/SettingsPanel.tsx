@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Settings,
@@ -26,9 +27,30 @@ import { OperationLogSettings } from './OperationLogSettings'
  * 设置面板 — 独立窗口（分组 Tab）
  * 通用设置 + 提供商管理 + HTTP 日志
  */
+const VALID_TABS = new Set([
+  'general',
+  'providers',
+  'tools',
+  'mcp',
+  'skills',
+  'bindings',
+  'httpLogs',
+  'operationLogs',
+  'about'
+])
+
 export function SettingsPanel(): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
+
+  // 从 URL hash 读取初始 tab（如 #settings/providers）
+  useEffect(() => {
+    const hash = window.location.hash
+    const match = hash.match(/^#settings\/(.+)$/)
+    if (match && VALID_TABS.has(match[1])) {
+      setActiveSettingsTab(match[1] as typeof activeSettingsTab)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="h-full bg-bg-primary flex flex-col">

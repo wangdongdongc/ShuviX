@@ -9,7 +9,7 @@ import { useSessionInit } from './hooks/useSessionInit'
 import { useAgentEvents } from './hooks/useAgentEvents'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
-const isSettingsWindow = window.location.hash === '#settings'
+const isSettingsWindow = window.location.hash.startsWith('#settings')
 
 /**
  * 应用主入口

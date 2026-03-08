@@ -2,7 +2,7 @@ import { useEffect, useCallback } from 'react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
-const isSettingsWindow = window.location.hash === '#settings'
+const isSettingsWindow = window.location.hash.startsWith('#settings')
 
 /**
  * Agent 流式事件分发 Hook

@@ -46,6 +46,9 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
+    "setupHintBefore": "",
+    "setupHintSettings": "設定",
+    "setupHintAfter": "でAIモデルプロバイダーを追加・有効化してください",
     "startNewChat": "新しいチャットを開始",
     "emptyHint": "メッセージを送信して会話を開始",
     "thinking": "思考中…",

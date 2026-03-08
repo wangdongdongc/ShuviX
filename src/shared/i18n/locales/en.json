@@ -46,6 +46,9 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
+    "setupHintBefore": "Add and enable AI model providers in ",
+    "setupHintSettings": "Settings",
+    "setupHintAfter": "",
     "startNewChat": "Start New Chat",
     "emptyHint": "Send a message to start the conversation",
     "thinking": "Thinking…",

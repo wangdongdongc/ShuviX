@@ -4,7 +4,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
-const isSettingsWindow = window.location.hash === '#settings'
+const isSettingsWindow = window.location.hash.startsWith('#settings')
 
 /**
  * 应用级初始化 Hook

@@ -3,7 +3,7 @@ import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
-const isSettingsWindow = window.location.hash === '#settings'
+const isSettingsWindow = window.location.hash.startsWith('#settings')
 
 /**
  * 会话级初始化 Hook

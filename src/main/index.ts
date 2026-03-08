@@ -64,7 +64,7 @@ function getThemeBgColor(): string {
 }
 
 /** 打开独立设置窗口（单例） */
-function openSettingsWindow(): void {
+function openSettingsWindow(tab?: string): void {
   // 已存在则聚焦
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.focus()
@@ -93,11 +93,12 @@ function openSettingsWindow(): void {
     }
   })
 
-  // 加载同一渲染入口，用 #settings hash 区分
+  // 加载同一渲染入口，用 #settings hash 区分（可附加 tab 路径如 #settings/providers）
+  const hash = tab ? `settings/${tab}` : 'settings'
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    settingsWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#settings`)
+    settingsWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
   } else {
-    settingsWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'settings' })
+    settingsWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash })
   }
 
   settingsWindow.on('closed', () => {
@@ -296,8 +297,8 @@ ipcMain.on('app:window-ready', (event) => {
 })
 
 // Sidebar 按钮触发打开设置窗口
-ipcMain.handle('app:open-settings', () => {
-  openSettingsWindow()
+ipcMain.handle('app:open-settings', (_event, tab?: string) => {
+  openSettingsWindow(tab)
   return { success: true }
 })
 

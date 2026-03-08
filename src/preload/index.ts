@@ -52,8 +52,8 @@ const api = {
   app: {
     /** 当前运行平台 */
     platform: process.platform as 'darwin' | 'win32' | 'linux',
-    /** 打开独立设置窗口 */
-    openSettings: () => ipcRenderer.invoke('app:open-settings'),
+    /** 打开独立设置窗口（可指定初始 tab，如 'providers'） */
+    openSettings: (tab?: string) => ipcRenderer.invoke('app:open-settings', tab),
     /** 用系统默认浏览器打开外部链接 */
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
     /** 用系统文件管理器打开指定文件夹 */

@@ -46,6 +46,9 @@
 
   "chat": {
     "welcomeTitle": "ShuviX",
+    "setupHintBefore": "在",
+    "setupHintSettings": "设置",
+    "setupHintAfter": "中添加并启用 AI 大模型提供商",
     "startNewChat": "开始新对话",
     "emptyHint": "发送一条消息开始对话",
     "thinking": "思考中…",

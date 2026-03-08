@@ -17,7 +17,16 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
           <img src={welcomeIcon} alt="ShuviX" className="w-full h-full object-cover" />
         </div>
         <h2 className="text-xl font-semibold text-text-primary mb-2">{t('chat.welcomeTitle')}</h2>
-        <p className="text-sm text-text-secondary mb-6 leading-relaxed">{t('about.description')}</p>
+        <p className="text-sm text-text-secondary mb-6 leading-relaxed">
+          {t('chat.setupHintBefore')}
+          <button
+            onClick={() => window.api.app.openSettings('providers')}
+            className="text-accent hover:text-accent-hover underline cursor-pointer"
+          >
+            {t('chat.setupHintSettings')}
+          </button>
+          {t('chat.setupHintAfter')}
+        </p>
         {window.api.app.platform !== 'web' && (
           <div className="flex items-center justify-center gap-3">
             <button
