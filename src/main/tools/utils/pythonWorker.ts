@@ -4,6 +4,7 @@
  */
 
 import { parentPort } from 'worker_threads'
+import { toEmscriptenPath } from './emscriptenPaths'
 
 // ---- 消息协议 ----
 
@@ -74,19 +75,21 @@ async function init(
   const { loadPyodide } = await import('pyodide')
   pyodide = await loadPyodide({})
 
-  // 挂载文件系统（路径与宿主机一致）
+  // 挂载文件系统（Windows 路径需转换为 POSIX 挂载点）
   const FS = pyodide.FS
   readonlyPaths = []
   for (const mount of mounts) {
-    mkdirRecursive(FS, mount.hostPath)
-    FS.mount(FS.filesystems.NODEFS, { root: mount.hostPath }, mount.hostPath)
+    const mountPoint = toEmscriptenPath(mount.hostPath)
+    mkdirRecursive(FS, mountPoint)
+    FS.mount(FS.filesystems.NODEFS, { root: mount.hostPath }, mountPoint)
     if (mount.access === 'readonly') {
-      readonlyPaths.push(mount.hostPath)
+      readonlyPaths.push(mountPoint)
     }
   }
 
-  // 设置工作目录为项目目录
-  pyodide.runPython(`import os; os.chdir(${JSON.stringify(workingDirectory)})`)
+  // 设置工作目录为项目目录（使用 POSIX 挂载点路径）
+  const posixWorkDir = toEmscriptenPath(workingDirectory)
+  pyodide.runPython(`import os; os.chdir(${JSON.stringify(posixWorkDir)})`)
 
   // 创建持久化全局作用域
   persistentGlobals = pyodide.globals.get('dict')()

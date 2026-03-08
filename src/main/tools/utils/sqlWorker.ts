@@ -4,6 +4,7 @@
  */
 
 import { parentPort } from 'worker_threads'
+import { toEmscriptenPath } from './emscriptenPaths'
 
 // ---- 消息协议 ----
 
@@ -148,8 +149,9 @@ async function init(mounts: MountConfig[]): Promise<void> {
       const FS = db.Module.FS
       const NODEFS = FS.filesystems.NODEFS
       for (const mount of mounts) {
-        mkdirRecursive(FS, mount.hostPath)
-        FS.mount(NODEFS, { root: mount.hostPath }, mount.hostPath)
+        const mountPoint = toEmscriptenPath(mount.hostPath)
+        mkdirRecursive(FS, mountPoint)
+        FS.mount(NODEFS, { root: mount.hostPath }, mountPoint)
       }
     } catch (err) {
       // 挂载失败不阻塞初始化
