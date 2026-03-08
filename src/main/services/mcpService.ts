@@ -237,7 +237,6 @@ class McpService {
     serverName: string,
     mcpTool: McpDiscoveredTool
   ): AgentTool<TSchema, McpToolDetails> {
-    const self = this
     return {
       name: `mcp__${serverName}__${mcpTool.name}`,
       label: mcpTool.description || mcpTool.name,
@@ -245,7 +244,7 @@ class McpService {
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
       execute: async (_toolCallId, params): Promise<AgentToolResult<McpToolDetails>> => {
         try {
-          const result = await self.callTool(
+          const result = await this.callTool(
             serverId,
             mcpTool.name,
             params as Record<string, unknown>

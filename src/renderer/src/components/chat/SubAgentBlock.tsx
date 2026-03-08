@@ -110,14 +110,14 @@ export const SubAgentBlock = memo(function SubAgentBlock({
   // 内部工具开始执行时自动展开
   useEffect(() => {
     if (tools.length > 0 && status === 'running') {
-      setExpanded(true)
+      setExpanded(true) // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [tools.length, status])
 
   // 完成后自动折叠
   useEffect(() => {
     if (status === 'done' || status === 'error') {
-      setExpanded(false)
+      setExpanded(false) // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [status])
 

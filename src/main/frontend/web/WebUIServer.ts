@@ -8,6 +8,7 @@ import { webUIService } from '../../services/webUIService'
 import { WebFrontend } from './WebFrontend'
 import { createApiRouter } from './routes'
 import { createLogger } from '../../logger'
+import fs from 'fs'
 
 const log = createLogger('WebUI:Server')
 
@@ -161,8 +162,6 @@ class WebUIServer {
   /** 解析 WebUI 前端构建产物路径 */
   private resolveWebuiDist(): string | null {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const fs = require('fs')
       // __dirname = out/main/（electron-vite 打包后的目录）
       // webui 构建产物在 out/webui/
       const distPath = join(__dirname, '../webui')

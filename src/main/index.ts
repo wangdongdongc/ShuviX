@@ -1,4 +1,13 @@
-import { app, shell, BrowserWindow, Menu, ipcMain, nativeImage, screen } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  Menu,
+  ipcMain,
+  nativeImage,
+  nativeTheme,
+  screen
+} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
@@ -38,7 +47,6 @@ function getThemeBgColor(): string {
     const mode = settingsDao.findByKey('general.theme') || 'dark'
     let themeId: string
     if (mode === 'system') {
-      const { nativeTheme } = require('electron')
       const resolved = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
       themeId =
         resolved === 'light'

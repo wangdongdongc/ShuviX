@@ -278,7 +278,9 @@ export function createWebApi(): typeof window.api {
       setShared: noop,
       isShared: () => Promise.resolve(false),
       getShareMode: () =>
-        api(`/sessions/${SESSION_ID}/share-mode`).then((r: any) => r.mode ?? null),
+        api(`/sessions/${SESSION_ID}/share-mode`).then(
+          (r) => (r as Record<string, unknown>).mode ?? null
+        ),
       listShared: () => Promise.resolve([]),
       serverStatus: () => Promise.resolve({ running: false })
     },

@@ -60,7 +60,7 @@ export function Sidebar(): React.JSX.Element {
 
   // 加载项目列表（创建/编辑后也会刷新）
   useEffect(() => {
-    void reloadProjects()
+    void reloadProjects() // eslint-disable-line react-hooks/set-state-in-effect
   }, [editingProjectId])
 
   /** 项目 id → 名称 快查表 */
@@ -76,7 +76,7 @@ export function Sidebar(): React.JSX.Element {
     initialCollapseApplied.current = true
     const initial = new Set(projects.map((p) => p.id))
     if (archivedProjects.length > 0) initial.add(ARCHIVED_GROUP_KEY)
-    setCollapsedGroups(initial)
+    setCollapsedGroups(initial) // eslint-disable-line react-hooks/set-state-in-effect
   }, [projects, archivedProjects])
 
   // ---------- 分组逻辑：项目为骨架，会话填入 ----------

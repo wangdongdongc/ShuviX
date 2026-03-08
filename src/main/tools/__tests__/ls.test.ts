@@ -16,9 +16,7 @@ const SESSION_ID = 'test-session-ls'
 // mock types 模块（完全替换，避免触发 Electron/DB 依赖）
 vi.mock('../types', () => ({
   BaseTool: class {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-empty-function
     async securityCheck(..._args: unknown[]): Promise<void> {}
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async executeInternal(..._args: unknown[]): Promise<unknown> {
       return {}
     }

@@ -25,7 +25,27 @@ export default defineConfig(
     },
     rules: {
       ...eslintPluginReactHooks.configs.recommended.rules,
-      ...eslintPluginReactRefresh.configs.vite.rules
+      ...eslintPluginReactRefresh.configs.vite.rules,
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
+      ]
+    }
+  },
+  // .cjs 文件允许 require
+  {
+    files: ['**/*.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
+  // 测试文件放宽规则
+  {
+    files: ['**/__tests__/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-empty-function': 'off',
+      '@typescript-eslint/no-require-imports': 'off'
     }
   },
   eslintConfigPrettier

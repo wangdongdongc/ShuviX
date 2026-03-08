@@ -76,7 +76,7 @@ export function ToolSelectList({
   useEffect(() => {
     if (!compact) {
       const groups = new Set(tools.filter((t) => t.group).map((t) => t.group!))
-      setExpandedGroups(groups)
+      setExpandedGroups(groups) // eslint-disable-line react-hooks/set-state-in-effect
     }
   }, [compact, tools])
 

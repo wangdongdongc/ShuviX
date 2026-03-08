@@ -342,7 +342,7 @@ function TelegramDetail({
   }, [])
 
   useEffect(() => {
-    loadBots()
+    loadBots() // eslint-disable-line react-hooks/set-state-in-effect
   }, [loadBots])
 
   const handleDeleteBot = async (botId: string): Promise<void> => {
