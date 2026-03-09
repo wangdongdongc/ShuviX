@@ -20,6 +20,7 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
+import { acpService } from './services/acpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
 import { createLogger } from './logger'
@@ -378,6 +379,7 @@ app.on('before-quit', () => {
   pythonWorkerManager.terminateAll()
   sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
+  acpService.abortAll()
 })
 
 // macOS 下关闭窗口不退出应用

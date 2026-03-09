@@ -15,6 +15,9 @@ export type {
   ChatSshEvent,
   ChatSubAgentStartEvent,
   ChatSubAgentEndEvent,
+  ChatSubAgentTextDeltaEvent,
+  ChatSubAgentThinkingDeltaEvent,
+  ChatAcpEvent,
   ChatErrorEvent,
   ChatTokenUsage
 } from './types'

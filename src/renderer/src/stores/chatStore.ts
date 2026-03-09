@@ -89,12 +89,13 @@ interface SessionStreamState {
   images: Array<{ data: string; mimeType: string }>
 }
 
-/** 每个 session 的活跃 Docker/SSH/Python 资源信息 */
+/** 每个 session 的活跃 Docker/SSH/Python/ACP 资源信息 */
 export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
   ssh?: { host: string; port: number; username: string } | null
   python?: { ready: boolean } | null
   sql?: { ready: boolean } | null
+  acp?: Array<{ agentName: string; displayName: string }>
 }
 
 /** 子智能体内部工具执行（临时，不持久化） */
@@ -134,6 +135,10 @@ export interface SubAgentExecution {
   tools: SubAgentToolExecution[]
   result?: string
   usage?: SubAgentUsage
+  /** 流式文本输出（运行中实时更新） */
+  streamingContent?: string
+  /** 流式思考输出（运行中实时更新） */
+  streamingThinking?: string
 }
 
 /** 空数组常量，避免选择器每次返回新引用 */
@@ -244,6 +249,10 @@ interface ChatState {
   ) => void
   setSessionPython: (sessionId: string, info: { ready: boolean } | null) => void
   setSessionSql: (sessionId: string, info: { ready: boolean } | null) => void
+  addSessionAcp: (sessionId: string, info: { agentName: string; displayName: string }) => void
+  removeSessionAcp: (sessionId: string, agentName: string) => void
+  appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
+  appendSubAgentStreamingThinking: (sessionId: string, subAgentId: string, delta: string) => void
   /** 设置 session 的待处理用户输入 */
   setPendingUserInput: (sessionId: string, input: PendingUserInput) => void
   /** 清除 session 的待处理用户输入 */
@@ -519,6 +528,59 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const prev = state.sessionResources[sessionId] || {}
       return {
         sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, sql: info } }
+      }
+    }),
+
+  addSessionAcp: (sessionId, info) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      const acpList = [...(prev.acp || []), info]
+      return {
+        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, acp: acpList } }
+      }
+    }),
+
+  removeSessionAcp: (sessionId, agentName) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      const acpList = (prev.acp || []).filter((a) => a.agentName !== agentName)
+      return {
+        sessionResources: {
+          ...state.sessionResources,
+          [sessionId]: { ...prev, acp: acpList.length > 0 ? acpList : undefined }
+        }
+      }
+    }),
+
+  appendSubAgentStreamingContent: (sessionId, subAgentId, delta) =>
+    set((state) => {
+      const execs = state.sessionSubAgentExecutions[sessionId]
+      if (!execs) return state
+      return {
+        sessionSubAgentExecutions: {
+          ...state.sessionSubAgentExecutions,
+          [sessionId]: execs.map((sa) =>
+            sa.subAgentId === subAgentId
+              ? { ...sa, streamingContent: (sa.streamingContent || '') + delta }
+              : sa
+          )
+        }
+      }
+    }),
+
+  appendSubAgentStreamingThinking: (sessionId, subAgentId, delta) =>
+    set((state) => {
+      const execs = state.sessionSubAgentExecutions[sessionId]
+      if (!execs) return state
+      return {
+        sessionSubAgentExecutions: {
+          ...state.sessionSubAgentExecutions,
+          [sessionId]: execs.map((sa) =>
+            sa.subAgentId === subAgentId
+              ? { ...sa, streamingThinking: (sa.streamingThinking || '') + delta }
+              : sa
+          )
+        }
       }
     }),
 

@@ -72,6 +72,7 @@
     "destroySql": "Terminate SQL runtime",
     "sqlWasmRuntime": "Postgres Database",
     "acpAgentRunning": "{{name}} running",
+    "destroyAcp": "Terminate ACP Agent session",
     "destroyReason_manual": "manually destroyed",
     "bashAutoApproveLabel": "Bash Auto-Approve",
     "bashAutoApproveWarning": "All bash commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",
@@ -163,6 +164,8 @@
     "error": "Error",
     "params": "Parameters",
     "result": "Result",
+    "output": "Output",
+    "thinking": "Thinking",
     "internalTools": "Internal tools"
   },
 

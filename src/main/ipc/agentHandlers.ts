@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
+import { acpService } from '../services/acpService'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -110,5 +111,14 @@ export function registerAgentHandlers(): void {
   /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
   ipcMain.handle('tools:list', () =>
     operationContext.run(createElectronContext(), () => chatGateway.listTools())
+  )
+
+  /** 销毁指定会话的 ACP Agent session */
+  ipcMain.handle(
+    'acp:destroySession',
+    (_event, params: { sessionId: string; agentName: string }) => {
+      acpService.destroySession(params.sessionId, params.agentName)
+      return { success: true }
+    }
   )
 }

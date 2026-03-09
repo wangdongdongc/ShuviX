@@ -165,6 +165,12 @@ declare global {
     type: 'sql_event'
     action: 'runtime_ready' | 'runtime_destroyed'
   }
+  interface ChatAcpEvent extends ChatEventBase {
+    type: 'acp_event'
+    action: 'session_created' | 'session_destroyed'
+    agentName: string
+    displayName: string
+  }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
     subAgentId: string
@@ -210,6 +216,18 @@ declare global {
     result?: string
     isError?: boolean
   }
+  interface ChatSubAgentTextDeltaEvent extends ChatEventBase {
+    type: 'subagent_text_delta'
+    subAgentId: string
+    subAgentType: string
+    delta: string
+  }
+  interface ChatSubAgentThinkingDeltaEvent extends ChatEventBase {
+    type: 'subagent_thinking_delta'
+    subAgentId: string
+    subAgentType: string
+    delta: string
+  }
   interface ChatErrorEvent extends ChatEventBase {
     type: 'error'
     error: string
@@ -236,10 +254,13 @@ declare global {
     | ChatSshEvent
     | ChatPythonEvent
     | ChatSqlEvent
+    | ChatAcpEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
     | ChatSubAgentToolStartEvent
     | ChatSubAgentToolEndEvent
+    | ChatSubAgentTextDeltaEvent
+    | ChatSubAgentThinkingDeltaEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
 
@@ -416,6 +437,12 @@ declare global {
         tools: string[]
       }) => Promise<{ success: boolean }>
       onEvent: (callback: (event: ChatEvent) => void) => () => void
+    }
+    acp: {
+      destroySession: (params: {
+        sessionId: string
+        agentName: string
+      }) => Promise<{ success: boolean }>
     }
     provider: {
       listAll: () => Promise<ProviderInfo[]>

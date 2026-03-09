@@ -108,6 +108,8 @@ export const SubAgentBlock = memo(function SubAgentBlock({
   const tools = subAgent?.tools || []
   const finalResult = result || subAgent?.result
   const usage: SubAgentUsage | undefined = subAgent?.usage
+  const streamingContent = subAgent?.streamingContent
+  const streamingThinking = subAgent?.streamingThinking
 
   // 内部工具开始执行时自动展开
   useEffect(() => {
@@ -201,6 +203,26 @@ export const SubAgentBlock = memo(function SubAgentBlock({
                   <span className="flex-shrink-0">{innerToolStatusIcon(tool.status)}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* 流式思考 */}
+          {status === 'running' && streamingThinking && (
+            <div>
+              <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.thinking')}</div>
+              <pre className="text-[11px] text-text-tertiary italic bg-bg-tertiary/30 rounded px-2 py-1 overflow-auto max-h-24 whitespace-pre-wrap break-words">
+                {streamingThinking.slice(-500)}
+              </pre>
+            </div>
+          )}
+
+          {/* 流式输出 */}
+          {status === 'running' && streamingContent && (
+            <div>
+              <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.output')}</div>
+              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+                {streamingContent.slice(-1000)}
+              </pre>
             </div>
           )}
 

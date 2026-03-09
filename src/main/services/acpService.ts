@@ -2,9 +2,11 @@
  * ACP (Agent Client Protocol) 通用服务
  *
  * 负责管理外部 ACP Agent（如 Claude Code、Gemini CLI 等）的生命周期：
+ * - 按 ShuviX sessionId + agentName 复用 ACP session（保持对话上下文）
  * - spawn 进程 → ACP 握手 → session 管理 → prompt 执行 → 结果收集
  * - sessionUpdate 通知转译为 subagent_* ChatEvent 广播到 UI
  * - requestPermission 桥接到 ShuviX 审批 UI
+ * - 用户可主动关闭 ACP session（下次调用时创建新 session）
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
@@ -23,7 +25,7 @@ import type {
   ToolCall,
   ToolCallUpdate
 } from '@agentclientprotocol/sdk'
-import type { ChatEvent } from '../frontend'
+import { chatFrontendRegistry, type ChatEvent } from '../frontend'
 import type { ToolContext } from '../tools/types'
 import { resolveProjectConfig } from '../tools/types'
 import log from 'electron-log'
@@ -50,7 +52,7 @@ export interface AcpAgentConfig {
  * 内置 ACP Agent 列表
  *
  * 用户需自行安装对应 CLI 工具到 PATH：
- *   npm install -g @zed-industries/claude-agent-acp
+ *   npm install -g @anthropic-ai/claude-code
  */
 const BUILTIN_ACP_AGENTS: AcpAgentConfig[] = [
   {
@@ -109,19 +111,35 @@ function withProtocolLogging(stream: Stream, label: string): Stream {
   return { writable: loggedWritable, readable: loggedReadable }
 }
 
-// ─── 任务管理 ──────────────────────────────────────────
+// ─── 缓存会话 ──────────────────────────────────────────
 
-interface ActiveTask {
+/** 当前正在执行的任务状态（可变引用，每次 prompt 更新） */
+interface TaskState {
+  taskId: string
+  ctx: ToolContext
+  acpToolCallMap: Map<string, string>
+  resultBuffer: string
+  onEvent: (event: ChatEvent) => void
+}
+
+/** 缓存的 ACP 会话（按 sessionId:agentName 复用） */
+interface CachedAcpSession {
   process: ChildProcess
-  connection?: ClientSideConnection
-  sessionId?: string
-  abortController: AbortController
+  connection: ClientSideConnection
+  acpSessionId: string
+  config: AcpAgentConfig
+  cacheKey: string
+  shuvixSessionId: string
+  stderrBuffer: string
+  /** 当前活跃任务（null = 空闲，进程仍保持运行） */
+  taskState: TaskState | null
 }
 
 // ─── 服务实现 ──────────────────────────────────────────
 
 class AcpService {
-  private activeTasks = new Map<string, ActiveTask>()
+  /** 缓存的 ACP 会话：key = `${shuvixSessionId}:${agentName}` */
+  private cachedSessions = new Map<string, CachedAcpSession>()
 
   /** 返回所有已注册的 ACP Agent 配置 */
   getRegisteredAgents(): AcpAgentConfig[] {
@@ -145,7 +163,8 @@ class AcpService {
   /**
    * 执行 ACP Agent 任务
    *
-   * @returns 最终结果文本
+   * 同一 ShuviX session + agentName 复用已有 ACP session（保持上下文），
+   * 进程异常退出或用户主动关闭后，下次调用自动创建新 session。
    */
   async runTask(params: {
     config: AcpAgentConfig
@@ -158,19 +177,9 @@ class AcpService {
   }): Promise<{ taskId: string; result: string }> {
     const { config, ctx, toolCallId, prompt, description, signal, onEvent } = params
     const taskId = uuid()
-    const projectConfig = resolveProjectConfig(ctx.sessionId)
-    const cwd = projectConfig.workingDirectory
+    const cacheKey = `${ctx.sessionId}:${config.name}`
 
-    // 1. 解析可执行文件
-    const resolved = this.resolveExecutable(config)
-    if (!resolved) {
-      throw new Error(
-        `ACP Agent "${config.displayName}" executable not found. ` +
-          `Ensure "${config.command}" is installed and available in PATH.`
-      )
-    }
-
-    // 2. 广播 subagent_start
+    // 1. 广播 subagent_start
     onEvent({
       type: 'subagent_start',
       sessionId: ctx.sessionId,
@@ -180,31 +189,18 @@ class AcpService {
       parentToolCallId: toolCallId
     })
 
-    const abortController = new AbortController()
-
-    // 外部 signal 联动
-    if (signal) {
-      if (signal.aborted) {
-        abortController.abort()
-      } else {
-        signal.addEventListener('abort', () => abortController.abort(), { once: true })
-      }
-    }
-
     try {
-      const result = await this._executeAcpSession({
+      const result = await this._executeOnSession({
         config,
-        resolved,
-        cwd,
-        taskId,
+        cacheKey,
         ctx,
-        toolCallId,
+        taskId,
         prompt,
-        abortController,
+        signal,
         onEvent
       })
 
-      // 3. 广播 subagent_end
+      // 广播 subagent_end
       onEvent({
         type: 'subagent_end',
         sessionId: ctx.sessionId,
@@ -226,93 +222,215 @@ class AcpService {
       })
 
       throw err
-    } finally {
-      this.activeTasks.delete(taskId)
     }
   }
 
-  /** 中止指定任务 */
-  abortTask(taskId: string): void {
-    const task = this.activeTasks.get(taskId)
-    if (!task) return
+  /** 销毁指定会话的 ACP Agent session（用户主动关闭） */
+  destroySession(shuvixSessionId: string, agentName: string): void {
+    const cacheKey = `${shuvixSessionId}:${agentName}`
+    const cached = this.cachedSessions.get(cacheKey)
+    if (!cached) return
 
-    task.abortController.abort()
+    log.info(`[ACP] Destroying session ${cacheKey}`)
+    this._killAndCleanup(cached)
+  }
 
-    // 发送 ACP cancel
-    if (task.connection && task.sessionId) {
-      task.connection.cancel({ sessionId: task.sessionId }).catch(() => {})
-    }
-
-    // 强制 kill 进程
-    if (!task.process.killed) {
-      task.process.kill('SIGTERM')
-      setTimeout(() => {
-        if (!task.process.killed) task.process.kill('SIGKILL')
-      }, 3000)
+  /** 销毁指定 ShuviX 会话的所有 ACP session */
+  destroyAllForSession(shuvixSessionId: string): void {
+    for (const [key, cached] of this.cachedSessions) {
+      if (key.startsWith(shuvixSessionId + ':')) {
+        log.info(`[ACP] Destroying session ${key}`)
+        this._killAndCleanup(cached)
+      }
     }
   }
 
   /** 中止所有活跃任务（应用退出时调用） */
   abortAll(): void {
-    for (const taskId of this.activeTasks.keys()) {
-      this.abortTask(taskId)
+    for (const [, cached] of this.cachedSessions) {
+      if (!cached.process.killed) {
+        cached.process.kill('SIGTERM')
+        setTimeout(() => {
+          if (!cached.process.killed) cached.process.kill('SIGKILL')
+        }, 3000)
+      }
     }
+    this.cachedSessions.clear()
   }
 
   // ─── 内部实现 ──────────────────────────────────────
 
-  private async _executeAcpSession(params: {
+  /** 在已有或新建的 ACP session 上执行 prompt */
+  private async _executeOnSession(params: {
     config: AcpAgentConfig
-    resolved: { cmd: string; args: string[] }
-    cwd: string
-    taskId: string
+    cacheKey: string
     ctx: ToolContext
-    toolCallId: string
+    taskId: string
     prompt: string
-    abortController: AbortController
+    signal?: AbortSignal
     onEvent: (event: ChatEvent) => void
   }): Promise<string> {
-    const { config, resolved, cwd, taskId, ctx, prompt, abortController, onEvent } = params
+    const { config, cacheKey, ctx, taskId, prompt, signal, onEvent } = params
 
-    // Spawn 子进程（不传 signal，手动管理 abort 以避免 uncaught AbortError）
+    // 获取或创建缓存会话
+    let cached = this.cachedSessions.get(cacheKey)
+
+    // 进程已死 → 清理缓存
+    if (cached && cached.process.killed) {
+      log.info(`[ACP] Cached session for ${cacheKey} process is dead, creating new one`)
+      this.cachedSessions.delete(cacheKey)
+      cached = undefined
+    }
+
+    if (!cached) {
+      cached = await this._createSession({
+        config,
+        cacheKey,
+        shuvixSessionId: ctx.sessionId,
+        ctx,
+        taskId,
+        onEvent
+      })
+      this.cachedSessions.set(cacheKey, cached)
+
+      // 广播 acp_event: session_created
+      chatFrontendRegistry.broadcast({
+        type: 'acp_event',
+        sessionId: ctx.sessionId,
+        action: 'session_created',
+        agentName: config.name,
+        displayName: config.displayName
+      })
+    }
+
+    // 更新当前任务状态（可变引用，connection handlers 通过 cached.taskState 读取）
+    cached.taskState = {
+      taskId,
+      ctx,
+      acpToolCallMap: new Map(),
+      resultBuffer: '',
+      onEvent
+    }
+
+    // signal 联动：取消当前 prompt（不 kill 进程，保留 session）
+    let signalCleanup: (() => void) | null = null
+    if (signal) {
+      const onAbort = (): void => {
+        if (cached!.connection && cached!.acpSessionId) {
+          cached!.connection.cancel({ sessionId: cached!.acpSessionId }).catch(() => {})
+        }
+      }
+      if (signal.aborted) {
+        onAbort()
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true })
+        signalCleanup = () => signal.removeEventListener('abort', onAbort)
+      }
+    }
+
+    try {
+      const promptResp = await cached.connection.prompt({
+        sessionId: cached.acpSessionId,
+        prompt: [{ type: 'text', text: prompt }]
+      })
+
+      const result =
+        cached.taskState?.resultBuffer ||
+        (promptResp.stopReason === 'cancelled'
+          ? 'Task was cancelled.'
+          : 'Task completed (no output captured).')
+
+      return result
+    } catch (err) {
+      // 进程意外退出时清理缓存
+      if (cached.process.killed && this.cachedSessions.get(cacheKey) === cached) {
+        this.cachedSessions.delete(cacheKey)
+      }
+
+      if (signal?.aborted) {
+        return cached.taskState?.resultBuffer || 'Task was aborted.'
+      }
+
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (cached.stderrBuffer) {
+        log.error(`[ACP] ${config.name} stderr:\n${cached.stderrBuffer.slice(-2000)}`)
+      }
+      throw new Error(`ACP Agent "${config.displayName}" error: ${errMsg}`)
+    } finally {
+      signalCleanup?.()
+      if (cached.taskState?.taskId === taskId) {
+        cached.taskState = null
+      }
+    }
+  }
+
+  /** 创建新的 ACP session（spawn + 握手 + newSession） */
+  private async _createSession(params: {
+    config: AcpAgentConfig
+    cacheKey: string
+    shuvixSessionId: string
+    ctx: ToolContext
+    taskId: string
+    onEvent: (event: ChatEvent) => void
+  }): Promise<CachedAcpSession> {
+    const { config, cacheKey, shuvixSessionId, ctx, taskId, onEvent } = params
+    const projectConfig = resolveProjectConfig(shuvixSessionId)
+    const cwd = projectConfig.workingDirectory
+
+    const resolved = this.resolveExecutable(config)
+    if (!resolved) {
+      throw new Error(
+        `ACP Agent "${config.displayName}" executable not found. ` +
+          `Ensure "${config.command}" is installed and available in PATH.`
+      )
+    }
+
     const child = spawn(resolved.cmd, resolved.args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
         ...config.env,
-        // 不注入 API Key — Agent 使用自身认证
         NODE_NO_WARNINGS: '1'
       }
     })
 
-    // 手动处理 abort：kill 进程
-    const onAbort = (): void => {
-      if (!child.killed) {
-        child.kill('SIGTERM')
-        setTimeout(() => {
-          if (!child.killed) child.kill('SIGKILL')
-        }, 3000)
+    const cached: CachedAcpSession = {
+      process: child,
+      connection: undefined as unknown as ClientSideConnection,
+      acpSessionId: '',
+      config,
+      cacheKey,
+      shuvixSessionId,
+      stderrBuffer: '',
+      taskState: {
+        taskId,
+        ctx,
+        acpToolCallMap: new Map(),
+        resultBuffer: '',
+        onEvent
       }
     }
-    if (abortController.signal.aborted) {
-      onAbort()
-    } else {
-      abortController.signal.addEventListener('abort', onAbort, { once: true })
-    }
 
-    const activeTask: ActiveTask = {
-      process: child,
-      abortController
-    }
-    this.activeTasks.set(taskId, activeTask)
+    // 进程退出时自动清理缓存 + 广播销毁事件
+    child.on('exit', () => {
+      if (this.cachedSessions.get(cacheKey) === cached) {
+        this.cachedSessions.delete(cacheKey)
+        chatFrontendRegistry.broadcast({
+          type: 'acp_event',
+          sessionId: shuvixSessionId,
+          action: 'session_destroyed',
+          agentName: config.name,
+          displayName: config.displayName
+        })
+      }
+    })
 
     // 收集 stderr 日志
-    let stderrBuffer = ''
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuffer += chunk.toString()
-      if (stderrBuffer.length > 10000) {
-        stderrBuffer = stderrBuffer.slice(-5000)
+      cached.stderrBuffer += chunk.toString()
+      if (cached.stderrBuffer.length > 10000) {
+        cached.stderrBuffer = cached.stderrBuffer.slice(-5000)
       }
     })
 
@@ -324,67 +442,61 @@ class AcpService {
     const rawStream = ndJsonStream(outputStream, inputStream)
     const stream = withProtocolLogging(rawStream, config.name)
 
-    // ACP tool_call ID → ShuviX tool_call ID 映射
-    const acpToolCallMap = new Map<string, string>()
-    let resultBuffer = ''
-
     const connection = new ClientSideConnection(
       (_agent: Agent): Client => ({
-        // sessionUpdate 通知处理
+        // sessionUpdate 通知处理 — 通过 cached.taskState 可变引用路由到当前任务
         sessionUpdate: async (notification: SessionNotification): Promise<void> => {
+          const ts = cached.taskState
+          if (!ts) return
           this._handleSessionUpdate(
             notification.update,
-            ctx.sessionId,
-            taskId,
+            ts.ctx.sessionId,
+            ts.taskId,
             config.name,
-            acpToolCallMap,
-            onEvent,
+            ts.acpToolCallMap,
+            ts.onEvent,
             (text: string) => {
-              resultBuffer += text
+              if (cached.taskState) cached.taskState.resultBuffer += text
             }
           )
         },
 
         // requestPermission 桥接到 ShuviX 审批 UI
         requestPermission: async (
-          params: RequestPermissionRequest
+          reqParams: RequestPermissionRequest
         ): Promise<RequestPermissionResponse> => {
-          if (abortController.signal.aborted) {
-            return { outcome: { outcome: 'cancelled' } }
-          }
+          const ts = cached.taskState
+          if (!ts) return { outcome: { outcome: 'cancelled' } }
 
-          // 从 ACP toolCall 中提取命令描述
-          const toolTitle = params.toolCall.title || 'Unknown operation'
+          const toolTitle = reqParams.toolCall.title || 'Unknown operation'
           const commandDesc =
-            typeof params.toolCall.rawInput === 'string'
-              ? params.toolCall.rawInput
-              : JSON.stringify(params.toolCall.rawInput ?? toolTitle)
+            typeof reqParams.toolCall.rawInput === 'string'
+              ? reqParams.toolCall.rawInput
+              : JSON.stringify(reqParams.toolCall.rawInput ?? toolTitle)
 
-          if (ctx.requestUserInput && params.options.length > 0) {
-            // 将 ACP PermissionOption 映射为 ask 选项，展示给用户选择
+          if (ts.ctx.requestUserInput && reqParams.options.length > 0) {
             const kindLabels: Record<string, string> = {
               allow_once: '✓ Allow once',
               allow_always: '✓ Allow always',
               reject_once: '✗ Reject once',
               reject_always: '✗ Reject always'
             }
-            const askOptions = params.options.map((o) => ({
+            const askOptions = reqParams.options.map((o) => ({
               label: o.name,
               description: kindLabels[o.kind] || o.kind
             }))
 
             const permissionToolCallId = uuid()
-            const selections = await ctx.requestUserInput(permissionToolCallId, {
+            const selections = await ts.ctx.requestUserInput(permissionToolCallId, {
               question: `[${config.displayName}] ${toolTitle}`,
               detail: commandDesc !== toolTitle ? commandDesc : undefined,
               options: askOptions,
               allowMultiple: false
             })
 
-            // 根据用户选择的 label 匹配回 ACP option
             const selectedName = selections[0]
             if (selectedName) {
-              const selectedOption = params.options.find((o) => o.name === selectedName)
+              const selectedOption = reqParams.options.find((o) => o.name === selectedName)
               if (selectedOption) {
                 return { outcome: { outcome: 'selected', optionId: selectedOption.optionId } }
               }
@@ -393,8 +505,7 @@ class AcpService {
             return { outcome: { outcome: 'cancelled' } }
           }
 
-          // 无 requestUserInput 回调时默认允许（第一个选项通常是 allow）
-          const firstOption = params.options[0]
+          const firstOption = reqParams.options[0]
           if (firstOption) {
             return { outcome: { outcome: 'selected', optionId: firstOption.optionId } }
           }
@@ -405,7 +516,7 @@ class AcpService {
       stream
     )
 
-    activeTask.connection = connection
+    cached.connection = connection
 
     try {
       // ACP 握手
@@ -425,40 +536,38 @@ class AcpService {
         mcpServers: []
       })
 
-      const acpSessionId = sessionResp.sessionId
-      activeTask.sessionId = acpSessionId
+      cached.acpSessionId = sessionResp.sessionId
 
-      // 发送 prompt
-      const promptResp = await connection.prompt({
-        sessionId: acpSessionId,
-        prompt: [{ type: 'text', text: prompt }]
-      })
-
-      // 等待完成
-      if (promptResp.stopReason === 'cancelled') {
-        return resultBuffer || 'Task was cancelled.'
-      }
-
-      return resultBuffer || 'Task completed (no output captured).'
+      return cached
     } catch (err) {
-      if (abortController.signal.aborted) {
-        return resultBuffer || 'Task was aborted.'
-      }
-      const errMsg = err instanceof Error ? err.message : String(err)
-      if (stderrBuffer) {
-        log.error(`[ACP] ${config.name} stderr:\n${stderrBuffer.slice(-2000)}`)
-      }
-      throw new Error(`ACP Agent "${config.displayName}" error: ${errMsg}`)
-    } finally {
-      // 清理 abort 监听
-      abortController.signal.removeEventListener('abort', onAbort)
-      // 确保进程退出
+      // 握手/session 创建失败 → kill 进程
       if (!child.killed) {
         child.kill('SIGTERM')
       }
-      // 等待连接关闭
-      await connection.closed.catch(() => {})
+      throw err
     }
+  }
+
+  /** Kill 进程并清理缓存 */
+  private _killAndCleanup(cached: CachedAcpSession): void {
+    // 从缓存移除（exit handler 会检测到已移除，不重复广播）
+    this.cachedSessions.delete(cached.cacheKey)
+
+    if (!cached.process.killed) {
+      cached.process.kill('SIGTERM')
+      setTimeout(() => {
+        if (!cached.process.killed) cached.process.kill('SIGKILL')
+      }, 3000)
+    }
+
+    // 广播 session_destroyed
+    chatFrontendRegistry.broadcast({
+      type: 'acp_event',
+      sessionId: cached.shuvixSessionId,
+      action: 'session_destroyed',
+      agentName: cached.config.name,
+      displayName: cached.config.displayName
+    })
   }
 
   /** 处理 ACP sessionUpdate 通知，翻译为 subagent_* ChatEvent */
@@ -496,7 +605,6 @@ class AcpService {
 
         // 只在完成/失败时广播 tool_end
         if (tcu.status === 'completed' || tcu.status === 'failed') {
-          // 提取结果文本
           let resultText = ''
           if (tcu.rawOutput != null) {
             resultText =
@@ -522,12 +630,35 @@ class AcpService {
         const content = chunk.content as { type: string; text?: string }
         if (content?.type === 'text' && content.text) {
           appendResult(content.text)
+          // 同时流式广播到 UI
+          onEvent({
+            type: 'subagent_text_delta',
+            sessionId,
+            subAgentId: taskId,
+            subAgentType: agentType,
+            delta: content.text
+          })
+        }
+        break
+      }
+
+      case 'agent_thought_chunk': {
+        // 思考内容流式广播到 UI
+        const chunk = update as { sessionUpdate: 'agent_thought_chunk'; content: unknown }
+        const content = chunk.content as { type: string; text?: string }
+        if (content?.type === 'text' && content.text) {
+          onEvent({
+            type: 'subagent_thinking_delta',
+            sessionId,
+            subAgentId: taskId,
+            subAgentType: agentType,
+            delta: content.text
+          })
         }
         break
       }
 
       case 'plan': {
-        // 将 plan 作为一对 tool_start/end 展示
         const plan = update as {
           sessionUpdate: 'plan'
           entries: Array<{ content: string; status: string }>
@@ -556,7 +687,6 @@ class AcpService {
         break
       }
 
-      // 其他 update 类型忽略
       default:
         break
     }

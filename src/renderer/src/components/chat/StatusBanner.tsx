@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bot,
@@ -17,7 +16,7 @@ interface StatusBannerProps {
   sessionId: string
 }
 
-/** Docker/SSH/分享 实时状态横幅 — 紧贴 titlebar 下方 */
+/** Docker/SSH/ACP/分享 实时状态横幅 — 紧贴 titlebar 下方 */
 export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const resources = useChatStore((s) => s.sessionResources[sessionId])
@@ -25,19 +24,13 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const ssh = resources?.ssh
   const python = resources?.python
   const sql = resources?.sql
+  const acpAgents = resources?.acp
 
   const sessionSettings = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
   )
   const bashAutoApprove = sessionSettings?.bashAutoApprove === true
   const sshAutoApprove = sessionSettings?.sshAutoApprove === true
-
-  // 运行中的 ACP 子智能体
-  const allSubAgents = useChatStore((s) => s.sessionSubAgentExecutions[sessionId])
-  const runningAgents = useMemo(
-    () => (allSubAgents || []).filter((a) => a.status === 'running'),
-    [allSubAgents]
-  )
 
   // 分享状态
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
@@ -48,9 +41,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
     !ssh &&
     !python &&
     !sql &&
+    (!acpAgents || acpAgents.length === 0) &&
     !bashAutoApprove &&
     !sshAutoApprove &&
-    runningAgents.length === 0 &&
     !lanShareMode &&
     !telegramBinding
   )
@@ -72,6 +65,10 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const handleDestroySql = async (): Promise<void> => {
     await window.api.sql.destroySession(sessionId)
     useChatStore.getState().setSessionSql(sessionId, null)
+  }
+
+  const handleDestroyAcp = async (agentName: string): Promise<void> => {
+    await window.api.acp.destroySession({ sessionId, agentName })
   }
 
   /** 点击关闭 Bash 免审批 */
@@ -167,16 +164,20 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           </button>
         </span>
       )}
-      {runningAgents.map((agent) => (
+      {acpAgents?.map((agent) => (
         <span
-          key={agent.subAgentId}
+          key={agent.agentName}
           className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-violet-500/10 text-violet-500"
-          title={agent.description}
         >
-          <Bot size={12} className="animate-pulse" />
-          <span className="truncate max-w-[160px]">
-            {t('chat.acpAgentRunning', { name: agent.subAgentType })}
-          </span>
+          <Bot size={12} />
+          <span className="truncate max-w-[160px]">{agent.displayName}</span>
+          <button
+            onClick={() => handleDestroyAcp(agent.agentName)}
+            className="ml-0.5 rounded hover:bg-violet-500/20 transition-colors p-0.5"
+            title={t('chat.destroyAcp')}
+          >
+            <X size={10} />
+          </button>
         </span>
       ))}
       {bashAutoApprove && (

@@ -152,6 +152,17 @@ export function useAgentEvents(): void {
         }
         break
 
+      case 'acp_event':
+        if (event.action === 'session_created') {
+          store.addSessionAcp(sid, {
+            agentName: event.agentName,
+            displayName: event.displayName
+          })
+        } else {
+          store.removeSessionAcp(sid, event.agentName)
+        }
+        break
+
       case 'agent_end': {
         // 更新已占用上下文 token 数（total - output = prompt_tokens，包含 cached tokens）
         if (event.usage && sid === store.activeSessionId) {
@@ -222,6 +233,14 @@ export function useAgentEvents(): void {
           status: event.isError ? 'error' : 'done',
           result: event.result
         })
+        break
+
+      case 'subagent_text_delta':
+        store.appendSubAgentStreamingContent(sid, event.subAgentId, event.delta)
+        break
+
+      case 'subagent_thinking_delta':
+        store.appendSubAgentStreamingThinking(sid, event.subAgentId, event.delta)
         break
 
       case 'error':

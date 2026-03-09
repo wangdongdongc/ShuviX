@@ -119,6 +119,13 @@ const api = {
     }
   },
 
+  // ============ ACP Agent ============
+  acp: {
+    /** 销毁指定会话的 ACP Agent session */
+    destroySession: (params: { sessionId: string; agentName: string }) =>
+      ipcRenderer.invoke('acp:destroySession', params)
+  },
+
   // ============ 提供商管理 ============
   provider: {
     listAll: () => ipcRenderer.invoke('provider:listAll'),

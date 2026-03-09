@@ -162,6 +162,14 @@ export interface ChatSqlEvent extends ChatEventBase {
   action: 'runtime_ready' | 'runtime_destroyed'
 }
 
+/** ACP Agent session 生命周期事件（轻量通知，不持久化为消息） */
+export interface ChatAcpEvent extends ChatEventBase {
+  type: 'acp_event'
+  action: 'session_created' | 'session_destroyed'
+  agentName: string
+  displayName: string
+}
+
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /** 子智能体开始执行 */
@@ -203,6 +211,22 @@ export interface ChatSubAgentToolEndEvent extends ChatEventBase {
   isError?: boolean
 }
 
+/** 子智能体文本增量 */
+export interface ChatSubAgentTextDeltaEvent extends ChatEventBase {
+  type: 'subagent_text_delta'
+  subAgentId: string
+  subAgentType: string
+  delta: string
+}
+
+/** 子智能体思考增量 */
+export interface ChatSubAgentThinkingDeltaEvent extends ChatEventBase {
+  type: 'subagent_thinking_delta'
+  subAgentId: string
+  subAgentType: string
+  delta: string
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -239,10 +263,13 @@ export type ChatEvent =
   | ChatSshEvent
   | ChatPythonEvent
   | ChatSqlEvent
+  | ChatAcpEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent
   | ChatSubAgentToolStartEvent
   | ChatSubAgentToolEndEvent
+  | ChatSubAgentTextDeltaEvent
+  | ChatSubAgentThinkingDeltaEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
 
