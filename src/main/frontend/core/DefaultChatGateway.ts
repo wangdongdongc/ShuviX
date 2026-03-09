@@ -3,6 +3,7 @@ import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '
 import type { SshCredentialPayload } from '../../tools/types'
 import { sessionService } from '../../services/sessionService'
 import { ALL_TOOL_NAMES } from '../../utils/tools'
+import { acpService } from '../../services/acpService'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
@@ -226,7 +227,8 @@ export class DefaultChatGateway implements ChatGateway {
       sql: t('tool.sqlLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel'),
-      explore: t('tool.exploreLabel')
+      explore: t('tool.exploreLabel'),
+      'claude-code': t('tool.claudeCodeLabel')
     }
     const hintMap: Record<string, string> = {
       bash: t('tool.bashHint'),
@@ -242,13 +244,18 @@ export class DefaultChatGateway implements ChatGateway {
       sql: t('tool.sqlHint'),
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint'),
-      explore: t('tool.exploreHint')
+      explore: t('tool.exploreHint'),
+      'claude-code': t('tool.claudeCodeHint')
     }
+    const acpAgentNames = new Set(acpService.getRegisteredAgents().map((a) => a.name))
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,
       label: labelMap[name] || name,
       hint: hintMap[name],
-      group: name === 'explore' ? '__subagents__' : (undefined as string | undefined)
+      group:
+        name === 'explore' || acpAgentNames.has(name)
+          ? '__subagents__'
+          : (undefined as string | undefined)
     }))
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({

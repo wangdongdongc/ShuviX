@@ -545,7 +545,9 @@
     "shuvixSettingHint": "查看或修改应用的全局设置（如语言、主题等）",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "exploreLabel": "探索",
-    "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构"
+    "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构",
+    "claudeCodeLabel": "Claude Code",
+    "claudeCodeHint": "将复杂编程任务委托给 Claude Code — 自主 AI 编码智能体，擅长多文件修改、重构、调试等"
   },
 
   "bindings": {

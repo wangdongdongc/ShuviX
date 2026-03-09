@@ -13,7 +13,8 @@ export const ALL_TOOL_NAMES = [
   'sql',
   'shuvix-project',
   'shuvix-setting',
-  'explore'
+  'explore',
+  'claude-code'
 ] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 

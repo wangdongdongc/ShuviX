@@ -152,6 +152,11 @@ export function ToolCallBlock({
           icon: <Bot size={12} className="text-amber-500 flex-shrink-0" />,
           detail: str(args?.description)
         }
+      case 'claude-code':
+        return {
+          icon: <Bot size={12} className="text-purple-500 flex-shrink-0" />,
+          detail: str(args?.description)
+        }
       case 'python': {
         const code = str(args?.code)
         const lineCount = code.split('\n').length

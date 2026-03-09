@@ -156,6 +156,15 @@ export interface ExploreToolDetails {
   description: string
 }
 
+/** ACP Agent 工具详情（claude-code、gemini 等） */
+export interface AcpAgentToolDetails {
+  type: 'acp-agent'
+  agentName: string
+  taskId: string
+  description: string
+  error?: string
+}
+
 /** shuvix-setting 工具详情 */
 export interface ShuvixSettingToolDetails {
   type: 'shuvix-setting'
@@ -209,6 +218,7 @@ export type ToolResultDetails =
   | SshToolDetails
   | SkillToolDetails
   | ExploreToolDetails
+  | AcpAgentToolDetails
   | ShuvixSettingToolDetails
   | ShuvixProjectToolDetails
   | PythonToolDetails

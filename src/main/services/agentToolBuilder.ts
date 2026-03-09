@@ -15,8 +15,10 @@ import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
 import { SkillTool } from '../tools/skill'
 import { ExploreTool } from '../tools/explore'
+import { AcpAgentTool } from '../tools/acpAgent'
 import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
+import { acpService } from './acpService'
 import { parallelCoordinator } from './parallelExecution'
 import type { ChatEvent } from '../frontend'
 
@@ -85,6 +87,18 @@ export function buildTools(
       subAgentCtx.parentStreamFn,
       subAgentCtx.broadcastEvent
     )
+  }
+  // ACP Agent 工具（仅主 Agent 注册，防递归）
+  if (subAgentCtx) {
+    for (const agentConfig of acpService.getRegisteredAgents()) {
+      if (enabledTools.includes(agentConfig.name)) {
+        builtinAll[agentConfig.name] = new AcpAgentTool(
+          ctx,
+          subAgentCtx.broadcastEvent,
+          agentConfig
+        )
+      }
+    }
   }
   // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
   const mcpAll: Record<string, AnyAgentTool> = {}

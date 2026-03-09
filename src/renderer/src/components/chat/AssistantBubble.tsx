@@ -119,11 +119,12 @@ export const AssistantBubble = memo(function AssistantBubble({
                 const meta = step.msg.metadata
                 const toolName = meta?.toolName || ''
                 const status = step.msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
-                if (toolName === 'explore') {
+                if (toolName === 'explore' || toolName === 'claude-code') {
                   return (
                     <SubAgentBlock
                       key={step.msg.id}
                       toolCallId={meta?.toolCallId}
+                      toolName={toolName}
                       args={meta?.args}
                       result={step.msg.content || undefined}
                       status={status}

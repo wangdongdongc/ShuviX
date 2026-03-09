@@ -23,6 +23,7 @@ import {
 
 interface SubAgentBlockProps {
   toolCallId?: string
+  toolName?: string
   args?: Record<string, unknown>
   result?: string
   status: 'running' | 'done' | 'error'
@@ -84,6 +85,7 @@ function innerToolStatusIcon(status: SubAgentToolExecution['status']): React.Rea
  */
 export const SubAgentBlock = memo(function SubAgentBlock({
   toolCallId,
+  toolName,
   args,
   result,
   status: propStatus
@@ -157,7 +159,9 @@ export const SubAgentBlock = memo(function SubAgentBlock({
           <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
         )}
         <Bot size={12} className="text-text-tertiary flex-shrink-0" />
-        <span className="font-medium text-text-secondary flex-shrink-0">explore</span>
+        <span className="font-medium text-text-secondary flex-shrink-0">
+          {subAgent?.subAgentType || toolName || 'explore'}
+        </span>
         {description && <span className="flex-1 truncate font-mono opacity-70">{description}</span>}
         {!description && <span className="flex-1" />}
         <span className="flex items-center gap-1 flex-shrink-0 opacity-80">

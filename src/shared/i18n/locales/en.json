@@ -545,7 +545,9 @@
     "shuvixSettingHint": "View or modify global app settings (language, theme, etc.)",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "exploreLabel": "Explore",
-    "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure"
+    "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure",
+    "claudeCodeLabel": "Claude Code",
+    "claudeCodeHint": "Delegate complex coding tasks to Claude Code — an autonomous AI agent for multi-file changes, refactoring, debugging and more"
   },
 
   "bindings": {
