@@ -71,6 +71,7 @@
     "pythonWasmRuntime": "Python Engine",
     "destroySql": "Terminate SQL runtime",
     "sqlWasmRuntime": "Postgres Database",
+    "acpAgentRunning": "{{name}} running",
     "destroyReason_manual": "manually destroyed",
     "bashAutoApproveLabel": "Bash Auto-Approve",
     "bashAutoApproveWarning": "All bash commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",

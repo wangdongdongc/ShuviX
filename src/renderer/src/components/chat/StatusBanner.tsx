@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  Bot,
   Code,
   Container,
   Database,
@@ -30,6 +32,13 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const bashAutoApprove = sessionSettings?.bashAutoApprove === true
   const sshAutoApprove = sessionSettings?.sshAutoApprove === true
 
+  // 运行中的 ACP 子智能体
+  const allSubAgents = useChatStore((s) => s.sessionSubAgentExecutions[sessionId])
+  const runningAgents = useMemo(
+    () => (allSubAgents || []).filter((a) => a.status === 'running'),
+    [allSubAgents]
+  )
+
   // 分享状态
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
@@ -41,6 +50,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
     !sql &&
     !bashAutoApprove &&
     !sshAutoApprove &&
+    runningAgents.length === 0 &&
     !lanShareMode &&
     !telegramBinding
   )
@@ -157,6 +167,18 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           </button>
         </span>
       )}
+      {runningAgents.map((agent) => (
+        <span
+          key={agent.subAgentId}
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-violet-500/10 text-violet-500"
+          title={agent.description}
+        >
+          <Bot size={12} className="animate-pulse" />
+          <span className="truncate max-w-[160px]">
+            {t('chat.acpAgentRunning', { name: agent.subAgentType })}
+          </span>
+        </span>
+      ))}
       {bashAutoApprove && (
         <button
           onClick={handleDisableBashAutoApprove}
