@@ -105,7 +105,6 @@ declare global {
     messageId?: string
     turnIndex?: number
     approvalRequired?: boolean
-    userInputRequired?: boolean
     sshCredentialRequired?: boolean
   }
   interface ChatToolEndEvent extends ChatEventBase {

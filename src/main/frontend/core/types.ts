@@ -72,8 +72,6 @@ export interface ChatToolStartEvent extends ChatEventBase {
   turnIndex?: number
   /** 是否需要用户审批（bash 沙箱模式） */
   approvalRequired?: boolean
-  /** 是否需要用户选择（ask 工具） */
-  userInputRequired?: boolean
   /** 是否需要 SSH 凭据输入 */
   sshCredentialRequired?: boolean
 }

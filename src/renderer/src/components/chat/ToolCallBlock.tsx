@@ -42,13 +42,7 @@ interface ToolCallBlockProps {
   result?: string
   /** 工具特定的结构化详情（持久化消息传入） */
   details?: ToolResultDetails
-  status:
-    | 'running'
-    | 'done'
-    | 'error'
-    | 'pending_approval'
-    | 'pending_user_input'
-    | 'pending_ssh_credentials'
+  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_ssh_credentials'
 }
 
 /**
@@ -218,11 +212,6 @@ export function ToolCallBlock({
       label: t('toolCall.pendingApproval'),
       borderColor: 'border-warning/40'
     },
-    pending_user_input: {
-      icon: <MessageCircleQuestion size={12} className="text-accent" />,
-      label: t('toolCall.pendingUserInput'),
-      borderColor: 'border-accent/40'
-    },
     pending_ssh_credentials: {
       icon: <Terminal size={12} className="text-accent" />,
       label: t('toolCall.pendingSshCredentials'),
@@ -265,8 +254,7 @@ export function ToolCallBlock({
       {/* 展开详情 */}
       {expanded &&
         !hasEditDiff &&
-        status !== 'pending_approval' &&
-        status !== 'pending_user_input' && (
+        status !== 'pending_approval' && (
           <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
             {toolName === 'python' && args ? (
               <PythonToolDetail args={args} result={result} />

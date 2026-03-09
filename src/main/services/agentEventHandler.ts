@@ -20,7 +20,7 @@ function checkToolApproval(
   sessionId: string,
   toolName: string,
   args: Record<string, unknown>
-): { approvalRequired: boolean; userInputRequired: boolean; sshCredentialRequired: boolean } {
+): { approvalRequired: boolean; sshCredentialRequired: boolean; isUserInput: boolean } {
   let approvalRequired = false
   if (toolName === 'bash') {
     const sess = sessionDao.pickSettings(sessionId, ['bashAutoApprove', 'bashAllowList'])
@@ -39,10 +39,10 @@ function checkToolApproval(
       approvalRequired = !isCommandAllowed(sess?.sshAllowList, command)
     }
   }
-  const userInputRequired = toolName === 'ask'
+  const isUserInput = toolName === 'ask'
   const sshCredentialRequired =
     toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
-  return { approvalRequired, userInputRequired, sshCredentialRequired }
+  return { approvalRequired, sshCredentialRequired, isUserInput }
 }
 
 /** 会话级项目指令文件加载状态 */
@@ -360,12 +360,12 @@ function handleMessageEnd(
     const sessionForTool = sessionDao.pick(ctx.sessionId, ['model'])
     const turnIndex = ctx.state.turnCounter
     for (const tc of batchToolCalls) {
-      const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
+      const { approvalRequired, sshCredentialRequired, isUserInput } = checkToolApproval(
         ctx.sessionId,
         tc.name,
         tc.arguments
       )
-      if (approvalRequired || userInputRequired || sshCredentialRequired) continue
+      if (approvalRequired || isUserInput || sshCredentialRequired) continue
       const toolUseMsg = messageService.addToolUse({
         sessionId: ctx.sessionId,
         toolCallId: tc.id,
@@ -383,7 +383,6 @@ function handleMessageEnd(
         toolArgs: tc.arguments,
         messageId: toolUseMsg.id,
         approvalRequired: false,
-        userInputRequired: false,
         sshCredentialRequired: false,
         turnIndex
       })
@@ -413,7 +412,7 @@ function handleToolExecutionStart(
     model: sessionForTool?.model || ''
   })
   ctx.state.toolUseMessageIds.set(event.toolCallId, toolUseMsg.id)
-  const { approvalRequired, userInputRequired, sshCredentialRequired } = checkToolApproval(
+  const { approvalRequired, sshCredentialRequired } = checkToolApproval(
     ctx.sessionId,
     event.toolName,
     args || {}
@@ -426,7 +425,6 @@ function handleToolExecutionStart(
     toolArgs: args,
     messageId: toolUseMsg.id,
     approvalRequired,
-    userInputRequired,
     sshCredentialRequired,
     turnIndex: ctx.state.turnCounter
   })

@@ -5,6 +5,7 @@ import {
   useChatStore,
   selectIsStreaming,
   selectToolExecutions,
+  selectPendingUserInput,
   selectCanEdit
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
@@ -47,13 +48,11 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   const canEdit = useChatStore(selectCanEdit)
   const { projectPath, agentMdLoaded } = useSessionMeta()
 
-  // 检测是否有待用户操作的工具执行（ask 提问 / bash 审批）
+  // 检测是否有待用户操作（用户输入 / bash 审批）
   const toolExecutions = useChatStore(selectToolExecutions)
-  const hasPendingAction = toolExecutions.some(
-    (te) =>
-      te.status === 'pending_approval' ||
-      (te.status === 'pending_user_input' && te.toolName === 'ask')
-  )
+  const pendingUserInput = useChatStore(selectPendingUserInput)
+  const hasPendingAction =
+    !!pendingUserInput || toolExecutions.some((te) => te.status === 'pending_approval')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 

@@ -353,64 +353,46 @@ class AcpService {
             return { outcome: { outcome: 'cancelled' } }
           }
 
-          // 从 ACP toolCall 中提取命令描述和内部工具名
+          // 从 ACP toolCall 中提取命令描述
           const toolTitle = params.toolCall.title || 'Unknown operation'
-          const innerToolName = params.toolCall.title || 'permission'
           const commandDesc =
             typeof params.toolCall.rawInput === 'string'
               ? params.toolCall.rawInput
               : JSON.stringify(params.toolCall.rawInput ?? toolTitle)
 
-          if (ctx.requestApproval) {
-            // 生成审批专用 toolCallId，广播 tool_start 以创建 UI 审批卡片
-            // 使用内部工具名（如 'bash'）而非 config.name（'claude-code'），
-            // 避免被路由到 SubAgentBlock
-            const approvalToolCallId = uuid()
-            onEvent({
-              type: 'tool_start',
-              sessionId: ctx.sessionId,
-              toolCallId: approvalToolCallId,
-              toolName: innerToolName,
-              toolArgs: { command: `[${config.displayName}] ${commandDesc}` },
-              approvalRequired: true
+          if (ctx.requestUserInput && params.options.length > 0) {
+            // 将 ACP PermissionOption 映射为 ask 选项，展示给用户选择
+            const kindLabels: Record<string, string> = {
+              allow_once: '✓ Allow once',
+              allow_always: '✓ Allow always',
+              reject_once: '✗ Reject once',
+              reject_always: '✗ Reject always'
+            }
+            const askOptions = params.options.map((o) => ({
+              label: o.name,
+              description: kindLabels[o.kind] || o.kind
+            }))
+
+            const permissionToolCallId = uuid()
+            const selections = await ctx.requestUserInput(permissionToolCallId, {
+              question: `[${config.displayName}] ${commandDesc}`,
+              options: askOptions,
+              allowMultiple: false
             })
 
-            const { approved, reason } = await ctx.requestApproval(
-              approvalToolCallId,
-              `[${config.displayName}] ${commandDesc}`
-            )
-
-            // 审批结束，关闭卡片
-            onEvent({
-              type: 'tool_end',
-              sessionId: ctx.sessionId,
-              toolCallId: approvalToolCallId,
-              toolName: innerToolName,
-              result: approved ? 'Approved' : `Rejected: ${reason || 'user denied'}`,
-              isError: !approved
-            })
-
-            if (!approved) {
-              // 找到 reject 类型的 option
-              const rejectOption = params.options.find(
-                (o) => o.kind === 'reject_once' || o.kind === 'reject_always'
-              )
-              if (rejectOption) {
-                return { outcome: { outcome: 'selected', optionId: rejectOption.optionId } }
+            // 根据用户选择的 label 匹配回 ACP option
+            const selectedName = selections[0]
+            if (selectedName) {
+              const selectedOption = params.options.find((o) => o.name === selectedName)
+              if (selectedOption) {
+                return { outcome: { outcome: 'selected', optionId: selectedOption.optionId } }
               }
-              return { outcome: { outcome: 'cancelled' } }
             }
 
-            // 找到 allow 类型的 option
-            const allowOption = params.options.find(
-              (o) => o.kind === 'allow_once' || o.kind === 'allow_always'
-            )
-            if (allowOption) {
-              return { outcome: { outcome: 'selected', optionId: allowOption.optionId } }
-            }
+            return { outcome: { outcome: 'cancelled' } }
           }
 
-          // 无审批机制时默认允许（第一个选项通常是 allow）
+          // 无 requestUserInput 回调时默认允许（第一个选项通常是 allow）
           const firstOption = params.options[0]
           if (firstOption) {
             return { outcome: { outcome: 'selected', optionId: firstOption.optionId } }

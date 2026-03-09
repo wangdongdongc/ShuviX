@@ -161,15 +161,13 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     [activeSessionId]
   )
 
-  /** ask 工具：用户选择回调 */
+  /** 用户输入选择回调（ask 工具 / ACP permission 等） */
   const handleUserInput = useCallback(
     async (toolCallId: string, selections: string[]) => {
       await window.api.agent.respondToAsk({ toolCallId, selections })
       const store = useChatStore.getState()
       if (activeSessionId) {
-        store.updateToolExecution(activeSessionId, toolCallId, {
-          status: 'running'
-        })
+        store.clearPendingUserInput(activeSessionId)
       }
     },
     [activeSessionId]
@@ -231,16 +229,14 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         return
       }
 
-      // 检查是否有待用户输入的 ask 工具
-      const pendingAsk = execs.find(
-        (te) => te.status === 'pending_user_input' && te.toolName === 'ask'
-      )
-      if (pendingAsk) {
+      // 检查是否有待用户输入请求
+      const pendingInput = store.sessionPendingUserInputs[activeSessionId]
+      if (pendingInput) {
         await window.api.agent.respondToAsk({
-          toolCallId: pendingAsk.toolCallId,
+          toolCallId: pendingInput.toolCallId,
           selections: [t('toolCall.overrideAsk', { text })]
         })
-        store.updateToolExecution(activeSessionId, pendingAsk.toolCallId, { status: 'running' })
+        store.clearPendingUserInput(activeSessionId)
         return
       }
 

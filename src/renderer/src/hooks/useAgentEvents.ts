@@ -51,14 +51,9 @@ export function useAgentEvents(): void {
         break
 
       case 'tool_start': {
-        // 根据工具类型设置初始状态：bash 沙箱审批 / ask 用户输入 / ssh 凭据 / 其余直接运行
-        let initialStatus:
-          | 'running'
-          | 'pending_approval'
-          | 'pending_user_input'
-          | 'pending_ssh_credentials' = 'running'
+        // 根据工具类型设置初始状态：bash 沙箱审批 / ssh 凭据 / 其余直接运行
+        let initialStatus: 'running' | 'pending_approval' | 'pending_ssh_credentials' = 'running'
         if (event.approvalRequired) initialStatus = 'pending_approval'
-        if (event.userInputRequired) initialStatus = 'pending_user_input'
         if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
         store.addToolExecution(sid, {
           toolCallId: event.toolCallId,
@@ -86,9 +81,13 @@ export function useAgentEvents(): void {
         break
 
       case 'user_input_request':
-        // ask 工具：仅切换状态为等待选择，不覆盖 args（tool_start 已携带完整参数）
-        store.updateToolExecution(sid, event.toolCallId, {
-          status: 'pending_user_input'
+        // 用户输入请求：写入独立状态（与工具执行解耦）
+        store.setPendingUserInput(sid, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          question: event.payload.question,
+          options: event.payload.options,
+          allowMultiple: event.payload.allowMultiple
         })
         break
 

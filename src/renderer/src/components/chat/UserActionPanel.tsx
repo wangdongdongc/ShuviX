@@ -11,7 +11,7 @@ import {
   Terminal,
   TriangleAlert
 } from 'lucide-react'
-import { useChatStore, selectToolExecutions } from '../../stores/chatStore'
+import { useChatStore, selectToolExecutions, selectPendingUserInput } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 interface UserActionPanelProps {
@@ -50,11 +50,9 @@ export function UserActionPanel({
   const { t } = useTranslation()
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set())
 
-  // 从 store 查找当前需要用户操作的工具执行
+  // 从 store 查找当前需要用户操作的状态
   const toolExecutions = useChatStore(selectToolExecutions)
-  const pendingAsk = toolExecutions.find(
-    (te) => te.status === 'pending_user_input' && te.toolName === 'ask'
-  )
+  const pendingUserInput = useChatStore(selectPendingUserInput)
   const pendingApproval = toolExecutions.find((te) => te.status === 'pending_approval')
   const pendingSsh = toolExecutions.find((te) => te.status === 'pending_ssh_credentials')
 
@@ -62,11 +60,11 @@ export function UserActionPanel({
   if (pendingSsh) {
     return <SshCredentialContent pending={pendingSsh} onSshCredentials={onSshCredentials} t={t} />
   }
-  // ask 优先（两者不会同时出现，但保险起见）
-  if (pendingAsk) {
+  // 用户输入优先（独立状态，与工具执行解耦）
+  if (pendingUserInput) {
     return (
       <AskContent
-        pending={pendingAsk}
+        pending={pendingUserInput}
         selectedOptions={selectedOptions}
         setSelectedOptions={setSelectedOptions}
         onUserInput={onUserInput}
@@ -96,16 +94,18 @@ function AskContent({
   onUserInput,
   t
 }: {
-  pending: { toolCallId: string; args?: Record<string, unknown> }
+  pending: {
+    toolCallId: string
+    question: string
+    options: Array<{ label: string; description: string }>
+    allowMultiple: boolean
+  }
   selectedOptions: Set<string>
   setSelectedOptions: React.Dispatch<React.SetStateAction<Set<string>>>
   onUserInput: (toolCallId: string, selections: string[]) => void
   t: (key: string) => string
 }): React.JSX.Element {
-  const { toolCallId, args } = pending
-  const question = (args?.question as string) || ''
-  const options = (args?.options as Array<{ label: string; description: string }>) || []
-  const allowMultiple = (args?.allowMultiple as boolean) ?? false
+  const { toolCallId, question, options, allowMultiple } = pending
   const [collapsed, setCollapsed] = useState(false)
 
   const handleToggle = (label: string): void => {

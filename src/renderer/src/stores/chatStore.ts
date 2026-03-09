@@ -31,17 +31,20 @@ export interface ToolExecution {
   args: Record<string, unknown>
   /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
   turnIndex?: number
-  status:
-    | 'running'
-    | 'done'
-    | 'error'
-    | 'pending_approval'
-    | 'pending_user_input'
-    | 'pending_ssh_credentials'
+  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_ssh_credentials'
   result?: string
   /** 工具特定的结构化详情（edit diff 等） */
   details?: ToolResultDetails
   messageId?: string
+}
+
+/** 独立的用户输入请求状态（ask 工具 / ACP requestPermission 等） */
+export interface PendingUserInput {
+  toolCallId: string
+  toolName: string
+  question: string
+  options: Array<{ label: string; description: string }>
+  allowMultiple: boolean
 }
 
 /** 模型相关元数据 */
@@ -170,6 +173,8 @@ interface ChatState {
   agentMdLoaded: boolean
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
+  /** 各 session 的待处理用户输入请求 */
+  sessionPendingUserInputs: Record<string, PendingUserInput>
   /** 已开启 WebUI 分享的 session ID → 分享模式 */
   sharedSessionIds: Map<string, ShareMode>
   /** Telegram 绑定关系：sessionId → { botId, username } */
@@ -237,6 +242,10 @@ interface ChatState {
   ) => void
   setSessionPython: (sessionId: string, info: { ready: boolean } | null) => void
   setSessionSql: (sessionId: string, info: { ready: boolean } | null) => void
+  /** 设置 session 的待处理用户输入 */
+  setPendingUserInput: (sessionId: string, input: PendingUserInput) => void
+  /** 清除 session 的待处理用户输入 */
+  clearPendingUserInput: (sessionId: string) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -266,6 +275,9 @@ export const selectSubAgentExecutions = (s: ChatState): SubAgentExecution[] =>
     ? s.sessionSubAgentExecutions[s.activeSessionId] || EMPTY_SUBAGENTS
     : EMPTY_SUBAGENTS
 
+export const selectPendingUserInput = (s: ChatState): PendingUserInput | null =>
+  s.activeSessionId ? s.sessionPendingUserInputs[s.activeSessionId] || null : null
+
 /** 当前模式是否允许对话（chat / full / null=本地） */
 export const selectCanChat = (s: ChatState): boolean => s.shareMode !== 'readonly'
 
@@ -280,6 +292,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreams: {},
   sessionToolExecutions: {},
   sessionSubAgentExecutions: {},
+  sessionPendingUserInputs: {},
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
   modelSupportsVision: false,
@@ -507,6 +520,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
+  setPendingUserInput: (sessionId, input) =>
+    set((state) => ({
+      sessionPendingUserInputs: { ...state.sessionPendingUserInputs, [sessionId]: input }
+    })),
+
+  clearPendingUserInput: (sessionId) =>
+    set((state) => {
+      const rest = { ...state.sessionPendingUserInputs }
+      delete rest[sessionId]
+      return { sessionPendingUserInputs: rest }
+    }),
+
   finishStreaming: (sessionId, finalMessage) =>
     set((state) => {
       // 清除该 session 的流式内容
@@ -526,6 +551,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restSubAgents = { ...state.sessionSubAgentExecutions }
       delete restSubAgents[sessionId]
 
+      // 清除该 session 的待处理用户输入
+      const restPendingInputs = { ...state.sessionPendingUserInputs }
+      delete restPendingInputs[sessionId]
+
       // 添加最终消息（如有）
       const newMessages =
         finalMessage && sessionId === state.activeSessionId
@@ -536,6 +565,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionStreams: newStreams,
         sessionToolExecutions: restToolExecs,
         sessionSubAgentExecutions: restSubAgents,
+        sessionPendingUserInputs: restPendingInputs,
         messages: newMessages
       }
     })
