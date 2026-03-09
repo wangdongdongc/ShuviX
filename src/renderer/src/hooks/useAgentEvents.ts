@@ -86,6 +86,7 @@ export function useAgentEvents(): void {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           question: event.payload.question,
+          detail: event.payload.detail,
           options: event.payload.options,
           allowMultiple: event.payload.allowMultiple
         })

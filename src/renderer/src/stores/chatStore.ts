@@ -43,6 +43,8 @@ export interface PendingUserInput {
   toolCallId: string
   toolName: string
   question: string
+  /** 问题下方的详细说明（可选） */
+  detail?: string
   options: Array<{ label: string; description: string }>
   allowMultiple: boolean
 }

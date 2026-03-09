@@ -375,7 +375,8 @@ class AcpService {
 
             const permissionToolCallId = uuid()
             const selections = await ctx.requestUserInput(permissionToolCallId, {
-              question: `[${config.displayName}] ${commandDesc}`,
+              question: `[${config.displayName}] ${toolTitle}`,
+              detail: commandDesc !== toolTitle ? commandDesc : undefined,
               options: askOptions,
               allowMultiple: false
             })

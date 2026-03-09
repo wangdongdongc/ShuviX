@@ -97,6 +97,7 @@ function AskContent({
   pending: {
     toolCallId: string
     question: string
+    detail?: string
     options: Array<{ label: string; description: string }>
     allowMultiple: boolean
   }
@@ -105,7 +106,7 @@ function AskContent({
   onUserInput: (toolCallId: string, selections: string[]) => void
   t: (key: string) => string
 }): React.JSX.Element {
-  const { toolCallId, question, options, allowMultiple } = pending
+  const { toolCallId, question, detail, options, allowMultiple } = pending
   const [collapsed, setCollapsed] = useState(false)
 
   const handleToggle = (label: string): void => {
@@ -151,6 +152,12 @@ function AskContent({
       {/* 可折叠区域（带过渡动画） */}
       <div className={`collapse-grid${collapsed ? '' : ' expanded'}`}>
         <div className="collapse-inner">
+          {/* 详细说明 */}
+          {detail && (
+            <pre className="text-[10px] text-text-tertiary bg-bg-primary/50 rounded-md mx-3 mb-1.5 px-3 py-2 overflow-auto max-h-24 whitespace-pre-wrap break-all font-mono border border-border-secondary/50">
+              {detail}
+            </pre>
+          )}
           {/* 选项列表 */}
           <div className="flex flex-col gap-1 px-3 pb-2">
             {options.map((opt) => {

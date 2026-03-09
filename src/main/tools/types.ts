@@ -71,6 +71,8 @@ export interface SshCredentialPayload {
 /** ask 工具的用户输入请求数据 */
 export interface UserInputPayload {
   question: string
+  /** 问题下方的详细说明（可选） */
+  detail?: string
   options: Array<{ label: string; description: string }>
   allowMultiple: boolean
 }

@@ -129,6 +129,7 @@ declare global {
     toolName: string
     payload: {
       question: string
+      detail?: string
       options: Array<{ label: string; description: string }>
       allowMultiple: boolean
     }

@@ -59,8 +59,9 @@ export function formatAskMessage(event: ChatInputRequestEvent): {
   text: string
   keyboard: InlineKeyboard
 } {
-  const { question, options, allowMultiple } = event.payload
+  const { question, detail, options, allowMultiple } = event.payload
   let text = question
+  if (detail) text += `\n${detail}`
   text = truncate(text)
 
   const keyboard = new InlineKeyboard()
