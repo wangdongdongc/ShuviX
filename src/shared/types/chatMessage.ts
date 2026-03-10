@@ -148,12 +148,45 @@ export interface SkillToolDetails {
   error?: boolean
 }
 
+/** 持久化的子智能体工具条目 */
+export interface PersistedSubAgentToolEntry {
+  toolName: string
+  status: 'done' | 'error'
+  summary?: string
+}
+
+/** 持久化的子智能体时间线条目 */
+export type PersistedSubAgentTimelineEntry =
+  | { type: 'tool'; tool: PersistedSubAgentToolEntry }
+  | { type: 'text'; content: string }
+  | { type: 'thinking'; content: string }
+
+/** 持久化的子智能体 token 用量 */
+export interface PersistedSubAgentUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  total: number
+  details?: Array<{
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+    stopReason: string
+  }>
+}
+
 /** explore 子智能体工具详情 */
 export interface ExploreToolDetails {
   type: 'explore'
   taskId: string
   subAgentType: string
   description: string
+  prompt?: string
+  timeline?: PersistedSubAgentTimelineEntry[]
+  usage?: PersistedSubAgentUsage
 }
 
 /** ACP Agent 工具详情（claude-code、gemini 等） */
@@ -163,6 +196,9 @@ export interface AcpAgentToolDetails {
   taskId: string
   description: string
   error?: string
+  prompt?: string
+  timeline?: PersistedSubAgentTimelineEntry[]
+  usage?: PersistedSubAgentUsage
 }
 
 /** shuvix-setting 工具详情 */

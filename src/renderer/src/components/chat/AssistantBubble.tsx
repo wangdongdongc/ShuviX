@@ -128,6 +128,7 @@ export const AssistantBubble = memo(function AssistantBubble({
                       args={meta?.args}
                       result={step.msg.content || undefined}
                       status={status}
+                      details={meta?.details}
                     />
                   )
                 }

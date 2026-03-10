@@ -103,6 +103,8 @@ export interface SubAgentToolExecution {
   toolCallId: string
   toolName: string
   args: Record<string, unknown>
+  /** ACP 工具类别（read / edit / execute / search 等） */
+  toolKind?: string
   status: 'running' | 'done' | 'error'
   result?: string
 }
@@ -124,6 +126,12 @@ export interface SubAgentUsage {
   }>
 }
 
+/** 子智能体时间线条目 — tool / text / thinking 按时间顺序混排 */
+export type SubAgentTimelineEntry =
+  | { type: 'tool'; tool: SubAgentToolExecution }
+  | { type: 'text'; content: string }
+  | { type: 'thinking'; content: string }
+
 /** 子智能体执行状态 */
 export interface SubAgentExecution {
   subAgentId: string
@@ -132,13 +140,10 @@ export interface SubAgentExecution {
   /** 关联主 Agent 的 explore 工具调用 */
   parentToolCallId?: string
   status: 'running' | 'done' | 'error'
-  tools: SubAgentToolExecution[]
+  /** 按时间顺序的工具调用 / 文本 / 思考流 */
+  timeline: SubAgentTimelineEntry[]
   result?: string
   usage?: SubAgentUsage
-  /** 流式文本输出（运行中实时更新） */
-  streamingContent?: string
-  /** 流式思考输出（运行中实时更新） */
-  streamingThinking?: string
 }
 
 /** 空数组常量，避免选择器每次返回新引用 */
@@ -429,7 +434,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const prev = state.sessionSubAgentExecutions[sessionId] || []
       const updated = prev.map((sa) =>
-        sa.subAgentId === subAgentId ? { ...sa, tools: [...sa.tools, tool] } : sa
+        sa.subAgentId === subAgentId
+          ? { ...sa, timeline: [...sa.timeline, { type: 'tool' as const, tool }] }
+          : sa
       )
       return {
         sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
@@ -443,7 +450,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sa.subAgentId === subAgentId
           ? {
               ...sa,
-              tools: sa.tools.map((t) => (t.toolCallId === toolCallId ? { ...t, ...updates } : t))
+              timeline: sa.timeline.map((entry) =>
+                entry.type === 'tool' && entry.tool.toolCallId === toolCallId
+                  ? { ...entry, tool: { ...entry.tool, ...updates } }
+                  : entry
+              )
             }
           : sa
       )
@@ -559,11 +570,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionSubAgentExecutions: {
           ...state.sessionSubAgentExecutions,
-          [sessionId]: execs.map((sa) =>
-            sa.subAgentId === subAgentId
-              ? { ...sa, streamingContent: (sa.streamingContent || '') + delta }
-              : sa
-          )
+          [sessionId]: execs.map((sa) => {
+            if (sa.subAgentId !== subAgentId) return sa
+            const tl = sa.timeline
+            const last = tl[tl.length - 1]
+            if (last && last.type === 'text') {
+              // 追加到最后一个 text 条目
+              const updated = [...tl]
+              updated[updated.length - 1] = { type: 'text', content: last.content + delta }
+              return { ...sa, timeline: updated }
+            }
+            // 新建 text 条目
+            return { ...sa, timeline: [...tl, { type: 'text' as const, content: delta }] }
+          })
         }
       }
     }),
@@ -575,11 +594,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionSubAgentExecutions: {
           ...state.sessionSubAgentExecutions,
-          [sessionId]: execs.map((sa) =>
-            sa.subAgentId === subAgentId
-              ? { ...sa, streamingThinking: (sa.streamingThinking || '') + delta }
-              : sa
-          )
+          [sessionId]: execs.map((sa) => {
+            if (sa.subAgentId !== subAgentId) return sa
+            const tl = sa.timeline
+            const last = tl[tl.length - 1]
+            if (last && last.type === 'thinking') {
+              const updated = [...tl]
+              updated[updated.length - 1] = { type: 'thinking', content: last.content + delta }
+              return { ...sa, timeline: updated }
+            }
+            return { ...sa, timeline: [...tl, { type: 'thinking' as const, content: delta }] }
+          })
         }
       }
     }),

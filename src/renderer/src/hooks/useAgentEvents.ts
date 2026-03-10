@@ -211,7 +211,7 @@ export function useAgentEvents(): void {
           description: event.description,
           parentToolCallId: event.parentToolCallId,
           status: 'running',
-          tools: []
+          timeline: []
         })
         break
 
@@ -224,16 +224,25 @@ export function useAgentEvents(): void {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.toolArgs ?? {},
+          toolKind: event.toolKind,
           status: 'running'
         })
         break
 
-      case 'subagent_tool_end':
-        store.updateSubAgentTool(sid, event.subAgentId, event.toolCallId, {
-          status: event.isError ? 'error' : 'done',
-          result: event.result
-        })
+      case 'subagent_tool_end': {
+        const updates: Record<string, unknown> = {}
+        // 终态：设置 status + result
+        if (event.result != null || event.isError != null) {
+          updates.status = event.isError ? 'error' : 'done'
+          updates.result = event.result
+        }
+        // 中间更新 / 终态都可能携带更新的 toolName
+        if (event.toolName) {
+          updates.toolName = event.toolName
+        }
+        store.updateSubAgentTool(sid, event.subAgentId, event.toolCallId, updates)
         break
+      }
 
       case 'subagent_text_delta':
         store.appendSubAgentStreamingContent(sid, event.subAgentId, event.delta)

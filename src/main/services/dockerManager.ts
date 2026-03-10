@@ -8,12 +8,8 @@
 import { spawn, spawnSync } from 'child_process'
 import { createLogger } from '../logger'
 import type { ReferenceDir } from '../types'
+import { spawnEnv } from '../utils/paths'
 const log = createLogger('Docker')
-
-/** 补充 macOS 打包应用中缺失的常见路径（Finder 启动时 PATH 极简） */
-const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
-const mergedPATH = [...new Set([...(process.env.PATH?.split(':') ?? []), ...EXTRA_PATHS])].join(':')
-const spawnEnv: NodeJS.ProcessEnv = { ...process.env, PATH: mergedPATH }
 
 /** 容器空闲超时时间（毫秒），超过此时间无命令执行则自动销毁 */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 分钟

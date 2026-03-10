@@ -13,6 +13,7 @@ import type { StreamFn } from '@mariozechner/pi-agent-core'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { subAgentManager, getSubAgentTypes } from '../services/subAgent'
 import type { ChatEvent } from '../frontend'
+import { SubAgentTimelineCollector } from '../utils/subAgentTimeline'
 import { t } from '../i18n'
 
 const ExploreParamsSchema = Type.Object({
@@ -89,6 +90,12 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
   ): Promise<AgentToolResult<ExploreToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
+    const collector = new SubAgentTimelineCollector()
+    const wrappedOnEvent = (event: ChatEvent): void => {
+      collector.onEvent(event)
+      this.broadcastEvent(event)
+    }
+
     const { taskId, result } = await subAgentManager.runTask({
       parentSessionId: this.ctx.sessionId,
       parentToolCallId: _toolCallId,
@@ -98,8 +105,10 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
       parentModel: this.parentModel,
       parentStreamFn: this.parentStreamFn,
       parentAbortSignal: signal,
-      onEvent: this.broadcastEvent
+      onEvent: wrappedOnEvent
     })
+
+    const { timeline, usage } = collector.serialize()
 
     const output = [
       `task_id: ${taskId} (use this to resume the same sub-agent session if needed)`,
@@ -115,7 +124,10 @@ export class ExploreTool extends BaseTool<typeof ExploreParamsSchema> {
         type: 'explore',
         taskId,
         subAgentType: 'explore',
-        description: params.description
+        description: params.description,
+        prompt: params.prompt,
+        timeline,
+        usage
       }
     }
   }

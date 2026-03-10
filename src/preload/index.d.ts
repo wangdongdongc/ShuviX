@@ -206,13 +206,14 @@ declare global {
     toolCallId: string
     toolName: string
     toolArgs?: Record<string, unknown>
+    toolKind?: string
   }
   interface ChatSubAgentToolEndEvent extends ChatEventBase {
     type: 'subagent_tool_end'
     subAgentId: string
     subAgentType: string
     toolCallId: string
-    toolName: string
+    toolName?: string
     result?: string
     isError?: boolean
   }

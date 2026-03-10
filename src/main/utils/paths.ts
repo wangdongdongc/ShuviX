@@ -29,3 +29,15 @@ export function getUserConfigDir(): string {
 export function getTempWorkspace(sessionId: string): string {
   return ensureDir(join(app.getPath('userData'), 'temp_workspace', sessionId))
 }
+
+/**
+ * 合并 PATH — 打包后的 Electron GUI 应用不继承 shell PATH，
+ * 需要手动追加常见路径以便找到 docker / claude-agent-acp 等命令。
+ */
+const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
+export const mergedPATH = [
+  ...new Set([...(process.env.PATH?.split(':') ?? []), ...EXTRA_PATHS])
+].join(':')
+
+/** 带合并 PATH 的 spawn 环境变量 */
+export const spawnEnv: NodeJS.ProcessEnv = { ...process.env, PATH: mergedPATH }

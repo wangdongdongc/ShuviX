@@ -1,5 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
 import {
   Bot,
   Check,
@@ -7,19 +10,20 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
-  Terminal,
-  FileText,
-  Search,
-  FileSearch2,
-  FolderTree,
   Wrench
 } from 'lucide-react'
 import {
   useChatStore,
   type SubAgentExecution,
   type SubAgentToolExecution,
-  type SubAgentUsage
+  type SubAgentUsage,
+  type SubAgentTimelineEntry
 } from '../../stores/chatStore'
+import type {
+  ToolResultDetails,
+  ExploreToolDetails,
+  AcpAgentToolDetails
+} from '../../../../shared/types/chatMessage'
 
 interface SubAgentBlockProps {
   toolCallId?: string
@@ -27,44 +31,34 @@ interface SubAgentBlockProps {
   args?: Record<string, unknown>
   result?: string
   status: 'running' | 'done' | 'error'
+  details?: ToolResultDetails
 }
 
-/** 内部工具图标 */
-function innerToolIcon(name: string): React.ReactNode {
-  const cls = 'text-text-tertiary flex-shrink-0'
-  switch (name) {
-    case 'read':
-      return <FileText size={11} className={cls} />
-    case 'ls':
-      return <FolderTree size={11} className={cls} />
-    case 'grep':
-      return <Search size={11} className={cls} />
-    case 'glob':
-      return <FileSearch2 size={11} className={cls} />
-    case 'bash':
-      return <Terminal size={11} className={cls} />
-    default:
-      return <Wrench size={11} className={cls} />
-  }
+/** 子智能体内部工具统一图标 */
+function innerToolIcon(): React.ReactNode {
+  return <Wrench size={11} className="text-text-tertiary flex-shrink-0" />
 }
 
-/** 工具参数摘要 */
+/**
+ * 工具摘要：当 toolName（ACP title）已经足够描述性时直接返回空；
+ * 否则从 args 中提取第一个合理长度的字符串值作为摘要
+ */
 function innerToolSummary(tool: SubAgentToolExecution): string {
-  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-  switch (tool.toolName) {
-    case 'read':
-      return str(tool.args?.path)
-    case 'ls':
-      return str(tool.args?.path) || '.'
-    case 'grep':
-      return str(tool.args?.pattern)
-    case 'glob':
-      return str(tool.args?.pattern)
-    case 'bash':
-      return str(tool.args?.command).split('\n')[0].slice(0, 60)
-    default:
-      return ''
+  // ACP title 已包含详细信息（如路径/命令），不需要额外摘要
+  if (tool.toolName && (tool.toolName.includes('/') || tool.toolName.length > 20)) return ''
+
+  const args = tool.args
+  if (!args || Object.keys(args).length === 0) return ''
+
+  // 从 args 值中取第一个合理长度的字符串
+  for (const v of Object.values(args)) {
+    if (typeof v !== 'string' || !v) continue
+    const line = v.split('\n')[0]
+    if (line.length <= 200) {
+      return line.length > 80 ? line.slice(0, 77) + '...' : line
+    }
   }
+  return ''
 }
 
 /** 内部工具状态图标 */
@@ -79,44 +73,130 @@ function innerToolStatusIcon(status: SubAgentToolExecution['status']): React.Rea
   }
 }
 
+/** 渲染单条时间线条目 */
+function TimelineEntry({
+  entry,
+  index
+}: {
+  entry: SubAgentTimelineEntry
+  index: number
+}): React.JSX.Element {
+  switch (entry.type) {
+    case 'tool':
+      return (
+        <div
+          key={entry.tool.toolCallId}
+          className="flex items-center gap-1.5 py-px text-[11px] text-text-tertiary"
+        >
+          {innerToolIcon()}
+          <span className="font-medium text-text-secondary flex-shrink-0">
+            {entry.tool.toolName}
+          </span>
+          <span className="flex-1 truncate font-mono opacity-70">
+            {innerToolSummary(entry.tool)}
+          </span>
+          <span className="flex-shrink-0">{innerToolStatusIcon(entry.tool.status)}</span>
+        </div>
+      )
+    case 'thinking':
+      return (
+        <div key={`thinking-${index}`}>
+          <pre className="text-[11px] text-text-tertiary italic whitespace-pre-wrap break-words overflow-hidden leading-relaxed">
+            {entry.content.slice(-500)}
+          </pre>
+        </div>
+      )
+    case 'text':
+      return (
+        <div key={`text-${index}`} className="markdown-body text-[12px]">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+            {entry.content}
+          </ReactMarkdown>
+        </div>
+      )
+  }
+}
+
 /**
  * 子智能体块 — 与 ToolCallBlock 相同的单行展开/折叠样式
- * 内部工具开始执行时自动展开，完成后自动折叠
+ * 内部 tool / text / thinking 按时间顺序混排显示，文本使用 Markdown 渲染
  */
+/** 判断 details 是否为子智能体详情类型 */
+function isSubAgentDetails(
+  d?: ToolResultDetails
+): d is ExploreToolDetails | AcpAgentToolDetails {
+  return d?.type === 'explore' || d?.type === 'acp-agent'
+}
+
+/** 将持久化时间线转换为 store 中的 SubAgentTimelineEntry 格式 */
+function toStoreTimeline(
+  details: ExploreToolDetails | AcpAgentToolDetails
+): SubAgentTimelineEntry[] {
+  if (!details.timeline) return []
+  return details.timeline.map((entry) => {
+    if (entry.type === 'tool') {
+      return {
+        type: 'tool' as const,
+        tool: {
+          toolCallId: '',
+          toolName: entry.tool.toolName,
+          args: {},
+          status: entry.tool.status,
+          result: entry.tool.summary
+        }
+      }
+    }
+    return entry
+  })
+}
+
 export const SubAgentBlock = memo(function SubAgentBlock({
   toolCallId,
   toolName,
   args,
   result,
-  status: propStatus
+  status: propStatus,
+  details
 }: SubAgentBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
-  const toolsRef = useRef<HTMLDivElement>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
 
-  // 从 store 中查找关联的子智能体
+  // 从 store 中查找关联的子智能体（实时流式数据）
   const subAgent = useChatStore((s): SubAgentExecution | undefined => {
     if (!toolCallId || !s.activeSessionId) return undefined
     const execs = s.sessionSubAgentExecutions[s.activeSessionId]
     return execs?.find((sa) => sa.parentToolCallId === toolCallId)
   })
 
+  // 持久化详情（从 DB 恢复时使用）
+  const persistedDetails = isSubAgentDetails(details) ? details : undefined
+
   const status =
     subAgent?.status === 'done' || subAgent?.status === 'error' ? subAgent.status : propStatus
 
-  const description = (args?.description as string) || subAgent?.description || ''
-  const tools = subAgent?.tools || []
-  const finalResult = result || subAgent?.result
-  const usage: SubAgentUsage | undefined = subAgent?.usage
-  const streamingContent = subAgent?.streamingContent
-  const streamingThinking = subAgent?.streamingThinking
+  const description =
+    (args?.description as string) || subAgent?.description || persistedDetails?.description || ''
 
-  // 内部工具开始执行时自动展开
+  // 实时时间线优先；无实时数据时使用持久化时间线
+  const timeline: SubAgentTimelineEntry[] =
+    subAgent && subAgent.timeline.length > 0
+      ? subAgent.timeline
+      : persistedDetails
+        ? toStoreTimeline(persistedDetails)
+        : []
+
+  const prompt = (args?.prompt as string) || persistedDetails?.prompt || ''
+  const finalResult = result || subAgent?.result
+  const usage: SubAgentUsage | undefined =
+    subAgent?.usage || (persistedDetails?.usage as SubAgentUsage | undefined)
+
+  // 时间线有内容时自动展开
   useEffect(() => {
-    if (tools.length > 0 && status === 'running') {
+    if (timeline.length > 0 && status === 'running') {
       setExpanded(true) // eslint-disable-line react-hooks/set-state-in-effect
     }
-  }, [tools.length, status])
+  }, [timeline.length, status])
 
   // 完成后自动折叠
   useEffect(() => {
@@ -125,12 +205,12 @@ export const SubAgentBlock = memo(function SubAgentBlock({
     }
   }, [status])
 
-  // 新工具出现时自动滚到底部
+  // 新条目出现时自动滚到底部
   useEffect(() => {
-    if (toolsRef.current && expanded) {
-      toolsRef.current.scrollTop = toolsRef.current.scrollHeight
+    if (timelineRef.current && expanded) {
+      timelineRef.current.scrollTop = timelineRef.current.scrollHeight
     }
-  }, [tools.length, expanded])
+  }, [timeline.length, timeline[timeline.length - 1], expanded]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const statusIcon =
     status === 'running' ? (
@@ -162,7 +242,14 @@ export const SubAgentBlock = memo(function SubAgentBlock({
         )}
         <Bot size={12} className="text-text-tertiary flex-shrink-0" />
         <span className="font-medium text-text-secondary flex-shrink-0">
-          {subAgent?.subAgentType || toolName || 'explore'}
+          {subAgent?.subAgentType ||
+            (persistedDetails?.type === 'acp-agent'
+              ? persistedDetails.agentName
+              : persistedDetails?.type === 'explore'
+                ? persistedDetails.subAgentType
+                : undefined) ||
+            toolName ||
+            'explore'}
         </span>
         {description && <span className="flex-1 truncate font-mono opacity-70">{description}</span>}
         {!description && <span className="flex-1" />}
@@ -172,57 +259,25 @@ export const SubAgentBlock = memo(function SubAgentBlock({
         </span>
       </button>
 
-      {/* 展开详情 — 参数 + 内部工具列表 + 结果 + 用量 */}
+      {/* 展开详情 — prompt + 时间线 + 结果 + 用量 */}
       {expanded && (
-        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
-          {/* 参数 */}
-          {args && Object.keys(args).length > 0 && (
-            <div>
-              <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.params')}</div>
-              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
-              </pre>
-            </div>
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1">
+          {/* prompt */}
+          {prompt && (
+            <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-y-auto overflow-x-hidden max-h-32 whitespace-pre-wrap break-words">
+              {prompt}
+            </pre>
           )}
 
-          {/* 内部工具 */}
-          {tools.length > 0 && (
-            <div ref={toolsRef} className="max-h-[200px] overflow-y-auto">
-              {tools.map((tool) => (
-                <div
-                  key={tool.toolCallId}
-                  className="flex items-center gap-1.5 py-px text-[11px] text-text-tertiary"
-                >
-                  {innerToolIcon(tool.toolName)}
-                  <span className="font-medium text-text-secondary flex-shrink-0">
-                    {tool.toolName}
-                  </span>
-                  <span className="flex-1 truncate font-mono opacity-70">
-                    {innerToolSummary(tool)}
-                  </span>
-                  <span className="flex-shrink-0">{innerToolStatusIcon(tool.status)}</span>
-                </div>
+          {/* 时间线 — tool / text / thinking 按时间顺序 */}
+          {timeline.length > 0 && (
+            <div
+              ref={timelineRef}
+              className="max-h-[300px] overflow-y-auto overflow-x-hidden space-y-1"
+            >
+              {timeline.map((entry, i) => (
+                <TimelineEntry key={i} entry={entry} index={i} />
               ))}
-            </div>
-          )}
-
-          {/* 流式思考 */}
-          {status === 'running' && streamingThinking && (
-            <div>
-              <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.thinking')}</div>
-              <pre className="text-[11px] text-text-tertiary italic bg-bg-tertiary/30 rounded px-2 py-1 overflow-auto max-h-24 whitespace-pre-wrap break-words">
-                {streamingThinking.slice(-500)}
-              </pre>
-            </div>
-          )}
-
-          {/* 流式输出 */}
-          {status === 'running' && streamingContent && (
-            <div>
-              <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.output')}</div>
-              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                {streamingContent.slice(-1000)}
-              </pre>
             </div>
           )}
 
@@ -230,7 +285,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({
           {finalResult && (
             <div>
               <div className="text-[10px] text-text-tertiary mb-0.5">{t('subAgent.result')}</div>
-              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+              <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-y-auto overflow-x-hidden max-h-32 whitespace-pre-wrap break-words">
                 {finalResult}
               </pre>
             </div>

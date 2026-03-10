@@ -29,6 +29,7 @@ import { chatFrontendRegistry, type ChatEvent } from '../frontend'
 import type { ToolContext } from '../tools/types'
 import { resolveProjectConfig } from '../tools/types'
 import log from 'electron-log'
+import { mergedPATH } from '../utils/paths'
 
 // ─── ACP Agent 配置 ──────────────────────────────────
 
@@ -81,12 +82,12 @@ The prompt should clearly describe the task, including:
 // ─── ACP 协议日志 ──────────────────────────────────────
 
 /** 包装 ACP Stream，打印双向所有 JSON-RPC 消息 */
-function withProtocolLogging(stream: Stream, label: string): Stream {
+function withProtocolLogging(stream: Stream, _label: string): Stream {
   // 拦截 Client → Agent（writable 方向）
   const originalWritable = stream.writable
   const loggedWritable = new WritableStream<AnyMessage>({
     write(message) {
-      log.info(`[ACP:${label}] ──▶ SEND`, JSON.stringify(message, null, 2))
+      // log.debug(`[ACP:${label}] ──▶ SEND`, JSON.stringify(message, null, 2))
       const writer = originalWritable.getWriter()
       return writer.write(message).finally(() => writer.releaseLock())
     },
@@ -102,7 +103,7 @@ function withProtocolLogging(stream: Stream, label: string): Stream {
   const loggedReadable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
-        log.info(`[ACP:${label}] ◀── RECV`, JSON.stringify(message, null, 2))
+        // log.debug(`[ACP:${label}] ◀── RECV`, JSON.stringify(message, null, 2))
         controller.enqueue(message)
       }
     })
@@ -150,7 +151,8 @@ class AcpService {
   resolveExecutable(config: AcpAgentConfig): { cmd: string; args: string[] } | null {
     const result = spawnSync(process.platform === 'win32' ? 'where' : 'which', [config.command], {
       encoding: 'utf-8',
-      timeout: 5000
+      timeout: 5000,
+      env: { ...process.env, PATH: mergedPATH }
     })
     if (result.status === 0 && result.stdout.trim()) {
       return { cmd: config.command, args: [...config.args] }
@@ -391,7 +393,8 @@ class AcpService {
       env: {
         ...process.env,
         ...config.env,
-        NODE_NO_WARNINGS: '1'
+        NODE_NO_WARNINGS: '1',
+        PATH: mergedPATH
       }
     })
 
@@ -593,7 +596,7 @@ class AcpService {
           subAgentType: agentType,
           toolCallId: shuvixToolCallId,
           toolName: tc.title || 'tool',
-          toolArgs: typeof tc.rawInput === 'object' ? (tc.rawInput as Record<string, unknown>) : {}
+          toolKind: tc.kind || undefined
         })
         break
       }
@@ -603,8 +606,8 @@ class AcpService {
         const mappedId = acpToolCallMap.get(tcu.toolCallId)
         if (!mappedId) break
 
-        // 只在完成/失败时广播 tool_end
         if (tcu.status === 'completed' || tcu.status === 'failed') {
+          // 终态：广播 tool_end
           let resultText = ''
           if (tcu.rawOutput != null) {
             resultText =
@@ -617,9 +620,19 @@ class AcpService {
             subAgentId: taskId,
             subAgentType: agentType,
             toolCallId: mappedId,
-            toolName: tcu.title || 'tool',
+            toolName: tcu.title || undefined,
             result: resultText || undefined,
             isError: tcu.status === 'failed'
+          })
+        } else if (tcu.title) {
+          // 中间更新：仅在 title 有新值时转发（如 "Read File" → "Read /path/to/file"）
+          onEvent({
+            type: 'subagent_tool_end',
+            sessionId,
+            subAgentId: taskId,
+            subAgentType: agentType,
+            toolCallId: mappedId,
+            toolName: tcu.title
           })
         }
         break

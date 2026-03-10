@@ -198,15 +198,18 @@ export interface ChatSubAgentToolStartEvent extends ChatEventBase {
   toolCallId: string
   toolName: string
   toolArgs?: Record<string, unknown>
+  /** ACP 工具类别（read / edit / execute / search 等），用于 UI 图标和摘要 */
+  toolKind?: string
 }
 
-/** 子智能体内部工具完成 */
+/** 子智能体内部工具更新/完成 */
 export interface ChatSubAgentToolEndEvent extends ChatEventBase {
   type: 'subagent_tool_end'
   subAgentId: string
   subAgentType: string
   toolCallId: string
-  toolName: string
+  /** 工具显示名（可选，仅有值时才覆盖已有名称） */
+  toolName?: string
   result?: string
   isError?: boolean
 }

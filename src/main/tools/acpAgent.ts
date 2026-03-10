@@ -11,6 +11,7 @@ import type { AcpAgentToolDetails } from '../../shared/types/chatMessage'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { acpService, type AcpAgentConfig } from '../services/acpService'
 import type { ChatEvent } from '../frontend'
+import { SubAgentTimelineCollector } from '../utils/subAgentTimeline'
 
 const AcpAgentParamsSchema = Type.Object({
   description: Type.String({
@@ -62,6 +63,12 @@ export class AcpAgentTool extends BaseTool<typeof AcpAgentParamsSchema> {
   ): Promise<AgentToolResult<AcpAgentToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
+    const collector = new SubAgentTimelineCollector()
+    const wrappedOnEvent = (event: ChatEvent): void => {
+      collector.onEvent(event)
+      this.broadcastEvent(event)
+    }
+
     try {
       const { taskId, result } = await acpService.runTask({
         config: this.config,
@@ -70,8 +77,10 @@ export class AcpAgentTool extends BaseTool<typeof AcpAgentParamsSchema> {
         prompt: params.prompt,
         description: params.description,
         signal,
-        onEvent: this.broadcastEvent
+        onEvent: wrappedOnEvent
       })
+
+      const { timeline, usage } = collector.serialize()
 
       const output = [
         `task_id: ${taskId}`,
@@ -87,11 +96,15 @@ export class AcpAgentTool extends BaseTool<typeof AcpAgentParamsSchema> {
           type: 'acp-agent',
           agentName: this.config.name,
           taskId,
-          description: params.description
+          description: params.description,
+          prompt: params.prompt,
+          timeline,
+          usage
         }
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
+      const { timeline, usage } = collector.serialize()
 
       return {
         content: [{ type: 'text' as const, text: `Error: ${errMsg}` }],
@@ -100,7 +113,10 @@ export class AcpAgentTool extends BaseTool<typeof AcpAgentParamsSchema> {
           agentName: this.config.name,
           taskId: '',
           description: params.description,
-          error: errMsg
+          error: errMsg,
+          prompt: params.prompt,
+          timeline,
+          usage
         }
       }
     }
