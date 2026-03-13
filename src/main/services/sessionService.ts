@@ -101,9 +101,15 @@ export class SessionService {
     sessionDao.updateSettings(id, { sshAutoApprove })
   }
 
-  /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB） */
-  previewAllowPatterns(command: string): string[] {
-    return [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+  /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB）
+   *  如果传入 sessionId + toolType，会过滤掉已在允许列表中的模式 */
+  previewAllowPatterns(command: string, sessionId?: string, toolType?: 'bash' | 'ssh'): string[] {
+    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+    if (!sessionId) return patterns
+    const key = toolType === 'ssh' ? 'sshAllowList' : 'bashAllowList'
+    const sess = sessionDao.pickSettings(sessionId, [key])
+    const existing = new Set(sess?.[key] || [])
+    return patterns.filter((p) => !existing.has(p))
   }
 
   /** 批量添加通配符模式到 Bash 允许列表 */
@@ -200,7 +206,7 @@ export class SessionService {
       ? JSON.parse(modelRow.capabilities)
       : {}
     const project = session.projectId
-      ? projectDao.pick(session.projectId, ['path', 'settings'])
+      ? projectDao.pick(session.projectId, ['path', 'systemPrompt', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = resolveEnabledTools(session.modelMetadata.enabledTools, project?.settings)

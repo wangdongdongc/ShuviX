@@ -23,7 +23,6 @@ interface InternalEntry {
 }
 
 const MAX_TEXT_CHARS = 2000
-const MAX_THINKING_CHARS = 500
 const MAX_ENTRIES = 200
 
 /**
@@ -71,7 +70,7 @@ export class SubAgentTimelineCollector {
         break
 
       case 'subagent_thinking_delta':
-        this.appendContent('thinking', event.delta)
+        // thinking 内容不持久化
         break
 
       case 'subagent_end':
@@ -124,14 +123,7 @@ export class SubAgentTimelineCollector {
                   : e.content
             }
           case 'thinking':
-            if (!e.content) return null
-            return {
-              type: 'thinking',
-              content:
-                e.content.length > MAX_THINKING_CHARS
-                  ? e.content.slice(-MAX_THINKING_CHARS)
-                  : e.content
-            }
+            return null // thinking 不持久化
           default:
             return null
         }

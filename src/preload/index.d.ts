@@ -493,7 +493,11 @@ declare global {
       updateSshAutoApprove: (
         params: SessionUpdateSshAutoApproveParams
       ) => Promise<{ success: boolean }>
-      previewAllowPatterns: (command: string) => Promise<string[]>
+      previewAllowPatterns: (params: {
+        command: string
+        sessionId?: string
+        toolType?: 'bash' | 'ssh'
+      }) => Promise<string[]>
       addBashAllowListPatterns: (
         params: SessionBashAllowListAddParams
       ) => Promise<{ success: boolean }>

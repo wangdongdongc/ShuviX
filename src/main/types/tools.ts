@@ -18,14 +18,5 @@ export const ALL_TOOL_NAMES = [
 ] as const
 export type ToolName = (typeof ALL_TOOL_NAMES)[number]
 
-/** 默认启用的核心工具（不含 shuvix-project、shuvix-setting、MCP、skills） */
-export const DEFAULT_TOOL_NAMES = [
-  'bash',
-  'read',
-  'write',
-  'edit',
-  'ask',
-  'ls',
-  'grep',
-  'glob'
-] as const
+/** 默认启用的核心内置工具（不含 ripgrep 工具、shuvix-project、shuvix-setting） */
+export const DEFAULT_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask'] as const

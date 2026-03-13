@@ -19,10 +19,19 @@ export function resolveEnabledTools(
   sessionEnabledTools: string[] | undefined,
   projectSettings: { enabledTools?: string[] } | undefined
 ): string[] {
+  let tools: string[]
   // 优先使用 session 级别覆盖
-  if (Array.isArray(sessionEnabledTools)) return sessionEnabledTools
+  if (Array.isArray(sessionEnabledTools)) tools = sessionEnabledTools
   // 其次使用 project settings
-  if (Array.isArray(projectSettings?.enabledTools)) return projectSettings.enabledTools
-  // 默认仅启用核心内置工具（不含 shuvix-project、shuvix-setting、MCP、skills）
-  return DEFAULT_TOOL_NAMES as unknown as string[]
+  else if (Array.isArray(projectSettings?.enabledTools)) tools = projectSettings.enabledTools
+  // 默认：核心内置工具 + 已连接 MCP 工具 + 已启用 Skills
+  else {
+    const mcpNames = mcpService.getAllToolNames()
+    const skillNames = skillService.findEnabled().map((s) => `skill:${s.name}`)
+    return [...(DEFAULT_TOOL_NAMES as unknown as string[]), ...mcpNames, ...skillNames]
+  }
+
+  // 过滤掉已不存在的工具名（如已禁用的 Skill、已移除的 MCP 工具）
+  const available = new Set(getAllToolNames())
+  return tools.filter((name) => available.has(name))
 }

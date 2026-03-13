@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Folder, Settings2 } from 'lucide-react'
+import { Copy, Folder, Settings2 } from 'lucide-react'
 import {
   useChatStore,
   selectStreamingContent,
@@ -290,14 +290,26 @@ export function ChatView(): React.JSX.Element {
             </div>
           ))}
         {projectPath && (
-          <button
-            onClick={() => window.api.app.openFolder(projectPath)}
-            className="titlebar-no-drag flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors max-w-[80%] truncate cursor-pointer"
-            title={projectPath}
-          >
-            <Folder size={10} className="flex-shrink-0 text-text-tertiary/70" />
-            <span className="truncate">{projectPath}</span>
-          </button>
+          <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[60%]">
+            <button
+              onClick={() => window.api.app.openFolder(projectPath)}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors cursor-pointer min-w-0"
+              title={projectPath}
+            >
+              <Folder size={10} className="flex-shrink-0 text-text-tertiary/70" />
+              <span className="truncate">{projectPath}</span>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                navigator.clipboard.writeText(projectPath)
+              }}
+              className="flex-shrink-0 p-0.5 rounded hover:bg-bg-hover/50 text-text-tertiary/50 hover:text-text-secondary transition-colors"
+              title={t('common.copy')}
+            >
+              <Copy size={10} />
+            </button>
+          </div>
         )}
       </div>
 

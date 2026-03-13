@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wrench, Server, BookOpen } from 'lucide-react'
+import { Wrench, Server, BookOpen, Bot } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
@@ -53,6 +53,9 @@ export function ToolPicker(): React.JSX.Element | null {
   const enabledBuiltinTools = allTools.filter(
     (t) => !t.group && activeEnabledTools.includes(t.name)
   )
+  const enabledSubAgentTools = allTools.filter(
+    (t) => t.group === '__subagents__' && activeEnabledTools.includes(t.name)
+  )
   const enabledMcpTools = allTools.filter(
     (t) => t.group && !t.group.startsWith('__') && activeEnabledTools.includes(t.name)
   )
@@ -62,9 +65,10 @@ export function ToolPicker(): React.JSX.Element | null {
   // 按 server 分组的 MCP 工具
   const enabledMcpGroups = [...new Set(enabledMcpTools.map((t) => t.group!))]
 
-  // 是否有 MCP / Skill 工具可用（影响标签是否显示）
+  // 是否有 MCP / Skill / SubAgent 工具可用（影响标签是否显示）
   const hasMcpTools = allTools.some((t) => t.group && !t.group.startsWith('__'))
   const hasSkillTools = allTools.some((t) => t.group === '__skills__')
+  const hasSubAgentTools = allTools.some((t) => t.group === '__subagents__')
 
   /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
   const handleChange = async (newTools: string[]): Promise<void> => {
@@ -87,6 +91,12 @@ export function ToolPicker(): React.JSX.Element | null {
       >
         <Wrench size={11} />
         <span>{enabledBuiltinTools.length}</span>
+        {hasSubAgentTools && (
+          <span className="inline-flex items-center gap-0.5 text-amber-300/80">
+            <Bot size={10} />
+            <span>{enabledSubAgentTools.length}</span>
+          </span>
+        )}
         {hasMcpTools && (
           <span className="inline-flex items-center gap-0.5 text-purple-400/80">
             <Server size={10} />
@@ -110,6 +120,15 @@ export function ToolPicker(): React.JSX.Element | null {
             {enabledBuiltinTools.length > 0 && (
               <div className="text-[11px] text-text-primary">
                 {enabledBuiltinTools.map((t) => t.name).join(', ')}
+              </div>
+            )}
+            {/* 子智能体 */}
+            {enabledSubAgentTools.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-amber-400">[SubAgents]</span>
+                <span className="text-[11px] text-text-primary truncate">
+                  {enabledSubAgentTools.map((t) => t.name).join(', ')}
+                </span>
               </div>
             )}
             {/* MCP 工具按 server 分组 */}

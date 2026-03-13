@@ -316,11 +316,17 @@ function ApprovalContent({
   const command = (args?.command as string) || ''
   const canRemember = (toolName === 'bash' || toolName === 'ssh') && command
 
-  /** 点击「允许并记住」→ 加载模式预览 */
+  /** 点击「允许并记住」→ 加载模式预览（过滤已允许的模式） */
   const handleShowPatterns = async (): Promise<void> => {
     setLoadingPatterns(true)
     try {
-      const patterns = await window.api.session.previewAllowPatterns(command)
+      const sessionId = useChatStore.getState().activeSessionId || undefined
+      const toolType = (toolName === 'ssh' ? 'ssh' : 'bash') as 'bash' | 'ssh'
+      const patterns = await window.api.session.previewAllowPatterns({
+        command,
+        sessionId,
+        toolType
+      })
       setPreviewPatterns(patterns)
     } finally {
       setLoadingPatterns(false)

@@ -179,8 +179,11 @@ const api = {
       ipcRenderer.invoke('session:updateBashAutoApprove', params),
     updateSshAutoApprove: (params: SessionUpdateSshAutoApproveParams) =>
       ipcRenderer.invoke('session:updateSshAutoApprove', params),
-    previewAllowPatterns: (command: string) =>
-      ipcRenderer.invoke('session:previewAllowPatterns', command),
+    previewAllowPatterns: (params: {
+      command: string
+      sessionId?: string
+      toolType?: 'bash' | 'ssh'
+    }) => ipcRenderer.invoke('session:previewAllowPatterns', params),
     addBashAllowListPatterns: (params: SessionBashAllowListAddParams) =>
       ipcRenderer.invoke('session:addBashAllowListPatterns', params),
     removeBashAllowListEntry: (params: SessionBashAllowListRemoveParams) =>

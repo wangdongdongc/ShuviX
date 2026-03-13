@@ -151,7 +151,7 @@ export function ToolSelectList({
                   key={tool.name}
                   className={
                     compact
-                      ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                      ? 'flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
                       : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
                   }
                 >
@@ -197,7 +197,7 @@ export function ToolSelectList({
                   key={tool.name}
                   className={
                     compact
-                      ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                      ? 'flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
                       : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
                   }
                 >
@@ -248,7 +248,7 @@ export function ToolSelectList({
                   key={tool.name}
                   className={
                     compact
-                      ? 'flex items-center gap-2 w-full px-2 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                      ? 'flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
                       : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
                   }
                 >
@@ -258,7 +258,7 @@ export function ToolSelectList({
                     onChange={() => toggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <span className="text-[11px] font-mono text-amber-300">{tool.name}</span>
+                  <span className="text-[11px] font-mono text-amber-300 whitespace-nowrap flex-shrink-0">{tool.name}</span>
                   <span className="text-[10px] text-text-tertiary truncate">
                     {tool.label}
                     {!compact && tool.hint ? ` — ${tool.hint}` : ''}
@@ -293,7 +293,7 @@ export function ToolSelectList({
               >
                 {/* MCP Server 分组头部 */}
                 <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-1.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
+                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
                 >
                   <button
                     onClick={() => toggleExpand(group)}
@@ -338,7 +338,7 @@ export function ToolSelectList({
                         key={tool.name}
                         className={
                           compact
-                            ? `flex items-center gap-2 w-full px-2 pl-7 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
+                            ? `flex items-center gap-1.5 w-full px-2 pl-7 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
                             : `flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5 ${!isOnline ? 'opacity-50' : ''}`
                         }
                       >
@@ -371,6 +371,8 @@ export function ToolSelectList({
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
           {(() => {
             const isExpanded = expandedGroups.has(SKILLS_GROUP)
+            const allSkillChecked = skillTools.every((t) => enabledTools.includes(t.name))
+            const someSkillChecked = skillTools.some((t) => enabledTools.includes(t.name))
 
             return (
               <div
@@ -378,7 +380,7 @@ export function ToolSelectList({
               >
                 {/* Skills 分组头部 */}
                 <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-1.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
+                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
                 >
                   <button
                     onClick={() => toggleExpand(SKILLS_GROUP)}
@@ -386,6 +388,15 @@ export function ToolSelectList({
                   >
                     {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
+                  <input
+                    type="checkbox"
+                    checked={allSkillChecked}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSkillChecked && !allSkillChecked
+                    }}
+                    onChange={() => toggleGroup(skillTools)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
                   <BookOpen size={11} className="text-emerald-400" />
                   <span className="text-[11px] font-medium text-emerald-400">Skills</span>
                   <span className="text-[10px] text-text-tertiary ml-auto">
@@ -401,7 +412,7 @@ export function ToolSelectList({
                         key={tool.name}
                         className={
                           compact
-                            ? 'flex items-center gap-2 w-full px-2 pl-7 py-1.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                            ? 'flex items-center gap-1.5 w-full px-2 pl-7 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
                             : 'flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5'
                         }
                       >

@@ -105,7 +105,9 @@ function openSettingsWindow(tab?: string): void {
   settingsWindow.on('closed', () => {
     settingsWindow = null
     // 设置窗口关闭后通知主窗口刷新设置
-    mainWindow?.webContents.send('app:settings-changed')
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app:settings-changed')
+    }
   })
 }
 

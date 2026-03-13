@@ -122,16 +122,48 @@ export function SettingsPanel(): React.JSX.Element {
         </div>
 
         {/* 右侧内容区 */}
-        <div className="flex-1 min-w-0 overflow-y-auto">
-          {activeSettingsTab === 'general' && <GeneralSettings />}
-          {activeSettingsTab === 'providers' && <ProviderSettings />}
+        <div className="flex-1 min-w-0 flex flex-col">
+          {activeSettingsTab === 'general' && (
+            <div className="flex-1 overflow-y-auto">
+              <GeneralSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'providers' && (
+            <div className="flex-1 overflow-y-auto">
+              <ProviderSettings />
+            </div>
+          )}
           {activeSettingsTab === 'tools' && <ToolSettings />}
-          {activeSettingsTab === 'mcp' && <McpSettings />}
-          {activeSettingsTab === 'skills' && <SkillSettings />}
-          {activeSettingsTab === 'bindings' && <BindingsSettings />}
-          {activeSettingsTab === 'httpLogs' && <HttpLogSettings />}
-          {activeSettingsTab === 'operationLogs' && <OperationLogSettings />}
-          {activeSettingsTab === 'about' && <AboutSettings />}
+          {activeSettingsTab === 'mcp' && (
+            <div className="flex-1 overflow-y-auto">
+              <McpSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'skills' && (
+            <div className="flex-1 overflow-y-auto">
+              <SkillSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'bindings' && (
+            <div className="flex-1 overflow-y-auto">
+              <BindingsSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'httpLogs' && (
+            <div className="flex-1 overflow-y-auto">
+              <HttpLogSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'operationLogs' && (
+            <div className="flex-1 overflow-y-auto">
+              <OperationLogSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'about' && (
+            <div className="flex-1 overflow-y-auto">
+              <AboutSettings />
+            </div>
+          )}
         </div>
       </div>
     </div>

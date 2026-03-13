@@ -86,10 +86,13 @@ export function registerSessionHandlers(): void {
     }
   )
 
-  /** 预览命令拆解后的通配符模式 */
-  ipcMain.handle('session:previewAllowPatterns', (_event, command: string) => {
-    return sessionService.previewAllowPatterns(command)
-  })
+  /** 预览命令拆解后的通配符模式（过滤已在允许列表中的） */
+  ipcMain.handle(
+    'session:previewAllowPatterns',
+    (_event, params: { command: string; sessionId?: string; toolType?: 'bash' | 'ssh' }) => {
+      return sessionService.previewAllowPatterns(params.command, params.sessionId, params.toolType)
+    }
+  )
 
   /** 批量添加模式到 Bash 允许列表 */
   ipcMain.handle(

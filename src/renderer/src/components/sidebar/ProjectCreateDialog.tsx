@@ -92,7 +92,13 @@ export function ProjectCreateDialog({
   /** 选择用途 → 预选工具 → 进入工具选择步骤 */
   const handlePurposeSelect = (key: string): void => {
     setPurpose(key)
-    setEnabledTools(PURPOSE_PRESETS[key] || PURPOSE_PRESETS.bash)
+    const preset = PURPOSE_PRESETS[key] || PURPOSE_PRESETS.bash
+    // 默认选中已连接的 MCP 工具和已启用的 Skills
+    const connectedMcp = mcpTools
+      .filter((t) => t.serverStatus === 'connected')
+      .map((t) => t.name)
+    const enabledSkills = skillTools.map((t) => t.name)
+    setEnabledTools([...new Set([...preset, ...connectedMcp, ...enabledSkills])])
     setSandboxEnabled(true)
     setStep(1)
   }
@@ -493,43 +499,75 @@ export function ProjectCreateDialog({
                   })()}
 
                   {/* Skills */}
-                  {skillTools.length > 0 && (
-                    <div className="border border-emerald-500/30 rounded-md overflow-hidden">
-                      <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
-                        <BookOpen size={11} className="text-emerald-400" />
-                        <span className="text-[11px] font-medium text-emerald-400">Skills</span>
-                        <span className="text-[10px] text-text-tertiary ml-auto">
-                          {skillTools.length}
-                        </span>
-                      </div>
-                      <div className="px-3 py-1.5 space-y-0.5">
-                        {skillTools.map((tool) => {
-                          const shortName = tool.name.startsWith('skill:')
-                            ? tool.name.slice(6)
-                            : tool.name
-                          return (
-                            <label
-                              key={tool.name}
-                              className="flex items-center gap-1.5 cursor-pointer select-none py-0.5"
+                  {skillTools.length > 0 &&
+                    (() => {
+                      const skillNames = skillTools.map((t) => t.name)
+                      const allSkillChecked = skillNames.every((n) => enabledTools.includes(n))
+                      const someSkillChecked = skillNames.some((n) => enabledTools.includes(n))
+                      const isSkillExpanded = expandedExtGroups.has(SKILLS_GROUP)
+
+                      return (
+                        <div className="border border-emerald-500/30 rounded-md overflow-hidden">
+                          <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
+                            <button
+                              onClick={() => toggleExtExpand(SKILLS_GROUP)}
+                              className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
                             >
-                              <input
-                                type="checkbox"
-                                checked={enabledTools.includes(tool.name)}
-                                onChange={() => toggleExtTool(tool.name)}
-                                className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                              />
-                              <span className="text-[11px] font-mono text-emerald-300 flex-shrink-0">
-                                {shortName}
-                              </span>
-                              <span className="text-[10px] text-text-tertiary truncate">
-                                {tool.label}
-                              </span>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
+                              {isSkillExpanded ? (
+                                <ChevronDown size={12} />
+                              ) : (
+                                <ChevronRight size={12} />
+                              )}
+                            </button>
+                            <input
+                              type="checkbox"
+                              checked={allSkillChecked}
+                              ref={(el) => {
+                                if (el) el.indeterminate = someSkillChecked && !allSkillChecked
+                              }}
+                              onChange={() => toggleExtGroup(skillNames)}
+                              className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                            />
+                            <BookOpen size={11} className="text-emerald-400" />
+                            <span className="text-[11px] font-medium text-emerald-400">Skills</span>
+                            <span className="text-[10px] text-text-tertiary/60 border border-border-secondary rounded px-1 py-px">
+                              Skill
+                            </span>
+                            <span className="text-[10px] text-text-tertiary ml-auto">
+                              {skillTools.length}
+                            </span>
+                          </div>
+                          {isSkillExpanded && (
+                            <div className="px-3 py-1.5 space-y-0.5">
+                              {skillTools.map((tool) => {
+                                const shortName = tool.name.startsWith('skill:')
+                                  ? tool.name.slice(6)
+                                  : tool.name
+                                return (
+                                  <label
+                                    key={tool.name}
+                                    className="flex items-center gap-1.5 cursor-pointer select-none py-0.5"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={enabledTools.includes(tool.name)}
+                                      onChange={() => toggleExtTool(tool.name)}
+                                      className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                                    />
+                                    <span className="text-[11px] font-mono text-emerald-300 flex-shrink-0">
+                                      {shortName}
+                                    </span>
+                                    <span className="text-[10px] text-text-tertiary truncate">
+                                      {tool.label}
+                                    </span>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                   {/* 补充引导：前往设置添加更多 */}
                   <button

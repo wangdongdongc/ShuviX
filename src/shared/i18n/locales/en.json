@@ -410,7 +410,7 @@
     "toolBashUnlimited": "Unlimited",
     "toolBashDockerNotInstalled": "Docker not detected. Please install Docker Desktop first.",
     "toolBashDockerNotRunning": "Docker is installed but the engine is not running. Please start Docker Desktop.",
-    "toolSshTitle": "SSH Credentials",
+    "toolSshTitle": "SSH Tool",
     "toolSshDesc": "Save SSH credentials for quick connection. AI can use saved credentials by name without prompting you each time.",
     "toolSshSecurityWarning": "SSH credentials are encrypted and stored locally. Only save credentials for trusted servers. AI can use saved credentials to connect and execute commands directly.",
     "toolSshAdd": "Add Credential",

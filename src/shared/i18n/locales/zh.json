@@ -410,7 +410,7 @@
     "toolBashUnlimited": "不限制",
     "toolBashDockerNotInstalled": "未检测到 Docker，请先安装 Docker Desktop",
     "toolBashDockerNotRunning": "Docker 已安装但引擎未启动，请先启动 Docker Desktop",
-    "toolSshTitle": "SSH 凭据管理",
+    "toolSshTitle": "SSH 工具",
     "toolSshDesc": "保存 SSH 连接凭据，AI 可通过凭据名称直接连接远程服务器，无需每次手动输入。",
     "toolSshSecurityWarning": "SSH 凭据将加密存储在本地。请确保仅保存可信服务器的凭据，并注意保护私钥安全。AI 可使用已保存的凭据直接连接远程服务器并执行命令。",
     "toolSshAdd": "添加凭据",
