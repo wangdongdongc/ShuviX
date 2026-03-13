@@ -19,7 +19,7 @@ export type {
   AskToolDetails,
   SshToolDetails,
   SkillToolDetails,
-  ExploreToolDetails,
+  SubAgentToolDetails,
   ShuvixSettingToolDetails,
   ShuvixProjectToolDetails,
   McpToolDetails,

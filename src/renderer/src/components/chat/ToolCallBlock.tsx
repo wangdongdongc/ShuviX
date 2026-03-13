@@ -15,7 +15,6 @@ import {
   ShieldAlert,
   MessageCircleQuestion,
   BookOpen,
-  Bot,
   FolderTree,
   Search,
   FileSearch2,
@@ -140,16 +139,6 @@ export function ToolCallBlock({
         return {
           icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
           detail: str(args?.command)
-        }
-      case 'explore':
-        return {
-          icon: <Bot size={12} className="text-amber-500 flex-shrink-0" />,
-          detail: str(args?.description)
-        }
-      case 'claude-code':
-        return {
-          icon: <Bot size={12} className="text-purple-500 flex-shrink-0" />,
-          detail: str(args?.description)
         }
       case 'python': {
         const code = str(args?.code)

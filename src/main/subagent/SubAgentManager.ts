@@ -1,7 +1,7 @@
 /**
- * 子智能体类型注册表 + 会话管理器
+ * 子智能体会话管理器 — 进程内 Agent 子智能体的运行时管理
  *
- * 子智能体通过 task 工具由主 Agent 生成，运行在独立上下文中。
+ * 管理 explore 等进程内子智能体的 Agent 实例生命周期。
  * 纯内存管理，不写 DB，父会话销毁时统一清理。
  */
 
@@ -19,8 +19,8 @@ import { ListTool } from '../tools/ls'
 import { GrepTool } from '../tools/grep'
 import { GlobTool } from '../tools/glob'
 import type { ToolContext } from '../tools/types'
-import { createTransformContext } from './contextManager'
-import { parallelCoordinator } from './parallelExecution'
+import { createTransformContext } from '../services/contextManager'
+import { parallelCoordinator } from '../services/parallelExecution'
 import type { ChatEvent } from '../frontend'
 import { createLogger } from '../logger'
 
@@ -28,8 +28,8 @@ const log = createLogger('SubAgent')
 
 // ─── 子智能体类型定义 ──────────────────────────────────────────
 
-/** 子智能体类型 */
-export interface SubAgentType {
+/** 进程内子智能体类型（工具集 + 系统提示 + 行为配置） */
+export interface InProcessAgentType {
   /** 类型名称（如 'explore'） */
   name: string
   /** 描述（展示给主 Agent，帮助它决定何时使用） */
@@ -42,52 +42,12 @@ export interface SubAgentType {
   systemPrompt: string
 }
 
-/** 内置子智能体类型：explore — 只读代码库搜索专家 */
-const EXPLORE_TYPE: SubAgentType = {
-  name: 'explore',
-  description:
-    'Fast read-only agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.',
-  tools: ['read', 'ls', 'grep', 'glob'],
-  maxTurns: 20,
-  systemPrompt: `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
-
-Your strengths:
-- Rapidly finding files using glob patterns
-- Searching code and text with powerful regex patterns
-- Reading and analyzing file contents
-
-Guidelines:
-- Use Glob for broad file pattern matching
-- Use Grep for searching file contents with regex
-- Use Read when you know the specific file path you need to read
-- Use Ls for listing directory contents
-- Adapt your search approach based on the thoroughness level specified by the caller
-- Return file paths as absolute paths in your final response
-- For clear communication, avoid using emojis
-- Do not create any files or run commands that modify the user's system state in any way
-
-Complete the user's search request efficiently and report your findings clearly.`
-}
-
-/** 所有已注册的子智能体类型 */
-const SUBAGENT_TYPES: SubAgentType[] = [EXPLORE_TYPE]
-
-/** 获取所有子智能体类型名称 */
-export function getSubAgentTypes(): SubAgentType[] {
-  return SUBAGENT_TYPES
-}
-
-/** 按名称查找子智能体类型 */
-export function getSubAgentType(name: string): SubAgentType | undefined {
-  return SUBAGENT_TYPES.find((t) => t.name === name)
-}
-
 // ─── 子智能体会话 ──────────────────────────────────────────
 
 /** 活跃的子智能体会话（纯内存） */
 interface SubAgentSession {
   taskId: string
-  type: SubAgentType
+  type: InProcessAgentType
   agent: Agent
   abortController: AbortController
   turnCount: number
@@ -98,7 +58,7 @@ interface SubAgentSession {
 type AnyAgentTool = Agent['state']['tools'][number]
 
 /** 为子智能体构建工具集（固定列表，不依赖父级 enabledTools） */
-function buildSubAgentTools(ctx: ToolContext, subAgentType: SubAgentType): AnyAgentTool[] {
+function buildSubAgentTools(ctx: ToolContext, agentType: InProcessAgentType): AnyAgentTool[] {
   const toolFactories: Record<string, () => AnyAgentTool> = {
     read: () => new ReadTool(ctx),
     ls: () => new ListTool(ctx),
@@ -108,7 +68,7 @@ function buildSubAgentTools(ctx: ToolContext, subAgentType: SubAgentType): AnyAg
 
   const parallelKey = ctx.parallelSessionKey || ctx.sessionId
 
-  return subAgentType.tools
+  return agentType.tools
     .filter((name) => name in toolFactories)
     .map((name) => {
       const tool = toolFactories[name]()
@@ -155,7 +115,7 @@ export interface RunTaskParams {
   /** 父级工具调用 ID（用于前端关联子智能体与 explore 工具调用） */
   parentToolCallId?: string
   taskId?: string
-  subAgentType: string
+  agentType: InProcessAgentType
   prompt: string
   parentModel: Model<Api>
   parentStreamFn: StreamFn
@@ -163,7 +123,7 @@ export interface RunTaskParams {
   onEvent: (event: ChatEvent) => void
 }
 
-/** 子智能体会话管理器 */
+/** 进程内子智能体会话管理器 */
 class SubAgentManager {
   /** parentSessionId → Map<taskId, SubAgentSession> */
   private sessions = new Map<string, Map<string, SubAgentSession>>()
@@ -175,20 +135,13 @@ class SubAgentManager {
   async runTask(params: RunTaskParams): Promise<{ taskId: string; result: string }> {
     const {
       parentSessionId,
-      subAgentType: typeName,
+      agentType,
       prompt,
       parentModel,
       parentStreamFn,
       parentAbortSignal,
       onEvent
     } = params
-
-    // 查找子智能体类型
-    const agentType = getSubAgentType(typeName)
-    if (!agentType) {
-      const available = SUBAGENT_TYPES.map((t) => t.name).join(', ')
-      throw new Error(`Unknown sub-agent type "${typeName}". Available types: ${available}`)
-    }
 
     // 恢复已有会话 or 创建新会话
     let session: SubAgentSession
@@ -198,7 +151,7 @@ class SubAgentManager {
       const existing = this.sessions.get(parentSessionId)?.get(taskId)
       if (existing) {
         session = existing
-        log.info(`Resuming sub-agent task=${taskId} type=${typeName}`)
+        log.info(`Resuming sub-agent task=${taskId} type=${agentType.name}`)
       } else {
         log.warn(`Sub-agent task=${taskId} not found, creating new session`)
         session = this.createSession(
@@ -234,7 +187,7 @@ class SubAgentManager {
       type: 'subagent_start',
       sessionId: parentSessionId,
       subAgentId: session.taskId,
-      subAgentType: typeName,
+      subAgentType: agentType.name,
       description: prompt.slice(0, 100),
       parentToolCallId: params.parentToolCallId
     })
@@ -260,7 +213,7 @@ class SubAgentManager {
       type: 'subagent_end',
       sessionId: parentSessionId,
       subAgentId: session.taskId,
-      subAgentType: typeName,
+      subAgentType: agentType.name,
       result,
       usage: usage.total > 0 ? { ...usage, details: usage.details } : undefined
     })
@@ -298,7 +251,7 @@ class SubAgentManager {
 
   private createSession(
     parentSessionId: string,
-    agentType: SubAgentType,
+    agentType: InProcessAgentType,
     parentModel: Model<Api>,
     parentStreamFn: StreamFn,
     onEvent: (event: ChatEvent) => void

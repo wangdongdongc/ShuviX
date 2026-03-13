@@ -11,7 +11,7 @@ import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
-import { subAgentManager } from './subAgent'
+import { subAgentRegistry } from '../subagent'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
@@ -320,7 +320,7 @@ export class AgentSession {
   abort(): Message | null {
     log.info(`中止 session=${this.sessionId}`)
     parallelCoordinator.cancelBatch(this.sessionId)
-    subAgentManager.abortAll(this.sessionId)
+    subAgentRegistry.abortAll(this.sessionId)
     this.agent.abort()
     // 只取消本 session 的 pending 项
     for (const [, pending] of this.pendingApprovals) {
@@ -580,7 +580,7 @@ export class AgentSession {
   /** 使 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
   invalidate(): void {
     this.agent.abort()
-    subAgentManager.destroyAll(this.sessionId)
+    subAgentRegistry.destroyAll(this.sessionId)
     parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
@@ -590,7 +590,7 @@ export class AgentSession {
   /** 完全销毁（删除会话时调用，含 Docker 清理） */
   destroy(): void {
     this.agent.abort()
-    subAgentManager.destroyAll(this.sessionId)
+    subAgentRegistry.destroyAll(this.sessionId)
     parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     dockerManager

@@ -27,7 +27,7 @@ const MAX_ENTRIES = 200
 
 /**
  * 收集子智能体事件流并序列化为持久化时间线。
- * 每个 explore / acp-agent 工具调用创建一个实例。
+ * 每个子智能体工具调用创建一个实例。
  */
 export class SubAgentTimelineCollector {
   private entries: InternalEntry[] = []
@@ -118,9 +118,7 @@ export class SubAgentTimelineCollector {
             return {
               type: 'text',
               content:
-                e.content.length > MAX_TEXT_CHARS
-                  ? e.content.slice(-MAX_TEXT_CHARS)
-                  : e.content
+                e.content.length > MAX_TEXT_CHARS ? e.content.slice(-MAX_TEXT_CHARS) : e.content
             }
           case 'thinking':
             return null // thinking 不持久化

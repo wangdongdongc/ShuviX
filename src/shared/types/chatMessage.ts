@@ -178,21 +178,11 @@ export interface PersistedSubAgentUsage {
   }>
 }
 
-/** explore 子智能体工具详情 */
-export interface ExploreToolDetails {
-  type: 'explore'
-  taskId: string
+/** 子智能体工具详情（统一类型，覆盖所有子智能体后端） */
+export interface SubAgentToolDetails {
+  type: 'sub-agent'
+  /** 子智能体类型名（如 'explore', 'claude-code'） */
   subAgentType: string
-  description: string
-  prompt?: string
-  timeline?: PersistedSubAgentTimelineEntry[]
-  usage?: PersistedSubAgentUsage
-}
-
-/** ACP Agent 工具详情（claude-code、gemini 等） */
-export interface AcpAgentToolDetails {
-  type: 'acp-agent'
-  agentName: string
   taskId: string
   description: string
   error?: string
@@ -253,8 +243,7 @@ export type ToolResultDetails =
   | AskToolDetails
   | SshToolDetails
   | SkillToolDetails
-  | ExploreToolDetails
-  | AcpAgentToolDetails
+  | SubAgentToolDetails
   | ShuvixSettingToolDetails
   | ShuvixProjectToolDetails
   | PythonToolDetails

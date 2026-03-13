@@ -21,8 +21,7 @@ import {
 } from '../../stores/chatStore'
 import type {
   ToolResultDetails,
-  ExploreToolDetails,
-  AcpAgentToolDetails
+  SubAgentToolDetails
 } from '../../../../shared/types/chatMessage'
 
 interface SubAgentBlockProps {
@@ -122,16 +121,12 @@ function TimelineEntry({
  * 内部 tool / text / thinking 按时间顺序混排显示，文本使用 Markdown 渲染
  */
 /** 判断 details 是否为子智能体详情类型 */
-function isSubAgentDetails(
-  d?: ToolResultDetails
-): d is ExploreToolDetails | AcpAgentToolDetails {
-  return d?.type === 'explore' || d?.type === 'acp-agent'
+function isSubAgentDetails(d?: ToolResultDetails): d is SubAgentToolDetails {
+  return d?.type === 'sub-agent'
 }
 
 /** 将持久化时间线转换为 store 中的 SubAgentTimelineEntry 格式 */
-function toStoreTimeline(
-  details: ExploreToolDetails | AcpAgentToolDetails
-): SubAgentTimelineEntry[] {
+function toStoreTimeline(details: SubAgentToolDetails): SubAgentTimelineEntry[] {
   if (!details.timeline) return []
   return details.timeline.map((entry) => {
     if (entry.type === 'tool') {
@@ -243,11 +238,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({
         <Bot size={12} className="text-text-tertiary flex-shrink-0" />
         <span className="font-medium text-text-secondary flex-shrink-0">
           {subAgent?.subAgentType ||
-            (persistedDetails?.type === 'acp-agent'
-              ? persistedDetails.agentName
-              : persistedDetails?.type === 'explore'
-                ? persistedDetails.subAgentType
-                : undefined) ||
+            persistedDetails?.subAgentType ||
             toolName ||
             'explore'}
         </span>

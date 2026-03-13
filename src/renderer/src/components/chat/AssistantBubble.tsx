@@ -11,8 +11,17 @@ import { CodeBlock } from './CodeBlock'
 import { StepBlock } from './StepBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { SubAgentBlock } from './SubAgentBlock'
-import type { AssistantTextMessage } from '../../stores/chatStore'
+import { useChatStore, type AssistantTextMessage } from '../../stores/chatStore'
 import type { StepItem } from './types'
+
+/** 检查某 toolCallId 在当前活跃会话中是否有关联的子智能体执行 */
+function hasSubAgentExecution(toolCallId?: string): boolean {
+  if (!toolCallId) return false
+  const s = useChatStore.getState()
+  if (!s.activeSessionId) return false
+  const execs = s.sessionSubAgentExecutions[s.activeSessionId]
+  return execs?.some((sa) => sa.parentToolCallId === toolCallId) ?? false
+}
 
 interface AssistantBubbleProps {
   msg: AssistantTextMessage
@@ -119,7 +128,12 @@ export const AssistantBubble = memo(function AssistantBubble({
                 const meta = step.msg.metadata
                 const toolName = meta?.toolName || ''
                 const status = step.msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
-                if (toolName === 'explore' || toolName === 'claude-code') {
+                // 子智能体路由：优先看 details.type（持久化），回退到 subAgentExecutions（流式）
+                const detailsType = meta?.details?.type
+                const isSubAgent =
+                  detailsType === 'sub-agent' ||
+                  (!detailsType && hasSubAgentExecution(meta?.toolCallId))
+                if (isSubAgent) {
                   return (
                     <SubAgentBlock
                       key={step.msg.id}

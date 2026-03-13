@@ -14,11 +14,9 @@ import { SqlTool } from '../tools/sql'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
 import { SkillTool } from '../tools/skill'
-import { ExploreTool } from '../tools/explore'
-import { AcpAgentTool } from '../tools/acpAgent'
+import { subAgentRegistry, SubAgentTool } from '../subagent'
 import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
-import { acpService } from './acpService'
 import { parallelCoordinator } from './parallelExecution'
 import type { ChatEvent } from '../frontend'
 
@@ -79,23 +77,16 @@ export function buildTools(
     'shuvix-setting': new ShuvixSettingTool(ctx)
   }
 
-  // explore 工具仅在主 Agent 有 SubAgentBuildContext 时注册（子智能体不传此参数，天然防递归）
-  if (subAgentCtx && enabledTools.includes('explore')) {
-    builtinAll['explore'] = new ExploreTool(
-      ctx,
-      subAgentCtx.parentModel,
-      subAgentCtx.parentStreamFn,
-      subAgentCtx.broadcastEvent
-    )
-  }
-  // ACP Agent 工具（仅主 Agent 注册，防递归）
+  // 子智能体工具（仅主 Agent 有 SubAgentBuildContext 时注册，子智能体不传此参数，天然防递归）
   if (subAgentCtx) {
-    for (const agentConfig of acpService.getRegisteredAgents()) {
-      if (enabledTools.includes(agentConfig.name)) {
-        builtinAll[agentConfig.name] = new AcpAgentTool(
+    for (const provider of subAgentRegistry.getAll()) {
+      if (enabledTools.includes(provider.name)) {
+        builtinAll[provider.name] = new SubAgentTool(
           ctx,
+          provider,
           subAgentCtx.broadcastEvent,
-          agentConfig
+          subAgentCtx.parentModel,
+          subAgentCtx.parentStreamFn
         )
       }
     }
