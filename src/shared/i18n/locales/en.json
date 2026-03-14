@@ -516,7 +516,8 @@
 
   "agent": {
     "defaultTitle": "New Chat",
-    "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else."
+    "titleGenPrompt": "You are a title generation assistant. Based on the first exchange between user and assistant, generate a concise title (no more than 10 words, no quotes or punctuation). Output only the title itself, nothing else.",
+    "toolAborted": "Aborted by user."
   },
 
   "tool": {

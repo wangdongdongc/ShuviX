@@ -138,12 +138,20 @@ export const SubAgentBlock = memo(function SubAgentBlock({
     const execs = s.sessionSubAgentExecutions[s.activeSessionId]
     return execs?.find((sa) => sa.parentToolCallId === toolCallId)
   })
+  const isStreaming = useChatStore(
+    (s) => (s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false)
+  )
 
   // 持久化详情（从 DB 恢复时使用）
   const persistedDetails = isSubAgentDetails(details) ? details : undefined
 
+  // 状态优先级：subAgent 终态 > propStatus > 流式结束但无终态（中断）视为 error
   const status =
-    subAgent?.status === 'done' || subAgent?.status === 'error' ? subAgent.status : propStatus
+    subAgent?.status === 'done' || subAgent?.status === 'error'
+      ? subAgent.status
+      : propStatus === 'running' && !isStreaming
+        ? 'error'
+        : propStatus
 
   const description =
     (args?.description as string) || subAgent?.description || persistedDetails?.description || ''

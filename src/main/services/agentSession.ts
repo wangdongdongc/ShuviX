@@ -334,10 +334,26 @@ export class AgentSession {
       pending.resolve(null)
     }
     this.pendingSshCredentials.clear()
-    // 检查是否有未完成的工具调用
-    const lastMsg = messageService.findLastBySession(this.sessionId)
-    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.type === 'tool_use') {
-      log.info(`中止时有未完成的工具调用，跳过 buffer 持久化 session=${this.sessionId}`)
+    // 标记所有未完成的工具调用为已中止
+    if (this.eventState.toolUseMessageIds.size > 0) {
+      const abortedContent = t('agent.toolAborted')
+      for (const [toolCallId, msgId] of this.eventState.toolUseMessageIds) {
+        messageService.completeToolUse({
+          messageId: msgId,
+          content: abortedContent,
+          isError: true
+        })
+        chatFrontendRegistry.broadcast({
+          type: 'tool_end',
+          sessionId: this.sessionId,
+          toolCallId,
+          toolName: '',
+          result: abortedContent,
+          isError: true,
+          messageId: msgId
+        })
+      }
+      this.eventState.toolUseMessageIds.clear()
       this.eventState.streamBuffer = { content: '', thinking: '', images: [] }
       return null
     }

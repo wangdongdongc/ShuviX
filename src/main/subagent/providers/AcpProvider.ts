@@ -65,21 +65,11 @@ export const BUILTIN_ACP_AGENTS: AcpAgentConfig[] = [
     displayName: 'Claude Code',
     command: 'claude-agent-acp',
     args: [],
-    description: `Delegate complex coding tasks to Claude Code, an autonomous AI coding agent.
-Use this tool for tasks that require:
-- Multi-file changes across a codebase
-- Complex refactoring or architecture changes
-- Writing new features with tests
-- Debugging and fixing complex issues
-- Code exploration and analysis across many files
+    description: `Delegate tasks to Claude Code, a fully autonomous AI agent with its own tools.
 
-Claude Code has its own set of tools (bash, read, write, edit, grep, glob) and operates independently.
-It does NOT have access to your conversation history — provide all necessary context in the prompt.
+Claude Code is highly capable — pass the user's intent directly rather than breaking it into micro-steps. It will figure out the best approach on its own.
 
-The prompt should clearly describe the task, including:
-- What needs to be done
-- Which files or directories are relevant
-- Any constraints or preferences`
+It does NOT have access to your conversation history, so provide necessary context (relevant file paths, project background) in the prompt.`
   }
 ]
 
@@ -123,6 +113,8 @@ interface TaskState {
   acpToolCallMap: Map<string, string>
   resultBuffer: string
   onEvent: (event: ChatEvent) => void
+  /** 发送 subagent_end（幂等，防止重复发送） */
+  emitEnd: (result: string) => void
 }
 
 /** 缓存的 ACP 会话（按 sessionId:agentName 复用） */
@@ -159,7 +151,20 @@ export class AcpProvider implements SubAgentProvider {
   async runTask(params: SubAgentRunParams): Promise<SubAgentRunResult> {
     const { ctx, toolCallId, prompt, description, signal, onEvent } = params
     const taskId = uuid()
-    const cacheKey = `${ctx.sessionId}:${this.config.name}`
+
+    // 防止 killAndCleanup 和 runTask 重复发 subagent_end
+    let ended = false
+    const emitEnd = (result: string): void => {
+      if (ended) return
+      ended = true
+      onEvent({
+        type: 'subagent_end',
+        sessionId: ctx.sessionId,
+        subAgentId: taskId,
+        subAgentType: this.config.name,
+        result
+      })
+    }
 
     // 广播 subagent_start
     onEvent({
@@ -173,34 +178,20 @@ export class AcpProvider implements SubAgentProvider {
 
     try {
       const result = await this._executeOnSession({
-        cacheKey,
+        cacheKey: `${ctx.sessionId}:${this.config.name}`,
         ctx,
         taskId,
         prompt,
         signal,
-        onEvent
+        onEvent,
+        emitEnd
       })
 
-      onEvent({
-        type: 'subagent_end',
-        sessionId: ctx.sessionId,
-        subAgentId: taskId,
-        subAgentType: this.config.name,
-        result
-      })
-
+      emitEnd(result)
       return { taskId, result }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
-
-      onEvent({
-        type: 'subagent_end',
-        sessionId: ctx.sessionId,
-        subAgentId: taskId,
-        subAgentType: this.config.name,
-        result: `Error: ${errMsg}`
-      })
-
+      emitEnd(`Error: ${errMsg}`)
       throw err
     }
   }
@@ -252,8 +243,9 @@ export class AcpProvider implements SubAgentProvider {
     prompt: string
     signal?: AbortSignal
     onEvent: (event: ChatEvent) => void
+    emitEnd: (result: string) => void
   }): Promise<string> {
-    const { cacheKey, ctx, taskId, prompt, signal, onEvent } = params
+    const { cacheKey, ctx, taskId, prompt, signal, onEvent, emitEnd } = params
 
     // 获取或创建缓存会话
     let cached = cachedSessions.get(cacheKey)
@@ -271,7 +263,8 @@ export class AcpProvider implements SubAgentProvider {
         shuvixSessionId: ctx.sessionId,
         ctx,
         taskId,
-        onEvent
+        onEvent,
+        emitEnd
       })
       cachedSessions.set(cacheKey, cached)
 
@@ -291,7 +284,8 @@ export class AcpProvider implements SubAgentProvider {
       ctx,
       acpToolCallMap: new Map(),
       resultBuffer: '',
-      onEvent
+      onEvent,
+      emitEnd
     }
 
     // signal 联动：取消当前 prompt（不 kill 进程，保留 session）
@@ -353,8 +347,9 @@ export class AcpProvider implements SubAgentProvider {
     ctx: ToolContext
     taskId: string
     onEvent: (event: ChatEvent) => void
+    emitEnd: (result: string) => void
   }): Promise<CachedAcpSession> {
-    const { cacheKey, shuvixSessionId, ctx, taskId, onEvent } = params
+    const { cacheKey, shuvixSessionId, ctx, taskId, onEvent, emitEnd } = params
     const projectConfig = resolveProjectConfig(shuvixSessionId)
     const cwd = projectConfig.workingDirectory
 
@@ -391,7 +386,8 @@ export class AcpProvider implements SubAgentProvider {
         ctx,
         acpToolCallMap: new Map(),
         resultBuffer: '',
-        onEvent
+        onEvent,
+        emitEnd
       }
     }
 
@@ -537,6 +533,13 @@ export class AcpProvider implements SubAgentProvider {
 /** Kill 进程并清理缓存 */
 function killAndCleanup(cached: CachedAcpSession): void {
   cachedSessions.delete(cached.cacheKey)
+
+  // 若有活跃任务，先广播 subagent_end（确保前端状态更新）
+  const ts = cached.taskState
+  if (ts) {
+    cached.taskState = null
+    ts.emitEnd(ts.resultBuffer || 'Task was aborted.')
+  }
 
   if (!cached.process.killed) {
     cached.process.kill('SIGTERM')
