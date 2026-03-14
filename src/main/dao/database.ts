@@ -137,18 +137,6 @@ class DatabaseManager {
         updatedAt INTEGER NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS operation_logs (
-        id TEXT PRIMARY KEY,
-        action TEXT NOT NULL,
-        sessionId TEXT,
-        sourceType TEXT NOT NULL,
-        sourceDetail TEXT,
-        summary TEXT NOT NULL,
-        detail TEXT,
-        requestId TEXT NOT NULL,
-        createdAt INTEGER NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS message_steps (
         id TEXT PRIMARY KEY,
         sessionId TEXT NOT NULL,
@@ -176,7 +164,6 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_message_steps_session ON message_steps(sessionId);
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
-      CREATE INDEX IF NOT EXISTS idx_operation_logs_createdAt ON operation_logs(createdAt DESC);
     `)
   }
 

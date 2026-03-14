@@ -39,7 +39,6 @@ interface SettingsState {
     | 'skills'
     | 'bindings'
     | 'httpLogs'
-    | 'operationLogs'
     | 'about'
   /** 是否已加载 */
   loaded: boolean
@@ -61,16 +60,7 @@ interface SettingsState {
   setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (
-    tab:
-      | 'general'
-      | 'providers'
-      | 'tools'
-      | 'mcp'
-      | 'skills'
-      | 'bindings'
-      | 'httpLogs'
-      | 'operationLogs'
-      | 'about'
+    tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'bindings' | 'httpLogs' | 'about'
   ) => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */

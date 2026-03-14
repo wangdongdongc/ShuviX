@@ -479,27 +479,7 @@
     "skillDisable": "禁用",
     "skillDeleteConfirm": "确定要删除 Skill「{{name}}」吗？这将移除整个 skill 目录。",
     "skillImportDir": "从目录导入",
-    "skillOpenDir": "打开 Skills 目录",
-    "tabOperationLogs": "使用日志",
-    "operationLogTitle": "使用日志",
-    "operationLogDesc": "记录所有用户操作，便于审计和回溯。",
-    "allSources": "全部来源",
-    "allActions": "全部操作",
-    "opSource": "操作来源",
-    "opSummary": "摘要",
-    "opDetail": "详情",
-    "opAction": {
-      "label": "操作类型",
-      "prompt": "发送消息",
-      "abort": "中止生成",
-      "startChat": "开启对话",
-      "setModel": "切换模型",
-      "setThinkingLevel": "设置思考深度",
-      "setEnabledTools": "更新工具集",
-      "approveToolCall": "审批工具调用",
-      "destroyDocker": "销毁 Docker 容器",
-      "disconnectSsh": "断开 SSH 连接"
-    }
+    "skillOpenDir": "打开 Skills 目录"
   },
 
   "about": {

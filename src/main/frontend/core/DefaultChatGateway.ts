@@ -15,7 +15,6 @@ import { commandService } from '../../services/commandService'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
-import { operationLogService } from '../../services/operationLogService'
 import { t } from '../../i18n'
 
 /**
@@ -25,9 +24,7 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
   startChat(sessionId: string): AgentInitResult {
-    const result = sessionService.initAgent(sessionId)
-    operationLogService.log('startChat', '')
-    return result
+    return sessionService.initAgent(sessionId)
   }
 
   async prompt(
@@ -35,8 +32,6 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
-    const textPreview = text.length > 80 ? text.slice(0, 80) + '...' : text
-    operationLogService.log('prompt', textPreview)
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
@@ -53,7 +48,6 @@ export class DefaultChatGateway implements ChatGateway {
         const result = commandService.matchAndExpand(project.path, text)
         if (result) {
           promptText = result.expandedText
-          operationLogService.log('slashCommand', result.commandId)
         }
       }
     }
@@ -82,7 +76,6 @@ export class DefaultChatGateway implements ChatGateway {
 
   abort(sessionId: string): { success: boolean; savedMessage?: Message } {
     const savedMessage = sessionService.getAgentSession(sessionId)?.abort() || null
-    operationLogService.log('abort', '')
     return { success: true, savedMessage: savedMessage || undefined }
   }
 
@@ -90,10 +83,6 @@ export class DefaultChatGateway implements ChatGateway {
 
   approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
     sessionService.approveToolCall(toolCallId, approved, reason)
-    operationLogService.log(
-      'approveToolCall',
-      `${approved ? 'approved' : 'rejected'}${reason ? `: ${reason}` : ''}`
-    )
   }
 
   respondToAsk(toolCallId: string, selections: string[]): void {
@@ -114,18 +103,14 @@ export class DefaultChatGateway implements ChatGateway {
     apiProtocol?: string
   ): void {
     sessionService.getAgentSession(sessionId)?.setModel(provider, model, baseUrl, apiProtocol)
-    operationLogService.log('setModel', `${provider} / ${model}`)
   }
 
   setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
     sessionService.getAgentSession(sessionId)?.setThinkingLevel(level)
-    operationLogService.log('setThinkingLevel', level)
   }
 
   setEnabledTools(sessionId: string, tools: string[]): void {
     sessionService.getAgentSession(sessionId)?.setEnabledTools(tools)
-    const preview = tools.slice(0, 5).join(', ') + (tools.length > 5 ? '...' : '')
-    operationLogService.log('setEnabledTools', preview)
   }
 
   // ─── 消息操作 ─────────────────────────────────
@@ -168,7 +153,6 @@ export class DefaultChatGateway implements ChatGateway {
         containerId: containerId.slice(0, 12),
         reason: 'manual'
       })
-      operationLogService.log('destroyDocker', containerId.slice(0, 12))
     }
     return { success: !!containerId }
   }
@@ -189,7 +173,6 @@ export class DefaultChatGateway implements ChatGateway {
       port: info.port,
       username: info.username
     })
-    operationLogService.log('disconnectSsh', info.host)
     return { success: true }
   }
 
@@ -206,7 +189,6 @@ export class DefaultChatGateway implements ChatGateway {
       sessionId,
       action: 'runtime_destroyed'
     })
-    operationLogService.log('destroyPython', sessionId)
     return { success: true }
   }
 
@@ -223,7 +205,6 @@ export class DefaultChatGateway implements ChatGateway {
       sessionId,
       action: 'runtime_destroyed'
     })
-    operationLogService.log('destroySql', sessionId)
     return { success: true }
   }
 

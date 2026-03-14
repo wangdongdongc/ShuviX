@@ -6,7 +6,6 @@ import type {
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
-  OperationLogListParams,
   MessageAddParams,
   ProjectCreateParams,
   ProjectUpdateParams,
@@ -216,13 +215,6 @@ const api = {
     list: (params?: HttpLogListParams) => ipcRenderer.invoke('httpLog:list', params),
     get: (id: string) => ipcRenderer.invoke('httpLog:get', id),
     clear: () => ipcRenderer.invoke('httpLog:clear')
-  },
-
-  // ============ 操作日志 ============
-  operationLog: {
-    list: (params?: OperationLogListParams) => ipcRenderer.invoke('operationLog:list', params),
-    get: (id: string) => ipcRenderer.invoke('operationLog:get', id),
-    clear: () => ipcRenderer.invoke('operationLog:clear')
   },
 
   // ============ Docker ============

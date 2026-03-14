@@ -10,7 +10,6 @@ import { registerSkillHandlers } from './skillHandlers'
 import { registerSshCredentialHandlers } from './sshCredentialHandlers'
 import { registerWebUIHandlers } from './webUIHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
-import { registerOperationLogHandlers } from './operationLogHandlers'
 import { registerCommandHandlers } from './commandHandlers'
 
 /**
@@ -30,6 +29,5 @@ export function registerIpcHandlers(): void {
   registerSshCredentialHandlers()
   registerWebUIHandlers()
   registerTelegramHandlers()
-  registerOperationLogHandlers()
   registerCommandHandlers()
 }

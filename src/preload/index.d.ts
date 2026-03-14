@@ -8,9 +8,6 @@ import type {
   HttpLog,
   HttpLogListParams,
   HttpLogSummary,
-  OperationLog,
-  OperationLogListParams,
-  OperationLogSummary,
   MessageAddParams,
   ProjectCreateParams,
   ProjectUpdateParams,
@@ -521,11 +518,6 @@ declare global {
     httpLog: {
       list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
       get: (id: string) => Promise<HttpLog | undefined>
-      clear: () => Promise<{ success: boolean }>
-    }
-    operationLog: {
-      list: (params?: OperationLogListParams) => Promise<OperationLogSummary[]>
-      get: (id: string) => Promise<OperationLog | undefined>
       clear: () => Promise<{ success: boolean }>
     }
     docker: {
