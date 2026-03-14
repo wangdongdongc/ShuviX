@@ -105,16 +105,15 @@ export function buildTools(
     all['skill'] = new SkillTool(enabledSkillNames, projectPath)
   }
 
-  // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理）
-  const regularTools = enabledTools
+  // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理），skill 工具存在时追加到末尾
+  const tools = enabledTools
     .filter((name) => !name.startsWith('skill:'))
     .filter((name) => name in all)
     .map((name) => all[name])
 
-  // 如果有 skill 工具（全局 skill 或项目级 skill），追加到末尾
-  if ((enabledSkillNames.length > 0 || projectPath) && all['skill']) {
-    regularTools.push(all['skill'])
+  if (all['skill']) {
+    tools.push(all['skill'])
   }
 
-  return regularTools.map((tool) => wrapToolForParallel(ctx.sessionId, tool))
+  return tools.map((tool) => wrapToolForParallel(ctx.sessionId, tool))
 }
