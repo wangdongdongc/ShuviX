@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
-import { acpService } from '../services/acpService'
+import { subAgentRegistry } from '../subagent'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -117,7 +117,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'acp:destroySession',
     (_event, params: { sessionId: string; agentName: string }) => {
-      acpService.destroySession(params.sessionId, params.agentName)
+      subAgentRegistry.get(params.agentName)?.destroy(params.sessionId)
       return { success: true }
     }
   )

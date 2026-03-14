@@ -3,7 +3,7 @@ import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '
 import type { SshCredentialPayload } from '../../tools/types'
 import { sessionService } from '../../services/sessionService'
 import { ALL_TOOL_NAMES } from '../../utils/tools'
-import { acpService } from '../../services/acpService'
+import { subAgentRegistry } from '../../subagent'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
@@ -247,15 +247,13 @@ export class DefaultChatGateway implements ChatGateway {
       explore: t('tool.exploreHint'),
       'claude-code': t('tool.claudeCodeHint')
     }
-    const acpAgentNames = new Set(acpService.getRegisteredAgents().map((a) => a.name))
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,
       label: labelMap[name] || name,
       hint: hintMap[name],
-      group:
-        name === 'explore' || acpAgentNames.has(name)
-          ? '__subagents__'
-          : (undefined as string | undefined)
+      group: subAgentRegistry.isSubAgent(name)
+        ? '__subagents__'
+        : (undefined as string | undefined)
     }))
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({

@@ -7,14 +7,13 @@
 
 import { subAgentRegistry } from './registry'
 import { ExploreProvider } from './providers/ExploreProvider'
-import { AcpProvider } from './providers/AcpProvider'
-import { acpService } from '../services/acpService'
+import { AcpProvider, BUILTIN_ACP_AGENTS } from './providers/AcpProvider'
 
 // ─── 注册内置 Provider ──────────────────────────────────────
 
 subAgentRegistry.register(new ExploreProvider())
 
-for (const config of acpService.getRegisteredAgents()) {
+for (const config of BUILTIN_ACP_AGENTS) {
   subAgentRegistry.register(new AcpProvider(config))
 }
 
@@ -22,6 +21,7 @@ for (const config of acpService.getRegisteredAgents()) {
 
 export { subAgentRegistry } from './registry'
 export { SubAgentTool } from './SubAgentTool'
+export { abortAllAcpSessions } from './providers/AcpProvider'
 export type {
   SubAgentProvider,
   SubAgentRunParams,
