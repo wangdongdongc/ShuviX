@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../stores/chatStore'
-import { useSettingsStore } from '../stores/settingsStore'
 
 /** useChatActions 返回值类型 */
 export interface UseChatActionsReturn {
@@ -199,12 +198,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
 
   /** 创建新会话 */
   const handleNewChat = useCallback(async () => {
-    const settings = useSettingsStore.getState()
-    const session = await window.api.session.create({
-      provider: settings.activeProvider,
-      model: settings.activeModel,
-      systemPrompt: settings.systemPrompt
-    })
+    const session = await window.api.session.create()
     const sessions = await window.api.session.list()
     useChatStore.getState().setSessions(sessions)
     useChatStore.getState().setActiveSessionId(session.id)

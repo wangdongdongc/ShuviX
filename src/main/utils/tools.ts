@@ -6,7 +6,10 @@
 import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
 import { ALL_TOOL_NAMES, DEFAULT_TOOL_NAMES } from '../types/tools'
+import { createLogger } from '../logger'
 export { ALL_TOOL_NAMES, type ToolName } from '../types/tools'
+
+const log = createLogger('Tools')
 
 /** 获取所有可用工具名（内置 + MCP 动态 + 已启用 Skill） */
 export function getAllToolNames(projectPath?: string): string[] {
@@ -14,25 +17,20 @@ export function getAllToolNames(projectPath?: string): string[] {
   return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames(), ...skillNames]
 }
 
-/** 解析会话的 enabledTools（session 覆盖 > project settings > 全部） */
-export function resolveEnabledTools(
-  sessionEnabledTools: string[] | undefined,
-  projectSettings: { enabledTools?: string[] } | undefined,
-  projectPath?: string
-): string[] {
-  let tools: string[]
-  // 优先使用 session 级别覆盖
-  if (Array.isArray(sessionEnabledTools)) tools = sessionEnabledTools
-  // 其次使用 project settings
-  else if (Array.isArray(projectSettings?.enabledTools)) tools = projectSettings.enabledTools
-  // 默认：核心内置工具 + 已连接 MCP 工具 + 已启用 Skills
-  else {
-    const mcpNames = mcpService.getAllToolNames()
-    const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
-    return [...(DEFAULT_TOOL_NAMES as unknown as string[]), ...mcpNames, ...skillNames]
-  }
+/** 计算新会话的默认启用工具列表（创建会话时调用，结果持久化） */
+export function getDefaultEnabledTools(projectPath?: string): string[] {
+  const mcpNames = mcpService.getAllToolNames()
+  const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
+  const result = [...(DEFAULT_TOOL_NAMES as unknown as string[]), ...mcpNames, ...skillNames]
+  log.info(`getDefaultEnabledTools count=${result.length} skills=[${skillNames.join(',')}]`)
+  return result
+}
 
-  // 过滤掉已不存在的工具名（如已禁用的 Skill、已移除的 MCP 工具）
+/** 过滤已保存的启用工具列表，移除已不存在的工具（读取已有会话时调用） */
+export function filterAvailableTools(enabledTools: string[], projectPath?: string): string[] {
   const available = new Set(getAllToolNames(projectPath))
-  return tools.filter((name) => available.has(name))
+  const result = enabledTools.filter((name) => available.has(name))
+  const skills = result.filter((n) => n.startsWith('skill:'))
+  log.info(`filterAvailableTools count=${result.length} skills=[${skills.join(',')}]`)
+  return result
 }

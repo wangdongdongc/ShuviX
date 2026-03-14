@@ -3,7 +3,6 @@ import { sessionService } from '../services/sessionService'
 import { dockerManager } from '../services/dockerManager'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import type {
-  Session,
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
@@ -28,8 +27,8 @@ export function registerSessionHandlers(): void {
   })
 
   /** 创建新会话 */
-  ipcMain.handle('session:create', (_event, params?: Partial<Session>) => {
-    return sessionService.create(params)
+  ipcMain.handle('session:create', (_event, projectId?: string | null) => {
+    return sessionService.create(projectId)
   })
 
   /** 更新会话标题 */

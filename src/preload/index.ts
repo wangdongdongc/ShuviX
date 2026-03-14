@@ -19,7 +19,6 @@ import type {
   ProviderToggleModelEnabledParams,
   ProviderUpdateConfigParams,
   ProviderUpdateModelCapabilitiesParams,
-  Session,
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
@@ -164,7 +163,7 @@ const api = {
   // ============ 会话管理 ============
   session: {
     list: () => ipcRenderer.invoke('session:list'),
-    create: (params?: Partial<Session>) => ipcRenderer.invoke('session:create', params),
+    create: (projectId?: string | null) => ipcRenderer.invoke('session:create', projectId),
     updateTitle: (params: SessionUpdateTitleParams) =>
       ipcRenderer.invoke('session:updateTitle', params),
     updateModelConfig: (params: SessionUpdateModelConfigParams) =>

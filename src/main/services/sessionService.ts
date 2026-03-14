@@ -5,9 +5,10 @@ import { messageService } from './messageService'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
+import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
-import { resolveEnabledTools } from '../utils/tools'
+import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
 import { splitCommand, toPattern } from '../tools/utils/allowList'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
@@ -38,9 +39,8 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
-    const enabledTools = resolveEnabledTools(
-      session.modelMetadata.enabledTools,
-      project?.settings,
+    const enabledTools = filterAvailableTools(
+      session.modelMetadata.enabledTools ?? [],
       project?.path
     )
     const { agentMdLoaded } = this.agentSessions.get(id)?.getInstructionLoadState() || {
@@ -49,20 +49,23 @@ export class SessionService {
     return { ...session, workingDirectory, enabledTools, agentMdLoaded }
   }
 
-  /** 创建新会话 */
-  create(params?: Partial<Session>): Session {
-    const now = Date.now()
+  /** 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具） */
+  create(projectId?: string | null): Session {
     const id = uuidv7()
+    const pid = projectId ?? null
+    const project = pid ? projectDao.pick(pid, ['path']) : undefined
+    const enabledTools = getDefaultEnabledTools(project?.path)
+    const now = Date.now()
 
     const session: Session = {
       id,
-      title: params?.title || t('agent.defaultTitle'),
-      projectId: params?.projectId ?? null,
-      provider: params?.provider || this.getDefaultProvider(),
-      model: params?.model || this.getDefaultModel(),
-      systemPrompt: params?.systemPrompt || 'You are a helpful assistant.',
-      modelMetadata: params?.modelMetadata || {},
-      settings: params?.settings || {},
+      title: t('agent.defaultTitle'),
+      projectId: pid,
+      provider: this.getDefaultProvider(),
+      model: this.getDefaultModel(),
+      systemPrompt: settingsDao.findByKey('systemPrompt') || 'You are a helpful assistant.',
+      modelMetadata: { enabledTools },
+      settings: {},
       createdAt: now,
       updatedAt: now
     }
@@ -213,9 +216,8 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'systemPrompt', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
-    const enabledTools = resolveEnabledTools(
-      session.modelMetadata.enabledTools,
-      project?.settings,
+    const enabledTools = filterAvailableTools(
+      session.modelMetadata.enabledTools ?? [],
       project?.path
     )
     const meta = {

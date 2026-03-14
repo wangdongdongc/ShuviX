@@ -34,12 +34,10 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
     super()
     this.projectPath = projectPath
 
-    // 从文件系统加载 skills（全局 + 项目级合并）
-    // 全局 skill 需在 enabledSkillNames 中；项目级 skill 始终包含
+    // 从文件系统加载 enabledSkillNames 中指定的 skills（全局 + 项目级合并）
+    // 项目级 skills 的启用在会话创建时由 getDefaultEnabledTools 处理，此处不做特殊处理
     const allSkills = skillService.findEnabled(projectPath)
-    this.skills = allSkills.filter(
-      (s) => enabledSkillNames.includes(s.name) || this.isProjectSkill(s)
-    )
+    this.skills = allSkills.filter((s) => enabledSkillNames.includes(s.name))
 
     // 构建 <available_skills> XML 嵌入 tool description
     const skillListXml = this.skills
@@ -68,12 +66,6 @@ Important:
 <available_skills>
 ${skillListXml}
 </available_skills>`
-  }
-
-  /** 判断 skill 是否来自项目 .claude/skills/ 目录 */
-  private isProjectSkill(skill: { basePath: string }): boolean {
-    if (!this.projectPath) return false
-    return skill.basePath.startsWith(this.projectPath)
   }
 
   async preExecute(): Promise<void> {

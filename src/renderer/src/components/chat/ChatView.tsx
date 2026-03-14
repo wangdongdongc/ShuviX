@@ -13,7 +13,6 @@ import {
   type ChatMessage,
   type AssistantTextMessage
 } from '../../stores/chatStore'
-import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
@@ -379,13 +378,7 @@ export function ChatView(): React.JSX.Element {
           onCreated={async (projectId) => {
             setShowCreateProject(false)
             // 在新项目下创建一个会话并激活
-            const settings = useSettingsStore.getState()
-            const session = await window.api.session.create({
-              provider: settings.activeProvider,
-              model: settings.activeModel,
-              systemPrompt: settings.systemPrompt,
-              projectId
-            })
+            const session = await window.api.session.create(projectId)
             const allSessions = await window.api.session.list()
             useChatStore.getState().setSessions(allSessions)
             useChatStore.getState().setActiveSessionId(session.id)

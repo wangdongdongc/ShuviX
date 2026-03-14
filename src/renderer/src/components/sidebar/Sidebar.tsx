@@ -13,7 +13,6 @@ import {
   RotateCcw
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
-import { useSettingsStore } from '../../stores/settingsStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -144,13 +143,7 @@ export function Sidebar(): React.JSX.Element {
 
   /** 在指定项目下创建新会话 */
   const handleNewChat = async (projectId?: string | null): Promise<void> => {
-    const settings = useSettingsStore.getState()
-    const session = await window.api.session.create({
-      provider: settings.activeProvider,
-      model: settings.activeModel,
-      systemPrompt: settings.systemPrompt,
-      projectId: projectId ?? null
-    })
+    const session = await window.api.session.create(projectId ?? null)
     const allSessions = await window.api.session.list()
     useChatStore.getState().setSessions(allSessions)
     setActiveSessionId(session.id)

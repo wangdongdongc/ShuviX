@@ -478,7 +478,7 @@ declare global {
     }
     session: {
       list: () => Promise<Session[]>
-      create: (params?: Partial<Session>) => Promise<Session>
+      create: (projectId?: string | null) => Promise<Session>
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
       updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
