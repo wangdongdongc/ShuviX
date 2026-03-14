@@ -16,7 +16,7 @@ interface InternalToolEntry {
 }
 
 interface InternalEntry {
-  type: 'tool' | 'text' | 'thinking'
+  type: 'tool' | 'text'
   tool?: InternalToolEntry
   content?: string
   toolCallId?: string
@@ -56,7 +56,8 @@ export class SubAgentTimelineCollector {
           toolCallId: event.toolCallId,
           tool: {
             toolName: event.toolName,
-            status: 'running'
+            status: 'running',
+            summary: this.extractArgsSummary(event.toolArgs)
           }
         })
         break
@@ -70,7 +71,8 @@ export class SubAgentTimelineCollector {
         break
 
       case 'subagent_thinking_delta':
-        // thinking 内容不持久化
+        // 子智能体的 thinking 内容也作为 text 持久化（与 ACP 行为一致）
+        this.appendContent('text', event.delta)
         break
 
       case 'subagent_end':
@@ -120,8 +122,6 @@ export class SubAgentTimelineCollector {
               content:
                 e.content.length > MAX_TEXT_CHARS ? e.content.slice(-MAX_TEXT_CHARS) : e.content
             }
-          case 'thinking':
-            return null // thinking 不持久化
           default:
             return null
         }
@@ -160,13 +160,26 @@ export class SubAgentTimelineCollector {
     }
   }
 
-  private appendContent(type: 'text' | 'thinking', delta: string): void {
+  private appendContent(type: 'text', delta: string): void {
     const last = this.entries[this.entries.length - 1]
     if (last && last.type === type) {
       last.content = (last.content || '') + delta
     } else {
       this.entries.push({ type, content: delta })
     }
+  }
+
+  /** 从工具参数中提取第一个合理长度的字符串值作为摘要 */
+  private extractArgsSummary(args?: Record<string, unknown>): string | undefined {
+    if (!args) return undefined
+    for (const v of Object.values(args)) {
+      if (typeof v !== 'string' || !v) continue
+      const line = v.split('\n')[0]
+      if (line.length <= 200) {
+        return line.length > 80 ? line.slice(0, 77) + '...' : line
+      }
+    }
+    return undefined
   }
 
   private findToolEntry(toolCallId: string): InternalEntry | undefined {

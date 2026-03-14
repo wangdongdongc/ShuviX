@@ -17,6 +17,9 @@ import { BaseTool, TOOL_ABORTED, type ToolContext } from '../tools/types'
 import type { SubAgentProvider } from './types'
 import type { ChatEvent } from '../frontend'
 import { SubAgentTimelineCollector } from './SubAgentTimelineCollector'
+import { createLogger } from '../logger'
+
+const log = createLogger('SubAgentTool')
 
 /** 默认参数 schema（description + prompt） */
 const DefaultParamsSchema = Type.Object({
@@ -85,6 +88,18 @@ export class SubAgentTool extends BaseTool<TSchema> {
       })
 
       const { timeline, usage } = collector.serialize()
+      const entryCounts = timeline
+        ? timeline.reduce(
+            (acc, e) => {
+              acc[e.type] = (acc[e.type] || 0) + 1
+              return acc
+            },
+            {} as Record<string, number>
+          )
+        : null
+      log.info(
+        `Timeline serialized: ${JSON.stringify(entryCounts)} (${timeline?.length ?? 0} entries)`
+      )
 
       const output = [
         `task_id: ${taskId}${taskIdParam ? '' : ' (use this to resume the same sub-agent session if needed)'}`,

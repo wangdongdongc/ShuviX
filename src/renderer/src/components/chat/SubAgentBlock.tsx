@@ -47,17 +47,19 @@ function innerToolSummary(tool: SubAgentToolExecution): string {
   if (tool.toolName && (tool.toolName.includes('/') || tool.toolName.length > 20)) return ''
 
   const args = tool.args
-  if (!args || Object.keys(args).length === 0) return ''
-
-  // 从 args 值中取第一个合理长度的字符串
-  for (const v of Object.values(args)) {
-    if (typeof v !== 'string' || !v) continue
-    const line = v.split('\n')[0]
-    if (line.length <= 200) {
-      return line.length > 80 ? line.slice(0, 77) + '...' : line
+  if (args && Object.keys(args).length > 0) {
+    // 从 args 值中取第一个合理长度的字符串（流式状态）
+    for (const v of Object.values(args)) {
+      if (typeof v !== 'string' || !v) continue
+      const line = v.split('\n')[0]
+      if (line.length <= 200) {
+        return line.length > 80 ? line.slice(0, 77) + '...' : line
+      }
     }
   }
-  return ''
+
+  // 回退到持久化摘要（从 DB 恢复时 args 为空，summary 存储在 result 字段）
+  return tool.result || ''
 }
 
 /** 内部工具状态图标 */
