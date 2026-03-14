@@ -22,4 +22,9 @@ for (const config of acpService.getRegisteredAgents()) {
 
 export { subAgentRegistry } from './registry'
 export { SubAgentTool } from './SubAgentTool'
-export type { SubAgentProvider, SubAgentRunParams, SubAgentRunResult } from './types'
+export type {
+  SubAgentProvider,
+  SubAgentRunParams,
+  SubAgentRunResult,
+  SubAgentModelConfig
+} from './types'

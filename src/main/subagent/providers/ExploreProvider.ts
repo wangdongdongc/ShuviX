@@ -6,7 +6,12 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { SubAgentProvider, SubAgentRunParams, SubAgentRunResult } from '../types'
+import type {
+  SubAgentModelConfig,
+  SubAgentProvider,
+  SubAgentRunParams,
+  SubAgentRunResult
+} from '../types'
 import { subAgentManager, type InProcessAgentType } from '../SubAgentManager'
 import { t } from '../../i18n'
 
@@ -16,7 +21,7 @@ const EXPLORE_TYPE: InProcessAgentType = {
   description:
     'Fast read-only agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.',
   tools: ['read', 'ls', 'grep', 'glob'],
-  maxTurns: 20,
+  maxTurns: 40,
   systemPrompt: `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
 
 Your strengths:
@@ -79,9 +84,16 @@ export class ExploreProvider implements SubAgentProvider {
   readonly description = buildExploreDescription()
   readonly parameterSchema = ExploreParamsSchema
 
+  private modelConfig?: SubAgentModelConfig
+
+  /** 注入模型配置（由 agentToolBuilder 调用） */
+  setModelConfig(config: SubAgentModelConfig): void {
+    this.modelConfig = config
+  }
+
   async runTask(params: SubAgentRunParams): Promise<SubAgentRunResult> {
-    if (!params.parentModel || !params.parentStreamFn) {
-      throw new Error('ExploreProvider requires parentModel and parentStreamFn')
+    if (!this.modelConfig) {
+      throw new Error('ExploreProvider requires model config — call setModelConfig() first')
     }
 
     const { taskId, result } = await subAgentManager.runTask({
@@ -90,8 +102,7 @@ export class ExploreProvider implements SubAgentProvider {
       taskId: params.taskId,
       agentType: EXPLORE_TYPE,
       prompt: params.prompt,
-      parentModel: params.parentModel,
-      parentStreamFn: params.parentStreamFn,
+      modelConfig: this.modelConfig,
       parentAbortSignal: params.signal,
       onEvent: params.onEvent
     })

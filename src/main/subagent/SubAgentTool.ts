@@ -12,8 +12,6 @@
 
 import { Type, type TSchema } from '@sinclair/typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
-import type { Api, Model } from '@mariozechner/pi-ai'
-import type { StreamFn } from '@mariozechner/pi-agent-core'
 import type { SubAgentToolDetails } from '../../shared/types/chatMessage'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from '../tools/types'
 import type { SubAgentProvider } from './types'
@@ -41,9 +39,7 @@ export class SubAgentTool extends BaseTool<TSchema> {
   constructor(
     private ctx: ToolContext,
     private provider: SubAgentProvider,
-    private broadcastEvent: (event: ChatEvent) => void,
-    private parentModel?: Model<Api>,
-    private parentStreamFn?: StreamFn
+    private broadcastEvent: (event: ChatEvent) => void
   ) {
     super()
     this.name = provider.name
@@ -85,9 +81,7 @@ export class SubAgentTool extends BaseTool<TSchema> {
         prompt,
         description,
         signal,
-        onEvent: wrappedOnEvent,
-        parentModel: this.parentModel,
-        parentStreamFn: this.parentStreamFn
+        onEvent: wrappedOnEvent
       })
 
       const { timeline, usage } = collector.serialize()

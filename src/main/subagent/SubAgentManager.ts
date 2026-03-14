@@ -3,6 +3,9 @@
  *
  * 管理 explore 等进程内子智能体的 Agent 实例生命周期。
  * 纯内存管理，不写 DB，父会话销毁时统一清理。
+ *
+ * 与父 Agent 解耦：自行解析模型配置并创建 streamFn，
+ * 不依赖父 Agent 的 Model/StreamFn 对象。
  */
 
 import {
@@ -11,7 +14,7 @@ import {
   type AgentMessage,
   type StreamFn
 } from '@mariozechner/pi-agent-core'
-import type { Api, Model } from '@mariozechner/pi-ai'
+import { streamSimple } from '@mariozechner/pi-ai'
 import { isAssistantMessage } from '../utils/messageGuards'
 import type { ChatTokenUsage } from '../frontend'
 import { ReadTool } from '../tools/read'
@@ -21,7 +24,11 @@ import { GlobTool } from '../tools/glob'
 import type { ToolContext } from '../tools/types'
 import { createTransformContext } from '../services/contextManager'
 import { parallelCoordinator } from '../services/parallelExecution'
+import { resolveModel } from '../services/agentModelResolver'
+import { streamSimpleGoogleWithImages } from '../services/googleImageStream'
+import { providerDao } from '../dao/providerDao'
 import type { ChatEvent } from '../frontend'
+import type { SubAgentModelConfig } from './types'
 import { createLogger } from '../logger'
 
 const log = createLogger('SubAgent')
@@ -117,8 +124,8 @@ export interface RunTaskParams {
   taskId?: string
   agentType: InProcessAgentType
   prompt: string
-  parentModel: Model<Api>
-  parentStreamFn: StreamFn
+  /** 模型配置（纯数据，SubAgentManager 自行解析为 Model + StreamFn） */
+  modelConfig: SubAgentModelConfig
   parentAbortSignal?: AbortSignal
   onEvent: (event: ChatEvent) => void
 }
@@ -133,15 +140,7 @@ class SubAgentManager {
 
   /** 生成或恢复子智能体并执行 prompt */
   async runTask(params: RunTaskParams): Promise<{ taskId: string; result: string }> {
-    const {
-      parentSessionId,
-      agentType,
-      prompt,
-      parentModel,
-      parentStreamFn,
-      parentAbortSignal,
-      onEvent
-    } = params
+    const { parentSessionId, agentType, prompt, modelConfig, parentAbortSignal, onEvent } = params
 
     // 恢复已有会话 or 创建新会话
     let session: SubAgentSession
@@ -154,13 +153,7 @@ class SubAgentManager {
         log.info(`Resuming sub-agent task=${taskId} type=${agentType.name}`)
       } else {
         log.warn(`Sub-agent task=${taskId} not found, creating new session`)
-        session = this.createSession(
-          parentSessionId,
-          agentType,
-          parentModel,
-          parentStreamFn,
-          onEvent
-        )
+        session = this.createSession(parentSessionId, agentType, modelConfig, onEvent)
       }
     } else {
       // 并发数检查
@@ -170,7 +163,7 @@ class SubAgentManager {
           `Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`
         )
       }
-      session = this.createSession(parentSessionId, agentType, parentModel, parentStreamFn, onEvent)
+      session = this.createSession(parentSessionId, agentType, modelConfig, onEvent)
     }
 
     // 链接父级中止信号
@@ -249,11 +242,33 @@ class SubAgentManager {
 
   // ─── 内部方法 ──────────────────────────────────────────
 
+  /** 创建子智能体的 StreamFn：自行查 API key、还原 provider slug，不依赖父级 */
+  private buildStreamFn(): StreamFn {
+    return (
+      streamModel: Parameters<typeof streamSimple>[0],
+      context: Parameters<typeof streamSimple>[1],
+      options?: Parameters<typeof streamSimple>[2]
+    ): ReturnType<typeof streamSimple> => {
+      const p = providerDao.pick(String(streamModel.provider), ['apiKey', 'isBuiltin', 'name'])
+      const effectiveModel =
+        p?.isBuiltin && p.name
+          ? { ...streamModel, provider: p.name.toLowerCase() }
+          : streamModel
+      const streamOpts = {
+        ...(options || {}),
+        ...(p?.apiKey ? { apiKey: p.apiKey } : {})
+      }
+      if (effectiveModel.api === 'google-generative-ai') {
+        return streamSimpleGoogleWithImages(effectiveModel, context, streamOpts)
+      }
+      return streamSimple(effectiveModel, context, streamOpts)
+    }
+  }
+
   private createSession(
     parentSessionId: string,
     agentType: InProcessAgentType,
-    parentModel: Model<Api>,
-    parentStreamFn: StreamFn,
+    modelConfig: SubAgentModelConfig,
     onEvent: (event: ChatEvent) => void
   ): SubAgentSession {
     const taskId = crypto.randomUUID()
@@ -268,16 +283,24 @@ class SubAgentManager {
 
     const tools = buildSubAgentTools(subToolContext, agentType)
 
+    // 自行解析模型和创建 streamFn（与父 Agent 解耦）
+    const resolvedModel = resolveModel({
+      provider: modelConfig.provider,
+      model: modelConfig.model,
+      capabilities: modelConfig.capabilities
+    })
+    const subStreamFn = this.buildStreamFn()
+
     const agent = new Agent({
       initialState: {
         systemPrompt: agentType.systemPrompt,
-        model: parentModel,
+        model: resolvedModel,
         thinkingLevel: 'off',
         messages: [],
         tools
       },
-      transformContext: createTransformContext(parentModel),
-      streamFn: parentStreamFn
+      transformContext: createTransformContext(resolvedModel),
+      streamFn: subStreamFn
     })
 
     // 订阅子智能体事件，转发到父会话（带 subAgentId 标注）
@@ -348,7 +371,7 @@ class SubAgentManager {
     return '(No result)'
   }
 
-  /** 转发子智能体事件到父会话（添加 subAgentId 标注，仅转发工具生命周期事件） */
+  /** 转发子智能体事件到父会话（工具 + 文本 + 思考流式事件） */
   private forwardEvent(
     event: AgentEvent,
     parentSessionId: string,
@@ -356,7 +379,6 @@ class SubAgentManager {
     subAgentType: string,
     onEvent: (event: ChatEvent) => void
   ): void {
-    // 只转发工具执行事件（让 UI 显示子智能体的活动进度）
     if (event.type === 'tool_execution_start') {
       onEvent({
         type: 'subagent_tool_start',
@@ -384,6 +406,25 @@ class SubAgentManager {
         toolName: event.toolName ?? '',
         result: text.length > 500 ? text.slice(0, 500) + '...' : text
       })
+    } else if (event.type === 'message_update') {
+      const msgEvent = event.assistantMessageEvent
+      if (msgEvent.type === 'text_delta' && msgEvent.delta) {
+        onEvent({
+          type: 'subagent_text_delta',
+          sessionId: parentSessionId,
+          subAgentId: taskId,
+          subAgentType,
+          delta: msgEvent.delta
+        })
+      } else if (msgEvent.type === 'thinking_delta' && msgEvent.delta) {
+        onEvent({
+          type: 'subagent_thinking_delta',
+          sessionId: parentSessionId,
+          subAgentId: taskId,
+          subAgentType,
+          delta: msgEvent.delta
+        })
+      }
     }
   }
 }

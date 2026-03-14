@@ -1,5 +1,4 @@
-import type { AgentState, StreamFn } from '@mariozechner/pi-agent-core'
-import type { Api, Model } from '@mariozechner/pi-ai'
+import type { AgentState } from '@mariozechner/pi-agent-core'
 import { BashTool } from '../tools/bash'
 import { ReadTool } from '../tools/read'
 import { WriteTool } from '../tools/write'
@@ -14,7 +13,7 @@ import { SqlTool } from '../tools/sql'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
 import { SkillTool } from '../tools/skill'
-import { subAgentRegistry, SubAgentTool } from '../subagent'
+import { subAgentRegistry, SubAgentTool, type SubAgentModelConfig } from '../subagent'
 import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
 import { parallelCoordinator } from './parallelExecution'
@@ -24,8 +23,7 @@ type AnyAgentTool = AgentState['tools'][number]
 
 /** 子智能体构建上下文（仅主 Agent 有，子智能体不传此参数以防递归） */
 export interface SubAgentBuildContext {
-  parentModel: Model<Api>
-  parentStreamFn: StreamFn
+  modelConfig: SubAgentModelConfig
   broadcastEvent: (event: ChatEvent) => void
 }
 
@@ -81,13 +79,9 @@ export function buildTools(
   if (subAgentCtx) {
     for (const provider of subAgentRegistry.getAll()) {
       if (enabledTools.includes(provider.name)) {
-        builtinAll[provider.name] = new SubAgentTool(
-          ctx,
-          provider,
-          subAgentCtx.broadcastEvent,
-          subAgentCtx.parentModel,
-          subAgentCtx.parentStreamFn
-        )
+        // 进程内子智能体需要模型配置
+        provider.setModelConfig?.(subAgentCtx.modelConfig)
+        builtinAll[provider.name] = new SubAgentTool(ctx, provider, subAgentCtx.broadcastEvent)
       }
     }
   }

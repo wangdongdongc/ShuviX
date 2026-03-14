@@ -6,10 +6,18 @@
  */
 
 import type { TSchema } from '@sinclair/typebox'
-import type { Api, Model } from '@mariozechner/pi-ai'
-import type { StreamFn } from '@mariozechner/pi-agent-core'
 import type { ChatEvent } from '../frontend'
 import type { ToolContext } from '../tools/types'
+import type { ModelCapabilities } from '../types'
+
+// ─── 模型配置 ──────────────────────────────────────────
+
+/** 子智能体模型配置（纯数据，不依赖 pi-ai 类型） */
+export interface SubAgentModelConfig {
+  provider: string
+  model: string
+  capabilities: ModelCapabilities
+}
 
 // ─── Provider 接口 ──────────────────────────────────────────
 
@@ -24,9 +32,6 @@ export interface SubAgentRunParams {
   description: string
   signal?: AbortSignal
   onEvent: (event: ChatEvent) => void
-  /** explore 等进程内子智能体需要 */
-  parentModel?: Model<Api>
-  parentStreamFn?: StreamFn
 }
 
 /** 子智能体执行结果 */
@@ -50,6 +55,9 @@ export interface SubAgentProvider {
   readonly description: string
   /** 工具参数 schema；为 undefined 时使用默认的 {description, prompt} schema */
   readonly parameterSchema?: TSchema
+
+  /** 注入模型配置（进程内子智能体需要，ACP 等外部子智能体不需要） */
+  setModelConfig?(config: SubAgentModelConfig): void
 
   /** 执行任务 */
   runTask(params: SubAgentRunParams): Promise<SubAgentRunResult>

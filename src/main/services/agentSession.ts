@@ -249,8 +249,7 @@ export class AgentSession {
 
     // 构建子智能体上下文（使 explore 等子智能体工具可用）
     const subAgentCtx: SubAgentBuildContext = {
-      parentModel: resolvedModel,
-      parentStreamFn: streamFn,
+      modelConfig: { provider, model, capabilities },
       broadcastEvent: (e) => chatFrontendRegistry.broadcast(e)
     }
     const tools = buildTools(toolContext, enabledTools, subAgentCtx)
