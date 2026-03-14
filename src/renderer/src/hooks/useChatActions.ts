@@ -131,23 +131,16 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   const handleAllowAndRemember = useCallback(
     async (toolCallId: string, toolType: 'bash' | 'ssh', patterns: string[]) => {
       if (activeSessionId && patterns.length > 0) {
-        if (toolType === 'bash') {
-          await window.api.session.addBashAllowListPatterns({
-            id: activeSessionId,
-            patterns
-          })
-        } else {
-          await window.api.session.addSshAllowListPatterns({
-            id: activeSessionId,
-            patterns
-          })
-        }
+        await window.api.session.addAllowListPatterns({
+          id: activeSessionId,
+          toolType,
+          patterns
+        })
         // 从后端重新获取会话以同步允许列表
         const updated = await window.api.session.getById(activeSessionId)
         if (updated) {
           useChatStore.getState().updateSessionSettings(activeSessionId, {
-            bashAllowList: updated.settings.bashAllowList,
-            sshAllowList: updated.settings.sshAllowList
+            allowList: updated.settings.allowList
           })
         }
       }

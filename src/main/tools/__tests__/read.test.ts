@@ -32,7 +32,6 @@ vi.mock('../types', () => ({
     workingDirectory: TEST_DIR,
     dockerEnabled: false,
     dockerImage: '',
-    sandboxEnabled: false,
     referenceDirs: []
   }),
   isPathWithinWorkspace: (absolutePath: string, workingDirectory: string) => {

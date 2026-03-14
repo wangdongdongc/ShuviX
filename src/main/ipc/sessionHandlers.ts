@@ -7,12 +7,9 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateBashAutoApproveParams,
-  SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListAddParams,
-  SessionBashAllowListRemoveParams,
-  SessionSshAllowListAddParams,
-  SessionSshAllowListRemoveParams,
+  SessionUpdateAutoApproveParams,
+  SessionAllowListAddParams,
+  SessionAllowListRemoveParams,
   SessionUpdateTitleParams
 } from '../types'
 
@@ -67,23 +64,11 @@ export function registerSessionHandlers(): void {
     }
   )
 
-  /** 更新 Bash 命令免审批 */
-  ipcMain.handle(
-    'session:updateBashAutoApprove',
-    (_event, params: SessionUpdateBashAutoApproveParams) => {
-      sessionService.updateBashAutoApprove(params.id, params.bashAutoApprove)
-      return { success: true }
-    }
-  )
-
-  /** 更新 SSH 命令免审批 */
-  ipcMain.handle(
-    'session:updateSshAutoApprove',
-    (_event, params: SessionUpdateSshAutoApproveParams) => {
-      sessionService.updateSshAutoApprove(params.id, params.sshAutoApprove)
-      return { success: true }
-    }
-  )
+  /** 更新命令免审批（统一开关） */
+  ipcMain.handle('session:updateAutoApprove', (_event, params: SessionUpdateAutoApproveParams) => {
+    sessionService.updateAutoApprove(params.id, params.autoApprove)
+    return { success: true }
+  })
 
   /** 预览命令拆解后的通配符模式（过滤已在允许列表中的） */
   ipcMain.handle(
@@ -93,41 +78,17 @@ export function registerSessionHandlers(): void {
     }
   )
 
-  /** 批量添加模式到 Bash 允许列表 */
-  ipcMain.handle(
-    'session:addBashAllowListPatterns',
-    (_event, params: SessionBashAllowListAddParams) => {
-      sessionService.addBashAllowListPatterns(params.id, params.patterns)
-      return { success: true }
-    }
-  )
+  /** 批量添加模式到统一允许列表 */
+  ipcMain.handle('session:addAllowListPatterns', (_event, params: SessionAllowListAddParams) => {
+    sessionService.addAllowListPatterns(params.id, params.toolType, params.patterns)
+    return { success: true }
+  })
 
-  /** 从 Bash 允许列表移除命令 */
-  ipcMain.handle(
-    'session:removeBashAllowListEntry',
-    (_event, params: SessionBashAllowListRemoveParams) => {
-      sessionService.removeBashAllowListEntry(params.id, params.command)
-      return { success: true }
-    }
-  )
-
-  /** 批量添加模式到 SSH 允许列表 */
-  ipcMain.handle(
-    'session:addSshAllowListPatterns',
-    (_event, params: SessionSshAllowListAddParams) => {
-      sessionService.addSshAllowListPatterns(params.id, params.patterns)
-      return { success: true }
-    }
-  )
-
-  /** 从 SSH 允许列表移除命令 */
-  ipcMain.handle(
-    'session:removeSshAllowListEntry',
-    (_event, params: SessionSshAllowListRemoveParams) => {
-      sessionService.removeSshAllowListEntry(params.id, params.command)
-      return { success: true }
-    }
-  )
+  /** 从统一允许列表移除条目 */
+  ipcMain.handle('session:removeAllowListEntry', (_event, params: SessionAllowListRemoveParams) => {
+    sessionService.removeAllowListEntry(params.id, params.entry)
+    return { success: true }
+  })
 
   /** 获取单个会话（含 workingDirectory） */
   ipcMain.handle('session:getById', (_event, id: string) => {

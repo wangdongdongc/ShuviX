@@ -27,12 +27,9 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateBashAutoApproveParams,
-  SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListAddParams,
-  SessionBashAllowListRemoveParams,
-  SessionSshAllowListAddParams,
-  SessionSshAllowListRemoveParams,
+  SessionUpdateAutoApproveParams,
+  SessionAllowListAddParams,
+  SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -300,10 +297,8 @@ declare global {
 
   /** 会话级配置 */
   interface SessionSettings {
-    bashAutoApprove?: boolean
-    bashAllowList?: string[]
-    sshAutoApprove?: boolean
-    sshAllowList?: string[]
+    autoApprove?: boolean
+    allowList?: string[]
     telegramBotId?: string
   }
 
@@ -486,29 +481,14 @@ declare global {
         params: SessionUpdateThinkingLevelParams
       ) => Promise<{ success: boolean }>
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
-      updateBashAutoApprove: (
-        params: SessionUpdateBashAutoApproveParams
-      ) => Promise<{ success: boolean }>
-      updateSshAutoApprove: (
-        params: SessionUpdateSshAutoApproveParams
-      ) => Promise<{ success: boolean }>
+      updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
       previewAllowPatterns: (params: {
         command: string
         sessionId?: string
         toolType?: 'bash' | 'ssh'
       }) => Promise<string[]>
-      addBashAllowListPatterns: (
-        params: SessionBashAllowListAddParams
-      ) => Promise<{ success: boolean }>
-      removeBashAllowListEntry: (
-        params: SessionBashAllowListRemoveParams
-      ) => Promise<{ success: boolean }>
-      addSshAllowListPatterns: (
-        params: SessionSshAllowListAddParams
-      ) => Promise<{ success: boolean }>
-      removeSshAllowListEntry: (
-        params: SessionSshAllowListRemoveParams
-      ) => Promise<{ success: boolean }>
+      addAllowListPatterns: (params: SessionAllowListAddParams) => Promise<{ success: boolean }>
+      removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
         userMessage: string

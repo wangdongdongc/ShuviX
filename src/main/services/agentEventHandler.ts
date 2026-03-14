@@ -4,7 +4,7 @@ import { isAssistantMessage } from '../utils/messageGuards'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowed } from '../tools/utils/allowList'
+import { isCommandAllowedUnified } from '../tools/utils/allowList'
 import { dockerManager } from './dockerManager'
 import { parallelCoordinator } from './parallelExecution'
 import type { Message, MessageMetadata, ToolResultDetails } from '../types'
@@ -23,20 +23,20 @@ function checkToolApproval(
 ): { approvalRequired: boolean; sshCredentialRequired: boolean; isUserInput: boolean } {
   let approvalRequired = false
   if (toolName === 'bash') {
-    const sess = sessionDao.pickSettings(sessionId, ['bashAutoApprove', 'bashAllowList'])
-    if (!sess?.bashAutoApprove) {
+    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
+    if (!sess?.autoApprove) {
       const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowed(sess?.bashAllowList, command)
+      approvalRequired = !isCommandAllowedUnified(sess?.allowList, 'bash', command)
     }
   } else if (toolName === 'shuvix-project' && args?.action === 'update') {
     approvalRequired = true
   } else if (toolName === 'shuvix-setting' && args?.action === 'set') {
     approvalRequired = true
   } else if (toolName === 'ssh' && args?.action === 'exec') {
-    const sess = sessionDao.pickSettings(sessionId, ['sshAutoApprove', 'sshAllowList'])
-    if (!sess?.sshAutoApprove) {
+    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
+    if (!sess?.autoApprove) {
       const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowed(sess?.sshAllowList, command)
+      approvalRequired = !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
     }
   }
   const isUserInput = toolName === 'ask'

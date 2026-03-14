@@ -11,7 +11,7 @@ import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowed } from './utils/allowList'
+import { isCommandAllowedUnified } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BashToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -174,8 +174,8 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
 
     // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
     if (this.ctx.requestApproval) {
-      const sess = sessionDao.pickSettings(this.ctx.sessionId, ['bashAutoApprove', 'bashAllowList'])
-      if (!sess?.bashAutoApprove && !isCommandAllowed(sess?.bashAllowList, params.command)) {
+      const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
+      if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', params.command)) {
         const approval = await this.ctx.requestApproval(toolCallId, params.command)
         if (!approval.approved) {
           throw new Error(approval.reason || 'User denied execution of this command')

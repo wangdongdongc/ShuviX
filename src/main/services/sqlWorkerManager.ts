@@ -42,7 +42,7 @@ class SqlWorkerManager {
     for (const ref of config.referenceDirs) {
       mounts.push({
         hostPath: ref.path,
-        access: config.sandboxEnabled ? (ref.access ?? 'readonly') : 'readwrite'
+        access: ref.access ?? 'readonly'
       })
     }
     return mounts

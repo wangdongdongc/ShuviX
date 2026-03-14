@@ -9,7 +9,6 @@ export interface ProjectCreateParams {
   systemPrompt?: string
   dockerEnabled?: boolean
   dockerImage?: string
-  sandboxEnabled?: boolean
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
   archived?: boolean
@@ -23,7 +22,6 @@ export interface ProjectUpdateParams {
   systemPrompt?: string
   dockerEnabled?: boolean
   dockerImage?: string
-  sandboxEnabled?: boolean
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
   archived?: boolean

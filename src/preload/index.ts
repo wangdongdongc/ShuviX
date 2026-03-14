@@ -23,12 +23,9 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateBashAutoApproveParams,
-  SessionUpdateSshAutoApproveParams,
-  SessionBashAllowListAddParams,
-  SessionBashAllowListRemoveParams,
-  SessionSshAllowListAddParams,
-  SessionSshAllowListRemoveParams,
+  SessionUpdateAutoApproveParams,
+  SessionAllowListAddParams,
+  SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SettingsSetParams,
   McpServerAddParams,
@@ -174,23 +171,17 @@ const api = {
       ipcRenderer.invoke('session:updateThinkingLevel', params),
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
       ipcRenderer.invoke('session:updateEnabledTools', params),
-    updateBashAutoApprove: (params: SessionUpdateBashAutoApproveParams) =>
-      ipcRenderer.invoke('session:updateBashAutoApprove', params),
-    updateSshAutoApprove: (params: SessionUpdateSshAutoApproveParams) =>
-      ipcRenderer.invoke('session:updateSshAutoApprove', params),
+    updateAutoApprove: (params: SessionUpdateAutoApproveParams) =>
+      ipcRenderer.invoke('session:updateAutoApprove', params),
     previewAllowPatterns: (params: {
       command: string
       sessionId?: string
       toolType?: 'bash' | 'ssh'
     }) => ipcRenderer.invoke('session:previewAllowPatterns', params),
-    addBashAllowListPatterns: (params: SessionBashAllowListAddParams) =>
-      ipcRenderer.invoke('session:addBashAllowListPatterns', params),
-    removeBashAllowListEntry: (params: SessionBashAllowListRemoveParams) =>
-      ipcRenderer.invoke('session:removeBashAllowListEntry', params),
-    addSshAllowListPatterns: (params: SessionSshAllowListAddParams) =>
-      ipcRenderer.invoke('session:addSshAllowListPatterns', params),
-    removeSshAllowListEntry: (params: SessionSshAllowListRemoveParams) =>
-      ipcRenderer.invoke('session:removeSshAllowListEntry', params),
+    addAllowListPatterns: (params: SessionAllowListAddParams) =>
+      ipcRenderer.invoke('session:addAllowListPatterns', params),
+    removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
+      ipcRenderer.invoke('session:removeAllowListEntry', params),
     generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),

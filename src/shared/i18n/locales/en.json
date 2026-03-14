@@ -74,10 +74,8 @@
     "acpAgentRunning": "{{name}} running",
     "destroyAcp": "Terminate ACP Agent session",
     "destroyReason_manual": "manually destroyed",
-    "bashAutoApproveLabel": "Bash Auto-Approve",
-    "bashAutoApproveWarning": "All bash commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",
-    "sshAutoApproveLabel": "SSH Auto-Approve",
-    "sshAutoApproveWarning": "SSH commands will execute automatically without approval. Do not enable this on production or critical servers.",
+    "autoApproveLabel": "Auto-Approve",
+    "autoApproveWarning": "All Bash and SSH commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",
     "lanShareLabel": "LAN Shared",
     "telegramLabel": "Telegram"
   },
@@ -192,8 +190,7 @@
   "sessionConfig": {
     "title": "Session Config",
     "sessionTitle": "Session Title",
-    "bashAutoApprove": "Auto-Approve Commands",
-    "sshAutoApprove": "Auto-Approve Commands",
+    "autoApprove": "Auto-Approve Commands",
     "allowedCommands": "Allowed Commands",
     "lanShare": "Enable LAN Sharing",
     "lanShareDesc": "When enabled, others on the same network can access this session via browser.",
@@ -207,8 +204,7 @@
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "Select a Telegram bot to bind to this session. Configure bots in Settings > Bindings.",
     "telegramNone": "None (unbound)",
-    "bashGroup": "Bash Tool",
-    "sshGroup": "SSH Tool",
+    "commandGroup": "Command Approval",
     "lanShareGroup": "WebUI",
     "telegramGroup": "Telegram Bot"
   },

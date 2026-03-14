@@ -29,8 +29,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const sessionSettings = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
   )
-  const bashAutoApprove = sessionSettings?.bashAutoApprove === true
-  const sshAutoApprove = sessionSettings?.sshAutoApprove === true
+  const autoApprove = sessionSettings?.autoApprove === true
 
   // 分享状态
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
@@ -42,8 +41,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
     !python &&
     !sql &&
     (!acpAgents || acpAgents.length === 0) &&
-    !bashAutoApprove &&
-    !sshAutoApprove &&
+    !autoApprove &&
     !lanShareMode &&
     !telegramBinding
   )
@@ -71,16 +69,10 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
     await window.api.acp.destroySession({ sessionId, agentName })
   }
 
-  /** 点击关闭 Bash 免审批 */
-  const handleDisableBashAutoApprove = async (): Promise<void> => {
-    await window.api.session.updateBashAutoApprove({ id: sessionId, bashAutoApprove: false })
-    useChatStore.getState().updateSessionSettings(sessionId, { bashAutoApprove: false })
-  }
-
-  /** 点击关闭 SSH 免审批 */
-  const handleDisableSshAutoApprove = async (): Promise<void> => {
-    await window.api.session.updateSshAutoApprove({ id: sessionId, sshAutoApprove: false })
-    useChatStore.getState().updateSessionSettings(sessionId, { sshAutoApprove: false })
+  /** 点击关闭命令免审批 */
+  const handleDisableAutoApprove = async (): Promise<void> => {
+    await window.api.session.updateAutoApprove({ id: sessionId, autoApprove: false })
+    useChatStore.getState().updateSessionSettings(sessionId, { autoApprove: false })
   }
 
   /** 点击关闭局域网分享 */
@@ -180,25 +172,14 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           </button>
         </span>
       ))}
-      {bashAutoApprove && (
+      {autoApprove && (
         <button
-          onClick={handleDisableBashAutoApprove}
+          onClick={handleDisableAutoApprove}
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
-          title={t('chat.bashAutoApproveWarning')}
+          title={t('chat.autoApproveWarning')}
         >
           <TriangleAlert size={11} />
-          {t('chat.bashAutoApproveLabel')}
-          <X size={10} className="ml-0.5 opacity-60" />
-        </button>
-      )}
-      {sshAutoApprove && (
-        <button
-          onClick={handleDisableSshAutoApprove}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
-          title={t('chat.sshAutoApproveWarning')}
-        >
-          <TriangleAlert size={11} />
-          {t('chat.sshAutoApproveLabel')}
+          {t('chat.autoApproveLabel')}
           <X size={10} className="ml-0.5 opacity-60" />
         </button>
       )}

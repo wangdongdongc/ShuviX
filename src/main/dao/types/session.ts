@@ -8,14 +8,10 @@ export interface SessionModelMetadata {
 
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
 export interface SessionSettings {
-  /** Bash 命令免审批 */
-  bashAutoApprove?: boolean
-  /** Bash 命令允许列表（精确匹配或 * 前缀匹配） */
-  bashAllowList?: string[]
-  /** SSH 命令免审批 */
-  sshAutoApprove?: boolean
-  /** SSH 命令允许列表（精确匹配或 * 前缀匹配） */
-  sshAllowList?: string[]
+  /** 命令免审批（bash + ssh 统一开关） */
+  autoApprove?: boolean
+  /** 命令允许列表，格式 Bash(pattern) / SSH(pattern) */
+  allowList?: string[]
   /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
   telegramBotId?: string
 }

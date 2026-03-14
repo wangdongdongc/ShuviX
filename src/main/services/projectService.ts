@@ -20,7 +20,6 @@ export interface ProjectFieldMeta {
 export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   name: { labelKey: 'projectForm.name', desc: 'Project display name' },
   systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
-  sandboxEnabled: { labelKey: 'projectForm.sandbox', desc: 'Enable sandbox mode (boolean)' },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
   referenceDirs: {
     labelKey: 'projectForm.referenceDirs',
@@ -87,7 +86,6 @@ export class ProjectService {
     systemPrompt?: string
     dockerEnabled?: boolean
     dockerImage?: string
-    sandboxEnabled?: boolean
     enabledTools?: string[]
     referenceDirs?: ReferenceDir[]
     archived?: boolean
@@ -105,7 +103,7 @@ export class ProjectService {
       systemPrompt: params.systemPrompt || '',
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || '',
-      sandboxEnabled: params.sandboxEnabled === false ? 0 : 1,
+      sandboxEnabled: 1,
       settings,
       archivedAt: params.archived ? now : 0,
       createdAt: now,
@@ -124,7 +122,6 @@ export class ProjectService {
       systemPrompt?: string
       dockerEnabled?: boolean
       dockerImage?: string
-      sandboxEnabled?: boolean
       enabledTools?: string[]
       referenceDirs?: ReferenceDir[]
       archived?: boolean
@@ -150,9 +147,6 @@ export class ProjectService {
         ? { dockerEnabled: params.dockerEnabled ? 1 : 0 }
         : {}),
       ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
-      ...(params.sandboxEnabled !== undefined
-        ? { sandboxEnabled: params.sandboxEnabled ? 1 : 0 }
-        : {}),
       ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })

@@ -25,7 +25,6 @@ export function ProjectEditDialog({
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
-  const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
@@ -42,7 +41,6 @@ export function ProjectEditDialog({
           setName(project.name)
           setPath(project.path)
           setSystemPrompt(project.systemPrompt)
-          setSandboxEnabled(project.sandboxEnabled === 1)
           // 从 settings 恢复 enabledTools 和 referenceDirs
           const settings = project.settings || {}
           if (Array.isArray(settings.enabledTools)) {
@@ -99,7 +97,6 @@ export function ProjectEditDialog({
         name: name.trim() || undefined,
         path: path || undefined,
         systemPrompt,
-        sandboxEnabled,
         enabledTools,
         referenceDirs
       })
@@ -141,8 +138,6 @@ export function ProjectEditDialog({
             onSelectFolder={handleSelectFolder}
             referenceDirs={referenceDirs}
             onReferenceDirsChange={setReferenceDirs}
-            sandboxEnabled={sandboxEnabled}
-            onSandboxEnabledChange={setSandboxEnabled}
           />
 
           {/* 工具配置 */}

@@ -267,3 +267,35 @@ export function isCommandAllowed(allowList: string[] | undefined, command: strin
   if (units.length === 0) return false
   return units.every((unit) => allowList.some((entry) => matchesEntry(entry, unit)))
 }
+
+// ─── 统一允许列表格式 ──────────────────────────────
+
+/** 解析前缀格式条目：Bash(npm run *) → { toolType: 'bash', pattern: 'npm run *' } */
+export function parseAllowEntry(
+  entry: string
+): { toolType: 'bash' | 'ssh'; pattern: string } | null {
+  const m = entry.match(/^(Bash|SSH)\((.+)\)$/)
+  if (!m) return null
+  return { toolType: m[1].toLowerCase() as 'bash' | 'ssh', pattern: m[2] }
+}
+
+/** 构建前缀格式条目 */
+export function buildAllowEntry(toolType: 'bash' | 'ssh', pattern: string): string {
+  return `${toolType === 'bash' ? 'Bash' : 'SSH'}(${pattern})`
+}
+
+/**
+ * 统一允许列表检查：按 toolType 过滤后委托 isCommandAllowed。
+ */
+export function isCommandAllowedUnified(
+  allowList: string[] | undefined,
+  toolType: 'bash' | 'ssh',
+  command: string
+): boolean {
+  if (!allowList || allowList.length === 0) return false
+  const filtered = allowList
+    .map(parseAllowEntry)
+    .filter((e): e is NonNullable<typeof e> => e !== null && e.toolType === toolType)
+    .map((e) => e.pattern)
+  return isCommandAllowed(filtered, command)
+}

@@ -74,10 +74,8 @@
     "acpAgentRunning": "{{name}} 运行中",
     "destroyAcp": "终止 ACP Agent 会话",
     "destroyReason_manual": "手动销毁",
-    "bashAutoApproveLabel": "Bash 免审批",
-    "bashAutoApproveWarning": "所有 Bash 命令将自动执行，不再逐条审批。AI 可能生成意外命令，请谨慎使用。",
-    "sshAutoApproveLabel": "SSH 免审批",
-    "sshAutoApproveWarning": "SSH 命令将自动执行，不再逐条审批。请勿在生产环境或重要服务器上开启此功能。",
+    "autoApproveLabel": "命令免审批",
+    "autoApproveWarning": "所有 Bash 和 SSH 命令将自动执行，不再逐条审批。AI 可能生成意外命令，请谨慎使用。",
     "lanShareLabel": "局域网分享",
     "telegramLabel": "Telegram"
   },
@@ -192,8 +190,7 @@
   "sessionConfig": {
     "title": "会话配置",
     "sessionTitle": "会话标题",
-    "bashAutoApprove": "命令执行免审批",
-    "sshAutoApprove": "命令执行免审批",
+    "autoApprove": "命令执行免审批",
     "allowedCommands": "允许的命令",
     "lanShare": "开启局域网共享",
     "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。",
@@ -207,8 +204,7 @@
     "telegramBot": "Telegram Bot",
     "telegramBotDesc": "选择一个 Telegram Bot 绑定到此会话。Bot 需在设置 > 绑定中配置。",
     "telegramNone": "无（未绑定）",
-    "bashGroup": "Bash 工具",
-    "sshGroup": "SSH 工具",
+    "commandGroup": "命令审批",
     "lanShareGroup": "WebUI",
     "telegramGroup": "Telegram Bot"
   },

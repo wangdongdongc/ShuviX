@@ -18,9 +18,7 @@ export const TOOL_ABORTED = 'Aborted'
 export interface ProjectConfig {
   /** 项目工作目录（宿主机路径） */
   workingDirectory: string
-  /** 是否启用沙箱模式（限制文件越界 + bash 需确认） */
-  sandboxEnabled: boolean
-  /** 参考目录列表（沙箱模式下按 access 属性控制读写权限） */
+  /** 参考目录列表（按 access 属性控制读写权限） */
   referenceDirs: ReferenceDir[]
 }
 
@@ -118,7 +116,6 @@ export function assertSandboxRead(
   absolutePath: string,
   displayPath?: string
 ): void {
-  if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
   const p = displayPath ?? absolutePath
@@ -136,7 +133,6 @@ export function assertSandboxWrite(
   absolutePath: string,
   displayPath?: string
 ): void {
-  if (!config.sandboxEnabled) return
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
   const p = displayPath ?? absolutePath
@@ -155,22 +151,20 @@ export function assertSandboxWrite(
 export function resolveProjectConfig(sessionId: string): ProjectConfig {
   const session = sessionService.getById(sessionId)
   const project = session?.projectId
-    ? projectDao.pick(session.projectId, ['path', 'sandboxEnabled', 'settings'])
+    ? projectDao.pick(session.projectId, ['path', 'settings'])
     : undefined
 
   if (project) {
     // 有项目 → 使用项目配置
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
-      sandboxEnabled: project.sandboxEnabled === 1,
       referenceDirs: project.settings?.referenceDirs || []
     }
   }
 
-  // 无项目（临时会话） → 使用 temp workspace，强制开启沙箱
+  // 无项目（临时会话） → 使用 temp workspace
   return {
     workingDirectory: getTempWorkspace(sessionId),
-    sandboxEnabled: true,
     referenceDirs: []
   }
 }

@@ -44,7 +44,6 @@ vi.mock('../types', () => ({
   },
   resolveProjectConfig: () => ({
     workingDirectory: PROJECT_DIR,
-    sandboxEnabled: true,
     referenceDirs: [
       { path: REF_RW_DIR, access: 'readwrite' },
       { path: REF_RO_DIR, access: 'readonly' }
@@ -111,7 +110,6 @@ beforeAll(async () => {
   // Initialize the PGLite worker (~3-5s)
   const config = {
     workingDirectory: PROJECT_DIR,
-    sandboxEnabled: true,
     referenceDirs: [
       { path: REF_RW_DIR, access: 'readwrite' as const },
       { path: REF_RO_DIR, access: 'readonly' as const }
@@ -403,7 +401,6 @@ describe('并发执行', () => {
   it('不同 session 并行执行互不影响', async () => {
     const config2 = {
       workingDirectory: PROJECT_DIR,
-      sandboxEnabled: false,
       referenceDirs: []
     }
     await sqlWorkerManager.ensureReady(SESSION_ID_2, config2)
@@ -438,7 +435,6 @@ describe('终止与重建', () => {
     await new Promise((r) => setTimeout(r, 200))
     const config = {
       workingDirectory: PROJECT_DIR,
-      sandboxEnabled: true,
       referenceDirs: [
         { path: REF_RW_DIR, access: 'readwrite' as const },
         { path: REF_RO_DIR, access: 'readonly' as const }

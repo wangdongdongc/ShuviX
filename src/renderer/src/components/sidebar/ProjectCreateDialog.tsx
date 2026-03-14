@@ -58,7 +58,6 @@ export function ProjectCreateDialog({
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
-  const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
@@ -97,7 +96,6 @@ export function ProjectCreateDialog({
     const connectedMcp = mcpTools.filter((t) => t.serverStatus === 'connected').map((t) => t.name)
     const enabledSkills = skillTools.map((t) => t.name)
     setEnabledTools([...new Set([...preset, ...connectedMcp, ...enabledSkills])])
-    setSandboxEnabled(true)
     setStep(1)
   }
 
@@ -154,7 +152,6 @@ export function ProjectCreateDialog({
         name: name.trim() || undefined,
         path: path.trim(),
         systemPrompt,
-        sandboxEnabled,
         enabledTools,
         referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined
       })
@@ -614,8 +611,6 @@ export function ProjectCreateDialog({
                 onSelectFolder={handleSelectFolder}
                 referenceDirs={referenceDirs}
                 onReferenceDirsChange={setReferenceDirs}
-                sandboxEnabled={sandboxEnabled}
-                onSandboxEnabledChange={setSandboxEnabled}
               />
             </div>
 

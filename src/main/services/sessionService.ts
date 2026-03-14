@@ -9,7 +9,7 @@ import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
-import { splitCommand, toPattern } from '../tools/utils/allowList'
+import { splitCommand, toPattern, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
 import type { SshCredentialPayload } from '../tools/types'
@@ -98,59 +98,42 @@ export class SessionService {
     sessionDao.updateModelMetadata(id, { enabledTools })
   }
 
-  /** 更新 Bash 命令免审批 */
-  updateBashAutoApprove(id: string, bashAutoApprove: boolean): void {
-    sessionDao.updateSettings(id, { bashAutoApprove })
-  }
-
-  /** 更新 SSH 命令免审批 */
-  updateSshAutoApprove(id: string, sshAutoApprove: boolean): void {
-    sessionDao.updateSettings(id, { sshAutoApprove })
+  /** 更新命令免审批（bash + ssh 统一开关） */
+  updateAutoApprove(id: string, autoApprove: boolean): void {
+    sessionDao.updateSettings(id, { autoApprove })
   }
 
   /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB）
    *  如果传入 sessionId + toolType，会过滤掉已在允许列表中的模式 */
   previewAllowPatterns(command: string, sessionId?: string, toolType?: 'bash' | 'ssh'): string[] {
     const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
-    if (!sessionId) return patterns
-    const key = toolType === 'ssh' ? 'sshAllowList' : 'bashAllowList'
-    const sess = sessionDao.pickSettings(sessionId, [key])
-    const existing = new Set(sess?.[key] || [])
+    if (!sessionId || !toolType) return patterns
+    const sess = sessionDao.pickSettings(sessionId, ['allowList'])
+    const existing = new Set(
+      (sess?.allowList || [])
+        .map(parseAllowEntry)
+        .filter((e): e is NonNullable<typeof e> => e !== null && e.toolType === toolType)
+        .map((e) => e.pattern)
+    )
     return patterns.filter((p) => !existing.has(p))
   }
 
-  /** 批量添加通配符模式到 Bash 允许列表 */
-  addBashAllowListPatterns(id: string, patterns: string[]): void {
-    const sess = sessionDao.pickSettings(id, ['bashAllowList'])
-    const list = sess?.bashAllowList || []
-    const newEntries = patterns.filter((p) => !list.includes(p))
+  /** 批量添加通配符模式到统一允许列表（自动加前缀） */
+  addAllowListPatterns(id: string, toolType: 'bash' | 'ssh', patterns: string[]): void {
+    const sess = sessionDao.pickSettings(id, ['allowList'])
+    const list = sess?.allowList || []
+    const prefixed = patterns.map((p) => buildAllowEntry(toolType, p))
+    const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
-      sessionDao.updateSettings(id, { bashAllowList: [...list, ...newEntries] })
+      sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
     }
   }
 
-  /** 从 Bash 允许列表移除命令 */
-  removeBashAllowListEntry(id: string, command: string): void {
-    const sess = sessionDao.pickSettings(id, ['bashAllowList'])
-    const list = (sess?.bashAllowList || []).filter((c) => c !== command)
-    sessionDao.updateSettings(id, { bashAllowList: list })
-  }
-
-  /** 批量添加通配符模式到 SSH 允许列表 */
-  addSshAllowListPatterns(id: string, patterns: string[]): void {
-    const sess = sessionDao.pickSettings(id, ['sshAllowList'])
-    const list = sess?.sshAllowList || []
-    const newEntries = patterns.filter((p) => !list.includes(p))
-    if (newEntries.length > 0) {
-      sessionDao.updateSettings(id, { sshAllowList: [...list, ...newEntries] })
-    }
-  }
-
-  /** 从 SSH 允许列表移除命令 */
-  removeSshAllowListEntry(id: string, command: string): void {
-    const sess = sessionDao.pickSettings(id, ['sshAllowList'])
-    const list = (sess?.sshAllowList || []).filter((c) => c !== command)
-    sessionDao.updateSettings(id, { sshAllowList: list })
+  /** 从统一允许列表移除条目 */
+  removeAllowListEntry(id: string, entry: string): void {
+    const sess = sessionDao.pickSettings(id, ['allowList'])
+    const list = (sess?.allowList || []).filter((e) => e !== entry)
+    sessionDao.updateSettings(id, { allowList: list })
   }
 
   /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */

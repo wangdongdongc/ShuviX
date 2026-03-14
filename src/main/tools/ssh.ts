@@ -10,7 +10,7 @@ import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
 import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
-import { isCommandAllowed } from './utils/allowList'
+import { isCommandAllowedUnified } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SshToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -266,11 +266,11 @@ async function handleExec(
   }
 
   // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
-  const sess = sessionDao.pickSettings(ctx.sessionId, ['sshAutoApprove', 'sshAllowList'])
+  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
   if (
     ctx.requestApproval &&
-    !sess?.sshAutoApprove &&
-    !isCommandAllowed(sess?.sshAllowList, command)
+    !sess?.autoApprove &&
+    !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
   ) {
     const approval = await ctx.requestApproval(toolCallId, command)
     if (!approval.approved) {

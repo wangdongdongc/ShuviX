@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { FolderOpen, ShieldCheck, FolderSearch, Plus, Trash2 } from 'lucide-react'
+import { FolderOpen, FolderSearch, Plus, Trash2 } from 'lucide-react'
 import type { ReferenceDir } from '../../../../main/types/project'
 
 // ─── 基本信息：名称 + 提示词 ────────────────────────────
@@ -54,17 +54,13 @@ interface ProjectFileSystemProps {
   onSelectFolder: () => void
   referenceDirs: ReferenceDir[]
   onReferenceDirsChange: (dirs: ReferenceDir[]) => void
-  sandboxEnabled: boolean
-  onSandboxEnabledChange: (enabled: boolean) => void
 }
 
 export function ProjectFileSystem({
   path,
   onSelectFolder,
   referenceDirs,
-  onReferenceDirsChange,
-  sandboxEnabled,
-  onSandboxEnabledChange
+  onReferenceDirsChange
 }: ProjectFileSystemProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -138,31 +134,11 @@ export function ProjectFileSystem({
         <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.referenceDirsHint')}</p>
       </div>
 
-      <div className="border-t border-border-secondary" />
-
-      {/* 沙箱模式 */}
-      <div>
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-            <ShieldCheck size={12} />
-            {t('projectForm.sandbox')}
-          </label>
-          <button
-            onClick={() => onSandboxEnabledChange(!sandboxEnabled)}
-            className={`relative w-8 h-[18px] rounded-full transition-colors ${
-              sandboxEnabled ? 'bg-accent' : 'bg-bg-hover'
-            }`}
-          >
-            <span
-              className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                sandboxEnabled ? 'left-[16px]' : 'left-[2px]'
-              }`}
-            />
-          </button>
-        </div>
-        <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.sandboxHint')}</p>
-        {sandboxEnabled && (path || referenceDirs.length > 0) && (
-          <div className="mt-3 pt-3 border-t border-border-secondary space-y-1.5">
+      {/* 参考目录访问权限 */}
+      {(path || referenceDirs.length > 0) && (
+        <>
+          <div className="border-t border-border-secondary" />
+          <div className="space-y-1.5">
             <div className="text-[10px] text-text-tertiary mb-1">
               {t('projectForm.refDirAccessLabel')}
             </div>
@@ -213,8 +189,8 @@ export function ProjectFileSystem({
               </div>
             ))}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   )
 }

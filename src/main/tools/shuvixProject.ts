@@ -22,9 +22,6 @@ const ShuvixProjectParamsSchema = Type.Object({
       description: 'Project-level system prompt (applied together with global prompt)'
     })
   ),
-  sandboxEnabled: Type.Optional(
-    Type.Boolean({ description: 'Enable sandbox mode (restrict file access + bash approval)' })
-  ),
   enabledTools: Type.Optional(
     Type.Array(Type.String(), {
       description: 'List of enabled tool names for new sessions in this project'
@@ -77,7 +74,6 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
       action: 'get' | 'update'
       name?: string
       systemPrompt?: string
-      sandboxEnabled?: boolean
       enabledTools?: string[]
       referenceDirs?: Array<{ path: string; note?: string; access?: 'readonly' | 'readwrite' }>
     }
@@ -118,7 +114,6 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
         name: project.name,
         path: project.path,
         systemPrompt: project.systemPrompt || '(empty)',
-        sandboxEnabled: project.sandboxEnabled === 1,
         enabledTools,
         referenceDirs
       }
@@ -138,7 +133,6 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
     > = {}
     if (params.name !== undefined) updates.name = params.name
     if (params.systemPrompt !== undefined) updates.systemPrompt = params.systemPrompt
-    if (params.sandboxEnabled !== undefined) updates.sandboxEnabled = params.sandboxEnabled
     if (params.enabledTools !== undefined) updates.enabledTools = params.enabledTools
     if (params.referenceDirs !== undefined) updates.referenceDirs = params.referenceDirs
 

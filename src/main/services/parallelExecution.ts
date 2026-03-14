@@ -17,7 +17,7 @@
 
 import { validateToolArguments, type Tool } from '@mariozechner/pi-ai'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
-import { isCommandAllowed } from '../tools/utils/allowList'
+import { isCommandAllowedUnified } from '../tools/utils/allowList'
 import { sessionDao } from '../dao/sessionDao'
 import { createLogger } from '../logger'
 
@@ -79,10 +79,10 @@ function requiresSerial(
 
   // bash：始终需要审批（免审批或允许列表匹配时跳过）
   if (toolName === 'bash') {
-    const sess = sessionDao.pickSettings(sessionId, ['bashAutoApprove', 'bashAllowList'])
-    if (sess?.bashAutoApprove) return false
+    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
+    if (sess?.autoApprove) return false
     const command = (rawArgs.command as string) || ''
-    return !isCommandAllowed(sess?.bashAllowList, command)
+    return !isCommandAllowedUnified(sess?.allowList, 'bash', command)
   }
 
   // ssh connect（无 credentialName）需要凭据输入
@@ -92,10 +92,10 @@ function requiresSerial(
 
   // ssh exec：检查是否自动审批或允许列表匹配
   if (toolName === 'ssh' && rawArgs.action === 'exec') {
-    const sess = sessionDao.pickSettings(sessionId, ['sshAutoApprove', 'sshAllowList'])
-    if (sess?.sshAutoApprove) return false
+    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
+    if (sess?.autoApprove) return false
     const command = (rawArgs.command as string) || ''
-    return !isCommandAllowed(sess?.sshAllowList, command)
+    return !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
   }
 
   // shuvix-project update / shuvix-setting set

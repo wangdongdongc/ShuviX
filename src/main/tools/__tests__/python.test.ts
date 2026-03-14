@@ -44,7 +44,6 @@ vi.mock('../types', () => ({
   },
   resolveProjectConfig: () => ({
     workingDirectory: PROJECT_DIR,
-    sandboxEnabled: true,
     referenceDirs: [
       { path: REF_RW_DIR, access: 'readwrite' },
       { path: REF_RO_DIR, access: 'readonly' }
@@ -114,7 +113,6 @@ beforeAll(async () => {
   // Initialize the Pyodide worker (this takes ~5-15s)
   const config = {
     workingDirectory: PROJECT_DIR,
-    sandboxEnabled: true,
     referenceDirs: [
       { path: REF_RW_DIR, access: 'readwrite' as const },
       { path: REF_RO_DIR, access: 'readonly' as const }
@@ -292,7 +290,6 @@ describe('并发执行', () => {
     // Create a second session
     const config2 = {
       workingDirectory: PROJECT_DIR,
-      sandboxEnabled: false,
       referenceDirs: []
     }
     await pythonWorkerManager.ensureReady(SESSION_ID_2, config2)
@@ -327,7 +324,6 @@ describe('终止与重建', () => {
     await new Promise((r) => setTimeout(r, 200))
     const config = {
       workingDirectory: PROJECT_DIR,
-      sandboxEnabled: true,
       referenceDirs: [
         { path: REF_RW_DIR, access: 'readwrite' as const },
         { path: REF_RO_DIR, access: 'readonly' as const }
