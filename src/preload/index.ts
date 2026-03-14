@@ -272,7 +272,7 @@ const api = {
 
   // ============ 工具 ============
   tools: {
-    list: () => ipcRenderer.invoke('tools:list')
+    list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId)
   },
 
   // ============ MCP Server 管理 ============

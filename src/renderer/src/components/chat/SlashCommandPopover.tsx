@@ -58,16 +58,16 @@ export function SlashCommandPopover({
         <button
           key={cmd.commandId}
           onClick={() => onSelect(cmd.commandId)}
-          className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
+          className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors ${
             idx === selectedIndex
               ? 'bg-accent/15 text-text-primary'
               : 'text-text-secondary hover:bg-bg-tertiary'
           }`}
         >
-          <Terminal size={14} className="flex-shrink-0 text-text-tertiary" />
+          <Terminal size={12} className="flex-shrink-0 text-text-tertiary" />
           <span className="font-mono text-accent">/{cmd.commandId}</span>
           {cmd.description && (
-            <span className="text-text-tertiary text-xs truncate">{cmd.description}</span>
+            <span className="text-text-tertiary text-[11px] truncate">{cmd.description}</span>
           )}
         </button>
       ))}

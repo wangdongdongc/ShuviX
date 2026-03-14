@@ -111,8 +111,8 @@ export function buildTools(
     .filter((name) => name in all)
     .map((name) => all[name])
 
-  // 如果有 skill 工具，追加到末尾
-  if (enabledSkillNames.length > 0 && all['skill']) {
+  // 如果有 skill 工具（全局 skill 或项目级 skill），追加到末尾
+  if ((enabledSkillNames.length > 0 || projectPath) && all['skill']) {
     regularTools.push(all['skill'])
   }
 

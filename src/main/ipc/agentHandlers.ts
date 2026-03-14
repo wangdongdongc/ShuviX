@@ -108,9 +108,9 @@ export function registerAgentHandlers(): void {
       })
   )
 
-  /** 获取所有可用工具列表（名称 + 标签 + 可选分组） */
-  ipcMain.handle('tools:list', () =>
-    operationContext.run(createElectronContext(), () => chatGateway.listTools())
+  /** 获取所有可用工具列表（名称 + 标签 + 可选分组，传 sessionId 时包含项目级 skills） */
+  ipcMain.handle('tools:list', (_event, sessionId?: string) =>
+    operationContext.run(createElectronContext(sessionId), () => chatGateway.listTools(sessionId))
   )
 
   /** 销毁指定会话的 ACP Agent session */

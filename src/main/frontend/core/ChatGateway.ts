@@ -99,8 +99,8 @@ export interface ChatGateway {
 
   // ─── 工具发现 ──────────────────────────────────
 
-  /** 获取所有可用工具列表 */
-  listTools(): Array<{
+  /** 获取所有可用工具列表（传入 sessionId 时包含项目级 skills） */
+  listTools(sessionId?: string): Array<{
     name: string
     label: string
     hint?: string

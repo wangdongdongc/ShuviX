@@ -229,13 +229,20 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 工具发现 ──────────────────────────────────
 
-  listTools(): Array<{
+  listTools(sessionId?: string): Array<{
     name: string
     label: string
     hint?: string
     group?: string
     serverStatus?: string
   }> {
+    // 解析项目路径（用于发现项目级 skills）
+    let projectPath: string | undefined
+    if (sessionId) {
+      const session = sessionDao.findById(sessionId)
+      const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
+      projectPath = project?.path
+    }
     /** 内置工具 */
     const labelMap: Record<string, string> = {
       bash: t('tool.bashLabel'),
@@ -284,8 +291,8 @@ export class DefaultChatGateway implements ChatGateway {
       group: info.group,
       serverStatus: info.serverStatus
     }))
-    /** 已启用 Skill */
-    const skillItems = skillService.findEnabled().map((s) => ({
+    /** 已启用 Skill（含项目级 .claude/skills/） */
+    const skillItems = skillService.findEnabled(projectPath).map((s) => ({
       name: `skill:${s.name}`,
       label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
       group: '__skills__'

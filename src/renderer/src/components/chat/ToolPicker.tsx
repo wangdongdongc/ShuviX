@@ -21,7 +21,7 @@ export function ToolPicker(): React.JSX.Element | null {
 
   /** 拉取工具列表并清理陈旧名称 */
   const fetchTools = useCallback(() => {
-    window.api.tools.list().then((tools) => {
+    window.api.tools.list(activeSessionId ?? undefined).then((tools) => {
       setAllTools(tools)
       const validNames = new Set(tools.map((t) => t.name))
       const currentEnabled = useChatStore.getState().enabledTools

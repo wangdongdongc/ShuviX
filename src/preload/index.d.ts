@@ -575,7 +575,7 @@ declare global {
       listNames: () => Promise<string[]>
     }
     tools: {
-      list: () => Promise<
+      list: (sessionId?: string) => Promise<
         Array<{
           name: string
           label: string
