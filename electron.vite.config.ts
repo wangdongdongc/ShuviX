@@ -5,7 +5,13 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [
+      externalizeDepsPlugin({
+        // pi-ai/pi-agent-core 0.58+ 是纯 ESM（exports 无 require 条件），
+        // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED
+        exclude: ['@mariozechner/pi-ai', '@mariozechner/pi-agent-core']
+      })
+    ],
     build: {
       rollupOptions: {
         input: {

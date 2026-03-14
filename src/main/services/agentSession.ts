@@ -37,7 +37,6 @@ import {
 import { isAssistantMessage } from '../utils/messageGuards'
 import { chatFrontendRegistry, INTERACTION_TIMEOUT_MS } from '../frontend'
 import type { ToolContext, SshCredentialPayload } from '../tools/types'
-import { streamSimpleGoogleWithImages } from './googleImageStream'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
@@ -238,9 +237,6 @@ export class AgentSession {
             ? { ...streamModel, provider: currentProvider.name.toLowerCase() }
             : streamModel
 
-        if (effectiveModel.api === 'google-generative-ai') {
-          return streamSimpleGoogleWithImages(effectiveModel, context, streamOpts)
-        }
         return streamSimple(effectiveModel, context, streamOpts)
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err)

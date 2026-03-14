@@ -25,7 +25,6 @@ import type { ToolContext } from '../tools/types'
 import { createTransformContext } from '../services/contextManager'
 import { parallelCoordinator } from '../services/parallelExecution'
 import { resolveModel } from '../services/agentModelResolver'
-import { streamSimpleGoogleWithImages } from '../services/googleImageStream'
 import { providerDao } from '../dao/providerDao'
 import type { ChatEvent } from '../frontend'
 import { extractArgsSummary, type SubAgentModelConfig } from './types'
@@ -255,9 +254,6 @@ class SubAgentManager {
       const streamOpts = {
         ...(options || {}),
         ...(p?.apiKey ? { apiKey: p.apiKey } : {})
-      }
-      if (effectiveModel.api === 'google-generative-ai') {
-        return streamSimpleGoogleWithImages(effectiveModel, context, streamOpts)
       }
       return streamSimple(effectiveModel, context, streamOpts)
     }
