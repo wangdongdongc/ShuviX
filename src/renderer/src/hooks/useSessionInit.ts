@@ -65,7 +65,15 @@ export function useSessionInit(activeSessionId: string | null): void {
         store.setUsedContextTokens(null)
       }
 
-      // 6. 从 modelMetadata 恢复思考深度（仅同步 UI 状态，后端已在创建时初始化）
+      // 6. 获取可用斜杠命令（来自项目 .claude/commands/）
+      if (result.workingDirectory) {
+        const commands = await window.api.command.list({ sessionId: activeSessionId })
+        if (!cancelled) store.setSlashCommands(commands)
+      } else {
+        store.setSlashCommands([])
+      }
+
+      // 7. 从 modelMetadata 恢复思考深度（仅同步 UI 状态，后端已在创建时初始化）
       const restoredLevel = hasReasoning ? result.modelMetadata.thinkingLevel || 'medium' : 'off'
       store.setThinkingLevel(restoredLevel)
 

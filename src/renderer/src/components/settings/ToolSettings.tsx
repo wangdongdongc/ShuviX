@@ -218,9 +218,7 @@ function BashToolPanel(): React.JSX.Element {
                 />
               </div>
 
-              <p className="text-[10px] text-text-tertiary">
-                {t('settings.toolBashResourceHint')}
-              </p>
+              <p className="text-[10px] text-text-tertiary">{t('settings.toolBashResourceHint')}</p>
 
               <div>
                 <label className="block text-[10px] text-text-tertiary mb-1.5">
@@ -432,10 +430,7 @@ function SshToolPanel(): React.JSX.Element {
             <span className="text-xs font-medium text-text-primary">
               {sshEditId ? t('settings.toolSshName') : t('settings.toolSshAdd')}
             </span>
-            <button
-              onClick={resetSshForm}
-              className="text-text-tertiary hover:text-text-primary"
-            >
+            <button onClick={resetSshForm} className="text-text-tertiary hover:text-text-primary">
               <X size={14} />
             </button>
           </div>
@@ -451,17 +446,13 @@ function SshToolPanel(): React.JSX.Element {
               placeholder={t('settings.toolSshNamePlaceholder')}
               className={inputCls}
             />
-            <p className="text-[9px] text-text-tertiary mt-0.5">
-              {t('settings.toolSshNameHint')}
-            </p>
+            <p className="text-[9px] text-text-tertiary mt-0.5">{t('settings.toolSshNameHint')}</p>
           </div>
 
           {/* 主机 + 端口 */}
           <div className="flex gap-2">
             <div className="flex-1">
-              <label className="block text-[10px] text-text-tertiary mb-1">
-                {t('ssh.host')}
-              </label>
+              <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.host')}</label>
               <input
                 value={sshFormHost}
                 onChange={(e) => setSshFormHost(e.target.value)}
@@ -470,9 +461,7 @@ function SshToolPanel(): React.JSX.Element {
               />
             </div>
             <div className="w-20">
-              <label className="block text-[10px] text-text-tertiary mb-1">
-                {t('ssh.port')}
-              </label>
+              <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.port')}</label>
               <input
                 value={sshFormPort}
                 onChange={(e) => setSshFormPort(e.target.value)}
@@ -484,9 +473,7 @@ function SshToolPanel(): React.JSX.Element {
 
           {/* 用户名 */}
           <div>
-            <label className="block text-[10px] text-text-tertiary mb-1">
-              {t('ssh.username')}
-            </label>
+            <label className="block text-[10px] text-text-tertiary mb-1">{t('ssh.username')}</label>
             <input
               value={sshFormUsername}
               onChange={(e) => setSshFormUsername(e.target.value)}
@@ -542,9 +529,7 @@ function SshToolPanel(): React.JSX.Element {
             <>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-[10px] text-text-tertiary">
-                    {t('ssh.privateKey')}
-                  </label>
+                  <label className="text-[10px] text-text-tertiary">{t('ssh.privateKey')}</label>
                   <button
                     onClick={handleBrowseKey}
                     className="flex items-center gap-0.5 text-[10px] text-accent hover:text-accent/80 transition-colors"

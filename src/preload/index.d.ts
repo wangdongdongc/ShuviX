@@ -643,6 +643,18 @@ declare global {
       /** 获取 Bot 运行状态 */
       getBotStatus: (botId: string) => Promise<{ running: boolean }>
     }
+    command: {
+      /** 获取当前会话可用的斜杠命令列表 */
+      list: (params: { sessionId: string }) => Promise<
+        Array<{
+          commandId: string
+          name: string
+          description: string
+          template: string
+          filePath: string
+        }>
+      >
+    }
     skill: {
       list: () => Promise<Skill[]>
       add: (params: SkillAddParams) => Promise<Skill>

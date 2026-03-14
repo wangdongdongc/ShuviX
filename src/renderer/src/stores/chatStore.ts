@@ -181,6 +181,8 @@ interface ChatState {
   projectPath: string | null
   /** AGENT.md 是否已加载 */
   agentMdLoaded: boolean
+  /** 当前会话可用的斜杠命令（来自项目 .claude/commands/） */
+  slashCommands: Array<{ commandId: string; name: string; description: string }>
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
   /** 各 session 的待处理用户输入请求 */
@@ -242,6 +244,9 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
+  setSlashCommands: (
+    commands: Array<{ commandId: string; name: string; description: string }>
+  ) => void
   setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Map<string, ShareMode>) => void
   setTelegramBindings: (bindings: Map<string, { botId: string; username: string }>) => void
@@ -317,6 +322,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   enabledTools: [],
   projectPath: null,
   agentMdLoaded: false,
+  slashCommands: [],
   sessionResources: {},
   sharedSessionIds: new Map(),
   telegramBindings: new Map(),
@@ -507,6 +513,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
+  setSlashCommands: (commands) => set({ slashCommands: commands }),
 
   setSessionDocker: (sessionId, info) =>
     set((state) => {

@@ -23,7 +23,15 @@ export function ProviderSettings(): React.JSX.Element {
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [localEdits, setLocalEdits] = useState<
-    Record<string, { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ProviderInfo['apiProtocol'] }>
+    Record<
+      string,
+      {
+        name?: string
+        apiKey?: string
+        baseUrl?: string
+        apiProtocol?: ProviderInfo['apiProtocol']
+      }
+    >
   >({})
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
@@ -106,7 +114,12 @@ export function ProviderSettings(): React.JSX.Element {
     const edits = localEdits[providerId]
     const provider = providers.find((p) => p.id === providerId)
     if (!edits || !provider) return
-    const updates: { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ProviderInfo['apiProtocol'] } = {}
+    const updates: {
+      name?: string
+      apiKey?: string
+      baseUrl?: string
+      apiProtocol?: ProviderInfo['apiProtocol']
+    } = {}
     if (edits.name !== undefined && edits.name !== provider.name) {
       updates.name = edits.name
     }

@@ -106,6 +106,7 @@ export class AgentSession {
   private agent: Agent
   private toolContext: ToolContext
   private subAgentCtx: SubAgentBuildContext | undefined
+  private projectPath?: string
   private instructionLoadState: ProjectInstructionLoadState
 
   // 交互回调 pending Map（keyed by toolCallId）
@@ -136,12 +137,14 @@ export class AgentSession {
     agent: Agent,
     toolContext: ToolContext,
     subAgentCtx: SubAgentBuildContext | undefined,
-    instructionLoadState: ProjectInstructionLoadState
+    instructionLoadState: ProjectInstructionLoadState,
+    projectPath?: string
   ) {
     this.sessionId = sessionId
     this.agent = agent
     this.toolContext = toolContext
     this.subAgentCtx = subAgentCtx
+    this.projectPath = projectPath
     this.instructionLoadState = instructionLoadState
 
     // 订阅 Agent 事件，转发到 Renderer
@@ -252,7 +255,7 @@ export class AgentSession {
       modelConfig: { provider, model, capabilities },
       broadcastEvent: (e) => chatFrontendRegistry.broadcast(e)
     }
-    const tools = buildTools(toolContext, enabledTools, subAgentCtx)
+    const tools = buildTools(toolContext, enabledTools, subAgentCtx, project?.path)
 
     const agent = new Agent({
       initialState: {
@@ -278,9 +281,16 @@ export class AgentSession {
       })
     }
 
-    session = new AgentSession(sessionId, agent, toolContext, subAgentCtx, {
-      agentMdLoaded: !!agentMd
-    })
+    session = new AgentSession(
+      sessionId,
+      agent,
+      toolContext,
+      subAgentCtx,
+      {
+        agentMdLoaded: !!agentMd
+      },
+      project?.path
+    )
 
     // 恢复历史消息到 Agent 上下文
     const dbMsgs = messageService.listBySession(sessionId)
@@ -398,7 +408,7 @@ export class AgentSession {
 
   /** 动态更新启用工具集 */
   setEnabledTools(enabledTools: string[]): void {
-    const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx)
+    const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx, this.projectPath)
     this.agent.setTools(tools)
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }

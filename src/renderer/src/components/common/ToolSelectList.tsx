@@ -258,7 +258,9 @@ export function ToolSelectList({
                     onChange={() => toggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <span className="text-[11px] font-mono text-amber-300 whitespace-nowrap flex-shrink-0">{tool.name}</span>
+                  <span className="text-[11px] font-mono text-amber-300 whitespace-nowrap flex-shrink-0">
+                    {tool.name}
+                  </span>
                   <span className="text-[10px] text-text-tertiary truncate">
                     {tool.label}
                     {!compact && tool.hint ? ` — ${tool.hint}` : ''}

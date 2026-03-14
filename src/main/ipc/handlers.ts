@@ -11,6 +11,7 @@ import { registerSshCredentialHandlers } from './sshCredentialHandlers'
 import { registerWebUIHandlers } from './webUIHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
 import { registerOperationLogHandlers } from './operationLogHandlers'
+import { registerCommandHandlers } from './commandHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -30,4 +31,5 @@ export function registerIpcHandlers(): void {
   registerWebUIHandlers()
   registerTelegramHandlers()
   registerOperationLogHandlers()
+  registerCommandHandlers()
 }

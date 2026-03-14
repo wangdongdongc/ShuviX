@@ -338,6 +338,12 @@ const api = {
     getBotStatus: (botId: string) => ipcRenderer.invoke('telegram:getBotStatus', botId)
   },
 
+  // ============ 斜杠命令 ============
+  command: {
+    /** 获取当前会话可用的斜杠命令列表 */
+    list: (params: { sessionId: string }) => ipcRenderer.invoke('command:list', params)
+  },
+
   // ============ Skill 管理 ============
   skill: {
     /** 获取所有 Skill */

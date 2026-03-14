@@ -38,7 +38,11 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(id)
-    const enabledTools = resolveEnabledTools(session.modelMetadata.enabledTools, project?.settings)
+    const enabledTools = resolveEnabledTools(
+      session.modelMetadata.enabledTools,
+      project?.settings,
+      project?.path
+    )
     const { agentMdLoaded } = this.agentSessions.get(id)?.getInstructionLoadState() || {
       agentMdLoaded: false
     }
@@ -209,7 +213,11 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'systemPrompt', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
-    const enabledTools = resolveEnabledTools(session.modelMetadata.enabledTools, project?.settings)
+    const enabledTools = resolveEnabledTools(
+      session.modelMetadata.enabledTools,
+      project?.settings,
+      project?.path
+    )
     const meta = {
       provider,
       model,

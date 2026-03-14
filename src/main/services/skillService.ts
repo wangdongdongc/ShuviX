@@ -1,7 +1,9 @@
 /**
  * SkillService — 基于文件系统的 Skill 管理
- * 目录结构：~/.shuvix/skills/<name>/SKILL.md（+ 可选伴随文件）
- * 启用/禁用状态存储在 ~/.shuvix/skills/.config.json
+ * 全局 skills：~/.shuvix/skills/<name>/SKILL.md（+ 可选伴随文件）
+ * 项目 skills：<projectPath>/.claude/skills/<name>/SKILL.md
+ * 启用/禁用状态仅针对全局 skills，存储在 ~/.shuvix/skills/.config.json
+ * 项目级 skills 始终启用
  */
 
 import {
@@ -94,16 +96,15 @@ class SkillService {
     return { name, description, content }
   }
 
-  /** 从目录加载单个 skill */
-  private loadSkill(name: string): Skill | null {
-    const dir = join(this.skillsDir, name)
+  /** 从指定目录加载单个 skill（通用，支持全局和项目目录） */
+  private loadSkillFromDir(dir: string, name: string, isProject: boolean): Skill | null {
     const mdPath = join(dir, 'SKILL.md')
     if (!existsSync(mdPath)) return null
 
     try {
       const raw = readFileSync(mdPath, 'utf-8')
       const parsed = this.parseSkillMarkdown(raw)
-      const config = this.readConfig()
+      const config = isProject ? null : this.readConfig()
 
       if (parsed) {
         return {
@@ -111,7 +112,7 @@ class SkillService {
           description: parsed.description,
           content: parsed.content,
           basePath: dir,
-          isEnabled: !config.disabled.includes(name)
+          isEnabled: isProject ? true : !config!.disabled.includes(name)
         }
       }
 
@@ -121,7 +122,7 @@ class SkillService {
         description: '',
         content: raw.trim(),
         basePath: dir,
-        isEnabled: !config.disabled.includes(name)
+        isEnabled: isProject ? true : !config!.disabled.includes(name)
       }
     } catch (e) {
       log.warn(`加载 skill "${name}" 失败:`, e)
@@ -129,30 +130,66 @@ class SkillService {
     }
   }
 
-  /** 获取所有已安装的 Skill */
-  findAll(): Skill[] {
-    if (!existsSync(this.skillsDir)) return []
+  /** 从目录加载单个 skill（全局 skills 目录） */
+  private loadSkill(name: string): Skill | null {
+    return this.loadSkillFromDir(join(this.skillsDir, name), name, false)
+  }
 
-    const entries = readdirSync(this.skillsDir, { withFileTypes: true })
+  /** 扫描指定目录下的所有 skills */
+  private scanSkillsDir(dir: string, isProject: boolean): Skill[] {
+    if (!existsSync(dir)) return []
+
+    const entries = readdirSync(dir, { withFileTypes: true })
     const skills: Skill[] = []
 
     for (const entry of entries) {
       // 跳过配置文件和隐藏文件
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-      const skill = this.loadSkill(entry.name)
+      const skill = this.loadSkillFromDir(join(dir, entry.name), entry.name, isProject)
       if (skill) skills.push(skill)
     }
 
-    return skills.sort((a, b) => a.name.localeCompare(b.name))
+    return skills
   }
 
-  /** 获取所有已启用的 Skill */
-  findEnabled(): Skill[] {
-    return this.findAll().filter((s) => s.isEnabled)
+  /**
+   * 获取所有已安装的 Skill
+   * 传入 projectPath 时，合并项目级 .claude/skills/ 中的 skills（项目级同名覆盖全局）
+   */
+  findAll(projectPath?: string): Skill[] {
+    const globalSkills = this.scanSkillsDir(this.skillsDir, false)
+    if (!projectPath) return globalSkills.sort((a, b) => a.name.localeCompare(b.name))
+
+    const projectSkillsDir = join(projectPath, '.claude', 'skills')
+    const projectSkills = this.scanSkillsDir(projectSkillsDir, true)
+    if (projectSkills.length === 0) return globalSkills.sort((a, b) => a.name.localeCompare(b.name))
+
+    // 合并：项目级同名 skill 覆盖全局
+    const projectNames = new Set(projectSkills.map((s) => s.name))
+    return [...globalSkills.filter((s) => !projectNames.has(s.name)), ...projectSkills].sort(
+      (a, b) => a.name.localeCompare(b.name)
+    )
   }
 
-  /** 根据名称获取单个 Skill */
-  findByName(name: string): Skill | null {
+  /**
+   * 获取所有已启用的 Skill
+   * 项目级 skills 始终启用
+   */
+  findEnabled(projectPath?: string): Skill[] {
+    return this.findAll(projectPath).filter((s) => s.isEnabled)
+  }
+
+  /**
+   * 根据名称获取单个 Skill
+   * 传入 projectPath 时，优先查找项目级 skill
+   */
+  findByName(name: string, projectPath?: string): Skill | null {
+    // 优先查项目级
+    if (projectPath) {
+      const projectDir = join(projectPath, '.claude', 'skills', name)
+      const skill = this.loadSkillFromDir(projectDir, name, true)
+      if (skill) return skill
+    }
     return this.loadSkill(name)
   }
 
@@ -254,9 +291,22 @@ class SkillService {
     this.writeConfig(config)
   }
 
-  /** 读取 skill 伴随文件内容 */
-  readCompanionFile(skillName: string, relativePath: string): string | null {
-    const dir = join(this.skillsDir, skillName)
+  /**
+   * 读取 skill 伴随文件内容
+   * 传入 projectPath 时，优先查找项目级 skill 目录
+   */
+  readCompanionFile(skillName: string, relativePath: string, projectPath?: string): string | null {
+    // 优先在项目级 skill 目录查找
+    if (projectPath) {
+      const projectDir = join(projectPath, '.claude', 'skills', skillName)
+      const result = this.readFileFromDir(projectDir, relativePath)
+      if (result !== null) return result
+    }
+    return this.readFileFromDir(join(this.skillsDir, skillName), relativePath)
+  }
+
+  /** 从指定目录读取伴随文件 */
+  private readFileFromDir(dir: string, relativePath: string): string | null {
     const filePath = join(dir, relativePath)
 
     // 安全检查：防止路径遍历

@@ -241,40 +241,38 @@ export function ToolCallBlock({
       )}
 
       {/* 展开详情 */}
-      {expanded &&
-        !hasEditDiff &&
-        status !== 'pending_approval' && (
-          <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
-            {toolName === 'python' && args ? (
-              <PythonToolDetail args={args} result={result} />
-            ) : toolName === 'sql' && args ? (
-              <SqlToolDetail args={args} result={result} />
-            ) : (
-              <>
-                {args && Object.keys(args).length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-text-tertiary mb-0.5">
-                      {t('toolCall.params')}
-                    </div>
-                    <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                      {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
-                    </pre>
+      {expanded && !hasEditDiff && status !== 'pending_approval' && (
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
+          {toolName === 'python' && args ? (
+            <PythonToolDetail args={args} result={result} />
+          ) : toolName === 'sql' && args ? (
+            <SqlToolDetail args={args} result={result} />
+          ) : (
+            <>
+              {args && Object.keys(args).length > 0 && (
+                <div>
+                  <div className="text-[10px] text-text-tertiary mb-0.5">
+                    {t('toolCall.params')}
                   </div>
-                )}
-                {result && (
-                  <div>
-                    <div className="text-[10px] text-text-tertiary mb-0.5">
-                      {t('toolCall.result')}
-                    </div>
-                    <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                      {result}
-                    </pre>
+                  <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+                    {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {result && (
+                <div>
+                  <div className="text-[10px] text-text-tertiary mb-0.5">
+                    {t('toolCall.result')}
                   </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+                  <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+                    {result}
+                  </pre>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

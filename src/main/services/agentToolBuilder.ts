@@ -56,7 +56,8 @@ function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentToo
 export function buildTools(
   ctx: ToolContext,
   enabledTools: string[],
-  subAgentCtx?: SubAgentBuildContext
+  subAgentCtx?: SubAgentBuildContext,
+  projectPath?: string
 ): AnyAgentTool[] {
   // 内置工具
   const builtinAll: Record<string, AnyAgentTool> = {
@@ -99,9 +100,9 @@ export function buildTools(
   // 合并内置 + MCP
   const all: Record<string, AnyAgentTool> = { ...builtinAll, ...mcpAll }
 
-  // 有启用的 skill 时动态注册 skill 工具
-  if (enabledSkillNames.length > 0) {
-    all['skill'] = new SkillTool(enabledSkillNames)
+  // 有启用的 skill 或有项目路径（可能有 .claude/skills/）时注册 skill 工具
+  if (enabledSkillNames.length > 0 || projectPath) {
+    all['skill'] = new SkillTool(enabledSkillNames, projectPath)
   }
 
   // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理）

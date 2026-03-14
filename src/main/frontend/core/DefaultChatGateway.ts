@@ -11,6 +11,9 @@ import { pythonWorkerManager } from '../../services/pythonWorkerManager'
 import { sqlWorkerManager } from '../../services/sqlWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
+import { commandService } from '../../services/commandService'
+import { sessionDao } from '../../dao/sessionDao'
+import { projectDao } from '../../dao/projectDao'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 import { operationLogService } from '../../services/operationLogService'
 import { t } from '../../i18n'
@@ -39,7 +42,23 @@ export class DefaultChatGateway implements ChatGateway {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
-    // 统一持久化用户消息并通知所有前端
+
+    // ─── 斜杠命令拦截：将 /command args 展开为完整 prompt ───
+    const displayText = text // UI 中显示的文本
+    let promptText = text // 发送给 LLM 的文本
+    if (text.startsWith('/')) {
+      const dbSession = sessionDao.findById(sessionId)
+      const project = dbSession?.projectId ? projectDao.pick(dbSession.projectId, ['path']) : null
+      if (project?.path) {
+        const result = commandService.matchAndExpand(project.path, text)
+        if (result) {
+          promptText = result.expandedText
+          operationLogService.log('slashCommand', result.commandId)
+        }
+      }
+    }
+
+    // 统一持久化用户消息并通知所有前端（显示原始命令文本）
     const userImages =
       images && images.length > 0
         ? images.map((img) => ({
@@ -47,13 +66,18 @@ export class DefaultChatGateway implements ChatGateway {
             preview: `data:${img.mimeType};base64,${img.data}`
           }))
         : undefined
-    const userMsg = messageService.addUserText({ sessionId, content: text, images: userImages })
+    const userMsg = messageService.addUserText({
+      sessionId,
+      content: displayText,
+      images: userImages
+    })
     chatFrontendRegistry.broadcast({
       type: 'user_message',
       sessionId,
       message: JSON.stringify(userMsg)
     })
-    await session.prompt(text, images)
+    // 发送展开后的 prompt 给 Agent
+    await session.prompt(promptText, images)
   }
 
   abort(sessionId: string): { success: boolean; savedMessage?: Message } {
@@ -251,9 +275,7 @@ export class DefaultChatGateway implements ChatGateway {
       name,
       label: labelMap[name] || name,
       hint: hintMap[name],
-      group: subAgentRegistry.isSubAgent(name)
-        ? '__subagents__'
-        : (undefined as string | undefined)
+      group: subAgentRegistry.isSubAgent(name) ? '__subagents__' : (undefined as string | undefined)
     }))
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({

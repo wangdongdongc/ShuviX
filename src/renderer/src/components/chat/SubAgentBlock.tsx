@@ -3,15 +3,7 @@ import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import {
-  Bot,
-  Check,
-  X,
-  Loader2,
-  ChevronDown,
-  ChevronRight,
-  Wrench
-} from 'lucide-react'
+import { Bot, Check, X, Loader2, ChevronDown, ChevronRight, Wrench } from 'lucide-react'
 import {
   useChatStore,
   type SubAgentExecution,
@@ -19,10 +11,7 @@ import {
   type SubAgentUsage,
   type SubAgentTimelineEntry
 } from '../../stores/chatStore'
-import type {
-  ToolResultDetails,
-  SubAgentToolDetails
-} from '../../../../shared/types/chatMessage'
+import type { ToolResultDetails, SubAgentToolDetails } from '../../../../shared/types/chatMessage'
 
 interface SubAgentBlockProps {
   toolCallId?: string
@@ -138,8 +127,8 @@ export const SubAgentBlock = memo(function SubAgentBlock({
     const execs = s.sessionSubAgentExecutions[s.activeSessionId]
     return execs?.find((sa) => sa.parentToolCallId === toolCallId)
   })
-  const isStreaming = useChatStore(
-    (s) => (s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false)
+  const isStreaming = useChatStore((s) =>
+    s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
   )
 
   // 持久化详情（从 DB 恢复时使用）
@@ -220,10 +209,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({
         )}
         <Bot size={12} className="text-text-tertiary flex-shrink-0" />
         <span className="font-medium text-text-secondary flex-shrink-0">
-          {subAgent?.subAgentType ||
-            persistedDetails?.subAgentType ||
-            toolName ||
-            'explore'}
+          {subAgent?.subAgentType || persistedDetails?.subAgentType || toolName || 'explore'}
         </span>
         {description && <span className="flex-1 truncate font-mono opacity-70">{description}</span>}
         {!description && <span className="flex-1" />}

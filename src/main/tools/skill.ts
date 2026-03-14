@@ -28,12 +28,18 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
   readonly parameters = SkillParamsSchema
 
   private skills: ReturnType<typeof skillService.findEnabled>
+  private projectPath?: string
 
-  constructor(enabledSkillNames: string[]) {
+  constructor(enabledSkillNames: string[], projectPath?: string) {
     super()
+    this.projectPath = projectPath
 
-    // 从文件系统加载已启用且在 enabledSkillNames 中的 skill
-    this.skills = skillService.findEnabled().filter((s) => enabledSkillNames.includes(s.name))
+    // 从文件系统加载 skills（全局 + 项目级合并）
+    // 全局 skill 需在 enabledSkillNames 中；项目级 skill 始终包含
+    const allSkills = skillService.findEnabled(projectPath)
+    this.skills = allSkills.filter(
+      (s) => enabledSkillNames.includes(s.name) || this.isProjectSkill(s)
+    )
 
     // 构建 <available_skills> XML 嵌入 tool description
     const skillListXml = this.skills
@@ -64,6 +70,12 @@ ${skillListXml}
 </available_skills>`
   }
 
+  /** 判断 skill 是否来自项目 .claude/skills/ 目录 */
+  private isProjectSkill(skill: { basePath: string }): boolean {
+    if (!this.projectPath) return false
+    return skill.basePath.startsWith(this.projectPath)
+  }
+
   async preExecute(): Promise<void> {
     /* no-op */
   }
@@ -85,7 +97,7 @@ ${skillListXml}
       // command: "pdf/REFERENCE.md" — 读取伴随文件
       const skillName = cmd.slice(0, slashIdx)
       const filePath = cmd.slice(slashIdx + 1)
-      const content = skillService.readCompanionFile(skillName, filePath)
+      const content = skillService.readCompanionFile(skillName, filePath, this.projectPath)
       if (content === null) {
         return {
           content: [
@@ -104,7 +116,7 @@ ${skillListXml}
     }
 
     // command: "pdf" — 加载 skill 主内容
-    const skill = skillService.findByName(cmd)
+    const skill = skillService.findByName(cmd, this.projectPath)
     if (!skill) {
       return {
         content: [

@@ -94,9 +94,7 @@ export function ProjectCreateDialog({
     setPurpose(key)
     const preset = PURPOSE_PRESETS[key] || PURPOSE_PRESETS.bash
     // 默认选中已连接的 MCP 工具和已启用的 Skills
-    const connectedMcp = mcpTools
-      .filter((t) => t.serverStatus === 'connected')
-      .map((t) => t.name)
+    const connectedMcp = mcpTools.filter((t) => t.serverStatus === 'connected').map((t) => t.name)
     const enabledSkills = skillTools.map((t) => t.name)
     setEnabledTools([...new Set([...preset, ...connectedMcp, ...enabledSkills])])
     setSandboxEnabled(true)
@@ -322,7 +320,9 @@ export function ProjectCreateDialog({
                 <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
                   <Info size={14} className="text-accent shrink-0 mt-0.5" />
                   <p className="text-[11px] text-text-secondary leading-relaxed">
-                    {t(`projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`)}
+                    {t(
+                      `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
+                    )}
                   </p>
                 </div>
               )}

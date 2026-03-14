@@ -251,9 +251,7 @@ class SubAgentManager {
     ): ReturnType<typeof streamSimple> => {
       const p = providerDao.pick(String(streamModel.provider), ['apiKey', 'isBuiltin', 'name'])
       const effectiveModel =
-        p?.isBuiltin && p.name
-          ? { ...streamModel, provider: p.name.toLowerCase() }
-          : streamModel
+        p?.isBuiltin && p.name ? { ...streamModel, provider: p.name.toLowerCase() } : streamModel
       const streamOpts = {
         ...(options || {}),
         ...(p?.apiKey ? { apiKey: p.apiKey } : {})

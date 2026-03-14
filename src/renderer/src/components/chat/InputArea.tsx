@@ -13,6 +13,8 @@ import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { ModelPicker } from './ModelPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { ToolPicker } from './ToolPicker'
+import { SlashCommandPopover } from './SlashCommandPopover'
+import { useSlashCommands } from '../../hooks/useSlashCommands'
 
 /** 将 token 数格式化为紧凑显示（如 12.5k、128k） */
 function formatTokenCount(n: number): string {
@@ -42,7 +44,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     maxContextTokens,
     usedContextTokens,
     pendingImages,
-    removePendingImage
+    removePendingImage,
+    slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
   const canEdit = useChatStore(selectCanEdit)
@@ -58,6 +61,9 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
   const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
+
+  // 斜杠命令自动补全
+  const slash = useSlashCommands(slashCommands, inputText)
 
   // 拖拽调节的 textarea 最小高度
   const DRAG_MIN = 60
@@ -160,8 +166,33 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     useChatStore.getState().setInputText('')
   }
 
+  /** 斜杠命令选中回调 */
+  const handleSlashSelect = useCallback(
+    (commandId: string) => {
+      setInputText(slash.handleSelect(commandId))
+    },
+    [slash, setInputText]
+  )
+
   /** 键盘事件处理 */
   const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // 斜杠命令 popover 可见时优先处理导航
+    if (slash.showPopover) {
+      // Enter/Tab 时需要选中当前项
+      if (e.key === 'Enter' && !e.shiftKey) {
+        const filtered = slashCommands.filter((cmd) =>
+          cmd.commandId.toLowerCase().startsWith(slash.filter.toLowerCase())
+        )
+        const selected = filtered[slash.selectedIndex]
+        if (selected) {
+          e.preventDefault()
+          handleSlashSelect(selected.commandId)
+          return
+        }
+      }
+      if (slash.handleKeyDown(e)) return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       // pending action 时优先走 override 流程
@@ -222,6 +253,16 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         )}
 
         <div className="relative flex items-end gap-2">
+          {/* 斜杠命令自动补全浮层 */}
+          {slash.showPopover && (
+            <SlashCommandPopover
+              filter={slash.filter}
+              commands={slashCommands}
+              onSelect={handleSlashSelect}
+              selectedIndex={slash.selectedIndex}
+            />
+          )}
+
           {/* 左下角紧凑扩展位 */}
           <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
             {/* Pickers 组：可选择项紧凑排列在最左 */}

@@ -169,7 +169,6 @@ export class SubAgentTimelineCollector {
     }
   }
 
-
   private findToolEntry(toolCallId: string): InternalEntry | undefined {
     for (let i = this.entries.length - 1; i >= 0; i--) {
       if (this.entries[i].type === 'tool' && this.entries[i].toolCallId === toolCallId) {
