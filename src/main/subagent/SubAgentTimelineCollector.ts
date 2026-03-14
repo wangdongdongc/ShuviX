@@ -57,7 +57,7 @@ export class SubAgentTimelineCollector {
           tool: {
             toolName: event.toolName,
             status: 'running',
-            summary: this.extractArgsSummary(event.toolArgs)
+            summary: event.summary
           }
         })
         break
@@ -169,18 +169,6 @@ export class SubAgentTimelineCollector {
     }
   }
 
-  /** 从工具参数中提取第一个合理长度的字符串值作为摘要 */
-  private extractArgsSummary(args?: Record<string, unknown>): string | undefined {
-    if (!args) return undefined
-    for (const v of Object.values(args)) {
-      if (typeof v !== 'string' || !v) continue
-      const line = v.split('\n')[0]
-      if (line.length <= 200) {
-        return line.length > 80 ? line.slice(0, 77) + '...' : line
-      }
-    }
-    return undefined
-  }
 
   private findToolEntry(toolCallId: string): InternalEntry | undefined {
     for (let i = this.entries.length - 1; i >= 0; i--) {

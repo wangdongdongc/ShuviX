@@ -40,26 +40,12 @@ function innerToolIcon(): React.ReactNode {
 
 /**
  * 工具摘要：当 toolName（ACP title）已经足够描述性时直接返回空；
- * 否则从 args 中提取第一个合理长度的字符串值作为摘要
+ * 否则返回 summary（流式时由 extractArgsSummary 生成，持久化时从 DB 恢复）
  */
 function innerToolSummary(tool: SubAgentToolExecution): string {
   // ACP title 已包含详细信息（如路径/命令），不需要额外摘要
   if (tool.toolName && (tool.toolName.includes('/') || tool.toolName.length > 20)) return ''
-
-  const args = tool.args
-  if (args && Object.keys(args).length > 0) {
-    // 从 args 值中取第一个合理长度的字符串（流式状态）
-    for (const v of Object.values(args)) {
-      if (typeof v !== 'string' || !v) continue
-      const line = v.split('\n')[0]
-      if (line.length <= 200) {
-        return line.length > 80 ? line.slice(0, 77) + '...' : line
-      }
-    }
-  }
-
-  // 回退到持久化摘要（从 DB 恢复时 args 为空，summary 存储在 result 字段）
-  return tool.result || ''
+  return tool.summary || ''
 }
 
 /** 内部工具状态图标 */
@@ -139,7 +125,7 @@ function toStoreTimeline(details: SubAgentToolDetails): SubAgentTimelineEntry[] 
           toolName: entry.tool.toolName,
           args: {},
           status: entry.tool.status,
-          result: entry.tool.summary
+          summary: entry.tool.summary
         }
       }
     }

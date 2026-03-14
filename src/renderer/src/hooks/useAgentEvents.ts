@@ -223,9 +223,10 @@ export function useAgentEvents(): void {
         store.addSubAgentTool(sid, event.subAgentId, {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-          args: event.toolArgs ?? {},
+          args: {},
           toolKind: event.toolKind,
-          status: 'running'
+          status: 'running',
+          summary: event.summary
         })
         break
 

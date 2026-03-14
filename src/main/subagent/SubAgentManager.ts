@@ -28,7 +28,7 @@ import { resolveModel } from '../services/agentModelResolver'
 import { streamSimpleGoogleWithImages } from '../services/googleImageStream'
 import { providerDao } from '../dao/providerDao'
 import type { ChatEvent } from '../frontend'
-import type { SubAgentModelConfig } from './types'
+import { extractArgsSummary, type SubAgentModelConfig } from './types'
 import { createLogger } from '../logger'
 
 const log = createLogger('SubAgent')
@@ -387,7 +387,7 @@ class SubAgentManager {
         subAgentType,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        toolArgs: event.args as Record<string, unknown>
+        summary: extractArgsSummary(event.args as Record<string, unknown>)
       })
     } else if (event.type === 'tool_execution_end') {
       const result = event.result

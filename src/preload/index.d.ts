@@ -205,7 +205,7 @@ declare global {
     subAgentType: string
     toolCallId: string
     toolName: string
-    toolArgs?: Record<string, unknown>
+    summary?: string
     toolKind?: string
   }
   interface ChatSubAgentToolEndEvent extends ChatEventBase {

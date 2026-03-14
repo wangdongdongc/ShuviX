@@ -98,7 +98,7 @@ export interface SessionResourceInfo {
   acp?: Array<{ agentName: string; displayName: string }>
 }
 
-/** 子智能体内部工具执行（临时，不持久化） */
+/** 子智能体内部工具执行 */
 export interface SubAgentToolExecution {
   toolCallId: string
   toolName: string
@@ -107,6 +107,8 @@ export interface SubAgentToolExecution {
   toolKind?: string
   status: 'running' | 'done' | 'error'
   result?: string
+  /** 参数摘要（持久化时保存，恢复后直接使用；流式时从 args 实时推导） */
+  summary?: string
 }
 
 /** 子智能体 token 用量 */
