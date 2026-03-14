@@ -102,12 +102,8 @@ export interface SessionResourceInfo {
 export interface SubAgentToolExecution {
   toolCallId: string
   toolName: string
-  args: Record<string, unknown>
-  /** ACP 工具类别（read / edit / execute / search 等） */
-  toolKind?: string
   status: 'running' | 'done' | 'error'
-  result?: string
-  /** 参数摘要（持久化时保存，恢复后直接使用；流式时从 args 实时推导） */
+  /** 工具参数摘要（后端统一生成） */
   summary?: string
 }
 

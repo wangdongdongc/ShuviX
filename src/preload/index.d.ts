@@ -206,7 +206,6 @@ declare global {
     toolCallId: string
     toolName: string
     summary?: string
-    toolKind?: string
   }
   interface ChatSubAgentToolEndEvent extends ChatEventBase {
     type: 'subagent_tool_end'

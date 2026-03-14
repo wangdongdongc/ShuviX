@@ -223,8 +223,6 @@ export function useAgentEvents(): void {
         store.addSubAgentTool(sid, event.subAgentId, {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-          args: {},
-          toolKind: event.toolKind,
           status: 'running',
           summary: event.summary
         })
@@ -232,10 +230,9 @@ export function useAgentEvents(): void {
 
       case 'subagent_tool_end': {
         const updates: Record<string, unknown> = {}
-        // 终态：设置 status + result
+        // 终态：设置 status
         if (event.result != null || event.isError != null) {
           updates.status = event.isError ? 'error' : 'done'
-          updates.result = event.result
         }
         // 中间更新 / 终态都可能携带更新的 toolName
         if (event.toolName) {

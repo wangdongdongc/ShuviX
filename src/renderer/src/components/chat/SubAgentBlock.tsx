@@ -38,16 +38,6 @@ function innerToolIcon(): React.ReactNode {
   return <Wrench size={11} className="text-text-tertiary flex-shrink-0" />
 }
 
-/**
- * 工具摘要：当 toolName（ACP title）已经足够描述性时直接返回空；
- * 否则返回 summary（流式时由 extractArgsSummary 生成，持久化时从 DB 恢复）
- */
-function innerToolSummary(tool: SubAgentToolExecution): string {
-  // ACP title 已包含详细信息（如路径/命令），不需要额外摘要
-  if (tool.toolName && (tool.toolName.includes('/') || tool.toolName.length > 20)) return ''
-  return tool.summary || ''
-}
-
 /** 内部工具状态图标 */
 function innerToolStatusIcon(status: SubAgentToolExecution['status']): React.ReactNode {
   switch (status) {
@@ -79,9 +69,7 @@ function TimelineEntry({
           <span className="font-medium text-text-secondary flex-shrink-0">
             {entry.tool.toolName}
           </span>
-          <span className="flex-1 truncate font-mono opacity-70">
-            {innerToolSummary(entry.tool)}
-          </span>
+          <span className="flex-1 truncate font-mono opacity-70">{entry.tool.summary || ''}</span>
           <span className="flex-shrink-0">{innerToolStatusIcon(entry.tool.status)}</span>
         </div>
       )
@@ -123,7 +111,6 @@ function toStoreTimeline(details: SubAgentToolDetails): SubAgentTimelineEntry[] 
         tool: {
           toolCallId: '',
           toolName: entry.tool.toolName,
-          args: {},
           status: entry.tool.status,
           summary: entry.tool.summary
         }

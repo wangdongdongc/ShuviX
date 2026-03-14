@@ -595,8 +595,7 @@ class AcpService {
           subAgentId: taskId,
           subAgentType: agentType,
           toolCallId: shuvixToolCallId,
-          toolName: tc.title || 'tool',
-          toolKind: tc.kind || undefined
+          toolName: tc.title || 'tool'
         })
         break
       }

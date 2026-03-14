@@ -197,10 +197,8 @@ export interface ChatSubAgentToolStartEvent extends ChatEventBase {
   subAgentType: string
   toolCallId: string
   toolName: string
-  /** 工具参数摘要（后端统一从 args 推导，前端直接展示） */
+  /** 工具参数摘要（后端统一生成，前端直接展示） */
   summary?: string
-  /** ACP 工具类别（read / edit / execute / search 等），用于 UI 图标和摘要 */
-  toolKind?: string
 }
 
 /** 子智能体内部工具更新/完成 */
