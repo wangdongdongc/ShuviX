@@ -34,6 +34,7 @@ export class WhisperBackend implements SttBackend {
   private audioChunks: Blob[] = []
   private language: string | undefined
   private processing = false
+  private processingPromise: Promise<void> | null = null // 当前飞行中的 processSegment
 
   // VAD 状态
   private totalFrames = 0
@@ -91,6 +92,7 @@ export class WhisperBackend implements SttBackend {
   }
 
   stop(): void {
+    // 立刻停止 VAD 和录音，但等所有转写处理完成后再 cleanup
     if (this.vadTimer) {
       clearInterval(this.vadTimer)
       this.vadTimer = null
@@ -99,14 +101,27 @@ export class WhisperBackend implements SttBackend {
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop()
       this.mediaRecorder.onstop = (): void => {
-        if (this.hasSufficientSpeech()) {
-          void this.processSegment()
-        }
-        this.cleanup()
+        void this.drainAndCleanup()
       }
     } else {
-      this.cleanup()
+      void this.drainAndCleanup()
     }
+  }
+
+  /** 等待飞行中的处理完成 + 处理剩余音频 + 最后 cleanup */
+  private async drainAndCleanup(): Promise<void> {
+    // 1. 等待已经在飞行中的 processSegment 完成
+    if (this.processingPromise) {
+      await this.processingPromise
+    }
+
+    // 2. 处理剩余的音频片段
+    if (this.hasSufficientSpeech() && this.audioChunks.length > 0) {
+      await this.processSegment()
+    }
+
+    // 3. 全部完成后清理
+    this.cleanup()
   }
 
   /** 计算当前帧的 RMS 能量 */
@@ -193,7 +208,7 @@ export class WhisperBackend implements SttBackend {
       }
 
       if (chunks.length > 0) {
-        void this.processSegment(chunks)
+        this.processingPromise = this.processSegment(chunks)
       }
     }
   }
@@ -236,6 +251,7 @@ export class WhisperBackend implements SttBackend {
       this.onError?.(err instanceof Error ? err.message : String(err))
     } finally {
       this.processing = false
+      this.processingPromise = null
       if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
         this.onStateChange?.('recording')
       }

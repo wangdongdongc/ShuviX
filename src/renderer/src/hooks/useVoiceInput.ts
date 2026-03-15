@@ -24,7 +24,11 @@ export interface UseVoiceInputReturn {
 
 /**
  * 语音输入 Hook — 封装 Whisper STT 后端、录制状态、文本累积逻辑
- * 遵循 useImageUpload 的 hook 模式：管理特定输入模态，将结果写入 chatStore.inputText
+ *
+ * 停止行为：
+ * - stopRecording: 立刻停止录音（UI 反馈），但保持回调存活，
+ *   让后端把剩余音频处理完（drainAndCleanup），最后 onStateChange('idle') 触发最终清理。
+ * - cancelRecording: 立刻中止一切，丢弃文字。
  */
 export function useVoiceInput(language: string): UseVoiceInputReturn {
   const { setInputText } = useChatStore()
@@ -34,7 +38,6 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
   const [sttState, setSttState] = useState<SttState>('idle')
   const [error, setError] = useState<string | null>(null)
 
-  // 录制状态引用（避免闭包陷阱）
   const backendRef = useRef<SttBackend | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const preExistingTextRef = useRef('')
@@ -42,7 +45,6 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
   const interimTextRef = useRef('')
   const recordingRef = useRef(false)
 
-  // 检测可用性
   const [isAvailable, setIsAvailable] = useState(false)
   useEffect(() => {
     const backend = new WhisperBackend()
@@ -55,25 +57,37 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
     setInputText(text)
   }, [setInputText])
 
-  /** 停止并清理 */
-  const cleanup = useCallback((): void => {
+  /** 停止计时器 */
+  const stopTimer = useCallback((): void => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+  }, [])
+
+  /** 最终清理：清空回调和引用 */
+  const finalCleanup = useCallback((): void => {
     if (backendRef.current) {
-      backendRef.current.stop()
       backendRef.current.onInterimResult = null
       backendRef.current.onFinalResult = null
       backendRef.current.onError = null
       backendRef.current.onStateChange = null
       backendRef.current = null
     }
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    stopTimer()
     recordingRef.current = false
     setIsRecording(false)
     setDuration(0)
     setSttState('idle')
-  }, [])
+  }, [stopTimer])
+
+  /** 强制中止：立刻停止后端 + 清理（用于 cancel 和 unmount） */
+  const forceAbort = useCallback((): void => {
+    if (backendRef.current) {
+      backendRef.current.stop()
+    }
+    finalCleanup()
+  }, [finalCleanup])
 
   /** 开始录音 */
   const startRecording = useCallback((): void => {
@@ -84,13 +98,11 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
     backendRef.current = backend
     recordingRef.current = true
 
-    // 记录录制前已有的文本
     const currentText = useChatStore.getState().inputText
     preExistingTextRef.current = currentText
     confirmedTextRef.current = ''
     interimTextRef.current = ''
 
-    // 设置回调
     backend.onInterimResult = (text: string): void => {
       interimTextRef.current = text
       updateInputText()
@@ -104,58 +116,65 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
 
     backend.onError = (err: string): void => {
       setError(err)
-      cleanup()
+      finalCleanup()
     }
 
+    // 后端完全空闲后触发最终清理
     backend.onStateChange = (state: SttState): void => {
       setSttState(state)
-      if (state === 'idle' && recordingRef.current) {
-        cleanup()
+      if (state === 'idle') {
+        finalCleanup()
       }
     }
 
     setIsRecording(true)
     setDuration(0)
 
-    // 启动计时器
     const startTime = Date.now()
     timerRef.current = setInterval(() => {
       setDuration(Math.floor((Date.now() - startTime) / 1000))
     }, 1000)
 
-    // 启动 STT
     const lang = language === 'auto' ? undefined : language
     backend.start({ language: lang })
-  }, [language, updateInputText, cleanup])
+  }, [language, updateInputText, finalCleanup])
 
-  /** 停止录音（保留文字） */
+  /** 停止录音（保留文字，等待剩余音频处理完成） */
   const stopRecording = useCallback((): void => {
     if (!recordingRef.current) return
-    // 将 interim 文本转为 confirmed
+    recordingRef.current = false
+
+    // 立刻反映到 UI
+    setIsRecording(false)
+    stopTimer()
+
+    // 提升 interim 文本
     if (interimTextRef.current) {
       confirmedTextRef.current += interimTextRef.current
       interimTextRef.current = ''
       updateInputText()
     }
-    cleanup()
-  }, [updateInputText, cleanup])
 
-  /** 取消录音（丢弃文字） */
+    // 通知后端停止录音 — 它会 drain 剩余音频，处理完成后
+    // 调用 onFinalResult（如果有结果），然后 onStateChange('idle') 触发 finalCleanup
+    backendRef.current?.stop()
+  }, [updateInputText, stopTimer])
+
+  /** 取消录音（丢弃文字，立刻中止） */
   const cancelRecording = useCallback((): void => {
     if (!recordingRef.current) return
-    cleanup()
-    // 恢复录制前的文本
+    forceAbort()
     setInputText(preExistingTextRef.current)
-  }, [cleanup, setInputText])
+  }, [forceAbort, setInputText])
 
-  // 组件卸载时清理
+  // 组件卸载时强制中止
   useEffect(() => {
     return () => {
       if (recordingRef.current) {
-        cleanup()
+        forceAbort()
       }
     }
-  }, [cleanup])
+  }, [forceAbort])
 
   return {
     isRecording,
