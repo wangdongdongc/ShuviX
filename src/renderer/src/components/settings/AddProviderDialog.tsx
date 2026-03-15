@@ -81,7 +81,7 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t('settings.providerNamePlaceholder')}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
+              className="zen-input"
             />
           </div>
           <div>
@@ -90,7 +90,7 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://api.example.com/v1"
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+              className="zen-input font-mono"
             />
           </div>
           <div>
@@ -100,7 +100,7 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+              className="zen-input font-mono"
             />
           </div>
           <div>
@@ -110,7 +110,7 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
             <select
               value={apiProtocol}
               onChange={(e) => setApiProtocol(e.target.value as ProviderInfo['apiProtocol'])}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+              className="zen-select"
             >
               <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
               <option value="anthropic-messages">Anthropic Messages</option>

@@ -176,7 +176,7 @@ export function HttpLogSettings(): React.JSX.Element {
               setFilterProvider(e.target.value)
               setFilterModel('')
             }}
-            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[140px]"
+            className="zen-select max-w-[140px] text-[11px]"
           >
             <option value="">{t('settings.allProviders')}</option>
             {providers.map((p) => (
@@ -188,7 +188,7 @@ export function HttpLogSettings(): React.JSX.Element {
           <select
             value={filterModel}
             onChange={(e) => setFilterModel(e.target.value)}
-            className="bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer max-w-[180px]"
+            className="zen-select max-w-[180px] text-[11px]"
           >
             <option value="">{t('settings.allModels')}</option>
             {modelOptions.map((m) => (

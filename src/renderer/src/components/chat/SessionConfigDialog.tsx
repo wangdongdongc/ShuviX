@@ -205,7 +205,7 @@ export function SessionConfigDialog({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleSaveTitle()
               }}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors"
+              className="zen-input"
             />
           </div>
 
@@ -347,7 +347,7 @@ export function SessionConfigDialog({
             <select
               value={boundBotId ?? ''}
               onChange={(e) => void handleSelectTelegramBot(e.target.value || null)}
-              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-border-primary bg-bg-primary text-text-primary focus:outline-none focus:border-accent"
+              className="zen-select"
             >
               <option value="">{t('sessionConfig.telegramNone')}</option>
               {telegramBots

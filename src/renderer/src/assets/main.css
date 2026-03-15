@@ -273,6 +273,104 @@ body {
   overflow: hidden;
 }
 
+/* ========== Zen 风格表单控件 ========== */
+
+/* 单行输入：底线风格 */
+.zen-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border-secondary);
+  border-radius: 0;
+  padding: 6px 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  outline: none;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.zen-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.zen-input:focus {
+  border-bottom-color: var(--color-accent);
+  box-shadow: 0 1px 0 0 var(--color-accent);
+}
+.zen-input:disabled {
+  opacity: 0.5;
+}
+
+/* 多行文本框：微透明边框 */
+.zen-textarea {
+  width: 100%;
+  background: color-mix(in srgb, var(--color-bg-tertiary) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  outline: none;
+  resize: none;
+  transition: border-color 0.25s ease, background-color 0.25s ease;
+}
+.zen-textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+.zen-textarea:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-bg-tertiary) 35%, transparent);
+}
+
+/* 下拉选择：底线风格 */
+.zen-select {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border-secondary);
+  border-radius: 0;
+  padding: 6px 2px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.zen-select:focus {
+  border-bottom-color: var(--color-accent);
+  box-shadow: 0 1px 0 0 var(--color-accent);
+}
+.zen-select option {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+/* 复合输入组（密码 + 按钮等） */
+.zen-input-group {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border-bottom: 1px solid var(--color-border-secondary);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.zen-input-group:focus-within {
+  border-bottom-color: var(--color-accent);
+  box-shadow: 0 1px 0 0 var(--color-accent);
+}
+.zen-input-group input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 6px 2px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  outline: none;
+}
+.zen-input-group input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
 /* ========== Markdown Zen 样式 ========== */
 
 .markdown-body {

@@ -458,7 +458,7 @@ function AddBotForm({
             onChange={(e) => setToken(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
             placeholder={t('bindings.telegramBotTokenHint')}
-            className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-border-primary bg-bg-primary text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+            className="zen-input"
           />
         </div>
         {error && <div className="text-[10px] text-red-400">{error}</div>}
@@ -645,7 +645,7 @@ function BotAllowedUsers({
           onChange={(e) => setNewUserId(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && void handleAddUser()}
           placeholder="User ID"
-          className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border-primary bg-bg-primary text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+          className="zen-input flex-1"
         />
         <button
           onClick={() => void handleAddUser()}

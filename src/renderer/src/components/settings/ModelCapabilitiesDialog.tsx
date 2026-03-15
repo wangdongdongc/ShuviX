@@ -240,7 +240,7 @@ function NumberField({
           type="number"
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
-          className="w-28 bg-bg-tertiary border border-border-primary rounded-lg px-2.5 py-1.5 text-xs text-text-primary text-right outline-none focus:border-accent/50 transition-colors font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          className="zen-input w-28 text-right font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
         />
         <span className="text-[10px] text-text-tertiary w-16">{unit}</span>
       </div>

@@ -322,14 +322,14 @@ export function ProviderSettings(): React.JSX.Element {
                         value={edits.name ?? p.name}
                         onChange={(e) => updateLocalEdit(p.id, 'name', e.target.value)}
                         placeholder={t('settings.providerNamePlaceholder')}
-                        className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors focus:border-accent/50"
+                        className="zen-input"
                       />
                     </div>
                   )}
                   {/* API Key */}
                   <div>
                     <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
-                    <div className="flex items-center bg-bg-tertiary border border-border-primary rounded-lg overflow-hidden focus-within:border-accent/50 transition-colors">
+                    <div className="zen-input-group">
                       <input
                         type={showKeys[p.id] ? 'text' : 'password'}
                         value={edits.apiKey ?? p.apiKey}
@@ -337,7 +337,6 @@ export function ProviderSettings(): React.JSX.Element {
                         placeholder={t('settings.apiKeyPlaceholder', {
                           name: p.displayName || p.name
                         })}
-                        className="flex-1 bg-transparent px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none"
                       />
                       <button
                         onClick={() => setShowKeys((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
@@ -356,7 +355,7 @@ export function ProviderSettings(): React.JSX.Element {
                       value={edits.baseUrl ?? p.baseUrl}
                       onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
                       placeholder={t('settings.baseUrlPlaceholder')}
-                      className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none transition-colors focus:border-accent/50"
+                      className="zen-input"
                     />
                   </div>
 
@@ -369,7 +368,7 @@ export function ProviderSettings(): React.JSX.Element {
                       <select
                         value={edits.apiProtocol ?? p.apiProtocol}
                         onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
-                        className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+                        className="zen-select"
                       >
                         <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
                         <option value="anthropic-messages">Anthropic Messages</option>
@@ -427,7 +426,7 @@ export function ProviderSettings(): React.JSX.Element {
                           }
                           onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
                           placeholder={t('settings.addModelPlaceholder')}
-                          className="flex-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors font-mono"
+                          className="zen-input flex-1 font-mono text-[11px]"
                         />
                         <button
                           onClick={() => handleAddModel(p.id)}
@@ -446,7 +445,7 @@ export function ProviderSettings(): React.JSX.Element {
                         setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
                       }
                       placeholder={t('settings.searchModel')}
-                      className="w-full mb-2 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors"
+                      className="zen-input mb-2 text-[11px]"
                     />
 
                     <div className="space-y-1">

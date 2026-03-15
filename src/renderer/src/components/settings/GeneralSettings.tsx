@@ -239,7 +239,7 @@ export function GeneralSettings(): React.JSX.Element {
         <select
           value={activeProvider}
           onChange={(e) => handleProviderChange(e.target.value)}
-          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          className="zen-select"
         >
           {enabledProviderIds.map((pid) => {
             const m = availableModels.find((am) => am.providerId === pid)
@@ -260,7 +260,7 @@ export function GeneralSettings(): React.JSX.Element {
         <select
           value={activeModel}
           onChange={(e) => handleModelChange(e.target.value)}
-          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          className="zen-select"
         >
           {availableModels
             .filter((m) => m.providerId === activeProvider)
@@ -282,7 +282,7 @@ export function GeneralSettings(): React.JSX.Element {
           onChange={(e) => setLocalSystemPrompt(e.target.value)}
           onBlur={handleSystemPromptBlur}
           rows={4}
-          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
+          className="zen-textarea leading-relaxed"
           placeholder={t('settings.systemPromptPlaceholder')}
         />
       </div>

@@ -213,7 +213,7 @@ function BashToolPanel(): React.JSX.Element {
                   value={dockerImage}
                   onChange={(e) => setDockerImage(e.target.value)}
                   onBlur={() => save('tool.bash.dockerImage', dockerImage)}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
+                  className="zen-input font-mono"
                   placeholder={t('settings.toolBashImagePlaceholder')}
                 />
               </div>
@@ -391,8 +391,7 @@ function SshToolPanel(): React.JSX.Element {
     sshFormUsername.trim() &&
     (sshFormAuthType === 'password' ? sshFormPassword.trim() : sshFormPrivateKey.trim())
 
-  const inputCls =
-    'w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary outline-none focus:border-accent/50 transition-colors'
+  const inputCls = 'zen-input'
 
   return (
     <div className="px-5 py-5 space-y-4">
@@ -558,7 +557,7 @@ function SshToolPanel(): React.JSX.Element {
                     onChange={(e) => setSshFormPrivateKey(e.target.value)}
                     placeholder={t('settings.toolSshPrivateKeyPlaceholder')}
                     rows={3}
-                    className={`${inputCls} resize-none font-mono text-[10px] leading-relaxed`}
+                    className="zen-textarea font-mono text-[10px] leading-relaxed"
                   />
                 )}
               </div>

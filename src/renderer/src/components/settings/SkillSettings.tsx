@@ -229,7 +229,7 @@ export function SkillSettings(): React.JSX.Element {
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
                 rows={10}
-                className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
+                className="zen-textarea font-mono"
                 placeholder="---\nname: my-skill\ndescription: ...\n---\n# Instructions..."
               />
               {parseError && <p className="text-[10px] text-red-400">{parseError}</p>}
@@ -253,7 +253,7 @@ export function SkillSettings(): React.JSX.Element {
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   disabled={!!editName}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono disabled:opacity-50"
+                  className="zen-input font-mono"
                   placeholder="my-skill"
                 />
               </div>
@@ -265,7 +265,7 @@ export function SkillSettings(): React.JSX.Element {
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
                   rows={2}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none"
+                  className="zen-textarea"
                   placeholder={t('settings.skillDescriptionPlaceholder')}
                 />
               </div>
@@ -277,7 +277,7 @@ export function SkillSettings(): React.JSX.Element {
                   value={formContent}
                   onChange={(e) => setFormContent(e.target.value)}
                   rows={8}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
+                  className="zen-textarea font-mono"
                   placeholder="# My Skill&#10;Instructions for Claude..."
                 />
               </div>

@@ -196,7 +196,7 @@ export function VoiceSettings(): React.JSX.Element {
             useSettingsStore.setState({ voiceSttLanguage: e.target.value })
             window.api.settings.set({ key: 'voice.sttLanguage', value: e.target.value })
           }}
-          className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          className="zen-select"
         >
           <option value="auto">{t('settings.voiceLangAuto')}</option>
           <option value="zh-CN">{t('settings.voiceLangZh')}</option>

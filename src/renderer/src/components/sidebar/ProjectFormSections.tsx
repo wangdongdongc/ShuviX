@@ -27,7 +27,7 @@ export function ProjectBasicInfo({
         <input
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
-          className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors"
+          className="zen-input"
           placeholder={t('projectForm.namePlaceholder')}
         />
       </div>
@@ -39,7 +39,7 @@ export function ProjectBasicInfo({
           value={systemPrompt}
           onChange={(e) => onSystemPromptChange(e.target.value)}
           rows={3}
-          className="w-full bg-bg-secondary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none"
+          className="zen-textarea"
           placeholder={t('projectForm.promptPlaceholder')}
         />
       </div>
@@ -107,7 +107,7 @@ export function ProjectFileSystem({
                   next[idx] = { ...dir, note: e.target.value }
                   onReferenceDirsChange(next)
                 }}
-                className="w-full bg-bg-secondary border border-border-primary rounded px-2 py-1 text-[10px] text-text-secondary outline-none focus:border-accent transition-colors mt-1"
+                className="zen-input text-[10px] mt-1"
                 placeholder={t('projectForm.refDirNotePlaceholder')}
               />
             </div>

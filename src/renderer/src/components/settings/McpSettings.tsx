@@ -331,7 +331,7 @@ export function McpSettings(): React.JSX.Element {
             <input
               value={formName}
               onChange={(e) => setFormName(e.target.value)}
-              className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
+              className="zen-input font-mono"
               placeholder={t('settings.mcpNamePlaceholder')}
             />
           </div>
@@ -368,7 +368,7 @@ export function McpSettings(): React.JSX.Element {
                 <input
                   value={formCommand}
                   onChange={(e) => setFormCommand(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
+                  className="zen-input font-mono"
                   placeholder={t('settings.mcpCommandPlaceholder')}
                 />
               </div>
@@ -380,7 +380,7 @@ export function McpSettings(): React.JSX.Element {
                   value={formArgs}
                   onChange={(e) => setFormArgs(e.target.value)}
                   rows={3}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
+                  className="zen-textarea font-mono"
                   placeholder={t('settings.mcpArgsPlaceholder')}
                 />
               </div>
@@ -392,7 +392,7 @@ export function McpSettings(): React.JSX.Element {
                   value={formEnv}
                   onChange={(e) => setFormEnv(e.target.value)}
                   rows={2}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
+                  className="zen-textarea font-mono"
                   placeholder={t('settings.mcpEnvPlaceholder')}
                 />
               </div>
@@ -409,7 +409,7 @@ export function McpSettings(): React.JSX.Element {
                 <input
                   value={formUrl}
                   onChange={(e) => setFormUrl(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors font-mono"
+                  className="zen-input font-mono"
                   placeholder={t('settings.mcpUrlPlaceholder')}
                 />
               </div>
@@ -421,7 +421,7 @@ export function McpSettings(): React.JSX.Element {
                   value={formHeaders}
                   onChange={(e) => setFormHeaders(e.target.value)}
                   rows={2}
-                  className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary outline-none focus:border-accent transition-colors resize-none font-mono"
+                  className="zen-textarea font-mono"
                   placeholder={t('settings.mcpHeadersPlaceholder')}
                 />
               </div>
