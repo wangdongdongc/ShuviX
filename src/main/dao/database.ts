@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3'
 import { join } from 'path'
-import { v7 as uuidv7 } from 'uuid'
 import { mark, measure } from '../perf'
 import { getDataDir } from '../utils/paths'
 
@@ -174,7 +173,14 @@ class DatabaseManager {
   private seedProviders(): void {
     const now = Date.now()
 
-    // name 必须与 pi-ai 的 provider slug 一致（agent.ts 用 name.toLowerCase() 调 getModel()）
+    // 迁移：将旧 UUID ID 的内置提供商降级为自定义提供商（避免 name 冲突）
+    this.db
+      .prepare(
+        "UPDATE providers SET isBuiltin = 0, name = name || '-' || id WHERE isBuiltin = 1 AND id != name"
+      )
+      .run()
+
+    // name 与 id 均为 pi-ai 的 provider slug
     const builtinProviders: Array<{
       name: string
       displayName: string
@@ -293,7 +299,7 @@ class DatabaseManager {
         const existing = findByName.get(p.name) as { id: string; displayName: string } | undefined
         if (!existing) {
           insertProvider.run(
-            uuidv7(),
+            p.name,
             p.name,
             p.displayName,
             p.baseUrl,

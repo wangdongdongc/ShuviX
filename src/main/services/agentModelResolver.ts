@@ -79,7 +79,6 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
   const piModel = getModel(slug as KnownProvider, model as Parameters<typeof getModel>[1])
   if (piModel) {
     resolvedModel = piModel
-    resolvedModel.provider = provider
     if (params.baseUrl || providerInfo?.baseUrl) {
       resolvedModel.baseUrl = params.baseUrl || providerInfo!.baseUrl!
     }

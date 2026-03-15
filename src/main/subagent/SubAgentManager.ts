@@ -4,17 +4,11 @@
  * 管理 explore 等进程内子智能体的 Agent 实例生命周期。
  * 纯内存管理，不写 DB，父会话销毁时统一清理。
  *
- * 与父 Agent 解耦：自行解析模型配置并创建 streamFn，
- * 不依赖父 Agent 的 Model/StreamFn 对象。
+ * 与父 Agent 解耦：自行解析模型配置，
+ * 不依赖父 Agent 的 Model 对象。
  */
 
-import {
-  Agent,
-  type AgentEvent,
-  type AgentMessage,
-  type StreamFn
-} from '@mariozechner/pi-agent-core'
-import { streamSimple } from '@mariozechner/pi-ai'
+import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
 import { isAssistantMessage } from '../utils/messageGuards'
 import type { ChatTokenUsage } from '../frontend'
 import { ReadTool } from '../tools/read'
@@ -240,24 +234,6 @@ class SubAgentManager {
 
   // ─── 内部方法 ──────────────────────────────────────────
 
-  /** 创建子智能体的 StreamFn：自行查 API key、还原 provider slug，不依赖父级 */
-  private buildStreamFn(): StreamFn {
-    return (
-      streamModel: Parameters<typeof streamSimple>[0],
-      context: Parameters<typeof streamSimple>[1],
-      options?: Parameters<typeof streamSimple>[2]
-    ): ReturnType<typeof streamSimple> => {
-      const p = providerDao.pick(String(streamModel.provider), ['apiKey', 'isBuiltin', 'name'])
-      const effectiveModel =
-        p?.isBuiltin && p.name ? { ...streamModel, provider: p.name.toLowerCase() } : streamModel
-      const streamOpts = {
-        ...(options || {}),
-        ...(p?.apiKey ? { apiKey: p.apiKey } : {})
-      }
-      return streamSimple(effectiveModel, context, streamOpts)
-    }
-  }
-
   private createSession(
     parentSessionId: string,
     agentType: InProcessAgentType,
@@ -276,13 +252,11 @@ class SubAgentManager {
 
     const tools = buildSubAgentTools(subToolContext, agentType)
 
-    // 自行解析模型和创建 streamFn（与父 Agent 解耦）
     const resolvedModel = resolveModel({
       provider: modelConfig.provider,
       model: modelConfig.model,
       capabilities: modelConfig.capabilities
     })
-    const subStreamFn = this.buildStreamFn()
 
     const agent = new Agent({
       initialState: {
@@ -292,7 +266,7 @@ class SubAgentManager {
         messages: [],
         tools
       },
-      streamFn: subStreamFn
+      getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined
     })
 
     // 订阅子智能体事件，转发到父会话（带 subAgentId 标注）

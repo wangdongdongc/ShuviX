@@ -3,8 +3,7 @@ import {
   type TextContent,
   type ThinkingContent,
   type ImageContent,
-  completeSimple,
-  streamSimple
+  completeSimple
 } from '@mariozechner/pi-ai'
 import { parallelCoordinator } from './parallelExecution'
 import { messageService } from './messageService'
@@ -204,48 +203,6 @@ export class AgentSession {
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
-    // 构建 streamFn（回调通过闭包引用 session）
-    const streamFn = (
-      streamModel: Parameters<typeof streamSimple>[0],
-      context: Parameters<typeof streamSimple>[1],
-      options?: Parameters<typeof streamSimple>[2]
-    ): ReturnType<typeof streamSimple> => {
-      const currentProvider = providerDao.pick(String(streamModel.provider), [
-        'apiKey',
-        'isBuiltin',
-        'name'
-      ])
-      const resolvedApiKey = currentProvider?.apiKey
-      try {
-        const streamOpts = {
-          ...(options || {}),
-          ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
-          onPayload: (payload: unknown) => {
-            const logId = httpLogService.logRequest({
-              sessionId,
-              provider: String(streamModel.provider || provider),
-              model: String(streamModel.id || model),
-              payload
-            })
-            session.addPendingLogId(logId)
-          }
-        }
-        // 内置提供商：还原 SDK 可识别的 provider slug（如 "openrouter"、"anthropic"）
-        // ShuviX 用内部 ID 覆盖了 model.provider，需要还原以使 SDK 内部逻辑正常工作
-        const effectiveModel =
-          currentProvider?.isBuiltin && currentProvider.name
-            ? { ...streamModel, provider: currentProvider.name.toLowerCase() }
-            : streamModel
-
-        return streamSimple(effectiveModel, context, streamOpts)
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err)
-        log.error(`streamFn 错误: ${message}`)
-        chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: message })
-        throw err
-      }
-    }
-
     // 构建子智能体上下文（使 explore 等子智能体工具可用）
     const subAgentCtx: SubAgentBuildContext = {
       modelConfig: { provider, model, capabilities },
@@ -263,7 +220,11 @@ export class AgentSession {
         messages: [],
         tools
       },
-      streamFn
+      getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined,
+      onPayload: (payload) => {
+        const logId = httpLogService.logRequest({ sessionId, provider, model, payload })
+        session.addPendingLogId(logId)
+      }
     })
 
     // 注入项目 AGENTS.MD / AGENT.md
