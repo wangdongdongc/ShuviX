@@ -212,9 +212,9 @@ function extractSummary(content: unknown): {
   let hasToolCall = false
 
   for (const block of content) {
-    if (block.type === 'text' && block.text) {
+    if ((block.type === 'text' || block.type === 'input_text') && block.text) {
       text += block.text + ' '
-    } else if (block.type === 'image_url' || block.type === 'image') {
+    } else if (block.type === 'image_url' || block.type === 'image' || block.type === 'input_image') {
       hasImage = true
     } else if (block.type === 'tool_call' || block.type === 'toolCall') {
       hasToolCall = true
@@ -303,7 +303,7 @@ function ContentBlockView({
   block: ContentBlock
   t: (key: string) => string
 }): React.JSX.Element {
-  if (block.type === 'text') {
+  if (block.type === 'text' || block.type === 'input_text') {
     return (
       <pre className="text-[11px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
         {block.text}
@@ -394,7 +394,7 @@ function ContentBlockView({
 /** 渲染基本参数（排除 messages 和 tools） */
 function BasicParams({ data }: { data: Record<string, unknown> }): React.JSX.Element {
   const filtered = Object.entries(data).filter(
-    ([key]) => key !== 'messages' && key !== 'tools' && key !== 'system'
+    ([key]) => key !== 'messages' && key !== 'tools' && key !== 'system' && key !== 'input'
   )
   return (
     <div className="px-3 py-2 space-y-1">
@@ -432,6 +432,95 @@ function ToolItem({ tool }: { tool: ToolDefinition }): React.JSX.Element {
       </div>
     </CollapsibleItem>
   )
+}
+
+/**
+ * 将 OpenAI Responses API 格式（input 数组）归一化为标准 messages 结构。
+ * GPT-5.x 等新模型使用 `input` 代替 `messages`，content block 使用 `input_text` 等类型。
+ */
+function normalizeOpenAIResponsesPayload(raw: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (key !== 'input') {
+      result[key] = value
+    }
+  }
+
+  const input = raw.input as Array<Record<string, unknown>> | undefined
+  if (input) {
+    const messages: NormalizedMessage[] = []
+    let pendingToolCalls: ToolCallEntry[] = []
+
+    /** 将累积的 function_call 打包为一条 assistant 消息 */
+    const flushToolCalls = (): void => {
+      if (pendingToolCalls.length > 0) {
+        messages.push({ role: 'assistant', tool_calls: pendingToolCalls })
+        pendingToolCalls = []
+      }
+    }
+
+    /** 归一化 content 块中的类型（input_text → text 等） */
+    const normalizeContent = (content: unknown): unknown => {
+      if (typeof content === 'string') return content
+      if (!Array.isArray(content)) return content
+      return (content as ContentBlock[]).map((block) => {
+        if (block.type === 'input_text') return { type: 'text', text: block.text }
+        if (block.type === 'input_image') {
+          return {
+            type: 'image_url',
+            image_url: { url: (block as Record<string, unknown>).image_url || '' }
+          }
+        }
+        if (block.type === 'input_audio') return { type: 'text', text: '[audio]' }
+        return block
+      })
+    }
+
+    for (const item of input) {
+      const itemType = item.type as string | undefined
+
+      if (itemType === 'function_call') {
+        // 累积工具调用
+        let args = item.arguments
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args)
+          } catch {
+            /* keep raw string */
+          }
+        }
+        pendingToolCalls.push({
+          function: { name: item.name as string, arguments: args }
+        })
+      } else if (itemType === 'function_call_output') {
+        // 先 flush 累积的工具调用，再添加工具结果
+        flushToolCalls()
+        messages.push({
+          role: 'tool',
+          tool_call_id: (item.call_id as string) || undefined,
+          content: (item.output as string) || ''
+        })
+      } else if (item.role) {
+        // 普通消息（developer / user / assistant）
+        flushToolCalls()
+        const msg: NormalizedMessage = { role: item.role as string }
+        msg.content = normalizeContent(item.content)
+        messages.push(msg)
+      } else {
+        // 其他类型（reasoning 等）跳过或作为 assistant 消息展示
+        flushToolCalls()
+        if (itemType) {
+          messages.push({ role: 'assistant', content: `[${itemType}]` })
+        }
+      }
+    }
+
+    flushToolCalls()
+    result.messages = messages
+  }
+
+  return result
 }
 
 /**
@@ -648,7 +737,11 @@ export function PayloadViewer({
       const raw = JSON.parse(payload)
       // 检测 Google Gemini 格式并归一化
       const isGoogleFormat = Array.isArray(raw.contents) || raw.config?.systemInstruction
-      return isGoogleFormat ? normalizeGooglePayload(raw) : raw
+      if (isGoogleFormat) return normalizeGooglePayload(raw)
+      // 检测 OpenAI Responses API 格式（input 数组代替 messages）
+      const isResponsesFormat = Array.isArray(raw.input) && !raw.messages
+      if (isResponsesFormat) return normalizeOpenAIResponsesPayload(raw)
+      return raw
     } catch {
       return null
     }

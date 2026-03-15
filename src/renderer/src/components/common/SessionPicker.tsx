@@ -121,9 +121,9 @@ export function SessionPicker({ value, onChange }: SessionPickerProps): React.JS
             setOpen(true)
           }
         }}
-        className="inline-flex items-center gap-1 bg-bg-tertiary border border-border-primary rounded-md px-2 py-1.5 text-[11px] text-text-primary outline-none hover:border-accent/50 transition-colors cursor-pointer max-w-[160px]"
+        className="inline-flex items-center gap-1 bg-transparent border-0 border-b border-border-secondary rounded-none py-1.5 text-[11px] text-text-primary whitespace-nowrap hover:border-accent/50 transition-colors cursor-pointer"
       >
-        <span className="truncate">{displayLabel}</span>
+        <span className="truncate max-w-[140px]">{displayLabel}</span>
         <ChevronDown size={10} className="text-text-tertiary flex-shrink-0" />
       </button>
 

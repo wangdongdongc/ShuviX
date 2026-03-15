@@ -4,6 +4,7 @@ import { Trash2, RefreshCw } from 'lucide-react'
 import { PayloadViewer } from './PayloadViewer'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SessionPicker } from '../common/SessionPicker'
+import { ZenSelect } from '../common/ZenSelect'
 
 /** HTTP 日志设置 */
 export function HttpLogSettings(): React.JSX.Element {
@@ -170,33 +171,21 @@ export function HttpLogSettings(): React.JSX.Element {
         {/* 筛选条件 */}
         <div className="flex items-center gap-2">
           <SessionPicker value={filterSessionId} onChange={setFilterSessionId} />
-          <select
+          <ZenSelect
             value={filterProvider}
-            onChange={(e) => {
-              setFilterProvider(e.target.value)
+            onChange={(v) => {
+              setFilterProvider(v)
               setFilterModel('')
             }}
-            className="zen-select max-w-[140px] text-[11px]"
-          >
-            <option value="">{t('settings.allProviders')}</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <select
+            placeholder={t('settings.allProviders')}
+            options={providers.map((p) => ({ value: p.id, label: p.name }))}
+          />
+          <ZenSelect
             value={filterModel}
-            onChange={(e) => setFilterModel(e.target.value)}
-            className="zen-select max-w-[180px] text-[11px]"
-          >
-            <option value="">{t('settings.allModels')}</option>
-            {modelOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+            onChange={setFilterModel}
+            placeholder={t('settings.allModels')}
+            options={modelOptions.map((m) => ({ value: m, label: m }))}
+          />
         </div>
       </div>
 
