@@ -13,7 +13,6 @@ import {
   writeFileSync,
   readdirSync,
   rmSync,
-  statSync,
   cpSync
 } from 'fs'
 import { join } from 'path'
@@ -289,39 +288,6 @@ class SkillService {
     const config = this.readConfig()
     config.disabled = config.disabled.filter((n) => n !== name)
     this.writeConfig(config)
-  }
-
-  /**
-   * 读取 skill 伴随文件内容
-   * 传入 projectPath 时，优先查找项目级 skill 目录
-   */
-  readCompanionFile(skillName: string, relativePath: string, projectPath?: string): string | null {
-    // 优先在项目级 skill 目录查找
-    if (projectPath) {
-      const projectDir = join(projectPath, '.claude', 'skills', skillName)
-      const result = this.readFileFromDir(projectDir, relativePath)
-      if (result !== null) return result
-    }
-    return this.readFileFromDir(join(this.skillsDir, skillName), relativePath)
-  }
-
-  /** 从指定目录读取伴随文件 */
-  private readFileFromDir(dir: string, relativePath: string): string | null {
-    const filePath = join(dir, relativePath)
-
-    // 安全检查：防止路径遍历
-    if (!filePath.startsWith(dir)) {
-      return null
-    }
-
-    try {
-      if (existsSync(filePath) && statSync(filePath).isFile()) {
-        return readFileSync(filePath, 'utf-8')
-      }
-    } catch (e) {
-      log.warn(`读取 skill 伴随文件失败: ${filePath}`, e)
-    }
-    return null
   }
 
   /** 获取 skills 根目录路径 */

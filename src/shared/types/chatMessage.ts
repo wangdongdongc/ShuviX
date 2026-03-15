@@ -144,7 +144,7 @@ export interface SshToolDetails {
 export interface SkillToolDetails {
   type: 'skill'
   skillName: string
-  file?: string
+  dir?: string
   error?: boolean
 }
 

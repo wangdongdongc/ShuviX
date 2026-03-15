@@ -1,12 +1,14 @@
 /**
  * Skill 工具 — 按需加载已安装的 Skill 指令集
- * 采用 Claude Code 的 lazy-loading 机制：
- *   - tool description 中嵌入已启用 skill 的名称 + 描述索引
- *   - 模型调用时返回完整 SKILL.md 内容
- *   - 支持读取伴随文件：command: "pdf/REFERENCE.md"
+ * 采用 OpenCode 的 lazy-loading 机制：
+ *   - tool description 中嵌入已启用 skill 的名称 + 描述 + 路径索引
+ *   - 模型调用时返回完整 SKILL.md 内容 + 目录文件采样列表
+ *   - 伴随文件由 agent 使用 Read 工具自行读取
  */
 
+import { resolve } from 'path'
 import { Type } from '@sinclair/typebox'
+import { rgFiles } from './utils/ripgrep'
 import { BaseTool } from './types'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SkillToolDetails } from '../../shared/types/chatMessage'
@@ -14,9 +16,8 @@ import { skillService } from '../services/skillService'
 import { t } from '../i18n'
 
 const SkillParamsSchema = Type.Object({
-  command: Type.String({
-    description:
-      'The skill name to load, or skill_name/file_path to read a companion file. E.g., "pdf", "brand-guide", "pdf/REFERENCE.md"'
+  name: Type.String({
+    description: 'The name of the skill from available_skills'
   })
 })
 
@@ -34,38 +35,46 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
     super()
     this.projectPath = projectPath
 
-    // 从文件系统加载 enabledSkillNames 中指定的 skills（全局 + 项目级合并）
-    // 项目级 skills 的启用在会话创建时由 getDefaultEnabledTools 处理，此处不做特殊处理
     const allSkills = skillService.findEnabled(projectPath)
     this.skills = allSkills.filter((s) => enabledSkillNames.includes(s.name))
 
-    // 构建 <available_skills> XML 嵌入 tool description
-    const skillListXml = this.skills
-      .map(
-        (s) =>
-          `<skill>\n  <name>${s.name}</name>\n  <description>${s.description}</description>\n</skill>`
-      )
-      .join('\n')
+    if (this.skills.length === 0) {
+      this.description =
+        'Load a specialized skill that provides domain-specific instructions and workflows. No skills are currently available.'
+    } else {
+      // 动态生成 name 参数 hint
+      const examples = this.skills
+        .slice(0, 3)
+        .map((s) => `'${s.name}'`)
+        .join(', ')
+      const hint = examples ? ` (e.g., ${examples}, ...)` : ''
+      ;(this.parameters.properties.name as { description: string }).description =
+        `The name of the skill from available_skills${hint}`
 
-    this.description = `Execute a skill within the main conversation.
+      const skillListXml = this.skills
+        .map(
+          (s) =>
+            `  <skill>\n    <name>${s.name}</name>\n    <description>${s.description}</description>\n    <location>file://${s.basePath}</location>\n  </skill>`
+        )
+        .join('\n')
 
-<skills_instructions>
-When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.
-
-How to use skills:
-- Load a skill: command: "pdf" — returns the skill's instructions
-- Read companion file: command: "pdf/REFERENCE.md" — reads a referenced file within the skill directory
-- Examples: command: "pdf", command: "brand-guide", command: "pdf/FORMS.md"
-
-Important:
-- Only use skills listed in <available_skills> below
-- Do not invoke a skill that is already running
-- When a skill's instructions reference companion files (e.g., "see REFERENCE.md"), use this tool with "skill_name/filename" to read them
-</skills_instructions>
-
-<available_skills>
-${skillListXml}
-</available_skills>`
+      this.description = [
+        'Load a specialized skill that provides domain-specific instructions and workflows.',
+        '',
+        'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
+        '',
+        'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
+        '',
+        'Tool output includes a `<skill_content name="...">` block with the loaded content.',
+        '',
+        'The following skills provide specialized sets of instructions for particular tasks.',
+        'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
+        '',
+        '<available_skills>',
+        skillListXml,
+        '</available_skills>'
+      ].join('\n')
+    }
   }
 
   async preExecute(): Promise<void> {
@@ -77,55 +86,63 @@ ${skillListXml}
     /* no-op */
   }
 
+  /** 使用 ripgrep 递归扫描 skill 目录文件（排除 SKILL.md，最多 10 个） */
+  private async scanSkillFiles(basePath: string): Promise<string[]> {
+    const limit = 10
+    const result: string[] = []
+    try {
+      for await (const file of rgFiles({ cwd: basePath, hidden: true })) {
+        if (file.includes('SKILL.md')) continue
+        result.push(resolve(basePath, file))
+        if (result.length >= limit) break
+      }
+    } catch {
+      // ignore — rg may fail on missing directories
+    }
+    return result
+  }
+
   protected async executeInternal(
     _toolCallId: string,
-    params: { command: string }
+    params: { name: string }
   ): Promise<AgentToolResult<SkillToolDetails>> {
-    const cmd = params.command.trim()
-    const slashIdx = cmd.indexOf('/')
+    const skillName = params.name.trim()
 
-    // 判断是加载 skill 还是读取伴随文件
-    if (slashIdx > 0) {
-      // command: "pdf/REFERENCE.md" — 读取伴随文件
-      const skillName = cmd.slice(0, slashIdx)
-      const filePath = cmd.slice(slashIdx + 1)
-      const content = skillService.readCompanionFile(skillName, filePath, this.projectPath)
-      if (content === null) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `File "${filePath}" not found in skill "${skillName}".`
-            }
-          ],
-          details: { type: 'skill', skillName, file: filePath, error: true }
-        }
-      }
-      return {
-        content: [{ type: 'text' as const, text: content }],
-        details: { type: 'skill', skillName, file: filePath }
-      }
-    }
-
-    // command: "pdf" — 加载 skill 主内容
-    const skill = skillService.findByName(cmd, this.projectPath)
+    const skill = skillService.findByName(skillName, this.projectPath)
     if (!skill) {
       return {
         content: [
           {
             type: 'text' as const,
-            text: `Skill "${cmd}" not found. Available skills: ${this.skills.map((s) => s.name).join(', ')}`
+            text: `Skill "${skillName}" not found. Available skills: ${this.skills.map((s) => s.name).join(', ') || 'none'}`
           }
         ],
-        details: { type: 'skill', skillName: cmd, error: true }
+        details: { type: 'skill', skillName, error: true }
       }
     }
 
-    // 返回 skill 内容，附带目录路径提示
-    const header = `[Skill: ${skill.name} | Directory: ${skill.basePath}]\n\n`
+    const files = await this.scanSkillFiles(skill.basePath)
+    const filesXml =
+      files.length > 0
+        ? `\n<skill_files>\n${files.map((f) => `<file>${f}</file>`).join('\n')}\n</skill_files>`
+        : ''
+
+    const output = [
+      `<skill_content name="${skill.name}">`,
+      `# Skill: ${skill.name}`,
+      '',
+      skill.content.trim(),
+      '',
+      `Base directory for this skill: file://${skill.basePath}`,
+      'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
+      ...(files.length > 0 ? ['Note: file list is sampled.'] : []),
+      filesXml,
+      '</skill_content>'
+    ].join('\n')
+
     return {
-      content: [{ type: 'text' as const, text: `${header}${skill.content}` }],
-      details: { type: 'skill', skillName: skill.name }
+      content: [{ type: 'text' as const, text: output }],
+      details: { type: 'skill', skillName: skill.name, dir: skill.basePath }
     }
   }
 }

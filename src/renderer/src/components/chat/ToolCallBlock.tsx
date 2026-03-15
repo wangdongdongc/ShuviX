@@ -138,7 +138,7 @@ export function ToolCallBlock({
       case 'skill':
         return {
           icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
-          detail: str(args?.command)
+          detail: str(args?.name)
         }
       case 'python': {
         const code = str(args?.code)
