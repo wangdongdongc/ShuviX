@@ -268,7 +268,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
           </div>
         )}
 
-        <div className="relative flex items-end gap-2">
+        <div className="relative">
           {/* 斜杠命令自动补全浮层 */}
           {slash.showPopover && (
             <SlashCommandPopover
@@ -279,8 +279,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
             />
           )}
 
-          {/* 左下角紧凑扩展位 */}
-          <div className="absolute left-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
+          {/* 底部工具栏 */}
+          <div className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
             {/* Pickers 组：可选择项紧凑排列在最左 */}
             <div className="flex items-center gap-1.5">
               <ModelPicker readonly={!canEdit} />
@@ -364,6 +364,66 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                 </div>
               </span>
             )}
+
+            {/* 右侧弹性空白 → 将按钮推到最右 */}
+            <span className="flex-1" />
+
+            {/* Mic + Send/Stop 按钮 */}
+            <div className="flex items-center gap-0.5">
+              {voice.isAvailable && !effectiveStreaming && (
+                <button
+                  onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
+                  disabled={!activeSessionId}
+                  className={`p-1 rounded transition-colors ${
+                    voice.isRecording
+                      ? 'text-error hover:bg-error/10'
+                      : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
+                  }`}
+                  title={
+                    voice.isRecording
+                      ? t('voice.stopRecording')
+                      : t('voice.startRecording')
+                  }
+                >
+                  {voice.isRecording ? (
+                    <div className="flex items-center gap-1">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
+                      </span>
+                      <span className="text-[10px] tabular-nums">
+                        {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
+                      </span>
+                    </div>
+                  ) : (
+                    <Mic size={14} />
+                  )}
+                </button>
+              )}
+
+              {effectiveStreaming ? (
+                <button
+                  onClick={handleAbort}
+                  className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
+                  title={t('input.stopGen')}
+                >
+                  <Square size={14} fill="currentColor" />
+                </button>
+              ) : (
+                <button
+                  onClick={hasPendingAction ? handleOverrideSend : handleSend}
+                  disabled={!canSend}
+                  className={`p-1.5 rounded-lg transition-colors ${
+                    canSend
+                      ? 'bg-accent text-white hover:bg-accent-hover'
+                      : 'text-text-tertiary cursor-not-allowed'
+                  }`}
+                  title={t('input.send')}
+                >
+                  <Send size={14} />
+                </button>
+              )}
+            </div>
           </div>
 
           <textarea
@@ -384,7 +444,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
             disabled={!activeSessionId}
             rows={3}
             style={{ minHeight: `${minH}px` }}
-            className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
+            className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
           />
 
           {/* 语音输入错误提示 */}
@@ -393,64 +453,6 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               {voice.error}
             </div>
           )}
-
-          {/* 右侧按钮组：Mic + Send/Stop */}
-          <div className="flex items-end gap-0.5">
-            {/* 麦克风按钮 */}
-            {voice.isAvailable && !effectiveStreaming && (
-              <button
-                onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
-                disabled={!activeSessionId}
-                className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
-                  voice.isRecording
-                    ? 'bg-error/20 text-error hover:bg-error/30'
-                    : 'bg-bg-tertiary text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
-                }`}
-                title={
-                  voice.isRecording
-                    ? t('voice.stopRecording')
-                    : t('voice.startRecording')
-                }
-              >
-                {voice.isRecording ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="relative flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-error" />
-                    </span>
-                    <span className="text-[11px] tabular-nums">
-                      {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
-                    </span>
-                  </div>
-                ) : (
-                  <Mic size={16} />
-                )}
-              </button>
-            )}
-
-            {effectiveStreaming ? (
-              <button
-                onClick={handleAbort}
-                className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
-                title={t('input.stopGen')}
-              >
-                <Square size={16} fill="currentColor" />
-              </button>
-            ) : (
-              <button
-                onClick={hasPendingAction ? handleOverrideSend : handleSend}
-                disabled={!canSend}
-                className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
-                  canSend
-                    ? 'bg-accent text-white hover:bg-accent-hover'
-                    : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
-                }`}
-                title={t('input.send')}
-              >
-                <Send size={16} />
-              </button>
-            )}
-          </div>
         </div>
       </div>
     </div>
