@@ -192,7 +192,7 @@ class DatabaseManager {
         name: 'openai',
         displayName: 'OpenAI',
         baseUrl: 'https://api.openai.com/v1',
-        apiProtocol: 'openai-completions',
+        apiProtocol: 'openai-responses',
         sortOrder: 0
       },
       {
@@ -233,8 +233,8 @@ class DatabaseManager {
       {
         name: 'mistral',
         displayName: 'Mistral',
-        baseUrl: 'https://api.mistral.ai/v1',
-        apiProtocol: 'openai-completions',
+        baseUrl: 'https://api.mistral.ai',
+        apiProtocol: 'mistral-conversations',
         sortOrder: 6
       },
       {
@@ -247,15 +247,15 @@ class DatabaseManager {
       {
         name: 'minimax',
         displayName: 'MiniMax',
-        baseUrl: 'https://api.minimaxi.chat/v1',
-        apiProtocol: 'openai-completions',
+        baseUrl: 'https://api.minimax.io/anthropic',
+        apiProtocol: 'anthropic-messages',
         sortOrder: 8
       },
       {
         name: 'minimax-cn',
         displayName: 'MiniMax CN',
-        baseUrl: 'https://api.minimax.chat/v1',
-        apiProtocol: 'openai-completions',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        apiProtocol: 'anthropic-messages',
         sortOrder: 9
       },
       {
@@ -268,8 +268,8 @@ class DatabaseManager {
       {
         name: 'opencode',
         displayName: 'OpenCode',
-        baseUrl: 'https://opencode.ai/zen/v1',
-        apiProtocol: 'openai-completions',
+        baseUrl: 'https://opencode.ai/zen',
+        apiProtocol: 'anthropic-messages',
         sortOrder: 11
       },
       {
@@ -282,7 +282,7 @@ class DatabaseManager {
       {
         name: 'zai',
         displayName: 'ZAI (智谱)',
-        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        baseUrl: 'https://api.z.ai/api/coding/paas/v4',
         apiProtocol: 'openai-completions',
         sortOrder: 13
       }
