@@ -22,11 +22,12 @@ function getWhisper(): typeof import('whisper-cpp-node') {
  */
 export class LocalSttBackend implements SttBackendMain {
   async transcribe(_audioBase64: string, language?: string, pcmf32Base64?: string): Promise<{ text: string }> {
+    // 渲染进程对极短/不完整的 WebM 解码可能失败，pcmf32 为空时静默跳过
     if (!pcmf32Base64) {
-      throw new Error('本地模式需要 PCM 数据，请确保渲染进程已提供 pcmf32')
+      log.warn('No PCM data received (audio segment too short or decode failed), skipping')
+      return { text: '' }
     }
 
-    // 获取当前选中的模型
     const modelId = settingsDao.findByKey('voice.localModel') || 'large-v3-turbo'
     const modelPath = whisperModelManager.getModelPath(modelId)
     if (!whisperModelManager.isDownloaded(modelId)) {
