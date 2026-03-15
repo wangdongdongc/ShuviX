@@ -489,12 +489,23 @@
     "voiceSttBackend": "認識エンジン",
     "voiceSttLanguage": "認識言語",
     "voiceWhisperHint": "音声入力は内蔵の OpenAI プロバイダーの Whisper モデルを使用します。先に API Key を設定してください。",
+    "voiceSttBackend": "認識エンジン",
+    "voiceLocalLabel": "ローカル (Whisper.cpp)",
     "voiceWhisperReady": "OpenAI Whisper 準備完了",
+    "voiceWhisperHint": "音声入力は内蔵の OpenAI プロバイダーの Whisper モデルを使用します。先に API Key を設定してください。",
     "voiceGoProviders": "プロバイダー設定へ →",
     "voiceLangAuto": "自動検出",
     "voiceLangZh": "中国語 (zh-CN)",
     "voiceLangEn": "English (en-US)",
-    "voiceLangJa": "日本語 (ja-JP)"
+    "voiceLangJa": "日本語 (ja-JP)",
+    "voiceAvailableModels": "利用可能なモデル",
+    "voiceModelHint": "ローカル音声認識用の Whisper モデルをダウンロードしてください。大きいモデルはより正確ですが、より多くのストレージと処理能力が必要です。",
+    "voiceDownload": "ダウンロード",
+    "voiceCancelDownload": "ダウンロードをキャンセル",
+    "voiceDeleteModel": "モデルを削除",
+    "voiceUseModel": "使用",
+    "voiceRemaining": "残り",
+    "tabVoice": "音声"
   },
 
   "about": {

@@ -489,12 +489,23 @@
     "voiceSttBackend": "识别引擎",
     "voiceSttLanguage": "识别语言",
     "voiceWhisperHint": "语音输入使用内置 OpenAI 提供商的 Whisper 模型，请先配置 API Key",
+    "voiceSttBackend": "识别引擎",
+    "voiceLocalLabel": "本地 (Whisper.cpp)",
     "voiceWhisperReady": "OpenAI Whisper 已就绪",
+    "voiceWhisperHint": "语音输入使用内置 OpenAI 提供商的 Whisper 模型，请先配置 API Key",
     "voiceGoProviders": "前往提供商设置 →",
     "voiceLangAuto": "自动检测",
     "voiceLangZh": "中文 (zh-CN)",
     "voiceLangEn": "English (en-US)",
-    "voiceLangJa": "日本語 (ja-JP)"
+    "voiceLangJa": "日本語 (ja-JP)",
+    "voiceAvailableModels": "可用模型",
+    "voiceModelHint": "下载 Whisper 模型以进行本地语音识别。较大的模型更准确，但需要更多存储空间和处理能力。",
+    "voiceDownload": "下载",
+    "voiceCancelDownload": "取消下载",
+    "voiceDeleteModel": "删除模型",
+    "voiceUseModel": "使用",
+    "voiceRemaining": "剩余",
+    "tabVoice": "语音"
   },
 
   "about": {

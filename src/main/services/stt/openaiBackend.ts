@@ -1,17 +1,13 @@
-import { providerDao } from '../dao/providerDao'
-import { createLogger } from '../logger'
+import type { SttBackendMain } from './types'
+import { providerDao } from '../../dao/providerDao'
+import { createLogger } from '../../logger'
 
-const log = createLogger('SttService')
+const log = createLogger('OpenAIStt')
 
 /**
- * STT 服务 — 调用 OpenAI Whisper API 进行语音转写
+ * OpenAI Whisper API 后端 — 调用远程 API 进行语音转写
  */
-export class SttService {
-  /**
-   * 将 base64 编码的音频数据转写为文字
-   * @param audioBase64 base64 编码的 webm/opus 音频
-   * @param language BCP-47 语言标签（可选）
-   */
+export class OpenAISttBackend implements SttBackendMain {
   async transcribe(audioBase64: string, language?: string): Promise<{ text: string }> {
     // 固定使用内置 OpenAI 提供商
     const providers = providerDao.findAll()
@@ -41,7 +37,6 @@ export class SttService {
     formData.append('file', file)
     formData.append('model', 'whisper-1')
     if (language && language !== 'auto') {
-      // Whisper 使用 ISO 639-1 语言代码（如 zh, en, ja），不含区域
       const langCode = language.split('-')[0]
       formData.append('language', langCode)
     }
@@ -50,15 +45,12 @@ export class SttService {
 
     const response = await fetch(`${baseUrl}/audio/transcriptions`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`
-      },
+      headers: { Authorization: `Bearer ${apiKey}` },
       body: formData
     })
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '')
-      // 400 通常是音频片段无效（太短/格式错误），静默跳过而非抛异常
       if (response.status === 400) {
         log.warn(`Whisper rejected audio: ${errText}`)
         return { text: '' }
@@ -70,5 +62,3 @@ export class SttService {
     return { text: result.text || '' }
   }
 }
-
-export const sttService = new SttService()

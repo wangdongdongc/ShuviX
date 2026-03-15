@@ -489,12 +489,23 @@
     "voiceSttBackend": "STT Engine",
     "voiceSttLanguage": "Recognition Language",
     "voiceWhisperHint": "Voice input uses the built-in OpenAI provider's Whisper model. Please configure your API Key first.",
+    "voiceSttBackend": "STT Engine",
+    "voiceLocalLabel": "Local (Whisper.cpp)",
     "voiceWhisperReady": "OpenAI Whisper is ready",
+    "voiceWhisperHint": "Voice input uses the built-in OpenAI provider's Whisper model. Please configure your API Key first.",
     "voiceGoProviders": "Go to Provider Settings →",
     "voiceLangAuto": "Auto Detect",
     "voiceLangZh": "Chinese (zh-CN)",
     "voiceLangEn": "English (en-US)",
-    "voiceLangJa": "Japanese (ja-JP)"
+    "voiceLangJa": "Japanese (ja-JP)",
+    "voiceAvailableModels": "Available Models",
+    "voiceModelHint": "Download Whisper models for local speech recognition. Larger models are more accurate but require more storage and processing power.",
+    "voiceDownload": "Download",
+    "voiceCancelDownload": "Cancel download",
+    "voiceDeleteModel": "Delete model",
+    "voiceUseModel": "Use",
+    "voiceRemaining": "remaining",
+    "tabVoice": "Voice"
   },
 
   "about": {

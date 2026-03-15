@@ -258,6 +258,16 @@ declare global {
     | ChatErrorEvent
     | ChatUserMessageEvent
 
+  /** 下载进度信息 */
+  interface DownloadProgress {
+    taskId: string
+    percent: number
+    downloadedBytes: number
+    totalBytes: number
+    speedBytesPerSec: number
+    etaSeconds: number
+  }
+
   /** 参考目录条目 */
   interface ReferenceDir {
     path: string
@@ -628,11 +638,33 @@ declare global {
       >
     }
     stt: {
-      /** 调用 Whisper API 转写音频 */
+      /** 调用 Whisper 转写音频 */
       transcribe: (params: {
         audioData: string
+        pcmf32?: string
         language?: string
       }) => Promise<{ text: string }>
+      /** 获取本地 Whisper 状态（模型列表） */
+      getLocalStatus: () => Promise<{
+        models: Array<{
+          id: string
+          name: string
+          sizeMB: number
+          description: string
+          recommended: boolean
+          downloaded: boolean
+        }>
+      }>
+      /** 下载指定模型 */
+      downloadModel: (modelId: string) => Promise<{ success: boolean }>
+      /** 删除指定模型 */
+      deleteModel: (modelId: string) => Promise<{ success: boolean }>
+    }
+    download: {
+      /** 监听下载进度事件 */
+      onProgress: (callback: (progress: DownloadProgress) => void) => () => void
+      /** 取消下载任务 */
+      cancel: (taskId: string) => Promise<{ success: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

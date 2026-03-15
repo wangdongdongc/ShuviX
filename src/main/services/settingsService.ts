@@ -45,9 +45,17 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.toolBashCpus',
     desc: 'Container CPU limit, e.g. "0.5", "1", "2" (empty = unlimited)'
   },
+  'voice.sttBackend': {
+    labelKey: 'settings.voiceSttBackend',
+    desc: 'openai | local — speech-to-text engine'
+  },
   'voice.sttLanguage': {
     labelKey: 'settings.voiceSttLanguage',
     desc: 'auto | zh-CN | en-US | ja-JP — speech recognition language'
+  },
+  'voice.localModel': {
+    labelKey: 'settings.voiceLocalModel',
+    desc: 'large-v3-turbo | tiny | base | small | medium | ... — local whisper model'
   }
 }
 

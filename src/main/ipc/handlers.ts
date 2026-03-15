@@ -12,6 +12,7 @@ import { registerWebUIHandlers } from './webUIHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
 import { registerCommandHandlers } from './commandHandlers'
 import { registerSttHandlers } from './sttHandlers'
+import { registerDownloadHandlers } from './downloadHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -32,4 +33,5 @@ export function registerIpcHandlers(): void {
   registerTelegramHandlers()
   registerCommandHandlers()
   registerSttHandlers()
+  registerDownloadHandlers()
 }

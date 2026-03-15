@@ -28,8 +28,12 @@ interface SettingsState {
   fontSize: number
   /** UI 缩放比例 (%) */
   uiZoom: number
+  /** 语音 STT 后端 */
+  voiceSttBackend: 'openai' | 'local'
   /** 语音输入语言 */
   voiceSttLanguage: string
+  /** 本地 Whisper 模型 */
+  voiceLocalModel: string
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -39,6 +43,7 @@ interface SettingsState {
     | 'tools'
     | 'mcp'
     | 'skills'
+    | 'voice'
     | 'bindings'
     | 'httpLogs'
     | 'about'
@@ -62,7 +67,7 @@ interface SettingsState {
   setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (
-    tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'bindings' | 'httpLogs' | 'about'
+    tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'voice' | 'bindings' | 'httpLogs' | 'about'
   ) => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */
@@ -83,7 +88,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   lightTheme: 'light',
   fontSize: 14,
   uiZoom: 100,
+  voiceSttBackend: 'openai',
   voiceSttLanguage: 'auto',
+  voiceLocalModel: 'large-v3-turbo',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -116,7 +123,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       lightTheme,
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
+      voiceSttBackend: (settings['voice.sttBackend'] as 'openai' | 'local') || 'openai',
       voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
+      voiceLocalModel: settings['voice.localModel'] || 'large-v3-turbo',
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText, Info, Puzzle, BookOpen, Wrench, Share2 } from 'lucide-react'
+import { Settings, Layers, FileText, Info, Puzzle, BookOpen, Wrench, Share2, Mic } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
 import { GeneralSettings } from './GeneralSettings'
@@ -11,6 +11,7 @@ import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
+import { VoiceSettings } from './VoiceSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -22,6 +23,7 @@ const VALID_TABS = new Set([
   'tools',
   'mcp',
   'skills',
+  'voice',
   'bindings',
   'httpLogs',
   'about'
@@ -84,6 +86,12 @@ export function SettingsPanel(): React.JSX.Element {
             onClick={() => setActiveSettingsTab('skills')}
           />
           <TabButton
+            icon={<Mic size={14} />}
+            label={t('settings.tabVoice')}
+            active={activeSettingsTab === 'voice'}
+            onClick={() => setActiveSettingsTab('voice')}
+          />
+          <TabButton
             icon={<Share2 size={14} />}
             label={t('settings.tabBindings')}
             active={activeSettingsTab === 'bindings'}
@@ -124,6 +132,11 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'skills' && (
             <div className="flex-1 overflow-y-auto">
               <SkillSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'voice' && (
+            <div className="flex-1 overflow-y-auto">
+              <VoiceSettings />
             </div>
           )}
           {activeSettingsTab === 'bindings' && (

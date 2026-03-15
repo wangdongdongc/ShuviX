@@ -17,12 +17,6 @@ const ENERGY_WINDOW = 5
 const IDLE_FLUSH_MS = 5000
 
 /**
- * Whisper 幻觉关键词 — 转写结果匹配时丢弃
- */
-const HALLUCINATION_RE =
-  /请不吝点赞|订阅|转发|打赏|明镜|谢谢观看|感谢收看|再[会見]|字幕|subtitl|subscribe|thank(s| you) for watching/i
-
-/**
  * OpenAI Whisper 后端 — MediaRecorder 录音 + 能量 VAD 分段 + IPC 调用 Whisper API
  *
  * 分段策略：检测自然语句停顿（静默 ≥ PAUSE_MS）时切割。
@@ -215,16 +209,27 @@ export class WhisperBackend implements SttBackend {
     try {
       const audioBlob = new Blob(blobs, { type: 'audio/webm' })
       const buffer = await audioBlob.arrayBuffer()
-      const base64 = btoa(
+
+      // WebM base64（供 OpenAI API 使用）
+      const audioData = btoa(
         new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
       )
 
+      // 同时解码为 16kHz mono Float32 PCM（供本地 Whisper 使用）
+      let pcmf32: string | undefined
+      try {
+        pcmf32 = await this.decodeToPcm(buffer)
+      } catch {
+        // 解码失败时仍可用 WebM（OpenAI 模式）
+      }
+
       const result = await window.api.stt.transcribe({
-        audioData: base64,
+        audioData,
+        pcmf32,
         language: this.language
       })
 
-      if (result.text && !HALLUCINATION_RE.test(result.text)) {
+      if (result.text) {
         this.onFinalResult?.(result.text)
       }
     } catch (err) {
@@ -235,6 +240,35 @@ export class WhisperBackend implements SttBackend {
         this.onStateChange?.('recording')
       }
     }
+  }
+
+  /**
+   * 使用 Web Audio API 将 WebM 解码为 16kHz mono Float32 PCM，返回 base64
+   */
+  private async decodeToPcm(webmBuffer: ArrayBuffer): Promise<string> {
+    // 用 OfflineAudioContext 以 16kHz 采样率解码
+    const offlineCtx = new OfflineAudioContext(1, 1, 16000)
+    const audioBuffer = await offlineCtx.decodeAudioData(webmBuffer.slice(0))
+
+    // 重采样到 16kHz mono
+    const duration = audioBuffer.duration
+    const sampleCount = Math.ceil(duration * 16000)
+    const resampleCtx = new OfflineAudioContext(1, sampleCount, 16000)
+    const source = resampleCtx.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(resampleCtx.destination)
+    source.start()
+    const resampled = await resampleCtx.startRendering()
+
+    const pcmFloat32 = resampled.getChannelData(0)
+
+    // Float32Array → base64
+    const bytes = new Uint8Array(pcmFloat32.buffer, pcmFloat32.byteOffset, pcmFloat32.byteLength)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    return btoa(binary)
   }
 
   private cleanup(): void {

@@ -328,9 +328,46 @@ const api = {
 
   // ============ 语音转文字 ============
   stt: {
-    /** 调用 Whisper API 转写音频 */
-    transcribe: (params: { audioData: string; language?: string }) =>
-      ipcRenderer.invoke('stt:transcribe', params)
+    /** 调用 Whisper 转写音频 */
+    transcribe: (params: { audioData: string; pcmf32?: string; language?: string }) =>
+      ipcRenderer.invoke('stt:transcribe', params),
+    /** 获取本地 Whisper 状态（模型列表） */
+    getLocalStatus: () => ipcRenderer.invoke('stt:getLocalStatus'),
+    /** 下载指定模型 */
+    downloadModel: (modelId: string) => ipcRenderer.invoke('stt:downloadModel', modelId),
+    /** 删除指定模型 */
+    deleteModel: (modelId: string) => ipcRenderer.invoke('stt:deleteModel', modelId)
+  },
+
+  // ============ 下载管理 ============
+  download: {
+    /** 监听下载进度事件 */
+    onProgress: (
+      callback: (progress: {
+        taskId: string
+        percent: number
+        downloadedBytes: number
+        totalBytes: number
+        speedBytesPerSec: number
+        etaSeconds: number
+      }) => void
+    ) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        progress: {
+          taskId: string
+          percent: number
+          downloadedBytes: number
+          totalBytes: number
+          speedBytesPerSec: number
+          etaSeconds: number
+        }
+      ): void => callback(progress)
+      ipcRenderer.on('download:progress', handler)
+      return () => ipcRenderer.removeListener('download:progress', handler)
+    },
+    /** 取消下载任务 */
+    cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId)
   },
 
   // ============ Skill 管理 ============
