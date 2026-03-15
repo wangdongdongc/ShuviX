@@ -79,6 +79,7 @@ export function UserActionPanel({
   if (pendingApproval) {
     return (
       <ApprovalContent
+        key={pendingApproval.toolCallId}
         pending={pendingApproval}
         onApproval={onApproval}
         onAllowAndRemember={onAllowAndRemember}

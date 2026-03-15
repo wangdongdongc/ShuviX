@@ -273,16 +273,26 @@ export class SessionService {
 
   // ─── private ──────────────────────────────────
 
-  /** 获取默认提供商 ID（第一个已启用的提供商） */
+  /** 获取默认提供商 ID（优先使用用户配置，回退到第一个已启用的提供商） */
   private getDefaultProvider(): string {
+    const configured = settingsDao.findByKey('general.defaultProvider')
+    if (configured) {
+      const enabled = providerDao.findEnabled()
+      if (enabled.some((p) => p.id === configured)) return configured
+    }
     const enabled = providerDao.findEnabled()
     return enabled.length > 0 ? enabled[0].id : ''
   }
 
-  /** 获取默认模型 ID（第一个已启用提供商的第一个已启用模型） */
+  /** 获取默认模型 ID（优先使用用户配置，回退到第一个已启用模型） */
   private getDefaultModel(): string {
     const providerId = this.getDefaultProvider()
     if (!providerId) return ''
+    const configured = settingsDao.findByKey('general.defaultModel')
+    if (configured) {
+      const models = providerDao.findEnabledModels(providerId)
+      if (models.some((m) => m.modelId === configured)) return configured
+    }
     const models = providerDao.findEnabledModels(providerId)
     return models.length > 0 ? models[0].modelId : ''
   }
