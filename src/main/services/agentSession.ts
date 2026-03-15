@@ -178,7 +178,8 @@ export class AgentSession {
           image
         })
       },
-      requestApproval: (toolCallId, command) => session.requestApproval(toolCallId, command),
+      requestApproval: (toolCallId, toolName, command, description) =>
+        session.requestApproval(toolCallId, toolName, command, description),
       requestUserInput: (toolCallId, payload) => session.requestUserInput(toolCallId, payload),
       requestSshCredentials: (toolCallId) => session.requestSshCredential(toolCallId),
       onSshConnected: (host, port, username) => {
@@ -507,7 +508,9 @@ export class AgentSession {
   /** 创建审批 Promise（ToolContext.requestApproval 的实现） */
   requestApproval(
     toolCallId: string,
-    command: string
+    toolName: string,
+    command: string,
+    description?: string
   ): Promise<{ approved: boolean; reason?: string }> {
     if (!chatFrontendRegistry.hasCapability(this.sessionId, 'toolApproval')) {
       return Promise.resolve({ approved: false, reason: 'no frontend supports approval' })
@@ -530,8 +533,8 @@ export class AgentSession {
         type: 'tool_approval_request',
         sessionId: this.sessionId,
         toolCallId,
-        toolName: 'bash',
-        toolArgs: { command }
+        toolName,
+        toolArgs: { command, description }
       })
     })
   }

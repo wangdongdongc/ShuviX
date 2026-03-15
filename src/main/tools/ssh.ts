@@ -36,6 +36,10 @@ const SshParamsSchema = Type.Object({
       description: 'The command to execute on the remote server (required for exec action).'
     })
   ),
+  description: Type.String({
+    description:
+      'Brief description of what this command does and why. Only applicable for exec action.'
+  }),
   timeout: Type.Optional(
     Type.Number({
       description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Only for exec action.`
@@ -105,6 +109,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       action: 'connect' | 'exec' | 'disconnect'
       credentialName?: string
       command?: string
+      description: string
       timeout?: number
     },
     signal?: AbortSignal
@@ -115,7 +120,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       case 'connect':
         return handleConnect(this.ctx, toolCallId, params.credentialName, signal)
       case 'exec':
-        return handleExec(this.ctx, toolCallId, params.command, params.timeout, signal)
+        return handleExec(this.ctx, toolCallId, params.command, params.timeout, params.description, signal)
       case 'disconnect':
         return handleDisconnect(this.ctx)
       default:
@@ -255,6 +260,7 @@ async function handleExec(
   toolCallId: string,
   command: string | undefined,
   timeout: number | undefined,
+  description: string | undefined,
   signal?: AbortSignal
 ): Promise<AgentToolResult<SshToolDetails>> {
   if (!command) {
@@ -272,7 +278,7 @@ async function handleExec(
     !sess?.autoApprove &&
     !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
   ) {
-    const approval = await ctx.requestApproval(toolCallId, command)
+    const approval = await ctx.requestApproval(toolCallId, 'ssh', command, description)
     if (!approval.approved) {
       throw new Error(approval.reason || 'User denied execution of this command')
     }

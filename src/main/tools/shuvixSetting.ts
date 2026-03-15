@@ -81,7 +81,7 @@ export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema
     const preview = `${params.key} = ${params.value}`
 
     if (this.ctx.requestApproval) {
-      const approval = await this.ctx.requestApproval(toolCallId, preview)
+      const approval = await this.ctx.requestApproval(toolCallId, 'shuvix-setting', preview)
       if (!approval.approved) {
         throw new Error(approval.reason || 'User denied this operation')
       }

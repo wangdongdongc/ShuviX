@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Check,
@@ -11,8 +11,12 @@ import {
   Terminal,
   TriangleAlert
 } from 'lucide-react'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
 import { useChatStore, selectToolExecutions, selectPendingUserInput } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+
+hljs.registerLanguage('bash', bash)
 
 interface UserActionPanelProps {
   /** ask 工具：用户选择回调 */
@@ -216,6 +220,38 @@ function AskContent({
 // ---------- 审批子内容（通用） ----------
 
 /** 根据工具类型渲染变更预览 */
+/** 命令审批预览：AI 描述 + 语法高亮代码块 */
+function CommandPreview({
+  command,
+  description
+}: {
+  command: string
+  description?: string
+}): React.JSX.Element {
+  const highlighted = useMemo(() => {
+    if (!command) return ''
+    try {
+      return hljs.highlight(command, { language: 'bash' }).value
+    } catch {
+      return command.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    }
+  }, [command])
+
+  return (
+    <div className="space-y-1.5">
+      {description && (
+        <p className="text-[11px] text-text-secondary leading-relaxed px-0.5">{description}</p>
+      )}
+      <pre className="text-[11px] leading-relaxed bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words border border-border-secondary/50 !m-0">
+        <code
+          className="hljs language-bash"
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      </pre>
+    </div>
+  )
+}
+
 function ApprovalPreview({
   toolName,
   args
@@ -226,13 +262,9 @@ function ApprovalPreview({
   const { t } = useTranslation()
   const { settingMeta, projectFieldMeta } = useSettingsStore()
 
-  if (toolName === 'bash') {
-    // bash：代码块预览
-    return (
-      <pre className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words font-mono border border-border-secondary/50">
-        {(args?.command as string) || ''}
-      </pre>
-    )
+  if (toolName === 'bash' || (toolName === 'ssh' && args?.command)) {
+    // bash / ssh exec：描述 + 语法高亮代码块
+    return <CommandPreview command={(args?.command as string) || ''} description={args?.description as string | undefined} />
   }
 
   if (toolName === 'shuvix-setting') {

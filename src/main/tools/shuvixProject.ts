@@ -151,7 +151,7 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
       .join('\n')
 
     if (this.ctx.requestApproval) {
-      const approval = await this.ctx.requestApproval(toolCallId, preview)
+      const approval = await this.ctx.requestApproval(toolCallId, 'shuvix-project', preview)
       if (!approval.approved) {
         throw new Error(approval.reason || 'User denied this operation')
       }

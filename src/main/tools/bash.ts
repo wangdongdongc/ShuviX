@@ -26,6 +26,9 @@ const BashParamsSchema = Type.Object({
     description:
       'The shell command to execute. Supports pipes, redirects, and other bash features. Avoid commands that require interactive input.'
   }),
+  description: Type.String({
+    description: 'Brief description of what this command does and why.'
+  }),
   timeout: Type.Optional(
     Type.Number({
       description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands.`
@@ -165,7 +168,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
 
   protected async executeInternal(
     toolCallId: string,
-    params: { command: string; timeout?: number },
+    params: { command: string; description: string; timeout?: number },
     signal?: AbortSignal
   ): Promise<AgentToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
@@ -176,7 +179,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     if (this.ctx.requestApproval) {
       const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
       if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', params.command)) {
-        const approval = await this.ctx.requestApproval(toolCallId, params.command)
+        const approval = await this.ctx.requestApproval(toolCallId, 'bash', params.command, params.description)
         if (!approval.approved) {
           throw new Error(approval.reason || 'User denied execution of this command')
         }
