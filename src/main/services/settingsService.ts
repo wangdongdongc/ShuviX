@@ -44,6 +44,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'tool.bash.dockerCpus': {
     labelKey: 'settings.toolBashCpus',
     desc: 'Container CPU limit, e.g. "0.5", "1", "2" (empty = unlimited)'
+  },
+  'voice.sttLanguage': {
+    labelKey: 'settings.voiceSttLanguage',
+    desc: 'auto | zh-CN | en-US | ja-JP — speech recognition language'
   }
 }
 

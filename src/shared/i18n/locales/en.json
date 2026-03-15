@@ -108,6 +108,11 @@
     "imageOnly": "(image)"
   },
 
+  "voice": {
+    "startRecording": "Voice input",
+    "stopRecording": "Stop recording"
+  },
+
   "message": {
     "user": "User",
     "copy": "Copy",
@@ -479,7 +484,17 @@
     "skillDisable": "Disable",
     "skillDeleteConfirm": "Delete Skill \"{{name}}\"? This will remove the entire skill directory.",
     "skillImportDir": "Import from Directory",
-    "skillOpenDir": "Open Skills Directory"
+    "skillOpenDir": "Open Skills Directory",
+    "voiceInput": "Voice Input",
+    "voiceSttBackend": "STT Engine",
+    "voiceSttLanguage": "Recognition Language",
+    "voiceWhisperHint": "Voice input uses the built-in OpenAI provider's Whisper model. Please configure your API Key first.",
+    "voiceWhisperReady": "OpenAI Whisper is ready",
+    "voiceGoProviders": "Go to Provider Settings →",
+    "voiceLangAuto": "Auto Detect",
+    "voiceLangZh": "Chinese (zh-CN)",
+    "voiceLangEn": "English (en-US)",
+    "voiceLangJa": "Japanese (ja-JP)"
   },
 
   "about": {

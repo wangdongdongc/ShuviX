@@ -108,6 +108,11 @@
     "imageOnly": "(画像)"
   },
 
+  "voice": {
+    "startRecording": "音声入力",
+    "stopRecording": "録音停止"
+  },
+
   "message": {
     "user": "ユーザー",
     "copy": "コピー",
@@ -479,7 +484,17 @@
     "skillDisable": "無効化",
     "skillDeleteConfirm": "Skill「{{name}}」を削除しますか？Skill ディレクトリ全体が削除されます。",
     "skillImportDir": "ディレクトリからインポート",
-    "skillOpenDir": "Skills ディレクトリを開く"
+    "skillOpenDir": "Skills ディレクトリを開く",
+    "voiceInput": "音声入力",
+    "voiceSttBackend": "認識エンジン",
+    "voiceSttLanguage": "認識言語",
+    "voiceWhisperHint": "音声入力は内蔵の OpenAI プロバイダーの Whisper モデルを使用します。先に API Key を設定してください。",
+    "voiceWhisperReady": "OpenAI Whisper 準備完了",
+    "voiceGoProviders": "プロバイダー設定へ →",
+    "voiceLangAuto": "自動検出",
+    "voiceLangZh": "中国語 (zh-CN)",
+    "voiceLangEn": "English (en-US)",
+    "voiceLangJa": "日本語 (ja-JP)"
   },
 
   "about": {

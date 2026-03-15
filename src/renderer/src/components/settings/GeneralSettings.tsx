@@ -26,6 +26,8 @@ export function GeneralSettings(): React.JSX.Element {
     lightTheme,
     fontSize,
     uiZoom,
+    voiceSttLanguage,
+    providers,
     setSystemPrompt,
     setTheme,
     setDarkTheme,
@@ -285,6 +287,60 @@ export function GeneralSettings(): React.JSX.Element {
           className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-tertiary outline-none resize-none focus:border-accent/50 transition-colors leading-relaxed"
           placeholder={t('settings.systemPromptPlaceholder')}
         />
+      </div>
+
+      {/* ---- 语音输入 ---- */}
+      <div className="pt-2 border-t border-border-secondary">
+        <h3 className="text-xs font-semibold text-text-primary mb-4">{t('settings.voiceInput')}</h3>
+
+        {/* OpenAI 配置状态提示 */}
+        {(() => {
+          const openaiProvider = providers.find((p) => p.name === 'openai' && p.isBuiltin)
+          const hasKey = !!openaiProvider?.apiKey?.trim()
+          return (
+            <div
+              className={`mb-4 rounded-lg border px-3 py-2 text-[11px] ${
+                hasKey
+                  ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
+                  : 'border-amber-500/30 bg-amber-500/5 text-amber-400'
+              }`}
+            >
+              {hasKey ? (
+                t('settings.voiceWhisperReady')
+              ) : (
+                <span>
+                  {t('settings.voiceWhisperHint')}{' '}
+                  <button
+                    onClick={() => window.api.app.openSettings('providers')}
+                    className="underline hover:text-amber-300 transition-colors"
+                  >
+                    {t('settings.voiceGoProviders')}
+                  </button>
+                </span>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* 语言 */}
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-2">
+            {t('settings.voiceSttLanguage')}
+          </label>
+          <select
+            value={voiceSttLanguage}
+            onChange={(e) => {
+              useSettingsStore.setState({ voiceSttLanguage: e.target.value })
+              window.api.settings.set({ key: 'voice.sttLanguage', value: e.target.value })
+            }}
+            className="w-full bg-bg-tertiary border border-border-primary rounded-lg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer"
+          >
+            <option value="auto">{t('settings.voiceLangAuto')}</option>
+            <option value="zh-CN">{t('settings.voiceLangZh')}</option>
+            <option value="en-US">{t('settings.voiceLangEn')}</option>
+            <option value="ja-JP">{t('settings.voiceLangJa')}</option>
+          </select>
+        </div>
       </div>
     </div>
   )

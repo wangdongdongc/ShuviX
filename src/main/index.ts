@@ -1,6 +1,7 @@
 import {
   app,
   shell,
+  session,
   BrowserWindow,
   Menu,
   ipcMain,
@@ -322,6 +323,15 @@ ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
 app.whenReady().then(() => {
   mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
+
+  // 允许渲染进程请求麦克风权限（语音输入）
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media') {
+      callback(true)
+      return
+    }
+    callback(true)
+  })
 
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
   const iconPath = join(app.getAppPath(), 'resources/icon.png')

@@ -108,6 +108,11 @@
     "imageOnly": "(图片)"
   },
 
+  "voice": {
+    "startRecording": "语音输入",
+    "stopRecording": "停止录音"
+  },
+
   "message": {
     "user": "用户",
     "copy": "复制",
@@ -479,7 +484,17 @@
     "skillDisable": "禁用",
     "skillDeleteConfirm": "确定要删除 Skill「{{name}}」吗？这将移除整个 skill 目录。",
     "skillImportDir": "从目录导入",
-    "skillOpenDir": "打开 Skills 目录"
+    "skillOpenDir": "打开 Skills 目录",
+    "voiceInput": "语音输入",
+    "voiceSttBackend": "识别引擎",
+    "voiceSttLanguage": "识别语言",
+    "voiceWhisperHint": "语音输入使用内置 OpenAI 提供商的 Whisper 模型，请先配置 API Key",
+    "voiceWhisperReady": "OpenAI Whisper 已就绪",
+    "voiceGoProviders": "前往提供商设置 →",
+    "voiceLangAuto": "自动检测",
+    "voiceLangZh": "中文 (zh-CN)",
+    "voiceLangEn": "English (en-US)",
+    "voiceLangJa": "日本語 (ja-JP)"
   },
 
   "about": {

@@ -28,6 +28,8 @@ interface SettingsState {
   fontSize: number
   /** UI 缩放比例 (%) */
   uiZoom: number
+  /** 语音输入语言 */
+  voiceSttLanguage: string
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -81,6 +83,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   lightTheme: 'light',
   fontSize: 14,
   uiZoom: 100,
+  voiceSttLanguage: 'auto',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -113,6 +116,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       lightTheme,
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
+      voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁

@@ -627,6 +627,13 @@ declare global {
         }>
       >
     }
+    stt: {
+      /** 调用 Whisper API 转写音频 */
+      transcribe: (params: {
+        audioData: string
+        language?: string
+      }) => Promise<{ text: string }>
+    }
     skill: {
       list: () => Promise<Skill[]>
       add: (params: SkillAddParams) => Promise<Skill>

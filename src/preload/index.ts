@@ -326,6 +326,13 @@ const api = {
     list: (params: { sessionId: string }) => ipcRenderer.invoke('command:list', params)
   },
 
+  // ============ 语音转文字 ============
+  stt: {
+    /** 调用 Whisper API 转写音频 */
+    transcribe: (params: { audioData: string; language?: string }) =>
+      ipcRenderer.invoke('stt:transcribe', params)
+  },
+
   // ============ Skill 管理 ============
   skill: {
     /** 获取所有 Skill */

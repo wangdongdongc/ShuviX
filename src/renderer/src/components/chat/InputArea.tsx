@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, ImagePlus, X } from 'lucide-react'
+import { Send, Square, ImagePlus, Mic, X } from 'lucide-react'
 import {
   useChatStore,
   selectIsStreaming,
@@ -9,7 +9,9 @@ import {
   selectCanEdit
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
+import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { ModelPicker } from './ModelPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { ToolPicker } from './ToolPicker'
@@ -61,6 +63,10 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
   const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
+
+  // 语音输入
+  const { voiceSttLanguage } = useSettingsStore()
+  const voice = useVoiceInput(voiceSttLanguage)
 
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
@@ -119,6 +125,9 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
+    // 录音中则先停止录制
+    if (voice.isRecording) voice.stopRecording()
+
     const text = inputText.trim()
     const images = pendingImages
     if ((!text && images.length === 0) || isStreaming || !activeSessionId) return
@@ -191,6 +200,13 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         }
       }
       if (slash.handleKeyDown(e)) return
+    }
+
+    // Escape 取消录音
+    if (e.key === 'Escape' && voice.isRecording) {
+      e.preventDefault()
+      voice.cancelRecording()
+      return
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -371,28 +387,70 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
             className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
           />
 
-          {effectiveStreaming ? (
-            <button
-              onClick={handleAbort}
-              className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
-              title={t('input.stopGen')}
-            >
-              <Square size={16} fill="currentColor" />
-            </button>
-          ) : (
-            <button
-              onClick={hasPendingAction ? handleOverrideSend : handleSend}
-              disabled={!canSend}
-              className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
-                canSend
-                  ? 'bg-accent text-white hover:bg-accent-hover'
-                  : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
-              }`}
-              title={t('input.send')}
-            >
-              <Send size={16} />
-            </button>
+          {/* 语音输入错误提示 */}
+          {voice.error && (
+            <div className="absolute right-2 bottom-12 z-20 rounded-md border border-error/30 bg-error/10 px-2 py-1 text-[11px] text-error whitespace-nowrap">
+              {voice.error}
+            </div>
           )}
+
+          {/* 右侧按钮组：Mic + Send/Stop */}
+          <div className="flex items-end gap-0.5">
+            {/* 麦克风按钮 */}
+            {voice.isAvailable && !effectiveStreaming && (
+              <button
+                onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
+                disabled={!activeSessionId}
+                className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
+                  voice.isRecording
+                    ? 'bg-error/20 text-error hover:bg-error/30'
+                    : 'bg-bg-tertiary text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
+                }`}
+                title={
+                  voice.isRecording
+                    ? t('voice.stopRecording')
+                    : t('voice.startRecording')
+                }
+              >
+                {voice.isRecording ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-error" />
+                    </span>
+                    <span className="text-[11px] tabular-nums">
+                      {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                ) : (
+                  <Mic size={16} />
+                )}
+              </button>
+            )}
+
+            {effectiveStreaming ? (
+              <button
+                onClick={handleAbort}
+                className="flex-shrink-0 m-2 p-2 rounded-lg bg-error/20 text-error hover:bg-error/30 transition-colors"
+                title={t('input.stopGen')}
+              >
+                <Square size={16} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                onClick={hasPendingAction ? handleOverrideSend : handleSend}
+                disabled={!canSend}
+                className={`flex-shrink-0 m-2 p-2 rounded-lg transition-colors ${
+                  canSend
+                    ? 'bg-accent text-white hover:bg-accent-hover'
+                    : 'bg-bg-tertiary text-text-tertiary cursor-not-allowed'
+                }`}
+                title={t('input.send')}
+              >
+                <Send size={16} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
