@@ -40,7 +40,6 @@ import type { ToolContext, SshCredentialPayload } from '../tools/types'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
-import { createTransformContext } from './contextManager'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { createLogger } from '../logger'
 
@@ -264,7 +263,6 @@ export class AgentSession {
         messages: [],
         tools
       },
-      transformContext: createTransformContext(resolvedModel),
       streamFn
     })
 

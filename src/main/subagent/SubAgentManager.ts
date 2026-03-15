@@ -22,7 +22,6 @@ import { ListTool } from '../tools/ls'
 import { GrepTool } from '../tools/grep'
 import { GlobTool } from '../tools/glob'
 import type { ToolContext } from '../tools/types'
-import { createTransformContext } from '../services/contextManager'
 import { parallelCoordinator } from '../services/parallelExecution'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerDao } from '../dao/providerDao'
@@ -293,7 +292,6 @@ class SubAgentManager {
         messages: [],
         tools
       },
-      transformContext: createTransformContext(resolvedModel),
       streamFn: subStreamFn
     })
 
