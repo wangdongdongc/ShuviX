@@ -210,7 +210,7 @@ export function SessionConfigDialog({
           </div>
 
           {/* 命令审批分组 */}
-          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+          <div className="zen-section space-y-2">
             <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
               <Terminal size={12} />
               {t('sessionConfig.commandGroup')}
@@ -264,7 +264,7 @@ export function SessionConfigDialog({
           </div>
 
           {/* LAN 分享分组 */}
-          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+          <div className="zen-section space-y-2">
             <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
               <Globe size={12} />
               {t('sessionConfig.lanShareGroup')}
@@ -339,7 +339,7 @@ export function SessionConfigDialog({
           </div>
 
           {/* Telegram Bot 分组 */}
-          <div className="border border-border-secondary rounded-lg p-3 space-y-2">
+          <div className="zen-section space-y-2">
             <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
               <Bot size={12} />
               {t('sessionConfig.telegramGroup')}

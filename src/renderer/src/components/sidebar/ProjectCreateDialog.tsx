@@ -323,7 +323,7 @@ export function ProjectCreateDialog({
                   </p>
                 </div>
               )}
-              <div className="border border-border-secondary rounded-lg p-3">
+              <div className="zen-section">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
                   <Wrench size={12} />
                   {t('projectForm.tools')}
@@ -367,7 +367,7 @@ export function ProjectCreateDialog({
                   </p>
 
                   {/* MCP 引导 */}
-                  <div className="border border-border-secondary rounded-lg p-4">
+                  <div className="zen-section">
                     <div className="flex items-center gap-2 mb-2">
                       <Puzzle size={14} className="text-purple-400" />
                       <span className="text-xs font-medium text-text-primary">MCP Server</span>
@@ -385,7 +385,7 @@ export function ProjectCreateDialog({
                   </div>
 
                   {/* Skills 引导 */}
-                  <div className="border border-border-secondary rounded-lg p-4">
+                  <div className="zen-section">
                     <div className="flex items-center gap-2 mb-2">
                       <BookOpen size={14} className="text-emerald-400" />
                       <span className="text-xs font-medium text-text-primary">Skills</span>
@@ -425,9 +425,9 @@ export function ProjectCreateDialog({
                       return (
                         <div
                           key={group}
-                          className={`border rounded-md overflow-hidden ${isOnline ? 'border-border-primary' : 'border-red-500/30'}`}
+                          className={`border-l-2 pl-3 ${isOnline ? 'border-purple-500/40' : 'border-red-500/40'}`}
                         >
-                          <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
+                          <div className="flex items-center gap-1.5 py-1">
                             <button
                               onClick={() => toggleExtExpand(group)}
                               className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
@@ -460,7 +460,7 @@ export function ProjectCreateDialog({
                             </span>
                           </div>
                           {isExpanded && (
-                            <div className="px-3 py-1.5 space-y-0.5">
+                            <div className="space-y-0.5">
                               {groupTools.map((tool) => {
                                 const shortName =
                                   tool.name.split('__').length >= 3
@@ -504,8 +504,8 @@ export function ProjectCreateDialog({
                       const isSkillExpanded = expandedExtGroups.has(SKILLS_GROUP)
 
                       return (
-                        <div className="border border-emerald-500/30 rounded-md overflow-hidden">
-                          <div className="flex items-center gap-1.5 px-3 py-2 bg-bg-tertiary">
+                        <div className="border-l-2 border-emerald-500/40 pl-3">
+                          <div className="flex items-center gap-1.5 py-1">
                             <button
                               onClick={() => toggleExtExpand(SKILLS_GROUP)}
                               className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
@@ -535,7 +535,7 @@ export function ProjectCreateDialog({
                             </span>
                           </div>
                           {isSkillExpanded && (
-                            <div className="px-3 py-1.5 space-y-0.5">
+                            <div className="space-y-0.5">
                               {skillTools.map((tool) => {
                                 const shortName = tool.name.startsWith('skill:')
                                   ? tool.name.slice(6)

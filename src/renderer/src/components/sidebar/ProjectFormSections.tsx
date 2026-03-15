@@ -64,7 +64,7 @@ export function ProjectFileSystem({
 }: ProjectFileSystemProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div className="border border-border-secondary rounded-lg p-3 space-y-3">
+    <div className="zen-section space-y-3">
       {/* 项目路径 */}
       <div>
         <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">

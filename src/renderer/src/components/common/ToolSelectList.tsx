@@ -135,17 +135,17 @@ export function ToolSelectList({
       {builtinTools.length > 0 && (
         <div className={compact ? 'py-0.5' : ''}>
           <div
-            className={compact ? '' : 'border border-border-secondary rounded-md overflow-hidden'}
+            className={compact ? '' : 'border-l-2 border-border-secondary pl-3'}
           >
             {!compact && (
-              <div className="flex items-center gap-1.5 px-2 py-1.5">
+              <div className="flex items-center gap-1.5 py-1">
                 <Blocks size={11} className="text-text-secondary" />
                 <span className="text-[11px] font-medium text-text-secondary">
                   {t('projectForm.toolsGeneralGroup')}
                 </span>
               </div>
             )}
-            <div className={compact ? '' : 'px-2 pb-1.5 space-y-0.5'}>
+            <div className={compact ? '' : 'space-y-0.5'}>
               {builtinTools.map((tool) => (
                 <label
                   key={tool.name}
@@ -180,18 +180,18 @@ export function ToolSelectList({
             className={
               compact
                 ? ''
-                : 'border border-cyan-500/20 rounded-md overflow-hidden bg-cyan-500/[0.03]'
+                : 'border-l-2 border-cyan-500/40 pl-3'
             }
           >
             {!compact && (
-              <div className="flex items-center gap-1.5 px-2 py-1.5">
+              <div className="flex items-center gap-1.5 py-1">
                 <Search size={11} className="text-cyan-400" />
                 <span className="text-[11px] font-medium text-cyan-400">
                   {t('projectForm.toolsRipgrepGroup')}
                 </span>
               </div>
             )}
-            <div className={compact ? 'py-0.5' : 'px-2 pb-1.5 space-y-0.5'}>
+            <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
               {ripgrepTools.map((tool) => (
                 <label
                   key={tool.name}
@@ -226,11 +226,11 @@ export function ToolSelectList({
             className={
               compact
                 ? ''
-                : 'border border-amber-500/20 rounded-md overflow-hidden bg-amber-500/[0.03]'
+                : 'border-l-2 border-amber-500/40 pl-3'
             }
           >
             {!compact && (
-              <div className="px-2 py-1.5">
+              <div className="py-1">
                 <div className="flex items-center gap-1.5">
                   <Bot size={11} className="text-amber-400" />
                   <span className="text-[11px] font-medium text-amber-400">
@@ -242,7 +242,7 @@ export function ToolSelectList({
                 </p>
               </div>
             )}
-            <div className={compact ? 'py-0.5' : 'px-2 pb-1.5 space-y-0.5'}>
+            <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
               {subAgentTools.map((tool) => (
                 <label
                   key={tool.name}
@@ -290,12 +290,12 @@ export function ToolSelectList({
                 className={
                   compact
                     ? ''
-                    : `border rounded-md overflow-hidden ${isOnline ? 'border-border-primary' : 'border-red-500/30'}`
+                    : `border-l-2 pl-3 ${isOnline ? 'border-purple-500/40' : 'border-red-500/40'}`
                 }
               >
                 {/* MCP Server 分组头部 */}
                 <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
+                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'py-1'}`}
                 >
                   <button
                     onClick={() => toggleExpand(group)}
@@ -334,7 +334,7 @@ export function ToolSelectList({
 
                 {/* 展开的子工具 */}
                 {isExpanded && (
-                  <div className={compact ? 'py-0.5' : 'px-2 py-1.5 space-y-0.5'}>
+                  <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
                     {groupTools.map((tool) => (
                       <label
                         key={tool.name}
@@ -378,11 +378,11 @@ export function ToolSelectList({
 
             return (
               <div
-                className={compact ? '' : 'border rounded-md overflow-hidden border-emerald-500/30'}
+                className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}
               >
                 {/* Skills 分组头部 */}
                 <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'px-2 py-1.5 bg-bg-tertiary'}`}
+                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'py-1'}`}
                 >
                   <button
                     onClick={() => toggleExpand(SKILLS_GROUP)}
@@ -408,7 +408,7 @@ export function ToolSelectList({
 
                 {/* 展开的 Skill 列表 */}
                 {isExpanded && (
-                  <div className={compact ? 'py-0.5' : 'px-2 py-1.5 space-y-0.5'}>
+                  <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
                     {skillTools.map((tool) => (
                       <label
                         key={tool.name}

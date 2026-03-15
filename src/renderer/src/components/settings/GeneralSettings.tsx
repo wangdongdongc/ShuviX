@@ -74,11 +74,13 @@ export function GeneralSettings(): React.JSX.Element {
 
   return (
     <div className="flex-1 px-5 py-5 space-y-6">
-      {/* 主题模式 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
+      {/* ── 主题 ── */}
+      <div className="zen-section space-y-4">
+        <label className="block text-xs font-medium text-text-primary">
           {t('settings.theme')}
         </label>
+
+        {/* 主题模式 */}
         <div className="flex gap-2">
           {(['dark', 'light', 'system'] as const).map((th) => (
             <button
@@ -102,65 +104,67 @@ export function GeneralSettings(): React.JSX.Element {
             </button>
           ))}
         </div>
-      </div>
 
-      {/* 深色主题变体 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.darkThemeVariant')}
-        </label>
-        <div className="flex flex-wrap gap-2">
-          {DARK_THEMES.map((th) => (
-            <button
-              key={th.id}
-              onClick={() => {
-                setDarkTheme(th.id)
-                localStorage.setItem('darkTheme', th.id)
-                window.api.settings.set({ key: 'general.darkTheme', value: th.id })
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                darkTheme === th.id
-                  ? 'bg-accent text-white'
-                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-              }`}
-            >
-              {t(th.labelKey)}
-            </button>
-          ))}
+        {/* 深色主题变体 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1.5">
+            {t('settings.darkThemeVariant')}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {DARK_THEMES.map((th) => (
+              <button
+                key={th.id}
+                onClick={() => {
+                  setDarkTheme(th.id)
+                  localStorage.setItem('darkTheme', th.id)
+                  window.api.settings.set({ key: 'general.darkTheme', value: th.id })
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  darkTheme === th.id
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+              >
+                {t(th.labelKey)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 浅色主题变体 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1.5">
+            {t('settings.lightThemeVariant')}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {LIGHT_THEMES.map((th) => (
+              <button
+                key={th.id}
+                onClick={() => {
+                  setLightTheme(th.id)
+                  localStorage.setItem('lightTheme', th.id)
+                  window.api.settings.set({ key: 'general.lightTheme', value: th.id })
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  lightTheme === th.id
+                    ? 'bg-accent text-white'
+                    : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                }`}
+              >
+                {t(th.labelKey)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* 浅色主题变体 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.lightThemeVariant')}
-        </label>
-        <div className="flex flex-wrap gap-2">
-          {LIGHT_THEMES.map((th) => (
-            <button
-              key={th.id}
-              onClick={() => {
-                setLightTheme(th.id)
-                localStorage.setItem('lightTheme', th.id)
-                window.api.settings.set({ key: 'general.lightTheme', value: th.id })
-              }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                lightTheme === th.id
-                  ? 'bg-accent text-white'
-                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-              }`}
-            >
-              {t(th.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 语言 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
+      {/* ── UI ── */}
+      <div className="zen-section space-y-4">
+        <label className="block text-xs font-medium text-text-primary">
           {t('settings.language')}
         </label>
+
+        {/* 语言 */}
         <div className="flex gap-2">
           {(['zh', 'en', 'ja'] as const).map((lng) => (
             <button
@@ -179,112 +183,119 @@ export function GeneralSettings(): React.JSX.Element {
             </button>
           ))}
         </div>
-      </div>
 
-      {/* 字体大小 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.fontSize')}{' '}
-          <span className="text-text-tertiary font-normal ml-1">{fontSize}px</span>
-        </label>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] text-text-tertiary">12</span>
-          <input
-            type="range"
-            min={12}
-            max={20}
-            step={1}
-            value={fontSize}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              setFontSize(v)
-              window.api.settings.set({ key: 'general.fontSize', value: String(v) })
-            }}
-            className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
-          />
-          <span className="text-[10px] text-text-tertiary">20</span>
+        {/* 字体大小 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1.5">
+            {t('settings.fontSize')}{' '}
+            <span className="font-normal ml-1">{fontSize}px</span>
+          </label>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-text-tertiary">12</span>
+            <input
+              type="range"
+              min={12}
+              max={20}
+              step={1}
+              value={fontSize}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                setFontSize(v)
+                window.api.settings.set({ key: 'general.fontSize', value: String(v) })
+              }}
+              className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
+            />
+            <span className="text-[10px] text-text-tertiary">20</span>
+          </div>
+        </div>
+
+        {/* UI 缩放 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1.5">
+            {t('settings.uiZoom')}{' '}
+            <span className="font-normal ml-1">{uiZoom}%</span>
+          </label>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-text-tertiary">50%</span>
+            <input
+              type="range"
+              min={50}
+              max={200}
+              step={5}
+              value={uiZoom}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                setUiZoom(v)
+                window.api.settings.set({ key: 'general.uiZoom', value: String(v) })
+              }}
+              className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
+            />
+            <span className="text-[10px] text-text-tertiary">200%</span>
+          </div>
         </div>
       </div>
 
-      {/* UI 缩放 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.uiZoom')}{' '}
-          <span className="text-text-tertiary font-normal ml-1">{uiZoom}%</span>
-        </label>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] text-text-tertiary">50%</span>
-          <input
-            type="range"
-            min={50}
-            max={200}
-            step={5}
-            value={uiZoom}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              setUiZoom(v)
-              window.api.settings.set({ key: 'general.uiZoom', value: String(v) })
-            }}
-            className="flex-1 h-1.5 bg-bg-tertiary rounded-full appearance-none cursor-pointer accent-accent"
-          />
-          <span className="text-[10px] text-text-tertiary">200%</span>
-        </div>
-      </div>
-
-      {/* 默认 Provider */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
+      {/* ── 默认模型 ── */}
+      <div className="zen-section space-y-4">
+        <label className="block text-xs font-medium text-text-primary">
           {t('settings.defaultProvider')}
         </label>
-        <select
-          value={activeProvider}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          className="zen-select"
-        >
-          {enabledProviderIds.map((pid) => {
-            const m = availableModels.find((am) => am.providerId === pid)
-            return (
-              <option key={pid} value={pid}>
-                {m?.providerName || pid}
-              </option>
-            )
-          })}
-        </select>
-      </div>
 
-      {/* 默认模型 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.defaultModel')}
-        </label>
-        <select
-          value={activeModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          className="zen-select"
-        >
-          {availableModels
-            .filter((m) => m.providerId === activeProvider)
-            .map((m) => (
-              <option key={m.id} value={m.modelId}>
-                {m.modelId}
-              </option>
-            ))}
-        </select>
-      </div>
+        {/* 默认 Provider */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1">
+            {t('settings.defaultProvider')}
+          </label>
+          <select
+            value={activeProvider}
+            onChange={(e) => handleProviderChange(e.target.value)}
+            className="zen-select"
+          >
+            {enabledProviderIds.map((pid) => {
+              const m = availableModels.find((am) => am.providerId === pid)
+              return (
+                <option key={pid} value={pid}>
+                  {m?.providerName || pid}
+                </option>
+              )
+            })}
+          </select>
+        </div>
 
-      {/* 系统提示词 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.systemPrompt')}
-        </label>
-        <textarea
-          value={localSystemPrompt}
-          onChange={(e) => setLocalSystemPrompt(e.target.value)}
-          onBlur={handleSystemPromptBlur}
-          rows={4}
-          className="zen-textarea leading-relaxed"
-          placeholder={t('settings.systemPromptPlaceholder')}
-        />
+        {/* 默认模型 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1">
+            {t('settings.defaultModel')}
+          </label>
+          <select
+            value={activeModel}
+            onChange={(e) => handleModelChange(e.target.value)}
+            className="zen-select"
+          >
+            {availableModels
+              .filter((m) => m.providerId === activeProvider)
+              .map((m) => (
+                <option key={m.id} value={m.modelId}>
+                  {m.modelId}
+                </option>
+              ))}
+          </select>
+        </div>
+
+        {/* 系统提示词 */}
+        <div>
+          <label className="block text-[11px] text-text-tertiary mb-1">
+            {t('settings.systemPrompt')}
+          </label>
+          <textarea
+            value={localSystemPrompt}
+            onChange={(e) => setLocalSystemPrompt(e.target.value)}
+            onBlur={handleSystemPromptBlur}
+            rows={4}
+            className="zen-textarea leading-relaxed"
+            placeholder={t('settings.systemPromptPlaceholder')}
+          />
+        </div>
       </div>
     </div>
   )

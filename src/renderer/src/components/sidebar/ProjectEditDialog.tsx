@@ -141,7 +141,7 @@ export function ProjectEditDialog({
           />
 
           {/* 工具配置 */}
-          <div className="border border-border-secondary rounded-lg p-3">
+          <div className="zen-section">
             <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
               <Wrench size={12} />
               {t('projectForm.tools')}

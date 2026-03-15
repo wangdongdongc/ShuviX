@@ -273,6 +273,16 @@ body {
   overflow: hidden;
 }
 
+/* ========== Zen 风格分组容器 ========== */
+
+/* 配置项分组：左线指示（替代灰色圆角边框） */
+.zen-section {
+  border: none;
+  border-left: 2px solid var(--color-border-secondary);
+  border-radius: 0;
+  padding-left: 14px;
+}
+
 /* ========== Zen 风格表单控件 ========== */
 
 /* 单行输入：底线风格 */
