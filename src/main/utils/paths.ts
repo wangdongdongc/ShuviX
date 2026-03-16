@@ -25,6 +25,11 @@ export function getUserConfigDir(): string {
   return ensureDir(join(homedir(), '.shuvix'))
 }
 
+/** TTS 临时音频文件目录 */
+export function getTtsCacheDir(): string {
+  return ensureDir(join(app.getPath('userData'), 'tts_cache'))
+}
+
 /** 获取临时会话的工作目录 */
 export function getTempWorkspace(sessionId: string): string {
   return ensureDir(join(app.getPath('userData'), 'temp_workspace', sessionId))

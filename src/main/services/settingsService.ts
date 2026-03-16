@@ -56,6 +56,22 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'voice.localModel': {
     labelKey: 'settings.voiceLocalModel',
     desc: 'large-v3-turbo | tiny | base | small | medium | ... — local whisper model'
+  },
+  'voice.tts.enabled': {
+    labelKey: 'settings.voiceTtsEnabled',
+    desc: 'true | false — auto-play TTS after agent response'
+  },
+  'voice.tts.openai.voice': {
+    labelKey: 'settings.voiceTtsVoice',
+    desc: 'alloy | echo | fable | onyx | nova | shimmer — OpenAI TTS voice'
+  },
+  'voice.tts.openai.speed': {
+    labelKey: 'settings.voiceTtsSpeed',
+    desc: 'number as string, 0.25-4.0 — OpenAI TTS playback speed'
+  },
+  'voice.tts.openai.model': {
+    labelKey: 'settings.voiceTtsModel',
+    desc: 'tts-1 | tts-1-hd — OpenAI TTS model quality'
   }
 }
 

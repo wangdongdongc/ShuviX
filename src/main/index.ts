@@ -2,6 +2,8 @@ import {
   app,
   shell,
   session,
+  net,
+  protocol,
   BrowserWindow,
   Menu,
   ipcMain,
@@ -320,9 +322,23 @@ ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
   return { success: true }
 })
 
+// 注册自定义协议（必须在 app.whenReady 之前调用）
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'shuvix-media',
+    privileges: { stream: true, supportFetchAPI: true, bypassCSP: true }
+  }
+])
+
 app.whenReady().then(() => {
   mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
+
+  // 注册 shuvix-media:// 协议，安全地为渲染进程提供本地文件（TTS 音频等）
+  protocol.handle('shuvix-media', (request) => {
+    const filePath = decodeURIComponent(new URL(request.url).pathname)
+    return net.fetch(`file://${filePath}`)
+  })
 
   // 允许渲染进程请求麦克风权限（语音输入）
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {

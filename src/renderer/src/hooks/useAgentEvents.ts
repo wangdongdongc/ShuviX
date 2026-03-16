@@ -1,5 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
+import { useSettingsStore } from '../stores/settingsStore'
+import { ttsPlayer } from '../services/tts/ttsPlayer'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -24,6 +26,8 @@ export function useAgentEvents(): void {
       case 'agent_start':
         store.setIsStreaming(sid, true)
         store.clearStreamingContent(sid)
+        // 中断正在播放的 TTS
+        if (ttsPlayer.isPlaying || ttsPlayer.isLoading) ttsPlayer.stop()
         break
 
       case 'text_delta':
@@ -176,6 +180,14 @@ export function useAgentEvents(): void {
         // 后端已统一落库，直接从事件中取已保存的 assistant 消息
         const savedMsg = event.message ? JSON.parse(event.message) : null
         store.finishStreaming(sid, savedMsg ?? undefined)
+
+        // 自动 TTS 朗读
+        if (savedMsg && sid === store.activeSessionId) {
+          const { voiceTtsEnabled } = useSettingsStore.getState()
+          if (voiceTtsEnabled && savedMsg.content?.trim()) {
+            ttsPlayer.speak(savedMsg.content.slice(0, 4000), savedMsg.id).catch(() => {})
+          }
+        }
 
         // 首次对话时后台让 AI 生成标题（对用户透明）
         if (savedMsg && sid === store.activeSessionId) {

@@ -339,6 +339,12 @@ const api = {
     deleteModel: (modelId: string) => ipcRenderer.invoke('stt:deleteModel', modelId)
   },
 
+  // ============ 文字转语音 ============
+  tts: {
+    /** TTS 合成文字为音频 */
+    speakOnce: (params: { text: string }) => ipcRenderer.invoke('tts:speakOnce', params)
+  },
+
   // ============ 下载管理 ============
   download: {
     /** 监听下载进度事件 */

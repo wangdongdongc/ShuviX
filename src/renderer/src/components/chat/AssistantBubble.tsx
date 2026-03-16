@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import { Copy, Check, Code, FileText, RefreshCw } from 'lucide-react'
+import { Copy, Check, Code, FileText, RefreshCw, Volume2, Square, Loader2 } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
 import { CodeBlock } from './CodeBlock'
@@ -12,6 +12,7 @@ import { StepBlock } from './StepBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { SubAgentBlock } from './SubAgentBlock'
 import { useChatStore, type AssistantTextMessage } from '../../stores/chatStore'
+import { useTtsPlayback } from '../../hooks/useTtsPlayback'
 import type { StepItem } from './types'
 
 /** 检查某 toolCallId 在当前活跃会话中是否有关联的子智能体执行 */
@@ -49,6 +50,9 @@ export const AssistantBubble = memo(function AssistantBubble({
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
+  const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
+  const isThisPlaying = isPlaying && playingMessageId === msg.id
+  const isThisLoading = isLoading && playingMessageId === msg.id
 
   const thinking = streamingThinking || msg.metadata?.thinking || null
   const usage = msg.metadata?.usage
@@ -80,6 +84,24 @@ export const AssistantBubble = memo(function AssistantBubble({
               title={t('message.copy')}
             >
               {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+            </button>
+          )}
+          {/* TTS 朗读 */}
+          {!isStreaming && msg.content && (
+            <button
+              onClick={() =>
+                isThisPlaying || isThisLoading ? stop() : speak(msg.content.slice(0, 4000), msg.id)
+              }
+              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
+              title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
+            >
+              {isThisLoading ? (
+                <Loader2 size={12} className="animate-spin" />
+              ) : isThisPlaying ? (
+                <Square size={12} />
+              ) : (
+                <Volume2 size={12} />
+              )}
             </button>
           )}
           {/* 原始/渲染 切换 */}

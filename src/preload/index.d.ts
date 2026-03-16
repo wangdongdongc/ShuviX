@@ -637,6 +637,10 @@ declare global {
         }>
       >
     }
+    tts: {
+      /** TTS 合成文字为音频 */
+      speakOnce: (params: { text: string }) => Promise<{ filePath: string }>
+    }
     stt: {
       /** 调用 Whisper 转写音频 */
       transcribe: (params: {

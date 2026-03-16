@@ -34,6 +34,14 @@ interface SettingsState {
   voiceSttLanguage: string
   /** 本地 Whisper 模型 */
   voiceLocalModel: string
+  /** TTS 自动朗读开关 */
+  voiceTtsEnabled: boolean
+  /** TTS 语音角色 */
+  voiceTtsVoice: string
+  /** TTS 语速 */
+  voiceTtsSpeed: number
+  /** TTS 模型 */
+  voiceTtsModel: string
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -91,6 +99,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   voiceSttBackend: 'openai',
   voiceSttLanguage: 'auto',
   voiceLocalModel: 'large-v3-turbo',
+  voiceTtsEnabled: false,
+  voiceTtsVoice: 'alloy',
+  voiceTtsSpeed: 1.0,
+  voiceTtsModel: 'tts-1',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -126,6 +138,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       voiceSttBackend: (settings['voice.sttBackend'] as 'openai' | 'local') || 'openai',
       voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
       voiceLocalModel: settings['voice.localModel'] || 'large-v3-turbo',
+      voiceTtsEnabled: settings['voice.tts.enabled'] === 'true',
+      voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',
+      voiceTtsSpeed: Number(settings['voice.tts.openai.speed']) || 1.0,
+      voiceTtsModel: settings['voice.tts.openai.model'] || 'tts-1',
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁
