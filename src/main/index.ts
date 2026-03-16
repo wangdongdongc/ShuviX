@@ -67,6 +67,40 @@ function getThemeBgColor(): string {
   }
 }
 
+function getSavedSettingsWindowBounds(): {
+  width: number
+  height: number
+  x?: number
+  y?: number
+} {
+  const defaults = { width: 820, height: 620 }
+  try {
+    const raw = settingsDao.findByKey('window.settingsBounds')
+    if (!raw) return defaults
+    const saved = JSON.parse(raw) as { x?: number; y?: number; width?: number; height?: number }
+    const w = Number(saved.width)
+    const h = Number(saved.height)
+    if (!w || !h || w < 600 || h < 400) return defaults
+
+    if (saved.x != null && saved.y != null) {
+      const displays = screen.getAllDisplays()
+      const visible = displays.some((d) => {
+        const b = d.bounds
+        return (
+          saved.x! >= b.x - w + 100 &&
+          saved.x! < b.x + b.width - 100 &&
+          saved.y! >= b.y &&
+          saved.y! < b.y + b.height - 100
+        )
+      })
+      if (visible) return { width: w, height: h, x: Math.round(saved.x), y: Math.round(saved.y) }
+    }
+    return { width: w, height: h }
+  } catch {
+    return defaults
+  }
+}
+
 /** 打开独立设置窗口（单例） */
 function openSettingsWindow(tab?: string): void {
   // 已存在则聚焦
@@ -75,9 +109,12 @@ function openSettingsWindow(tab?: string): void {
     return
   }
 
+  const bounds = getSavedSettingsWindowBounds()
+
   settingsWindow = new BrowserWindow({
-    width: 820,
-    height: 620,
+    width: bounds.width,
+    height: bounds.height,
+    ...(bounds.x != null && bounds.y != null ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 600,
     minHeight: 400,
     show: false,
@@ -104,6 +141,13 @@ function openSettingsWindow(tab?: string): void {
   } else {
     settingsWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash })
   }
+
+  // 关闭前保存窗口位置和尺寸
+  settingsWindow.on('close', () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsDao.upsert('window.settingsBounds', JSON.stringify(settingsWindow.getBounds()))
+    }
+  })
 
   settingsWindow.on('closed', () => {
     settingsWindow = null
