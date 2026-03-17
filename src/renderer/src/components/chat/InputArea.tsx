@@ -60,6 +60,19 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     !!pendingUserInput || toolExecutions.some((te) => te.status === 'pending_approval')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+
+  // 工具栏宽度不足时隐藏上下文用量和指令状态
+  const [showToolbarExtras, setShowToolbarExtras] = useState(true)
+  useEffect(() => {
+    const el = toolbarRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setShowToolbarExtras(entry.contentRect.width > 520)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
@@ -280,17 +293,17 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
           )}
 
           {/* 底部工具栏 */}
-          <div className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary">
-            {/* Pickers 组：可选择项紧凑排列在最左 */}
-            <div className="flex items-center gap-1.5">
+          <div ref={toolbarRef} className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap">
+            {/* Pickers 组：不可收缩 */}
+            <div className="flex-shrink-0 flex items-center gap-1.5">
               <ModelPicker readonly={!canEdit} />
               {canEdit && <ThinkingPicker />}
               {canEdit && <ToolPicker />}
             </div>
 
             {/* 分隔线 */}
-            {(modelSupportsVision || maxContextTokens > 0 || projectPath) && (
-              <span className="h-3 w-px bg-border-secondary" />
+            {(modelSupportsVision || (showToolbarExtras && (maxContextTokens > 0 || projectPath))) && (
+              <span className="flex-shrink-0 h-3 w-px bg-border-secondary" />
             )}
 
             {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
@@ -298,7 +311,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               <>
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
+                  className="flex-shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
                   title={t('input.uploadImage')}
                 >
                   <ImagePlus size={12} />
@@ -317,8 +330,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               </>
             )}
 
-            {/* 上下文用量指示器 */}
-            {maxContextTokens > 0 && (
+            {/* 上下文用量指示器（空间不足时隐藏） */}
+            {showToolbarExtras && maxContextTokens > 0 && (
               <span className="relative inline-flex items-center group/token">
                 <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
                   {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
@@ -337,8 +350,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               </span>
             )}
 
-            {/* 项目指令文件加载状态 */}
-            {projectPath && (
+            {/* 项目指令文件加载状态（空间不足时隐藏） */}
+            {showToolbarExtras && projectPath && (
               <span className="relative inline-flex items-center group">
                 <span
                   className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors select-none"
@@ -351,7 +364,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                   </span>
                 </span>
 
-                <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
+                <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block whitespace-nowrap">
                   <div className="text-[10px] text-text-tertiary mb-1">
                     {t('input.instructionsStatus')}
                   </div>

@@ -391,9 +391,14 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
 })
 
 // 设置预览面板宽度偏移（CSS 像素，按 zoom factor 换算为屏幕像素后存储）
+// 同时动态调整窗口最小宽度，防止对话区被压缩过窄
 ipcMain.handle('app:set-preview-offset', (_event, offset: number) => {
   const zoom = mainWindow?.webContents?.getZoomFactor() || 1
   previewWidthOffset = Math.round(offset * zoom)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const baseMinWidth = 800
+    mainWindow.setMinimumSize(baseMinWidth + previewWidthOffset, 600)
+  }
 })
 
 // 注册自定义协议（必须在 app.whenReady 之前调用）
