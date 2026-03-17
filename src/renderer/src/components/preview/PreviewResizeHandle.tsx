@@ -48,8 +48,11 @@ export function PreviewResizeHandle(): React.JSX.Element {
 
   return (
     <div
-      className="flex-shrink-0 w-1 cursor-col-resize hover:bg-accent/40 active:bg-accent/60 transition-colors bg-border-primary"
+      className="flex-shrink-0 w-px bg-border-primary cursor-col-resize relative group"
       onMouseDown={onMouseDown}
-    />
+    >
+      {/* 透明宽击中区域（左右各扩展 3px） */}
+      <div className="absolute inset-y-0 -left-[3px] -right-[3px] group-hover:bg-accent/30 group-active:bg-accent/50 transition-colors" />
+    </div>
   )
 }

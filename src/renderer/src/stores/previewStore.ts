@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
-/** resize handle 宽度（PreviewResizeHandle 的 w-1 = 0.25rem ≈ 4px） */
-const HANDLE_WIDTH = 4
+/** resize handle 宽度（PreviewResizeHandle 的 w-px = 1px） */
+const HANDLE_WIDTH = 1
 
 /** 调整窗口宽度（仅 Electron 环境生效），返回 Promise */
 function adjustWindowWidth(delta: number): Promise<void> {
