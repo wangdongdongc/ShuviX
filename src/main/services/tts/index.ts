@@ -4,21 +4,40 @@ import { randomUUID } from 'crypto'
 import type { TtsBackendMain } from './types'
 import { OpenAITtsBackend } from './openaiBackend'
 import { getTtsCacheDir } from '../../utils/paths'
+import { settingsDao } from '../../dao/settingsDao'
 
 const openaiBackend = new OpenAITtsBackend()
 
+// qwen3Backend 延迟实例化（仅 macOS 可用）
+import { Qwen3TtsBackend } from './qwen3Backend'
+let _qwen3Backend: TtsBackendMain | undefined
+function getQwen3Backend(): TtsBackendMain {
+  if (!_qwen3Backend) {
+    _qwen3Backend = new Qwen3TtsBackend()
+  }
+  return _qwen3Backend
+}
+
 /**
- * TTS 服务 — 统一管控合成参数、输出路径和缓存清理
+ * TTS 服务 — 统一管控后端路由、输出路径和缓存清理
  */
 class TtsService {
-  private backend: TtsBackendMain = openaiBackend
+  private getBackend(): TtsBackendMain {
+    const id = settingsDao.findByKey('voice.tts.backend') || 'openai'
+    if (id === 'qwen3' && process.platform === 'darwin') {
+      return getQwen3Backend()
+    }
+    return openaiBackend
+  }
 
   /** 一次性语音合成（用于即时播报），结果存入临时缓存，下次调用前自动清理 */
   async speakOnce(params: { text: string }): Promise<string> {
     this.clearCache()
 
-    const outputPath = join(getTtsCacheDir(), `tts-${randomUUID()}.mp3`)
-    await this.backend.synthesize({ text: params.text, outputPath })
+    const backend = this.getBackend()
+    const ext = backend.outputExtension ?? 'mp3'
+    const outputPath = join(getTtsCacheDir(), `tts-${randomUUID()}.${ext}`)
+    await backend.synthesize({ text: params.text, outputPath })
 
     return outputPath
   }

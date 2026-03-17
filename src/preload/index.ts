@@ -55,6 +55,10 @@ const api = {
     openFolder: (folderPath: string) => ipcRenderer.invoke('app:open-folder', folderPath),
     /** 通知主进程渲染已就绪，可以显示窗口 */
     windowReady: () => ipcRenderer.send('app:window-ready'),
+    /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
+    adjustWindowWidth: (delta: number) => ipcRenderer.invoke('app:adjust-window-width', delta),
+    /** 设置预览面板宽度偏移（保存窗口尺寸时扣除） */
+    setPreviewOffset: (offset: number) => ipcRenderer.invoke('app:set-preview-offset', offset),
     /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
@@ -342,7 +346,32 @@ const api = {
   // ============ 文字转语音 ============
   tts: {
     /** TTS 合成文字为音频 */
-    speakOnce: (params: { text: string }) => ipcRenderer.invoke('tts:speakOnce', params)
+    speakOnce: (params: { text: string }) => ipcRenderer.invoke('tts:speakOnce', params),
+    /** 获取 Qwen3 本地 TTS 状态 */
+    getQwen3Status: () => ipcRenderer.invoke('tts:getQwen3Status'),
+    /** 获取 Qwen3 可用语音列表 */
+    getQwen3Voices: () => ipcRenderer.invoke('tts:getQwen3Voices'),
+    /** 安装 Qwen3 本地 TTS 环境（Python + 依赖 + 模型） */
+    setupQwen3: () => ipcRenderer.invoke('tts:setupQwen3'),
+    /** 中止 Qwen3 安装 */
+    cancelSetupQwen3: () => ipcRenderer.invoke('tts:cancelSetupQwen3'),
+    /** 监听 Qwen3 安装进度 */
+    onSetupProgress: (
+      callback: (progress: {
+        step: string
+        messageKey: string
+        percent: number
+      }) => void
+    ) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        progress: { step: string; messageKey: string; percent: number }
+      ): void => callback(progress)
+      ipcRenderer.on('tts:setupProgress', handler)
+      return (): void => {
+        ipcRenderer.removeListener('tts:setupProgress', handler)
+      }
+    }
   },
 
   // ============ 下载管理 ============

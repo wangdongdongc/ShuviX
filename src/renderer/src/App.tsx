@@ -1,8 +1,11 @@
 import { useEffect } from 'react'
 import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
+import { usePreviewStore, CHAT_CONTAINER_ATTR } from './stores/previewStore'
 import { Sidebar } from './components/sidebar/Sidebar'
 import { ChatView } from './components/chat/ChatView'
+import { PreviewPanel } from './components/preview/PreviewPanel'
+import { PreviewResizeHandle } from './components/preview/PreviewResizeHandle'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
 import { useSessionInit } from './hooks/useSessionInit'
@@ -23,6 +26,8 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
 function App(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
+  const isPreviewOpen = usePreviewStore((s) => s.isOpen)
+  const lockedChatWidth = usePreviewStore((s) => s.lockedChatWidth)
 
   // ========== 核心流程 hook ==========
   useAppInit()
@@ -64,15 +69,21 @@ function App(): React.JSX.Element {
     return <SettingsPanel />
   }
 
-  // 主窗口：侧边栏 + 聊天区
+  // 主窗口：侧边栏 + 聊天区 + 预览面板
   return (
     <div className="flex h-full">
       <div className="w-[240px] flex-shrink-0">
         <Sidebar />
       </div>
-      <div className="flex-1 min-w-0 bg-bg-primary">
+      <div
+        {...{ [CHAT_CONTAINER_ATTR]: true }}
+        className="min-w-0 bg-bg-primary"
+        style={lockedChatWidth != null ? { width: lockedChatWidth, flexShrink: 0 } : { flex: '1 1 0%' }}
+      >
         <ChatView />
       </div>
+      {isPreviewOpen && <PreviewResizeHandle />}
+      {isPreviewOpen && <PreviewPanel />}
     </div>
   )
 }

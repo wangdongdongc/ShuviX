@@ -400,6 +400,10 @@ declare global {
       openExternal: (url: string) => Promise<{ success: boolean }>
       /** 用系统文件管理器打开指定文件夹 */
       openFolder: (folderPath: string) => Promise<{ success: boolean }>
+      /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
+      adjustWindowWidth: (delta: number) => Promise<void>
+      /** 设置预览面板宽度偏移（保存窗口尺寸时扣除） */
+      setPreviewOffset: (offset: number) => Promise<void>
       /** 通知主进程渲染已就绪，可以显示窗口 */
       windowReady: () => void
       onSettingsChanged: (callback: () => void) => () => void
@@ -640,6 +644,27 @@ declare global {
     tts: {
       /** TTS 合成文字为音频 */
       speakOnce: (params: { text: string }) => Promise<{ filePath: string }>
+      /** 获取 Qwen3 本地 TTS 状态 */
+      getQwen3Status: () => Promise<{
+        ready: boolean
+        hasPython: boolean
+        hasDeps: boolean
+        hasModel: boolean
+        modelSizeMB: number | null
+        platformSupported: boolean
+      }>
+      /** 获取 Qwen3 可用语音列表 */
+      getQwen3Voices: () => Promise<
+        Array<{ id: string; name: string; language: string; gender: string }>
+      >
+      /** 安装 Qwen3 本地 TTS 环境 */
+      setupQwen3: () => Promise<{ success: boolean }>
+      /** 中止 Qwen3 安装 */
+      cancelSetupQwen3: () => Promise<{ success: boolean }>
+      /** 监听 Qwen3 安装进度 */
+      onSetupProgress: (
+        callback: (progress: { step: string; messageKey: string; percent: number }) => void
+      ) => () => void
     }
     stt: {
       /** 调用 Whisper 转写音频 */

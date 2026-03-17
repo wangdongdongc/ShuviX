@@ -18,6 +18,8 @@ function formatBytes(bytes: number): string {
  * voice / model / speed 等参数从 voice.tts.openai.* 设置中读取
  */
 export class OpenAITtsBackend implements TtsBackendMain {
+  readonly outputExtension = 'mp3'
+
   async synthesize(params: TtsSynthesizeParams): Promise<void> {
     const providers = providerDao.findAll()
     const openai = providers.find((p) => p.name === 'openai' && p.isBuiltin)

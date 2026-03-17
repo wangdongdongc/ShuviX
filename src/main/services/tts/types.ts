@@ -6,4 +6,6 @@ export interface TtsSynthesizeParams {
 
 export interface TtsBackendMain {
   synthesize(params: TtsSynthesizeParams): Promise<void>
+  /** 后端输出的音频格式扩展名（不含点），默认 'mp3' */
+  readonly outputExtension?: string
 }

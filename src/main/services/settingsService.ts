@@ -72,6 +72,22 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'voice.tts.openai.model': {
     labelKey: 'settings.voiceTtsModel',
     desc: 'tts-1 | tts-1-hd — OpenAI TTS model quality'
+  },
+  'voice.tts.backend': {
+    labelKey: 'settings.voiceTtsBackend',
+    desc: 'openai | qwen3 — text-to-speech engine'
+  },
+  'voice.tts.qwen3.voice': {
+    labelKey: 'settings.voiceTtsQwen3Voice',
+    desc: 'Vivian | Chelsie | Ryan | ... — Qwen3 TTS voice'
+  },
+  'voice.tts.qwen3.speed': {
+    labelKey: 'settings.voiceTtsQwen3Speed',
+    desc: 'number as string, 0.5-2.0 — Qwen3 TTS speech speed'
+  },
+  'voice.tts.qwen3.emotion': {
+    labelKey: 'settings.voiceTtsQwen3Emotion',
+    desc: 'emotion/style instruction text for Qwen3 TTS'
   }
 }
 

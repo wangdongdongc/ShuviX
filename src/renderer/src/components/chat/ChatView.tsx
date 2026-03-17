@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Copy, Folder, Settings2 } from 'lucide-react'
+import { Copy, Folder, Settings2, PanelRight } from 'lucide-react'
 import {
   useChatStore,
   selectStreamingContent,
@@ -14,6 +14,7 @@ import {
   type AssistantTextMessage
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
+import { usePreviewStore } from '../../stores/previewStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
@@ -158,6 +159,8 @@ export function ChatView(): React.JSX.Element {
   const titleInputRef = useRef<HTMLInputElement>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
+  const togglePreview = usePreviewStore((s) => s.toggle)
+  const isPreviewOpen = usePreviewStore((s) => s.isOpen)
 
   /** 开始编辑会话标题 */
   const startEditTitle = (): void => {
@@ -246,8 +249,16 @@ export function ChatView(): React.JSX.Element {
     <div className="flex flex-col h-full">
       {/* 窗口拖拽区 + 会话标题 / 工作目录（macOS 为交通灯留出顶部空间） */}
       <div
-        className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}
+        className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 relative ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}
       >
+        {/* Preview 面板切换按钮 */}
+        <button
+          onClick={togglePreview}
+          className={`titlebar-no-drag absolute right-2 bottom-1.5 p-1 rounded-md transition-colors ${isPreviewOpen ? 'text-accent bg-accent-muted' : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'}`}
+          title="Preview"
+        >
+          <PanelRight size={14} />
+        </button>
         {sessionTitle &&
           (editingTitle && window.api.app.platform !== 'web' ? (
             <input

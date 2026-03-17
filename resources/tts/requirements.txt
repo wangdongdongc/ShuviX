@@ -1,0 +1,13 @@
+huggingface_hub>=1.0.0
+httpx[socks]
+mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git
+mlx>=0.25.0
+mlx-lm>=0.20.0
+transformers>=4.40.0
+safetensors>=0.4.0
+sentencepiece>=0.2.0
+tokenizers>=0.20.0
+numpy>=2.0.0
+scipy>=1.12.0
+soundfile>=0.12.0
+librosa>=0.10.0

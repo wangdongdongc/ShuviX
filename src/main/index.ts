@@ -305,10 +305,14 @@ function createWindow(): void {
     shell.openExternal(url)
   })
 
-  // 关闭前保存窗口位置和尺寸
+  // 关闭前保存窗口位置和尺寸（扣除预览面板宽度）
   mainWindow.on('close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      settingsDao.upsert('window.mainBounds', JSON.stringify(mainWindow.getBounds()))
+      const bounds = mainWindow.getBounds()
+      if (previewWidthOffset > 0) {
+        bounds.width = Math.max(800, bounds.width - previewWidthOffset)
+      }
+      settingsDao.upsert('window.mainBounds', JSON.stringify(bounds))
     }
   })
 
@@ -364,6 +368,32 @@ ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
   const { shell } = await import('electron')
   await shell.openPath(folderPath)
   return { success: true }
+})
+
+// 预览面板占用的额外宽度（保存窗口尺寸时需要扣除）
+let previewWidthOffset = 0
+
+// 调整主窗口宽度（delta 为 CSS 像素，自动按 zoom factor 换算为屏幕像素）
+ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const zoom = mainWindow.webContents.getZoomFactor()
+  const scaledDelta = Math.round(delta * zoom)
+  const bounds = mainWindow.getBounds()
+  const newWidth = Math.max(800, bounds.width + scaledDelta)
+  // 获取窗口所在显示器的工作区域，防止超出屏幕
+  const { screen } = require('electron')
+  const display = screen.getDisplayMatching(bounds)
+  const maxRight = display.workArea.x + display.workArea.width
+  const clampedWidth = Math.min(newWidth, maxRight - bounds.x)
+  if (clampedWidth !== bounds.width) {
+    mainWindow.setBounds({ ...bounds, width: clampedWidth })
+  }
+})
+
+// 设置预览面板宽度偏移（CSS 像素，按 zoom factor 换算为屏幕像素后存储）
+ipcMain.handle('app:set-preview-offset', (_event, offset: number) => {
+  const zoom = mainWindow?.webContents?.getZoomFactor() || 1
+  previewWidthOffset = Math.round(offset * zoom)
 })
 
 // 注册自定义协议（必须在 app.whenReady 之前调用）

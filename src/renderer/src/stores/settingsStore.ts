@@ -42,6 +42,14 @@ interface SettingsState {
   voiceTtsSpeed: number
   /** TTS 模型 */
   voiceTtsModel: string
+  /** TTS 后端 */
+  voiceTtsBackend: 'openai' | 'qwen3'
+  /** Qwen3 语音角色 */
+  voiceTtsQwen3Voice: string
+  /** Qwen3 语速 */
+  voiceTtsQwen3Speed: number
+  /** Qwen3 情感指令 */
+  voiceTtsQwen3Emotion: string
   /** 设置面板是否打开 */
   isSettingsOpen: boolean
   /** 设置面板当前 Tab */
@@ -103,6 +111,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   voiceTtsVoice: 'alloy',
   voiceTtsSpeed: 1.0,
   voiceTtsModel: 'tts-1',
+  voiceTtsBackend: 'openai',
+  voiceTtsQwen3Voice: 'Vivian',
+  voiceTtsQwen3Speed: 1.0,
+  voiceTtsQwen3Emotion: '',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   loaded: false,
@@ -142,6 +154,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',
       voiceTtsSpeed: Number(settings['voice.tts.openai.speed']) || 1.0,
       voiceTtsModel: settings['voice.tts.openai.model'] || 'tts-1',
+      voiceTtsBackend:
+        (settings['voice.tts.backend'] as 'openai' | 'qwen3') || 'openai',
+      voiceTtsQwen3Voice: settings['voice.tts.qwen3.voice'] || 'Vivian',
+      voiceTtsQwen3Speed: Number(settings['voice.tts.qwen3.speed']) || 1.0,
+      voiceTtsQwen3Emotion: settings['voice.tts.qwen3.emotion'] || '',
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁

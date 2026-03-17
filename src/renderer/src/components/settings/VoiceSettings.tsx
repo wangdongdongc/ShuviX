@@ -308,10 +308,10 @@ function SttPanel(): React.JSX.Element {
                       {isDownloading ? (
                         <button
                           onClick={() => handleCancelDownload(model.id)}
-                          className="p-1.5 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-error transition-colors"
-                          title={t('settings.voiceCancelDownload')}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
                         >
-                          <Loader2 size={14} className="animate-spin" />
+                          <Loader2 size={12} className="animate-spin" />
+                          {t('settings.voiceCancelDownload')}
                         </button>
                       ) : model.downloaded ? (
                         <>
@@ -378,27 +378,98 @@ function SttPanel(): React.JSX.Element {
 // TTS 面板（语音输出）
 // ────────────────────────────────────────────────────────────────
 
-/** TTS 语音选项 */
-const TTS_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const
-
-/** TTS 语速预设 */
+/** OpenAI 语音选项 */
+const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const
+/** 语速预设 */
 const TTS_SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0] as const
 
 /** 模块级引用，防止 Audio 被 GC */
 let testAudio: HTMLAudioElement | null = null
 
+/** Qwen3 状态 */
+interface Qwen3Status {
+  ready: boolean
+  hasPython: boolean
+  hasDeps: boolean
+  hasModel: boolean
+  modelSizeMB: number | null
+  platformSupported: boolean
+}
+
 function TtsPanel(): React.JSX.Element {
   const { t } = useTranslation()
-  const { voiceTtsEnabled, voiceTtsVoice, voiceTtsSpeed, voiceTtsModel, providers } =
-    useSettingsStore()
+  const {
+    voiceTtsEnabled,
+    voiceTtsVoice,
+    voiceTtsSpeed,
+    voiceTtsModel,
+    voiceTtsBackend,
+    voiceTtsQwen3Voice,
+    voiceTtsQwen3Speed,
+    providers
+  } = useSettingsStore()
   const [testing, setTesting] = useState(false)
+  const [qwen3Status, setQwen3Status] = useState<Qwen3Status | null>(null)
+  const [setupRunning, setSetupRunning] = useState(false)
+  const [setupMessage, setSetupMessage] = useState('')
+  const [setupPercent, setSetupPercent] = useState(-1)
+  const [qwen3Voices, setQwen3Voices] = useState<
+    Array<{ id: string; name: string; language: string; gender: string }>
+  >([])
 
   const openaiProvider = providers.find((p) => p.name === 'openai' && p.isBuiltin)
   const openaiReady = !!openaiProvider?.apiKey?.trim() && !!openaiProvider?.isEnabled
+  const isMac = window.api.app.platform === 'darwin'
 
   const save = (key: string, value: string): void => {
     window.api.settings.set({ key, value })
   }
+
+  // 加载 Qwen3 状态
+  const loadQwen3Status = useCallback(async () => {
+    try {
+      const status = await window.api.tts.getQwen3Status()
+      setQwen3Status(status)
+      if (status.platformSupported) {
+        const voices = await window.api.tts.getQwen3Voices()
+        setQwen3Voices(voices)
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadQwen3Status()
+  }, [loadQwen3Status])
+
+  // 监听 setup step 级别进度
+  useEffect(() => {
+    const unsub = window.api.tts.onSetupProgress((progress) => {
+      setSetupMessage(t(progress.messageKey))
+      setSetupPercent(progress.percent)
+      // 最后一步完成时刷新状态
+      if (progress.step === 'model' && progress.percent === 100) {
+        setTimeout(() => {
+          setSetupRunning(false)
+          void loadQwen3Status()
+        }, 500)
+      }
+    })
+    return unsub
+  }, [loadQwen3Status])
+
+  // 监听 downloadManager 的字节级下载进度（qwen3- 前缀的任务）
+  useEffect(() => {
+    const unsub = window.api.download.onProgress((progress) => {
+      if (!progress.taskId.startsWith('qwen3-')) return
+      const pct = progress.percent
+      const speedMB = (progress.speedBytesPerSec / (1024 * 1024)).toFixed(1)
+      setSetupMessage(`${progress.taskId.replace('qwen3-model-', '')}  ${pct}%  ${speedMB} MB/s`)
+      setSetupPercent(pct)
+    })
+    return unsub
+  }, [])
 
   const handleToggleTts = (): void => {
     const next = !voiceTtsEnabled
@@ -406,26 +477,28 @@ function TtsPanel(): React.JSX.Element {
     save('voice.tts.enabled', String(next))
   }
 
-  const handleVoiceChange = (voice: string): void => {
-    useSettingsStore.setState({ voiceTtsVoice: voice })
-    save('voice.tts.openai.voice', voice)
+  const handleBackendChange = (backend: 'openai' | 'qwen3'): void => {
+    useSettingsStore.setState({ voiceTtsBackend: backend })
+    save('voice.tts.backend', backend)
   }
 
-  const handleModelChange = (model: string): void => {
-    useSettingsStore.setState({ voiceTtsModel: model })
-    save('voice.tts.openai.model', model)
-  }
-
-  const handleSpeedChange = (speed: number): void => {
-    useSettingsStore.setState({ voiceTtsSpeed: speed })
-    save('voice.tts.openai.speed', String(speed))
+  const handleSetup = async (): Promise<void> => {
+    setSetupRunning(true)
+    setSetupMessage(t('settings.voiceTtsQwen3SetupStarting'))
+    setSetupPercent(-1)
+    try {
+      await window.api.tts.setupQwen3()
+    } catch (err) {
+      console.error('Qwen3 setup failed:', err)
+      setSetupRunning(false)
+      setSetupMessage('')
+    }
   }
 
   const handleTest = async (): Promise<void> => {
     if (testing) return
     setTesting(true)
     try {
-      // 停止上一次测试播放
       if (testAudio) {
         testAudio.pause()
         testAudio = null
@@ -448,6 +521,11 @@ function TtsPanel(): React.JSX.Element {
       setTesting(false)
     }
   }
+
+  const testDisabled =
+    testing ||
+    (voiceTtsBackend === 'openai' && !openaiReady) ||
+    (voiceTtsBackend === 'qwen3' && !qwen3Status?.ready)
 
   return (
     <div className="px-5 py-5 space-y-4">
@@ -478,71 +556,27 @@ function TtsPanel(): React.JSX.Element {
         </button>
       </div>
 
-      {/* OpenAI 状态提示 */}
-      <div
-        className={`rounded-lg border px-3 py-2 text-[11px] ${
-          openaiReady
-            ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
-            : 'border-amber-500/30 bg-amber-500/5 text-amber-400'
-        }`}
-      >
-        {openaiReady ? (
-          t('settings.voiceTtsReady')
-        ) : (
-          <span>
-            {t('settings.voiceTtsHint')}{' '}
-            <button
-              onClick={() => window.api.app.openSettings('providers')}
-              className="underline hover:text-amber-300 transition-colors"
-            >
-              {t('settings.voiceGoProviders')}
-            </button>
-          </span>
-        )}
-      </div>
-
-      {/* 语音角色 */}
+      {/* 后端选择 */}
       <div>
         <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.voiceTtsVoice')}
+          {t('settings.voiceTtsBackend')}
         </label>
-        <div className="flex flex-wrap gap-1.5">
-          {TTS_VOICES.map((voice) => (
-            <button
-              key={voice}
-              onClick={() => handleVoiceChange(voice)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors capitalize ${
-                voiceTtsVoice === voice
-                  ? 'border-accent text-accent bg-accent/10'
-                  : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-              }`}
-            >
-              {voice}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 模型选择 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.voiceTtsModel')}
-        </label>
-        <div className="flex gap-1.5">
+        <div className="flex gap-2">
           {(
             [
-              { id: 'tts-1', label: t('settings.voiceTtsModelStandard') },
-              { id: 'tts-1-hd', label: t('settings.voiceTtsModelHd') }
+              { id: 'openai' as const, label: 'OpenAI API' },
+              { id: 'qwen3' as const, label: t('settings.voiceTtsBackendQwen3') }
             ] as const
           ).map((opt) => (
             <button
               key={opt.id}
-              onClick={() => handleModelChange(opt.id)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
-                voiceTtsModel === opt.id
-                  ? 'border-accent text-accent bg-accent/10'
-                  : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-              }`}
+              onClick={() => handleBackendChange(opt.id)}
+              disabled={opt.id === 'qwen3' && !isMac}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                voiceTtsBackend === opt.id
+                  ? 'bg-accent text-white'
+                  : 'bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+              } ${opt.id === 'qwen3' && !isMac ? 'opacity-40 cursor-not-allowed' : ''}`}
             >
               {opt.label}
             </button>
@@ -550,33 +584,221 @@ function TtsPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 语速 */}
-      <div>
-        <label className="block text-xs font-medium text-text-secondary mb-2">
-          {t('settings.voiceTtsSpeed')}{' '}
-          <span className="text-text-tertiary font-normal">{voiceTtsSpeed}x</span>
-        </label>
-        <div className="flex flex-wrap gap-1.5">
-          {TTS_SPEED_OPTIONS.map((speed) => (
-            <button
-              key={speed}
-              onClick={() => handleSpeedChange(speed)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
-                voiceTtsSpeed === speed
-                  ? 'border-accent text-accent bg-accent/10'
-                  : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-              }`}
-            >
-              {speed}x
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* ---- OpenAI 面板 ---- */}
+      {voiceTtsBackend === 'openai' && (
+        <>
+          {/* OpenAI 状态提示 */}
+          <div
+            className={`rounded-lg border px-3 py-2 text-[11px] ${
+              openaiReady
+                ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
+                : 'border-amber-500/30 bg-amber-500/5 text-amber-400'
+            }`}
+          >
+            {openaiReady ? (
+              t('settings.voiceTtsReady')
+            ) : (
+              <span>
+                {t('settings.voiceTtsHint')}{' '}
+                <button
+                  onClick={() => window.api.app.openSettings('providers')}
+                  className="underline hover:text-amber-300 transition-colors"
+                >
+                  {t('settings.voiceGoProviders')}
+                </button>
+              </span>
+            )}
+          </div>
 
-      {/* 测试按钮 */}
+          {/* 语音角色 */}
+          <div>
+            <label className="block text-xs font-medium text-text-secondary mb-2">
+              {t('settings.voiceTtsVoice')}
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {OPENAI_VOICES.map((voice) => (
+                <button
+                  key={voice}
+                  onClick={() => {
+                    useSettingsStore.setState({ voiceTtsVoice: voice })
+                    save('voice.tts.openai.voice', voice)
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors capitalize ${
+                    voiceTtsVoice === voice
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
+                  }`}
+                >
+                  {voice}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 模型选择 */}
+          <div>
+            <label className="block text-xs font-medium text-text-secondary mb-2">
+              {t('settings.voiceTtsModel')}
+            </label>
+            <div className="flex gap-1.5">
+              {(
+                [
+                  { id: 'tts-1', label: t('settings.voiceTtsModelStandard') },
+                  { id: 'tts-1-hd', label: t('settings.voiceTtsModelHd') }
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => {
+                    useSettingsStore.setState({ voiceTtsModel: opt.id })
+                    save('voice.tts.openai.model', opt.id)
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+                    voiceTtsModel === opt.id
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 语速 */}
+          <div>
+            <label className="block text-xs font-medium text-text-secondary mb-2">
+              {t('settings.voiceTtsSpeed')}{' '}
+              <span className="text-text-tertiary font-normal">{voiceTtsSpeed}x</span>
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {TTS_SPEED_OPTIONS.map((speed) => (
+                <button
+                  key={speed}
+                  onClick={() => {
+                    useSettingsStore.setState({ voiceTtsSpeed: speed })
+                    save('voice.tts.openai.speed', String(speed))
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+                    voiceTtsSpeed === speed
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
+                  }`}
+                >
+                  {speed}x
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ---- Qwen3 本地面板 ---- */}
+      {voiceTtsBackend === 'qwen3' && (
+        <>
+          {/* 状态提示 */}
+          {qwen3Status?.ready ? (
+            <div className="rounded-lg border px-3 py-2 text-[11px] border-emerald-500/30 bg-emerald-500/5 text-emerald-400 flex items-center gap-1.5">
+              <Check size={12} />
+              {t('settings.voiceTtsQwen3Ready')}
+            </div>
+          ) : setupRunning ? (
+            <div className="rounded-lg border px-3 py-2 border-accent/30 bg-accent/5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[11px] text-accent">
+                  <Loader2 size={12} className="animate-spin" />
+                  {setupMessage}
+                </div>
+                <button
+                  onClick={() => {
+                    window.api.tts.cancelSetupQwen3()
+                    setSetupRunning(false)
+                    setSetupMessage('')
+                    setSetupPercent(-1)
+                  }}
+                  className="px-2 py-0.5 rounded text-[10px] text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
+                >
+                  {t('settings.voiceCancelDownload')}
+                </button>
+              </div>
+              {setupPercent >= 0 && (
+                <div className="mt-2 w-full h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-accent rounded-full transition-all duration-300"
+                    style={{ width: `${setupPercent}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-lg border px-3 py-2 border-amber-500/30 bg-amber-500/5 space-y-2">
+              <p className="text-[11px] text-amber-400">{t('settings.voiceTtsQwen3Desc')}</p>
+              <button
+                onClick={handleSetup}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
+              >
+                {t('settings.voiceTtsQwen3Setup')}
+              </button>
+            </div>
+          )}
+
+          {/* Qwen3 语音选择 */}
+          {qwen3Status?.ready && qwen3Voices.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-2">
+                {t('settings.voiceTtsVoice')}
+              </label>
+              <select
+                value={voiceTtsQwen3Voice}
+                onChange={(e) => {
+                  useSettingsStore.setState({ voiceTtsQwen3Voice: e.target.value })
+                  save('voice.tts.qwen3.voice', e.target.value)
+                }}
+                className="zen-select"
+              >
+                {qwen3Voices.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} ({v.language}, {v.gender})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Qwen3 语速 */}
+          {qwen3Status?.ready && (
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-2">
+                {t('settings.voiceTtsSpeed')}{' '}
+                <span className="text-text-tertiary font-normal">{voiceTtsQwen3Speed}x</span>
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {([0.8, 1.0, 1.25, 1.5] as const).map((speed) => (
+                  <button
+                    key={speed}
+                    onClick={() => {
+                      useSettingsStore.setState({ voiceTtsQwen3Speed: speed })
+                      save('voice.tts.qwen3.speed', String(speed))
+                    }}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+                      voiceTtsQwen3Speed === speed
+                        ? 'border-accent text-accent bg-accent/10'
+                        : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
+                    }`}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* 测试按钮（两个后端共用） */}
       <button
         onClick={handleTest}
-        disabled={testing || !openaiReady}
+        disabled={testDisabled}
         className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-bg-tertiary text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {testing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}

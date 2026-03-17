@@ -273,6 +273,27 @@ body {
   overflow: hidden;
 }
 
+/* ========== Preview 面板 ========== */
+
+/* 加载进度条动画 */
+@keyframes preview-loading {
+  0% {
+    width: 0%;
+    margin-left: 0%;
+  }
+  50% {
+    width: 60%;
+    margin-left: 20%;
+  }
+  100% {
+    width: 0%;
+    margin-left: 100%;
+  }
+}
+.animate-preview-loading {
+  animation: preview-loading 1.5s ease-in-out infinite;
+}
+
 /* ========== Zen 风格分组容器 ========== */
 
 /* 配置项分组：左线指示（替代灰色圆角边框） */

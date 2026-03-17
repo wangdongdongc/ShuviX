@@ -27,7 +27,7 @@ asarUnpack:
 npmRebuild: true
 # 从源码编译原生模块，避免 prebuild-install 下载的预编译二进制依赖更高版本 GLIBC
 buildDependenciesFromSource: true
-# macOS 无开发者证书时，afterPack 钩子统一 ad-hoc 签名
+# macOS 无开发者证书时，afterPack 钩子 fallback 到 ad-hoc 签名
 afterPack: build/afterPack.cjs
 win:
   executableName: shuvix
@@ -42,15 +42,14 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
-  # 跳过 electron-builder 默认签名，由 afterPack 钩子统一 ad-hoc 签名
-  identity: null
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
+  # 公证：当 CI 环境设置了 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID 时自动触发
+  notarize: true
   target:
     - target: dmg
       arch:

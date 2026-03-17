@@ -25,9 +25,19 @@ export function getUserConfigDir(): string {
   return ensureDir(join(homedir(), '.shuvix'))
 }
 
-/** TTS 临时音频文件目录 */
+/** TTS 临时音频文件缓存目录 */
 export function getTtsCacheDir(): string {
   return ensureDir(join(app.getPath('userData'), 'tts_cache'))
+}
+
+/** Whisper 模型存储目录：~/.shuvix/stt/whisper/models/ */
+export function getWhisperModelsDir(): string {
+  return ensureDir(join(homedir(), '.shuvix', 'stt', 'whisper', 'models'))
+}
+
+/** Qwen3 TTS 基础目录：~/.shuvix/tts/qwen3/ */
+export function getQwen3TtsDir(): string {
+  return ensureDir(join(homedir(), '.shuvix', 'tts', 'qwen3'))
 }
 
 /** 获取临时会话的工作目录 */

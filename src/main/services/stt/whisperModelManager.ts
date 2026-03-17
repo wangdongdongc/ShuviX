@@ -1,6 +1,6 @@
 import { join } from 'path'
-import { existsSync, mkdirSync, unlinkSync } from 'fs'
-import { getDataDir } from '../../utils/paths'
+import { existsSync, unlinkSync } from 'fs'
+import { getWhisperModelsDir } from '../../utils/paths'
 import { downloadManager } from '../downloadManager'
 import { createLogger } from '../../logger'
 
@@ -85,12 +85,6 @@ export const MODEL_CATALOG: WhisperModelInfo[] = [
   }
 ]
 
-/** 获取模型存储目录 */
-function getModelsDir(): string {
-  const dir = join(getDataDir(), 'whisper', 'models')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
-}
 
 /**
  * Whisper 模型管理器 — 下载、删除、查询 GGML 模型文件
@@ -98,7 +92,7 @@ function getModelsDir(): string {
 class WhisperModelManager {
   /** 获取模型文件路径 */
   getModelPath(modelId: string): string {
-    return join(getModelsDir(), `ggml-${modelId}.bin`)
+    return join(getWhisperModelsDir(), `ggml-${modelId}.bin`)
   }
 
   /** 模型是否已下载 */
