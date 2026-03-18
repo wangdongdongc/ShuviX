@@ -345,8 +345,22 @@ const api = {
 
   // ============ 文字转语音 ============
   tts: {
-    /** TTS 合成文字为音频 */
-    speakOnce: (params: { text: string }) => ipcRenderer.invoke('tts:speakOnce', params),
+    /** TTS 切片合成 — 每片完成通过 onChunk 事件推送 */
+    speakOnce: (params: { text: string }) =>
+      ipcRenderer.invoke('tts:speakOnce', params) as Promise<void>,
+    /** 中止当前 TTS 合成 */
+    abortTts: () => ipcRenderer.invoke('tts:abort') as Promise<void>,
+    /** 监听合成片段完成事件 */
+    onChunk: (callback: (data: { filePath: string; index: number }) => void) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        data: { filePath: string; index: number }
+      ): void => callback(data)
+      ipcRenderer.on('tts:chunk', handler)
+      return (): void => {
+        ipcRenderer.removeListener('tts:chunk', handler)
+      }
+    },
     /** 获取 Qwen3 本地 TTS 状态 */
     getQwen3Status: () => ipcRenderer.invoke('tts:getQwen3Status'),
     /** 获取 Qwen3 可用语音列表 */

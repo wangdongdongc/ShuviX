@@ -503,18 +503,23 @@ function TtsPanel(): React.JSX.Element {
         testAudio.pause()
         testAudio = null
       }
-      const result = await window.api.tts.speakOnce({
+      const removeListener = window.api.tts.onChunk((data) => {
+        if (data.index === 0 && !testAudio) {
+          const audio = new Audio(`shuvix-media://${data.filePath}`)
+          testAudio = audio
+          audio.onended = () => {
+            testAudio = null
+          }
+          audio.onerror = () => {
+            testAudio = null
+          }
+          audio.play()
+        }
+      })
+      await window.api.tts.speakOnce({
         text: t('settings.voiceTtsTestText')
       })
-      const audio = new Audio(`shuvix-media://${result.filePath}`)
-      testAudio = audio
-      audio.onended = () => {
-        testAudio = null
-      }
-      audio.onerror = () => {
-        testAudio = null
-      }
-      await audio.play()
+      removeListener()
     } catch (err) {
       console.error('TTS test failed:', err)
     } finally {

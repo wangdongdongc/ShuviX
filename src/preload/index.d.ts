@@ -642,8 +642,12 @@ declare global {
       >
     }
     tts: {
-      /** TTS 合成文字为音频 */
-      speakOnce: (params: { text: string }) => Promise<{ filePath: string }>
+      /** TTS 切片合成 — 每片完成通过 onChunk 事件推送 */
+      speakOnce: (params: { text: string }) => Promise<void>
+      /** 中止当前 TTS 合成 */
+      abortTts: () => Promise<void>
+      /** 监听合成片段完成事件 */
+      onChunk: (callback: (data: { filePath: string; index: number }) => void) => () => void
       /** 获取 Qwen3 本地 TTS 状态 */
       getQwen3Status: () => Promise<{
         ready: boolean

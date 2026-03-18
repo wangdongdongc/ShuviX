@@ -3,9 +3,16 @@ import { ttsService } from '../services/tts'
 import { qwen3ModelManager } from '../services/tts/qwen3ModelManager'
 
 export function registerTtsHandlers(): void {
-  ipcMain.handle('tts:speakOnce', async (_event, params: { text: string }) => {
-    const filePath = await ttsService.speakOnce(params)
-    return { filePath }
+  ipcMain.handle('tts:speakOnce', async (event, params: { text: string }) => {
+    await ttsService.speakOnce(params, (filePath, index) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('tts:chunk', { filePath, index })
+      }
+    })
+  })
+
+  ipcMain.handle('tts:abort', () => {
+    ttsService.abortSpeakOnce()
   })
 
   // ---- Qwen3 本地 TTS 管理 ----

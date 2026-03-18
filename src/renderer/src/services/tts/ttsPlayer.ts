@@ -1,8 +1,10 @@
 /**
- * 全局 TTS 音频播放器 — 管理播放、中断和清理
+ * 全局 TTS 音频播放器 — 管理切片队列播放、中断和清理
  */
 class TtsPlayer {
   private audio: HTMLAudioElement | null = null
+  private queue: string[] = []
+  private removeChunkListener: (() => void) | null = null
   private _isPlaying = false
   private _isLoading = false
   private _playingMessageId: string | null = null
@@ -30,11 +32,10 @@ class TtsPlayer {
     this.listeners.forEach((fn) => fn())
   }
 
-  /** 播放音频文件 */
+  /** 播放单个音频文件（供 VoiceSettings 试听等场景使用） */
   async play(filePath: string, messageId?: string): Promise<void> {
     this.stop()
 
-    // Electron 打包后用 file:// 协议加载本地临时文件
     this.audio = new Audio(`shuvix-media://${filePath}`)
     this._playingMessageId = messageId ?? null
     this._isPlaying = true
@@ -51,8 +52,78 @@ class TtsPlayer {
     await this.audio.play()
   }
 
-  /** 停止播放 */
+  /** 合成并播放文本 — 切片流水线模式 */
+  async speak(text: string, messageId?: string): Promise<void> {
+    this.stop()
+
+    this._isLoading = true
+    this._playingMessageId = messageId ?? null
+    this.queue = []
+    this.notify()
+
+    // 监听逐片推送，收到第一片立即播放
+    this.removeChunkListener = window.api.tts.onChunk((data) => {
+      if (!this._isLoading && !this._isPlaying) return
+      this.queue.push(data.filePath)
+      if (!this._isPlaying && this.queue.length === 1) {
+        this.playNext(messageId)
+      }
+    })
+
+    try {
+      await window.api.tts.speakOnce({ text })
+      // invoke 返回 = 所有片段合成完毕（或被中止）
+      if (!this._isLoading && !this._isPlaying) return
+      this._isLoading = false
+      this.notify()
+      // 合成结束且队列空且没在播放 → cleanup
+      if (!this._isPlaying && this.queue.length === 0) {
+        this.cleanup()
+      }
+    } catch {
+      this.cleanup()
+    }
+  }
+
+  /** 从队列取下一片播放 */
+  private async playNext(messageId?: string): Promise<void> {
+    const filePath = this.queue.shift()
+    if (!filePath) {
+      // 队列空了，如果合成也结束则 cleanup
+      if (!this._isLoading) this.cleanup()
+      return
+    }
+
+    if (this.audio) {
+      this.audio.pause()
+      this.audio.onended = null
+      this.audio.onerror = null
+    }
+
+    this.audio = new Audio(`shuvix-media://${filePath}`)
+    this._isPlaying = true
+    this._playingMessageId = messageId ?? null
+    this.notify()
+
+    this.audio.onended = (): void => void this.playNext(messageId)
+    this.audio.onerror = (): void => void this.playNext(messageId)
+
+    try {
+      await this.audio.play()
+    } catch {
+      this.playNext(messageId)
+    }
+  }
+
+  /** 停止播放并中止后台合成 */
   stop(): void {
+    // 通知 main 中止后台合成
+    window.api.tts.abortTts()
+    // 清理 chunk 事件监听
+    this.removeChunkListener?.()
+    this.removeChunkListener = null
+    this.queue = []
+    // 清理音频
     if (this.audio) {
       this.audio.pause()
       this.audio.onended = null
@@ -68,25 +139,10 @@ class TtsPlayer {
     }
   }
 
-  /** 合成并播放文本 */
-  async speak(text: string, messageId?: string): Promise<void> {
-    this.stop()
-
-    this._isLoading = true
-    this._playingMessageId = messageId ?? null
-    this.notify()
-
-    try {
-      const result = await window.api.tts.speakOnce({ text })
-      // 如果在等待期间被中断（stop 被调用），不再播放
-      if (!this._isLoading) return
-      await this.play(result.filePath, messageId)
-    } catch {
-      this.cleanup()
-    }
-  }
-
   private cleanup(): void {
+    this.removeChunkListener?.()
+    this.removeChunkListener = null
+    this.queue = []
     if (this.audio) {
       this.audio.onended = null
       this.audio.onerror = null
