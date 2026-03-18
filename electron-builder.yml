@@ -48,8 +48,8 @@ mac:
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  # 公证：当 CI 环境设置了 APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID 时自动触发
-  notarize: true
+  # 公证由 CI workflow 单独步骤处理（支持重试），此处关闭 electron-builder 内置公证
+  notarize: false
   target:
     - target: dmg
       arch:
