@@ -23,6 +23,8 @@ jobs:
             platform: win
 
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_APPLE_CERTS: ${{ secrets.APPLE_ID != '' && 'true' || 'false' }}
 
     steps:
       - name: Checkout
@@ -49,7 +51,7 @@ jobs:
 
       # macOS 公证（独立步骤，支持重试，避免网络抖动导致整个构建失败）
       - name: Notarize macOS app
-        if: matrix.platform == 'mac' && secrets.APPLE_ID != ''
+        if: matrix.platform == 'mac' && env.HAS_APPLE_CERTS == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
