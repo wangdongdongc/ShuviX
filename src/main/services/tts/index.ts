@@ -2,10 +2,13 @@ import { join } from 'path'
 import { rmSync } from 'fs'
 import { randomUUID } from 'crypto'
 import type { TtsBackendMain } from './types'
+import { cleanMarkdownForTts } from './cleanMarkdown'
 import { OpenAITtsBackend } from './openaiBackend'
 import { getTtsCacheDir } from '../../utils/paths'
 import { settingsDao } from '../../dao/settingsDao'
+import { createLogger } from '../../logger'
 
+const log = createLogger('TtsService')
 const openaiBackend = new OpenAITtsBackend()
 
 // qwen3Backend 延迟实例化（仅 macOS 可用）
@@ -37,7 +40,9 @@ class TtsService {
     const backend = this.getBackend()
     const ext = backend.outputExtension ?? 'mp3'
     const outputPath = join(getTtsCacheDir(), `tts-${randomUUID()}.${ext}`)
-    await backend.synthesize({ text: params.text, outputPath })
+    const cleanedText = cleanMarkdownForTts(params.text)
+    log.info(`Cleaned text for TTS:\n${cleanedText}`)
+    await backend.synthesize({ text: cleanedText, outputPath })
 
     return outputPath
   }
