@@ -49,7 +49,7 @@ jobs:
           # 构建阶段先跳过公证，由下一步单独处理（支持重试）
           MAC_NOTARIZE: false
 
-      # macOS 公证（独立步骤，支持重试，避免网络抖动导致整个构建失败）
+      # macOS 公证（提交后轮询结果，避免 --wait 超时导致失败）
       - name: Notarize macOS app
         if: matrix.platform == 'mac' && env.HAS_APPLE_CERTS == 'true'
         env:
@@ -58,32 +58,55 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
         run: |
-          MAX_RETRIES=3
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "=== Notarization attempt $i/$MAX_RETRIES ==="
-            for dmg in dist/*.dmg; do
-              echo "Notarizing $dmg ..."
-              if xcrun notarytool submit "$dmg" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" \
-                --wait --timeout 10m; then
-                echo "Stapling $dmg ..."
-                xcrun stapler staple "$dmg"
-                echo "✅ $dmg notarized and stapled"
-              else
-                echo "❌ Notarization failed for $dmg"
-                if [ "$i" -lt "$MAX_RETRIES" ]; then
-                  echo "Retrying in 30s..."
-                  sleep 30
-                  continue 2
-                fi
-                exit 1
-              fi
+          NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
+
+          for dmg in dist/*.dmg; do
+            echo "=== Submitting $dmg ==="
+            # 提交并提取 submission ID
+            SUBMIT_OUT=$(xcrun notarytool submit "$dmg" $NOTARY_ARGS 2>&1)
+            echo "$SUBMIT_OUT"
+            SUB_ID=$(echo "$SUBMIT_OUT" | grep '  id:' | head -1 | awk '{print $2}')
+            if [ -z "$SUB_ID" ]; then
+              echo "❌ Failed to get submission ID"
+              exit 1
+            fi
+            echo "Submission ID: $SUB_ID"
+
+            # 轮询等待结果（最多 30 分钟）
+            echo "Waiting for Apple to process (up to 30 min)..."
+            TIMEOUT=1800
+            INTERVAL=30
+            ELAPSED=0
+            while [ $ELAPSED -lt $TIMEOUT ]; do
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+              STATUS=$(xcrun notarytool info "$SUB_ID" $NOTARY_ARGS 2>&1 | grep '  status:' | head -1 | awk '{print $2}')
+              echo "[$((ELAPSED/60))m${((ELAPSED%60))}s] Status: $STATUS"
+              case "$STATUS" in
+                Accepted)
+                  echo "✅ Notarization accepted, stapling..."
+                  xcrun stapler staple "$dmg"
+                  echo "✅ $dmg done"
+                  break
+                  ;;
+                Invalid|Rejected)
+                  echo "❌ Notarization rejected. Fetching log..."
+                  xcrun notarytool log "$SUB_ID" $NOTARY_ARGS
+                  exit 1
+                  ;;
+                *)
+                  # In Progress or other, keep waiting
+                  ;;
+              esac
             done
-            echo "✅ All DMGs notarized successfully"
-            break
+
+            if [ "$STATUS" != "Accepted" ]; then
+              echo "❌ Timeout waiting for notarization of $dmg (ID: $SUB_ID)"
+              echo "You can check status later: xcrun notarytool info $SUB_ID $NOTARY_ARGS"
+              exit 1
+            fi
           done
+          echo "✅ All DMGs notarized and stapled"
 
       # Windows 构建多架构时会额外生成一个合并安装包（无 arch 后缀，体积翻倍），删除它
       - name: Remove universal Windows installer
