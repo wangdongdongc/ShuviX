@@ -81,7 +81,7 @@ jobs:
               sleep $INTERVAL
               ELAPSED=$((ELAPSED + INTERVAL))
               STATUS=$(xcrun notarytool info "$SUB_ID" $NOTARY_ARGS 2>&1 | grep '  status:' | head -1 | awk '{print $2}')
-              echo "[$((ELAPSED/60))m${((ELAPSED%60))}s] Status: $STATUS"
+              echo "[$(( ELAPSED / 60 ))m$(( ELAPSED % 60 ))s] Status: $STATUS"
               case "$STATUS" in
                 Accepted)
                   echo "✅ Notarization accepted, stapling..."
