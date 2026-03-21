@@ -167,7 +167,7 @@ declare global {
   }
   interface ChatPreviewEvent extends ChatEventBase {
     type: 'preview_event'
-    action: 'open' | 'close'
+    action: 'open' | 'close' | 'server_started' | 'server_stopped'
     url?: string
     title?: string
   }

@@ -39,13 +39,13 @@ const designPlugin: ShuviXPlugin = {
             manager
               .startDev(event.sessionId, event.workingDir)
               .then((info) =>
-                ctx.emitEvent(event.sessionId, { type: 'plugin:panel_open', url: info.url })
+                ctx.emitEvent(event.sessionId, { type: 'plugin:preview_server_started', url: info.url })
               )
               .catch((err) => ctx.logger.error('startDev failed', err))
             break
           case 'preview:stop':
             manager.stopDev(event.sessionId)
-            ctx.emitEvent(event.sessionId, { type: 'plugin:panel_close' })
+            ctx.emitEvent(event.sessionId, { type: 'plugin:preview_server_stopped' })
             break
         }
       }

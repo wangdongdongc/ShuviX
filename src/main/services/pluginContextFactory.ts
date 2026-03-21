@@ -27,7 +27,7 @@ export function createPluginContext(pluginId: string): PluginContext {
     emitEvent(sessionId: string, event: PluginEvent): void {
       logger.info(`PluginEvent → main: ${event.type}`, event)
       switch (event.type) {
-        case 'plugin:panel_open':
+        case 'plugin:preview_panel_open':
           chatFrontendRegistry.broadcast({
             type: 'preview_event' as const,
             sessionId,
@@ -36,11 +36,26 @@ export function createPluginContext(pluginId: string): PluginContext {
             title: event.title
           })
           break
-        case 'plugin:panel_close':
+        case 'plugin:preview_panel_close':
           chatFrontendRegistry.broadcast({
             type: 'preview_event' as const,
             sessionId,
             action: 'close' as const
+          })
+          break
+        case 'plugin:preview_server_started':
+          chatFrontendRegistry.broadcast({
+            type: 'preview_event' as const,
+            sessionId,
+            action: 'server_started' as const,
+            url: event.url
+          })
+          break
+        case 'plugin:preview_server_stopped':
+          chatFrontendRegistry.broadcast({
+            type: 'preview_event' as const,
+            sessionId,
+            action: 'server_stopped' as const
           })
           break
       }

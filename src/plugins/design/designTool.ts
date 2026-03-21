@@ -119,7 +119,7 @@ The design project supports:
       const serverInfo = await this.designProjectManager.startDev(sessionId, workingDir)
 
       // 通知 renderer 打开预览面板
-      this.ctx.emitEvent(sessionId, { type: 'plugin:panel_open', url: serverInfo.url })
+      this.ctx.emitEvent(sessionId, { type: 'plugin:preview_server_started', url: serverInfo.url })
 
       // startDev 内部已完成首次构建，再 rebuild 一次获取结果
       const designDir = this.designProjectManager.getDesignDir(workingDir)

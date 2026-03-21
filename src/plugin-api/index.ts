@@ -9,7 +9,13 @@
 export type { PluginTool } from './tool'
 
 // plugin→main 事件
-export type { PluginEvent, PluginPanelOpenEvent, PluginPanelCloseEvent } from './events'
+export type {
+  PluginEvent,
+  PluginPreviewPanelOpenEvent,
+  PluginPreviewPanelCloseEvent,
+  PluginPreviewServerStartedEvent,
+  PluginPreviewServerStoppedEvent
+} from './events'
 
 // main→plugin 事件
 export type { HostEvent, PreviewStartEvent, PreviewStopEvent } from './hostEvents'

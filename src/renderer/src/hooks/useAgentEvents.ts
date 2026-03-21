@@ -248,15 +248,19 @@ export function useAgentEvents(): void {
         break
 
       case 'preview_event':
-        if (event.action === 'open' && event.url) {
+        if (event.action === 'server_started' && event.url) {
           let url = event.url
           if (window.api?.app?.platform === 'web') {
             url = `${window.location.origin}/shuvix/preview/${sid}/`
           }
           usePreviewStore.getState().openPreview(url)
-          usePreviewStore.getState().setServerRunning(true)
+          usePreviewStore.setState({ isStartingServer: false, isServerRunning: true })
+        } else if (event.action === 'server_stopped') {
+          usePreviewStore.setState({ isServerRunning: false, isStartingServer: false })
+        } else if (event.action === 'open' && event.url) {
+          usePreviewStore.getState().openPreview(event.url)
         } else if (event.action === 'close') {
-          usePreviewStore.getState().setServerRunning(false)
+          usePreviewStore.getState().switchToUrl()
         }
         break
 
