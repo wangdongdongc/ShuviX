@@ -5,16 +5,18 @@
 
 import { mcpService } from '../services/mcpService'
 import { skillService } from '../services/skillService'
+import { pluginRegistry } from '../services/pluginRegistry'
 import { ALL_TOOL_NAMES, DEFAULT_TOOL_NAMES } from '../types/tools'
 import { createLogger } from '../logger'
 export { ALL_TOOL_NAMES, type ToolName } from '../types/tools'
 
 const log = createLogger('Tools')
 
-/** 获取所有可用工具名（内置 + MCP 动态 + 已启用 Skill） */
+/** 获取所有可用工具名（内置 + 插件 + MCP 动态 + 已启用 Skill） */
 export function getAllToolNames(projectPath?: string): string[] {
+  const pluginNames = pluginRegistry.getAllToolNames()
   const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
-  return [...ALL_TOOL_NAMES, ...mcpService.getAllToolNames(), ...skillNames]
+  return [...ALL_TOOL_NAMES, ...pluginNames, ...mcpService.getAllToolNames(), ...skillNames]
 }
 
 /** 计算新会话的默认启用工具列表（创建会话时调用，结果持久化） */

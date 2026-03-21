@@ -192,34 +192,29 @@ export function PreviewPanel(): React.JSX.Element {
           )}
         </div>
 
-        {/* URL 栏 / Design 模式标签 */}
-        {isDesignMode ? (
-          <div className="titlebar-no-drag flex-1 min-w-0">
-            <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1">
-              <Palette size={10} className="flex-shrink-0 text-accent" />
-              <span className="text-[11px] text-text-secondary truncate">Preview</span>
-            </div>
+        {/* URL 栏 */}
+        <form
+          className="titlebar-no-drag flex-1 min-w-0"
+          onSubmit={(e) => {
+            e.preventDefault()
+            handleNavigate()
+          }}
+        >
+          <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1 transition-colors focus-within:border-accent/40">
+            {isDesignMode
+              ? <Palette size={10} className="flex-shrink-0 text-accent" />
+              : <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
+            }
+            <input
+              type="text"
+              value={isDesignMode ? (designUrl || '') : (inputUrl === 'about:blank' ? '' : inputUrl)}
+              onChange={(e) => { if (!isDesignMode) setInputUrl(e.target.value) }}
+              readOnly={isDesignMode}
+              placeholder="Enter URL or start a preview server..."
+              className="flex-1 min-w-0 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
+            />
           </div>
-        ) : (
-          <form
-            className="titlebar-no-drag flex-1 min-w-0"
-            onSubmit={(e) => {
-              e.preventDefault()
-              handleNavigate()
-            }}
-          >
-            <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1 transition-colors focus-within:border-accent/40">
-              <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
-              <input
-                type="text"
-                value={inputUrl === 'about:blank' ? '' : inputUrl}
-                onChange={(e) => setInputUrl(e.target.value)}
-                placeholder="Enter URL or start a preview server..."
-                className="flex-1 min-w-0 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
-              />
-            </div>
-          </form>
-        )}
+        </form>
 
         {/* 在浏览器中打开 */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
@@ -257,19 +252,9 @@ export function PreviewPanel(): React.JSX.Element {
       </div>
 
       {/* ====== 底部状态栏 ====== */}
-      <div className="flex-shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-t border-border-secondary bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
+      <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
         {/* 加载状态指示 */}
-        <span className={`h-1 w-1 rounded-full flex-shrink-0 ${isLoading ? 'bg-accent animate-pulse' : isBlank ? 'bg-text-tertiary/30' : isDesignMode ? 'bg-accent/70' : 'bg-success/70'}`} />
-        {/* 域名或状态文字 */}
-        <span className="truncate">
-          {isBlank
-            ? 'No page loaded'
-            : isLoading
-              ? 'Loading...'
-              : (() => { try { return new URL(activeUrl).host } catch { return activeUrl } })()
-          }
-        </span>
-        <span className="flex-1" />
+        {isLoading && <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />}
         {/* 尺寸指示 */}
         <span className="tabular-nums opacity-60">{contentHeight} x {width}</span>
       </div>

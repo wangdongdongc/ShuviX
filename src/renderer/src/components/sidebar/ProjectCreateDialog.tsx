@@ -57,7 +57,7 @@ export function ProjectCreateDialog({
   onClose,
   onCreated
 }: ProjectCreateDialogProps): React.JSX.Element {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
 
   // 向导步骤
@@ -311,7 +311,7 @@ export function ProjectCreateDialog({
                       )}
                     </div>
                     <div className="text-xs font-medium text-text-primary">
-                      {t(pp.labelKey, pp.i18n[t('lng') as string]?.[pp.labelKey] || pp.labelKey)}
+                      {pp.i18n[i18n.language]?.[pp.labelKey] ?? pp.i18n['en']?.[pp.labelKey] ?? pp.labelKey}
                     </div>
                   </button>
                 )
@@ -347,7 +347,7 @@ export function ProjectCreateDialog({
                   ? pluginPurpose.tipKey
                   : `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
                 const tipText = pluginPurpose
-                  ? (pluginPurpose.i18n[t('lng') as string]?.[pluginPurpose.tipKey] || t(tipKey))
+                  ? (pluginPurpose.i18n[i18n.language]?.[pluginPurpose.tipKey] ?? pluginPurpose.i18n['en']?.[pluginPurpose.tipKey] ?? t(tipKey))
                   : t(tipKey)
                 return (
                   <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">

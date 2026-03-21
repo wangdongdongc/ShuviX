@@ -11,6 +11,7 @@ import { pythonWorkerManager } from '../../services/pythonWorkerManager'
 import { sqlWorkerManager } from '../../services/sqlWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
+import { pluginRegistry } from '../../services/pluginRegistry'
 import type { InlineToken } from '../../../shared/types/chatMessage'
 import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
@@ -237,7 +238,6 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-setting': t('tool.shuvixSettingLabel'),
       explore: t('tool.exploreLabel'),
       'claude-code': t('tool.claudeCodeLabel'),
-      design: t('tool.designLabel')
     }
     const hintMap: Record<string, string> = {
       bash: t('tool.bashHint'),
@@ -255,7 +255,6 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-setting': t('tool.shuvixSettingHint'),
       explore: t('tool.exploreHint'),
       'claude-code': t('tool.claudeCodeHint'),
-      design: t('tool.designHint')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,
@@ -263,6 +262,14 @@ export class DefaultChatGateway implements ChatGateway {
       hint: hintMap[name],
       group: subAgentRegistry.isSubAgent(name) ? '__subagents__' : (undefined as string | undefined)
     }))
+    /** 插件工具 */
+    const pluginTools = pluginRegistry.getActivatedEntries().flatMap(({ contribution }) =>
+      (contribution.tools ?? []).map((tool) => ({
+        name: tool.name,
+        label: tool.label,
+        hint: tool.description.split('\n')[0]
+      }))
+    )
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({
       name: info.name,
@@ -276,7 +283,7 @@ export class DefaultChatGateway implements ChatGateway {
       label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
       group: '__skills__'
     }))
-    return [...builtinTools, ...mcpTools, ...skillItems]
+    return [...builtinTools, ...pluginTools, ...mcpTools, ...skillItems]
   }
 }
 
