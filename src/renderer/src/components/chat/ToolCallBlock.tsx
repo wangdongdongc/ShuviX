@@ -24,17 +24,60 @@ import {
   Clock,
   Database,
   Palette,
-  Globe
+  Globe,
+  Code,
+  type LucideIcon
 } from 'lucide-react'
 import hljs from 'highlight.js/lib/core'
-import python from 'highlight.js/lib/languages/python'
-import sqlLang from 'highlight.js/lib/languages/sql'
-import { useChatStore, type ToolResultDetails } from '../../stores/chatStore'
+import hljsPython from 'highlight.js/lib/languages/python'
+import hljsSql from 'highlight.js/lib/languages/sql'
+import {
+  useChatStore,
+  type ToolResultDetails,
+  type ToolPresentation,
+  type FormItemRenderer
+} from '../../stores/chatStore'
 import { copyToClipboard } from '../../utils/clipboard'
 
-// 注册语言高亮
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('sql', sqlLang)
+/** lucide 图标名 → 组件映射（按需扩展） */
+const ICON_MAP: Record<string, LucideIcon> = {
+  Terminal,
+  FileText,
+  FilePen,
+  FileOutput,
+  Wrench,
+  Check,
+  X,
+  MessageCircleQuestion,
+  BookOpen,
+  FolderTree,
+  Search,
+  FileSearch2,
+  Container,
+  Copy,
+  Package,
+  Clock,
+  Database,
+  Palette,
+  Globe,
+  Code
+}
+
+/** 根据图标名查找 lucide 组件，找不到时返回 Wrench */
+function resolveLucideIcon(name?: string): LucideIcon {
+  if (!name) return Wrench
+  return ICON_MAP[name] ?? Wrench
+}
+
+
+// 静态注册已知语言，新语言在此添加
+hljs.registerLanguage('python', hljsPython)
+hljs.registerLanguage('sql', hljsSql)
+
+/** 检查 hljs 是否支持指定语言 */
+function isHljsLanguageRegistered(lang: string): boolean {
+  return hljs.getLanguage(lang) != null
+}
 
 interface ToolCallBlockProps {
   toolName: string
@@ -70,6 +113,7 @@ export function ToolCallBlock({
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const presentation = useChatStore((s) => s.toolPresentations[toolName])
 
   // 从 store 读取实时工具执行状态，确保审批状态变更时组件能独立重渲染
   const liveExec = useChatStore((s) => {
@@ -158,50 +202,18 @@ export function ToolCallBlock({
           detail: `${action}${cmd}`
         }
       }
-      case 'design':
-        return {
-          icon: <Palette size={12} className="text-pink-400 flex-shrink-0" />,
-          detail: str(args?.action)
-        }
       case 'skill':
         return {
           icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
           detail: str(args?.name)
         }
-      case 'python': {
-        const code = str(args?.code)
-        const lineCount = code.split('\n').length
-        const firstLine = code.split('\n')[0]
-        const summary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
-        const pyDetails = details?.type === 'python' ? details : null
-        const meta: string[] = []
-        if (lineCount > 1) meta.push(`${lineCount} lines`)
-        if (pyDetails?.executionTime) meta.push(`${(pyDetails.executionTime / 1000).toFixed(1)}s`)
-        if (pyDetails?.packages?.length) meta.push(pyDetails.packages.join(', '))
-        const metaSuffix = meta.length > 0 ? ` (${meta.join(' · ')})` : ''
-        return {
-          icon: <Terminal size={12} className="text-yellow-500 flex-shrink-0" />,
-          detail: summary + metaSuffix
+      default: {
+        // 插件工具：使用 presentation 配置生成摘要
+        if (presentation) {
+          return buildPresentationSummary(presentation, args)
         }
-      }
-      case 'sql': {
-        const query = str(args?.sql)
-        const firstLine = query.split('\n')[0]
-        const sqlSummary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
-        const sqlDetails = details?.type === 'sql' ? details : null
-        const sqlMeta: string[] = []
-        if (sqlDetails?.rowCount != null) sqlMeta.push(`${sqlDetails.rowCount} rows`)
-        if (sqlDetails?.executionTime)
-          sqlMeta.push(`${(sqlDetails.executionTime / 1000).toFixed(1)}s`)
-        if (sqlDetails?.extensions?.length) sqlMeta.push(sqlDetails.extensions.join(', '))
-        const sqlMetaSuffix = sqlMeta.length > 0 ? ` (${sqlMeta.join(' · ')})` : ''
-        return {
-          icon: <Database size={12} className="text-blue-400 flex-shrink-0" />,
-          detail: sqlSummary + sqlMetaSuffix
-        }
-      }
-      default:
         return { icon: <Wrench size={12} className={ic} />, detail: '' }
+      }
     }
   })()
 
@@ -292,10 +304,8 @@ export function ToolCallBlock({
       {/* 展开详情 */}
       {expanded && !streamingArgsText && !hasEditDiff && status !== 'pending_approval' && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
-          {toolName === 'python' && args ? (
-            <PythonToolDetail args={args} result={result} />
-          ) : toolName === 'sql' && args ? (
-            <SqlToolDetail args={args} result={result} />
+          {presentation && args ? (
+            <PluginToolDetail presentation={presentation} args={args} result={result} />
           ) : (
             <>
               {args && Object.keys(args).length > 0 && (
@@ -326,83 +336,74 @@ export function ToolCallBlock({
   )
 }
 
-/** Python 工具展开详情 — 结构化参数展示 + 语法高亮代码块 */
-function PythonToolDetail({
+// ─── 插件工具摘要生成 ──────────────────────────────────
+
+/** 根据 presentation 配置生成折叠态图标 + 摘要文本 */
+function buildPresentationSummary(
+  pres: ToolPresentation,
+  args?: Record<string, unknown>
+): { icon: React.ReactNode; detail: string } {
+  const Icon = resolveLucideIcon(pres.icon)
+  const iconClass = pres.iconClass
+    ? `${pres.iconClass} flex-shrink-0`
+    : 'text-text-tertiary flex-shrink-0'
+
+  // 摘要文本：取 summaryField 的首行
+  let summary = ''
+  if (pres.summaryField && args) {
+    const raw = args[pres.summaryField]
+    if (typeof raw === 'string') {
+      const firstLine = raw.split('\n')[0]
+      summary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
+    }
+  }
+
+  return {
+    icon: <Icon size={12} className={iconClass} />,
+    detail: summary
+  }
+}
+
+// ─── 插件工具通用展开详情 ──────────────────────────────
+
+/** 根据 formItems 配置渲染展开态表单详情 */
+function PluginToolDetail({
+  presentation: pres,
   args,
   result
 }: {
+  presentation: ToolPresentation
   args: Record<string, unknown>
   result?: string
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const [copied, setCopied] = useState(false)
 
-  const code = typeof args.code === 'string' ? args.code : ''
-  const packages = Array.isArray(args.packages) ? (args.packages as string[]) : undefined
-  const timeout = typeof args.timeout === 'number' ? args.timeout : undefined
-
-  const highlighted = useMemo(() => {
-    if (!code) return ''
-    try {
-      return hljs.highlight(code, { language: 'python' }).value
-    } catch {
-      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    }
-  }, [code])
-
-  const handleCopy = (): void => {
-    copyToClipboard(code)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
+  const items = pres.formItems ?? []
+  const declaredFields = new Set(items.map((fi) => fi.field))
+  const undeclaredFields = Object.keys(args).filter((k) => !declaredFields.has(k))
 
   return (
     <>
-      {/* 元信息标签（packages / timeout） */}
-      {(packages || timeout) && (
-        <div className="flex items-center gap-2 flex-wrap">
-          {packages && packages.length > 0 && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-text-tertiary bg-bg-tertiary/50 rounded px-1.5 py-0.5">
-              <Package size={10} />
-              {packages.join(', ')}
-            </span>
-          )}
-          {timeout && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-text-tertiary bg-bg-tertiary/50 rounded px-1.5 py-0.5">
-              <Clock size={10} />
-              {timeout}s
-            </span>
-          )}
-        </div>
-      )}
+      {/* 声明的表单项，按声明顺序 */}
+      {items.map((fi) => {
+        const val = args[fi.field]
+        if (val == null) return null
+        return (
+          <FormItem
+            key={fi.field}
+            label={fi.label}
+            renderer={fi.renderer ?? { type: 'text' }}
+            value={val}
+          />
+        )
+      })}
 
-      {/* 代码块 — 语法高亮，字体与工具 step 一致 */}
-      {code && (
-        <div className="relative group/code">
-          <div
-            className="flex items-center justify-between px-2 py-0.5 text-[10px] text-text-tertiary rounded-t"
-            style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-          >
-            <span className="font-medium uppercase tracking-wider">python</span>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 hover:text-text-secondary transition-colors"
-            >
-              {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
-            </button>
-          </div>
-          <pre
-            className="text-[11px] leading-relaxed rounded-b px-2 py-1.5 overflow-auto max-h-48 !m-0"
-            style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-          >
-            <code
-              className="hljs language-python"
-              style={{ fontSize: 'inherit' }}
-              dangerouslySetInnerHTML={{ __html: highlighted }}
-            />
-          </pre>
-        </div>
-      )}
+      {/* 未声明的 args 字段，以 text 形式追加 */}
+      {undeclaredFields.map((field) => {
+        const val = args[field]
+        if (val == null) return null
+        return <FormItem key={field} label={field} renderer={{ type: 'text' }} value={val} />
+      })}
 
       {/* 执行结果 */}
       {result && (
@@ -417,90 +418,103 @@ function PythonToolDetail({
   )
 }
 
-/** SQL 工具展开详情 — 语法高亮 SQL + 执行结果 */
-function SqlToolDetail({
-  args,
-  result
+// ─── 表单项渲染器 ──────────────────────────────────────
+
+/** 单个表单项 — 按 renderer.type 分发渲染 */
+function FormItem({
+  label,
+  renderer,
+  value
 }: {
-  args: Record<string, unknown>
-  result?: string
-}): React.JSX.Element {
-  const { t } = useTranslation()
+  label?: string
+  renderer: NonNullable<FormItemRenderer>
+  value: unknown
+}): React.JSX.Element | null {
+  switch (renderer.type) {
+    case 'code':
+      return <CodeFormItem label={label} code={String(value)} language={renderer.language} />
+    case 'text':
+    default:
+      return <TextFormItem label={label} value={value} />
+  }
+}
+
+/** code 渲染器 — 语法高亮代码块 + 复制按钮 */
+function CodeFormItem({
+  label,
+  code,
+  language
+}: {
+  label?: string
+  code: string
+  language?: string
+}): React.JSX.Element | null {
   const [copied, setCopied] = useState(false)
 
-  const sql = typeof args.sql === 'string' ? args.sql : ''
-  const extensions = Array.isArray(args.extensions) ? (args.extensions as string[]) : undefined
-  const timeout = typeof args.timeout === 'number' ? args.timeout : undefined
-
   const highlighted = useMemo(() => {
-    if (!sql) return ''
+    if (!code || !language || !isHljsLanguageRegistered(language)) return ''
     try {
-      return hljs.highlight(sql, { language: 'sql' }).value
+      return hljs.highlight(code, { language }).value
     } catch {
-      return sql.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
-  }, [sql])
+  }, [code, language])
+
+  if (!code) return null
 
   const handleCopy = (): void => {
-    copyToClipboard(sql)
+    copyToClipboard(code)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <>
-      {(extensions || timeout) && (
-        <div className="flex items-center gap-2 flex-wrap">
-          {extensions && extensions.length > 0 && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-text-tertiary bg-bg-tertiary/50 rounded px-1.5 py-0.5">
-              <Package size={10} />
-              {extensions.join(', ')}
-            </span>
-          )}
-          {timeout && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-text-tertiary bg-bg-tertiary/50 rounded px-1.5 py-0.5">
-              <Clock size={10} />
-              {timeout}s
-            </span>
-          )}
-        </div>
-      )}
+    <div className="relative group/code">
+      <div
+        className="flex items-center justify-between px-2 py-0.5 text-[10px] text-text-tertiary rounded-t"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
+        <span className="font-medium uppercase tracking-wider">{language || label || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 hover:text-text-secondary transition-colors"
+        >
+          {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
+        </button>
+      </div>
+      <pre
+        className="text-[11px] leading-relaxed rounded-b px-2 py-1.5 overflow-auto max-h-48 !m-0"
+        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+      >
+        {highlighted ? (
+          <code
+            className={`hljs language-${language}`}
+            style={{ fontSize: 'inherit' }}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
+        ) : (
+          <code style={{ fontSize: 'inherit' }}>{code}</code>
+        )}
+      </pre>
+    </div>
+  )
+}
 
-      {sql && (
-        <div className="relative group/code">
-          <div
-            className="flex items-center justify-between px-2 py-0.5 text-[10px] text-text-tertiary rounded-t"
-            style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-          >
-            <span className="font-medium uppercase tracking-wider">sql</span>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 hover:text-text-secondary transition-colors"
-            >
-              {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
-            </button>
-          </div>
-          <pre
-            className="text-[11px] leading-relaxed rounded-b px-2 py-1.5 overflow-auto max-h-48 !m-0"
-            style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-          >
-            <code
-              className="hljs language-sql"
-              style={{ fontSize: 'inherit' }}
-              dangerouslySetInnerHTML={{ __html: highlighted }}
-            />
-          </pre>
-        </div>
-      )}
-
-      {result && (
-        <div>
-          <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
-          <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-48 whitespace-pre-wrap break-words">
-            {result}
-          </pre>
-        </div>
-      )}
-    </>
+/** text 渲染器 — 带标签的纯文本 */
+function TextFormItem({
+  label,
+  value
+}: {
+  label?: string
+  value: unknown
+}): React.JSX.Element {
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return (
+    <div>
+      {label && <div className="text-[10px] text-text-tertiary mb-0.5">{label}</div>}
+      <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
+        {text}
+      </pre>
+    </div>
   )
 }

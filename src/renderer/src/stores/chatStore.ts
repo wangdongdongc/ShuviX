@@ -98,6 +98,17 @@ interface SessionStreamState {
   }>
 }
 
+/** 表单项渲染器类型 */
+export type FormItemRenderer = { type: 'code'; language?: string } | { type: 'text' }
+
+/** 插件工具渲染配置（从 plugin-api PluginToolPresentation 映射） */
+export interface ToolPresentation {
+  icon?: string
+  iconClass?: string
+  summaryField?: string
+  formItems?: Array<{ field: string; label?: string; renderer?: FormItemRenderer }>
+}
+
 /** Buffered streaming deltas for rAF batching (used by useAgentEvents) */
 export interface StreamingDeltaBuffer {
   content: string
@@ -204,6 +215,8 @@ interface ChatState {
   inputText: string
   /** 当前会话启用的工具列表 */
   enabledTools: string[]
+  /** 插件工具的渲染配置（toolName → presentation，启动时加载一次） */
+  toolPresentations: Record<string, ToolPresentation>
   /** 当前会话的项目工作目录 */
   projectPath: string | null
   /** AGENT.md 是否已加载 */
@@ -276,6 +289,7 @@ interface ChatState {
   updateSessionSettings: (id: string, patch: Partial<SessionSettings>) => void
   removeSession: (id: string) => void
   setEnabledTools: (tools: string[]) => void
+  setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
   setSlashCommands: (
@@ -377,6 +391,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingImages: [],
   inputText: '',
   enabledTools: [],
+  toolPresentations: {},
   projectPath: null,
   agentMdLoaded: false,
   slashCommands: [],
@@ -647,6 +662,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setSharedSessionIds: (ids: Map<string, ShareMode>) => set({ sharedSessionIds: ids }),
   setTelegramBindings: (bindings) => set({ telegramBindings: bindings }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
+  setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
   setSlashCommands: (commands) => set({ slashCommands: commands }),

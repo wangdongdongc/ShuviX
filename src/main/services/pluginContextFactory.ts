@@ -20,8 +20,12 @@ export function createPluginContext(pluginId: string): PluginContext {
   const logger = createLogger(`plugin:${pluginId}`)
 
   return {
-    getWorkingDirectory(sessionId: string): string {
-      return resolveProjectConfig(sessionId).workingDirectory
+    getSessionPaths(sessionId: string) {
+      const config = resolveProjectConfig(sessionId)
+      return {
+        workingDirectory: config.workingDirectory,
+        referenceDirs: config.referenceDirs.map((d) => ({ path: d.path, access: d.access ?? 'readonly' }))
+      }
     },
 
     emitEvent(sessionId: string, event: PluginEvent): void {

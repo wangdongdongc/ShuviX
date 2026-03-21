@@ -13,4 +13,8 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:purposes', () => {
     return pluginRegistry.getAllPurposes()
   })
+
+  ipcMain.handle('plugin:toolPresentations', () => {
+    return pluginRegistry.getAllToolPresentations()
+  })
 }

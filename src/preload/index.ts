@@ -429,7 +429,8 @@ const api = {
 
   // ============ Plugin ============
   plugin: {
-    purposes: () => ipcRenderer.invoke('plugin:purposes')
+    purposes: () => ipcRenderer.invoke('plugin:purposes'),
+    toolPresentations: () => ipcRenderer.invoke('plugin:toolPresentations')
   },
 
   // ============ Skill 管理 ============

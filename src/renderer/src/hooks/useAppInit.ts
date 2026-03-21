@@ -21,15 +21,17 @@ export function useAppInit(): void {
         console.log(`[Perf] ${label} — ${(performance.now() - t0).toFixed(0)}ms`)
       }
 
-      // 并行加载：通用设置 + 配置元数据
-      const [settings, settingMeta, projectFieldMeta] = await Promise.all([
+      // 并行加载：通用设置 + 配置元数据 + 插件工具渲染配置
+      const [settings, settingMeta, projectFieldMeta, toolPresentations] = await Promise.all([
         window.api.settings.getAll(),
         window.api.settings.getKnownKeys(),
-        window.api.project.getKnownFields()
+        window.api.project.getKnownFields(),
+        window.api.plugin.toolPresentations()
       ])
-      lap('settings + meta (parallel)')
+      lap('settings + meta + toolPresentations (parallel)')
       useSettingsStore.getState().loadSettings(settings)
       useSettingsStore.getState().loadConfigMeta(settingMeta, projectFieldMeta)
+      useChatStore.getState().setToolPresentations(toolPresentations)
       // 初始化时将全局默认值作为 fallback，useSessionInit 切换会话后会覆盖
       useSettingsStore.getState().setActiveProvider(settings['general.defaultProvider'] || '')
       useSettingsStore.getState().setActiveModel(settings['general.defaultModel'] || '')

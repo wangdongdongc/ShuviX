@@ -72,7 +72,7 @@ The design project supports:
       return textResult('Design tool: sessionId is required but was not provided.')
     }
 
-    const workingDir = this.ctx.getWorkingDirectory(sessionId)
+    const workingDir = this.ctx.getSessionPaths(sessionId).workingDirectory
     if (!workingDir) {
       return textResult(
         `Design tool: no working directory resolved for session ${sessionId}. ` +

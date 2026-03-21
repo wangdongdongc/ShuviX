@@ -6,7 +6,12 @@
  */
 
 // 工具接口
-export type { PluginTool } from './tool'
+export type {
+  PluginTool,
+  PluginToolPresentation,
+  PluginToolFormItem,
+  PluginFormItemRenderer
+} from './tool'
 
 // plugin→main 事件
 export type {
@@ -14,11 +19,18 @@ export type {
   PluginPreviewPanelOpenEvent,
   PluginPreviewPanelCloseEvent,
   PluginPreviewServerStartedEvent,
-  PluginPreviewServerStoppedEvent
+  PluginPreviewServerStoppedEvent,
+  PluginRuntimeStatusEvent,
+  PluginRuntimeInfo
 } from './events'
 
 // main→plugin 事件
-export type { HostEvent, PreviewStartEvent, PreviewStopEvent } from './hostEvents'
+export type {
+  HostEvent,
+  PreviewStartEvent,
+  PreviewStopEvent,
+  RuntimeDestroyEvent
+} from './hostEvents'
 export { HostEventType } from './hostEvents'
 
 // 核心类型
@@ -28,7 +40,9 @@ export type {
   PluginContribution,
   PluginLogger,
   PluginPurpose,
-  PluginCommand
+  PluginCommand,
+  PluginSessionPaths,
+  PluginReferenceDir
 } from './types'
 
 // Re-export 插件常用的外部类型，避免插件直接依赖这些包

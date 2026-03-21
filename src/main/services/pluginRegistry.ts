@@ -5,6 +5,7 @@
  */
 
 import type { ShuviXPlugin, PluginContribution, PluginPurpose } from '../../plugin-api/types'
+import type { PluginToolPresentation } from '../../plugin-api/tool'
 import type { SlashCommand } from '../../shared/types/slashCommand'
 import type { HostEvent } from '../../plugin-api/hostEvents'
 import { createPluginContext } from './pluginContextFactory'
@@ -101,6 +102,19 @@ class PluginRegistry {
       }
     }
     return names
+  }
+
+  /** 获取所有插件工具的渲染配置（toolName → presentation） */
+  getAllToolPresentations(): Record<string, PluginToolPresentation> {
+    const result: Record<string, PluginToolPresentation> = {}
+    for (const entry of this.plugins.values()) {
+      for (const tool of entry.contribution?.tools ?? []) {
+        if (tool.presentation) {
+          result[tool.name] = tool.presentation
+        }
+      }
+    }
+    return result
   }
 
   /** 获取指定插件的贡献 */

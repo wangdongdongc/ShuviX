@@ -20,11 +20,20 @@ export interface PreviewStopEvent {
   sessionId: string
 }
 
+/** 用户请求销毁某个插件 runtime（如关闭 Python 运行时） */
+export interface RuntimeDestroyEvent {
+  type: 'runtime:destroy'
+  sessionId: string
+  /** 对应 PluginRuntimeStatusEvent.runtimeId */
+  runtimeId: string
+}
+
 /** 主程序→插件的事件联合类型 */
-export type HostEvent = PreviewStartEvent | PreviewStopEvent
+export type HostEvent = PreviewStartEvent | PreviewStopEvent | RuntimeDestroyEvent
 
 /** 事件类型常量（方便 switch 匹配） */
 export const HostEventType = {
   PREVIEW_START: 'preview:start',
-  PREVIEW_STOP: 'preview:stop'
+  PREVIEW_STOP: 'preview:stop',
+  RUNTIME_DESTROY: 'runtime:destroy'
 } as const

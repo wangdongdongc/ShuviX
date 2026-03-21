@@ -19,12 +19,30 @@ export interface PluginLogger {
   debug(msg: string, ...args: unknown[]): void
 }
 
+// ─── 项目配置 ──────────────────────────────────────────
+
+/** 插件可见的参考目录 */
+export interface PluginReferenceDir {
+  /** 目录路径 */
+  path: string
+  /** 访问权限 */
+  access: 'readonly' | 'readwrite'
+}
+
+/** 插件可见的会话路径配置（主程序 ProjectConfig 的安全子集） */
+export interface PluginSessionPaths {
+  /** 项目工作目录 */
+  workingDirectory: string
+  /** 参考目录列表 */
+  referenceDirs: PluginReferenceDir[]
+}
+
 // ─── 插件上下文 ──────────────────────────────────────────
 
 /** 插件运行时上下文 — 由主程序构造并在 activate 时注入，全局唯一（不绑定特定 session） */
 export interface PluginContext {
-  /** 获取指定会话的工作目录 */
-  getWorkingDirectory(sessionId: string): string
+  /** 获取指定会话的路径配置（工作目录、参考目录等） */
+  getSessionPaths(sessionId: string): PluginSessionPaths
 
   /** 发出事件到 renderer（sessionId 指定目标会话） */
   emitEvent(sessionId: string, event: PluginEvent): void

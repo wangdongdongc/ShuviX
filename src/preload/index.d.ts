@@ -734,6 +734,16 @@ declare global {
         i18n: Record<string, Record<string, string>>
         enabledTools: string[]
       }>>
+      toolPresentations: () => Promise<Record<string, {
+        icon?: string
+        iconClass?: string
+        summaryField?: string
+        formItems?: Array<{
+          field: string
+          label?: string
+          renderer?: { type: 'code'; language?: string } | { type: 'text' }
+        }>
+      }>>
     }
     skill: {
       list: () => Promise<Skill[]>
