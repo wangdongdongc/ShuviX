@@ -264,7 +264,7 @@
     "pglitePersistLabel": "持久化数据存储",
     "pglitePersistDesc": "开启后 SQL 工具和 RAG 工具（即将推出）的数据将持久化到项目文件夹中。关闭时数据仅存于内存，运行时终止后丢失。",
     "toolsGeneralGroup": "通用工具",
-    "toolsRipgrepGroup": "高性能检索工具（适合大型代码库）",
+    "toolsRipgrepGroup": "快速文件检索（适合代码库）",
     "toolsShuvixGroup": "系统工具（读写项目和全局配置）",
     "toolsSubAgentGroup": "子智能体",
     "toolsSubAgentDesc": "将任务委派给运行在独立上下文中的自主子智能体。",

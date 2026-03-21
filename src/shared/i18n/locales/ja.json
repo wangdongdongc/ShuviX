@@ -264,7 +264,7 @@
     "pglitePersistLabel": "データ永続化",
     "pglitePersistDesc": "有効にすると SQL と RAG（近日公開）ツールのデータがプロジェクトフォルダに永続化されます。無効の場合はメモリ上のみで、ランタイム終了時に失われます。",
     "toolsGeneralGroup": "汎用ツール",
-    "toolsRipgrepGroup": "高性能検索ツール（大規模コードベース向け）",
+    "toolsRipgrepGroup": "高速ファイル検索（コードベース向け）",
     "toolsShuvixGroup": "システムツール（プロジェクトとグローバル設定の読み書き）",
     "toolsSubAgentGroup": "サブエージェント",
     "toolsSubAgentDesc": "独立したコンテキストで自律的に動作するサブエージェントにタスクを委譲します。",

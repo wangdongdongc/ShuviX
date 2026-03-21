@@ -264,7 +264,7 @@
     "pglitePersistLabel": "Persistent Data Storage",
     "pglitePersistDesc": "When enabled, SQL and RAG (coming soon) tools persist data to the project folder. When disabled, data is stored in memory and lost when the runtime terminates.",
     "toolsGeneralGroup": "General Tools",
-    "toolsRipgrepGroup": "High-performance search tools (for large codebases)",
+    "toolsRipgrepGroup": "Fast file search (for codebases)",
     "toolsShuvixGroup": "System tools (read/write project & global config)",
     "toolsSubAgentGroup": "Sub-Agents",
     "toolsSubAgentDesc": "Delegate tasks to autonomous sub-agents running in isolated contexts.",
