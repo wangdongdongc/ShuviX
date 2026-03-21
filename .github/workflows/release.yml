@@ -42,6 +42,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sync version from tag
+        shell: bash
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
 
       - name: Build & Sign
