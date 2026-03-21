@@ -18,6 +18,9 @@ const log = createLogger('DesignProjectManager')
 /** 设计项目在项目目录中的子路径 */
 const DESIGN_SUBDIR = '.shuvix/design'
 
+/** 可用的模板列表 */
+const VALID_TEMPLATES = new Set(['blank', 'app', 'landing', 'dashboard'])
+
 // ────────────────────── Types ──────────────────────
 
 interface DesignProjectState {
@@ -44,12 +47,13 @@ class DesignProjectManager {
     return join(workingDir, DESIGN_SUBDIR)
   }
 
-  /** 获取模板资源目录（dev 用项目根 resources/，打包后用 process.resourcesPath） */
-  private getTemplateDir(): string {
-    if (app.isPackaged) {
-      return join(process.resourcesPath, 'design-templates')
-    }
-    return resolve(__dirname, '../../resources/design-templates')
+  /** 获取指定模板的资源目录 */
+  private getTemplateDir(template: string): string {
+    const name = VALID_TEMPLATES.has(template) ? template : 'app'
+    const base = app.isPackaged
+      ? join(process.resourcesPath, 'design-templates')
+      : resolve(__dirname, '../../resources/design-templates')
+    return join(base, name)
   }
 
   /** 检查设计项目是否已存在 */
@@ -62,19 +66,19 @@ class DesignProjectManager {
    * 初始化设计项目：创建目录 + 脚手架模板文件（如果不存在）
    * @returns 设计项目目录绝对路径
    */
-  async init(_sessionId: string, workingDir: string): Promise<string> {
+  async init(_sessionId: string, workingDir: string, template: string = 'app'): Promise<string> {
     const designDir = this.getDesignDir(workingDir)
 
     // 仅在入口文件不存在时从资源模板复制
     const indexPath = join(designDir, 'index.tsx')
     if (!existsSync(indexPath)) {
-      const templateDir = this.getTemplateDir()
+      const templateDir = this.getTemplateDir(template)
       cpSync(templateDir, designDir, { recursive: true })
       // 确保空目录也被创建（cpSync 不会复制空目录）
       for (const sub of ['hooks', 'utils', 'types']) {
         mkdirSync(join(designDir, sub), { recursive: true })
       }
-      log.info(`Scaffolded design project at ${designDir}`)
+      log.info(`Scaffolded design project (template: ${template}) at ${designDir}`)
     }
 
     return designDir
@@ -84,9 +88,9 @@ class DesignProjectManager {
    * 启动 dev server + 文件监听
    * 如果该 session 已有运行中的 dev server，先停止再重启
    */
-  async startDev(sessionId: string, workingDir: string): Promise<DevServerInfo> {
+  async startDev(sessionId: string, workingDir: string, template?: string): Promise<DevServerInfo> {
     // 确保设计项目已初始化
-    const designDir = await this.init(sessionId, workingDir)
+    const designDir = await this.init(sessionId, workingDir, template)
 
     // 停止已有实例
     this.dispose(sessionId)

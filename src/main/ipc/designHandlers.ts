@@ -16,8 +16,8 @@ export function registerDesignHandlers(): void {
   /** 初始化设计项目（创建目录 + 脚手架模板） */
   ipcMain.handle(
     'design:init',
-    async (_event, params: { sessionId: string; workingDir: string }) => {
-      const designDir = await designProjectManager.init(params.sessionId, params.workingDir)
+    async (_event, params: { sessionId: string; workingDir: string; template?: string }) => {
+      const designDir = await designProjectManager.init(params.sessionId, params.workingDir, params.template)
       return { designDir }
     }
   )
@@ -25,8 +25,8 @@ export function registerDesignHandlers(): void {
   /** 启动 dev server + 文件监听 */
   ipcMain.handle(
     'design:startDev',
-    async (_event, params: { sessionId: string; workingDir: string }) => {
-      return designProjectManager.startDev(params.sessionId, params.workingDir)
+    async (_event, params: { sessionId: string; workingDir: string; template?: string }) => {
+      return designProjectManager.startDev(params.sessionId, params.workingDir, params.template)
     }
   )
 

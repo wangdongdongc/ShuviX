@@ -75,10 +75,51 @@ await build({
 
 console.log('  ✓ react-all.esm.js\n')
 
+// ── 打包 react-router 为独立 ESM 文件（externalize react 避免双实例） ──
+
+const routerWrapper = `
+export {
+  createHashRouter, createBrowserRouter, createMemoryRouter,
+  RouterProvider, Outlet, Link, NavLink, Navigate,
+  useNavigate, useLocation, useParams, useSearchParams,
+  useLoaderData, useRouteError, useOutletContext, useMatches,
+  redirect, matchPath
+} from 'react-router';
+`
+
+console.log('Bundling React Router ESM bundle...\n')
+
+await build({
+  stdin: {
+    contents: routerWrapper,
+    resolveDir: resolve(__dirname, '..'),
+    loader: 'js'
+  },
+  bundle: true,
+  format: 'esm',
+  outfile: resolve(outdir, 'react-router.esm.js'),
+  platform: 'browser',
+  target: 'es2020',
+  minify: true,
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  define: {
+    'process.env.NODE_ENV': '"production"'
+  },
+  logLevel: 'info'
+})
+
+console.log('  ✓ react-router.esm.js\n')
+
 // 写入 manifest — 运行时 plugin 用来知道哪些 bare import 需要拦截
 const manifest = {
-  shipped: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
-  bundle: 'react-all.esm.js'
+  shipped: [
+    'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
+    'react-router', 'react-router-dom'
+  ],
+  bundles: {
+    'react-all': 'react-all.esm.js',
+    'react-router': 'react-router.esm.js'
+  }
 }
 writeFileSync(resolve(outdir, 'manifest.json'), JSON.stringify(manifest, null, 2))
 console.log('  ✓ manifest.json')

@@ -17,7 +17,21 @@ const DesignParamsSchema = Type.Object({
   action: Type.Union([Type.Literal('init'), Type.Literal('preview')], {
     description:
       'Action to perform: "init" scaffolds the design project at .shuvix/design/; "preview" builds and opens/refreshes the preview panel (starts dev server on first call, rebuilds on subsequent calls)'
-  })
+  }),
+  template: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal('blank'),
+        Type.Literal('app'),
+        Type.Literal('landing'),
+        Type.Literal('dashboard')
+      ],
+      {
+        description:
+          'Project template (only used with "init" action, ignored if project already exists). "blank": minimal skeleton; "app": standard React app with example components (default); "landing": single-page landing with Hero/Features/Footer sections; "dashboard": multi-page app with sidebar navigation and React Router'
+      }
+    )
+  )
 })
 
 export class DesignTool extends BaseTool<typeof DesignParamsSchema> {
@@ -26,11 +40,12 @@ export class DesignTool extends BaseTool<typeof DesignParamsSchema> {
   readonly description = `Manage the interactive design preview project. This tool creates and previews React UI components in a sandboxed environment with Tailwind CSS.
 
 Actions:
-- "init": Scaffold the design project at .shuvix/design/ with a modern React + TypeScript + Tailwind CSS project structure (components/, pages/, hooks/, utils/, types/, styles/)
+- "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "app"). Templates: blank, app, landing, dashboard.
 - "preview": Build the project and open the preview panel. On first call, starts the dev server; on subsequent calls, triggers a rebuild and refreshes the preview. Returns build errors if the build fails — use these to debug and fix the code.
 
 The design project supports:
 - React with TypeScript (.tsx/.ts)
+- React Router (react-router) for multi-page navigation (used by "dashboard" template)
 - Tailwind CSS v4 utility classes (available globally, no import needed)
 - CSS file imports
 - Images as dataurl (svg/png/jpg/gif)
@@ -68,7 +83,7 @@ The design project supports:
 
   protected async executeInternal(
     _toolCallId: string,
-    params: { action: 'init' | 'preview' },
+    params: { action: 'init' | 'preview'; template?: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -77,7 +92,7 @@ The design project supports:
 
     switch (params.action) {
       case 'init':
-        return this.handleInit(workingDir)
+        return this.handleInit(workingDir, params.template)
       case 'preview':
         return this.handlePreview(workingDir, signal)
       default:
@@ -85,15 +100,17 @@ The design project supports:
     }
   }
 
-  private async handleInit(workingDir: string): Promise<AgentToolResult<undefined>> {
-    const designDir = await designProjectManager.init(this.ctx.sessionId, workingDir)
+  private async handleInit(
+    workingDir: string,
+    template?: string
+  ): Promise<AgentToolResult<undefined>> {
+    const tpl = template || 'app'
+    const designDir = await designProjectManager.init(this.ctx.sessionId, workingDir, tpl)
 
     return textResult(
-      `Design project initialized at .shuvix/design/\n\nProject structure:\n` +
-      `- index.tsx (entry point)\n- App.tsx (root component)\n` +
-      `- pages/Home.tsx (default page)\n- components/Button.tsx (example component)\n` +
-        `- styles/global.css (global styles)\n- hooks/, utils/, types/ (empty, ready for use)\n\n` +
-        `Design directory: ${designDir}`
+      `Design project initialized at .shuvix/design/ (template: ${tpl})\n\n` +
+        `Design directory: ${designDir}\n` +
+        `Use write/edit tools to modify files, then call design tool with action "preview" to build and preview.`
     )
   }
 

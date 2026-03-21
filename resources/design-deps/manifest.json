@@ -3,7 +3,12 @@
     "react",
     "react/jsx-runtime",
     "react-dom",
-    "react-dom/client"
+    "react-dom/client",
+    "react-router",
+    "react-router-dom"
   ],
-  "bundle": "react-all.esm.js"
+  "bundles": {
+    "react-all": "react-all.esm.js",
+    "react-router": "react-router.esm.js"
+  }
 }

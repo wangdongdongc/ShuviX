@@ -52,15 +52,27 @@ interface DevServerEntry {
 // ────────────────────── Pre-shipped dependency mapping ──────────────────────
 
 /** 需要拦截的 bare import 列表 */
-const SHIPPED_SPECIFIERS = new Set(['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'])
+const SHIPPED_SPECIFIERS = new Set([
+  'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
+  'react-router', 'react-router-dom'
+])
 
-/** all-in-one bundle 文件名 */
+/** bundle 文件名 */
 const ALL_IN_ONE_BUNDLE = 'react-all.esm.js'
+const ROUTER_BUNDLE = 'react-router.esm.js'
 
 /**
  * 每个 bare specifier 对应的 re-export wrapper
- * 从 all-in-one bundle 中按需 re-export，确保所有模块共享同一个 React 实例
+ * 从预置 bundle 中按需 re-export，确保所有模块共享同一个 React 实例
  */
+const ROUTER_REEXPORTS = `export {
+  createHashRouter, createBrowserRouter, createMemoryRouter,
+  RouterProvider, Outlet, Link, NavLink, Navigate,
+  useNavigate, useLocation, useParams, useSearchParams,
+  useLoaderData, useRouteError, useOutletContext, useMatches,
+  redirect, matchPath
+} from '__ROUTER_BUNDLE__';`
+
 const REEXPORT_WRAPPERS: Record<string, string> = {
   react: `export {
   React as default,
@@ -78,7 +90,10 @@ const REEXPORT_WRAPPERS: Record<string, string> = {
 
   'react-dom': `export { _reactDOM as default, createPortal, flushSync } from '__ALL_IN_ONE__';`,
 
-  'react-dom/client': `export { _reactDOMClient as default, createRoot, hydrateRoot } from '__ALL_IN_ONE__';`
+  'react-dom/client': `export { _reactDOMClient as default, createRoot, hydrateRoot } from '__ALL_IN_ONE__';`,
+
+  'react-router': ROUTER_REEXPORTS,
+  'react-router-dom': ROUTER_REEXPORTS
 }
 
 // ────────────────────── Host HTML template ──────────────────────
@@ -173,24 +188,45 @@ class BundlerService {
   private createDesignPlugin(projectDir: string): esbuild.Plugin {
     const depsDir = this.getDepsDir()
     const allInOnePath = resolve(depsDir, ALL_IN_ONE_BUNDLE)
-    // 预读 all-in-one bundle 内容（只读一次，缓存在闭包中）
     const allInOneContent = readFileSync(allInOnePath, 'utf-8')
+
+    // Router bundle（懒加载，可能不存在于旧安装中）
+    const routerBundlePath = resolve(depsDir, ROUTER_BUNDLE)
+    const routerBundleContent = existsSync(routerBundlePath)
+      ? readFileSync(routerBundlePath, 'utf-8')
+      : ''
 
     return {
       name: 'shuvix-design',
       setup(build) {
-        // 1) bare specifier (react/react-dom) → namespace 'shipped-dep'
-        build.onResolve({ filter: /^(react|react-dom)(\/.*)?$/ }, (args) => {
-          if (SHIPPED_SPECIFIERS.has(args.path)) {
-            return { path: args.path, namespace: 'shipped-dep' }
+        // 1) bare specifier → namespace 'shipped-dep'
+        build.onResolve(
+          { filter: /^(react|react-dom|react-router|react-router-dom)(\/.*)?$/ },
+          (args) => {
+            if (SHIPPED_SPECIFIERS.has(args.path)) {
+              return { path: args.path, namespace: 'shipped-dep' }
+            }
+            return undefined
           }
-          return undefined
-        })
+        )
 
-        // 2) shipped-dep namespace 内部对 __ALL_IN_ONE__ 的引用 → 指向实际 bundle
+        // 2a) shipped-dep 内部 __ALL_IN_ONE__ → react all-in-one bundle
         build.onResolve({ filter: /^__ALL_IN_ONE__$/, namespace: 'shipped-dep' }, () => {
           return { path: 'react-all', namespace: 'shipped-bundle' }
         })
+
+        // 2b) shipped-dep 内部 __ROUTER_BUNDLE__ → react-router bundle
+        build.onResolve({ filter: /^__ROUTER_BUNDLE__$/, namespace: 'shipped-dep' }, () => {
+          return { path: 'react-router', namespace: 'shipped-router-bundle' }
+        })
+
+        // 2c) router bundle 内部的 react 引用 → 重定向回 shipped-dep（共享 React 实例）
+        build.onResolve(
+          { filter: /^(react|react-dom|react\/jsx-runtime)$/, namespace: 'shipped-router-bundle' },
+          (args) => {
+            return { path: args.path, namespace: 'shipped-dep' }
+          }
+        )
 
         // 3) onLoad: shipped-dep → 返回 re-export wrapper
         build.onLoad({ filter: /.*/, namespace: 'shipped-dep' }, (args) => {
@@ -201,9 +237,14 @@ class BundlerService {
           return undefined
         })
 
-        // 4) onLoad: shipped-bundle → 返回 all-in-one bundle 内容
+        // 4a) onLoad: shipped-bundle → react all-in-one bundle
         build.onLoad({ filter: /.*/, namespace: 'shipped-bundle' }, () => {
           return { contents: allInOneContent, loader: 'js' }
+        })
+
+        // 4b) onLoad: shipped-router-bundle → react-router bundle
+        build.onLoad({ filter: /.*/, namespace: 'shipped-router-bundle' }, () => {
+          return { contents: routerBundleContent, loader: 'js' }
         })
 
         // 5) relative imports → 自动补全扩展名

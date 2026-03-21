@@ -722,11 +722,12 @@ declare global {
     }
     design: {
       /** 初始化设计项目（创建脚手架） */
-      init: (params: { sessionId: string; workingDir: string }) => Promise<{ designDir: string }>
+      init: (params: { sessionId: string; workingDir: string; template?: string }) => Promise<{ designDir: string }>
       /** 启动 dev server + 文件监听 */
       startDev: (params: {
         sessionId: string
         workingDir: string
+        template?: string
       }) => Promise<{ port: number; url: string }>
       /** 停止 dev server + 文件监听 */
       stopDev: (params: { sessionId: string }) => Promise<{ success: boolean }>
