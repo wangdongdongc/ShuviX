@@ -27,7 +27,8 @@ export type {
   PluginContext,
   PluginContribution,
   PluginLogger,
-  PluginPurpose
+  PluginPurpose,
+  PluginCommand
 } from './types'
 
 // Re-export 插件常用的外部类型，避免插件直接依赖这些包

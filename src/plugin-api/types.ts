@@ -56,12 +56,28 @@ export interface PluginPurpose {
 
 // ─── 插件贡献 ──────────────────────────────────────────
 
+/** 插件斜杠命令声明 */
+export interface PluginCommand {
+  /** 命令标识符（如 'design'），用户输入 /design 触发 */
+  commandId: string
+  /** 显示名称 */
+  name: string
+  /** 命令描述 */
+  description: string
+  /** 模板正文（$ARGUMENTS 占位符会被替换为用户输入的参数） */
+  template: string
+  /** 依赖的工具名（只有这些工具全部启用时命令才可见） */
+  requiredTools?: string[]
+}
+
 /** 插件激活后返回的贡献声明 */
 export interface PluginContribution {
   /** 插件贡献的工具 */
   tools?: PluginTool[]
   /** 项目用途引导（新建项目向导中的用途选项） */
   purpose?: PluginPurpose
+  /** 斜杠命令 */
+  commands?: PluginCommand[]
   /** 事件消费者 — 接收主程序分发的业务事件（完整类型定义见 hostEvents.ts） */
   onEvent?: (event: HostEvent) => void
 }

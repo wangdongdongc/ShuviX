@@ -4,11 +4,8 @@
  * 管理插件注册、激活/停用生命周期、事件分发、purpose 汇总。
  */
 
-import type {
-  ShuviXPlugin,
-  PluginContribution,
-  PluginPurpose
-} from '../../plugin-api/types'
+import type { ShuviXPlugin, PluginContribution, PluginPurpose } from '../../plugin-api/types'
+import type { SlashCommand } from '../../shared/types/slashCommand'
 import type { HostEvent } from '../../plugin-api/hostEvents'
 import { createPluginContext } from './pluginContextFactory'
 import { createLogger } from '../logger'
@@ -83,6 +80,16 @@ class PluginRegistry {
       }
     }
     return purposes
+  }
+
+  /** 获取所有插件贡献的斜杠命令（按 enabledTools 过滤） */
+  getAllCommands(enabledTools: string[]): SlashCommand[] {
+    const enabledSet = new Set(enabledTools)
+    return this.getActivatedEntries().flatMap(({ contribution }) =>
+      (contribution.commands ?? [])
+        .filter((cmd) => !cmd.requiredTools || cmd.requiredTools.every((t) => enabledSet.has(t)))
+        .map((cmd) => ({ ...cmd, filePath: '(plugin)' }))
+    )
   }
 
   /** 获取所有插件贡献的工具名列表 */
