@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next'
 import {
   X,
   Wrench,
-  Code2,
   Database,
   Terminal,
+  Palette,
   ChevronRight,
   ChevronDown,
   Puzzle,
@@ -29,9 +29,9 @@ interface ProjectCreateDialogProps {
 /** 用途预设：工具名称列表 */
 const PURPOSE_PRESETS: Record<string, string[]> = {
   bash: ['bash', 'read', 'ask'],
-  python: ['read', 'python', 'ask'],
   sql: ['read', 'sql', 'ask'],
-  dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore']
+  dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore'],
+  ui: ['bash', 'read', 'write', 'edit', 'ask', 'design']
 }
 
 /** Skills 分组标识 */
@@ -39,7 +39,7 @@ const SKILLS_GROUP = '__skills__'
 
 /**
  * 新建项目弹窗 — 渐进式引导配置
- * Step 0: 选择用途（通用 Bash / 通用 Python / 程序开发）→ 预选工具
+ * Step 0: 选择用途（通用 Bash / 数据分析 / 编码 / UI 设计）→ 预选工具
  * Step 1: 工具选择（仅内置工具）
  * Step 2: 扩展能力（MCP / Skills 引导）
  * Step 3: 项目配置（名称 + 提示词 + 路径 + 参考目录 + 沙箱）
@@ -237,35 +237,8 @@ export function ProjectCreateDialog({
                     className="text-text-secondary group-hover:text-accent transition-colors"
                   />
                 </div>
-                <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">
-                    {t('projectForm.purposeBash')}
-                  </div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
-                    {t('projectForm.purposeBashDesc')}
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => handlePurposeSelect('python')}
-                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'python' ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Code2
-                    size={20}
-                    className="text-text-secondary group-hover:text-accent transition-colors"
-                  />
-                </div>
-                <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">
-                    {t('projectForm.purposePython')}
-                  </div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
-                    {t('projectForm.purposePythonDesc')}
-                  </div>
+                <div className="text-xs font-medium text-text-primary">
+                  {t('projectForm.purposeBash')}
                 </div>
               </button>
 
@@ -281,13 +254,25 @@ export function ProjectCreateDialog({
                     className="text-text-secondary group-hover:text-accent transition-colors"
                   />
                 </div>
-                <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">
-                    {t('projectForm.purposeSQL')}
-                  </div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
-                    {t('projectForm.purposeSQLDesc')}
-                  </div>
+                <div className="text-xs font-medium text-text-primary">
+                  {t('projectForm.purposeSQL')}
+                </div>
+              </button>
+
+              <button
+                onClick={() => handlePurposeSelect('ui')}
+                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
+                  purpose === 'ui' ? 'border-accent bg-accent/5' : 'border-border-secondary'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
+                  <Palette
+                    size={20}
+                    className="text-text-secondary group-hover:text-accent transition-colors"
+                  />
+                </div>
+                <div className="text-xs font-medium text-text-primary">
+                  {t('projectForm.purposeUI')}
                 </div>
               </button>
 
@@ -303,13 +288,8 @@ export function ProjectCreateDialog({
                     className="text-text-secondary group-hover:text-accent transition-colors"
                   />
                 </div>
-                <div className="text-center">
-                  <div className="text-xs font-medium text-text-primary">
-                    {t('projectForm.purposeDev')}
-                  </div>
-                  <div className="text-[10px] text-text-tertiary mt-1 leading-relaxed">
-                    {t('projectForm.purposeDevDesc')}
-                  </div>
+                <div className="text-xs font-medium text-text-primary">
+                  {t('projectForm.purposeDev')}
                 </div>
               </button>
             </div>
@@ -353,7 +333,14 @@ export function ProjectCreateDialog({
                 {t('projectForm.wizardPrev')}
               </button>
               <button
-                onClick={() => setStep(2)}
+                onClick={() => {
+                  const groups = new Set([
+                    ...new Set(mcpTools.map((t) => t.group!)),
+                    ...(skillTools.length > 0 ? [SKILLS_GROUP] : [])
+                  ])
+                  setExpandedExtGroups(groups)
+                  setStep(2)
+                }}
                 className="px-4 py-1.5 rounded-lg text-xs bg-accent text-white hover:bg-accent/90 transition-colors"
               >
                 {t('projectForm.wizardNext')}
@@ -467,7 +454,7 @@ export function ProjectCreateDialog({
                             </span>
                           </div>
                           {isExpanded && (
-                            <div className="space-y-0.5">
+                            <div className="space-y-0.5 pl-9 pb-1">
                               {groupTools.map((tool) => {
                                 const shortName =
                                   tool.name.split('__').length >= 3
@@ -542,7 +529,7 @@ export function ProjectCreateDialog({
                             </span>
                           </div>
                           {isSkillExpanded && (
-                            <div className="space-y-0.5">
+                            <div className="space-y-0.5 pl-9 pb-1">
                               {skillTools.map((tool) => {
                                 const shortName = tool.name.startsWith('skill:')
                                   ? tool.name.slice(6)

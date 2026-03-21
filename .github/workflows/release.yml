@@ -41,6 +41,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Sync version from tag
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+
       - name: Build & Sign
         run: npx electron-vite build && npm run build:webui && npx electron-builder --${{ matrix.platform }} --publish never
         env:
@@ -138,11 +141,15 @@ jobs:
       - name: Build Linux packages in Docker (glibc 2.31)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VERSION: ${{ github.ref_name }}
         run: |
+          # Strip 'v' prefix for npm version
+          export TAG_VERSION="${TAG_VERSION#v}"
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             -e GITHUB_TOKEN \
+            -e TAG_VERSION \
             -e DEBIAN_FRONTEND=noninteractive \
             ubuntu:20.04 \
             bash -c '
@@ -173,6 +180,7 @@ jobs:
               apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
 
               npm ci
+              npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
               npm run build:webui
               npx electron-builder --linux --publish never
