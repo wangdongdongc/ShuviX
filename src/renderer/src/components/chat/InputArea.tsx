@@ -1,6 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, ImagePlus, Mic, X } from 'lucide-react'
+import { TokenBadge } from './InlineTokenBadge'
+import { makeTokenMarker, expandCommandTemplate } from '../../../../shared/utils/inlineTokens'
+import type { InlineToken } from '../../../../shared/types/chatMessage'
 import {
   useChatStore,
   selectIsStreaming,
@@ -84,6 +87,41 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
 
+  // 斜杠命令芯片：选中命令后以 badge 展示，输入框只显示参数
+  const [slashChip, setSlashChip] = useState<{
+    commandId: string
+    name: string
+    description: string
+    template: string
+  } | null>(null)
+  const [chipWidth, setChipWidth] = useState(0)
+  const chipRef = useCallback((node: HTMLSpanElement | null) => {
+    setChipWidth(node?.offsetWidth ?? 0)
+  }, [])
+
+  /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片 */
+  const handleInputChange = useCallback(
+    (value: string) => {
+      if (!slashChip && value.startsWith('/') && value.includes(' ')) {
+        const spaceIdx = value.indexOf(' ')
+        const cmdId = value.slice(1, spaceIdx)
+        const cmd = slashCommands.find((c) => c.commandId === cmdId)
+        if (cmd) {
+          setSlashChip({
+            commandId: cmd.commandId,
+            name: cmd.name,
+            description: cmd.description,
+            template: cmd.template
+          })
+          setInputText(value.slice(spaceIdx + 1))
+          return
+        }
+      }
+      setInputText(value)
+    },
+    [slashChip, slashCommands, setInputText]
+  )
+
   // 拖拽调节的 textarea 最小高度
   const DRAG_MIN = 60
   const DRAG_MAX = 480
@@ -141,20 +179,65 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     // 录音中则先停止录制
     if (voice.isRecording) voice.stopRecording()
 
-    const text = inputText.trim()
+    const rawText = inputText.trim()
     const images = pendingImages
-    if ((!text && images.length === 0) || isStreaming || !activeSessionId) return
+    // 有芯片时即使参数为空也允许发送（纯命令）
+    if ((!rawText && !slashChip && images.length === 0) || isStreaming || !activeSessionId) return
+
+    // ─── 前端斜杠命令展开 + Token 构造 ───
+    let contentText: string
+    let inlineTokens: Record<string, InlineToken> | undefined
+
+    if (slashChip) {
+      // 芯片模式：从芯片中获取模板并展开
+      const uid = 't0'
+      const expandedText = expandCommandTemplate(slashChip.template, rawText)
+      const token: InlineToken = {
+        type: 'cmd',
+        id: slashChip.commandId,
+        displayText: `/${slashChip.commandId}`,
+        payload: expandedText,
+        name: slashChip.name
+      }
+      inlineTokens = { [uid]: token }
+      contentText = rawText
+        ? `${makeTokenMarker(uid)} ${rawText}`
+        : makeTokenMarker(uid)
+    } else if (rawText.startsWith('/')) {
+      // 直接输入模式：检测斜杠命令并展开
+      const spaceIdx = rawText.indexOf(' ')
+      const cmdId = spaceIdx === -1 ? rawText.slice(1) : rawText.slice(1, spaceIdx)
+      const args = spaceIdx === -1 ? '' : rawText.slice(spaceIdx + 1).trim()
+      const cmd = slashCommands.find((c) => c.commandId === cmdId)
+      if (cmd) {
+        const uid = 't0'
+        const expandedText = expandCommandTemplate(cmd.template, args)
+        const token: InlineToken = {
+          type: 'cmd',
+          id: cmd.commandId,
+          displayText: `/${cmd.commandId}`,
+          payload: expandedText,
+          name: cmd.name
+        }
+        inlineTokens = { [uid]: token }
+        contentText = args
+          ? `${makeTokenMarker(uid)} ${args}`
+          : makeTokenMarker(uid)
+      } else {
+        contentText = rawText
+      }
+    } else {
+      contentText = rawText || t('input.imageOnly')
+    }
 
     const store = useChatStore.getState()
     store.setInputText('')
     store.clearPendingImages()
+    setSlashChip(null)
     store.setIsStreaming(activeSessionId, true)
     store.clearStreamingContent(activeSessionId)
 
-    // 构造消息内容：文本 + 图片标记
-    const contentText = text || t('input.imageOnly')
-
-    // 发送给 Agent（附带图片），后端统一持久化用户消息
+    // 发送给 Agent（附带图片 + 内联 Token），后端直接使用不再重复查询
     const agentImages =
       images.length > 0
         ? images.map((img) => ({
@@ -166,7 +249,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     await window.api.agent.prompt({
       sessionId: activeSessionId,
       text: contentText,
-      images: agentImages
+      images: agentImages,
+      inlineTokens
     })
   }
 
@@ -188,12 +272,20 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     useChatStore.getState().setInputText('')
   }
 
-  /** 斜杠命令选中回调 */
+  /** 斜杠命令选中回调：设置芯片，输入框只保留参数 */
   const handleSlashSelect = useCallback(
     (commandId: string) => {
-      setInputText(slash.handleSelect(commandId))
+      const cmd = slashCommands.find((c) => c.commandId === commandId)
+      setSlashChip({
+        commandId,
+        name: cmd?.name || commandId,
+        description: cmd?.description || '',
+        template: cmd?.template || ''
+      })
+      setInputText('')
+      setTimeout(() => textareaRef.current?.focus(), 0)
     },
-    [slash, setInputText]
+    [slashCommands, setInputText]
   )
 
   /** 键盘事件处理 */
@@ -222,6 +314,13 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
       return
     }
 
+    // Backspace 在光标位置 0 且输入为空时，移除斜杠命令芯片
+    if (e.key === 'Backspace' && slashChip && inputText === '') {
+      e.preventDefault()
+      setSlashChip(null)
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       // pending action 时优先走 override 流程
@@ -237,7 +336,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   // pending action 时输入框临时可用
   const effectiveStreaming = isStreaming && !hasPendingAction
   const canSend =
-    (inputText.trim().length > 0 || pendingImages.length > 0) &&
+    (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
     !effectiveStreaming &&
     activeSessionId
   const instructionBadgeText = agentMdLoaded ? 'AGENTS.MD' : 'None'
@@ -439,24 +538,49 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
             </div>
           </div>
 
+          {/* 斜杠命令芯片：绝对定位在 textarea 首行，text-indent 让出空间 */}
+          {slashChip && (
+            <span ref={chipRef} className="absolute left-4 top-2 z-10 pointer-events-auto text-sm">
+              <TokenBadge
+                popoverDirection="up"
+                segment={{
+                  type: 'token',
+                  uid: 'input',
+                  token: {
+                    type: 'cmd',
+                    id: slashChip.commandId,
+                    displayText: `/${slashChip.commandId}`,
+                    payload: expandCommandTemplate(slashChip.template, inputText.trim()),
+                    name: slashChip.name
+                  }
+                }}
+              />
+            </span>
+          )}
+
           <textarea
             ref={textareaRef}
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={
               !activeSessionId
                 ? t('input.placeholderNoSession')
-                : hasPendingAction
-                  ? t('input.placeholderOverride')
-                  : modelSupportsVision
-                    ? t('input.placeholderVision')
-                    : t('input.placeholder')
+                : slashChip
+                  ? t('input.placeholder')
+                  : hasPendingAction
+                    ? t('input.placeholderOverride')
+                    : modelSupportsVision
+                      ? t('input.placeholderVision')
+                      : t('input.placeholder')
             }
             disabled={!activeSessionId}
             rows={3}
-            style={{ minHeight: `${minH}px` }}
+            style={{
+              minHeight: `${minH}px`,
+              textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
+            }}
             className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
           />
 

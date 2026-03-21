@@ -200,8 +200,8 @@ interface ChatState {
   projectPath: string | null
   /** AGENT.md 是否已加载 */
   agentMdLoaded: boolean
-  /** 当前会话可用的斜杠命令（来自项目 .claude/commands/） */
-  slashCommands: Array<{ commandId: string; name: string; description: string }>
+  /** 当前会话可用的斜杠命令 */
+  slashCommands: Array<{ commandId: string; name: string; description: string; template: string }>
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
   /** 各 session 的待处理用户输入请求 */
@@ -271,7 +271,7 @@ interface ChatState {
   setProjectPath: (path: string | null) => void
   setAgentMdLoaded: (loaded: boolean) => void
   setSlashCommands: (
-    commands: Array<{ commandId: string; name: string; description: string }>
+    commands: Array<{ commandId: string; name: string; description: string; template: string }>
   ) => void
   setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Map<string, ShareMode>) => void

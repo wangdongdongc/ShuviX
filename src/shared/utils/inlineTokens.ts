@@ -13,6 +13,17 @@ export function makeTokenMarker(uid: string): string {
   return `{{shuvixInlineToken:${uid}}}`
 }
 
+/** 展开命令模板：替换 $ARGUMENTS 占位符，若无占位符则追加到末尾 */
+export function expandCommandTemplate(template: string, args: string): string {
+  if (template.includes('$ARGUMENTS')) {
+    return template.replaceAll('$ARGUMENTS', args)
+  }
+  if (args) {
+    return `${template}\n\n${args}`
+  }
+  return template
+}
+
 /**
  * 将 content 中的 token 标记替换为 payload，生成发送给 Agent 的文本
  * - cmd 类型：payload 替换整条消息（因为展开的模板已包含用户参数）

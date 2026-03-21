@@ -23,7 +23,7 @@ export function registerAgentHandlers(): void {
   /** 向指定 session 发送消息（支持附带图片） */
   ipcMain.handle('agent:prompt', (_event, params: AgentPromptParams) =>
     operationContext.run(createElectronContext(params.sessionId), async () => {
-      await chatGateway.prompt(params.sessionId, params.text, params.images)
+      await chatGateway.prompt(params.sessionId, params.text, params.images, params.inlineTokens)
       return { success: true }
     })
   )

@@ -11,9 +11,8 @@ import { pythonWorkerManager } from '../../services/pythonWorkerManager'
 import { sqlWorkerManager } from '../../services/sqlWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
-import { commandService } from '../../services/commandService'
 import type { InlineToken } from '../../../shared/types/chatMessage'
-import { makeTokenMarker } from '../../../shared/utils/inlineTokens'
+import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
@@ -32,7 +31,8 @@ export class DefaultChatGateway implements ChatGateway {
   async prompt(
     sessionId: string,
     text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    inlineTokens?: Record<string, InlineToken>
   ): Promise<void> {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
@@ -40,35 +40,10 @@ export class DefaultChatGateway implements ChatGateway {
       return
     }
 
-    // ─── 斜杠命令拦截：将 /command args 展开为完整 prompt ───
-    let contentText = text // 存入 DB 的内容（可能被改写为 token 标记）
-    let promptText = text // 发送给 LLM 的文本
-    let inlineTokens: Record<string, InlineToken> | undefined
-    if (text.startsWith('/')) {
-      const sessionInfo = sessionService.getById(sessionId)
-      const result = commandService.matchAndExpand(
-        sessionInfo?.workingDirectory ?? null,
-        text,
-        sessionInfo?.enabledTools
-      )
-      if (result) {
-        promptText = result.expandedText
-        // 构造 InlineToken：token 只包裹 /commandId 部分，args 留作普通文本
-        const uid = 't0'
-        const token: InlineToken = {
-          type: 'cmd',
-          id: result.commandId,
-          displayText: `/${result.commandId}`,
-          payload: result.expandedText,
-          name: result.commandName
-        }
-        inlineTokens = { [uid]: token }
-        // 改写 content：/commandId 替换为 token 标记，args 保留为普通文本
-        contentText = result.args
-          ? `${makeTokenMarker(uid)} ${result.args}`
-          : makeTokenMarker(uid)
-      }
-    }
+    // ─── 内联 Token 处理（由前端完成展开，后端直接使用） ───
+    const promptText = inlineTokens
+      ? resolveTokensForAgent(text, inlineTokens)
+      : text
 
     // 统一持久化用户消息并通知所有前端
     const userImages =
@@ -80,9 +55,9 @@ export class DefaultChatGateway implements ChatGateway {
         : undefined
     const userMsg = messageService.addUserText({
       sessionId,
-      content: contentText,
+      content: text,
       images: userImages,
-      inlineTokens
+      inlineTokens: inlineTokens
     })
     chatFrontendRegistry.broadcast({
       type: 'user_message',

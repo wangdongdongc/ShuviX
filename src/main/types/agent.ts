@@ -1,5 +1,6 @@
 import type { ModelCapabilities } from './provider'
 import type { SessionModelMetadata } from './session'
+import type { InlineToken } from '../../shared/types/chatMessage'
 
 /** Agent 初始化参数（仅需 sessionId，后端自行查询其余信息） */
 export interface AgentInitParams {
@@ -40,6 +41,8 @@ export interface AgentPromptParams {
   text: string
   /** 附带的图片列表（base64 编码） */
   images?: ImageContentParam[]
+  /** 前端预处理的内联 Token（斜杠命令展开等），后端直接使用不再重复查询 */
+  inlineTokens?: Record<string, InlineToken>
 }
 
 /** Agent 模型切换参数 */
