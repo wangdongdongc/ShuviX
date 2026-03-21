@@ -597,6 +597,8 @@
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "exploreLabel": "Explore",
     "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure",
+    "designLabel": "Design Preview",
+    "designHint": "Create and preview React UI components in an interactive sandbox with Tailwind CSS",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "Delegate complex coding tasks to Claude Code — an autonomous AI agent for multi-file changes, refactoring, debugging and more"
   },

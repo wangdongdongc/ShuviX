@@ -236,7 +236,8 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel'),
       explore: t('tool.exploreLabel'),
-      'claude-code': t('tool.claudeCodeLabel')
+      'claude-code': t('tool.claudeCodeLabel'),
+      design: t('tool.designLabel')
     }
     const hintMap: Record<string, string> = {
       bash: t('tool.bashHint'),
@@ -253,7 +254,8 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint'),
       explore: t('tool.exploreHint'),
-      'claude-code': t('tool.claudeCodeHint')
+      'claude-code': t('tool.claudeCodeHint'),
+      design: t('tool.designHint')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,

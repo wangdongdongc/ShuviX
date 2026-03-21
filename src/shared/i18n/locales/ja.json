@@ -597,6 +597,8 @@
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "exploreLabel": "探索",
     "exploreHint": "読み取り専用コードベース検索サブエージェント、ファイル検索・コード検索・プロジェクト構造探索に対応",
+    "designLabel": "デザインプレビュー",
+    "designHint": "Tailwind CSS 対応のインタラクティブ環境で React UI コンポーネントを作成・プレビュー",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "複雑なコーディングタスクを Claude Code に委託 — マルチファイル変更、リファクタリング、デバッグなどに対応する自律型 AI エージェント"
   },

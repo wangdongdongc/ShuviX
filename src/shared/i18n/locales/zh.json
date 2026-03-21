@@ -597,6 +597,8 @@
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "exploreLabel": "探索",
     "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构",
+    "designLabel": "设计预览",
+    "designHint": "创建并预览 React UI 组件，支持 Tailwind CSS 的交互式设计环境",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "将复杂编程任务委托给 Claude Code — 自主 AI 编码智能体，擅长多文件修改、重构、调试等"
   },

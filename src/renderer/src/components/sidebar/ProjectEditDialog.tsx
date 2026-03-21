@@ -80,7 +80,15 @@ export function ProjectEditDialog({
         } else {
           setEnabledTools([...DEFAULT_TOOL_NAMES])
         }
-        setLoading(false)
+        // 默认展开所有扩展分组
+          const mcpGroups = new Set(
+            tools.filter((t) => t.group && !t.group.startsWith('__')).map((t) => t.group!)
+          )
+          const hasSkills = tools.some((t) => t.group === SKILLS_GROUP)
+          if (hasSkills) mcpGroups.add(SKILLS_GROUP)
+          setExpandedExtGroups(mcpGroups)
+
+          setLoading(false)
       }
     )
   }, [projectId])
@@ -247,10 +255,10 @@ export function ProjectEditDialog({
                 </p>
 
                 {/* MCP 引导 */}
-                <div className="zen-section">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Puzzle size={14} className="text-purple-400" />
-                    <span className="text-xs font-medium text-text-primary">MCP Server</span>
+                <div className="zen-card">
+                  <div className="zen-card-header">
+                    <Puzzle size={12} className="text-purple-400" />
+                    MCP Server
                   </div>
                   <p className="text-[10px] text-text-tertiary leading-relaxed mb-3">
                     {t('projectForm.extMcpDesc')}
@@ -265,10 +273,10 @@ export function ProjectEditDialog({
                 </div>
 
                 {/* Skills 引导 */}
-                <div className="zen-section">
-                  <div className="flex items-center gap-2 mb-2">
-                    <BookOpen size={14} className="text-emerald-400" />
-                    <span className="text-xs font-medium text-text-primary">Skills</span>
+                <div className="zen-card">
+                  <div className="zen-card-header">
+                    <BookOpen size={12} className="text-emerald-400" />
+                    Skills
                   </div>
                   <p className="text-[10px] text-text-tertiary leading-relaxed mb-3">
                     {t('projectForm.extSkillDesc')}
@@ -303,11 +311,8 @@ export function ProjectEditDialog({
                     const isExpanded = expandedExtGroups.has(group)
 
                     return (
-                      <div
-                        key={group}
-                        className={`border-l-2 pl-3 ${isOnline ? 'border-purple-500/40' : 'border-red-500/40'}`}
-                      >
-                        <div className="flex items-center gap-1.5 py-1">
+                      <div key={group} className="zen-card">
+                        <div className="flex items-center gap-2">
                           <button
                             onClick={() => toggleExtExpand(group)}
                             className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
@@ -324,15 +329,21 @@ export function ProjectEditDialog({
                             className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                           />
                           <Puzzle
-                            size={11}
+                            size={12}
                             className={isOnline ? 'text-purple-400' : 'text-red-400'}
                           />
                           <span
-                            className={`text-[11px] font-medium ${isOnline ? 'text-purple-400' : 'text-red-400'}`}
+                            className={`text-[11px] font-medium ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
                           >
                             {group}
                           </span>
-                          <span className="text-[10px] text-text-tertiary/60 border border-border-secondary rounded px-1 py-px">
+                          <span
+                            className={`text-[10px] rounded px-1 py-px ${
+                              isOnline
+                                ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                                : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                            }`}
+                          >
                             MCP
                           </span>
                           <span className="text-[10px] text-text-tertiary ml-auto">
@@ -340,7 +351,7 @@ export function ProjectEditDialog({
                           </span>
                         </div>
                         {isExpanded && (
-                          <div className="space-y-0.5">
+                          <div className="space-y-0.5 mt-2 pl-7">
                             {groupTools.map((tool) => {
                               const shortName =
                                 tool.name.split('__').length >= 3
@@ -349,7 +360,7 @@ export function ProjectEditDialog({
                               return (
                                 <label
                                   key={tool.name}
-                                  className={`flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${!isOnline ? 'opacity-50' : ''}`}
+                                  className={`flex items-center gap-1.5 cursor-pointer select-none rounded-md px-2 py-1 -mx-1 hover:bg-bg-hover/40 transition-colors ${!isOnline ? 'opacity-50' : ''}`}
                                 >
                                   <input
                                     type="checkbox"
@@ -384,8 +395,8 @@ export function ProjectEditDialog({
                     const isSkillExpanded = expandedExtGroups.has(SKILLS_GROUP)
 
                     return (
-                      <div className="border-l-2 border-emerald-500/40 pl-3">
-                        <div className="flex items-center gap-1.5 py-1">
+                      <div className="zen-card">
+                        <div className="flex items-center gap-2">
                           <button
                             onClick={() => toggleExtExpand(SKILLS_GROUP)}
                             className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
@@ -405,9 +416,11 @@ export function ProjectEditDialog({
                             onChange={() => toggleExtGroup(skillNames)}
                             className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                           />
-                          <BookOpen size={11} className="text-emerald-400" />
-                          <span className="text-[11px] font-medium text-emerald-400">Skills</span>
-                          <span className="text-[10px] text-text-tertiary/60 border border-border-secondary rounded px-1 py-px">
+                          <BookOpen size={12} className="text-emerald-400" />
+                          <span className="text-[11px] font-medium text-text-secondary">
+                            Skills
+                          </span>
+                          <span className="text-[10px] rounded px-1 py-px bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                             Skill
                           </span>
                           <span className="text-[10px] text-text-tertiary ml-auto">
@@ -415,7 +428,7 @@ export function ProjectEditDialog({
                           </span>
                         </div>
                         {isSkillExpanded && (
-                          <div className="space-y-0.5">
+                          <div className="space-y-0.5 mt-2 pl-7">
                             {skillTools.map((tool) => {
                               const shortName = tool.name.startsWith('skill:')
                                 ? tool.name.slice(6)
@@ -423,7 +436,7 @@ export function ProjectEditDialog({
                               return (
                                 <label
                                   key={tool.name}
-                                  className="flex items-center gap-1.5 cursor-pointer select-none py-0.5"
+                                  className="flex items-center gap-1.5 cursor-pointer select-none rounded-md px-2 py-1 -mx-1 hover:bg-bg-hover/40 transition-colors"
                                 >
                                   <input
                                     type="checkbox"
