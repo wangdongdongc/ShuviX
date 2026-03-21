@@ -129,8 +129,8 @@ export function PreviewPanel(): React.JSX.Element {
 
   return (
     <div
-      className="flex-shrink-0 flex flex-col h-full bg-bg-primary"
-      style={{ width }}
+      className="flex flex-col h-full bg-bg-primary overflow-hidden"
+      style={{ width, minWidth: 200 }}
     >
 
       {/* ====== 工具栏 ====== */}
@@ -138,7 +138,7 @@ export function PreviewPanel(): React.JSX.Element {
         className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-primary"
       >
         {/* Start / Stop 按钮 */}
-        <div className="titlebar-no-drag flex items-center">
+        <div className="titlebar-no-drag flex items-center flex-shrink-0">
           {isStartingServer ? (
             <button
               disabled
@@ -174,7 +174,7 @@ export function PreviewPanel(): React.JSX.Element {
         <div className="w-px h-3.5 bg-border-secondary/60 mx-1 flex-shrink-0" />
 
         {/* 导航：后退、前进、刷新/停止加载 */}
-        <div className="titlebar-no-drag flex items-center">
+        <div className="titlebar-no-drag flex items-center flex-shrink-0">
           <button onClick={handleBack} className={btnClass} title="Back">
             <ArrowLeft size={12} />
           </button>
@@ -222,7 +222,7 @@ export function PreviewPanel(): React.JSX.Element {
         )}
 
         {/* 在浏览器中打开 */}
-        <div className="titlebar-no-drag flex items-center">
+        <div className="titlebar-no-drag flex items-center flex-shrink-0">
           <button onClick={handleOpenExternal} className={btnClass} title="Open in browser">
             <ExternalLink size={11} />
           </button>

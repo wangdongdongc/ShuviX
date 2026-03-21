@@ -432,9 +432,6 @@ ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
   return { success: true }
 })
 
-// 预览面板占用的额外宽度（保存窗口尺寸时需要扣除）
-let previewWidthOffset = 0
-
 // 调整主窗口宽度（delta 为 CSS 像素，自动按 zoom factor 换算为屏幕像素）
 ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -452,14 +449,11 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   }
 })
 
-// 设置预览面板宽度偏移（CSS 像素，按 zoom factor 换算为屏幕像素后存储）
-// 同时动态调整窗口最小宽度，防止对话区被压缩过窄
-ipcMain.handle('app:set-preview-offset', (_event, offset: number) => {
-  const zoom = mainWindow?.webContents?.getZoomFactor() || 1
-  previewWidthOffset = Math.round(offset * zoom)
+// 设置预览面板宽度偏移 — 仅重置窗口最小宽度为固定值
+// CSS min-width (chat 400px) 已保证内容不会被过度压缩
+ipcMain.handle('app:set-preview-offset', (_event, _offset: number) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    const baseMinWidth = 800
-    mainWindow.setMinimumSize(baseMinWidth + previewWidthOffset, 600)
+    mainWindow.setMinimumSize(800, 600)
   }
 })
 

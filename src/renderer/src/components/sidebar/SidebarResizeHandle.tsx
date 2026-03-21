@@ -47,11 +47,11 @@ export function SidebarResizeHandle(): React.JSX.Element {
 
   return (
     <div
-      className="flex-shrink-0 w-px bg-border-primary cursor-col-resize relative group"
+      className="flex-shrink-0 w-px bg-border-primary cursor-col-resize relative group z-10"
       onMouseDown={onMouseDown}
     >
-      {/* 透明宽击中区域（左右各扩展 3px） */}
-      <div className="absolute inset-y-0 -left-[3px] -right-[3px] group-hover:bg-accent/30 group-active:bg-accent/50 transition-colors" />
+      {/* 透明宽击中区域（左右各扩展 5px，z-10 保证不被相邻面板遮挡） */}
+      <div className="absolute inset-y-0 -left-[5px] -right-[5px] group-hover:bg-accent/30 group-active:bg-accent/50 transition-colors" />
     </div>
   )
 }

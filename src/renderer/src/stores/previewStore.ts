@@ -77,10 +77,20 @@ function totalOffset(panelWidth: number): number {
 /** macOS setBounds 动画时长（ms），留少许余量 */
 const MACOS_ANIMATE_DURATION = 320
 
+/** 防抖更新窗口最小宽度（拖拽面板时避免高频 IPC） */
+let syncOffsetTimer: ReturnType<typeof setTimeout> | null = null
+function debouncedSyncPreviewOffset(offset: number): void {
+  if (syncOffsetTimer) clearTimeout(syncOffsetTimer)
+  syncOffsetTimer = setTimeout(() => {
+    syncPreviewOffset(offset)
+    syncOffsetTimer = null
+  }, 150)
+}
+
 /** 等待窗口动画完成后解锁 ChatView 宽度 */
 function unlockAfterAnimate(p: Promise<void>): void {
   const isMac = window.api?.app?.platform === 'darwin'
-  p.then(() => {
+  const doUnlock = (): void => {
     if (isMac) {
       setTimeout(() => {
         requestAnimationFrame(() => usePreviewStore.setState({ lockedChatWidth: null }))
@@ -88,7 +98,9 @@ function unlockAfterAnimate(p: Promise<void>): void {
     } else {
       requestAnimationFrame(() => usePreviewStore.setState({ lockedChatWidth: null }))
     }
-  })
+  }
+  // 无论 adjustWindowWidth 成功或失败都必须解锁，否则 lockedChatWidth 会永远卡住
+  p.then(doUnlock, doUnlock)
 }
 
 export const usePreviewStore = create<PreviewState>((set, get) => ({
@@ -141,8 +153,15 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
   setUrl: (url) => set({ url }),
   setWidth: (width) => {
     const clamped = Math.max(PREVIEW_MIN, Math.min(PREVIEW_MAX, width))
-    set({ width: clamped })
+    // 拖拽期间强制解锁 chatWidth：lockedChatWidth 会让 chat 容器固定宽度、
+    // flexShrink: 0，导致向左拖时 chat 无法收缩、预览溢出窗口。
+    // 用户主动拖拽意味着窗口动画已不重要，立即解锁让 flex 布局生效。
+    set(get().lockedChatWidth != null ? { width: clamped, lockedChatWidth: null } : { width: clamped })
     persistPanelLayout({ previewWidth: clamped })
+    // 同步更新窗口最小宽度，防止用户拖拽面板变窄后窗口仍被锁定在旧的最小宽度
+    if (get().isOpen) {
+      debouncedSyncPreviewOffset(totalOffset(clamped))
+    }
   },
 
   openDesign: (designUrl) => {
