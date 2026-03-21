@@ -12,7 +12,8 @@ import type {
   StepTextMessage,
   StepThinkingMessage,
   ErrorEventMessage,
-  ImageMeta
+  ImageMeta,
+  InlineToken
 } from '../types'
 import { narrowMessage } from '../types'
 
@@ -136,12 +137,24 @@ export class MessageService {
 
   // ─── 类型化工厂方法 ───────────────────────────────
 
-  addUserText(p: { sessionId: string; content: string; images?: ImageMeta[] }): UserTextMessage {
+  addUserText(p: {
+    sessionId: string
+    content: string
+    images?: ImageMeta[]
+    inlineTokens?: Record<string, InlineToken>
+  }): UserTextMessage {
+    const meta: MessageMetadata | undefined =
+      p.images?.length || p.inlineTokens
+        ? {
+            ...(p.images?.length ? { images: p.images } : {}),
+            ...(p.inlineTokens ? { inlineTokens: p.inlineTokens } : {})
+          }
+        : undefined
     return this.add({
       sessionId: p.sessionId,
       role: 'user',
       content: p.content,
-      metadata: p.images?.length ? { images: p.images } : undefined
+      metadata: meta
     }) as unknown as UserTextMessage
   }
 

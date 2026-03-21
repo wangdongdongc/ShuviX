@@ -85,7 +85,7 @@ class CommandService {
     workingDir: string | null,
     text: string,
     enabledTools?: string[]
-  ): { commandId: string; expandedText: string; originalText: string } | null {
+  ): { commandId: string; commandName: string; args: string; expandedText: string; originalText: string } | null {
     if (!text.startsWith('/')) return null
 
     // 解析 commandId 和 args
@@ -106,6 +106,8 @@ class CommandService {
 
     return {
       commandId,
+      commandName: command.name,
+      args,
       expandedText: this.expandCommand(command, args),
       originalText: text
     }

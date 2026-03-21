@@ -30,10 +30,29 @@ export interface UsageInfo {
   }>
 }
 
+/** 内联 Token — 自包含的可扩展占位符 */
+export interface InlineToken {
+  /** Token 类型：'cmd'（斜杠命令）、'at'（@ 引用）等 */
+  type: string
+  /** 实体标识符（命令 ID、mention ID 等） */
+  id: string
+  /** UI 显示文本（"/review"、"@claude"） */
+  displayText: string
+  /** 展开/解析后的完整内容（发送给 LLM 的文本） */
+  payload: string
+  /** 可选：显示名称 */
+  name?: string
+}
+
+/** 内联 Token 标记正则：匹配 {{shuvixInlineToken:uid}} */
+export const INLINE_TOKEN_RE = /\{\{shuvixInlineToken:([a-z0-9]+)\}\}/g
+
 /** 消息元数据（扁平超集，DAO 层使用） */
 export interface MessageMetadata {
   // —— user ——
   source?: { type: string; [k: string]: unknown }
+  // —— user / inline token ——
+  inlineTokens?: Record<string, InlineToken>
   // —— user / assistant text / step_text ——
   images?: ImageMeta[]
   // —— assistant text ——
@@ -57,6 +76,7 @@ export interface MessageMetadata {
 export interface UserTextMeta {
   source?: { type: string; [k: string]: unknown }
   images?: ImageMeta[]
+  inlineTokens?: Record<string, InlineToken>
 }
 
 /** 助手文本消息元数据（最终回复） */

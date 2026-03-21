@@ -12,6 +12,8 @@ import { sqlWorkerManager } from '../../services/sqlWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { commandService } from '../../services/commandService'
+import type { InlineToken } from '../../../shared/types/chatMessage'
+import { makeTokenMarker } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
@@ -39,8 +41,9 @@ export class DefaultChatGateway implements ChatGateway {
     }
 
     // ─── 斜杠命令拦截：将 /command args 展开为完整 prompt ───
-    const displayText = text // UI 中显示的文本
+    let contentText = text // 存入 DB 的内容（可能被改写为 token 标记）
     let promptText = text // 发送给 LLM 的文本
+    let inlineTokens: Record<string, InlineToken> | undefined
     if (text.startsWith('/')) {
       const sessionInfo = sessionService.getById(sessionId)
       const result = commandService.matchAndExpand(
@@ -50,10 +53,24 @@ export class DefaultChatGateway implements ChatGateway {
       )
       if (result) {
         promptText = result.expandedText
+        // 构造 InlineToken：token 只包裹 /commandId 部分，args 留作普通文本
+        const uid = 't0'
+        const token: InlineToken = {
+          type: 'cmd',
+          id: result.commandId,
+          displayText: `/${result.commandId}`,
+          payload: result.expandedText,
+          name: result.commandName
+        }
+        inlineTokens = { [uid]: token }
+        // 改写 content：/commandId 替换为 token 标记，args 保留为普通文本
+        contentText = result.args
+          ? `${makeTokenMarker(uid)} ${result.args}`
+          : makeTokenMarker(uid)
       }
     }
 
-    // 统一持久化用户消息并通知所有前端（显示原始命令文本）
+    // 统一持久化用户消息并通知所有前端
     const userImages =
       images && images.length > 0
         ? images.map((img) => ({
@@ -63,8 +80,9 @@ export class DefaultChatGateway implements ChatGateway {
         : undefined
     const userMsg = messageService.addUserText({
       sessionId,
-      content: displayText,
-      images: userImages
+      content: contentText,
+      images: userImages,
+      inlineTokens
     })
     chatFrontendRegistry.broadcast({
       type: 'user_message',

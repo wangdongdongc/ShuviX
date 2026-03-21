@@ -3,6 +3,7 @@ export type { MessageType, Message } from '../dao/types'
 
 // 消息相关共享类型（从 shared 统一导入，消除重复定义）
 export type {
+  InlineToken,
   ImageMeta,
   UsageInfo,
   MessageMetadata,

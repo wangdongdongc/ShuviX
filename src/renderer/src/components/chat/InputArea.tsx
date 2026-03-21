@@ -200,8 +200,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     // 斜杠命令 popover 可见时优先处理导航
     if (slash.showPopover) {
-      // Enter/Tab 时需要选中当前项
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Enter/Tab 时选中当前项
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
         const filtered = slashCommands.filter((cmd) =>
           cmd.commandId.toLowerCase().startsWith(slash.filter.toLowerCase())
         )

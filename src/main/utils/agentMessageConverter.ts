@@ -9,6 +9,7 @@ import type {
   UserMessage
 } from '@mariozechner/pi-ai'
 import type { Message, ImageMeta } from '../types'
+import { resolveTokensForAgent } from '../../shared/utils/inlineTokens'
 
 /** 从图片对象中提取 raw base64：处理 data URL 格式和纯 base64 */
 export function extractBase64(img: ImageMeta): string {
@@ -46,13 +47,15 @@ export function dbMessagesToAgentMessages(msgs: Message[]): AgentMessage[] {
       continue
     }
 
-    // 用户消息（可能包含图片）
+    // 用户消息（可能包含图片和/或内联 token）
     if (msg.role === 'user') {
-      let content: string | (TextContent | ImageContent)[] = msg.content
+      // 使用存储的 token payload 替换标记，确保 Agent 重启后上下文正确
+      const resolvedText = resolveTokensForAgent(msg.content, msg.metadata?.inlineTokens)
+      let content: string | (TextContent | ImageContent)[] = resolvedText
       const meta = msg.metadata
       if (meta?.images?.length) {
         content = [
-          { type: 'text', text: msg.content },
+          { type: 'text', text: resolvedText },
           ...meta.images.map((img) => ({
             type: 'image' as const,
             data: extractBase64(img),
