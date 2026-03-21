@@ -48,5 +48,26 @@ export default defineConfig(
       '@typescript-eslint/no-require-imports': 'off'
     }
   },
+  // 插件隔离：禁止插件代码依赖主程序或直接引用 Electron
+  {
+    files: ['src/plugins/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/main/**'],
+              message: '插件不能依赖主程序，请只使用 plugin-api 中的类型'
+            },
+            {
+              group: ['electron'],
+              message: '插件不能直接依赖 Electron，请使用 PluginContext'
+            }
+          ]
+        }
+      ]
+    }
+  },
   eslintConfigPrettier
 )

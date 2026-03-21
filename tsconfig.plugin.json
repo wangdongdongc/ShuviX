@@ -1,0 +1,14 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": ["src/plugin-api/**/*", "src/plugins/**/*"],
+  "compilerOptions": {
+    "composite": true,
+    "types": [],
+    "lib": ["ES2022"],
+    "baseUrl": ".",
+    "paths": {
+      "@plugin-api": ["src/plugin-api/index.ts"],
+      "@plugin-api/*": ["src/plugin-api/*"]
+    }
+  }
+}
