@@ -43,8 +43,8 @@ export function useAgentEvents(): void {
         break
 
       case 'toolcall_generating':
-        if (event.argsDelta) {
-          // 增量：追加到已有 argsText
+        if (event.argsDelta !== undefined) {
+          // 增量：追加到已有 argsText（空字符串也是有效 delta，不可用 truthy 判断）
           store.appendStreamingToolCallDelta(sid, event.argsDelta)
         } else {
           // 新工具调用开始：先将当前正在生成的移入已完成列表
