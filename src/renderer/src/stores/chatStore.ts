@@ -98,6 +98,14 @@ interface SessionStreamState {
   }>
 }
 
+/** Buffered streaming deltas for rAF batching (used by useAgentEvents) */
+export interface StreamingDeltaBuffer {
+  content: string
+  thinking: string
+  toolCallArgsDelta: string
+  subAgents: Map<string, { content: string; thinking: string }>
+}
+
 /** 每个 session 的活跃 Docker/SSH/Python/ACP 资源信息 */
 export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
@@ -294,6 +302,8 @@ interface ChatState {
   setPendingUserInput: (sessionId: string, input: PendingUserInput) => void
   /** 清除 session 的待处理用户输入 */
   clearPendingUserInput: (sessionId: string) => void
+  /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
+  flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -750,6 +760,74 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const rest = { ...state.sessionPendingUserInputs }
       delete rest[sessionId]
       return { sessionPendingUserInputs: rest }
+    }),
+
+  flushStreamingDeltas: (buffers) =>
+    set((state) => {
+      const newStreams = { ...state.sessionStreams }
+      let newSubAgents = state.sessionSubAgentExecutions
+      let subAgentsChanged = false
+
+      for (const [sessionId, buf] of buffers) {
+        if (buf.content || buf.thinking || buf.toolCallArgsDelta) {
+          const prev = newStreams[sessionId] || {
+            content: '',
+            thinking: '',
+            isStreaming: false,
+            images: [],
+            streamingToolCall: null,
+            completedStreamingToolCalls: []
+          }
+          const updated = { ...prev }
+          if (buf.content) updated.content = prev.content + buf.content
+          if (buf.thinking) updated.thinking = prev.thinking + buf.thinking
+          if (buf.toolCallArgsDelta && updated.streamingToolCall) {
+            updated.streamingToolCall = {
+              ...updated.streamingToolCall,
+              argsText: updated.streamingToolCall.argsText + buf.toolCallArgsDelta
+            }
+          }
+          newStreams[sessionId] = updated
+        }
+
+        if (buf.subAgents.size > 0) {
+          const prevExecs = state.sessionSubAgentExecutions[sessionId]
+          if (prevExecs) {
+            if (!subAgentsChanged) {
+              newSubAgents = { ...state.sessionSubAgentExecutions }
+              subAgentsChanged = true
+            }
+            newSubAgents[sessionId] = prevExecs.map((sa) => {
+              const subBuf = buf.subAgents.get(sa.subAgentId)
+              if (!subBuf) return sa
+              let tl = sa.timeline
+              if (subBuf.thinking) {
+                const last = tl[tl.length - 1]
+                if (last && last.type === 'thinking') {
+                  tl = [...tl]
+                  tl[tl.length - 1] = { type: 'thinking', content: last.content + subBuf.thinking }
+                } else {
+                  tl = [...tl, { type: 'thinking' as const, content: subBuf.thinking }]
+                }
+              }
+              if (subBuf.content) {
+                const last = tl[tl.length - 1]
+                if (last && last.type === 'text') {
+                  tl = [...tl]
+                  tl[tl.length - 1] = { type: 'text', content: last.content + subBuf.content }
+                } else {
+                  tl = [...tl, { type: 'text' as const, content: subBuf.content }]
+                }
+              }
+              return tl !== sa.timeline ? { ...sa, timeline: tl } : sa
+            })
+          }
+        }
+      }
+
+      const result: Partial<ChatState> = { sessionStreams: newStreams }
+      if (subAgentsChanged) result.sessionSubAgentExecutions = newSubAgents
+      return result
     }),
 
   finishStreaming: (sessionId, finalMessage) =>

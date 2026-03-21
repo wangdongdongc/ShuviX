@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useChatStore, type ChatMessage } from '../stores/chatStore'
+import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { usePreviewStore } from '../stores/previewStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
@@ -7,14 +7,104 @@ import { ttsPlayer } from '../services/tts/ttsPlayer'
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
 
+// ---- Streaming delta rAF buffer ----
+// High-frequency delta events (text, thinking, toolcall args, subagent text/thinking)
+// are accumulated here and flushed to the store once per animation frame,
+// reducing hundreds of store updates per second down to ~60.
+
+const deltaBuffers = new Map<string, StreamingDeltaBuffer>()
+let rafId: number | null = null
+
+function getBuffer(sessionId: string): StreamingDeltaBuffer {
+  let buf = deltaBuffers.get(sessionId)
+  if (!buf) {
+    buf = { content: '', thinking: '', toolCallArgsDelta: '', subAgents: new Map() }
+    deltaBuffers.set(sessionId, buf)
+  }
+  return buf
+}
+
+function getSubBuf(
+  buf: StreamingDeltaBuffer,
+  subAgentId: string
+): { content: string; thinking: string } {
+  let sub = buf.subAgents.get(subAgentId)
+  if (!sub) {
+    sub = { content: '', thinking: '' }
+    buf.subAgents.set(subAgentId, sub)
+  }
+  return sub
+}
+
+function scheduleFlush(): void {
+  if (rafId !== null) return
+  rafId = requestAnimationFrame(() => {
+    rafId = null
+    if (deltaBuffers.size === 0) return
+    const snapshot = new Map(deltaBuffers)
+    deltaBuffers.clear()
+    useChatStore.getState().flushStreamingDeltas(snapshot)
+  })
+}
+
+/** Flush buffered deltas synchronously (call before non-delta events to preserve ordering) */
+function flushNow(): void {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+  if (deltaBuffers.size === 0) return
+  const snapshot = new Map(deltaBuffers)
+  deltaBuffers.clear()
+  useChatStore.getState().flushStreamingDeltas(snapshot)
+}
+
 /**
  * Agent 流式事件分发 Hook
  * 处理所有 session 的 Agent 事件，按 sessionId 隔离状态
+ *
+ * 高频 delta 事件通过 requestAnimationFrame 批量合并，
+ * 每帧最多触发一次 store 更新，大幅减少渲染压力。
  */
 export function useAgentEvents(): void {
   const handleAgentEvent = useCallback(async (event: ChatEvent): Promise<void> => {
-    const store = useChatStore.getState()
     const sid: string = event.sessionId
+
+    // ---- High-frequency delta events: buffer and flush on rAF ----
+    switch (event.type) {
+      case 'text_delta':
+        getBuffer(sid).content += event.delta
+        scheduleFlush()
+        return
+
+      case 'thinking_delta':
+        getBuffer(sid).thinking += event.delta
+        scheduleFlush()
+        return
+
+      case 'toolcall_generating':
+        if (event.argsDelta !== undefined) {
+          getBuffer(sid).toolCallArgsDelta += event.argsDelta
+          scheduleFlush()
+          return
+        }
+        break // argsDelta undefined = new tool call start, fall through to non-delta handling
+
+      case 'subagent_text_delta':
+        getSubBuf(getBuffer(sid), event.subAgentId).content += event.delta
+        scheduleFlush()
+        return
+
+      case 'subagent_thinking_delta':
+        getSubBuf(getBuffer(sid), event.subAgentId).thinking += event.delta
+        scheduleFlush()
+        return
+    }
+
+    // ---- Non-delta events: flush pending deltas first to preserve ordering ----
+    flushNow()
+
+    const store = useChatStore.getState()
 
     switch (event.type) {
       case 'user_message':
@@ -31,26 +121,13 @@ export function useAgentEvents(): void {
         if (ttsPlayer.isPlaying || ttsPlayer.isLoading) ttsPlayer.stop()
         break
 
-      case 'text_delta':
-        store.appendStreamingContent(sid, event.delta)
-        break
-
-      case 'thinking_delta':
-        store.appendStreamingThinking(sid, event.delta)
-        break
-
       case 'text_end':
         break
 
       case 'toolcall_generating':
-        if (event.argsDelta !== undefined) {
-          // 增量：追加到已有 argsText（空字符串也是有效 delta，不可用 truthy 判断）
-          store.appendStreamingToolCallDelta(sid, event.argsDelta)
-        } else {
-          // 新工具调用开始：先将当前正在生成的移入已完成列表
-          store.finalizeStreamingToolCall(sid)
-          store.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
-        }
+        // Only reaches here when argsDelta is undefined (new tool call start)
+        store.finalizeStreamingToolCall(sid)
+        store.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
         break
 
       case 'step_end': {
@@ -282,14 +359,6 @@ export function useAgentEvents(): void {
         break
       }
 
-      case 'subagent_text_delta':
-        store.appendSubAgentStreamingContent(sid, event.subAgentId, event.delta)
-        break
-
-      case 'subagent_thinking_delta':
-        store.appendSubAgentStreamingThinking(sid, event.subAgentId, event.delta)
-        break
-
       case 'error':
         // 错误以独立提示消息形式写入会话（不再使用底部错误条/弹窗）
         store.finishStreaming(sid)
@@ -311,6 +380,14 @@ export function useAgentEvents(): void {
   useEffect(() => {
     if (isSettingsWindow) return
     const unsubscribe = window.api.agent.onEvent(handleAgentEvent)
-    return unsubscribe
+    return () => {
+      unsubscribe()
+      // Cancel any pending rAF flush on unmount
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId)
+        rafId = null
+      }
+      deltaBuffers.clear()
+    }
   }, [handleAgentEvent])
 }
