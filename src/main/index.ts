@@ -26,7 +26,8 @@ import { mcpService } from './services/mcpService'
 import { abortAllAcpSessions } from './subagent'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
-import { designProjectManager } from './services/designProjectManager'
+import { pluginRegistry } from './services/pluginRegistry'
+import designPlugin from '../plugins/design'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -503,6 +504,12 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // 注册插件
+  pluginRegistry.register(designPlugin)
+  pluginRegistry.activateAll().catch((err) => {
+    log.error(`Plugin activation failed: ${err}`)
+  })
+
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
 
@@ -543,7 +550,7 @@ app.on('before-quit', () => {
   sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()
-  designProjectManager.disposeAll()
+  pluginRegistry.deactivateAll().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

@@ -1,5 +1,5 @@
 /**
- * BundlerService — esbuild-wasm 打包服务（单例）
+ * BundlerService — esbuild-wasm 打包服务（插件版）
  *
  * 封装所有 esbuild-wasm 复杂性：
  * - Lazy 初始化 esbuild-wasm（加载 .wasm 二进制）
@@ -10,12 +10,9 @@
 
 import * as esbuild from 'esbuild-wasm'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http'
-import { resolve, dirname, join } from 'path'
+import { resolve, dirname } from 'path'
 import { existsSync, readFileSync, statSync } from 'fs'
-import { app } from 'electron'
-import { createLogger } from '../logger'
-
-const log = createLogger('BundlerService')
+import type { PluginLogger } from '../../plugin-api'
 
 // ────────────────────── Types ──────────────────────
 
@@ -53,8 +50,12 @@ interface DevServerEntry {
 
 /** 需要拦截的 bare import 列表 */
 const SHIPPED_SPECIFIERS = new Set([
-  'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-  'react-router', 'react-router-dom'
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  'react-router',
+  'react-router-dom'
 ])
 
 /** bundle 文件名 */
@@ -136,19 +137,24 @@ function errorOverlayHTML(errors: string[]): string {
 
 // ────────────────────── BundlerService ──────────────────────
 
-class BundlerService {
+export class BundlerService {
   private initialized = false
   private initPromise: Promise<void> | null = null
   private devServers = new Map<string, DevServerEntry>()
   /** 缓存 Tailwind CSS browser runtime 内容 */
   private tailwindContent: string | null = null
 
+  constructor(
+    private getResourcePath: (relativePath: string) => string,
+    private log: PluginLogger
+  ) {}
+
   // ── Resource paths ──
 
   /** 获取 Tailwind CSS browser runtime 内容（懒加载 + 缓存） */
   private getTailwindContent(): string {
     if (!this.tailwindContent) {
-      const tailwindPath = resolve(this.getDepsDir(), 'tailwindcss-browser.js')
+      const tailwindPath = resolve(this.getResourcePath('deps'), 'tailwindcss-browser.js')
       this.tailwindContent = readFileSync(tailwindPath, 'utf-8')
     }
     return this.tailwindContent
@@ -156,10 +162,7 @@ class BundlerService {
 
   /** 预置 ESM 依赖目录 */
   private getDepsDir(): string {
-    if (app.isPackaged) {
-      return join(process.resourcesPath, 'design-deps')
-    }
-    return resolve(__dirname, '../../resources/design-deps')
+    return this.getResourcePath('deps')
   }
 
   // ── Initialization ──
@@ -170,13 +173,13 @@ class BundlerService {
     if (this.initPromise) return this.initPromise
 
     this.initPromise = (async () => {
-      log.info('Initializing esbuild-wasm')
+      this.log.info('Initializing esbuild-wasm')
 
       // Node.js 环境下 esbuild-wasm 自动定位 wasm 二进制，无需指定 wasmURL/wasmModule
       await esbuild.initialize({})
 
       this.initialized = true
-      log.info('esbuild-wasm initialized')
+      this.log.info('esbuild-wasm initialized')
     })()
 
     return this.initPromise
@@ -313,7 +316,9 @@ class BundlerService {
         else if (file.path.endsWith('.css')) outputCSS = file.text
       }
 
-      const warnings = result.warnings.map((w) => esbuild.formatMessagesSync([w], { kind: 'warning' })[0])
+      const warnings = result.warnings.map(
+        (w) => esbuild.formatMessagesSync([w], { kind: 'warning' })[0]
+      )
 
       return {
         success: true,
@@ -346,9 +351,9 @@ class BundlerService {
     // 首次构建
     const result = await this.build(resolve(projectDir, 'index.tsx'), projectDir)
     if (!result.success) {
-      log.warn('Initial build failed:', result.errors)
+      this.log.warn('Initial build failed:', result.errors)
     } else {
-      log.info(`Initial build OK (${result.duration}ms)`)
+      this.log.info(`Initial build OK (${result.duration}ms)`)
     }
 
     const entry: DevServerEntry = {
@@ -380,7 +385,7 @@ class BundlerService {
     this.devServers.set(sessionId, entry)
 
     const url = `http://127.0.0.1:${entry.port}`
-    log.info(`Dev server started for session ${sessionId} at ${url}`)
+    this.log.info(`Dev server started for session ${sessionId} at ${url}`)
     return { port: entry.port, url }
   }
 
@@ -397,7 +402,7 @@ class BundlerService {
 
     entry.server.close()
     this.devServers.delete(sessionId)
-    log.info(`Dev server stopped for session ${sessionId}`)
+    this.log.info(`Dev server stopped for session ${sessionId}`)
   }
 
   /** 获取 dev server 信息 */
@@ -424,9 +429,9 @@ class BundlerService {
     }
 
     if (result.success) {
-      log.info(`Rebuild OK for session ${sessionId} (${result.duration}ms)`)
+      this.log.info(`Rebuild OK for session ${sessionId} (${result.duration}ms)`)
     } else {
-      log.warn(`Rebuild failed for session ${sessionId}:`, result.errors)
+      this.log.warn(`Rebuild failed for session ${sessionId}:`, result.errors)
     }
 
     return result
@@ -484,7 +489,13 @@ class BundlerService {
     // 默认：host HTML（构建失败时显示 error overlay）
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     if (!entry.buildSuccess) {
-      res.end(errorOverlayHTML(entry.buildErrors.length > 0 ? entry.buildErrors : ['Build failed. Check console for details.']))
+      res.end(
+        errorOverlayHTML(
+          entry.buildErrors.length > 0
+            ? entry.buildErrors
+            : ['Build failed. Check console for details.']
+        )
+      )
     } else {
       res.end(HOST_HTML)
     }
@@ -497,5 +508,3 @@ class BundlerService {
     }
   }
 }
-
-export const bundlerService = new BundlerService()

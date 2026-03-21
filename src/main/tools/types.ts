@@ -59,10 +59,6 @@ export interface ToolContext {
   onSqlReady?: () => void
   /** SQL 运行时销毁回调（storageMode 为销毁前的存储模式） */
   onSqlDestroyed?: (storageMode: 'memory' | 'persistent') => void
-  /** Design preview server 启动回调 */
-  onDesignServerStarted?: (url: string) => void
-  /** Design preview server 停止回调 */
-  onDesignServerStopped?: () => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

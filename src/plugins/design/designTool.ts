@@ -1,13 +1,13 @@
 /**
- * Design 工具 — 管理设计预览项目的初始化、构建和预览
+ * Design 工具 — 管理设计预览项目的初始化、构建和预览（插件版）
  * AI 通过此工具创建脚手架、启动预览面板、触发构建并获取错误信息
  */
 
 import { Type } from '@sinclair/typebox'
-import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
-import { designProjectManager } from '../services/designProjectManager'
-import { bundlerService } from '../services/bundlerService'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { PluginTool, PluginContext, AgentToolResult } from '../../plugin-api'
+import type { DesignProjectManager } from './designProjectManager'
+import type { BundlerService } from './bundlerService'
+
 /** 构建简单文本结果 */
 function textResult(text: string): AgentToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
@@ -34,7 +34,7 @@ const DesignParamsSchema = Type.Object({
   )
 })
 
-export class DesignTool extends BaseTool<typeof DesignParamsSchema> {
+export class DesignTool implements PluginTool<typeof DesignParamsSchema> {
   readonly name = 'design'
   readonly label = 'Design'
   readonly description = `Manage the interactive design preview project. This tool creates and previews React UI components in a sandboxed environment with Tailwind CSS.
@@ -53,59 +53,50 @@ The design project supports:
 
   readonly parameters = DesignParamsSchema
 
-  constructor(private ctx: ToolContext) {
-    super()
-  }
+  constructor(
+    private ctx: PluginContext,
+    private designProjectManager: DesignProjectManager,
+    private bundlerService: BundlerService
+  ) {}
 
-  async preExecute(): Promise<void> {
-    // 无需预初始化资源
-  }
-
-  protected async securityCheck(
+  async execute(
     _toolCallId: string,
-    _params: { action: 'init' | 'preview' },
-    signal?: AbortSignal
-  ): Promise<void> {
-    if (signal?.aborted) throw new Error(TOOL_ABORTED)
-  }
+    params: { action: 'init' | 'preview'; template?: string },
+    signal?: AbortSignal,
+    _onUpdate?: (partialResult: AgentToolResult<unknown>) => void,
+    sessionId?: string
+  ): Promise<AgentToolResult<unknown>> {
+    if (signal?.aborted) throw new Error('Aborted')
 
-  /** 获取当前会话的工作目录 */
-  private getWorkingDir(): string {
-    const config = resolveProjectConfig(this.ctx.sessionId)
-    if (!config.workingDirectory) {
-      throw new Error(
-        `Design tool: no working directory resolved for session ${this.ctx.sessionId}. ` +
+    if (!sessionId) {
+      return textResult('Design tool: sessionId is required but was not provided.')
+    }
+
+    const workingDir = this.ctx.getWorkingDirectory(sessionId)
+    if (!workingDir) {
+      return textResult(
+        `Design tool: no working directory resolved for session ${sessionId}. ` +
           `Please create or select a project, or start a new conversation.`
       )
     }
-    return config.workingDirectory
-  }
-
-  protected async executeInternal(
-    _toolCallId: string,
-    params: { action: 'init' | 'preview'; template?: string },
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
-    if (signal?.aborted) throw new Error(TOOL_ABORTED)
-
-    const workingDir = this.getWorkingDir()
 
     switch (params.action) {
       case 'init':
-        return this.handleInit(workingDir, params.template)
+        return this.handleInit(sessionId, workingDir, params.template)
       case 'preview':
-        return this.handlePreview(workingDir, signal)
+        return this.handlePreview(sessionId, workingDir, signal)
       default:
         return textResult(`Unknown action: ${params.action}`)
     }
   }
 
   private async handleInit(
+    sessionId: string,
     workingDir: string,
     template?: string
   ): Promise<AgentToolResult<undefined>> {
     const tpl = template || 'app'
-    const designDir = await designProjectManager.init(this.ctx.sessionId, workingDir, tpl)
+    const designDir = await this.designProjectManager.init(sessionId, workingDir, tpl)
 
     return textResult(
       `Design project initialized at .shuvix/design/ (template: ${tpl})\n\n` +
@@ -115,26 +106,29 @@ The design project supports:
   }
 
   private async handlePreview(
+    sessionId: string,
     workingDir: string,
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
-    if (signal?.aborted) throw new Error(TOOL_ABORTED)
+    if (signal?.aborted) throw new Error('Aborted')
 
-    const isActive = designProjectManager.isActive(this.ctx.sessionId)
+    const isActive = this.designProjectManager.isActive(sessionId)
 
     if (!isActive) {
       // 首次调用：init + startDev（含首次构建）
-      const serverInfo = await designProjectManager.startDev(this.ctx.sessionId, workingDir)
+      const serverInfo = await this.designProjectManager.startDev(sessionId, workingDir)
 
       // 通知 renderer 打开预览面板
-      this.ctx.onDesignServerStarted?.(serverInfo.url)
+      this.ctx.emitEvent(sessionId, { type: 'plugin:panel_open', url: serverInfo.url })
 
       // startDev 内部已完成首次构建，再 rebuild 一次获取结果
-      const designDir = designProjectManager.getDesignDir(workingDir)
-      const result = await bundlerService.rebuild(this.ctx.sessionId, designDir)
+      const designDir = this.designProjectManager.getDesignDir(workingDir)
+      const result = await this.bundlerService.rebuild(sessionId, designDir)
 
       if (result.success) {
-        return textResult(`Preview started and build OK (${result.duration}ms). The preview panel is now open.`)
+        return textResult(
+          `Preview started and build OK (${result.duration}ms). The preview panel is now open.`
+        )
       } else {
         return textResult(
           `Preview started but build failed:\n\n${(result.errors ?? []).join('\n\n')}\n\nFix the errors and call design tool with action "preview" again.`
@@ -142,8 +136,8 @@ The design project supports:
       }
     } else {
       // 后续调用：rebuild + SSE 自动刷新
-      const designDir = designProjectManager.getDesignDir(workingDir)
-      const result = await bundlerService.rebuild(this.ctx.sessionId, designDir)
+      const designDir = this.designProjectManager.getDesignDir(workingDir)
+      const result = await this.bundlerService.rebuild(sessionId, designDir)
 
       if (result.success) {
         return textResult(`Build OK (${result.duration}ms). Preview refreshed.`)

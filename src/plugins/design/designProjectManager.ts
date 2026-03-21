@@ -1,5 +1,5 @@
 /**
- * DesignProjectManager — 设计项目生命周期管理（单例）
+ * DesignProjectManager — 设计项目生命周期管理（插件版）
  *
  * 职责：
  * - 初始化/脚手架设计项目目录 ({workingDir}/.shuvix/design/)
@@ -7,13 +7,10 @@
  * - per-session 生命周期管理（启动/停止 dev server + watcher）
  */
 
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { existsSync, mkdirSync, cpSync, watch, type FSWatcher } from 'fs'
-import { app } from 'electron'
-import { bundlerService, type DevServerInfo } from './bundlerService'
-import { createLogger } from '../logger'
-
-const log = createLogger('DesignProjectManager')
+import { BundlerService, type DevServerInfo } from './bundlerService'
+import type { PluginLogger } from '../../plugin-api'
 
 /** 设计项目在项目目录中的子路径 */
 const DESIGN_SUBDIR = '.shuvix/design'
@@ -39,8 +36,14 @@ interface DesignProjectState {
 /** rebuild debounce 间隔（ms） */
 const DEBOUNCE_MS = 300
 
-class DesignProjectManager {
+export class DesignProjectManager {
   private sessions = new Map<string, DesignProjectState>()
+
+  constructor(
+    private getResourcePath: (relativePath: string) => string,
+    private log: PluginLogger,
+    private bundlerService: BundlerService
+  ) {}
 
   /** 获取设计项目目录路径 */
   getDesignDir(workingDir: string): string {
@@ -50,10 +53,7 @@ class DesignProjectManager {
   /** 获取指定模板的资源目录 */
   private getTemplateDir(template: string): string {
     const name = VALID_TEMPLATES.has(template) ? template : 'app'
-    const base = app.isPackaged
-      ? join(process.resourcesPath, 'design-templates')
-      : resolve(__dirname, '../../resources/design-templates')
-    return join(base, name)
+    return join(this.getResourcePath('templates'), name)
   }
 
   /** 检查设计项目是否已存在 */
@@ -78,7 +78,7 @@ class DesignProjectManager {
       for (const sub of ['hooks', 'utils', 'types']) {
         mkdirSync(join(designDir, sub), { recursive: true })
       }
-      log.info(`Scaffolded design project (template: ${template}) at ${designDir}`)
+      this.log.info(`Scaffolded design project (template: ${template}) at ${designDir}`)
     }
 
     return designDir
@@ -96,7 +96,7 @@ class DesignProjectManager {
     this.dispose(sessionId)
 
     // 启动 dev server（首次构建在 bundlerService 内完成）
-    const serverInfo = await bundlerService.startDevServer(sessionId, designDir)
+    const serverInfo = await this.bundlerService.startDevServer(sessionId, designDir)
 
     // 启动文件监听
     const state: DesignProjectState = {
@@ -115,15 +115,15 @@ class DesignProjectManager {
       })
 
       state.watcher.on('error', (err) => {
-        log.warn(`File watcher error for session ${sessionId}:`, err)
+        this.log.warn(`File watcher error for session ${sessionId}:`, err)
       })
     } catch (err) {
-      log.warn(`Failed to start file watcher for ${designDir}:`, err)
+      this.log.warn(`Failed to start file watcher for ${designDir}:`, err)
       // watcher 失败不影响 dev server，用户可手动触发 rebuild
     }
 
     this.sessions.set(sessionId, state)
-    log.info(`Design dev started for session ${sessionId}: ${serverInfo.url}`)
+    this.log.info(`Design dev started for session ${sessionId}: ${serverInfo.url}`)
 
     return serverInfo
   }
@@ -156,10 +156,10 @@ class DesignProjectManager {
     }
 
     // 停止 dev server
-    bundlerService.stopDevServer(sessionId)
+    this.bundlerService.stopDevServer(sessionId)
 
     this.sessions.delete(sessionId)
-    log.info(`Design dev stopped for session ${sessionId}`)
+    this.log.info(`Design dev stopped for session ${sessionId}`)
   }
 
   /** 清理所有 session（应用退出时调用） */
@@ -179,12 +179,10 @@ class DesignProjectManager {
     state.rebuildTimer = setTimeout(async () => {
       state.rebuildTimer = null
       try {
-        await bundlerService.rebuild(sessionId, state.designDir)
+        await this.bundlerService.rebuild(sessionId, state.designDir)
       } catch (err) {
-        log.error(`Rebuild failed for session ${sessionId}:`, err)
+        this.log.error(`Rebuild failed for session ${sessionId}:`, err)
       }
     }, DEBOUNCE_MS)
   }
 }
-
-export const designProjectManager = new DesignProjectManager()

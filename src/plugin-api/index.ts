@@ -8,8 +8,12 @@
 // 工具接口
 export type { PluginTool } from './tool'
 
-// 事件类型
-export type { PluginEvent, PluginPanelEvent, PluginStatusEvent } from './events'
+// plugin→main 事件
+export type { PluginEvent, PluginPanelOpenEvent, PluginPanelCloseEvent } from './events'
+
+// main→plugin 事件
+export type { HostEvent, PreviewStartEvent, PreviewStopEvent } from './hostEvents'
+export { HostEventType } from './hostEvents'
 
 // 核心类型
 export type {

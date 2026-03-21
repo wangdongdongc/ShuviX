@@ -22,8 +22,8 @@ function syncPreviewOffset(offset: number): void {
 /** ChatView 容器的 data 属性，用于 DOM 测量 */
 export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
-/** 预览模式：url = 外部网页预览，design = 本地设计项目预览 */
-export type PreviewMode = 'url' | 'design'
+/** 预览模式：url = 外部网页预览，preview = 本地设计项目预览 */
+export type PreviewMode = 'url' | 'preview'
 
 const PREVIEW_MIN = 320
 const PREVIEW_MAX = 960
@@ -51,14 +51,14 @@ interface PreviewState {
   close: () => void
   setUrl: (url: string) => void
   setWidth: (width: number) => void
-  /** 打开设计预览模式 */
-  openDesign: (designUrl: string) => void
+  /** 打开预览模式 */
+  openPreview: (previewUrl: string) => void
   /** 切换回 URL 模式 */
   switchToUrl: () => void
-  /** 手动启动 design dev server */
-  startDesignServer: (sessionId: string, workingDir: string) => Promise<void>
-  /** 手动停止 design dev server */
-  stopDesignServer: (sessionId: string) => Promise<void>
+  /** 手动启动 preview server */
+  startPreviewServer: (sessionId: string, workingDir: string) => void
+  /** 手动停止 preview server */
+  stopPreviewServer: (sessionId: string) => void
   /** 设置 server 运行状态（供外部事件同步） */
   setServerRunning: (running: boolean) => void
 }
@@ -164,16 +164,16 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
     }
   },
 
-  openDesign: (designUrl) => {
+  openPreview: (previewUrl) => {
     const { isOpen, width } = get()
     if (!isOpen) {
       const chatWidth = measureChatWidth()
-      set({ isOpen: true, lockedChatWidth: chatWidth, mode: 'design', designUrl })
+      set({ isOpen: true, lockedChatWidth: chatWidth, mode: 'preview', designUrl: previewUrl })
       syncPreviewOffset(totalOffset(width))
       persistPanelLayout({ previewOpen: true })
       unlockAfterAnimate(adjustWindowWidth(totalOffset(width)))
     } else {
-      set({ mode: 'design', designUrl })
+      set({ mode: 'preview', designUrl: previewUrl })
     }
   },
   switchToUrl: () => {
@@ -182,31 +182,13 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
 
   setServerRunning: (running) => set({ isServerRunning: running }),
 
-  startDesignServer: async (sessionId, workingDir) => {
+  startPreviewServer: (sessionId, workingDir) => {
     set({ isStartingServer: true })
-    try {
-      // 确保脚手架已初始化
-      await window.api.design.init({ sessionId, workingDir })
-      // 启动 dev server
-      const info = await window.api.design.startDev({ sessionId, workingDir })
-      // WebUI 模式下通过反向代理访问
-      let designUrl = info.url
-      if (window.api?.app?.platform === 'web') {
-        designUrl = `${window.location.origin}/shuvix/design/${sessionId}/`
-      }
-      get().openDesign(designUrl)
-      set({ isServerRunning: true, isStartingServer: false })
-    } catch {
-      set({ isStartingServer: false })
-    }
+    window.api.preview.start({ sessionId, workingDir })
   },
 
-  stopDesignServer: async (sessionId) => {
-    try {
-      await window.api.design.stopDev({ sessionId })
-    } catch {
-      /* ignore */
-    }
+  stopPreviewServer: (sessionId) => {
+    window.api.preview.stop({ sessionId })
     set({ isServerRunning: false })
     get().switchToUrl()
   }

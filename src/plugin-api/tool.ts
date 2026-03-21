@@ -34,6 +34,7 @@ export interface PluginTool<TParams extends TSchema = TSchema> {
     toolCallId: string,
     params: Static<TParams>,
     signal?: AbortSignal,
-    onUpdate?: (partialResult: AgentToolResult<unknown>) => void
+    onUpdate?: (partialResult: AgentToolResult<unknown>) => void,
+    sessionId?: string
   ): Promise<AgentToolResult<unknown>>
 }

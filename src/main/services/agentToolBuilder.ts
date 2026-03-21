@@ -12,12 +12,13 @@ import { PythonTool } from '../tools/python'
 import { SqlTool } from '../tools/sql'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
-import { DesignTool } from '../tools/design'
 import { SkillTool } from '../tools/skill'
 import { subAgentRegistry, SubAgentTool, type SubAgentModelConfig } from '../subagent'
 import { BaseTool, type ToolContext } from '../tools/types'
 import { mcpService } from './mcpService'
 import { parallelCoordinator } from './parallelExecution'
+import { pluginRegistry } from './pluginRegistry'
+import { PluginToolAdapter } from './pluginToolAdapter'
 import type { ChatEvent } from '../frontend'
 
 type AnyAgentTool = AgentState['tools'][number]
@@ -74,8 +75,14 @@ export function buildTools(
     python: new PythonTool(ctx),
     sql: new SqlTool(ctx),
     'shuvix-project': new ShuvixProjectTool(ctx),
-    'shuvix-setting': new ShuvixSettingTool(ctx),
-    design: new DesignTool(ctx)
+    'shuvix-setting': new ShuvixSettingTool(ctx)
+  }
+
+  // 插件贡献的工具
+  for (const { contribution } of pluginRegistry.getActivatedEntries()) {
+    for (const tool of contribution.tools ?? []) {
+      builtinAll[tool.name] = new PluginToolAdapter(tool, ctx)
+    }
   }
 
   // 子智能体工具（仅主 Agent 有 SubAgentBuildContext 时注册，子智能体不传此参数，天然防递归）

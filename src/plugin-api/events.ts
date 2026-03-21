@@ -1,29 +1,25 @@
 /**
- * PluginEvent — 插件→主程序的事件协议
+ * PluginEvent — 插件→主程序的事件定义
  *
  * 插件通过 PluginContext.emitEvent() 发出事件，
- * 主程序负责将其转换为 ChatEvent 并广播到 renderer。
+ * 主程序消费事件并翻译为自己的 ChatEvent 广播到 renderer。
+ *
+ * 所有事件结构在此完整定义，每增加新的插件需求，在此添加具体的事件类型。
  */
 
-/** 面板事件 — 打开/关闭 URL 面板（泛化了 ChatDesignEvent） */
-export interface PluginPanelEvent {
-  type: 'plugin_panel'
-  /** 打开或关闭面板 */
-  action: 'open' | 'close'
-  /** 面板中加载的 URL（仅 open 时需要） */
-  url?: string
+/** 插件请求打开 URL 面板 */
+export interface PluginPanelOpenEvent {
+  type: 'plugin:panel_open'
+  /** 面板中加载的 URL */
+  url: string
   /** 面板标题 */
   title?: string
 }
 
-/** 状态事件 — 通用生命周期通知 */
-export interface PluginStatusEvent {
-  type: 'plugin_status'
-  /** 自定义动作标识 */
-  action: string
-  /** 附加数据 */
-  data?: Record<string, unknown>
+/** 插件请求关闭面板 */
+export interface PluginPanelCloseEvent {
+  type: 'plugin:panel_close'
 }
 
-/** 插件可发出的事件联合类型 */
-export type PluginEvent = PluginPanelEvent | PluginStatusEvent
+/** plugin→main 事件联合类型 */
+export type PluginEvent = PluginPanelOpenEvent | PluginPanelCloseEvent

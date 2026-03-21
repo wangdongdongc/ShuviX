@@ -201,12 +201,6 @@ export class AgentSession {
       onSqlDestroyed: (storageMode) => {
         session.emitSqlEvent('runtime_destroyed', storageMode)
       },
-      onDesignServerStarted: (url) => {
-        session.emitDesignEvent('server_started', url)
-      },
-      onDesignServerStopped: () => {
-        session.emitDesignEvent('server_stopped')
-      }
     }
 
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
@@ -741,13 +735,4 @@ export class AgentSession {
     })
   }
 
-  /** 通知前端 Design Preview 生命周期事件 */
-  emitDesignEvent(action: 'server_started' | 'server_stopped', url?: string): void {
-    chatFrontendRegistry.broadcast({
-      type: 'design_event',
-      sessionId: this.sessionId,
-      action,
-      url
-    })
-  }
 }

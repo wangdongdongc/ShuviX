@@ -174,11 +174,12 @@ export interface ChatSqlEvent extends ChatEventBase {
   storageMode: 'memory' | 'persistent'
 }
 
-/** Design Preview 生命周期事件（轻量通知，不持久化为消息） */
-export interface ChatDesignEvent extends ChatEventBase {
-  type: 'design_event'
-  action: 'server_started' | 'server_stopped'
+/** 预览面板生命周期事件（轻量通知，不持久化为消息；泛化了原 ChatDesignEvent） */
+export interface ChatPreviewEvent extends ChatEventBase {
+  type: 'preview_event'
+  action: 'open' | 'close'
   url?: string
+  title?: string
 }
 
 /** ACP Agent session 生命周期事件（轻量通知，不持久化为消息） */
@@ -285,7 +286,7 @@ export type ChatEvent =
   | ChatSshEvent
   | ChatPythonEvent
   | ChatSqlEvent
-  | ChatDesignEvent
+  | ChatPreviewEvent
   | ChatAcpEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent

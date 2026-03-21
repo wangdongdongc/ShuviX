@@ -5,8 +5,6 @@ import { sessionService } from '../../services/sessionService'
 import { providerService } from '../../services/providerService'
 import { settingsService } from '../../services/settingsService'
 import { webUIService, type ShareMode } from '../../services/webUIService'
-import { designProjectManager } from '../../services/designProjectManager'
-import { bundlerService } from '../../services/bundlerService'
 import { createLogger } from '../../logger'
 
 const log = createLogger('WebUI:API')
@@ -106,14 +104,13 @@ export function createApiRouter(): Router {
 
   // ─── Design Preview 状态（readonly） ────────────
 
+  // Design preview status endpoint removed during plugin migration.
+  // Preview state is now managed by the design plugin via events.
   router.get(
     '/sessions/:id/design',
     modeGuard('readonly'),
     wrapRoute((_req, res) => {
-      const sessionId = getSessionId(_req)
-      const active = designProjectManager.isActive(sessionId)
-      const serverInfo = active ? bundlerService.getDevServerInfo(sessionId) : null
-      res.json({ active, server: serverInfo })
+      res.json({ active: false, server: null })
     })
   )
 

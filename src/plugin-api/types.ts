@@ -7,6 +7,7 @@
 
 import type { PluginTool } from './tool'
 import type { PluginEvent } from './events'
+import type { HostEvent } from './hostEvents'
 
 // ─── 日志 ──────────────────────────────────────────────
 
@@ -20,18 +21,15 @@ export interface PluginLogger {
 
 // ─── 插件上下文 ──────────────────────────────────────────
 
-/** 插件运行时上下文 — 由主程序构造并在 activate 时注入 */
+/** 插件运行时上下文 — 由主程序构造并在 activate 时注入，全局唯一（不绑定特定 session） */
 export interface PluginContext {
-  /** 当前会话 ID */
-  readonly sessionId: string
+  /** 获取指定会话的工作目录 */
+  getWorkingDirectory(sessionId: string): string
 
-  /** 获取当前会话的工作目录（替代 resolveProjectConfig） */
-  getWorkingDirectory(): string
+  /** 发出事件到 renderer（sessionId 指定目标会话） */
+  emitEvent(sessionId: string, event: PluginEvent): void
 
-  /** 发出事件到 renderer（替代 ToolContext 上的 onXxxStarted 回调） */
-  emitEvent(event: PluginEvent): void
-
-  /** 获取应用资源路径（封装 app.isPackaged 判断，插件无需依赖 Electron） */
+  /** 获取插件独立资源路径（自动限定在插件自身的资源目录下） */
   getResourcePath(relativePath: string): string
 
   /** 作用域日志 */
@@ -64,6 +62,8 @@ export interface PluginContribution {
   tools?: PluginTool[]
   /** 项目用途引导（新建项目向导中的用途选项） */
   purpose?: PluginPurpose
+  /** 事件消费者 — 接收主程序分发的业务事件（完整类型定义见 hostEvents.ts） */
+  onEvent?: (event: HostEvent) => void
 }
 
 // ─── 插件入口 ──────────────────────────────────────────

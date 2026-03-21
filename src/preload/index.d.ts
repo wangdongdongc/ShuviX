@@ -165,10 +165,11 @@ declare global {
     action: 'runtime_ready' | 'runtime_destroyed'
     storageMode: 'memory' | 'persistent'
   }
-  interface ChatDesignEvent extends ChatEventBase {
-    type: 'design_event'
-    action: 'server_started' | 'server_stopped'
+  interface ChatPreviewEvent extends ChatEventBase {
+    type: 'preview_event'
+    action: 'open' | 'close'
     url?: string
+    title?: string
   }
   interface ChatAcpEvent extends ChatEventBase {
     type: 'acp_event'
@@ -260,7 +261,7 @@ declare global {
     | ChatSshEvent
     | ChatPythonEvent
     | ChatSqlEvent
-    | ChatDesignEvent
+    | ChatPreviewEvent
     | ChatAcpEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
@@ -720,22 +721,19 @@ declare global {
       /** 取消下载任务 */
       cancel: (taskId: string) => Promise<{ success: boolean }>
     }
-    design: {
-      /** 初始化设计项目（创建脚手架） */
-      init: (params: { sessionId: string; workingDir: string; template?: string }) => Promise<{ designDir: string }>
-      /** 启动 dev server + 文件监听 */
-      startDev: (params: {
-        sessionId: string
-        workingDir: string
-        template?: string
-      }) => Promise<{ port: number; url: string }>
-      /** 停止 dev server + 文件监听 */
-      stopDev: (params: { sessionId: string }) => Promise<{ success: boolean }>
-      /** 查询状态 */
-      status: (params: { sessionId: string }) => Promise<{
-        active: boolean
-        server: { port: number; url: string } | null
-      }>
+    preview: {
+      start: (params: { sessionId: string; workingDir: string }) => void
+      stop: (params: { sessionId: string }) => void
+    }
+    plugin: {
+      purposes: () => Promise<Array<{
+        key: string
+        icon: string
+        labelKey: string
+        tipKey: string
+        i18n: Record<string, Record<string, string>>
+        enabledTools: string[]
+      }>>
     }
     skill: {
       list: () => Promise<Skill[]>

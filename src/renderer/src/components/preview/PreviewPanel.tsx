@@ -24,7 +24,7 @@ export function PreviewPanel(): React.JSX.Element {
     url, width, mode, designUrl,
     setUrl, switchToUrl,
     isStartingServer, isServerRunning,
-    startDesignServer, stopDesignServer
+    startPreviewServer, stopPreviewServer
   } = usePreviewStore()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
@@ -48,8 +48,8 @@ export function PreviewPanel(): React.JSX.Element {
   }, [])
 
   // 实际显示的 URL：design 模式用 designUrl，url 模式用 url
-  const activeUrl = mode === 'design' && designUrl ? designUrl : url
-  const isDesignMode = mode === 'design'
+  const activeUrl = mode === 'preview' && designUrl ? designUrl : url
+  const isDesignMode = mode === 'preview'
 
   // 外部 url 变化时同步到输入框（仅 url 模式）
   useEffect(() => {
@@ -114,15 +114,15 @@ export function PreviewPanel(): React.JSX.Element {
   }, [activeUrl])
 
   // ====== Server 生命周期 ======
-  const handleStartServer = useCallback(async () => {
+  const handleStartServer = useCallback(() => {
     if (!activeSessionId || !projectPath) return
-    await startDesignServer(activeSessionId, projectPath)
-  }, [activeSessionId, projectPath, startDesignServer])
+    startPreviewServer(activeSessionId, projectPath)
+  }, [activeSessionId, projectPath, startPreviewServer])
 
-  const handleStopServer = useCallback(async () => {
+  const handleStopServer = useCallback(() => {
     if (!activeSessionId) return
-    await stopDesignServer(activeSessionId)
-  }, [activeSessionId, stopDesignServer])
+    stopPreviewServer(activeSessionId)
+  }, [activeSessionId, stopPreviewServer])
 
   const isBlank = !isDesignMode && url === 'about:blank'
   const btnClass = 'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
@@ -197,7 +197,7 @@ export function PreviewPanel(): React.JSX.Element {
           <div className="titlebar-no-drag flex-1 min-w-0">
             <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1">
               <Palette size={10} className="flex-shrink-0 text-accent" />
-              <span className="text-[11px] text-text-secondary truncate">Design Preview</span>
+              <span className="text-[11px] text-text-secondary truncate">Preview</span>
             </div>
           </div>
         ) : (

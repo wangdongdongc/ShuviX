@@ -247,16 +247,15 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'design_event':
-        if (event.action === 'server_started' && event.url) {
-          // WebUI 模式下通过反向代理访问，避免直连 dev server 端口
-          let designUrl = event.url
+      case 'preview_event':
+        if (event.action === 'open' && event.url) {
+          let url = event.url
           if (window.api?.app?.platform === 'web') {
-            designUrl = `${window.location.origin}/shuvix/design/${sid}/`
+            url = `${window.location.origin}/shuvix/preview/${sid}/`
           }
-          usePreviewStore.getState().openDesign(designUrl)
+          usePreviewStore.getState().openPreview(url)
           usePreviewStore.getState().setServerRunning(true)
-        } else if (event.action === 'server_stopped') {
+        } else if (event.action === 'close') {
           usePreviewStore.getState().setServerRunning(false)
         }
         break
