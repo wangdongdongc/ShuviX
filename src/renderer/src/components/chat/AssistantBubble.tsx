@@ -11,7 +11,12 @@ import { CodeBlock } from './CodeBlock'
 import { StepBlock } from './StepBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { SubAgentBlock } from './SubAgentBlock'
-import { useChatStore, type AssistantTextMessage } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectStreamingToolCall,
+  selectCompletedStreamingToolCalls,
+  type AssistantTextMessage
+} from '../../stores/chatStore'
 import { useTtsPlayback } from '../../hooks/useTtsPlayback'
 import type { StepItem } from './types'
 
@@ -55,6 +60,8 @@ export const AssistantBubble = memo(function AssistantBubble({
   const isThisLoading = isLoading && playingMessageId === msg.id
 
   const thinking = streamingThinking || msg.metadata?.thinking || null
+  const streamingToolCall = useChatStore(selectStreamingToolCall)
+  const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
   const usage = msg.metadata?.usage
 
   const handleCopy = (): void => {
@@ -64,7 +71,7 @@ export const AssistantBubble = memo(function AssistantBubble({
   }
 
   return (
-    <div className="group flex gap-3 px-4 py-3 bg-bg-secondary/30">
+    <div className="group flex gap-3 px-4 py-3 bg-bg-secondary/50">
       {/* 头像 */}
       <div className="flex-shrink-0 w-7 h-7 rounded-lg overflow-hidden mt-0.5">
         <img src={assistantAvatar} alt="assistant" className="w-full h-full object-cover" />
@@ -185,32 +192,46 @@ export const AssistantBubble = memo(function AssistantBubble({
           </div>
         )}
 
-        {/* 思考过程 */}
-        {thinking && (
-          <details open={!!streamingThinking} className="group mb-2">
-            <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
-              <svg
-                className="w-3 h-3 transition-transform group-open:rotate-90"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-              <span className={streamingThinking ? 'animate-pulse' : ''}>
-                {t('message.deepThought')}
-              </span>
-            </summary>
-            <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-              {thinking}
-            </div>
-          </details>
-        )}
+        {/* 思考过程 — 有后续内容时转为紧凑 StepBlock，否则展示实时流式 details */}
+        {thinking &&
+          (msg.content || streamingToolCall ? (
+            <StepBlock
+              message={{
+                id: 'streaming-thinking',
+                sessionId: msg.sessionId,
+                role: 'assistant' as const,
+                type: 'step_thinking' as const,
+                content: thinking,
+                metadata: null,
+                model: msg.model,
+                createdAt: msg.createdAt
+              }}
+            />
+          ) : (
+            <details open={!!streamingThinking} className="group mb-2">
+              <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
+                <svg
+                  className="w-3 h-3 transition-transform group-open:rotate-90"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+                <span className={streamingThinking ? 'animate-pulse' : ''}>
+                  {t('message.deepThought')}
+                </span>
+              </summary>
+              <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+                {thinking}
+              </div>
+            </details>
+          ))}
 
         {/* Markdown / 原始文本 */}
         {showRaw ? (
@@ -228,10 +249,30 @@ export const AssistantBubble = memo(function AssistantBubble({
             >
               {msg.content}
             </ReactMarkdown>
-            {isStreaming && (
+            {isStreaming && msg.content && !streamingToolCall && (
               <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
             )}
           </div>
+        )}
+
+        {/* 已完成生成的工具调用（等待执行） */}
+        {isStreaming &&
+          completedStreamingToolCalls.map((tc, i) => (
+            <ToolCallBlock
+              key={`completed-tc-${i}`}
+              toolName={tc.toolName}
+              args={tc.args}
+              status="pending"
+            />
+          ))}
+
+        {/* 当前正在生成的工具调用 */}
+        {isStreaming && streamingToolCall && (
+          <ToolCallBlock
+            toolName={streamingToolCall.toolName}
+            streamingArgsText={streamingToolCall.argsText}
+            status="generating"
+          />
         )}
 
         {/* 持久化图片 */}

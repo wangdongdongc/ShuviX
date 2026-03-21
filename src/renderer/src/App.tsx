@@ -2,7 +2,9 @@ import { useEffect } from 'react'
 import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { usePreviewStore, CHAT_CONTAINER_ATTR } from './stores/previewStore'
+import { useSidebarStore } from './stores/sidebarStore'
 import { Sidebar } from './components/sidebar/Sidebar'
+import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle'
 import { ChatView } from './components/chat/ChatView'
 import { PreviewPanel } from './components/preview/PreviewPanel'
 import { PreviewResizeHandle } from './components/preview/PreviewResizeHandle'
@@ -28,6 +30,8 @@ function App(): React.JSX.Element {
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
   const isPreviewOpen = usePreviewStore((s) => s.isOpen)
   const lockedChatWidth = usePreviewStore((s) => s.lockedChatWidth)
+  const isSidebarOpen = useSidebarStore((s) => s.isOpen)
+  const sidebarWidth = useSidebarStore((s) => s.width)
 
   // ========== 核心流程 hook ==========
   useAppInit()
@@ -71,10 +75,16 @@ function App(): React.JSX.Element {
 
   // 主窗口：侧边栏 + 聊天区 + 预览面板
   return (
-    <div className="flex h-full">
-      <div className="w-[240px] flex-shrink-0">
-        <Sidebar />
+    <div className="flex h-full bg-bg-primary">
+      <div
+        className="flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out"
+        style={{ width: isSidebarOpen ? sidebarWidth : 0 }}
+      >
+        <div className="h-full" style={{ width: sidebarWidth }}>
+          <Sidebar />
+        </div>
       </div>
+      {isSidebarOpen && <SidebarResizeHandle />}
       <div
         {...{ [CHAT_CONTAINER_ATTR]: true }}
         className="min-w-[400px] bg-bg-primary"
@@ -82,8 +92,8 @@ function App(): React.JSX.Element {
       >
         <ChatView />
       </div>
-      {isPreviewOpen && <PreviewResizeHandle />}
-      {isPreviewOpen && <PreviewPanel />}
+      {(isPreviewOpen || lockedChatWidth != null) && <PreviewResizeHandle />}
+      {(isPreviewOpen || lockedChatWidth != null) && <PreviewPanel />}
     </div>
   )
 }

@@ -248,6 +248,13 @@ export function createWebApi(): typeof window.api {
         api(`/sessions/${sid}/ssh/disconnect`, { method: 'POST', body: '{}' })
     },
 
+    design: {
+      init: noop,
+      startDev: noop,
+      stopDev: noop,
+      status: (p: { sessionId: string }) => api(`/sessions/${p.sessionId}/design`)
+    },
+
     sshCredential: {
       list: () => Promise.resolve([]),
       add: () => Promise.resolve({ id: '' }),

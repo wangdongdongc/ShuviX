@@ -58,6 +58,16 @@ export interface ChatAgentEndEvent extends ChatEventBase {
   usage?: ChatTokenUsage
 }
 
+// ─── 工具调用生成 ──────────────────────────────────────
+
+/** 工具调用正在生成中（LLM 正在输出 tool_use 块，尚未开始执行） */
+export interface ChatToolCallGeneratingEvent extends ChatEventBase {
+  type: 'toolcall_generating'
+  toolName: string
+  /** 参数 JSON 增量文本（与 text_delta 类似，前端累积拼接） */
+  argsDelta?: string
+}
+
 // ─── 工具执行 ──────────────────────────────────────────
 
 /** 工具开始执行 */
@@ -160,6 +170,15 @@ export interface ChatPythonEvent extends ChatEventBase {
 export interface ChatSqlEvent extends ChatEventBase {
   type: 'sql_event'
   action: 'runtime_ready' | 'runtime_destroyed'
+  /** 存储模式：memory=内存临时 / persistent=项目文件夹持久化 */
+  storageMode: 'memory' | 'persistent'
+}
+
+/** Design Preview 生命周期事件（轻量通知，不持久化为消息） */
+export interface ChatDesignEvent extends ChatEventBase {
+  type: 'design_event'
+  action: 'server_started' | 'server_stopped'
+  url?: string
 }
 
 /** ACP Agent session 生命周期事件（轻量通知，不持久化为消息） */
@@ -255,6 +274,7 @@ export type ChatEvent =
   | ChatTextEndEvent
   | ChatStepEndEvent
   | ChatAgentEndEvent
+  | ChatToolCallGeneratingEvent
   | ChatToolStartEvent
   | ChatToolEndEvent
   | ChatApprovalRequestEvent
@@ -265,6 +285,7 @@ export type ChatEvent =
   | ChatSshEvent
   | ChatPythonEvent
   | ChatSqlEvent
+  | ChatDesignEvent
   | ChatAcpEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent

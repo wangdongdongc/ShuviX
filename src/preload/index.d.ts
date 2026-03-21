@@ -91,6 +91,11 @@ declare global {
       }>
     }
   }
+  interface ChatToolCallGeneratingEvent extends ChatEventBase {
+    type: 'toolcall_generating'
+    toolName: string
+    argsDelta?: string
+  }
   interface ChatToolStartEvent extends ChatEventBase {
     type: 'tool_start'
     toolCallId: string
@@ -158,6 +163,12 @@ declare global {
   interface ChatSqlEvent extends ChatEventBase {
     type: 'sql_event'
     action: 'runtime_ready' | 'runtime_destroyed'
+    storageMode: 'memory' | 'persistent'
+  }
+  interface ChatDesignEvent extends ChatEventBase {
+    type: 'design_event'
+    action: 'server_started' | 'server_stopped'
+    url?: string
   }
   interface ChatAcpEvent extends ChatEventBase {
     type: 'acp_event'
@@ -238,6 +249,7 @@ declare global {
     | ChatTextEndEvent
     | ChatStepEndEvent
     | ChatAgentEndEvent
+    | ChatToolCallGeneratingEvent
     | ChatToolStartEvent
     | ChatToolEndEvent
     | ChatApprovalRequestEvent
@@ -248,6 +260,7 @@ declare global {
     | ChatSshEvent
     | ChatPythonEvent
     | ChatSqlEvent
+    | ChatDesignEvent
     | ChatAcpEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
@@ -275,10 +288,16 @@ declare global {
     access?: 'readonly' | 'readwrite'
   }
 
+  /** 工具扩展配置 */
+  interface ToolSettings {
+    pglitePersist?: boolean
+  }
+
   /** 项目扩展配置 */
   interface ProjectSettings {
     enabledTools?: string[]
     referenceDirs?: ReferenceDir[]
+    tool?: ToolSettings
   }
 
   /** 项目类型 */
@@ -550,7 +569,9 @@ declare global {
       destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }
     sql: {
-      sessionStatus: (sessionId: string) => Promise<{ ready: boolean } | null>
+      sessionStatus: (
+        sessionId: string
+      ) => Promise<{ ready: boolean; storageMode: 'memory' | 'persistent' } | null>
       destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }
     sshCredential: {
@@ -698,6 +719,22 @@ declare global {
       onProgress: (callback: (progress: DownloadProgress) => void) => () => void
       /** 取消下载任务 */
       cancel: (taskId: string) => Promise<{ success: boolean }>
+    }
+    design: {
+      /** 初始化设计项目（创建脚手架） */
+      init: (params: { sessionId: string; workingDir: string }) => Promise<{ designDir: string }>
+      /** 启动 dev server + 文件监听 */
+      startDev: (params: {
+        sessionId: string
+        workingDir: string
+      }) => Promise<{ port: number; url: string }>
+      /** 停止 dev server + 文件监听 */
+      stopDev: (params: { sessionId: string }) => Promise<{ success: boolean }>
+      /** 查询状态 */
+      status: (params: { sessionId: string }) => Promise<{
+        active: boolean
+        server: { port: number; url: string } | null
+      }>
     }
     skill: {
       list: () => Promise<Skill[]>

@@ -1,31 +1,62 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  X,
   ArrowLeft,
   ArrowRight,
   RotateCw,
   ExternalLink,
   Globe,
-  Square
+  Square,
+  Palette,
+  Play,
+  Loader2
 } from 'lucide-react'
 import { usePreviewStore } from '../../stores/previewStore'
+import { useChatStore } from '../../stores/chatStore'
 
 /**
  * Preview 侧边面板 — 右侧 iframe 预览区
- * 包含工具栏（导航、URL 栏、操作按钮）和内容区
+ * 支持两种模式：
+ * - url: 外部网页预览（输入 URL）
+ * - design: 本地设计项目预览（esbuild-wasm 打包）
  */
 export function PreviewPanel(): React.JSX.Element {
-  const { url, width, setUrl, close } = usePreviewStore()
+  const {
+    url, width, mode, designUrl,
+    setUrl, switchToUrl,
+    isStartingServer, isServerRunning,
+    startDesignServer, stopDesignServer
+  } = usePreviewStore()
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const projectPath = useChatStore((s) => s.projectPath)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   // ====== 状态 ======
   const [inputUrl, setInputUrl] = useState(url)
   const [isLoading, setIsLoading] = useState(false)
+  const [contentHeight, setContentHeight] = useState(0)
 
-  // 外部 url 变化时同步到输入框
+  // 监测内容区高度变化
   useEffect(() => {
-    setInputUrl(url)
-  }, [url])
+    const el = contentRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setContentHeight(Math.round(entry.contentRect.height))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // 实际显示的 URL：design 模式用 designUrl，url 模式用 url
+  const activeUrl = mode === 'design' && designUrl ? designUrl : url
+  const isDesignMode = mode === 'design'
+
+  // 外部 url 变化时同步到输入框（仅 url 模式）
+  useEffect(() => {
+    if (!isDesignMode) {
+      setInputUrl(url)
+    }
+  }, [url, isDesignMode])
 
   /** 提交 URL 导航 */
   const handleNavigate = useCallback(() => {
@@ -35,9 +66,13 @@ export function PreviewPanel(): React.JSX.Element {
     if (!/^https?:\/\//i.test(target) && target !== 'about:blank') {
       target = 'https://' + target
     }
+    // 如果在 design 模式下手动输入 URL，切换到 url 模式
+    if (isDesignMode) {
+      switchToUrl()
+    }
     setUrl(target)
     setIsLoading(true)
-  }, [inputUrl, setUrl])
+  }, [inputUrl, setUrl, isDesignMode, switchToUrl])
 
   /** iframe 加载完成 */
   const handleIframeLoad = useCallback(() => {
@@ -62,8 +97,8 @@ export function PreviewPanel(): React.JSX.Element {
   const handleRefresh = useCallback(() => {
     if (!iframeRef.current) return
     setIsLoading(true)
-    iframeRef.current.src = url
-  }, [url])
+    iframeRef.current.src = activeUrl
+  }, [activeUrl])
   const handleStop = useCallback(() => {
     try {
       iframeRef.current?.contentWindow?.stop()
@@ -73,12 +108,24 @@ export function PreviewPanel(): React.JSX.Element {
     setIsLoading(false)
   }, [])
   const handleOpenExternal = useCallback(() => {
-    if (url && url !== 'about:blank') {
-      window.open(url, '_blank')
+    if (activeUrl && activeUrl !== 'about:blank') {
+      window.open(activeUrl, '_blank')
     }
-  }, [url])
+  }, [activeUrl])
 
-  const isBlank = url === 'about:blank'
+  // ====== Server 生命周期 ======
+  const handleStartServer = useCallback(async () => {
+    if (!activeSessionId || !projectPath) return
+    await startDesignServer(activeSessionId, projectPath)
+  }, [activeSessionId, projectPath, startDesignServer])
+
+  const handleStopServer = useCallback(async () => {
+    if (!activeSessionId) return
+    await stopDesignServer(activeSessionId)
+  }, [activeSessionId, stopDesignServer])
+
+  const isBlank = !isDesignMode && url === 'about:blank'
+  const btnClass = 'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
 
   return (
     <div
@@ -88,93 +135,105 @@ export function PreviewPanel(): React.JSX.Element {
 
       {/* ====== 工具栏 ====== */}
       <div
-        className={`titlebar-drag flex-shrink-0 flex items-center gap-1 px-2 border-b border-border-primary ${window.api?.app?.platform === 'darwin' ? 'min-h-12 pt-7' : 'min-h-10'}`}
+        className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-primary"
       >
-        {/* 加载 / 停止 */}
+        {/* Start / Stop 按钮 */}
         <div className="titlebar-no-drag flex items-center">
-          {isLoading ? (
+          {isStartingServer ? (
             <button
-              onClick={handleStop}
-              className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-              title="Stop"
+              disabled
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-text-tertiary cursor-not-allowed"
+              title="Starting..."
             >
-              <Square size={13} />
+              <Loader2 size={10} className="animate-spin" />
+              <span>Starting...</span>
+            </button>
+          ) : isServerRunning ? (
+            <button
+              onClick={handleStopServer}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-error hover:text-error hover:bg-error/10 transition-colors"
+              title="Stop preview server"
+            >
+              <Square size={10} fill="currentColor" />
+              <span>Stop</span>
             </button>
           ) : (
             <button
-              onClick={handleRefresh}
-              className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-              title="Refresh"
+              onClick={handleStartServer}
+              disabled={!activeSessionId || !projectPath}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Start preview server"
             >
-              <RotateCw size={13} />
+              <Play size={10} fill="currentColor" />
+              <span>Start</span>
             </button>
           )}
         </div>
 
-        {/* 导航 */}
+        {/* 分隔线 */}
+        <div className="w-px h-3.5 bg-border-secondary/60 mx-1 flex-shrink-0" />
+
+        {/* 导航：后退、前进、刷新/停止加载 */}
         <div className="titlebar-no-drag flex items-center">
-          <button
-            onClick={handleBack}
-            className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title="Back"
-          >
-            <ArrowLeft size={14} />
+          <button onClick={handleBack} className={btnClass} title="Back">
+            <ArrowLeft size={12} />
           </button>
-          <button
-            onClick={handleForward}
-            className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title="Forward"
-          >
-            <ArrowRight size={14} />
+          <button onClick={handleForward} className={btnClass} title="Forward">
+            <ArrowRight size={12} />
           </button>
+          {isLoading ? (
+            <button onClick={handleStop} className={btnClass} title="Stop">
+              <Square size={11} />
+            </button>
+          ) : (
+            <button onClick={handleRefresh} className={btnClass} title="Refresh">
+              <RotateCw size={11} />
+            </button>
+          )}
         </div>
 
-        {/* URL 栏 */}
-        <form
-          className="titlebar-no-drag flex-1 min-w-0"
-          onSubmit={(e) => {
-            e.preventDefault()
-            handleNavigate()
-          }}
-        >
-          <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-2 py-1 gap-1.5 transition-colors focus-within:border-accent/40">
-            <Globe size={12} className="flex-shrink-0 text-text-tertiary" />
-            <input
-              type="text"
-              value={inputUrl === 'about:blank' ? '' : inputUrl}
-              onChange={(e) => setInputUrl(e.target.value)}
-              placeholder="Enter URL..."
-              className="flex-1 min-w-0 bg-transparent text-xs text-text-primary outline-none placeholder:text-text-tertiary"
-            />
+        {/* URL 栏 / Design 模式标签 */}
+        {isDesignMode ? (
+          <div className="titlebar-no-drag flex-1 min-w-0">
+            <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1">
+              <Palette size={10} className="flex-shrink-0 text-accent" />
+              <span className="text-[11px] text-text-secondary truncate">Design Preview</span>
+            </div>
           </div>
-        </form>
+        ) : (
+          <form
+            className="titlebar-no-drag flex-1 min-w-0"
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleNavigate()
+            }}
+          >
+            <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1 transition-colors focus-within:border-accent/40">
+              <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
+              <input
+                type="text"
+                value={inputUrl === 'about:blank' ? '' : inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                placeholder="Enter URL or start a preview server..."
+                className="flex-1 min-w-0 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
+              />
+            </div>
+          </form>
+        )}
 
-        {/* 右侧操作按钮 */}
-        <div className="titlebar-no-drag flex items-center gap-0.5">
-          <button
-            onClick={handleOpenExternal}
-            className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title="Open in browser"
-          >
-            <ExternalLink size={13} />
-          </button>
-          <button
-            onClick={close}
-            className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title="Close preview"
-          >
-            <X size={14} />
+        {/* 在浏览器中打开 */}
+        <div className="titlebar-no-drag flex items-center">
+          <button onClick={handleOpenExternal} className={btnClass} title="Open in browser">
+            <ExternalLink size={11} />
           </button>
         </div>
       </div>
 
       {/* ====== 内容区 ====== */}
-      <div className="flex-1 min-h-0 relative">
+      <div ref={contentRef} className="flex-1 min-h-0 relative">
         {isBlank ? (
-          /* 空白占位 */
-          <div className="flex flex-col items-center justify-center h-full text-text-tertiary gap-3 select-none">
-            <Globe size={40} strokeWidth={1} className="opacity-30" />
-            <p className="text-xs opacity-60">Enter a URL to preview</p>
+          <div className="flex items-center justify-center h-full select-none">
+            <p className="text-xs text-text-tertiary/40">Start a preview server or enter a URL</p>
           </div>
         ) : (
           <>
@@ -186,7 +245,7 @@ export function PreviewPanel(): React.JSX.Element {
             )}
             <iframe
               ref={iframeRef}
-              src={url}
+              src={activeUrl}
               onLoad={handleIframeLoad}
               className="w-full h-full border-0"
               style={{ background: '#fff' }}
@@ -198,16 +257,21 @@ export function PreviewPanel(): React.JSX.Element {
       </div>
 
       {/* ====== 底部状态栏 ====== */}
-      <div className="flex-shrink-0 flex items-center gap-2 px-3 h-7 border-t border-border-secondary bg-bg-secondary/40 text-[11px] text-text-tertiary select-none">
+      <div className="flex-shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-t border-border-secondary bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
         {/* 加载状态指示 */}
-        <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${isLoading ? 'bg-accent animate-pulse' : isBlank ? 'bg-text-tertiary/30' : 'bg-success/70'}`} />
+        <span className={`h-1 w-1 rounded-full flex-shrink-0 ${isLoading ? 'bg-accent animate-pulse' : isBlank ? 'bg-text-tertiary/30' : isDesignMode ? 'bg-accent/70' : 'bg-success/70'}`} />
         {/* 域名或状态文字 */}
         <span className="truncate">
-          {isBlank ? 'No page loaded' : isLoading ? 'Loading...' : (() => { try { return new URL(url).host } catch { return url } })()}
+          {isBlank
+            ? 'No page loaded'
+            : isLoading
+              ? 'Loading...'
+              : (() => { try { return new URL(activeUrl).host } catch { return activeUrl } })()
+          }
         </span>
         <span className="flex-1" />
-        {/* 宽度指示（拖拽时方便查看） */}
-        <span className="tabular-nums opacity-60">{width}px</span>
+        {/* 尺寸指示 */}
+        <span className="tabular-nums opacity-60">{contentHeight} x {width}</span>
       </div>
     </div>
   )

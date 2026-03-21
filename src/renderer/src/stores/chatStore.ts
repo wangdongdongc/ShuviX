@@ -85,6 +85,17 @@ interface SessionStreamState {
   thinking: string
   isStreaming: boolean
   images: Array<{ data: string; mimeType: string }>
+  /** 当前正在生成的工具调用（LLM 流式输出 tool_use 块期间） */
+  streamingToolCall: {
+    toolName: string
+    /** 累积的原始参数 JSON 文本 */
+    argsText: string
+  } | null
+  /** 已完成生成但尚未开始执行的工具调用（多工具顺序生成时累积） */
+  completedStreamingToolCalls: Array<{
+    toolName: string
+    args?: Record<string, unknown>
+  }>
 }
 
 /** 每个 session 的活跃 Docker/SSH/Python/ACP 资源信息 */
@@ -92,7 +103,7 @@ export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
   ssh?: { host: string; port: number; username: string } | null
   python?: { ready: boolean } | null
-  sql?: { ready: boolean } | null
+  sql?: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
   acp?: Array<{ agentName: string; displayName: string }>
 }
 
@@ -146,6 +157,16 @@ export interface SubAgentExecution {
 const EMPTY_TOOLS: ToolExecution[] = []
 const EMPTY_SUBAGENTS: SubAgentExecution[] = []
 
+/** 每个会话的输入框草稿状态 */
+type PendingImage = { data: string; mimeType: string; preview: string }
+interface SessionDraft {
+  inputText: string
+  pendingImages: PendingImage[]
+}
+
+/** 按 sessionId 暂存输入框草稿，切换会话时自动保存/恢复 */
+const sessionDrafts = new Map<string, SessionDraft>()
+
 interface ChatState {
   /** 所有会话 */
   sessions: Session[]
@@ -169,8 +190,8 @@ interface ChatState {
   maxContextTokens: number
   /** 当前会话已占用上下文 token 数（来自最近一次 LLM 请求的 input usage） */
   usedContextTokens: number | null
-  /** 待发送的图片列表（base64） */
-  pendingImages: Array<{ data: string; mimeType: string; preview: string }>
+  /** 待发送的图片列表（base64），按会话隔离 */
+  pendingImages: PendingImage[]
   /** 输入框内容 */
   inputText: string
   /** 当前会话启用的工具列表 */
@@ -205,6 +226,13 @@ interface ChatState {
   setIsStreaming: (sessionId: string, streaming: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
   getSessionStreamThinking: (sessionId: string) => string
+  setStreamingToolCall: (
+    sessionId: string,
+    toolCall: { toolName: string; argsText: string } | null
+  ) => void
+  appendStreamingToolCallDelta: (sessionId: string, delta: string) => void
+  /** 将当前 streamingToolCall 移入 completedStreamingToolCalls 并清除 */
+  finalizeStreamingToolCall: (sessionId: string) => void
   addToolExecution: (sessionId: string, exec: ToolExecution) => void
   updateToolExecution: (
     sessionId: string,
@@ -232,7 +260,7 @@ interface ChatState {
   setModelSupportsVision: (supports: boolean) => void
   setMaxContextTokens: (tokens: number) => void
   setUsedContextTokens: (tokens: number | null) => void
-  addPendingImage: (image: { data: string; mimeType: string; preview: string }) => void
+  addPendingImage: (image: PendingImage) => void
   removePendingImage: (index: number) => void
   clearPendingImages: () => void
   updateSessionTitle: (id: string, title: string) => void
@@ -254,7 +282,10 @@ interface ChatState {
     info: { host: string; port: number; username: string } | null
   ) => void
   setSessionPython: (sessionId: string, info: { ready: boolean } | null) => void
-  setSessionSql: (sessionId: string, info: { ready: boolean } | null) => void
+  setSessionSql: (
+    sessionId: string,
+    info: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
+  ) => void
   addSessionAcp: (sessionId: string, info: { agentName: string; displayName: string }) => void
   removeSessionAcp: (sessionId: string, agentName: string) => void
   appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
@@ -283,6 +314,24 @@ const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
 
 export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeType: string }> =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.images || EMPTY_IMAGES : EMPTY_IMAGES
+
+export const selectStreamingToolCall = (
+  s: ChatState
+): { toolName: string; argsText: string } | null =>
+  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.streamingToolCall ?? null : null
+
+const EMPTY_COMPLETED_TOOL_CALLS: Array<{
+  toolName: string
+  args?: Record<string, unknown>
+}> = []
+
+export const selectCompletedStreamingToolCalls = (
+  s: ChatState
+): Array<{ toolName: string; args?: Record<string, unknown> }> =>
+  s.activeSessionId
+    ? s.sessionStreams[s.activeSessionId]?.completedStreamingToolCalls ||
+      EMPTY_COMPLETED_TOOL_CALLS
+    : EMPTY_COMPLETED_TOOL_CALLS
 
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
@@ -327,7 +376,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   shareMode: null,
 
   setSessions: (sessions) => set({ sessions }),
-  setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setActiveSessionId: (id) => {
+    const state = get()
+    // 保存当前会话的输入框草稿
+    if (state.activeSessionId) {
+      sessionDrafts.set(state.activeSessionId, {
+        inputText: state.inputText,
+        pendingImages: state.pendingImages
+      })
+    }
+    // 恢复目标会话的草稿（无则清空）
+    const draft = id ? sessionDrafts.get(id) : undefined
+    set({
+      activeSessionId: id,
+      inputText: draft?.inputText ?? '',
+      pendingImages: draft?.pendingImages ?? []
+    })
+  },
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   replaceMessage: (id, message) =>
@@ -341,7 +406,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: '',
         thinking: '',
         isStreaming: false,
-        images: []
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
       }
       const updated = { ...prev, content: prev.content + delta }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
@@ -353,7 +420,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: '',
         thinking: '',
         isStreaming: false,
-        images: []
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
       }
       const updated = { ...prev, thinking: prev.thinking + delta }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
@@ -365,7 +434,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: '',
         thinking: '',
         isStreaming: false,
-        images: []
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
       }
       const updated = { ...prev, images: [...prev.images, image] }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
@@ -375,6 +446,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const prev = state.sessionStreams[sessionId]
       if (!prev) return {}
+      // 注意：不清除 streamingToolCall，等 tool_start 事件到达时再清除
       const updated = { ...prev, content: '', thinking: '', images: [] }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
@@ -385,7 +457,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: '',
         thinking: '',
         isStreaming: false,
-        images: []
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
       }
       const updated = { ...prev, isStreaming: streaming }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
@@ -398,6 +472,60 @@ export const useChatStore = create<ChatState>((set, get) => ({
   getSessionStreamThinking: (sessionId) => {
     return get().sessionStreams[sessionId]?.thinking || ''
   },
+
+  setStreamingToolCall: (sessionId, toolCall) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId] || {
+        content: '',
+        thinking: '',
+        isStreaming: false,
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
+      }
+      // 设为 null 时同时清除已完成列表（生成阶段结束）
+      const updated = toolCall
+        ? { ...prev, streamingToolCall: toolCall }
+        : { ...prev, streamingToolCall: null, completedStreamingToolCalls: [] }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+    }),
+
+  appendStreamingToolCallDelta: (sessionId, delta) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId]
+      if (!prev?.streamingToolCall) return {}
+      const updated = {
+        ...prev,
+        streamingToolCall: {
+          ...prev.streamingToolCall,
+          argsText: prev.streamingToolCall.argsText + delta
+        }
+      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+    }),
+
+  finalizeStreamingToolCall: (sessionId) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId]
+      if (!prev?.streamingToolCall) return {}
+      // 尝试解析完整的 argsText 为结构化参数
+      let parsedArgs: Record<string, unknown> | undefined
+      try {
+        parsedArgs = JSON.parse(prev.streamingToolCall.argsText)
+      } catch {
+        /* 解析失败则不带 args */
+      }
+      const completed = {
+        toolName: prev.streamingToolCall.toolName,
+        args: parsedArgs
+      }
+      const updated = {
+        ...prev,
+        streamingToolCall: null,
+        completedStreamingToolCalls: [...prev.completedStreamingToolCalls, completed]
+      }
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+    }),
 
   addToolExecution: (sessionId, exec) =>
     set((state) => {
@@ -629,7 +757,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 清除该 session 的流式内容
       const prevStream = state.sessionStreams[sessionId]
       const updatedStream = prevStream
-        ? { ...prevStream, content: '', thinking: '', isStreaming: false, images: [] }
+        ? {
+            ...prevStream,
+            content: '',
+            thinking: '',
+            isStreaming: false,
+            images: [],
+            streamingToolCall: null,
+            completedStreamingToolCalls: []
+          }
         : undefined
       const newStreams = updatedStream
         ? { ...state.sessionStreams, [sessionId]: updatedStream }

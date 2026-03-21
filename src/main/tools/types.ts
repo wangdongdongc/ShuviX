@@ -20,6 +20,12 @@ export interface ProjectConfig {
   workingDirectory: string
   /** 参考目录列表（按 access 属性控制读写权限） */
   referenceDirs: ReferenceDir[]
+  /** PGLite 持久化存储开关 */
+  pglitePersist?: boolean
+  /** 项目 ID（持久化模式下用作 worker 共享 key） */
+  projectId?: string
+  /** 项目根目录路径（用于计算 PGLite dataDir） */
+  projectPath?: string
 }
 
 /** 工具上下文 — 所有工具共享的运行时信息 */
@@ -51,8 +57,12 @@ export interface ToolContext {
   onPythonDestroyed?: () => void
   /** SQL 运行时就绪回调 */
   onSqlReady?: () => void
-  /** SQL 运行时销毁回调 */
-  onSqlDestroyed?: () => void
+  /** SQL 运行时销毁回调（storageMode 为销毁前的存储模式） */
+  onSqlDestroyed?: (storageMode: 'memory' | 'persistent') => void
+  /** Design preview server 启动回调 */
+  onDesignServerStarted?: (url: string) => void
+  /** Design preview server 停止回调 */
+  onDesignServerStopped?: () => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */
@@ -153,14 +163,17 @@ export function assertSandboxWrite(
 export function resolveProjectConfig(sessionId: string): ProjectConfig {
   const session = sessionService.getById(sessionId)
   const project = session?.projectId
-    ? projectDao.pick(session.projectId, ['path', 'settings'])
+    ? projectDao.pick(session.projectId, ['id', 'path', 'settings'])
     : undefined
 
   if (project) {
     // 有项目 → 使用项目配置
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
-      referenceDirs: project.settings?.referenceDirs || []
+      referenceDirs: project.settings?.referenceDirs || [],
+      pglitePersist: project.settings?.tool?.pglitePersist,
+      projectId: project.id,
+      projectPath: project.path
     }
   }
 

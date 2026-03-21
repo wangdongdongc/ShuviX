@@ -62,11 +62,11 @@ export function ThinkingPicker(): React.JSX.Element | null {
       </button>
 
       {open && (
-        <div className="absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+        <div className="picker-panel absolute left-0 bottom-8 w-[120px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
           <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">
             {t('input.thinkingDepth')}
           </div>
-          <div className="py-1">
+          <div className="py-1 flex flex-col">
             {levels.map((l) => (
               <button
                 key={l.value}

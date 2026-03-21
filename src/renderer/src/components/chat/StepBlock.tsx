@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Brain, MessageSquareText, ChevronDown, ChevronRight, Check } from 'lucide-react'
+import { Brain, MessageSquareText, ChevronDown, ChevronRight } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -45,10 +45,8 @@ export function StepBlock({ message }: StepBlockProps): React.JSX.Element {
         <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>
         {preview && <span className="flex-1 truncate font-mono opacity-70">{preview}</span>}
         {!preview && <span className="flex-1" />}
-        <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
-          <Check size={12} className="text-success" />
-          <span className="text-[10px]">{t('toolCall.done')}</span>
-        </span>
+        {/* 占位：与 ToolCallBlock 状态位等宽，保持右对齐 */}
+        <span className="w-14 flex-shrink-0" />
       </button>
 
       {expanded && (

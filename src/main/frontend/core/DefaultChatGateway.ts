@@ -42,13 +42,14 @@ export class DefaultChatGateway implements ChatGateway {
     const displayText = text // UI 中显示的文本
     let promptText = text // 发送给 LLM 的文本
     if (text.startsWith('/')) {
-      const dbSession = sessionDao.findById(sessionId)
-      const project = dbSession?.projectId ? projectDao.pick(dbSession.projectId, ['path']) : null
-      if (project?.path) {
-        const result = commandService.matchAndExpand(project.path, text)
-        if (result) {
-          promptText = result.expandedText
-        }
+      const sessionInfo = sessionService.getById(sessionId)
+      const result = commandService.matchAndExpand(
+        sessionInfo?.workingDirectory ?? null,
+        text,
+        sessionInfo?.enabledTools
+      )
+      if (result) {
+        promptText = result.expandedText
       }
     }
 
@@ -192,18 +193,20 @@ export class DefaultChatGateway implements ChatGateway {
     return { success: true }
   }
 
-  getSqlStatus(sessionId: string): { ready: boolean } | null {
-    return sqlWorkerManager.isActive(sessionId) ? { ready: true } : null
+  getSqlStatus(sessionId: string): { ready: boolean; storageMode: 'memory' | 'persistent' } | null {
+    return sqlWorkerManager.getStatus(sessionId)
   }
 
   destroySql(sessionId: string): { success: boolean } {
-    const active = sqlWorkerManager.isActive(sessionId)
-    if (!active) return { success: false }
+    const status = sqlWorkerManager.getStatus(sessionId)
+    if (!status) return { success: false }
+    const { storageMode } = status
     sqlWorkerManager.terminate(sessionId)
     chatFrontendRegistry.broadcast({
       type: 'sql_event',
       sessionId,
-      action: 'runtime_destroyed'
+      action: 'runtime_destroyed',
+      storageMode
     })
     return { success: true }
   }

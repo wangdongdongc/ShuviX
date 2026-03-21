@@ -12,6 +12,7 @@ import { PythonTool } from '../tools/python'
 import { SqlTool } from '../tools/sql'
 import { ShuvixProjectTool } from '../tools/shuvixProject'
 import { ShuvixSettingTool } from '../tools/shuvixSetting'
+import { DesignTool } from '../tools/design'
 import { SkillTool } from '../tools/skill'
 import { subAgentRegistry, SubAgentTool, type SubAgentModelConfig } from '../subagent'
 import { BaseTool, type ToolContext } from '../tools/types'
@@ -73,7 +74,8 @@ export function buildTools(
     python: new PythonTool(ctx),
     sql: new SqlTool(ctx),
     'shuvix-project': new ShuvixProjectTool(ctx),
-    'shuvix-setting': new ShuvixSettingTool(ctx)
+    'shuvix-setting': new ShuvixSettingTool(ctx),
+    design: new DesignTool(ctx)
   }
 
   // 子智能体工具（仅主 Agent 有 SubAgentBuildContext 时注册，子智能体不传此参数，天然防递归）

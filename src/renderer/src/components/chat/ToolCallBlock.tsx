@@ -22,7 +22,8 @@ import {
   Copy,
   Package,
   Clock,
-  Database
+  Database,
+  Palette
 } from 'lucide-react'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -41,7 +42,16 @@ interface ToolCallBlockProps {
   result?: string
   /** 工具特定的结构化详情（持久化消息传入） */
   details?: ToolResultDetails
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_ssh_credentials'
+  /** 流式生成中的原始参数文本（generating 状态下使用） */
+  streamingArgsText?: string
+  status:
+    | 'generating'
+    | 'pending'
+    | 'running'
+    | 'done'
+    | 'error'
+    | 'pending_approval'
+    | 'pending_ssh_credentials'
 }
 
 /**
@@ -54,6 +64,7 @@ export function ToolCallBlock({
   args,
   result,
   details: propDetails,
+  streamingArgsText,
   status: propStatus
 }: ToolCallBlockProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -135,6 +146,11 @@ export function ToolCallBlock({
           detail: `${action}${cmd}`
         }
       }
+      case 'design':
+        return {
+          icon: <Palette size={12} className="text-pink-400 flex-shrink-0" />,
+          detail: str(args?.action)
+        }
       case 'skill':
         return {
           icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
@@ -181,6 +197,16 @@ export function ToolCallBlock({
     string,
     { icon: React.ReactNode; label: string; borderColor: string }
   > = {
+    generating: {
+      icon: <Loader2 size={12} className="animate-spin text-text-tertiary" />,
+      label: t('toolCall.generating'),
+      borderColor: 'border-border-secondary/40'
+    },
+    pending: {
+      icon: null,
+      label: '',
+      borderColor: ''
+    },
     running: {
       icon: <Loader2 size={12} className="animate-spin text-accent" />,
       label: t('toolCall.running'),
@@ -217,8 +243,8 @@ export function ToolCallBlock({
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
       >
-        {(args || result || hasEditDiff) &&
-          (expanded ? (
+        {(args || result || hasEditDiff || streamingArgsText) &&
+          (expanded || streamingArgsText ? (
             <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
           ) : (
             <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
@@ -227,10 +253,12 @@ export function ToolCallBlock({
         <span className="font-medium text-text-secondary flex-shrink-0">{toolName}</span>
         {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}
         {!detail && <span className="flex-1" />}
-        <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
-          {config.icon}
-          <span className="text-[10px]">{config.label}</span>
-        </span>
+        {(config.icon || config.label) && (
+          <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
+            {config.icon}
+            <span className="text-[10px]">{config.label}</span>
+          </span>
+        )}
       </button>
 
       {/* 编辑成功时展示 DiffViewer */}
@@ -240,8 +268,17 @@ export function ToolCallBlock({
         </div>
       )}
 
+      {/* 流式生成中的参数文本（自动展开） */}
+      {streamingArgsText && (
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
+          <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-40 whitespace-pre-wrap break-words">
+            {streamingArgsText}
+          </pre>
+        </div>
+      )}
+
       {/* 展开详情 */}
-      {expanded && !hasEditDiff && status !== 'pending_approval' && (
+      {expanded && !streamingArgsText && !hasEditDiff && status !== 'pending_approval' && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {toolName === 'python' && args ? (
             <PythonToolDetail args={args} result={result} />

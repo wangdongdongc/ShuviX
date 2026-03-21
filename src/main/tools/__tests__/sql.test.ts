@@ -425,10 +425,10 @@ describe('并发执行', () => {
 })
 
 describe('终止与重建', () => {
-  it('terminate 后 isActive 返回 false', () => {
-    expect(sqlWorkerManager.isActive(SESSION_ID)).toBe(true)
+  it('terminate 后 getStatus 返回 null', () => {
+    expect(sqlWorkerManager.getStatus(SESSION_ID)).not.toBeNull()
     sqlWorkerManager.terminate(SESSION_ID)
-    expect(sqlWorkerManager.isActive(SESSION_ID)).toBe(false)
+    expect(sqlWorkerManager.getStatus(SESSION_ID)).toBeNull()
   })
 
   it('terminate 后重新 ensureReady 可再次执行', async () => {

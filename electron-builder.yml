@@ -13,6 +13,12 @@ files:
 extraResources:
   - from: resources/pyodide-wheels
     to: pyodide-wheels
+  - from: resources/design-deps
+    to: design-deps
+  - from: resources/design-templates
+    to: design-templates
+  - from: node_modules/esbuild-wasm/esbuild.wasm
+    to: esbuild/esbuild.wasm
 asarUnpack:
   - resources/**
   - out/main/pythonWorker.js
@@ -20,6 +26,7 @@ asarUnpack:
   - out/main/chunks/**
   - node_modules/@vscode/ripgrep/**
   - node_modules/pyodide/**
+  - node_modules/esbuild-wasm/**
   - node_modules/@electric-sql/pglite/**
   - node_modules/whisper-cpp-node/**
   - node_modules/@whisper-cpp-node/**

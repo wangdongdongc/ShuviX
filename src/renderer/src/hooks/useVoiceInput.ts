@@ -65,13 +65,16 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
     }
   }, [])
 
-  /** 最终清理：清空回调和引用 */
+  /** 最终清理：停止后端 + 清空回调和引用 */
   const finalCleanup = useCallback((): void => {
     if (backendRef.current) {
+      // 先清空回调，防止 stop() → cleanup() → onStateChange('idle') 重入 finalCleanup
       backendRef.current.onInterimResult = null
       backendRef.current.onFinalResult = null
       backendRef.current.onError = null
       backendRef.current.onStateChange = null
+      // 确保后端完全停止（MediaRecorder、麦克风、VAD）
+      backendRef.current.stop()
       backendRef.current = null
     }
     stopTimer()
@@ -80,14 +83,6 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
     setDuration(0)
     setSttState('idle')
   }, [stopTimer])
-
-  /** 强制中止：立刻停止后端 + 清理（用于 cancel 和 unmount） */
-  const forceAbort = useCallback((): void => {
-    if (backendRef.current) {
-      backendRef.current.stop()
-    }
-    finalCleanup()
-  }, [finalCleanup])
 
   /** 开始录音 */
   const startRecording = useCallback((): void => {
@@ -163,18 +158,27 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
   /** 取消录音（丢弃文字，立刻中止） */
   const cancelRecording = useCallback((): void => {
     if (!recordingRef.current) return
-    forceAbort()
+    finalCleanup()
     setInputText(preExistingTextRef.current)
-  }, [forceAbort, setInputText])
+  }, [finalCleanup, setInputText])
+
+  // 切换会话时自动取消录音，防止录音状态跨会话泄漏
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
+  useEffect(() => {
+    if (recordingRef.current) {
+      finalCleanup()
+      setInputText(preExistingTextRef.current)
+    }
+  }, [activeSessionId, finalCleanup, setInputText])
 
   // 组件卸载时强制中止
   useEffect(() => {
     return () => {
       if (recordingRef.current) {
-        forceAbort()
+        finalCleanup()
       }
     }
-  }, [forceAbort])
+  }, [finalCleanup])
 
   return {
     isRecording,

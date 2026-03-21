@@ -5,6 +5,8 @@ import express from 'express'
 import { WebSocketServer } from 'ws'
 import { chatFrontendRegistry } from '../core'
 import { webUIService } from '../../services/webUIService'
+import { designProjectManager } from '../../services/designProjectManager'
+import { bundlerService } from '../../services/bundlerService'
 import { WebFrontend } from './WebFrontend'
 import { createApiRouter } from './routes'
 import { createLogger } from '../../logger'
@@ -45,6 +47,32 @@ class WebUIServer {
 
     // REST API
     this.app.use('/shuvix/api', createApiRouter())
+
+    // Design Preview 反向代理：/shuvix/design/:sessionId/* → 127.0.0.1:<devServerPort>/*
+    this.app.use('/shuvix/design/:sessionId', (req, res) => {
+      const sessionId = req.params.sessionId
+      if (!sessionId || !webUIService.isShared(sessionId)) {
+        res.status(403).end()
+        return
+      }
+      const serverInfo = bundlerService.getDevServerInfo(sessionId)
+      if (!serverInfo) {
+        res.status(404).json({ error: 'Design preview not running' })
+        return
+      }
+      // 将 /shuvix/design/:sessionId/foo 转发为 /foo
+      const targetPath = req.originalUrl.replace(`/shuvix/design/${sessionId}`, '') || '/'
+      const targetUrl = `http://127.0.0.1:${serverInfo.port}${targetPath}`
+
+      const proxyReq = http.request(targetUrl, { method: req.method, headers: req.headers }, (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 200, proxyRes.headers)
+        proxyRes.pipe(res)
+      })
+      proxyReq.on('error', () => {
+        if (!res.headersSent) res.status(502).end()
+      })
+      req.pipe(proxyReq)
+    })
 
     // 静态资源：WebUI 前端
     const webuiDistPath = this.resolveWebuiDist()
@@ -92,6 +120,19 @@ class WebUIServer {
       log.info(`WebSocket 连接: session=${sessionId}`)
       const frontend = new WebFrontend(socket, sessionId)
       chatFrontendRegistry.bind(sessionId, frontend)
+
+      // 如果该 session 有运行中的 design preview，立即通知新连接的前端
+      if (designProjectManager.isActive(sessionId)) {
+        const serverInfo = bundlerService.getDevServerInfo(sessionId)
+        if (serverInfo) {
+          frontend.sendEvent({
+            type: 'design_event',
+            sessionId,
+            action: 'server_started',
+            url: serverInfo.url
+          })
+        }
+      }
 
       socket.on('close', () => {
         chatFrontendRegistry.unbind(sessionId, frontend.id)

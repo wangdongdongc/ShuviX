@@ -5,10 +5,18 @@ export interface ReferenceDir {
   access?: 'readonly' | 'readwrite'
 }
 
+/** 工具扩展配置 */
+export interface ToolSettings {
+  /** PGLite 持久化存储开关（开启后数据存储到项目文件夹 .shuvix/pglite/data） */
+  pglitePersist?: boolean
+}
+
 /** 项目扩展配置 */
 export interface ProjectSettings {
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
+  /** 工具扩展配置 */
+  tool?: ToolSettings
 }
 
 /** 项目数据结构（对应 DB 表 projects） */

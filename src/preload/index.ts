@@ -419,6 +419,22 @@ const api = {
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId)
   },
 
+  // ============ Design Preview ============
+  design: {
+    /** 初始化设计项目（创建脚手架） */
+    init: (params: { sessionId: string; workingDir: string }) =>
+      ipcRenderer.invoke('design:init', params),
+    /** 启动 dev server + 文件监听 */
+    startDev: (params: { sessionId: string; workingDir: string }) =>
+      ipcRenderer.invoke('design:startDev', params),
+    /** 停止 dev server + 文件监听 */
+    stopDev: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('design:stopDev', params),
+    /** 查询状态 */
+    status: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('design:status', params)
+  },
+
   // ============ Skill 管理 ============
   skill: {
     /** 获取所有 Skill */

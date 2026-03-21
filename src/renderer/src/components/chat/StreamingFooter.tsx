@@ -5,6 +5,7 @@ import {
   selectStreamingContent,
   selectStreamingThinking,
   selectStreamingImages,
+  selectStreamingToolCall,
   type AssistantTextMessage
 } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -17,7 +18,7 @@ interface StreamingFooterProps {
 }
 
 /**
- * 流式输出底部区域 — 思考过程、流式助手消息、加载指示器
+ * 流式输出底部区域 — 思考过程、流式助手消息、工具调用生成指示器、加载指示器
  * 独立组件，通过自身的 store subscription 获取最新状态
  * 通过 Virtuoso context 接收流式中的 steps
  */
@@ -26,6 +27,7 @@ export function StreamingFooter({ context }: StreamingFooterProps): React.JSX.El
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
   const streamingImages = useChatStore(selectStreamingImages)
+  const streamingToolCall = useChatStore(selectStreamingToolCall)
 
   // 将 VisibleItem[] 转换为 StepItem[]（窄化 msg 类型）
   const steps: StepItem[] | undefined =
@@ -51,9 +53,13 @@ export function StreamingFooter({ context }: StreamingFooterProps): React.JSX.El
 
   return (
     <>
-      {/* 流式输出的助手消息（steps + thinking 在气泡内渲染） */}
+      {/* 流式输出的助手消息（steps + thinking + 工具调用生成 均在气泡内渲染） */}
       {isStreaming &&
-        (streamingContent || streamingThinking || streamingImages.length > 0 || hasSteps) && (
+        (streamingContent ||
+          streamingThinking ||
+          streamingImages.length > 0 ||
+          hasSteps ||
+          streamingToolCall) && (
           <AssistantBubble
             msg={streamingMsg}
             isStreaming
@@ -64,27 +70,31 @@ export function StreamingFooter({ context }: StreamingFooterProps): React.JSX.El
         )}
 
       {/* 等待响应的加载指示器（仅在无任何内容时显示） */}
-      {isStreaming && !streamingContent && !streamingThinking && !hasSteps && (
-        <div className="flex gap-3 px-4 py-3">
-          <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
-            <Sparkles size={14} className="text-text-secondary animate-pulse" />
+      {isStreaming &&
+        !streamingContent &&
+        !streamingThinking &&
+        !hasSteps &&
+        !streamingToolCall && (
+          <div className="flex gap-3 px-4 py-3">
+            <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
+              <Sparkles size={14} className="text-text-secondary animate-pulse" />
+            </div>
+            <div className="flex items-center gap-1 pt-1">
+              <div
+                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+                style={{ animationDelay: '0ms' }}
+              />
+              <div
+                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+                style={{ animationDelay: '150ms' }}
+              />
+              <div
+                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+                style={{ animationDelay: '300ms' }}
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-1 pt-1">
-            <div
-              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-              style={{ animationDelay: '0ms' }}
-            />
-            <div
-              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-              style={{ animationDelay: '150ms' }}
-            />
-            <div
-              className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-              style={{ animationDelay: '300ms' }}
-            />
-          </div>
-        </div>
-      )}
+        )}
     </>
   )
 }

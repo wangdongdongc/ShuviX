@@ -89,6 +89,7 @@ function buildSystemPrompt(
   } else {
     prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}`
   }
+
   return prompt
 }
 
@@ -123,7 +124,8 @@ export class AgentSession {
     turnCounter: 0,
     pendingLogIds: [],
     preEmittedToolCalls: new Set(),
-    toolUseMessageIds: new Map()
+    toolUseMessageIds: new Map(),
+    generatingToolCall: null
   }
 
   // 缓存的事件处理器上下文
@@ -193,10 +195,17 @@ export class AgentSession {
         session.emitPythonEvent('runtime_destroyed')
       },
       onSqlReady: () => {
-        session.emitSqlEvent('runtime_ready')
+        const status = sqlWorkerManager.getStatus(session.sessionId)
+        session.emitSqlEvent('runtime_ready', status?.storageMode ?? 'memory')
       },
-      onSqlDestroyed: () => {
-        session.emitSqlEvent('runtime_destroyed')
+      onSqlDestroyed: (storageMode) => {
+        session.emitSqlEvent('runtime_destroyed', storageMode)
+      },
+      onDesignServerStarted: (url) => {
+        session.emitDesignEvent('server_started', url)
+      },
+      onDesignServerStopped: () => {
+        session.emitDesignEvent('server_stopped')
       }
     }
 
@@ -227,8 +236,8 @@ export class AgentSession {
       }
     })
 
-    // 注入项目 AGENTS.MD / AGENT.md
-    const agentMd = project ? readProjectAgentMd(project.path) : null
+    // 注入工作目录下的 AGENTS.MD / AGENT.md
+    const agentMd = readProjectAgentMd(workingDirectory)
     if (agentMd) {
       agent.state.messages.push({
         role: 'user',
@@ -720,11 +729,25 @@ export class AgentSession {
   }
 
   /** 通知前端 SQL 运行时生命周期事件（不持久化为消息） */
-  emitSqlEvent(action: 'runtime_ready' | 'runtime_destroyed'): void {
+  emitSqlEvent(
+    action: 'runtime_ready' | 'runtime_destroyed',
+    storageMode: 'memory' | 'persistent'
+  ): void {
     chatFrontendRegistry.broadcast({
       type: 'sql_event',
       sessionId: this.sessionId,
-      action
+      action,
+      storageMode
+    })
+  }
+
+  /** 通知前端 Design Preview 生命周期事件 */
+  emitDesignEvent(action: 'server_started' | 'server_stopped', url?: string): void {
+    chatFrontendRegistry.broadcast({
+      type: 'design_event',
+      sessionId: this.sessionId,
+      action,
+      url
     })
   }
 }

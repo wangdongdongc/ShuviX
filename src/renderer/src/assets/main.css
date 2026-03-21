@@ -294,6 +294,21 @@ body {
   animation: preview-loading 1.5s ease-in-out infinite;
 }
 
+/* ========== Picker 下拉面板入场动画 ========== */
+@keyframes picker-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.picker-panel {
+  animation: picker-in 120ms ease-out;
+}
+
 /* ========== Zen 风格分组容器 ========== */
 
 /* 配置项分组：左线指示（替代灰色圆角边框） */
@@ -302,6 +317,22 @@ body {
   border-left: 2px solid var(--color-border-secondary);
   border-radius: 0;
   padding-left: 14px;
+}
+
+/* 卡片式分组：微妙背景 + 圆角 */
+.zen-card {
+  background: color-mix(in srgb, var(--color-bg-tertiary) 40%, transparent);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.zen-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
 }
 
 /* ========== Zen 风格表单控件 ========== */

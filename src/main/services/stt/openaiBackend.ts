@@ -1,6 +1,7 @@
 import type { SttBackendMain } from './types'
 import { providerDao } from '../../dao/providerDao'
 import { createLogger } from '../../logger'
+import { t } from '../../i18n'
 
 const log = createLogger('OpenAIStt')
 
@@ -13,11 +14,11 @@ export class OpenAISttBackend implements SttBackendMain {
     const providers = providerDao.findAll()
     const openai = providers.find((p) => p.name === 'openai' && p.isBuiltin)
     if (!openai) {
-      throw new Error('未找到内置 OpenAI 提供商')
+      throw new Error(t('voice.errorProviderNotFound'))
     }
     const apiKey = openai.apiKey?.trim()
     if (!apiKey) {
-      throw new Error('请先在 设置 → 提供商 → OpenAI 中配置 API Key')
+      throw new Error(t('voice.errorApiKeyMissing'))
     }
 
     const baseUrl = (openai.baseUrl?.trim() || 'https://api.openai.com/v1').replace(/\/+$/, '')

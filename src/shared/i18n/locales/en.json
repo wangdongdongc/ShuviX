@@ -71,6 +71,8 @@
     "pythonWasmRuntime": "Python Engine",
     "destroySql": "Terminate SQL runtime",
     "sqlWasmRuntime": "Postgres Database",
+    "sqlPersistent": "Persistent",
+    "sqlTemporary": "Temporary",
     "acpAgentRunning": "{{name}} running",
     "destroyAcp": "Terminate ACP Agent session",
     "destroyReason_manual": "manually destroyed",
@@ -110,7 +112,10 @@
 
   "voice": {
     "startRecording": "Voice input",
-    "stopRecording": "Stop recording"
+    "stopRecording": "Stop recording",
+    "errorModelNotDownloaded": "Model {{modelId}} is not downloaded. Please download it in Settings first.",
+    "errorProviderNotFound": "Built-in OpenAI provider not found",
+    "errorApiKeyMissing": "Please configure your API Key in Settings → Providers → OpenAI"
   },
 
   "message": {
@@ -135,6 +140,7 @@
   },
 
   "toolCall": {
+    "generating": "Generating...",
     "running": "Running...",
     "done": "Done",
     "error": "Error",
@@ -228,11 +234,14 @@
   "projectForm": {
     "createTitle": "New Project",
     "editTitle": "Edit Project",
+    "basicInfoTitle": "Basic Info",
+    "folders": "Folders",
     "name": "Project Name",
     "namePlaceholder": "Project name",
     "path": "Project Folder",
     "pathPlaceholder": "/path/to/project",
-    "selectFolder": "Select…",
+    "selectFolder": "Select project working folder",
+    "changeFolder": "Change",
     "pathHint": "Working directory for tool execution. All relative paths are resolved from this directory.",
     "prompt": "Project Prompt",
     "promptPlaceholder": "Project-level prompt (works alongside the global prompt)",
@@ -250,6 +259,10 @@
     "toolsPresetGeneral": "General",
     "toolsPresetCode": "Code",
     "toolsHint": "Tools enabled by default when creating a new session. Can be adjusted per session.",
+    "toolConfig": "Tool Configuration",
+    "embeddedDbGroup": "Project Database",
+    "pglitePersistLabel": "Persistent Data Storage",
+    "pglitePersistDesc": "When enabled, SQL and RAG (coming soon) tools persist data to the project folder. When disabled, data is stored in memory and lost when the runtime terminates.",
     "toolsGeneralGroup": "General Tools",
     "toolsRipgrepGroup": "High-performance search tools (for large codebases)",
     "toolsShuvixGroup": "System tools (read/write project & global config)",
@@ -257,11 +270,13 @@
     "toolsSubAgentDesc": "Delegate tasks to autonomous sub-agents running in isolated contexts.",
     "referenceDirs": "Additional Folders",
     "referenceDirsHint": "AI can access files in these directories. Access mode controls read/write permissions in sandbox mode.",
-    "addRefDir": "Add Directory",
+    "addRefDir": "Reference more folders",
     "refDirNotePlaceholder": "Note (helps AI understand the directory purpose)",
     "refDirAccessLabel": "Folder access",
     "refDirAccessReadonly": "Read-only",
     "refDirAccessReadwrite": "Read-write",
+    "refDirAccessRO": "R",
+    "refDirAccessRW": "RW",
     "archiveProject": "Archive Project",
     "archiveConfirmTitle": "Archive Project",
     "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
@@ -283,9 +298,9 @@
     "purposeSQLDesc": "Out-of-the-box Postgres database",
     "purposeDev": "Software Dev",
     "purposeDevDesc": "Explore and understand codebases, code editing and command execution",
-    "purposeTipBash": "The Bash tool gives the agent unlimited possibilities. Every command requires your approval before execution, but if you're unfamiliar with this, incorrect commands could damage your computer.",
-    "purposeTipPython": "The Python tool uses a built-in engine — no extra installation required. Code runs in a sandbox, making it relatively safe. However, note that this is a limited Python runtime. Third-party libraries are downloaded automatically before use (this may fail in network-restricted environments), and not all third-party libraries are available.",
-    "purposeTipSql": "SQL runs in a built-in temporary Postgres database (the database will be deleted when no longer in use!), ready to use out of the box with many pre-installed extensions. Databases are isolated between sessions. You can import CSV files from your project folder into the database, making it great for data analysis.",
+    "purposeTipBash": "The Bash tool gives the agent unlimited possibilities. Commands require approval before execution — improper commands may damage the system.",
+    "purposeTipPython": "Allows AI to execute code in a relatively safe Python sandbox (not all third-party libraries are available).",
+    "purposeTipSql": "Run SQL in the built-in Postgres database. Supports importing CSV files from the project folder, great for data analysis.",
     "purposeTipDev": "High-performance search tools help AI quickly explore and understand large codebases.",
     "extEmptyDesc": "No extensions configured yet. MCP Servers and Skills give AI additional tools — head to Settings to add them.",
     "extMcpDesc": "Connect external tool servers via MCP protocol, giving AI capabilities like database queries and API calls.",

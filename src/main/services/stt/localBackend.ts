@@ -2,6 +2,7 @@ import type { SttBackendMain } from './types'
 import { whisperModelManager } from './whisperModelManager'
 import { settingsDao } from '../../dao/settingsDao'
 import { createLogger } from '../../logger'
+import { t } from '../../i18n'
 import type { WhisperContext } from 'whisper-cpp-node'
 
 const log = createLogger('LocalStt')
@@ -31,7 +32,7 @@ export class LocalSttBackend implements SttBackendMain {
     const modelId = settingsDao.findByKey('voice.localModel') || 'large-v3-turbo'
     const modelPath = whisperModelManager.getModelPath(modelId)
     if (!whisperModelManager.isDownloaded(modelId)) {
-      throw new Error(`模型 ${modelId} 未下载，请先在设置中下载`)
+      throw new Error(t('voice.errorModelNotDownloaded', { modelId }))
     }
 
     const whisper = getWhisper()

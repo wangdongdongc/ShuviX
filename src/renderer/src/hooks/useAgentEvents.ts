@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { usePreviewStore } from '../stores/previewStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
@@ -41,6 +42,17 @@ export function useAgentEvents(): void {
       case 'text_end':
         break
 
+      case 'toolcall_generating':
+        if (event.argsDelta) {
+          // 增量：追加到已有 argsText
+          store.appendStreamingToolCallDelta(sid, event.argsDelta)
+        } else {
+          // 新工具调用开始：先将当前正在生成的移入已完成列表
+          store.finalizeStreamingToolCall(sid)
+          store.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
+        }
+        break
+
       case 'step_end': {
         // 中间轮次步骤已持久化：清除流式内容 + 同步添加 step 消息到列表
         store.clearStreamingContent(sid)
@@ -55,6 +67,8 @@ export function useAgentEvents(): void {
         break
 
       case 'tool_start': {
+        // 清除所有流式工具调用状态，工具即将开始执行
+        store.setStreamingToolCall(sid, null)
         // 根据工具类型设置初始状态：bash 沙箱审批 / ssh 凭据 / 其余直接运行
         let initialStatus: 'running' | 'pending_approval' | 'pending_ssh_credentials' = 'running'
         if (event.approvalRequired) initialStatus = 'pending_approval'
@@ -150,9 +164,23 @@ export function useAgentEvents(): void {
 
       case 'sql_event':
         if (event.action === 'runtime_ready') {
-          store.setSessionSql(sid, { ready: true })
+          store.setSessionSql(sid, { ready: true, storageMode: event.storageMode })
         } else {
           store.setSessionSql(sid, null)
+        }
+        break
+
+      case 'design_event':
+        if (event.action === 'server_started' && event.url) {
+          // WebUI 模式下通过反向代理访问，避免直连 dev server 端口
+          let designUrl = event.url
+          if (window.api?.app?.platform === 'web') {
+            designUrl = `${window.location.origin}/shuvix/design/${sid}/`
+          }
+          usePreviewStore.getState().openDesign(designUrl)
+          usePreviewStore.getState().setServerRunning(true)
+        } else if (event.action === 'server_stopped') {
+          usePreviewStore.getState().setServerRunning(false)
         }
         break
 

@@ -14,6 +14,7 @@ import { registerCommandHandlers } from './commandHandlers'
 import { registerSttHandlers } from './sttHandlers'
 import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
+import { registerDesignHandlers } from './designHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -36,4 +37,5 @@ export function registerIpcHandlers(): void {
   registerSttHandlers()
   registerTtsHandlers()
   registerDownloadHandlers()
+  registerDesignHandlers()
 }

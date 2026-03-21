@@ -11,6 +11,8 @@ import { toEmscriptenPath } from './emscriptenPaths'
 interface InitMessage {
   type: 'init'
   mounts: MountConfig[]
+  /** 持久化存储目录（不传则使用内存模式） */
+  dataDir?: string
 }
 
 interface ExecuteMessage {
@@ -108,7 +110,7 @@ function formatResultSet(result: any): string {
   return parts.join('\n')
 }
 
-async function init(mounts: MountConfig[]): Promise<void> {
+async function init(mounts: MountConfig[], dataDir?: string): Promise<void> {
   // 动态导入 PGLite 及扩展
   const { PGlite } = await import('@electric-sql/pglite')
   const { vector } = await import('@electric-sql/pglite/vector')
@@ -125,6 +127,7 @@ async function init(mounts: MountConfig[]): Promise<void> {
   const { unaccent } = await import('@electric-sql/pglite/contrib/unaccent')
 
   db = new PGlite({
+    ...(dataDir ? { dataDir } : {}),
     extensions: {
       vector,
       pg_trgm,
@@ -234,7 +237,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
   if (msg.type === 'init') {
     execQueue = execQueue.then(async () => {
       try {
-        await init(msg.mounts)
+        await init(msg.mounts, msg.dataDir)
       } catch (err: unknown) {
         parentPort!.postMessage({
           type: 'error',

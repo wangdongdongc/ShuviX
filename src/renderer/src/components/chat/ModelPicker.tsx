@@ -171,7 +171,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
       )}
 
       {!isReadonly && pickerOpen && (
-        <div className="absolute left-0 bottom-8 w-[320px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden flex flex-col">
+        <div className="picker-panel absolute left-0 bottom-8 w-[320px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden flex flex-col">
           {/* 搜索框 */}
           <div className="px-2 py-2 border-b border-border-secondary">
             <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-bg-primary border border-border-primary">

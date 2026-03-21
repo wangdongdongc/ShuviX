@@ -82,8 +82,9 @@ class CommandService {
    * 返回 null 表示未匹配到任何命令
    */
   matchAndExpand(
-    projectPath: string,
-    text: string
+    workingDir: string | null,
+    text: string,
+    enabledTools?: string[]
   ): { commandId: string; expandedText: string; originalText: string } | null {
     if (!text.startsWith('/')) return null
 
@@ -95,8 +96,11 @@ class CommandService {
 
     if (!commandId) return null
 
-    // 查找匹配的命令
-    const commands = this.discoverCommands(projectPath)
+    // 查找匹配的命令（文件系统 + 内置）
+    const commands = workingDir ? this.discoverCommands(workingDir) : []
+    if (enabledTools) {
+      commands.push(...this.getBuiltinCommands(enabledTools))
+    }
     const command = commands.find((c) => c.commandId === commandId)
     if (!command) return null
 
@@ -139,6 +143,66 @@ class CommandService {
       return null
     }
   }
+
+  /** 获取根据启用工具条件可用的内置命令 */
+  getBuiltinCommands(enabledTools: string[]): SlashCommand[] {
+    const commands: SlashCommand[] = []
+    if (enabledTools.includes('design')) {
+      commands.push({
+        commandId: 'design',
+        name: 'Design',
+        description: 'Enter interactive design mode',
+        template: DESIGN_COMMAND_TEMPLATE,
+        filePath: '(built-in)'
+      })
+    }
+    return commands
+  }
 }
+
+// ────────────────────── Built-in command templates ──────────────────────
+
+const DESIGN_COMMAND_TEMPLATE = `You are now in interactive design mode. Use the \`design\` tool to create and preview React UI components.
+
+## Workflow
+
+1. Call \`design\` tool with \`action: "init"\` to scaffold the design project
+2. Use \`write\`/\`edit\` tools to create/modify files under \`.shuvix/design/\`
+3. Call \`design\` tool with \`action: "preview"\` to build and open the preview panel (first time starts the dev server; subsequent calls rebuild and refresh)
+4. If preview shows build errors, the tool returns detailed error messages — fix the code and call \`preview\` again
+
+## Design Project Structure
+
+\`\`\`
+.shuvix/design/
+├── index.tsx              # Entry point (createRoot)
+├── App.tsx                # Root component (layout shell)
+├── components/            # Reusable UI components
+├── pages/                 # Page-level components
+├── hooks/                 # Custom React hooks
+├── utils/                 # Utility functions
+├── types/                 # TypeScript type definitions
+└── styles/
+    └── global.css         # Global styles
+\`\`\`
+
+## Technical Stack
+
+- **React + TypeScript**: Function components with Hooks, .tsx/.ts files
+- **Tailwind CSS v4**: Utility-first CSS framework, available globally — use className with Tailwind utilities directly (e.g. \`className="flex items-center gap-2 p-4 bg-white rounded-lg shadow"\`)
+- **CSS imports**: Supported for custom styles beyond Tailwind
+- **Images**: Supported as dataurl inline (svg/png/jpg/gif)
+- **No npm packages**: Only React, ReactDOM, and Tailwind CSS are available
+
+## Code Conventions
+
+- Use function components with Hooks
+- Use TypeScript for all files
+- Prefer Tailwind CSS utility classes over custom CSS
+- Split components into separate files under \`components/\`
+- Place page-level components under \`pages/\`
+- Use relative imports between files
+
+$ARGUMENTS`
 
 export const commandService = new CommandService()

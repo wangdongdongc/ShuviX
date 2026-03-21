@@ -50,10 +50,10 @@ export interface ProjectInstructionLoadState {
   agentMdLoaded: boolean
 }
 
-/** 读取项目根目录指令文件（优先 AGENTS.MD，回退 AGENT.md；不存在或读取失败时返回空） */
-export function readProjectAgentMd(projectPath: string): string {
+/** 读取工作目录下的指令文件（优先 AGENTS.MD，回退 AGENT.md；不存在或读取失败时返回空） */
+export function readProjectAgentMd(workingDir: string): string {
   for (const name of ['AGENTS.MD', 'AGENT.md']) {
-    const filePath = join(projectPath, name)
+    const filePath = join(workingDir, name)
     if (!existsSync(filePath)) continue
     try {
       const content = readFileSync(filePath, 'utf-8').trim()
@@ -85,6 +85,8 @@ export interface SessionEventState {
   preEmittedToolCalls: Set<string>
   /** toolCallId → tool_use 消息 ID 的映射（用于 completeToolUse） */
   toolUseMessageIds: Map<string, string>
+  /** 当前正在生成的工具调用（LLM 流式输出 tool_use 块期间） */
+  generatingToolCall: { name: string; argsJson: string } | null
 }
 
 /** 事件处理器上下文 — per-session 直接引用，不再使用共享 Map */
@@ -108,6 +110,7 @@ function handleAgentStart(ctx: SessionEventHandlerContext): void {
   ctx.state.turnCounter = 0
   ctx.state.preEmittedToolCalls.clear()
   ctx.state.toolUseMessageIds.clear()
+  ctx.state.generatingToolCall = null
   ctx.broadcastEvent({ type: 'agent_start', sessionId: ctx.sessionId })
 }
 
@@ -206,7 +209,7 @@ function handleAgentEnd(
   })
 }
 
-/** message_update 事件：累积 text/thinking delta */
+/** message_update 事件：累积 text/thinking delta，转发 toolcall 生成状态 */
 function handleMessageUpdate(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'message_update' }>
@@ -226,6 +229,33 @@ function handleMessageUpdate(
       sessionId: ctx.sessionId,
       delta: msgEvent.delta || ''
     })
+  } else if (msgEvent.type === 'toolcall_start') {
+    // 从 partial message 中提取工具名
+    const block = (msgEvent as { partial?: { content?: Array<{ type: string; name?: string }> }; contentIndex?: number }).partial?.content?.[
+      (msgEvent as { contentIndex?: number }).contentIndex ?? 0
+    ]
+    const toolName = block?.type === 'toolCall' ? (block.name || '') : ''
+    if (toolName) {
+      ctx.state.generatingToolCall = { name: toolName, argsJson: '' }
+      ctx.broadcastEvent({
+        type: 'toolcall_generating',
+        sessionId: ctx.sessionId,
+        toolName
+      })
+    }
+  } else if (msgEvent.type === 'toolcall_delta') {
+    // 实时转发每个 delta，让前端能看到参数生成过程
+    const gen = ctx.state.generatingToolCall
+    if (gen) {
+      const delta = (msgEvent as { delta?: string }).delta || ''
+      gen.argsJson += delta
+      ctx.broadcastEvent({
+        type: 'toolcall_generating',
+        sessionId: ctx.sessionId,
+        toolName: gen.name,
+        argsDelta: delta
+      })
+    }
   }
 }
 
@@ -234,6 +264,9 @@ function handleMessageEnd(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'message_end' }>
 ): void {
+  // 工具调用生成阶段结束，清除状态
+  ctx.state.generatingToolCall = null
+
   const msg = event.message
   if (isAssistantMessage(msg)) {
     // 检查流式响应中的错误

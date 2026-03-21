@@ -26,6 +26,7 @@ import { mcpService } from './services/mcpService'
 import { abortAllAcpSessions } from './subagent'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
+import { designProjectManager } from './services/designProjectManager'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -232,15 +233,65 @@ function setupApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+/** resize handle 宽度（与 renderer 侧保持一致） */
+const HANDLE_WIDTH = 1
+
+/** 面板布局（持久化在 window.panelLayout） */
+interface PanelLayout {
+  sidebarWidth: number
+  sidebarOpen: boolean
+  chatWidth: number
+  previewWidth: number
+  previewOpen: boolean
+}
+
+const DEFAULT_PANEL_LAYOUT: PanelLayout = {
+  sidebarWidth: 240,
+  sidebarOpen: true,
+  chatWidth: 720,
+  previewWidth: 480,
+  previewOpen: false
+}
+
+/** 从面板布局计算窗口宽度 */
+function calcWindowWidth(layout: PanelLayout): number {
+  let w = layout.chatWidth
+  if (layout.sidebarOpen) w += layout.sidebarWidth + HANDLE_WIDTH
+  if (layout.previewOpen) w += layout.previewWidth + HANDLE_WIDTH
+  return Math.max(800, w)
+}
+
+/** 读取持久化的面板布局 */
+function getSavedPanelLayout(): PanelLayout {
+  try {
+    const raw = settingsDao.findByKey('window.panelLayout')
+    if (!raw) return DEFAULT_PANEL_LAYOUT
+    const saved = JSON.parse(raw) as Partial<PanelLayout>
+    return {
+      sidebarWidth: Number(saved.sidebarWidth) || DEFAULT_PANEL_LAYOUT.sidebarWidth,
+      sidebarOpen: saved.sidebarOpen ?? DEFAULT_PANEL_LAYOUT.sidebarOpen,
+      chatWidth: Math.max(400, Number(saved.chatWidth) || DEFAULT_PANEL_LAYOUT.chatWidth),
+      previewWidth: Number(saved.previewWidth) || DEFAULT_PANEL_LAYOUT.previewWidth,
+      previewOpen: saved.previewOpen ?? DEFAULT_PANEL_LAYOUT.previewOpen
+    }
+  } catch {
+    return DEFAULT_PANEL_LAYOUT
+  }
+}
+
 function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
-  const defaults = { width: 960, height: 800 }
+  const layout = getSavedPanelLayout()
+  // preview 不自动恢复（renderer 侧不恢复 previewOpen），计算窗口宽度时排除 preview
+  const defaultWidth = calcWindowWidth({ ...layout, previewOpen: false })
+  const defaults = { width: defaultWidth, height: 800 }
   try {
     const raw = settingsDao.findByKey('window.mainBounds')
     if (!raw) return defaults
-    const saved = JSON.parse(raw) as { x?: number; y?: number; width?: number; height?: number }
-    const w = Number(saved.width)
+    const saved = JSON.parse(raw) as { x?: number; y?: number; height?: number }
     const h = Number(saved.height)
-    if (!w || !h || w < 800 || h < 600) return defaults
+    if (!h || h < 600) return defaults
+
+    const w = defaultWidth
 
     // 校验位置是否在可见屏幕范围内
     if (saved.x != null && saved.y != null) {
@@ -305,14 +356,25 @@ function createWindow(): void {
     shell.openExternal(url)
   })
 
-  // 关闭前保存窗口位置和尺寸（扣除预览面板宽度）
+  // 关闭前保存窗口位置和尺寸
   mainWindow.on('close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const bounds = mainWindow.getBounds()
-      if (previewWidthOffset > 0) {
-        bounds.width = Math.max(800, bounds.width - previewWidthOffset)
-      }
-      settingsDao.upsert('window.mainBounds', JSON.stringify(bounds))
+      // 仅保存位置和高度（宽度由 panelLayout 计算）
+      settingsDao.upsert(
+        'window.mainBounds',
+        JSON.stringify({ x: bounds.x, y: bounds.y, height: bounds.height })
+      )
+      // 从各面板的持久化设置中汇总保存 panelLayout
+      const zoom = mainWindow.webContents.getZoomFactor()
+      const windowWidth = bounds.width / zoom // CSS 像素
+      const layout = getSavedPanelLayout()
+      // 反推 chatWidth = 窗口宽度 - 其他面板
+      let chatWidth = windowWidth
+      if (layout.sidebarOpen) chatWidth -= layout.sidebarWidth + HANDLE_WIDTH
+      if (layout.previewOpen) chatWidth -= layout.previewWidth + HANDLE_WIDTH
+      chatWidth = Math.max(400, Math.round(chatWidth))
+      settingsDao.upsert('window.panelLayout', JSON.stringify({ ...layout, chatWidth }))
     }
   })
 
@@ -386,7 +448,7 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   const maxRight = display.workArea.x + display.workArea.width
   const clampedWidth = Math.min(newWidth, maxRight - bounds.x)
   if (clampedWidth !== bounds.width) {
-    mainWindow.setBounds({ ...bounds, width: clampedWidth })
+    mainWindow.setBounds({ ...bounds, width: clampedWidth }, process.platform === 'darwin')
   }
 })
 
@@ -487,6 +549,7 @@ app.on('before-quit', () => {
   sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()
+  designProjectManager.disposeAll()
 })
 
 // macOS 下关闭窗口不退出应用

@@ -1,6 +1,6 @@
-import type { ReferenceDir } from '../dao/types'
+import type { ReferenceDir, ToolSettings } from '../dao/types'
 
-export type { Project, ProjectSettings, ReferenceDir } from '../dao/types'
+export type { Project, ProjectSettings, ReferenceDir, ToolSettings } from '../dao/types'
 
 /** IPC: 创建项目参数 */
 export interface ProjectCreateParams {
@@ -11,6 +11,7 @@ export interface ProjectCreateParams {
   dockerImage?: string
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
+  tool?: ToolSettings
   archived?: boolean
 }
 
@@ -24,6 +25,7 @@ export interface ProjectUpdateParams {
   dockerImage?: string
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
+  tool?: ToolSettings
   archived?: boolean
 }
 

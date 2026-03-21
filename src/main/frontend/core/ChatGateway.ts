@@ -92,7 +92,7 @@ export interface ChatGateway {
   destroyPython(sessionId: string): { success: boolean }
 
   /** 查询 SQL 运行时状态 */
-  getSqlStatus(sessionId: string): { ready: boolean } | null
+  getSqlStatus(sessionId: string): { ready: boolean; storageMode: 'memory' | 'persistent' } | null
 
   /** 销毁 SQL 运行时 */
   destroySql(sessionId: string): { success: boolean }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Copy, Folder, Settings2, PanelRight } from 'lucide-react'
+import { Folder, Settings2 } from 'lucide-react'
 import {
   useChatStore,
   selectStreamingContent,
@@ -15,6 +15,7 @@ import {
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { usePreviewStore } from '../../stores/previewStore'
+import { useSidebarStore } from '../../stores/sidebarStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
@@ -161,6 +162,8 @@ export function ChatView(): React.JSX.Element {
   const [showSessionConfig, setShowSessionConfig] = useState(false)
   const togglePreview = usePreviewStore((s) => s.toggle)
   const isPreviewOpen = usePreviewStore((s) => s.isOpen)
+  const toggleSidebar = useSidebarStore((s) => s.toggle)
+  const isSidebarOpen = useSidebarStore((s) => s.isOpen)
 
   /** 开始编辑会话标题 */
   const startEditTitle = (): void => {
@@ -247,80 +250,95 @@ export function ChatView(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      {/* 窗口拖拽区 + 会话标题 / 工作目录（macOS 为交通灯留出顶部空间） */}
+      {/* 窗口拖拽区 + 会话标题栏（单行布局） */}
       <div
-        className={`titlebar-drag flex-shrink-0 flex flex-col items-center justify-end pb-1 relative ${window.api.app.platform === 'darwin' ? 'min-h-12' : 'min-h-8'}`}
+        className={`titlebar-drag flex-shrink-0 flex items-center px-2 ${window.api.app.platform === 'darwin' ? 'h-10' : 'h-8'}`}
       >
-        {/* Preview 面板切换按钮 */}
-        <button
-          onClick={togglePreview}
-          className={`titlebar-no-drag absolute right-2 bottom-1.5 p-1 rounded-md transition-colors ${isPreviewOpen ? 'text-accent bg-accent-muted' : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'}`}
-          title="Preview"
-        >
-          <PanelRight size={14} />
-        </button>
-        {sessionTitle &&
-          (editingTitle && window.api.app.platform !== 'web' ? (
-            <input
-              ref={titleInputRef}
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              onBlur={() => void commitEditTitle()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void commitEditTitle()
-                if (e.key === 'Escape') setEditingTitle(false)
-              }}
-              className="titlebar-no-drag bg-transparent text-center text-xs font-medium text-text-primary outline-none border-b border-accent/50 px-2 py-0.5 max-w-[60%]"
-              autoFocus
-            />
-          ) : (
-            <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[70%]">
-              {window.api.app.platform !== 'web' ? (
-                <button
-                  onClick={startEditTitle}
-                  className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
-                  title={t('common.clickToEdit')}
-                >
-                  {sessionTitle}
-                </button>
-              ) : (
-                <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate">
-                  {sessionTitle}
-                </span>
-              )}
-              {window.api.app.platform !== 'web' && (
-                <button
-                  onClick={() => setShowSessionConfig(true)}
-                  className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
-                  title={t('sessionConfig.title')}
-                >
-                  <Settings2 size={12} />
-                </button>
-              )}
-            </div>
-          ))}
-        {projectPath && (
-          <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[60%]">
+        {/* 左侧：工作目录 */}
+        <div className="titlebar-no-drag flex items-center min-w-0 flex-shrink-0">
+          {projectPath && (
             <button
               onClick={() => window.api.app.openFolder(projectPath)}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors cursor-pointer min-w-0"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors cursor-pointer min-w-0"
               title={projectPath}
             >
               <Folder size={10} className="flex-shrink-0 text-text-tertiary/70" />
-              <span className="truncate">{projectPath}</span>
+              <span className="truncate">{projectPath.split('/').pop() || projectPath}</span>
             </button>
+          )}
+        </div>
+
+        {/* 中间：会话标题（居中） */}
+        <div className="flex-1 flex items-center justify-center min-w-0">
+          {sessionTitle &&
+            (editingTitle && window.api.app.platform !== 'web' ? (
+              <input
+                ref={titleInputRef}
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                onBlur={() => void commitEditTitle()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitEditTitle()
+                  if (e.key === 'Escape') setEditingTitle(false)
+                }}
+                className="titlebar-no-drag bg-transparent text-center text-xs font-medium text-text-primary outline-none border-b border-accent/50 px-2 py-0.5 max-w-[80%]"
+                autoFocus
+              />
+            ) : (
+              <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[80%]">
+                {window.api.app.platform !== 'web' ? (
+                  <button
+                    onClick={startEditTitle}
+                    className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
+                    title={t('common.clickToEdit')}
+                  >
+                    {sessionTitle}
+                  </button>
+                ) : (
+                  <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate">
+                    {sessionTitle}
+                  </span>
+                )}
+                {window.api.app.platform !== 'web' && (
+                  <button
+                    onClick={() => setShowSessionConfig(true)}
+                    className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+                    title={t('sessionConfig.title')}
+                  >
+                    <Settings2 size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+        </div>
+
+        {/* 右侧：侧边栏 + Preview 按钮 */}
+        <div className="titlebar-no-drag flex items-center gap-0.5 flex-shrink-0">
+          {window.api?.app?.platform !== 'web' && (
             <button
-              onClick={(e) => {
-                e.stopPropagation()
-                navigator.clipboard.writeText(projectPath)
-              }}
-              className="flex-shrink-0 p-0.5 rounded hover:bg-bg-hover/50 text-text-tertiary/50 hover:text-text-secondary transition-colors"
-              title={t('common.copy')}
+              onClick={toggleSidebar}
+              className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+              title="Toggle sidebar"
             >
-              <Copy size={10} />
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect width="18" height="18" x="3" y="3" rx="2" />
+                <path d="M9 3v18" />
+                {isSidebarOpen && <rect x="3" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />}
+              </svg>
             </button>
-          </div>
-        )}
+          )}
+          <button
+            onClick={togglePreview}
+            className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+            title="Preview"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2" />
+              <path d="M15 3v18" />
+              {isPreviewOpen && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />}
+            </svg>
+          </button>
+        </div>
       </div>
 
       {activeSessionId && <StatusBanner sessionId={activeSessionId} />}

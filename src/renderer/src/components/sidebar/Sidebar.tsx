@@ -16,6 +16,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import type { Session } from '../../stores/chatStore'
 
 /**
@@ -194,7 +195,7 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group flex items-center gap-1.5 px-2.5 py-1 cursor-pointer ${
+      className={`group flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
           : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
@@ -225,10 +226,10 @@ export function Sidebar(): React.JSX.Element {
   )
 
   return (
-    <div className="flex flex-col h-full bg-bg-primary border-r border-border-secondary/50">
+    <div className="flex flex-col h-full bg-bg-primary">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div
-        className={`titlebar-drag flex items-center justify-between px-4 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
+        className={`titlebar-drag flex items-center justify-between pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
       >
         <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">
           {t('sidebar.title')}
@@ -255,7 +256,7 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* 会话列表 */}
-      <div className="flex-1 overflow-y-auto px-2 py-1 no-scrollbar">
+      <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
         {sessions.length === 0 &&
         Object.keys(projectNames).length === 0 &&
         archivedProjects.length === 0 ? (
@@ -315,9 +316,9 @@ export function Sidebar(): React.JSX.Element {
                       )}
                     </div>
                   </div>
-                  {!collapsed && (
+                  <AnimatedCollapse open={!collapsed}>
                     <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
-                  )}
+                  </AnimatedCollapse>
                 </div>
               )
             })}
@@ -340,12 +341,12 @@ export function Sidebar(): React.JSX.Element {
                     </span>
                   </button>
                 </div>
-                {!collapsedGroups.has(ARCHIVED_GROUP_KEY) && (
+                <AnimatedCollapse open={!collapsedGroups.has(ARCHIVED_GROUP_KEY)}>
                   <div className="ml-1.5 pl-0.5">
                     {archivedProjects.map((p) => (
                       <div
                         key={p.id}
-                        className="group flex items-center gap-1.5 px-2.5 py-1 text-text-tertiary"
+                        className="group flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 text-text-tertiary"
                       >
                         <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
                         <button
@@ -365,7 +366,7 @@ export function Sidebar(): React.JSX.Element {
                       </div>
                     ))}
                   </div>
-                )}
+                </AnimatedCollapse>
               </div>
             )}
           </>
@@ -376,7 +377,7 @@ export function Sidebar(): React.JSX.Element {
       <div className="p-2 border-t border-border-secondary/50">
         <button
           onClick={() => window.api.app.openSettings()}
-          className="flex items-center gap-2 w-full px-3 py-1.5 rounded-md text-[11px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
+          className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[11px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
         >
           <Settings size={14} />
           <span>{t('sidebar.settings')}</span>

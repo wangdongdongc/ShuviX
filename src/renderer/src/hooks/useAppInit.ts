@@ -2,6 +2,9 @@ import { useEffect } from 'react'
 import i18next from 'i18next'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useSidebarStore } from '../stores/sidebarStore'
+import { usePreviewStore } from '../stores/previewStore'
+import { loadPanelLayout } from '../stores/panelLayout'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -73,6 +76,14 @@ export function useAppInit(): void {
         }
         useChatStore.getState().setTelegramBindings(telegramBindings)
       }
+
+      // 恢复面板布局（宽度 + 开关状态）
+      loadPanelLayout().then((layout) => {
+        if (layout.sidebarWidth) useSidebarStore.setState({ width: layout.sidebarWidth })
+        if (layout.sidebarOpen === false) useSidebarStore.setState({ isOpen: false })
+        if (layout.previewWidth) usePreviewStore.setState({ width: layout.previewWidth })
+        // preview open 状态不自动恢复（preview 依赖运行时 server，重启后需重新启动）
+      })
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口
       lap('renderer init done, waiting for paint')

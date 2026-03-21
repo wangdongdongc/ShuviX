@@ -71,6 +71,8 @@
     "pythonWasmRuntime": "Python 引擎",
     "destroySql": "终止 SQL 运行时",
     "sqlWasmRuntime": "Postgres 数据库",
+    "sqlPersistent": "持久化",
+    "sqlTemporary": "临时",
     "acpAgentRunning": "{{name}} 运行中",
     "destroyAcp": "终止 ACP Agent 会话",
     "destroyReason_manual": "手动销毁",
@@ -110,7 +112,10 @@
 
   "voice": {
     "startRecording": "语音输入",
-    "stopRecording": "停止录音"
+    "stopRecording": "停止录音",
+    "errorModelNotDownloaded": "模型 {{modelId}} 未下载，请先在设置中下载",
+    "errorProviderNotFound": "未找到内置 OpenAI 提供商",
+    "errorApiKeyMissing": "请先在 设置 → 提供商 → OpenAI 中配置 API Key"
   },
 
   "message": {
@@ -135,6 +140,7 @@
   },
 
   "toolCall": {
+    "generating": "生成中...",
     "running": "执行中...",
     "done": "完成",
     "error": "出错",
@@ -228,11 +234,14 @@
   "projectForm": {
     "createTitle": "新建项目",
     "editTitle": "编辑项目",
+    "basicInfoTitle": "基本信息",
+    "folders": "文件夹",
     "name": "项目名称",
     "namePlaceholder": "项目名称",
     "path": "项目文件夹",
     "pathPlaceholder": "/path/to/project",
-    "selectFolder": "选择…",
+    "selectFolder": "选择项目工作文件夹",
+    "changeFolder": "更换",
     "pathHint": "工具执行时的工作目录，所有相对路径基于此目录解析",
     "prompt": "项目提示词",
     "promptPlaceholder": "项目级提示词（与全局提示词同时生效）",
@@ -250,6 +259,10 @@
     "toolsPresetGeneral": "通用",
     "toolsPresetCode": "代码",
     "toolsHint": "新建会话时默认启用的工具，会话中可单独调整并覆盖此配置",
+    "toolConfig": "工具配置",
+    "embeddedDbGroup": "项目数据库",
+    "pglitePersistLabel": "持久化数据存储",
+    "pglitePersistDesc": "开启后 SQL 工具和 RAG 工具（即将推出）的数据将持久化到项目文件夹中。关闭时数据仅存于内存，运行时终止后丢失。",
     "toolsGeneralGroup": "通用工具",
     "toolsRipgrepGroup": "高性能检索工具（适合大型代码库）",
     "toolsShuvixGroup": "系统工具（读写项目和全局配置）",
@@ -257,11 +270,13 @@
     "toolsSubAgentDesc": "将任务委派给运行在独立上下文中的自主子智能体。",
     "referenceDirs": "引用更多文件夹",
     "referenceDirsHint": "AI 可访问这些目录中的文件，沙箱模式下按访问模式限制读写权限",
-    "addRefDir": "添加目录",
+    "addRefDir": "引用更多文件夹",
     "refDirNotePlaceholder": "注释（帮助 AI 理解目录用途）",
     "refDirAccessLabel": "文件夹访问权限",
     "refDirAccessReadonly": "只读",
     "refDirAccessReadwrite": "读写",
+    "refDirAccessRO": "R",
+    "refDirAccessRW": "RW",
     "archiveProject": "归档项目",
     "archiveConfirmTitle": "归档项目",
     "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
@@ -283,9 +298,9 @@
     "purposeSQLDesc": "开箱即用的 Postgres 数据库",
     "purposeDev": "程序开发",
     "purposeDevDesc": "探索并理解代码库，代码编辑和命令执行",
-    "purposeTipBash": "Bash 工具让智能体拥有无限的可能性。每一条命令都需要您审批后才能执行，但如果您对此不熟悉，错误的命令可能会损害您的计算机。",
-    "purposeTipPython": "Python 工具使用内置引擎，无需额外安装。代码在沙箱中执行，相对安全。但请注意，这是一个功能受限的 Python 运行时。第三方 Python 库会在使用前自动下载（如果您处于网络受限的环境中，可能会下载失败），但并非所有第三方库都可用。",
-    "purposeTipSql": "SQL 将在内置的临时的 Postgres 数据库中运行（当您不再使用时，数据库会被删除！），开箱即用且预装了大量插件。不同会话中的数据库是相互隔离的。您可以将项目文件夹中的 CSV 文件导入数据库，这非常适合数据分析。",
+    "purposeTipBash": "Bash 工具让智能体拥有无限的可能性。命令需要审批后才会执行，不恰当的命令可能会损害系统。",
+    "purposeTipPython": "允许 AI 在一个相对安全的 Python 沙箱中执行代码（并非所有第三方库都可用）",
+    "purposeTipSql": "在内置的 Postgres 数据库中运行 SQL。支持将项目文件夹中的 CSV 导入数据库，适合数据分析。",
     "purposeTipDev": "高性能检索工具有助于 AI 快速探索并理解大型代码库。",
     "extEmptyDesc": "你还没有配置任何扩展能力。MCP Server 和 Skills 可以为 AI 提供更多工具，前往设置页面添加。",
     "extMcpDesc": "通过 MCP 协议连接外部工具服务，让 AI 获得数据库查询、API 调用等扩展能力。",

@@ -9,6 +9,7 @@
     "src/webui/**/*.tsx",
     "src/preload/*.d.ts",
     "src/main/types/**/*.ts",
+    "src/main/dao/types/**/*.ts",
     "src/shared/**/*"
   ],
   "compilerOptions": {

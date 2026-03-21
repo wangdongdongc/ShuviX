@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
+import { usePanelTransition } from '../../hooks/usePanelTransition'
 import { ProjectBasicInfo, ProjectFileSystem } from './ProjectFormSections'
 
 import type { ReferenceDir } from '../../../../main/types/project'
@@ -52,6 +53,7 @@ export function ProjectCreateDialog({
 
   // 向导步骤
   const [step, setStep] = useState(0)
+  const panelRef = usePanelTransition()
   const [purpose, setPurpose] = useState<string | null>(null)
 
   // 项目字段
@@ -63,6 +65,7 @@ export function ProjectCreateDialog({
   const [enabledTools, setEnabledTools] = useState<string[]>([])
   const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
   const [expandedExtGroups, setExpandedExtGroups] = useState<Set<string>>(new Set())
+  const [pglitePersist, setPglitePersist] = useState(false)
 
   // 加载工具列表
   useEffect(() => {
@@ -153,7 +156,8 @@ export function ProjectCreateDialog({
         path: path.trim(),
         systemPrompt,
         enabledTools,
-        referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined
+        referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined,
+        tool: pglitePersist ? { pglitePersist: true } : undefined
       })
       await onCreated?.(project.id)
       onClose()
@@ -174,7 +178,10 @@ export function ProjectCreateDialog({
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel">
+      <div
+        ref={panelRef}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel"
+      >
         {/* 标题栏 + 步骤指示器 */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-secondary">
           <div className="flex items-center gap-3">
@@ -598,7 +605,7 @@ export function ProjectCreateDialog({
         {/* ========== Step 3: 项目配置 ========== */}
         {step === 3 && (
           <>
-            <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
+            <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
               <ProjectBasicInfo
                 name={name}
                 onNameChange={setName}
@@ -612,6 +619,30 @@ export function ProjectCreateDialog({
                 referenceDirs={referenceDirs}
                 onReferenceDirsChange={setReferenceDirs}
               />
+
+              {/* 工具配置 */}
+              <div className="zen-card">
+                <div className="zen-card-header">
+                  <Database size={12} />
+                  {t('projectForm.toolConfig')}
+                </div>
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={pglitePersist}
+                    onChange={(e) => setPglitePersist(e.target.checked)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <div>
+                    <span className="text-[11px] text-text-primary">
+                      {t('projectForm.pglitePersistLabel')}
+                    </span>
+                    <p className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">
+                      {t('projectForm.pglitePersistDesc')}
+                    </p>
+                  </div>
+                </label>
+              </div>
             </div>
 
             <div className="flex items-center justify-between px-5 py-3 border-t border-border-secondary">

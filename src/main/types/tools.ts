@@ -13,6 +13,7 @@ export const ALL_TOOL_NAMES = [
   'sql',
   'shuvix-project',
   'shuvix-setting',
+  'design',
   'explore',
   'claude-code'
 ] as const

@@ -71,6 +71,8 @@
     "pythonWasmRuntime": "Python エンジン",
     "destroySql": "SQL ランタイムを終了",
     "sqlWasmRuntime": "Postgresデータベース",
+    "sqlPersistent": "永続",
+    "sqlTemporary": "一時的",
     "acpAgentRunning": "{{name}} 実行中",
     "destroyAcp": "ACP Agent セッションを終了",
     "destroyReason_manual": "手動削除",
@@ -110,7 +112,10 @@
 
   "voice": {
     "startRecording": "音声入力",
-    "stopRecording": "録音停止"
+    "stopRecording": "録音停止",
+    "errorModelNotDownloaded": "モデル {{modelId}} がダウンロードされていません。設定からダウンロードしてください。",
+    "errorProviderNotFound": "内蔵の OpenAI プロバイダーが見つかりません",
+    "errorApiKeyMissing": "設定 → プロバイダー → OpenAI で API Key を設定してください"
   },
 
   "message": {
@@ -135,6 +140,7 @@
   },
 
   "toolCall": {
+    "generating": "生成中...",
     "running": "実行中...",
     "done": "完了",
     "error": "エラー",
@@ -228,11 +234,14 @@
   "projectForm": {
     "createTitle": "新規プロジェクト",
     "editTitle": "プロジェクトを編集",
+    "basicInfoTitle": "基本情報",
+    "folders": "フォルダ",
     "name": "プロジェクト名",
     "namePlaceholder": "プロジェクト名",
     "path": "プロジェクトフォルダ",
     "pathPlaceholder": "/path/to/project",
-    "selectFolder": "選択…",
+    "selectFolder": "プロジェクト作業フォルダを選択",
+    "changeFolder": "変更",
     "pathHint": "ツール実行時の作業ディレクトリ。すべての相対パスはこのディレクトリから解決されます。",
     "prompt": "プロジェクトプロンプト",
     "promptPlaceholder": "プロジェクトレベルのプロンプト（グローバルプロンプトと併用）",
@@ -250,6 +259,10 @@
     "toolsPresetGeneral": "汎用",
     "toolsPresetCode": "コード",
     "toolsHint": "新しいセッション作成時にデフォルトで有効になるツール。セッション内で個別に変更できます。",
+    "toolConfig": "ツール設定",
+    "embeddedDbGroup": "プロジェクトデータベース",
+    "pglitePersistLabel": "データ永続化",
+    "pglitePersistDesc": "有効にすると SQL と RAG（近日公開）ツールのデータがプロジェクトフォルダに永続化されます。無効の場合はメモリ上のみで、ランタイム終了時に失われます。",
     "toolsGeneralGroup": "汎用ツール",
     "toolsRipgrepGroup": "高性能検索ツール（大規模コードベース向け）",
     "toolsShuvixGroup": "システムツール（プロジェクトとグローバル設定の読み書き）",
@@ -257,11 +270,13 @@
     "toolsSubAgentDesc": "独立したコンテキストで自律的に動作するサブエージェントにタスクを委譲します。",
     "referenceDirs": "追加フォルダ",
     "referenceDirsHint": "AIがこれらのディレクトリのファイルにアクセスできます。サンドボックスモードではアクセスモードにより読み書き権限が制御されます。",
-    "addRefDir": "ディレクトリを追加",
+    "addRefDir": "他のフォルダを参照",
     "refDirNotePlaceholder": "メモ（AIがディレクトリの用途を理解するのに役立ちます）",
     "refDirAccessLabel": "フォルダアクセス権限",
     "refDirAccessReadonly": "読み取り専用",
     "refDirAccessReadwrite": "読み書き",
+    "refDirAccessRO": "R",
+    "refDirAccessRW": "RW",
     "archiveProject": "プロジェクトをアーカイブ",
     "archiveConfirmTitle": "プロジェクトをアーカイブ",
     "archiveConfirmDesc": "このプロジェクトは「アーカイブ済みプロジェクト」に移動され、後で復元できます。",
@@ -283,9 +298,9 @@
     "purposeSQLDesc": "すぐに使える Postgresデータベース",
     "purposeDev": "ソフトウェア開発",
     "purposeDevDesc": "コードベースの探索と理解、コード編集とコマンド実行",
-    "purposeTipBash": "Bashツールはエージェントに無限の可能性を与えます。すべてのコマンドは実行前に承認が必要ですが、不慣れな場合、誤ったコマンドがコンピュータに損害を与える可能性があります。",
-    "purposeTipPython": "Pythonツールは内蔵エンジンを使用し、追加インストールは不要です。コードはサンドボックスで実行されるため、比較的安全です。ただし、これは機能が制限されたPythonランタイムです。サードパーティライブラリは使用前に自動ダウンロードされます（ネットワーク制限環境ではダウンロードに失敗する場合があります）が、すべてのサードパーティライブラリが利用できるわけではありません。",
-    "purposeTipSql": "SQLは内蔵の一時的なPostgresデータベースで実行されます（使用しなくなるとデータベースは削除されます！）。多数のプラグインがプリインストールされており、すぐに使えます。セッション間でデータベースは分離されています。プロジェクトフォルダのCSVファイルをデータベースにインポートでき、データ分析に最適です。",
+    "purposeTipBash": "Bashツールはエージェントに無限の可能性を与えます。コマンドは承認後に実行されますが、不適切なコマンドはシステムに損害を与える可能性があります。",
+    "purposeTipPython": "AI が比較的安全な Python サンドボックスでコードを実行できます（すべてのサードパーティライブラリが利用できるわけではありません）。",
+    "purposeTipSql": "内蔵の Postgres データベースで SQL を実行します。プロジェクトフォルダの CSV インポートに対応し、データ分析に最適です。",
     "purposeTipDev": "高性能な検索ツールにより、AIが大規模なコードベースを素早く探索し理解できます。",
     "extEmptyDesc": "拡張機能がまだ設定されていません。MCP ServerとSkillsでAIに追加ツールを提供できます。設定ページで追加してください。",
     "extMcpDesc": "MCPプロトコルで外部ツールサーバーに接続し、データベースクエリやAPI呼び出しなどの拡張機能をAIに提供します。",

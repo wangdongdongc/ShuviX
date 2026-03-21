@@ -24,6 +24,10 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   referenceDirs: {
     labelKey: 'projectForm.referenceDirs',
     desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite'
+  },
+  'tool.pglitePersist': {
+    labelKey: 'projectForm.pglitePersistLabel',
+    desc: 'Enable PGLite persistent storage — data stored in project folder .shuvix/pglite/data (boolean)'
   }
 }
 
@@ -88,6 +92,7 @@ export class ProjectService {
     dockerImage?: string
     enabledTools?: string[]
     referenceDirs?: ReferenceDir[]
+    tool?: import('../dao/types').ToolSettings
     archived?: boolean
   }): Project {
     const now = Date.now()
@@ -96,6 +101,7 @@ export class ProjectService {
     if (params.enabledTools) settings.enabledTools = params.enabledTools
     if (params.referenceDirs)
       settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
+    if (params.tool) settings.tool = params.tool
     const project: Project = {
       id,
       name: params.name || basename(params.path) || params.path,
@@ -124,12 +130,17 @@ export class ProjectService {
       dockerImage?: string
       enabledTools?: string[]
       referenceDirs?: ReferenceDir[]
+      tool?: import('../dao/types').ToolSettings
       archived?: boolean
     }
   ): void {
     // 处理 settings 字段（合并而非覆盖）
     let settingsUpdate: ProjectSettings | undefined
-    if (params.enabledTools !== undefined || params.referenceDirs !== undefined) {
+    if (
+      params.enabledTools !== undefined ||
+      params.referenceDirs !== undefined ||
+      params.tool !== undefined
+    ) {
       const existing = projectDao.pick(id, ['settings', 'path'])
       const current: ProjectSettings = { ...(existing?.settings || {}) }
       if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
@@ -137,6 +148,7 @@ export class ProjectService {
         const projPath = params.path ?? existing?.path
         current.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, projPath)
       }
+      if (params.tool !== undefined) current.tool = { ...(current.tool || {}), ...params.tool }
       settingsUpdate = current
     }
     projectDao.update(id, {
