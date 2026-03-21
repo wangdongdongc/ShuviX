@@ -1,8 +1,9 @@
 /**
- * Read 工具 — 读取文件内容
+ * Read 工具 — 读取文件内容 / 抓取网页
  * 从 pi-coding-agent 移植，支持分页读取、行号、截断
  * 支持通过 markitdown-ts 将 PDF/Office/HTML 等富文本格式转换为 Markdown
  * 支持通过 word-extractor 提取旧版 .doc 文件文字
+ * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
  */
 
 import { stat as fsStat, readdir as fsReaddir, open as fsOpen } from 'fs/promises'
@@ -36,6 +37,20 @@ const log = createLogger('Tool:read')
 
 /** 工具返回结果类型别名 */
 type ReadResult = AgentToolResult<ReadToolDetails>
+
+/** 检测是否为 HTTP/HTTPS URL */
+function isUrl(path: string): boolean {
+  return /^https?:\/\//i.test(path)
+}
+
+/** URL 抓取超时时间（毫秒） */
+const FETCH_TIMEOUT_MS = 30_000
+
+/** URL 响应体最大字节数（5MB） */
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+/** URL 抓取 User-Agent */
+const FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; ShuviX/1.0)'
 
 /** markitdown-ts 支持转换的文件扩展名 */
 const RICH_FILE_EXTENSIONS = new Set([
@@ -137,7 +152,7 @@ function getWordExtractor(): WordExtractor {
 
 const ReadParamsSchema = Type.Object({
   path: Type.String({
-    description: 'The file or directory path to read (relative or absolute)'
+    description: 'The file path, directory path, or URL (http/https) to read'
   }),
   offset: Type.Optional(
     Type.Number({
@@ -156,7 +171,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   readonly name = 'read'
   readonly label = t('tool.readLabel')
   readonly description =
-    'Read file or directory contents. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).'
+    'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).'
   readonly parameters = ReadParamsSchema
 
   constructor(private ctx: ToolContext) {
@@ -174,6 +189,9 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   ): Promise<void> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
+    // URL 不走文件系统沙箱检查
+    if (isUrl(params.path)) return
+
     const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveReadPath(params.path, config.workingDirectory)
 
@@ -187,6 +205,17 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
     signal?: AbortSignal
   ): Promise<ReadResult> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+    // URL：抓取网页并转换为 Markdown
+    if (isUrl(params.path)) {
+      try {
+        return await readUrl(params.path, signal)
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message === TOOL_ABORTED) throw err
+        const errMsg = err instanceof Error ? err.message : String(err)
+        throw new Error(`Failed to fetch URL: ${errMsg}`)
+      }
+    }
 
     const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveReadPath(params.path, config.workingDirectory)
@@ -383,6 +412,74 @@ async function readLegacyDoc(
       format: 'DOC',
       converted: true,
       truncated: truncated.truncated
+    }
+  }
+}
+
+/**
+ * URL 抓取：通过 markitdown-ts 抓取网页并转换为 Markdown
+ * 自定义 fetch 实现超时、User-Agent、响应体大小限制
+ */
+async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
+  if (signal?.aborted) throw new Error(TOOL_ABORTED)
+
+  log.info(`Fetching URL: ${url}`)
+
+  const customFetch: typeof globalThis.fetch = async (input, init) => {
+    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal
+
+    const response = await globalThis.fetch(input, {
+      ...init,
+      signal: combinedSignal,
+      headers: {
+        'User-Agent': FETCH_USER_AGENT,
+        ...((init?.headers as Record<string, string>) || {})
+      }
+    })
+
+    // 检查 Content-Length（如果存在）
+    const contentLength = response.headers.get('content-length')
+    if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_BYTES) {
+      throw new Error(
+        `Response too large (${formatSize(parseInt(contentLength, 10))}). ` +
+          `Maximum allowed: ${formatSize(MAX_RESPONSE_BYTES)}.`
+      )
+    }
+
+    return response
+  }
+
+  const md = getMarkItDown()
+  const result = await md.convert(url, { fetch: customFetch })
+  if (!result || !result.markdown) {
+    throw new Error(`Failed to fetch or convert URL: ${url}`)
+  }
+
+  let text = result.markdown
+
+  // 截断处理（与 readRichFile 一致）
+  const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
+  if (truncated.truncated) {
+    text = `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n${truncated.text}`
+  } else {
+    text = truncated.text
+  }
+
+  // 信息头
+  const title = result.title ? ` — ${result.title}` : ''
+  text = `URL: ${url}${title} — converted to Markdown\n\n${text}`
+
+  return {
+    content: [{ type: 'text' as const, text }],
+    details: {
+      type: 'read',
+      format: 'URL',
+      converted: true,
+      truncated: truncated.truncated,
+      url
     }
   }
 }

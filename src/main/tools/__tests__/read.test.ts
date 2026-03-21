@@ -69,8 +69,20 @@ vi.mock('../../logger', () => ({
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
 vi.mock('markitdown-ts', () => ({
   MarkItDown: class {
-    convert(): { markdown: string } {
-      return { markdown: '' }
+    async convert(
+      source: string
+    ): Promise<{ title: string | null; markdown: string } | null> {
+      // URL mock：模拟网页抓取
+      if (typeof source === 'string' && /^https?:\/\//i.test(source)) {
+        if (source.includes('empty-page')) {
+          return { title: null, markdown: '' }
+        }
+        if (source.includes('fail-convert')) {
+          throw new Error('Network error')
+        }
+        return { title: 'Mock Page', markdown: '# Mock Page\n\nMock content from URL.' }
+      }
+      return { title: null, markdown: '' }
     }
   }
 }))
@@ -265,5 +277,64 @@ describe('read 工具 - 大文件字节上限', () => {
     expect((result.details as { truncated: boolean }).truncated).toBe(true)
     // 应包含截断提示
     expect(text).toContain('offset=')
+  })
+})
+
+describe('read 工具 - URL 抓取', () => {
+  it('URL 正确路由到 readUrl 并返回 Markdown', async () => {
+    const tool = new ReadTool(ctx)
+    const result = await tool.execute('tc-url1', {
+      path: 'https://example.com/page'
+    })
+    const text = getText(result)
+    const details = result.details as { format: string; converted: boolean; url: string }
+    expect(text).toContain('URL: https://example.com/page')
+    expect(text).toContain('Mock Page')
+    expect(text).toContain('Mock content from URL.')
+    expect(details.format).toBe('URL')
+    expect(details.converted).toBe(true)
+    expect(details.url).toBe('https://example.com/page')
+  })
+
+  it('URL 返回包含页面标题', async () => {
+    const tool = new ReadTool(ctx)
+    const result = await tool.execute('tc-url2', {
+      path: 'https://example.com/page'
+    })
+    const text = getText(result)
+    expect(text).toContain('— Mock Page —')
+  })
+
+  it('URL 抓取失败返回合适的错误', async () => {
+    const tool = new ReadTool(ctx)
+    try {
+      await tool.execute('tc-url3', { path: 'https://fail-convert.example.com' })
+      expect.fail('应该抛错')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      expect(msg).toContain('Failed to fetch URL')
+      expect(msg).toContain('Network error')
+    }
+  })
+
+  it('URL 返回空内容时报错', async () => {
+    const tool = new ReadTool(ctx)
+    try {
+      await tool.execute('tc-url4', { path: 'https://empty-page.example.com' })
+      expect.fail('应该抛错')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : ''
+      expect(msg).toContain('Failed to fetch URL')
+    }
+  })
+
+  it('http URL 也能正确识别', async () => {
+    const tool = new ReadTool(ctx)
+    const result = await tool.execute('tc-url5', {
+      path: 'http://example.com/page'
+    })
+    const text = getText(result)
+    expect(text).toContain('URL: http://example.com/page')
+    expect(text).toContain('Mock content from URL.')
   })
 })

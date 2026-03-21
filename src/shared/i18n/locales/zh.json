@@ -582,7 +582,7 @@
     "shuvixProjectLabel": "项目配置",
     "shuvixSettingLabel": "系统设置",
     "bashHint": "在终端中执行命令，如安装依赖、运行脚本、Git 操作等",
-    "readHint": "读取文件内容，支持文本、PDF、Word、Excel 等常见格式",
+    "readHint": "读取文件内容或获取网页，支持文本、PDF、Word、Excel、URL 等常见格式",
     "writeHint": "创建新文件或覆盖已有文件，自动创建所需的目录",
     "editHint": "精确替换文件中的指定文本片段，适合小范围修改",
     "askHint": "AI 向你提问并提供可点击的选项，帮助确认方向",

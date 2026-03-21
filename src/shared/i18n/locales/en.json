@@ -582,7 +582,7 @@
     "shuvixProjectLabel": "Project Config",
     "shuvixSettingLabel": "System Settings",
     "bashHint": "Run terminal commands like installing packages, running scripts, or Git operations",
-    "readHint": "Read file contents — supports text, PDF, Word, Excel and more",
+    "readHint": "Read file contents or fetch web pages — supports text, PDF, Word, Excel, URLs and more",
     "writeHint": "Create a new file or overwrite an existing one; directories are created automatically",
     "editHint": "Replace a specific text snippet in a file — ideal for small, precise changes",
     "askHint": "AI asks you a question with clickable options to confirm direction",

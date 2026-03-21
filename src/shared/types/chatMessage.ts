@@ -104,7 +104,7 @@ export interface BashToolDetails {
   docker?: boolean
 }
 
-/** read 工具详情（目录 / 富文本转换 / 纯文本三种场景的扁平超集） */
+/** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */
 export interface ReadToolDetails {
   type: 'read'
   totalLines?: number
@@ -113,6 +113,8 @@ export interface ReadToolDetails {
   format?: string
   converted?: boolean
   truncated: boolean
+  /** URL 来源标识（仅 URL 抓取时存在） */
+  url?: string
 }
 
 /** glob 工具详情 */

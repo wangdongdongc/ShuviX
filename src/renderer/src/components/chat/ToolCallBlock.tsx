@@ -23,7 +23,8 @@ import {
   Package,
   Clock,
   Database,
-  Palette
+  Palette,
+  Globe
 } from 'lucide-react'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
@@ -110,11 +111,22 @@ export function ToolCallBlock({
           detail: line.length > 80 ? line.slice(0, 77) + '...' : line
         }
       }
-      case 'read':
+      case 'read': {
+        const readPath = str(args?.path)
+        const isUrlPath = /^https?:\/\//i.test(readPath)
         return {
-          icon: <FileText size={12} className={ic} />,
-          detail: truncatePath(str(args?.path))
+          icon: isUrlPath ? (
+            <Globe size={12} className={ic} />
+          ) : (
+            <FileText size={12} className={ic} />
+          ),
+          detail: isUrlPath
+            ? readPath.length > 60
+              ? readPath.slice(0, 57) + '...'
+              : readPath
+            : truncatePath(readPath)
         }
+      }
       case 'write':
         return {
           icon: <FileOutput size={12} className={ic} />,
