@@ -5,7 +5,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
  * 通过 ResizeObserver 监测面板尺寸变化，自动做平滑高度过渡
  * 返回 callback ref，绑定到面板元素即可
  */
-export function usePanelTransition() {
+export function usePanelTransition(): (node: HTMLDivElement | null) => void {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null)
   const state = useRef({ prevH: 0, animating: false, rafId: 0, timer: 0 })
 

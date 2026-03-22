@@ -1,11 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  truncateLine,
-  MAX_LINE_LENGTH,
-  truncateHead,
-  truncateTail,
-  formatSize
-} from '../utils/truncate'
+import { truncateLine, MAX_LINE_LENGTH, truncateHead, truncateTail, formatSize } from '../truncate'
 
 describe('truncateLine', () => {
   it('短行不截断', () => {

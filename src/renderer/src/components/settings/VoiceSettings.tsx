@@ -457,7 +457,7 @@ function TtsPanel(): React.JSX.Element {
       }
     })
     return unsub
-  }, [loadQwen3Status])
+  }, [loadQwen3Status, t])
 
   // 监听 downloadManager 的字节级下载进度（qwen3- 前缀的任务）
   useEffect(() => {

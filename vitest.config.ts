@@ -9,8 +9,8 @@ export default defineConfig({
     }
   },
   test: {
-    // 仅测试 main 进程 Node.js 代码
-    include: ['src/main/**/*.test.ts'],
+    // 测试 main 进程及 Node.js 共享代码
+    include: ['src/main/**/*.test.ts', 'src/shared/node/**/*.test.ts'],
     environment: 'node'
   }
 })

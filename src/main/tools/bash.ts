@@ -5,7 +5,12 @@
 
 import { spawn } from 'child_process'
 import { Type } from '@sinclair/typebox'
-import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
+import {
+  truncateTail,
+  formatSize,
+  DEFAULT_MAX_LINES,
+  DEFAULT_MAX_BYTES
+} from '../../shared/node/truncate'
 import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'

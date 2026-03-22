@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, startTransition } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -60,7 +60,7 @@ export function PreviewPanel(): React.JSX.Element {
   // 外部 url 变化时同步到输入框（仅 url 模式）
   useEffect(() => {
     if (!isDesignMode) {
-      setInputUrl(url)
+      startTransition(() => setInputUrl(url))
     }
   }, [url, isDesignMode])
 

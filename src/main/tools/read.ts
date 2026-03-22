@@ -19,7 +19,7 @@ import {
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
-} from './utils/truncate'
+} from '../../shared/node/truncate'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
 import {

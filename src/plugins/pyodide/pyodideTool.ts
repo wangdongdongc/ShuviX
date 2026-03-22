@@ -15,7 +15,7 @@ import {
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
-} from '../../main/tools/utils/truncate'
+} from '../../shared/node/truncate'
 import type { PyodideWorkerManager } from './workerManager'
 
 const TOOL_ABORTED = 'Aborted'

@@ -11,9 +11,8 @@ const log = createLogger('LocalStt')
 let cachedCtx: WhisperContext | null = null
 let cachedModelId: string | null = null
 
-/** 懒加载 whisper-cpp-node（原生模块，require 避免 ESM 解析问题） */
+/** 懒加载 whisper-cpp-node（原生模块，module.require 避免 ESM 解析问题） */
 function getWhisper(): typeof import('whisper-cpp-node') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return module.require('whisper-cpp-node')
 }
 

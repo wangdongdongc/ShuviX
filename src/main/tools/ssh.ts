@@ -8,7 +8,12 @@ import { Type } from '@sinclair/typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
-import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
+import {
+  truncateTail,
+  formatSize,
+  DEFAULT_MAX_LINES,
+  DEFAULT_MAX_BYTES
+} from '../../shared/node/truncate'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { isCommandAllowedUnified } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'

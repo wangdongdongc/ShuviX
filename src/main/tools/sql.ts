@@ -4,7 +4,12 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from './utils/truncate'
+import {
+  truncateTail,
+  formatSize,
+  DEFAULT_MAX_LINES,
+  DEFAULT_MAX_BYTES
+} from '../../shared/node/truncate'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sqlWorkerManager } from '../services/sqlWorkerManager'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'

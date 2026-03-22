@@ -245,7 +245,7 @@ export function ChatView(): React.JSX.Element {
         onRegenerate={canEdit ? handleRegenerate : undefined}
       />
     ),
-    [messages, lastAssistantTextId, handleRollback, handleRegenerate, canEdit]
+    [lastAssistantTextId, handleRollback, handleRegenerate, canEdit]
   )
 
   return (

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, startTransition } from 'react'
 import { useChatStore } from '../stores/chatStore'
 import type { SttBackend, SttState } from '../services/stt/types'
 import { WhisperBackend } from '../services/stt/whisperBackend'
@@ -45,11 +45,7 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
   const interimTextRef = useRef('')
   const recordingRef = useRef(false)
 
-  const [isAvailable, setIsAvailable] = useState(false)
-  useEffect(() => {
-    const backend = new WhisperBackend()
-    setIsAvailable(backend.isAvailable())
-  }, [])
+  const [isAvailable] = useState(() => new WhisperBackend().isAvailable())
 
   /** 更新输入框文本 */
   const updateInputText = useCallback((): void => {
@@ -166,8 +162,10 @@ export function useVoiceInput(language: string): UseVoiceInputReturn {
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   useEffect(() => {
     if (recordingRef.current) {
-      finalCleanup()
-      setInputText(preExistingTextRef.current)
+      startTransition(() => {
+        finalCleanup()
+        setInputText(preExistingTextRef.current)
+      })
     }
   }, [activeSessionId, finalCleanup, setInputText])
 

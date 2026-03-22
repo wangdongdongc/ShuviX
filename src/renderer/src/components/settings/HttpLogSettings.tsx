@@ -120,18 +120,18 @@ export function HttpLogSettings(): React.JSX.Element {
   useEffect(() => {
     loadProviders()
     loadLogs()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 切换筛选条件时重新加载日志 */
   useEffect(() => {
     loadLogs(currentFilters)
-  }, [filterSessionId, filterProvider])
+  }, [filterSessionId, filterProvider]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 切换模型筛选时在前端过滤（模型列表从日志中提取，无需重新请求） */
   // 注意：model 筛选也走后端，保持一致性
   useEffect(() => {
     loadLogs(currentFilters)
-  }, [filterModel])
+  }, [filterModel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedLogId) {

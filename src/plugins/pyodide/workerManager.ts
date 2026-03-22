@@ -4,7 +4,7 @@
  */
 
 import { Worker } from 'worker_threads'
-import { resolve } from 'path'
+import { resolve, join } from 'path'
 import { existsSync } from 'fs'
 import type { PluginContext, PluginSessionPaths } from '../../plugin-api'
 import type { MountConfig, WorkerResponse } from './pythonWorker'
@@ -32,9 +32,9 @@ export class PyodideWorkerManager {
     // pythonWorker 是 electron-vite 的独立构建入口，输出到 out/main/
     // 开发模式：与主进程入口同目录；打包模式：在 app.asar.unpacked 中
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { app } = require('electron') as typeof import('electron')
       if (app.isPackaged) {
-        const { join } = require('path') as typeof import('path')
         return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'pythonWorker.js')
       }
     } catch {
