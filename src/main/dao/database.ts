@@ -132,6 +132,7 @@ class DatabaseManager {
         password TEXT NOT NULL DEFAULT '',
         privateKey TEXT NOT NULL DEFAULT '',
         passphrase TEXT NOT NULL DEFAULT '',
+        metadata TEXT NOT NULL DEFAULT '{}',
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL
       );
@@ -164,6 +165,13 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
       CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
     `)
+
+    // 增量迁移：为已有数据库添加 metadata 列
+    try {
+      this.db.exec(`ALTER TABLE ssh_credentials ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`)
+    } catch {
+      // 列已存在（新建数据库已通过 CREATE TABLE 包含该列），忽略
+    }
   }
 
   /**

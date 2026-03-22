@@ -1,17 +1,21 @@
 import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
 import { encrypt, decrypt } from '../utils/crypto'
-import type { SshCredential } from './types'
+import type { SshCredential, SshCredentialMetadata } from './types'
 
-/** 解密凭据中的敏感字段 */
-function decryptCredential<T extends SshCredential | undefined>(c: T): T {
+/** DB 原始行类型（metadata 为 JSON 字符串） */
+type SshCredentialRow = Omit<SshCredential, 'metadata'> & { metadata: string }
+
+/** 解密凭据中的敏感字段，并反序列化 metadata */
+function decryptCredential(c: SshCredentialRow | undefined): SshCredential | undefined {
   if (!c) return c
   return {
     ...c,
     password: decrypt(c.password),
     privateKey: decrypt(c.privateKey),
-    passphrase: decrypt(c.passphrase)
-  } as T
+    passphrase: decrypt(c.passphrase),
+    metadata: JSON.parse(c.metadata || '{}') as SshCredentialMetadata
+  }
 }
 
 /**
@@ -23,14 +27,14 @@ export class SshCredentialDao extends BaseDao {
   findAll(): SshCredential[] {
     const rows = this.stmt(
       'SELECT * FROM ssh_credentials ORDER BY createdAt ASC'
-    ).all() as SshCredential[]
-    return rows.map(decryptCredential)
+    ).all() as SshCredentialRow[]
+    return rows.map(decryptCredential) as SshCredential[]
   }
 
   /** 根据 ID 获取凭据（解密） */
   findById(id: string): SshCredential | undefined {
     const row = this.stmt('SELECT * FROM ssh_credentials WHERE id = ?').get(id) as
-      | SshCredential
+      | SshCredentialRow
       | undefined
     return decryptCredential(row)
   }
@@ -38,7 +42,7 @@ export class SshCredentialDao extends BaseDao {
   /** 根据名称获取凭据（解密） */
   findByName(name: string): SshCredential | undefined {
     const row = this.stmt('SELECT * FROM ssh_credentials WHERE name = ?').get(name) as
-      | SshCredential
+      | SshCredentialRow
       | undefined
     return decryptCredential(row)
   }
@@ -61,6 +65,7 @@ export class SshCredentialDao extends BaseDao {
     password?: string
     privateKey?: string
     passphrase?: string
+    metadata?: SshCredentialMetadata
   }): string {
     const existing = this.stmt('SELECT id FROM ssh_credentials WHERE name = ?').get(credential.name)
     if (existing) {
@@ -69,8 +74,8 @@ export class SshCredentialDao extends BaseDao {
     const id = uuidv7()
     const now = Date.now()
     this.stmt(
-      `INSERT INTO ssh_credentials (id, name, host, port, username, authType, password, privateKey, passphrase, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ssh_credentials (id, name, host, port, username, authType, password, privateKey, passphrase, metadata, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       credential.name,
@@ -81,6 +86,7 @@ export class SshCredentialDao extends BaseDao {
       encrypt(credential.password || ''),
       encrypt(credential.privateKey || ''),
       encrypt(credential.passphrase || ''),
+      JSON.stringify(credential.metadata ?? {}),
       now,
       now
     )
@@ -99,6 +105,7 @@ export class SshCredentialDao extends BaseDao {
       password: string
       privateKey: string
       passphrase: string
+      metadata: SshCredentialMetadata
     }>
   ): void {
     const sets: string[] = []
@@ -134,6 +141,10 @@ export class SshCredentialDao extends BaseDao {
     if (fields.passphrase !== undefined) {
       sets.push('passphrase = ?')
       values.push(encrypt(fields.passphrase))
+    }
+    if (fields.metadata !== undefined) {
+      sets.push('metadata = ?')
+      values.push(JSON.stringify(fields.metadata))
     }
     if (sets.length === 0) return
     sets.push('updatedAt = ?')

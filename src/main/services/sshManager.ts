@@ -6,6 +6,7 @@
  */
 
 import { Client, type ConnectConfig } from 'ssh2'
+import { SocksClient } from 'socks'
 import { createLogger } from '../logger'
 const log = createLogger('SSH')
 
@@ -33,6 +34,8 @@ export interface SshCredentials {
   privateKey?: string
   /** 私钥口令（如果私钥有加密） */
   passphrase?: string
+  /** 可选 SOCKS5/4 代理 URL，例如 socks5://localhost:6153 */
+  proxyUrl?: string
 }
 
 export class SshManager {
@@ -47,7 +50,35 @@ export class SshManager {
     // 已有连接则先断开
     await this.disconnect(sessionId)
 
-    const { host, port, username, password, privateKey, passphrase } = credentials
+    const { host, port, username, password, privateKey, passphrase, proxyUrl } = credentials
+
+    // 如果配置了代理，先通过 SOCKS5/4 建立隧道
+    let proxySocket: Awaited<ReturnType<typeof SocksClient.createConnection>>['socket'] | undefined
+    if (proxyUrl) {
+      try {
+        const u = new URL(proxyUrl)
+        const socksType = u.protocol === 'socks4:' ? 4 : 5
+        const proxyPort = parseInt(u.port)
+        log.info(`SSH 通过 SOCKS${socksType} 代理 ${u.hostname}:${proxyPort} 连接 ${host}:${port}`)
+        const result = await SocksClient.createConnection({
+          command: 'connect',
+          destination: { host, port },
+          proxy: {
+            host: u.hostname,
+            port: proxyPort,
+            type: socksType,
+            userId: u.username || undefined,
+            password: u.password || undefined
+          },
+          timeout: 15000
+        })
+        proxySocket = result.socket
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        log.error(`SOCKS 代理连接失败 ${proxyUrl}: ${msg}`)
+        return { success: false, error: `SOCKS proxy error: ${msg}` }
+      }
+    }
 
     return new Promise((resolve) => {
       const client = new Client()
@@ -99,8 +130,6 @@ export class SshManager {
 
       // 根据凭据类型选择认证方式
       const connectConfig: ConnectConfig = {
-        host,
-        port,
         username,
         // 跳过 host key 验证（用户已确认连接意图）
         hostVerifier: () => true,
@@ -109,6 +138,13 @@ export class SshManager {
         // 防止 NAT/防火墙因空闲超时丢弃连接
         keepaliveInterval: 30000,
         keepaliveCountMax: 3
+      }
+      if (proxySocket) {
+        // 代理模式：通过已建立的 SOCKS 隧道连接，不直接指定 host/port
+        connectConfig.sock = proxySocket
+      } else {
+        connectConfig.host = host
+        connectConfig.port = port
       }
       if (privateKey) {
         connectConfig.privateKey = privateKey

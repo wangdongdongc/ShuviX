@@ -93,7 +93,8 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       username: saved.username,
       password: saved.authType === 'password' ? saved.password : undefined,
       privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
-      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
+      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined,
+      proxyUrl: saved.metadata?.proxyUrl || undefined
     }
 
     const result = await sshManager.connect(this.ctx.sessionId, credentials)
@@ -189,7 +190,8 @@ async function handleConnect(
       username: saved.username,
       password: saved.authType === 'password' ? saved.password : undefined,
       privateKey: saved.authType === 'key' ? saved.privateKey : undefined,
-      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined
+      passphrase: saved.authType === 'key' && saved.passphrase ? saved.passphrase : undefined,
+      proxyUrl: saved.metadata?.proxyUrl || undefined
     }
 
     if (signal?.aborted) throw new Error(TOOL_ABORTED)

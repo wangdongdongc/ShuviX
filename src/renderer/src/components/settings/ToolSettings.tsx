@@ -47,6 +47,7 @@ interface SshCredentialInfo {
   password: string
   privateKey: string
   passphrase: string
+  metadata: { proxyUrl?: string }
   createdAt: number
   updatedAt: number
 }
@@ -294,6 +295,7 @@ function SshToolPanel(): React.JSX.Element {
   const [sshFormPrivateKey, setSshFormPrivateKey] = useState('')
   const [sshFormKeyFileName, setSshFormKeyFileName] = useState('')
   const [sshFormPassphrase, setSshFormPassphrase] = useState('')
+  const [sshFormProxyUrl, setSshFormProxyUrl] = useState('')
   const [sshSaving, setSshSaving] = useState(false)
   const [sshError, setSshError] = useState('')
   const [deletingSshId, setDeletingSshId] = useState<string | null>(null)
@@ -319,6 +321,7 @@ function SshToolPanel(): React.JSX.Element {
     setSshFormPrivateKey('')
     setSshFormKeyFileName('')
     setSshFormPassphrase('')
+    setSshFormProxyUrl('')
     setSshError('')
   }
 
@@ -333,6 +336,7 @@ function SshToolPanel(): React.JSX.Element {
     setSshFormPrivateKey(cred.authType === 'key' ? cred.privateKey : '')
     setSshFormKeyFileName('')
     setSshFormPassphrase(cred.authType === 'key' ? cred.passphrase : '')
+    setSshFormProxyUrl(cred.metadata?.proxyUrl ?? '')
     setSshError('')
     setShowSshForm(true)
   }
@@ -350,7 +354,8 @@ function SshToolPanel(): React.JSX.Element {
         authType: sshFormAuthType as 'password' | 'key',
         password: sshFormAuthType === 'password' ? sshFormPassword : '',
         privateKey: sshFormAuthType === 'key' ? sshFormPrivateKey : '',
-        passphrase: sshFormAuthType === 'key' ? sshFormPassphrase : ''
+        passphrase: sshFormAuthType === 'key' ? sshFormPassphrase : '',
+        metadata: { proxyUrl: sshFormProxyUrl.trim() || undefined }
       }
       if (sshEditId) {
         await window.api.sshCredential.update({ id: sshEditId, ...data })
@@ -575,6 +580,22 @@ function SshToolPanel(): React.JSX.Element {
               </div>
             </>
           )}
+
+          {/* SOCKS 代理 */}
+          <div>
+            <label className="block text-[10px] text-text-tertiary mb-1">
+              {t('settings.toolSshProxyUrl')}
+            </label>
+            <input
+              value={sshFormProxyUrl}
+              onChange={(e) => setSshFormProxyUrl(e.target.value)}
+              placeholder={t('settings.toolSshProxyUrlPlaceholder')}
+              className={inputCls}
+            />
+            <p className="text-[9px] text-text-tertiary mt-0.5">
+              {t('settings.toolSshProxyUrlHint')}
+            </p>
+          </div>
 
           {/* 错误提示 */}
           {sshError && <p className="text-[10px] text-danger">{sshError}</p>}

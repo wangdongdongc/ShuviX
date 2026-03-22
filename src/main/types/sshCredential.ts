@@ -1,5 +1,5 @@
-export type { SshAuthType, SshCredential } from '../dao/types'
-import type { SshAuthType } from '../dao/types'
+export type { SshAuthType, SshCredential, SshCredentialMetadata } from '../dao/types'
+import type { SshAuthType, SshCredentialMetadata } from '../dao/types'
 
 /** IPC: 添加 SSH 凭据参数 */
 export interface SshCredentialAddParams {
@@ -11,6 +11,7 @@ export interface SshCredentialAddParams {
   password?: string
   privateKey?: string
   passphrase?: string
+  metadata?: SshCredentialMetadata
 }
 
 /** IPC: 更新 SSH 凭据参数 */
@@ -24,4 +25,5 @@ export interface SshCredentialUpdateParams {
   password?: string
   privateKey?: string
   passphrase?: string
+  metadata?: SshCredentialMetadata
 }
