@@ -190,7 +190,7 @@ export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
       type: 'plugin:runtime_status',
       runtimeId: 'sql',
       status: {
-        label: 'PGLite',
+        label: 'Postgres',
         icon: 'Database',
         color: '#3b82f6',
         description: storageMode === 'persistent' ? 'persistent' : 'memory'

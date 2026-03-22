@@ -99,7 +99,7 @@ export class PyodideTool implements PluginTool<typeof PythonParamsSchema> {
       this.ctx.emitEvent(sessionId, {
         type: 'plugin:runtime_status',
         runtimeId: 'python',
-        status: { label: 'Python WASM', icon: 'Code', color: '#eab308' }
+        status: { label: 'Python', icon: 'Code', color: '#eab308' }
       })
     })
 

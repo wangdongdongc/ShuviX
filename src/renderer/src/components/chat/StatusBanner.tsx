@@ -1,5 +1,14 @@
 import { useTranslation } from 'react-i18next'
-import { Bot, Container, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
+import {
+  Bot,
+  Container,
+  Globe,
+  MessageCircle,
+  Terminal,
+  TriangleAlert,
+  X,
+  icons
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
@@ -141,6 +150,10 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
                   }
             }
           >
+            {(() => {
+              const IconComponent = info.icon ? icons[info.icon as keyof typeof icons] : null
+              return IconComponent ? <IconComponent size={12} /> : null
+            })()}
             <span>{info.label}</span>
             {info.description && <span className="opacity-60">({info.description})</span>}
             <button
