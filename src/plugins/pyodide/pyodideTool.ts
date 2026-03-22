@@ -4,8 +4,18 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import type { PluginTool, PluginContext, AgentToolResult, PluginToolPresentation } from '../../plugin-api'
-import { truncateTail, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES } from '../../main/tools/utils/truncate'
+import type {
+  PluginTool,
+  PluginContext,
+  AgentToolResult,
+  PluginToolPresentation
+} from '../../plugin-api'
+import {
+  truncateTail,
+  formatSize,
+  DEFAULT_MAX_LINES,
+  DEFAULT_MAX_BYTES
+} from '../../main/tools/utils/truncate'
 import type { PyodideWorkerManager } from './workerManager'
 
 const TOOL_ABORTED = 'Aborted'

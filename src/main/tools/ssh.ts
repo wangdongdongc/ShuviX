@@ -120,7 +120,14 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       case 'connect':
         return handleConnect(this.ctx, toolCallId, params.credentialName, signal)
       case 'exec':
-        return handleExec(this.ctx, toolCallId, params.command, params.timeout, params.description, signal)
+        return handleExec(
+          this.ctx,
+          toolCallId,
+          params.command,
+          params.timeout,
+          params.description,
+          signal
+        )
       case 'disconnect':
         return handleDisconnect(this.ctx)
       default:

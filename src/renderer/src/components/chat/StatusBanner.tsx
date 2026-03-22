@@ -130,10 +130,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           <span>
             {t('chat.sqlWasmRuntime')}
             <span className="ml-1 opacity-60">
-              (
-              {sql.storageMode === 'persistent'
-                ? t('chat.sqlPersistent')
-                : t('chat.sqlTemporary')}
+              ({sql.storageMode === 'persistent' ? t('chat.sqlPersistent') : t('chat.sqlTemporary')}
               )
             </span>
           </span>
@@ -167,9 +164,17 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           <span
             key={runtimeId}
             className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs"
-            style={info.color
-              ? { color: info.color, backgroundColor: `color-mix(in srgb, ${info.color} 10%, transparent)` }
-              : { color: 'var(--color-accent)', backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
+            style={
+              info.color
+                ? {
+                    color: info.color,
+                    backgroundColor: `color-mix(in srgb, ${info.color} 10%, transparent)`
+                  }
+                : {
+                    color: 'var(--color-accent)',
+                    backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)'
+                  }
+            }
           >
             <span>{info.label}</span>
             {info.description && <span className="opacity-60">({info.description})</span>}

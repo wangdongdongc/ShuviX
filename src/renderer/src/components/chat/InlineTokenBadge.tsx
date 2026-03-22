@@ -25,7 +25,9 @@ export function TokenBadge({
         {token.displayText}
       </span>
       {showPayload && (
-        <div className={`absolute left-0 ${popoverPos} z-50 w-[14rem] max-w-[75vw] rounded-lg border border-border-primary bg-bg-secondary shadow-xl p-3 text-xs text-text-secondary whitespace-pre-wrap break-words`}>
+        <div
+          className={`absolute left-0 ${popoverPos} z-50 w-[14rem] max-w-[75vw] rounded-lg border border-border-primary bg-bg-secondary shadow-xl p-3 text-xs text-text-secondary whitespace-pre-wrap break-words`}
+        >
           {token.name && token.name !== token.id && (
             <div className="text-[10px] text-text-tertiary mb-1">{token.name}</div>
           )}

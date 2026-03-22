@@ -352,7 +352,7 @@ export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeT
 export const selectStreamingToolCall = (
   s: ChatState
 ): { toolName: string; argsText: string } | null =>
-  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.streamingToolCall ?? null : null
+  s.activeSessionId ? (s.sessionStreams[s.activeSessionId]?.streamingToolCall ?? null) : null
 
 const EMPTY_COMPLETED_TOOL_CALLS: Array<{
   toolName: string
@@ -363,8 +363,7 @@ export const selectCompletedStreamingToolCalls = (
   s: ChatState
 ): Array<{ toolName: string; args?: Record<string, unknown> }> =>
   s.activeSessionId
-    ? s.sessionStreams[s.activeSessionId]?.completedStreamingToolCalls ||
-      EMPTY_COMPLETED_TOOL_CALLS
+    ? s.sessionStreams[s.activeSessionId]?.completedStreamingToolCalls || EMPTY_COMPLETED_TOOL_CALLS
     : EMPTY_COMPLETED_TOOL_CALLS
 
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
@@ -693,7 +692,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
-
   setSessionSql: (sessionId, info) =>
     set((state) => {
       const prev = state.sessionResources[sessionId] || {}
@@ -714,7 +712,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionResources: {
           ...state.sessionResources,
-          [sessionId]: { ...prev, pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined }
+          [sessionId]: {
+            ...prev,
+            pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined
+          }
         }
       }
     }),
@@ -725,7 +726,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionResources: {
           ...state.sessionResources,
-          [sessionId]: { ...prev, pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined }
+          [sessionId]: {
+            ...prev,
+            pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined
+          }
         }
       }
     }),

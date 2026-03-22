@@ -28,7 +28,13 @@ import type { WorkerResponse } from './pythonWorker'
 
 const mockCtx: PluginContext = {
   getSessionPaths: (sessionId: string) => {
-    const dirs: Record<string, { workingDirectory: string; referenceDirs: Array<{ path: string; access: 'readonly' | 'readwrite' }> }> = {
+    const dirs: Record<
+      string,
+      {
+        workingDirectory: string
+        referenceDirs: Array<{ path: string; access: 'readonly' | 'readwrite' }>
+      }
+    > = {
       [SESSION_ID]: {
         workingDirectory: PROJECT_DIR,
         referenceDirs: [

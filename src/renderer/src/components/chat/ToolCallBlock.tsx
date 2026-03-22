@@ -69,7 +69,6 @@ function resolveLucideIcon(name?: string): LucideIcon {
   return ICON_MAP[name] ?? Wrench
 }
 
-
 // 静态注册已知语言，新语言在此添加
 hljs.registerLanguage('python', hljsPython)
 hljs.registerLanguage('sql', hljsSql)
@@ -357,7 +356,13 @@ function buildPresentationSummary(
   }
 
   return {
-    icon: <Icon size={12} className="flex-shrink-0" style={iconColor ? { color: iconColor } : undefined} />,
+    icon: (
+      <Icon
+        size={12}
+        className="flex-shrink-0"
+        style={iconColor ? { color: iconColor } : undefined}
+      />
+    ),
     detail: summary
   }
 }
@@ -499,13 +504,7 @@ function CodeFormItem({
 }
 
 /** text 渲染器 — 带标签的纯文本 */
-function TextFormItem({
-  label,
-  value
-}: {
-  label?: string
-  value: unknown
-}): React.JSX.Element {
+function TextFormItem({ label, value }: { label?: string; value: unknown }): React.JSX.Element {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
   return (
     <div>

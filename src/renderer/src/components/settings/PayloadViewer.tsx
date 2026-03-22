@@ -214,7 +214,11 @@ function extractSummary(content: unknown): {
   for (const block of content) {
     if ((block.type === 'text' || block.type === 'input_text') && block.text) {
       text += block.text + ' '
-    } else if (block.type === 'image_url' || block.type === 'image' || block.type === 'input_image') {
+    } else if (
+      block.type === 'image_url' ||
+      block.type === 'image' ||
+      block.type === 'input_image'
+    ) {
       hasImage = true
     } else if (block.type === 'tool_call' || block.type === 'toolCall') {
       hasToolCall = true

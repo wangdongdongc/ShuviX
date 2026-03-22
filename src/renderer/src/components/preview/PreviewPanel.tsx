@@ -21,10 +21,16 @@ import { useChatStore } from '../../stores/chatStore'
  */
 export function PreviewPanel(): React.JSX.Element {
   const {
-    url, width, mode, designUrl,
-    setUrl, switchToUrl,
-    isStartingServer, isServerRunning,
-    startPreviewServer, stopPreviewServer
+    url,
+    width,
+    mode,
+    designUrl,
+    setUrl,
+    switchToUrl,
+    isStartingServer,
+    isServerRunning,
+    startPreviewServer,
+    stopPreviewServer
   } = usePreviewStore()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
@@ -125,18 +131,16 @@ export function PreviewPanel(): React.JSX.Element {
   }, [activeSessionId, stopPreviewServer])
 
   const isBlank = !isDesignMode && url === 'about:blank'
-  const btnClass = 'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
+  const btnClass =
+    'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
 
   return (
     <div
       className="flex flex-col h-full bg-bg-primary overflow-hidden"
       style={{ width, minWidth: 200 }}
     >
-
       {/* ====== 工具栏 ====== */}
-      <div
-        className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-primary"
-      >
+      <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-primary">
         {/* Start / Stop 按钮 */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
           {isStartingServer ? (
@@ -201,14 +205,17 @@ export function PreviewPanel(): React.JSX.Element {
           }}
         >
           <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1 transition-colors focus-within:border-accent/40">
-            {isDesignMode
-              ? <Palette size={10} className="flex-shrink-0 text-accent" />
-              : <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
-            }
+            {isDesignMode ? (
+              <Palette size={10} className="flex-shrink-0 text-accent" />
+            ) : (
+              <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
+            )}
             <input
               type="text"
-              value={isDesignMode ? (designUrl || '') : (inputUrl === 'about:blank' ? '' : inputUrl)}
-              onChange={(e) => { if (!isDesignMode) setInputUrl(e.target.value) }}
+              value={isDesignMode ? designUrl || '' : inputUrl === 'about:blank' ? '' : inputUrl}
+              onChange={(e) => {
+                if (!isDesignMode) setInputUrl(e.target.value)
+              }}
               readOnly={isDesignMode}
               placeholder="Enter URL or start a preview server..."
               className="flex-1 min-w-0 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -254,9 +261,13 @@ export function PreviewPanel(): React.JSX.Element {
       {/* ====== 底部状态栏 ====== */}
       <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
         {/* 加载状态指示 */}
-        {isLoading && <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />}
+        {isLoading && (
+          <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />
+        )}
         {/* 尺寸指示 */}
-        <span className="tabular-nums opacity-60">{contentHeight} x {width}</span>
+        <span className="tabular-nums opacity-60">
+          {contentHeight} x {width}
+        </span>
       </div>
     </div>
   )

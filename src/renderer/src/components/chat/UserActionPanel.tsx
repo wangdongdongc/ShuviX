@@ -244,10 +244,7 @@ function CommandPreview({
         <p className="text-[11px] text-text-secondary leading-relaxed px-0.5">{description}</p>
       )}
       <pre className="text-[11px] leading-relaxed bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 whitespace-pre-wrap break-words border border-border-secondary/50 !m-0">
-        <code
-          className="hljs language-bash"
-          dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
+        <code className="hljs language-bash" dangerouslySetInnerHTML={{ __html: highlighted }} />
       </pre>
     </div>
   )
@@ -265,7 +262,12 @@ function ApprovalPreview({
 
   if (toolName === 'bash' || (toolName === 'ssh' && args?.command)) {
     // bash / ssh exec：描述 + 语法高亮代码块
-    return <CommandPreview command={(args?.command as string) || ''} description={args?.description as string | undefined} />
+    return (
+      <CommandPreview
+        command={(args?.command as string) || ''}
+        description={args?.description as string | undefined}
+      />
+    )
   }
 
   if (toolName === 'shuvix-setting') {

@@ -41,9 +41,7 @@ export class DefaultChatGateway implements ChatGateway {
     }
 
     // ─── 内联 Token 处理（由前端完成展开，后端直接使用） ───
-    const promptText = inlineTokens
-      ? resolveTokensForAgent(text, inlineTokens)
-      : text
+    const promptText = inlineTokens ? resolveTokensForAgent(text, inlineTokens) : text
 
     // 统一持久化用户消息并通知所有前端
     const userImages =
@@ -219,7 +217,7 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel'),
       explore: t('tool.exploreLabel'),
-      'claude-code': t('tool.claudeCodeLabel'),
+      'claude-code': t('tool.claudeCodeLabel')
     }
     const hintMap: Record<string, string> = {
       bash: t('tool.bashHint'),
@@ -235,7 +233,7 @@ export class DefaultChatGateway implements ChatGateway {
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint'),
       explore: t('tool.exploreHint'),
-      'claude-code': t('tool.claudeCodeHint'),
+      'claude-code': t('tool.claudeCodeHint')
     }
     const builtinTools = ALL_TOOL_NAMES.map((name) => ({
       name,

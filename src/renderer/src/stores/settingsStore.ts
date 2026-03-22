@@ -83,7 +83,16 @@ interface SettingsState {
   setUiZoom: (zoom: number) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (
-    tab: 'general' | 'providers' | 'tools' | 'mcp' | 'skills' | 'voice' | 'bindings' | 'httpLogs' | 'about'
+    tab:
+      | 'general'
+      | 'providers'
+      | 'tools'
+      | 'mcp'
+      | 'skills'
+      | 'voice'
+      | 'bindings'
+      | 'httpLogs'
+      | 'about'
   ) => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */
@@ -154,8 +163,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',
       voiceTtsSpeed: Number(settings['voice.tts.openai.speed']) || 1.0,
       voiceTtsModel: settings['voice.tts.openai.model'] || 'tts-1',
-      voiceTtsBackend:
-        (settings['voice.tts.backend'] as 'openai' | 'qwen3') || 'openai',
+      voiceTtsBackend: (settings['voice.tts.backend'] as 'openai' | 'qwen3') || 'openai',
       voiceTtsQwen3Voice: settings['voice.tts.qwen3.voice'] || 'Vivian',
       voiceTtsQwen3Speed: Number(settings['voice.tts.qwen3.speed']) || 1.0,
       voiceTtsQwen3Emotion: settings['voice.tts.qwen3.emotion'] || '',

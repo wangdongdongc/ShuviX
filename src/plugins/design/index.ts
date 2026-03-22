@@ -48,7 +48,10 @@ const designPlugin: ShuviXPlugin = {
             manager
               .startDev(event.sessionId, event.workingDir)
               .then((info) =>
-                ctx.emitEvent(event.sessionId, { type: 'plugin:preview_server_started', url: info.url })
+                ctx.emitEvent(event.sessionId, {
+                  type: 'plugin:preview_server_started',
+                  url: info.url
+                })
               )
               .catch((err) => ctx.logger.error('startDev failed', err))
             break

@@ -69,9 +69,7 @@ vi.mock('../../logger', () => ({
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
 vi.mock('markitdown-ts', () => ({
   MarkItDown: class {
-    async convert(
-      source: string
-    ): Promise<{ title: string | null; markdown: string } | null> {
+    async convert(source: string): Promise<{ title: string | null; markdown: string } | null> {
       // URL mock：模拟网页抓取
       if (typeof source === 'string' && /^https?:\/\//i.test(source)) {
         if (source.includes('empty-page')) {

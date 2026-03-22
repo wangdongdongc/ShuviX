@@ -134,9 +134,7 @@ export function ToolSelectList({
       {/* 通用工具组 */}
       {builtinTools.length > 0 && (
         <div className={compact ? 'py-0.5' : ''}>
-          <div
-            className={compact ? '' : 'border-l-2 border-border-secondary pl-3'}
-          >
+          <div className={compact ? '' : 'border-l-2 border-border-secondary pl-3'}>
             {!compact && (
               <div className="flex items-center gap-1.5 py-1">
                 <Blocks size={11} className="text-text-secondary" />
@@ -176,13 +174,7 @@ export function ToolSelectList({
       {/* Ripgrep 高性能检索工具组 */}
       {ripgrepTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
-          <div
-            className={
-              compact
-                ? ''
-                : 'border-l-2 border-cyan-500/40 pl-3'
-            }
-          >
+          <div className={compact ? '' : 'border-l-2 border-cyan-500/40 pl-3'}>
             {!compact && (
               <div className="flex items-center gap-1.5 py-1">
                 <Search size={11} className="text-cyan-400" />
@@ -222,13 +214,7 @@ export function ToolSelectList({
       {/* 子智能体工具组 */}
       {subAgentTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
-          <div
-            className={
-              compact
-                ? ''
-                : 'border-l-2 border-amber-500/40 pl-3'
-            }
-          >
+          <div className={compact ? '' : 'border-l-2 border-amber-500/40 pl-3'}>
             {!compact && (
               <div className="py-1">
                 <div className="flex items-center gap-1.5">
@@ -377,9 +363,7 @@ export function ToolSelectList({
             const someSkillChecked = skillTools.some((t) => enabledTools.includes(t.name))
 
             return (
-              <div
-                className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}
-              >
+              <div className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}>
                 {/* Skills 分组头部 */}
                 <div
                   className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'py-1'}`}

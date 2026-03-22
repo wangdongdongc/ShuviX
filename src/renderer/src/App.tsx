@@ -88,7 +88,9 @@ function App(): React.JSX.Element {
       <div
         {...{ [CHAT_CONTAINER_ATTR]: true }}
         className="min-w-[400px] bg-bg-primary"
-        style={lockedChatWidth != null ? { width: lockedChatWidth, flexShrink: 0 } : { flex: '1 1 0%' }}
+        style={
+          lockedChatWidth != null ? { width: lockedChatWidth, flexShrink: 0 } : { flex: '1 1 0%' }
+        }
       >
         <ChatView />
       </div>

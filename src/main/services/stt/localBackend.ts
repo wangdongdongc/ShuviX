@@ -22,7 +22,11 @@ function getWhisper(): typeof import('whisper-cpp-node') {
  * 接收渲染进程发来的 16kHz mono Float32 PCM 数据，直接传给 whisper-cpp-node
  */
 export class LocalSttBackend implements SttBackendMain {
-  async transcribe(_audioBase64: string, language?: string, pcmf32Base64?: string): Promise<{ text: string }> {
+  async transcribe(
+    _audioBase64: string,
+    language?: string,
+    pcmf32Base64?: string
+  ): Promise<{ text: string }> {
     // 渲染进程对极短/不完整的 WebM 解码可能失败，pcmf32 为空时静默跳过
     if (!pcmf32Base64) {
       log.warn('No PCM data received (audio segment too short or decode failed), skipping')
@@ -53,7 +57,11 @@ export class LocalSttBackend implements SttBackendMain {
 
     // 将 base64 PCM 还原为 Float32Array
     const pcmBuffer = Buffer.from(pcmf32Base64, 'base64')
-    const pcmf32 = new Float32Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 4)
+    const pcmf32 = new Float32Array(
+      pcmBuffer.buffer,
+      pcmBuffer.byteOffset,
+      pcmBuffer.byteLength / 4
+    )
 
     if (pcmf32.length < 100) {
       return { text: '' }

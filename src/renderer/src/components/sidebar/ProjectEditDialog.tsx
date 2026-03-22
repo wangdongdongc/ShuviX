@@ -81,14 +81,14 @@ export function ProjectEditDialog({
           setEnabledTools([...DEFAULT_TOOL_NAMES])
         }
         // 默认展开所有扩展分组
-          const mcpGroups = new Set(
-            tools.filter((t) => t.group && !t.group.startsWith('__')).map((t) => t.group!)
-          )
-          const hasSkills = tools.some((t) => t.group === SKILLS_GROUP)
-          if (hasSkills) mcpGroups.add(SKILLS_GROUP)
-          setExpandedExtGroups(mcpGroups)
+        const mcpGroups = new Set(
+          tools.filter((t) => t.group && !t.group.startsWith('__')).map((t) => t.group!)
+        )
+        const hasSkills = tools.some((t) => t.group === SKILLS_GROUP)
+        if (hasSkills) mcpGroups.add(SKILLS_GROUP)
+        setExpandedExtGroups(mcpGroups)
 
-          setLoading(false)
+        setLoading(false)
       }
     )
   }, [projectId])

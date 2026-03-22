@@ -25,7 +25,10 @@ export function createPluginContext(pluginId: string): PluginContext {
       const config = resolveProjectConfig(sessionId)
       return {
         workingDirectory: config.workingDirectory,
-        referenceDirs: config.referenceDirs.map((d) => ({ path: d.path, access: d.access ?? 'readonly' }))
+        referenceDirs: config.referenceDirs.map((d) => ({
+          path: d.path,
+          access: d.access ?? 'readonly'
+        }))
       }
     },
 

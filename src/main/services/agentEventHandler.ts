@@ -231,10 +231,13 @@ function handleMessageUpdate(
     })
   } else if (msgEvent.type === 'toolcall_start') {
     // 从 partial message 中提取工具名
-    const block = (msgEvent as { partial?: { content?: Array<{ type: string; name?: string }> }; contentIndex?: number }).partial?.content?.[
-      (msgEvent as { contentIndex?: number }).contentIndex ?? 0
-    ]
-    const toolName = block?.type === 'toolCall' ? (block.name || '') : ''
+    const block = (
+      msgEvent as {
+        partial?: { content?: Array<{ type: string; name?: string }> }
+        contentIndex?: number
+      }
+    ).partial?.content?.[(msgEvent as { contentIndex?: number }).contentIndex ?? 0]
+    const toolName = block?.type === 'toolCall' ? block.name || '' : ''
     if (toolName) {
       ctx.state.generatingToolCall = { name: toolName, argsJson: '' }
       ctx.broadcastEvent({

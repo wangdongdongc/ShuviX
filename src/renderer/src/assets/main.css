@@ -349,7 +349,9 @@ body {
   line-height: 1.5;
   color: var(--color-text-primary);
   outline: none;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
 }
 .zen-input::placeholder {
   color: var(--color-text-tertiary);
@@ -374,7 +376,9 @@ body {
   color: var(--color-text-primary);
   outline: none;
   resize: none;
-  transition: border-color 0.25s ease, background-color 0.25s ease;
+  transition:
+    border-color 0.25s ease,
+    background-color 0.25s ease;
 }
 .zen-textarea::placeholder {
   color: var(--color-text-tertiary);
@@ -397,7 +401,9 @@ body {
   outline: none;
   appearance: none;
   cursor: pointer;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
 }
 .zen-select:focus {
   border-bottom-color: var(--color-accent);
@@ -414,7 +420,9 @@ body {
   align-items: center;
   background: transparent;
   border-bottom: 1px solid var(--color-border-secondary);
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
 }
 .zen-input-group:focus-within {
   border-bottom-color: var(--color-accent);

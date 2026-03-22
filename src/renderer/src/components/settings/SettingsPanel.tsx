@@ -1,6 +1,16 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, FileText, Info, Puzzle, BookOpen, Wrench, Share2, Mic } from 'lucide-react'
+import {
+  Settings,
+  Layers,
+  FileText,
+  Info,
+  Puzzle,
+  BookOpen,
+  Wrench,
+  Share2,
+  Mic
+} from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
 import { GeneralSettings } from './GeneralSettings'

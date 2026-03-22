@@ -156,7 +156,9 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
     // 拖拽期间强制解锁 chatWidth：lockedChatWidth 会让 chat 容器固定宽度、
     // flexShrink: 0，导致向左拖时 chat 无法收缩、预览溢出窗口。
     // 用户主动拖拽意味着窗口动画已不重要，立即解锁让 flex 布局生效。
-    set(get().lockedChatWidth != null ? { width: clamped, lockedChatWidth: null } : { width: clamped })
+    set(
+      get().lockedChatWidth != null ? { width: clamped, lockedChatWidth: null } : { width: clamped }
+    )
     persistPanelLayout({ previewWidth: clamped })
     // 同步更新窗口最小宽度，防止用户拖拽面板变窄后窗口仍被锁定在旧的最小宽度
     if (get().isOpen) {

@@ -311,7 +311,9 @@ export function ProjectCreateDialog({
                       )}
                     </div>
                     <div className="text-xs font-medium text-text-primary">
-                      {pp.i18n[i18n.language]?.[pp.labelKey] ?? pp.i18n['en']?.[pp.labelKey] ?? pp.labelKey}
+                      {pp.i18n[i18n.language]?.[pp.labelKey] ??
+                        pp.i18n['en']?.[pp.labelKey] ??
+                        pp.labelKey}
                     </div>
                   </button>
                 )
@@ -341,23 +343,24 @@ export function ProjectCreateDialog({
         {step === 1 && (
           <>
             <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0 space-y-3">
-              {purpose && (() => {
-                const pluginPurpose = pluginPurposes.find((p) => p.key === purpose)
-                const tipKey = pluginPurpose
-                  ? pluginPurpose.tipKey
-                  : `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
-                const tipText = pluginPurpose
-                  ? (pluginPurpose.i18n[i18n.language]?.[pluginPurpose.tipKey] ?? pluginPurpose.i18n['en']?.[pluginPurpose.tipKey] ?? t(tipKey))
-                  : t(tipKey)
-                return (
-                  <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
-                    <Info size={14} className="text-accent shrink-0 mt-0.5" />
-                    <p className="text-[11px] text-text-secondary leading-relaxed">
-                      {tipText}
-                    </p>
-                  </div>
-                )
-              })()}
+              {purpose &&
+                (() => {
+                  const pluginPurpose = pluginPurposes.find((p) => p.key === purpose)
+                  const tipKey = pluginPurpose
+                    ? pluginPurpose.tipKey
+                    : `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
+                  const tipText = pluginPurpose
+                    ? (pluginPurpose.i18n[i18n.language]?.[pluginPurpose.tipKey] ??
+                      pluginPurpose.i18n['en']?.[pluginPurpose.tipKey] ??
+                      t(tipKey))
+                    : t(tipKey)
+                  return (
+                    <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
+                      <Info size={14} className="text-accent shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-text-secondary leading-relaxed">{tipText}</p>
+                    </div>
+                  )
+                })()}
               <div className="zen-section">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
                   <Wrench size={12} />

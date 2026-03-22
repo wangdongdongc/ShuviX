@@ -32,7 +32,13 @@ export const MODEL_CATALOG: WhisperModelInfo[] = [
     description: 'Fast and accurate, best choice',
     recommended: true
   },
-  { id: 'tiny', name: 'Tiny', sizeMB: 75, description: 'Fastest, lowest accuracy', recommended: false },
+  {
+    id: 'tiny',
+    name: 'Tiny',
+    sizeMB: 75,
+    description: 'Fastest, lowest accuracy',
+    recommended: false
+  },
   {
     id: 'tiny.en',
     name: 'Tiny (English)',
@@ -84,7 +90,6 @@ export const MODEL_CATALOG: WhisperModelInfo[] = [
     recommended: false
   }
 ]
-
 
 /**
  * Whisper 模型管理器 — 下载、删除、查询 GGML 模型文件

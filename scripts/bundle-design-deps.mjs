@@ -113,8 +113,12 @@ console.log('  ✓ react-router.esm.js\n')
 // 写入 manifest — 运行时 plugin 用来知道哪些 bare import 需要拦截
 const manifest = {
   shipped: [
-    'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
-    'react-router', 'react-router-dom'
+    'react',
+    'react/jsx-runtime',
+    'react-dom',
+    'react-dom/client',
+    'react-router',
+    'react-router-dom'
   ],
   bundles: {
     'react-all': 'react-all.esm.js',

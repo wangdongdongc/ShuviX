@@ -200,9 +200,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         name: slashChip.name
       }
       inlineTokens = { [uid]: token }
-      contentText = rawText
-        ? `${makeTokenMarker(uid)} ${rawText}`
-        : makeTokenMarker(uid)
+      contentText = rawText ? `${makeTokenMarker(uid)} ${rawText}` : makeTokenMarker(uid)
     } else if (rawText.startsWith('/')) {
       // 直接输入模式：检测斜杠命令并展开
       const spaceIdx = rawText.indexOf(' ')
@@ -220,9 +218,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
           name: cmd.name
         }
         inlineTokens = { [uid]: token }
-        contentText = args
-          ? `${makeTokenMarker(uid)} ${args}`
-          : makeTokenMarker(uid)
+        contentText = args ? `${makeTokenMarker(uid)} ${args}` : makeTokenMarker(uid)
       } else {
         contentText = rawText
       }
@@ -392,7 +388,10 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
           )}
 
           {/* 底部工具栏 */}
-          <div ref={toolbarRef} className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap">
+          <div
+            ref={toolbarRef}
+            className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap"
+          >
             {/* Pickers 组：不可收缩 */}
             <div className="flex-shrink-0 flex items-center gap-1.5">
               <ModelPicker readonly={!canEdit} />
@@ -401,7 +400,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
             </div>
 
             {/* 分隔线 */}
-            {(modelSupportsVision || (showToolbarExtras && (maxContextTokens > 0 || projectPath))) && (
+            {(modelSupportsVision ||
+              (showToolbarExtras && (maxContextTokens > 0 || projectPath))) && (
               <span className="flex-shrink-0 h-3 w-px bg-border-secondary" />
             )}
 
@@ -491,11 +491,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                       ? 'text-error hover:bg-error/10'
                       : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
                   }`}
-                  title={
-                    voice.isRecording
-                      ? t('voice.stopRecording')
-                      : t('voice.startRecording')
-                  }
+                  title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
                 >
                   {voice.isRecording ? (
                     <div className="flex items-center gap-1">
@@ -504,7 +500,8 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
                       </span>
                       <span className="text-[10px] tabular-nums">
-                        {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
+                        {Math.floor(voice.duration / 60)}:
+                        {String(voice.duration % 60).padStart(2, '0')}
                       </span>
                     </div>
                   ) : (

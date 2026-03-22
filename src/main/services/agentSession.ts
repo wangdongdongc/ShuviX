@@ -193,7 +193,7 @@ export class AgentSession {
       },
       onSqlDestroyed: (storageMode) => {
         session.emitSqlEvent('runtime_destroyed', storageMode)
-      },
+      }
     }
 
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
@@ -717,5 +717,4 @@ export class AgentSession {
       storageMode
     })
   }
-
 }

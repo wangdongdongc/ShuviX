@@ -76,9 +76,7 @@ export function GeneralSettings(): React.JSX.Element {
     <div className="flex-1 px-5 py-5 space-y-6">
       {/* ── 主题 ── */}
       <div className="zen-section space-y-4">
-        <label className="block text-xs font-medium text-text-primary">
-          {t('settings.theme')}
-        </label>
+        <label className="block text-xs font-medium text-text-primary">{t('settings.theme')}</label>
 
         {/* 主题模式 */}
         <div className="flex gap-2">
@@ -187,8 +185,7 @@ export function GeneralSettings(): React.JSX.Element {
         {/* 字体大小 */}
         <div>
           <label className="block text-[11px] text-text-tertiary mb-1.5">
-            {t('settings.fontSize')}{' '}
-            <span className="font-normal ml-1">{fontSize}px</span>
+            {t('settings.fontSize')} <span className="font-normal ml-1">{fontSize}px</span>
           </label>
           <div className="flex items-center gap-3">
             <span className="text-[10px] text-text-tertiary">12</span>
@@ -212,8 +209,7 @@ export function GeneralSettings(): React.JSX.Element {
         {/* UI 缩放 */}
         <div>
           <label className="block text-[11px] text-text-tertiary mb-1.5">
-            {t('settings.uiZoom')}{' '}
-            <span className="font-normal ml-1">{uiZoom}%</span>
+            {t('settings.uiZoom')} <span className="font-normal ml-1">{uiZoom}%</span>
           </label>
           <div className="flex items-center gap-3">
             <span className="text-[10px] text-text-tertiary">50%</span>

@@ -63,11 +63,7 @@ export interface PluginTool<TParams extends TSchema = TSchema> {
   preExecute?(toolCallId: string, params: Record<string, unknown>): Promise<void>
 
   /** 安全检查（可选，抛异常即阻止执行） */
-  securityCheck?(
-    toolCallId: string,
-    params: Static<TParams>,
-    signal?: AbortSignal
-  ): Promise<void>
+  securityCheck?(toolCallId: string, params: Static<TParams>, signal?: AbortSignal): Promise<void>
 
   /** 工具核心执行逻辑 */
   execute(

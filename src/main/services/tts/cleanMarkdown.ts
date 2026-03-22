@@ -10,7 +10,10 @@ export function cleanMarkdownForTts(raw: string): string {
   // ── Phase 1: 移除不适合朗读的块级内容 ──
 
   // 1. LLM thinking / reasoning 块
-  text = text.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/gi, '')
+  text = text.replace(
+    /<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/gi,
+    ''
+  )
 
   // 2. Fenced code blocks（整块删除，代码不适合语音）
   text = text.replace(/```[\s\S]*?```/g, '')

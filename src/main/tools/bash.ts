@@ -179,7 +179,12 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     if (this.ctx.requestApproval) {
       const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
       if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', params.command)) {
-        const approval = await this.ctx.requestApproval(toolCallId, 'bash', params.command, params.description)
+        const approval = await this.ctx.requestApproval(
+          toolCallId,
+          'bash',
+          params.command,
+          params.description
+        )
         if (!approval.approved) {
           throw new Error(approval.reason || 'User denied execution of this command')
         }

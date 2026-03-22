@@ -131,7 +131,10 @@ export function ProjectFileSystem({
                 ? t('projectForm.refDirAccessRW')
                 : t('projectForm.refDirAccessRO')}
             </button>
-            <span className="text-[11px] font-mono text-text-primary truncate flex-1" title={dir.path}>
+            <span
+              className="text-[11px] font-mono text-text-primary truncate flex-1"
+              title={dir.path}
+            >
               {dir.path.split('/').pop() || dir.path}
             </span>
             <button

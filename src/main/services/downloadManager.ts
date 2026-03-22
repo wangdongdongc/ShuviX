@@ -97,7 +97,8 @@ class DownloadManager {
 
         // 更新进度
         activeTask.progress.downloadedBytes = downloadedBytes
-        activeTask.progress.percent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0
+        activeTask.progress.percent =
+          totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0
 
         // 每 500ms 计算速度和 ETA
         const now = Date.now()

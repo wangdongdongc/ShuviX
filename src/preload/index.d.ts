@@ -723,31 +723,46 @@ declare global {
       stop: (params: { sessionId: string }) => void
     }
     plugin: {
-      purposes: () => Promise<Array<{
-        key: string
-        icon: string
-        labelKey: string
-        tipKey: string
-        i18n: Record<string, Record<string, string>>
-        enabledTools: string[]
-      }>>
-      toolPresentations: () => Promise<Record<string, {
-        icon?: string
-        iconColor?: string
-        summaryField?: string
-        formItems?: Array<{
-          field: string
-          label?: string
-          renderer?: { type: 'code'; language?: string } | { type: 'text' }
+      purposes: () => Promise<
+        Array<{
+          key: string
+          icon: string
+          labelKey: string
+          tipKey: string
+          i18n: Record<string, Record<string, string>>
+          enabledTools: string[]
         }>
-      }>>
-      getRuntimeStatuses: (sessionId: string) => Promise<Record<string, {
-        label: string
-        icon?: string
-        color?: string
-        description?: string
-      }>>
-      destroyRuntime: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
+      >
+      toolPresentations: () => Promise<
+        Record<
+          string,
+          {
+            icon?: string
+            iconColor?: string
+            summaryField?: string
+            formItems?: Array<{
+              field: string
+              label?: string
+              renderer?: { type: 'code'; language?: string } | { type: 'text' }
+            }>
+          }
+        >
+      >
+      getRuntimeStatuses: (sessionId: string) => Promise<
+        Record<
+          string,
+          {
+            label: string
+            icon?: string
+            color?: string
+            description?: string
+          }
+        >
+      >
+      destroyRuntime: (params: {
+        sessionId: string
+        runtimeId: string
+      }) => Promise<{ success: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

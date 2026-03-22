@@ -10,7 +10,11 @@ const localBackend = new LocalSttBackend()
  * STT 服务 — 根据 voice.sttBackend 设置路由到对应后端
  */
 class SttService implements SttBackendMain {
-  async transcribe(audioBase64: string, language?: string, pcmf32?: string): Promise<{ text: string }> {
+  async transcribe(
+    audioBase64: string,
+    language?: string,
+    pcmf32?: string
+  ): Promise<{ text: string }> {
     const backend = settingsDao.findByKey('voice.sttBackend') || 'openai'
     if (backend === 'local') {
       return localBackend.transcribe(audioBase64, language, pcmf32)

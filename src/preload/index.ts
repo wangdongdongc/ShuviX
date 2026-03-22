@@ -365,11 +365,7 @@ const api = {
     cancelSetupQwen3: () => ipcRenderer.invoke('tts:cancelSetupQwen3'),
     /** 监听 Qwen3 安装进度 */
     onSetupProgress: (
-      callback: (progress: {
-        step: string
-        messageKey: string
-        percent: number
-      }) => void
+      callback: (progress: { step: string; messageKey: string; percent: number }) => void
     ) => {
       const handler = (
         _: Electron.IpcRendererEvent,
@@ -417,8 +413,7 @@ const api = {
   preview: {
     start: (params: { sessionId: string; workingDir: string }) =>
       ipcRenderer.send('preview:start', params),
-    stop: (params: { sessionId: string }) =>
-      ipcRenderer.send('preview:stop', params)
+    stop: (params: { sessionId: string }) => ipcRenderer.send('preview:stop', params)
   },
 
   // ============ Plugin ============

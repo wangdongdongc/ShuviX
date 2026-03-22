@@ -6,15 +6,7 @@
  * 项目级 skills 始终启用
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  rmSync,
-  cpSync
-} from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, cpSync } from 'fs'
 import { join } from 'path'
 import type { Skill, SkillAddParams, SkillUpdateParams } from '../types'
 import log from 'electron-log/main'

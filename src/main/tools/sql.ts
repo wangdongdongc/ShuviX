@@ -76,7 +76,8 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     // 记录当前存储模式，用于 timeout/abort 后的 destroy 通知
-    const currentStorageMode = sqlWorkerManager.getStatus(this.ctx.sessionId)?.storageMode ?? 'memory'
+    const currentStorageMode =
+      sqlWorkerManager.getStatus(this.ctx.sessionId)?.storageMode ?? 'memory'
 
     try {
       const abortPromise = signal

@@ -72,7 +72,6 @@ export interface Qwen3SetupProgress {
   percent: number
 }
 
-
 /** 计算目录总大小（MB） */
 function dirSizeMB(dirPath: string): number | null {
   if (!existsSync(dirPath)) return null

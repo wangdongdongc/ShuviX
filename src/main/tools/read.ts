@@ -427,9 +427,7 @@ async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
 
   const customFetch: typeof globalThis.fetch = async (input, init) => {
     const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
-    const combinedSignal = signal
-      ? AbortSignal.any([signal, timeoutSignal])
-      : timeoutSignal
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
     const response = await globalThis.fetch(input, {
       ...init,

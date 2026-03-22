@@ -19,7 +19,12 @@ interface ZenSelectProps {
  * Zen 风格自定义选择器 — 底线触发 + 弹出面板
  * 替代 native select，用于筛选栏等行内场景
  */
-export function ZenSelect({ value, onChange, options, placeholder }: ZenSelectProps): React.JSX.Element {
+export function ZenSelect({
+  value,
+  onChange,
+  options,
+  placeholder
+}: ZenSelectProps): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
 

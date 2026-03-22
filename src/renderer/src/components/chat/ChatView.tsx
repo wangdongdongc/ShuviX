@@ -320,10 +320,29 @@ export function ChatView(): React.JSX.Element {
               className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
               title="Toggle sidebar"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <rect width="18" height="18" x="3" y="3" rx="2" />
                 <path d="M9 3v18" />
-                {isSidebarOpen && <rect x="3" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />}
+                {isSidebarOpen && (
+                  <rect
+                    x="3"
+                    y="3"
+                    width="6"
+                    height="18"
+                    rx="2"
+                    fill="currentColor"
+                    stroke="none"
+                  />
+                )}
               </svg>
             </button>
           )}
@@ -332,10 +351,21 @@ export function ChatView(): React.JSX.Element {
             className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
             title="Preview"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect width="18" height="18" x="3" y="3" rx="2" />
               <path d="M15 3v18" />
-              {isPreviewOpen && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />}
+              {isPreviewOpen && (
+                <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />
+              )}
             </svg>
           </button>
         </div>
