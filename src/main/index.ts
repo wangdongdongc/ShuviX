@@ -15,7 +15,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { dockerManager } from './services/dockerManager'
-import { sqlWorkerManager } from './services/sqlWorkerManager'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -28,6 +27,7 @@ import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
 import designPlugin from '../plugins/design'
 import pyodidePlugin from '../plugins/pyodide'
+import pglitePlugin from '../plugins/pglite'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -506,6 +506,7 @@ app.whenReady().then(async () => {
   // 注册并激活插件（必须在 IPC 注册前完成，确保前端查询时插件已就绪）
   pluginRegistry.register(designPlugin)
   pluginRegistry.register(pyodidePlugin)
+  pluginRegistry.register(pglitePlugin)
   await measureAsync('activatePlugins', () => pluginRegistry.activateAll())
 
   // 注册所有 IPC 处理器
@@ -544,7 +545,6 @@ app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
-  sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()
   pluginRegistry.deactivateAll().catch(() => {})

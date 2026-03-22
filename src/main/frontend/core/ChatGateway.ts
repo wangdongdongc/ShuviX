@@ -85,12 +85,6 @@ export interface ChatGateway {
   /** 断开 SSH 连接 */
   disconnectSsh(sessionId: string): Promise<{ success: boolean }>
 
-  /** 查询 SQL 运行时状态 */
-  getSqlStatus(sessionId: string): { ready: boolean; storageMode: 'memory' | 'persistent' } | null
-
-  /** 销毁 SQL 运行时 */
-  destroySql(sessionId: string): { success: boolean }
-
   // ─── 工具发现 ──────────────────────────────────
 
   /** 获取所有可用工具列表（传入 sessionId 时包含项目级 skills） */

@@ -4,7 +4,13 @@
  */
 
 import { parentPort } from 'worker_threads'
-import { toEmscriptenPath } from './emscriptenPaths'
+import { platform } from 'process'
+
+/** 将宿主机路径转换为 Emscripten POSIX 虚拟文件系统挂载点路径 */
+function toEmscriptenPath(hostPath: string): string {
+  if (platform !== 'win32') return hostPath
+  return '/' + hostPath.replace(/\\/g, '/').replace(':', '')
+}
 
 // ---- 消息协议 ----
 

@@ -1,24 +1,24 @@
 /**
- * SQL 工具 — 使用 PGLite (Postgres WASM) 运行时执行 SQL
+ * PGLite 工具 — 使用 PGLite (Postgres WASM) 运行时执行 SQL
  * 支持多语句、扩展加载、COPY FROM 读取项目文件
  */
 
 import { Type } from '@sinclair/typebox'
+import type {
+  PluginTool,
+  PluginContext,
+  AgentToolResult,
+  PluginToolPresentation
+} from '../../plugin-api'
 import {
   truncateTail,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
-import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
-import { sqlWorkerManager } from '../services/sqlWorkerManager'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
-import type { SqlToolDetails } from '../../shared/types/chatMessage'
-import { t } from '../i18n'
-import { createLogger } from '../logger'
+import type { PgliteWorkerManager, SqlStorageMode } from './workerManager'
 
-const log = createLogger('Tool:sql')
-
+const TOOL_ABORTED = 'Aborted'
 const DEFAULT_TIMEOUT = 30
 
 const SqlParamsSchema = Type.Object({
@@ -39,9 +39,9 @@ const SqlParamsSchema = Type.Object({
   )
 })
 
-export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
+export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
   readonly name = 'sql'
-  readonly label = t('tool.sqlLabel')
+  readonly label = 'Execute SQL'
   readonly description = `Execute SQL in a built-in PGLite (PostgreSQL 17 WASM) runtime. This is a full PostgreSQL database:
 - Multiple statements in one call are supported (separated by semicolons)
 - Tables, indexes, views, functions, and data persist across calls within the same session
@@ -51,17 +51,27 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
 - Best for: structured data analysis, CSV/JSON import & query, data modeling/prototyping, aggregations & pivots, fuzzy/similarity search, vector similarity (RAG)
 - Prefer this tool over Python for tabular data analysis — SQL is more concise and less error-prone for aggregation, filtering, joining, and pivoting`
   readonly parameters = SqlParamsSchema
-
-  constructor(private ctx: ToolContext) {
-    super()
+  readonly presentation: PluginToolPresentation = {
+    icon: 'Database',
+    iconColor: '#3b82f6',
+    summaryField: 'sql',
+    formItems: [
+      { field: 'sql', renderer: { type: 'code', language: 'sql' } },
+      { field: 'extensions', label: 'Extensions' },
+      { field: 'timeout', label: 'Timeout' }
+    ]
   }
 
-  async preExecute(): Promise<void> {
-    const config = resolveProjectConfig(this.ctx.sessionId)
-    await sqlWorkerManager.ensureReady(this.ctx.sessionId, config, () => this.ctx.onSqlReady?.())
+  constructor(
+    private ctx: PluginContext,
+    private workerManager: PgliteWorkerManager
+  ) {}
+
+  async preExecute(_toolCallId: string, _params: Record<string, unknown>): Promise<void> {
+    // sessionId 无法从 preExecute 获取，延迟到 execute 中处理
   }
 
-  protected async securityCheck(
+  async securityCheck(
     _toolCallId: string,
     _params: { sql: string; extensions?: string[]; timeout?: number },
     signal?: AbortSignal
@@ -70,19 +80,35 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
     // PGLite WASM 本身即沙箱，无需审批
   }
 
-  protected async executeInternal(
+  async execute(
     toolCallId: string,
     params: { sql: string; extensions?: string[]; timeout?: number },
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<SqlToolDetails>> {
+    signal?: AbortSignal,
+    _onUpdate?: (partialResult: AgentToolResult<unknown>) => void,
+    sessionId?: string
+  ): Promise<AgentToolResult<unknown>> {
+    if (!sessionId) throw new Error('sessionId is required for SQL tool')
+
     const timeoutSec = Math.min(params.timeout ?? DEFAULT_TIMEOUT, 300)
     const startTime = Date.now()
 
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-    // 记录当前存储模式，用于 timeout/abort 后的 destroy 通知
-    const currentStorageMode =
-      sqlWorkerManager.getStatus(this.ctx.sessionId)?.storageMode ?? 'memory'
+    // 懒初始化 — 首次调用时创建 worker
+    const status = this.workerManager.getStatus(sessionId)
+    await this.workerManager.ensureReady(sessionId, () => {
+      const newStatus = this.workerManager.getStatus(sessionId)
+      const storageMode = newStatus?.storageMode ?? 'memory'
+      this.emitReady(sessionId, storageMode)
+    })
+
+    // 若 worker 已存在但状态未上报（如 session 切换后状态恢复）
+    if (!status) {
+      const currentStatus = this.workerManager.getStatus(sessionId)
+      if (currentStatus) {
+        this.emitReady(sessionId, currentStatus.storageMode)
+      }
+    }
 
     try {
       const abortPromise = signal
@@ -90,8 +116,8 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
             signal.addEventListener(
               'abort',
               () => {
-                sqlWorkerManager.terminate(this.ctx.sessionId)
-                this.ctx.onSqlDestroyed?.(currentStorageMode)
+                this.workerManager.terminate(sessionId)
+                this.emitDestroyed(sessionId)
                 reject(new Error(TOOL_ABORTED))
               },
               { once: true }
@@ -99,8 +125,8 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
           })
         : null
 
-      const execPromise = sqlWorkerManager.execute(
-        this.ctx.sessionId,
+      const execPromise = this.workerManager.execute(
+        sessionId,
         toolCallId,
         params.sql,
         params.extensions,
@@ -124,8 +150,8 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
       }
       text += truncated.text
 
-      log.info(
-        `SQL executed (session ${this.ctx.sessionId}): ${params.sql.slice(0, 50)}... → ${hasError ? 'error' : 'ok'} (${executionTime}ms)`
+      this.ctx.logger.info(
+        `SQL executed (session ${sessionId}): ${params.sql.slice(0, 50)}... → ${hasError ? 'error' : 'ok'} (${executionTime}ms)`
       )
 
       return {
@@ -145,10 +171,38 @@ export class SqlTool extends BaseTool<typeof SqlParamsSchema> {
       if (errMsg === TOOL_ABORTED) throw err
 
       if (errMsg.includes('timed out')) {
-        this.ctx.onSqlDestroyed?.(currentStorageMode)
+        this.emitDestroyed(sessionId)
       }
 
       throw new Error(`SQL execution failed: ${errMsg}`)
     }
+  }
+
+  /** 销毁指定 session 的 worker（供 onEvent 调用） */
+  destroySession(sessionId: string): void {
+    if (!this.workerManager.isActive(sessionId)) return
+    this.workerManager.terminate(sessionId)
+    this.emitDestroyed(sessionId)
+  }
+
+  private emitReady(sessionId: string, storageMode: SqlStorageMode): void {
+    this.ctx.emitEvent(sessionId, {
+      type: 'plugin:runtime_status',
+      runtimeId: 'sql',
+      status: {
+        label: 'PGLite',
+        icon: 'Database',
+        color: '#3b82f6',
+        description: storageMode === 'persistent' ? 'persistent' : 'memory'
+      }
+    })
+  }
+
+  private emitDestroyed(sessionId: string): void {
+    this.ctx.emitEvent(sessionId, {
+      type: 'plugin:runtime_status',
+      runtimeId: 'sql',
+      status: null
+    })
   }
 }

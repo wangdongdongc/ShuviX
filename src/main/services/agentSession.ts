@@ -15,7 +15,6 @@ import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
-import { sqlWorkerManager } from './sqlWorkerManager'
 import type {
   ModelCapabilities,
   ThinkingLevel,
@@ -186,13 +185,6 @@ export class AgentSession {
       },
       onSshDisconnected: (host, port, username) => {
         session.emitSshEvent('ssh_disconnected', { host, port, username })
-      },
-      onSqlReady: () => {
-        const status = sqlWorkerManager.getStatus(session.sessionId)
-        session.emitSqlEvent('runtime_ready', status?.storageMode ?? 'memory')
-      },
-      onSqlDestroyed: (storageMode) => {
-        session.emitSqlEvent('runtime_destroyed', storageMode)
       }
     }
 
@@ -584,7 +576,6 @@ export class AgentSession {
       })
       .catch(() => {})
     sshManager.disconnect(this.sessionId).catch(() => {})
-    sqlWorkerManager.terminate(this.sessionId)
     log.info(`destroy session=${this.sessionId}`)
   }
 
@@ -702,19 +693,6 @@ export class AgentSession {
       host: extra?.host,
       port: extra?.port,
       username: extra?.username
-    })
-  }
-
-  /** 通知前端 SQL 运行时生命周期事件（不持久化为消息） */
-  emitSqlEvent(
-    action: 'runtime_ready' | 'runtime_destroyed',
-    storageMode: 'memory' | 'persistent'
-  ): void {
-    chatFrontendRegistry.broadcast({
-      type: 'sql_event',
-      sessionId: this.sessionId,
-      action,
-      storageMode
     })
   }
 }

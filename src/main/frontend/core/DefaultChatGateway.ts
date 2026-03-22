@@ -7,7 +7,6 @@ import { subAgentRegistry } from '../../subagent'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
-import { sqlWorkerManager } from '../../services/sqlWorkerManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { pluginRegistry } from '../../services/pluginRegistry'
@@ -168,24 +167,6 @@ export class DefaultChatGateway implements ChatGateway {
     return { success: true }
   }
 
-  getSqlStatus(sessionId: string): { ready: boolean; storageMode: 'memory' | 'persistent' } | null {
-    return sqlWorkerManager.getStatus(sessionId)
-  }
-
-  destroySql(sessionId: string): { success: boolean } {
-    const status = sqlWorkerManager.getStatus(sessionId)
-    if (!status) return { success: false }
-    const { storageMode } = status
-    sqlWorkerManager.terminate(sessionId)
-    chatFrontendRegistry.broadcast({
-      type: 'sql_event',
-      sessionId,
-      action: 'runtime_destroyed',
-      storageMode
-    })
-    return { success: true }
-  }
-
   // ─── 工具发现 ──────────────────────────────────
 
   listTools(sessionId?: string): Array<{
@@ -213,7 +194,6 @@ export class DefaultChatGateway implements ChatGateway {
       grep: t('tool.grepLabel'),
       glob: t('tool.globLabel'),
       ssh: t('tool.sshLabel'),
-      sql: t('tool.sqlLabel'),
       'shuvix-project': t('tool.shuvixProjectLabel'),
       'shuvix-setting': t('tool.shuvixSettingLabel'),
       explore: t('tool.exploreLabel'),
@@ -229,7 +209,6 @@ export class DefaultChatGateway implements ChatGateway {
       grep: t('tool.grepHint'),
       glob: t('tool.globHint'),
       ssh: t('tool.sshHint'),
-      sql: t('tool.sqlHint'),
       'shuvix-project': t('tool.shuvixProjectHint'),
       'shuvix-setting': t('tool.shuvixSettingHint'),
       explore: t('tool.exploreHint'),

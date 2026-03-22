@@ -1,5 +1,5 @@
 /**
- * SQL 工具集成测试
+ * PGLite 工具集成测试
  * 使用真实的 PGLite WASM 运行时（通过 worker_threads）
  * 测试：基本执行、多语句、多轮共享状态、结果格式化、文件系统挂载、扩展加载、高级特性、并发执行
  */
@@ -26,53 +26,46 @@ vi.mock('electron', () => ({
   app: { isPackaged: false }
 }))
 
-vi.mock('../types', () => ({
-  BaseTool: class {
-    async securityCheck(..._args: unknown[]): Promise<void> {}
-    async executeInternal(..._args: unknown[]): Promise<unknown> {
-      return {}
+// ---- Mock PluginContext ----
+
+import type { PluginContext } from '../../plugin-api'
+import { PgliteWorkerManager } from './workerManager'
+import type { WorkerResponse } from './sqlWorker'
+
+const mockCtx: PluginContext = {
+  getSessionPaths: (sessionId: string) => {
+    if (sessionId === SESSION_ID_2) {
+      return {
+        workingDirectory: PROJECT_DIR,
+        referenceDirs: [],
+        persist: false
+      }
     }
-    async execute(
-      toolCallId: string,
-      params: unknown,
-      signal?: AbortSignal,
-      onUpdate?: unknown
-    ): Promise<unknown> {
-      await this.securityCheck(toolCallId, params, signal)
-      return this.executeInternal(toolCallId, params, signal, onUpdate)
+    return {
+      workingDirectory: PROJECT_DIR,
+      referenceDirs: [
+        { path: REF_RW_DIR, access: 'readwrite' as const },
+        { path: REF_RO_DIR, access: 'readonly' as const }
+      ],
+      persist: false
     }
   },
-  resolveProjectConfig: () => ({
-    workingDirectory: PROJECT_DIR,
-    referenceDirs: [
-      { path: REF_RW_DIR, access: 'readwrite' },
-      { path: REF_RO_DIR, access: 'readonly' }
-    ]
-  }),
-  TOOL_ABORTED: 'Aborted'
-}))
-
-vi.mock('../../i18n', () => ({
-  t: (key: string) => key
-}))
-
-vi.mock('../../logger', () => ({
-  createLogger: () => ({
+  emitEvent: () => {},
+  getResourcePath: (p: string) => p,
+  logger: {
     info: () => {},
     warn: () => {},
-    error: () => {}
-  })
-}))
+    error: () => {},
+    debug: () => {}
+  }
+}
 
-// ---- Import after mocks ----
+const workerManager = new PgliteWorkerManager(mockCtx)
 
-import { sqlWorkerManager } from '../../services/sqlWorkerManager'
-import type { WorkerResponse } from '../utils/sqlWorker'
-
-// Patch private methods to use correct paths in test environment
+// Patch worker path to use built output in test environment
 const WORKER_PATH = resolve(__dirname, '../../../../out/main/sqlWorker.js')
-
-vi.spyOn(sqlWorkerManager as any, 'getWorkerPath').mockReturnValue(WORKER_PATH)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+vi.spyOn(workerManager as any, 'getWorkerPath').mockReturnValue(WORKER_PATH)
 
 // ---- Helpers ----
 
@@ -83,7 +76,7 @@ async function exec(
   timeoutMs = 30_000
 ): Promise<WorkerResponse> {
   const id = 'tc-' + Math.random().toString(36).slice(2, 8)
-  return sqlWorkerManager.execute(sessionId, id, sql, extensions, timeoutMs)
+  return workerManager.execute(sessionId, id, sql, extensions, timeoutMs)
 }
 
 function getOutput(r: WorkerResponse): string {
@@ -108,18 +101,11 @@ beforeAll(async () => {
   writeFileSync(join(REF_RO_DIR, 'ro_data.csv'), 'id,label\n100,x\n200,y\n')
 
   // Initialize the PGLite worker (~3-5s)
-  const config = {
-    workingDirectory: PROJECT_DIR,
-    referenceDirs: [
-      { path: REF_RW_DIR, access: 'readwrite' as const },
-      { path: REF_RO_DIR, access: 'readonly' as const }
-    ]
-  }
-  await sqlWorkerManager.ensureReady(SESSION_ID, config)
+  await workerManager.ensureReady(SESSION_ID)
 }, 120_000)
 
 afterAll(() => {
-  sqlWorkerManager.terminateAll()
+  workerManager.terminateAll()
   rmSync(TEST_BASE, { recursive: true, force: true })
 })
 
@@ -182,15 +168,15 @@ describe('多语句执行', () => {
     await exec(SESSION_ID, 'CREATE TABLE dml_test(id int)')
     const rInsert = await exec(SESSION_ID, 'INSERT INTO dml_test VALUES(1),(2),(3)')
     expect(rInsert.type).toBe('result')
-    expect(getOutput(rInsert)).toMatch(/3/) // affected rows count
+    expect(getOutput(rInsert)).toMatch(/3/)
 
     const rUpdate = await exec(SESSION_ID, 'UPDATE dml_test SET id = id + 10 WHERE id > 1')
     expect(rUpdate.type).toBe('result')
-    expect(getOutput(rUpdate)).toMatch(/2/) // 2 rows updated
+    expect(getOutput(rUpdate)).toMatch(/2/)
 
     const rDelete = await exec(SESSION_ID, 'DELETE FROM dml_test WHERE id = 1')
     expect(rDelete.type).toBe('result')
-    expect(getOutput(rDelete)).toMatch(/1/) // 1 row deleted
+    expect(getOutput(rDelete)).toMatch(/1/)
 
     await exec(SESSION_ID, 'DROP TABLE dml_test')
   })
@@ -235,19 +221,15 @@ describe('结果格式化', () => {
   it('psql 风格表格输出', async () => {
     const r = await exec(SESSION_ID, "SELECT 1 AS id, 'Alice' AS name UNION ALL SELECT 2, 'Bob'")
     const output = getOutput(r)
-    // 表头
     expect(output).toContain('id')
     expect(output).toContain('name')
-    // 分隔线
     expect(output).toMatch(/[-]+\+[-]+/)
-    // 行数统计
     expect(output).toContain('(2 rows)')
   })
 
   it('NULL 值显示为空', async () => {
     const r = await exec(SESSION_ID, 'SELECT NULL AS empty_col')
     expect(r.type).toBe('result')
-    // NULL should render as empty (not the string "null")
     const output = getOutput(r)
     expect(output).toContain('empty_col')
     expect(output).not.toContain('null')
@@ -258,7 +240,6 @@ describe('结果格式化', () => {
     const output = getOutput(r)
     expect(output).toContain('first')
     expect(output).toContain('second')
-    // 两个结果集之间有空行
     expect(output).toMatch(/\(1 rows\)\n\n/)
   })
 })
@@ -286,7 +267,6 @@ describe('文件系统挂载 — 项目目录', () => {
     await exec(SESSION_ID, "INSERT INTO csv_export VALUES(1, 'exported')")
     const outPath = join(PROJECT_DIR, 'export_out.csv')
     await exec(SESSION_ID, `COPY csv_export TO '${outPath}' WITH (FORMAT csv, HEADER true)`)
-    // Verify file exists on host
     expect(existsSync(outPath)).toBe(true)
     const content = readFileSync(outPath, 'utf-8')
     expect(content).toContain('exported')
@@ -328,15 +308,12 @@ describe('扩展加载', () => {
   it('pg_trgm — 模糊匹配', async () => {
     const r = await exec(SESSION_ID, "SELECT similarity('hello', 'helo') AS sim", ['pg_trgm'])
     expect(r.type).toBe('result')
-    const output = getOutput(r)
-    // similarity returns a float between 0 and 1
-    expect(output).toMatch(/0\.\d+/)
+    expect(getOutput(r)).toMatch(/0\.\d+/)
   })
 
   it('uuid-ossp — UUID 生成', async () => {
     const r = await exec(SESSION_ID, 'SELECT uuid_generate_v4() AS uuid', ['uuid-ossp'])
     expect(r.type).toBe('result')
-    // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     expect(getOutput(r)).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
   })
 
@@ -399,13 +376,8 @@ describe('并发执行', () => {
   })
 
   it('不同 session 并行执行互不影响', async () => {
-    const config2 = {
-      workingDirectory: PROJECT_DIR,
-      referenceDirs: []
-    }
-    await sqlWorkerManager.ensureReady(SESSION_ID_2, config2)
+    await workerManager.ensureReady(SESSION_ID_2)
 
-    // Execute in both sessions in parallel
     const [r1, r2] = await Promise.all([
       exec(SESSION_ID, "SELECT 's1' AS sid"),
       exec(SESSION_ID_2, "SELECT 's2' AS sid")
@@ -420,27 +392,20 @@ describe('并发执行', () => {
     expect(r3.type).toBe('error')
     expect(r3.error).toContain('s2_only')
 
-    sqlWorkerManager.terminate(SESSION_ID_2)
+    workerManager.terminate(SESSION_ID_2)
   }, 120_000)
 })
 
 describe('终止与重建', () => {
   it('terminate 后 getStatus 返回 null', () => {
-    expect(sqlWorkerManager.getStatus(SESSION_ID)).not.toBeNull()
-    sqlWorkerManager.terminate(SESSION_ID)
-    expect(sqlWorkerManager.getStatus(SESSION_ID)).toBeNull()
+    expect(workerManager.getStatus(SESSION_ID)).not.toBeNull()
+    workerManager.terminate(SESSION_ID)
+    expect(workerManager.getStatus(SESSION_ID)).toBeNull()
   })
 
   it('terminate 后重新 ensureReady 可再次执行', async () => {
     await new Promise((r) => setTimeout(r, 200))
-    const config = {
-      workingDirectory: PROJECT_DIR,
-      referenceDirs: [
-        { path: REF_RW_DIR, access: 'readwrite' as const },
-        { path: REF_RO_DIR, access: 'readonly' as const }
-      ]
-    }
-    await sqlWorkerManager.ensureReady(SESSION_ID, config)
+    await workerManager.ensureReady(SESSION_ID)
     const r = await exec(SESSION_ID, 'SELECT 42 AS answer')
     expect(r.type).toBe('result')
     expect(getOutput(r)).toContain('42')

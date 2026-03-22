@@ -77,17 +77,15 @@ export function useSessionInit(activeSessionId: string | null): void {
       const restoredLevel = hasReasoning ? result.modelMetadata.thinkingLevel || 'medium' : 'off'
       store.setThinkingLevel(restoredLevel)
 
-      // 7. 查询 Docker/SSH/SQL/Plugin 实时资源状态
-      const [dockerInfo, sshInfo, sqlInfo, pluginRuntimes] = await Promise.all([
+      // 7. 查询 Docker/SSH/Plugin 实时资源状态
+      const [dockerInfo, sshInfo, pluginRuntimes] = await Promise.all([
         window.api.docker.sessionStatus(activeSessionId),
         window.api.ssh.sessionStatus(activeSessionId),
-        window.api.sql.sessionStatus(activeSessionId),
         window.api.plugin.getRuntimeStatuses(activeSessionId)
       ])
       if (!cancelled) {
         store.setSessionDocker(activeSessionId, dockerInfo)
         store.setSessionSsh(activeSessionId, sshInfo)
-        store.setSessionSql(activeSessionId, sqlInfo)
         store.setPluginRuntimes(activeSessionId, pluginRuntimes)
       }
     }

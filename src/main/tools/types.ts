@@ -51,10 +51,6 @@ export interface ToolContext {
   onSshConnected?: (host: string, port: number, username: string) => void
   /** ssh 连接断开时回调 */
   onSshDisconnected?: (host: string, port: number, username: string) => void
-  /** SQL 运行时就绪回调 */
-  onSqlReady?: () => void
-  /** SQL 运行时销毁回调（storageMode 为销毁前的存储模式） */
-  onSqlDestroyed?: (storageMode: 'memory' | 'persistent') => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

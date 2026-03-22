@@ -35,6 +35,8 @@ export interface PluginSessionPaths {
   workingDirectory: string
   /** 参考目录列表 */
   referenceDirs: PluginReferenceDir[]
+  /** 是否持久化运行时数据（项目级配置，插件可据此决定是否跨会话共享 worker） */
+  persist?: boolean
 }
 
 // ─── 插件上下文 ──────────────────────────────────────────

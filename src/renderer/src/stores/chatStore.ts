@@ -129,7 +129,6 @@ export interface PluginRuntimeInfo {
 export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
   ssh?: { host: string; port: number; username: string } | null
-  sql?: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
   acp?: Array<{ agentName: string; displayName: string }>
   /** 插件 runtime 状态（runtimeId → info） */
   pluginRuntimes?: Record<string, PluginRuntimeInfo>
@@ -311,10 +310,6 @@ interface ChatState {
   setSessionSsh: (
     sessionId: string,
     info: { host: string; port: number; username: string } | null
-  ) => void
-  setSessionSql: (
-    sessionId: string,
-    info: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
   ) => void
   setPluginRuntime: (sessionId: string, runtimeId: string, info: PluginRuntimeInfo | null) => void
   setPluginRuntimes: (sessionId: string, runtimes: Record<string, PluginRuntimeInfo>) => void
@@ -689,14 +684,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const prev = state.sessionResources[sessionId] || {}
       return {
         sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } }
-      }
-    }),
-
-  setSessionSql: (sessionId, info) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      return {
-        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, sql: info } }
       }
     }),
 

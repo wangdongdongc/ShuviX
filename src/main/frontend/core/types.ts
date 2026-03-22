@@ -160,14 +160,6 @@ export interface ChatSshEvent extends ChatEventBase {
   username?: string
 }
 
-/** SQL 运行时生命周期事件（轻量通知，不持久化为消息） */
-export interface ChatSqlEvent extends ChatEventBase {
-  type: 'sql_event'
-  action: 'runtime_ready' | 'runtime_destroyed'
-  /** 存储模式：memory=内存临时 / persistent=项目文件夹持久化 */
-  storageMode: 'memory' | 'persistent'
-}
-
 /** 插件 runtime 状态变更事件（通用，替代硬编码的 python_event/sql_event） */
 export interface ChatPluginRuntimeEvent extends ChatEventBase {
   type: 'plugin_runtime_event'
@@ -285,7 +277,6 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatDockerEvent
   | ChatSshEvent
-  | ChatSqlEvent
   | ChatPreviewEvent
   | ChatPluginRuntimeEvent
   | ChatAcpEvent

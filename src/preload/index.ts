@@ -234,12 +234,6 @@ const api = {
     disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
   },
 
-  // ============ SQL ============
-  sql: {
-    sessionStatus: (sessionId: string) => ipcRenderer.invoke('sql:sessionStatus', sessionId),
-    destroySession: (sessionId: string) => ipcRenderer.invoke('sql:destroySession', sessionId)
-  },
-
   // ============ SSH 凭据管理 ============
   sshCredential: {
     list: () => ipcRenderer.invoke('sshCredential:list'),

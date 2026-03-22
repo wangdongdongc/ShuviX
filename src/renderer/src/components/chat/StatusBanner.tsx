@@ -1,14 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import {
-  Bot,
-  Container,
-  Database,
-  Globe,
-  MessageCircle,
-  Terminal,
-  TriangleAlert,
-  X
-} from 'lucide-react'
+import { Bot, Container, Globe, MessageCircle, Terminal, TriangleAlert, X } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
@@ -21,7 +12,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const resources = useChatStore((s) => s.sessionResources[sessionId])
   const docker = resources?.docker
   const ssh = resources?.ssh
-  const sql = resources?.sql
   const acpAgents = resources?.acp
   const pluginRuntimes = resources?.pluginRuntimes
 
@@ -37,7 +27,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   if (
     !docker &&
     !ssh &&
-    !sql &&
     (!acpAgents || acpAgents.length === 0) &&
     !pluginRuntimes &&
     !autoApprove &&
@@ -52,11 +41,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   const handleDisconnectSsh = async (): Promise<void> => {
     await window.api.ssh.disconnectSession(sessionId)
-  }
-
-  const handleDestroySql = async (): Promise<void> => {
-    await window.api.sql.destroySession(sessionId)
-    useChatStore.getState().setSessionSql(sessionId, null)
   }
 
   const handleDestroyAcp = async (agentName: string): Promise<void> => {
@@ -119,25 +103,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
             onClick={handleDisconnectSsh}
             className="ml-0.5 rounded hover:bg-sky-500/20 transition-colors p-0.5"
             title={t('chat.disconnectSsh')}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      )}
-      {sql && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400">
-          <Database size={12} />
-          <span>
-            {t('chat.sqlWasmRuntime')}
-            <span className="ml-1 opacity-60">
-              ({sql.storageMode === 'persistent' ? t('chat.sqlPersistent') : t('chat.sqlTemporary')}
-              )
-            </span>
-          </span>
-          <button
-            onClick={handleDestroySql}
-            className="ml-0.5 rounded hover:bg-blue-500/20 transition-colors p-0.5"
-            title={t('chat.destroySql')}
           >
             <X size={10} />
           </button>

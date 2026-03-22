@@ -29,7 +29,6 @@ interface ProjectCreateDialogProps {
 /** 用途预设：工具名称列表 */
 const PURPOSE_PRESETS: Record<string, string[]> = {
   bash: ['bash', 'read', 'ask'],
-  sql: ['read', 'sql', 'ask'],
   dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore']
 }
 
@@ -267,23 +266,6 @@ export function ProjectCreateDialog({
                 </div>
                 <div className="text-xs font-medium text-text-primary">
                   {t('projectForm.purposeBash')}
-                </div>
-              </button>
-
-              <button
-                onClick={() => handlePurposeSelect('sql')}
-                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'sql' ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Database
-                    size={20}
-                    className="text-text-secondary group-hover:text-accent transition-colors"
-                  />
-                </div>
-                <div className="text-xs font-medium text-text-primary">
-                  {t('projectForm.purposeSQL')}
                 </div>
               </button>
 

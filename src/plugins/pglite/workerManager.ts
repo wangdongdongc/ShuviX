@@ -1,19 +1,15 @@
 /**
- * SQL Worker 生命周期管理 — 单例服务
+ * PGLite Worker 生命周期管理
  * 支持两种模式：
  * - 内存模式：每个 session 独立 worker（key = session:${sessionId}）
- * - 持久化模式：同一项目共享 worker（key = project:${projectId}），数据存储到项目文件夹
+ * - 持久化模式：同一项目共享 worker（key = workingDirectory），数据存储到项目文件夹
  */
 
 import { Worker } from 'worker_threads'
 import { resolve, join } from 'path'
 import { mkdirSync } from 'fs'
-import { app } from 'electron'
-import type { MountConfig, WorkerResponse } from '../tools/utils/sqlWorker'
-import type { ProjectConfig } from '../tools/types'
-import { createLogger } from '../logger'
-
-const log = createLogger('SqlWorkerManager')
+import type { PluginContext } from '../../plugin-api'
+import type { MountConfig, WorkerResponse } from './sqlWorker'
 
 export type SqlStorageMode = 'memory' | 'persistent'
 
@@ -33,7 +29,7 @@ interface WorkerEntry {
   sessionRefs: Set<string>
 }
 
-class SqlWorkerManager {
+export class PgliteWorkerManager {
   /** workerKey → WorkerEntry */
   private workers = new Map<string, WorkerEntry>()
   /** sessionId → workerKey */
@@ -41,37 +37,28 @@ class SqlWorkerManager {
   /** workerKey → init promise（防止并发初始化） */
   private initPromises = new Map<string, Promise<void>>()
 
-  /** 获取 worker 脚本路径 */
+  constructor(private ctx: PluginContext) {}
+
+  /** 获取 worker 脚本路径（与 Pyodide 插件相同的模式：运行时 require electron） */
   private getWorkerPath(): string {
-    if (app.isPackaged) {
-      return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'sqlWorker.js')
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { app } = require('electron') as typeof import('electron')
+      if (app.isPackaged) {
+        return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'sqlWorker.js')
+      }
+    } catch {
+      // 测试环境无 electron
     }
     return resolve(__dirname, 'sqlWorker.js')
   }
 
-  /** 从 ProjectConfig 构建挂载配置 */
-  private buildMounts(config: ProjectConfig): MountConfig[] {
-    const mounts: MountConfig[] = [{ hostPath: config.workingDirectory, access: 'readwrite' }]
-    for (const ref of config.referenceDirs) {
-      mounts.push({
-        hostPath: ref.path,
-        access: ref.access ?? 'readonly'
-      })
-    }
-    return mounts
-  }
-
-  /** 计算 worker key */
-  private resolveWorkerKey(sessionId: string, config: ProjectConfig): string {
-    if (config.pglitePersist && config.projectId) {
-      return `project:${config.projectId}`
-    }
-    return `session:${sessionId}`
-  }
-
   /** 确保 worker 已初始化并就绪 */
-  async ensureReady(sessionId: string, config: ProjectConfig, onReady?: () => void): Promise<void> {
-    const workerKey = this.resolveWorkerKey(sessionId, config)
+  async ensureReady(sessionId: string, onReady?: () => void): Promise<void> {
+    const paths = this.ctx.getSessionPaths(sessionId)
+    const persist = !!paths.persist
+    const workerKey = persist ? paths.workingDirectory : `session:${sessionId}`
+
     this.sessionToWorkerKey.set(sessionId, workerKey)
 
     const existing = this.workers.get(workerKey)
@@ -83,13 +70,18 @@ class SqlWorkerManager {
     const pending = this.initPromises.get(workerKey)
     if (pending) {
       await pending
-      // 初始化完成后将自身加入 sessionRefs
       const entry = this.workers.get(workerKey)
       entry?.sessionRefs.add(sessionId)
       return
     }
 
-    const initPromise = this.createWorker(workerKey, sessionId, config, onReady)
+    const initPromise = this.createWorker(
+      workerKey,
+      sessionId,
+      paths.workingDirectory,
+      persist,
+      onReady
+    )
     this.initPromises.set(workerKey, initPromise)
     try {
       await initPromise
@@ -101,20 +93,28 @@ class SqlWorkerManager {
   private async createWorker(
     workerKey: string,
     sessionId: string,
-    config: ProjectConfig,
+    workingDirectory: string,
+    persist: boolean,
     onReady?: () => void
   ): Promise<void> {
     const workerPath = this.getWorkerPath()
-    const storageMode: SqlStorageMode = config.pglitePersist ? 'persistent' : 'memory'
-    log.info(
+    const storageMode: SqlStorageMode = persist ? 'persistent' : 'memory'
+    this.ctx.logger.info(
       `Creating SQL worker [${workerKey}] (${storageMode}) for session ${sessionId}: ${workerPath}`
     )
 
     // 持久化模式：确保数据目录存在
     let dataDir: string | undefined
-    if (storageMode === 'persistent' && config.projectPath) {
-      dataDir = join(config.projectPath, '.shuvix', 'pglite', 'data')
+    if (persist) {
+      dataDir = join(workingDirectory, '.shuvix', 'pglite', 'data')
       mkdirSync(dataDir, { recursive: true })
+    }
+
+    // 构建挂载配置
+    const paths = this.ctx.getSessionPaths(sessionId)
+    const mounts: MountConfig[] = [{ hostPath: workingDirectory, access: 'readwrite' }]
+    for (const ref of paths.referenceDirs) {
+      mounts.push({ hostPath: ref.path, access: ref.access ?? 'readonly' })
     }
 
     const worker = new Worker(workerPath)
@@ -137,7 +137,7 @@ class SqlWorkerManager {
         if (msg.type === 'ready') {
           clearTimeout(initTimeout)
           entry.ready = true
-          log.info(`SQL worker ready [${workerKey}]`)
+          this.ctx.logger.info(`SQL worker ready [${workerKey}]`)
           onReady?.()
           resolveInit()
           return
@@ -161,13 +161,12 @@ class SqlWorkerManager {
 
       worker.on('error', (err) => {
         clearTimeout(initTimeout)
-        log.error(`SQL worker error [${workerKey}]:`, err)
+        this.ctx.logger.error(`SQL worker error [${workerKey}]:`, err)
         for (const [, req] of entry.pending) {
           clearTimeout(req.timer)
           req.reject(err)
         }
         entry.pending.clear()
-        // 清除所有 session 映射
         for (const sid of entry.sessionRefs) {
           this.sessionToWorkerKey.delete(sid)
         }
@@ -176,7 +175,7 @@ class SqlWorkerManager {
       })
 
       worker.on('exit', (code) => {
-        log.info(`SQL worker exited [${workerKey}], code ${code}`)
+        this.ctx.logger.info(`SQL worker exited [${workerKey}], code ${code}`)
         if (this.workers.get(workerKey) === entry) {
           for (const [, req] of entry.pending) {
             clearTimeout(req.timer)
@@ -191,7 +190,6 @@ class SqlWorkerManager {
       })
 
       // 发送初始化消息
-      const mounts = this.buildMounts(config)
       worker.postMessage({ type: 'init', mounts, dataDir })
     })
   }
@@ -213,7 +211,9 @@ class SqlWorkerManager {
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         entry.pending.delete(id)
-        log.warn(`SQL execution timed out (${timeoutMs}ms), terminating worker [${workerKey}]`)
+        this.ctx.logger.warn(
+          `SQL execution timed out (${timeoutMs}ms), terminating worker [${workerKey}]`
+        )
         this.terminate(sessionId)
         reject(new Error(`SQL execution timed out (${timeoutMs / 1000}s)`))
       }, timeoutMs)
@@ -232,6 +232,12 @@ class SqlWorkerManager {
     return { ready: true, storageMode: entry.storageMode }
   }
 
+  /** 检查 session 是否有活跃的 worker */
+  isActive(sessionId: string): boolean {
+    const workerKey = this.sessionToWorkerKey.get(sessionId)
+    return !!workerKey && this.workers.has(workerKey)
+  }
+
   /**
    * 终止指定 session 的 worker
    * - 内存模式：直接终止
@@ -248,7 +254,7 @@ class SqlWorkerManager {
 
     // 持久化模式：仍有其他 session 引用则不终止
     if (entry.storageMode === 'persistent' && entry.sessionRefs.size > 0) {
-      log.info(
+      this.ctx.logger.info(
         `Session ${sessionId} detached from shared worker [${workerKey}], ${entry.sessionRefs.size} refs remaining`
       )
       return
@@ -262,14 +268,13 @@ class SqlWorkerManager {
     const entry = this.workers.get(workerKey)
     if (!entry) return
 
-    log.info(`Terminating SQL worker [${workerKey}]`)
+    this.ctx.logger.info(`Terminating SQL worker [${workerKey}]`)
     for (const [, req] of entry.pending) {
       clearTimeout(req.timer)
       req.reject(new Error('Worker terminated'))
     }
     entry.pending.clear()
     entry.worker.terminate()
-    // 清除所有 session 映射
     for (const sid of entry.sessionRefs) {
       this.sessionToWorkerKey.delete(sid)
     }
@@ -283,5 +288,3 @@ class SqlWorkerManager {
     }
   }
 }
-
-export const sqlWorkerManager = new SqlWorkerManager()

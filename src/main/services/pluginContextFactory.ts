@@ -28,7 +28,8 @@ export function createPluginContext(pluginId: string): PluginContext {
         referenceDirs: config.referenceDirs.map((d) => ({
           path: d.path,
           access: d.access ?? 'readonly'
-        }))
+        })),
+        persist: !!config.pglitePersist
       }
     },
 

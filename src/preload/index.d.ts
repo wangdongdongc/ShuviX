@@ -156,11 +156,6 @@ declare global {
     port?: number
     username?: string
   }
-  interface ChatSqlEvent extends ChatEventBase {
-    type: 'sql_event'
-    action: 'runtime_ready' | 'runtime_destroyed'
-    storageMode: 'memory' | 'persistent'
-  }
   interface ChatPluginRuntimeEvent extends ChatEventBase {
     type: 'plugin_runtime_event'
     runtimeId: string
@@ -260,7 +255,6 @@ declare global {
     | ChatImageDataEvent
     | ChatDockerEvent
     | ChatSshEvent
-    | ChatSqlEvent
     | ChatPluginRuntimeEvent
     | ChatPreviewEvent
     | ChatAcpEvent
@@ -565,12 +559,6 @@ declare global {
         sessionId: string
       ) => Promise<{ host: string; port: number; username: string } | null>
       disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
-    }
-    sql: {
-      sessionStatus: (
-        sessionId: string
-      ) => Promise<{ ready: boolean; storageMode: 'memory' | 'persistent' } | null>
-      destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }
     sshCredential: {
       list: () => Promise<SshCredential[]>
