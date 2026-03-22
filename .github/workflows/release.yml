@@ -128,6 +128,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.exe
+            dist/*.yml
             !dist/*.blockmap
           if-no-files-found: ignore
 
@@ -196,6 +197,7 @@ jobs:
           path: |
             dist/*.AppImage
             dist/*.deb
+            dist/*.yml
           if-no-files-found: ignore
 
   # ---- 发布阶段：所有构建完成后创建 Release 并上传全部产物 ----

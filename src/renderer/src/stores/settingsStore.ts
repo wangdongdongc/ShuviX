@@ -63,6 +63,8 @@ interface SettingsState {
     | 'bindings'
     | 'httpLogs'
     | 'about'
+  /** 启动时自动检查更新 */
+  autoCheckUpdate: boolean
   /** 是否已加载 */
   loaded: boolean
   /** 系统设置 key 元数据（审批弹窗用） */
@@ -126,6 +128,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   voiceTtsQwen3Emotion: '',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
+  autoCheckUpdate: true,
   loaded: false,
   settingMeta: {},
   projectFieldMeta: {},
@@ -167,6 +170,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       voiceTtsQwen3Voice: settings['voice.tts.qwen3.voice'] || 'Vivian',
       voiceTtsQwen3Speed: Number(settings['voice.tts.qwen3.speed']) || 1.0,
       voiceTtsQwen3Emotion: settings['voice.tts.qwen3.emotion'] || '',
+      autoCheckUpdate: settings['updates.autoCheck'] !== 'false',
       loaded: true
     })
     // 同步主题到 localStorage，供 HTML 内联脚本在下次打开时消除闪烁

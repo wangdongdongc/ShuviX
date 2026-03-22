@@ -5,6 +5,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useSidebarStore } from '../stores/sidebarStore'
 import { usePreviewStore } from '../stores/previewStore'
 import { loadPanelLayout } from '../stores/panelLayout'
+import { useUpdateStore } from '../stores/updateStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -97,6 +98,31 @@ export function useAppInit(): void {
       })
     }
     init()
+  }, [])
+
+  // 注册更新事件监听器，并在设置加载完成后按需自动检查更新（仅主窗口）
+  useEffect(() => {
+    if (isSettingsWindow) return
+
+    const removeListener = window.api.update.onEvent((event) => {
+      useUpdateStore.getState().setUpdateEvent(event)
+    })
+
+    // 等待 settingsStore 加载完成后再决定是否自动检查
+    const checkIfNeeded = (): void => {
+      const { loaded, autoCheckUpdate } = useSettingsStore.getState()
+      if (!loaded) {
+        // settings 尚未加载，稍后重试
+        setTimeout(checkIfNeeded, 200)
+        return
+      }
+      if (autoCheckUpdate) {
+        void window.api.update.check()
+      }
+    }
+    checkIfNeeded()
+
+    return removeListener
   }, [])
 
   // 监听设置变更，实时刷新主题/字体等（仅主窗口）

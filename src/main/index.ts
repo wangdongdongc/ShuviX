@@ -25,6 +25,7 @@ import { abortAllAcpSessions } from './subagent'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
+import { updateService } from './services/updateService'
 import designPlugin from '../plugins/design'
 import pyodidePlugin from '../plugins/pyodide'
 import pglitePlugin from '../plugins/pglite'
@@ -511,6 +512,9 @@ app.whenReady().then(async () => {
 
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
+
+  // 初始化自动更新服务（绑定 electron-updater 事件）
+  updateService.init()
 
   // 从 pi-ai 注册表同步内置提供商的模型列表 + 能力信息（同步操作，无需网络）
   measure('syncBuiltinModels', () => providerService.syncAllBuiltinModels())

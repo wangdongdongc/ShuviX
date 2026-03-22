@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { UpdateEvent } from '../main/types'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -436,6 +437,24 @@ const api = {
     importFromDir: () => ipcRenderer.invoke('skill:importFromDir'),
     /** 获取 skills 根目录路径 */
     getDir: () => ipcRenderer.invoke('skill:getDir')
+  },
+
+  // ============ 自动更新 ============
+  update: {
+    /** 检查更新 */
+    check: (): Promise<{ success: boolean }> => ipcRenderer.invoke('update:check'),
+    /** 开始下载更新 */
+    download: (): Promise<{ success: boolean }> => ipcRenderer.invoke('update:download'),
+    /** 安装更新并重启 */
+    install: (): Promise<{ success: boolean }> => ipcRenderer.invoke('update:install'),
+    /** 获取最后一次更新事件（用于新打开的窗口同步状态） */
+    getLastEvent: (): Promise<UpdateEvent | null> => ipcRenderer.invoke('update:getLastEvent'),
+    /** 监听更新状态事件，返回取消监听函数 */
+    onEvent: (callback: (event: UpdateEvent) => void): (() => void) => {
+      const handler = (_: Electron.IpcRendererEvent, event: UpdateEvent): void => callback(event)
+      ipcRenderer.on('update:event', handler)
+      return () => ipcRenderer.removeListener('update:event', handler)
+    }
   }
 }
 

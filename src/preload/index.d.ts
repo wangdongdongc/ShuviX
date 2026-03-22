@@ -267,6 +267,9 @@ declare global {
     | ChatErrorEvent
     | ChatUserMessageEvent
 
+  /** 自动更新事件判别联合 */
+  type UpdateEvent = import('../main/types').UpdateEvent
+
   /** 下载进度信息 */
   interface DownloadProgress {
     taskId: string
@@ -762,6 +765,18 @@ declare global {
       ) => Promise<{ name: string; description: string; content: string } | null>
       importFromDir: () => Promise<{ success: boolean; skill?: Skill; reason?: string }>
       getDir: () => Promise<string>
+    }
+    update: {
+      /** 检查更新 */
+      check: () => Promise<{ success: boolean }>
+      /** 开始下载更新 */
+      download: () => Promise<{ success: boolean }>
+      /** 安装更新并重启 */
+      install: () => Promise<{ success: boolean }>
+      /** 获取最后一次更新事件（用于新打开的窗口同步状态） */
+      getLastEvent: () => Promise<UpdateEvent | null>
+      /** 监听更新状态事件，返回取消监听函数 */
+      onEvent: (callback: (event: UpdateEvent) => void) => () => void
     }
   }
 

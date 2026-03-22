@@ -41,7 +41,9 @@
     "confirmDeleteProject": "Confirm Delete Project",
     "deleteProjectWarning": "This will ",
     "deleteProjectWarningBold": "permanently delete the project and all its sessions and messages",
-    "deleteProjectWarningEnd": ", and cannot be recovered. Are you sure?"
+    "deleteProjectWarningEnd": ", and cannot be recovered. Are you sure?",
+    "updateAvailable": "Update available",
+    "updateReady": "Ready to install"
   },
 
   "chat": {
@@ -555,7 +557,17 @@
     "version": "Version {{version}}",
     "sourceCode": "Source Code",
     "reportIssue": "Report Issue",
-    "license": "This project is open source software released under the MIT License."
+    "license": "This project is open source software released under the MIT License.",
+    "checkUpdate": "Check for Updates",
+    "updateChecking": "Checking for updates…",
+    "updateUpToDate": "You're up to date (v{{version}})",
+    "updateAvailable": "Update available: v{{version}}",
+    "updateDownload": "Download",
+    "updateDownloading": "Downloading… {{percent}}%",
+    "updateReady": "v{{version}} ready to install",
+    "updateInstall": "Install & Restart",
+    "updateError": "Update error: {{message}}",
+    "autoCheckUpdate": "Check for updates on startup"
   },
 
   "agent": {

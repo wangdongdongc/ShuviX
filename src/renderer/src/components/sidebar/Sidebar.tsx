@@ -10,9 +10,11 @@ import {
   FolderPlus,
   Globe,
   MessageCircle,
-  RotateCcw
+  RotateCcw,
+  ArrowUpCircle
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
+import { useUpdateStore } from '../../stores/updateStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -36,6 +38,9 @@ export function Sidebar(): React.JSX.Element {
     sharedSessionIds,
     telegramBindings
   } = useChatStore()
+  const updateEvent = useUpdateStore((s) => s.updateEvent)
+  const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
+
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
@@ -373,8 +378,21 @@ export function Sidebar(): React.JSX.Element {
         )}
       </div>
 
-      {/* 底部设置按钮 */}
-      <div className="p-2 border-t border-border-secondary/50">
+      {/* 底部操作区 */}
+      <div className="px-2 py-1 border-t border-border-secondary/50 space-y-0.5">
+        {hasUpdate && (
+          <button
+            onClick={() => window.api.app.openSettings('about')}
+            className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[11px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+          >
+            <ArrowUpCircle size={14} />
+            <span>
+              {updateEvent?.type === 'ready'
+                ? t('sidebar.updateReady')
+                : t('sidebar.updateAvailable')}
+            </span>
+          </button>
+        )}
         <button
           onClick={() => window.api.app.openSettings()}
           className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[11px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"

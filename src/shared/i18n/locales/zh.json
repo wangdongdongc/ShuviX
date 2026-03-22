@@ -41,7 +41,9 @@
     "confirmDeleteProject": "确认删除项目",
     "deleteProjectWarning": "删除后将",
     "deleteProjectWarningBold": "彻底删除该项目及其所有会话和消息",
-    "deleteProjectWarningEnd": "，且无法恢复。确定要删除吗？"
+    "deleteProjectWarningEnd": "，且无法恢复。确定要删除吗？",
+    "updateAvailable": "发现新版本",
+    "updateReady": "可以安装更新"
   },
 
   "chat": {
@@ -555,7 +557,17 @@
     "version": "版本 {{version}}",
     "sourceCode": "源代码仓库",
     "reportIssue": "反馈问题",
-    "license": "本项目为开源软件，基于 MIT 许可证发布。"
+    "license": "本项目为开源软件，基于 MIT 许可证发布。",
+    "checkUpdate": "检查更新",
+    "updateChecking": "正在检查更新…",
+    "updateUpToDate": "已是最新版本（v{{version}}）",
+    "updateAvailable": "发现新版本：v{{version}}",
+    "updateDownload": "下载更新",
+    "updateDownloading": "正在下载… {{percent}}%",
+    "updateReady": "v{{version}} 已准备好安装",
+    "updateInstall": "安装并重启",
+    "updateError": "更新出错：{{message}}",
+    "autoCheckUpdate": "启动时自动检查更新"
   },
 
   "agent": {
