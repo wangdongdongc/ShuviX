@@ -441,7 +441,6 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   const bounds = mainWindow.getBounds()
   const newWidth = Math.max(800, bounds.width + scaledDelta)
   // 获取窗口所在显示器的工作区域，防止超出屏幕
-  const { screen } = require('electron')
   const display = screen.getDisplayMatching(bounds)
   const maxRight = display.workArea.x + display.workArea.width
   const clampedWidth = Math.min(newWidth, maxRight - bounds.x)
