@@ -145,7 +145,7 @@ function AskContent({
         className="w-full flex items-center gap-2.5 px-4 py-2.5 text-left hover:bg-bg-hover/20 transition-colors"
       >
         <MessageCircleQuestion size={14} className="text-accent/70 flex-shrink-0" />
-        <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 truncate">
+        <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 break-words">
           {question}
         </p>
         <ChevronDown
@@ -401,7 +401,7 @@ function ApprovalContent({
           <p className="text-[11px] text-text-secondary font-medium mb-1.5">
             {t('toolCall.patternsToAllow')}
           </p>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
             {previewPatterns.map((pattern) => (
               <div
                 key={pattern}
