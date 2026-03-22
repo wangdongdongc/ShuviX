@@ -4,7 +4,7 @@
  */
 
 import { parentPort } from 'worker_threads'
-import { toEmscriptenPath } from './emscriptenPaths'
+import { toEmscriptenPath } from '../../main/tools/utils/emscriptenPaths'
 
 // ---- 消息协议 ----
 

@@ -11,6 +11,7 @@ import type { PluginContext } from '../../plugin-api/types'
 import type { PluginEvent } from '../../plugin-api/events'
 import { resolveProjectConfig } from '../tools/types'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import { pluginRegistry } from './pluginRegistry'
 import { createLogger } from '../logger'
 
 /**
@@ -60,6 +61,15 @@ export function createPluginContext(pluginId: string): PluginContext {
             type: 'preview_event' as const,
             sessionId,
             action: 'server_stopped' as const
+          })
+          break
+        case 'plugin:runtime_status':
+          pluginRegistry.updateRuntimeStatus(sessionId, event.runtimeId, event.status)
+          chatFrontendRegistry.broadcast({
+            type: 'plugin_runtime_event' as const,
+            sessionId,
+            runtimeId: event.runtimeId,
+            status: event.status
           })
           break
       }

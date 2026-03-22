@@ -104,7 +104,7 @@ export type FormItemRenderer = { type: 'code'; language?: string } | { type: 'te
 /** 插件工具渲染配置（从 plugin-api PluginToolPresentation 映射） */
 export interface ToolPresentation {
   icon?: string
-  iconClass?: string
+  iconColor?: string
   summaryField?: string
   formItems?: Array<{ field: string; label?: string; renderer?: FormItemRenderer }>
 }
@@ -117,13 +117,22 @@ export interface StreamingDeltaBuffer {
   subAgents: Map<string, { content: string; thinking: string }>
 }
 
+/** 插件 runtime 状态信息 */
+export interface PluginRuntimeInfo {
+  label: string
+  icon?: string
+  color?: string
+  description?: string
+}
+
 /** 每个 session 的活跃 Docker/SSH/Python/ACP 资源信息 */
 export interface SessionResourceInfo {
   docker?: { containerId: string; image: string } | null
   ssh?: { host: string; port: number; username: string } | null
-  python?: { ready: boolean } | null
   sql?: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
   acp?: Array<{ agentName: string; displayName: string }>
+  /** 插件 runtime 状态（runtimeId → info） */
+  pluginRuntimes?: Record<string, PluginRuntimeInfo>
 }
 
 /** 子智能体内部工具执行 */
@@ -303,11 +312,12 @@ interface ChatState {
     sessionId: string,
     info: { host: string; port: number; username: string } | null
   ) => void
-  setSessionPython: (sessionId: string, info: { ready: boolean } | null) => void
   setSessionSql: (
     sessionId: string,
     info: { ready: boolean; storageMode: 'memory' | 'persistent' } | null
   ) => void
+  setPluginRuntime: (sessionId: string, runtimeId: string, info: PluginRuntimeInfo | null) => void
+  setPluginRuntimes: (sessionId: string, runtimes: Record<string, PluginRuntimeInfo>) => void
   addSessionAcp: (sessionId: string, info: { agentName: string; displayName: string }) => void
   removeSessionAcp: (sessionId: string, agentName: string) => void
   appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
@@ -683,19 +693,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
-  setSessionPython: (sessionId, info) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      return {
-        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, python: info } }
-      }
-    }),
 
   setSessionSql: (sessionId, info) =>
     set((state) => {
       const prev = state.sessionResources[sessionId] || {}
       return {
         sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, sql: info } }
+      }
+    }),
+
+  setPluginRuntime: (sessionId, runtimeId, info) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      const runtimes = { ...(prev.pluginRuntimes || {}) }
+      if (info) {
+        runtimes[runtimeId] = info
+      } else {
+        delete runtimes[runtimeId]
+      }
+      return {
+        sessionResources: {
+          ...state.sessionResources,
+          [sessionId]: { ...prev, pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined }
+        }
+      }
+    }),
+
+  setPluginRuntimes: (sessionId, runtimes) =>
+    set((state) => {
+      const prev = state.sessionResources[sessionId] || {}
+      return {
+        sessionResources: {
+          ...state.sessionResources,
+          [sessionId]: { ...prev, pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined }
+        }
       }
     }),
 

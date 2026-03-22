@@ -15,7 +15,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { dockerManager } from './services/dockerManager'
-import { pythonWorkerManager } from './services/pythonWorkerManager'
 import { sqlWorkerManager } from './services/sqlWorkerManager'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
@@ -28,6 +27,7 @@ import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
 import designPlugin from '../plugins/design'
+import pyodidePlugin from '../plugins/pyodide'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -466,7 +466,7 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
 
@@ -504,11 +504,10 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 注册插件
+  // 注册并激活插件（必须在 IPC 注册前完成，确保前端查询时插件已就绪）
   pluginRegistry.register(designPlugin)
-  pluginRegistry.activateAll().catch((err) => {
-    log.error(`Plugin activation failed: ${err}`)
-  })
+  pluginRegistry.register(pyodidePlugin)
+  await measureAsync('activatePlugins', () => pluginRegistry.activateAll())
 
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
@@ -546,7 +545,6 @@ app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
-  pythonWorkerManager.terminateAll()
   sqlWorkerManager.terminateAll()
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()

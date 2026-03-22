@@ -9,7 +9,6 @@ export const ALL_TOOL_NAMES = [
   'grep',
   'glob',
   'ssh',
-  'python',
   'sql',
   'shuvix-project',
   'shuvix-setting',

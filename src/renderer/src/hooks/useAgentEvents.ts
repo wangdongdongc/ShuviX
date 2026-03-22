@@ -231,20 +231,16 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'python_event':
-        if (event.action === 'runtime_ready') {
-          store.setSessionPython(sid, { ready: true })
-        } else {
-          store.setSessionPython(sid, null)
-        }
-        break
-
       case 'sql_event':
         if (event.action === 'runtime_ready') {
           store.setSessionSql(sid, { ready: true, storageMode: event.storageMode })
         } else {
           store.setSessionSql(sid, null)
         }
+        break
+
+      case 'plugin_runtime_event':
+        store.setPluginRuntime(sid, event.runtimeId, event.status)
         break
 
       case 'preview_event':

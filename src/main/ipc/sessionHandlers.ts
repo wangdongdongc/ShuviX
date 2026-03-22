@@ -181,20 +181,6 @@ export function registerSessionHandlers(): void {
     )
   )
 
-  /** 查询指定 session 的 Python 运行时状态 */
-  ipcMain.handle('python:sessionStatus', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.getPythonStatus(sessionId)
-    )
-  )
-
-  /** 手动销毁指定 session 的 Python 运行时 */
-  ipcMain.handle('python:destroySession', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.destroyPython(sessionId)
-    )
-  )
-
   /** 查询指定 session 的 SQL 运行时状态 */
   ipcMain.handle('sql:sessionStatus', (_event, sessionId: string) =>
     operationContext.run(createElectronContext(sessionId), () =>

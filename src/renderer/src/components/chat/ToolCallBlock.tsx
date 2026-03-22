@@ -344,9 +344,7 @@ function buildPresentationSummary(
   args?: Record<string, unknown>
 ): { icon: React.ReactNode; detail: string } {
   const Icon = resolveLucideIcon(pres.icon)
-  const iconClass = pres.iconClass
-    ? `${pres.iconClass} flex-shrink-0`
-    : 'text-text-tertiary flex-shrink-0'
+  const iconColor = pres.iconColor
 
   // 摘要文本：取 summaryField 的首行
   let summary = ''
@@ -359,7 +357,7 @@ function buildPresentationSummary(
   }
 
   return {
-    icon: <Icon size={12} className={iconClass} />,
+    icon: <Icon size={12} className="flex-shrink-0" style={iconColor ? { color: iconColor } : undefined} />,
     detail: summary
   }
 }

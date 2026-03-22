@@ -11,8 +11,8 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 extraResources:
-  - from: resources/pyodide-wheels
-    to: pyodide-wheels
+  - from: resources/plugins/pyodide/pyodide-wheels
+    to: plugins/pyodide/pyodide-wheels
   - from: resources/design-deps
     to: design-deps
   - from: resources/design-templates

@@ -234,12 +234,6 @@ const api = {
     disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
   },
 
-  // ============ Python ============
-  python: {
-    sessionStatus: (sessionId: string) => ipcRenderer.invoke('python:sessionStatus', sessionId),
-    destroySession: (sessionId: string) => ipcRenderer.invoke('python:destroySession', sessionId)
-  },
-
   // ============ SQL ============
   sql: {
     sessionStatus: (sessionId: string) => ipcRenderer.invoke('sql:sessionStatus', sessionId),
@@ -430,7 +424,11 @@ const api = {
   // ============ Plugin ============
   plugin: {
     purposes: () => ipcRenderer.invoke('plugin:purposes'),
-    toolPresentations: () => ipcRenderer.invoke('plugin:toolPresentations')
+    toolPresentations: () => ipcRenderer.invoke('plugin:toolPresentations'),
+    getRuntimeStatuses: (sessionId: string) =>
+      ipcRenderer.invoke('plugin:getRuntimeStatuses', sessionId),
+    destroyRuntime: (params: { sessionId: string; runtimeId: string }) =>
+      ipcRenderer.invoke('plugin:destroyRuntime', params)
   },
 
   // ============ Skill 管理 ============

@@ -41,8 +41,8 @@ export interface PluginRuntimeInfo {
   label: string
   /** lucide 图标名（如 'Code'） */
   icon?: string
-  /** 图标/标签颜色 class（如 'text-yellow-500'） */
-  colorClass?: string
+  /** 图标/标签颜色（CSS 颜色值，如 '#eab308'） */
+  color?: string
   /** 附加描述（如 'memory mode'，显示在标签内） */
   description?: string
 }

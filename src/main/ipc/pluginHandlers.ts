@@ -17,4 +17,20 @@ export function registerPluginHandlers(): void {
   ipcMain.handle('plugin:toolPresentations', () => {
     return pluginRegistry.getAllToolPresentations()
   })
+
+  ipcMain.handle('plugin:getRuntimeStatuses', (_event, sessionId: string) => {
+    return pluginRegistry.getRuntimeStatuses(sessionId)
+  })
+
+  ipcMain.handle(
+    'plugin:destroyRuntime',
+    (_event, params: { sessionId: string; runtimeId: string }) => {
+      pluginRegistry.dispatchEvent({
+        type: 'runtime:destroy',
+        sessionId: params.sessionId,
+        runtimeId: params.runtimeId
+      })
+      return { success: true }
+    }
+  )
 }

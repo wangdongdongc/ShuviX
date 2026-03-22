@@ -52,6 +52,11 @@ The design project supports:
 - Auto-refresh on file changes via write/edit tools`
 
   readonly parameters = DesignParamsSchema
+  readonly presentation = {
+    icon: 'Palette',
+    iconColor: '#f472b6',
+    summaryField: 'action'
+  }
 
   constructor(
     private ctx: PluginContext,

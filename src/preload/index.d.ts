@@ -156,14 +156,15 @@ declare global {
     port?: number
     username?: string
   }
-  interface ChatPythonEvent extends ChatEventBase {
-    type: 'python_event'
-    action: 'runtime_ready' | 'runtime_destroyed'
-  }
   interface ChatSqlEvent extends ChatEventBase {
     type: 'sql_event'
     action: 'runtime_ready' | 'runtime_destroyed'
     storageMode: 'memory' | 'persistent'
+  }
+  interface ChatPluginRuntimeEvent extends ChatEventBase {
+    type: 'plugin_runtime_event'
+    runtimeId: string
+    status: { label: string; icon?: string; color?: string; description?: string } | null
   }
   interface ChatPreviewEvent extends ChatEventBase {
     type: 'preview_event'
@@ -259,8 +260,8 @@ declare global {
     | ChatImageDataEvent
     | ChatDockerEvent
     | ChatSshEvent
-    | ChatPythonEvent
     | ChatSqlEvent
+    | ChatPluginRuntimeEvent
     | ChatPreviewEvent
     | ChatAcpEvent
     | ChatSubAgentStartEvent
@@ -565,10 +566,6 @@ declare global {
       ) => Promise<{ host: string; port: number; username: string } | null>
       disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
     }
-    python: {
-      sessionStatus: (sessionId: string) => Promise<{ ready: boolean } | null>
-      destroySession: (sessionId: string) => Promise<{ success: boolean }>
-    }
     sql: {
       sessionStatus: (
         sessionId: string
@@ -736,7 +733,7 @@ declare global {
       }>>
       toolPresentations: () => Promise<Record<string, {
         icon?: string
-        iconClass?: string
+        iconColor?: string
         summaryField?: string
         formItems?: Array<{
           field: string
@@ -744,6 +741,13 @@ declare global {
           renderer?: { type: 'code'; language?: string } | { type: 'text' }
         }>
       }>>
+      getRuntimeStatuses: (sessionId: string) => Promise<Record<string, {
+        label: string
+        icon?: string
+        color?: string
+        description?: string
+      }>>
+      destroyRuntime: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

@@ -31,8 +31,8 @@ export interface PluginToolFormItem {
 export interface PluginToolPresentation {
   /** 折叠态图标（lucide 图标名，如 'Terminal'） */
   icon?: string
-  /** 图标颜色 class（如 'text-yellow-500'） */
-  iconClass?: string
+  /** 图标颜色（CSS 颜色值，如 '#eab308'） */
+  iconColor?: string
   /** 折叠态摘要：从 args 的哪个字段取首行作为摘要文本 */
   summaryField?: string
   /**

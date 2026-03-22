@@ -1,17 +1,13 @@
 /**
- * Python Worker 生命周期管理 — 单例服务
+ * Pyodide Worker 生命周期管理
  * 管理每个 session 的 Pyodide worker_threads 实例
  */
 
 import { Worker } from 'worker_threads'
-import { resolve, join } from 'path'
+import { resolve } from 'path'
 import { existsSync } from 'fs'
-import { app } from 'electron'
-import type { MountConfig, WorkerResponse } from '../tools/utils/pythonWorker'
-import type { ProjectConfig } from '../tools/types'
-import { createLogger } from '../logger'
-
-const log = createLogger('PythonWorkerManager')
+import type { PluginContext, PluginSessionPaths } from '../../plugin-api'
+import type { MountConfig, WorkerResponse } from './pythonWorker'
 
 interface PendingRequest {
   resolve: (value: WorkerResponse) => void
@@ -25,52 +21,52 @@ interface WorkerEntry {
   pending: Map<string, PendingRequest>
 }
 
-class PythonWorkerManager {
+export class PyodideWorkerManager {
   private workers = new Map<string, WorkerEntry>()
   private initPromises = new Map<string, Promise<void>>()
 
-  /** 获取 worker 脚本路径 */
+  constructor(private ctx: PluginContext) {}
+
+  /** 获取 worker 脚本路径（构建产物，非静态资源） */
   private getWorkerPath(): string {
-    if (app.isPackaged) {
-      return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'pythonWorker.js')
+    // pythonWorker 是 electron-vite 的独立构建入口，输出到 out/main/
+    // 开发模式：与主进程入口同目录；打包模式：在 app.asar.unpacked 中
+    try {
+      const { app } = require('electron') as typeof import('electron')
+      if (app.isPackaged) {
+        const { join } = require('path') as typeof import('path')
+        return join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'pythonWorker.js')
+      }
+    } catch {
+      // 测试环境无 electron
     }
     return resolve(__dirname, 'pythonWorker.js')
   }
 
   /** 获取预装 wheel 文件目录路径 */
   private getWheelsDir(): string | undefined {
-    const candidates = app.isPackaged
-      ? [join(process.resourcesPath, 'pyodide-wheels')]
-      : [resolve(__dirname, '../../resources/pyodide-wheels')]
-    for (const dir of candidates) {
-      if (existsSync(dir)) return dir
-    }
-    return undefined
+    const dir = this.ctx.getResourcePath('pyodide-wheels')
+    return existsSync(dir) ? dir : undefined
   }
 
-  /** 从 ProjectConfig 构建挂载配置 */
-  private buildMounts(config: ProjectConfig): MountConfig[] {
-    const mounts: MountConfig[] = [{ hostPath: config.workingDirectory, access: 'readwrite' }]
-    for (const ref of config.referenceDirs) {
-      mounts.push({
-        hostPath: ref.path,
-        access: ref.access ?? 'readonly'
-      })
+  /** 从 PluginSessionPaths 构建挂载配置 */
+  private buildMounts(paths: PluginSessionPaths): MountConfig[] {
+    const mounts: MountConfig[] = [{ hostPath: paths.workingDirectory, access: 'readwrite' }]
+    for (const ref of paths.referenceDirs) {
+      mounts.push({ hostPath: ref.path, access: ref.access })
     }
     return mounts
   }
 
   /** 确保 worker 已初始化并就绪 */
-  async ensureReady(sessionId: string, config: ProjectConfig, onReady?: () => void): Promise<void> {
-    // 已有并就绪
+  async ensureReady(sessionId: string, onReady?: () => void): Promise<void> {
     const existing = this.workers.get(sessionId)
     if (existing?.ready) return
 
-    // 正在初始化中，等待
     const pending = this.initPromises.get(sessionId)
     if (pending) return pending
 
-    const initPromise = this.createWorker(sessionId, config, onReady)
+    const initPromise = this.createWorker(sessionId, onReady)
     this.initPromises.set(sessionId, initPromise)
     try {
       await initPromise
@@ -79,17 +75,15 @@ class PythonWorkerManager {
     }
   }
 
-  private async createWorker(
-    sessionId: string,
-    config: ProjectConfig,
-    onReady?: () => void
-  ): Promise<void> {
+  private async createWorker(sessionId: string, onReady?: () => void): Promise<void> {
     const workerPath = this.getWorkerPath()
-    log.info(`Creating Python worker for session ${sessionId}: ${workerPath}`)
+    this.ctx.logger.info(`Creating Pyodide worker for session ${sessionId}: ${workerPath}`)
 
     const worker = new Worker(workerPath)
     const entry: WorkerEntry = { worker, ready: false, pending: new Map() }
     this.workers.set(sessionId, entry)
+
+    const paths = this.ctx.getSessionPaths(sessionId)
 
     return new Promise<void>((resolveInit, rejectInit) => {
       const initTimeout = setTimeout(() => {
@@ -101,13 +95,12 @@ class PythonWorkerManager {
         if (msg.type === 'ready') {
           clearTimeout(initTimeout)
           entry.ready = true
-          log.info(`Python worker ready for session ${sessionId}`)
+          this.ctx.logger.info(`Pyodide worker ready for session ${sessionId}`)
           onReady?.()
           resolveInit()
           return
         }
 
-        // 处理执行结果
         if (msg.id) {
           const req = entry.pending.get(msg.id)
           if (req) {
@@ -116,7 +109,6 @@ class PythonWorkerManager {
             req.resolve(msg)
           }
         } else if (msg.type === 'error' && !msg.id) {
-          // 初始化错误
           clearTimeout(initTimeout)
           rejectInit(new Error(msg.error || 'Unknown initialization error'))
           this.terminate(sessionId)
@@ -125,8 +117,7 @@ class PythonWorkerManager {
 
       worker.on('error', (err) => {
         clearTimeout(initTimeout)
-        log.error(`Python worker error (session ${sessionId}):`, err)
-        // 拒绝所有 pending 请求
+        this.ctx.logger.error(`Pyodide worker error (session ${sessionId}):`, err)
         for (const [, req] of entry.pending) {
           clearTimeout(req.timer)
           req.reject(err)
@@ -137,9 +128,7 @@ class PythonWorkerManager {
       })
 
       worker.on('exit', (code) => {
-        log.info(`Python worker exited (session ${sessionId}, code ${code})`)
-        // Only clean up if this is still the current entry for this session
-        // (avoid race: old worker exit deleting a newly created entry)
+        this.ctx.logger.info(`Pyodide worker exited (session ${sessionId}, code ${code})`)
         if (this.workers.get(sessionId) === entry) {
           for (const [, req] of entry.pending) {
             clearTimeout(req.timer)
@@ -150,13 +139,12 @@ class PythonWorkerManager {
         }
       })
 
-      // 发送初始化消息
-      const mounts = this.buildMounts(config)
+      const mounts = this.buildMounts(paths)
       const wheelsDir = this.getWheelsDir()
       worker.postMessage({
         type: 'init',
         mounts,
-        workingDirectory: config.workingDirectory,
+        workingDirectory: paths.workingDirectory,
         wheelsDir
       })
     })
@@ -178,8 +166,7 @@ class PythonWorkerManager {
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         entry.pending.delete(id)
-        // 超时 → 终止 worker（WASM 无法中断）
-        log.warn(`Python execution timed out (${timeoutMs}ms), terminating worker`)
+        this.ctx.logger.warn(`Python execution timed out (${timeoutMs}ms), terminating worker`)
         this.terminate(sessionId)
         reject(new Error(`Python execution timed out (${timeoutMs / 1000}s)`))
       }, timeoutMs)
@@ -199,7 +186,7 @@ class PythonWorkerManager {
     const entry = this.workers.get(sessionId)
     if (!entry) return
 
-    log.info(`Terminating Python worker for session ${sessionId}`)
+    this.ctx.logger.info(`Terminating Pyodide worker for session ${sessionId}`)
     for (const [, req] of entry.pending) {
       clearTimeout(req.timer)
       req.reject(new Error('Worker terminated'))
@@ -216,5 +203,3 @@ class PythonWorkerManager {
     }
   }
 }
-
-export const pythonWorkerManager = new PythonWorkerManager()

@@ -15,7 +15,6 @@ import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
 import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
-import { pythonWorkerManager } from './pythonWorkerManager'
 import { sqlWorkerManager } from './sqlWorkerManager'
 import type {
   ModelCapabilities,
@@ -187,12 +186,6 @@ export class AgentSession {
       },
       onSshDisconnected: (host, port, username) => {
         session.emitSshEvent('ssh_disconnected', { host, port, username })
-      },
-      onPythonReady: () => {
-        session.emitPythonEvent('runtime_ready')
-      },
-      onPythonDestroyed: () => {
-        session.emitPythonEvent('runtime_destroyed')
       },
       onSqlReady: () => {
         const status = sqlWorkerManager.getStatus(session.sessionId)
@@ -591,7 +584,6 @@ export class AgentSession {
       })
       .catch(() => {})
     sshManager.disconnect(this.sessionId).catch(() => {})
-    pythonWorkerManager.terminate(this.sessionId)
     sqlWorkerManager.terminate(this.sessionId)
     log.info(`destroy session=${this.sessionId}`)
   }
@@ -710,15 +702,6 @@ export class AgentSession {
       host: extra?.host,
       port: extra?.port,
       username: extra?.username
-    })
-  }
-
-  /** 通知前端 Python 运行时生命周期事件（不持久化为消息） */
-  emitPythonEvent(action: 'runtime_ready' | 'runtime_destroyed'): void {
-    chatFrontendRegistry.broadcast({
-      type: 'python_event',
-      sessionId: this.sessionId,
-      action
     })
   }
 

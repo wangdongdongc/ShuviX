@@ -6,6 +6,7 @@
 
 import type { ShuviXPlugin, PluginContribution, PluginPurpose } from '../../plugin-api/types'
 import type { PluginToolPresentation } from '../../plugin-api/tool'
+import type { PluginRuntimeInfo } from '../../plugin-api/events'
 import type { SlashCommand } from '../../shared/types/slashCommand'
 import type { HostEvent } from '../../plugin-api/hostEvents'
 import { createPluginContext } from './pluginContextFactory'
@@ -20,6 +21,8 @@ interface PluginEntry {
 
 class PluginRegistry {
   private plugins = new Map<string, PluginEntry>()
+  /** 插件 runtime 状态缓存：sessionId → runtimeId → info */
+  private runtimeStatuses = new Map<string, Map<string, PluginRuntimeInfo>>()
 
   /** 注册插件（仅注册，不激活） */
   register(plugin: ShuviXPlugin): void {
@@ -115,6 +118,35 @@ class PluginRegistry {
       }
     }
     return result
+  }
+
+  /** 更新插件 runtime 状态缓存 */
+  updateRuntimeStatus(
+    sessionId: string,
+    runtimeId: string,
+    status: PluginRuntimeInfo | null
+  ): void {
+    if (status) {
+      let map = this.runtimeStatuses.get(sessionId)
+      if (!map) {
+        map = new Map()
+        this.runtimeStatuses.set(sessionId, map)
+      }
+      map.set(runtimeId, status)
+    } else {
+      const map = this.runtimeStatuses.get(sessionId)
+      if (map) {
+        map.delete(runtimeId)
+        if (map.size === 0) this.runtimeStatuses.delete(sessionId)
+      }
+    }
+  }
+
+  /** 获取指定 session 的所有活跃 runtime 状态 */
+  getRuntimeStatuses(sessionId: string): Record<string, PluginRuntimeInfo> {
+    const map = this.runtimeStatuses.get(sessionId)
+    if (!map) return {}
+    return Object.fromEntries(map)
   }
 
   /** 获取指定插件的贡献 */

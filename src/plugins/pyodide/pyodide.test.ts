@@ -4,7 +4,7 @@
  * 测试：基本执行、REPL 模式、多轮共享作用域、文件系统挂载、预装包、并发执行
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -20,63 +20,49 @@ const REF_RO_DIR = join(TEST_BASE, 'ref-ro')
 const SESSION_ID = 'test-python-session'
 const SESSION_ID_2 = 'test-python-session-2'
 
-// ---- Mocks ----
+// ---- Mock PluginContext ----
 
-vi.mock('electron', () => ({
-  app: { isPackaged: false }
-}))
+import type { PluginContext } from '../../plugin-api'
+import { PyodideWorkerManager } from './workerManager'
+import type { WorkerResponse } from './pythonWorker'
 
-vi.mock('../types', () => ({
-  BaseTool: class {
-    async securityCheck(..._args: unknown[]): Promise<void> {}
-    async executeInternal(..._args: unknown[]): Promise<unknown> {
-      return {}
+const mockCtx: PluginContext = {
+  getSessionPaths: (sessionId: string) => {
+    const dirs: Record<string, { workingDirectory: string; referenceDirs: Array<{ path: string; access: 'readonly' | 'readwrite' }> }> = {
+      [SESSION_ID]: {
+        workingDirectory: PROJECT_DIR,
+        referenceDirs: [
+          { path: REF_RW_DIR, access: 'readwrite' },
+          { path: REF_RO_DIR, access: 'readonly' }
+        ]
+      },
+      [SESSION_ID_2]: {
+        workingDirectory: PROJECT_DIR,
+        referenceDirs: []
+      }
     }
-    async execute(
-      toolCallId: string,
-      params: unknown,
-      signal?: AbortSignal,
-      onUpdate?: unknown
-    ): Promise<unknown> {
-      await this.securityCheck(toolCallId, params, signal)
-      return this.executeInternal(toolCallId, params, signal, onUpdate)
-    }
+    return dirs[sessionId] ?? { workingDirectory: PROJECT_DIR, referenceDirs: [] }
   },
-  resolveProjectConfig: () => ({
-    workingDirectory: PROJECT_DIR,
-    referenceDirs: [
-      { path: REF_RW_DIR, access: 'readwrite' },
-      { path: REF_RO_DIR, access: 'readonly' }
-    ]
-  }),
-  TOOL_ABORTED: 'Aborted'
-}))
-
-vi.mock('../../i18n', () => ({
-  t: (key: string) => key
-}))
-
-vi.mock('../../logger', () => ({
-  createLogger: () => ({
+  emitEvent: () => {},
+  getResourcePath: (relativePath: string) => {
+    // In test: resolve relative to built output
+    if (relativePath === 'pythonWorker.js') {
+      return resolve(__dirname, '../../../out/main/pythonWorker.js')
+    }
+    if (relativePath === 'pyodide-wheels') {
+      return resolve(__dirname, '../../../resources/plugins/pyodide/pyodide-wheels')
+    }
+    return resolve(__dirname, '../../../resources/plugins/pyodide', relativePath)
+  },
+  logger: {
     info: () => {},
     warn: () => {},
-    error: () => {}
-  })
-}))
+    error: () => {},
+    debug: () => {}
+  }
+}
 
-// ---- Import after mocks ----
-
-import { pythonWorkerManager } from '../../services/pythonWorkerManager'
-import type { WorkerResponse } from '../utils/pythonWorker'
-
-// Patch private methods to use correct paths in test environment
-const WORKER_PATH = resolve(__dirname, '../../../../out/main/pythonWorker.js')
-const WHEELS_DIR = resolve(__dirname, '../../../../resources/pyodide-wheels')
-
-vi.spyOn(pythonWorkerManager as any, 'getWorkerPath').mockReturnValue(WORKER_PATH)
-vi.spyOn(pythonWorkerManager as any, 'getWheelsDir').mockReturnValue(
-  existsSync(WHEELS_DIR) ? WHEELS_DIR : undefined
-)
+const pythonWorkerManager = new PyodideWorkerManager(mockCtx)
 
 // ---- Helpers ----
 
@@ -111,14 +97,7 @@ beforeAll(async () => {
   writeFileSync(join(REF_RO_DIR, 'ro.txt'), 'readonly ref')
 
   // Initialize the Pyodide worker (this takes ~5-15s)
-  const config = {
-    workingDirectory: PROJECT_DIR,
-    referenceDirs: [
-      { path: REF_RW_DIR, access: 'readwrite' as const },
-      { path: REF_RO_DIR, access: 'readonly' as const }
-    ]
-  }
-  await pythonWorkerManager.ensureReady(SESSION_ID, config)
+  await pythonWorkerManager.ensureReady(SESSION_ID)
 }, 120_000)
 
 afterAll(() => {
@@ -288,11 +267,7 @@ describe('并发执行', () => {
 
   it('不同 session 并行执行互不影响', async () => {
     // Create a second session
-    const config2 = {
-      workingDirectory: PROJECT_DIR,
-      referenceDirs: []
-    }
-    await pythonWorkerManager.ensureReady(SESSION_ID_2, config2)
+    await pythonWorkerManager.ensureReady(SESSION_ID_2)
 
     // Execute in both sessions in parallel
     const [r1, r2] = await Promise.all([
@@ -322,14 +297,7 @@ describe('终止与重建', () => {
   it('terminate 后重新 ensureReady 可再次执行', async () => {
     // Small delay to let the old worker's exit event fire before creating a new one
     await new Promise((r) => setTimeout(r, 200))
-    const config = {
-      workingDirectory: PROJECT_DIR,
-      referenceDirs: [
-        { path: REF_RW_DIR, access: 'readwrite' as const },
-        { path: REF_RO_DIR, access: 'readonly' as const }
-      ]
-    }
-    await pythonWorkerManager.ensureReady(SESSION_ID, config)
+    await pythonWorkerManager.ensureReady(SESSION_ID)
     const r = await exec(SESSION_ID, 'print("reborn")')
     expect(r.type).toBe('result')
     expect(r.stdout).toContain('reborn')

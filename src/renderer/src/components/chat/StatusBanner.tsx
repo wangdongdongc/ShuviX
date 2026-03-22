@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import {
   Bot,
-  Code,
   Container,
   Database,
   Globe,
@@ -22,9 +21,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const resources = useChatStore((s) => s.sessionResources[sessionId])
   const docker = resources?.docker
   const ssh = resources?.ssh
-  const python = resources?.python
   const sql = resources?.sql
   const acpAgents = resources?.acp
+  const pluginRuntimes = resources?.pluginRuntimes
 
   const sessionSettings = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
@@ -38,9 +37,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   if (
     !docker &&
     !ssh &&
-    !python &&
     !sql &&
     (!acpAgents || acpAgents.length === 0) &&
+    !pluginRuntimes &&
     !autoApprove &&
     !lanShareMode &&
     !telegramBinding
@@ -53,11 +52,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   const handleDisconnectSsh = async (): Promise<void> => {
     await window.api.ssh.disconnectSession(sessionId)
-  }
-
-  const handleDestroyPython = async (): Promise<void> => {
-    await window.api.python.destroySession(sessionId)
-    useChatStore.getState().setSessionPython(sessionId, null)
   }
 
   const handleDestroySql = async (): Promise<void> => {
@@ -130,19 +124,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           </button>
         </span>
       )}
-      {python && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-yellow-500/10 text-yellow-500">
-          <Code size={12} />
-          <span>{t('chat.pythonWasmRuntime')}</span>
-          <button
-            onClick={handleDestroyPython}
-            className="ml-0.5 rounded hover:bg-yellow-500/20 transition-colors p-0.5"
-            title={t('chat.destroyPython')}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      )}
       {sql && (
         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-blue-500/10 text-blue-400">
           <Database size={12} />
@@ -181,6 +162,27 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           </button>
         </span>
       ))}
+      {pluginRuntimes &&
+        Object.entries(pluginRuntimes).map(([runtimeId, info]) => (
+          <span
+            key={runtimeId}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs"
+            style={info.color
+              ? { color: info.color, backgroundColor: `color-mix(in srgb, ${info.color} 10%, transparent)` }
+              : { color: 'var(--color-accent)', backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
+          >
+            <span>{info.label}</span>
+            {info.description && <span className="opacity-60">({info.description})</span>}
+            <button
+              onClick={() => {
+                window.api.plugin.destroyRuntime({ sessionId, runtimeId })
+              }}
+              className="ml-0.5 rounded hover:bg-current/20 transition-colors p-0.5"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
       {autoApprove && (
         <button
           onClick={handleDisableAutoApprove}

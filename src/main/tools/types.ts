@@ -51,10 +51,6 @@ export interface ToolContext {
   onSshConnected?: (host: string, port: number, username: string) => void
   /** ssh 连接断开时回调 */
   onSshDisconnected?: (host: string, port: number, username: string) => void
-  /** Python 运行时就绪回调 */
-  onPythonReady?: () => void
-  /** Python 运行时销毁回调 */
-  onPythonDestroyed?: () => void
   /** SQL 运行时就绪回调 */
   onSqlReady?: () => void
   /** SQL 运行时销毁回调（storageMode 为销毁前的存储模式） */
