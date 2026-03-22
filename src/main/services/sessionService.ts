@@ -53,8 +53,10 @@ export class SessionService {
   create(projectId?: string | null): Session {
     const id = uuidv7()
     const pid = projectId ?? null
-    const project = pid ? projectDao.pick(pid, ['path']) : undefined
-    const enabledTools = getDefaultEnabledTools(project?.path)
+    const project = pid ? projectDao.pick(pid, ['path', 'settings']) : undefined
+    const enabledTools = project?.settings?.enabledTools
+      ? filterAvailableTools(project.settings.enabledTools, project.path)
+      : getDefaultEnabledTools(project?.path)
     const now = Date.now()
 
     const session: Session = {
