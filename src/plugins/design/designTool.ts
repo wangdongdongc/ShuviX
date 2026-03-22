@@ -14,23 +14,17 @@ function textResult(text: string): AgentToolResult<undefined> {
 }
 
 const DesignParamsSchema = Type.Object({
-  action: Type.Union([Type.Literal('init'), Type.Literal('preview')], {
+  action: Type.Unsafe<'init' | 'preview'>({
+    type: 'string',
+    enum: ['init', 'preview'],
     description:
       'Action to perform: "init" scaffolds the design project at .shuvix/design/; "preview" builds and opens/refreshes the preview panel (starts dev server on first call, rebuilds on subsequent calls)'
   }),
   template: Type.Optional(
-    Type.Union(
-      [
-        Type.Literal('blank'),
-        Type.Literal('app'),
-        Type.Literal('landing'),
-        Type.Literal('dashboard')
-      ],
-      {
-        description:
-          'Project template (only used with "init" action, ignored if project already exists). "blank": minimal skeleton; "app": standard React app with example components (default); "landing": single-page landing with Hero/Features/Footer sections; "dashboard": multi-page app with sidebar navigation and React Router'
-      }
-    )
+    Type.String({
+      description:
+        'Project template (only used with "init" action, ignored if project already exists). Valid values: "blank" (minimal skeleton, default), "app" (standard React app with example components), "landing" (single-page landing with Hero/Features/Footer sections), "dashboard" (multi-page app with sidebar navigation and React Router). Unknown values fall back to "blank".'
+    })
   )
 })
 
@@ -40,7 +34,7 @@ export class DesignTool implements PluginTool<typeof DesignParamsSchema> {
   readonly description = `Manage the interactive design preview project. This tool creates and previews React UI components in a sandboxed environment with Tailwind CSS.
 
 Actions:
-- "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "app"). Templates: blank, app, landing, dashboard.
+- "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "blank"). Templates: blank, app, landing, dashboard.
 - "preview": Build the project and open the preview panel. On first call, starts the dev server; on subsequent calls, triggers a rebuild and refreshes the preview. Returns build errors if the build fails — use these to debug and fix the code.
 
 The design project supports:
@@ -100,7 +94,7 @@ The design project supports:
     workingDir: string,
     template?: string
   ): Promise<AgentToolResult<undefined>> {
-    const tpl = template || 'app'
+    const tpl = template || 'blank'
     const designDir = await this.designProjectManager.init(sessionId, workingDir, tpl)
 
     return textResult(

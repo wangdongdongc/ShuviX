@@ -13,10 +13,8 @@ files:
 extraResources:
   - from: resources/plugins/pyodide/pyodide-wheels
     to: plugins/pyodide/pyodide-wheels
-  - from: resources/design-deps
-    to: design-deps
-  - from: resources/design-templates
-    to: design-templates
+  - from: resources/plugins/design
+    to: plugins/design
   - from: node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm
 asarUnpack:

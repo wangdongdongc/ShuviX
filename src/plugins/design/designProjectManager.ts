@@ -52,7 +52,7 @@ export class DesignProjectManager {
 
   /** 获取指定模板的资源目录 */
   private getTemplateDir(template: string): string {
-    const name = VALID_TEMPLATES.has(template) ? template : 'app'
+    const name = VALID_TEMPLATES.has(template) ? template : 'blank'
     return join(this.getResourcePath('templates'), name)
   }
 
@@ -66,7 +66,7 @@ export class DesignProjectManager {
    * 初始化设计项目：创建目录 + 脚手架模板文件（如果不存在）
    * @returns 设计项目目录绝对路径
    */
-  async init(_sessionId: string, workingDir: string, template: string = 'app'): Promise<string> {
+  async init(_sessionId: string, workingDir: string, template: string = 'blank'): Promise<string> {
     const designDir = this.getDesignDir(workingDir)
 
     // 仅在入口文件不存在时从资源模板复制
