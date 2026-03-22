@@ -60,7 +60,13 @@ mac:
       arch:
         - x64
         - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
 dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
+zip:
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   icon: build/icons

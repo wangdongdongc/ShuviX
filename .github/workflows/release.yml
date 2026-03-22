@@ -127,6 +127,7 @@ jobs:
           name: dist-${{ matrix.platform }}
           path: |
             dist/*.dmg
+            dist/*.zip
             dist/*.exe
             dist/*.yml
             !dist/*.blockmap
