@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { join } from 'path'
 import { mark, measure } from '../perf'
 import { getDataDir } from '../utils/paths'
+import { runMigrations } from './migrations'
 
 /**
  * 数据库连接管理
@@ -18,160 +19,9 @@ class DatabaseManager {
     // 启用 WAL 模式，提升并发性能
     this.db.pragma('journal_mode = WAL')
 
-    measure('database: initTables', () => this.initTables())
+    measure('database: migrations', () => runMigrations(this.db))
     measure('database: seed', () => this.seedProviders())
     mark('database: ready')
-  }
-
-  /** 初始化数据库表 */
-  private initTables(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        projectId TEXT DEFAULT NULL,
-        provider TEXT NOT NULL DEFAULT '',
-        model TEXT NOT NULL DEFAULT '',
-        systemPrompt TEXT NOT NULL DEFAULT 'You are a helpful assistant.',
-        modelMetadata TEXT NOT NULL DEFAULT '',
-        settings TEXT NOT NULL DEFAULT '{}',
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
-        role TEXT NOT NULL,
-        type TEXT NOT NULL,
-        content TEXT NOT NULL,
-        model TEXT NOT NULL DEFAULT '',
-        metadata TEXT DEFAULT '{}',
-        createdAt INTEGER NOT NULL,
-        FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS providers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        displayName TEXT NOT NULL DEFAULT '',
-        apiKey TEXT DEFAULT '',
-        baseUrl TEXT DEFAULT '',
-        apiProtocol TEXT NOT NULL DEFAULT 'openai-completions',
-        isBuiltin INTEGER NOT NULL DEFAULT 1,
-        isEnabled INTEGER DEFAULT 1,
-        sortOrder INTEGER DEFAULT 0,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS provider_models (
-        id TEXT PRIMARY KEY,
-        providerId TEXT NOT NULL,
-        modelId TEXT NOT NULL,
-        isEnabled INTEGER DEFAULT 0,
-        sortOrder INTEGER DEFAULT 0,
-        capabilities TEXT DEFAULT '{}',
-        FOREIGN KEY (providerId) REFERENCES providers(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS http_logs (
-        id TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        response TEXT NOT NULL DEFAULT '',
-        inputTokens INTEGER DEFAULT 0,
-        outputTokens INTEGER DEFAULT 0,
-        totalTokens INTEGER DEFAULT 0,
-        createdAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        path TEXT NOT NULL,
-        systemPrompt TEXT NOT NULL DEFAULT '',
-        dockerEnabled INTEGER NOT NULL DEFAULT 0,
-        dockerImage TEXT NOT NULL DEFAULT '',
-        sandboxEnabled INTEGER NOT NULL DEFAULT 1,
-        settings TEXT NOT NULL DEFAULT '{}',
-        archivedAt INTEGER NOT NULL DEFAULT 0,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS mcp_servers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        type TEXT NOT NULL DEFAULT 'stdio',
-        command TEXT NOT NULL DEFAULT '',
-        args TEXT NOT NULL DEFAULT '[]',
-        env TEXT NOT NULL DEFAULT '{}',
-        url TEXT NOT NULL DEFAULT '',
-        headers TEXT NOT NULL DEFAULT '{}',
-        isEnabled INTEGER NOT NULL DEFAULT 1,
-        cachedTools TEXT NOT NULL DEFAULT '[]',
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS ssh_credentials (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL DEFAULT 22,
-        username TEXT NOT NULL,
-        authType TEXT NOT NULL DEFAULT 'password',
-        password TEXT NOT NULL DEFAULT '',
-        privateKey TEXT NOT NULL DEFAULT '',
-        passphrase TEXT NOT NULL DEFAULT '',
-        metadata TEXT NOT NULL DEFAULT '{}',
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS message_steps (
-        id TEXT PRIMARY KEY,
-        sessionId TEXT NOT NULL,
-        role TEXT NOT NULL,
-        type TEXT NOT NULL,
-        content TEXT NOT NULL,
-        model TEXT NOT NULL DEFAULT '',
-        metadata TEXT DEFAULT '{}',
-        createdAt INTEGER NOT NULL,
-        FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS telegram_bots (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        token TEXT NOT NULL,
-        username TEXT NOT NULL DEFAULT '',
-        allowedUsers TEXT NOT NULL DEFAULT '[]',
-        isEnabled INTEGER NOT NULL DEFAULT 1,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(sessionId);
-      CREATE INDEX IF NOT EXISTS idx_message_steps_session ON message_steps(sessionId);
-      CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(providerId);
-      CREATE INDEX IF NOT EXISTS idx_http_logs_createdAt ON http_logs(createdAt DESC);
-    `)
-
-    // 增量迁移：为已有数据库添加 metadata 列
-    try {
-      this.db.exec(`ALTER TABLE ssh_credentials ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`)
-    } catch {
-      // 列已存在（新建数据库已通过 CREATE TABLE 包含该列），忽略
-    }
   }
 
   /**

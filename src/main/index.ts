@@ -458,6 +458,19 @@ ipcMain.handle('app:set-preview-offset', (_event, _offset: number) => {
   }
 })
 
+// 单实例锁：阻止第二个进程启动，避免并发访问数据库
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
 // 注册自定义协议（必须在 app.whenReady 之前调用）
 protocol.registerSchemesAsPrivileged([
   {
