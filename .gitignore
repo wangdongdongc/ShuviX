@@ -11,6 +11,7 @@ out
 
 # 本地文档
 docs/
- 
 # TypeScript 增量编译缓存
 *.tsbuildinfo
+CLAUDE.md
+.vscode
