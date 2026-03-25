@@ -6,12 +6,17 @@
 import { spawn } from 'child_process'
 import { Type } from '@sinclair/typebox'
 import {
-  truncateTail,
+  truncateMiddle,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
-import { getShellConfig, sanitizeBinaryOutput, killProcessTree } from './utils/shell'
+import {
+  getShellConfig,
+  sanitizeBinaryOutput,
+  killProcessTree,
+  collapseProgressOutput
+} from './utils/shell'
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
@@ -216,10 +221,12 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         // 本地模式
         result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)
       }
-      const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
+      const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
+      // 折叠进度输出（Docker pull 等场景）
+      const combined = collapseProgressOutput(raw)
 
       // 截断过长的输出
-      const truncated = truncateTail(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
+      const truncated = truncateMiddle(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
 
       let text = ''
       if (truncated.truncated) {

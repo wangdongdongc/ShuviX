@@ -9,11 +9,12 @@ import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
 import {
-  truncateTail,
+  truncateMiddle,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
+import { sanitizeBinaryOutput, collapseProgressOutput } from './utils/shell'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { isCommandAllowedUnified } from './utils/allowList'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
@@ -305,10 +306,12 @@ async function handleExec(
 
   try {
     const result = await sshManager.exec(ctx.sessionId, command, timeout ?? DEFAULT_TIMEOUT, signal)
-    const combined = [result.stdout, result.stderr].filter(Boolean).join('\n')
+    const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
+    // 清理控制字符 + 折叠进度输出（Docker pull 等场景）
+    const combined = collapseProgressOutput(sanitizeBinaryOutput(raw))
 
     // 截断过长的输出
-    const truncated = truncateTail(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
+    const truncated = truncateMiddle(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
 
     let text = ''
     if (truncated.truncated) {
