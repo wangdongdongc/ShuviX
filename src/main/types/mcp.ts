@@ -38,18 +38,18 @@ export interface McpServerInfo extends McpServer {
   toolCount: number
 }
 
-/** MCP 工具信息（用于 IPC 返回给渲染进程） */
+/** MCP 服务器信息（用于 IPC 返回给渲染进程，每个 server 一条） */
 export interface McpToolInfo {
-  /** 完整工具名：mcp__<serverName>__<toolName> */
+  /** 服务器级工具引用：mcp:<serverName> */
   name: string
-  /** 显示标签 */
+  /** 显示标签（服务器名） */
   label: string
-  /** 工具描述 */
+  /** 描述（如 "3 tool(s)"） */
   description: string
-  /** 所属 server 名称（用于 UI 分组） */
+  /** 服务器名称（用于 UI 分组） */
   group: string
-  /** 所属 server ID */
+  /** 服务器 ID */
   serverId: string
-  /** 所属 server 的连接状态 */
+  /** 服务器连接状态 */
   serverStatus: McpServerStatus
 }

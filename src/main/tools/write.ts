@@ -113,3 +113,13 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
     })
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'write',
+  group: 'general',
+  defaultEnabled: true,
+  getLabel: () => t('tool.writeLabel'),
+  getHint: () => t('tool.writeHint'),
+  factory: (ctx) => new WriteTool(ctx)
+})

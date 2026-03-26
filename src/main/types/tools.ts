@@ -1,20 +1,6 @@
-/** 全部内置工具名称（固定顺序） */
-export const ALL_TOOL_NAMES = [
-  'bash',
-  'read',
-  'write',
-  'edit',
-  'ask',
-  'ls',
-  'grep',
-  'glob',
-  'ssh',
-  'shuvix-project',
-  'shuvix-setting',
-  'explore',
-  'claude-code'
-] as const
-export type ToolName = (typeof ALL_TOOL_NAMES)[number]
-
-/** 默认启用的核心内置工具（不含 ripgrep 工具、shuvix-project、shuvix-setting） */
-export const DEFAULT_TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'ask'] as const
+/**
+ * 工具名称类型（向后兼容别名）
+ * 内置工具列表已迁移至 src/main/tools/registry.ts 自注册表，
+ * ALL_TOOL_NAMES / DEFAULT_TOOL_NAMES 不再维护，使用 getBuiltinToolEntries() 替代。
+ */
+export type ToolName = string

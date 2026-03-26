@@ -1,21 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  X,
-  Wrench,
-  Database,
-  Puzzle,
-  BookOpen,
-  Settings,
-  ChevronRight,
-  ChevronDown
-} from 'lucide-react'
+import { X, Wrench, Database, Puzzle, BookOpen, Settings } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { ProjectBasicInfo, ProjectFileSystem } from './ProjectFormSections'
-import { DEFAULT_TOOL_NAMES } from '../../../../main/types/tools'
+
 import type { ReferenceDir } from '../../../../main/types/project'
 
 interface ProjectEditDialogProps {
@@ -53,8 +44,6 @@ export function ProjectEditDialog({
   const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
   const [pglitePersist, setPglitePersist] = useState(false)
-  const [expandedExtGroups, setExpandedExtGroups] = useState<Set<string>>(new Set())
-
   // 加载项目数据 + 工具列表
   useEffect(() => {
     Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
@@ -69,7 +58,7 @@ export function ProjectEditDialog({
           if (Array.isArray(settings.enabledTools)) {
             setEnabledTools(settings.enabledTools)
           } else {
-            setEnabledTools([...DEFAULT_TOOL_NAMES])
+            setEnabledTools(tools.filter((t) => t.defaultEnabled).map((t) => t.name))
           }
           if (Array.isArray(settings.referenceDirs)) {
             setReferenceDirs(settings.referenceDirs)
@@ -78,16 +67,8 @@ export function ProjectEditDialog({
             setPglitePersist(true)
           }
         } else {
-          setEnabledTools([...DEFAULT_TOOL_NAMES])
+          setEnabledTools(tools.filter((t) => t.defaultEnabled).map((t) => t.name))
         }
-        // 默认展开所有扩展分组
-        const mcpGroups = new Set(
-          tools.filter((t) => t.group && !t.group.startsWith('__')).map((t) => t.group!)
-        )
-        const hasSkills = tools.some((t) => t.group === SKILLS_GROUP)
-        if (hasSkills) mcpGroups.add(SKILLS_GROUP)
-        setExpandedExtGroups(mcpGroups)
-
         setLoading(false)
       }
     )
@@ -125,26 +106,6 @@ export function ProjectEditDialog({
     setEnabledTools((prev) =>
       prev.includes(toolName) ? prev.filter((n) => n !== toolName) : [...prev, toolName]
     )
-  }
-
-  /** 切换扩展分组展开/收起 */
-  const toggleExtExpand = (group: string): void => {
-    setExpandedExtGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(group)) next.delete(group)
-      else next.add(group)
-      return next
-    })
-  }
-
-  /** 切换整个扩展分组 */
-  const toggleExtGroup = (groupToolNames: string[]): void => {
-    const allChecked = groupToolNames.every((n) => enabledTools.includes(n))
-    if (allChecked) {
-      setEnabledTools((prev) => prev.filter((n) => !groupToolNames.includes(n)))
-    } else {
-      setEnabledTools((prev) => [...new Set([...prev, ...groupToolNames])])
-    }
   }
 
   /** 归档项目 */
@@ -297,167 +258,65 @@ export function ProjectEditDialog({
                   {t('projectForm.extAvailableDesc')}
                 </p>
 
-                {/* MCP 工具 */}
-                {(() => {
-                  const mcpGroups = [...new Set(mcpTools.map((t) => t.group!))]
-                  if (mcpGroups.length === 0) return null
-                  return mcpGroups.map((group) => {
-                    const groupTools = mcpTools.filter((t) => t.group === group)
-                    const names = groupTools.map((t) => t.name)
-                    const allChecked = names.every((n) => enabledTools.includes(n))
-                    const someChecked = names.some((n) => enabledTools.includes(n))
-                    const isOnline = groupTools.some((t) => t.serverStatus === 'connected')
-
-                    const isExpanded = expandedExtGroups.has(group)
-
-                    return (
-                      <div key={group} className="zen-card">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleExtExpand(group)}
-                            className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
-                          >
-                            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                          </button>
-                          <input
-                            type="checkbox"
-                            checked={allChecked}
-                            ref={(el) => {
-                              if (el) el.indeterminate = someChecked && !allChecked
-                            }}
-                            onChange={() => toggleExtGroup(names)}
-                            className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                          />
-                          <Puzzle
-                            size={12}
-                            className={isOnline ? 'text-purple-400' : 'text-red-400'}
-                          />
-                          <span
-                            className={`text-[11px] font-medium ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
-                          >
-                            {group}
-                          </span>
-                          <span
-                            className={`text-[10px] rounded px-1 py-px ${
-                              isOnline
-                                ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                                : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                            }`}
-                          >
-                            MCP
-                          </span>
-                          <span className="text-[10px] text-text-tertiary ml-auto">
-                            {names.length}
-                          </span>
-                        </div>
-                        {isExpanded && (
-                          <div className="space-y-0.5 mt-2 pl-7">
-                            {groupTools.map((tool) => {
-                              const shortName =
-                                tool.name.split('__').length >= 3
-                                  ? tool.name.split('__').slice(2).join('__')
-                                  : tool.name
-                              return (
-                                <label
-                                  key={tool.name}
-                                  className={`flex items-center gap-1.5 cursor-pointer select-none rounded-md px-2 py-1 -mx-1 hover:bg-bg-hover/40 transition-colors ${!isOnline ? 'opacity-50' : ''}`}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={enabledTools.includes(tool.name)}
-                                    onChange={() => toggleExtTool(tool.name)}
-                                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                                  />
-                                  <span
-                                    className={`text-[11px] font-mono flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
-                                  >
-                                    {shortName}
-                                  </span>
-                                  <span className="text-[10px] text-text-tertiary truncate">
-                                    {tool.label}
-                                  </span>
-                                </label>
-                              )
-                            })}
-                          </div>
-                        )}
+                {/* MCP 服务器 */}
+                {mcpTools.map((tool) => {
+                  const isOnline = tool.serverStatus === 'connected'
+                  const serverName = tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name
+                  return (
+                    <div key={tool.name} className="zen-card">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={enabledTools.includes(tool.name)}
+                          onChange={() => toggleExtTool(tool.name)}
+                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                        />
+                        <Puzzle
+                          size={12}
+                          className={isOnline ? 'text-purple-400' : 'text-red-400'}
+                        />
+                        <span
+                          className={`text-[11px] font-medium ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
+                        >
+                          {serverName}
+                        </span>
+                        <span
+                          className={`text-[10px] rounded px-1 py-px ${
+                            isOnline
+                              ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                              : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                          }`}
+                        >
+                          MCP
+                        </span>
                       </div>
-                    )
-                  })
-                })()}
+                    </div>
+                  )
+                })}
 
                 {/* Skills */}
-                {skillTools.length > 0 &&
-                  (() => {
-                    const skillNames = skillTools.map((t) => t.name)
-                    const allSkillChecked = skillNames.every((n) => enabledTools.includes(n))
-                    const someSkillChecked = skillNames.some((n) => enabledTools.includes(n))
-                    const isSkillExpanded = expandedExtGroups.has(SKILLS_GROUP)
-
-                    return (
-                      <div className="zen-card">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleExtExpand(SKILLS_GROUP)}
-                            className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
-                          >
-                            {isSkillExpanded ? (
-                              <ChevronDown size={12} />
-                            ) : (
-                              <ChevronRight size={12} />
-                            )}
-                          </button>
-                          <input
-                            type="checkbox"
-                            checked={allSkillChecked}
-                            ref={(el) => {
-                              if (el) el.indeterminate = someSkillChecked && !allSkillChecked
-                            }}
-                            onChange={() => toggleExtGroup(skillNames)}
-                            className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                          />
-                          <BookOpen size={12} className="text-emerald-400" />
-                          <span className="text-[11px] font-medium text-text-secondary">
-                            Skills
-                          </span>
-                          <span className="text-[10px] rounded px-1 py-px bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            Skill
-                          </span>
-                          <span className="text-[10px] text-text-tertiary ml-auto">
-                            {skillTools.length}
-                          </span>
-                        </div>
-                        {isSkillExpanded && (
-                          <div className="space-y-0.5 mt-2 pl-7">
-                            {skillTools.map((tool) => {
-                              const shortName = tool.name.startsWith('skill:')
-                                ? tool.name.slice(6)
-                                : tool.name
-                              return (
-                                <label
-                                  key={tool.name}
-                                  className="flex items-center gap-1.5 cursor-pointer select-none rounded-md px-2 py-1 -mx-1 hover:bg-bg-hover/40 transition-colors"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={enabledTools.includes(tool.name)}
-                                    onChange={() => toggleExtTool(tool.name)}
-                                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                                  />
-                                  <span className="text-[11px] font-mono text-emerald-300 flex-shrink-0">
-                                    {shortName}
-                                  </span>
-                                  <span className="text-[10px] text-text-tertiary truncate">
-                                    {tool.label}
-                                  </span>
-                                </label>
-                              )
-                            })}
-                          </div>
-                        )}
+                {skillTools.map((tool) => {
+                  const shortName = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+                  return (
+                    <div key={tool.name} className="zen-card">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={enabledTools.includes(tool.name)}
+                          onChange={() => toggleExtTool(tool.name)}
+                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                        />
+                        <BookOpen size={12} className="text-emerald-400" />
+                        <span className="text-[11px] font-medium text-text-secondary">
+                          {shortName}
+                        </span>
+                        <span className="text-[10px] rounded px-1 py-px bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          Skill
+                        </span>
                       </div>
-                    )
-                  })()}
+                    </div>
+                  )
+                })}
 
                 {/* 补充引导：前往设置添加更多 */}
                 <button

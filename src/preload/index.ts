@@ -34,6 +34,9 @@ import type {
   SkillUpdateParams,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
+  DbCredentialAddParams,
+  DbCredentialUpdateParams,
+  DbCredentialTestParams,
   ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -243,6 +246,16 @@ const api = {
       ipcRenderer.invoke('sshCredential:update', params),
     delete: (id: string) => ipcRenderer.invoke('sshCredential:delete', id),
     listNames: () => ipcRenderer.invoke('sshCredential:listNames')
+  },
+
+  // ============ 数据库凭据管理 ============
+  dbCredential: {
+    list: () => ipcRenderer.invoke('dbCredential:list'),
+    add: (params: DbCredentialAddParams) => ipcRenderer.invoke('dbCredential:add', params),
+    update: (params: DbCredentialUpdateParams) => ipcRenderer.invoke('dbCredential:update', params),
+    delete: (id: string) => ipcRenderer.invoke('dbCredential:delete', id),
+    testConnection: (params: DbCredentialTestParams) =>
+      ipcRenderer.invoke('dbCredential:testConnection', params)
   },
 
   // ============ 工具 ============

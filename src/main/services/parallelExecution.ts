@@ -65,6 +65,8 @@ interface Batch {
   entries: BatchEntry[]
   launched: boolean
   abortController?: AbortController
+  /** 串行工具的 Promise 链（保证串行工具依次执行，避免并发冲突） */
+  serialChain: Promise<void>
 }
 
 // ─── 分类逻辑 ─────────────────────────────────────────────
@@ -142,13 +144,16 @@ class ParallelExecutionCoordinator {
     }))
 
     const parallelCount = entries.filter((e) => !e.serial).length
-    if (parallelCount < 2) return // 可并行的工具不足 2 个，无收益
+    const serialCount = entries.length - parallelCount
+
+    // 需要 batch：2+ 个可并行 或 2+ 个串行（串行工具需要排队避免并发冲突，如多个 ask）
+    if (parallelCount < 2 && serialCount < 2) return
 
     log.info(
       `注册 batch: session=${sessionId}, 总计 ${entries.length} 个工具, ` +
-        `${parallelCount} 个可并行, ${entries.length - parallelCount} 个串行`
+        `${parallelCount} 个可并行, ${serialCount} 个串行`
     )
-    this.batches.set(sessionId, { entries, launched: false })
+    this.batches.set(sessionId, { entries, launched: false, serialChain: Promise.resolve() })
   }
 
   /**
@@ -195,17 +200,25 @@ class ParallelExecutionCoordinator {
       )
     }
 
-    // 串行工具：preExecute + execute
+    // 串行工具：链式排队，保证依次执行（避免多个 ask 等交互工具并发冲突）
     if (entry.serial) {
-      return this.serialExecute(
-        sessionId,
-        toolName,
-        toolCallId,
-        params,
-        signal,
-        onUpdate,
-        originalExecute
+      const resultPromise = batch.serialChain.then(() =>
+        this.serialExecute(
+          sessionId,
+          toolName,
+          toolCallId,
+          params,
+          signal,
+          onUpdate,
+          originalExecute
+        )
       )
+      // 更新 chain：无论成功失败都继续下一个
+      batch.serialChain = resultPromise.then(
+        () => {},
+        () => {}
+      )
+      return resultPromise
     }
 
     // 首次进入 parallel 工具时启动整个 batch（Phase1 + Phase2）

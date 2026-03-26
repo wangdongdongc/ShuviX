@@ -256,3 +256,13 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'bash',
+  group: 'general',
+  defaultEnabled: true,
+  getLabel: () => t('tool.bashLabel'),
+  getHint: () => t('tool.bashHint'),
+  factory: (ctx) => new BashTool(ctx)
+})

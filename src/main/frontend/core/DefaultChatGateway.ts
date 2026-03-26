@@ -2,8 +2,8 @@ import type { ChatGateway } from './ChatGateway'
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
 import type { SshCredentialPayload } from '../../tools/types'
 import { sessionService } from '../../services/sessionService'
-import { ALL_TOOL_NAMES } from '../../utils/tools'
-import { subAgentRegistry } from '../../subagent'
+import '../../tools/allTools'
+import { getBuiltinToolEntries } from '../../tools/registry'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
@@ -15,7 +15,6 @@ import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
-import { t } from '../../i18n'
 
 /**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
@@ -174,6 +173,7 @@ export class DefaultChatGateway implements ChatGateway {
     label: string
     hint?: string
     group?: string
+    defaultEnabled?: boolean
     serverStatus?: string
   }> {
     // 解析项目路径（用于发现项目级 skills）
@@ -183,49 +183,23 @@ export class DefaultChatGateway implements ChatGateway {
       const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
       projectPath = project?.path
     }
-    /** 内置工具 */
-    const labelMap: Record<string, string> = {
-      bash: t('tool.bashLabel'),
-      read: t('tool.readLabel'),
-      write: t('tool.writeLabel'),
-      edit: t('tool.editLabel'),
-      ask: t('tool.askLabel'),
-      ls: t('tool.lsLabel'),
-      grep: t('tool.grepLabel'),
-      glob: t('tool.globLabel'),
-      ssh: t('tool.sshLabel'),
-      'shuvix-project': t('tool.shuvixProjectLabel'),
-      'shuvix-setting': t('tool.shuvixSettingLabel'),
-      explore: t('tool.exploreLabel'),
-      'claude-code': t('tool.claudeCodeLabel')
-    }
-    const hintMap: Record<string, string> = {
-      bash: t('tool.bashHint'),
-      read: t('tool.readHint'),
-      write: t('tool.writeHint'),
-      edit: t('tool.editHint'),
-      ask: t('tool.askHint'),
-      ls: t('tool.lsHint'),
-      grep: t('tool.grepHint'),
-      glob: t('tool.globHint'),
-      ssh: t('tool.sshHint'),
-      'shuvix-project': t('tool.shuvixProjectHint'),
-      'shuvix-setting': t('tool.shuvixSettingHint'),
-      explore: t('tool.exploreHint'),
-      'claude-code': t('tool.claudeCodeHint')
-    }
-    const builtinTools = ALL_TOOL_NAMES.map((name) => ({
-      name,
-      label: labelMap[name] || name,
-      hint: hintMap[name],
-      group: subAgentRegistry.isSubAgent(name) ? '__subagents__' : (undefined as string | undefined)
-    }))
+    /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
+    const builtinTools = getBuiltinToolEntries()
+      .filter((e) => e.group !== 'system')
+      .map((e) => ({
+        name: e.name,
+        label: e.getLabel(),
+        hint: e.getHint(),
+        group: e.group,
+        defaultEnabled: e.defaultEnabled
+      }))
     /** 插件工具 */
     const pluginTools = pluginRegistry.getActivatedEntries().flatMap(({ contribution }) =>
       (contribution.tools ?? []).map((tool) => ({
         name: tool.name,
         label: tool.label,
-        hint: tool.description.split('\n')[0]
+        hint: tool.description.split('\n')[0],
+        group: 'general'
       }))
     )
     /** MCP 工具 */

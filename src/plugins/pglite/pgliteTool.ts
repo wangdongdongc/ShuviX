@@ -40,8 +40,8 @@ const SqlParamsSchema = Type.Object({
 })
 
 export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
-  readonly name = 'sql'
-  readonly label = 'Execute SQL'
+  readonly name = 'local_db'
+  readonly label = 'Local Database'
   readonly description = `Execute SQL in a built-in PGLite (PostgreSQL 17 WASM) runtime. This is a full PostgreSQL database:
 - Multiple statements in one call are supported (separated by semicolons)
 - Tables, indexes, views, functions, and data persist across calls within the same session
@@ -157,7 +157,7 @@ export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
       return {
         content: [{ type: 'text' as const, text }],
         details: {
-          type: 'sql',
+          type: 'local_db',
           hasError,
           truncated: truncated.truncated,
           rowCount: result.rowCount,

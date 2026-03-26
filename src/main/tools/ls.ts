@@ -189,3 +189,13 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'ls',
+  group: 'ripgrep',
+  defaultEnabled: false,
+  getLabel: () => t('tool.lsLabel'),
+  getHint: () => t('tool.lsHint'),
+  factory: (ctx) => new ListTool(ctx)
+})

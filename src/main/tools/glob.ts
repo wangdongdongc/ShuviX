@@ -149,3 +149,13 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'glob',
+  group: 'ripgrep',
+  defaultEnabled: false,
+  getLabel: () => t('tool.globLabel'),
+  getHint: () => t('tool.globHint'),
+  factory: (ctx) => new GlobTool(ctx)
+})

@@ -171,3 +171,13 @@ export class ShuvixProjectTool extends BaseTool<typeof ShuvixProjectParamsSchema
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'shuvix-project',
+  group: 'system',
+  defaultEnabled: false,
+  getLabel: () => t('tool.shuvixProjectLabel'),
+  getHint: () => t('tool.shuvixProjectHint'),
+  factory: (ctx) => new ShuvixProjectTool(ctx)
+})

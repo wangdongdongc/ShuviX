@@ -162,6 +162,17 @@ export interface SshToolDetails {
   host?: string
 }
 
+/** remote_db 工具详情 */
+export interface DatabaseToolDetails {
+  type: 'remote_db'
+  action: 'connect' | 'query' | 'disconnect' | 'list_tables' | 'describe_table'
+  success?: boolean
+  credentialName?: string
+  error?: string
+  rowCount?: number
+  truncated?: boolean
+}
+
 /** skill 工具详情 */
 export interface SkillToolDetails {
   type: 'skill'
@@ -235,9 +246,9 @@ export interface PythonToolDetails {
   executionTime?: number
 }
 
-/** SQL 工具详情 */
+/** local_db 工具详情 */
 export interface SqlToolDetails {
-  type: 'sql'
+  type: 'local_db'
   hasError: boolean
   truncated: boolean
   rowCount?: number
@@ -264,6 +275,7 @@ export type ToolResultDetails =
   | LsToolDetails
   | AskToolDetails
   | SshToolDetails
+  | DatabaseToolDetails
   | SkillToolDetails
   | SubAgentToolDetails
   | ShuvixSettingToolDetails

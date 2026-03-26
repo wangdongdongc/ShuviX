@@ -1,16 +1,5 @@
-import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  ChevronDown,
-  ChevronRight,
-  Puzzle,
-  WifiOff,
-  BookOpen,
-  Info,
-  Search,
-  Blocks,
-  Bot
-} from 'lucide-react'
+import { Puzzle, WifiOff, BookOpen, Info, Search, Blocks, Bot, Globe } from 'lucide-react'
 
 /** 工具信息 */
 export interface ToolItem {
@@ -19,6 +8,8 @@ export interface ToolItem {
   /** 面向用户的工具简要说明（仅非紧凑模式展示） */
   hint?: string
   group?: string
+  /** 新建会话时是否默认启用（来自后端注册表） */
+  defaultEnabled?: boolean
   /** MCP 工具所属 server 的连接状态 */
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
   /** Skill 的启用/禁用状态（仅 skill 类型工具） */
@@ -38,20 +29,13 @@ interface ToolSelectListProps {
   builtinOnly?: boolean
 }
 
-/** 从 MCP 全名中提取工具短名（mcp__server__tool → tool） */
-function mcpShortName(fullName: string): string {
-  const parts = fullName.split('__')
-  return parts.length >= 3 ? parts.slice(2).join('__') : fullName
+/** 从 mcp:<serverName> 中提取服务器短名 */
+function mcpServerName(fullName: string): string {
+  return fullName.startsWith('mcp:') ? fullName.slice(4) : fullName
 }
 
 /** Skill 分组标识常量 */
 const SKILLS_GROUP = '__skills__'
-
-/** 子智能体分组标识常量 */
-const SUBAGENTS_GROUP = '__subagents__'
-
-/** 基于 ripgrep 的高性能检索工具 */
-const RIPGREP_TOOLS = new Set(['ls', 'grep', 'glob'])
 
 /** 从 skill: 前缀名中提取短名（skill:pdf → pdf） */
 function skillShortName(fullName: string): string {
@@ -70,15 +54,6 @@ export function ToolSelectList({
   builtinOnly
 }: ToolSelectListProps): React.JSX.Element {
   const { t } = useTranslation()
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
-
-  // 非紧凑模式下默认展开所有分组（项目新建/编辑窗口）
-  useEffect(() => {
-    if (!compact) {
-      const groups = new Set(tools.filter((t) => t.group).map((t) => t.group!))
-      setExpandedGroups(groups) // eslint-disable-line react-hooks/set-state-in-effect
-    }
-  }, [compact, tools])
 
   /** 切换单个工具 */
   const toggle = (name: string): void => {
@@ -87,37 +62,13 @@ export function ToolSelectList({
     )
   }
 
-  /** 切换整个分组 */
-  const toggleGroup = (groupTools: ToolItem[]): void => {
-    const names = groupTools.map((t) => t.name)
-    const allChecked = names.every((n) => enabledTools.includes(n))
-    if (allChecked) {
-      onChange(enabledTools.filter((n) => !names.includes(n)))
-    } else {
-      onChange([...new Set([...enabledTools, ...names])])
-    }
-  }
-
-  /** 切换分组展开/收起 */
-  const toggleExpand = (group: string): void => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(group)) next.delete(group)
-      else next.add(group)
-      return next
-    })
-  }
-
-  // 分离：内置工具（通用 + ripgrep + 子智能体）、MCP 工具、Skills
-  // shuvix-project / shuvix-setting 暂不在选择器中展示
-  const builtinTools = tools.filter(
-    (t) => !t.group && !RIPGREP_TOOLS.has(t.name) && !t.name.startsWith('shuvix-')
-  )
-  const ripgrepTools = tools.filter((t) => !t.group && RIPGREP_TOOLS.has(t.name))
-  const subAgentTools = tools.filter((t) => t.group === SUBAGENTS_GROUP)
-  const mcpTools = tools.filter((t) => t.group && !t.group.startsWith('__'))
+  // 分离各分组（group 由后端注册表提供，system 组不展示）
+  const builtinTools = tools.filter((t) => t.group === 'general')
+  const ripgrepTools = tools.filter((t) => t.group === 'ripgrep')
+  const remoteTools = tools.filter((t) => t.group === 'remote')
+  const subAgentTools = tools.filter((t) => t.group === 'subagent')
+  const mcpTools = tools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = tools.filter((t) => t.group === SKILLS_GROUP)
-  const groups = [...new Set(mcpTools.map((t) => t.group!))]
 
   return (
     <div>
@@ -211,6 +162,46 @@ export function ToolSelectList({
         </div>
       )}
 
+      {/* 远程访问工具组 */}
+      {remoteTools.length > 0 && (
+        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
+          <div className={compact ? '' : 'border-l-2 border-blue-500/40 pl-3'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 py-1">
+                <Globe size={11} className="text-blue-400" />
+                <span className="text-[11px] font-medium text-blue-400">
+                  {t('projectForm.toolsRemoteGroup')}
+                </span>
+              </div>
+            )}
+            <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
+              {remoteTools.map((tool) => (
+                <label
+                  key={tool.name}
+                  className={
+                    compact
+                      ? 'flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                      : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggle(tool.name)}
+                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                  />
+                  <span className="text-[11px] font-mono text-accent">{tool.name}</span>
+                  <span className="text-[10px] text-text-tertiary truncate">
+                    {tool.label}
+                    {!compact && tool.hint ? ` — ${tool.hint}` : ''}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 子智能体工具组 */}
       {subAgentTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-2'}>
@@ -258,169 +249,94 @@ export function ToolSelectList({
         </div>
       )}
 
-      {/* MCP 工具按 Server 分组 */}
-      {!builtinOnly && groups.length > 0 && (
-        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3 space-y-1.5'}>
-          {groups.map((group) => {
-            const groupTools = mcpTools.filter((t) => t.group === group)
-            const isExpanded = expandedGroups.has(group)
-            const allChecked = groupTools.every((t) => enabledTools.includes(t.name))
-            const someChecked = groupTools.some((t) => enabledTools.includes(t.name))
-
-            // 判断分组是否在线
-            const isOnline = groupTools.some((t) => t.serverStatus === 'connected')
-
-            return (
-              <div
-                key={group}
-                className={
-                  compact
-                    ? ''
-                    : `border-l-2 pl-3 ${isOnline ? 'border-purple-500/40' : 'border-red-500/40'}`
-                }
-              >
-                {/* MCP Server 分组头部 */}
-                <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'py-1'}`}
-                >
-                  <button
-                    onClick={() => toggleExpand(group)}
-                    className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
-                  >
-                    {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  </button>
-                  <input
-                    type="checkbox"
-                    checked={allChecked}
-                    ref={(el) => {
-                      if (el) el.indeterminate = someChecked && !allChecked
-                    }}
-                    onChange={() => toggleGroup(groupTools)}
-                    className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                  />
-                  <Puzzle size={11} className={isOnline ? 'text-purple-400' : 'text-red-400'} />
-                  <span
-                    className={`text-[11px] font-medium ${isOnline ? 'text-purple-400' : 'text-red-400'}`}
-                  >
-                    {group}
-                  </span>
-                  {!isOnline && (
-                    <span
-                      className="flex items-center gap-0.5 text-[10px] text-red-400"
-                      title={t('settings.mcpStatusDisconnected')}
-                    >
-                      <WifiOff size={10} />
-                      {t('settings.mcpStatusDisconnected')}
-                    </span>
-                  )}
-                  <span className="text-[10px] text-text-tertiary ml-auto">
-                    {groupTools.length}
-                  </span>
-                </div>
-
-                {/* 展开的子工具 */}
-                {isExpanded && (
-                  <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
-                    {groupTools.map((tool) => (
-                      <label
-                        key={tool.name}
-                        className={
-                          compact
-                            ? `flex items-center gap-1.5 w-full px-2 pl-7 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
-                            : `flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5 ${!isOnline ? 'opacity-50' : ''}`
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={enabledTools.includes(tool.name)}
-                          onChange={() => toggle(tool.name)}
-                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                        />
-                        <span
-                          className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
-                        >
-                          {mcpShortName(tool.name)}
-                        </span>
-                        <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                          {tool.label}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )}
+      {/* MCP 服务器（每个服务器一行开关） */}
+      {!builtinOnly && mcpTools.length > 0 && (
+        <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
+          <div className={compact ? '' : 'border-l-2 border-purple-500/40 pl-3'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 py-1">
+                <Puzzle size={11} className="text-purple-400" />
+                <span className="text-[11px] font-medium text-purple-400">MCP</span>
               </div>
-            )
-          })}
+            )}
+            <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
+              {mcpTools.map((tool) => {
+                const isOnline = tool.serverStatus === 'connected'
+                return (
+                  <label
+                    key={tool.name}
+                    className={
+                      compact
+                        ? `flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`
+                        : `flex items-center gap-1.5 cursor-pointer select-none py-0.5 ${!isOnline ? 'opacity-50' : ''}`
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={enabledTools.includes(tool.name)}
+                      onChange={() => toggle(tool.name)}
+                      className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                    />
+                    <span
+                      className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
+                    >
+                      {mcpServerName(tool.name)}
+                    </span>
+                    {!isOnline && (
+                      <span
+                        className="flex items-center gap-0.5 text-[10px] text-red-400"
+                        title={t('settings.mcpStatusDisconnected')}
+                      >
+                        <WifiOff size={10} />
+                      </span>
+                    )}
+                    <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                      {tool.label}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Skills 分组 */}
+      {/* Skills（每个 skill 一行开关） */}
       {!builtinOnly && skillTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
-          {(() => {
-            const isExpanded = expandedGroups.has(SKILLS_GROUP)
-            const allSkillChecked = skillTools.every((t) => enabledTools.includes(t.name))
-            const someSkillChecked = skillTools.some((t) => enabledTools.includes(t.name))
-
-            return (
-              <div className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}>
-                {/* Skills 分组头部 */}
-                <div
-                  className={`flex items-center gap-1.5 ${compact ? 'px-2 py-0.5 hover:bg-bg-hover' : 'py-1'}`}
+          <div className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}>
+            {!compact && (
+              <div className="flex items-center gap-1.5 py-1">
+                <BookOpen size={11} className="text-emerald-400" />
+                <span className="text-[11px] font-medium text-emerald-400">Skills</span>
+              </div>
+            )}
+            <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
+              {skillTools.map((tool) => (
+                <label
+                  key={tool.name}
+                  className={
+                    compact
+                      ? 'flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
+                      : 'flex items-center gap-1.5 cursor-pointer select-none py-0.5'
+                  }
                 >
-                  <button
-                    onClick={() => toggleExpand(SKILLS_GROUP)}
-                    className="text-text-tertiary hover:text-text-secondary flex-shrink-0"
-                  >
-                    {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  </button>
                   <input
                     type="checkbox"
-                    checked={allSkillChecked}
-                    ref={(el) => {
-                      if (el) el.indeterminate = someSkillChecked && !allSkillChecked
-                    }}
-                    onChange={() => toggleGroup(skillTools)}
+                    checked={enabledTools.includes(tool.name)}
+                    onChange={() => toggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <BookOpen size={11} className="text-emerald-400" />
-                  <span className="text-[11px] font-medium text-emerald-400">Skills</span>
-                  <span className="text-[10px] text-text-tertiary ml-auto">
-                    {skillTools.length}
+                  <span className="text-[11px] font-mono text-emerald-300 whitespace-nowrap flex-shrink-0">
+                    {skillShortName(tool.name)}
                   </span>
-                </div>
-
-                {/* 展开的 Skill 列表 */}
-                {isExpanded && (
-                  <div className={compact ? 'py-0.5' : 'space-y-0.5'}>
-                    {skillTools.map((tool) => (
-                      <label
-                        key={tool.name}
-                        className={
-                          compact
-                            ? 'flex items-center gap-1.5 w-full px-2 pl-7 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer'
-                            : 'flex items-center gap-1.5 cursor-pointer select-none pl-5 py-0.5'
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={enabledTools.includes(tool.name)}
-                          onChange={() => toggle(tool.name)}
-                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                        />
-                        <span className="text-[11px] font-mono text-emerald-300 whitespace-nowrap flex-shrink-0">
-                          {skillShortName(tool.name)}
-                        </span>
-                        <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                          {tool.label}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })()}
+                  <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                    {tool.label}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>

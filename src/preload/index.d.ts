@@ -39,6 +39,10 @@ import type {
   SshCredential,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
+  DbCredential,
+  DbCredentialAddParams,
+  DbCredentialUpdateParams,
+  DbCredentialTestParams,
   ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -570,12 +574,23 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       listNames: () => Promise<string[]>
     }
+    dbCredential: {
+      list: () => Promise<Omit<DbCredential, 'password'>[]>
+      add: (params: DbCredentialAddParams) => Promise<{ id: string }>
+      update: (params: DbCredentialUpdateParams) => Promise<{ success: boolean }>
+      delete: (id: string) => Promise<{ success: boolean }>
+      testConnection: (
+        params: DbCredentialTestParams
+      ) => Promise<{ success: boolean; error?: string }>
+    }
     tools: {
       list: (sessionId?: string) => Promise<
         Array<{
           name: string
           label: string
+          hint?: string
           group?: string
+          defaultEnabled?: boolean
           serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
           isEnabled?: boolean
         }>

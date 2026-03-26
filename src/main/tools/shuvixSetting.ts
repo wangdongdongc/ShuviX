@@ -108,3 +108,13 @@ export class ShuvixSettingTool extends BaseTool<typeof ShuvixSettingParamsSchema
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'shuvix-setting',
+  group: 'system',
+  defaultEnabled: false,
+  getLabel: () => t('tool.shuvixSettingLabel'),
+  getHint: () => t('tool.shuvixSettingHint'),
+  factory: (ctx) => new ShuvixSettingTool(ctx)
+})

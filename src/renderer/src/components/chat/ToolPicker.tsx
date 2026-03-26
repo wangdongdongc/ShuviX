@@ -52,24 +52,24 @@ export function ToolPicker(): React.JSX.Element | null {
 
   // 分类统计
   const enabledBuiltinTools = allTools.filter(
-    (t) => !t.group && activeEnabledTools.includes(t.name)
+    (t) =>
+      (t.group === 'general' || t.group === 'ripgrep' || t.group === 'remote') &&
+      activeEnabledTools.includes(t.name)
   )
   const enabledSubAgentTools = allTools.filter(
-    (t) => t.group === '__subagents__' && activeEnabledTools.includes(t.name)
+    (t) => t.group === 'subagent' && activeEnabledTools.includes(t.name)
   )
   const enabledMcpTools = allTools.filter(
-    (t) => t.group && !t.group.startsWith('__') && activeEnabledTools.includes(t.name)
+    (t) => t.group?.startsWith('mcp:') && activeEnabledTools.includes(t.name)
   )
   const enabledSkillTools = allTools.filter(
     (t) => t.group === '__skills__' && activeEnabledTools.includes(t.name)
   )
-  // 按 server 分组的 MCP 工具
-  const enabledMcpGroups = [...new Set(enabledMcpTools.map((t) => t.group!))]
 
   // 是否有 MCP / Skill / SubAgent 工具可用（影响标签是否显示）
-  const hasMcpTools = allTools.some((t) => t.group && !t.group.startsWith('__'))
+  const hasMcpTools = allTools.some((t) => t.group?.startsWith('mcp:'))
   const hasSkillTools = allTools.some((t) => t.group === '__skills__')
-  const hasSubAgentTools = allTools.some((t) => t.group === '__subagents__')
+  const hasSubAgentTools = allTools.some((t) => t.group === 'subagent')
 
   /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
   const handleChange = async (newTools: string[]): Promise<void> => {
@@ -101,7 +101,7 @@ export function ToolPicker(): React.JSX.Element | null {
         {hasMcpTools && (
           <span className="inline-flex items-center gap-0.5 text-purple-400/80">
             <Server size={10} />
-            <span>{enabledMcpGroups.length}</span>
+            <span>{enabledMcpTools.length}</span>
           </span>
         )}
         {hasSkillTools && (
@@ -132,18 +132,17 @@ export function ToolPicker(): React.JSX.Element | null {
                 </span>
               </div>
             )}
-            {/* MCP 工具按 server 分组 */}
-            {enabledMcpGroups.map((group) => {
-              const tools = enabledMcpTools.filter((t) => t.group === group)
-              return (
-                <div key={group} className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-purple-400">[{group}]</span>
-                  <span className="text-[11px] text-text-primary truncate">
-                    {tools.map((t) => t.name.split('__').pop() || t.name).join(', ')}
-                  </span>
-                </div>
-              )
-            })}
+            {/* MCP 服务器 */}
+            {enabledMcpTools.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-purple-400">[MCP]</span>
+                <span className="text-[11px] text-text-primary truncate">
+                  {enabledMcpTools
+                    .map((t) => (t.name.startsWith('mcp:') ? t.name.slice(4) : t.name))
+                    .join(', ')}
+                </span>
+              </div>
+            )}
             {/* Skills */}
             {enabledSkillTools.length > 0 && (
               <div className="flex items-center gap-1.5">

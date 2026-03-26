@@ -1,15 +1,6 @@
 import type { AgentState } from '@mariozechner/pi-agent-core'
-import { BashTool } from '../tools/bash'
-import { ReadTool } from '../tools/read'
-import { WriteTool } from '../tools/write'
-import { EditTool } from '../tools/edit'
-import { AskTool } from '../tools/ask'
-import { ListTool } from '../tools/ls'
-import { GrepTool } from '../tools/grep'
-import { GlobTool } from '../tools/glob'
-import { SshTool } from '../tools/ssh'
-import { ShuvixProjectTool } from '../tools/shuvixProject'
-import { ShuvixSettingTool } from '../tools/shuvixSetting'
+import '../tools/allTools'
+import { getBuiltinToolEntries } from '../tools/registry'
 import { SkillTool } from '../tools/skill'
 import { subAgentRegistry, SubAgentTool, type SubAgentModelConfig } from '../subagent'
 import { BaseTool, type ToolContext } from '../tools/types'
@@ -59,19 +50,12 @@ export function buildTools(
   subAgentCtx?: SubAgentBuildContext,
   projectPath?: string
 ): AnyAgentTool[] {
-  // 内置工具
-  const builtinAll: Record<string, AnyAgentTool> = {
-    bash: new BashTool(ctx),
-    read: new ReadTool(ctx),
-    write: new WriteTool(ctx),
-    edit: new EditTool(ctx),
-    ask: new AskTool(ctx),
-    ls: new ListTool(ctx),
-    grep: new GrepTool(ctx),
-    glob: new GlobTool(ctx),
-    ssh: new SshTool(ctx),
-    'shuvix-project': new ShuvixProjectTool(ctx),
-    'shuvix-setting': new ShuvixSettingTool(ctx)
+  // 内置工具（从注册表动态构建，无需逐一硬编码）
+  const builtinAll: Record<string, AnyAgentTool> = {}
+  for (const entry of getBuiltinToolEntries()) {
+    if (entry.factory) {
+      builtinAll[entry.name] = entry.factory(ctx) as AnyAgentTool
+    }
   }
 
   // 插件贡献的工具
@@ -91,34 +75,37 @@ export function buildTools(
       }
     }
   }
-  // MCP 工具（动态），key = "mcp__<serverName>__<toolName>"
-  const mcpAll: Record<string, AnyAgentTool> = {}
-  for (const tool of mcpService.getAllAgentTools()) {
-    mcpAll[tool.name] = tool
-  }
+  // 从 enabledTools 中提取启用的 MCP 服务器名（mcp:context7 → context7）
+  const enabledMcpServers = enabledTools.filter((n) => n.startsWith('mcp:')).map((n) => n.slice(4))
+
+  // 收集所有启用 MCP 服务器的 AgentTool（按服务器级别整体注入）
+  const mcpTools: AnyAgentTool[] = enabledMcpServers.flatMap((name) =>
+    mcpService.getAgentToolsByServerName(name)
+  )
 
   // 从 enabledTools 中提取 skill 名（skill:pdf → pdf）
   const enabledSkillNames = enabledTools
     .filter((n) => n.startsWith('skill:'))
     .map((n) => n.slice(6))
 
-  // 合并内置 + MCP
-  const all: Record<string, AnyAgentTool> = { ...builtinAll, ...mcpAll }
-
   // 有启用的 skill 或有项目路径（可能有 .claude/skills/）时注册 skill 工具
   if (enabledSkillNames.length > 0 || projectPath) {
-    all['skill'] = new SkillTool(enabledSkillNames, projectPath)
+    builtinAll['skill'] = new SkillTool(enabledSkillNames, projectPath)
   }
 
-  // 过滤：排除 skill: 前缀项（它们通过 skill 工具统一处理），skill 工具存在时追加到末尾
+  // 过滤内置 + 插件 + 子智能体工具（排除 skill: 和 mcp: 前缀项）
   const tools = enabledTools
-    .filter((name) => !name.startsWith('skill:'))
-    .filter((name) => name in all)
-    .map((name) => all[name])
+    .filter((name) => !name.startsWith('skill:') && !name.startsWith('mcp:'))
+    .filter((name) => name in builtinAll)
+    .map((name) => builtinAll[name])
 
-  if (all['skill']) {
-    tools.push(all['skill'])
+  // 追加 skill 工具
+  if (builtinAll['skill']) {
+    tools.push(builtinAll['skill'])
   }
+
+  // 追加所有启用 MCP 服务器的工具
+  tools.push(...mcpTools)
 
   return tools.map((tool) => wrapToolForParallel(ctx.sessionId, tool))
 }

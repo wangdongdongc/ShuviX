@@ -573,3 +573,13 @@ async function readTextFile(
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'read',
+  group: 'general',
+  defaultEnabled: true,
+  getLabel: () => t('tool.readLabel'),
+  getHint: () => t('tool.readHint'),
+  factory: (ctx) => new ReadTool(ctx)
+})

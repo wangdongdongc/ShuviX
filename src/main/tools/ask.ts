@@ -86,3 +86,13 @@ export class AskTool extends BaseTool<typeof AskParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'ask',
+  group: 'general',
+  defaultEnabled: true,
+  getLabel: () => t('tool.askLabel'),
+  getHint: () => t('tool.askHint'),
+  factory: (ctx) => new AskTool(ctx)
+})

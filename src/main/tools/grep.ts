@@ -160,3 +160,13 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'grep',
+  group: 'ripgrep',
+  defaultEnabled: false,
+  getLabel: () => t('tool.grepLabel'),
+  getHint: () => t('tool.grepHint'),
+  factory: (ctx) => new GrepTool(ctx)
+})

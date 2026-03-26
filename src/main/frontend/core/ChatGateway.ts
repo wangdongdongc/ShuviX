@@ -93,6 +93,7 @@ export interface ChatGateway {
     label: string
     hint?: string
     group?: string
+    defaultEnabled?: boolean
     serverStatus?: string
   }>
 }

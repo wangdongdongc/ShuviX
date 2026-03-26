@@ -289,16 +289,50 @@ class McpService {
     return [...this.connections.keys()].flatMap((id) => this.serverToAgentTools(id))
   }
 
-  /** 获取所有已连接 Server 的全部工具名 */
+  /** 获取所有已连接 Server 的名称列表（mcp:<serverName> 格式） */
   getAllToolNames(): string[] {
-    return this.getAllAgentTools().map((t) => t.name)
+    const names: string[] = []
+    for (const [serverId, conn] of this.connections) {
+      if (conn.status !== 'connected') continue
+      const server = mcpDao.pick(serverId, ['name'])
+      if (server) names.push(`mcp:${server.name}`)
+    }
+    return names
   }
 
-  /** 获取所有 Server 的工具信息（用于 tools:list IPC）
-   *  包含已断开/禁用 server 的缓存工具（带 serverStatus 离线标识） */
+  /** 按服务器名获取所有 AgentTool（用于 agentToolBuilder 按服务器级别注入） */
+  getAgentToolsByServerName(serverName: string): AgentTool<TSchema, McpToolDetails>[] {
+    for (const [serverId, conn] of this.connections) {
+      if (conn.status !== 'connected') continue
+      const server = mcpDao.pick(serverId, ['name'])
+      if (server?.name === serverName) {
+        return this.serverToAgentTools(serverId)
+      }
+    }
+    return []
+  }
+
+  /** 获取所有 Server 的信息（用于 tools:list IPC，每个 server 一条）
+   *  包含已断开/禁用 server（带 serverStatus 离线标识） */
   getAllToolInfos(): McpToolInfo[] {
     const allServers = mcpDao.findAll()
-    return allServers.flatMap((s) => this.getServerToolInfos(s.id))
+    return allServers.map((s) => {
+      const status = this.connections.get(s.id)?.status ?? 'disconnected'
+      let toolCount = 0
+      try {
+        toolCount = JSON.parse(s.cachedTools || '[]').length
+      } catch {
+        /* ignore */
+      }
+      return {
+        name: `mcp:${s.name}`,
+        label: s.name,
+        description: `${toolCount} tool(s)`,
+        group: s.name,
+        serverId: s.id,
+        serverStatus: status
+      }
+    })
   }
 
   // ─── 内部方法 ───

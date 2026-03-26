@@ -183,6 +183,32 @@ export const migrations: Migration[] = [
         // 列已存在，忽略
       }
     }
+  },
+  {
+    version: 2,
+    description: '新增 db_credentials 表（远程 MySQL/PostgreSQL 凭据）',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS db_credentials (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          dbType TEXT NOT NULL,
+          host TEXT NOT NULL DEFAULT '',
+          port INTEGER NOT NULL DEFAULT 0,
+          username TEXT NOT NULL DEFAULT '',
+          password TEXT NOT NULL DEFAULT '',
+          database TEXT NOT NULL DEFAULT '',
+          authType TEXT NOT NULL DEFAULT 'password',
+          token TEXT NOT NULL DEFAULT '',
+          connStr TEXT NOT NULL DEFAULT '',
+          readonly INTEGER NOT NULL DEFAULT 1,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_db_credentials_name ON db_credentials(name);
+      `)
+    }
   }
 ]
 

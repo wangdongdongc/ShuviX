@@ -368,3 +368,13 @@ async function handleDisconnect(ctx: ToolContext): Promise<AgentToolResult<SshTo
     details: { type: 'ssh', action: 'disconnect', wasConnected: true }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'ssh',
+  group: 'remote',
+  defaultEnabled: false,
+  getLabel: () => t('tool.sshLabel'),
+  getHint: () => t('tool.sshHint'),
+  factory: (ctx) => new SshTool(ctx)
+})

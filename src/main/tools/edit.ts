@@ -178,3 +178,13 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
     })
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'edit',
+  group: 'general',
+  defaultEnabled: true,
+  getLabel: () => t('tool.editLabel'),
+  getHint: () => t('tool.editHint'),
+  factory: (ctx) => new EditTool(ctx)
+})
