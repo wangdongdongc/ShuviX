@@ -4,6 +4,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
+import { t } from '../../shared/node/i18n'
 import type {
   PluginTool,
   PluginContext,
@@ -41,7 +42,12 @@ const SqlParamsSchema = Type.Object({
 
 export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
   readonly name = 'local_db'
-  readonly label = 'Local Database'
+  get label(): string {
+    return t('tool.localDbLabel')
+  }
+  get hint(): string {
+    return t('tool.localDbHint')
+  }
   readonly description = `Execute SQL in a built-in PGLite (PostgreSQL 17 WASM) runtime. This is a full PostgreSQL database:
 - Multiple statements in one call are supported (separated by semicolons)
 - Tables, indexes, views, functions, and data persist across calls within the same session

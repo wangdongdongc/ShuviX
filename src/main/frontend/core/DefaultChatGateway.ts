@@ -198,7 +198,7 @@ export class DefaultChatGateway implements ChatGateway {
       (contribution.tools ?? []).map((tool) => ({
         name: tool.name,
         label: tool.label,
-        hint: tool.description.split('\n')[0],
+        hint: tool.hint ?? tool.description.split('\n')[0],
         group: 'general'
       }))
     )

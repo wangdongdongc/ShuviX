@@ -620,6 +620,7 @@
     "globHint": "ファイル名パターン（例: *.ts）でファイルを検索",
     "pythonHint": "内蔵エンジンで Python コードを実行",
     "sqlHint": "一時的な Postgres データベースを作成して SQL を実行",
+    "localDbHint": "内蔵 PGLite（PostgreSQL 17 WASM）データベースで SQL を実行",
     "sshHint": "SSH でリモートサーバーに接続してコマンドを実行",
     "remoteDbHint": "リモートデータベース（MySQL、PostgreSQL など）に接続して SQL クエリを実行",
     "shuvixProjectHint": "現在のプロジェクト設定を表示・変更（サンドボックス、Docker など）",

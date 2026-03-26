@@ -632,6 +632,7 @@
     "globHint": "Find files by name pattern (e.g. *.ts)",
     "pythonHint": "Run Python code using the built-in engine",
     "sqlHint": "Create a temporary Postgres database and run SQL",
+    "localDbHint": "Run SQL in a built-in PGLite (PostgreSQL 17 WASM) database",
     "sshHint": "Connect to a remote server via SSH and execute commands",
     "remoteDbHint": "Connect to remote databases (MySQL, PostgreSQL, etc.) and run SQL queries",
     "shuvixProjectHint": "View or modify the current project config (sandbox, Docker, etc.)",

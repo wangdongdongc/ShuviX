@@ -4,6 +4,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
+import { t } from '../../shared/node/i18n'
 import type {
   PluginTool,
   PluginContext,
@@ -41,7 +42,12 @@ const PythonParamsSchema = Type.Object({
 
 export class PyodideTool implements PluginTool<typeof PythonParamsSchema> {
   readonly name = 'python'
-  readonly label = 'Execute Python'
+  get label(): string {
+    return t('tool.pythonLabel')
+  }
+  get hint(): string {
+    return t('tool.pythonHint')
+  }
   readonly description = `Execute Python code in a built-in Pyodide (WebAssembly) runtime. This is an interactive REPL environment:
 - The last expression value is automatically displayed (no need for print())
 - Variables and imports persist across multiple calls within the same session (use \`_\` to reference the last result)

@@ -4,6 +4,7 @@
  */
 
 import { Type } from '@sinclair/typebox'
+import { t } from '../../shared/node/i18n'
 import type { PluginTool, PluginContext, AgentToolResult } from '../../plugin-api'
 import type { DesignProjectManager } from './designProjectManager'
 import type { BundlerService } from './bundlerService'
@@ -30,7 +31,12 @@ const DesignParamsSchema = Type.Object({
 
 export class DesignTool implements PluginTool<typeof DesignParamsSchema> {
   readonly name = 'design'
-  readonly label = 'Design'
+  get label(): string {
+    return t('tool.designLabel')
+  }
+  get hint(): string {
+    return t('tool.designHint')
+  }
   readonly description = `Manage the interactive design preview project. This tool creates and previews React UI components in a sandboxed environment with Tailwind CSS.
 
 Actions:

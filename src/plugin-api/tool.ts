@@ -50,8 +50,10 @@ export interface PluginToolPresentation {
 export interface PluginTool<TParams extends TSchema = TSchema> {
   /** 工具唯一标识 */
   readonly name: string
-  /** 显示名称 */
+  /** 显示名称（支持 getter 实现多语言） */
   readonly label: string
+  /** UI 简介（一句话，面向用户；不提供时回退到 description 首行） */
+  readonly hint?: string
   /** 工具描述（展示给 LLM） */
   readonly description: string
   /** 参数 JSON Schema（TypeBox 定义） */

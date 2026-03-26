@@ -632,6 +632,7 @@
     "globHint": "按文件名模式（如 *.ts）快速查找文件",
     "pythonHint": "使用内置引擎执行 Python 代码",
     "sqlHint": "创建临时 Postgres 数据库并运行 SQL",
+    "localDbHint": "在内置 PGLite（PostgreSQL 17 WASM）数据库中运行 SQL",
     "sshHint": "通过 SSH 连接远程服务器并执行命令",
     "remoteDbHint": "连接远程数据库（MySQL、PostgreSQL 等）并执行 SQL 查询",
     "shuvixProjectHint": "查看或修改当前项目的配置（如沙箱、Docker 等）",
