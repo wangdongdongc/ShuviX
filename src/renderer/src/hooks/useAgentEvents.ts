@@ -236,17 +236,17 @@ export function useAgentEvents(): void {
         break
 
       case 'preview_event':
-        if (event.action === 'server_started' && event.url) {
+        if (event.action === 'server_started') {
+          // 只更新 server 状态，不打开面板（由 preview 工具的 open action 负责）
+          usePreviewStore.setState({ isStartingServer: false, isServerRunning: true })
+        } else if (event.action === 'server_stopped') {
+          usePreviewStore.setState({ isServerRunning: false, isStartingServer: false })
+        } else if (event.action === 'open' && event.url) {
           let url = event.url
           if (window.api?.app?.platform === 'web') {
             url = `${window.location.origin}/shuvix/preview/${sid}/`
           }
           usePreviewStore.getState().openPreview(url)
-          usePreviewStore.setState({ isStartingServer: false, isServerRunning: true })
-        } else if (event.action === 'server_stopped') {
-          usePreviewStore.setState({ isServerRunning: false, isStartingServer: false })
-        } else if (event.action === 'open' && event.url) {
-          usePreviewStore.getState().openPreview(event.url)
         } else if (event.action === 'close') {
           usePreviewStore.getState().switchToUrl()
         }

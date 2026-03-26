@@ -1,17 +1,17 @@
 import type { ShuviXPlugin, PluginContext, PluginContribution } from '../../plugin-api'
-import { DesignProjectManager } from './designProjectManager'
+import { ProjectManager } from './projectManager'
 import { BundlerService } from './bundlerService'
-import { DesignTool } from './designTool'
+import { EsbuildTool } from './esbuildTool'
 
-const designPlugin: ShuviXPlugin = {
-  id: 'design',
-  name: 'Design Preview',
+const esbuildPlugin: ShuviXPlugin = {
+  id: 'esbuild',
+  name: 'Esbuild Preview',
   version: '1.0.0',
 
   activate(ctx: PluginContext): PluginContribution {
     const bundler = new BundlerService(ctx.getResourcePath.bind(ctx), ctx.logger)
-    const manager = new DesignProjectManager(ctx.getResourcePath.bind(ctx), ctx.logger, bundler)
-    const tool = new DesignTool(ctx, manager, bundler)
+    const manager = new ProjectManager(ctx.getResourcePath.bind(ctx), ctx.logger, bundler)
+    const tool = new EsbuildTool(ctx, manager, bundler)
 
     return {
       tools: [tool],
@@ -21,7 +21,7 @@ const designPlugin: ShuviXPlugin = {
           name: 'Design',
           description: 'Enter interactive design mode',
           template: DESIGN_COMMAND_TEMPLATE,
-          requiredTools: ['design']
+          requiredTools: ['esbuild', 'preview']
         }
       ],
       purpose: {
@@ -32,15 +32,15 @@ const designPlugin: ShuviXPlugin = {
         i18n: {
           zh: {
             purposeUI: 'UI 设计',
-            purposeTipUi: '基于 design 工具生成 React 代码、快速构建、实时预览。'
+            purposeTipUi: '基于 esbuild + preview 工具生成 React 代码、快速构建、实时预览。'
           },
           en: {
             purposeUI: 'UI Design',
             purposeTipUi:
-              'Generate React code with the design tool, quick builds, and live preview.'
+              'Generate React code with esbuild + preview tools, quick builds, and live preview.'
           }
         },
-        enabledTools: ['bash', 'read', 'write', 'edit', 'ask', 'design']
+        enabledTools: ['bash', 'read', 'write', 'edit', 'ask', 'esbuild', 'preview']
       },
       onEvent(event) {
         switch (event.type) {
@@ -69,18 +69,20 @@ const designPlugin: ShuviXPlugin = {
   }
 }
 
-export default designPlugin
+export default esbuildPlugin
 
 // ────────────────────── Command template ──────────────────────
 
-const DESIGN_COMMAND_TEMPLATE = `You are now in interactive design mode. Use the \`design\` tool to create and preview React UI components.
+const DESIGN_COMMAND_TEMPLATE = `You are now in interactive design mode. Use the \`esbuild\` and \`preview\` tools together to create and preview React UI components.
 
 ## Workflow
 
-1. Choose a template and call \`design\` tool with \`action: "init"\` and \`template\` parameter
+1. Call \`esbuild\` tool with \`action: "init"\` and a \`template\` to scaffold the project
 2. Use \`write\`/\`edit\` tools to create/modify files under \`.shuvix/design/\`
-3. Call \`design\` tool with \`action: "preview"\` to build and open the preview panel (first time starts the dev server; subsequent calls rebuild and refresh)
-4. If preview shows build errors, the tool returns detailed error messages — fix the code and call \`preview\` again
+3. Call \`esbuild\` tool with \`action: "build"\` — it returns the dev server URL on success
+4. Call \`preview\` tool with \`action: "open"\` and the URL from step 3 to open the preview panel
+5. If the build fails, fix the code and call \`esbuild\` with \`action: "build"\` again
+6. On subsequent builds the preview auto-refreshes via SSE — no need to reopen the panel
 
 ## Templates
 

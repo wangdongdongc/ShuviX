@@ -1,12 +1,13 @@
 /**
- * Design 工具 — 管理设计预览项目的初始化、构建和预览（插件版）
- * AI 通过此工具创建脚手架、启动预览面板、触发构建并获取错误信息
+ * EsbuildTool — 管理设计预览项目的初始化与构建（esbuild 插件版）
+ * AI 通过此工具创建脚手架、触发构建并获取 dev server URL 和错误信息。
+ * 预览面板的打开/关闭由独立的 `preview` 内置工具负责。
  */
 
 import { Type } from '@sinclair/typebox'
 import { t } from '../../shared/node/i18n'
 import type { PluginTool, PluginContext, AgentToolResult } from '../../plugin-api'
-import type { DesignProjectManager } from './designProjectManager'
+import type { ProjectManager } from './projectManager'
 import type { BundlerService } from './bundlerService'
 
 /** 构建简单文本结果 */
@@ -14,12 +15,12 @@ function textResult(text: string): AgentToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
 }
 
-const DesignParamsSchema = Type.Object({
-  action: Type.Unsafe<'init' | 'preview'>({
+const EsbuildParamsSchema = Type.Object({
+  action: Type.Unsafe<'init' | 'build'>({
     type: 'string',
-    enum: ['init', 'preview'],
+    enum: ['init', 'build'],
     description:
-      'Action to perform: "init" scaffolds the design project at .shuvix/design/; "preview" builds and opens/refreshes the preview panel (starts dev server on first call, rebuilds on subsequent calls)'
+      'Action to perform: "init" scaffolds the design project at .shuvix/design/; "build" starts the dev server (first call) or rebuilds (subsequent calls) and returns the local URL — use the `preview` tool to open the preview panel with that URL'
   }),
   template: Type.Optional(
     Type.String({
@@ -29,19 +30,19 @@ const DesignParamsSchema = Type.Object({
   )
 })
 
-export class DesignTool implements PluginTool<typeof DesignParamsSchema> {
-  readonly name = 'design'
+export class EsbuildTool implements PluginTool<typeof EsbuildParamsSchema> {
+  readonly name = 'esbuild'
   get label(): string {
-    return t('tool.designLabel')
+    return t('tool.esbuildLabel')
   }
   get hint(): string {
-    return t('tool.designHint')
+    return t('tool.esbuildHint')
   }
-  readonly description = `Manage the interactive design preview project. This tool creates and previews React UI components in a sandboxed environment with Tailwind CSS.
+  readonly description = `Manage the React design project: scaffold and build with esbuild-wasm. Returns the dev server URL on build — use the \`preview\` tool to open the preview panel.
 
 Actions:
 - "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "blank"). Templates: blank, app, landing, dashboard.
-- "preview": Build the project and open the preview panel. On first call, starts the dev server; on subsequent calls, triggers a rebuild and refreshes the preview. Returns build errors if the build fails — use these to debug and fix the code.
+- "build": Start the dev server (first call) or rebuild (subsequent calls). Returns the local URL and build result. If the build fails, detailed error messages are returned — fix the code and call "build" again.
 
 The design project supports:
 - React with TypeScript (.tsx/.ts)
@@ -51,7 +52,7 @@ The design project supports:
 - Images as dataurl (svg/png/jpg/gif)
 - Auto-refresh on file changes via write/edit tools`
 
-  readonly parameters = DesignParamsSchema
+  readonly parameters = EsbuildParamsSchema
   readonly presentation = {
     icon: 'Palette',
     iconColor: '#f472b6',
@@ -60,13 +61,13 @@ The design project supports:
 
   constructor(
     private ctx: PluginContext,
-    private designProjectManager: DesignProjectManager,
+    private projectManager: ProjectManager,
     private bundlerService: BundlerService
   ) {}
 
   async execute(
     _toolCallId: string,
-    params: { action: 'init' | 'preview'; template?: string },
+    params: { action: 'init' | 'build'; template?: string },
     signal?: AbortSignal,
     _onUpdate?: (partialResult: AgentToolResult<unknown>) => void,
     sessionId?: string
@@ -74,13 +75,13 @@ The design project supports:
     if (signal?.aborted) throw new Error('Aborted')
 
     if (!sessionId) {
-      return textResult('Design tool: sessionId is required but was not provided.')
+      return textResult('Esbuild tool: sessionId is required but was not provided.')
     }
 
     const workingDir = this.ctx.getSessionPaths(sessionId).workingDirectory
     if (!workingDir) {
       return textResult(
-        `Design tool: no working directory resolved for session ${sessionId}. ` +
+        `Esbuild tool: no working directory resolved for session ${sessionId}. ` +
           `Please create or select a project, or start a new conversation.`
       )
     }
@@ -88,8 +89,8 @@ The design project supports:
     switch (params.action) {
       case 'init':
         return this.handleInit(sessionId, workingDir, params.template)
-      case 'preview':
-        return this.handlePreview(sessionId, workingDir, signal)
+      case 'build':
+        return this.handleBuild(sessionId, workingDir, signal)
       default:
         return textResult(`Unknown action: ${params.action}`)
     }
@@ -101,54 +102,57 @@ The design project supports:
     template?: string
   ): Promise<AgentToolResult<undefined>> {
     const tpl = template || 'blank'
-    const designDir = await this.designProjectManager.init(sessionId, workingDir, tpl)
+    const designDir = await this.projectManager.init(sessionId, workingDir, tpl)
 
     return textResult(
       `Design project initialized at .shuvix/design/ (template: ${tpl})\n\n` +
         `Design directory: ${designDir}\n` +
-        `Use write/edit tools to modify files, then call design tool with action "preview" to build and preview.`
+        `Use write/edit tools to modify files, then call esbuild tool with action "build" to build and get the preview URL.`
     )
   }
 
-  private async handlePreview(
+  private async handleBuild(
     sessionId: string,
     workingDir: string,
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
     if (signal?.aborted) throw new Error('Aborted')
 
-    const isActive = this.designProjectManager.isActive(sessionId)
+    const isActive = this.projectManager.isActive(sessionId)
 
     if (!isActive) {
-      // 首次调用：init + startDev（含首次构建）
-      const serverInfo = await this.designProjectManager.startDev(sessionId, workingDir)
+      // 首次调用：startDev（含首次构建）
+      const serverInfo = await this.projectManager.startDev(sessionId, workingDir)
 
-      // 通知 renderer 打开预览面板
+      // 通知 renderer 更新 server 状态（不打开面板，由 preview 工具负责）
       this.ctx.emitEvent(sessionId, { type: 'plugin:preview_server_started', url: serverInfo.url })
 
       // startDev 内部已完成首次构建，再 rebuild 一次获取结果
-      const designDir = this.designProjectManager.getDesignDir(workingDir)
+      const designDir = this.projectManager.getDesignDir(workingDir)
       const result = await this.bundlerService.rebuild(sessionId, designDir)
 
       if (result.success) {
         return textResult(
-          `Preview started and build OK (${result.duration}ms). The preview panel is now open.`
+          `Build OK (${result.duration}ms). Dev server running at ${serverInfo.url}\n\n` +
+            `Use the \`preview\` tool with action "open" and url="${serverInfo.url}" to open the preview panel.`
         )
       } else {
         return textResult(
-          `Preview started but build failed:\n\n${(result.errors ?? []).join('\n\n')}\n\nFix the errors and call design tool with action "preview" again.`
+          `Dev server started at ${serverInfo.url} but build failed:\n\n${(result.errors ?? []).join('\n\n')}\n\nFix the errors and call esbuild tool with action "build" again.`
         )
       }
     } else {
       // 后续调用：rebuild + SSE 自动刷新
-      const designDir = this.designProjectManager.getDesignDir(workingDir)
+      const designDir = this.projectManager.getDesignDir(workingDir)
+      const serverInfo = this.bundlerService.getDevServerInfo(sessionId)
       const result = await this.bundlerService.rebuild(sessionId, designDir)
 
       if (result.success) {
-        return textResult(`Build OK (${result.duration}ms). Preview refreshed.`)
+        const urlHint = serverInfo ? ` (${serverInfo.url})` : ''
+        return textResult(`Build OK (${result.duration}ms). Preview refreshed${urlHint}.`)
       } else {
         return textResult(
-          `Build failed:\n\n${(result.errors ?? []).join('\n\n')}\n\nFix the errors and call design tool with action "preview" again.`
+          `Build failed:\n\n${(result.errors ?? []).join('\n\n')}\n\nFix the errors and call esbuild tool with action "build" again.`
         )
       }
     }

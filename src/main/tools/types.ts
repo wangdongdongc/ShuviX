@@ -51,6 +51,8 @@ export interface ToolContext {
   onSshConnected?: (host: string, port: number, username: string) => void
   /** ssh 连接断开时回调 */
   onSshDisconnected?: (host: string, port: number, username: string) => void
+  /** preview 工具：控制预览面板的显示（open/close） */
+  emitPreviewEvent?: (action: 'open' | 'close', url?: string) => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

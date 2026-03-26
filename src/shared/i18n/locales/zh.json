@@ -640,8 +640,10 @@
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "exploreLabel": "探索",
     "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构",
-    "designLabel": "设计预览",
-    "designHint": "创建并预览 React UI 组件，支持 Tailwind CSS 的交互式设计环境",
+    "esbuildLabel": "Esbuild 构建",
+    "esbuildHint": "使用 esbuild-wasm 构建 React 项目并启动本地预览服务器，返回 URL 供 preview 工具打开",
+    "previewLabel": "预览面板",
+    "previewHint": "在预览面板中打开任意 URL，或关闭预览面板",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "将复杂编程任务委托给 Claude Code — 自主 AI 编码智能体，擅长多文件修改、重构、调试等"
   },

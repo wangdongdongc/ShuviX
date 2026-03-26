@@ -1,5 +1,5 @@
 /**
- * DesignProjectManager — 设计项目生命周期管理（插件版）
+ * ProjectManager — 设计项目生命周期管理（esbuild 插件版）
  *
  * 职责：
  * - 初始化/脚手架设计项目目录 ({workingDir}/.shuvix/design/)
@@ -20,7 +20,7 @@ const VALID_TEMPLATES = new Set(['blank', 'app', 'landing', 'dashboard'])
 
 // ────────────────────── Types ──────────────────────
 
-interface DesignProjectState {
+interface ProjectState {
   /** 设计项目绝对路径 */
   designDir: string
   /** 关联的工作目录 */
@@ -31,13 +31,13 @@ interface DesignProjectState {
   rebuildTimer: ReturnType<typeof setTimeout> | null
 }
 
-// ────────────────────── DesignProjectManager ──────────────────────
+// ────────────────────── ProjectManager ──────────────────────
 
 /** rebuild debounce 间隔（ms） */
 const DEBOUNCE_MS = 300
 
-export class DesignProjectManager {
-  private sessions = new Map<string, DesignProjectState>()
+export class ProjectManager {
+  private sessions = new Map<string, ProjectState>()
 
   constructor(
     private getResourcePath: (relativePath: string) => string,
@@ -99,7 +99,7 @@ export class DesignProjectManager {
     const serverInfo = await this.bundlerService.startDevServer(sessionId, designDir)
 
     // 启动文件监听
-    const state: DesignProjectState = {
+    const state: ProjectState = {
       designDir,
       workingDir,
       watcher: null,
@@ -172,7 +172,7 @@ export class DesignProjectManager {
   // ── Private ──
 
   /** debounce 重新打包 */
-  private scheduleRebuild(sessionId: string, state: DesignProjectState): void {
+  private scheduleRebuild(sessionId: string, state: ProjectState): void {
     if (state.rebuildTimer) {
       clearTimeout(state.rebuildTimer)
     }

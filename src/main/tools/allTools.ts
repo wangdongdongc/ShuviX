@@ -20,6 +20,9 @@ import './glob'
 import './ssh'
 import './database'
 
+// 预览面板控制
+import './preview'
+
 // 系统工具
 import './shuvixProject'
 import './shuvixSetting'

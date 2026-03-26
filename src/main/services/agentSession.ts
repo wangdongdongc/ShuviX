@@ -185,6 +185,14 @@ export class AgentSession {
       },
       onSshDisconnected: (host, port, username) => {
         session.emitSshEvent('ssh_disconnected', { host, port, username })
+      },
+      emitPreviewEvent: (action, url) => {
+        chatFrontendRegistry.broadcast({
+          type: 'preview_event',
+          sessionId,
+          action,
+          url
+        })
       }
     }
 

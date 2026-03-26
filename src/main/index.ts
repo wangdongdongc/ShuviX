@@ -26,7 +26,7 @@ import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
 import { updateService } from './services/updateService'
-import designPlugin from '../plugins/design'
+import esbuildPlugin from '../plugins/esbuild'
 import pyodidePlugin from '../plugins/pyodide'
 import pglitePlugin from '../plugins/pglite'
 import { createLogger } from './logger'
@@ -518,7 +518,7 @@ app.whenReady().then(async () => {
   })
 
   // 注册并激活插件（必须在 IPC 注册前完成，确保前端查询时插件已就绪）
-  pluginRegistry.register(designPlugin)
+  pluginRegistry.register(esbuildPlugin)
   pluginRegistry.register(pyodidePlugin)
   pluginRegistry.register(pglitePlugin)
   await measureAsync('activatePlugins', () => pluginRegistry.activateAll())
