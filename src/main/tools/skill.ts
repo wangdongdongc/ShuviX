@@ -146,3 +146,18 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
     }
   }
 }
+
+import { registerBuiltinTool } from './registry'
+registerBuiltinTool({
+  name: 'skill',
+  group: 'general',
+  defaultEnabled: false,
+  hidden: true,
+  getLabel: () => t('tool.skillLabel'),
+  getHint: () => t('tool.skillHint'),
+  presentation: {
+    icon: 'BookOpen',
+    iconColor: '#34d399',
+    summaryField: 'name'
+  }
+})

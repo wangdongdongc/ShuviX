@@ -100,7 +100,15 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
 
     const result = await sshManager.connect(this.ctx.sessionId, credentials)
     if (result.success) {
-      this.ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+      this.ctx.emitChatEvent?.({
+        type: 'runtime_event',
+        runtimeId: 'ssh',
+        status: {
+          label: `${credentials.username}@${credentials.host}`,
+          icon: 'Terminal',
+          color: '#38bdf8'
+        }
+      })
     }
     // 连接失败不抛异常，留给 execute 中的 handleConnect 返回明确错误消息
   }
@@ -199,7 +207,15 @@ async function handleConnect(
 
     const result = await sshManager.connect(ctx.sessionId, credentials)
     if (result.success) {
-      ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+      ctx.emitChatEvent?.({
+        type: 'runtime_event',
+        runtimeId: 'ssh',
+        status: {
+          label: `${credentials.username}@${credentials.host}`,
+          icon: 'Terminal',
+          color: '#38bdf8'
+        }
+      })
       return {
         content: [
           {
@@ -251,7 +267,15 @@ async function handleConnect(
 
   if (result.success) {
     // 通知前端连接已建立
-    ctx.onSshConnected?.(credentials.host, credentials.port, credentials.username)
+    ctx.emitChatEvent?.({
+      type: 'runtime_event',
+      runtimeId: 'ssh',
+      status: {
+        label: `${credentials.username}@${credentials.host}`,
+        icon: 'Terminal',
+        color: '#38bdf8'
+      }
+    })
     return {
       content: [
         {
@@ -341,7 +365,12 @@ async function handleExec(
     if (sshManager.isConnected(ctx.sessionId)) {
       const connInfo = sshManager.getConnectionInfo(ctx.sessionId)
       await sshManager.disconnect(ctx.sessionId)
-      if (connInfo) ctx.onSshDisconnected?.(connInfo.host, connInfo.port, connInfo.username)
+      if (connInfo)
+        ctx.emitChatEvent?.({
+          type: 'runtime_event',
+          runtimeId: 'ssh',
+          status: null
+        })
     }
     throw new Error(
       `SSH command failed: ${errMsg}. The connection has been closed. Use ssh({ action: "connect" }) to reconnect.`
@@ -362,7 +391,12 @@ async function handleDisconnect(ctx: ToolContext): Promise<AgentToolResult<SshTo
   const connInfo = sshManager.getConnectionInfo(ctx.sessionId)
   await sshManager.disconnect(ctx.sessionId)
   // 通知前端连接已断开
-  if (connInfo) ctx.onSshDisconnected?.(connInfo.host, connInfo.port, connInfo.username)
+  if (connInfo)
+    ctx.emitChatEvent?.({
+      type: 'runtime_event',
+      runtimeId: 'ssh',
+      status: null
+    })
   return {
     content: [{ type: 'text', text: 'SSH connection closed.' }],
     details: { type: 'ssh', action: 'disconnect', wasConnected: true }
@@ -376,5 +410,10 @@ registerBuiltinTool({
   defaultEnabled: false,
   getLabel: () => t('tool.sshLabel'),
   getHint: () => t('tool.sshHint'),
-  factory: (ctx) => new SshTool(ctx)
+  factory: (ctx) => new SshTool(ctx),
+  presentation: {
+    icon: 'Terminal',
+    iconColor: '#38bdf8',
+    summaryField: 'action'
+  }
 })

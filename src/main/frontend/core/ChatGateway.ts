@@ -1,5 +1,6 @@
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
 import type { SshCredentialPayload } from '../../tools/types'
+import type { RuntimeStatus } from './types'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -73,17 +74,11 @@ export interface ChatGateway {
 
   // ─── 资源操作 ──────────────────────────────────
 
-  /** 查询 Docker 容器状态 */
-  getDockerStatus(sessionId: string): { containerId: string; image: string } | null
+  /** 获取所有运行时资源状态 */
+  getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus>
 
-  /** 销毁 Docker 容器 */
-  destroyDocker(sessionId: string): Promise<{ success: boolean }>
-
-  /** 查询 SSH 连接状态 */
-  getSshStatus(sessionId: string): { host: string; port: number; username: string } | null
-
-  /** 断开 SSH 连接 */
-  disconnectSsh(sessionId: string): Promise<{ success: boolean }>
+  /** 销毁指定运行时资源 */
+  destroyRuntime(sessionId: string, runtimeId: string): Promise<{ success: boolean }>
 
   // ─── 工具发现 ──────────────────────────────────
 

@@ -1,5 +1,11 @@
 import { create } from 'zustand'
 import type { ToolResultDetails } from '../../../shared/types/chatMessage'
+import type { ToolPresentation } from '../../../shared/types/toolPresentation'
+export type {
+  ToolPresentation,
+  ToolFormItem,
+  ToolFormItemRenderer as FormItemRenderer
+} from '../../../shared/types/toolPresentation'
 
 // 消息相关类型从 preload 全局声明导入（ChatMessage 判别联合 + per-type 接口）
 export type {
@@ -98,17 +104,6 @@ interface SessionStreamState {
   }>
 }
 
-/** 表单项渲染器类型 */
-export type FormItemRenderer = { type: 'code'; language?: string } | { type: 'text' }
-
-/** 插件工具渲染配置（从 plugin-api PluginToolPresentation 映射） */
-export interface ToolPresentation {
-  icon?: string
-  iconColor?: string
-  summaryField?: string
-  formItems?: Array<{ field: string; label?: string; renderer?: FormItemRenderer }>
-}
-
 /** Buffered streaming deltas for rAF batching (used by useAgentEvents) */
 export interface StreamingDeltaBuffer {
   content: string
@@ -117,21 +112,17 @@ export interface StreamingDeltaBuffer {
   subAgents: Map<string, { content: string; thinking: string }>
 }
 
-/** 插件 runtime 状态信息 */
-export interface PluginRuntimeInfo {
+/** 运行时资源状态信息 */
+export interface RuntimeInfo {
   label: string
   icon?: string
   color?: string
   description?: string
 }
 
-/** 每个 session 的活跃 Docker/SSH/Python/ACP 资源信息 */
+/** 每个 session 的活跃运行时资源（runtimeId → info） */
 export interface SessionResourceInfo {
-  docker?: { containerId: string; image: string } | null
-  ssh?: { host: string; port: number; username: string } | null
-  acp?: Array<{ agentName: string; displayName: string }>
-  /** 插件 runtime 状态（runtimeId → info） */
-  pluginRuntimes?: Record<string, PluginRuntimeInfo>
+  runtimes: Record<string, RuntimeInfo>
 }
 
 /** 子智能体内部工具执行 */
@@ -306,15 +297,10 @@ interface ChatState {
   setShareMode: (mode: ShareMode | null) => void
   setSharedSessionIds: (ids: Map<string, ShareMode>) => void
   setTelegramBindings: (bindings: Map<string, { botId: string; username: string }>) => void
-  setSessionDocker: (sessionId: string, info: { containerId: string; image: string } | null) => void
-  setSessionSsh: (
-    sessionId: string,
-    info: { host: string; port: number; username: string } | null
-  ) => void
-  setPluginRuntime: (sessionId: string, runtimeId: string, info: PluginRuntimeInfo | null) => void
-  setPluginRuntimes: (sessionId: string, runtimes: Record<string, PluginRuntimeInfo>) => void
-  addSessionAcp: (sessionId: string, info: { agentName: string; displayName: string }) => void
-  removeSessionAcp: (sessionId: string, agentName: string) => void
+  /** 设置/删除运行时资源状态（info 为 null 时删除） */
+  setRuntime: (sessionId: string, runtimeId: string, info: RuntimeInfo | null) => void
+  /** 批量设置运行时资源状态（session 初始化时使用） */
+  setRuntimes: (sessionId: string, runtimes: Record<string, RuntimeInfo>) => void
   appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
   appendSubAgentStreamingThinking: (sessionId: string, subAgentId: string, delta: string) => void
   /** 设置 session 的待处理用户输入 */
@@ -671,26 +657,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
   setSlashCommands: (commands) => set({ slashCommands: commands }),
 
-  setSessionDocker: (sessionId, info) =>
+  setRuntime: (sessionId, runtimeId, info) =>
     set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      return {
-        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, docker: info } }
-      }
-    }),
-
-  setSessionSsh: (sessionId, info) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      return {
-        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, ssh: info } }
-      }
-    }),
-
-  setPluginRuntime: (sessionId, runtimeId, info) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      const runtimes = { ...(prev.pluginRuntimes || {}) }
+      const prev = state.sessionResources[sessionId]?.runtimes || {}
+      const runtimes = { ...prev }
       if (info) {
         runtimes[runtimeId] = info
       } else {
@@ -699,48 +669,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionResources: {
           ...state.sessionResources,
-          [sessionId]: {
-            ...prev,
-            pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined
-          }
+          [sessionId]: { runtimes }
         }
       }
     }),
 
-  setPluginRuntimes: (sessionId, runtimes) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      return {
-        sessionResources: {
-          ...state.sessionResources,
-          [sessionId]: {
-            ...prev,
-            pluginRuntimes: Object.keys(runtimes).length > 0 ? runtimes : undefined
-          }
-        }
+  setRuntimes: (sessionId, runtimes) =>
+    set((state) => ({
+      sessionResources: {
+        ...state.sessionResources,
+        [sessionId]: { runtimes }
       }
-    }),
-
-  addSessionAcp: (sessionId, info) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      const acpList = [...(prev.acp || []), info]
-      return {
-        sessionResources: { ...state.sessionResources, [sessionId]: { ...prev, acp: acpList } }
-      }
-    }),
-
-  removeSessionAcp: (sessionId, agentName) =>
-    set((state) => {
-      const prev = state.sessionResources[sessionId] || {}
-      const acpList = (prev.acp || []).filter((a) => a.agentName !== agentName)
-      return {
-        sessionResources: {
-          ...state.sessionResources,
-          [sessionId]: { ...prev, acp: acpList.length > 0 ? acpList : undefined }
-        }
-      }
-    }),
+    })),
 
   appendSubAgentStreamingContent: (sessionId, subAgentId, delta) =>
     set((state) => {

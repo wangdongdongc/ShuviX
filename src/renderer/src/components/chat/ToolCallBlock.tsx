@@ -18,6 +18,7 @@ import {
   FolderTree,
   Search,
   FileSearch2,
+  Monitor,
   Container,
   Copy,
   Package,
@@ -53,6 +54,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   FolderTree,
   Search,
   FileSearch2,
+  Monitor,
   Container,
   Copy,
   Package,
@@ -126,94 +128,37 @@ export function ToolCallBlock({
   // 编辑成功且有 diff
   const hasEditDiff = details?.type === 'edit' && !!details.diff && status === 'done'
 
-  // 截断文件路径，优先展示末尾文件名
-  const truncatePath = (p: string, max = 60): string => {
-    if (p.length <= max) return p
-    const sep = p.lastIndexOf('/')
-    if (sep === -1) return p.slice(-max)
-    const name = p.slice(sep) // /filename.ts
-    if (name.length >= max) return '...' + name.slice(-(max - 3))
-    const remaining = max - name.length - 3 // 3 for "..."
-    return remaining > 0 ? '...' + p.slice(sep - remaining, sep) + name : '...' + name
-  }
-
-  // 根据工具类型生成摘要
+  // 根据工具 presentation 配置生成摘要（内置工具和插件工具统一走此路径）
   const { icon, detail } = (() => {
     const ic = 'text-text-tertiary flex-shrink-0'
     const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-    switch (toolName) {
-      case 'bash': {
-        const line = str(args?.command).split('\n')[0]
-        const isDocker = details?.type === 'bash' && details.docker
+
+    // bash：Docker 执行时特殊图标；read：URL 路径特殊图标
+    if (toolName === 'bash') {
+      const line = str(args?.command).split('\n')[0]
+      const isDocker = details?.type === 'bash' && details.docker
+      if (isDocker) {
         return {
-          icon: isDocker ? (
-            <Container size={12} className="text-emerald-500 flex-shrink-0" />
-          ) : (
-            <Terminal size={12} className={ic} />
-          ),
+          icon: <Container size={12} className="text-emerald-500 flex-shrink-0" />,
           detail: line.length > 80 ? line.slice(0, 77) + '...' : line
         }
       }
-      case 'read': {
-        const readPath = str(args?.path)
-        const isUrlPath = /^https?:\/\//i.test(readPath)
+    }
+    if (toolName === 'read') {
+      const readPath = str(args?.path)
+      if (/^https?:\/\//i.test(readPath)) {
         return {
-          icon: isUrlPath ? (
-            <Globe size={12} className={ic} />
-          ) : (
-            <FileText size={12} className={ic} />
-          ),
-          detail: isUrlPath
-            ? readPath.length > 60
-              ? readPath.slice(0, 57) + '...'
-              : readPath
-            : truncatePath(readPath)
+          icon: <Globe size={12} className={ic} />,
+          detail: readPath.length > 60 ? readPath.slice(0, 57) + '...' : readPath
         }
-      }
-      case 'write':
-        return {
-          icon: <FileOutput size={12} className={ic} />,
-          detail: truncatePath(str(args?.path))
-        }
-      case 'edit':
-        return { icon: <FilePen size={12} className={ic} />, detail: truncatePath(str(args?.path)) }
-      case 'ask': {
-        const q = str(args?.question).slice(0, 60)
-        return {
-          icon: <MessageCircleQuestion size={12} className={ic} />,
-          detail: q + (str(args?.question).length > 60 ? '...' : '')
-        }
-      }
-      case 'ls':
-        return { icon: <FolderTree size={12} className={ic} />, detail: str(args?.path) || '.' }
-      case 'grep': {
-        const pat = str(args?.pattern)
-        const inc = args?.include ? ` (${args.include})` : ''
-        return { icon: <Search size={12} className={ic} />, detail: pat + inc }
-      }
-      case 'glob':
-        return { icon: <FileSearch2 size={12} className={ic} />, detail: str(args?.pattern) }
-      case 'ssh': {
-        const action = str(args?.action)
-        const cmd = args?.command ? `: ${str(args.command).split('\n')[0].slice(0, 60)}` : ''
-        return {
-          icon: <Terminal size={12} className="text-sky-500 flex-shrink-0" />,
-          detail: `${action}${cmd}`
-        }
-      }
-      case 'skill':
-        return {
-          icon: <BookOpen size={12} className="text-emerald-400 flex-shrink-0" />,
-          detail: str(args?.name)
-        }
-      default: {
-        // 插件工具：使用 presentation 配置生成摘要
-        if (presentation) {
-          return buildPresentationSummary(presentation, args)
-        }
-        return { icon: <Wrench size={12} className={ic} />, detail: '' }
       }
     }
+
+    // 通用路径：使用 presentation 配置（内置 + 插件工具均已注册）
+    if (presentation) {
+      return buildPresentationSummary(presentation, args)
+    }
+    return { icon: <Wrench size={12} className={ic} />, detail: '' }
   })()
 
   const statusConfig: Record<

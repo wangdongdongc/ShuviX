@@ -197,5 +197,9 @@ registerBuiltinTool({
   defaultEnabled: false,
   getLabel: () => t('tool.lsLabel'),
   getHint: () => t('tool.lsHint'),
-  factory: (ctx) => new ListTool(ctx)
+  factory: (ctx) => new ListTool(ctx),
+  presentation: {
+    icon: 'FolderTree',
+    summaryField: 'path'
+  }
 })

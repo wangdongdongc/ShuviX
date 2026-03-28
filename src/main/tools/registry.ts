@@ -8,6 +8,7 @@
  */
 
 import type { ToolContext } from './types'
+import type { ToolPresentation } from '../../shared/types/toolPresentation'
 
 /** 工具在 UI 中的分组标识 */
 export type BuiltinGroup = 'general' | 'ripgrep' | 'remote' | 'subagent' | 'system'
@@ -17,6 +18,8 @@ export interface BuiltinToolMeta {
   group: BuiltinGroup
   /** 新建会话时是否默认启用 */
   defaultEnabled: boolean
+  /** 隐藏工具不在工具选择器中展示，由系统自动管理 */
+  hidden?: boolean
   getLabel: () => string
   getHint: () => string
   /**
@@ -24,6 +27,8 @@ export interface BuiltinToolMeta {
    * 由 subAgentRegistry 管理其构造。
    */
   factory?: (ctx: ToolContext) => object
+  /** 工具调用的 UI 渲染声明（折叠图标、摘要字段、展开表单项） */
+  presentation?: ToolPresentation
 }
 
 const _entries: BuiltinToolMeta[] = []
@@ -34,4 +39,12 @@ export function registerBuiltinTool(meta: BuiltinToolMeta): void {
 
 export function getBuiltinToolEntries(): readonly BuiltinToolMeta[] {
   return _entries
+}
+
+export function getBuiltinToolPresentations(): Record<string, ToolPresentation> {
+  const result: Record<string, ToolPresentation> = {}
+  for (const meta of _entries) {
+    if (meta.presentation) result[meta.name] = meta.presentation
+  }
+  return result
 }

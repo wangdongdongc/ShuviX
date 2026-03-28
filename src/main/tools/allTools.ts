@@ -20,6 +20,9 @@ import './glob'
 import './ssh'
 import './database'
 
+// Skill 工具（元数据注册；实例化由 agentToolBuilder 负责）
+import './skill'
+
 // 预览面板控制
 import './preview'
 

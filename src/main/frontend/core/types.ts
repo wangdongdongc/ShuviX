@@ -6,6 +6,7 @@
  */
 
 import type { ToolResultDetails } from '../../../shared/types/chatMessage'
+import type { LucideIconName, ThemeColor } from '../../../shared/theme'
 
 // ─── 基础 ──────────────────────────────────────────────
 
@@ -142,29 +143,19 @@ export interface ChatImageDataEvent extends ChatEventBase {
 
 // ─── 资源事件 ──────────────────────────────────────────
 
-/** Docker 容器生命周期事件（轻量通知，不持久化为消息） */
-export interface ChatDockerEvent extends ChatEventBase {
-  type: 'docker_event'
-  action: 'container_created' | 'container_destroyed'
-  containerId?: string
-  image?: string
-  reason?: string
+/** 运行时资源状态信息（前端直接渲染，不理解具体资源类型） */
+export interface RuntimeStatus {
+  label: string
+  icon?: LucideIconName
+  color?: ThemeColor
+  description?: string
 }
 
-/** SSH 连接生命周期事件（轻量通知，不持久化为消息） */
-export interface ChatSshEvent extends ChatEventBase {
-  type: 'ssh_event'
-  action: 'ssh_connected' | 'ssh_disconnected'
-  host?: string
-  port?: number
-  username?: string
-}
-
-/** 插件 runtime 状态变更事件（通用，替代硬编码的 python_event/sql_event） */
-export interface ChatPluginRuntimeEvent extends ChatEventBase {
-  type: 'plugin_runtime_event'
+/** 运行时资源生命周期事件（status 非 null → 激活/更新，null → 销毁） */
+export interface ChatRuntimeEvent extends ChatEventBase {
+  type: 'runtime_event'
   runtimeId: string
-  status: { label: string; icon?: string; color?: string; description?: string } | null
+  status: RuntimeStatus | null
 }
 
 /** 预览面板生命周期事件（轻量通知，不持久化为消息；泛化了原 ChatDesignEvent） */
@@ -173,14 +164,6 @@ export interface ChatPreviewEvent extends ChatEventBase {
   action: 'open' | 'close' | 'server_started' | 'server_stopped'
   url?: string
   title?: string
-}
-
-/** ACP Agent session 生命周期事件（轻量通知，不持久化为消息） */
-export interface ChatAcpEvent extends ChatEventBase {
-  type: 'acp_event'
-  action: 'session_created' | 'session_destroyed'
-  agentName: string
-  displayName: string
 }
 
 // ─── 子智能体 ──────────────────────────────────────────────
@@ -275,11 +258,8 @@ export type ChatEvent =
   | ChatInputRequestEvent
   | ChatCredentialRequestEvent
   | ChatImageDataEvent
-  | ChatDockerEvent
-  | ChatSshEvent
+  | ChatRuntimeEvent
   | ChatPreviewEvent
-  | ChatPluginRuntimeEvent
-  | ChatAcpEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent
   | ChatSubAgentToolStartEvent

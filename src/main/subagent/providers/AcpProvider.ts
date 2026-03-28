@@ -268,13 +268,16 @@ export class AcpProvider implements SubAgentProvider {
       })
       cachedSessions.set(cacheKey, cached)
 
-      // 广播 acp_event: session_created
+      // 广播 runtime_event: ACP session activated
       chatFrontendRegistry.broadcast({
-        type: 'acp_event',
+        type: 'runtime_event',
         sessionId: ctx.sessionId,
-        action: 'session_created',
-        agentName: this.config.name,
-        displayName: this.config.displayName
+        runtimeId: `acp:${this.config.name}`,
+        status: {
+          label: this.config.displayName,
+          icon: 'Bot',
+          color: '#8b5cf6'
+        }
       })
     }
 
@@ -396,11 +399,10 @@ export class AcpProvider implements SubAgentProvider {
       if (cachedSessions.get(cacheKey) === cached) {
         cachedSessions.delete(cacheKey)
         chatFrontendRegistry.broadcast({
-          type: 'acp_event',
+          type: 'runtime_event',
           sessionId: shuvixSessionId,
-          action: 'session_destroyed',
-          agentName: config.name,
-          displayName: config.displayName
+          runtimeId: `acp:${config.name}`,
+          status: null
         })
       }
     })
@@ -549,11 +551,10 @@ function killAndCleanup(cached: CachedAcpSession): void {
   }
 
   chatFrontendRegistry.broadcast({
-    type: 'acp_event',
+    type: 'runtime_event',
     sessionId: cached.shuvixSessionId,
-    action: 'session_destroyed',
-    agentName: cached.config.name,
-    displayName: cached.config.displayName
+    runtimeId: `acp:${cached.config.name}`,
+    status: null
   })
 }
 

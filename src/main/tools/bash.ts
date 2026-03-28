@@ -162,7 +162,17 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
           referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined
         }
       )
-      if (container.isNew) this.ctx.onContainerCreated?.(container.containerId, docker.image)
+      if (container.isNew)
+        this.ctx.emitChatEvent?.({
+          type: 'runtime_event',
+          runtimeId: 'docker',
+          status: {
+            label: docker.image,
+            icon: 'Container',
+            color: '#10b981',
+            description: container.containerId.slice(0, 12)
+          }
+        })
     } catch {
       const status = dockerManager.getDockerStatus()
       if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
@@ -264,5 +274,11 @@ registerBuiltinTool({
   defaultEnabled: true,
   getLabel: () => t('tool.bashLabel'),
   getHint: () => t('tool.bashHint'),
-  factory: (ctx) => new BashTool(ctx)
+  factory: (ctx) => new BashTool(ctx),
+  presentation: {
+    icon: 'Terminal',
+    iconColor: '#eab308',
+    summaryField: 'command',
+    formItems: [{ field: 'command', renderer: { type: 'code', language: 'bash' } }]
+  }
 })

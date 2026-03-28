@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useDialogClose } from '../../hooks/useDialogClose'
 
 interface AddProviderDialogProps {
@@ -112,9 +113,11 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
               onChange={(e) => setApiProtocol(e.target.value as ProviderInfo['apiProtocol'])}
               className="zen-select"
             >
-              <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
-              <option value="anthropic-messages">Anthropic Messages</option>
-              <option value="google-generative-ai">Google Generative AI</option>
+              {API_PROTOCOL_OPTIONS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {t(p.labelKey)}
+                </option>
+              ))}
             </select>
           </div>
         </div>

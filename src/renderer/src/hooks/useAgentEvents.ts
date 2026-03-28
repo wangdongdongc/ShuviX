@@ -208,31 +208,8 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'docker_event':
-        if (event.action === 'container_created') {
-          store.setSessionDocker(sid, {
-            containerId: event.containerId || '',
-            image: event.image || ''
-          })
-        } else {
-          store.setSessionDocker(sid, null)
-        }
-        break
-
-      case 'ssh_event':
-        if (event.action === 'ssh_connected') {
-          store.setSessionSsh(sid, {
-            host: event.host || '',
-            port: event.port || 22,
-            username: event.username || ''
-          })
-        } else {
-          store.setSessionSsh(sid, null)
-        }
-        break
-
-      case 'plugin_runtime_event':
-        store.setPluginRuntime(sid, event.runtimeId, event.status)
+      case 'runtime_event':
+        store.setRuntime(sid, event.runtimeId, event.status)
         break
 
       case 'preview_event':
@@ -249,17 +226,6 @@ export function useAgentEvents(): void {
           usePreviewStore.getState().openPreview(url)
         } else if (event.action === 'close') {
           usePreviewStore.getState().switchToUrl()
-        }
-        break
-
-      case 'acp_event':
-        if (event.action === 'session_created') {
-          store.addSessionAcp(sid, {
-            agentName: event.agentName,
-            displayName: event.displayName
-          })
-        } else {
-          store.removeSessionAcp(sid, event.agentName)
         }
         break
 

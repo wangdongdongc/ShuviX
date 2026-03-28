@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { LucideIconName, ThemeColor } from '../shared/theme'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -146,36 +147,22 @@ declare global {
     type: 'image_data'
     image: string
   }
-  interface ChatDockerEvent extends ChatEventBase {
-    type: 'docker_event'
-    action: 'container_created' | 'container_destroyed'
-    containerId?: string
-    image?: string
-    reason?: string
+  interface RuntimeStatus {
+    label: string
+    icon?: LucideIconName
+    color?: ThemeColor
+    description?: string
   }
-  interface ChatSshEvent extends ChatEventBase {
-    type: 'ssh_event'
-    action: 'ssh_connected' | 'ssh_disconnected'
-    host?: string
-    port?: number
-    username?: string
-  }
-  interface ChatPluginRuntimeEvent extends ChatEventBase {
-    type: 'plugin_runtime_event'
+  interface ChatRuntimeEvent extends ChatEventBase {
+    type: 'runtime_event'
     runtimeId: string
-    status: { label: string; icon?: string; color?: string; description?: string } | null
+    status: RuntimeStatus | null
   }
   interface ChatPreviewEvent extends ChatEventBase {
     type: 'preview_event'
     action: 'open' | 'close' | 'server_started' | 'server_stopped'
     url?: string
     title?: string
-  }
-  interface ChatAcpEvent extends ChatEventBase {
-    type: 'acp_event'
-    action: 'session_created' | 'session_destroyed'
-    agentName: string
-    displayName: string
   }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
@@ -257,11 +244,8 @@ declare global {
     | ChatInputRequestEvent
     | ChatCredentialRequestEvent
     | ChatImageDataEvent
-    | ChatDockerEvent
-    | ChatSshEvent
-    | ChatPluginRuntimeEvent
+    | ChatRuntimeEvent
     | ChatPreviewEvent
-    | ChatAcpEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
     | ChatSubAgentToolStartEvent
@@ -383,7 +367,7 @@ declare global {
     displayName: string
     apiKey: string
     baseUrl: string
-    apiProtocol: 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+    apiProtocol: import('../shared/types/provider').ApiProtocol
     isBuiltin: number
     isEnabled: number
     sortOrder: number
@@ -429,6 +413,8 @@ declare global {
       /** 通知主进程渲染已就绪，可以显示窗口 */
       windowReady: () => void
       onSettingsChanged: (callback: () => void) => () => void
+      onNewChat: (callback: () => void) => () => void
+      onNewProject: (callback: () => void) => () => void
     }
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
@@ -465,12 +451,6 @@ declare global {
         tools: string[]
       }) => Promise<{ success: boolean }>
       onEvent: (callback: (event: ChatEvent) => void) => () => void
-    }
-    acp: {
-      destroySession: (params: {
-        sessionId: string
-        agentName: string
-      }) => Promise<{ success: boolean }>
     }
     provider: {
       listAll: () => Promise<ProviderInfo[]>
@@ -558,14 +538,10 @@ declare global {
     }
     docker: {
       validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
-      sessionStatus: (sessionId: string) => Promise<{ containerId: string; image: string } | null>
-      destroySession: (sessionId: string) => Promise<{ success: boolean }>
     }
-    ssh: {
-      sessionStatus: (
-        sessionId: string
-      ) => Promise<{ host: string; port: number; username: string } | null>
-      disconnectSession: (sessionId: string) => Promise<{ success: boolean }>
+    runtime: {
+      statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
+      destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
     }
     sshCredential: {
       list: () => Promise<SshCredential[]>
@@ -743,8 +719,8 @@ declare global {
         Record<
           string,
           {
-            icon?: string
-            iconColor?: string
+            icon?: LucideIconName
+            iconColor?: ThemeColor
             summaryField?: string
             formItems?: Array<{
               field: string
@@ -754,21 +730,6 @@ declare global {
           }
         >
       >
-      getRuntimeStatuses: (sessionId: string) => Promise<
-        Record<
-          string,
-          {
-            label: string
-            icon?: string
-            color?: string
-            description?: string
-          }
-        >
-      >
-      destroyRuntime: (params: {
-        sessionId: string
-        runtimeId: string
-      }) => Promise<{ success: boolean }>
     }
     skill: {
       list: () => Promise<Skill[]>

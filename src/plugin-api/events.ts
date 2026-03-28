@@ -7,6 +7,8 @@
  * 所有事件结构在此完整定义，每增加新的插件需求，在此添加具体的事件类型。
  */
 
+import type { LucideIconName, ThemeColor } from '../shared/theme'
+
 /** 插件请求打开预览面板 */
 export interface PluginPreviewPanelOpenEvent {
   type: 'plugin:preview_panel_open'
@@ -39,10 +41,10 @@ export interface PluginPreviewServerStoppedEvent {
 export interface PluginRuntimeInfo {
   /** 状态标签显示名（如 'Python WASM'） */
   label: string
-  /** lucide 图标名（如 'Code'） */
-  icon?: string
-  /** 图标/标签颜色（CSS 颜色值，如 '#eab308'） */
-  color?: string
+  /** 前端已注册的 lucide 图标名 */
+  icon?: LucideIconName
+  /** 主题调色板颜色 */
+  color?: ThemeColor
   /** 附加描述（如 'memory mode'，显示在标签内） */
   description?: string
 }

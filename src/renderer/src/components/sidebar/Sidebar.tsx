@@ -7,7 +7,6 @@ import {
   Pencil,
   ChevronDown,
   ChevronRight,
-  FolderPlus,
   Globe,
   MessageCircle,
   RotateCcw,
@@ -230,34 +229,30 @@ export function Sidebar(): React.JSX.Element {
     </div>
   )
 
+  // 监听菜单栏「新建对话 / 新建项目」
+  useEffect(() => {
+    const cleanupChat = window.api.app.onNewChat(() => {
+      const active = sessions.find((s) => s.id === activeSessionId)
+      handleNewChat(active?.projectId ?? null)
+    })
+    const cleanupProject = window.api.app.onNewProject(() => {
+      setShowCreateProject(true)
+    })
+    return () => {
+      cleanupChat()
+      cleanupProject()
+    }
+  }) // 每次 render 重新绑定以捕获最新 sessions/activeSessionId
+
   return (
     <div className="flex flex-col h-full bg-bg-primary">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div
-        className={`titlebar-drag flex items-center justify-between pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
+        className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
       >
         <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">
           {t('sidebar.title')}
         </h1>
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => {
-              const active = sessions.find((s) => s.id === activeSessionId)
-              handleNewChat(active?.projectId ?? null)
-            }}
-            className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-accent transition-colors"
-            title={t('sidebar.newChat')}
-          >
-            <MessageSquarePlus size={15} />
-          </button>
-          <button
-            onClick={() => setShowCreateProject(true)}
-            className="titlebar-no-drag p-1 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-amber-400 transition-colors"
-            title={t('sidebar.newProject')}
-          >
-            <FolderPlus size={15} />
-          </button>
-        </div>
       </div>
 
       {/* 会话列表 */}

@@ -34,12 +34,6 @@ export class PreviewTool extends BaseTool<typeof PreviewParamsSchema> {
   readonly description =
     'Control the preview panel. Use "open" with a URL to display a web page or local dev server in the preview panel. Use "close" to hide the panel. Typically used after the `esbuild` tool returns a dev server URL.'
   readonly parameters = PreviewParamsSchema
-  readonly presentation = {
-    icon: 'Monitor',
-    iconColor: '#60a5fa',
-    summaryField: 'action'
-  }
-
   constructor(private ctx: ToolContext) {
     super()
   }
@@ -68,17 +62,13 @@ export class PreviewTool extends BaseTool<typeof PreviewParamsSchema> {
           details: undefined
         }
       }
-      if (this.ctx.emitPreviewEvent) {
-        this.ctx.emitPreviewEvent('open', params.url)
-      }
+      this.ctx.emitChatEvent?.({ type: 'preview_event', action: 'open', url: params.url })
       return {
         content: [{ type: 'text' as const, text: `Preview panel opened at ${params.url}.` }],
         details: undefined
       }
     } else {
-      if (this.ctx.emitPreviewEvent) {
-        this.ctx.emitPreviewEvent('close')
-      }
+      this.ctx.emitChatEvent?.({ type: 'preview_event', action: 'close' })
       return {
         content: [{ type: 'text' as const, text: 'Preview panel closed.' }],
         details: undefined
@@ -93,5 +83,10 @@ registerBuiltinTool({
   defaultEnabled: false,
   getLabel: () => t('tool.previewLabel'),
   getHint: () => t('tool.previewHint'),
-  factory: (ctx) => new PreviewTool(ctx)
+  factory: (ctx) => new PreviewTool(ctx),
+  presentation: {
+    icon: 'Monitor',
+    iconColor: '#60a5fa',
+    summaryField: 'action'
+  }
 })

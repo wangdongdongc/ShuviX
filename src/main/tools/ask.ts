@@ -94,5 +94,10 @@ registerBuiltinTool({
   defaultEnabled: true,
   getLabel: () => t('tool.askLabel'),
   getHint: () => t('tool.askHint'),
-  factory: (ctx) => new AskTool(ctx)
+  factory: (ctx) => new AskTool(ctx),
+  presentation: {
+    icon: 'MessageCircleQuestion',
+    iconColor: '#60a5fa',
+    summaryField: 'question'
+  }
 })

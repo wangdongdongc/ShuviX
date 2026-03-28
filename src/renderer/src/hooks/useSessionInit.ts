@@ -78,15 +78,9 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setThinkingLevel(restoredLevel)
 
       // 7. 查询 Docker/SSH/Plugin 实时资源状态
-      const [dockerInfo, sshInfo, pluginRuntimes] = await Promise.all([
-        window.api.docker.sessionStatus(activeSessionId),
-        window.api.ssh.sessionStatus(activeSessionId),
-        window.api.plugin.getRuntimeStatuses(activeSessionId)
-      ])
+      const runtimes = await window.api.runtime.statuses(activeSessionId)
       if (!cancelled) {
-        store.setSessionDocker(activeSessionId, dockerInfo)
-        store.setSessionSsh(activeSessionId, sshInfo)
-        store.setPluginRuntimes(activeSessionId, pluginRuntimes)
+        store.setRuntimes(activeSessionId, runtimes)
       }
     }
     loadSession()

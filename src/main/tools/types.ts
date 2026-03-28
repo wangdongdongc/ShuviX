@@ -10,6 +10,11 @@ import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
 import { getTempWorkspace } from '../utils/paths'
 import type { ReferenceDir } from '../types'
+import type { ChatEvent } from '../frontend/core/types'
+
+/** ChatEvent 去掉 sessionId 后的有效载荷（分布式 Omit，保留判别联合结构） */
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never
+export type ChatEventPayload = DistributiveOmit<ChatEvent, 'sessionId'>
 
 /** 中止操作的统一错误消息（用于 sentinel 检查） */
 export const TOOL_ABORTED = 'Aborted'
@@ -34,8 +39,6 @@ export interface ToolContext {
   sessionId: string
   /** 并行执行协调器的 key 覆盖（默认使用 sessionId；子智能体使用独立 key 避免冲突） */
   parallelSessionKey?: string
-  /** Docker 容器创建时回调 */
-  onContainerCreated?: (containerId: string, image: string) => void
   /** 沙箱模式下 bash/ssh 命令需用户确认，返回 approved=true 表示允许，reason 为用户拒绝时附加的说明 */
   requestApproval?: (
     toolCallId: string,
@@ -47,12 +50,8 @@ export interface ToolContext {
   requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
   /** ssh 工具：请求用户输入 SSH 凭据（密码或密钥），凭据不经过大模型 */
   requestSshCredentials?: (toolCallId: string) => Promise<SshCredentialPayload | null>
-  /** ssh 连接建立时回调 */
-  onSshConnected?: (host: string, port: number, username: string) => void
-  /** ssh 连接断开时回调 */
-  onSshDisconnected?: (host: string, port: number, username: string) => void
-  /** preview 工具：控制预览面板的显示（open/close） */
-  emitPreviewEvent?: (action: 'open' | 'close', url?: string) => void
+  /** 工具运行时单向通知（容器、SSH 连接、预览面板等生命周期事件） */
+  emitChatEvent?: (event: ChatEventPayload) => void
 }
 
 /** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */

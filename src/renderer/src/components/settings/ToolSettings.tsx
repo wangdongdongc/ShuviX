@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 
 /** 子分类标识 */
-type ToolSubTab = 'bash' | 'ssh' | 'remote_db'
+type ToolSubTab = 'bash' | 'ssh' | 'database'
 
 /** 内存预设选项 */
 const MEMORY_OPTIONS = ['256m', '512m', '1g', '2g', ''] as const
@@ -102,9 +102,9 @@ export function ToolSettings(): React.JSX.Element {
         />
         <SubTabButton
           icon={<Database size={13} />}
-          label="remote_db"
-          active={subTab === 'remote_db'}
-          onClick={() => setSubTab('remote_db')}
+          label="database"
+          active={subTab === 'database'}
+          onClick={() => setSubTab('database')}
         />
       </div>
 
@@ -112,7 +112,7 @@ export function ToolSettings(): React.JSX.Element {
       <div className="flex-1 min-w-0 overflow-y-auto">
         {subTab === 'bash' && <BashToolPanel />}
         {subTab === 'ssh' && <SshToolPanel />}
-        {subTab === 'remote_db' && <DatabaseToolPanel />}
+        {subTab === 'database' && <DatabaseToolPanel />}
       </div>
     </div>
   )

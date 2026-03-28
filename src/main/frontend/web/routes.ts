@@ -297,57 +297,33 @@ export function createApiRouter(): Router {
     })
   )
 
-  // ─── 资源操作 ──────────────────────────────────
+  // ─── 运行时资源 ──────────────────────────────────
 
   router.get(
-    '/sessions/:id/docker',
+    '/sessions/:id/runtimes',
     modeGuard('readonly'),
     wrapRoute((req, res) => {
       try {
-        res.json(chatGateway.getDockerStatus(getSessionId(req)))
+        res.json(chatGateway.getRuntimeStatuses(getSessionId(req)))
       } catch (e) {
-        log.warn(`GET docker 失败: ${e}`)
+        log.warn(`GET runtimes 失败: ${e}`)
         res.status(500).json({ error: 'Internal error' })
       }
     })
   )
 
   router.post(
-    '/sessions/:id/docker/destroy',
+    '/sessions/:id/runtimes/:runtimeId/destroy',
     modeGuard('full'),
     wrapRoute(async (req, res) => {
       try {
-        const result = await chatGateway.destroyDocker(getSessionId(req))
+        const result = await chatGateway.destroyRuntime(
+          getSessionId(req),
+          req.params.runtimeId as string
+        )
         res.json(result)
       } catch (e) {
-        log.warn(`POST docker/destroy 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.get(
-    '/sessions/:id/ssh',
-    modeGuard('readonly'),
-    wrapRoute((req, res) => {
-      try {
-        res.json(chatGateway.getSshStatus(getSessionId(req)))
-      } catch (e) {
-        log.warn(`GET ssh 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.post(
-    '/sessions/:id/ssh/disconnect',
-    modeGuard('full'),
-    wrapRoute(async (req, res) => {
-      try {
-        const result = await chatGateway.disconnectSsh(getSessionId(req))
-        res.json(result)
-      } catch (e) {
-        log.warn(`POST ssh/disconnect 失败: ${e}`)
+        log.warn(`POST runtimes/destroy 失败: ${e}`)
         res.status(500).json({ error: 'Internal error' })
       }
     })

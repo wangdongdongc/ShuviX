@@ -581,5 +581,9 @@ registerBuiltinTool({
   defaultEnabled: true,
   getLabel: () => t('tool.readLabel'),
   getHint: () => t('tool.readHint'),
-  factory: (ctx) => new ReadTool(ctx)
+  factory: (ctx) => new ReadTool(ctx),
+  presentation: {
+    icon: 'FileText',
+    summaryField: 'path'
+  }
 })

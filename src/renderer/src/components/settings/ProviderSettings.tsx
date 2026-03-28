@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   TriangleAlert
 } from 'lucide-react'
+import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
@@ -370,9 +371,11 @@ export function ProviderSettings(): React.JSX.Element {
                         onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
                         className="zen-select"
                       >
-                        <option value="openai-completions">{t('settings.protocolOpenAI')}</option>
-                        <option value="anthropic-messages">Anthropic Messages</option>
-                        <option value="google-generative-ai">Google Generative AI</option>
+                        {API_PROTOCOL_OPTIONS.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {t(p.labelKey)}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   )}

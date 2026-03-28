@@ -162,10 +162,10 @@ export interface SshToolDetails {
   host?: string
 }
 
-/** remote_db 工具详情 */
+/** database 工具详情 */
 export interface DatabaseToolDetails {
-  type: 'remote_db'
-  action: 'connect' | 'query' | 'disconnect' | 'list_tables' | 'describe_table'
+  type: 'database'
+  action: 'connect' | 'query' | 'disconnect'
   success?: boolean
   credentialName?: string
   error?: string
@@ -246,9 +246,9 @@ export interface PythonToolDetails {
   executionTime?: number
 }
 
-/** local_db 工具详情 */
+/** postgres 工具详情 */
 export interface SqlToolDetails {
-  type: 'local_db'
+  type: 'postgres'
   hasError: boolean
   truncated: boolean
   rowCount?: number

@@ -157,5 +157,9 @@ registerBuiltinTool({
   defaultEnabled: false,
   getLabel: () => t('tool.globLabel'),
   getHint: () => t('tool.globHint'),
-  factory: (ctx) => new GlobTool(ctx)
+  factory: (ctx) => new GlobTool(ctx),
+  presentation: {
+    icon: 'FileSearch2',
+    summaryField: 'pattern'
+  }
 })

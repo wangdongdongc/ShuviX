@@ -5,12 +5,7 @@
 
 import { Type } from '@sinclair/typebox'
 import { t } from '../../shared/node/i18n'
-import type {
-  PluginTool,
-  PluginContext,
-  AgentToolResult,
-  PluginToolPresentation
-} from '../../plugin-api'
+import type { PluginTool, PluginContext, AgentToolResult, ToolPresentation } from '../../plugin-api'
 import {
   truncateTail,
   formatSize,
@@ -52,12 +47,13 @@ export class PyodideTool implements PluginTool<typeof PythonParamsSchema> {
 - The last expression value is automatically displayed (no need for print())
 - Variables and imports persist across multiple calls within the same session (use \`_\` to reference the last result)
 - The Python environment is Pyodide (WASM), not native Python. Standard library is available, but some C-extension modules (multiprocessing, ctypes, etc.) are not
-- Pre-installed packages: pyyaml, beautifulsoup4, regex, python-dateutil, pytz — import them directly (e.g. \`import yaml\`, \`from bs4 import BeautifulSoup\`)
+- Pre-installed packages: pyyaml, beautifulsoup4, regex, python-dateutil, pytz, lxml, cssselect, pillow, pymupdf, xlrd, python-calamine, openpyxl, python-docx, python-pptx — import them directly
+- Office/document processing: use pymupdf for PDF (\`import pymupdf\`), openpyxl for Excel .xlsx read/write (\`from openpyxl import load_workbook\`), xlrd/python-calamine for legacy .xls and fast reading, python-docx for Word .docx (\`from docx import Document\`), python-pptx for PowerPoint (\`from pptx import Presentation\`)
 - To install additional packages, use the \`packages\` parameter of this tool (e.g. \`packages: ["pandas"]\`). Do NOT use micropip, pip, or pyodide.loadPackage in code — they will fail. Only pure-Python PyPI packages are supported
 - The working directory is set to the project root, so relative paths work (e.g. open('data.csv')). Absolute paths also work
 - Use this tool for data processing, calculations, scripting, and any task that benefits from Python`
   readonly parameters = PythonParamsSchema
-  readonly presentation: PluginToolPresentation = {
+  readonly presentation: ToolPresentation = {
     icon: 'Code',
     iconColor: '#eab308',
     summaryField: 'code',

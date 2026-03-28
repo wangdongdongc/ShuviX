@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { pluginRegistry } from '../services/pluginRegistry'
+import { getBuiltinToolPresentations } from '../tools/registry'
 
 export function registerPluginHandlers(): void {
   ipcMain.on('preview:start', (_event, params: { sessionId: string; workingDir: string }) => {
@@ -14,8 +15,11 @@ export function registerPluginHandlers(): void {
     return pluginRegistry.getAllPurposes()
   })
 
-  ipcMain.handle('plugin:toolPresentations', () => {
-    return pluginRegistry.getAllToolPresentations()
+  ipcMain.handle('tools:presentations', () => {
+    return {
+      ...getBuiltinToolPresentations(),
+      ...pluginRegistry.getAllToolPresentations()
+    }
   })
 
   ipcMain.handle('plugin:getRuntimeStatuses', (_event, sessionId: string) => {

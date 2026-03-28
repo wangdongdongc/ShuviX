@@ -163,7 +163,7 @@ export function ToolPicker(): React.JSX.Element | null {
           <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">
             {t('input.tools')}
           </div>
-          <div className="py-1">
+          <div className="py-1 max-h-[60vh] overflow-y-auto">
             <ToolSelectList
               tools={allTools}
               enabledTools={enabledTools}

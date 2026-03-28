@@ -153,31 +153,17 @@ export function registerSessionHandlers(): void {
     return result.filePaths[0]
   })
 
-  /** 查询指定 session 的 Docker 容器状态 */
-  ipcMain.handle('docker:sessionStatus', (_event, sessionId: string) =>
+  /** 查询指定 session 的所有运行时资源状态 */
+  ipcMain.handle('runtime:statuses', (_event, sessionId: string) =>
     operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.getDockerStatus(sessionId)
+      chatGateway.getRuntimeStatuses(sessionId)
     )
   )
 
-  /** 查询指定 session 的 SSH 连接状态 */
-  ipcMain.handle('ssh:sessionStatus', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.getSshStatus(sessionId)
-    )
-  )
-
-  /** 手动销毁指定 session 的 Docker 容器 */
-  ipcMain.handle('docker:destroySession', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.destroyDocker(sessionId)
-    )
-  )
-
-  /** 手动断开指定 session 的 SSH 连接 */
-  ipcMain.handle('ssh:disconnectSession', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.disconnectSsh(sessionId)
+  /** 销毁指定运行时资源 */
+  ipcMain.handle('runtime:destroy', (_event, params: { sessionId: string; runtimeId: string }) =>
+    operationContext.run(createElectronContext(params.sessionId), () =>
+      chatGateway.destroyRuntime(params.sessionId, params.runtimeId)
     )
   )
 }

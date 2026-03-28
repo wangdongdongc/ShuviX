@@ -191,9 +191,25 @@ function setupApplicationMenu(): void {
           }
         ]
       : []),
+    // 文件菜单
+    {
+      label: t('menu.file'),
+      submenu: [
+        {
+          label: t('sidebar.newChat'),
+          accelerator: 'CommandOrControl+N',
+          click: () => mainWindow?.webContents.send('app:new-chat')
+        },
+        {
+          label: t('sidebar.newProject'),
+          accelerator: 'CommandOrControl+Shift+N',
+          click: () => mainWindow?.webContents.send('app:new-project')
+        }
+      ]
+    },
     // 编辑菜单（系统常用快捷键：撤销、重做、剪切、复制、粘贴、全选、删除）
     {
-      label: 'Edit',
+      label: t('menu.edit'),
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -209,7 +225,7 @@ function setupApplicationMenu(): void {
     },
     // 窗口菜单
     {
-      label: 'Window',
+      label: t('menu.window'),
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
@@ -221,7 +237,7 @@ function setupApplicationMenu(): void {
     ...(is.dev
       ? [
           {
-            label: 'Dev',
+            label: t('menu.dev'),
             submenu: [
               { role: 'toggleDevTools' as const },
               { role: 'reload' as const },

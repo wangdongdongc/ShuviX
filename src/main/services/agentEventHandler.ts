@@ -8,7 +8,7 @@ import { isCommandAllowedUnified } from '../tools/utils/allowList'
 import { dockerManager } from './dockerManager'
 import { parallelCoordinator } from './parallelExecution'
 import type { Message, MessageMetadata, ToolResultDetails } from '../types'
-import type { ChatEvent } from '../frontend'
+import type { ChatEvent, RuntimeStatus } from '../frontend'
 import { createLogger } from '../logger'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -95,10 +95,7 @@ export interface SessionEventHandlerContext {
   state: SessionEventState
   broadcastEvent: (event: ChatEvent) => void
   persistStreamBuffer: (extraMeta?: MessageMetadata) => Message | null
-  emitDockerEvent: (
-    action: 'container_created' | 'container_destroyed',
-    extra?: { containerId?: string; image?: string; reason?: string }
-  ) => void
+  emitRuntimeEvent: (runtimeId: string, status: RuntimeStatus | null) => void
 }
 
 // ─── Handler 实现 ────────────────────────────────────────
@@ -134,11 +131,8 @@ function handleAgentEnd(
   ctx.state.preEmittedToolCalls.clear()
   ctx.state.toolUseMessageIds.clear()
   // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
-  dockerManager.scheduleDestroy(ctx.sessionId, (containerId) => {
-    ctx.emitDockerEvent('container_destroyed', {
-      containerId: containerId.slice(0, 12),
-      reason: 'idle'
-    })
+  dockerManager.scheduleDestroy(ctx.sessionId, () => {
+    ctx.emitRuntimeEvent('docker', null)
   })
   // 检查 agent_end 中的消息是否携带错误信息
   const endMessages = event.messages

@@ -6,7 +6,7 @@
 
 import { Type } from '@sinclair/typebox'
 import { t } from '../../shared/node/i18n'
-import type { PluginTool, PluginContext, AgentToolResult } from '../../plugin-api'
+import type { PluginTool, PluginContext, AgentToolResult, ToolPresentation } from '../../plugin-api'
 import type { ProjectManager } from './projectManager'
 import type { BundlerService } from './bundlerService'
 
@@ -53,7 +53,7 @@ The design project supports:
 - Auto-refresh on file changes via write/edit tools`
 
   readonly parameters = EsbuildParamsSchema
-  readonly presentation = {
+  readonly presentation: ToolPresentation = {
     icon: 'Palette',
     iconColor: '#f472b6',
     summaryField: 'action'

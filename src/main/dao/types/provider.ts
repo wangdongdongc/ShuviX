@@ -1,5 +1,5 @@
-/** API 协议类型（用户可选） */
-export type ApiProtocol = 'openai-completions' | 'anthropic-messages' | 'google-generative-ai'
+export type { ApiProtocol } from '../../../shared/types/provider'
+import type { ApiProtocol } from '../../../shared/types/provider'
 
 /** 提供商数据结构（对应 DB 表 providers） */
 export interface Provider {

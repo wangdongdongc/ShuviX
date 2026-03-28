@@ -186,5 +186,14 @@ registerBuiltinTool({
   defaultEnabled: true,
   getLabel: () => t('tool.editLabel'),
   getHint: () => t('tool.editHint'),
-  factory: (ctx) => new EditTool(ctx)
+  factory: (ctx) => new EditTool(ctx),
+  presentation: {
+    icon: 'FilePen',
+    summaryField: 'file_path',
+    formItems: [
+      { field: 'file_path' },
+      { field: 'old_string', renderer: { type: 'code', language: 'typescript' } },
+      { field: 'new_string', renderer: { type: 'code', language: 'typescript' } }
+    ]
+  }
 })

@@ -328,7 +328,7 @@ class McpService {
         name: `mcp:${s.name}`,
         label: s.name,
         description: `${toolCount} tool(s)`,
-        group: s.name,
+        group: `mcp:${s.name}`,
         serverId: s.id,
         serverStatus: status
       }

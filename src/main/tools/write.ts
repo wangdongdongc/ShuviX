@@ -121,5 +121,13 @@ registerBuiltinTool({
   defaultEnabled: true,
   getLabel: () => t('tool.writeLabel'),
   getHint: () => t('tool.writeHint'),
-  factory: (ctx) => new WriteTool(ctx)
+  factory: (ctx) => new WriteTool(ctx),
+  presentation: {
+    icon: 'FileOutput',
+    summaryField: 'path',
+    formItems: [
+      { field: 'path' },
+      { field: 'content', renderer: { type: 'code', language: 'typescript' } }
+    ]
+  }
 })

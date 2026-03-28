@@ -1,28 +1,15 @@
 import { useTranslation } from 'react-i18next'
-import {
-  Bot,
-  Container,
-  Globe,
-  MessageCircle,
-  Terminal,
-  TriangleAlert,
-  X,
-  icons
-} from 'lucide-react'
+import { Globe, MessageCircle, TriangleAlert, X, icons } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 
 interface StatusBannerProps {
   sessionId: string
 }
 
-/** Docker/SSH/ACP/分享 实时状态横幅 — 紧贴 titlebar 下方 */
+/** 运行时资源 / 分享 / 审批状态横幅 — 紧贴 titlebar 下方 */
 export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
   const { t } = useTranslation()
-  const resources = useChatStore((s) => s.sessionResources[sessionId])
-  const docker = resources?.docker
-  const ssh = resources?.ssh
-  const acpAgents = resources?.acp
-  const pluginRuntimes = resources?.pluginRuntimes
+  const runtimes = useChatStore((s) => s.sessionResources[sessionId]?.runtimes)
 
   const sessionSettings = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === sessionId)?.settings
@@ -33,28 +20,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
 
-  if (
-    !docker &&
-    !ssh &&
-    (!acpAgents || acpAgents.length === 0) &&
-    !pluginRuntimes &&
-    !autoApprove &&
-    !lanShareMode &&
-    !telegramBinding
-  )
-    return null
+  const runtimeEntries = runtimes ? Object.entries(runtimes) : []
 
-  const handleDestroyDocker = async (): Promise<void> => {
-    await window.api.docker.destroySession(sessionId)
-  }
-
-  const handleDisconnectSsh = async (): Promise<void> => {
-    await window.api.ssh.disconnectSession(sessionId)
-  }
-
-  const handleDestroyAcp = async (agentName: string): Promise<void> => {
-    await window.api.acp.destroySession({ sessionId, agentName })
-  }
+  if (runtimeEntries.length === 0 && !autoApprove && !lanShareMode && !telegramBinding) return null
 
   /** 点击关闭命令免审批 */
   const handleDisableAutoApprove = async (): Promise<void> => {
@@ -80,61 +48,9 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   return (
     <div className="flex-shrink-0 flex items-center gap-2 px-4 py-1 bg-bg-secondary/60 border-b border-border-secondary/30">
-      {docker && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-500">
-          <Container size={12} />
-          <span
-            className="truncate max-w-[180px]"
-            title={`${docker.image} (${docker.containerId})`}
-          >
-            {docker.image}
-            <span className="ml-1 opacity-60">{docker.containerId.slice(0, 12)}</span>
-          </span>
-          <button
-            onClick={handleDestroyDocker}
-            className="ml-0.5 rounded hover:bg-emerald-500/20 transition-colors p-0.5"
-            title={t('chat.destroyContainer')}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      )}
-      {ssh && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-sky-500/10 text-sky-500">
-          <Terminal size={12} />
-          <span
-            className="truncate max-w-[160px]"
-            title={`${ssh.username}@${ssh.host}:${ssh.port}`}
-          >
-            {ssh.username}@{ssh.host}
-          </span>
-          <button
-            onClick={handleDisconnectSsh}
-            className="ml-0.5 rounded hover:bg-sky-500/20 transition-colors p-0.5"
-            title={t('chat.disconnectSsh')}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      )}
-      {acpAgents?.map((agent) => (
-        <span
-          key={agent.agentName}
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs bg-violet-500/10 text-violet-500"
-        >
-          <Bot size={12} />
-          <span className="truncate max-w-[160px]">{agent.displayName}</span>
-          <button
-            onClick={() => handleDestroyAcp(agent.agentName)}
-            className="ml-0.5 rounded hover:bg-violet-500/20 transition-colors p-0.5"
-            title={t('chat.destroyAcp')}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      ))}
-      {pluginRuntimes &&
-        Object.entries(pluginRuntimes).map(([runtimeId, info]) => (
+      {runtimeEntries.map(([runtimeId, info]) => {
+        const IconComponent = info.icon ? icons[info.icon as keyof typeof icons] : null
+        return (
           <span
             key={runtimeId}
             className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs"
@@ -150,22 +66,18 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
                   }
             }
           >
-            {(() => {
-              const IconComponent = info.icon ? icons[info.icon as keyof typeof icons] : null
-              return IconComponent ? <IconComponent size={12} /> : null
-            })()}
-            <span>{info.label}</span>
+            {IconComponent && <IconComponent size={12} />}
+            <span className="truncate max-w-[160px]">{info.label}</span>
             {info.description && <span className="opacity-60">({info.description})</span>}
             <button
-              onClick={() => {
-                window.api.plugin.destroyRuntime({ sessionId, runtimeId })
-              }}
+              onClick={() => window.api.runtime.destroy({ sessionId, runtimeId })}
               className="ml-0.5 rounded hover:bg-current/20 transition-colors p-0.5"
             >
               <X size={10} />
             </button>
           </span>
-        ))}
+        )
+      })}
       {autoApprove && (
         <button
           onClick={handleDisableAutoApprove}

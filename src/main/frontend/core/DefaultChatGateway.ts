@@ -1,4 +1,5 @@
 import type { ChatGateway } from './ChatGateway'
+import type { RuntimeStatus } from './types'
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
 import type { SshCredentialPayload } from '../../tools/types'
 import { sessionService } from '../../services/sessionService'
@@ -7,9 +8,11 @@ import { getBuiltinToolEntries } from '../../tools/registry'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
+import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { pluginRegistry } from '../../services/pluginRegistry'
+import { subAgentRegistry } from '../../subagent'
 import type { InlineToken } from '../../../shared/types/chatMessage'
 import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
@@ -127,42 +130,84 @@ export class DefaultChatGateway implements ChatGateway {
     sessionService.invalidateAgent(sessionId)
   }
 
-  // ─── 资源操作 ──────────────────────────────────
+  // ─── 运行时资源 ──────────────────────────────────
 
-  getDockerStatus(sessionId: string): { containerId: string; image: string } | null {
-    return dockerManager.getContainerInfo(sessionId)
+  getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus> {
+    const result: Record<string, RuntimeStatus> = {}
+
+    const docker = dockerManager.getContainerInfo(sessionId)
+    if (docker) {
+      result['docker'] = {
+        label: docker.image,
+        icon: 'Container',
+        color: '#10b981',
+        description: docker.containerId.slice(0, 12)
+      }
+    }
+
+    const ssh = sshManager.getConnectionInfo(sessionId)
+    if (ssh) {
+      result['ssh'] = {
+        label: `${ssh.username}@${ssh.host}`,
+        icon: 'Terminal',
+        color: '#38bdf8'
+      }
+    }
+
+    const db = dbManager.getConnectionInfo(sessionId)
+    if (db) {
+      result['db'] = {
+        label: `${db.dbType} ${db.database}`,
+        icon: 'Database',
+        color: '#f59e0b',
+        description: db.host
+      }
+    }
+
+    const pluginRuntimes = pluginRegistry.getRuntimeStatuses(sessionId)
+    for (const [runtimeId, info] of Object.entries(pluginRuntimes)) {
+      result[runtimeId] = info
+    }
+
+    // ACP sessions are event-driven only (no central status store)
+
+    return result
   }
 
-  async destroyDocker(sessionId: string): Promise<{ success: boolean }> {
-    const containerId = await dockerManager.destroyContainer(sessionId)
-    if (containerId) {
+  async destroyRuntime(sessionId: string, runtimeId: string): Promise<{ success: boolean }> {
+    const broadcastDestroy = (): void => {
       chatFrontendRegistry.broadcast({
-        type: 'docker_event',
+        type: 'runtime_event',
         sessionId,
-        action: 'container_destroyed',
-        containerId: containerId.slice(0, 12),
-        reason: 'manual'
+        runtimeId,
+        status: null
       })
     }
-    return { success: !!containerId }
-  }
 
-  getSshStatus(sessionId: string): { host: string; port: number; username: string } | null {
-    return sshManager.getConnectionInfo(sessionId)
-  }
-
-  async disconnectSsh(sessionId: string): Promise<{ success: boolean }> {
-    const info = sshManager.getConnectionInfo(sessionId)
-    if (!info) return { success: false }
-    await sshManager.disconnect(sessionId)
-    chatFrontendRegistry.broadcast({
-      type: 'ssh_event',
-      sessionId,
-      action: 'ssh_disconnected',
-      host: info.host,
-      port: info.port,
-      username: info.username
-    })
+    if (runtimeId === 'docker') {
+      const containerId = await dockerManager.destroyContainer(sessionId)
+      if (containerId) broadcastDestroy()
+      return { success: !!containerId }
+    }
+    if (runtimeId === 'ssh') {
+      if (!sshManager.getConnectionInfo(sessionId)) return { success: false }
+      await sshManager.disconnect(sessionId)
+      broadcastDestroy()
+      return { success: true }
+    }
+    if (runtimeId === 'db') {
+      if (!dbManager.getConnectionInfo(sessionId)) return { success: false }
+      await dbManager.disconnect(sessionId)
+      broadcastDestroy()
+      return { success: true }
+    }
+    if (runtimeId.startsWith('acp:')) {
+      subAgentRegistry.get(runtimeId.slice(4))?.destroy(sessionId)
+      broadcastDestroy()
+      return { success: true }
+    }
+    // Plugin runtimes
+    pluginRegistry.dispatchEvent({ type: 'runtime:destroy', sessionId, runtimeId })
     return { success: true }
   }
 
@@ -185,7 +230,7 @@ export class DefaultChatGateway implements ChatGateway {
     }
     /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
     const builtinTools = getBuiltinToolEntries()
-      .filter((e) => e.group !== 'system')
+      .filter((e) => e.group !== 'system' && !e.hidden)
       .map((e) => ({
         name: e.name,
         label: e.getLabel(),

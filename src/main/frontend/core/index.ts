@@ -11,13 +11,12 @@ export type {
   ChatInputRequestEvent,
   ChatCredentialRequestEvent,
   ChatImageDataEvent,
-  ChatDockerEvent,
-  ChatSshEvent,
+  ChatRuntimeEvent,
+  RuntimeStatus,
   ChatSubAgentStartEvent,
   ChatSubAgentEndEvent,
   ChatSubAgentTextDeltaEvent,
   ChatSubAgentThinkingDeltaEvent,
-  ChatAcpEvent,
   ChatErrorEvent,
   ChatTokenUsage
 } from './types'

@@ -5,12 +5,7 @@
 
 import { Type } from '@sinclair/typebox'
 import { t } from '../../shared/node/i18n'
-import type {
-  PluginTool,
-  PluginContext,
-  AgentToolResult,
-  PluginToolPresentation
-} from '../../plugin-api'
+import type { PluginTool, PluginContext, AgentToolResult, ToolPresentation } from '../../plugin-api'
 import {
   truncateTail,
   formatSize,
@@ -41,7 +36,7 @@ const SqlParamsSchema = Type.Object({
 })
 
 export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
-  readonly name = 'local_db'
+  readonly name = 'postgres'
   get label(): string {
     return t('tool.localDbLabel')
   }
@@ -57,7 +52,7 @@ export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
 - Best for: structured data analysis, CSV/JSON import & query, data modeling/prototyping, aggregations & pivots, fuzzy/similarity search, vector similarity (RAG)
 - Prefer this tool over Python for tabular data analysis — SQL is more concise and less error-prone for aggregation, filtering, joining, and pivoting`
   readonly parameters = SqlParamsSchema
-  readonly presentation: PluginToolPresentation = {
+  readonly presentation: ToolPresentation = {
     icon: 'Database',
     iconColor: '#3b82f6',
     summaryField: 'sql',
@@ -163,7 +158,7 @@ export class PgliteTool implements PluginTool<typeof SqlParamsSchema> {
       return {
         content: [{ type: 'text' as const, text }],
         details: {
-          type: 'local_db',
+          type: 'postgres',
           hasError,
           truncated: truncated.truncated,
           rowCount: result.rowCount,

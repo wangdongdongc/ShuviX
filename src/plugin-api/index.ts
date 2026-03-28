@@ -8,9 +8,12 @@
 // 工具接口
 export type {
   PluginTool,
-  PluginToolPresentation,
-  PluginToolFormItem,
-  PluginFormItemRenderer
+  ToolPresentation,
+  ToolFormItem,
+  ToolFormItemRenderer,
+  // 向后兼容别名
+  ToolFormItem as PluginToolFormItem,
+  ToolFormItemRenderer as PluginFormItemRenderer
 } from './tool'
 
 // plugin→main 事件

@@ -221,7 +221,7 @@ export class ProviderService {
     // 根据协议类型选择不同的远程拉取方式
     const protocol = provider.apiProtocol || 'openai-completions'
     let fetchedModelIds: string[]
-    if (protocol === 'openai-completions') {
+    if (protocol === 'openai-completions' || protocol === 'openai-responses') {
       const baseUrl = provider.baseUrl?.trim() || 'https://api.openai.com/v1'
       fetchedModelIds = await this.fetchOpenAIModels(apiKey, baseUrl)
     } else if (protocol === 'google-generative-ai') {

@@ -33,6 +33,7 @@ import {
 } from './agentEventHandler'
 import { isAssistantMessage } from '../utils/messageGuards'
 import { chatFrontendRegistry, INTERACTION_TIMEOUT_MS } from '../frontend'
+import type { ChatEvent, RuntimeStatus } from '../frontend/core/types'
 import type { ToolContext, SshCredentialPayload } from '../tools/types'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
@@ -170,30 +171,11 @@ export class AgentSession {
     // 构建 ToolContext（回调通过闭包引用 session）
     const toolContext: ToolContext = {
       sessionId,
-      onContainerCreated: (containerId, image) => {
-        session.emitDockerEvent('container_created', {
-          containerId: containerId.slice(0, 12),
-          image
-        })
-      },
       requestApproval: (toolCallId, toolName, command, description) =>
         session.requestApproval(toolCallId, toolName, command, description),
       requestUserInput: (toolCallId, payload) => session.requestUserInput(toolCallId, payload),
       requestSshCredentials: (toolCallId) => session.requestSshCredential(toolCallId),
-      onSshConnected: (host, port, username) => {
-        session.emitSshEvent('ssh_connected', { host, port, username })
-      },
-      onSshDisconnected: (host, port, username) => {
-        session.emitSshEvent('ssh_disconnected', { host, port, username })
-      },
-      emitPreviewEvent: (action, url) => {
-        chatFrontendRegistry.broadcast({
-          type: 'preview_event',
-          sessionId,
-          action,
-          url
-        })
-      }
+      emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
     const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
@@ -576,10 +558,7 @@ export class AgentSession {
       .destroyContainer(this.sessionId)
       .then((containerId) => {
         if (containerId) {
-          this.emitDockerEvent('container_destroyed', {
-            containerId: containerId.slice(0, 12),
-            reason: 'session_deleted'
-          })
+          this.emitRuntimeEvent('docker', null)
         }
       })
       .catch(() => {})
@@ -602,7 +581,7 @@ export class AgentSession {
         state: this.eventState,
         broadcastEvent: (e) => chatFrontendRegistry.broadcast(e),
         persistStreamBuffer: (meta) => this.persistStreamBuffer(meta),
-        emitDockerEvent: (action, extra) => this.emitDockerEvent(action, extra)
+        emitRuntimeEvent: (runtimeId, status) => this.emitRuntimeEvent(runtimeId, status)
       }
     }
     return this.eventCtx
@@ -674,33 +653,13 @@ export class AgentSession {
     }
   }
 
-  /** 通知前端 Docker 容器生命周期事件（不持久化为消息） */
-  emitDockerEvent(
-    action: 'container_created' | 'container_destroyed',
-    extra?: { containerId?: string; image?: string; reason?: string }
-  ): void {
+  /** 通知前端运行时资源状态变更（不持久化为消息） */
+  emitRuntimeEvent(runtimeId: string, status: RuntimeStatus | null): void {
     chatFrontendRegistry.broadcast({
-      type: 'docker_event',
+      type: 'runtime_event',
       sessionId: this.sessionId,
-      action,
-      containerId: extra?.containerId,
-      image: extra?.image,
-      reason: extra?.reason
-    })
-  }
-
-  /** 通知前端 SSH 连接生命周期事件（不持久化为消息） */
-  emitSshEvent(
-    action: 'ssh_connected' | 'ssh_disconnected',
-    extra?: { host?: string; port?: number; username?: string }
-  ): void {
-    chatFrontendRegistry.broadcast({
-      type: 'ssh_event',
-      sessionId: this.sessionId,
-      action,
-      host: extra?.host,
-      port: extra?.port,
-      username: extra?.username
+      runtimeId,
+      status
     })
   }
 }

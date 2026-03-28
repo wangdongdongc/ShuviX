@@ -24,7 +24,7 @@ function parseRow(row: MessageRow): Message {
  * Message DAO — messages 表的纯数据访问操作
  */
 /** messages 表中的合法消息类型 */
-const MESSAGE_TYPES = ['text', 'docker_event', 'ssh_event', 'error_event']
+const MESSAGE_TYPES = ['text', 'error_event']
 /** message_steps 表中的合法消息类型 */
 const STEP_TYPES = ['tool_use', 'step_text', 'step_thinking']
 

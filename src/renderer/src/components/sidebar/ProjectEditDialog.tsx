@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, Wrench, Database, Puzzle, BookOpen, Settings } from 'lucide-react'
+import { X, Wrench, Database } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { ProjectBasicInfo, ProjectFileSystem } from './ProjectFormSections'
+import { ProjectBasicInfo, ProjectFileSystem, ExtensionsPanel } from './ProjectFormSections'
 
 import type { ReferenceDir } from '../../../../main/types/project'
 
@@ -75,9 +75,8 @@ export function ProjectEditDialog({
   }, [projectId])
 
   // MCP / Skills 工具
-  const mcpTools = allTools.filter((t) => t.group && !t.group.startsWith('__'))
+  const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
-  const hasMcpOrSkills = mcpTools.length > 0 || skillTools.length > 0
 
   // 按 Escape 关闭
   useEffect(() => {
@@ -207,127 +206,14 @@ export function ProjectEditDialog({
 
         {/* ========== Tab: 扩展能力（MCP / Skills） ========== */}
         {tab === 'extensions' && (
-          <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0 space-y-3">
-            {!hasMcpOrSkills ? (
-              /* 未配置任何 MCP/Skill → 引导卡片 */
-              <div className="space-y-3">
-                <p className="text-[11px] text-text-tertiary leading-relaxed">
-                  {t('projectForm.extEmptyDesc')}
-                </p>
-
-                {/* MCP 引导 */}
-                <div className="zen-card">
-                  <div className="zen-card-header">
-                    <Puzzle size={12} className="text-purple-400" />
-                    MCP Server
-                  </div>
-                  <p className="text-[10px] text-text-tertiary leading-relaxed mb-3">
-                    {t('projectForm.extMcpDesc')}
-                  </p>
-                  <button
-                    onClick={handleOpenSettings}
-                    className="flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 transition-colors"
-                  >
-                    <Settings size={12} />
-                    {t('projectForm.extGoSettings')}
-                  </button>
-                </div>
-
-                {/* Skills 引导 */}
-                <div className="zen-card">
-                  <div className="zen-card-header">
-                    <BookOpen size={12} className="text-emerald-400" />
-                    Skills
-                  </div>
-                  <p className="text-[10px] text-text-tertiary leading-relaxed mb-3">
-                    {t('projectForm.extSkillDesc')}
-                  </p>
-                  <button
-                    onClick={handleOpenSettings}
-                    className="flex items-center gap-1.5 text-[11px] text-accent hover:text-accent/80 transition-colors"
-                  >
-                    <Settings size={12} />
-                    {t('projectForm.extGoSettings')}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* 已有 MCP/Skill → 选择列表 */
-              <div className="space-y-3">
-                <p className="text-[11px] text-text-tertiary leading-relaxed">
-                  {t('projectForm.extAvailableDesc')}
-                </p>
-
-                {/* MCP 服务器 */}
-                {mcpTools.map((tool) => {
-                  const isOnline = tool.serverStatus === 'connected'
-                  const serverName = tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name
-                  return (
-                    <div key={tool.name} className="zen-card">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={enabledTools.includes(tool.name)}
-                          onChange={() => toggleExtTool(tool.name)}
-                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                        />
-                        <Puzzle
-                          size={12}
-                          className={isOnline ? 'text-purple-400' : 'text-red-400'}
-                        />
-                        <span
-                          className={`text-[11px] font-medium ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
-                        >
-                          {serverName}
-                        </span>
-                        <span
-                          className={`text-[10px] rounded px-1 py-px ${
-                            isOnline
-                              ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
-                              : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                          }`}
-                        >
-                          MCP
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {/* Skills */}
-                {skillTools.map((tool) => {
-                  const shortName = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
-                  return (
-                    <div key={tool.name} className="zen-card">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={enabledTools.includes(tool.name)}
-                          onChange={() => toggleExtTool(tool.name)}
-                          className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
-                        />
-                        <BookOpen size={12} className="text-emerald-400" />
-                        <span className="text-[11px] font-medium text-text-secondary">
-                          {shortName}
-                        </span>
-                        <span className="text-[10px] rounded px-1 py-px bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                          Skill
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {/* 补充引导：前往设置添加更多 */}
-                <button
-                  onClick={handleOpenSettings}
-                  className="flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-accent transition-colors"
-                >
-                  <Settings size={12} />
-                  {t('projectForm.extGoSettings')}
-                </button>
-              </div>
-            )}
+          <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0">
+            <ExtensionsPanel
+              mcpTools={mcpTools}
+              skillTools={skillTools}
+              enabledTools={enabledTools}
+              onToggle={toggleExtTool}
+              onOpenSettings={handleOpenSettings}
+            />
           </div>
         )}
 

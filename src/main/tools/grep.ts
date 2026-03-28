@@ -168,5 +168,9 @@ registerBuiltinTool({
   defaultEnabled: false,
   getLabel: () => t('tool.grepLabel'),
   getHint: () => t('tool.grepHint'),
-  factory: (ctx) => new GrepTool(ctx)
+  factory: (ctx) => new GrepTool(ctx),
+  presentation: {
+    icon: 'Search',
+    summaryField: 'pattern'
+  }
 })

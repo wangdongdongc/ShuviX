@@ -68,6 +68,18 @@ const api = {
       const handler = (): void => callback()
       ipcRenderer.on('app:settings-changed', handler)
       return () => ipcRenderer.removeListener('app:settings-changed', handler)
+    },
+    /** 监听菜单栏「新建对话」 */
+    onNewChat: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('app:new-chat', handler)
+      return () => ipcRenderer.removeListener('app:new-chat', handler)
+    },
+    /** 监听菜单栏「新建项目」 */
+    onNewProject: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('app:new-project', handler)
+      return () => ipcRenderer.removeListener('app:new-project', handler)
     }
   },
 
@@ -120,13 +132,6 @@ const api = {
       ipcRenderer.on('agent:event', handler)
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
-  },
-
-  // ============ ACP Agent ============
-  acp: {
-    /** 销毁指定会话的 ACP Agent session */
-    destroySession: (params: { sessionId: string; agentName: string }) =>
-      ipcRenderer.invoke('acp:destroySession', params)
   },
 
   // ============ 提供商管理 ============
@@ -227,15 +232,14 @@ const api = {
 
   // ============ Docker ============
   docker: {
-    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params),
-    sessionStatus: (sessionId: string) => ipcRenderer.invoke('docker:sessionStatus', sessionId),
-    destroySession: (sessionId: string) => ipcRenderer.invoke('docker:destroySession', sessionId)
+    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params)
   },
 
-  // ============ SSH ============
-  ssh: {
-    sessionStatus: (sessionId: string) => ipcRenderer.invoke('ssh:sessionStatus', sessionId),
-    disconnectSession: (sessionId: string) => ipcRenderer.invoke('ssh:disconnectSession', sessionId)
+  // ============ Runtime (统一资源) ============
+  runtime: {
+    statuses: (sessionId: string) => ipcRenderer.invoke('runtime:statuses', sessionId),
+    destroy: (params: { sessionId: string; runtimeId: string }) =>
+      ipcRenderer.invoke('runtime:destroy', params)
   },
 
   // ============ SSH 凭据管理 ============
@@ -427,11 +431,7 @@ const api = {
   // ============ Plugin ============
   plugin: {
     purposes: () => ipcRenderer.invoke('plugin:purposes'),
-    toolPresentations: () => ipcRenderer.invoke('plugin:toolPresentations'),
-    getRuntimeStatuses: (sessionId: string) =>
-      ipcRenderer.invoke('plugin:getRuntimeStatuses', sessionId),
-    destroyRuntime: (params: { sessionId: string; runtimeId: string }) =>
-      ipcRenderer.invoke('plugin:destroyRuntime', params)
+    toolPresentations: () => ipcRenderer.invoke('tools:presentations')
   },
 
   // ============ Skill 管理 ============
