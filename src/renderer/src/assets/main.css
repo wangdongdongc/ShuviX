@@ -22,25 +22,8 @@
 
 /* ========== 深色主题 ========== */
 
-/* 默认深色（Default Dark） */
+/* GitHub Dark（默认深色） */
 :root,
-[data-theme='dark'] {
-  --theme-bg-primary: #0a0a0f;
-  --theme-bg-secondary: #12121a;
-  --theme-bg-tertiary: #1a1a25;
-  --theme-bg-hover: #22222f;
-  --theme-bg-active: #2a2a3a;
-  --theme-border-primary: #2a2a3a;
-  --theme-border-secondary: #1e1e2a;
-  --theme-text-primary: #e8e8f0;
-  --theme-text-secondary: #9898b0;
-  --theme-text-tertiary: #686880;
-  --theme-accent: #6366f1;
-  --theme-accent-hover: #818cf8;
-  --theme-accent-muted: rgba(99, 102, 241, 0.15);
-}
-
-/* GitHub Dark */
 [data-theme='github-dark'] {
   --theme-bg-primary: #0d1117;
   --theme-bg-secondary: #161b22;
@@ -91,26 +74,77 @@
   --theme-accent-muted: rgba(187, 154, 247, 0.15);
 }
 
-/* ========== 浅色主题 ========== */
-
-/* 默认浅色（Default Light） */
-[data-theme='light'] {
-  --theme-bg-primary: #ffffff;
-  --theme-bg-secondary: #f5f5f7;
-  --theme-bg-tertiary: #eaeaef;
-  --theme-bg-hover: #e0e0e8;
-  --theme-bg-active: #d5d5e0;
-  --theme-border-primary: #d0d0da;
-  --theme-border-secondary: #e0e0e8;
-  --theme-text-primary: #1a1a2e;
-  --theme-text-secondary: #5a5a72;
-  --theme-text-tertiary: #8a8aa0;
-  --theme-accent: #6366f1;
-  --theme-accent-hover: #818cf8;
-  --theme-accent-muted: rgba(99, 102, 241, 0.15);
+/* Dracula */
+[data-theme='dracula'] {
+  --theme-bg-primary: #282a36;
+  --theme-bg-secondary: #1e1f29;
+  --theme-bg-tertiary: #343746;
+  --theme-bg-hover: #44475a;
+  --theme-bg-active: #4d5066;
+  --theme-border-primary: #44475a;
+  --theme-border-secondary: #343746;
+  --theme-text-primary: #f8f8f2;
+  --theme-text-secondary: #bfbfbf;
+  --theme-text-tertiary: #6272a4;
+  --theme-accent: #bd93f9;
+  --theme-accent-hover: #caa9fa;
+  --theme-accent-muted: rgba(189, 147, 249, 0.15);
 }
 
-/* GitHub Light */
+/* One Dark */
+[data-theme='one-dark'] {
+  --theme-bg-primary: #282c34;
+  --theme-bg-secondary: #21252b;
+  --theme-bg-tertiary: #2c313c;
+  --theme-bg-hover: #353b45;
+  --theme-bg-active: #3e4452;
+  --theme-border-primary: #3e4452;
+  --theme-border-secondary: #2c313c;
+  --theme-text-primary: #abb2bf;
+  --theme-text-secondary: #828997;
+  --theme-text-tertiary: #5c6370;
+  --theme-accent: #61afef;
+  --theme-accent-hover: #74b9f0;
+  --theme-accent-muted: rgba(97, 175, 239, 0.15);
+}
+
+/* Catppuccin Mocha */
+[data-theme='catppuccin-mocha'] {
+  --theme-bg-primary: #1e1e2e;
+  --theme-bg-secondary: #181825;
+  --theme-bg-tertiary: #313244;
+  --theme-bg-hover: #45475a;
+  --theme-bg-active: #585b70;
+  --theme-border-primary: #45475a;
+  --theme-border-secondary: #313244;
+  --theme-text-primary: #cdd6f4;
+  --theme-text-secondary: #bac2de;
+  --theme-text-tertiary: #6c7086;
+  --theme-accent: #89b4fa;
+  --theme-accent-hover: #b4d0fb;
+  --theme-accent-muted: rgba(137, 180, 250, 0.15);
+}
+
+/* Gruvbox Dark */
+[data-theme='gruvbox-dark'] {
+  --theme-bg-primary: #282828;
+  --theme-bg-secondary: #1d2021;
+  --theme-bg-tertiary: #3c3836;
+  --theme-bg-hover: #504945;
+  --theme-bg-active: #665c54;
+  --theme-border-primary: #504945;
+  --theme-border-secondary: #3c3836;
+  --theme-text-primary: #ebdbb2;
+  --theme-text-secondary: #bdae93;
+  --theme-text-tertiary: #a89984;
+  --theme-accent: #83a598;
+  --theme-accent-hover: #8ec07c;
+  --theme-accent-muted: rgba(131, 165, 152, 0.15);
+}
+
+/* ========== 浅色主题 ========== */
+
+/* GitHub Light（默认浅色） */
 [data-theme='github-light'] {
   --theme-bg-primary: #ffffff;
   --theme-bg-secondary: #f6f8fa;
@@ -142,6 +176,40 @@
   --theme-accent: #2aa198;
   --theme-accent-hover: #268bd2;
   --theme-accent-muted: rgba(42, 161, 152, 0.12);
+}
+
+/* One Light */
+[data-theme='one-light'] {
+  --theme-bg-primary: #fafafa;
+  --theme-bg-secondary: #f0f0f0;
+  --theme-bg-tertiary: #e5e5e6;
+  --theme-bg-hover: #dbdbdc;
+  --theme-bg-active: #d0d0d1;
+  --theme-border-primary: #d0d0d1;
+  --theme-border-secondary: #e5e5e6;
+  --theme-text-primary: #383a42;
+  --theme-text-secondary: #696c77;
+  --theme-text-tertiary: #a0a1a7;
+  --theme-accent: #4078f2;
+  --theme-accent-hover: #2f65d9;
+  --theme-accent-muted: rgba(64, 120, 242, 0.12);
+}
+
+/* Catppuccin Latte */
+[data-theme='catppuccin-latte'] {
+  --theme-bg-primary: #eff1f5;
+  --theme-bg-secondary: #e6e9ef;
+  --theme-bg-tertiary: #dce0e8;
+  --theme-bg-hover: #ccd0da;
+  --theme-bg-active: #bcc0cc;
+  --theme-border-primary: #bcc0cc;
+  --theme-border-secondary: #dce0e8;
+  --theme-text-primary: #4c4f69;
+  --theme-text-secondary: #5c5f77;
+  --theme-text-tertiary: #7c7f93;
+  --theme-accent: #1e66f5;
+  --theme-accent-hover: #1557d0;
+  --theme-accent-muted: rgba(30, 102, 245, 0.12);
 }
 
 /* 全局基础样式 */

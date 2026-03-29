@@ -140,7 +140,7 @@ export function PreviewPanel(): React.JSX.Element {
       style={{ width, minWidth: 200 }}
     >
       {/* ====== 工具栏 ====== */}
-      <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-primary">
+      <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-secondary/30">
         {/* Start / Stop 按钮 */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
           {isStartingServer ? (
@@ -259,7 +259,7 @@ export function PreviewPanel(): React.JSX.Element {
       </div>
 
       {/* ====== 底部状态栏 ====== */}
-      <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
+      <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary/30 bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
         {/* 加载状态指示 */}
         {isLoading && (
           <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />

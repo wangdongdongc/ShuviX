@@ -131,11 +131,10 @@ export function useAgentEvents(): void {
         break
 
       case 'step_end': {
-        // 中间轮次步骤已持久化：清除流式内容 + 同步添加 step 消息到列表
-        store.clearStreamingContent(sid)
-        if (sid === store.activeSessionId && event.message) {
-          store.addMessage(JSON.parse(event.message))
-        }
+        // 原子操作：清除流式内容 + 添加 step 消息（单次 set，避免中间帧闪空）
+        const stepMsg =
+          sid === store.activeSessionId && event.message ? JSON.parse(event.message) : null
+        store.handleStepEnd(sid, stepMsg)
         break
       }
 
@@ -144,26 +143,42 @@ export function useAgentEvents(): void {
         break
 
       case 'tool_start': {
-        // 清除所有流式工具调用状态，工具即将开始执行
-        store.setStreamingToolCall(sid, null)
-        // 根据工具类型设置初始状态：bash 沙箱审批 / ssh 凭据 / 其余直接运行
+        // 原子操作：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁）
         let initialStatus: 'running' | 'pending_approval' | 'pending_ssh_credentials' = 'running'
         if (event.approvalRequired) initialStatus = 'pending_approval'
         if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
-        store.addToolExecution(sid, {
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          args: event.toolArgs ?? {},
-          turnIndex: event.turnIndex,
-          status: initialStatus,
-          messageId: event.messageId
-        })
-        // 仅当前活跃会话时添加到消息列表（tool_call 消息已在 main 进程持久化）
-        if (sid === store.activeSessionId && event.messageId) {
-          const msgs = await window.api.message.list(sid)
-          const toolCallMsg = msgs.find((m) => m.id === event.messageId)
-          if (toolCallMsg) store.addMessage(toolCallMsg)
-        }
+
+        // 构造临时 tool_use 消息，避免异步获取导致的空白帧
+        const toolMsg =
+          sid === store.activeSessionId && event.messageId
+            ? ({
+                id: event.messageId,
+                sessionId: sid,
+                role: 'assistant' as const,
+                type: 'tool_use' as const,
+                content: '',
+                metadata: {
+                  toolCallId: event.toolCallId,
+                  toolName: event.toolName,
+                  args: event.toolArgs ?? {}
+                },
+                model: '',
+                createdAt: Date.now()
+              } as ChatMessage)
+            : null
+
+        store.handleToolStart(
+          sid,
+          {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.toolArgs ?? {},
+            turnIndex: event.turnIndex,
+            status: initialStatus,
+            messageId: event.messageId
+          },
+          toolMsg
+        )
         break
       }
 
@@ -194,19 +209,34 @@ export function useAgentEvents(): void {
         })
         break
 
-      case 'tool_end':
-        store.updateToolExecution(sid, event.toolCallId, {
-          status: event.isError ? 'error' : 'done',
+      case 'tool_end': {
+        // 原子操作：更新执行状态 + 替换消息（单次 set，避免闪烁）
+        const execUpdates = {
+          status: (event.isError ? 'error' : 'done') as 'done' | 'error',
           result: event.result,
           details: event.details
-        })
-        // tool_end 与 tool_start 共享同一条 tool_use 记录，原地替换而非新增
-        if (sid === store.activeSessionId && event.messageId) {
-          const msgs2 = await window.api.message.list(sid)
-          const toolUseMsg = msgs2.find((m) => m.id === event.messageId)
-          if (toolUseMsg) store.replaceMessage(event.messageId, toolUseMsg)
         }
+
+        // 从现有消息中找到并更新，避免 async 获取
+        let updatedToolMsg: ChatMessage | null = null
+        if (sid === store.activeSessionId && event.messageId) {
+          const existing = store.messages.find((m) => m.id === event.messageId)
+          if (existing && existing.type === 'tool_use') {
+            updatedToolMsg = {
+              ...existing,
+              content: event.result || '',
+              metadata: {
+                ...(existing.metadata as unknown as Record<string, unknown>),
+                isError: event.isError || false,
+                details: event.details
+              }
+            } as ChatMessage
+          }
+        }
+
+        store.handleToolEnd(sid, event.toolCallId, execUpdates, event.messageId, updatedToolMsg)
         break
+      }
 
       case 'runtime_event':
         store.setRuntime(sid, event.runtimeId, event.status)

@@ -8,12 +8,14 @@ import { useSidebarStore, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../../sto
 export function SidebarResizeHandle(): React.JSX.Element {
   const width = useSidebarStore((s) => s.width)
   const setWidth = useSidebarStore((s) => s.setWidth)
+  const setResizing = useSidebarStore((s) => s.setResizing)
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
       dragRef.current = { startX: e.clientX, startW: width }
+      setResizing(true)
       document.querySelectorAll('iframe').forEach((f) => {
         ;(f as HTMLIFrameElement).style.pointerEvents = 'none'
       })
@@ -31,6 +33,7 @@ export function SidebarResizeHandle(): React.JSX.Element {
       }
       const onUp = (): void => {
         dragRef.current = null
+        setResizing(false)
         document.querySelectorAll('iframe').forEach((f) => {
           ;(f as HTMLIFrameElement).style.pointerEvents = ''
         })
@@ -42,16 +45,18 @@ export function SidebarResizeHandle(): React.JSX.Element {
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
     },
-    [width, setWidth]
+    [width, setWidth, setResizing]
   )
 
   return (
     <div
-      className="flex-shrink-0 w-px bg-border-primary cursor-col-resize relative group z-10"
+      className="flex-shrink-0 w-px bg-border-secondary/50 cursor-col-resize relative group z-10"
       onMouseDown={onMouseDown}
     >
-      {/* 透明宽击中区域（左右各扩展 5px，z-10 保证不被相邻面板遮挡） */}
-      <div className="absolute inset-y-0 -left-[5px] -right-[5px] group-hover:bg-accent/30 group-active:bg-accent/50 transition-colors" />
+      {/* 透明宽击中区域（左右各扩展 5px） */}
+      <div className="absolute inset-y-0 -left-[5px] -right-[5px]" />
+      {/* 可见高亮仅 1px 宽 */}
+      <div className="absolute inset-y-0 left-0 w-px group-hover:bg-accent/40 group-active:bg-accent/60 transition-colors" />
     </div>
   )
 }

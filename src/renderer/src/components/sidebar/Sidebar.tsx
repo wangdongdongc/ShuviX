@@ -10,7 +10,8 @@ import {
   Globe,
   MessageCircle,
   RotateCcw,
-  ArrowUpCircle
+  ArrowUpCircle,
+  Archive
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useUpdateStore } from '../../stores/updateStore'
@@ -245,7 +246,7 @@ export function Sidebar(): React.JSX.Element {
   }) // 每次 render 重新绑定以捕获最新 sessions/activeSessionId
 
   return (
-    <div className="flex flex-col h-full bg-bg-primary">
+    <div className="flex flex-col h-full bg-bg-secondary">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div
         className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
@@ -277,24 +278,28 @@ export function Sidebar(): React.JSX.Element {
                   key={groupKey}
                   className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}
                 >
-                  <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
+                  <div className="relative flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                     <button
                       onClick={() => toggleGroup(groupKey)}
                       className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
                         activeGroupKey === groupKey
                           ? 'text-text-secondary'
-                          : isTemp
-                            ? 'text-text-tertiary/60 hover:text-text-tertiary'
-                            : 'text-text-tertiary hover:text-text-secondary'
+                          : 'text-text-tertiary hover:text-text-secondary'
                       }`}
                     >
-                      {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                      {isTemp ? (
+                        <MessageCircle size={11} className="flex-shrink-0" />
+                      ) : collapsed ? (
+                        <ChevronRight size={11} className="flex-shrink-0" />
+                      ) : (
+                        <ChevronDown size={11} className="flex-shrink-0" />
+                      )}
                       <span className="truncate font-medium uppercase tracking-wider">
                         {groupLabel}
                       </span>
                     </button>
-                    {/* 项目操作按钮 */}
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
+                    {/* 项目操作按钮 — 绝对定位，不占文本空间 */}
+                    <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
@@ -325,17 +330,13 @@ export function Sidebar(): React.JSX.Element {
 
             {/* 已归档项目 */}
             {archivedProjects.length > 0 && (
-              <div className="mt-1.5 mb-0.5 rounded-md">
+              <div className="mb-0.5 rounded-md">
                 <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                   <button
                     onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
-                    className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary/70 hover:text-text-tertiary transition-colors"
+                    className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary hover:text-text-secondary transition-colors"
                   >
-                    {collapsedGroups.has(ARCHIVED_GROUP_KEY) ? (
-                      <ChevronRight size={11} />
-                    ) : (
-                      <ChevronDown size={11} />
-                    )}
+                    <Archive size={11} className="flex-shrink-0" />
                     <span className="truncate font-medium uppercase tracking-wider">
                       {t('sidebar.archivedProjects')}
                     </span>
@@ -374,7 +375,7 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* 底部操作区 */}
-      <div className="px-2 py-1 border-t border-border-secondary/50 space-y-0.5">
+      <div className="px-2 py-1 border-t border-border-secondary/30 space-y-0.5">
         {hasUpdate && (
           <button
             onClick={() => window.api.app.openSettings('about')}

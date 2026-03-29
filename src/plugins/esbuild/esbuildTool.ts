@@ -25,7 +25,7 @@ const EsbuildParamsSchema = Type.Object({
   template: Type.Optional(
     Type.String({
       description:
-        'Project template (only used with "init" action, ignored if project already exists). Valid values: "blank" (minimal skeleton, default), "app" (standard React app with example components), "landing" (single-page landing with Hero/Features/Footer sections), "dashboard" (multi-page app with sidebar navigation and React Router). Unknown values fall back to "blank".'
+        'Project template (only used with "init" action, ignored if project already exists). Valid values: "blank" (minimal skeleton, default), "app" (standard React app with example components), "landing" (single-page landing with Hero/Features/Footer sections), "dashboard" (multi-page app with sidebar navigation and React Router), "presentation" (slide deck using Spectacle with Deck/Slide/Heading/Text/CodePane components). Unknown values fall back to "blank".'
     })
   )
 })
@@ -41,12 +41,13 @@ export class EsbuildTool implements PluginTool<typeof EsbuildParamsSchema> {
   readonly description = `Manage the React design project: scaffold and build with esbuild-wasm. Returns the dev server URL on build — use the \`preview\` tool to open the preview panel.
 
 Actions:
-- "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "blank"). Templates: blank, app, landing, dashboard.
+- "init": Scaffold the design project at .shuvix/design/ using the specified template (default: "blank"). Templates: blank, app, landing, dashboard, presentation.
 - "build": Start the dev server (first call) or rebuild (subsequent calls). Returns the local URL and build result. If the build fails, detailed error messages are returned — fix the code and call "build" again.
 
 The design project supports:
 - React with TypeScript (.tsx/.ts)
 - React Router (react-router) for multi-page navigation (used by "dashboard" template)
+- Spectacle (spectacle) for slide deck presentations (used by "presentation" template)
 - Tailwind CSS v4 utility classes (available globally, no import needed)
 - CSS file imports
 - Images as dataurl (svg/png/jpg/gif)

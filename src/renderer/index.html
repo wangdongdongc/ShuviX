@@ -16,8 +16,8 @@
         }
         var themeId =
           mode === 'light'
-            ? localStorage.getItem('lightTheme') || 'light'
-            : localStorage.getItem('darkTheme') || 'dark'
+            ? localStorage.getItem('lightTheme') || 'github-light'
+            : localStorage.getItem('darkTheme') || 'github-dark'
         document.documentElement.setAttribute('data-theme', themeId)
       })()
     </script>

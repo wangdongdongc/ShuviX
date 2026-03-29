@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Brain, MessageSquareText, ChevronDown, ChevronRight } from 'lucide-react'
+import { Brain, MessageSquareText, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -8,12 +8,14 @@ import type { StepTextMessage, StepThinkingMessage } from '../../stores/chatStor
 
 interface StepBlockProps {
   message: StepTextMessage | StepThinkingMessage
+  /** 是否正在流式生成中 */
+  isGenerating?: boolean
 }
 
 /**
- * 中间步骤块 — 与 ToolCallBlock 相同的单行展开/折叠样式
+ * 中间步骤块 — 默认折叠，点击展开/折叠
  */
-export function StepBlock({ message }: StepBlockProps): React.JSX.Element {
+export function StepBlock({ message, isGenerating }: StepBlockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const isThinking = message.type === 'step_thinking'
@@ -45,8 +47,15 @@ export function StepBlock({ message }: StepBlockProps): React.JSX.Element {
         <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>
         {preview && <span className="flex-1 truncate font-mono opacity-70">{preview}</span>}
         {!preview && <span className="flex-1" />}
-        {/* 占位：与 ToolCallBlock 状态位等宽，保持右对齐 */}
-        <span className="w-14 flex-shrink-0" />
+        {/* 状态指示 */}
+        {isGenerating ? (
+          <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
+            <Loader2 size={12} className="animate-spin text-text-tertiary" />
+            <span className="text-[10px]">{t('toolCall.generating')}</span>
+          </span>
+        ) : (
+          <span className="w-14 flex-shrink-0" />
+        )}
       </button>
 
       {expanded && (

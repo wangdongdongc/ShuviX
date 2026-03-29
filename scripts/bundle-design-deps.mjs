@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url'
 import { mkdirSync, writeFileSync, copyFileSync } from 'fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const outdir = resolve(__dirname, '../resources/design-deps')
+const outdir = resolve(__dirname, '../resources/plugins/esbuild/deps')
 
 mkdirSync(outdir, { recursive: true })
 
@@ -43,7 +43,7 @@ import _jsxRuntime from 'react/jsx-runtime';
 export { _jsxRuntime };
 
 // ReactDOM
-export { createPortal, flushSync } from 'react-dom';
+export { createPortal, flushSync, unstable_batchedUpdates } from 'react-dom';
 import _reactDOM from 'react-dom';
 export { _reactDOM };
 
@@ -110,6 +110,71 @@ await build({
 
 console.log('  ✓ react-router.esm.js\n')
 
+// ── 打包 Spectacle 为独立 ESM 文件（externalize react 避免双实例） ──
+
+const spectacleWrapper = `
+export {
+  Deck, DeckContext, Slide, SlideContext, SlideLayout,
+  Heading, Text, FitText, CodeSpan, Quote, Link,
+  FlexBox, Grid, Box, Image, FullSizeImage,
+  UnorderedList, OrderedList, ListItem,
+  Table, TableHeader, TableBody, TableRow, TableCell,
+  Appear, Stepper,
+  Notes,
+  CodePane, codePaneThemes,
+  Markdown, MarkdownSlide, MarkdownSlideSet,
+  DefaultTemplate, SpectacleLogo,
+  AnimatedProgress, Progress, FullScreen, CommandBar,
+  defaultTheme, defaultTransition, fadeTransition, slideTransition,
+  indentNormalizer, removeNotes, isolateNotes, mdxComponentMap
+} from 'spectacle';
+`
+
+console.log('Bundling Spectacle ESM bundle...\n')
+
+// Spectacle 的部分依赖（styled-components 等）含 CJS require("react") 调用。
+// platform: 'browser' 会生成 __require shim，在浏览器中对 external 模块的
+// require() 调用会抛出 "Dynamic require not supported" 错误。
+// 解决方案：用 esbuild plugin 在 CJS 的 require("react") 调用时提供 ESM re-export，
+// 确保 spectacle bundle 内部所有 react 引用都走 ESM import。
+await build({
+  stdin: {
+    contents: spectacleWrapper,
+    resolveDir: resolve(__dirname, '..'),
+    loader: 'js'
+  },
+  bundle: true,
+  format: 'esm',
+  outfile: resolve(outdir, 'spectacle-all.esm.js'),
+  platform: 'browser',
+  target: 'es2020',
+  minify: true,
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  define: {
+    'process.env.NODE_ENV': '"production"'
+  },
+  logLevel: 'info',
+  // 为 CJS require("react") 注入一个 ESM 兼容垫片
+  // 覆盖 esbuild 的 __require shim，让它返回 ESM import 的结果
+  banner: {
+    js: [
+      'import __REACT_ESM__ from "react";',
+      'import __REACT_DOM_ESM__ from "react-dom";',
+      'import * as __JSX_RUNTIME_ESM__ from "react/jsx-runtime";',
+      'var require = (function(origRequire) {',
+      '  var mods = { "react": __REACT_ESM__, "react-dom": __REACT_DOM_ESM__, "react/jsx-runtime": __JSX_RUNTIME_ESM__ };',
+      '  return function(id) {',
+      '    if (mods[id]) return mods[id];',
+      '    if (typeof origRequire === "function") return origRequire(id);',
+      '    throw new Error("Cannot require " + id);',
+      '  };',
+      '})(typeof require !== "undefined" ? require : undefined);'
+    ].join('\n')
+  }
+})
+
+console.log('  ✓ spectacle-all.esm.js\n')
+
 // 写入 manifest — 运行时 plugin 用来知道哪些 bare import 需要拦截
 const manifest = {
   shipped: [
@@ -118,11 +183,13 @@ const manifest = {
     'react-dom',
     'react-dom/client',
     'react-router',
-    'react-router-dom'
+    'react-router-dom',
+    'spectacle'
   ],
   bundles: {
     'react-all': 'react-all.esm.js',
-    'react-router': 'react-router.esm.js'
+    'react-router': 'react-router.esm.js',
+    'spectacle-all': 'spectacle-all.esm.js'
   }
 }
 writeFileSync(resolve(outdir, 'manifest.json'), JSON.stringify(manifest, null, 2))

@@ -5,10 +5,12 @@
     "react-dom",
     "react-dom/client",
     "react-router",
-    "react-router-dom"
+    "react-router-dom",
+    "spectacle"
   ],
   "bundles": {
     "react-all": "react-all.esm.js",
-    "react-router": "react-router.esm.js"
+    "react-router": "react-router.esm.js",
+    "spectacle-all": "spectacle-all.esm.js"
   }
 }

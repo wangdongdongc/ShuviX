@@ -221,7 +221,13 @@ interface ChatState {
   /** AGENT.md 是否已加载 */
   agentMdLoaded: boolean
   /** 当前会话可用的斜杠命令 */
-  slashCommands: Array<{ commandId: string; name: string; description: string; template: string }>
+  slashCommands: Array<{
+    commandId: string
+    name: string
+    description: string
+    template: string
+    requiredTools?: string[]
+  }>
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
   /** 各 session 的待处理用户输入请求 */
@@ -309,6 +315,18 @@ interface ChatState {
   clearPendingUserInput: (sessionId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
+  /** 原子处理 step_end：清除流式内容 + 添加 step 消息（单次 set，避免闪空） */
+  handleStepEnd: (sessionId: string, stepMessage: ChatMessage | null) => void
+  /** 原子处理 tool_start：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁） */
+  handleToolStart: (sessionId: string, exec: ToolExecution, toolMessage: ChatMessage | null) => void
+  /** 原子处理 tool_end：更新执行状态 + 替换消息（单次 set，避免闪烁） */
+  handleToolEnd: (
+    sessionId: string,
+    toolCallId: string,
+    execUpdates: Partial<ToolExecution>,
+    messageId: string | undefined,
+    updatedMessage: ChatMessage | null
+  ) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
@@ -806,6 +824,66 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const result: Partial<ChatState> = { sessionStreams: newStreams }
       if (subAgentsChanged) result.sessionSubAgentExecutions = newSubAgents
       return result
+    }),
+
+  handleStepEnd: (sessionId, stepMessage) =>
+    set((state) => {
+      const prev = state.sessionStreams[sessionId]
+      if (!prev) return stepMessage ? { messages: [...state.messages, stepMessage] } : {}
+      // 单次 set：清除流式内容 + 添加 step 消息
+      const updatedStream = { ...prev, content: '', thinking: '', images: [] }
+      return {
+        sessionStreams: { ...state.sessionStreams, [sessionId]: updatedStream },
+        ...(stepMessage ? { messages: [...state.messages, stepMessage] } : {})
+      }
+    }),
+
+  handleToolStart: (sessionId, exec, toolMessage) =>
+    set((state) => {
+      // 1. 清除流式工具调用状态
+      const prevStream = state.sessionStreams[sessionId]
+      const updatedStream = prevStream
+        ? { ...prevStream, streamingToolCall: null, completedStreamingToolCalls: [] }
+        : undefined
+      const newStreams = updatedStream
+        ? { ...state.sessionStreams, [sessionId]: updatedStream }
+        : state.sessionStreams
+
+      // 2. 添加工具执行状态
+      const prevExecs = state.sessionToolExecutions[sessionId] || []
+      const newToolExecs = {
+        ...state.sessionToolExecutions,
+        [sessionId]: [...prevExecs, exec]
+      }
+
+      // 3. 添加 tool_use 消息（如有）
+      const newMessages = toolMessage ? [...state.messages, toolMessage] : state.messages
+
+      return {
+        sessionStreams: newStreams,
+        sessionToolExecutions: newToolExecs,
+        messages: newMessages
+      }
+    }),
+
+  handleToolEnd: (sessionId, toolCallId, execUpdates, messageId, updatedMessage) =>
+    set((state) => {
+      // 1. 更新工具执行状态
+      const prevExecs = state.sessionToolExecutions[sessionId] || []
+      const newExecs = prevExecs.map((t) =>
+        t.toolCallId === toolCallId ? { ...t, ...execUpdates } : t
+      )
+
+      // 2. 替换消息（如有）
+      const newMessages =
+        messageId && updatedMessage
+          ? state.messages.map((m) => (m.id === messageId ? updatedMessage : m))
+          : state.messages
+
+      return {
+        sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: newExecs },
+        messages: newMessages
+      }
     }),
 
   finishStreaming: (sessionId, finalMessage) =>

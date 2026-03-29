@@ -31,10 +31,12 @@ export const UserBubble = memo(function UserBubble({
   const segments = segmentContent(msg.content, msg.metadata?.inlineTokens)
 
   return (
-    <div className="group flex gap-3 px-4 py-3">
-      {/* 头像 */}
-      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center mt-0.5 bg-accent/20 text-accent">
-        <User size={14} />
+    <div className="group relative flex gap-3 pl-10 pr-4 py-3">
+      {/* 时间线 */}
+      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
+      {/* 头像节点 */}
+      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-accent/20 text-accent ring-2 ring-bg-primary z-10">
+        <User size={10} />
       </div>
 
       {/* 内容 */}

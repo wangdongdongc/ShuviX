@@ -10,14 +10,18 @@ interface SidebarState {
   isOpen: boolean
   /** 面板宽度（px） */
   width: number
+  /** 是否正在拖拽调整宽度 */
+  isResizing: boolean
 
   toggle: () => void
   setWidth: (width: number) => void
+  setResizing: (v: boolean) => void
 }
 
 export const useSidebarStore = create<SidebarState>((set, get) => ({
   isOpen: true,
   width: DEFAULT_WIDTH,
+  isResizing: false,
 
   toggle: () => {
     const isOpen = !get().isOpen
@@ -28,7 +32,8 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const clamped = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, width))
     set({ width: clamped })
     persistPanelLayout({ sidebarWidth: clamped })
-  }
+  },
+  setResizing: (v) => set({ isResizing: v })
 }))
 
 export { MIN_WIDTH as SIDEBAR_MIN_WIDTH, MAX_WIDTH as SIDEBAR_MAX_WIDTH }

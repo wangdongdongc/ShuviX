@@ -4,97 +4,63 @@ import {
   selectIsStreaming,
   selectStreamingContent,
   selectStreamingThinking,
-  selectStreamingImages,
-  selectStreamingToolCall,
-  type AssistantTextMessage
+  selectStreamingToolCall
 } from '../../stores/chatStore'
-import { useSettingsStore } from '../../stores/settingsStore'
-import { AssistantBubble } from './AssistantBubble'
-import type { StepItem, StepMessage } from './types'
-import type { VisibleItem } from './MessageRenderer'
-
-interface StreamingFooterProps {
-  context?: { streamingSteps?: VisibleItem[] }
-}
 
 /**
- * 流式输出底部区域 — 思考过程、流式助手消息、工具调用生成指示器、加载指示器
- * 独立组件，通过自身的 store subscription 获取最新状态
- * 通过 Virtuoso context 接收流式中的 steps
+ * 流式等待指示器 — 仅在流式已开始但尚无任何内容时显示 loading dots
+ * 所有流式内容渲染已移至 Virtuoso 列表内的合成占位项（AssistantBubble）
  */
-export function StreamingFooter({ context }: StreamingFooterProps): React.JSX.Element {
+export function StreamingFooter(): React.JSX.Element {
   const isStreaming = useChatStore(selectIsStreaming)
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
-  const streamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
 
-  // 将 VisibleItem[] 转换为 StepItem[]（窄化 msg 类型）
-  const steps: StepItem[] | undefined =
-    context?.streamingSteps && context.streamingSteps.length > 0
-      ? context.streamingSteps.map((s) => ({
-          msg: s.msg as StepMessage
-        }))
-      : undefined
+  // 检查消息列表中是否有流式阶段的 step 消息（由 buildVisibleItems 合成项承载）
+  const hasStreamingSteps = useChatStore((s) => {
+    if (!s.activeSessionId || !isStreaming) return false
+    // 如果 messages 中有任何 step/tool 类型，说明已有内容
+    const msgs = s.messages
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (m.role === 'user' && m.type === 'text') break
+      if (m.type === 'tool_use' || m.type === 'step_text' || m.type === 'step_thinking') return true
+    }
+    return false
+  })
 
-  const hasSteps = steps && steps.length > 0
-
-  // 构造流式用的临时 AssistantTextMessage
-  const streamingMsg: AssistantTextMessage = {
-    id: 'streaming',
-    sessionId: '',
-    role: 'assistant',
-    type: 'text',
-    content: streamingContent || '',
-    metadata: null,
-    model: useSettingsStore.getState().activeModel || '',
-    createdAt: Date.now()
+  // 仅在等待首个 token 时显示 loading dots
+  if (
+    !isStreaming ||
+    streamingContent ||
+    streamingThinking ||
+    streamingToolCall ||
+    hasStreamingSteps
+  ) {
+    return <></>
   }
 
   return (
-    <>
-      {/* 流式输出的助手消息（steps + thinking + 工具调用生成 均在气泡内渲染） */}
-      {isStreaming &&
-        (streamingContent ||
-          streamingThinking ||
-          streamingImages.length > 0 ||
-          hasSteps ||
-          streamingToolCall) && (
-          <AssistantBubble
-            msg={streamingMsg}
-            isStreaming
-            streamingThinking={streamingThinking}
-            streamingImages={streamingImages}
-            steps={steps}
-          />
-        )}
-
-      {/* 等待响应的加载指示器（仅在无任何内容时显示） */}
-      {isStreaming &&
-        !streamingContent &&
-        !streamingThinking &&
-        !hasSteps &&
-        !streamingToolCall && (
-          <div className="flex gap-3 px-4 py-3">
-            <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-bg-tertiary flex items-center justify-center">
-              <Sparkles size={14} className="text-text-secondary animate-pulse" />
-            </div>
-            <div className="flex items-center gap-1 pt-1">
-              <div
-                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-                style={{ animationDelay: '0ms' }}
-              />
-              <div
-                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-                style={{ animationDelay: '150ms' }}
-              />
-              <div
-                className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
-                style={{ animationDelay: '300ms' }}
-              />
-            </div>
-          </div>
-        )}
-    </>
+    <div className="relative flex gap-3 pl-10 pr-4 py-3">
+      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
+      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 rounded-full bg-bg-tertiary flex items-center justify-center ring-2 ring-bg-primary z-10">
+        <Sparkles size={10} className="text-text-secondary animate-pulse" />
+      </div>
+      <div className="flex items-center gap-1 pt-1">
+        <div
+          className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+          style={{ animationDelay: '0ms' }}
+        />
+        <div
+          className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+          style={{ animationDelay: '150ms' }}
+        />
+        <div
+          className="w-1.5 h-1.5 rounded-full bg-text-tertiary animate-bounce"
+          style={{ animationDelay: '300ms' }}
+        />
+      </div>
+    </div>
   )
 }

@@ -32,6 +32,7 @@ function App(): React.JSX.Element {
   const lockedChatWidth = usePreviewStore((s) => s.lockedChatWidth)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
   const sidebarWidth = useSidebarStore((s) => s.width)
+  const isSidebarResizing = useSidebarStore((s) => s.isResizing)
 
   // ========== 核心流程 hook ==========
   useAppInit()
@@ -77,7 +78,7 @@ function App(): React.JSX.Element {
   return (
     <div className="flex h-full bg-bg-primary">
       <div
-        className="flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out"
+        className={`flex-shrink-0 overflow-hidden ${isSidebarResizing ? '' : 'transition-[width] duration-200 ease-in-out'}`}
         style={{ width: isSidebarOpen ? sidebarWidth : 0 }}
       >
         <div className="h-full" style={{ width: sidebarWidth }}>

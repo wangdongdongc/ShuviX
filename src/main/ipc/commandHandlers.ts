@@ -9,7 +9,7 @@ import { projectDao } from '../dao/projectDao'
 export function registerCommandHandlers(): void {
   /** 获取当前会话可用的斜杠命令列表 */
   ipcMain.handle('command:list', (_event, params: { sessionId: string }) => {
-    const session = sessionDao.pick(params.sessionId, ['projectId', 'modelMetadata'])
+    const session = sessionDao.pick(params.sessionId, ['projectId'])
     if (!session) return []
 
     // 项目命令（来自 .claude/commands/）
@@ -20,9 +20,8 @@ export function registerCommandHandlers(): void {
         })()
       : []
 
-    // 内置命令（根据 enabledTools 条件）
-    const enabledTools = session.modelMetadata?.enabledTools || []
-    commands.push(...commandService.getBuiltinCommands(enabledTools))
+    // 插件命令（始终可用，requiredTools 由前端在选中时自动启用）
+    commands.push(...commandService.getBuiltinCommands())
 
     return commands
   })

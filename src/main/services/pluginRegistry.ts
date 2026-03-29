@@ -86,13 +86,10 @@ class PluginRegistry {
     return purposes
   }
 
-  /** 获取所有插件贡献的斜杠命令（按 enabledTools 过滤） */
-  getAllCommands(enabledTools: string[]): SlashCommand[] {
-    const enabledSet = new Set(enabledTools)
+  /** 获取所有插件贡献的斜杠命令（始终返回全部，requiredTools 由前端在选中时自动启用） */
+  getAllCommands(): SlashCommand[] {
     return this.getActivatedEntries().flatMap(({ contribution }) =>
-      (contribution.commands ?? [])
-        .filter((cmd) => !cmd.requiredTools || cmd.requiredTools.every((t) => enabledSet.has(t)))
-        .map((cmd) => ({ ...cmd, filePath: '(plugin)' }))
+      (contribution.commands ?? []).map((cmd) => ({ ...cmd, filePath: '(plugin)' }))
     )
   }
 

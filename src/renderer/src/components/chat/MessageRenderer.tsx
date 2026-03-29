@@ -9,6 +9,8 @@ export interface VisibleItem {
   msg: ChatMessage
   /** 内嵌的中间步骤（仅 assistant text 消息携带） */
   steps?: VisibleItem[]
+  /** 流式合成占位项（由 AssistantBubble 自行从 store 读取流式状态） */
+  isStreamingPlaceholder?: boolean
 }
 
 interface MessageRendererProps {
@@ -20,7 +22,8 @@ interface MessageRendererProps {
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-1.5 ml-14 mr-4 my-1 text-[11px] text-error/90">
+    <div className="relative flex items-center gap-1.5 pl-10 mr-4 my-1 text-[11px] text-error/90">
+      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
       <AlertCircle size={12} />
       <span className="whitespace-pre-wrap break-words">{msg.content}</span>
     </div>
@@ -62,6 +65,7 @@ export function MessageRenderer({
     <AssistantBubble
       msg={assistantMsg}
       steps={steps}
+      isStreaming={item.isStreamingPlaceholder}
       onRegenerate={
         msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined
       }

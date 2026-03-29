@@ -84,8 +84,7 @@ class CommandService {
    */
   matchAndExpand(
     workingDir: string | null,
-    text: string,
-    enabledTools?: string[]
+    text: string
   ): {
     commandId: string
     commandName: string
@@ -103,11 +102,9 @@ class CommandService {
 
     if (!commandId) return null
 
-    // 查找匹配的命令（文件系统 + 内置）
+    // 查找匹配的命令（文件系统 + 插件）
     const commands = workingDir ? this.discoverCommands(workingDir) : []
-    if (enabledTools) {
-      commands.push(...this.getBuiltinCommands(enabledTools))
-    }
+    commands.push(...this.getBuiltinCommands())
     const command = commands.find((c) => c.commandId === commandId)
     if (!command) return null
 
@@ -153,9 +150,9 @@ class CommandService {
     }
   }
 
-  /** 获取插件贡献的命令（按启用工具过滤） */
-  getBuiltinCommands(enabledTools: string[]): SlashCommand[] {
-    return pluginRegistry.getAllCommands(enabledTools)
+  /** 获取插件贡献的命令 */
+  getBuiltinCommands(): SlashCommand[] {
+    return pluginRegistry.getAllCommands()
   }
 }
 

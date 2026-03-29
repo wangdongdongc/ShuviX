@@ -158,21 +158,7 @@ export const SubAgentBlock = memo(function SubAgentBlock({
   const usage: SubAgentUsage | undefined =
     subAgent?.usage || (persistedDetails?.usage as SubAgentUsage | undefined)
 
-  // 时间线有内容时自动展开
-  useEffect(() => {
-    if (timeline.length > 0 && status === 'running') {
-      setExpanded(true) // eslint-disable-line react-hooks/set-state-in-effect
-    }
-  }, [timeline.length, status])
-
-  // 完成后自动折叠
-  useEffect(() => {
-    if (status === 'done' || status === 'error') {
-      setExpanded(false) // eslint-disable-line react-hooks/set-state-in-effect
-    }
-  }, [status])
-
-  // 新条目出现时自动滚到底部
+  // 展开时新条目出现自动滚到底部
   useEffect(() => {
     if (timelineRef.current && expanded) {
       timelineRef.current.scrollTop = timelineRef.current.scrollHeight

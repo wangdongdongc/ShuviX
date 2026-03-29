@@ -6,7 +6,6 @@ import {
   useChatStore,
   selectStreamingContent,
   selectStreamingThinking,
-  selectStreamingImages,
   selectIsStreaming,
   selectCanChat,
   selectCanEdit,
@@ -34,31 +33,17 @@ function isStepOrToolMsg(msg: ChatMessage): boolean {
 
 /**
  * 预处理消息列表：将 step/tool 消息合并到后续的 assistant text 消息中
- * @param isStreaming 当前是否正在流式生成（流式中的 steps 不进入 items，由 StreamingFooter 展示）
+ * 流式时在末尾追加合成占位项，由 AssistantBubble 自行从 store 读取流式状态
  */
 function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
   const items: VisibleItem[] = []
   const stepBuffer: VisibleItem[] = []
-
-  // 流式中：找到最后一个 user text 消息的索引，之后的 step/tool 不加入 items
-  let streamCutoff = -1
-  if (isStreaming) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user' && messages[i].type === 'text') {
-        streamCutoff = i
-        break
-      }
-    }
-  }
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
 
     // 跳过 system_notify（但保留 error_event）
     if (msg.role === 'system_notify' && msg.type !== 'error_event') continue
-
-    // 流式中：最后一个 user text 之后的 step/tool 消息跳过（由 StreamingFooter 展示）
-    if (isStreaming && streamCutoff >= 0 && i > streamCutoff && isStepOrToolMsg(msg)) continue
 
     // step/tool 消息 → 收集到 buffer
     if (isStepOrToolMsg(msg)) {
@@ -93,46 +78,55 @@ function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): Visib
     items.push({ msg })
   }
 
-  // 尾部残留 steps（非流式场景下 agent 中断）
-  if (stepBuffer.length > 0 && !isStreaming) {
-    const syntheticMsg: ChatMessage = {
-      id: `orphan-${stepBuffer[0].msg.id}`,
-      sessionId: stepBuffer[0].msg.sessionId,
+  // 尾部残留 steps
+  if (stepBuffer.length > 0) {
+    if (isStreaming) {
+      // 流式中：将残留 steps 挂载到合成流式占位项
+      const sessionId = stepBuffer[0].msg.sessionId
+      const syntheticMsg: AssistantTextMessage = {
+        id: 'streaming-live',
+        sessionId,
+        role: 'assistant',
+        type: 'text',
+        content: '',
+        metadata: null,
+        model: '',
+        createdAt: Date.now()
+      }
+      items.push({ msg: syntheticMsg, steps: [...stepBuffer], isStreamingPlaceholder: true })
+    } else {
+      // 非流式：创建 orphan bubble
+      const syntheticMsg: AssistantTextMessage = {
+        id: `orphan-${stepBuffer[0].msg.id}`,
+        sessionId: stepBuffer[0].msg.sessionId,
+        role: 'assistant',
+        type: 'text',
+        content: '',
+        metadata: null,
+        model: stepBuffer[0].msg.model || '',
+        createdAt: stepBuffer[0].msg.createdAt
+      }
+      items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
+    }
+    stepBuffer.length = 0
+  } else if (isStreaming) {
+    // 流式中无残留 steps 时也追加空合成项（承载流式 content/thinking/toolCall）
+    const lastMsg = messages[messages.length - 1]
+    const sessionId = lastMsg?.sessionId || ''
+    const syntheticMsg: AssistantTextMessage = {
+      id: 'streaming-live',
+      sessionId,
       role: 'assistant',
       type: 'text',
       content: '',
       metadata: null,
-      model: stepBuffer[0].msg.model || '',
-      createdAt: stepBuffer[0].msg.createdAt
+      model: '',
+      createdAt: Date.now()
     }
-    items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
-    stepBuffer.length = 0
+    items.push({ msg: syntheticMsg, isStreamingPlaceholder: true })
   }
 
   return items
-}
-
-/**
- * 提取流式中的 steps（最后一个 user text 之后的 step/tool 消息）
- * 这些 steps 在 StreamingFooter 的气泡中渲染
- */
-function extractStreamingSteps(messages: ChatMessage[]): VisibleItem[] {
-  // 找到最后一个 user text 消息
-  let lastUserIdx = -1
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user' && messages[i].type === 'text') {
-      lastUserIdx = i
-      break
-    }
-  }
-  if (lastUserIdx < 0) return []
-
-  const steps: VisibleItem[] = []
-  for (let i = lastUserIdx + 1; i < messages.length; i++) {
-    const msg = messages[i]
-    if (isStepOrToolMsg(msg)) steps.push({ msg })
-  }
-  return steps
 }
 
 /**
@@ -143,7 +137,6 @@ export function ChatView(): React.JSX.Element {
   const { messages, activeSessionId, sessions } = useChatStore()
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
-  const streamingImages = useChatStore(selectStreamingImages)
   const isStreaming = useChatStore(selectIsStreaming)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
@@ -201,26 +194,27 @@ export function ChatView(): React.JSX.Element {
     atBottomRef.current = atBottom
   }, [])
 
+  // Virtuoso followOutput：新项出现时自动跟随
+  const followOutput = useCallback(
+    (isAtBottom: boolean) => (isAtBottom ? ('auto' as const) : (false as const)),
+    []
+  )
+
   // 预构建可见消息列表，messages 不变时复用缓存
   const visibleItems = useMemo(
     () => buildVisibleItems(messages, isStreaming),
     [messages, isStreaming]
   )
-  const streamingSteps = useMemo(
-    () => (isStreaming ? extractStreamingSteps(messages) : []),
-    [isStreaming, messages]
-  )
-
-  // 流式内容 / 新消息更新时，若用户在底部则自动滚动
-  // 使用 rAF 合并同帧内多次更新，behavior:'auto' 避免 smooth 动画重叠抖动
+  // 流式内容增长时，若用户在底部则自动滚动
+  // 使用 rAF 合并同帧内多次更新，scrollTo 代替 scrollToIndex 避免 index 定位抖动
   useEffect(() => {
     if (!atBottomRef.current || !virtuosoRef.current) return
     if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
     scrollRafRef.current = requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
+      virtuosoRef.current?.scrollTo({ top: Number.MAX_SAFE_INTEGER })
       scrollRafRef.current = 0
     })
-  }, [streamingContent, streamingThinking, streamingImages, messages])
+  }, [streamingContent, streamingThinking, messages])
 
   // 组件卸载时清理 rAF
   useEffect(() => {
@@ -385,12 +379,11 @@ export function ChatView(): React.JSX.Element {
               className="flex-1"
               data={visibleItems}
               itemContent={renderItem}
-              context={{ streamingSteps }}
               components={{ Footer: StreamingFooter }}
-              followOutput="auto"
+              followOutput={followOutput}
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}
-              increaseViewportBy={200}
+              increaseViewportBy={{ top: 200, bottom: 400 }}
               computeItemKey={(_index, item) => item.msg.id}
               atBottomStateChange={handleAtBottomChange}
               atBottomThreshold={300}

@@ -3,15 +3,19 @@ import { useTranslation } from 'react-i18next'
 import { useSettingsStore, type DarkThemeId, type LightThemeId } from '../../stores/settingsStore'
 
 const DARK_THEMES: { id: DarkThemeId; labelKey: string }[] = [
-  { id: 'dark', labelKey: 'settings.themeDefaultDark' },
   { id: 'github-dark', labelKey: 'settings.themeGitHubDark' },
+  { id: 'dracula', labelKey: 'settings.themeDracula' },
+  { id: 'one-dark', labelKey: 'settings.themeOneDark' },
+  { id: 'catppuccin-mocha', labelKey: 'settings.themeCatppuccinMocha' },
+  { id: 'gruvbox-dark', labelKey: 'settings.themeGruvboxDark' },
   { id: 'nord', labelKey: 'settings.themeNord' },
   { id: 'tokyo-night', labelKey: 'settings.themeTokyoNight' }
 ]
 
 const LIGHT_THEMES: { id: LightThemeId; labelKey: string }[] = [
-  { id: 'light', labelKey: 'settings.themeDefaultLight' },
   { id: 'github-light', labelKey: 'settings.themeGitHubLight' },
+  { id: 'one-light', labelKey: 'settings.themeOneLight' },
+  { id: 'catppuccin-latte', labelKey: 'settings.themeCatppuccinLatte' },
   { id: 'solarized-light', labelKey: 'settings.themeSolarizedLight' }
 ]
 

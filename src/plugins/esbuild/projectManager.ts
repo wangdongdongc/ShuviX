@@ -16,7 +16,7 @@ import type { PluginLogger } from '../../plugin-api'
 const DESIGN_SUBDIR = '.shuvix/design'
 
 /** 可用的模板列表 */
-const VALID_TEMPLATES = new Set(['blank', 'app', 'landing', 'dashboard'])
+const VALID_TEMPLATES = new Set(['blank', 'app', 'landing', 'dashboard', 'presentation'])
 
 // ────────────────────── Types ──────────────────────
 

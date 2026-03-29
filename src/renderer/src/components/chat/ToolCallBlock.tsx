@@ -212,7 +212,7 @@ export function ToolCallBlock({
         className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
       >
         {(args || result || hasEditDiff || streamingArgsText) &&
-          (expanded || streamingArgsText ? (
+          (expanded ? (
             <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
           ) : (
             <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
@@ -229,15 +229,8 @@ export function ToolCallBlock({
         )}
       </button>
 
-      {/* 编辑成功时展示 DiffViewer */}
-      {expanded && hasEditDiff && details?.type === 'edit' && (
-        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
-          <DiffViewer diff={details.diff!} />
-        </div>
-      )}
-
-      {/* 流式生成中的参数文本（自动展开） */}
-      {streamingArgsText && (
+      {/* 流式生成中的参数文本（手动展开查看） */}
+      {expanded && streamingArgsText && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
           <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-40 whitespace-pre-wrap break-words">
             {streamingArgsText}
@@ -245,8 +238,15 @@ export function ToolCallBlock({
         </div>
       )}
 
+      {/* 编辑成功时展示 DiffViewer */}
+      {expanded && hasEditDiff && details?.type === 'edit' && (
+        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
+          <DiffViewer diff={details.diff!} />
+        </div>
+      )}
+
       {/* 展开详情 */}
-      {expanded && !streamingArgsText && !hasEditDiff && status !== 'pending_approval' && (
+      {expanded && !hasEditDiff && status !== 'pending_approval' && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {presentation && args ? (
             <PluginToolDetail presentation={presentation} args={args} result={result} />

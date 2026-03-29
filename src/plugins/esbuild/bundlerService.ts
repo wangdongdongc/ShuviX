@@ -55,12 +55,14 @@ const SHIPPED_SPECIFIERS = new Set([
   'react-dom',
   'react-dom/client',
   'react-router',
-  'react-router-dom'
+  'react-router-dom',
+  'spectacle'
 ])
 
 /** bundle 文件名 */
 const ALL_IN_ONE_BUNDLE = 'react-all.esm.js'
 const ROUTER_BUNDLE = 'react-router.esm.js'
+const SPECTACLE_BUNDLE = 'spectacle-all.esm.js'
 
 /**
  * 每个 bare specifier 对应的 re-export wrapper
@@ -89,12 +91,28 @@ const REEXPORT_WRAPPERS: Record<string, string> = {
 
   'react/jsx-runtime': `export { jsx, jsxs, _Fragment as Fragment, _jsxRuntime as default } from '__ALL_IN_ONE__';`,
 
-  'react-dom': `export { _reactDOM as default, createPortal, flushSync } from '__ALL_IN_ONE__';`,
+  'react-dom': `export { _reactDOM as default, createPortal, flushSync, unstable_batchedUpdates } from '__ALL_IN_ONE__';`,
 
   'react-dom/client': `export { _reactDOMClient as default, createRoot, hydrateRoot } from '__ALL_IN_ONE__';`,
 
   'react-router': ROUTER_REEXPORTS,
-  'react-router-dom': ROUTER_REEXPORTS
+  'react-router-dom': ROUTER_REEXPORTS,
+
+  spectacle: `export {
+  Deck, DeckContext, Slide, SlideContext, SlideLayout,
+  Heading, Text, FitText, CodeSpan, Quote, Link,
+  FlexBox, Grid, Box, Image, FullSizeImage,
+  UnorderedList, OrderedList, ListItem,
+  Table, TableHeader, TableBody, TableRow, TableCell,
+  Appear, Stepper,
+  Notes,
+  CodePane, codePaneThemes,
+  Markdown, MarkdownSlide, MarkdownSlideSet,
+  DefaultTemplate, SpectacleLogo,
+  AnimatedProgress, Progress, FullScreen, CommandBar,
+  defaultTheme, defaultTransition, fadeTransition, slideTransition,
+  indentNormalizer, removeNotes, isolateNotes, mdxComponentMap
+} from '__SPECTACLE_BUNDLE__';`
 }
 
 // ────────────────────── Host HTML template ──────────────────────
@@ -107,6 +125,10 @@ const HOST_HTML = `<!DOCTYPE html>
   <title>Design Preview</title>
   <script src="tailwind.js"></script>
   <link rel="stylesheet" href="bundle.css" />
+  <style>
+    /* Ensure full viewport coverage for frameworks like Spectacle */
+    html, body, #root { height: 100%; margin: 0; }
+  </style>
 </head>
 <body>
   <div id="root"></div>
@@ -116,6 +138,17 @@ const HOST_HTML = `<!DOCTYPE html>
     const es = new EventSource('sse');
     es.addEventListener('reload', () => location.reload());
     es.onerror = () => setTimeout(() => location.reload(), 1000);
+    // Surface runtime errors visually
+    window.onerror = function(msg, src, line, col, err) {
+      document.getElementById('root').innerHTML =
+        '<pre style="color:#f38ba8;background:#1e1e2e;padding:2rem;margin:0;height:100%;font-size:13px;overflow:auto;">' +
+        '<b>Runtime Error</b>\\n\\n' + (err ? err.stack : msg) + '</pre>';
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      document.getElementById('root').innerHTML =
+        '<pre style="color:#f38ba8;background:#1e1e2e;padding:2rem;margin:0;height:100%;font-size:13px;overflow:auto;">' +
+        '<b>Unhandled Promise Rejection</b>\\n\\n' + (e.reason?.stack || e.reason) + '</pre>';
+    });
   </script>
 </body>
 </html>`
@@ -199,12 +232,18 @@ export class BundlerService {
       ? readFileSync(routerBundlePath, 'utf-8')
       : ''
 
+    // Spectacle bundle（懒加载）
+    const spectacleBundlePath = resolve(depsDir, SPECTACLE_BUNDLE)
+    const spectacleBundleContent = existsSync(spectacleBundlePath)
+      ? readFileSync(spectacleBundlePath, 'utf-8')
+      : ''
+
     return {
       name: 'shuvix-design',
       setup(build) {
         // 1) bare specifier → namespace 'shipped-dep'
         build.onResolve(
-          { filter: /^(react|react-dom|react-router|react-router-dom)(\/.*)?$/ },
+          { filter: /^(react|react-dom|react-router|react-router-dom|spectacle)(\/.*)?$/ },
           (args) => {
             if (SHIPPED_SPECIFIERS.has(args.path)) {
               return { path: args.path, namespace: 'shipped-dep' }
@@ -231,6 +270,22 @@ export class BundlerService {
           }
         )
 
+        // 2d) shipped-dep 内部 __SPECTACLE_BUNDLE__ → spectacle bundle
+        build.onResolve({ filter: /^__SPECTACLE_BUNDLE__$/, namespace: 'shipped-dep' }, () => {
+          return { path: 'spectacle-all', namespace: 'shipped-spectacle-bundle' }
+        })
+
+        // 2e) spectacle bundle 内部的 react 引用 → 重定向回 shipped-dep（共享 React 实例）
+        build.onResolve(
+          {
+            filter: /^(react|react-dom|react\/jsx-runtime)$/,
+            namespace: 'shipped-spectacle-bundle'
+          },
+          (args) => {
+            return { path: args.path, namespace: 'shipped-dep' }
+          }
+        )
+
         // 3) onLoad: shipped-dep → 返回 re-export wrapper
         build.onLoad({ filter: /.*/, namespace: 'shipped-dep' }, (args) => {
           const wrapper = REEXPORT_WRAPPERS[args.path]
@@ -248,6 +303,11 @@ export class BundlerService {
         // 4b) onLoad: shipped-router-bundle → react-router bundle
         build.onLoad({ filter: /.*/, namespace: 'shipped-router-bundle' }, () => {
           return { contents: routerBundleContent, loader: 'js' }
+        })
+
+        // 4c) onLoad: shipped-spectacle-bundle → spectacle bundle
+        build.onLoad({ filter: /.*/, namespace: 'shipped-spectacle-bundle' }, () => {
+          return { contents: spectacleBundleContent, loader: 'js' }
         })
 
         // 5) relative imports → 自动补全扩展名

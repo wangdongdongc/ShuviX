@@ -13,6 +13,9 @@ import { ToolCallBlock } from './ToolCallBlock'
 import { SubAgentBlock } from './SubAgentBlock'
 import {
   useChatStore,
+  selectStreamingContent,
+  selectStreamingThinking,
+  selectStreamingImages,
   selectStreamingToolCall,
   selectCompletedStreamingToolCalls,
   type AssistantTextMessage
@@ -33,23 +36,18 @@ interface AssistantBubbleProps {
   msg: AssistantTextMessage
   steps?: StepItem[]
   isStreaming?: boolean
-  /** 流式阶段的思考内容（实时更新） */
-  streamingThinking?: string | null
-  /** 流式阶段的生成图片（实时更新） */
-  streamingImages?: Array<{ data: string; mimeType: string }>
   /** 重新生成此消息 */
   onRegenerate?: () => void
 }
 
 /**
  * 助手消息气泡 — Markdown 渲染、步骤、思考、图片、用量
+ * 流式模式下自行从 store 读取 streaming 状态，无需外部传入
  */
 export const AssistantBubble = memo(function AssistantBubble({
   msg,
   steps,
   isStreaming,
-  streamingThinking,
-  streamingImages,
   onRegenerate
 }: AssistantBubbleProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -59,21 +57,30 @@ export const AssistantBubble = memo(function AssistantBubble({
   const isThisPlaying = isPlaying && playingMessageId === msg.id
   const isThisLoading = isLoading && playingMessageId === msg.id
 
-  const thinking = streamingThinking || msg.metadata?.thinking || null
+  // 流式模式下从 store 直接读取状态
+  const storeStreamingContent = useChatStore(selectStreamingContent)
+  const storeStreamingThinking = useChatStore(selectStreamingThinking)
+  const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
+
+  const displayContent = isStreaming ? storeStreamingContent : msg.content
+  const thinking = (isStreaming ? storeStreamingThinking : null) || msg.metadata?.thinking || null
+  const liveImages = isStreaming ? storeStreamingImages : []
   const usage = msg.metadata?.usage
 
   const handleCopy = (): void => {
-    copyToClipboard(msg.content)
+    copyToClipboard(displayContent)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <div className="group flex gap-3 px-4 py-3 bg-bg-secondary/50">
-      {/* 头像 */}
-      <div className="flex-shrink-0 w-7 h-7 rounded-lg overflow-hidden mt-0.5">
+    <div className="group relative flex gap-3 pl-10 pr-4 py-3">
+      {/* 时间线 */}
+      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
+      {/* 头像节点 */}
+      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 rounded-full overflow-hidden ring-2 ring-bg-primary z-10">
         <img src={assistantAvatar} alt="assistant" className="w-full h-full object-cover" />
       </div>
 
@@ -84,7 +91,7 @@ export const AssistantBubble = memo(function AssistantBubble({
             {msg.model || 'Assistant'}
           </span>
           {/* 复制 */}
-          {!isStreaming && msg.content && (
+          {!isStreaming && displayContent && (
             <button
               onClick={handleCopy}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
@@ -94,10 +101,12 @@ export const AssistantBubble = memo(function AssistantBubble({
             </button>
           )}
           {/* TTS 朗读 */}
-          {!isStreaming && msg.content && (
+          {!isStreaming && displayContent && (
             <button
               onClick={() =>
-                isThisPlaying || isThisLoading ? stop() : speak(msg.content.slice(0, 4000), msg.id)
+                isThisPlaying || isThisLoading
+                  ? stop()
+                  : speak(displayContent.slice(0, 4000), msg.id)
               }
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
               title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
@@ -112,7 +121,7 @@ export const AssistantBubble = memo(function AssistantBubble({
             </button>
           )}
           {/* 原始/渲染 切换 */}
-          {!isStreaming && msg.content && (
+          {!isStreaming && displayContent && (
             <button
               onClick={() => setShowRaw(!showRaw)}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
@@ -135,7 +144,7 @@ export const AssistantBubble = memo(function AssistantBubble({
 
         {/* 步骤 */}
         {steps && steps.length > 0 && (
-          <div className="mb-2 space-y-0.5">
+          <div className="mb-0.5 space-y-0.5">
             {steps.map((step) => {
               if (step.msg.type === 'step_text') {
                 return (
@@ -192,68 +201,47 @@ export const AssistantBubble = memo(function AssistantBubble({
           </div>
         )}
 
-        {/* 思考过程 — 有后续内容时转为紧凑 StepBlock，否则展示实时流式 details */}
-        {thinking &&
-          (msg.content || streamingToolCall ? (
-            <StepBlock
-              message={{
-                id: 'streaming-thinking',
-                sessionId: msg.sessionId,
-                role: 'assistant' as const,
-                type: 'step_thinking' as const,
-                content: thinking,
-                metadata: null,
-                model: msg.model,
-                createdAt: msg.createdAt
-              }}
-            />
-          ) : (
-            <details open={!!streamingThinking} className="group mb-2">
-              <summary className="cursor-pointer select-none text-xs text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 py-1">
-                <svg
-                  className="w-3 h-3 transition-transform group-open:rotate-90"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-                <span className={streamingThinking ? 'animate-pulse' : ''}>
-                  {t('message.deepThought')}
-                </span>
-              </summary>
-              <div className="mt-1 ml-4.5 pl-3 border-l-2 border-purple-500/30 text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-                {thinking}
-              </div>
-            </details>
-          ))}
+        {/* 思考过程 — 统一使用 StepBlock，默认折叠 */}
+        {thinking && (
+          <StepBlock
+            message={{
+              id: 'streaming-thinking',
+              sessionId: msg.sessionId,
+              role: 'assistant' as const,
+              type: 'step_thinking' as const,
+              content: thinking,
+              metadata: null,
+              model: msg.model,
+              createdAt: msg.createdAt
+            }}
+            isGenerating={
+              isStreaming && !!storeStreamingThinking && !displayContent && !streamingToolCall
+            }
+          />
+        )}
 
         {/* Markdown / 原始文本 */}
-        {showRaw ? (
-          <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
-            {msg.content}
-          </pre>
-        ) : (
-          <div className="markdown-body text-sm">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight, rehypeRaw]}
-              components={{
-                pre: CodeBlock as never
-              }}
-            >
-              {msg.content}
-            </ReactMarkdown>
-            {isStreaming && msg.content && !streamingToolCall && (
-              <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
-            )}
-          </div>
-        )}
+        {displayContent &&
+          (showRaw ? (
+            <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
+              {displayContent}
+            </pre>
+          ) : (
+            <div className="markdown-body text-sm">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                components={{
+                  pre: CodeBlock as never
+                }}
+              >
+                {displayContent}
+              </ReactMarkdown>
+              {isStreaming && displayContent && !streamingToolCall && (
+                <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+              )}
+            </div>
+          ))}
 
         {/* 已完成生成的工具调用（等待执行） */}
         {isStreaming &&
@@ -275,38 +263,26 @@ export const AssistantBubble = memo(function AssistantBubble({
           />
         )}
 
-        {/* 持久化图片 */}
-        {!isStreaming && (msg.metadata?.images?.length ?? 0) > 0 && (
-          <div className="flex flex-wrap gap-2 mt-2">
-            {msg.metadata!.images!.map((img, idx) => (
-              <img
-                key={idx}
-                src={img.data || ''}
-                alt={t('message.generatedImage', {
-                  index: idx + 1,
-                  defaultValue: `Generated image ${idx + 1}`
-                })}
-                className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
-              />
-            ))}
-          </div>
-        )}
-        {/* 流式图片 */}
-        {isStreaming && streamingImages && streamingImages.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-2">
-            {streamingImages.map((img, idx) => (
-              <img
-                key={idx}
-                src={img.data}
-                alt={t('message.generatedImage', {
-                  index: idx + 1,
-                  defaultValue: `Generated image ${idx + 1}`
-                })}
-                className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
-              />
-            ))}
-          </div>
-        )}
+        {/* 图片（流式用 store，非流式用持久化 metadata） */}
+        {(() => {
+          const images = isStreaming ? liveImages : msg.metadata?.images
+          if (!images || images.length === 0) return null
+          return (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {images.map((img, idx) => (
+                <img
+                  key={idx}
+                  src={img.data || ''}
+                  alt={t('message.generatedImage', {
+                    index: idx + 1,
+                    defaultValue: `Generated image ${idx + 1}`
+                  })}
+                  className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
+                />
+              ))}
+            </div>
+          )
+        })()}
 
         {/* token 用量 */}
         {usage && !isStreaming && (

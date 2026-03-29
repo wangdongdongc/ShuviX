@@ -10,4 +10,6 @@ export interface SlashCommand {
   template: string
   /** 源文件路径（调试用） */
   filePath: string
+  /** 依赖的工具名（选中命令时自动启用这些工具） */
+  requiredTools?: string[]
 }

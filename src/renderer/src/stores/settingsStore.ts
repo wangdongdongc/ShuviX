@@ -3,9 +3,16 @@ import { create } from 'zustand'
 // ProviderInfo / ProviderModelInfo / AvailableModel / ConfigMeta 类型定义在 src/preload/index.d.ts（全局可用）
 
 /** 深色系主题 ID */
-export type DarkThemeId = 'dark' | 'github-dark' | 'nord' | 'tokyo-night'
+export type DarkThemeId =
+  | 'github-dark'
+  | 'dracula'
+  | 'one-dark'
+  | 'catppuccin-mocha'
+  | 'gruvbox-dark'
+  | 'nord'
+  | 'tokyo-night'
 /** 浅色系主题 ID */
-export type LightThemeId = 'light' | 'github-light' | 'solarized-light'
+export type LightThemeId = 'github-light' | 'one-light' | 'catppuccin-latte' | 'solarized-light'
 
 interface SettingsState {
   /** 所有提供商列表（含禁用的） */
@@ -111,8 +118,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   activeModel: '',
   systemPrompt: 'You are a helpful assistant.',
   theme: 'dark',
-  darkTheme: 'dark',
-  lightTheme: 'light',
+  darkTheme: 'github-dark',
+  lightTheme: 'github-light',
   fontSize: 14,
   uiZoom: 100,
   voiceSttBackend: 'openai',
@@ -150,8 +157,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   /** 从 settings 表加载通用设置（不覆盖当前会话的 activeProvider/activeModel） */
   loadSettings: (settings) => {
-    const darkTheme = (settings['general.darkTheme'] as DarkThemeId) || 'dark'
-    const lightTheme = (settings['general.lightTheme'] as LightThemeId) || 'light'
+    const rawDark = settings['general.darkTheme'] || 'github-dark'
+    const darkTheme = (rawDark === 'dark' ? 'github-dark' : rawDark) as DarkThemeId
+    const rawLight = settings['general.lightTheme'] || 'github-light'
+    const lightTheme = (rawLight === 'light' ? 'github-light' : rawLight) as LightThemeId
     set({
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',

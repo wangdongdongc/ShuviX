@@ -39,12 +39,16 @@ const isMac = process.platform === 'darwin'
 
 /** 各主题对应的窗口背景色（用于创建窗口时避免白闪） */
 const THEME_BG_COLORS: Record<string, string> = {
-  dark: '#0a0a0f',
   'github-dark': '#0d1117',
+  dracula: '#282a36',
+  'one-dark': '#282c34',
+  'catppuccin-mocha': '#1e1e2e',
+  'gruvbox-dark': '#282828',
   nord: '#2e3440',
   'tokyo-night': '#1a1b26',
-  light: '#ffffff',
   'github-light': '#ffffff',
+  'one-light': '#fafafa',
+  'catppuccin-latte': '#eff1f5',
   'solarized-light': '#fdf6e3'
 }
 
@@ -57,16 +61,16 @@ function getThemeBgColor(): string {
       const resolved = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
       themeId =
         resolved === 'light'
-          ? settingsDao.findByKey('general.lightTheme') || 'light'
-          : settingsDao.findByKey('general.darkTheme') || 'dark'
+          ? settingsDao.findByKey('general.lightTheme') || 'github-light'
+          : settingsDao.findByKey('general.darkTheme') || 'github-dark'
     } else if (mode === 'light') {
-      themeId = settingsDao.findByKey('general.lightTheme') || 'light'
+      themeId = settingsDao.findByKey('general.lightTheme') || 'github-light'
     } else {
-      themeId = settingsDao.findByKey('general.darkTheme') || 'dark'
+      themeId = settingsDao.findByKey('general.darkTheme') || 'github-dark'
     }
-    return THEME_BG_COLORS[themeId] || '#0a0a0f'
+    return THEME_BG_COLORS[themeId] || '#0d1117'
   } catch {
-    return '#0a0a0f'
+    return '#0d1117'
   }
 }
 

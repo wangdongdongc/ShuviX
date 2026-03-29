@@ -26,9 +26,10 @@ export function getDefaultEnabledTools(projectPath?: string): string[] {
   const defaultBuiltinNames = getBuiltinToolEntries()
     .filter((e) => e.defaultEnabled)
     .map((e) => e.name)
+  const pluginNames = pluginRegistry.getAllToolNames()
   const mcpNames = mcpService.getAllToolNames()
   const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
-  const result = [...defaultBuiltinNames, ...mcpNames, ...skillNames]
+  const result = [...defaultBuiltinNames, ...pluginNames, ...mcpNames, ...skillNames]
   log.info(`getDefaultEnabledTools count=${result.length} skills=[${skillNames.join(',')}]`)
   return result
 }
