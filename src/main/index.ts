@@ -21,6 +21,7 @@ import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
+import { mcpServerService } from './services/mcpServerService'
 import { abortAllAcpSessions } from './subagent'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
@@ -559,10 +560,20 @@ app.whenReady().then(async () => {
     })
     .catch(() => {})
 
-  // 启动所有已启用的 MCP Server
+  // 启动所有已启用的 MCP Client
   measureAsync('mcpService.connectAll', () => mcpService.connectAll()).catch((err) => {
     log.error(`connectAll failed: ${err}`)
   })
+
+  // 自动启动 MCP Server（如果已启用）
+  if (settingsDao.findByKey('mcpServer.enabled') === 'true') {
+    const port = Number(settingsDao.findByKey('mcpServer.port')) || 3399
+    const dbFeature = settingsDao.findByKey('mcpServer.features.database') === 'true'
+    mcpServerService
+      .start({ enabled: true, transport: 'http', port, features: { database: dbFeature } })
+      .then(() => log.info(`MCP Server started on port ${port}`))
+      .catch((err) => log.error(`MCP Server start failed: ${err}`))
+  }
 
   // 恢复有绑定 session 的 Telegram Bot
   telegramService.autoStartBots().catch((err) => {
@@ -581,6 +592,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => {
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
+  mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()

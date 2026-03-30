@@ -88,6 +88,18 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'voice.tts.qwen3.emotion': {
     labelKey: 'settings.voiceTtsQwen3Emotion',
     desc: 'emotion/style instruction text for Qwen3 TTS'
+  },
+  'mcpServer.enabled': {
+    labelKey: 'settings.mcpServerEnabled',
+    desc: 'true | false — enable ShuviX as MCP server'
+  },
+  'mcpServer.port': {
+    labelKey: 'settings.mcpServerPort',
+    desc: 'number — HTTP port for MCP server (default 3399)'
+  },
+  'mcpServer.features.database': {
+    labelKey: 'settings.mcpServerFeatureDatabase',
+    desc: 'true | false — expose database query tool via MCP'
   }
 }
 

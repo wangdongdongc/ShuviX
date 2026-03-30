@@ -50,7 +50,7 @@ export class DbCredentialDao extends BaseDao {
     const rows = this.stmt(
       'SELECT name, dbType, readonly FROM db_credentials ORDER BY createdAt ASC'
     ).all() as Array<{ name: string; dbType: DbType; readonly: number }>
-    return rows.map((r) => ({ ...r, readonly: r.readonly === 1 }))
+    return (rows || []).map((r) => ({ ...r, readonly: r.readonly === 1 }))
   }
 
   /** 根据名称获取凭据（解密） */

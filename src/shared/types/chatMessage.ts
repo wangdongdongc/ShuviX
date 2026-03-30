@@ -165,7 +165,7 @@ export interface SshToolDetails {
 /** database 工具详情 */
 export interface DatabaseToolDetails {
   type: 'database'
-  action: 'connect' | 'query' | 'disconnect'
+  action: 'query'
   success?: boolean
   credentialName?: string
   error?: string

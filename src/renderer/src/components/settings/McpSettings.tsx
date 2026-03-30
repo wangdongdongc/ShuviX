@@ -9,9 +9,41 @@ import {
   ChevronDown,
   ChevronRight,
   Wrench,
-  Server
+  Server,
+  PlugZap
 } from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { McpServerPanel } from './McpServerPanel'
+
+/** 子标签页类型 */
+type McpSubTab = 'client' | 'server'
+
+/** 子分类导航按钮（与 ToolSettings 保持一致） */
+function SubTabButton({
+  icon,
+  label,
+  active,
+  onClick
+}: {
+  icon: React.ReactNode
+  label: string
+  active: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors text-left ${
+        active
+          ? 'bg-accent/10 text-accent font-medium'
+          : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+      }`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </button>
+  )
+}
 
 /** MCP Server 信息（从主进程返回） */
 interface McpServerInfo {
@@ -157,7 +189,7 @@ function headersToLines(json: string): string {
 }
 
 /** MCP 设置页 */
-export function McpSettings(): React.JSX.Element {
+function McpClientPanel(): React.JSX.Element {
   const { t } = useTranslation()
   const [servers, setServers] = useState<McpServerInfo[]>([])
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -561,6 +593,38 @@ export function McpSettings(): React.JSX.Element {
           onCancel={() => setDeletingServer(null)}
         />
       )}
+    </div>
+  )
+}
+
+/** MCP 设置页（含子标签页：客户端 + 服务） */
+export function McpSettings(): React.JSX.Element {
+  const { t } = useTranslation()
+  const [subTab, setSubTab] = useState<McpSubTab>('client')
+
+  return (
+    <div className="flex flex-1 min-h-0 h-full">
+      {/* 左侧子导航 */}
+      <div className="w-[140px] flex-shrink-0 border-r border-border-secondary py-4 px-2.5 space-y-0.5">
+        <SubTabButton
+          icon={<PlugZap size={13} />}
+          label={t('settings.mcpSubTabClient')}
+          active={subTab === 'client'}
+          onClick={() => setSubTab('client')}
+        />
+        <SubTabButton
+          icon={<Server size={13} />}
+          label={t('settings.mcpSubTabServer')}
+          active={subTab === 'server'}
+          onClick={() => setSubTab('server')}
+        />
+      </div>
+
+      {/* 右侧内容区 */}
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        {subTab === 'client' && <McpClientPanel />}
+        {subTab === 'server' && <McpServerPanel />}
+      </div>
     </div>
   )
 }

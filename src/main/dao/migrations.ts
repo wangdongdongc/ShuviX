@@ -209,6 +209,27 @@ export const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_db_credentials_name ON db_credentials(name);
       `)
     }
+  },
+  {
+    version: 3,
+    description: '新增 mcp_server_logs 表（MCP 对外服务工具调用日志）',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_server_logs (
+          id TEXT PRIMARY KEY,
+          sessionId TEXT NOT NULL DEFAULT '',
+          clientName TEXT NOT NULL DEFAULT '',
+          clientVersion TEXT NOT NULL DEFAULT '',
+          toolName TEXT NOT NULL DEFAULT '',
+          arguments TEXT NOT NULL DEFAULT '',
+          result TEXT NOT NULL DEFAULT '',
+          isError INTEGER NOT NULL DEFAULT 0,
+          durationMs INTEGER NOT NULL DEFAULT 0,
+          createdAt INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_server_logs_created ON mcp_server_logs(createdAt);
+      `)
+    }
   }
 ]
 

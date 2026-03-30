@@ -267,7 +267,30 @@ const api = {
     list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId)
   },
 
-  // ============ MCP Server 管理 ============
+  // ============ MCP Host（ShuviX 对外 MCP 服务） ============
+  mcpServer: {
+    /** 获取 MCP Server 状态 */
+    getStatus: () => ipcRenderer.invoke('mcpServer:getStatus'),
+    /** 启动 MCP Server */
+    start: () => ipcRenderer.invoke('mcpServer:start'),
+    /** 停止 MCP Server */
+    stop: () => ipcRenderer.invoke('mcpServer:stop'),
+    /** 获取已注册的工具列表 */
+    getTools: () => ipcRenderer.invoke('mcpServer:getTools'),
+    /** 动态启用功能 */
+    enableFeature: (feature: string) => ipcRenderer.invoke('mcpServer:enableFeature', feature),
+    /** 动态禁用功能 */
+    disableFeature: (feature: string) => ipcRenderer.invoke('mcpServer:disableFeature', feature),
+    /** 列出日志 */
+    listLogs: (params?: { clientName?: string; toolName?: string; limit?: number }) =>
+      ipcRenderer.invoke('mcpServer:listLogs', params),
+    /** 获取日志详情 */
+    getLog: (id: string) => ipcRenderer.invoke('mcpServer:getLog', id),
+    /** 清空日志 */
+    clearLogs: () => ipcRenderer.invoke('mcpServer:clearLogs')
+  },
+
+  // ============ MCP 客户端管理 ============
   mcp: {
     /** 列出所有 MCP Server（含运行时状态） */
     list: () => ipcRenderer.invoke('mcp:list'),

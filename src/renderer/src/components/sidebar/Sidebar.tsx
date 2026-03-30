@@ -200,13 +200,13 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 cursor-pointer ${
+      className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
           : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
       }`}
     >
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px]">
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px] group-hover:pr-6">
         <span className="truncate">{session.title}</span>
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
         {telegramBindings.has(session.id) && (
@@ -216,7 +216,7 @@ export function Sidebar(): React.JSX.Element {
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+      <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
         <button
           onClick={(e) => {
             e.stopPropagation()
@@ -281,7 +281,7 @@ export function Sidebar(): React.JSX.Element {
                   <div className="relative flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
                     <button
                       onClick={() => toggleGroup(groupKey)}
-                      className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors ${
+                      className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
                         activeGroupKey === groupKey
                           ? 'text-text-secondary'
                           : 'text-text-tertiary hover:text-text-secondary'

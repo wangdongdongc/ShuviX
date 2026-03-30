@@ -17,6 +17,7 @@ import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
 import { registerPluginHandlers } from './pluginHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
+import { registerMcpServerHandlers } from './mcpServerHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -42,4 +43,5 @@ export function registerIpcHandlers(): void {
   registerDownloadHandlers()
   registerPluginHandlers()
   registerUpdateHandlers()
+  registerMcpServerHandlers()
 }

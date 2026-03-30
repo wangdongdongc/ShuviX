@@ -134,11 +134,7 @@ export function SettingsPanel(): React.JSX.Element {
             </div>
           )}
           {activeSettingsTab === 'tools' && <ToolSettings />}
-          {activeSettingsTab === 'mcp' && (
-            <div className="flex-1 overflow-y-auto">
-              <McpSettings />
-            </div>
-          )}
+          {activeSettingsTab === 'mcp' && <McpSettings />}
           {activeSettingsTab === 'skills' && (
             <div className="flex-1 overflow-y-auto">
               <SkillSettings />
