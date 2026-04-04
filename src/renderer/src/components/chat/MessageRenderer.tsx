@@ -11,6 +11,8 @@ export interface VisibleItem {
   steps?: VisibleItem[]
   /** 流式合成占位项（由 AssistantBubble 自行从 store 读取流式状态） */
   isStreamingPlaceholder?: boolean
+  /** 已归档消息（只读，不显示操作按钮） */
+  isArchived?: boolean
 }
 
 interface MessageRendererProps {
@@ -52,9 +54,16 @@ export function MessageRenderer({
     msg: s.msg as StepMessage
   }))
 
+  const isArchived = item.isArchived
+
   // 用户消息
   if (msg.role === 'user' && msg.type === 'text') {
-    return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
+    return (
+      <UserBubble
+        msg={msg}
+        onRollback={!isArchived && onRollback ? () => onRollback(msg.id) : undefined}
+      />
+    )
   }
 
   // 助手消息（含 synthetic orphan messages）
@@ -67,7 +76,9 @@ export function MessageRenderer({
       steps={steps}
       isStreaming={item.isStreamingPlaceholder}
       onRegenerate={
-        msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined
+        !isArchived && msg.id === lastAssistantTextId && onRegenerate
+          ? () => onRegenerate(msg.id)
+          : undefined
       }
     />
   )

@@ -40,19 +40,39 @@ export function getQwen3TtsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'tts', 'qwen3'))
 }
 
+/** 全局 Skills 目录：~/.shuvix/skills/（不自动创建，由 skillService 管理） */
+export function getDefaultSkillsDir(): string {
+  return join(homedir(), '.shuvix', 'skills')
+}
+
 /** 获取临时会话的工作目录 */
 export function getTempWorkspace(sessionId: string): string {
   return ensureDir(join(app.getPath('userData'), 'temp_workspace', sessionId))
 }
 
+/** 工具大结果持久化根目录（不自动创建） */
+export function getToolResultsBase(): string {
+  return join(app.getPath('userData'), 'tool_results')
+}
+
+/** 工具大结果持久化目录：~/Library/Application Support/shuvix/tool_results/{sessionId}/ */
+export function getToolResultsDir(sessionId: string): string {
+  return ensureDir(join(getToolResultsBase(), sessionId))
+}
+
 /**
  * 合并 PATH — 打包后的 Electron GUI 应用不继承 shell PATH，
- * 需要手动追加常见路径以便找到 docker / claude-agent-acp 等命令。
+ * 需要手动追加常见路径以便找到 npx / docker / claude-agent-acp 等命令。
  */
 const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
 export const mergedPATH = [
   ...new Set([...(process.env.PATH?.split(':') ?? []), ...EXTRA_PATHS])
 ].join(':')
 
-/** 带合并 PATH 的 spawn 环境变量 */
-export const spawnEnv: NodeJS.ProcessEnv = { ...process.env, PATH: mergedPATH }
+/**
+ * 构建 spawn 用环境变量，自动合并 PATH。
+ * 可传入额外 env 覆盖或追加变量。
+ */
+export function buildSpawnEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...process.env, ...extra, PATH: mergedPATH }
+}

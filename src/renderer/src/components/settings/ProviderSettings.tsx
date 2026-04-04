@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { motion } from 'framer-motion'
 import {
   Eye,
   EyeOff,
@@ -16,6 +17,8 @@ import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
+import { ProviderIcon } from './ProviderIcons'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** 提供商设置 */
 export function ProviderSettings(): React.JSX.Element {
@@ -31,6 +34,7 @@ export function ProviderSettings(): React.JSX.Element {
         apiKey?: string
         baseUrl?: string
         apiProtocol?: ProviderInfo['apiProtocol']
+        customHeaders?: string // 存入 metadata.customHeaders
       }
     >
   >({})
@@ -41,6 +45,7 @@ export function ProviderSettings(): React.JSX.Element {
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
+  const [deletingProviderId, setDeletingProviderId] = useState<string | null>(null)
   const [editingModel, setEditingModel] = useState<{
     id: string
     providerId: string
@@ -88,13 +93,39 @@ export function ProviderSettings(): React.JSX.Element {
   /** 更新本地编辑状态 */
   const updateLocalEdit = (
     providerId: string,
-    field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol',
+    field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol' | 'customHeaders',
     value: string
   ): void => {
     setLocalEdits((prev) => ({
       ...prev,
       [providerId]: { ...prev[providerId], [field]: value }
     }))
+  }
+
+  /** 从 provider.metadata JSON 中提取 customHeaders 字符串 */
+  const getCustomHeaders = (provider: ProviderInfo): string => {
+    try {
+      const meta = JSON.parse(provider.metadata || '{}')
+      return meta.customHeaders ? JSON.stringify(meta.customHeaders, null, 2) : '{}'
+    } catch {
+      return '{}'
+    }
+  }
+
+  /** 将 customHeaders 字符串合并回 metadata JSON */
+  const buildMetadata = (provider: ProviderInfo, customHeadersStr: string): string => {
+    let meta: Record<string, unknown> = {}
+    try {
+      meta = JSON.parse(provider.metadata || '{}')
+    } catch {
+      // ignore
+    }
+    try {
+      meta.customHeaders = JSON.parse(customHeadersStr)
+    } catch {
+      meta.customHeaders = {}
+    }
+    return JSON.stringify(meta)
   }
 
   /** 判断指定 provider 是否有真正变更 */
@@ -107,6 +138,8 @@ export function ProviderSettings(): React.JSX.Element {
     if (edits.apiKey !== undefined && edits.apiKey !== provider.apiKey) return true
     if (edits.baseUrl !== undefined && edits.baseUrl !== provider.baseUrl) return true
     if (edits.apiProtocol !== undefined && edits.apiProtocol !== provider.apiProtocol) return true
+    if (edits.customHeaders !== undefined && edits.customHeaders !== getCustomHeaders(provider))
+      return true
     return false
   }
 
@@ -120,6 +153,7 @@ export function ProviderSettings(): React.JSX.Element {
       apiKey?: string
       baseUrl?: string
       apiProtocol?: ProviderInfo['apiProtocol']
+      metadata?: string
     } = {}
     if (edits.name !== undefined && edits.name !== provider.name) {
       updates.name = edits.name
@@ -132,6 +166,9 @@ export function ProviderSettings(): React.JSX.Element {
     }
     if (edits.apiProtocol !== undefined && edits.apiProtocol !== provider.apiProtocol) {
       updates.apiProtocol = edits.apiProtocol
+    }
+    if (edits.customHeaders !== undefined && edits.customHeaders !== getCustomHeaders(provider)) {
+      updates.metadata = buildMetadata(provider, edits.customHeaders)
     }
     if (Object.keys(updates).length > 0) {
       await window.api.provider.updateConfig({ id: providerId, ...updates })
@@ -160,6 +197,7 @@ export function ProviderSettings(): React.JSX.Element {
     baseUrl: string
     apiKey: string
     apiProtocol: ProviderInfo['apiProtocol']
+    metadata?: string
   }): Promise<void> => {
     await window.api.provider.add(provider)
     const updated = await window.api.provider.listAll()
@@ -228,7 +266,7 @@ export function ProviderSettings(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 px-5 py-5 space-y-2 overflow-y-auto">
+      <div className="flex-1 px-5 py-5 space-y-1.5 overflow-y-auto">
         {/* Token 用量提示 */}
         <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
           <TriangleAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
@@ -251,307 +289,339 @@ export function ProviderSettings(): React.JSX.Element {
           <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
         )}
 
-        {providers.map((p) => {
-          const isExpanded = expandedProvider === p.id
-          const edits = localEdits[p.id] || {}
-          const models = providerModels[p.id] || []
-          const query = (modelSearch[p.id] || '').trim().toLowerCase()
-          const filteredModels = query
-            ? models.filter((m) => m.modelId.toLowerCase().includes(query))
-            : models
+        {[...providers]
+          .sort((a, b) => {
+            // 自定义在前，内置在后
+            if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? 1 : -1
+            // 同组内已启用排前面
+            if (a.isEnabled !== b.isEnabled) return a.isEnabled ? -1 : 1
+            return 0
+          })
+          .map((p) => {
+            const isExpanded = expandedProvider === p.id
+            const edits = localEdits[p.id] || {}
+            const models = providerModels[p.id] || []
+            const query = (modelSearch[p.id] || '').trim().toLowerCase()
+            const filteredModels = query
+              ? models.filter((m) => m.modelId.toLowerCase().includes(query))
+              : models
 
-          return (
-            <div key={p.id} className="border border-border-secondary rounded-lg overflow-hidden">
-              {/* 提供商头部 */}
-              <div className="flex items-center gap-3 px-3 py-2.5 bg-bg-primary/30">
-                <button
+            return (
+              <motion.div
+                key={p.id}
+                layout="position"
+                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                className="border border-border-secondary rounded-lg overflow-hidden"
+              >
+                {/* 提供商头部 */}
+                <div
                   onClick={() => handleToggleExpand(p.id)}
-                  className="text-text-tertiary hover:text-text-primary transition-colors"
+                  className="flex items-center gap-3 px-3 py-2 bg-bg-primary/30 cursor-pointer hover:bg-bg-hover/50 transition-colors"
                 >
-                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                </button>
-                <span className="flex-1 text-xs font-medium text-text-primary">
-                  {p.isBuiltin ? (
-                    <span className="mr-1 text-[10px] text-text-tertiary font-normal">
-                      {t('settings.builtin')}
+                  <span className="text-text-tertiary">
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </span>
+                  <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                    <ProviderIcon name={p.name} />
+                    <span className="text-xs font-medium text-text-primary shrink-0">
+                      {p.displayName || p.name}
                     </span>
-                  ) : null}
-                  {p.displayName || p.name}
-                </span>
-                {/* 删除自定义提供商 */}
-                {!p.isBuiltin && (
+                    {p.baseUrl && (
+                      <span className="text-[10px] text-text-tertiary font-normal truncate">
+                        {p.baseUrl.replace(/^https?:\/\//, '')}
+                      </span>
+                    )}
+                  </span>
+                  {/* 删除自定义提供商 */}
+                  {!p.isBuiltin && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeletingProviderId(p.id)
+                      }}
+                      className="p-1 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors mr-1"
+                      title={t('settings.deleteProvider')}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                  {/* 启用/禁用开关 */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      handleDeleteProvider(p.id)
+                      handleToggleProvider(p.id, !p.isEnabled)
                     }}
-                    className="text-text-tertiary hover:text-danger transition-colors mr-1"
-                    title={t('settings.deleteProvider')}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-                {/* 启用/禁用开关 */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleToggleProvider(p.id, !p.isEnabled)
-                  }}
-                  className={`w-8 h-4.5 rounded-full relative transition-colors ${
-                    p.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${
-                      p.isEnabled ? 'left-[18px]' : 'left-0.5'
+                    className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${
+                      p.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
                     }`}
-                  />
-                </button>
-              </div>
+                  >
+                    <span
+                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+                        p.isEnabled ? 'left-[18px]' : 'left-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-              {/* 展开内容 */}
-              {isExpanded && (
-                <div className="px-4 py-3 space-y-3 border-t border-border-secondary">
-                  {/* 自定义提供商：名称 */}
-                  {!p.isBuiltin && (
+                {/* 展开内容 */}
+                {isExpanded && (
+                  <div className="px-4 py-3 space-y-3 border-t border-border-secondary">
+                    {/* 自定义提供商：名称 */}
+                    {!p.isBuiltin && (
+                      <div>
+                        <label className="block text-[11px] text-text-tertiary mb-1">
+                          {t('settings.providerName')}
+                        </label>
+                        <input
+                          type="text"
+                          value={edits.name ?? p.name}
+                          onChange={(e) => updateLocalEdit(p.id, 'name', e.target.value)}
+                          placeholder={t('settings.providerNamePlaceholder')}
+                          className="zen-input"
+                        />
+                      </div>
+                    )}
+                    {/* API Key */}
                     <div>
-                      <label className="block text-[11px] text-text-tertiary mb-1">
-                        {t('settings.providerName')}
-                      </label>
+                      <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
+                      <div className="zen-input-group">
+                        <input
+                          type={showKeys[p.id] ? 'text' : 'password'}
+                          value={edits.apiKey ?? p.apiKey}
+                          onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
+                          placeholder={t('settings.apiKeyPlaceholder', {
+                            name: p.displayName || p.name
+                          })}
+                        />
+                        <button
+                          onClick={() => setShowKeys((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+                          className="px-2 text-text-tertiary hover:text-text-secondary"
+                        >
+                          {showKeys[p.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Base URL */}
+                    <div>
+                      <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
                       <input
                         type="text"
-                        value={edits.name ?? p.name}
-                        onChange={(e) => updateLocalEdit(p.id, 'name', e.target.value)}
-                        placeholder={t('settings.providerNamePlaceholder')}
+                        value={edits.baseUrl ?? p.baseUrl}
+                        onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
+                        placeholder={t('settings.baseUrlPlaceholder')}
                         className="zen-input"
                       />
                     </div>
-                  )}
-                  {/* API Key */}
-                  <div>
-                    <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
-                    <div className="zen-input-group">
-                      <input
-                        type={showKeys[p.id] ? 'text' : 'password'}
-                        value={edits.apiKey ?? p.apiKey}
-                        onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
-                        placeholder={t('settings.apiKeyPlaceholder', {
-                          name: p.displayName || p.name
-                        })}
-                      />
-                      <button
-                        onClick={() => setShowKeys((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                        className="px-2 text-text-tertiary hover:text-text-secondary"
-                      >
-                        {showKeys[p.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                      </button>
-                    </div>
-                  </div>
 
-                  {/* Base URL */}
-                  <div>
-                    <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
-                    <input
-                      type="text"
-                      value={edits.baseUrl ?? p.baseUrl}
-                      onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
-                      placeholder={t('settings.baseUrlPlaceholder')}
-                      className="zen-input"
-                    />
-                  </div>
-
-                  {/* 自定义提供商：接口类型 */}
-                  {!p.isBuiltin && (
-                    <div>
-                      <label className="block text-[11px] text-text-tertiary mb-1">
-                        {t('settings.apiProtocol')}
-                      </label>
-                      <select
-                        value={edits.apiProtocol ?? p.apiProtocol}
-                        onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
-                        className="zen-select"
-                      >
-                        {API_PROTOCOL_OPTIONS.map((p) => (
-                          <option key={p.value} value={p.value}>
-                            {t(p.labelKey)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {/* 保存按钮 */}
-                  {(hasEdits(p.id) || savedIds.has(p.id)) && (
-                    <button
-                      onClick={() => handleSaveProvider(p.id)}
-                      disabled={savedIds.has(p.id) || !hasEdits(p.id)}
-                      className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                        savedIds.has(p.id)
-                          ? 'bg-success/20 text-success'
-                          : 'bg-accent text-white hover:bg-accent-hover'
-                      }`}
-                    >
-                      <Save size={14} />
-                      {savedIds.has(p.id) ? t('settings.saved') : t('settings.saveConfig')}
-                    </button>
-                  )}
-
-                  {/* 模型列表 */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="block text-[11px] text-text-tertiary">
-                        {t('settings.modelManagement')}
-                      </label>
-                      <button
-                        onClick={() => handleSyncModels(p.id)}
-                        disabled={syncingProviderId === p.id}
-                        className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                      >
-                        {syncingProviderId === p.id
-                          ? t('settings.syncing')
-                          : t('settings.syncModels')}
-                      </button>
-                    </div>
-                    {syncMessages[p.id] && (
-                      <div className="text-[10px] text-text-tertiary mb-2">
-                        {syncMessages[p.id]}
+                    {/* 自定义提供商：接口类型 */}
+                    {!p.isBuiltin && (
+                      <div>
+                        <label className="block text-[11px] text-text-tertiary mb-1">
+                          {t('settings.apiProtocol')}
+                        </label>
+                        <select
+                          value={edits.apiProtocol ?? p.apiProtocol}
+                          onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
+                          className="zen-select"
+                        >
+                          {API_PROTOCOL_OPTIONS.map((p) => (
+                            <option key={p.value} value={p.value}>
+                              {t(p.labelKey)}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     )}
 
-                    {/* 手动添加模型 */}
+                    {/* 自定义提供商：自定义请求头 */}
                     {!p.isBuiltin && (
-                      <div className="flex items-center gap-2 mb-2">
-                        <input
-                          type="text"
-                          value={newModelId[p.id] || ''}
-                          onChange={(e) =>
-                            setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
-                          }
-                          onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
-                          placeholder={t('settings.addModelPlaceholder')}
-                          className="zen-input flex-1 font-mono text-[11px]"
+                      <div>
+                        <label className="block text-[11px] text-text-tertiary mb-1">
+                          {t('settings.customHeaders')}
+                        </label>
+                        <textarea
+                          value={edits.customHeaders ?? getCustomHeaders(p)}
+                          onChange={(e) => updateLocalEdit(p.id, 'customHeaders', e.target.value)}
+                          placeholder={t('settings.customHeadersPlaceholder')}
+                          rows={3}
+                          className="zen-input font-mono text-[11px] resize-y"
                         />
+                      </div>
+                    )}
+
+                    {/* 保存按钮 */}
+                    {(hasEdits(p.id) || savedIds.has(p.id)) && (
+                      <button
+                        onClick={() => handleSaveProvider(p.id)}
+                        disabled={savedIds.has(p.id) || !hasEdits(p.id)}
+                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          savedIds.has(p.id)
+                            ? 'bg-success/20 text-success'
+                            : 'bg-accent text-white hover:bg-accent-hover'
+                        }`}
+                      >
+                        <Save size={14} />
+                        {savedIds.has(p.id) ? t('settings.saved') : t('settings.saveConfig')}
+                      </button>
+                    )}
+
+                    {/* 模型列表 */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-[11px] text-text-tertiary">
+                          {t('settings.modelManagement')}
+                        </label>
                         <button
-                          onClick={() => handleAddModel(p.id)}
-                          disabled={!newModelId[p.id]?.trim()}
-                          className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          onClick={() => handleSyncModels(p.id)}
+                          disabled={syncingProviderId === p.id}
+                          className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                         >
-                          {t('common.add')}
+                          {syncingProviderId === p.id
+                            ? t('settings.syncing')
+                            : t('settings.syncModels')}
                         </button>
                       </div>
-                    )}
-
-                    <input
-                      type="text"
-                      value={modelSearch[p.id] || ''}
-                      onChange={(e) =>
-                        setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
-                      }
-                      placeholder={t('settings.searchModel')}
-                      className="zen-input mb-2 text-[11px]"
-                    />
-
-                    <div className="space-y-1">
-                      {filteredModels.map((m) => {
-                        const caps = (() => {
-                          try {
-                            return JSON.parse(m.capabilities || '{}')
-                          } catch {
-                            return {}
-                          }
-                        })()
-                        return (
-                          <div
-                            key={m.id}
-                            className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                              <span className="text-xs text-text-primary font-mono truncate">
-                                {m.modelId}
-                              </span>
-                              {/* 能力标签 */}
-                              <div className="flex items-center gap-1 shrink-0">
-                                {caps.vision && (
-                                  <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
-                                    Vision
-                                  </span>
-                                )}
-                                {caps.functionCalling && (
-                                  <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
-                                    Tools
-                                  </span>
-                                )}
-                                {caps.reasoning && (
-                                  <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
-                                    Reasoning
-                                  </span>
-                                )}
-                                {caps.imageOutput && (
-                                  <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
-                                    ImgOut
-                                  </span>
-                                )}
-                                {caps.audioInput && (
-                                  <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
-                                    Audio
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              {/* 编辑能力 */}
-                              <button
-                                onClick={() =>
-                                  setEditingModel({
-                                    id: m.id,
-                                    providerId: p.id,
-                                    modelId: m.modelId,
-                                    caps
-                                  })
-                                }
-                                className="text-text-tertiary hover:text-text-secondary transition-colors"
-                                title={t('settings.editCapabilities')}
-                              >
-                                <SlidersHorizontal size={12} />
-                              </button>
-                              {/* 自定义提供商的模型可删除 */}
-                              {!p.isBuiltin && (
-                                <button
-                                  onClick={() => handleDeleteModel(m.id, p.id)}
-                                  className="text-text-tertiary hover:text-danger transition-colors"
-                                  title={t('settings.deleteModel')}
-                                >
-                                  <X size={12} />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
-                                className={`w-7 h-4 rounded-full relative transition-colors ${
-                                  m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                                }`}
-                              >
-                                <span
-                                  className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                                    m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                                  }`}
-                                />
-                              </button>
-                            </div>
-                          </div>
-                        )
-                      })}
-                      {filteredModels.length === 0 && (
-                        <div className="px-2 py-2 text-[11px] text-text-tertiary">
-                          {t('settings.noMatchingModels')}
+                      {syncMessages[p.id] && (
+                        <div className="text-[10px] text-text-tertiary mb-2">
+                          {syncMessages[p.id]}
                         </div>
                       )}
+
+                      {/* 手动添加模型 */}
+                      {!p.isBuiltin && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <input
+                            type="text"
+                            value={newModelId[p.id] || ''}
+                            onChange={(e) =>
+                              setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
+                            }
+                            onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
+                            placeholder={t('settings.addModelPlaceholder')}
+                            className="zen-input flex-1 font-mono text-[11px]"
+                          />
+                          <button
+                            onClick={() => handleAddModel(p.id)}
+                            disabled={!newModelId[p.id]?.trim()}
+                            className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {t('common.add')}
+                          </button>
+                        </div>
+                      )}
+
+                      <input
+                        type="text"
+                        value={modelSearch[p.id] || ''}
+                        onChange={(e) =>
+                          setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
+                        }
+                        placeholder={t('settings.searchModel')}
+                        className="zen-input mb-2 text-[11px]"
+                      />
+
+                      <div className="space-y-1 max-h-60 overflow-y-auto">
+                        {filteredModels.map((m) => {
+                          const caps = (() => {
+                            try {
+                              return JSON.parse(m.capabilities || '{}')
+                            } catch {
+                              return {}
+                            }
+                          })()
+                          return (
+                            <div
+                              key={m.id}
+                              className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <span className="text-xs text-text-primary font-mono truncate">
+                                  {m.modelId}
+                                </span>
+                                {/* 能力标签 */}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {caps.vision && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
+                                      Vision
+                                    </span>
+                                  )}
+                                  {caps.functionCalling && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
+                                      Tools
+                                    </span>
+                                  )}
+                                  {caps.reasoning && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
+                                      Reasoning
+                                    </span>
+                                  )}
+                                  {caps.imageOutput && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
+                                      ImgOut
+                                    </span>
+                                  )}
+                                  {caps.audioInput && (
+                                    <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
+                                      Audio
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                {/* 编辑能力 */}
+                                <button
+                                  onClick={() =>
+                                    setEditingModel({
+                                      id: m.id,
+                                      providerId: p.id,
+                                      modelId: m.modelId,
+                                      caps
+                                    })
+                                  }
+                                  className="p-0.5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
+                                  title={t('settings.editCapabilities')}
+                                >
+                                  <SlidersHorizontal size={12} />
+                                </button>
+                                {/* 自定义提供商的模型可删除 */}
+                                {!p.isBuiltin && (
+                                  <button
+                                    onClick={() => handleDeleteModel(m.id, p.id)}
+                                    className="p-0.5 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
+                                    title={t('settings.deleteModel')}
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
+                                  className={`w-7 h-4 rounded-full relative transition-colors ${
+                                    m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+                                  }`}
+                                >
+                                  <span
+                                    className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                                      m.isEnabled ? 'left-[14px]' : 'left-0.5'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                        {filteredModels.length === 0 && (
+                          <div className="px-2 py-2 text-[11px] text-text-tertiary">
+                            {t('settings.noMatchingModels')}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
-          )
-        })}
+                )}
+              </motion.div>
+            )
+          })}
       </div>
 
       {/* 模型能力编辑弹窗 */}
@@ -568,6 +638,25 @@ export function ProviderSettings(): React.JSX.Element {
             setProviderModels((prev) => ({ ...prev, [editingModel.providerId]: models }))
           }}
           onClose={() => setEditingModel(null)}
+        />
+      )}
+
+      {/* 删除提供商确认弹窗 */}
+      {deletingProviderId && (
+        <ConfirmDialog
+          title={t('settings.deleteProviderConfirm', {
+            name:
+              providers.find((p) => p.id === deletingProviderId)?.displayName ||
+              providers.find((p) => p.id === deletingProviderId)?.name ||
+              ''
+          })}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={async () => {
+            await handleDeleteProvider(deletingProviderId)
+            setDeletingProviderId(null)
+          }}
+          onCancel={() => setDeletingProviderId(null)}
         />
       )}
     </div>

@@ -230,6 +230,29 @@ export const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_mcp_server_logs_created ON mcp_server_logs(createdAt);
       `)
     }
+  },
+  {
+    version: 4,
+    description: '为 providers、mcp_servers、telegram_bots 表添加 metadata 列',
+    up: (db) => {
+      db.exec(`ALTER TABLE providers ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`)
+      db.exec(`ALTER TABLE mcp_servers ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`)
+      db.exec(`ALTER TABLE telegram_bots ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`)
+    }
+  },
+  {
+    version: 5,
+    description: '为 messages 和 message_steps 表添加 archived 列（Full Compaction）',
+    up: (db) => {
+      db.exec(`ALTER TABLE messages ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
+      db.exec(`ALTER TABLE message_steps ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`)
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_messages_session_archived ON messages(sessionId, archived)`
+      )
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_message_steps_session_archived ON message_steps(sessionId, archived)`
+      )
+    }
   }
 ]
 

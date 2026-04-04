@@ -1,4 +1,5 @@
 import { v7 as uuidv7 } from 'uuid'
+import { join } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
@@ -7,7 +8,7 @@ import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
-import { getTempWorkspace } from '../utils/paths'
+import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
 import { splitCommand, toPattern, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
@@ -160,6 +161,15 @@ export class SessionService {
     if (existsSync(tempDir)) {
       try {
         rmSync(tempDir, { recursive: true, force: true })
+      } catch {
+        /* 忽略 */
+      }
+    }
+    // 清理工具大结果持久化目录
+    const toolResultsDir = join(getToolResultsBase(), id)
+    if (existsSync(toolResultsDir)) {
+      try {
+        rmSync(toolResultsDir, { recursive: true, force: true })
       } catch {
         /* 忽略 */
       }

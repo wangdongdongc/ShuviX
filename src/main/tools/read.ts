@@ -15,11 +15,11 @@ import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import {
   truncateLine,
-  truncateHead,
   formatSize,
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
+import { processToolOutput } from './utils/processToolOutput'
 import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
 import { recordRead } from './utils/fileTime'
 import {
@@ -200,7 +200,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   }
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; offset?: number; limit?: number },
     signal?: AbortSignal
   ): Promise<ReadResult> {
@@ -209,7 +209,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
     // URL：抓取网页并转换为 Markdown
     if (isUrl(params.path)) {
       try {
-        return await readUrl(params.path, signal)
+        return await readUrl(params.path, this.ctx.sessionId, toolCallId, signal)
       } catch (err: unknown) {
         if (err instanceof Error && err.message === TOOL_ABORTED) throw err
         const errMsg = err instanceof Error ? err.message : String(err)
@@ -240,12 +240,26 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
       // 判断是否为富文本文件，使用 markitdown-ts 转换
       const ext = extname(absolutePath).toLowerCase()
       if (RICH_FILE_EXTENSIONS.has(ext)) {
-        return await readRichFile(absolutePath, params.path, fileStat.size, signal)
+        return await readRichFile(
+          absolutePath,
+          params.path,
+          fileStat.size,
+          this.ctx.sessionId,
+          toolCallId,
+          signal
+        )
       }
 
       // 旧版 Word .doc 文件：使用 word-extractor 提取文字
       if (ext === '.doc') {
-        return await readLegacyDoc(absolutePath, params.path, fileStat.size, signal)
+        return await readLegacyDoc(
+          absolutePath,
+          params.path,
+          fileStat.size,
+          this.ctx.sessionId,
+          toolCallId,
+          signal
+        )
       }
 
       // 已知二进制格式：直接拒绝
@@ -262,7 +276,9 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
         )
       }
 
-      // 纯文本文件：流式逐行读取
+      // 纯文本文件：流式逐行读取（自带 offset/limit 分页，不经过 processToolOutput）
+      // 注意：持久化的大结果文件（tool_results/*.txt）也走此路径，
+      // 因此不会再次触发持久化，避免死循环。
       const result = await readTextFile(absolutePath, params, fileStat)
       // 记录读取时间（用于 edit/write 工具校验文件是否被外部修改）
       recordRead(this.ctx.sessionId, absolutePath)
@@ -339,6 +355,8 @@ async function readRichFile(
   absolutePath: string,
   displayPath: string,
   fileSize: number,
+  sessionId: string,
+  toolCallId: string,
   signal?: AbortSignal
 ): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -349,28 +367,26 @@ async function readRichFile(
     throw new Error(`Failed to convert: ${displayPath}`)
   }
 
-  let text = result.markdown
-
-  // 截断处理
-  const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
-  if (truncated.truncated) {
-    text = `[Output truncated: ${text.split('\n').length} lines / ${formatSize(fileSize)}]\n\n${truncated.text}`
-  } else {
-    text = truncated.text
-  }
-
   // 文件信息头
   const ext = extname(absolutePath).toLowerCase().slice(1).toUpperCase()
-  text = `File: ${displayPath} (${ext}, ${formatSize(fileSize)}) — converted to Markdown\n\n${text}`
+  const header = `File: ${displayPath} (${ext}, ${formatSize(fileSize)}) — converted to Markdown\n\n`
+
+  // 统一截断/持久化处理
+  const processed = processToolOutput({
+    sessionId,
+    toolCallId,
+    fullText: result.markdown,
+    strategy: 'head'
+  })
 
   return {
-    content: [{ type: 'text' as const, text }],
+    content: [{ type: 'text' as const, text: header + processed.text }],
     details: {
       type: 'read',
       fileSize,
       format: ext,
       converted: true,
-      truncated: truncated.truncated
+      truncated: processed.truncated
     }
   }
 }
@@ -382,36 +398,38 @@ async function readLegacyDoc(
   absolutePath: string,
   displayPath: string,
   fileSize: number,
+  sessionId: string,
+  toolCallId: string,
   signal?: AbortSignal
 ): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   const extractor = getWordExtractor()
   const doc = await extractor.extract(absolutePath)
-  let text = doc.getBody()?.trim()
-  if (!text) {
+  const body = doc.getBody()?.trim()
+  if (!body) {
     throw new Error(`Failed to convert: ${displayPath}`)
   }
 
-  // 截断处理
-  const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
-  if (truncated.truncated) {
-    text = `[Output truncated: ${text.split('\n').length} lines / ${formatSize(fileSize)}]\n\n${truncated.text}`
-  } else {
-    text = truncated.text
-  }
-
   // 文件信息头
-  text = `File: ${displayPath} (DOC, ${formatSize(fileSize)}) — converted to Markdown\n\n${text}`
+  const header = `File: ${displayPath} (DOC, ${formatSize(fileSize)}) — converted to Markdown\n\n`
+
+  // 统一截断/持久化处理
+  const processed = processToolOutput({
+    sessionId,
+    toolCallId,
+    fullText: body,
+    strategy: 'head'
+  })
 
   return {
-    content: [{ type: 'text' as const, text }],
+    content: [{ type: 'text' as const, text: header + processed.text }],
     details: {
       type: 'read',
       fileSize,
       format: 'DOC',
       converted: true,
-      truncated: truncated.truncated
+      truncated: processed.truncated
     }
   }
 }
@@ -420,7 +438,12 @@ async function readLegacyDoc(
  * URL 抓取：通过 markitdown-ts 抓取网页并转换为 Markdown
  * 自定义 fetch 实现超时、User-Agent、响应体大小限制
  */
-async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
+async function readUrl(
+  url: string,
+  sessionId: string,
+  toolCallId: string,
+  signal?: AbortSignal
+): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   log.info(`Fetching URL: ${url}`)
@@ -456,27 +479,25 @@ async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
     throw new Error(`Failed to fetch or convert URL: ${url}`)
   }
 
-  let text = result.markdown
-
-  // 截断处理（与 readRichFile 一致）
-  const truncated = truncateHead(text, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
-  if (truncated.truncated) {
-    text = `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n${truncated.text}`
-  } else {
-    text = truncated.text
-  }
-
   // 信息头
   const title = result.title ? ` — ${result.title}` : ''
-  text = `URL: ${url}${title} — converted to Markdown\n\n${text}`
+  const header = `URL: ${url}${title} — converted to Markdown\n\n`
+
+  // 统一截断/持久化处理
+  const processed = processToolOutput({
+    sessionId,
+    toolCallId,
+    fullText: result.markdown,
+    strategy: 'head'
+  })
 
   return {
-    content: [{ type: 'text' as const, text }],
+    content: [{ type: 'text' as const, text: header + processed.text }],
     details: {
       type: 'read',
       format: 'URL',
       converted: true,
-      truncated: truncated.truncated,
+      truncated: processed.truncated,
       url
     }
   }

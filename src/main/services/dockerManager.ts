@@ -8,7 +8,9 @@
 import { spawn, spawnSync } from 'child_process'
 import { createLogger } from '../logger'
 import type { ReferenceDir } from '../types'
-import { spawnEnv } from '../utils/paths'
+import { buildSpawnEnv } from '../utils/paths'
+
+const spawnEnv = buildSpawnEnv()
 const log = createLogger('Docker')
 
 /** 容器空闲超时时间（毫秒），超过此时间无命令执行则自动销毁 */
@@ -153,7 +155,8 @@ export class DockerManager {
     containerId: string,
     command: string,
     cwd: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    envVars?: Record<string, string>
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
@@ -161,10 +164,17 @@ export class DockerManager {
         return
       }
 
-      const child = spawn('docker', ['exec', '-w', cwd, containerId, 'bash', '-c', command], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: spawnEnv
-      })
+      const envFlags = envVars
+        ? Object.entries(envVars).flatMap(([k, v]) => ['-e', `${k}=${v}`])
+        : []
+      const child = spawn(
+        'docker',
+        ['exec', ...envFlags, '-w', cwd, containerId, 'bash', '-c', command],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: spawnEnv
+        }
+      )
 
       let stdout = ''
       let stderr = ''

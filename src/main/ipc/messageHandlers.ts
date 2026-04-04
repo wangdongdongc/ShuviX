@@ -52,4 +52,16 @@ export function registerMessageHandlers(): void {
       messageService.addErrorEvent(params)
     )
   )
+
+  /** 统计会话已归档消息数 */
+  ipcMain.handle('message:countArchived', (_event, sessionId: string) =>
+    messageService.countArchived(sessionId)
+  )
+
+  /** 分页加载已归档消息（含 steps） */
+  ipcMain.handle(
+    'message:listArchived',
+    (_event, params: { sessionId: string; limit: number; offset: number }) =>
+      messageService.listArchivedBySession(params.sessionId, params.limit, params.offset)
+  )
 }

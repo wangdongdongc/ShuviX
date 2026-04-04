@@ -30,7 +30,6 @@ import type {
   SettingsSetParams,
   McpServerAddParams,
   McpServerUpdateParams,
-  SkillAddParams,
   SkillUpdateParams,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
@@ -211,7 +210,13 @@ const api = {
     rollback: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('message:rollback', params),
     deleteFrom: (params: { sessionId: string; messageId: string }) =>
-      ipcRenderer.invoke('message:deleteFrom', params)
+      ipcRenderer.invoke('message:deleteFrom', params),
+    /** 统计已归档消息数 */
+    countArchived: (sessionId: string) =>
+      ipcRenderer.invoke('message:countArchived', sessionId) as Promise<number>,
+    /** 分页加载已归档消息（含 steps） */
+    listArchived: (params: { sessionId: string; limit: number; offset: number }) =>
+      ipcRenderer.invoke('message:listArchived', params)
   },
 
   // ============ 设置管理 ============
@@ -353,6 +358,12 @@ const api = {
     getBotStatus: (botId: string) => ipcRenderer.invoke('telegram:getBotStatus', botId)
   },
 
+  // ============ 压缩归档 ============
+  compact: {
+    /** 触发 Full Compaction */
+    start: (sessionId: string) => ipcRenderer.invoke('compact:start', sessionId)
+  },
+
   // ============ 斜杠命令 ============
   command: {
     /** 获取当前会话可用的斜杠命令列表 */
@@ -461,18 +472,25 @@ const api = {
   skill: {
     /** 获取所有 Skill */
     list: () => ipcRenderer.invoke('skill:list'),
-    /** 手动创建 Skill */
-    add: (params: SkillAddParams) => ipcRenderer.invoke('skill:add', params),
+    /** 获取按目录分组的 Skill 列表 */
+    listGrouped: () => ipcRenderer.invoke('skill:listGrouped'),
     /** 更新 Skill */
     update: (params: SkillUpdateParams) => ipcRenderer.invoke('skill:update', params),
     /** 删除 Skill（按名称） */
-    delete: (name: string) => ipcRenderer.invoke('skill:delete', name),
+    deleteDefault: (name: string) => ipcRenderer.invoke('skill:deleteDefault', name),
     /** 解析 SKILL.md 文本 */
     parseMarkdown: (text: string) => ipcRenderer.invoke('skill:parseMarkdown', text),
-    /** 从本地目录导入 Skill（弹出文件夹选择器） */
-    importFromDir: () => ipcRenderer.invoke('skill:importFromDir'),
-    /** 获取 skills 根目录路径 */
-    getDir: () => ipcRenderer.invoke('skill:getDir')
+    /** 获取默认 skills 目录路径 */
+    getDefaultDir: () => ipcRenderer.invoke('skill:getDefaultDir'),
+    /** 获取外部 skill 目录列表 */
+    listExternalDirs: () => ipcRenderer.invoke('skill:listExternalDirs'),
+    /** 弹出文件夹选择器（仅返回路径） */
+    pickExternalDir: () => ipcRenderer.invoke('skill:pickExternalDir'),
+    /** 添加外部 skill 源目录 */
+    addExternalDir: (dir: { name: string; path: string }) =>
+      ipcRenderer.invoke('skill:addExternalDir', dir),
+    /** 移除外部 skill 源目录 */
+    removeExternalDir: (name: string) => ipcRenderer.invoke('skill:removeExternalDir', name)
   },
 
   // ============ 自动更新 ============

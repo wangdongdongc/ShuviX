@@ -4,7 +4,18 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import { Copy, Check, Code, FileText, RefreshCw, Volume2, Square, Loader2 } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  Code,
+  FileText,
+  RefreshCw,
+  Volume2,
+  Square,
+  Loader2,
+  Archive,
+  ChevronRight
+} from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
 import { CodeBlock } from './CodeBlock'
@@ -53,6 +64,8 @@ export const AssistantBubble = memo(function AssistantBubble({
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
+  const isCompactionSummary = !!msg.metadata?.isCompactionSummary
+  const [summaryExpanded, setSummaryExpanded] = useState(false)
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === msg.id
   const isThisLoading = isLoading && playingMessageId === msg.id
@@ -120,8 +133,8 @@ export const AssistantBubble = memo(function AssistantBubble({
               )}
             </button>
           )}
-          {/* 原始/渲染 切换 */}
-          {!isStreaming && displayContent && (
+          {/* 原始/渲染 切换（压缩摘要不显示） */}
+          {!isStreaming && displayContent && !isCompactionSummary && (
             <button
               onClick={() => setShowRaw(!showRaw)}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
@@ -130,8 +143,8 @@ export const AssistantBubble = memo(function AssistantBubble({
               {showRaw ? <FileText size={12} /> : <Code size={12} />}
             </button>
           )}
-          {/* 重新生成 */}
-          {!isStreaming && onRegenerate && (
+          {/* 重新生成（压缩摘要不显示） */}
+          {!isStreaming && onRegenerate && !isCompactionSummary && (
             <button
               onClick={onRegenerate}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
@@ -222,7 +235,46 @@ export const AssistantBubble = memo(function AssistantBubble({
 
         {/* Markdown / 原始文本 */}
         {displayContent &&
-          (showRaw ? (
+          (isCompactionSummary ? (
+            /* ── 压缩摘要：默认折叠，点击展开 ── */
+            <div className="rounded-lg border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden">
+              <button
+                onClick={() => setSummaryExpanded(!summaryExpanded)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/40 transition-colors"
+              >
+                <Archive size={14} className="flex-shrink-0 text-accent/70" />
+                <ChevronRight
+                  size={14}
+                  className={`flex-shrink-0 text-text-tertiary transition-transform duration-200 ${summaryExpanded ? 'rotate-90' : ''}`}
+                />
+                <span className="text-xs font-medium text-text-secondary truncate">
+                  {t('compact.summaryLabel')}
+                </span>
+                {!summaryExpanded && (
+                  <span className="text-xs text-text-tertiary truncate ml-1">
+                    {displayContent
+                      .split('\n')
+                      .find((l) => l.trim())
+                      ?.slice(0, 80)}
+                    ...
+                  </span>
+                )}
+              </button>
+              {summaryExpanded && (
+                <div className="px-3 pb-3 border-t border-border-secondary/40">
+                  <div className="markdown-body text-sm pt-2">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                      components={{ pre: CodeBlock as never }}
+                    >
+                      {displayContent}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : showRaw ? (
             <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
               {displayContent}
             </pre>

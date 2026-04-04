@@ -8,12 +8,7 @@ import { Type } from '@sinclair/typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
-import {
-  truncateMiddle,
-  formatSize,
-  DEFAULT_MAX_LINES,
-  DEFAULT_MAX_BYTES
-} from '../../shared/node/truncate'
+import { processToolOutput } from './utils/processToolOutput'
 import { sanitizeBinaryOutput, collapseProgressOutput } from './utils/shell'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
 import { isCommandAllowedUnified } from './utils/allowList'
@@ -331,17 +326,18 @@ async function handleExec(
   try {
     const result = await sshManager.exec(ctx.sessionId, command, timeout ?? DEFAULT_TIMEOUT, signal)
     const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
-    // 清理控制字符 + 折叠进度输出（Docker pull 等场景）
-    const combined = collapseProgressOutput(sanitizeBinaryOutput(raw))
+    // 清理控制字符 + 折叠进度输出（仅匹配进度类命令时生效）
+    const combined = collapseProgressOutput(sanitizeBinaryOutput(raw), command)
 
-    // 截断过长的输出
-    const truncated = truncateMiddle(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
+    // 统一截断/持久化处理
+    const processed = processToolOutput({
+      sessionId: ctx.sessionId,
+      toolCallId,
+      fullText: combined,
+      strategy: 'middle'
+    })
 
-    let text = ''
-    if (truncated.truncated) {
-      text += `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n`
-    }
-    text += truncated.text
+    let text = processed.text
 
     if (result.exitCode === 124) {
       text += `\n\n[Command timed out (${timeout ?? DEFAULT_TIMEOUT}s)]`
@@ -355,7 +351,7 @@ async function handleExec(
         type: 'ssh',
         action: 'exec',
         exitCode: result.exitCode,
-        truncated: truncated.truncated
+        truncated: processed.truncated
       }
     }
   } catch (err: unknown) {
@@ -414,6 +410,6 @@ registerBuiltinTool({
   presentation: {
     icon: 'Terminal',
     iconColor: '#38bdf8',
-    summaryField: 'action'
+    summaryField: 'description'
   }
 })

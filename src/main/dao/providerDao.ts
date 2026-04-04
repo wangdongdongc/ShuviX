@@ -76,6 +76,13 @@ export class ProviderDao extends BaseDao {
     ).run(apiProtocol, Date.now(), id)
   }
 
+  /** 更新提供商 metadata（仅自定义提供商） */
+  updateMetadata(id: string, metadata: string): void {
+    this.stmt(
+      'UPDATE providers SET metadata = ?, updatedAt = ? WHERE id = ? AND isBuiltin = 0'
+    ).run(metadata, Date.now(), id)
+  }
+
   /** 更新提供商 Base URL */
   updateBaseUrl(id: string, baseUrl: string): void {
     this.stmt('UPDATE providers SET baseUrl = ?, updatedAt = ? WHERE id = ?').run(
@@ -101,6 +108,7 @@ export class ProviderDao extends BaseDao {
     baseUrl: string
     apiKey: string
     apiProtocol: string
+    metadata?: string
   }): void {
     const existing = this.stmt('SELECT id FROM providers WHERE name = ?').get(provider.name)
     if (existing) {
@@ -109,13 +117,14 @@ export class ProviderDao extends BaseDao {
     const now = Date.now()
     const maxOrder = this.getMaxSortOrder()
     this.stmt(
-      'INSERT INTO providers (id, name, apiKey, baseUrl, apiProtocol, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?)'
+      'INSERT INTO providers (id, name, apiKey, baseUrl, apiProtocol, metadata, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)'
     ).run(
       provider.id,
       provider.name,
       encrypt(provider.apiKey),
       provider.baseUrl,
       provider.apiProtocol,
+      provider.metadata || '{}',
       maxOrder + 1,
       now,
       now

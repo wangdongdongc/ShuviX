@@ -38,8 +38,9 @@ import type {
   McpHostToolDesc,
   McpHostLogSummary,
   Skill,
-  SkillAddParams,
   SkillUpdateParams,
+  SkillDir,
+  SkillGroup,
   SshCredential,
   SshCredentialAddParams,
   SshCredentialUpdateParams,
@@ -224,6 +225,17 @@ declare global {
     subAgentType: string
     delta: string
   }
+  interface ChatCompactionStartEvent extends ChatEventBase {
+    type: 'compaction_start'
+  }
+  interface ChatCompactionEndEvent extends ChatEventBase {
+    type: 'compaction_end'
+    message: string
+  }
+  interface ChatCompactionErrorEvent extends ChatEventBase {
+    type: 'compaction_error'
+    error: string
+  }
   interface ChatErrorEvent extends ChatEventBase {
     type: 'error'
     error: string
@@ -255,6 +267,9 @@ declare global {
     | ChatSubAgentToolEndEvent
     | ChatSubAgentTextDeltaEvent
     | ChatSubAgentThinkingDeltaEvent
+    | ChatCompactionStartEvent
+    | ChatCompactionEndEvent
+    | ChatCompactionErrorEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
 
@@ -278,9 +293,17 @@ declare global {
     access?: 'readonly' | 'readwrite'
   }
 
+  /** 项目环境变量 */
+  interface ProjectEnvVar {
+    key: string
+    value: string
+    sensitive: boolean
+  }
+
   /** 工具扩展配置 */
   interface ToolSettings {
     pglitePersist?: boolean
+    envVars?: ProjectEnvVar[]
   }
 
   /** 项目扩展配置 */
@@ -371,6 +394,7 @@ declare global {
     apiKey: string
     baseUrl: string
     apiProtocol: import('../shared/types/provider').ApiProtocol
+    metadata: string
     isBuiltin: number
     isEnabled: number
     sortOrder: number
@@ -526,6 +550,14 @@ declare global {
         sessionId: string
         messageId: string
       }) => Promise<{ success: boolean }>
+      /** 统计已归档消息数 */
+      countArchived: (sessionId: string) => Promise<number>
+      /** 分页加载已归档消息（含 steps） */
+      listArchived: (params: {
+        sessionId: string
+        limit: number
+        offset: number
+      }) => Promise<ChatMessage[]>
     }
     settings: {
       getAll: () => Promise<Record<string, string>>
@@ -662,6 +694,10 @@ declare global {
       /** 获取 Bot 运行状态 */
       getBotStatus: (botId: string) => Promise<{ running: boolean }>
     }
+    compact: {
+      /** 触发 Full Compaction */
+      start: (sessionId: string) => Promise<unknown>
+    }
     command: {
       /** 获取当前会话可用的斜杠命令列表 */
       list: (params: { sessionId: string }) => Promise<
@@ -765,14 +801,17 @@ declare global {
     }
     skill: {
       list: () => Promise<Skill[]>
-      add: (params: SkillAddParams) => Promise<Skill>
+      listGrouped: () => Promise<SkillGroup[]>
       update: (params: SkillUpdateParams) => Promise<{ success: boolean }>
-      delete: (name: string) => Promise<{ success: boolean }>
+      deleteDefault: (name: string) => Promise<{ success: boolean }>
       parseMarkdown: (
         text: string
       ) => Promise<{ name: string; description: string; content: string } | null>
-      importFromDir: () => Promise<{ success: boolean; skill?: Skill; reason?: string }>
-      getDir: () => Promise<string>
+      getDefaultDir: () => Promise<string>
+      listExternalDirs: () => Promise<SkillDir[]>
+      pickExternalDir: () => Promise<{ success: boolean; path?: string; reason?: string }>
+      addExternalDir: (dir: SkillDir) => Promise<{ success: boolean; reason?: string }>
+      removeExternalDir: (name: string) => Promise<{ success: boolean }>
     }
     update: {
       /** 检查更新 */

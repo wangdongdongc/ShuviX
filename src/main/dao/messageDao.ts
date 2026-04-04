@@ -29,11 +29,11 @@ const MESSAGE_TYPES = ['text', 'error_event']
 const STEP_TYPES = ['tool_use', 'step_text', 'step_thinking']
 
 export class MessageDao extends BaseDao {
-  /** 获取某个会话的所有消息，按时间升序（仅读取当前合法类型，忽略旧格式数据） */
+  /** 获取某个会话的所有消息，按时间升序（仅读取当前合法类型，忽略旧格式数据，排除已归档） */
   findBySessionId(sessionId: string): Message[] {
     const placeholders = MESSAGE_TYPES.map(() => '?').join(',')
     const rows = this.stmt(
-      `SELECT * FROM messages WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt ASC`
+      `SELECT * FROM messages WHERE sessionId = ? AND archived = 0 AND type IN (${placeholders}) ORDER BY createdAt ASC`
     ).all(sessionId, ...MESSAGE_TYPES) as MessageRow[]
     return rows.map(parseRow)
   }
@@ -140,6 +140,34 @@ export class MessageDao extends BaseDao {
       target.createdAt
     ).changes
   }
+
+  /** 归档会话的所有未归档消息（Full Compaction 用） */
+  archiveBySessionId(sessionId: string): number {
+    return this.stmt('UPDATE messages SET archived = 1 WHERE sessionId = ? AND archived = 0').run(
+      sessionId
+    ).changes
+  }
+
+  /** 统计会话已归档消息数 */
+  countArchived(sessionId: string): number {
+    const placeholders = MESSAGE_TYPES.map(() => '?').join(',')
+    const row = this.stmt(
+      `SELECT COUNT(*) as cnt FROM messages WHERE sessionId = ? AND archived = 1 AND type IN (${placeholders})`
+    ).get(sessionId, ...MESSAGE_TYPES) as { cnt: number }
+    return row.cnt
+  }
+
+  /**
+   * 分页查询已归档消息（按时间倒序，取最近的 limit 条，跳过 offset 条）
+   * 返回结果已按时间正序排列（方便直接展示）
+   */
+  findArchivedBySessionId(sessionId: string, limit: number, offset: number): Message[] {
+    const placeholders = MESSAGE_TYPES.map(() => '?').join(',')
+    const rows = this.stmt(
+      `SELECT * FROM messages WHERE sessionId = ? AND archived = 1 AND type IN (${placeholders}) ORDER BY createdAt DESC LIMIT ? OFFSET ?`
+    ).all(sessionId, ...MESSAGE_TYPES, limit, offset) as MessageRow[]
+    return rows.map(parseRow).reverse()
+  }
 }
 
 /**
@@ -147,11 +175,11 @@ export class MessageDao extends BaseDao {
  * 与 MessageDao 列完全一致，存放工具调用/结果等中间步骤
  */
 export class MessageStepDao extends BaseDao {
-  /** 获取某个会话的所有步骤消息，按时间升序（仅读取当前合法类型，忽略旧格式数据） */
+  /** 获取某个会话的所有步骤消息，按时间升序（仅读取当前合法类型，忽略旧格式数据，排除已归档） */
   findBySessionId(sessionId: string): Message[] {
     const placeholders = STEP_TYPES.map(() => '?').join(',')
     const rows = this.stmt(
-      `SELECT * FROM message_steps WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt ASC`
+      `SELECT * FROM message_steps WHERE sessionId = ? AND archived = 0 AND type IN (${placeholders}) ORDER BY createdAt ASC`
     ).all(sessionId, ...STEP_TYPES) as MessageRow[]
     return rows.map(parseRow)
   }
@@ -217,13 +245,29 @@ export class MessageStepDao extends BaseDao {
       .run(...values, id)
   }
 
-  /** 获取某个会话的最后一条步骤消息（仅读取当前合法类型） */
+  /** 获取某个会话的最后一条步骤消息（仅读取当前合法类型，排除已归档） */
   findLastBySessionId(sessionId: string): Message | undefined {
     const placeholders = STEP_TYPES.map(() => '?').join(',')
     const row = this.stmt(
-      `SELECT * FROM message_steps WHERE sessionId = ? AND type IN (${placeholders}) ORDER BY createdAt DESC LIMIT 1`
+      `SELECT * FROM message_steps WHERE sessionId = ? AND archived = 0 AND type IN (${placeholders}) ORDER BY createdAt DESC LIMIT 1`
     ).get(sessionId, ...STEP_TYPES) as MessageRow | undefined
     return row ? parseRow(row) : undefined
+  }
+
+  /** 归档会话的所有未归档步骤消息（Full Compaction 用） */
+  archiveBySessionId(sessionId: string): number {
+    return this.stmt(
+      'UPDATE message_steps SET archived = 1 WHERE sessionId = ? AND archived = 0'
+    ).run(sessionId).changes
+  }
+
+  /** 查询指定时间范围内的已归档步骤消息（按时间正序） */
+  findArchivedInRange(sessionId: string, fromTime: number, toTime: number): Message[] {
+    const placeholders = STEP_TYPES.map(() => '?').join(',')
+    const rows = this.stmt(
+      `SELECT * FROM message_steps WHERE sessionId = ? AND archived = 1 AND type IN (${placeholders}) AND createdAt >= ? AND createdAt <= ? ORDER BY createdAt ASC`
+    ).all(sessionId, ...STEP_TYPES, fromTime, toTime) as MessageRow[]
+    return rows.map(parseRow)
   }
 }
 

@@ -8,6 +8,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core'
 import { mcpDao } from '../dao/mcpDao'
 import type { McpServer, McpServerStatus, McpToolInfo, McpToolDetails } from '../types'
 import { createLogger } from '../logger'
+import { buildSpawnEnv } from '../utils/paths'
 const log = createLogger('MCP')
 
 /** MCP tools/list 返回的单个工具结构 */
@@ -345,7 +346,7 @@ class McpService {
       return new StdioClientTransport({
         command: server.command,
         args,
-        env: { ...(process.env as Record<string, string>), ...env }
+        env: buildSpawnEnv(env) as Record<string, string>
       })
     } else if (server.type === 'http') {
       const headers = this.parseJsonObject(server.headers)

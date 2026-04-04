@@ -10,6 +10,8 @@ export interface TelegramBot {
   username: string
   /** 允许的用户 ID 列表，JSON: number[] */
   allowedUsers: string
+  /** 扩展元数据 JSON */
+  metadata: string
   isEnabled: number
   createdAt: number
   updatedAt: number

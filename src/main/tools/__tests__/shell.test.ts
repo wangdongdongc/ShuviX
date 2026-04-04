@@ -76,33 +76,43 @@ describe('collapseProgressOutput', () => {
   // --- 骨架去重 ---
 
   describe('骨架去重', () => {
-    it('Docker pull 进度行折叠——60 行重复输出折叠为数行', () => {
+    it('Docker pull 进度行折叠——连续相同骨架行被折叠', () => {
+      // 真实 docker pull 非 TTY 模式：每个 layer 的进度连续输出
       const lines = [
         'Using default tag: latest',
         'latest: Pulling from library/nginx',
-        // 3 个 layer × 20 帧 = 60 行进度
-        ...Array.from({ length: 20 }, (_, i) => [
-          `c032818082ff Downloading ${(i * 0.5 + 0.5).toFixed(3)}MB`,
-          `9ef18fb61f0c Downloading ${(i * 0.3 + 0.1).toFixed(3)}MB`,
-          `aab3b37e4807 Extracting ${(i * 0.2 + 0.1).toFixed(3)}MB`
-        ]).flat(),
+        // layer 1: 20 行连续进度
+        ...Array.from(
+          { length: 20 },
+          (_, i) => `c032818082ff Downloading ${(i * 0.5 + 0.5).toFixed(3)}MB`
+        ),
         'c032818082ff Pull complete',
+        // layer 2: 20 行连续进度
+        ...Array.from(
+          { length: 20 },
+          (_, i) => `9ef18fb61f0c Downloading ${(i * 0.3 + 0.1).toFixed(3)}MB`
+        ),
         '9ef18fb61f0c Pull complete',
+        // layer 3: 20 行连续进度
+        ...Array.from(
+          { length: 20 },
+          (_, i) => `aab3b37e4807 Extracting ${(i * 0.2 + 0.1).toFixed(3)}MB`
+        ),
         'aab3b37e4807 Pull complete',
         'Digest: sha256:abc123def456',
         'Status: Downloaded newer image for nginx:latest'
       ]
 
-      const result = collapseProgressOutput(lines.join('\n'))
+      const result = collapseProgressOutput(lines.join('\n'), 'docker pull nginx:latest')
       const resultLines = result.split('\n')
 
-      // 原始 66 行应大幅缩减
+      // 原始 67 行，每段 20 行折叠为 2 行（notice + last），共减少 57 行
       expect(resultLines.length).toBeLessThan(15)
       // 保留首尾有价值的行
       expect(result).toContain('Using default tag: latest')
       expect(result).toContain('Status: Downloaded newer image for nginx:latest')
-      // 有折叠提示
-      expect(result).toContain('similar lines collapsed')
+      // 3 段各有折叠提示
+      expect((result.match(/similar lines collapsed/g) || []).length).toBe(3)
     })
 
     it('wget/curl 进度条折叠', () => {
@@ -116,7 +126,10 @@ describe('collapseProgressOutput', () => {
         'Downloaded: 1 file, 10240 in 7s (1.5 MB/s)'
       ]
 
-      const result = collapseProgressOutput(lines.join('\n'))
+      const result = collapseProgressOutput(
+        lines.join('\n'),
+        'wget https://example.com/file.tar.gz'
+      )
       const resultLines = result.split('\n')
 
       expect(resultLines.length).toBeLessThan(lines.length)
@@ -139,7 +152,10 @@ describe('collapseProgressOutput', () => {
         'done.'
       ]
 
-      const result = collapseProgressOutput(lines.join('\n'))
+      const result = collapseProgressOutput(
+        lines.join('\n'),
+        'git clone https://github.com/user/repo.git'
+      )
 
       expect(result).toContain("Cloning into 'repo'...")
       expect(result).toContain('done.')
@@ -156,7 +172,10 @@ describe('collapseProgressOutput', () => {
         'Done.'
       ]
 
-      const result = collapseProgressOutput(lines.join('\n'))
+      const result = collapseProgressOutput(
+        lines.join('\n'),
+        'wget https://example.com/file.tar.gz'
+      )
       // 同一骨架仅 4 行（< 5），不应折叠
       expect(result).toBe(lines.join('\n'))
     })
@@ -191,6 +210,21 @@ describe('collapseProgressOutput', () => {
         '  run `npm fund` for details'
       ]
 
+      const result = collapseProgressOutput(lines.join('\n'), 'npm install')
+      expect(result).toBe(lines.join('\n'))
+    })
+
+    it('非进度类命令不执行骨架折叠', () => {
+      // 即使输出中有大量结构相似的行，非进度命令也不折叠
+      const lines = Array.from({ length: 10 }, (_, i) => `第${i + 1}行 数据 ${(i + 1) * 100} 记录`)
+
+      const result = collapseProgressOutput(lines.join('\n'), 'cat report.txt')
+      expect(result).toBe(lines.join('\n'))
+    })
+
+    it('无命令参数时不执行骨架折叠', () => {
+      const lines = Array.from({ length: 10 }, (_, i) => `a1b2c3d4e5f6 Downloading ${i + 1}MB`)
+
       const result = collapseProgressOutput(lines.join('\n'))
       expect(result).toBe(lines.join('\n'))
     })
@@ -206,7 +240,7 @@ describe('collapseProgressOutput', () => {
       )
       const input = frames.join('\n')
 
-      const result = collapseProgressOutput(input)
+      const result = collapseProgressOutput(input, 'docker pull nginx')
       // \r 处理后每行只保留最后内容，然后骨架去重折叠
       expect(result).toContain('similar lines collapsed')
     })
@@ -232,7 +266,7 @@ describe('collapseProgressOutput', () => {
         'Successfully built abc123def456'
       ]
 
-      const result = collapseProgressOutput(lines.join('\n'))
+      const result = collapseProgressOutput(lines.join('\n'), 'docker build -t myapp .')
       const resultLines = result.split('\n')
 
       // 原始 47 行应大幅缩减

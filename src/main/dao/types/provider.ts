@@ -10,6 +10,7 @@ export interface Provider {
   apiKey: string
   baseUrl: string
   apiProtocol: ApiProtocol
+  metadata: string // JSON 字符串，如 { customHeaders: { "X-Key": "val" } }
   isBuiltin: number // 0=自定义, 1=内置
   isEnabled: number // 0=禁用, 1=启用
   sortOrder: number

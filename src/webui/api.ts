@@ -290,12 +290,10 @@ export function createWebApi(): typeof window.api {
 
     skill: {
       list: () => Promise.resolve([]),
-      add: (p) => api('/skills', { method: 'POST', body: JSON.stringify(p) }),
       update: noop,
-      delete: noop,
+      deleteDefault: noop,
       parseMarkdown: () => Promise.resolve(null),
-      importFromDir: () => Promise.resolve({ success: false }),
-      getDir: () => Promise.resolve('')
+      getDefaultDir: () => Promise.resolve('')
     }
   } as unknown as typeof window.api
 }

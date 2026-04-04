@@ -9,6 +9,7 @@ interface AddProviderDialogProps {
     baseUrl: string
     apiKey: string
     apiProtocol: ProviderInfo['apiProtocol']
+    metadata?: string
   }) => Promise<void>
   onClose: () => void
 }
@@ -25,6 +26,7 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [apiProtocol, setApiProtocol] = useState<ProviderInfo['apiProtocol']>('openai-completions')
+  const [customHeaders, setCustomHeaders] = useState('')
   const [adding, setAdding] = useState(false)
 
   const canSubmit = name.trim() && baseUrl.trim() && !adding
@@ -45,13 +47,22 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
 
   const handleSubmit = async (): Promise<void> => {
     if (!canSubmit) return
+    let metadata: string | undefined
+    if (customHeaders.trim()) {
+      try {
+        metadata = JSON.stringify({ customHeaders: JSON.parse(customHeaders.trim()) })
+      } catch {
+        return // 无效 JSON，不提交
+      }
+    }
     setAdding(true)
     try {
       await onAdd({
         name: name.trim(),
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
-        apiProtocol
+        apiProtocol,
+        metadata
       })
       handleClose()
     } finally {
@@ -119,6 +130,18 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
                 </option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="block text-[11px] text-text-tertiary mb-1">
+              {t('settings.customHeaders')}
+            </label>
+            <textarea
+              value={customHeaders}
+              onChange={(e) => setCustomHeaders(e.target.value)}
+              placeholder={t('settings.customHeadersPlaceholder')}
+              rows={3}
+              className="zen-input font-mono text-[11px] resize-y"
+            />
           </div>
         </div>
 

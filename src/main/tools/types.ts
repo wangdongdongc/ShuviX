@@ -8,8 +8,9 @@ import type { TSchema, Static } from '@sinclair/typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { projectDao } from '../dao/projectDao'
 import { sessionService } from '../services/sessionService'
-import { getTempWorkspace } from '../utils/paths'
-import type { ReferenceDir } from '../types'
+import { getTempWorkspace, getToolResultsBase, getDefaultSkillsDir } from '../utils/paths'
+import { skillService } from '../services/skillService'
+import type { ReferenceDir, ProjectEnvVar } from '../types'
 import type { ChatEvent } from '../frontend/core/types'
 
 /** ChatEvent 去掉 sessionId 后的有效载荷（分布式 Omit，保留判别联合结构） */
@@ -31,6 +32,8 @@ export interface ProjectConfig {
   projectId?: string
   /** 项目根目录路径（用于计算 PGLite dataDir） */
   projectPath?: string
+  /** 项目环境变量（注入 bash 进程） */
+  envVars?: Record<string, string>
 }
 
 /** 工具上下文 — 所有工具共享的运行时信息 */
@@ -119,6 +122,12 @@ export function assertSandboxRead(
 ): void {
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
+  // 允许读取持久化的工具大结果文件
+  if (absolutePath.startsWith(getToolResultsBase() + sep)) return
+  // 允许读取全局 skills 目录（skill 工具加载后 AI 需读取伴随文件）
+  if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return
+  // 允许读取用户配置的外部 skill 目录
+  if (skillService.listExternalDirs().some((d) => absolutePath.startsWith(d.path + sep))) return
   const p = displayPath ?? absolutePath
   throw new Error(
     `Sandbox: access denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`
@@ -148,6 +157,16 @@ export function assertSandboxWrite(
   )
 }
 
+/** ProjectEnvVar[] → Record<string, string>，过滤空 key */
+function envVarsToRecord(envVars?: ProjectEnvVar[]): Record<string, string> | undefined {
+  if (!envVars?.length) return undefined
+  const result: Record<string, string> = {}
+  for (const v of envVars) {
+    if (v.key) result[v.key] = v.value
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
 /** 通过 sessionId 查询当前项目配置（每次工具执行时调用，获取最新值） */
 export function resolveProjectConfig(sessionId: string): ProjectConfig {
   const session = sessionService.getById(sessionId)
@@ -162,7 +181,8 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
       referenceDirs: project.settings?.referenceDirs || [],
       pglitePersist: project.settings?.tool?.pglitePersist,
       projectId: project.id,
-      projectPath: project.path
+      projectPath: project.path,
+      envVars: envVarsToRecord(project.settings?.tool?.envVars)
     }
   }
 

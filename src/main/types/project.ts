@@ -1,6 +1,12 @@
 import type { ReferenceDir, ToolSettings } from '../dao/types'
 
-export type { Project, ProjectSettings, ReferenceDir, ToolSettings } from '../dao/types'
+export type {
+  Project,
+  ProjectEnvVar,
+  ProjectSettings,
+  ReferenceDir,
+  ToolSettings
+} from '../dao/types'
 
 /** IPC: 创建项目参数 */
 export interface ProjectCreateParams {

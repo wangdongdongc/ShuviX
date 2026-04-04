@@ -18,6 +18,8 @@ export interface McpServer {
   url: string
   /** http: 请求头 JSON 对象 */
   headers: string
+  /** 扩展元数据 JSON */
+  metadata: string
   /** 是否启用 */
   isEnabled: number
   /** 上次连接时发现的工具列表 JSON（持久化缓存） */

@@ -18,6 +18,7 @@ import { registerDownloadHandlers } from './downloadHandlers'
 import { registerPluginHandlers } from './pluginHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
 import { registerMcpServerHandlers } from './mcpServerHandlers'
+import { registerCompactionHandlers } from './compactionHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -44,4 +45,5 @@ export function registerIpcHandlers(): void {
   registerPluginHandlers()
   registerUpdateHandlers()
   registerMcpServerHandlers()
+  registerCompactionHandlers()
 }

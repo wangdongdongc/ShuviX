@@ -225,6 +225,26 @@ export interface ChatSubAgentThinkingDeltaEvent extends ChatEventBase {
   delta: string
 }
 
+// ─── 压缩归档 ────────────────────────────────────────────
+
+/** 压缩开始 */
+export interface ChatCompactionStartEvent extends ChatEventBase {
+  type: 'compaction_start'
+}
+
+/** 压缩完成 */
+export interface ChatCompactionEndEvent extends ChatEventBase {
+  type: 'compaction_end'
+  /** 新摘要消息 (JSON string) */
+  message: string
+}
+
+/** 压缩失败 */
+export interface ChatCompactionErrorEvent extends ChatEventBase {
+  type: 'compaction_error'
+  error: string
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -266,6 +286,9 @@ export type ChatEvent =
   | ChatSubAgentToolEndEvent
   | ChatSubAgentTextDeltaEvent
   | ChatSubAgentThinkingDeltaEvent
+  | ChatCompactionStartEvent
+  | ChatCompactionEndEvent
+  | ChatCompactionErrorEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
 

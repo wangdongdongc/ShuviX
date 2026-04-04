@@ -1,6 +1,6 @@
 import { ipcMain, dialog } from 'electron'
 import { skillService } from '../services/skillService'
-import type { SkillAddParams, SkillUpdateParams } from '../types'
+import type { SkillUpdateParams, SkillDir } from '../types'
 
 /**
  * Skill 相关 IPC 处理器（基于文件系统 ~/.shuvix/skills/）
@@ -11,9 +11,9 @@ export function registerSkillHandlers(): void {
     return skillService.findAll()
   })
 
-  /** 手动创建 Skill */
-  ipcMain.handle('skill:add', (_event, params: SkillAddParams) => {
-    return skillService.create(params)
+  /** 获取按目录分组的 Skill 列表 */
+  ipcMain.handle('skill:listGrouped', () => {
+    return skillService.findAllGrouped()
   })
 
   /** 更新 Skill */
@@ -22,9 +22,9 @@ export function registerSkillHandlers(): void {
     return { success: true }
   })
 
-  /** 删除 Skill（移除整个目录） */
-  ipcMain.handle('skill:delete', (_event, name: string) => {
-    skillService.deleteByName(name)
+  /** 删除默认目录中的 Skill（移除整个子目录） */
+  ipcMain.handle('skill:deleteDefault', (_event, name: string) => {
+    skillService.deleteDefaultSkill(name)
     return { success: true }
   })
 
@@ -33,25 +33,43 @@ export function registerSkillHandlers(): void {
     return skillService.parseSkillMarkdown(text)
   })
 
-  /** 从本地目录导入 Skill（弹出文件夹选择器） */
-  ipcMain.handle('skill:importFromDir', async () => {
+  /** 获取默认 skills 目录路径 */
+  ipcMain.handle('skill:getDefaultDir', () => {
+    return skillService.getDefaultSkillsDir()
+  })
+
+  // ============ 目录管理 ============
+
+  /** 获取外部 skill 源目录列表 */
+  ipcMain.handle('skill:listExternalDirs', () => {
+    return skillService.listExternalDirs()
+  })
+
+  /** 弹出文件夹选择器（仅返回路径，不执行添加） */
+  ipcMain.handle('skill:pickExternalDir', async () => {
     const result = await dialog.showOpenDialog({
-      properties: ['openDirectory'],
-      title: 'Select Skill Directory'
+      properties: ['openDirectory', 'showHiddenFiles'],
+      title: 'Select Skill Source Directory'
     })
     if (result.canceled || result.filePaths.length === 0) {
       return { success: false, reason: 'canceled' }
     }
+    return { success: true, path: result.filePaths[0] }
+  })
+
+  /** 添加外部 skill 源目录 */
+  ipcMain.handle('skill:addExternalDir', (_event, dir: SkillDir) => {
     try {
-      const skill = skillService.importFromDirectory(result.filePaths[0])
-      return { success: true, skill }
+      skillService.addExternalDir(dir)
+      return { success: true }
     } catch (e: unknown) {
       return { success: false, reason: e instanceof Error ? e.message : String(e) }
     }
   })
 
-  /** 获取 skills 目录路径 */
-  ipcMain.handle('skill:getDir', () => {
-    return skillService.getSkillsDir()
+  /** 移除外部 skill 源目录 */
+  ipcMain.handle('skill:removeExternalDir', (_event, name: string) => {
+    skillService.removeExternalDir(name)
+    return { success: true }
   })
 }

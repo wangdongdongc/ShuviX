@@ -34,10 +34,16 @@ export class ProviderService {
     return providerDao.findById(id)
   }
 
-  /** 更新提供商配置（name、apiKey、baseUrl、apiProtocol） */
+  /** 更新提供商配置（name、apiKey、baseUrl、apiProtocol、customHeaders） */
   updateConfig(
     id: string,
-    config: { name?: string; apiKey?: string; baseUrl?: string; apiProtocol?: ApiProtocol }
+    config: {
+      name?: string
+      apiKey?: string
+      baseUrl?: string
+      apiProtocol?: ApiProtocol
+      metadata?: string
+    }
   ): void {
     if (config.name !== undefined) {
       providerDao.updateName(id, config.name)
@@ -50,6 +56,9 @@ export class ProviderService {
     }
     if (config.apiProtocol !== undefined) {
       providerDao.updateApiProtocol(id, config.apiProtocol)
+    }
+    if (config.metadata !== undefined) {
+      providerDao.updateMetadata(id, config.metadata)
     }
   }
 
@@ -64,6 +73,7 @@ export class ProviderService {
     baseUrl: string
     apiKey: string
     apiProtocol: ApiProtocol
+    metadata?: string
   }): Provider {
     const id = uuidv7()
     providerDao.insert({
@@ -71,7 +81,8 @@ export class ProviderService {
       name: params.name,
       baseUrl: params.baseUrl.replace(/\/+$/, ''),
       apiKey: params.apiKey,
-      apiProtocol: params.apiProtocol
+      apiProtocol: params.apiProtocol,
+      metadata: params.metadata
     })
     return providerDao.findById(id)!
   }

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Folder, Settings2 } from 'lucide-react'
+import { Folder, Settings2, Archive } from 'lucide-react'
 import {
   useChatStore,
   selectStreamingContent,
   selectStreamingThinking,
   selectIsStreaming,
+  selectIsCompacting,
   selectCanChat,
   selectCanEdit,
   type ChatMessage,
@@ -138,6 +139,7 @@ export function ChatView(): React.JSX.Element {
   const streamingContent = useChatStore(selectStreamingContent)
   const streamingThinking = useChatStore(selectStreamingThinking)
   const isStreaming = useChatStore(selectIsStreaming)
+  const isCompacting = useChatStore(selectIsCompacting)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -153,6 +155,13 @@ export function ChatView(): React.JSX.Element {
   const titleInputRef = useRef<HTMLInputElement>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
+
+  // ── 归档消息回溯 ──
+  const [archivedCount, setArchivedCount] = useState(0)
+  const [archivedItems, setArchivedItems] = useState<VisibleItem[]>([])
+  const [archivedOffset, setArchivedOffset] = useState(0)
+  const [archivedLoading, setArchivedLoading] = useState(false)
+  const hasMoreArchived = archivedOffset < archivedCount
   const togglePreview = usePreviewStore((s) => s.toggle)
   const isPreviewOpen = usePreviewStore((s) => s.isOpen)
   const toggleSidebar = useSidebarStore((s) => s.toggle)
@@ -200,10 +209,45 @@ export function ChatView(): React.JSX.Element {
     []
   )
 
+  // ── 归档消息：会话切换时重置并获取归档数 ──
+  useEffect(() => {
+    setArchivedItems([])
+    setArchivedOffset(0)
+    setArchivedCount(0)
+    if (!activeSessionId) return
+    window.api.message.countArchived(activeSessionId).then((cnt) => setArchivedCount(cnt))
+  }, [activeSessionId])
+
+  /** 加载更多归档消息（每次 5 条主消息） */
+  const loadMoreArchived = useCallback(async () => {
+    if (!activeSessionId || archivedLoading || !hasMoreArchived) return
+    setArchivedLoading(true)
+    try {
+      const batch = await window.api.message.listArchived({
+        sessionId: activeSessionId,
+        limit: 5,
+        offset: archivedOffset
+      })
+      if (batch.length > 0) {
+        const batchItems = buildVisibleItems(batch, false).map((item) => ({
+          ...item,
+          isArchived: true
+        }))
+        // 新加载的是更早的消息，需要放在已有归档项之前
+        setArchivedItems((prev) => [...batchItems, ...prev])
+        setArchivedOffset((prev) => prev + 5)
+      }
+    } finally {
+      setArchivedLoading(false)
+    }
+  }, [activeSessionId, archivedLoading, hasMoreArchived, archivedOffset])
+
   // 预构建可见消息列表，messages 不变时复用缓存
+  const liveItems = useMemo(() => buildVisibleItems(messages, isStreaming), [messages, isStreaming])
+  // 合并：归档项在前，活跃项在后
   const visibleItems = useMemo(
-    () => buildVisibleItems(messages, isStreaming),
-    [messages, isStreaming]
+    () => (archivedItems.length > 0 ? [...archivedItems, ...liveItems] : liveItems),
+    [archivedItems, liveItems]
   )
   // 流式内容增长时，若用户在底部则自动滚动
   // 使用 rAF 合并同帧内多次更新，scrollTo 代替 scrollToIndex 避免 index 定位抖动
@@ -231,19 +275,65 @@ export function ChatView(): React.JSX.Element {
 
   /** 渲染单条可见消息 */
   const renderItem = useCallback(
-    (_index: number, item: VisibleItem) => (
-      <MessageRenderer
-        item={item}
-        lastAssistantTextId={lastAssistantTextId}
-        onRollback={canEdit ? handleRollback : undefined}
-        onRegenerate={canEdit ? handleRegenerate : undefined}
-      />
-    ),
+    (_index: number, item: VisibleItem) => {
+      if (item.isArchived) {
+        return (
+          <div className="opacity-45">
+            <MessageRenderer
+              item={item}
+              lastAssistantTextId={null}
+              onRollback={undefined}
+              onRegenerate={undefined}
+            />
+          </div>
+        )
+      }
+      return (
+        <MessageRenderer
+          item={item}
+          lastAssistantTextId={lastAssistantTextId}
+          onRollback={canEdit ? handleRollback : undefined}
+          onRegenerate={canEdit ? handleRegenerate : undefined}
+        />
+      )
+    },
     [lastAssistantTextId, handleRollback, handleRegenerate, canEdit]
   )
 
+  /** Virtuoso Header：归档消息横幅 */
+  const ArchivedBanner = useMemo(() => {
+    if (archivedCount === 0) return undefined
+    return function ArchivedBannerHeader() {
+      if (!hasMoreArchived && archivedItems.length === 0) return null
+      return (
+        <button
+          onClick={loadMoreArchived}
+          disabled={archivedLoading || !hasMoreArchived}
+          className="w-full flex items-center justify-center gap-2 py-2 px-4 text-xs text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors border-b border-border-secondary/40 disabled:opacity-50"
+        >
+          <Archive size={13} />
+          {archivedLoading ? (
+            <span>{t('compact.archivedLoading')}</span>
+          ) : hasMoreArchived ? (
+            <span>{t('compact.archivedBanner', { count: archivedCount - archivedOffset })}</span>
+          ) : (
+            <span>{t('compact.archivedAllLoaded')}</span>
+          )}
+        </button>
+      )
+    }
+  }, [
+    archivedCount,
+    archivedOffset,
+    archivedLoading,
+    hasMoreArchived,
+    archivedItems.length,
+    loadMoreArchived,
+    t
+  ])
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex flex-col h-full">
       {/* 窗口拖拽区 + 会话标题栏（单行布局） */}
       <div
         className={`titlebar-drag flex-shrink-0 flex items-center px-2 ${window.api.app.platform === 'darwin' ? 'h-10' : 'h-8'}`}
@@ -371,6 +461,15 @@ export function ChatView(): React.JSX.Element {
         <WelcomeView onNewChat={handleNewChat} onCreateProject={() => setShowCreateProject(true)} />
       ) : (
         <>
+          {/* 压缩中冻结遮罩 */}
+          {isCompacting && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-bg-primary/80 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-3">
+                <div className="animate-spin h-6 w-6 border-2 border-accent border-t-transparent rounded-full" />
+                <span className="text-sm text-text-secondary">{t('compact.compressing')}</span>
+              </div>
+            </div>
+          )}
           {messages.length === 0 && !isStreaming ? (
             <EmptySessionHint />
           ) : (
@@ -379,7 +478,10 @@ export function ChatView(): React.JSX.Element {
               className="flex-1"
               data={visibleItems}
               itemContent={renderItem}
-              components={{ Footer: StreamingFooter }}
+              components={{
+                Footer: StreamingFooter,
+                ...(ArchivedBanner ? { Header: ArchivedBanner } : {})
+              }}
               followOutput={followOutput}
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}

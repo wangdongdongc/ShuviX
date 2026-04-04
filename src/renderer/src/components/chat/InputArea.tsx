@@ -1,12 +1,13 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, ImagePlus, Mic, X } from 'lucide-react'
+import { Send, Square, ImagePlus, Mic, X, Archive } from 'lucide-react'
 import { TokenBadge } from './InlineTokenBadge'
 import { makeTokenMarker, expandCommandTemplate } from '../../../../shared/utils/inlineTokens'
 import type { InlineToken } from '../../../../shared/types/chatMessage'
 import {
   useChatStore,
   selectIsStreaming,
+  selectIsCompacting,
   selectToolExecutions,
   selectPendingUserInput,
   selectCanEdit
@@ -53,7 +54,14 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
+  const isCompacting = useChatStore(selectIsCompacting)
   const canEdit = useChatStore(selectCanEdit)
+  const assistantMsgCount = useChatStore(
+    useCallback(
+      (s) => s.messages.filter((m) => m.role === 'assistant' && m.type === 'text').length,
+      []
+    )
+  )
   const { projectPath, agentMdLoaded } = useSessionMeta()
 
   // 检测是否有待用户操作（用户输入 / bash 审批）
@@ -365,7 +373,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="max-w-3xl mx-auto p-3">
+      <div className="max-w-3xl mx-auto p-2">
         <div className="border border-border-secondary/40 bg-bg-secondary/50 shadow-sm rounded-lg">
           {/* 拖拽调节手柄 */}
           <div
@@ -499,8 +507,17 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               {/* 右侧弹性空白 → 将按钮推到最右 */}
               <span className="flex-1" />
 
-              {/* Mic + Send/Stop 按钮 */}
+              {/* Compact + Mic + Send/Stop 按钮 */}
               <div className="flex items-center gap-0.5">
+                {assistantMsgCount >= 2 && !effectiveStreaming && !isCompacting && (
+                  <button
+                    onClick={() => activeSessionId && window.api.compact.start(activeSessionId)}
+                    className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+                    title={t('compact.button')}
+                  >
+                    <Archive size={14} />
+                  </button>
+                )}
                 {voice.isAvailable && !effectiveStreaming && (
                   <button
                     onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}

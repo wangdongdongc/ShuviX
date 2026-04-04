@@ -65,12 +65,9 @@ function buildSystemPrompt(
 ): string {
   const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
   let prompt = globalPrompt
-  if (project?.systemPrompt) {
-    prompt = `${globalPrompt}\n\n${project.systemPrompt}`
-  }
   if (project) {
     const workDir = workingDirectory || project.path
-    prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory.`
+    prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory. Always prioritize working within this directory to complete tasks.`
 
     const referenceDirs = project.settings?.referenceDirs || []
     if (referenceDirs.length > 0) {
@@ -85,8 +82,21 @@ function buildSystemPrompt(
         prompt += `\n\nReference directories (read-write, you can read AND write files in these directories):\n${lines.join('\n')}`
       }
     }
+    const envVars = project.settings?.tool?.envVars || []
+    if (envVars.length > 0) {
+      const names = envVars
+        .filter((v) => v.key)
+        .map((v) => `- ${v.key}`)
+        .join('\n')
+      if (names) {
+        prompt += `\n\nProject environment variables (auto-injected in bash tool, do not export manually):\n${names}`
+      }
+    }
+    if (project.systemPrompt) {
+      prompt += `\n\n${project.systemPrompt}`
+    }
   } else {
-    prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}`
+    prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}. Always prioritize working within this directory to complete tasks.`
   }
 
   return prompt

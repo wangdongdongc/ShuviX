@@ -1,29 +1,34 @@
 /**
  * SkillService — 基于文件系统的 Skill 管理
  * 全局 skills：~/.shuvix/skills/<name>/SKILL.md（+ 可选伴随文件）
+ * 外部目录：用户添加的额外 skill 源，每个目录有唯一 name，skill 标识为 dirName:skillName
  * 项目 skills：<projectPath>/.claude/skills/<name>/SKILL.md
- * 启用/禁用状态仅针对全局 skills，存储在 ~/.shuvix/skills/.config.json
+ * 启用/禁用状态针对全局和外部 skills，存储在 ~/.shuvix/skills/.config.json
  * 项目级 skills 始终启用
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, cpSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
-import type { Skill, SkillAddParams, SkillUpdateParams } from '../types'
+import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
 import log from 'electron-log/main'
-import { getUserConfigDir } from '../utils/paths'
+import { getDefaultSkillsDir } from '../utils/paths'
 
 /** 配置文件结构 */
 interface SkillConfig {
   /** 禁用的 skill 名称集合（默认全部启用） */
   disabled: string[]
+  /** 用户添加的外部 skill 目录 */
+  dirs: SkillDir[]
 }
+
+type SkillSource = 'default' | 'project' | 'external'
 
 class SkillService {
   /** skills 根目录 */
   private readonly skillsDir: string
 
   constructor() {
-    this.skillsDir = join(getUserConfigDir(), 'skills')
+    this.skillsDir = getDefaultSkillsDir()
     this.ensureDir(this.skillsDir)
   }
 
@@ -39,12 +44,13 @@ class SkillService {
     const configPath = join(this.skillsDir, '.config.json')
     try {
       if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'))
+        const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
+        return { disabled: raw.disabled ?? [], dirs: raw.dirs ?? [] }
       }
     } catch (e) {
       log.warn('读取 skills 配置失败:', e)
     }
-    return { disabled: [] }
+    return { disabled: [], dirs: [] }
   }
 
   /** 写入配置文件 */
@@ -87,47 +93,61 @@ class SkillService {
     return { name, description, content }
   }
 
-  /** 从指定目录加载单个 skill（通用，支持全局和项目目录） */
-  private loadSkillFromDir(dir: string, name: string, isProject: boolean): Skill | null {
+  /** 从指定目录加载单个 skill */
+  private loadSkillFromDir(
+    dir: string,
+    dirEntryName: string,
+    source: SkillSource,
+    config: SkillConfig,
+    dirName?: string
+  ): Skill | null {
     const mdPath = join(dir, 'SKILL.md')
     if (!existsSync(mdPath)) return null
 
     try {
       const raw = readFileSync(mdPath, 'utf-8')
       const parsed = this.parseSkillMarkdown(raw)
-      const config = isProject ? null : this.readConfig()
+
+      // 构建全局唯一名称
+      const rawName = parsed ? parsed.name : dirEntryName
+      const globalName = dirName ? `${dirName}:${rawName}` : rawName
+      const isEnabled = source === 'project' ? true : !config.disabled.includes(globalName)
 
       if (parsed) {
         return {
-          name: parsed.name,
+          name: globalName,
           description: parsed.description,
           content: parsed.content,
           basePath: dir,
-          isEnabled: isProject ? true : !config!.disabled.includes(name)
+          isEnabled,
+          source,
+          dirName
         }
       }
 
       // frontmatter 解析失败时，用目录名作为 name，全文作为 content
       return {
-        name,
+        name: globalName,
         description: '',
         content: raw.trim(),
         basePath: dir,
-        isEnabled: isProject ? true : !config!.disabled.includes(name)
+        isEnabled,
+        source,
+        dirName
       }
     } catch (e) {
-      log.warn(`加载 skill "${name}" 失败:`, e)
+      log.warn(`加载 skill "${dirEntryName}" 失败:`, e)
       return null
     }
   }
 
-  /** 从目录加载单个 skill（全局 skills 目录） */
-  private loadSkill(name: string): Skill | null {
-    return this.loadSkillFromDir(join(this.skillsDir, name), name, false)
-  }
-
   /** 扫描指定目录下的所有 skills */
-  private scanSkillsDir(dir: string, isProject: boolean): Skill[] {
+  private scanSkillsDir(
+    dir: string,
+    source: SkillSource,
+    config: SkillConfig,
+    dirName?: string
+  ): Skill[] {
     if (!existsSync(dir)) return []
 
     const entries = readdirSync(dir, { withFileTypes: true })
@@ -136,7 +156,13 @@ class SkillService {
     for (const entry of entries) {
       // 跳过配置文件和隐藏文件
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-      const skill = this.loadSkillFromDir(join(dir, entry.name), entry.name, isProject)
+      const skill = this.loadSkillFromDir(
+        join(dir, entry.name),
+        entry.name,
+        source,
+        config,
+        dirName
+      )
       if (skill) skills.push(skill)
     }
 
@@ -148,18 +174,74 @@ class SkillService {
    * 传入 projectPath 时，合并项目级 .claude/skills/ 中的 skills（项目级同名覆盖全局）
    */
   findAll(projectPath?: string): Skill[] {
-    const globalSkills = this.scanSkillsDir(this.skillsDir, false)
-    if (!projectPath) return globalSkills.sort((a, b) => a.name.localeCompare(b.name))
+    const config = this.readConfig()
+    const allSkills: Skill[] = []
 
+    // 1. 默认目录
+    allSkills.push(...this.scanSkillsDir(this.skillsDir, 'default', config))
+
+    // 2. 外部目录
+    for (const dir of config.dirs) {
+      allSkills.push(...this.scanSkillsDir(dir.path, 'external', config, dir.name))
+    }
+
+    if (!projectPath) return allSkills.sort((a, b) => a.name.localeCompare(b.name))
+
+    // 3. 项目级 skills（同名覆盖）
     const projectSkillsDir = join(projectPath, '.claude', 'skills')
-    const projectSkills = this.scanSkillsDir(projectSkillsDir, true)
-    if (projectSkills.length === 0) return globalSkills.sort((a, b) => a.name.localeCompare(b.name))
+    const projectSkills = this.scanSkillsDir(projectSkillsDir, 'project', config)
+    if (projectSkills.length === 0) return allSkills.sort((a, b) => a.name.localeCompare(b.name))
 
-    // 合并：项目级同名 skill 覆盖全局
     const projectNames = new Set(projectSkills.map((s) => s.name))
-    return [...globalSkills.filter((s) => !projectNames.has(s.name)), ...projectSkills].sort(
-      (a, b) => a.name.localeCompare(b.name)
+    return [...allSkills.filter((s) => !projectNames.has(s.name)), ...projectSkills].sort((a, b) =>
+      a.name.localeCompare(b.name)
     )
+  }
+
+  /**
+   * 获取按目录分组的 Skill 列表
+   */
+  findAllGrouped(projectPath?: string): SkillGroup[] {
+    const config = this.readConfig()
+    const groups: SkillGroup[] = []
+
+    // 默认目录
+    groups.push({
+      dirName: 'default',
+      dirPath: this.skillsDir,
+      isDefault: true,
+      skills: this.scanSkillsDir(this.skillsDir, 'default', config).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
+    })
+
+    // 外部目录
+    for (const dir of config.dirs) {
+      groups.push({
+        dirName: dir.name,
+        dirPath: dir.path,
+        isDefault: false,
+        skills: this.scanSkillsDir(dir.path, 'external', config, dir.name).sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )
+      })
+    }
+
+    // 项目级
+    if (projectPath) {
+      const projectSkillsDir = join(projectPath, '.claude', 'skills')
+      const projectSkills = this.scanSkillsDir(projectSkillsDir, 'project', config)
+      if (projectSkills.length > 0) {
+        groups.push({
+          dirName: 'project',
+          dirPath: projectSkillsDir,
+          isDefault: false,
+          skills: projectSkills.sort((a, b) => a.name.localeCompare(b.name))
+        })
+      }
+    }
+
+    return groups
   }
 
   /**
@@ -173,78 +255,15 @@ class SkillService {
   /**
    * 根据名称获取单个 Skill
    * 传入 projectPath 时，优先查找项目级 skill
+   * 注意：目录名可能与 SKILL.md 中的 name 字段不同，需遍历匹配
    */
   findByName(name: string, projectPath?: string): Skill | null {
-    // 优先查项目级
-    if (projectPath) {
-      const projectDir = join(projectPath, '.claude', 'skills', name)
-      const skill = this.loadSkillFromDir(projectDir, name, true)
-      if (skill) return skill
-    }
-    return this.loadSkill(name)
-  }
-
-  /** 手动创建 Skill（在 skills 目录下创建子目录 + SKILL.md） */
-  create(params: SkillAddParams): Skill {
-    const dir = join(this.skillsDir, params.name)
-    if (existsSync(dir)) {
-      throw new Error(`Skill "${params.name}" already exists`)
-    }
-
-    this.ensureDir(dir)
-
-    // 写入 SKILL.md（含 frontmatter）
-    const md = `---\nname: ${params.name}\ndescription: "${params.description}"\n---\n\n${params.content}`
-    writeFileSync(join(dir, 'SKILL.md'), md, 'utf-8')
-
-    return {
-      name: params.name,
-      description: params.description,
-      content: params.content,
-      basePath: dir,
-      isEnabled: true
-    }
-  }
-
-  /** 从本地目录导入 Skill（复制整个目录到 skills 根目录） */
-  importFromDirectory(sourcePath: string): Skill {
-    const mdPath = join(sourcePath, 'SKILL.md')
-    if (!existsSync(mdPath)) {
-      throw new Error(`目录中未找到 SKILL.md: ${sourcePath}`)
-    }
-
-    const raw = readFileSync(mdPath, 'utf-8')
-    const parsed = this.parseSkillMarkdown(raw)
-    if (!parsed) {
-      throw new Error('SKILL.md 解析失败：缺少有效的 YAML frontmatter')
-    }
-
-    // 用解析到的 name（而非目录名）作为 skill 名称
-    const targetDir = join(this.skillsDir, parsed.name)
-    if (existsSync(targetDir)) {
-      throw new Error(`Skill "${parsed.name}" already exists`)
-    }
-
-    // 复制整个目录
-    cpSync(sourcePath, targetDir, { recursive: true })
-
-    return {
-      name: parsed.name,
-      description: parsed.description,
-      content: parsed.content,
-      basePath: targetDir,
-      isEnabled: true
-    }
+    return this.findAll(projectPath).find((s) => s.name === name) ?? null
   }
 
   /** 更新 Skill */
   update(params: SkillUpdateParams): void {
-    const dir = join(this.skillsDir, params.name)
-    if (!existsSync(dir)) {
-      throw new Error(`Skill "${params.name}" not found`)
-    }
-
-    // 处理启用/禁用
+    // 处理启用/禁用（对默认和外部 skill 都生效）
     if (params.isEnabled !== undefined) {
       const config = this.readConfig()
       if (params.isEnabled) {
@@ -257,20 +276,25 @@ class SkillService {
       this.writeConfig(config)
     }
 
-    // 更新 SKILL.md 内容
+    // 更新 SKILL.md 内容（仅默认目录的 skill）
     if (params.description !== undefined || params.content !== undefined) {
-      const current = this.loadSkill(params.name)
-      if (!current) return
+      // 从 name 中判断是否为外部 skill（含 : 前缀）
+      const skill = this.findByName(params.name)
+      if (!skill) throw new Error(`Skill "${params.name}" not found`)
+      if (skill.source !== 'default') {
+        throw new Error('Cannot edit skills from external directories')
+      }
 
-      const desc = params.description ?? current.description
-      const content = params.content ?? current.content
+      const dir = skill.basePath
+      const desc = params.description ?? skill.description
+      const content = params.content ?? skill.content
       const md = `---\nname: ${params.name}\ndescription: "${desc}"\n---\n\n${content}`
       writeFileSync(join(dir, 'SKILL.md'), md, 'utf-8')
     }
   }
 
-  /** 删除 Skill（移除整个目录） */
-  deleteByName(name: string): void {
+  /** 删除默认目录中的 Skill（移除整个子目录） */
+  deleteDefaultSkill(name: string): void {
     const dir = join(this.skillsDir, name)
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true })
@@ -283,8 +307,46 @@ class SkillService {
   }
 
   /** 获取 skills 根目录路径 */
-  getSkillsDir(): string {
+  getDefaultSkillsDir(): string {
     return this.skillsDir
+  }
+
+  // ============ 目录管理 ============
+
+  /** 获取所有外部 skill 源目录 */
+  listExternalDirs(): SkillDir[] {
+    return this.readConfig().dirs
+  }
+
+  /** 添加外部 skill 源目录 */
+  addExternalDir(dir: SkillDir): void {
+    if (!existsSync(dir.path)) {
+      throw new Error(`Directory does not exist: ${dir.path}`)
+    }
+    if (dir.path === this.skillsDir) {
+      throw new Error('Cannot add the default skills directory')
+    }
+
+    const config = this.readConfig()
+    if (config.dirs.some((d) => d.name === dir.name)) {
+      throw new Error(`Directory name "${dir.name}" already exists`)
+    }
+    if (config.dirs.some((d) => d.path === dir.path)) {
+      throw new Error(`Directory path "${dir.path}" already added`)
+    }
+
+    config.dirs.push({ name: dir.name, path: dir.path })
+    this.writeConfig(config)
+  }
+
+  /** 移除外部 skill 源目录 */
+  removeExternalDir(name: string): void {
+    const config = this.readConfig()
+    const prefix = `${name}:`
+    config.dirs = config.dirs.filter((d) => d.name !== name)
+    // 清理该目录下 skill 的 disabled 记录
+    config.disabled = config.disabled.filter((n) => !n.startsWith(prefix))
+    this.writeConfig(config)
   }
 }
 

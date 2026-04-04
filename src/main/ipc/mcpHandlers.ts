@@ -31,6 +31,7 @@ export function registerMcpHandlers(): void {
       env: JSON.stringify(params.env ?? {}),
       url: params.url ?? '',
       headers: JSON.stringify(params.headers ?? {}),
+      metadata: '{}',
       isEnabled: 1,
       cachedTools: '[]',
       createdAt: now,

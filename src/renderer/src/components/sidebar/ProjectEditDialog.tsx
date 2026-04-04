@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, Wrench, Database } from 'lucide-react'
+import { X, Wrench, Database, Terminal, Plus, Trash2, Eye, EyeOff } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
@@ -14,7 +14,7 @@ interface ProjectEditDialogProps {
   onClose: () => void
 }
 
-type EditTab = 'tools' | 'extensions' | 'project'
+type EditTab = 'tools' | 'extensions' | 'project' | 'advanced'
 
 /** Skills 分组标识 */
 const SKILLS_GROUP = '__skills__'
@@ -44,6 +44,10 @@ export function ProjectEditDialog({
   const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
   const [pglitePersist, setPglitePersist] = useState(false)
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string; sensitive: boolean }>>(
+    []
+  )
+  const [envVisibility, setEnvVisibility] = useState<Record<number, boolean>>({})
   // 加载项目数据 + 工具列表
   useEffect(() => {
     Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
@@ -65,6 +69,9 @@ export function ProjectEditDialog({
           }
           if (settings.tool?.pglitePersist) {
             setPglitePersist(true)
+          }
+          if (Array.isArray(settings.tool?.envVars)) {
+            setEnvVars(settings.tool.envVars)
           }
         } else {
           setEnabledTools(tools.filter((t) => t.defaultEnabled).map((t) => t.name))
@@ -130,7 +137,12 @@ export function ProjectEditDialog({
         systemPrompt,
         enabledTools,
         referenceDirs,
-        tool: { pglitePersist }
+        tool: {
+          pglitePersist,
+          envVars: envVars.filter((v) => v.key.trim()).length
+            ? envVars.filter((v) => v.key.trim())
+            : undefined
+        }
       })
       onClose()
     } finally {
@@ -142,7 +154,8 @@ export function ProjectEditDialog({
   const tabs: Array<{ key: EditTab; label: string }> = [
     { key: 'tools', label: t('projectForm.wizardStepTools') },
     { key: 'extensions', label: t('projectForm.wizardStepExtensions') },
-    { key: 'project', label: t('projectForm.wizardStepProject') }
+    { key: 'project', label: t('projectForm.wizardStepProject') },
+    { key: 'advanced', label: t('projectForm.wizardStepAdvanced') }
   ]
 
   if (loading) return null
@@ -233,12 +246,16 @@ export function ProjectEditDialog({
               referenceDirs={referenceDirs}
               onReferenceDirsChange={setReferenceDirs}
             />
+          </div>
+        )}
 
-            {/* 工具配置 */}
+        {/* ========== Tab: 高级配置 ========== */}
+        {tab === 'advanced' && (
+          <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
             <div className="zen-card">
               <div className="zen-card-header">
                 <Database size={12} />
-                {t('projectForm.toolConfig')}
+                {t('tool.localDbLabel')}
               </div>
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <input
@@ -256,6 +273,95 @@ export function ProjectEditDialog({
                   </p>
                 </div>
               </label>
+            </div>
+
+            {/* 环境变量 */}
+            <div className="zen-card">
+              <div className="zen-card-header">
+                <Terminal size={12} />
+                {t('tool.bashLabel')}
+              </div>
+              <div className="space-y-1.5">
+                {envVars.map((v, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <input
+                      value={v.key}
+                      onChange={(e) => {
+                        const next = [...envVars]
+                        next[i] = { ...v, key: e.target.value }
+                        setEnvVars(next)
+                      }}
+                      placeholder={t('projectForm.envVarKey')}
+                      className="flex-[2] min-w-0 px-2 py-1 rounded-md text-[11px] bg-bg-primary/50 border border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50"
+                    />
+                    {v.sensitive ? (
+                      <div className="flex-[3] min-w-0 flex items-center gap-0">
+                        <input
+                          value={v.value}
+                          type={envVisibility[i] ? 'text' : 'password'}
+                          onChange={(e) => {
+                            const next = [...envVars]
+                            next[i] = { ...v, value: e.target.value }
+                            setEnvVars(next)
+                          }}
+                          placeholder={t('projectForm.envVarValue')}
+                          className="flex-1 min-w-0 px-2 py-1 rounded-l-md text-[11px] bg-bg-primary/50 border border-r-0 border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setEnvVisibility((prev) => ({ ...prev, [i]: !prev[i] }))}
+                          className="px-1.5 self-stretch flex items-center border border-l-0 border-border-secondary rounded-r-md text-text-tertiary hover:text-text-secondary bg-bg-primary/50"
+                          title={envVisibility[i] ? 'Hide' : 'Show'}
+                        >
+                          {envVisibility[i] ? <Eye size={11} /> : <EyeOff size={11} />}
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        value={v.value}
+                        onChange={(e) => {
+                          const next = [...envVars]
+                          next[i] = { ...v, value: e.target.value }
+                          setEnvVars(next)
+                        }}
+                        placeholder={t('projectForm.envVarValue')}
+                        className="flex-[3] min-w-0 px-2 py-1 rounded-md text-[11px] bg-bg-primary/50 border border-border-secondary text-text-primary placeholder:text-text-tertiary/50 outline-none focus:border-accent/50"
+                      />
+                    )}
+                    <label className="flex items-center gap-1 cursor-pointer select-none shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={v.sensitive}
+                        onChange={(e) => {
+                          const next = [...envVars]
+                          next[i] = { ...v, sensitive: e.target.checked }
+                          setEnvVars(next)
+                        }}
+                        className="rounded border-border-primary accent-accent w-3 h-3"
+                      />
+                      <span className="text-[10px] text-text-tertiary">
+                        {t('projectForm.envVarSensitive')}
+                      </span>
+                    </label>
+                    <button
+                      onClick={() => setEnvVars(envVars.filter((_, j) => j !== i))}
+                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-error shrink-0"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setEnvVars([...envVars, { key: '', value: '', sensitive: false }])}
+                  className="flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 transition-colors"
+                >
+                  <Plus size={11} />
+                  {t('projectForm.envVarAdd')}
+                </button>
+              </div>
+              <p className="text-[10px] text-text-tertiary mt-1.5 leading-relaxed">
+                {t('projectForm.envVarsDesc')}
+              </p>
             </div>
           </div>
         )}

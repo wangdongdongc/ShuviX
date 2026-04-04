@@ -68,6 +68,8 @@ export interface MessageMetadata {
   details?: ToolResultDetails
   // —— step / tool_call ——
   turnIndex?: number
+  // —— compaction ——
+  isCompactionSummary?: boolean
 }
 
 // ---- per-type metadata 接口 ----
@@ -84,6 +86,7 @@ export interface AssistantTextMeta {
   images?: ImageMeta[]
   thinking?: string
   usage?: UsageInfo
+  isCompactionSummary?: boolean
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----
@@ -102,6 +105,8 @@ export interface BashToolDetails {
   truncated: boolean
   /** 是否在 Docker 容器中执行 */
   docker?: boolean
+  /** 完整输出是否已持久化到磁盘 */
+  persisted?: boolean
 }
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */
@@ -115,6 +120,8 @@ export interface ReadToolDetails {
   truncated: boolean
   /** URL 来源标识（仅 URL 抓取时存在） */
   url?: string
+  /** 完整输出是否已持久化到磁盘 */
+  persisted?: boolean
 }
 
 /** glob 工具详情 */
@@ -122,6 +129,8 @@ export interface GlobToolDetails {
   type: 'glob'
   count: number
   truncated: boolean
+  /** 完整输出是否已持久化到磁盘 */
+  persisted?: boolean
 }
 
 /** grep 工具详情 */
@@ -129,6 +138,8 @@ export interface GrepToolDetails {
   type: 'grep'
   matches: number
   truncated: boolean
+  /** 完整输出是否已持久化到磁盘 */
+  persisted?: boolean
 }
 
 /** ls 工具详情 */
@@ -137,6 +148,8 @@ export interface LsToolDetails {
   path: string
   count: number
   truncated: boolean
+  /** 完整输出是否已持久化到磁盘 */
+  persisted?: boolean
 }
 
 /** ask 工具详情 */

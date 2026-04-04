@@ -28,6 +28,7 @@ export interface ProviderUpdateConfigParams {
   apiKey?: string
   baseUrl?: string
   apiProtocol?: ApiProtocol
+  metadata?: string
 }
 
 /** IPC: 切换提供商启用状态参数 */
@@ -53,6 +54,7 @@ export interface ProviderAddParams {
   baseUrl: string
   apiKey: string
   apiProtocol: ApiProtocol
+  metadata?: string
 }
 
 /** IPC: 删除提供商参数 */

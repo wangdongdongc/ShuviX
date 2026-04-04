@@ -131,30 +131,8 @@ export function ToolCallBlock({
   // 根据工具 presentation 配置生成摘要（内置工具和插件工具统一走此路径）
   const { icon, detail } = (() => {
     const ic = 'text-text-tertiary flex-shrink-0'
-    const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
-    // bash：Docker 执行时特殊图标；read：URL 路径特殊图标
-    if (toolName === 'bash') {
-      const line = str(args?.command).split('\n')[0]
-      const isDocker = details?.type === 'bash' && details.docker
-      if (isDocker) {
-        return {
-          icon: <Container size={12} className="text-emerald-500 flex-shrink-0" />,
-          detail: line.length > 80 ? line.slice(0, 77) + '...' : line
-        }
-      }
-    }
-    if (toolName === 'read') {
-      const readPath = str(args?.path)
-      if (/^https?:\/\//i.test(readPath)) {
-        return {
-          icon: <Globe size={12} className={ic} />,
-          detail: readPath.length > 60 ? readPath.slice(0, 57) + '...' : readPath
-        }
-      }
-    }
-
-    // 通用路径：使用 presentation 配置（内置 + 插件工具均已注册）
+    // 通用路径：使用 presentation 配置（内置 + 插件工具均一走此路径）
     if (presentation) {
       return buildPresentationSummary(presentation, args)
     }

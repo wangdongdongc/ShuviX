@@ -238,6 +238,8 @@ interface ChatState {
   telegramBindings: Map<string, { botId: string; username: string }>
   /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
   shareMode: ShareMode | null
+  /** 正在压缩的会话 ID 集合 */
+  compactingSessions: Set<string>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -329,6 +331,8 @@ interface ChatState {
   ) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
+  /** 设置/解除会话的压缩中状态 */
+  setCompacting: (sessionId: string, compacting: boolean) => void
 }
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
@@ -341,6 +345,9 @@ export const selectStreamingThinking = (s: ChatState): string =>
 
 export const selectIsStreaming = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
+
+export const selectIsCompacting = (s: ChatState): boolean =>
+  s.activeSessionId ? s.compactingSessions.has(s.activeSessionId) : false
 
 /** 空图片数组常量，避免选择器每次返回新引用 */
 const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
@@ -407,6 +414,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sharedSessionIds: new Map(),
   telegramBindings: new Map(),
   shareMode: null,
+  compactingSessions: new Set(),
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => {
@@ -930,5 +938,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionPendingUserInputs: restPendingInputs,
         messages: newMessages
       }
+    }),
+
+  setCompacting: (sessionId, compacting) =>
+    set((state) => {
+      const next = new Set(state.compactingSessions)
+      if (compacting) next.add(sessionId)
+      else next.delete(sessionId)
+      return { compactingSessions: next }
     })
 }))

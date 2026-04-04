@@ -135,6 +135,30 @@ export class MessageService {
     return last ? narrowMessage(last) : undefined
   }
 
+  // ─── 归档消息查询 ──────────────────────────────────
+
+  /** 统计会话已归档消息数 */
+  countArchived(sessionId: string): number {
+    return messageDao.countArchived(sessionId)
+  }
+
+  /**
+   * 分页加载已归档消息（含关联的 steps，按时间正序）
+   * @param limit  每页加载的主消息条数
+   * @param offset 已跳过的主消息条数
+   */
+  listArchivedBySession(sessionId: string, limit: number, offset: number): ChatMessage[] {
+    const primary = messageDao.findArchivedBySessionId(sessionId, limit, offset)
+    if (primary.length === 0) return []
+    // 用主消息的时间范围查关联 steps
+    const fromTime = primary[0].createdAt
+    const toTime = primary[primary.length - 1].createdAt
+    const steps = messageStepDao.findArchivedInRange(sessionId, fromTime, toTime)
+    const merged =
+      steps.length === 0 ? primary : primary.length === 0 ? steps : mergeSorted(primary, steps)
+    return merged.map(narrowMessage)
+  }
+
   // ─── 类型化工厂方法 ───────────────────────────────
 
   addUserText(p: {

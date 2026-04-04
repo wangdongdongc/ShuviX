@@ -17,6 +17,7 @@ import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { LsToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
+import { processToolOutput } from './utils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:ls')
@@ -127,7 +128,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   }
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path?: string; ignore?: string[] },
     signal?: AbortSignal
   ): Promise<AgentToolResult<LsToolDetails>> {
@@ -178,13 +179,21 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
       output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`
     }
 
+    // 统一截断/持久化处理
+    const processed = processToolOutput({
+      sessionId: this.ctx.sessionId,
+      toolCallId,
+      fullText: output,
+      strategy: 'tail'
+    })
+
     return {
-      content: [{ type: 'text' as const, text: output }],
+      content: [{ type: 'text' as const, text: processed.text }],
       details: {
         type: 'ls',
         path: searchPath,
         count: files.length,
-        truncated
+        truncated: truncated || processed.truncated
       }
     }
   }

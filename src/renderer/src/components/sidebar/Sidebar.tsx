@@ -2,11 +2,12 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   MessageSquarePlus,
+  MessageSquare,
   Settings,
   Trash2,
   Pencil,
-  ChevronDown,
-  ChevronRight,
+  FolderClosed,
+  FolderOpen,
   Globe,
   MessageCircle,
   RotateCcw,
@@ -200,20 +201,32 @@ export function Sidebar(): React.JSX.Element {
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
-      className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 cursor-pointer ${
+      className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
           : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
       }`}
     >
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[11px] group-hover:pr-6">
+      <MessageSquare
+        size={11}
+        fill={
+          activeSessionId === session.id || sessionStreams[session.id]?.isStreaming
+            ? 'currentColor'
+            : 'none'
+        }
+        className={`flex-shrink-0 ${
+          sessionStreams[session.id]?.isStreaming
+            ? 'text-accent animate-pulse'
+            : activeSessionId === session.id
+              ? 'text-accent'
+              : 'text-text-tertiary/40'
+        }`}
+      />
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-6">
         <span className="truncate">{session.title}</span>
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
         {telegramBindings.has(session.id) && (
           <MessageCircle size={10} className="text-blue-500 shrink-0" />
-        )}
-        {sessionStreams[session.id]?.isStreaming && (
-          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
         )}
       </div>
       <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
@@ -246,7 +259,7 @@ export function Sidebar(): React.JSX.Element {
   }) // 每次 render 重新绑定以捕获最新 sessions/activeSessionId
 
   return (
-    <div className="flex flex-col h-full bg-bg-secondary">
+    <div className="flex flex-col h-full bg-bg-secondary/50">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div
         className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
@@ -276,9 +289,9 @@ export function Sidebar(): React.JSX.Element {
               return (
                 <div
                   key={groupKey}
-                  className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-hover/30' : ''}`}
+                  className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
                 >
-                  <div className="relative flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
+                  <div className="relative flex items-center w-full px-1.5 py-0.5 text-[11px] group/header">
                     <button
                       onClick={() => toggleGroup(groupKey)}
                       className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
@@ -288,11 +301,11 @@ export function Sidebar(): React.JSX.Element {
                       }`}
                     >
                       {isTemp ? (
-                        <MessageCircle size={11} className="flex-shrink-0" />
+                        <MessageCircle size={12} className="flex-shrink-0 text-blue-400" />
                       ) : collapsed ? (
-                        <ChevronRight size={11} className="flex-shrink-0" />
+                        <FolderClosed size={12} className="flex-shrink-0 text-amber-400" />
                       ) : (
-                        <ChevronDown size={11} className="flex-shrink-0" />
+                        <FolderOpen size={12} className="flex-shrink-0 text-amber-500" />
                       )}
                       <span className="truncate font-medium uppercase tracking-wider">
                         {groupLabel}
@@ -331,12 +344,12 @@ export function Sidebar(): React.JSX.Element {
             {/* 已归档项目 */}
             {archivedProjects.length > 0 && (
               <div className="mb-0.5 rounded-md">
-                <div className="flex items-center w-full px-1.5 py-0.5 text-[10px] group/header">
+                <div className="flex items-center w-full px-1.5 py-0.5 text-[11px] group/header">
                   <button
                     onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
                     className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary hover:text-text-secondary transition-colors"
                   >
-                    <Archive size={11} className="flex-shrink-0" />
+                    <Archive size={11} className="flex-shrink-0 text-purple-400/70" />
                     <span className="truncate font-medium uppercase tracking-wider">
                       {t('sidebar.archivedProjects')}
                     </span>
@@ -347,23 +360,28 @@ export function Sidebar(): React.JSX.Element {
                     {archivedProjects.map((p) => (
                       <div
                         key={p.id}
-                        className="group flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 text-text-tertiary"
+                        className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 text-text-tertiary"
                       >
-                        <span className="flex-1 min-w-0 truncate text-[11px]">{p.name}</span>
-                        <button
-                          onClick={() => void handleRestoreProject(p.id)}
-                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary transition-colors opacity-0 group-hover:opacity-100"
-                          title={t('sidebar.restoreProject')}
-                        >
-                          <RotateCcw size={11} />
-                        </button>
-                        <button
-                          onClick={() => setDeletingProjectId(p.id)}
-                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                          title={t('sidebar.deleteProject')}
-                        >
-                          <Trash2 size={11} />
-                        </button>
+                        <FolderClosed size={11} className="flex-shrink-0 text-purple-400/50" />
+                        <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-6">
+                          <span className="truncate">{p.name}</span>
+                        </div>
+                        <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+                          <button
+                            onClick={() => void handleRestoreProject(p.id)}
+                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary"
+                            title={t('sidebar.restoreProject')}
+                          >
+                            <RotateCcw size={11} className="text-green-400/70" />
+                          </button>
+                          <button
+                            onClick={() => setDeletingProjectId(p.id)}
+                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400"
+                            title={t('sidebar.deleteProject')}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -379,7 +397,7 @@ export function Sidebar(): React.JSX.Element {
         {hasUpdate && (
           <button
             onClick={() => window.api.app.openSettings('about')}
-            className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[11px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+            className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[12px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
           >
             <ArrowUpCircle size={14} />
             <span>
@@ -391,9 +409,9 @@ export function Sidebar(): React.JSX.Element {
         )}
         <button
           onClick={() => window.api.app.openSettings()}
-          className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[11px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
+          className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[12px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
         >
-          <Settings size={14} />
+          <Settings size={14} className="text-text-tertiary/70" />
           <span>{t('sidebar.settings')}</span>
         </button>
       </div>

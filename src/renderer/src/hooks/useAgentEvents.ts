@@ -346,6 +346,23 @@ export function useAgentEvents(): void {
         break
       }
 
+      // ─── 压缩归档事件 ───────────────────────────
+      case 'compaction_start':
+        store.setCompacting(sid, true)
+        break
+
+      case 'compaction_end':
+        store.setCompacting(sid, false)
+        // 用摘要消息替换整个消息列表
+        if (sid === store.activeSessionId && event.message) {
+          store.setMessages([JSON.parse(event.message)])
+        }
+        break
+
+      case 'compaction_error':
+        store.setCompacting(sid, false)
+        break
+
       case 'error':
         // 错误以独立提示消息形式写入会话（不再使用底部错误条/弹窗）
         store.finishStreaming(sid)

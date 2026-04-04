@@ -18,6 +18,7 @@ import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { GlobToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgFilesList } from './utils/ripgrep'
+import { processToolOutput } from './utils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:glob')
@@ -74,7 +75,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   }
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { pattern: string; path?: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<GlobToolDetails>> {
@@ -139,12 +140,20 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       )
     }
 
+    // 统一截断/持久化处理
+    const processed = processToolOutput({
+      sessionId: this.ctx.sessionId,
+      toolCallId,
+      fullText: outputLines.join('\n'),
+      strategy: 'tail'
+    })
+
     return {
-      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
+      content: [{ type: 'text' as const, text: processed.text }],
       details: {
         type: 'glob',
         count: files.length,
-        truncated
+        truncated: truncated || processed.truncated
       }
     }
   }

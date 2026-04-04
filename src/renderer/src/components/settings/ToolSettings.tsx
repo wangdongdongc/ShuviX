@@ -75,7 +75,7 @@ function SubTabButton({
       }`}
     >
       {icon}
-      <span className="truncate">{label}</span>
+      <span className="whitespace-nowrap">{label}</span>
     </button>
   )
 }
@@ -83,26 +83,27 @@ function SubTabButton({
 /** 工具配置页（含子分类侧边栏） */
 export function ToolSettings(): React.JSX.Element {
   const [subTab, setSubTab] = useState<ToolSubTab>('bash')
+  const { t } = useTranslation()
 
   return (
     <div className="flex flex-1 min-h-0 h-full">
       {/* 左侧子分类导航 */}
-      <div className="w-[140px] flex-shrink-0 border-r border-border-secondary py-4 px-2.5 space-y-0.5">
+      <div className="flex-shrink-0 border-r border-border-secondary py-4 px-2.5 space-y-0.5">
         <SubTabButton
           icon={<Terminal size={13} />}
-          label="bash"
+          label={t('tool.bashLabel')}
           active={subTab === 'bash'}
           onClick={() => setSubTab('bash')}
         />
         <SubTabButton
           icon={<Terminal size={13} />}
-          label="ssh"
+          label={t('tool.sshLabel')}
           active={subTab === 'ssh'}
           onClick={() => setSubTab('ssh')}
         />
         <SubTabButton
           icon={<Database size={13} />}
-          label="database"
+          label={t('tool.remoteDbLabel')}
           active={subTab === 'database'}
           onClick={() => setSubTab('database')}
         />
@@ -168,7 +169,6 @@ function BashToolPanel(): React.JSX.Element {
     <div className="px-5 py-5 space-y-4">
       <div>
         <h3 className="text-sm font-semibold text-text-primary">{t('settings.toolBashTitle')}</h3>
-        <p className="text-[11px] text-text-tertiary mt-1">{t('settings.toolBashDockerHint')}</p>
       </div>
 
       {loading && (

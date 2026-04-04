@@ -29,7 +29,7 @@ import type {
 import { chatFrontendRegistry, type ChatEvent } from '../../frontend'
 import { resolveProjectConfig } from '../../tools/types'
 import type { ToolContext } from '../../tools/types'
-import { mergedPATH } from '../../utils/paths'
+import { buildSpawnEnv } from '../../utils/paths'
 import type { SubAgentProvider, SubAgentRunParams, SubAgentRunResult } from '../types'
 import { createLogger } from '../../logger'
 
@@ -222,7 +222,7 @@ export class AcpProvider implements SubAgentProvider {
       {
         encoding: 'utf-8',
         timeout: 5000,
-        env: { ...process.env, PATH: mergedPATH }
+        env: buildSpawnEnv()
       }
     )
     if (result.status === 0 && result.stdout.trim()) {
@@ -367,12 +367,7 @@ export class AcpProvider implements SubAgentProvider {
     const child = spawn(resolved.cmd, resolved.args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ...this.config.env,
-        NODE_NO_WARNINGS: '1',
-        PATH: mergedPATH
-      }
+      env: buildSpawnEnv({ ...this.config.env, NODE_NO_WARNINGS: '1' })
     })
 
     const config = this.config

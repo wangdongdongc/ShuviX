@@ -5,18 +5,14 @@
 
 import { spawn } from 'child_process'
 import { Type } from '@sinclair/typebox'
-import {
-  truncateMiddle,
-  formatSize,
-  DEFAULT_MAX_LINES,
-  DEFAULT_MAX_BYTES
-} from '../../shared/node/truncate'
+import { processToolOutput } from './utils/processToolOutput'
 import {
   getShellConfig,
   sanitizeBinaryOutput,
   killProcessTree,
   collapseProgressOutput
 } from './utils/shell'
+import { buildSpawnEnv } from '../utils/paths'
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
@@ -51,7 +47,8 @@ function defaultSpawn(
   command: string,
   cwd: string,
   timeout: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  extraEnv?: Record<string, string>
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -64,7 +61,7 @@ function defaultSpawn(
 
     const child = spawn(shell, [...args, command], {
       cwd,
-      env: { ...process.env },
+      env: buildSpawnEnv(extraEnv),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32'
     })
@@ -225,24 +222,32 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
           containerInfo.containerId,
           params.command,
           config.workingDirectory,
-          signal
+          signal,
+          config.envVars
         )
       } else {
         // 本地模式
-        result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal)
+        result = await defaultSpawn(
+          params.command,
+          config.workingDirectory,
+          timeout,
+          signal,
+          config.envVars
+        )
       }
       const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
-      // 折叠进度输出（Docker pull 等场景）
-      const combined = collapseProgressOutput(raw)
+      // 折叠进度输出（仅匹配进度类命令时生效）
+      const combined = collapseProgressOutput(raw, params.command)
 
-      // 截断过长的输出
-      const truncated = truncateMiddle(combined, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES)
+      // 统一截断/持久化处理
+      const processed = processToolOutput({
+        sessionId: this.ctx.sessionId,
+        toolCallId,
+        fullText: combined,
+        strategy: 'middle'
+      })
 
-      let text = ''
-      if (truncated.truncated) {
-        text += `[Output truncated: ${truncated.originalLines} lines / ${formatSize(truncated.originalBytes)}]\n\n`
-      }
-      text += truncated.text
+      let text = processed.text
 
       if (result.exitCode === 124) {
         text += `\n\n[Command timed out (${timeout}s)]`
@@ -255,7 +260,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         details: {
           type: 'bash',
           exitCode: result.exitCode,
-          truncated: truncated.truncated,
+          truncated: processed.truncated,
           docker: docker.useDocker || undefined
         }
       }
@@ -278,7 +283,7 @@ registerBuiltinTool({
   presentation: {
     icon: 'Terminal',
     iconColor: '#eab308',
-    summaryField: 'command',
+    summaryField: 'description',
     formItems: [{ field: 'command', renderer: { type: 'code', language: 'bash' } }]
   }
 })

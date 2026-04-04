@@ -17,6 +17,7 @@ import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { GrepToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from './utils/pathUtils'
 import { rgSearch } from './utils/ripgrep'
+import { processToolOutput } from './utils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:grep')
@@ -79,7 +80,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   }
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<GrepToolDetails>> {
@@ -150,12 +151,20 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       )
     }
 
+    // 统一截断/持久化处理
+    const processed = processToolOutput({
+      sessionId: this.ctx.sessionId,
+      toolCallId,
+      fullText: outputLines.join('\n'),
+      strategy: 'tail'
+    })
+
     return {
-      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
+      content: [{ type: 'text' as const, text: processed.text }],
       details: {
         type: 'grep',
         matches: matches.length,
-        truncated
+        truncated: truncated || processed.truncated
       }
     }
   }

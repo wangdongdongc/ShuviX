@@ -123,19 +123,37 @@ export function sanitizeBinaryOutput(str: string): string {
 }
 
 /**
- * 折叠进度类输出（通用方案，不绑定任何特定工具）
+ * 已知会产生大量进度输出的命令模式。
+ * 只有匹配这些模式的命令才会执行骨架去重折叠，避免误伤普通输出。
+ */
+const PROGRESS_COMMAND_PATTERNS = [
+  /\bdocker\b.*\b(pull|push|build|load|save|compose)\b/,
+  /\bgit\b.*\b(clone|fetch|pull|push|lfs)\b/,
+  /\b(wget|curl)\b/,
+  /\b(npm|pnpm|yarn|bun)\b.*\b(install|ci|add|update)\b/,
+  /\bpip3?\b.*\binstall\b/,
+  /\b(apt-get|apt|yum|dnf|pacman|brew)\b.*\b(install|update|upgrade)\b/,
+  /\brsync\b/,
+  /\bscp\b/
+]
+
+function isProgressCommand(command: string): boolean {
+  return PROGRESS_COMMAND_PATTERNS.some((p) => p.test(command))
+}
+
+/**
+ * 折叠进度类输出
  *
  * 核心观察：进度刷屏的本质是——大量行共享相同的结构模式，只有数值部分在变化。
  *
  * 处理流程：
- * 1. 处理 \r 回车符：模拟终端行覆盖，只保留每次回车后的最终内容
- * 2. 计算每行的"骨架"（将数字、hex hash、百分比、文件大小替换为占位符），
- *    同一骨架出现 ≥ COLLAPSE_THRESHOLD 次时，只保留最后一行并标注折叠数量
+ * 1. 处理 \r 回车符：模拟终端行覆盖，只保留每次回车后的最终内容（始终执行）
+ * 2. 当 command 匹配进度类命令时，计算每行的"骨架"并折叠重复行
  *
  * 覆盖场景：Docker pull/push/build、npm install、pip install、
  *           apt-get、wget/curl 进度、git clone 等
  */
-export function collapseProgressOutput(text: string): string {
+export function collapseProgressOutput(text: string, command?: string): string {
   // Step 1: 处理 \r — 模拟终端回车覆盖行为
   let lines = text.split('\n').map((line) => {
     if (!line.includes('\r')) return line
@@ -146,38 +164,41 @@ export function collapseProgressOutput(text: string): string {
     return ''
   })
 
-  // Step 2: 骨架去重 — 同一骨架出现多次时只保留最后一行
-  const COLLAPSE_THRESHOLD = 5
-  const skeletonIndices = new Map<string, number[]>()
-
-  for (let i = 0; i < lines.length; i++) {
-    const skel = lineSkeleton(lines[i])
-    if (skel === null) continue
-    const arr = skeletonIndices.get(skel)
-    if (arr) arr.push(i)
-    else skeletonIndices.set(skel, [i])
-  }
-
-  const replaced = new Set<number>()
-  const collapseNotice = new Map<number, string>()
-
-  for (const [, indices] of skeletonIndices) {
-    if (indices.length < COLLAPSE_THRESHOLD) continue
-    const last = indices[indices.length - 1]
-    for (const idx of indices) {
-      if (idx !== last) replaced.add(idx)
-    }
-    collapseNotice.set(last, `[... ${indices.length - 1} similar lines collapsed ...]`)
-  }
-
-  if (replaced.size > 0) {
+  // Step 2: 连续相似行折叠 — 仅在命令匹配进度类模式时执行
+  //   只折叠连续的同骨架行段（run），不跨越不同内容区域
+  if (command && isProgressCommand(command)) {
+    const COLLAPSE_THRESHOLD = 5
     const result: string[] = []
-    for (let i = 0; i < lines.length; i++) {
-      if (replaced.has(i)) continue
-      const notice = collapseNotice.get(i)
-      if (notice) result.push(notice)
-      result.push(lines[i])
+    let runSkel: string | null = null
+    let runLines: string[] = []
+
+    const flushRun = (): void => {
+      if (runLines.length >= COLLAPSE_THRESHOLD) {
+        result.push(`[... ${runLines.length - 1} similar lines collapsed ...]`)
+        result.push(runLines[runLines.length - 1])
+      } else {
+        result.push(...runLines)
+      }
+      runLines = []
+      runSkel = null
     }
+
+    for (const line of lines) {
+      const skel = lineSkeleton(line)
+      if (skel !== null && skel === runSkel) {
+        runLines.push(line)
+      } else {
+        if (runLines.length > 0) flushRun()
+        if (skel !== null) {
+          runSkel = skel
+          runLines = [line]
+        } else {
+          result.push(line)
+        }
+      }
+    }
+    if (runLines.length > 0) flushRun()
+
     lines = result
   }
 

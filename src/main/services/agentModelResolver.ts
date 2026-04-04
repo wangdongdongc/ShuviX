@@ -49,6 +49,19 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
     const resolvedApi = (params.apiProtocol ||
       providerInfo?.apiProtocol ||
       'openai-completions') as Api
+    // 从 metadata 中解析自定义请求头
+    let customHeaders: Record<string, string> | undefined
+    if (providerInfo?.metadata) {
+      try {
+        const meta = JSON.parse(providerInfo.metadata)
+        if (meta?.customHeaders && typeof meta.customHeaders === 'object') {
+          const h = meta.customHeaders
+          if (Object.keys(h).length > 0) customHeaders = h
+        }
+      } catch {
+        // 忽略无效 JSON
+      }
+    }
     return {
       id: model,
       name: model,
@@ -62,7 +75,8 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
       maxTokens: caps.maxOutputTokens ?? 16384,
       ...(buildCustomProviderCompat(resolvedApi)
         ? { compat: buildCustomProviderCompat(resolvedApi) }
-        : {})
+        : {}),
+      ...(customHeaders ? { headers: customHeaders } : {})
     }
   }
 
