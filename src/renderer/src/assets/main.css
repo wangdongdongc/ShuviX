@@ -341,6 +341,22 @@ body {
   overflow: hidden;
 }
 
+/* ========== Terminal 面板 ========== */
+
+/* xterm 不支持 CSS padding，通过外层容器 padding 实现内边距 */
+.xterm-container {
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+/* xterm 滚动条宽度和圆角（颜色由 xterm theme 的 scrollbarSlider* 控制） */
+.xterm-container .xterm-viewport::-webkit-scrollbar {
+  width: 5px;
+}
+.xterm-container .xterm-viewport::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+}
+
 /* ========== Preview 面板 ========== */
 
 /* 加载进度条动画 */

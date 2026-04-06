@@ -89,10 +89,6 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.voiceTtsQwen3Emotion',
     desc: 'emotion/style instruction text for Qwen3 TTS'
   },
-  'mcpServer.enabled': {
-    labelKey: 'settings.mcpServerEnabled',
-    desc: 'true | false — enable ShuviX as MCP server'
-  },
   'mcpServer.port': {
     labelKey: 'settings.mcpServerPort',
     desc: 'number — HTTP port for MCP server (default 3399)'
@@ -100,6 +96,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'mcpServer.features.database': {
     labelKey: 'settings.mcpServerFeatureDatabase',
     desc: 'true | false — expose database query tool via MCP'
+  },
+  'mcpServer.features.ssh': {
+    labelKey: 'settings.mcpServerFeatureSsh',
+    desc: 'true | false — expose SSH remote execution tool via MCP'
   }
 }
 

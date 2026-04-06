@@ -25,6 +25,9 @@ export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 /** 预览模式：url = 外部网页预览，preview = 本地设计项目预览 */
 export type PreviewMode = 'url' | 'preview'
 
+/** 右侧面板激活的标签页 */
+export type PanelTab = 'preview' | 'terminal'
+
 const PREVIEW_MIN = 320
 const PREVIEW_MAX = 960
 
@@ -45,6 +48,8 @@ interface PreviewState {
   isStartingServer: boolean
   /** dev server 已运行 */
   isServerRunning: boolean
+  /** 右侧面板当前激活的标签页 */
+  activeTab: PanelTab
 
   toggle: () => void
   open: (url?: string) => void
@@ -61,6 +66,8 @@ interface PreviewState {
   stopPreviewServer: (sessionId: string) => void
   /** 设置 server 运行状态（供外部事件同步） */
   setServerRunning: (running: boolean) => void
+  /** 切换右侧面板标签页 */
+  setActiveTab: (tab: PanelTab) => void
 }
 
 /** 测量 ChatView 容器当前宽度 */
@@ -112,6 +119,7 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
   designUrl: null,
   isStartingServer: false,
   isServerRunning: false,
+  activeTab: 'preview' as PanelTab,
 
   toggle: () => {
     const { isOpen, width } = get()
@@ -183,6 +191,8 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
   },
 
   setServerRunning: (running) => set({ isServerRunning: running }),
+
+  setActiveTab: (tab) => set({ activeTab: tab }),
 
   startPreviewServer: (sessionId, workingDir) => {
     set({ isStartingServer: true })

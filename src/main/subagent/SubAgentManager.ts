@@ -11,14 +11,13 @@
 import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
 import { isAssistantMessage } from '../utils/messageGuards'
 import type { ChatTokenUsage } from '../frontend'
-import { ReadTool } from '../tools/read'
-import { ListTool } from '../tools/ls'
-import { GrepTool } from '../tools/grep'
-import { GlobTool } from '../tools/glob'
+import { getBuiltinToolEntries } from '../tools/registry'
+import { SkillTool } from '../tools/skill'
 import type { ToolContext } from '../tools/types'
 import { parallelCoordinator } from '../services/parallelExecution'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerDao } from '../dao/providerDao'
+import { mcpService } from '../services/mcpService'
 import type { ChatEvent } from '../frontend'
 import { extractArgsSummary, type SubAgentModelConfig } from './types'
 import { createLogger } from '../logger'
@@ -56,55 +55,79 @@ interface SubAgentSession {
 
 type AnyAgentTool = Agent['state']['tools'][number]
 
-/** 为子智能体构建工具集（固定列表，不依赖父级 enabledTools） */
+/** 包装单个工具的 execute 方法，接入并行执行协调器 */
+function wrapToolForSubAgent(parallelKey: string, tool: AnyAgentTool): AnyAgentTool {
+  const originalExecute = tool.execute.bind(tool)
+  const preExecute =
+    'preExecute' in tool
+      ? (tool as { preExecute: (...a: unknown[]) => Promise<void> }).preExecute.bind(tool)
+      : undefined
+  parallelCoordinator.registerExecutor(parallelKey, tool.name, tool, originalExecute, preExecute)
+  return {
+    ...tool,
+    execute: async (
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+      onUpdate?: (partialResult: unknown) => void
+    ) => {
+      await Promise.resolve()
+      return parallelCoordinator.execute(
+        parallelKey,
+        toolCallId,
+        tool.name,
+        params,
+        signal,
+        onUpdate,
+        originalExecute
+      )
+    }
+  } as AnyAgentTool
+}
+
+/**
+ * 为子智能体构建工具集（动态查找，支持内置工具、MCP、Skills）
+ * 不包含子智能体工具，天然防递归
+ */
 function buildSubAgentTools(ctx: ToolContext, agentType: InProcessAgentType): AnyAgentTool[] {
-  const toolFactories: Record<string, () => AnyAgentTool> = {
-    read: () => new ReadTool(ctx),
-    ls: () => new ListTool(ctx),
-    grep: () => new GrepTool(ctx),
-    glob: () => new GlobTool(ctx)
+  const parallelKey = ctx.parallelSessionKey || ctx.sessionId
+  const tools: AnyAgentTool[] = []
+
+  // 构建内置工具 factory 查找表
+  const builtinEntries = getBuiltinToolEntries()
+  const builtinMap = new Map(builtinEntries.filter((e) => e.factory).map((e) => [e.name, e]))
+
+  // 收集 skill 名称
+  const skillNames: string[] = []
+
+  for (const toolName of agentType.tools) {
+    if (toolName.startsWith('mcp:')) {
+      // MCP 服务器工具
+      const serverName = toolName.slice(4)
+      const mcpTools = mcpService.getAgentToolsByServerName(serverName)
+      for (const t of mcpTools) {
+        tools.push(wrapToolForSubAgent(parallelKey, t))
+      }
+    } else if (toolName.startsWith('skill:')) {
+      // 收集 skill 名称，后面统一构造
+      skillNames.push(toolName.slice(6))
+    } else {
+      // 内置工具
+      const entry = builtinMap.get(toolName)
+      if (entry?.factory) {
+        const tool = entry.factory(ctx) as AnyAgentTool
+        tools.push(wrapToolForSubAgent(parallelKey, tool))
+      }
+    }
   }
 
-  const parallelKey = ctx.parallelSessionKey || ctx.sessionId
+  // Skills 统一构造为一个 SkillTool
+  if (skillNames.length > 0) {
+    const skillTool = new SkillTool(skillNames) as unknown as AnyAgentTool
+    tools.push(wrapToolForSubAgent(parallelKey, skillTool))
+  }
 
-  return agentType.tools
-    .filter((name) => name in toolFactories)
-    .map((name) => {
-      const tool = toolFactories[name]()
-      // 包装并行执行（复用父级的 parallelCoordinator，用独立 key 隔离）
-      const originalExecute = tool.execute.bind(tool)
-      const preExecute =
-        'preExecute' in tool
-          ? (tool as { preExecute: (...a: unknown[]) => Promise<void> }).preExecute.bind(tool)
-          : undefined
-      parallelCoordinator.registerExecutor(
-        parallelKey,
-        tool.name,
-        tool,
-        originalExecute,
-        preExecute
-      )
-      return {
-        ...tool,
-        execute: async (
-          toolCallId: string,
-          params: Record<string, unknown>,
-          signal?: AbortSignal,
-          onUpdate?: (partialResult: unknown) => void
-        ) => {
-          await Promise.resolve()
-          return parallelCoordinator.execute(
-            parallelKey,
-            toolCallId,
-            tool.name,
-            params,
-            signal,
-            onUpdate,
-            originalExecute
-          )
-        }
-      } as AnyAgentTool
-    })
+  return tools
 }
 
 // ─── SubAgentManager ──────────────────────────────────────────

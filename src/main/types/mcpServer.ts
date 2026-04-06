@@ -1,7 +1,7 @@
 /** MCP Server 对外服务相关类型（ShuviX 作为 MCP Server） */
 
 export type McpHostTransport = 'http'
-export type McpHostFeature = 'database'
+export type McpHostFeature = 'database' | 'ssh'
 
 /** MCP Host 配置（从 settings 构建） */
 export interface McpHostConfig {

@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { usePreviewStore } from '../stores/previewStore'
+import { useTerminalStore } from '../stores/terminalStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
@@ -256,6 +257,15 @@ export function useAgentEvents(): void {
           usePreviewStore.getState().openPreview(url)
         } else if (event.action === 'close') {
           usePreviewStore.getState().switchToUrl()
+        }
+        break
+
+      case 'terminal_event':
+        if (event.action === 'open') {
+          useTerminalStore.getState().connectAgentTerminal(event.ptyId)
+          const preview = usePreviewStore.getState()
+          if (!preview.isOpen) preview.open()
+          preview.setActiveTab('terminal')
         }
         break
 

@@ -12,11 +12,13 @@ import {
   X,
   FolderOpen,
   TriangleAlert,
-  Database
+  Database,
+  Bot
 } from 'lucide-react'
+import { SubAgentPanel } from './SubAgentPanel'
 
 /** 子分类标识 */
-type ToolSubTab = 'bash' | 'ssh' | 'database'
+type ToolSubTab = 'bash' | 'ssh' | 'database' | 'subagent'
 
 /** 内存预设选项 */
 const MEMORY_OPTIONS = ['256m', '512m', '1g', '2g', ''] as const
@@ -107,6 +109,12 @@ export function ToolSettings(): React.JSX.Element {
           active={subTab === 'database'}
           onClick={() => setSubTab('database')}
         />
+        <SubTabButton
+          icon={<Bot size={13} />}
+          label={t('tool.subAgentTab')}
+          active={subTab === 'subagent'}
+          onClick={() => setSubTab('subagent')}
+        />
       </div>
 
       {/* 右侧内容区 */}
@@ -114,6 +122,7 @@ export function ToolSettings(): React.JSX.Element {
         {subTab === 'bash' && <BashToolPanel />}
         {subTab === 'ssh' && <SshToolPanel />}
         {subTab === 'database' && <DatabaseToolPanel />}
+        {subTab === 'subagent' && <SubAgentPanel />}
       </div>
     </div>
   )

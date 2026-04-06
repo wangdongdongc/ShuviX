@@ -24,6 +24,9 @@ export interface ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void>
 
+  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
+  steer(sessionId: string, text: string): void
+
   /** 中止当前生成 */
   abort(sessionId: string): { success: boolean; savedMessage?: Message }
 

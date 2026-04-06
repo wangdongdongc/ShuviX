@@ -98,6 +98,13 @@ export interface EditToolDetails {
   firstChangedLine?: number
 }
 
+/** terminal 工具详情 */
+export interface TerminalToolDetails {
+  type: 'terminal'
+  exitCode: number
+  truncated: boolean
+}
+
 /** bash 工具详情 */
 export interface BashToolDetails {
   type: 'bash'
@@ -237,19 +244,6 @@ export interface SubAgentToolDetails {
   usage?: PersistedSubAgentUsage
 }
 
-/** shuvix-setting 工具详情 */
-export interface ShuvixSettingToolDetails {
-  type: 'shuvix-setting'
-  key?: string
-  value?: string
-}
-
-/** shuvix-project 工具详情 */
-export interface ShuvixProjectToolDetails {
-  type: 'shuvix-project'
-  updatedFields?: string[]
-}
-
 /** Python 工具详情 */
 export interface PythonToolDetails {
   type: 'python'
@@ -282,6 +276,7 @@ export interface McpToolDetails {
 export type ToolResultDetails =
   | EditToolDetails
   | BashToolDetails
+  | TerminalToolDetails
   | ReadToolDetails
   | GlobToolDetails
   | GrepToolDetails
@@ -291,8 +286,6 @@ export type ToolResultDetails =
   | DatabaseToolDetails
   | SkillToolDetails
   | SubAgentToolDetails
-  | ShuvixSettingToolDetails
-  | ShuvixProjectToolDetails
   | PythonToolDetails
   | SqlToolDetails
   | McpToolDetails
@@ -362,6 +355,13 @@ export interface StepThinkingMessage extends MessageBase {
   metadata: StepThinkingMeta | null
 }
 
+/** 用户 steer 消息（运行中注入的引导消息） */
+export interface SteerMessage extends MessageBase {
+  role: 'user'
+  type: 'steer'
+  metadata: null
+}
+
 export interface ErrorEventMessage extends MessageBase {
   role: 'system_notify'
   type: 'error_event'
@@ -375,4 +375,5 @@ export type ChatMessage =
   | ToolUseMessage
   | StepTextMessage
   | StepThinkingMessage
+  | SteerMessage
   | ErrorEventMessage

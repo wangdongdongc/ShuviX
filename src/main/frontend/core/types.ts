@@ -166,6 +166,13 @@ export interface ChatPreviewEvent extends ChatEventBase {
   title?: string
 }
 
+/** 终端工具事件 — 通知 renderer 打开/连接 agent 终端 */
+export interface ChatTerminalToolEvent extends ChatEventBase {
+  type: 'terminal_event'
+  action: 'open'
+  ptyId: string
+}
+
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /** 子智能体开始执行 */
@@ -280,6 +287,7 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatPreviewEvent
+  | ChatTerminalToolEvent
   | ChatSubAgentStartEvent
   | ChatSubAgentEndEvent
   | ChatSubAgentToolStartEvent

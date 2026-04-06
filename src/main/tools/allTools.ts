@@ -23,12 +23,11 @@ import './database'
 // Skill 工具（元数据注册；实例化由 agentToolBuilder 负责）
 import './skill'
 
+// 终端工具
+import './terminal'
+
 // 预览面板控制
 import './preview'
-
-// 系统工具
-import './shuvixProject'
-import './shuvixSetting'
 
 // 子智能体（在 subagent/index.ts 中注册元数据）
 import '../subagent'

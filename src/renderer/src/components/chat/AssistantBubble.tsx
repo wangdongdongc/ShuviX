@@ -159,6 +159,9 @@ export const AssistantBubble = memo(function AssistantBubble({
         {steps && steps.length > 0 && (
           <div className="mb-0.5 space-y-0.5">
             {steps.map((step) => {
+              if (step.msg.type === 'steer') {
+                return <StepBlock key={step.msg.id} message={step.msg} />
+              }
               if (step.msg.type === 'step_text') {
                 return (
                   <div key={step.msg.id} className="markdown-body text-sm">

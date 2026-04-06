@@ -11,6 +11,7 @@ import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
 import { splitCommand, toPattern, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
+import { destroyAgentTerminal } from './agentTerminalManager'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
 import type { SshCredentialPayload } from '../tools/types'
@@ -148,6 +149,8 @@ export class SessionService {
       this.agentSessions.delete(id)
       log.info(`移除 AgentSession session=${id} 剩余=${this.agentSessions.size}`)
     }
+    // 清理 agent 终端
+    destroyAgentTerminal(id)
     // 清理 Telegram 绑定（异步，不阻塞删除）
     import('./telegramService').then(({ telegramService }) => {
       telegramService.unbindSession(id).catch(() => {})

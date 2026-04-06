@@ -21,8 +21,6 @@ export type {
   SshToolDetails,
   SkillToolDetails,
   SubAgentToolDetails,
-  ShuvixSettingToolDetails,
-  ShuvixProjectToolDetails,
   McpToolDetails,
   StepTextMeta,
   StepThinkingMeta,
@@ -32,6 +30,7 @@ export type {
   ToolUseMessage,
   StepTextMessage,
   StepThinkingMessage,
+  SteerMessage,
   ErrorEventMessage,
   ChatMessage
 } from '../../shared/types/chatMessage'

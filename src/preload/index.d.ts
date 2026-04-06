@@ -4,6 +4,7 @@ import type {
   AgentInitParams,
   AgentInitResult,
   AgentPromptParams,
+  AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLog,
@@ -48,6 +49,9 @@ import type {
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
+  CustomSubAgent,
+  CustomSubAgentAddParams,
+  CustomSubAgentUpdateParams,
   ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -168,6 +172,11 @@ declare global {
     url?: string
     title?: string
   }
+  interface ChatTerminalToolEvent extends ChatEventBase {
+    type: 'terminal_event'
+    action: 'open'
+    ptyId: string
+  }
   interface ChatSubAgentStartEvent extends ChatEventBase {
     type: 'subagent_start'
     subAgentId: string
@@ -261,6 +270,7 @@ declare global {
     | ChatImageDataEvent
     | ChatRuntimeEvent
     | ChatPreviewEvent
+    | ChatTerminalToolEvent
     | ChatSubAgentStartEvent
     | ChatSubAgentEndEvent
     | ChatSubAgentToolStartEvent
@@ -382,6 +392,7 @@ declare global {
   type ToolUseMessage = import('../shared/types/chatMessage').ToolUseMessage
   type StepTextMessage = import('../shared/types/chatMessage').StepTextMessage
   type StepThinkingMessage = import('../shared/types/chatMessage').StepThinkingMessage
+  type SteerMessage = import('../shared/types/chatMessage').SteerMessage
   type ErrorEventMessage = import('../shared/types/chatMessage').ErrorEventMessage
   type ChatMessage = import('../shared/types/chatMessage').ChatMessage
 
@@ -446,6 +457,7 @@ declare global {
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
+      steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
@@ -593,6 +605,13 @@ declare global {
       testConnection: (
         params: DbCredentialTestParams
       ) => Promise<{ success: boolean; error?: string }>
+    }
+    customSubAgent: {
+      list: () => Promise<CustomSubAgent[]>
+      add: (params: CustomSubAgentAddParams) => Promise<{ id: string }>
+      update: (params: CustomSubAgentUpdateParams) => Promise<{ success: boolean }>
+      delete: (id: string) => Promise<{ success: boolean }>
+      toggle: (params: { id: string; enabled: boolean }) => Promise<{ success: boolean }>
     }
     tools: {
       list: (sessionId?: string) => Promise<
@@ -767,6 +786,21 @@ declare global {
       onProgress: (callback: (progress: DownloadProgress) => void) => () => void
       /** 取消下载任务 */
       cancel: (taskId: string) => Promise<{ success: boolean }>
+    }
+    terminal: {
+      create: (params: {
+        cwd?: string
+        cols?: number
+        rows?: number
+      }) => Promise<{ terminalId: string }>
+      write: (params: { terminalId: string; data: string }) => void
+      resize: (params: { terminalId: string; cols: number; rows: number }) => void
+      destroy: (terminalId: string) => Promise<{ success: boolean }>
+      onData: (callback: (payload: { terminalId: string; data: string }) => void) => () => void
+      onExit: (callback: (payload: { terminalId: string; exitCode: number }) => void) => () => void
+      onReadLines: (
+        handler: (params: { ptyId: string; lines: number }) => string | null
+      ) => () => void
     }
     preview: {
       start: (params: { sessionId: string; workingDir: string }) => void

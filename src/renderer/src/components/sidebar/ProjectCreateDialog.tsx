@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   X,
@@ -25,6 +25,8 @@ interface ProjectCreateDialogProps {
   onClose: () => void
   /** 创建成功后回调，传入新项目 ID */
   onCreated?: (projectId: string) => void | Promise<void>
+  /** 预选用途，跳过 step 0 直接进入工具选择 */
+  initialPurpose?: string
 }
 
 /** 用途预设：工具名称列表 */
@@ -56,15 +58,16 @@ const SKILLS_GROUP = '__skills__'
  */
 export function ProjectCreateDialog({
   onClose,
-  onCreated
+  onCreated,
+  initialPurpose
 }: ProjectCreateDialogProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
 
   // 向导步骤
-  const [step, setStep] = useState(0)
+  const [step, setStep] = useState(initialPurpose ? 1 : 0)
   const panelRef = usePanelTransition()
-  const [purpose, setPurpose] = useState<string | null>(null)
+  const [purpose, setPurpose] = useState<string | null>(initialPurpose ?? null)
 
   // 项目字段
   const [name, setName] = useState('')
@@ -98,6 +101,23 @@ export function ProjectCreateDialog({
   // MCP / Skills 工具
   const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
+
+  // initialPurpose：工具列表加载后自动预选（仅首次）
+  const purposeApplied = useRef(false)
+  useEffect(() => {
+    if (!initialPurpose || allTools.length === 0 || purposeApplied.current) return
+    purposeApplied.current = true
+    let preset = PURPOSE_PRESETS[initialPurpose]
+    if (!preset) {
+      const pp = pluginPurposes.find((p) => p.key === initialPurpose)
+      preset = pp?.enabledTools || PURPOSE_PRESETS.bash
+    }
+    const connectedMcp = allTools
+      .filter((t) => t.group?.startsWith('mcp:') && t.serverStatus === 'connected')
+      .map((t) => t.name)
+    const enabledSkills = allTools.filter((t) => t.group === SKILLS_GROUP).map((t) => t.name)
+    setEnabledTools([...new Set([...preset, ...connectedMcp, ...enabledSkills])])
+  }, [initialPurpose, allTools, pluginPurposes])
 
   // 按 Escape 关闭（step 0 直接关闭，其他步骤回退）
   useEffect(() => {

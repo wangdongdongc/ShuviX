@@ -41,10 +41,20 @@ export function getBuiltinToolEntries(): readonly BuiltinToolMeta[] {
   return _entries
 }
 
+export function unregisterBuiltinTool(name: string): void {
+  const idx = _entries.findIndex((e) => e.name === name)
+  if (idx >= 0) _entries.splice(idx, 1)
+}
+
 export function getBuiltinToolPresentations(): Record<string, ToolPresentation> {
   const result: Record<string, ToolPresentation> = {}
   for (const meta of _entries) {
-    if (meta.presentation) result[meta.name] = meta.presentation
+    const label = meta.getLabel()
+    if (meta.presentation) {
+      result[meta.name] = { label, ...meta.presentation }
+    } else {
+      result[meta.name] = { label }
+    }
   }
   return result
 }

@@ -15,6 +15,7 @@ export type {
   ToolUseMessage,
   StepTextMessage,
   StepThinkingMessage,
+  SteerMessage,
   ErrorEventMessage,
   MessageMetadata,
   ImageMeta,

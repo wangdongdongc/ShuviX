@@ -4,10 +4,10 @@ import { Brain, MessageSquareText, ChevronDown, ChevronRight, Loader2 } from 'lu
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import type { StepTextMessage, StepThinkingMessage } from '../../stores/chatStore'
+import type { StepTextMessage, StepThinkingMessage, SteerMessage } from '../../stores/chatStore'
 
 interface StepBlockProps {
-  message: StepTextMessage | StepThinkingMessage
+  message: StepTextMessage | StepThinkingMessage | SteerMessage
   /** 是否正在流式生成中 */
   isGenerating?: boolean
 }
@@ -19,6 +19,7 @@ export function StepBlock({ message, isGenerating }: StepBlockProps): React.JSX.
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const isThinking = message.type === 'step_thinking'
+  const isSteer = message.type === 'steer'
 
   // 首行预览
   const firstLine = message.content.split('\n')[0] || ''
@@ -26,11 +27,17 @@ export function StepBlock({ message, isGenerating }: StepBlockProps): React.JSX.
 
   const icon = isThinking ? (
     <Brain size={12} className="text-text-tertiary flex-shrink-0" />
+  ) : isSteer ? (
+    <MessageSquareText size={12} className="text-warning flex-shrink-0" />
   ) : (
     <MessageSquareText size={12} className="text-text-tertiary flex-shrink-0" />
   )
 
-  const label = isThinking ? t('toolCall.stepThinking') : t('toolCall.stepText')
+  const label = isThinking
+    ? t('toolCall.stepThinking')
+    : isSteer
+      ? t('toolCall.steerMessage')
+      : t('toolCall.stepText')
 
   return (
     <div className="my-0.5">

@@ -6,7 +6,7 @@ import { useSidebarStore } from './stores/sidebarStore'
 import { Sidebar } from './components/sidebar/Sidebar'
 import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle'
 import { ChatView } from './components/chat/ChatView'
-import { PreviewPanel } from './components/preview/PreviewPanel'
+import { RightPanel } from './components/preview/RightPanel'
 import { PreviewResizeHandle } from './components/preview/PreviewResizeHandle'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
@@ -96,7 +96,7 @@ function App(): React.JSX.Element {
         <ChatView />
       </div>
       {(isPreviewOpen || lockedChatWidth != null) && <PreviewResizeHandle />}
-      {(isPreviewOpen || lockedChatWidth != null) && <PreviewPanel />}
+      {(isPreviewOpen || lockedChatWidth != null) && <RightPanel />}
     </div>
   )
 }

@@ -253,6 +253,65 @@ export const migrations: Migration[] = [
         `CREATE INDEX IF NOT EXISTS idx_message_steps_session_archived ON message_steps(sessionId, archived)`
       )
     }
+  },
+  {
+    version: 6,
+    description: '新增 custom_sub_agents 表（子智能体配置，含内置 explore）',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS custom_sub_agents (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          displayName TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          systemPrompt TEXT NOT NULL DEFAULT '',
+          tools TEXT NOT NULL DEFAULT '[]',
+          maxTurns INTEGER NOT NULL DEFAULT 40,
+          isBuiltin INTEGER NOT NULL DEFAULT 0,
+          isEnabled INTEGER NOT NULL DEFAULT 1,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+        );
+      `)
+
+      // 种子数据：内置 explore 子智能体
+      const now = Date.now()
+      const exploreDesc =
+        'Fast read-only agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.\n\nWhen NOT to use this tool:\n- If you want to read a specific file path, use Read directly\n- If you are searching for a specific class/function definition, use Grep/Glob directly\n- If you are searching within 2-3 known files, use Read directly'
+      const explorePrompt = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
+
+Your strengths:
+- Rapidly finding files using glob patterns
+- Searching code and text with powerful regex patterns
+- Reading and analyzing file contents
+
+Guidelines:
+- Use Glob for broad file pattern matching
+- Use Grep for searching file contents with regex
+- Use Read when you know the specific file path you need to read
+- Use Ls for listing directory contents
+- Adapt your search approach based on the thoroughness level specified by the caller
+- Return file paths as absolute paths in your final response
+- For clear communication, avoid using emojis
+- Do not create any files or run commands that modify the user's system state in any way
+
+Complete the user's search request efficiently and report your findings clearly.`
+      db.prepare(
+        `INSERT INTO custom_sub_agents (id, name, displayName, description, systemPrompt, tools, maxTurns, isBuiltin, metadata, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, '{}', ?, ?)`
+      ).run(
+        'builtin-explore',
+        'explore',
+        'Explore',
+        exploreDesc,
+        explorePrompt,
+        '["read","ls","grep","glob"]',
+        40,
+        now,
+        now
+      )
+    }
   }
 ]
 

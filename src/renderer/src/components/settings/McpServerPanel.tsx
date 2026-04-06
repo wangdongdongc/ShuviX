@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Database,
+  Terminal,
   ChevronDown,
   ChevronRight,
   Trash2,
@@ -59,6 +60,7 @@ export function McpServerPanel(): React.JSX.Element {
   const [enabled, setEnabled] = useState(false)
   const [port, setPort] = useState('3399')
   const [dbFeature, setDbFeature] = useState(false)
+  const [sshFeature, setSshFeature] = useState(false)
   const [tools, setTools] = useState<McpHostToolDesc[]>([])
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -71,21 +73,22 @@ export function McpServerPanel(): React.JSX.Element {
   const [logDetail, setLogDetail] = useState<McpServerLogDetail | null>(null)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
-  // 加载设置
+  // 加载设置（不读取 mcpServer.enabled，始终从运行状态获取）
   const loadSettings = useCallback(async () => {
-    const [enabledVal, portVal, dbVal] = await Promise.all([
-      window.api.settings.get('mcpServer.enabled'),
+    const [portVal, dbVal, sshVal] = await Promise.all([
       window.api.settings.get('mcpServer.port'),
-      window.api.settings.get('mcpServer.features.database')
+      window.api.settings.get('mcpServer.features.database'),
+      window.api.settings.get('mcpServer.features.ssh')
     ])
-    setEnabled(enabledVal === 'true')
     setPort(portVal || '3399')
     setDbFeature(dbVal === 'true')
+    setSshFeature(sshVal === 'true')
   }, [])
 
   const loadStatus = useCallback(async () => {
     const s = await window.api.mcpServer.getStatus()
     setStatus(s)
+    setEnabled(s.running)
     return s
   }, [])
 
@@ -106,17 +109,15 @@ export function McpServerPanel(): React.JSX.Element {
     loadLogs()
   }, [loadSettings, loadStatus, loadTools, loadLogs])
 
-  // 主开关
+  // 主开关（不持久化，出于安全考虑每次启动应用默认关闭）
   const handleToggleEnabled = async (): Promise<void> => {
     setLoading(true)
     setStartError('')
     try {
       const newEnabled = !enabled
-      await window.api.settings.set({ key: 'mcpServer.enabled', value: String(newEnabled) })
       setEnabled(newEnabled)
 
       if (newEnabled) {
-        // 先保存端口
         await window.api.settings.set({ key: 'mcpServer.port', value: port })
         const s = await window.api.mcpServer.start()
         setStatus(s)
@@ -129,7 +130,6 @@ export function McpServerPanel(): React.JSX.Element {
     } catch (err: unknown) {
       setStartError(err instanceof Error ? err.message : String(err))
       setEnabled(false)
-      await window.api.settings.set({ key: 'mcpServer.enabled', value: 'false' })
     } finally {
       setLoading(false)
     }
@@ -158,6 +158,25 @@ export function McpServerPanel(): React.JSX.Element {
         await window.api.mcpServer.enableFeature('database')
       } else {
         await window.api.mcpServer.disableFeature('database')
+      }
+    }
+    await loadTools()
+    await loadStatus()
+  }
+
+  // SSH 功能开关
+  const handleToggleSsh = async (): Promise<void> => {
+    const newVal = !sshFeature
+    setSshFeature(newVal)
+    await window.api.settings.set({
+      key: 'mcpServer.features.ssh',
+      value: String(newVal)
+    })
+    if (status?.running) {
+      if (newVal) {
+        await window.api.mcpServer.enableFeature('ssh')
+      } else {
+        await window.api.mcpServer.disableFeature('ssh')
       }
     }
     await loadTools()
@@ -268,24 +287,29 @@ export function McpServerPanel(): React.JSX.Element {
         )}
       </div>
 
-      {/* 功能列表 */}
+      {/* 功能 & 工具 */}
       <div>
-        <h4 className="text-xs font-medium text-text-primary mb-3">
+        <h4 className="text-xs font-medium text-text-primary mb-2">
           {t('settings.mcpServerFeatures')}
         </h4>
 
-        {/* Database 功能 */}
-        <div className="border border-border-secondary rounded-lg overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2.5 bg-bg-secondary">
-            <div className="flex items-center gap-2">
-              <Database size={13} className="text-amber-500" />
-              <span className="text-xs font-medium text-text-primary">
-                {t('settings.mcpServerFeatureDatabase')}
-              </span>
+        <div className="border border-border-secondary rounded-lg overflow-hidden divide-y divide-border-secondary">
+          {/* Database */}
+          <div className="flex items-center justify-between px-3 py-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Database size={13} className="text-amber-500 flex-shrink-0" />
+              <div className="min-w-0">
+                <span className="text-xs font-medium text-text-primary">
+                  {t('settings.mcpServerFeatureDatabase')}
+                </span>
+                <p className="text-[10px] text-text-tertiary leading-tight mt-0.5">
+                  {t('settings.mcpServerFeatureDatabaseDesc')}
+                </p>
+              </div>
             </div>
             <button
               onClick={handleToggleDatabase}
-              className={`relative w-8 h-[18px] rounded-full transition-colors ${
+              className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ml-3 ${
                 dbFeature ? 'bg-accent' : 'bg-bg-hover'
               }`}
             >
@@ -297,15 +321,36 @@ export function McpServerPanel(): React.JSX.Element {
             </button>
           </div>
 
-          <div className="px-3 py-2 border-t border-border-secondary">
-            <p className="text-[11px] text-text-tertiary">
-              {t('settings.mcpServerFeatureDatabaseDesc')}
-            </p>
+          {/* SSH */}
+          <div className="flex items-center justify-between px-3 py-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Terminal size={13} className="text-cyan-400 flex-shrink-0" />
+              <div className="min-w-0">
+                <span className="text-xs font-medium text-text-primary">
+                  {t('settings.mcpServerFeatureSsh')}
+                </span>
+                <p className="text-[10px] text-text-tertiary leading-tight mt-0.5">
+                  {t('settings.mcpServerFeatureSshDesc')}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleToggleSsh}
+              className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ml-3 ${
+                sshFeature ? 'bg-accent' : 'bg-bg-hover'
+              }`}
+            >
+              <span
+                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${
+                  sshFeature ? 'left-[16px]' : 'left-[2px]'
+                }`}
+              />
+            </button>
           </div>
 
           {/* 工具列表（可展开） */}
-          {dbFeature && tools.length > 0 && (
-            <div className="border-t border-border-secondary">
+          {tools.length > 0 && (
+            <>
               <button
                 onClick={() => setToolsExpanded(!toolsExpanded)}
                 className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-text-secondary hover:text-text-primary w-full"
@@ -316,9 +361,9 @@ export function McpServerPanel(): React.JSX.Element {
                 </span>
               </button>
               {toolsExpanded && (
-                <div className="px-3 pb-2 space-y-2">
+                <div className="px-3 py-2 space-y-2">
                   {tools.map((tool) => (
-                    <div key={tool.name} className="bg-bg-primary/50 rounded-md px-2.5 py-2">
+                    <div key={tool.name} className="bg-bg-tertiary/30 rounded-md px-2.5 py-2">
                       <div className="text-[11px] font-mono text-accent">{tool.name}</div>
                       <div className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">
                         {tool.description}
@@ -348,7 +393,7 @@ export function McpServerPanel(): React.JSX.Element {
                   ))}
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
       </div>

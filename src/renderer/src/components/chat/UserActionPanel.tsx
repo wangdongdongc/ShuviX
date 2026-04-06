@@ -14,7 +14,6 @@ import {
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import { useChatStore, selectToolExecutions, selectPendingUserInput } from '../../stores/chatStore'
-import { useSettingsStore } from '../../stores/settingsStore'
 
 hljs.registerLanguage('bash', bash)
 
@@ -250,64 +249,14 @@ function CommandPreview({
   )
 }
 
-function ApprovalPreview({
-  toolName,
-  args
-}: {
-  toolName: string
-  args?: Record<string, unknown>
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const { settingMeta, projectFieldMeta } = useSettingsStore()
-
-  if (toolName === 'bash' || (toolName === 'ssh' && args?.command)) {
-    // bash / ssh exec：描述 + 语法高亮代码块
+function ApprovalPreview({ args }: { args?: Record<string, unknown> }): React.JSX.Element {
+  if (args?.command) {
+    // bash / terminal / ssh exec：描述 + 语法高亮代码块
     return (
       <CommandPreview
         command={(args?.command as string) || ''}
         description={args?.description as string | undefined}
       />
-    )
-  }
-
-  if (toolName === 'shuvix-setting') {
-    // 系统设置：展示可读标签 + key = value
-    const key = (args?.key as string) || ''
-    const value = args?.value != null ? String(args.value) : ''
-    const label = settingMeta[key] ? t(settingMeta[key].labelKey) : key
-    return (
-      <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-text-primary font-medium flex-shrink-0">{label}</span>
-          <span className="text-text-tertiary text-[10px] font-mono">({key})</span>
-        </div>
-        <div className="font-mono text-accent/90 break-all">{value}</div>
-      </div>
-    )
-  }
-
-  if (toolName === 'shuvix-project') {
-    // 项目配置：展示各字段可读标签 + 新值
-    const entries = Object.entries(args || {}).filter(([k, v]) => k !== 'action' && v !== undefined)
-    if (entries.length === 0)
-      return <span className="text-[11px] text-text-tertiary">No changes</span>
-    return (
-      <div className="text-[11px] text-text-secondary bg-bg-primary/50 rounded-lg px-3 py-2 overflow-auto max-h-32 border border-border-secondary/50 space-y-1.5">
-        {entries.map(([k, v]) => {
-          const label = projectFieldMeta[k] ? t(projectFieldMeta[k].labelKey) : k
-          return (
-            <div key={k}>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-text-primary font-medium flex-shrink-0">{label}</span>
-                <span className="text-text-tertiary text-[10px] font-mono">({k})</span>
-              </div>
-              <div className="font-mono text-accent/90 break-all mt-0.5">
-                {typeof v === 'string' ? v : JSON.stringify(v)}
-              </div>
-            </div>
-          )
-        })}
-      </div>
     )
   }
 
@@ -338,18 +287,15 @@ function ApprovalContent({
 
   // 根据工具类型选择提示文案
   const hint =
-    toolName === 'bash'
+    toolName === 'bash' || toolName === 'terminal'
       ? t('toolCall.bashHint')
-      : toolName === 'shuvix-project'
-        ? t('toolCall.shuvixProjectHint')
-        : toolName === 'shuvix-setting'
-          ? t('toolCall.shuvixSettingHint')
-          : toolName === 'ssh'
-            ? t('toolCall.sshHint')
-            : t('toolCall.pendingApproval')
+      : toolName === 'ssh'
+        ? t('toolCall.sshHint')
+        : t('toolCall.pendingApproval')
 
   const command = (args?.command as string) || ''
-  const canRemember = (toolName === 'bash' || toolName === 'ssh') && command
+  const canRemember =
+    (toolName === 'bash' || toolName === 'terminal' || toolName === 'ssh') && command
 
   /** 点击「允许并记住」→ 加载模式预览（过滤已允许的模式） */
   const handleShowPatterns = async (): Promise<void> => {
@@ -376,7 +322,8 @@ function ApprovalContent({
   /** 确认：保存筛选后的模式 + 批准命令 */
   const handleConfirmPatterns = (): void => {
     if (previewPatterns && previewPatterns.length > 0) {
-      onAllowAndRemember(toolCallId, toolName as 'bash' | 'ssh', previewPatterns)
+      const toolType = (toolName === 'ssh' ? 'ssh' : 'bash') as 'bash' | 'ssh'
+      onAllowAndRemember(toolCallId, toolType, previewPatterns)
     }
   }
 
@@ -392,7 +339,7 @@ function ApprovalContent({
 
       {/* 变更预览 */}
       <div className="px-4 pb-2">
-        <ApprovalPreview toolName={toolName} args={args} />
+        <ApprovalPreview args={args} />
       </div>
 
       {/* 模式预览面板（点击「允许并记住」后展示） */}

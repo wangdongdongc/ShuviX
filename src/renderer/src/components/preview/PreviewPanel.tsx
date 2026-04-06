@@ -22,7 +22,6 @@ import { useChatStore } from '../../stores/chatStore'
 export function PreviewPanel(): React.JSX.Element {
   const {
     url,
-    width,
     mode,
     designUrl,
     setUrl,
@@ -32,6 +31,7 @@ export function PreviewPanel(): React.JSX.Element {
     startPreviewServer,
     stopPreviewServer
   } = usePreviewStore()
+  const width = usePreviewStore((s) => s.width)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -135,10 +135,7 @@ export function PreviewPanel(): React.JSX.Element {
     'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
 
   return (
-    <div
-      className="flex flex-col h-full bg-bg-primary overflow-hidden"
-      style={{ width, minWidth: 200 }}
-    >
+    <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
       {/* ====== 工具栏 ====== */}
       <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-secondary/30">
         {/* Start / Stop 按钮 */}

@@ -22,6 +22,8 @@ export interface ToolFormItem {
 
 /** 工具渲染提示 */
 export interface ToolPresentation {
+  /** 工具显示名称（如 "Bash Execute Command"） */
+  label?: string
   /** 折叠态图标（前端已注册的 lucide 图标名） */
   icon?: LucideIconName
   /** 图标颜色（主题调色板颜色） */

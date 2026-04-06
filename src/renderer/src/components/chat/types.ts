@@ -1,7 +1,12 @@
-import type { StepTextMessage, StepThinkingMessage, ToolUseMessage } from '../../stores/chatStore'
+import type {
+  StepTextMessage,
+  StepThinkingMessage,
+  SteerMessage,
+  ToolUseMessage
+} from '../../stores/chatStore'
 
 /** 步骤消息窄类型 */
-export type StepMessage = StepTextMessage | StepThinkingMessage | ToolUseMessage
+export type StepMessage = StepTextMessage | StepThinkingMessage | SteerMessage | ToolUseMessage
 
 /** 内嵌步骤项（tool_use / step thinking / step text） */
 export interface StepItem {

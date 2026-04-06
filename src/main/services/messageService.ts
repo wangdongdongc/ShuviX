@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from 'uuid'
-import { messageDao, messageStepDao } from '../dao/messageDao'
+import { messageDao, messageStepDao, STEP_TYPES } from '../dao/messageDao'
 import { sessionDao } from '../dao/sessionDao'
 import { getOperationContext } from '../frontend/core/OperationContext'
 import type { Message, MessageMetadata, MessageType } from '../types'
@@ -17,8 +17,8 @@ import type {
 } from '../types'
 import { narrowMessage } from '../types'
 
-/** 路由到 message_steps 的消息类型 */
-const STEP_TYPES = new Set(['tool_use', 'step_text', 'step_thinking'])
+/** 路由到 message_steps 的消息类型（Set 化以供快速查找） */
+const STEP_TYPE_SET = new Set(STEP_TYPES)
 
 /** 归并两个按 createdAt 升序的数组，相同时间戳用 id 字典序作 tiebreaker */
 function mergeSorted(a: Message[], b: Message[]): Message[] {
@@ -88,7 +88,7 @@ export class MessageService {
     }
 
     // 按类型路由到对应的表
-    if (STEP_TYPES.has(message.type)) {
+    if (STEP_TYPE_SET.has(message.type)) {
       messageStepDao.insert(message)
     } else {
       messageDao.insert(message)

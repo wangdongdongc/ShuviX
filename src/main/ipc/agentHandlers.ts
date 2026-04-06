@@ -4,6 +4,7 @@ import { subAgentRegistry } from '../subagent'
 import type {
   AgentInitParams,
   AgentPromptParams,
+  AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
@@ -24,6 +25,14 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:prompt', (_event, params: AgentPromptParams) =>
     operationContext.run(createElectronContext(params.sessionId), async () => {
       await chatGateway.prompt(params.sessionId, params.text, params.images, params.inlineTokens)
+      return { success: true }
+    })
+  )
+
+  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
+  ipcMain.handle('agent:steer', (_event, params: AgentSteerParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.steer(params.sessionId, params.text)
       return { success: true }
     })
   )

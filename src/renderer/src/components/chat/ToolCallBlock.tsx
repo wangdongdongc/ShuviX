@@ -27,6 +27,7 @@ import {
   Palette,
   Globe,
   Code,
+  SquareTerminal,
   type LucideIcon
 } from 'lucide-react'
 import hljs from 'highlight.js/lib/core'
@@ -62,7 +63,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Database,
   Palette,
   Globe,
-  Code
+  Code,
+  SquareTerminal
 }
 
 /** 根据图标名查找 lucide 组件，找不到时返回 Wrench */
@@ -196,7 +198,9 @@ export function ToolCallBlock({
             <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
           ))}
         {icon}
-        <span className="font-medium text-text-secondary flex-shrink-0">{toolName}</span>
+        <span className="font-medium text-text-secondary flex-shrink-0">
+          {presentation?.label || toolName}
+        </span>
         {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}
         {!detail && <span className="flex-1" />}
         {(config.icon || config.label) && (

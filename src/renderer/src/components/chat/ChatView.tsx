@@ -29,7 +29,12 @@ import { SessionConfigDialog } from './SessionConfigDialog'
 
 /** 判断消息是否为中间步骤/工具项 */
 function isStepOrToolMsg(msg: ChatMessage): boolean {
-  return msg.type === 'tool_use' || msg.type === 'step_text' || msg.type === 'step_thinking'
+  return (
+    msg.type === 'tool_use' ||
+    msg.type === 'step_text' ||
+    msg.type === 'step_thinking' ||
+    msg.type === 'steer'
+  )
 }
 
 /**
@@ -154,6 +159,7 @@ export function ChatView(): React.JSX.Element {
   const [draftTitle, setDraftTitle] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
+  const [createPurpose, setCreatePurpose] = useState<string | undefined>()
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   // ── 归档消息回溯 ──
@@ -458,7 +464,13 @@ export function ChatView(): React.JSX.Element {
       {activeSessionId && <StatusBanner sessionId={activeSessionId} />}
 
       {!activeSessionId ? (
-        <WelcomeView onNewChat={handleNewChat} onCreateProject={() => setShowCreateProject(true)} />
+        <WelcomeView
+          onNewChat={handleNewChat}
+          onCreateProject={(purpose) => {
+            setCreatePurpose(purpose)
+            setShowCreateProject(true)
+          }}
+        />
       ) : (
         <>
           {/* 压缩中冻结遮罩 */}
@@ -528,9 +540,14 @@ export function ChatView(): React.JSX.Element {
       {/* 新建项目弹窗（欢迎页触发） */}
       {showCreateProject && (
         <ProjectCreateDialog
-          onClose={() => setShowCreateProject(false)}
+          initialPurpose={createPurpose}
+          onClose={() => {
+            setShowCreateProject(false)
+            setCreatePurpose(undefined)
+          }}
           onCreated={async (projectId) => {
             setShowCreateProject(false)
+            setCreatePurpose(undefined)
             // 在新项目下创建一个会话并激活
             const session = await window.api.session.create(projectId)
             const allSessions = await window.api.session.list()

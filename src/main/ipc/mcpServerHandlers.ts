@@ -4,14 +4,15 @@ import { mcpServerLogDao } from '../dao/mcpServerLogDao'
 import { settingsDao } from '../dao/settingsDao'
 import type { McpHostConfig, McpHostFeature } from '../types'
 
-/** 从 settings 构建 MCP Server 配置 */
+/** 从 settings 构建 MCP Server 配置（enabled 不持久化，始终由用户手动启动） */
 function buildConfig(): McpHostConfig {
   return {
-    enabled: settingsDao.findByKey('mcpServer.enabled') === 'true',
+    enabled: true,
     transport: 'http',
     port: Number(settingsDao.findByKey('mcpServer.port')) || 3399,
     features: {
-      database: settingsDao.findByKey('mcpServer.features.database') === 'true'
+      database: settingsDao.findByKey('mcpServer.features.database') === 'true',
+      ssh: settingsDao.findByKey('mcpServer.features.ssh') === 'true'
     }
   }
 }

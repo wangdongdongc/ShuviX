@@ -269,6 +269,20 @@ export class AgentSession {
     }
   }
 
+  /** 向运行中的 Agent 注入 steer 消息（同步入队，下次 LLM 调用前生效） */
+  steer(text: string): void {
+    log.info(`steer session=${this.sessionId} text=${text.slice(0, 50)}...`)
+    // _isSteer 标记用于 agentEventHandler 区分 steer 消息与初始 prompt
+    // pi-agent-core 会透传完整对象到 message_start/message_end 事件
+    const msg = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text }],
+      timestamp: Date.now(),
+      _isSteer: true
+    }
+    this.agent.steer(msg as Parameters<typeof this.agent.steer>[0])
+  }
+
   /** 中止生成；若已有部分内容则持久化并返回 */
   abort(): Message | null {
     log.info(`中止 session=${this.sessionId}`)

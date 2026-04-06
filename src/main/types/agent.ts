@@ -45,6 +45,12 @@ export interface AgentPromptParams {
   inlineTokens?: Record<string, InlineToken>
 }
 
+/** Agent steer 消息参数（运行中注入引导消息） */
+export interface AgentSteerParams {
+  sessionId: string
+  text: string
+}
+
 /** Agent 模型切换参数 */
 export interface AgentSetModelParams {
   sessionId: string

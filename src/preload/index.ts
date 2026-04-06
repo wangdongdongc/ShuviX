@@ -4,6 +4,7 @@ import type { UpdateEvent } from '../main/types'
 import type {
   AgentInitParams,
   AgentPromptParams,
+  AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
@@ -36,6 +37,8 @@ import type {
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
+  CustomSubAgentAddParams,
+  CustomSubAgentUpdateParams,
   ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -89,6 +92,9 @@ const api = {
 
     /** 向指定 session 发送消息 */
     prompt: (params: AgentPromptParams) => ipcRenderer.invoke('agent:prompt', params),
+
+    /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
+    steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
@@ -265,6 +271,17 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('dbCredential:delete', id),
     testConnection: (params: DbCredentialTestParams) =>
       ipcRenderer.invoke('dbCredential:testConnection', params)
+  },
+
+  // ============ 自定义子智能体管理 ============
+  customSubAgent: {
+    list: () => ipcRenderer.invoke('customSubAgent:list'),
+    add: (params: CustomSubAgentAddParams) => ipcRenderer.invoke('customSubAgent:add', params),
+    update: (params: CustomSubAgentUpdateParams) =>
+      ipcRenderer.invoke('customSubAgent:update', params),
+    delete: (id: string) => ipcRenderer.invoke('customSubAgent:delete', id),
+    toggle: (params: { id: string; enabled: boolean }) =>
+      ipcRenderer.invoke('customSubAgent:toggle', params)
   },
 
   // ============ 工具 ============
@@ -453,6 +470,45 @@ const api = {
     },
     /** 取消下载任务 */
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId)
+  },
+
+  // ============ Terminal (node-pty) ============
+  terminal: {
+    create: (params: { cwd?: string; cols?: number; rows?: number }) =>
+      ipcRenderer.invoke('terminal:create', params) as Promise<{ terminalId: string }>,
+    write: (params: { terminalId: string; data: string }) =>
+      ipcRenderer.send('terminal:write', params),
+    resize: (params: { terminalId: string; cols: number; rows: number }) =>
+      ipcRenderer.send('terminal:resize', params),
+    destroy: (terminalId: string) => ipcRenderer.invoke('terminal:destroy', terminalId),
+    onData: (callback: (payload: { terminalId: string; data: string }) => void) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        payload: { terminalId: string; data: string }
+      ): void => callback(payload)
+      ipcRenderer.on('terminal:data', handler)
+      return () => ipcRenderer.removeListener('terminal:data', handler)
+    },
+    onExit: (callback: (payload: { terminalId: string; exitCode: number }) => void) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        payload: { terminalId: string; exitCode: number }
+      ): void => callback(payload)
+      ipcRenderer.on('terminal:exit', handler)
+      return () => ipcRenderer.removeListener('terminal:exit', handler)
+    },
+    /** 响应 main process 读取 xterm buffer 最后 N 行的请求 */
+    onReadLines: (handler: (params: { ptyId: string; lines: number }) => string | null) => {
+      const listener = (
+        _: Electron.IpcRendererEvent,
+        params: { requestId: string; ptyId: string; lines: number }
+      ): void => {
+        const content = handler({ ptyId: params.ptyId, lines: params.lines })
+        ipcRenderer.send('terminal:readLinesResult', { requestId: params.requestId, content })
+      }
+      ipcRenderer.on('terminal:readLines', listener)
+      return () => ipcRenderer.removeListener('terminal:readLines', listener)
+    }
   },
 
   // ============ Preview (plugin-based) ============

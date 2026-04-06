@@ -285,6 +285,23 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     store.finishStreaming(sid, result.savedMessage ?? undefined)
   }
 
+  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
+  const handleSteer = async (): Promise<void> => {
+    const text = inputText.trim()
+    if (!text || !activeSessionId) return
+    const store = useChatStore.getState()
+    store.setInputText('')
+    // 竞态保护：agent 可能刚好结束，检查 isStreaming 决定走 steer 还是 prompt
+    const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
+    if (stillStreaming) {
+      await window.api.agent.steer({ sessionId: activeSessionId, text })
+    } else {
+      store.setIsStreaming(activeSessionId, true)
+      store.clearStreamingContent(activeSessionId)
+      await window.api.agent.prompt({ sessionId: activeSessionId, text })
+    }
+  }
+
   /** 用户通过输入框提交文本覆盖当前 pending action */
   const handleOverrideSend = (): void => {
     const text = inputText.trim()
@@ -350,7 +367,11 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
         handleOverrideSend()
         return
       }
-      if (isStreaming) return
+      // streaming 时发送 steer 消息
+      if (isStreaming) {
+        if (inputText.trim()) handleSteer()
+        return
+      }
       handleSend()
     }
   }
@@ -547,13 +568,27 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                 )}
 
                 {effectiveStreaming ? (
-                  <button
-                    onClick={handleAbort}
-                    className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
-                    title={t('input.stopGen')}
-                  >
-                    <Square size={14} fill="currentColor" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={handleSteer}
+                      disabled={!inputText.trim()}
+                      className={`p-1.5 rounded-lg transition-colors ${
+                        inputText.trim()
+                          ? 'bg-warning text-white hover:bg-warning/80'
+                          : 'text-text-tertiary cursor-not-allowed'
+                      }`}
+                      title={t('input.steer')}
+                    >
+                      <Send size={14} />
+                    </button>
+                    <button
+                      onClick={handleAbort}
+                      className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
+                      title={t('input.stopGen')}
+                    >
+                      <Square size={14} fill="currentColor" />
+                    </button>
+                  </div>
                 ) : (
                   <button
                     onClick={hasPendingAction ? handleOverrideSend : handleSend}
@@ -603,13 +638,15 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               placeholder={
                 !activeSessionId
                   ? t('input.placeholderNoSession')
-                  : slashChip
-                    ? t('input.placeholder')
-                    : hasPendingAction
-                      ? t('input.placeholderOverride')
-                      : modelSupportsVision
-                        ? t('input.placeholderVision')
-                        : t('input.placeholder')
+                  : effectiveStreaming
+                    ? t('input.placeholderSteer')
+                    : slashChip
+                      ? t('input.placeholder')
+                      : hasPendingAction
+                        ? t('input.placeholderOverride')
+                        : modelSupportsVision
+                          ? t('input.placeholderVision')
+                          : t('input.placeholder')
               }
               disabled={!activeSessionId}
               rows={3}

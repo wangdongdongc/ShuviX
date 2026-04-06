@@ -27,6 +27,7 @@ import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
 import { updateService } from './services/updateService'
+import { destroyTerminalsByWindow } from './services/terminalService'
 import esbuildPlugin from '../plugins/esbuild'
 import pyodidePlugin from '../plugins/pyodide'
 import pglitePlugin from '../plugins/pglite'
@@ -379,6 +380,12 @@ function createWindow(): void {
     shell.openExternal(url)
   })
 
+  // 关闭前清理该窗口关联的终端实例
+  const mainWebContentsId = mainWindow.webContents.id
+  mainWindow.on('close', () => {
+    destroyTerminalsByWindow(mainWebContentsId)
+  })
+
   // 关闭前保存窗口位置和尺寸
   mainWindow.on('close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -565,15 +572,7 @@ app.whenReady().then(async () => {
     log.error(`connectAll failed: ${err}`)
   })
 
-  // 自动启动 MCP Server（如果已启用）
-  if (settingsDao.findByKey('mcpServer.enabled') === 'true') {
-    const port = Number(settingsDao.findByKey('mcpServer.port')) || 3399
-    const dbFeature = settingsDao.findByKey('mcpServer.features.database') === 'true'
-    mcpServerService
-      .start({ enabled: true, transport: 'http', port, features: { database: dbFeature } })
-      .then(() => log.info(`MCP Server started on port ${port}`))
-      .catch((err) => log.error(`MCP Server start failed: ${err}`))
-  }
+  // MCP Server 出于安全考虑不自动启动，需用户在设置中手动开启
 
   // 恢复有绑定 session 的 Telegram Bot
   telegramService.autoStartBots().catch((err) => {

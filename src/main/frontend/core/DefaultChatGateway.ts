@@ -67,6 +67,17 @@ export class DefaultChatGateway implements ChatGateway {
     await session.prompt(promptText, images)
   }
 
+  steer(sessionId: string, text: string): void {
+    const session = sessionService.getAgentSession(sessionId)
+    if (!session) {
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
+      return
+    }
+    // 只入队；持久化和广播交给 agentEventHandler 在 message_end 事件中处理，
+    // 确保 steer 消息在 event 流中的位置与 step/tool 消息自然衔接。
+    session.steer(text)
+  }
+
   abort(sessionId: string): { success: boolean; savedMessage?: Message } {
     const savedMessage = sessionService.getAgentSession(sessionId)?.abort() || null
     return { success: true, savedMessage: savedMessage || undefined }

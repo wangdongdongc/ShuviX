@@ -36,7 +36,7 @@ const pglitePlugin: ShuviXPlugin = {
               'Run SQL in the built-in Postgres database. Supports importing CSV files from the project folder, great for data analysis.'
           }
         },
-        enabledTools: ['read', 'sql', 'ask']
+        enabledTools: ['read', 'sql', 'ask', 'postgres']
       },
       onEvent(event: HostEvent): void {
         if (event.type === 'runtime:destroy' && event.runtimeId === 'sql') {

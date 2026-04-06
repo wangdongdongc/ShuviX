@@ -79,8 +79,8 @@ function requiresSerial(
   // ask 工具始终需要用户输入
   if (toolName === 'ask') return true
 
-  // bash：始终需要审批（免审批或允许列表匹配时跳过）
-  if (toolName === 'bash') {
+  // bash / terminal exec：需要审批（免审批或允许列表匹配时跳过）
+  if (toolName === 'bash' || (toolName === 'terminal' && rawArgs.action === 'exec')) {
     const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
     if (sess?.autoApprove) return false
     const command = (rawArgs.command as string) || ''
@@ -99,10 +99,6 @@ function requiresSerial(
     const command = (rawArgs.command as string) || ''
     return !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
   }
-
-  // shuvix-project update / shuvix-setting set
-  if (toolName === 'shuvix-project' && rawArgs.action === 'update') return true
-  if (toolName === 'shuvix-setting' && rawArgs.action === 'set') return true
 
   return false
 }

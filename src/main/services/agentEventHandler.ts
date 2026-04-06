@@ -1,6 +1,6 @@
 import type { AgentEvent } from '@mariozechner/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@mariozechner/pi-ai'
-import { isAssistantMessage } from '../utils/messageGuards'
+import { isAssistantMessage, isUserMessage } from '../utils/messageGuards'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { sessionDao } from '../dao/sessionDao'
@@ -22,16 +22,12 @@ function checkToolApproval(
   args: Record<string, unknown>
 ): { approvalRequired: boolean; sshCredentialRequired: boolean; isUserInput: boolean } {
   let approvalRequired = false
-  if (toolName === 'bash') {
+  if (toolName === 'bash' || (toolName === 'terminal' && args?.action === 'exec')) {
     const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
     if (!sess?.autoApprove) {
       const command = (args?.command as string) || ''
       approvalRequired = !isCommandAllowedUnified(sess?.allowList, 'bash', command)
     }
-  } else if (toolName === 'shuvix-project' && args?.action === 'update') {
-    approvalRequired = true
-  } else if (toolName === 'shuvix-setting' && args?.action === 'set') {
-    approvalRequired = true
   } else if (toolName === 'ssh' && args?.action === 'exec') {
     const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
     if (!sess?.autoApprove) {
@@ -265,6 +261,37 @@ function handleMessageEnd(
   ctx.state.generatingToolCall = null
 
   const msg = event.message
+
+  // steer 消息由 AgentSession.steer() 注入，带 _isSteer 标记以区分初始 prompt
+  // pi-agent-core 在 message_start/message_end 中透传完整对象
+  // 持久化为独立的 steer 类型，在 event 流中与 step/tool 自然衔接
+  if (isUserMessage(msg) && '_isSteer' in msg) {
+    const session = sessionDao.pick(ctx.sessionId, ['model'])
+    const text =
+      typeof msg.content === 'string'
+        ? msg.content
+        : msg.content
+            .filter((c): c is TextContent => c.type === 'text')
+            .map((c) => c.text)
+            .join('\n')
+    if (text) {
+      const steerMsg = messageService.add({
+        sessionId: ctx.sessionId,
+        role: 'user',
+        type: 'steer',
+        content: text,
+        model: session?.model || ''
+      })
+      ctx.broadcastEvent({
+        type: 'step_end',
+        sessionId: ctx.sessionId,
+        messageId: steerMsg.id,
+        message: JSON.stringify(steerMsg)
+      })
+    }
+    return
+  }
+
   if (isAssistantMessage(msg)) {
     // 检查流式响应中的错误
     if (msg.stopReason === 'error' && msg.errorMessage) {

@@ -32,6 +32,15 @@ class SubAgentRegistry {
     return Array.from(this.providers.values())
   }
 
+  /** 注销一个子智能体 Provider */
+  unregister(name: string): boolean {
+    const removed = this.providers.delete(name)
+    if (removed) {
+      log.info(`Unregistered sub-agent provider: ${name}`)
+    }
+    return removed
+  }
+
   /** 判断工具名是否为已注册的子智能体 */
   isSubAgent(toolName: string): boolean {
     return this.providers.has(toolName)

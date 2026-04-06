@@ -26,7 +26,7 @@ function parseRow(row: MessageRow): Message {
 /** messages 表中的合法消息类型 */
 const MESSAGE_TYPES = ['text', 'error_event']
 /** message_steps 表中的合法消息类型 */
-const STEP_TYPES = ['tool_use', 'step_text', 'step_thinking']
+export const STEP_TYPES = ['tool_use', 'step_text', 'step_thinking', 'steer']
 
 export class MessageDao extends BaseDao {
   /** 获取某个会话的所有消息，按时间升序（仅读取当前合法类型，忽略旧格式数据，排除已归档） */

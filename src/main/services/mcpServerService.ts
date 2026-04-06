@@ -18,7 +18,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import * as z from 'zod/v4'
 import { dbManager } from './dbManager'
+import { sshManager } from './sshManager'
 import { dbCredentialDao } from '../dao/dbCredentialDao'
+import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { mcpServerLogDao } from '../dao/mcpServerLogDao'
 import { createLogger } from '../logger'
 import type { McpHostConfig, McpHostStatus, McpHostFeature, McpHostToolDesc } from '../types'
@@ -47,6 +49,9 @@ class McpServerServiceImpl {
     this.enabledFeatures.clear()
     if (config.features.database) {
       this.enabledFeatures.add('database')
+    }
+    if (config.features.ssh) {
+      this.enabledFeatures.add('ssh')
     }
 
     // 启动 HTTP Server
@@ -79,6 +84,7 @@ class McpServerServiceImpl {
         // ignore
       }
       dbManager.disconnect(`mcp-${sid}`).catch(() => {})
+      sshManager.disconnect(`mcp-${sid}`).catch(() => {})
     }
     this.sessions.clear()
     this.enabledFeatures.clear()
@@ -129,6 +135,27 @@ class McpServerServiceImpl {
         }
       })
     }
+    if (this.enabledFeatures.has('ssh')) {
+      tools.push({
+        name: 'ssh_exec',
+        description: this.getSshToolDescription(),
+        inputSchema: {
+          type: 'object',
+          properties: {
+            credentialName: { type: 'string', description: 'Name of a saved SSH credential' },
+            command: {
+              type: 'string',
+              description: 'Shell command to execute on the remote server'
+            },
+            timeout: {
+              type: 'number',
+              description: 'Command timeout in seconds (default 120)'
+            }
+          },
+          required: ['credentialName', 'command']
+        }
+      })
+    }
     return tools
   }
 
@@ -158,6 +185,9 @@ class McpServerServiceImpl {
 
     if (this.enabledFeatures.has('database')) {
       this.registerDatabaseToolsOn(server)
+    }
+    if (this.enabledFeatures.has('ssh')) {
+      this.registerSshToolsOn(server)
     }
 
     return server
@@ -253,6 +283,7 @@ class McpServerServiceImpl {
         log.info(`MCP client session closed: ${sid}`)
         this.sessions.delete(sid)
         dbManager.disconnect(`mcp-${sid}`).catch(() => {})
+        sshManager.disconnect(`mcp-${sid}`).catch(() => {})
       }
     }
 
@@ -336,6 +367,112 @@ class McpServerServiceImpl {
             clientName: clientInfo?.name ?? 'unknown',
             clientVersion: clientInfo?.version ?? '',
             toolName: 'database_query',
+            arguments: JSON.stringify(args),
+            result: resultText.slice(0, 10000),
+            isError: isError ? 1 : 0,
+            durationMs,
+            createdAt: Date.now()
+          })
+        } catch (logErr) {
+          log.error(`Failed to write MCP server log: ${logErr}`)
+        }
+
+        if (isError) {
+          return {
+            content: [{ type: 'text' as const, text: `Error: ${resultText}` }],
+            isError: true
+          }
+        }
+
+        return {
+          content: [{ type: 'text' as const, text: resultText }]
+        }
+      }
+    )
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // SSH 工具注册
+  // ────────────────────────────────────────────────────────────────
+
+  private getSshToolDescription(): string {
+    const names = sshCredentialDao.findAllNames()
+    let desc =
+      'Execute shell commands on remote servers via SSH. Connection is managed automatically — just provide a credential name and command.'
+    if (names.length > 0) {
+      desc += ` Available connections: [${names.map((n) => `"${n}"`).join(', ')}].`
+    } else {
+      desc += ' No SSH credentials configured yet.'
+    }
+    return desc
+  }
+
+  /** 在指定的 McpServer 实例上注册 SSH 工具 */
+  private registerSshToolsOn(server: McpServer): void {
+    server.registerTool(
+      'ssh_exec',
+      {
+        description: this.getSshToolDescription(),
+        inputSchema: {
+          credentialName: z.string().describe('Name of a saved SSH credential'),
+          command: z.string().describe('Shell command to execute on the remote server'),
+          timeout: z.number().optional().describe('Command timeout in seconds (default 120)')
+        }
+      },
+      async (args, extra) => {
+        const startTime = Date.now()
+        const mcpSessionId = `mcp-${extra.sessionId ?? 'default'}`
+        let isError = false
+        let resultText: string
+
+        try {
+          // 查找凭据
+          const cred = sshCredentialDao.findByName(args.credentialName)
+          if (!cred) {
+            throw new Error(`SSH credential "${args.credentialName}" not found`)
+          }
+
+          // 如未连接则自动建立连接
+          if (!sshManager.getConnectionInfo(mcpSessionId)) {
+            const connectResult = await sshManager.connect(mcpSessionId, {
+              host: cred.host,
+              port: cred.port,
+              username: cred.username,
+              password: cred.password || undefined,
+              privateKey: cred.privateKey || undefined,
+              passphrase: cred.passphrase || undefined,
+              proxyUrl: cred.metadata?.proxyUrl
+            })
+            if (!connectResult.success) {
+              throw new Error(`SSH connection failed: ${connectResult.error}`)
+            }
+          }
+
+          // 执行命令
+          const execResult = await sshManager.exec(mcpSessionId, args.command, args.timeout ?? 120)
+          const parts: string[] = []
+          if (execResult.stdout) parts.push(execResult.stdout)
+          if (execResult.stderr) parts.push(`[stderr]\n${execResult.stderr}`)
+          resultText = parts.join('\n') || '(no output)'
+          if (execResult.exitCode !== 0) {
+            resultText += `\n[exit code: ${execResult.exitCode}]`
+          }
+        } catch (err: unknown) {
+          isError = true
+          resultText = err instanceof Error ? err.message : String(err)
+        }
+
+        const durationMs = Date.now() - startTime
+
+        // 记录日志
+        try {
+          const clientInfo = server.server.getClientVersion?.()
+          mcpServerLogDao.insert({
+            id: randomUUID(),
+            sessionId: extra.sessionId ?? 'unknown',
+            clientName: clientInfo?.name ?? 'unknown',
+            clientVersion: clientInfo?.version ?? '',
+            toolName: 'ssh_exec',
             arguments: JSON.stringify(args),
             result: resultText.slice(0, 10000),
             isError: isError ? 1 : 0,

@@ -24,6 +24,7 @@ export type LucideIconName =
   | 'Monitor'
   | 'Palette'
   | 'Search'
+  | 'SquareTerminal'
   | 'Terminal'
   | 'Wrench'
 
@@ -33,6 +34,7 @@ export type LucideIconName =
 export type ThemeColor =
   | '#34d399' // emerald-400
   | '#10b981' // emerald-500
+  | '#22c55e' // green-500
   | '#38bdf8' // sky-400
   | '#60a5fa' // blue-400
   | '#3b82f6' // blue-500
