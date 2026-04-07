@@ -17,7 +17,7 @@
     "build:webui": "vite build --config vite.config.webui.ts",
     "dev:webui": "vite --config vite.config.webui.ts",
     "build": "npm run typecheck && electron-vite build && npm run build:webui",
-    "postinstall": "electron-builder install-app-deps && electron-rebuild -f -w better-sqlite3 -w node-pty",
+    "postinstall": "electron-builder install-app-deps && electron-rebuild -f -w better-sqlite3,node-pty",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
