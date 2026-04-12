@@ -699,8 +699,6 @@ body {
 /* —— CodeBlock 容器衔接 —— */
 .markdown-body .group\/code > pre {
   margin-top: 0 !important;
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
 }
 
 /* —— 代码块滚动条 —— */

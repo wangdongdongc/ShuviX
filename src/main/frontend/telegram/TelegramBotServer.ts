@@ -136,39 +136,36 @@ export class TelegramBotServer {
       const action = data.slice(lastColon + 1)
 
       try {
+        const frontend = this.findFrontendByChat(ctx.callbackQuery.message?.chat.id)
+        if (!frontend) {
+          await ctx.answerCallbackQuery()
+          return
+        }
+
         if (type === 'approve') {
           const approved = action === 'yes'
           log.info(`审批回调: toolCallId=${toolCallId}, approved=${approved}`)
-          chatGateway.approveToolCall(
-            toolCallId,
+          chatGateway.respondToInput(frontend.sessionId, toolCallId, {
+            kind: 'approval',
             approved,
-            approved ? undefined : 'Denied via Telegram'
-          )
+            reason: approved ? undefined : 'Denied via Telegram'
+          })
           await ctx.answerCallbackQuery({ text: approved ? 'Approved' : 'Denied' })
           await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
         } else if (type === 'ask') {
           if (action === 'done') {
             // 多选提交
-            const frontend = this.findFrontendByChat(ctx.callbackQuery.message?.chat.id)
-            if (frontend) {
-              const indices = frontend.getAskSelections(toolCallId)
-              chatGateway.respondToAsk(
-                toolCallId,
-                indices.map((i) => String(i))
-              )
-            }
+            const indices = frontend.getAskSelections(toolCallId)
+            chatGateway.respondToInput(frontend.sessionId, toolCallId, {
+              kind: 'choice',
+              selections: indices.map((i) => String(i))
+            })
             await ctx.answerCallbackQuery({ text: 'Submitted' })
             await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
           } else {
             // 单选直接提交 / 多选切换
             const index = parseInt(action)
             if (isNaN(index)) {
-              await ctx.answerCallbackQuery()
-              return
-            }
-
-            const frontend = this.findFrontendByChat(ctx.callbackQuery.message?.chat.id)
-            if (!frontend) {
               await ctx.answerCallbackQuery()
               return
             }
@@ -185,7 +182,10 @@ export class TelegramBotServer {
               await ctx.answerCallbackQuery({ text: `Toggled option ${index + 1}` })
             } else {
               // 单选模式：直接提交
-              chatGateway.respondToAsk(toolCallId, [String(index)])
+              chatGateway.respondToInput(frontend.sessionId, toolCallId, {
+                kind: 'choice',
+                selections: [String(index)]
+              })
               await ctx.answerCallbackQuery({ text: 'Selected' })
               await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
             }

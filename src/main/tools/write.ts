@@ -42,14 +42,14 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
   }
 
   protected async securityCheck(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; content: string }
   ): Promise<void> {
     const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
 
-    // 沙箱模式：路径越界检查
-    assertSandboxWrite(config, absolutePath, params.path)
+    // 沙箱守卫:工作目录 + readwrite 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertSandboxWrite(this.ctx, config, toolCallId, 'write', absolutePath, params.path)
   }
 
   protected async executeInternal(

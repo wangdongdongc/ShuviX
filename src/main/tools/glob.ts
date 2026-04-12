@@ -55,7 +55,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   }
 
   protected async securityCheck(
-    _toolCallId: string,
+    toolCallId: string,
     params: { pattern: string; path?: string },
     signal?: AbortSignal
   ): Promise<void> {
@@ -70,8 +70,8 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许）
-    assertSandboxRead(config, searchPath)
+    // 沙箱守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertSandboxRead(this.ctx, config, toolCallId, 'glob', searchPath, params.path)
   }
 
   protected async executeInternal(

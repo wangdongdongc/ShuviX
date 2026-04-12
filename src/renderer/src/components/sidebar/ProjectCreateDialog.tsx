@@ -17,9 +17,16 @@ import { icons } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
-import { ProjectBasicInfo, ProjectFileSystem, ExtensionsPanel } from './ProjectFormSections'
+import {
+  ProjectBasicInfo,
+  ProjectFileSystem,
+  ExtensionsPanel,
+  ProjectPromptSectionsGroup
+} from './ProjectFormSections'
+import { getDefaultPromptSections } from '../../utils/promptSectionPresets'
 
 import type { ReferenceDir } from '../../../../main/types/project'
+import type { ProjectPromptSection } from '../../../../shared/types/promptSection'
 
 interface ProjectCreateDialogProps {
   onClose: () => void
@@ -72,7 +79,10 @@ export function ProjectCreateDialog({
   // 项目字段
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [systemPrompt, setSystemPrompt] = useState('')
+  // 新建项目时预置 4 张卡片(身份 / 任务处理哲学 / 工具使用规则 / 安全指引),用户可自由删改
+  const [promptSections, setPromptSections] = useState<ProjectPromptSection[]>(() =>
+    getDefaultPromptSections(t)
+  )
   const [saving, setSaving] = useState(false)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
@@ -179,7 +189,7 @@ export function ProjectCreateDialog({
       const project = await window.api.project.create({
         name: name.trim() || undefined,
         path: path.trim(),
-        systemPrompt,
+        promptSections,
         enabledTools,
         referenceDirs: referenceDirs.length > 0 ? referenceDirs : undefined,
         tool:
@@ -433,12 +443,7 @@ export function ProjectCreateDialog({
         {step === 3 && (
           <>
             <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
-              <ProjectBasicInfo
-                name={name}
-                onNameChange={setName}
-                systemPrompt={systemPrompt}
-                onSystemPromptChange={setSystemPrompt}
-              />
+              <ProjectBasicInfo name={name} onNameChange={setName} />
 
               <ProjectFileSystem
                 path={path}
@@ -446,6 +451,8 @@ export function ProjectCreateDialog({
                 referenceDirs={referenceDirs}
                 onReferenceDirsChange={setReferenceDirs}
               />
+
+              <ProjectPromptSectionsGroup sections={promptSections} onChange={setPromptSections} />
             </div>
 
             <div className="flex items-center justify-between px-5 py-3 border-t border-border-secondary">

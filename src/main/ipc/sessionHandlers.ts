@@ -95,6 +95,20 @@ export function registerSessionHandlers(): void {
     return sessionService.getById(id) || null
   })
 
+  /** 扫描会话工作目录顶层的候选指令文件 */
+  ipcMain.handle('session:scanInstructionFiles', (_event, sessionId: string) => {
+    return sessionService.scanInstructionFiles(sessionId)
+  })
+
+  /** 更新会话启用的指令文件列表 */
+  ipcMain.handle(
+    'session:updateInstructionFiles',
+    (_event, params: { id: string; filenames: string[] }) => {
+      sessionService.updateEnabledInstructionFiles(params.id, params.filenames)
+      return { success: true }
+    }
+  )
+
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
   ipcMain.handle('session:delete', (_event, id: string) => {
     sessionService.delete(id)

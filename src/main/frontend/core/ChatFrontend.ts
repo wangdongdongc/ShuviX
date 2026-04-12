@@ -4,12 +4,12 @@ import type { ChatEvent } from './types'
 export interface ChatFrontendCapabilities {
   /** 支持实时流式 delta 事件 (text_delta / thinking_delta / image_data) */
   streaming?: boolean
-  /** 支持工具执行审批交互 (tool_approval_request) */
-  toolApproval?: boolean
-  /** 支持用户选择交互 — ask 工具 (user_input_request) */
+  /**
+   * 支持"用户输入请求"交互(input_request 事件)。
+   * 命令审批 / 选择题 / SSH 凭证全部归并为单一能力。
+   * 不支持的前端在收到 input_request 时被跳过,工具收到 cancel 响应。
+   */
   userInput?: boolean
-  /** 支持 SSH 凭据输入 (ssh_credential_request) */
-  sshCredentials?: boolean
 }
 
 /** 聊天前端适配器 — 接收 Agent 流式事件推送 */

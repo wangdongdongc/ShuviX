@@ -41,7 +41,8 @@
     "confirmDeleteProject": "プロジェクト削除の確認",
     "deleteProjectWarning": "削除すると",
     "deleteProjectWarningBold": "プロジェクトとすべてのセッション・メッセージが完全に削除",
-    "deleteProjectWarningEnd": "され、復元できません。削除しますか？"
+    "deleteProjectWarningEnd": "され、復元できません。削除しますか？",
+    "deleteSession": "セッションを削除"
   },
 
   "chat": {
@@ -111,13 +112,9 @@
     "thinkHigh": "深い",
     "thinkXHigh": "最深",
     "tools": "ツール",
-    "instructionsStatus": "指示ファイルの読み込み状態",
     "placeholderVision": "メッセージを入力、画像をドラッグ＆ドロップまたは貼り付け...",
     "placeholder": "メッセージを入力... (Shift+Enterで改行)",
-    "placeholderOverride": "同意できない？テキストで AI にフィードバック...",
     "placeholderNoSession": "まずチャットを作成または選択してください",
-    "loaded": "読み込み済み",
-    "notLoaded": "未読み込み",
     "stopGen": "生成を停止",
     "steer": "ガイドメッセージを送信",
     "placeholderSteer": "エージェントをガイドするメッセージを入力...",
@@ -132,6 +129,10 @@
     "archivedBanner": "{{count}} 件のアーカイブメッセージが非表示 — クリックして表示",
     "archivedLoading": "読み込み中...",
     "archivedAllLoaded": "すべてのアーカイブメッセージを読み込みました"
+  },
+  "instruction": {
+    "sender": "システム",
+    "loaded": "プロジェクト指示を読み込みました · {{filename}}"
   },
 
   "voice": {
@@ -163,18 +164,28 @@
     "nCalls": "回呼出"
   },
 
+  "pendingInputs": {
+    "submitAllFilled": "入力済みを一括送信",
+    "filledHint": "{{filled}} / {{total}} 入力済み",
+    "otherPlaceholder": "その他 — AI へのフィードバックを入力...",
+    "submitOther": "送信"
+  },
+
   "toolCall": {
     "generating": "生成中...",
     "running": "実行中...",
     "done": "完了",
     "error": "エラー",
     "pendingApproval": "承認待ち",
-    "allow": "許可",
+    "pendingPathRead": "外部ファイルを読み取り中",
+    "pendingPathWrite": "外部ファイルを書き込み中",
+    "allow": "1回だけ許可",
     "deny": "拒否",
     "sandboxHint": "Bash コマンドは実行前に承認が必要です",
-    "allowAndRemember": "許可して記憶",
+    "allowAndRemember": "このパターンを許可",
     "patternsToAllow": "許可するパターン：",
     "noPatternsLeft": "パターンが選択されていません",
+    "loadingPatterns": "読み込み中...",
     "confirmAllow": "確認して許可",
     "bashHint": "Bash コマンドはユーザー承認後に実行されます",
     "params": "パラメータ",
@@ -228,6 +239,7 @@
     "sessionTitle": "セッションタイトル",
     "autoApprove": "コマンド自動承認",
     "allowedCommands": "許可されたコマンド",
+    "allowList": "許可リスト(コマンドとパス)",
     "lanShare": "LAN 共有を有効化",
     "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションにアクセスできます。",
     "shareMode": "共有モード",
@@ -242,7 +254,11 @@
     "telegramNone": "なし",
     "commandGroup": "コマンド承認",
     "lanShareGroup": "WebUI",
-    "telegramGroup": "Telegram Bot"
+    "telegramGroup": "Telegram Bot",
+    "instructionFilesGroup": "プロジェクト指示ファイル",
+    "instructionFilesEmpty": "プロジェクトディレクトリに AGENTS.md / CLAUDE.md が見つかりません。",
+    "instructionFilesRescan": "再スキャン",
+    "instructionFilesHint": "有効なファイルは新規セッションと圧縮後にユーザーメッセージとして挿入されます。設定は次回から有効になります。"
   },
 
   "sessionEdit": {
@@ -332,7 +348,32 @@
     "extMcpDesc": "MCPプロトコルで外部ツールサーバーに接続し、データベースクエリやAPI呼び出しなどの拡張機能をAIに提供します。",
     "extSkillDesc": "Skillsは再利用可能なプロンプトテンプレートで、AIが特定のワークフローを習得するのに役立ちます。",
     "extGoSettings": "設定へ移動",
-    "extAvailableDesc": "このプロジェクトで有効にする拡張ツールを選択してください。"
+    "extAvailableDesc": "このプロジェクトで有効にする拡張ツールを選択してください。",
+    "promptSectionsTitle": "プロジェクトプロンプト",
+    "promptSectionsHint": "## タイトル のセクションとしてシステムプロンプトに結合されます。ハンドルをドラッグして並べ替え、カードの追加・削除も可能です。",
+    "addPromptSection": "カードを追加",
+    "promptSectionTitlePlaceholder": "タイトル（例：アイデンティティ / ツール使用ルール）",
+    "promptSectionContentPlaceholder": "内容...",
+    "deletePromptSection": "削除",
+    "dragToReorder": "ドラッグして並べ替え",
+    "presets": {
+      "identity": {
+        "title": "アイデンティティ",
+        "content": "あなたは ShuviX デスクトップアシスタントです。read / edit / write / grep / glob / bash / ssh / skill / mcp などのツールを使ってユーザーのエンジニアリング作業を支援します。"
+      },
+      "philosophy": {
+        "title": "タスク処理方針",
+        "content": "ユーザーが依頼したことだけを実行し、勝手にリファクタや抽象化、機能追加をしないでください。完了前に必ず実際に検証（テスト実行、出力確認）し、検証できない場合は正直に伝えてください。失敗したらまず根本原因を診断してから別の方法を試してください。"
+      },
+      "toolUsage": {
+        "title": "ツール使用ルール",
+        "content": "bash よりも専用ツール（read / edit / write / grep / glob）を優先してください。独立した操作はできるだけ並列で実行し、効率を高めてください。"
+      },
+      "safety": {
+        "title": "安全ガイドライン",
+        "content": "破壊的操作（削除、強制プッシュ、rm -rf）、共有状態に影響する操作（push / CI / メッセージ送信）、第三者へのアップロードは必ずユーザーに確認してください。エラー時は根本原因を調査し、回避手段（--no-verify など）で問題を隠さないでください。"
+      }
+    }
   },
 
   "settings": {
@@ -677,9 +718,9 @@
   "tool": {
     "bashLabel": "Bash コマンド実行",
     "terminalLabel": "ターミナルでコマンド実行",
-    "readLabel": "ファイルを読み込む",
+    "readLabel": "読む",
     "writeLabel": "ファイルを書き込む",
-    "editLabel": "ファイルを編集",
+    "editLabel": "テキスト編集",
     "skillLabel": "Skill 指示セットを読み込み",
     "askLabel": "ユーザーに質問",
     "lsLabel": "ファイル一覧",

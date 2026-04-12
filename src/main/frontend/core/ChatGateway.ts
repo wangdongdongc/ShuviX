@@ -1,5 +1,5 @@
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
-import type { SshCredentialPayload } from '../../tools/types'
+import type { InputResponse } from '../../../shared/types/inputRequest'
 import type { RuntimeStatus } from './types'
 
 /**
@@ -32,14 +32,11 @@ export interface ChatGateway {
 
   // ─── 交互响应 ─────────────────────────────────
 
-  /** 响应工具审批（沙箱模式 bash） */
-  approveToolCall(toolCallId: string, approved: boolean, reason?: string): void
-
-  /** 响应 ask 工具选择 */
-  respondToAsk(toolCallId: string, selections: string[]): void
-
-  /** 响应 SSH 凭据请求 */
-  respondToSshCredentials(toolCallId: string, credentials: SshCredentialPayload | null): void
+  /**
+   * 统一的"用户输入响应"入口。
+   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的挂起 Promise。
+   */
+  respondToInput(sessionId: string, requestId: string, response: InputResponse): void
 
   // ─── 运行时调整 ────────────────────────────────
 

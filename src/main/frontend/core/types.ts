@@ -81,10 +81,6 @@ export interface ChatToolStartEvent extends ChatEventBase {
   messageId?: string
   /** 当前 turn 编号（UI 分组用） */
   turnIndex?: number
-  /** 是否需要用户审批（bash 沙箱模式） */
-  approvalRequired?: boolean
-  /** 是否需要 SSH 凭据输入 */
-  sshCredentialRequired?: boolean
 }
 
 /** 工具执行完成 */
@@ -102,34 +98,24 @@ export interface ChatToolEndEvent extends ChatEventBase {
   details?: ToolResultDetails
 }
 
-// ─── 交互请求 ──────────────────────────────────────────
+// ─── 交互请求(统一) ────────────────────────────────────
 
-/** 工具审批请求（bash 命令等待允许/拒绝） */
-export interface ChatApprovalRequestEvent extends ChatEventBase {
-  type: 'tool_approval_request'
-  toolCallId: string
-  toolName: string
-  toolArgs?: Record<string, unknown>
-}
-
-/** 用户输入请求（ask 工具等待选择） */
+/**
+ * 一个新的"用户输入请求"挂起。前端按 request.kind 渲染对应表单。
+ * 命令审批 / 选择题 / SSH 凭证全部走这一个事件,扩展新 kind 不再加新事件类型。
+ */
 export interface ChatInputRequestEvent extends ChatEventBase {
-  type: 'user_input_request'
-  toolCallId: string
-  toolName: string
-  payload: {
-    question: string
-    detail?: string
-    options: Array<{ label: string; description: string }>
-    allowMultiple: boolean
-  }
+  type: 'input_request'
+  request: import('../../../shared/types/inputRequest').InputRequest
 }
 
-/** SSH 凭据请求 */
-export interface ChatCredentialRequestEvent extends ChatEventBase {
-  type: 'ssh_credential_request'
-  toolCallId: string
-  toolName: string
+/**
+ * 某个用户输入请求已被解决(用户响应 / 取消 / abort 都会发出),
+ * 前端用于把对应 request 从 pending 列表移除并清理草稿。
+ */
+export interface ChatInputRequestResolvedEvent extends ChatEventBase {
+  type: 'input_request_resolved'
+  requestId: string
 }
 
 // ─── 媒体 ──────────────────────────────────────────────
@@ -244,12 +230,21 @@ export interface ChatCompactionEndEvent extends ChatEventBase {
   type: 'compaction_end'
   /** 新摘要消息 (JSON string) */
   message: string
+  /** 紧跟摘要的项目指令注入消息 (每个文件一条 JSON string) */
+  instructionMessages?: string[]
 }
 
 /** 压缩失败 */
 export interface ChatCompactionErrorEvent extends ChatEventBase {
   type: 'compaction_error'
   error: string
+}
+
+/** 项目指令文件懒注入完成（首次 prompt 前由 AgentSession 触发） */
+export interface ChatInstructionsInjectedEvent extends ChatEventBase {
+  type: 'instructions_injected'
+  /** 已写入的指令消息列表（每条 JSON string） */
+  messages: string[]
 }
 
 // ─── 错误 ──────────────────────────────────────────────
@@ -281,9 +276,8 @@ export type ChatEvent =
   | ChatToolCallGeneratingEvent
   | ChatToolStartEvent
   | ChatToolEndEvent
-  | ChatApprovalRequestEvent
   | ChatInputRequestEvent
-  | ChatCredentialRequestEvent
+  | ChatInputRequestResolvedEvent
   | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatPreviewEvent
@@ -297,6 +291,7 @@ export type ChatEvent =
   | ChatCompactionStartEvent
   | ChatCompactionEndEvent
   | ChatCompactionErrorEvent
+  | ChatInstructionsInjectedEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
 

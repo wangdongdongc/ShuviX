@@ -52,7 +52,11 @@ export function StepBlock({ message, isGenerating }: StepBlockProps): React.JSX.
         )}
         {icon}
         <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>
-        {preview && <span className="flex-1 truncate font-mono opacity-70">{preview}</span>}
+        {preview && (
+          <span className={`flex-1 truncate opacity-70 ${isThinking ? '' : 'font-mono'}`}>
+            {preview}
+          </span>
+        )}
         {!preview && <span className="flex-1" />}
         {/* 状态指示 */}
         {isGenerating ? (

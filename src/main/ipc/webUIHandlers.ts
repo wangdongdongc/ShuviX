@@ -3,6 +3,7 @@ import { webUIService } from '../services/webUIService'
 import type { ShareMode } from '../services/webUIService'
 // 副作用导入：触发 WebUIServer 实例化 + 注册到 webUIService
 import '../frontend/web/WebUIServer'
+import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 
 /**
  * WebUI 分享管理 IPC 处理器
@@ -13,6 +14,7 @@ export function registerWebUIHandlers(): void {
     'webui:setShared',
     (_event, params: { sessionId: string; shared: boolean; mode?: ShareMode }) => {
       webUIService.setShared(params.sessionId, params.shared, params.mode)
+      broadcastSessionConfigChanged(params.sessionId)
       return { success: true }
     }
   )

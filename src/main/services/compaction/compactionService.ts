@@ -26,6 +26,7 @@ import { providerDao } from '../../dao/providerDao'
 import { databaseManager } from '../../dao/database'
 import { messageService } from '../messageService'
 import { sessionService } from '../sessionService'
+import { buildInstructionMessages } from '../instructionInjector'
 import { chatFrontendRegistry } from '../../frontend'
 import { dbMessagesToAgentMessages } from '../../utils/agentMessageConverter'
 import { buildCompactionPrompt, formatCompactSummary, buildSummaryContent } from './prompt'
@@ -160,8 +161,14 @@ class CompactionService {
       }
 
       const model = agentSession.getAgent().state.model
-      const currentProvider = providerDao.pick(String(model.provider), ['apiKey'])
+      const providerId = String(model.provider)
+      const currentProvider = providerDao.pick(providerId, ['apiKey'])
       const apiKey = currentProvider?.apiKey
+      if (!apiKey) {
+        throw new Error(
+          `当前会话使用的 Provider (${providerId}) 没有配置 API Key,请到设置 → Provider 中填写后重试`
+        )
+      }
 
       // ─── 4. 调用 LLM 生成摘要 ─────────────────
       const compactionPrompt = buildCompactionPrompt()
@@ -193,14 +200,40 @@ class CompactionService {
         .trim()
 
       if (!rawText) {
-        throw new Error('LLM 返回空内容，压缩失败')
+        // pi-ai 在 stopReason='error' 时把 provider 的真实错误塞在 errorMessage 字段里
+        const r = result as {
+          stopReason?: string
+          errorMessage?: string
+          usage?: unknown
+        }
+        const blockTypes = result.content?.map((c) => c.type).join(',') || '<no content>'
+        const stopReason = r.stopReason || '<unknown>'
+        const errorMessage = r.errorMessage || ''
+        log.error(
+          `LLM 压缩返回为空 session=${sessionId} stopReason=${stopReason} blockTypes=[${blockTypes}] errorMessage=${errorMessage} usage=${JSON.stringify(r.usage)}`
+        )
+        try {
+          log.error(`完整返回内容: ${JSON.stringify(result.content)?.slice(0, 2000)}`)
+        } catch {
+          /* ignore stringify failure */
+        }
+        const detail = errorMessage || `stopReason=${stopReason}, blocks=[${blockTypes}]`
+        throw new Error(`LLM 返回空内容，压缩失败 (${detail})`)
       }
 
       // ─── 6. 格式化摘要 ─────────────────────────
       const formattedSummary = formatCompactSummary(rawText)
       const summaryContent = buildSummaryContent(formattedSummary)
 
-      // ─── 7. 原子事务：归档 + 插入 ──────────────
+      // ─── 7. 构造指令消息（不写库，纯函数） ───
+      const workingDir = sessionService.getById(sessionId)?.workingDirectory || ''
+      const instructionMessages = workingDir ? buildInstructionMessages(sessionId, workingDir) : []
+
+      // ─── 8. 构造摘要消息：时间戳晚于全部指令消息，确保排序在后 ───
+      const lastInstructionTs =
+        instructionMessages.length > 0
+          ? instructionMessages[instructionMessages.length - 1].createdAt
+          : 0
       const summaryMessage: Message = {
         id: uuidv7(),
         sessionId,
@@ -209,27 +242,35 @@ class CompactionService {
         content: summaryContent,
         metadata: { isCompactionSummary: true },
         model: String(model.id || ''),
-        createdAt: Date.now()
+        createdAt: Math.max(Date.now(), lastInstructionTs + 1)
       }
 
+      // ─── 9. 原子事务：归档旧消息 + 插入指令 + 插入摘要 ───
       const db = databaseManager.getDb()
       db.transaction(() => {
         messageDao.archiveBySessionId(sessionId)
         messageStepDao.archiveBySessionId(sessionId)
+        for (const im of instructionMessages) messageDao.insert(im)
         messageDao.insert(summaryMessage)
         sessionDao.touch(sessionId)
       })()
 
-      log.info(`压缩完成 session=${sessionId}，摘要长度=${summaryContent.length}`)
+      log.info(
+        `压缩完成 session=${sessionId}，摘要长度=${summaryContent.length}，指令消息=${instructionMessages.length}`
+      )
 
-      // ─── 8. 失效 Agent，下次交互重建上下文 ─────
+      // ─── 10. 失效 Agent，下次交互重建上下文 ─────
       sessionService.invalidateAgent(sessionId)
 
-      // ─── 9. 通知前端：压缩成功 ────────────────
+      // ─── 11. 通知前端：压缩成功（指令在前，摘要在后） ───
       chatFrontendRegistry.broadcast({
         type: 'compaction_end',
         sessionId,
-        message: JSON.stringify(summaryMessage)
+        message: JSON.stringify(summaryMessage),
+        instructionMessages:
+          instructionMessages.length > 0
+            ? instructionMessages.map((m) => JSON.stringify(m))
+            : undefined
       })
 
       return summaryMessage

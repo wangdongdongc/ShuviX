@@ -43,7 +43,8 @@
     "deleteProjectWarningBold": "彻底删除该项目及其所有会话和消息",
     "deleteProjectWarningEnd": "，且无法恢复。确定要删除吗？",
     "updateAvailable": "发现新版本",
-    "updateReady": "可以安装更新"
+    "updateReady": "可以安装更新",
+    "deleteSession": "删除会话"
   },
 
   "chat": {
@@ -113,13 +114,9 @@
     "thinkHigh": "深度",
     "thinkXHigh": "极深",
     "tools": "工具",
-    "instructionsStatus": "指令文件加载状态",
     "placeholderVision": "输入消息，可拖放或粘贴图片...",
     "placeholder": "输入消息... (Shift+Enter 换行)",
-    "placeholderOverride": "不认可？直接输入文本反馈给 AI...",
     "placeholderNoSession": "请先创建或选择一个对话",
-    "loaded": "已加载",
-    "notLoaded": "未加载",
     "stopGen": "停止生成",
     "steer": "发送引导消息",
     "placeholderSteer": "输入消息引导智能体...",
@@ -134,6 +131,10 @@
     "archivedBanner": "{{count}} 条已归档消息被隐藏，点击查看",
     "archivedLoading": "加载中...",
     "archivedAllLoaded": "所有归档消息已加载"
+  },
+  "instruction": {
+    "sender": "系统",
+    "loaded": "项目指令已加载 · {{filename}}"
   },
 
   "voice": {
@@ -165,18 +166,30 @@
     "nCalls": "次调用"
   },
 
+  "pendingInputs": {
+    "submitAllFilled": "一键提交已填",
+    "filledHint": "{{filled}} / {{total}} 已填",
+    "otherPlaceholder": "其它 — 输入反馈给 AI...",
+    "submitOther": "发送"
+  },
+
   "toolCall": {
     "generating": "生成中...",
     "running": "执行中...",
     "done": "完成",
     "error": "出错",
     "pendingApproval": "等待确认",
-    "allow": "允许执行",
+    "pendingPathRead": "正在读取外部文件",
+    "pendingPathReadDir": "正在读取外部目录",
+    "pendingPathWrite": "正在写入外部文件",
+    "allowThisDirectory": "允许此目录",
+    "allow": "允许一次",
     "deny": "拒绝",
     "sandboxHint": "Bash 命令需确认后执行",
-    "allowAndRemember": "允许并记住",
+    "allowAndRemember": "允许该模式",
     "patternsToAllow": "将允许的模式：",
     "noPatternsLeft": "未选择任何模式",
+    "loadingPatterns": "加载中...",
     "confirmAllow": "确认并允许",
     "params": "参数",
     "result": "结果",
@@ -230,6 +243,7 @@
     "sessionTitle": "会话标题",
     "autoApprove": "命令执行免审批",
     "allowedCommands": "允许的命令",
+    "allowList": "允许列表(命令与路径)",
     "lanShare": "开启局域网共享",
     "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器访问此会话的对话页面。",
     "shareMode": "分享模式",
@@ -244,7 +258,11 @@
     "telegramNone": "无（未绑定）",
     "commandGroup": "命令审批",
     "lanShareGroup": "WebUI",
-    "telegramGroup": "Telegram Bot"
+    "telegramGroup": "Telegram Bot",
+    "instructionFilesGroup": "项目指令文件",
+    "instructionFilesEmpty": "项目目录下未发现 AGENTS.md / CLAUDE.md。",
+    "instructionFilesRescan": "重新扫描",
+    "instructionFilesHint": "启用的文件会在新建会话和压缩后作为用户消息插入，配置下次生效。"
   },
 
   "sessionEdit": {
@@ -334,7 +352,32 @@
     "extMcpDesc": "通过 MCP 协议连接外部工具服务，让 AI 获得数据库查询、API 调用等扩展能力。",
     "extSkillDesc": "Skills 是可复用的提示词模板，让 AI 掌握特定领域的工作流程。",
     "extGoSettings": "前往设置",
-    "extAvailableDesc": "选择要在项目中启用的扩展工具。"
+    "extAvailableDesc": "选择要在项目中启用的扩展工具。",
+    "promptSectionsTitle": "项目提示词",
+    "promptSectionsHint": "按顺序拼接为 ## 标题 段落注入到 system prompt。可拖拽手柄调整顺序，也可增删卡片。",
+    "addPromptSection": "添加卡片",
+    "promptSectionTitlePlaceholder": "标题（如：身份 / 工具使用规则）",
+    "promptSectionContentPlaceholder": "内容...",
+    "deletePromptSection": "删除",
+    "dragToReorder": "拖动以排序",
+    "presets": {
+      "identity": {
+        "title": "身份",
+        "content": "你是 ShuviX 桌面助手，通过 read / edit / write / grep / glob / bash / ssh / skill / mcp 等工具帮助用户完成工程任务。"
+      },
+      "philosophy": {
+        "title": "任务处理哲学",
+        "content": "只做用户要求的事，不要擅自重构、加抽象或额外功能。完成前必须实际验证（跑测试、查输出），无法验证就如实说明；失败时先诊断根因再换策略。"
+      },
+      "toolUsage": {
+        "title": "工具使用规则",
+        "content": "优先使用专用工具（read / edit / write / grep / glob）而不是 bash 命令。独立的多步操作尽量并行调用以提升效率。"
+      },
+      "safety": {
+        "title": "安全指引",
+        "content": "破坏性操作（删除、强推、rm -rf）、影响共享状态的操作（push / CI / 发消息）、上传到第三方的操作，都要先与用户确认。出错时优先排查根因，不要用绕过手段（如 --no-verify）逃避问题。"
+      }
+    }
   },
 
   "settings": {
@@ -689,9 +732,9 @@
   "tool": {
     "bashLabel": "Bash 执行命令",
     "terminalLabel": "终端执行命令",
-    "readLabel": "读取文件",
+    "readLabel": "阅读",
     "writeLabel": "写入文件",
-    "editLabel": "编辑文件",
+    "editLabel": "文本编辑",
     "skillLabel": "加载 Skill 指令集",
     "askLabel": "向用户提问",
     "lsLabel": "列出文件",

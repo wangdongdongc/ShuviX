@@ -11,7 +11,8 @@ import { sessionDao } from '../dao/sessionDao'
 import { processToolOutput } from './utils/processToolOutput'
 import { sanitizeBinaryOutput, collapseProgressOutput } from './utils/shell'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
-import { isCommandAllowedUnified } from './utils/allowList'
+import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SshToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -240,22 +241,39 @@ async function handleConnect(
   }
 
   // --- 路径 B：原有 UI 弹窗流程（不变） ---
-  if (!ctx.requestSshCredentials) {
+  if (!ctx.requestUserInput) {
     throw new Error('SSH credential input not available')
   }
 
   log.info(`请求 SSH 凭据 session=${ctx.sessionId}`)
-  const credentials = await ctx.requestSshCredentials(toolCallId)
+  const response = await ctx.requestUserInput({
+    id: toolCallId,
+    kind: 'sshCredentials',
+    toolName: 'ssh',
+    createdAt: Date.now()
+  })
 
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
-  // 用户取消连接
-  if (!credentials) {
+  if (response.kind === 'cancel') {
+    throw new Error(TOOL_ABORTED)
+  }
+  // 用户提交"其它"反馈,不连接,把文本作为正常 tool result 返回
+  if (response.kind === 'other') {
     return {
-      content: [{ type: 'text', text: 'User cancelled SSH connection.' }],
+      content: [
+        {
+          type: 'text',
+          text: `SSH connection was not attempted. User responded with feedback instead:\n${response.text}`
+        }
+      ],
       details: { type: 'ssh', action: 'connect', cancelled: true }
     }
   }
+  if (response.kind !== 'sshCredentials') {
+    throw new Error('Unexpected response kind for SSH credentials request')
+  }
+  const credentials = response.credentials
 
   // 使用 sshManager 建立连接（凭据不返回给大模型）
   const result = await sshManager.connect(ctx.sessionId, credentials)
@@ -308,13 +326,43 @@ async function handleExec(
   // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
   const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
   if (
-    ctx.requestApproval &&
+    ctx.requestUserInput &&
     !sess?.autoApprove &&
     !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
   ) {
-    const approval = await ctx.requestApproval(toolCallId, 'ssh', command, description)
-    if (!approval.approved) {
-      throw new Error(approval.reason || 'User denied execution of this command')
+    const response = await ctx.requestUserInput({
+      id: toolCallId,
+      kind: 'approval',
+      toolName: 'ssh',
+      command,
+      description,
+      createdAt: Date.now()
+    })
+    if (response.kind === 'cancel') {
+      throw new Error(TOOL_ABORTED)
+    }
+    // 用户提交"其它"反馈,不执行命令,把文本作为正常 tool result 返回
+    if (response.kind === 'other') {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Command was not executed. User responded with feedback instead:\n${response.text}`
+          }
+        ],
+        details: { type: 'ssh', action: 'exec', cancelled: true }
+      }
+    }
+    if (response.kind !== 'approval' || !response.approved) {
+      throw new Error(
+        (response.kind === 'approval' && response.reason) || 'User denied execution of this command'
+      )
+    }
+    if (response.extra?.rememberPattern) {
+      const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+      if (patterns.length > 0) {
+        sessionService.addAllowListPatterns(ctx.sessionId, 'ssh', patterns)
+      }
     }
   }
 

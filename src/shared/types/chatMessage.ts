@@ -70,6 +70,10 @@ export interface MessageMetadata {
   turnIndex?: number
   // —— compaction ——
   isCompactionSummary?: boolean
+  // —— project instruction injection (AGENTS.md / CLAUDE.md) ——
+  isInstructionInjection?: boolean
+  /** 注入消息对应的原始指令文件名 */
+  instructionFilename?: string
 }
 
 // ---- per-type metadata 接口 ----
@@ -79,6 +83,10 @@ export interface UserTextMeta {
   source?: { type: string; [k: string]: unknown }
   images?: ImageMeta[]
   inlineTokens?: Record<string, InlineToken>
+  /** 项目指令文件注入消息（AGENTS.md / CLAUDE.md），UI 渲染为 SystemNoticeCard */
+  isInstructionInjection?: boolean
+  /** 注入消息对应的原始指令文件名 */
+  instructionFilename?: string
 }
 
 /** 助手文本消息元数据（最终回复） */
@@ -272,6 +280,17 @@ export interface McpToolDetails {
   isError?: boolean
 }
 
+/** preview 工具详情 */
+export interface PreviewToolDetails {
+  type: 'preview'
+  action: string
+  devtoolsAction?: string
+  success?: boolean
+  url?: string
+  elementCount?: number
+  error?: string
+}
+
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
   | EditToolDetails
@@ -289,6 +308,7 @@ export type ToolResultDetails =
   | PythonToolDetails
   | SqlToolDetails
   | McpToolDetails
+  | PreviewToolDetails
 
 /** 工具使用元数据 */
 export interface ToolUseMeta {

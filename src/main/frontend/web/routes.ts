@@ -203,43 +203,20 @@ export function createApiRouter(): Router {
 
   // ─── 交互响应（chat） ──────────────────────────
 
+  /**
+   * 统一的"用户输入响应"端点。
+   * Body: { requestId: string, response: InputResponse }
+   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该端点路由。
+   */
   router.post(
-    '/sessions/:id/approve',
+    '/sessions/:id/respond-input',
     modeGuard('chat'),
     wrapRoute((req, res) => {
       try {
-        chatGateway.approveToolCall(req.body.toolCallId, req.body.approved, req.body.reason)
+        chatGateway.respondToInput(getSessionId(req), req.body.requestId, req.body.response)
         res.json({ success: true })
       } catch (e) {
-        log.warn(`POST approve 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.post(
-    '/sessions/:id/respond-ask',
-    modeGuard('chat'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.respondToAsk(req.body.toolCallId, req.body.selections)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`POST respond-ask 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.post(
-    '/sessions/:id/respond-ssh',
-    modeGuard('chat'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.respondToSshCredentials(req.body.toolCallId, req.body.credentials)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`POST respond-ssh 失败: ${e}`)
+        log.warn(`POST respond-input 失败: ${e}`)
         res.status(500).json({ error: 'Internal error' })
       }
     })

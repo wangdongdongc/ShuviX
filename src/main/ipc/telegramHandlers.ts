@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { telegramService } from '../services/telegramService'
+import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 import type {
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -63,11 +64,13 @@ export function registerTelegramHandlers(): void {
 
   ipcMain.handle('telegram:bindSession', async (_event, params: TelegramBindSessionParams) => {
     await telegramService.bindSession(params.botId, params.sessionId)
+    broadcastSessionConfigChanged(params.sessionId)
     return { success: true }
   })
 
   ipcMain.handle('telegram:unbindSession', async (_event, params: TelegramUnbindSessionParams) => {
     await telegramService.unbindSession(params.sessionId)
+    broadcastSessionConfigChanged(params.sessionId)
     return { success: true }
   })
 

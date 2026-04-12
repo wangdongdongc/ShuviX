@@ -4,14 +4,33 @@
  */
 
 import { resolve, sep } from 'path'
+import { existsSync, statSync } from 'fs'
 import type { TSchema, Static } from '@sinclair/typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { projectDao } from '../dao/projectDao'
+import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from '../services/sessionService'
 import { getTempWorkspace, getToolResultsBase, getDefaultSkillsDir } from '../utils/paths'
 import { skillService } from '../services/skillService'
+import { buildAllowEntry, isPathAllowedUnified } from './utils/allowList'
 import type { ReferenceDir, ProjectEnvVar } from '../types'
 import type { ChatEvent } from '../frontend/core/types'
+
+import type { InputRequest, InputResponse } from '../../shared/types/inputRequest'
+
+export type {
+  InputRequest,
+  InputResponse,
+  ApprovalInputRequest,
+  ChoiceInputRequest,
+  SshCredentialsInputRequest,
+  ApprovalResponse,
+  ChoiceResponse,
+  SshCredentialsResponse,
+  CancelResponse,
+  InputRequestKind,
+  SshCredentialPayload
+} from '../../shared/types/inputRequest'
 
 /** ChatEvent 去掉 sessionId 后的有效载荷（分布式 Omit，保留判别联合结构） */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never
@@ -42,41 +61,18 @@ export interface ToolContext {
   sessionId: string
   /** 并行执行协调器的 key 覆盖（默认使用 sessionId；子智能体使用独立 key 避免冲突） */
   parallelSessionKey?: string
-  /** 沙箱模式下 bash/ssh 命令需用户确认，返回 approved=true 表示允许，reason 为用户拒绝时附加的说明 */
-  requestApproval?: (
-    toolCallId: string,
-    toolName: string,
-    command: string,
-    description?: string
-  ) => Promise<{ approved: boolean; reason?: string }>
-  /** ask 工具：向用户提问并等待选择结果，返回用户选中的 label 列表 */
-  requestUserInput?: (toolCallId: string, payload: UserInputPayload) => Promise<string[]>
-  /** ssh 工具：请求用户输入 SSH 凭据（密码或密钥），凭据不经过大模型 */
-  requestSshCredentials?: (toolCallId: string) => Promise<SshCredentialPayload | null>
+  /**
+   * 统一的"请求用户输入"入口。所有需要用户介入的工具(命令审批 / 选择题 / SSH 凭证)
+   * 都通过此方法挂起,后端按 InputRequest.kind 路由,前端按 kind 渲染表单。
+   *
+   * - 永不超时:Promise 只能由用户响应或 agent.abort 触发 resolve
+   * - 取消:返回 `{kind: 'cancel'}`,工具自行决定 throw 还是 fallback
+   * - 副作用:用户响应可携带 `extra` 字段(如 `{rememberPattern: true}`),工具根据
+   *   该字段处理副作用(如写入 allowList)
+   */
+  requestUserInput?: (request: InputRequest) => Promise<InputResponse>
   /** 工具运行时单向通知（容器、SSH 连接、预览面板等生命周期事件） */
   emitChatEvent?: (event: ChatEventPayload) => void
-}
-
-/** SSH 凭据（仅在内存中传递，不持久化、不返回给大模型） */
-export interface SshCredentialPayload {
-  host: string
-  port: number
-  username: string
-  /** 密码认证 */
-  password?: string
-  /** 私钥认证：私钥内容（PEM 格式） */
-  privateKey?: string
-  /** 私钥口令（如果私钥有加密） */
-  passphrase?: string
-}
-
-/** ask 工具的用户输入请求数据 */
-export interface UserInputPayload {
-  question: string
-  /** 问题下方的详细说明（可选） */
-  detail?: string
-  options: Array<{ label: string; description: string }>
-  allowMultiple: boolean
 }
 
 /** 检查路径是否在工作目录内（沙箱路径越界检查） */
@@ -115,11 +111,14 @@ export function isPathWithinReadwriteReferenceDirs(
  * 沙箱守卫：只读访问（workspace + referenceDirs 均允许）
  * 用于 read、ls、grep、glob 等只读工具
  */
-export function assertSandboxRead(
+export async function assertSandboxRead(
+  ctx: ToolContext,
   config: ProjectConfig,
+  toolCallId: string,
+  toolName: string,
   absolutePath: string,
   displayPath?: string
-): void {
+): Promise<void> {
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
   // 允许读取持久化的工具大结果文件
@@ -128,33 +127,119 @@ export function assertSandboxRead(
   if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return
   // 允许读取用户配置的外部 skill 目录
   if (skillService.listExternalDirs().some((d) => absolutePath.startsWith(d.path + sep))) return
-  const p = displayPath ?? absolutePath
-  throw new Error(
-    `Sandbox: access denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`
-  )
+
+  // 走会话级 autoApprove + allowList 检查
+  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
+  if (sess?.autoApprove) return
+  if (isPathAllowedUnified(sess?.allowList, 'read', absolutePath)) return
+
+  await requestPathApproval(ctx, {
+    toolCallId,
+    toolName,
+    mode: 'read',
+    absolutePath,
+    displayPath
+  })
 }
 
 /**
  * 沙箱守卫：写入访问（workspace + readwrite 参考目录允许）
  * 用于 write、edit 等写入工具
  */
-export function assertSandboxWrite(
+export async function assertSandboxWrite(
+  ctx: ToolContext,
   config: ProjectConfig,
+  toolCallId: string,
+  toolName: string,
   absolutePath: string,
   displayPath?: string
-): void {
+): Promise<void> {
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
   if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
-  const p = displayPath ?? absolutePath
-  // 区分只读参考目录和完全越界
-  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) {
+
+  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
+  if (sess?.autoApprove) return
+  if (isPathAllowedUnified(sess?.allowList, 'write', absolutePath)) return
+
+  // 在只读参考目录内时,审批描述显式说明"批准会授予写权限"
+  const isInsideReadonlyRef = isPathWithinReferenceDirs(absolutePath, config.referenceDirs)
+  await requestPathApproval(ctx, {
+    toolCallId,
+    toolName,
+    mode: 'write',
+    absolutePath,
+    displayPath,
+    description: isInsideReadonlyRef
+      ? 'This path is inside a read-only reference directory. Approving will grant write access.'
+      : undefined
+  })
+}
+
+/**
+ * 路径越界 → 通过统一的 ApprovalInputRequest 机制等待用户批准。
+ *
+ * - 不通过 → throw(让 AI 收到 tool error 自行决定下一步)
+ * - 通过 → return(单次放行)
+ * - 通过 + extra.rememberPattern → 把 absolutePath 写入会话 allowList(read/write)
+ * - **目录场景特殊**:read 模式下若 absolutePath 是目录,无论用户是否勾选"记住",
+ *   都自动加入 allowList。这样后续访问该目录下的任何文件不再重复弹审批。
+ */
+async function requestPathApproval(
+  ctx: ToolContext,
+  params: {
+    toolCallId: string
+    toolName: string
+    mode: 'read' | 'write'
+    absolutePath: string
+    displayPath?: string
+    description?: string
+  }
+): Promise<void> {
+  if (!ctx.requestUserInput) {
+    // 无前端 → 直接拒绝
+    const p = params.displayPath ?? params.absolutePath
+    throw new Error(`Sandbox: access denied to path outside workspace: ${p}`)
+  }
+  // 探测路径类型 — 仅 read 关心目录(write 通常指向具体文件,目录 vs 文件不影响 UX)
+  let pathIsDirectory = false
+  if (params.mode === 'read') {
+    try {
+      pathIsDirectory =
+        existsSync(params.absolutePath) && statSync(params.absolutePath).isDirectory()
+    } catch {
+      /* 路径不存在或权限不足 — 当作非目录处理 */
+    }
+  }
+  // command 字段直接复用 allowList 条目格式 — 既是审批面板的展示文本,
+  // 也是用户勾选"允许并记住"时写入 allowList 的字面值
+  const command = buildAllowEntry(params.mode, params.absolutePath)
+  const response = await ctx.requestUserInput({
+    id: params.toolCallId,
+    kind: 'approval',
+    toolName: params.toolName,
+    command,
+    description: params.description,
+    pathIsDirectory,
+    createdAt: Date.now()
+  })
+
+  if (response.kind === 'cancel') {
+    throw new Error(TOOL_ABORTED)
+  }
+  if (response.kind === 'other') {
+    const p = params.displayPath ?? params.absolutePath
+    throw new Error(`User declined access to ${p} and provided feedback instead: ${response.text}`)
+  }
+  if (response.kind !== 'approval' || !response.approved) {
+    const p = params.displayPath ?? params.absolutePath
     throw new Error(
-      `Sandbox: write denied — ${p} is inside a read-only reference directory. You can only read files from this directory.`
+      (response.kind === 'approval' && response.reason) || `User denied access to ${p}`
     )
   }
-  throw new Error(
-    `Sandbox: write denied to path outside workspace: ${p}. Workspace: ${config.workingDirectory}`
-  )
+  // 通过审批 — 仅当用户在前端明确确认"允许并记住"(预览态 → Confirm)时才写入 allowList
+  if (response.extra?.rememberPattern) {
+    sessionService.addAllowListPatterns(ctx.sessionId, params.mode, [params.absolutePath])
+  }
 }
 
 /** ProjectEnvVar[] → Record<string, string>，过滤空 key */

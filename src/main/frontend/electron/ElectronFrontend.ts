@@ -6,9 +6,7 @@ export class ElectronFrontend implements ChatFrontend {
   readonly id = 'electron-main'
   readonly capabilities: ChatFrontendCapabilities = {
     streaming: true,
-    toolApproval: true,
-    userInput: true,
-    sshCredentials: true
+    userInput: true
   }
 
   constructor(private window: BrowserWindow) {}

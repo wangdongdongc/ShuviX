@@ -1,7 +1,8 @@
 import { AlertCircle } from 'lucide-react'
-import type { ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
+import type { ChatMessage, ErrorEventMessage, UserTextMessage } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
+import { InstructionBubble } from './InstructionBubble'
 import type { StepItem, StepMessage } from './types'
 
 /** 可见消息项（由 ChatView 预处理后传入） */
@@ -58,6 +59,10 @@ export function MessageRenderer({
 
   // 用户消息
   if (msg.role === 'user' && msg.type === 'text') {
+    // 项目指令注入消息走专用卡片
+    if ((msg as UserTextMessage).metadata?.isInstructionInjection) {
+      return <InstructionBubble msg={msg as UserTextMessage} />
+    }
     return (
       <UserBubble
         msg={msg}

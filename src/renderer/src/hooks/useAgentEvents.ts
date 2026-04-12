@@ -4,6 +4,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { usePreviewStore } from '../stores/previewStore'
 import { useTerminalStore } from '../stores/terminalStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
+import i18n from '../i18n'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -145,11 +146,7 @@ export function useAgentEvents(): void {
 
       case 'tool_start': {
         // 原子操作：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁）
-        let initialStatus: 'running' | 'pending_approval' | 'pending_ssh_credentials' = 'running'
-        if (event.approvalRequired) initialStatus = 'pending_approval'
-        if (event.sshCredentialRequired) initialStatus = 'pending_ssh_credentials'
-
-        // 构造临时 tool_use 消息，避免异步获取导致的空白帧
+        // 工具执行状态统一为 'running';"等待用户输入"由独立的 input_request 事件驱动
         const toolMsg =
           sid === store.activeSessionId && event.messageId
             ? ({
@@ -175,7 +172,7 @@ export function useAgentEvents(): void {
             toolName: event.toolName,
             args: event.toolArgs ?? {},
             turnIndex: event.turnIndex,
-            status: initialStatus,
+            status: 'running',
             messageId: event.messageId
           },
           toolMsg
@@ -183,31 +180,14 @@ export function useAgentEvents(): void {
         break
       }
 
-      case 'tool_approval_request':
-        // 沙箱模式：bash 命令等待用户审批（备用路径，通常 tool_start 已携带 approvalRequired）
-        store.updateToolExecution(sid, event.toolCallId, {
-          status: 'pending_approval',
-          args: event.toolArgs
-        })
+      case 'input_request':
+        // 统一的"用户输入请求"事件 — 命令审批 / 选择题 / SSH 凭证
+        store.addPendingInput(sid, event.request)
         break
 
-      case 'user_input_request':
-        // 用户输入请求：写入独立状态（与工具执行解耦）
-        store.setPendingUserInput(sid, {
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          question: event.payload.question,
-          detail: event.payload.detail,
-          options: event.payload.options,
-          allowMultiple: event.payload.allowMultiple
-        })
-        break
-
-      case 'ssh_credential_request':
-        // ssh connect：切换状态为等待凭据输入
-        store.updateToolExecution(sid, event.toolCallId, {
-          status: 'pending_ssh_credentials'
-        })
+      case 'input_request_resolved':
+        // 某个 pending 已被解决(本端响应 / 其它前端响应 / agent.abort 都会发出)
+        store.removePendingInput(sid, event.requestId)
         break
 
       case 'tool_end': {
@@ -245,8 +225,11 @@ export function useAgentEvents(): void {
 
       case 'preview_event':
         if (event.action === 'server_started') {
-          // 只更新 server 状态，不打开面板（由 preview 工具的 open action 负责）
           usePreviewStore.setState({ isStartingServer: false, isServerRunning: true })
+          // 重启后端口可能变化，用 openPreview 同时切回 preview 模式 + 更新 URL
+          if (event.url) {
+            usePreviewStore.getState().openPreview(event.url)
+          }
         } else if (event.action === 'server_stopped') {
           usePreviewStore.setState({ isServerRunning: false, isStartingServer: false })
         } else if (event.action === 'open' && event.url) {
@@ -292,12 +275,16 @@ export function useAgentEvents(): void {
         }
 
         // 首次对话时后台让 AI 生成标题（对用户透明）
+        // 仅当会话仍持有默认占位标题时才生成，避免压缩后老会话被重命名
         if (savedMsg && sid === store.activeSessionId) {
+          const currentSession = store.sessions.find((s) => s.id === sid)
+          const defaultTitle = i18n.t('agent.defaultTitle')
+          const isUntitled = !currentSession || currentSession.title === defaultTitle
           const sidMsgs = await window.api.message.list(sid)
           const textMsgCount = sidMsgs.filter(
             (m: ChatMessage) => m.type === 'text' || !m.type
           ).length
-          if (textMsgCount <= 3) {
+          if (isUntitled && textMsgCount <= 3) {
             const userMsg = sidMsgs.find((m: ChatMessage) => m.role === 'user')
             if (userMsg) {
               window.api.session
@@ -363,14 +350,34 @@ export function useAgentEvents(): void {
 
       case 'compaction_end':
         store.setCompacting(sid, false)
-        // 用摘要消息替换整个消息列表
+        // 替换整个消息列表：指令注入消息在前，摘要消息在后
         if (sid === store.activeSessionId && event.message) {
-          store.setMessages([JSON.parse(event.message)])
+          const msgs: ChatMessage[] = []
+          if (event.instructionMessages?.length) {
+            for (const im of event.instructionMessages) msgs.push(JSON.parse(im))
+          }
+          msgs.push(JSON.parse(event.message))
+          store.setMessages(msgs)
         }
         break
 
       case 'compaction_error':
         store.setCompacting(sid, false)
+        // 把压缩失败错误写为一条 error_event 消息,UI 上能看到原因
+        {
+          const errorMsg = await window.api.message.addErrorEvent({
+            sessionId: sid,
+            content: `压缩失败: ${event.error || 'Unknown error'}`
+          })
+          if (sid === store.activeSessionId) store.addMessage(errorMsg)
+        }
+        break
+
+      case 'instructions_injected':
+        // 懒注入：将后端写入的指令消息追加到当前会话消息列表
+        if (sid === store.activeSessionId && event.messages?.length) {
+          for (const im of event.messages) store.addMessage(JSON.parse(im))
+        }
         break
 
       case 'error':

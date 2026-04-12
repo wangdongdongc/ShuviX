@@ -8,6 +8,7 @@ import type {
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
+import type { InputResponse } from '../../shared/types/inputRequest'
 
 /**
  * Agent 相关 IPC 处理器
@@ -64,45 +65,16 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
+  /**
+   * 统一的"用户输入响应"入口。
+   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由,
+   * 后端根据 InputResponse.kind 分发给对应的工具挂起 Promise。
+   */
   ipcMain.handle(
-    'agent:approveToolCall',
-    (_event, params: { toolCallId: string; approved: boolean; reason?: string }) =>
-      operationContext.run(createElectronContext(), () => {
-        chatGateway.approveToolCall(params.toolCallId, params.approved, params.reason)
-        return { success: true }
-      })
-  )
-
-  /** 响应 ask 工具的用户选择 */
-  ipcMain.handle(
-    'agent:respondToAsk',
-    (_event, params: { toolCallId: string; selections: string[] }) =>
-      operationContext.run(createElectronContext(), () => {
-        chatGateway.respondToAsk(params.toolCallId, params.selections)
-        return { success: true }
-      })
-  )
-
-  /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
-  ipcMain.handle(
-    'agent:respondToSshCredentials',
-    (
-      _event,
-      params: {
-        toolCallId: string
-        credentials: {
-          host: string
-          port: number
-          username: string
-          password?: string
-          privateKey?: string
-          passphrase?: string
-        } | null
-      }
-    ) =>
-      operationContext.run(createElectronContext(), () => {
-        chatGateway.respondToSshCredentials(params.toolCallId, params.credentials)
+    'agent:respondToInput',
+    (_event, params: { sessionId: string; requestId: string; response: InputResponse }) =>
+      operationContext.run(createElectronContext(params.sessionId), () => {
+        chatGateway.respondToInput(params.sessionId, params.requestId, params.response)
         return { success: true }
       })
   )

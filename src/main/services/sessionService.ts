@@ -11,11 +11,15 @@ import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
 import { splitCommand, toPattern, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
+import type { AllowToolType } from '../tools/utils/allowList'
 import { destroyAgentTerminal } from './agentTerminalManager'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
-import type { SshCredentialPayload } from '../tools/types'
+import type { InputResponse } from '../../shared/types/inputRequest'
 import { AgentSession } from './agentSession'
+import { scanInstructionFiles } from './instructionFileScanner'
+import type { InstructionFileEntry } from '../../shared/types/instructionFile'
+import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 import { createLogger } from '../logger'
 
 const log = createLogger('SessionService')
@@ -45,10 +49,7 @@ export class SessionService {
       session.modelMetadata.enabledTools ?? [],
       project?.path
     )
-    const { agentMdLoaded } = this.agentSessions.get(id)?.getInstructionLoadState() || {
-      agentMdLoaded: false
-    }
-    return { ...session, workingDirectory, enabledTools, agentMdLoaded }
+    return { ...session, workingDirectory, enabledTools }
   }
 
   /** 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具） */
@@ -74,7 +75,30 @@ export class SessionService {
       updatedAt: now
     }
     sessionDao.insert(session)
+    // 注：指令文件不在创建时注入。改为在用户首次发送 prompt 时按当前配置懒注入
+    // （由 AgentSession.prompt 判定 agent 上下文是否为空），使得用户可以在
+    // 创建会话后、发送第一条消息前任意切换配置。
     return session
+  }
+
+  /** 扫描指定会话工作目录顶层的候选指令文件 */
+  scanInstructionFiles(sessionId: string): InstructionFileEntry[] {
+    const info = this.getById(sessionId)
+    if (!info?.workingDirectory) {
+      log.info(`scanInstructionFiles: session=${sessionId} 无工作目录，返回空`)
+      return []
+    }
+    return scanInstructionFiles(info.workingDirectory)
+  }
+
+  /** 更新会话启用的指令文件列表 */
+  updateEnabledInstructionFiles(sessionId: string, filenames: string[]): void {
+    log.info(`updateEnabledInstructionFiles session=${sessionId} → [${filenames.join(', ')}]`)
+    sessionDao.updateSettings(sessionId, { enabledInstructionFiles: filenames })
+    const after = sessionDao.pickSettings(sessionId, [
+      'enabledInstructionFiles'
+    ])?.enabledInstructionFiles
+    log.info(`updateEnabledInstructionFiles 写入后回读: [${(after ?? []).join(', ')}]`)
   }
 
   /** 更新会话标题 */
@@ -108,7 +132,11 @@ export class SessionService {
   }
 
   /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB）
-   *  如果传入 sessionId + toolType，会过滤掉已在允许列表中的模式 */
+   *  如果传入 sessionId + toolType，会过滤掉已在允许列表中的模式
+   *
+   *  注:仅用于命令类(bash/ssh)的"允许并记住"模式预览。read/write 路径审批
+   *  不走该流程,直接 remember 整路径。
+   */
   previewAllowPatterns(command: string, sessionId?: string, toolType?: 'bash' | 'ssh'): string[] {
     const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
     if (!sessionId || !toolType) return patterns
@@ -122,14 +150,16 @@ export class SessionService {
     return patterns.filter((p) => !existing.has(p))
   }
 
-  /** 批量添加通配符模式到统一允许列表（自动加前缀） */
-  addAllowListPatterns(id: string, toolType: 'bash' | 'ssh', patterns: string[]): void {
+  /** 批量添加通配符/路径模式到统一允许列表（按 toolType 自动加前缀） */
+  addAllowListPatterns(id: string, toolType: AllowToolType, patterns: string[]): void {
     const sess = sessionDao.pickSettings(id, ['allowList'])
     const list = sess?.allowList || []
     const prefixed = patterns.map((p) => buildAllowEntry(toolType, p))
     const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
+      log.info(`addAllowListPatterns session=${id} ${toolType} +${newEntries.length}`)
+      broadcastSessionConfigChanged(id)
     }
   }
 
@@ -138,6 +168,7 @@ export class SessionService {
     const sess = sessionDao.pickSettings(id, ['allowList'])
     const list = (sess?.allowList || []).filter((e) => e !== entry)
     sessionDao.updateSettings(id, { allowList: list })
+    broadcastSessionConfigChanged(id)
   }
 
   /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */
@@ -199,8 +230,7 @@ export class SessionService {
         capabilities: {},
         modelMetadata: {},
         workingDirectory: '',
-        enabledTools: [],
-        agentMdLoaded: false
+        enabledTools: []
       }
     }
 
@@ -211,7 +241,7 @@ export class SessionService {
       ? JSON.parse(modelRow.capabilities)
       : {}
     const project = session.projectId
-      ? projectDao.pick(session.projectId, ['path', 'systemPrompt', 'settings'])
+      ? projectDao.pick(session.projectId, ['path', 'promptSections', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = filterAvailableTools(
@@ -229,8 +259,7 @@ export class SessionService {
 
     // 已存在则跳过
     if (this.agentSessions.has(sessionId)) {
-      const instrState = this.agentSessions.get(sessionId)!.getInstructionLoadState()
-      return { success: true, created: false, ...meta, ...instrState }
+      return { success: true, created: false, ...meta }
     }
 
     log.info(`创建 Agent model=${model} session=${sessionId}`)
@@ -246,12 +275,7 @@ export class SessionService {
     })
     this.agentSessions.set(sessionId, agentSession)
 
-    return {
-      success: true,
-      created: true,
-      ...meta,
-      ...agentSession.getInstructionLoadState()
-    }
+    return { success: true, created: true, ...meta }
   }
 
   /** 使指定 session 的 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
@@ -263,26 +287,15 @@ export class SessionService {
     }
   }
 
-  // ─── toolCallId-based 方法（遍历所有 session 查找归属） ──────
+  // ─── 用户输入响应路由(遍历所有 session 查找归属) ──
 
-  /** 响应工具审批请求（前端用户点击允许/拒绝后调用） */
-  approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
+  /**
+   * 统一响应入口:根据 requestId 找到归属 session 并把响应送达。
+   * 所有类型的用户输入(审批 / 选择题 / SSH 凭证)都走这一个路径。
+   */
+  respondToInput(requestId: string, response: InputResponse): void {
     for (const session of this.agentSessions.values()) {
-      if (session.approveToolCall(toolCallId, approved, reason)) return
-    }
-  }
-
-  /** 响应 ask 工具的用户选择 */
-  respondToAsk(toolCallId: string, selections: string[]): void {
-    for (const session of this.agentSessions.values()) {
-      if (session.respondToAsk(toolCallId, selections)) return
-    }
-  }
-
-  /** 响应 SSH 凭据输入（凭据不经过大模型，直接传给 sshManager） */
-  respondToSshCredentials(toolCallId: string, credentials: SshCredentialPayload | null): void {
-    for (const session of this.agentSessions.values()) {
-      if (session.respondToSshCredentials(toolCallId, credentials)) return
+      if (session.respondToInput(requestId, response)) return
     }
   }
 

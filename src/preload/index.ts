@@ -106,26 +106,15 @@ const api = {
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
       ipcRenderer.invoke('agent:setThinkingLevel', params),
 
-    /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-    approveToolCall: (params: { toolCallId: string; approved: boolean; reason?: string }) =>
-      ipcRenderer.invoke('agent:approveToolCall', params),
-
-    /** 响应 ask 工具的用户选择 */
-    respondToAsk: (params: { toolCallId: string; selections: string[] }) =>
-      ipcRenderer.invoke('agent:respondToAsk', params),
-
-    /** 响应 SSH 凭据输入（凭据不经过大模型） */
-    respondToSshCredentials: (params: {
-      toolCallId: string
-      credentials: {
-        host: string
-        port: number
-        username: string
-        password?: string
-        privateKey?: string
-        passphrase?: string
-      } | null
-    }) => ipcRenderer.invoke('agent:respondToSshCredentials', params),
+    /**
+     * 统一的"用户输入响应"入口。
+     * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的工具挂起 Promise。
+     */
+    respondToInput: (params: {
+      sessionId: string
+      requestId: string
+      response: import('../shared/types/inputRequest').InputResponse
+    }) => ipcRenderer.invoke('agent:respondToInput', params),
 
     /** 动态更新启用工具集 */
     setEnabledTools: (params: { sessionId: string; tools: string[] }) =>
@@ -171,7 +160,13 @@ const api = {
     update: (params: ProjectUpdateParams) => ipcRenderer.invoke('project:update', params),
     delete: (params: ProjectDeleteParams) => ipcRenderer.invoke('project:delete', params),
     /** 获取已知项目字段的元数据（labelKey + desc） */
-    getKnownFields: () => ipcRenderer.invoke('project:getKnownFields')
+    getKnownFields: () => ipcRenderer.invoke('project:getKnownFields'),
+    /** 监听项目列表变更（创建/更新/删除/归档后触发） */
+    onChanged: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('project:changed', handler)
+      return () => ipcRenderer.removeListener('project:changed', handler)
+    }
   },
 
   // ============ 会话管理 ============
@@ -193,7 +188,7 @@ const api = {
     previewAllowPatterns: (params: {
       command: string
       sessionId?: string
-      toolType?: 'bash' | 'ssh'
+      toolType?: 'bash' | 'ssh' | 'read' | 'write'
     }) => ipcRenderer.invoke('session:previewAllowPatterns', params),
     addAllowListPatterns: (params: SessionAllowListAddParams) =>
       ipcRenderer.invoke('session:addAllowListPatterns', params),
@@ -203,7 +198,17 @@ const api = {
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
-    getById: (id: string) => ipcRenderer.invoke('session:getById', id)
+    getById: (id: string) => ipcRenderer.invoke('session:getById', id),
+    scanInstructionFiles: (sessionId: string) =>
+      ipcRenderer.invoke('session:scanInstructionFiles', sessionId),
+    updateInstructionFiles: (params: { id: string; filenames: string[] }) =>
+      ipcRenderer.invoke('session:updateInstructionFiles', params),
+    /** 监听会话配置变更（如 LAN 分享 / Telegram 绑定切换） */
+    onConfigChanged: (callback: (payload: { sessionId: string }) => void) => {
+      const handler = (_e: unknown, payload: { sessionId: string }): void => callback(payload)
+      ipcRenderer.on('session:configChanged', handler)
+      return () => ipcRenderer.removeListener('session:configChanged', handler)
+    }
   },
 
   // ============ 消息管理 ============
@@ -518,6 +523,37 @@ const api = {
     stop: (params: { sessionId: string }) => ipcRenderer.send('preview:stop', params)
   },
 
+  // ============ Preview WebContentsView ============
+  previewView: {
+    navigate: (url: string) => ipcRenderer.invoke('preview-view:navigate', url),
+    goBack: () => ipcRenderer.invoke('preview-view:go-back'),
+    goForward: () => ipcRenderer.invoke('preview-view:go-forward'),
+    reload: () => ipcRenderer.invoke('preview-view:reload'),
+    stop: () => ipcRenderer.invoke('preview-view:stop'),
+    getUrl: () => ipcRenderer.invoke('preview-view:get-url') as Promise<string>,
+    updateBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.send('preview-view:update-bounds', bounds),
+    setVisible: (visible: boolean) => ipcRenderer.send('preview-view:set-visible', visible),
+    /** WebContentsView 开始加载 */
+    onDidStartLoading: (callback: (url: string) => void) => {
+      const handler = (_: unknown, url: string): void => callback(url)
+      ipcRenderer.on('preview-view:did-start-loading', handler)
+      return () => ipcRenderer.removeListener('preview-view:did-start-loading', handler)
+    },
+    /** WebContentsView 导航完成（URL 变化） */
+    onDidNavigate: (callback: (url: string) => void) => {
+      const handler = (_: unknown, url: string): void => callback(url)
+      ipcRenderer.on('preview-view:did-navigate', handler)
+      return () => ipcRenderer.removeListener('preview-view:did-navigate', handler)
+    },
+    /** WebContentsView 加载完成 */
+    onDidFinishLoad: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('preview-view:did-finish-load', handler)
+      return () => ipcRenderer.removeListener('preview-view:did-finish-load', handler)
+    }
+  },
+
   // ============ Plugin ============
   plugin: {
     purposes: () => ipcRenderer.invoke('plugin:purposes'),
@@ -565,6 +601,13 @@ const api = {
       ipcRenderer.on('update:event', handler)
       return () => ipcRenderer.removeListener('update:event', handler)
     }
+  },
+
+  // ============ 上下文菜单 ============
+  contextMenu: {
+    popup: (request: {
+      items: Array<{ id: string; label: string; type?: string; enabled?: boolean }>
+    }) => ipcRenderer.invoke('contextMenu:popup', request)
   }
 }
 

@@ -24,8 +24,6 @@ export interface AgentInitResult {
   workingDirectory: string
   /** 当前生效的工具列表 */
   enabledTools: string[]
-  /** 项目 AGENT.md 是否已加载 */
-  agentMdLoaded: boolean
 }
 
 /** 图片内容（base64） */

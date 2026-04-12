@@ -10,8 +10,6 @@ import { parallelCoordinator } from './parallelExecution'
 import type { Message, MessageMetadata, ToolResultDetails } from '../types'
 import type { ChatEvent, RuntimeStatus } from '../frontend'
 import { createLogger } from '../logger'
-import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
 
 const log = createLogger('AgentEvent')
 
@@ -39,31 +37,6 @@ function checkToolApproval(
   const sshCredentialRequired =
     toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
   return { approvalRequired, sshCredentialRequired, isUserInput }
-}
-
-/** 会话级项目指令文件加载状态 */
-export interface ProjectInstructionLoadState {
-  agentMdLoaded: boolean
-}
-
-/** 读取工作目录下的指令文件（优先 AGENTS.MD，回退 AGENT.md；不存在或读取失败时返回空） */
-export function readProjectAgentMd(workingDir: string): string {
-  for (const name of ['AGENTS.MD', 'AGENT.md']) {
-    const filePath = join(workingDir, name)
-    if (!existsSync(filePath)) continue
-    try {
-      const content = readFileSync(filePath, 'utf-8').trim()
-      if (content) {
-        log.info(`已加载项目指令文件: ${name}`)
-        return content
-      }
-    } catch (err: unknown) {
-      log.warn(
-        `读取 ${name} 失败: ${filePath} (${err instanceof Error ? err.message : String(err)})`
-      )
-    }
-  }
-  return ''
 }
 
 // ─── Per-session 事件上下文 ─────────────────────────────────
@@ -439,8 +412,6 @@ function handleMessageEnd(
         toolName: tc.name,
         toolArgs: tc.arguments,
         messageId: toolUseMsg.id,
-        approvalRequired: false,
-        sshCredentialRequired: false,
         turnIndex
       })
       ctx.state.preEmittedToolCalls.add(tc.id)
@@ -469,11 +440,6 @@ function handleToolExecutionStart(
     model: sessionForTool?.model || ''
   })
   ctx.state.toolUseMessageIds.set(event.toolCallId, toolUseMsg.id)
-  const { approvalRequired, sshCredentialRequired } = checkToolApproval(
-    ctx.sessionId,
-    event.toolName,
-    args || {}
-  )
   ctx.broadcastEvent({
     type: 'tool_start',
     sessionId: ctx.sessionId,
@@ -481,8 +447,6 @@ function handleToolExecutionStart(
     toolName: event.toolName,
     toolArgs: args,
     messageId: toolUseMsg.id,
-    approvalRequired,
-    sshCredentialRequired,
     turnIndex: ctx.state.turnCounter
   })
 }

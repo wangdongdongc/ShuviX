@@ -10,7 +10,8 @@ import { Type } from '@sinclair/typebox'
 import { processToolOutput } from './utils/processToolOutput'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified } from './utils/allowList'
+import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { sessionService } from '../services/sessionService'
 import {
   ensureAgentTerminal,
   getAgentTerminalId,
@@ -135,17 +136,43 @@ export class TerminalTool extends BaseTool<typeof TerminalParamsSchema> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
 
     // 命令审批（复用 bash 的允许列表，与 agentEventHandler.checkToolApproval 配合）
-    if (this.ctx.requestApproval) {
+    if (this.ctx.requestUserInput) {
       const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
       if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', command)) {
-        const approval = await this.ctx.requestApproval(
-          toolCallId,
-          'terminal',
+        const response = await this.ctx.requestUserInput({
+          id: toolCallId,
+          kind: 'approval',
+          toolName: 'terminal',
           command,
-          params.description
-        )
-        if (!approval.approved) {
-          throw new Error(approval.reason || 'User denied execution of this command')
+          description: params.description,
+          createdAt: Date.now()
+        })
+        if (response.kind === 'cancel') {
+          throw new Error(TOOL_ABORTED)
+        }
+        // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
+        if (response.kind === 'other') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Command was not executed. User responded with feedback instead:\n${response.text}`
+              }
+            ],
+            details: { type: 'terminal', exitCode: -1, truncated: false }
+          }
+        }
+        if (response.kind !== 'approval' || !response.approved) {
+          throw new Error(
+            (response.kind === 'approval' && response.reason) ||
+              'User denied execution of this command'
+          )
+        }
+        if (response.extra?.rememberPattern) {
+          const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+          if (patterns.length > 0) {
+            sessionService.addAllowListPatterns(this.ctx.sessionId, 'bash', patterns)
+          }
         }
       }
     }

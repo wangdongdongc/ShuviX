@@ -21,6 +21,8 @@ import { registerMcpServerHandlers } from './mcpServerHandlers'
 import { registerCompactionHandlers } from './compactionHandlers'
 import { registerCustomSubAgentHandlers } from './customSubAgentHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
+import { registerPreviewViewHandlers } from './previewViewHandlers'
+import { registerContextMenuHandlers } from './contextMenuHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -50,4 +52,6 @@ export function registerIpcHandlers(): void {
   registerCompactionHandlers()
   registerCustomSubAgentHandlers()
   registerTerminalHandlers()
+  registerPreviewViewHandlers()
+  registerContextMenuHandlers()
 }

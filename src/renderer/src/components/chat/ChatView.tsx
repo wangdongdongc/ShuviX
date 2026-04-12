@@ -22,7 +22,7 @@ import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
 import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
-import { UserActionPanel } from './UserActionPanel'
+import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
 import { SessionConfigDialog } from './SessionConfigDialog'
@@ -196,11 +196,7 @@ export function ChatView(): React.JSX.Element {
     confirmRollback,
     cancelRollback,
     handleRegenerate,
-    handleToolApproval,
-    handleAllowAndRemember,
-    handleUserInput,
-    handleSshCredentials,
-    handleUserActionOverride,
+    handleInputResponse,
     handleNewChat
   } = useChatActions(activeSessionId)
 
@@ -483,7 +479,7 @@ export function ChatView(): React.JSX.Element {
             </div>
           )}
           {messages.length === 0 && !isStreaming ? (
-            <EmptySessionHint />
+            <EmptySessionHint sessionId={activeSessionId!} />
           ) : (
             <Virtuoso
               ref={virtuosoRef}
@@ -515,17 +511,13 @@ export function ChatView(): React.JSX.Element {
               onCancel={cancelRollback}
             />
           )}
-          {/* 用户操作浮动面板（ask 提问 / bash 审批 / SSH 凭据）— readonly 隐藏 */}
+          {/* 输入区 + 待处理用户输入悬浮面板 — readonly 隐藏 */}
           {canChat && (
-            <UserActionPanel
-              onUserInput={handleUserInput}
-              onApproval={handleToolApproval}
-              onAllowAndRemember={handleAllowAndRemember}
-              onSshCredentials={handleSshCredentials}
-            />
+            <div className="relative">
+              <PendingInputsPanel onResponse={handleInputResponse} />
+              <InputArea />
+            </div>
           )}
-          {/* 输入区 — readonly 隐藏 */}
-          {canChat && <InputArea onUserActionOverride={handleUserActionOverride} />}
         </>
       )}
 

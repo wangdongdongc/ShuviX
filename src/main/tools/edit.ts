@@ -54,14 +54,14 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
   }
 
   protected async securityCheck(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; oldText: string; newText: string }
   ): Promise<void> {
     const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveToCwd(params.path, config.workingDirectory)
 
-    // 沙箱模式：路径越界检查
-    assertSandboxWrite(config, absolutePath, params.path)
+    // 沙箱守卫:工作目录 + readwrite 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertSandboxWrite(this.ctx, config, toolCallId, 'edit', absolutePath, params.path)
   }
 
   protected async executeInternal(
@@ -189,11 +189,11 @@ registerBuiltinTool({
   factory: (ctx) => new EditTool(ctx),
   presentation: {
     icon: 'FilePen',
-    summaryField: 'file_path',
+    summaryField: 'path',
     formItems: [
-      { field: 'file_path' },
-      { field: 'old_string', renderer: { type: 'code', language: 'typescript' } },
-      { field: 'new_string', renderer: { type: 'code', language: 'typescript' } }
+      { field: 'path' },
+      { field: 'oldText', renderer: { type: 'code', language: 'typescript' } },
+      { field: 'newText', renderer: { type: 'code', language: 'typescript' } }
     ]
   }
 })

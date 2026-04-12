@@ -13,9 +13,9 @@ import {
   Volume2,
   Square,
   Loader2,
-  Archive,
-  ChevronRight
+  Archive
 } from 'lucide-react'
+import { SystemNoticeCard } from './SystemNoticeCard'
 import { copyToClipboard } from '../../utils/clipboard'
 import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
 import { CodeBlock } from './CodeBlock'
@@ -65,7 +65,6 @@ export const AssistantBubble = memo(function AssistantBubble({
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const isCompactionSummary = !!msg.metadata?.isCompactionSummary
-  const [summaryExpanded, setSummaryExpanded] = useState(false)
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === msg.id
   const isThisLoading = isLoading && playingMessageId === msg.id
@@ -239,44 +238,11 @@ export const AssistantBubble = memo(function AssistantBubble({
         {/* Markdown / 原始文本 */}
         {displayContent &&
           (isCompactionSummary ? (
-            /* ── 压缩摘要：默认折叠，点击展开 ── */
-            <div className="rounded-lg border border-border-secondary/60 bg-bg-secondary/30 overflow-hidden">
-              <button
-                onClick={() => setSummaryExpanded(!summaryExpanded)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/40 transition-colors"
-              >
-                <Archive size={14} className="flex-shrink-0 text-accent/70" />
-                <ChevronRight
-                  size={14}
-                  className={`flex-shrink-0 text-text-tertiary transition-transform duration-200 ${summaryExpanded ? 'rotate-90' : ''}`}
-                />
-                <span className="text-xs font-medium text-text-secondary truncate">
-                  {t('compact.summaryLabel')}
-                </span>
-                {!summaryExpanded && (
-                  <span className="text-xs text-text-tertiary truncate ml-1">
-                    {displayContent
-                      .split('\n')
-                      .find((l) => l.trim())
-                      ?.slice(0, 80)}
-                    ...
-                  </span>
-                )}
-              </button>
-              {summaryExpanded && (
-                <div className="px-3 pb-3 border-t border-border-secondary/40">
-                  <div className="markdown-body text-sm pt-2">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeHighlight, rehypeRaw]}
-                      components={{ pre: CodeBlock as never }}
-                    >
-                      {displayContent}
-                    </ReactMarkdown>
-                  </div>
-                </div>
-              )}
-            </div>
+            <SystemNoticeCard
+              icon={<Archive size={14} />}
+              title={t('compact.summaryLabel')}
+              content={displayContent}
+            />
           ) : showRaw ? (
             <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
               {displayContent}

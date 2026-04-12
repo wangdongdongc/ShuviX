@@ -5,9 +5,15 @@ import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { ProjectBasicInfo, ProjectFileSystem, ExtensionsPanel } from './ProjectFormSections'
+import {
+  ProjectBasicInfo,
+  ProjectFileSystem,
+  ExtensionsPanel,
+  ProjectPromptSectionsGroup
+} from './ProjectFormSections'
 
 import type { ReferenceDir } from '../../../../main/types/project'
+import type { ProjectPromptSection } from '../../../../shared/types/promptSection'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -36,7 +42,7 @@ export function ProjectEditDialog({
   // 项目字段
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [systemPrompt, setSystemPrompt] = useState('')
+  const [promptSections, setPromptSections] = useState<ProjectPromptSection[]>([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
@@ -56,7 +62,7 @@ export function ProjectEditDialog({
         if (project) {
           setName(project.name)
           setPath(project.path)
-          setSystemPrompt(project.systemPrompt)
+          setPromptSections(project.promptSections ?? [])
           // 从 settings 恢复 enabledTools 和 referenceDirs
           const settings = project.settings || {}
           if (Array.isArray(settings.enabledTools)) {
@@ -134,7 +140,7 @@ export function ProjectEditDialog({
         id: projectId,
         name: name.trim() || undefined,
         path: path || undefined,
-        systemPrompt,
+        promptSections,
         enabledTools,
         referenceDirs,
         tool: {
@@ -233,12 +239,7 @@ export function ProjectEditDialog({
         {/* ========== Tab: 项目配置 ========== */}
         {tab === 'project' && (
           <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
-            <ProjectBasicInfo
-              name={name}
-              onNameChange={setName}
-              systemPrompt={systemPrompt}
-              onSystemPromptChange={setSystemPrompt}
-            />
+            <ProjectBasicInfo name={name} onNameChange={setName} />
 
             <ProjectFileSystem
               path={path}
@@ -246,6 +247,8 @@ export function ProjectEditDialog({
               referenceDirs={referenceDirs}
               onReferenceDirsChange={setReferenceDirs}
             />
+
+            <ProjectPromptSectionsGroup sections={promptSections} onChange={setPromptSections} />
           </div>
         )}
 

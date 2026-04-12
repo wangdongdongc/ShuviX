@@ -463,13 +463,18 @@ export class AcpProvider implements SubAgentProvider {
             }))
 
             const permissionToolCallId = uuid()
-            const selections = await ts.ctx.requestUserInput(permissionToolCallId, {
+            const response = await ts.ctx.requestUserInput?.({
+              id: permissionToolCallId,
+              kind: 'choice',
+              toolName: 'acp:permission',
               question: `[${config.displayName}] ${toolTitle}`,
               detail: commandDesc !== toolTitle ? commandDesc : undefined,
               options: askOptions,
-              allowMultiple: false
+              allowMultiple: false,
+              createdAt: Date.now()
             })
 
+            const selections = response?.kind === 'choice' ? response.selections : []
             const selectedName = selections[0]
             if (selectedName) {
               const selectedOption = reqParams.options.find((o) => o.name === selectedName)

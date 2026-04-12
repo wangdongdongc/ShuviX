@@ -7,9 +7,7 @@ export class WebFrontend implements ChatFrontend {
   readonly id: string
   readonly capabilities: ChatFrontendCapabilities = {
     streaming: true,
-    toolApproval: true,
-    userInput: true,
-    sshCredentials: false
+    userInput: true
   }
 
   constructor(

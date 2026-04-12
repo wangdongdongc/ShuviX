@@ -14,10 +14,13 @@ import { usePreviewStore } from '../../stores/previewStore'
 import { useChatStore } from '../../stores/chatStore'
 
 /**
- * Preview 侧边面板 — 右侧 iframe 预览区
+ * Preview 侧边面板 — 右侧预览区
+ * 内容由主进程的 WebContentsView 渲染（覆盖在 placeholder 上方），
+ * 本组件仅提供工具栏 + 状态栏 + bounds 同步。
+ *
  * 支持两种模式：
  * - url: 外部网页预览（输入 URL）
- * - design: 本地设计项目预览（esbuild-wasm 打包）
+ * - preview: 本地设计项目预览（esbuild-wasm 打包）
  */
 export function PreviewPanel(): React.JSX.Element {
   const {
@@ -32,9 +35,13 @@ export function PreviewPanel(): React.JSX.Element {
     stopPreviewServer
   } = usePreviewStore()
   const width = usePreviewStore((s) => s.width)
+  const isOpen = usePreviewStore((s) => s.isOpen)
+  const activeTab = usePreviewStore((s) => s.activeTab)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  /** placeholder div — WebContentsView 叠放在这个区域上方 */
+  const placeholderRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
   // ====== 状态 ======
@@ -42,7 +49,99 @@ export function PreviewPanel(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState(0)
 
-  // 监测内容区高度变化
+  /** 跟踪当前 WebContentsView 的实际 URL，防止重复导航 */
+  const viewUrlRef = useRef('')
+
+  // 实际显示的 URL：design 模式用 designUrl，url 模式用 url
+  const activeUrl = mode === 'preview' && designUrl ? designUrl : url
+  const isDesignMode = mode === 'preview'
+  const isBlank = !isDesignMode && url === 'about:blank'
+
+  // WebContentsView 是否应该可见
+  const shouldShowView = isOpen && activeTab === 'preview' && !isBlank
+
+  // ====== WebContentsView 导航 ======
+
+  // activeUrl 变化时导航 WebContentsView
+  useEffect(() => {
+    if (!activeUrl || activeUrl === 'about:blank') return
+    if (activeUrl === viewUrlRef.current) return
+    viewUrlRef.current = activeUrl
+    window.api.previewView.navigate(activeUrl)
+  }, [activeUrl])
+
+  // ====== WebContentsView 事件监听 ======
+
+  useEffect(() => {
+    const cleanups = [
+      window.api.previewView.onDidStartLoading((navUrl: string) => {
+        setIsLoading(true)
+        viewUrlRef.current = navUrl
+        // 内部导航时同步 URL 到输入框
+        if (!isDesignMode) {
+          startTransition(() => setInputUrl(navUrl))
+        }
+      }),
+      window.api.previewView.onDidNavigate((navUrl: string) => {
+        viewUrlRef.current = navUrl
+        if (!isDesignMode) {
+          startTransition(() => setInputUrl(navUrl))
+        }
+      }),
+      window.api.previewView.onDidFinishLoad(() => {
+        setIsLoading(false)
+      })
+    ]
+    return () => cleanups.forEach((c) => c())
+  }, [isDesignMode])
+
+  // ====== Bounds 同步 ======
+
+  const rafRef = useRef(0)
+
+  const syncBounds = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      if (!placeholderRef.current || !shouldShowView) {
+        window.api.previewView.setVisible(false)
+        return
+      }
+      const rect = placeholderRef.current.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        window.api.previewView.setVisible(false)
+        return
+      }
+      window.api.previewView.updateBounds({
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      })
+      window.api.previewView.setVisible(true)
+    })
+  }, [shouldShowView])
+
+  // ResizeObserver 监听 placeholder 尺寸变化
+  useEffect(() => {
+    const el = placeholderRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => syncBounds())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [syncBounds])
+
+  // 窗口 resize 时同步 bounds（捕捉 x 位置变化）
+  useEffect(() => {
+    window.addEventListener('resize', syncBounds)
+    return () => window.removeEventListener('resize', syncBounds)
+  }, [syncBounds])
+
+  // shouldShowView 变化时立即同步
+  useEffect(() => {
+    syncBounds()
+  }, [shouldShowView, syncBounds])
+
+  // 监测内容区高度变化（状态栏显示尺寸）
   useEffect(() => {
     const el = contentRef.current
     if (!el) return
@@ -53,10 +152,6 @@ export function PreviewPanel(): React.JSX.Element {
     return () => ro.disconnect()
   }, [])
 
-  // 实际显示的 URL：design 模式用 designUrl，url 模式用 url
-  const activeUrl = mode === 'preview' && designUrl ? designUrl : url
-  const isDesignMode = mode === 'preview'
-
   // 外部 url 变化时同步到输入框（仅 url 模式）
   useEffect(() => {
     if (!isDesignMode) {
@@ -64,15 +159,15 @@ export function PreviewPanel(): React.JSX.Element {
     }
   }, [url, isDesignMode])
 
+  // ====== 操作 ======
+
   /** 提交 URL 导航 */
   const handleNavigate = useCallback(() => {
     let target = inputUrl.trim()
     if (!target) return
-    // 简单补全协议
     if (!/^https?:\/\//i.test(target) && target !== 'about:blank') {
       target = 'https://' + target
     }
-    // 如果在 design 模式下手动输入 URL，切换到 url 模式
     if (isDesignMode) {
       switchToUrl()
     }
@@ -80,39 +175,24 @@ export function PreviewPanel(): React.JSX.Element {
     setIsLoading(true)
   }, [inputUrl, setUrl, isDesignMode, switchToUrl])
 
-  /** iframe 加载完成 */
-  const handleIframeLoad = useCallback(() => {
+  const handleBack = useCallback(() => {
+    window.api.previewView.goBack()
+  }, [])
+
+  const handleForward = useCallback(() => {
+    window.api.previewView.goForward()
+  }, [])
+
+  const handleRefresh = useCallback(() => {
+    setIsLoading(true)
+    window.api.previewView.reload()
+  }, [])
+
+  const handleStop = useCallback(() => {
+    window.api.previewView.stop()
     setIsLoading(false)
   }, [])
 
-  // ====== 导航按钮 ======
-  const handleBack = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.history.back()
-    } catch {
-      /* cross-origin */
-    }
-  }, [])
-  const handleForward = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.history.forward()
-    } catch {
-      /* cross-origin */
-    }
-  }, [])
-  const handleRefresh = useCallback(() => {
-    if (!iframeRef.current) return
-    setIsLoading(true)
-    iframeRef.current.src = activeUrl
-  }, [activeUrl])
-  const handleStop = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.stop()
-    } catch {
-      /* cross-origin */
-    }
-    setIsLoading(false)
-  }, [])
   const handleOpenExternal = useCallback(() => {
     if (activeUrl && activeUrl !== 'about:blank') {
       window.open(activeUrl, '_blank')
@@ -130,7 +210,6 @@ export function PreviewPanel(): React.JSX.Element {
     stopPreviewServer(activeSessionId)
   }, [activeSessionId, stopPreviewServer])
 
-  const isBlank = !isDesignMode && url === 'about:blank'
   const btnClass =
     'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
 
@@ -242,26 +321,17 @@ export function PreviewPanel(): React.JSX.Element {
                 <div className="h-full bg-accent animate-preview-loading" />
               </div>
             )}
-            <iframe
-              ref={iframeRef}
-              src={activeUrl}
-              onLoad={handleIframeLoad}
-              className="w-full h-full border-0"
-              style={{ background: '#fff' }}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-              title="Preview"
-            />
+            {/* WebContentsView 占位区域 — 主进程的 WebContentsView 叠放在此 div 上方 */}
+            <div ref={placeholderRef} className="w-full h-full" />
           </>
         )}
       </div>
 
       {/* ====== 底部状态栏 ====== */}
       <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary/30 bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
-        {/* 加载状态指示 */}
         {isLoading && (
           <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />
         )}
-        {/* 尺寸指示 */}
         <span className="tabular-nums opacity-60">
           {contentHeight} x {width}
         </span>

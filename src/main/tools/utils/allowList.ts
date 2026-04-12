@@ -371,22 +371,48 @@ export function isCommandAllowed(allowList: string[] | undefined, command: strin
 
 // ─── 统一允许列表格式 ──────────────────────────────
 
-/** 解析前缀格式条目：Bash(npm run *) → { toolType: 'bash', pattern: 'npm run *' } */
-export function parseAllowEntry(
-  entry: string
-): { toolType: 'bash' | 'ssh'; pattern: string } | null {
-  const m = entry.match(/^(Bash|SSH)\((.+)\)$/)
-  if (!m) return null
-  return { toolType: m[1].toLowerCase() as 'bash' | 'ssh', pattern: m[2] }
+import { sep as pathSep } from 'path'
+
+/** 允许列表条目支持的工具类型 */
+export type AllowToolType = 'bash' | 'ssh' | 'read' | 'write'
+
+/** toolType ↔ 条目前缀的映射 */
+const TOOL_PREFIX: Record<AllowToolType, string> = {
+  bash: 'Bash',
+  ssh: 'SSH',
+  read: 'Read',
+  write: 'Write'
 }
 
-/** 构建前缀格式条目 */
-export function buildAllowEntry(toolType: 'bash' | 'ssh', pattern: string): string {
-  return `${toolType === 'bash' ? 'Bash' : 'SSH'}(${pattern})`
+const PREFIX_TO_TYPE: Record<string, AllowToolType> = {
+  Bash: 'bash',
+  SSH: 'ssh',
+  Read: 'read',
+  Write: 'write'
 }
 
 /**
- * 统一允许列表检查：按 toolType 过滤后委托 isCommandAllowed。
+ * 解析前缀格式条目:
+ * - `Bash(npm run *)` → { toolType: 'bash', pattern: 'npm run *' }
+ * - `Read(/abs/path)` → { toolType: 'read', pattern: '/abs/path' }
+ */
+export function parseAllowEntry(
+  entry: string
+): { toolType: AllowToolType; pattern: string } | null {
+  const m = entry.match(/^(Bash|SSH|Read|Write)\((.+)\)$/)
+  if (!m) return null
+  const toolType = PREFIX_TO_TYPE[m[1]]
+  if (!toolType) return null
+  return { toolType, pattern: m[2] }
+}
+
+/** 构建前缀格式条目 */
+export function buildAllowEntry(toolType: AllowToolType, pattern: string): string {
+  return `${TOOL_PREFIX[toolType]}(${pattern})`
+}
+
+/**
+ * 统一命令允许列表检查(bash / ssh):按 toolType 过滤后委托 isCommandAllowed。
  */
 export function isCommandAllowedUnified(
   allowList: string[] | undefined,
@@ -399,4 +425,40 @@ export function isCommandAllowedUnified(
     .filter((e): e is NonNullable<typeof e> => e !== null && e.toolType === toolType)
     .map((e) => e.pattern)
   return isCommandAllowed(filtered, command)
+}
+
+/**
+ * 路径前缀匹配:`absolutePath === entryPath || absolutePath.startsWith(entryPath + sep)`
+ *
+ * 文件用全等命中,目录用前缀命中。不引入 glob,也不规范化大小写。
+ */
+function matchesPathEntry(entryPath: string, absolutePath: string): boolean {
+  if (absolutePath === entryPath) return true
+  // 末尾保留 sep 的条目按目录前缀匹配;否则按"路径段边界"前缀匹配避免 /foo 命中 /foobar
+  const withSep = entryPath.endsWith(pathSep) ? entryPath : entryPath + pathSep
+  return absolutePath.startsWith(withSep)
+}
+
+/**
+ * 统一路径允许列表检查:
+ * - `mode: 'read'` → 命中任意 `Read(...)` 或 `Write(...)` 条目(写权限隐含读权限)
+ * - `mode: 'write'` → 仅命中 `Write(...)` 条目
+ */
+export function isPathAllowedUnified(
+  allowList: string[] | undefined,
+  mode: 'read' | 'write',
+  absolutePath: string
+): boolean {
+  if (!allowList || allowList.length === 0) return false
+  for (const entry of allowList) {
+    const parsed = parseAllowEntry(entry)
+    if (!parsed) continue
+    if (mode === 'read') {
+      if (parsed.toolType !== 'read' && parsed.toolType !== 'write') continue
+    } else {
+      if (parsed.toolType !== 'write') continue
+    }
+    if (matchesPathEntry(parsed.pattern, absolutePath)) return true
+  }
+  return false
 }

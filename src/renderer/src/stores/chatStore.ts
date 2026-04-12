@@ -38,23 +38,26 @@ export interface ToolExecution {
   args: Record<string, unknown>
   /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
   turnIndex?: number
-  status: 'running' | 'done' | 'error' | 'pending_approval' | 'pending_ssh_credentials'
+  status: 'running' | 'done' | 'error'
   result?: string
   /** 工具特定的结构化详情（edit diff 等） */
   details?: ToolResultDetails
   messageId?: string
 }
 
-/** 独立的用户输入请求状态（ask 工具 / ACP requestPermission 等） */
-export interface PendingUserInput {
-  toolCallId: string
-  toolName: string
-  question: string
-  /** 问题下方的详细说明（可选） */
-  detail?: string
-  options: Array<{ label: string; description: string }>
-  allowMultiple: boolean
-}
+/** 重新导出统一的用户输入请求类型,UI 直接消费 */
+export type {
+  InputRequest,
+  InputResponse,
+  ApprovalInputRequest,
+  ChoiceInputRequest,
+  SshCredentialsInputRequest,
+  ApprovalResponse,
+  ChoiceResponse,
+  SshCredentialsResponse,
+  CancelResponse
+} from '../../../shared/types/inputRequest'
+import type { InputRequest } from '../../../shared/types/inputRequest'
 
 /** 模型相关元数据 */
 export interface SessionModelMetadata {
@@ -67,6 +70,7 @@ export interface SessionSettings {
   autoApprove?: boolean
   allowList?: string[]
   telegramBotId?: string
+  enabledInstructionFiles?: string[]
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -219,8 +223,6 @@ interface ChatState {
   toolPresentations: Record<string, ToolPresentation>
   /** 当前会话的项目工作目录 */
   projectPath: string | null
-  /** AGENT.md 是否已加载 */
-  agentMdLoaded: boolean
   /** 当前会话可用的斜杠命令 */
   slashCommands: Array<{
     commandId: string
@@ -231,8 +233,22 @@ interface ChatState {
   }>
   /** 各 session 的活跃 Docker/SSH 资源信息 */
   sessionResources: Record<string, SessionResourceInfo>
-  /** 各 session 的待处理用户输入请求 */
-  sessionPendingUserInputs: Record<string, PendingUserInput>
+  /**
+   * 各 session 的待处理用户输入请求列表(按 sessionId 隔离)。
+   * 命令审批 / 选择题 / SSH 凭证全部走这一张表。
+   */
+  sessionPendingInputs: Record<string, InputRequest[]>
+  /**
+   * 各 session 中各 request 的草稿状态(按 sessionId+requestId 隔离)。
+   * 切换会话或切换 tab 时不清除,仅在 request resolved/abort 后才清。
+   */
+  sessionInputDrafts: Record<string, Record<string, unknown>>
+  /**
+   * 各 session 中各 request 的"其它"输入文本(按 sessionId+requestId 隔离)。
+   * 用户在 PendingInputsPanel 的"其它"输入框里填写的文本,
+   * 跨会话切换持久化,在 request resolved/abort 后随 draft 一起清除。
+   */
+  sessionOtherInputs: Record<string, Record<string, string>>
   /** 已开启 WebUI 分享的 session ID → 分享模式 */
   sharedSessionIds: Map<string, ShareMode>
   /** Telegram 绑定关系：sessionId → { botId, username } */
@@ -299,7 +315,6 @@ interface ChatState {
   setEnabledTools: (tools: string[]) => void
   setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
   setProjectPath: (path: string | null) => void
-  setAgentMdLoaded: (loaded: boolean) => void
   setSlashCommands: (
     commands: Array<{ commandId: string; name: string; description: string; template: string }>
   ) => void
@@ -312,10 +327,16 @@ interface ChatState {
   setRuntimes: (sessionId: string, runtimes: Record<string, RuntimeInfo>) => void
   appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
   appendSubAgentStreamingThinking: (sessionId: string, subAgentId: string, delta: string) => void
-  /** 设置 session 的待处理用户输入 */
-  setPendingUserInput: (sessionId: string, input: PendingUserInput) => void
-  /** 清除 session 的待处理用户输入 */
-  clearPendingUserInput: (sessionId: string) => void
+  /** 添加一个新的 pending 输入请求 */
+  addPendingInput: (sessionId: string, request: InputRequest) => void
+  /** 移除某个已解决的 pending 请求(同时清掉草稿) */
+  removePendingInput: (sessionId: string, requestId: string) => void
+  /** 清空指定 session 的全部 pending(用于会话切换/失效) */
+  clearPendingInputs: (sessionId: string) => void
+  /** 设置/更新某个请求的草稿 */
+  setInputDraft: (sessionId: string, requestId: string, draft: unknown) => void
+  /** 设置/更新某个请求的"其它"输入文本 */
+  setOtherInput: (sessionId: string, requestId: string, text: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /** 原子处理 step_end：清除流式内容 + 添加 step 消息（单次 set，避免闪空） */
@@ -381,8 +402,42 @@ export const selectSubAgentExecutions = (s: ChatState): SubAgentExecution[] =>
     ? s.sessionSubAgentExecutions[s.activeSessionId] || EMPTY_SUBAGENTS
     : EMPTY_SUBAGENTS
 
-export const selectPendingUserInput = (s: ChatState): PendingUserInput | null =>
-  s.activeSessionId ? s.sessionPendingUserInputs[s.activeSessionId] || null : null
+/** 当前会话的所有 pending 输入请求(按时间序) */
+const EMPTY_INPUT_REQUESTS: InputRequest[] = []
+export const selectPendingInputs = (s: ChatState): InputRequest[] =>
+  s.activeSessionId
+    ? s.sessionPendingInputs[s.activeSessionId] || EMPTY_INPUT_REQUESTS
+    : EMPTY_INPUT_REQUESTS
+
+/**
+ * 全局 pending 计数(供 Sidebar 一次读取所有会话的待处理数)。
+ *
+ * ⚠️ zustand + useSyncExternalStore 要求 selector 在数据未变时返回稳定引用,
+ * 否则触发"getSnapshot should be cached"错误并陷入无限重渲染循环。
+ * 用 module-scope cache 缓存上次的输入(sessionPendingInputs 引用)和输出对象,
+ * 输入引用不变时直接返回上次的输出。
+ */
+const EMPTY_PENDING_COUNTS: Record<string, number> = {}
+let _lastPendingCountsInput: ChatState['sessionPendingInputs'] | null = null
+let _lastPendingCountsOutput: Record<string, number> = EMPTY_PENDING_COUNTS
+export const selectAllPendingCounts = (s: ChatState): Record<string, number> => {
+  if (s.sessionPendingInputs === _lastPendingCountsInput) return _lastPendingCountsOutput
+  _lastPendingCountsInput = s.sessionPendingInputs
+  const result: Record<string, number> = {}
+  let nonEmpty = false
+  for (const [sid, list] of Object.entries(s.sessionPendingInputs)) {
+    if (list && list.length > 0) {
+      result[sid] = list.length
+      nonEmpty = true
+    }
+  }
+  _lastPendingCountsOutput = nonEmpty ? result : EMPTY_PENDING_COUNTS
+  return _lastPendingCountsOutput
+}
+
+/** 取某个会话中某个请求的草稿 */
+export const selectInputDraft = (s: ChatState, sessionId: string, requestId: string): unknown =>
+  s.sessionInputDrafts[sessionId]?.[requestId]
 
 /** 当前模式是否允许对话（chat / full / null=本地） */
 export const selectCanChat = (s: ChatState): boolean => s.shareMode !== 'readonly'
@@ -398,7 +453,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionStreams: {},
   sessionToolExecutions: {},
   sessionSubAgentExecutions: {},
-  sessionPendingUserInputs: {},
+  sessionPendingInputs: {},
+  sessionInputDrafts: {},
+  sessionOtherInputs: {},
   modelSupportsReasoning: false,
   thinkingLevel: 'off',
   modelSupportsVision: false,
@@ -409,7 +466,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   enabledTools: [],
   toolPresentations: {},
   projectPath: null,
-  agentMdLoaded: false,
   slashCommands: [],
   sessionResources: {},
   sharedSessionIds: new Map(),
@@ -681,7 +737,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
-  setAgentMdLoaded: (loaded) => set({ agentMdLoaded: loaded }),
   setSlashCommands: (commands) => set({ slashCommands: commands }),
 
   setRuntime: (sessionId, runtimeId, info) =>
@@ -755,16 +810,93 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
-  setPendingUserInput: (sessionId, input) =>
-    set((state) => ({
-      sessionPendingUserInputs: { ...state.sessionPendingUserInputs, [sessionId]: input }
-    })),
-
-  clearPendingUserInput: (sessionId) =>
+  addPendingInput: (sessionId, request) =>
     set((state) => {
-      const rest = { ...state.sessionPendingUserInputs }
-      delete rest[sessionId]
-      return { sessionPendingUserInputs: rest }
+      const prev = state.sessionPendingInputs[sessionId] || []
+      // 同一 id 已存在则更新而非追加(避免事件去重边界情况)
+      const exists = prev.findIndex((r) => r.id === request.id)
+      const next =
+        exists >= 0 ? prev.map((r, i) => (i === exists ? request : r)) : [...prev, request]
+      return {
+        sessionPendingInputs: { ...state.sessionPendingInputs, [sessionId]: next }
+      }
+    }),
+
+  removePendingInput: (sessionId, requestId) =>
+    set((state) => {
+      const prev = state.sessionPendingInputs[sessionId]
+      if (!prev) return {}
+      const nextList = prev.filter((r) => r.id !== requestId)
+      const nextMap = { ...state.sessionPendingInputs }
+      if (nextList.length > 0) {
+        nextMap[sessionId] = nextList
+      } else {
+        delete nextMap[sessionId]
+      }
+      // 同时清掉对应草稿
+      const sessionDrafts = state.sessionInputDrafts[sessionId]
+      let nextDrafts = state.sessionInputDrafts
+      if (sessionDrafts && requestId in sessionDrafts) {
+        const { [requestId]: _drop, ...rest } = sessionDrafts
+        nextDrafts = { ...state.sessionInputDrafts, [sessionId]: rest }
+        if (Object.keys(rest).length === 0) {
+          const { [sessionId]: _drop2, ...other } = nextDrafts
+          nextDrafts = other
+        }
+      }
+      // 同时清掉"其它"输入文本
+      const sessionOthers = state.sessionOtherInputs[sessionId]
+      let nextOthers = state.sessionOtherInputs
+      if (sessionOthers && requestId in sessionOthers) {
+        const { [requestId]: _dropO, ...restO } = sessionOthers
+        nextOthers = { ...state.sessionOtherInputs, [sessionId]: restO }
+        if (Object.keys(restO).length === 0) {
+          const { [sessionId]: _drop2O, ...otherO } = nextOthers
+          nextOthers = otherO
+        }
+      }
+      return {
+        sessionPendingInputs: nextMap,
+        sessionInputDrafts: nextDrafts,
+        sessionOtherInputs: nextOthers
+      }
+    }),
+
+  clearPendingInputs: (sessionId) =>
+    set((state) => {
+      const nextMap = { ...state.sessionPendingInputs }
+      delete nextMap[sessionId]
+      const nextDrafts = { ...state.sessionInputDrafts }
+      delete nextDrafts[sessionId]
+      const nextOthers = { ...state.sessionOtherInputs }
+      delete nextOthers[sessionId]
+      return {
+        sessionPendingInputs: nextMap,
+        sessionInputDrafts: nextDrafts,
+        sessionOtherInputs: nextOthers
+      }
+    }),
+
+  setInputDraft: (sessionId, requestId, draft) =>
+    set((state) => {
+      const sessionDrafts = state.sessionInputDrafts[sessionId] || {}
+      return {
+        sessionInputDrafts: {
+          ...state.sessionInputDrafts,
+          [sessionId]: { ...sessionDrafts, [requestId]: draft }
+        }
+      }
+    }),
+
+  setOtherInput: (sessionId, requestId, text) =>
+    set((state) => {
+      const sessionOthers = state.sessionOtherInputs[sessionId] || {}
+      return {
+        sessionOtherInputs: {
+          ...state.sessionOtherInputs,
+          [sessionId]: { ...sessionOthers, [requestId]: text }
+        }
+      }
     }),
 
   flushStreamingDeltas: (buffers) =>
@@ -922,9 +1054,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restSubAgents = { ...state.sessionSubAgentExecutions }
       delete restSubAgents[sessionId]
 
-      // 清除该 session 的待处理用户输入
-      const restPendingInputs = { ...state.sessionPendingUserInputs }
+      // 清除该 session 的待处理用户输入(以及对应草稿和"其它"文本)
+      const restPendingInputs = { ...state.sessionPendingInputs }
       delete restPendingInputs[sessionId]
+      const restInputDrafts = { ...state.sessionInputDrafts }
+      delete restInputDrafts[sessionId]
+      const restOtherInputs = { ...state.sessionOtherInputs }
+      delete restOtherInputs[sessionId]
 
       // 添加最终消息（如有）
       const newMessages =
@@ -936,7 +1072,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionStreams: newStreams,
         sessionToolExecutions: restToolExecs,
         sessionSubAgentExecutions: restSubAgents,
-        sessionPendingUserInputs: restPendingInputs,
+        sessionPendingInputs: restPendingInputs,
+        sessionInputDrafts: restInputDrafts,
+        sessionOtherInputs: restOtherInputs,
         messages: newMessages
       }
     }),

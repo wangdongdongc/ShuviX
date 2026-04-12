@@ -20,25 +20,26 @@ import type {
   ThinkingLevel,
   Message,
   MessageMetadata,
-  ProjectSettings
+  ProjectSettings,
+  ProjectPromptSection
 } from '../types'
 import type { SessionModelMetadata } from '../dao/types'
 import { t } from '../i18n'
 import {
   forwardAgentEvent,
-  readProjectAgentMd,
-  type ProjectInstructionLoadState,
   type SessionEventState,
   type SessionEventHandlerContext
 } from './agentEventHandler'
 import { isAssistantMessage } from '../utils/messageGuards'
-import { chatFrontendRegistry, INTERACTION_TIMEOUT_MS } from '../frontend'
+import { chatFrontendRegistry } from '../frontend'
 import type { ChatEvent, RuntimeStatus } from '../frontend/core/types'
-import type { ToolContext, SshCredentialPayload } from '../tools/types'
+import type { ToolContext } from '../tools/types'
+import type { InputRequest, InputResponse } from '../../shared/types/inputRequest'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
+import { injectInstructionMessages } from './instructionInjector'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
@@ -49,7 +50,11 @@ export interface AgentSessionCreateParams {
   provider: string
   model: string
   capabilities: ModelCapabilities
-  project?: { path: string; systemPrompt?: string | null; settings?: ProjectSettings | null }
+  project?: {
+    path: string
+    promptSections?: ProjectPromptSection[] | null
+    settings?: ProjectSettings | null
+  }
   workingDirectory: string
   enabledTools: string[]
   modelMetadata?: SessionModelMetadata
@@ -58,7 +63,11 @@ export interface AgentSessionCreateParams {
 /** 合并系统提示词：全局 + 项目级 + 参考目录 + 工作目录 */
 function buildSystemPrompt(
   project:
-    | { path: string; systemPrompt?: string | null; settings?: ProjectSettings | null }
+    | {
+        path: string
+        promptSections?: ProjectPromptSection[] | null
+        settings?: ProjectSettings | null
+      }
     | undefined,
   workingDirectory: string,
   sessionId: string
@@ -92,8 +101,14 @@ function buildSystemPrompt(
         prompt += `\n\nProject environment variables (auto-injected in bash tool, do not export manually):\n${names}`
       }
     }
-    if (project.systemPrompt) {
-      prompt += `\n\n${project.systemPrompt}`
+    if (project.promptSections && project.promptSections.length > 0) {
+      for (const sec of project.promptSections) {
+        const title = sec.title.trim()
+        const content = sec.content.trim()
+        if (!title && !content) continue
+        if (title) prompt += `\n\n## ${title}\n${content}`
+        else prompt += `\n\n${content}`
+      }
     }
   } else {
     prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}. Always prioritize working within this directory to complete tasks.`
@@ -114,17 +129,16 @@ export class AgentSession {
   private toolContext: ToolContext
   private subAgentCtx: SubAgentBuildContext | undefined
   private projectPath?: string
-  private instructionLoadState: ProjectInstructionLoadState
+  private workingDirectory: string
 
-  // 交互回调 pending Map（keyed by toolCallId）
-  private pendingApprovals = new Map<
+  /**
+   * 统一的"等待用户输入"挂起表(keyed by request.id == toolCallId)
+   * - 命令审批 / 选择题 / SSH 凭证全部走这一张表
+   * - 永不超时,只能由 respondToInput / abort 触发 resolve
+   */
+  private pendingInputs = new Map<
     string,
-    { resolve: (result: { approved: boolean; reason?: string }) => void }
-  >()
-  private pendingUserInputs = new Map<string, { resolve: (selections: string[]) => void }>()
-  private pendingSshCredentials = new Map<
-    string,
-    { resolve: (credentials: SshCredentialPayload | null) => void }
+    { request: InputRequest; resolve: (response: InputResponse) => void }
   >()
 
   // 事件状态（可变引用，传给 event handler）
@@ -145,7 +159,7 @@ export class AgentSession {
     agent: Agent,
     toolContext: ToolContext,
     subAgentCtx: SubAgentBuildContext | undefined,
-    instructionLoadState: ProjectInstructionLoadState,
+    workingDirectory: string,
     projectPath?: string
   ) {
     this.sessionId = sessionId
@@ -153,7 +167,7 @@ export class AgentSession {
     this.toolContext = toolContext
     this.subAgentCtx = subAgentCtx
     this.projectPath = projectPath
-    this.instructionLoadState = instructionLoadState
+    this.workingDirectory = workingDirectory
 
     // 订阅 Agent 事件，转发到 Renderer
     this.agent.subscribe((event: AgentEvent) => {
@@ -181,10 +195,7 @@ export class AgentSession {
     // 构建 ToolContext（回调通过闭包引用 session）
     const toolContext: ToolContext = {
       sessionId,
-      requestApproval: (toolCallId, toolName, command, description) =>
-        session.requestApproval(toolCallId, toolName, command, description),
-      requestUserInput: (toolCallId, payload) => session.requestUserInput(toolCallId, payload),
-      requestSshCredentials: (toolCallId) => session.requestSshCredential(toolCallId),
+      requestUserInput: (request) => session.requestUserInput(request),
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
@@ -215,24 +226,12 @@ export class AgentSession {
       }
     })
 
-    // 注入工作目录下的 AGENTS.MD / AGENT.md
-    const agentMd = readProjectAgentMd(workingDirectory)
-    if (agentMd) {
-      agent.state.messages.push({
-        role: 'user',
-        content: `Project AGENTS.MD instructions:\n${agentMd}`,
-        timestamp: Date.now()
-      })
-    }
-
     session = new AgentSession(
       sessionId,
       agent,
       toolContext,
       subAgentCtx,
-      {
-        agentMdLoaded: !!agentMd
-      },
+      workingDirectory,
       project?.path
     )
 
@@ -269,6 +268,27 @@ export class AgentSession {
     }
   }
 
+  /**
+   * 首次 prompt 前的指令懒注入。
+   * 由调用方（DefaultChatGateway）在写入用户消息**之前**调用，
+   * 确保指令消息在持久化顺序和广播顺序上都早于用户消息。
+   */
+  ensureInstructionsInjected(): void {
+    if (this.agent.state.messages.length > 0) return
+    const inserted = injectInstructionMessages(this.sessionId, this.workingDirectory)
+    if (inserted.length === 0) return
+    // 同步进 agent 内存上下文
+    for (const msg of dbMessagesToAgentMessages(inserted)) {
+      this.agent.state.messages.push(msg)
+    }
+    // 通知前端追加这些消息（UI 通过 InstructionBubble 渲染）
+    chatFrontendRegistry.broadcast({
+      type: 'instructions_injected',
+      sessionId: this.sessionId,
+      messages: inserted.map((m) => JSON.stringify(m))
+    })
+  }
+
   /** 向运行中的 Agent 注入 steer 消息（同步入队，下次 LLM 调用前生效） */
   steer(text: string): void {
     log.info(`steer session=${this.sessionId} text=${text.slice(0, 50)}...`)
@@ -289,19 +309,16 @@ export class AgentSession {
     parallelCoordinator.cancelBatch(this.sessionId)
     subAgentRegistry.abortAll(this.sessionId)
     this.agent.abort()
-    // 只取消本 session 的 pending 项
-    for (const [, pending] of this.pendingApprovals) {
-      pending.resolve({ approved: false })
+    // 只取消本 session 的 pending 项 — 全部 resolve 为 cancel(reason=aborted)
+    for (const [id, pending] of this.pendingInputs) {
+      pending.resolve({ kind: 'cancel', reason: 'aborted' })
+      chatFrontendRegistry.broadcast({
+        type: 'input_request_resolved',
+        sessionId: this.sessionId,
+        requestId: id
+      })
     }
-    this.pendingApprovals.clear()
-    for (const [, pending] of this.pendingUserInputs) {
-      pending.resolve([])
-    }
-    this.pendingUserInputs.clear()
-    for (const [, pending] of this.pendingSshCredentials) {
-      pending.resolve(null)
-    }
-    this.pendingSshCredentials.clear()
+    this.pendingInputs.clear()
     // 标记所有未完成的工具调用为已中止
     if (this.eventState.toolUseMessageIds.size > 0) {
       const abortedContent = t('agent.toolAborted')
@@ -381,11 +398,6 @@ export class AgentSession {
     this.agent.state.messages = []
   }
 
-  /** 获取项目指令文件加载状态 */
-  getInstructionLoadState(): ProjectInstructionLoadState {
-    return this.instructionLoadState
-  }
-
   /** 获取底层 Agent 实例（用于外部恢复历史消息等） */
   getAgent(): Agent {
     return this.agent
@@ -429,135 +441,48 @@ export class AgentSession {
     return null
   }
 
-  // ─── 交互响应（返回 boolean 表示是否命中本 session） ──────
+  // ─── 用户输入挂起 / 响应 ─────────────────────────────
 
-  /** 响应工具审批请求 */
-  approveToolCall(toolCallId: string, approved: boolean, reason?: string): boolean {
-    const pending = this.pendingApprovals.get(toolCallId)
-    if (pending) {
-      pending.resolve({ approved, reason })
-      this.pendingApprovals.delete(toolCallId)
-      return true
-    }
-    return false
-  }
-
-  /** 响应 ask 工具的用户选择 */
-  respondToAsk(toolCallId: string, selections: string[]): boolean {
-    const pending = this.pendingUserInputs.get(toolCallId)
-    if (pending) {
-      pending.resolve(selections)
-      this.pendingUserInputs.delete(toolCallId)
-      return true
-    }
-    return false
-  }
-
-  /** 响应 SSH 凭据输入 */
-  respondToSshCredentials(toolCallId: string, credentials: SshCredentialPayload | null): boolean {
-    const pending = this.pendingSshCredentials.get(toolCallId)
-    if (pending) {
-      pending.resolve(credentials)
-      this.pendingSshCredentials.delete(toolCallId)
-      return true
-    }
-    return false
-  }
-
-  // ─── ToolContext 回调（供 AgentService 构建 ToolContext 时引用） ──
-
-  /** 创建审批 Promise（ToolContext.requestApproval 的实现） */
-  requestApproval(
-    toolCallId: string,
-    toolName: string,
-    command: string,
-    description?: string
-  ): Promise<{ approved: boolean; reason?: string }> {
-    if (!chatFrontendRegistry.hasCapability(this.sessionId, 'toolApproval')) {
-      return Promise.resolve({ approved: false, reason: 'no frontend supports approval' })
-    }
-    return new Promise<{ approved: boolean; reason?: string }>((resolve) => {
-      this.pendingApprovals.set(toolCallId, { resolve })
-      const timer = setTimeout(() => {
-        if (this.pendingApprovals.delete(toolCallId)) {
-          resolve({ approved: false, reason: 'approval timeout' })
-        }
-      }, INTERACTION_TIMEOUT_MS)
-      const origResolve = resolve
-      this.pendingApprovals.set(toolCallId, {
-        resolve: (result) => {
-          clearTimeout(timer)
-          origResolve(result)
-        }
-      })
-      chatFrontendRegistry.broadcast({
-        type: 'tool_approval_request',
-        sessionId: this.sessionId,
-        toolCallId,
-        toolName,
-        toolArgs: { command, description }
-      })
-    })
-  }
-
-  /** 创建用户输入 Promise（ToolContext.requestUserInput 的实现） */
-  requestUserInput(
-    toolCallId: string,
-    payload: {
-      question: string
-      options: Array<{ label: string; description: string }>
-      allowMultiple: boolean
-    }
-  ): Promise<string[]> {
+  /**
+   * 统一的"请求用户输入"入口(ToolContext.requestUserInput 的实现)。
+   * 永不超时;只能由 respondToInput 或 abort 触发 resolve。
+   *
+   * 若没有任何前端声明 'userInput' 能力(罕见,如纯自动化场景),
+   * 立即返回 cancel,工具据此报错或降级。
+   */
+  requestUserInput(request: InputRequest): Promise<InputResponse> {
     if (!chatFrontendRegistry.hasCapability(this.sessionId, 'userInput')) {
-      return Promise.resolve([])
-    }
-    return new Promise<string[]>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this.pendingUserInputs.delete(toolCallId)) {
-          resolve([])
-        }
-      }, INTERACTION_TIMEOUT_MS)
-      this.pendingUserInputs.set(toolCallId, {
-        resolve: (selections) => {
-          clearTimeout(timer)
-          resolve(selections)
-        }
+      // 没有任何前端能展示输入面板 → 复用 abort 路径,工具按"中断"处理
+      return Promise.resolve({
+        kind: 'cancel',
+        reason: 'aborted'
       })
+    }
+    return new Promise<InputResponse>((resolve) => {
+      this.pendingInputs.set(request.id, { request, resolve })
       chatFrontendRegistry.broadcast({
-        type: 'user_input_request',
+        type: 'input_request',
         sessionId: this.sessionId,
-        toolCallId,
-        toolName: 'ask',
-        payload
+        request
       })
     })
   }
 
-  /** 创建 SSH 凭据 Promise（ToolContext.requestSshCredentials 的实现） */
-  requestSshCredential(toolCallId: string): Promise<SshCredentialPayload | null> {
-    if (!chatFrontendRegistry.hasCapability(this.sessionId, 'sshCredentials')) {
-      return Promise.resolve(null)
-    }
-    return new Promise<SshCredentialPayload | null>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this.pendingSshCredentials.delete(toolCallId)) {
-          resolve(null)
-        }
-      }, INTERACTION_TIMEOUT_MS)
-      this.pendingSshCredentials.set(toolCallId, {
-        resolve: (credentials) => {
-          clearTimeout(timer)
-          resolve(credentials)
-        }
-      })
-      chatFrontendRegistry.broadcast({
-        type: 'ssh_credential_request',
-        sessionId: this.sessionId,
-        toolCallId,
-        toolName: 'ssh'
-      })
+  /**
+   * 响应一个挂起的用户输入请求。
+   * @returns 是否命中本 session 的 pending 项
+   */
+  respondToInput(requestId: string, response: InputResponse): boolean {
+    const pending = this.pendingInputs.get(requestId)
+    if (!pending) return false
+    this.pendingInputs.delete(requestId)
+    pending.resolve(response)
+    chatFrontendRegistry.broadcast({
+      type: 'input_request_resolved',
+      sessionId: this.sessionId,
+      requestId
     })
+    return true
   }
 
   // ─── 生命周期 ──────────────────────────────────────

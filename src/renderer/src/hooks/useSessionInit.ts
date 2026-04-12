@@ -44,7 +44,6 @@ export function useSessionInit(activeSessionId: string | null): void {
       // 4. 同步会话元信息（projectPath、enabledTools、指令文件状态）
       store.setProjectPath(result.workingDirectory || null)
       store.setEnabledTools(result.enabledTools || [])
-      store.setAgentMdLoaded(!!result.agentMdLoaded)
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
       const lastAssistant = [...msgs]

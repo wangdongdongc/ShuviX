@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy'
-import type { ChatApprovalRequestEvent, ChatInputRequestEvent } from '../core/types'
+import type { ApprovalInputRequest, ChoiceInputRequest } from '../../../shared/types/inputRequest'
 
 /** Telegram 消息长度上限 */
 const MAX_MESSAGE_LENGTH = 4096
@@ -21,45 +21,30 @@ export function extractMessageContent(messageJson: string | undefined): string |
   }
 }
 
-/** 格式化工具参数为简短摘要 */
-function formatToolArgs(args?: Record<string, unknown>): string {
-  if (!args) return ''
-  const entries = Object.entries(args)
-  if (entries.length === 0) return ''
-  return entries
-    .map(([k, v]) => {
-      const val = typeof v === 'string' ? v : JSON.stringify(v)
-      const short = val.length > 100 ? val.slice(0, 97) + '...' : val
-      return `  ${k}: ${short}`
-    })
-    .join('\n')
-}
-
-/** 格式化工具审批消息 + Inline Keyboard */
-export function formatApprovalMessage(event: ChatApprovalRequestEvent): {
+/** 格式化工具审批消息 + Inline Keyboard(基于统一 InputRequest 模型) */
+export function formatApprovalMessage(request: ApprovalInputRequest): {
   text: string
   keyboard: InlineKeyboard
 } {
-  let text = `🔧 Tool: ${event.toolName}`
-  const argsStr = formatToolArgs(event.toolArgs)
-  if (argsStr) {
-    text += `\n${argsStr}`
+  let text = `🔧 Tool: ${request.toolName}\n  command: ${request.command}`
+  if (request.description) {
+    text += `\n  description: ${request.description}`
   }
   text = truncate(text)
 
   const keyboard = new InlineKeyboard()
-    .text('✅ Allow', `approve:${event.toolCallId}:yes`)
-    .text('❌ Deny', `approve:${event.toolCallId}:no`)
+    .text('✅ Allow', `approve:${request.id}:yes`)
+    .text('❌ Deny', `approve:${request.id}:no`)
 
   return { text, keyboard }
 }
 
-/** 格式化 ask 工具交互消息 + Inline Keyboard */
-export function formatAskMessage(event: ChatInputRequestEvent): {
+/** 格式化 ask(选择题)交互消息 + Inline Keyboard(基于统一 InputRequest 模型) */
+export function formatAskMessage(request: ChoiceInputRequest): {
   text: string
   keyboard: InlineKeyboard
 } {
-  const { question, detail, options, allowMultiple } = event.payload
+  const { question, detail, options, allowMultiple } = request
   let text = question
   if (detail) text += `\n${detail}`
   text = truncate(text)
@@ -67,10 +52,10 @@ export function formatAskMessage(event: ChatInputRequestEvent): {
   const keyboard = new InlineKeyboard()
   for (let i = 0; i < options.length; i++) {
     const label = options[i].label
-    keyboard.text(label, `ask:${event.toolCallId}:${i}`).row()
+    keyboard.text(label, `ask:${request.id}:${i}`).row()
   }
   if (allowMultiple) {
-    keyboard.text('📤 Submit', `ask:${event.toolCallId}:done`).row()
+    keyboard.text('📤 Submit', `ask:${request.id}:done`).row()
   }
 
   return { text, keyboard }

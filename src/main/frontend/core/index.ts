@@ -7,9 +7,8 @@ export type {
   ChatAgentEndEvent,
   ChatToolStartEvent,
   ChatToolEndEvent,
-  ChatApprovalRequestEvent,
   ChatInputRequestEvent,
-  ChatCredentialRequestEvent,
+  ChatInputRequestResolvedEvent,
   ChatImageDataEvent,
   ChatRuntimeEvent,
   RuntimeStatus,
@@ -23,11 +22,7 @@ export type {
 
 export type { ChatFrontend, ChatFrontendCapabilities } from './ChatFrontend'
 
-export {
-  ChatFrontendRegistry,
-  chatFrontendRegistry,
-  INTERACTION_TIMEOUT_MS
-} from './ChatFrontendRegistry'
+export { ChatFrontendRegistry, chatFrontendRegistry } from './ChatFrontendRegistry'
 
 export type { ChatGateway } from './ChatGateway'
 

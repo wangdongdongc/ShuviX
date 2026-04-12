@@ -7,8 +7,6 @@ export interface SessionInfo extends Session {
   workingDirectory?: string | null
   /** 当前生效的工具列表（由 service 层解析：session > project > all） */
   enabledTools?: string[]
-  /** 项目 AGENT.md 是否存在并已加载 */
-  agentMdLoaded?: boolean
 }
 
 /** IPC: 更新会话标题参数 */
@@ -48,10 +46,10 @@ export interface SessionUpdateAutoApproveParams {
   autoApprove: boolean
 }
 
-/** IPC: 批量添加允许列表模式 */
+/** IPC: 批量添加允许列表模式(toolType 支持命令和路径两类) */
 export interface SessionAllowListAddParams {
   id: string
-  toolType: 'bash' | 'ssh'
+  toolType: 'bash' | 'ssh' | 'read' | 'write'
   patterns: string[]
 }
 

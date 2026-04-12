@@ -14,6 +14,8 @@ export interface SessionSettings {
   allowList?: string[]
   /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
   telegramBotId?: string
+  /** 启用的项目指令文件名（来自 scanInstructionFiles 返回值；缺省视为全部关闭） */
+  enabledInstructionFiles?: string[]
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

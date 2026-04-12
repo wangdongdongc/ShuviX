@@ -133,7 +133,7 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
       '',
       skill.content.trim(),
       '',
-      `Base directory for this skill: file://${skill.basePath}`,
+      `Base directory for this skill: ${skill.basePath}`,
       'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
       ...(files.length > 0 ? ['Note: file list is sampled.'] : []),
       filesXml,

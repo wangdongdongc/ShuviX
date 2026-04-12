@@ -67,18 +67,19 @@ export function CodeBlock({
 
   return (
     <div className="relative group/code my-2">
-      {/* 语言标签 + 复制按钮 */}
-      <div
-        className="flex items-center justify-between px-4 py-1.5 text-[10px] text-text-tertiary rounded-t-lg"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="font-medium uppercase tracking-wider">{lang || 'code'}</span>
+      {/* 右上角悬浮:语言标签 + 复制按钮(默认半透明,hover 高亮) */}
+      <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1.5 text-[9px] text-text-tertiary opacity-50 group-hover/code:opacity-100 transition-opacity">
+        {lang && (
+          <span className="font-medium uppercase tracking-wider px-1 py-px rounded bg-bg-tertiary/60">
+            {lang}
+          </span>
+        )}
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 hover:text-text-secondary transition-colors"
+          className="flex items-center gap-0.5 px-1 py-px rounded bg-bg-tertiary/60 hover:text-text-secondary transition-colors"
+          title={copied ? 'Copied' : 'Copy'}
         >
-          {copied ? <Check size={10} className="text-success" /> : <Copy size={10} />}
-          <span>{copied ? 'Copied' : 'Copy'}</span>
+          {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
         </button>
       </div>
       <pre {...props}>{children}</pre>

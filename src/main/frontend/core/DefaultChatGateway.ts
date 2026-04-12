@@ -1,7 +1,7 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from './types'
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
-import type { SshCredentialPayload } from '../../tools/types'
+import type { InputResponse } from '../../../shared/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../tools/registry'
@@ -44,6 +44,10 @@ export class DefaultChatGateway implements ChatGateway {
     // ─── 内联 Token 处理（由前端完成展开，后端直接使用） ───
     const promptText = inlineTokens ? resolveTokensForAgent(text, inlineTokens) : text
 
+    // 首次发言前按当前配置懒注入项目指令文件
+    // 必须发生在 addUserText 之前，确保指令消息在时间戳和广播顺序上都早于用户消息
+    session.ensureInstructionsInjected()
+
     // 统一持久化用户消息并通知所有前端
     const userImages =
       images && images.length > 0
@@ -85,16 +89,9 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 交互响应 ─────────────────────────────────
 
-  approveToolCall(toolCallId: string, approved: boolean, reason?: string): void {
-    sessionService.approveToolCall(toolCallId, approved, reason)
-  }
-
-  respondToAsk(toolCallId: string, selections: string[]): void {
-    sessionService.respondToAsk(toolCallId, selections)
-  }
-
-  respondToSshCredentials(toolCallId: string, credentials: SshCredentialPayload | null): void {
-    sessionService.respondToSshCredentials(toolCallId, credentials)
+  respondToInput(_sessionId: string, requestId: string, response: InputResponse): void {
+    // sessionService 在内部遍历所有 session 找到归属;sessionId 参数仅作日志/校验
+    sessionService.respondToInput(requestId, response)
   }
 
   // ─── 运行时调整 ────────────────────────────────

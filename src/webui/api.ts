@@ -120,20 +120,10 @@ export function createWebApi(): typeof window.api {
           method: 'PUT',
           body: JSON.stringify(p)
         }),
-      approveToolCall: (p) =>
-        api(`/sessions/${SESSION_ID}/approve`, {
+      respondToInput: (p) =>
+        api(`/sessions/${p.sessionId}/respond-input`, {
           method: 'POST',
-          body: JSON.stringify(p)
-        }),
-      respondToAsk: (p) =>
-        api(`/sessions/${SESSION_ID}/respond-ask`, {
-          method: 'POST',
-          body: JSON.stringify(p)
-        }),
-      respondToSshCredentials: (p) =>
-        api(`/sessions/${SESSION_ID}/respond-ssh`, {
-          method: 'POST',
-          body: JSON.stringify(p)
+          body: JSON.stringify({ requestId: p.requestId, response: p.response })
         }),
       setEnabledTools: (p) =>
         api(`/sessions/${p.sessionId}/tools`, {

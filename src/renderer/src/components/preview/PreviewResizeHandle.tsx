@@ -17,10 +17,6 @@ export function PreviewResizeHandle(): React.JSX.Element {
     (e: React.MouseEvent) => {
       e.preventDefault()
       dragRef.current = { startX: e.clientX, startW: width }
-      // 禁用所有 iframe 的 pointer-events，防止拖拽时 iframe 捕获鼠标
-      document.querySelectorAll('iframe').forEach((f) => {
-        ;(f as HTMLIFrameElement).style.pointerEvents = 'none'
-      })
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
 
@@ -32,9 +28,6 @@ export function PreviewResizeHandle(): React.JSX.Element {
       }
       const onUp = (): void => {
         dragRef.current = null
-        document.querySelectorAll('iframe').forEach((f) => {
-          ;(f as HTMLIFrameElement).style.pointerEvents = ''
-        })
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
         document.removeEventListener('mousemove', onMove)

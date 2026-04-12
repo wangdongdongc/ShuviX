@@ -43,7 +43,8 @@
     "deleteProjectWarningBold": "permanently delete the project and all its sessions and messages",
     "deleteProjectWarningEnd": ", and cannot be recovered. Are you sure?",
     "updateAvailable": "Update available",
-    "updateReady": "Ready to install"
+    "updateReady": "Ready to install",
+    "deleteSession": "Delete Session"
   },
 
   "chat": {
@@ -113,13 +114,9 @@
     "thinkHigh": "Deep",
     "thinkXHigh": "Extreme",
     "tools": "Tools",
-    "instructionsStatus": "Instruction file load status",
     "placeholderVision": "Type a message, drag & drop or paste images...",
     "placeholder": "Type a message... (Shift+Enter for new line)",
-    "placeholderOverride": "Disagree? Type your feedback to AI...",
     "placeholderNoSession": "Please create or select a chat first",
-    "loaded": "Loaded",
-    "notLoaded": "Not loaded",
     "stopGen": "Stop generation",
     "steer": "Send steering message",
     "placeholderSteer": "Type a message to guide the agent...",
@@ -134,6 +131,10 @@
     "archivedBanner": "{{count}} archived messages hidden — click to view",
     "archivedLoading": "Loading...",
     "archivedAllLoaded": "All archived messages loaded"
+  },
+  "instruction": {
+    "sender": "System",
+    "loaded": "Project instructions loaded · {{filename}}"
   },
 
   "voice": {
@@ -165,18 +166,30 @@
     "nCalls": "calls"
   },
 
+  "pendingInputs": {
+    "submitAllFilled": "Submit all filled",
+    "filledHint": "{{filled}} of {{total}} filled",
+    "otherPlaceholder": "Other — type feedback for the AI...",
+    "submitOther": "Send"
+  },
+
   "toolCall": {
     "generating": "Generating...",
     "running": "Running...",
     "done": "Done",
     "error": "Error",
     "pendingApproval": "Awaiting approval",
-    "allow": "Allow",
+    "pendingPathRead": "Reading external file",
+    "pendingPathReadDir": "Reading external directory",
+    "pendingPathWrite": "Writing external file",
+    "allowThisDirectory": "Allow this directory",
+    "allow": "Allow once",
     "deny": "Deny",
     "sandboxHint": "Bash commands require approval before execution",
-    "allowAndRemember": "Allow & Remember",
+    "allowAndRemember": "Allow this pattern",
     "patternsToAllow": "Patterns to allow:",
     "noPatternsLeft": "No patterns selected",
+    "loadingPatterns": "Loading patterns...",
     "confirmAllow": "Confirm & Allow",
     "bashHint": "Bash commands require user approval before execution",
     "params": "Parameters",
@@ -230,6 +243,7 @@
     "sessionTitle": "Session Title",
     "autoApprove": "Auto-Approve Commands",
     "allowedCommands": "Allowed Commands",
+    "allowList": "Allow List (commands & paths)",
     "lanShare": "Enable LAN Sharing",
     "lanShareDesc": "When enabled, others on the same network can access this session via browser.",
     "shareMode": "Share Mode",
@@ -244,7 +258,11 @@
     "telegramNone": "None (unbound)",
     "commandGroup": "Command Approval",
     "lanShareGroup": "WebUI",
-    "telegramGroup": "Telegram Bot"
+    "telegramGroup": "Telegram Bot",
+    "instructionFilesGroup": "Project Instruction Files",
+    "instructionFilesEmpty": "No AGENTS.md / CLAUDE.md found in the project directory.",
+    "instructionFilesRescan": "Rescan",
+    "instructionFilesHint": "Enabled files are injected as user messages on new sessions and after compaction. Changes apply next time."
   },
 
   "sessionEdit": {
@@ -334,7 +352,32 @@
     "extMcpDesc": "Connect external tool servers via MCP protocol, giving AI capabilities like database queries and API calls.",
     "extSkillDesc": "Skills are reusable prompt templates that help AI master specific workflows.",
     "extGoSettings": "Go to Settings",
-    "extAvailableDesc": "Select which extensions to enable for this project."
+    "extAvailableDesc": "Select which extensions to enable for this project.",
+    "promptSectionsTitle": "Project Prompt",
+    "promptSectionsHint": "Concatenated as ## Title sections into the system prompt. Drag the handle to reorder, or add/remove cards.",
+    "addPromptSection": "Add card",
+    "promptSectionTitlePlaceholder": "Title (e.g. Identity / Tool Usage Rules)",
+    "promptSectionContentPlaceholder": "Content...",
+    "deletePromptSection": "Delete",
+    "dragToReorder": "Drag to reorder",
+    "presets": {
+      "identity": {
+        "title": "Identity",
+        "content": "You are ShuviX, a desktop assistant. Use tools like read / edit / write / grep / glob / bash / ssh / skill / mcp to help the user complete engineering tasks."
+      },
+      "philosophy": {
+        "title": "Task Philosophy",
+        "content": "Only do what the user asked — don't refactor, add abstractions, or expand scope. Verify your work before claiming done (run tests, check output); if you can't verify, say so. When something fails, diagnose the root cause before switching tactics."
+      },
+      "toolUsage": {
+        "title": "Tool Usage Rules",
+        "content": "Prefer dedicated tools (read / edit / write / grep / glob) over bash. Run independent operations in parallel for efficiency."
+      },
+      "safety": {
+        "title": "Safety",
+        "content": "Confirm with the user before destructive actions (delete, force-push, rm -rf), shared-state changes (push / CI / sending messages), or uploads to third parties. When something breaks, fix the root cause — don't bypass checks (e.g. --no-verify)."
+      }
+    }
   },
 
   "settings": {
@@ -689,9 +732,9 @@
   "tool": {
     "bashLabel": "Bash Execute Command",
     "terminalLabel": "Terminal Execute Command",
-    "readLabel": "Read File",
+    "readLabel": "Read",
     "writeLabel": "Write File",
-    "editLabel": "Edit File",
+    "editLabel": "Text Edit",
     "skillLabel": "Load Skill instructions",
     "askLabel": "Ask User",
     "lsLabel": "List Files",

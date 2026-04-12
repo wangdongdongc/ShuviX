@@ -13,6 +13,8 @@ const log = createLogger('Telegram')
 class TelegramService {
   /** botId (Telegram numeric ID) → TelegramBotServer 运行实例 */
   private botServers = new Map<string, TelegramBotServer>()
+  /** botId → 进行中的 startBot Promise，用于让 stopBot 等待启动完成，避免 bind/unbind 快速切换时的竞态 */
+  private startingBots = new Map<string, Promise<void>>()
 
   // ─── Bot CRUD ────────────────────────────────
 
@@ -102,24 +104,43 @@ class TelegramService {
 
   async startBot(botId: string): Promise<void> {
     if (this.botServers.has(botId)) return
-    const bot = telegramBotDao.pick(botId, ['token', 'username'])
-    if (!bot || !bot.token) return
+    // 复用进行中的启动，防止并发重复启动
+    const inflight = this.startingBots.get(botId)
+    if (inflight) return inflight
 
-    // 延迟 import 避免模块加载顺序问题
-    const { TelegramBotServer } = await import('../frontend/telegram/TelegramBotServer')
-    const server = new TelegramBotServer(botId)
-    this.botServers.set(botId, server)
+    const promise = (async (): Promise<void> => {
+      const bot = telegramBotDao.pick(botId, ['token', 'username'])
+      if (!bot || !bot.token) return
+      // 延迟 import 避免模块加载顺序问题
+      const { TelegramBotServer } = await import('../frontend/telegram/TelegramBotServer')
+      const server = new TelegramBotServer(botId)
+      this.botServers.set(botId, server)
+      try {
+        await server.start(bot.token)
+        log.info(`Bot 已启动: ${bot.username} (id=${botId})`)
+      } catch (err) {
+        this.botServers.delete(botId)
+        log.error(`Bot 启动失败: ${err}`)
+        throw err
+      }
+    })()
+
+    this.startingBots.set(botId, promise)
     try {
-      await server.start(bot.token)
-      log.info(`Bot 已启动: ${bot.username} (id=${botId})`)
-    } catch (err) {
-      this.botServers.delete(botId)
-      log.error(`Bot 启动失败: ${err}`)
-      throw err
+      await promise
+    } finally {
+      this.startingBots.delete(botId)
     }
   }
 
   async stopBot(botId: string): Promise<void> {
+    // 若有进行中的启动，先等其完成，避免 start 在 stop 之后才把 server 写入 map
+    const starting = this.startingBots.get(botId)
+    if (starting) {
+      await starting.catch(() => {
+        /* 启动失败时无需继续停止 */
+      })
+    }
     const server = this.botServers.get(botId)
     if (!server) return
     await server.stop()

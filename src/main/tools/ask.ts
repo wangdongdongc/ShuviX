@@ -60,20 +60,35 @@ export class AskTool extends BaseTool<typeof AskParamsSchema> {
     }
 
     // 挂起 Promise，等待用户在前端选择
-    const selections = await this.ctx.requestUserInput(toolCallId, {
+    const response = await this.ctx.requestUserInput({
+      id: toolCallId,
+      kind: 'choice',
+      toolName: 'ask',
       question: params.question,
       options: params.options,
-      allowMultiple: params.allowMultiple ?? false
+      allowMultiple: params.allowMultiple ?? false,
+      createdAt: Date.now()
     })
 
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     // 格式化用户选择为文本
     let text: string
-    if (selections.length === 0) {
-      text = 'User made no selection'
+    let selections: string[] = []
+    if (response.kind === 'cancel') {
+      // abort 路径,中断当前 turn
+      throw new Error(TOOL_ABORTED)
+    } else if (response.kind === 'other') {
+      // 用户没选任何选项,转而提交了自由文本反馈
+      text = `User did not select any option and responded with feedback instead:\n${response.text}`
+    } else if (response.kind === 'choice') {
+      selections = response.selections
+      text =
+        selections.length === 0
+          ? 'User made no selection'
+          : `User selected: ${selections.join(', ')}`
     } else {
-      text = `User selected: ${selections.join(', ')}`
+      text = 'User input error: unexpected response kind'
     }
 
     return {

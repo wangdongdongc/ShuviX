@@ -17,7 +17,8 @@ import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified } from './utils/allowList'
+import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BashToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -193,17 +194,44 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     const docker = getDockerConfig()
 
     // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
-    if (this.ctx.requestApproval) {
+    if (this.ctx.requestUserInput) {
       const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
       if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', params.command)) {
-        const approval = await this.ctx.requestApproval(
-          toolCallId,
-          'bash',
-          params.command,
-          params.description
-        )
-        if (!approval.approved) {
-          throw new Error(approval.reason || 'User denied execution of this command')
+        const response = await this.ctx.requestUserInput({
+          id: toolCallId,
+          kind: 'approval',
+          toolName: 'bash',
+          command: params.command,
+          description: params.description,
+          createdAt: Date.now()
+        })
+        if (response.kind === 'cancel') {
+          throw new Error(TOOL_ABORTED)
+        }
+        // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
+        if (response.kind === 'other') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Command was not executed. User responded with feedback instead:\n${response.text}`
+              }
+            ],
+            details: { type: 'bash', exitCode: -1, truncated: false }
+          }
+        }
+        if (response.kind !== 'approval' || !response.approved) {
+          throw new Error(
+            (response.kind === 'approval' && response.reason) ||
+              'User denied execution of this command'
+          )
+        }
+        // 副作用:用户勾选"记住此模式" → 写入会话 allowList
+        if (response.extra?.rememberPattern) {
+          const patterns = [...new Set(splitCommand(params.command).map((u) => toPattern(u)))]
+          if (patterns.length > 0) {
+            sessionService.addAllowListPatterns(this.ctx.sessionId, 'bash', patterns)
+          }
         }
       }
     }

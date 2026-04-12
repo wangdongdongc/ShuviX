@@ -1,23 +1,27 @@
 import { useTranslation } from 'react-i18next'
-import { Type, FolderOpen, Plus, Trash2, Puzzle, BookOpen, Settings } from 'lucide-react'
+import {
+  Type,
+  FolderOpen,
+  MessageSquareText,
+  Plus,
+  Trash2,
+  Puzzle,
+  BookOpen,
+  Settings
+} from 'lucide-react'
 import type { ReferenceDir } from '../../../../main/types/project'
+import type { ProjectPromptSection } from '../../../../shared/types/promptSection'
 import type { ToolItem } from '../common/ToolSelectList'
+import { PromptSectionsEditor } from './PromptSectionsEditor'
 
-// ─── 基本信息：名称 + 提示词 ────────────────────────────
+// ─── 基本信息：项目名称 ────────────────────────────────
 
 interface ProjectBasicInfoProps {
   name: string
   onNameChange: (name: string) => void
-  systemPrompt: string
-  onSystemPromptChange: (prompt: string) => void
 }
 
-export function ProjectBasicInfo({
-  name,
-  onNameChange,
-  systemPrompt,
-  onSystemPromptChange
-}: ProjectBasicInfoProps): React.JSX.Element {
+export function ProjectBasicInfo({ name, onNameChange }: ProjectBasicInfoProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div className="zen-card space-y-3">
@@ -36,18 +40,32 @@ export function ProjectBasicInfo({
           placeholder={t('projectForm.namePlaceholder')}
         />
       </div>
-      <div>
-        <label className="block text-[10px] text-text-tertiary mb-1.5">
-          {t('projectForm.prompt')}
-        </label>
-        <textarea
-          value={systemPrompt}
-          onChange={(e) => onSystemPromptChange(e.target.value)}
-          rows={3}
-          className="zen-textarea"
-          placeholder={t('projectForm.promptPlaceholder')}
-        />
+    </div>
+  )
+}
+
+// ─── 项目提示词：可拖拽卡片列表 ─────────────────────────
+
+interface ProjectPromptSectionsGroupProps {
+  sections: ProjectPromptSection[]
+  onChange: (sections: ProjectPromptSection[]) => void
+}
+
+export function ProjectPromptSectionsGroup({
+  sections,
+  onChange
+}: ProjectPromptSectionsGroupProps): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div className="zen-card space-y-2">
+      <div className="zen-card-header">
+        <MessageSquareText size={12} />
+        {t('projectForm.promptSectionsTitle')}
       </div>
+      <p className="text-[10px] text-text-tertiary leading-relaxed">
+        {t('projectForm.promptSectionsHint')}
+      </p>
+      <PromptSectionsEditor sections={sections} onChange={onChange} />
     </div>
   )
 }

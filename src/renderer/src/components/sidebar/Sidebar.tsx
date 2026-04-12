@@ -14,13 +14,14 @@ import {
   ArrowUpCircle,
   Archive
 } from 'lucide-react'
-import { useChatStore } from '../../stores/chatStore'
+import { useChatStore, selectAllPendingCounts } from '../../stores/chatStore'
 import { useUpdateStore } from '../../stores/updateStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import type { Session } from '../../stores/chatStore'
+import { useContextMenu } from '../../hooks/useContextMenu'
 
 /**
  * 侧边栏 — 会话列表 + 新建对话 + 设置入口
@@ -31,6 +32,7 @@ const ARCHIVED_GROUP_KEY = '__archived_projects__'
 
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
+  const showContextMenu = useContextMenu()
   const {
     sessions,
     activeSessionId,
@@ -64,9 +66,13 @@ export function Sidebar(): React.JSX.Element {
     setArchivedProjects(archivedList.map((p) => ({ id: p.id, name: p.name })))
   }
 
-  // 加载项目列表（创建/编辑后也会刷新）
+  // 加载项目列表（创建/编辑后也会刷新）+ 监听后端 project:changed 事件
   useEffect(() => {
     void reloadProjects() // eslint-disable-line react-hooks/set-state-in-effect
+    const unsubscribe = window.api.project.onChanged(() => {
+      void reloadProjects()
+    })
+    return unsubscribe
   }, [editingProjectId])
 
   /** 项目 id → 名称 快查表 */
@@ -196,11 +202,24 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
+  /** 全局 pending 输入计数(供脉冲指示器) */
+  const allPendingCounts = useChatStore(selectAllPendingCounts)
+
   /** 渲染单个会话项 */
   const renderSessionItem = (session: Session): React.JSX.Element => (
     <div
       key={session.id}
       onClick={() => handleSelectSession(session.id)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        showContextMenu(
+          [{ id: 'delete-session', label: t('sidebar.deleteSession') }],
+          (actionId) => {
+            if (actionId === 'delete-session') handleDelete(session.id)
+          }
+        )
+      }}
       className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
@@ -227,6 +246,18 @@ export function Sidebar(): React.JSX.Element {
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
         {telegramBindings.has(session.id) && (
           <MessageCircle size={10} className="text-blue-500 shrink-0" />
+        )}
+        {/* 待处理用户输入提醒:脉冲圆点 + 计数 */}
+        {allPendingCounts[session.id] > 0 && (
+          <span className="flex items-center gap-1 ml-auto shrink-0">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+            </span>
+            <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
+              {allPendingCounts[session.id]}
+            </span>
+          </span>
         )}
       </div>
       <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
@@ -291,7 +322,23 @@ export function Sidebar(): React.JSX.Element {
                   key={groupKey}
                   className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
                 >
-                  <div className="relative flex items-center w-full px-1.5 py-0.5 text-[11px] group/header">
+                  <div
+                    className="relative flex items-center w-full px-1.5 py-0.5 text-[11px] group/header"
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      const items = [
+                        { id: 'new-chat', label: t('sidebar.newChat') },
+                        ...(!isTemp
+                          ? [{ id: 'edit-project', label: t('sidebar.editProject') }]
+                          : [])
+                      ]
+                      showContextMenu(items, (actionId) => {
+                        if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
+                        if (actionId === 'edit-project') setEditingProjectId(groupKey)
+                      })
+                    }}
+                  >
                     <button
                       onClick={() => toggleGroup(groupKey)}
                       className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
@@ -361,6 +408,21 @@ export function Sidebar(): React.JSX.Element {
                       <div
                         key={p.id}
                         className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 text-text-tertiary"
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          showContextMenu(
+                            [
+                              { id: 'restore-project', label: t('sidebar.restoreProject') },
+                              { id: 'sep', label: '', type: 'separator' },
+                              { id: 'delete-project', label: t('sidebar.deleteProject') }
+                            ],
+                            (actionId) => {
+                              if (actionId === 'restore-project') void handleRestoreProject(p.id)
+                              if (actionId === 'delete-project') setDeletingProjectId(p.id)
+                            }
+                          )
+                        }}
                       >
                         <FolderClosed size={11} className="flex-shrink-0 text-purple-400/50" />
                         <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-6">

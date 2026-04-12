@@ -4,9 +4,6 @@ import { createLogger } from '../../logger'
 
 const log = createLogger('ChatFrontend')
 
-/** 交互请求超时（5 分钟） */
-export const INTERACTION_TIMEOUT_MS = 5 * 60 * 1000
-
 /** 需要 streaming 能力的事件类型 */
 const STREAMING_EVENT_TYPES = new Set(['text_delta', 'thinking_delta', 'image_data'])
 
@@ -14,9 +11,7 @@ const STREAMING_EVENT_TYPES = new Set(['text_delta', 'thinking_delta', 'image_da
 const INTERACTION_CAPABILITY_MAP: Partial<
   Record<ChatEvent['type'], keyof ChatFrontendCapabilities>
 > = {
-  tool_approval_request: 'toolApproval',
-  user_input_request: 'userInput',
-  ssh_credential_request: 'sshCredentials'
+  input_request: 'userInput'
 }
 
 /**
@@ -94,9 +89,7 @@ export class ChatFrontendRegistry {
    *
    * 路由规则：
    * - text_delta / thinking_delta / image_data → 仅 streaming=true 的前端
-   * - tool_approval_request → 仅 toolApproval=true 的前端
-   * - user_input_request → 仅 userInput=true 的前端
-   * - ssh_credential_request → 仅 sshCredentials=true 的前端
+   * - input_request → 仅 userInput=true 的前端
    * - 其他事件 → 所有绑定前端
    */
   broadcast(event: ChatEvent): void {

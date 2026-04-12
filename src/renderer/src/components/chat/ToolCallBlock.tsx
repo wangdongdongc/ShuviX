@@ -91,14 +91,7 @@ interface ToolCallBlockProps {
   details?: ToolResultDetails
   /** 流式生成中的原始参数文本（generating 状态下使用） */
   streamingArgsText?: string
-  status:
-    | 'generating'
-    | 'pending'
-    | 'running'
-    | 'done'
-    | 'error'
-    | 'pending_approval'
-    | 'pending_ssh_credentials'
+  status: 'generating' | 'pending' | 'running' | 'done' | 'error'
 }
 
 /**
@@ -118,11 +111,16 @@ export function ToolCallBlock({
   const [expanded, setExpanded] = useState(false)
   const presentation = useChatStore((s) => s.toolPresentations[toolName])
 
-  // 从 store 读取实时工具执行状态，确保审批状态变更时组件能独立重渲染
+  // 从 store 读取实时工具执行状态，确保状态变更时组件能独立重渲染
   const liveExec = useChatStore((s) => {
     if (!toolCallId || !s.activeSessionId) return undefined
     const execs = s.sessionToolExecutions[s.activeSessionId]
     return execs?.find((te) => te.toolCallId === toolCallId)
+  })
+  // 该工具是否有挂起的用户输入请求(命令审批 / SSH 凭证 / ...)
+  const hasPendingInput = useChatStore((s) => {
+    if (!toolCallId || !s.activeSessionId) return false
+    return (s.sessionPendingInputs[s.activeSessionId] || []).some((r) => r.id === toolCallId)
   })
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
@@ -169,20 +167,17 @@ export function ToolCallBlock({
       icon: <X size={12} className="text-error" />,
       label: t('toolCall.error'),
       borderColor: 'border-error/40'
-    },
-    pending_approval: {
-      icon: <ShieldAlert size={12} className="text-warning" />,
-      label: t('toolCall.pendingApproval'),
-      borderColor: 'border-warning/40'
-    },
-    pending_ssh_credentials: {
-      icon: <Terminal size={12} className="text-accent" />,
-      label: t('toolCall.pendingSshCredentials'),
-      borderColor: 'border-accent/40'
     }
   }
 
-  const config = statusConfig[status]
+  // 当存在挂起的用户输入时,覆盖状态展示为"等待用户响应"(优先级高于 running)
+  const config = hasPendingInput
+    ? {
+        icon: <ShieldAlert size={12} className="text-warning" />,
+        label: t('toolCall.pendingApproval'),
+        borderColor: 'border-warning/40'
+      }
+    : statusConfig[status]
 
   return (
     <div className="my-0.5">
@@ -228,7 +223,7 @@ export function ToolCallBlock({
       )}
 
       {/* 展开详情 */}
-      {expanded && !hasEditDiff && status !== 'pending_approval' && (
+      {expanded && !hasEditDiff && !hasPendingInput && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {presentation && args ? (
             <PluginToolDetail presentation={presentation} args={args} result={result} />

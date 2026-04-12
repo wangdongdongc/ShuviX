@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Sparkles, Terminal, FileText, Wrench, Settings } from 'lucide-react'
+import { MessageSquarePlus, Terminal, FileText, Wrench, Settings, Sliders } from 'lucide-react'
 import { icons } from 'lucide-react'
+import { SessionConfigPanel } from './SessionConfigPanel'
 
 interface PluginPurpose {
   key: string
@@ -146,16 +147,19 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
   )
 }
 
-/** 空会话引导 — 有活跃会话但无消息时显示 */
-export function EmptySessionHint(): React.JSX.Element {
+/** 空会话引导 — 有活跃会话但无消息时显示，居中展示会话配置面板 */
+export function EmptySessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center px-6">
-        <div className="w-12 h-12 rounded-xl bg-bg-tertiary flex items-center justify-center mx-auto mb-4">
-          <Sparkles size={24} className="text-text-tertiary" />
+    <div className="flex-1 flex items-center justify-center overflow-y-auto">
+      <div className="w-full max-w-lg px-8 py-12">
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 rounded-xl bg-bg-tertiary flex items-center justify-center mx-auto mb-3">
+            <Sliders size={22} className="text-text-tertiary" />
+          </div>
+          <p className="text-sm text-text-secondary">{t('chat.emptyHint')}</p>
         </div>
-        <p className="text-sm text-text-secondary">{t('chat.emptyHint')}</p>
+        <SessionConfigPanel sessionId={sessionId} />
       </div>
     </div>
   )

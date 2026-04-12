@@ -183,7 +183,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   }
 
   protected async securityCheck(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; offset?: number; limit?: number },
     signal?: AbortSignal
   ): Promise<void> {
@@ -195,8 +195,8 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
     const config = resolveProjectConfig(this.ctx.sessionId)
     const absolutePath = resolveReadPath(params.path, config.workingDirectory)
 
-    // 沙箱模式：路径越界检查（工作目录 + 参考目录均允许读取）
-    assertSandboxRead(config, absolutePath, params.path)
+    // 沙箱守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待用户审批
+    await assertSandboxRead(this.ctx, config, toolCallId, 'read', absolutePath, params.path)
   }
 
   protected async executeInternal(

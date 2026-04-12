@@ -39,6 +39,6 @@ export function filterAvailableTools(enabledTools: string[], projectPath?: strin
   const available = new Set(getAllToolNames(projectPath))
   const result = enabledTools.filter((name) => available.has(name))
   const skills = result.filter((n) => n.startsWith('skill:'))
-  log.info(`filterAvailableTools count=${result.length} skills=[${skills.join(',')}]`)
+  log.debug(`filterAvailableTools count=${result.length} skills=[${skills.join(',')}]`)
   return result
 }

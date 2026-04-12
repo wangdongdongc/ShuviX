@@ -312,6 +312,22 @@ Complete the user's search request efficiently and report your findings clearly.
         now
       )
     }
+  },
+  {
+    version: 7,
+    description: '将 projects.systemPrompt 列从 plain text 转为 JSON 信封 {sections:[]}',
+    up: (db) => {
+      // 老 plain text 内容直接清空(用户决策),改为标准空信封
+      db.exec(`UPDATE projects SET systemPrompt = '{"sections":[]}'`)
+    }
+  },
+  {
+    version: 8,
+    description: '删除 projects.sandboxEnabled 列(改用会话级 settings.autoApprove 统一控制)',
+    up: (db) => {
+      // SQLite 3.35+ 支持 DROP COLUMN(better-sqlite3 内置版本满足)
+      db.exec(`ALTER TABLE projects DROP COLUMN sandboxEnabled`)
+    }
   }
 ]
 

@@ -1,11 +1,18 @@
 import { BaseDao } from './database'
-import type { Project, ProjectSettings } from './types'
+import type { Project, ProjectSettings, ProjectPromptSection } from './types'
 
-/** DB 原始行类型（settings 在 DB 中为 JSON 字符串） */
-type ProjectRow = Omit<Project, 'settings'> & { settings: string }
+/**
+ * DB 原始行类型:
+ * - settings 在 DB 中为 JSON 字符串
+ * - systemPrompt 列在 DB 中存 `{"sections":[...]}` JSON 信封,解析后映射为应用层 `promptSections` 字段
+ */
+type ProjectRow = Omit<Project, 'settings' | 'promptSections'> & {
+  settings: string
+  systemPrompt: string
+}
 
-/** 安全解析 JSON，失败返回空对象 */
-function safeParse(json: string | undefined | null): ProjectSettings {
+/** 安全解析 settings JSON,失败返回空对象 */
+function safeParseSettings(json: string | undefined | null): ProjectSettings {
   try {
     return JSON.parse(json || '{}')
   } catch {
@@ -13,13 +20,50 @@ function safeParse(json: string | undefined | null): ProjectSettings {
   }
 }
 
-/** 将 DB 行的 settings 字符串解析为类型化对象 */
+/**
+ * 解析 systemPrompt 列的 JSON 信封 → ProjectPromptSection[]
+ * 防御性 fallback:遇到老 plain text / 损坏数据返回空数组
+ */
+function parsePromptSections(raw: string | undefined | null): ProjectPromptSection[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && Array.isArray(parsed.sections)) {
+      return parsed.sections.filter(
+        (s: unknown): s is ProjectPromptSection =>
+          typeof s === 'object' &&
+          s !== null &&
+          typeof (s as { id?: unknown }).id === 'string' &&
+          typeof (s as { title?: unknown }).title === 'string' &&
+          typeof (s as { content?: unknown }).content === 'string'
+      )
+    }
+  } catch {
+    /* 旧 plain text 或损坏,按空处理 */
+  }
+  return []
+}
+
+/** 序列化 ProjectPromptSection[] → JSON 信封字符串 */
+function encodePromptSections(sections: ProjectPromptSection[]): string {
+  return JSON.stringify({ sections })
+}
+
+/** 将 DB 行映射为应用层 Project 对象 */
 function parseRow(row: ProjectRow): Project {
-  return { ...row, settings: safeParse(row.settings) }
+  const { settings, systemPrompt, ...rest } = row
+  return {
+    ...rest,
+    settings: safeParseSettings(settings),
+    promptSections: parsePromptSections(systemPrompt)
+  }
 }
 
 /**
  * Project DAO — 项目表的纯数据访问操作
+ *
+ * 注意:DB 列名仍为 `systemPrompt`(历史遗留),内容存 `{"sections":[...]}`
+ * JSON 信封,DAO 内部映射为应用层 `promptSections` 字段。
  */
 export class ProjectDao extends BaseDao {
   /** 获取所有项目，按更新时间倒序 */
@@ -58,15 +102,25 @@ export class ProjectDao extends BaseDao {
     return row ? parseRow(row) : undefined
   }
 
-  /** 按需查询：只 SELECT 指定字段，settings 仅在需要时解析 */
+  /**
+   * 按需查询:只 SELECT 指定字段
+   * - settings 字段会自动 JSON 解析
+   * - promptSections 字段映射为 SELECT systemPrompt 列,自动解析 JSON 信封
+   */
   pick<K extends keyof Project>(id: string, fields: K[]): Pick<Project, K> | undefined {
-    const columns = fields.map((f) => String(f)).join(', ')
-    const row = this.stmt(`SELECT ${columns} FROM projects WHERE id = ?`).get(id) as
+    // 字段名 → DB 列名映射(promptSections 实际存在 systemPrompt 列)
+    const columns = fields.map((f) => (f === 'promptSections' ? 'systemPrompt' : String(f)))
+    const row = this.stmt(`SELECT ${columns.join(', ')} FROM projects WHERE id = ?`).get(id) as
       | Record<string, unknown>
       | undefined
     if (!row) return undefined
     if ('settings' in row) {
-      row.settings = safeParse(row.settings as string)
+      row.settings = safeParseSettings(row.settings as string)
+    }
+    if ('systemPrompt' in row && fields.includes('promptSections' as K)) {
+      const sections = parsePromptSections(row.systemPrompt as string)
+      delete row.systemPrompt
+      ;(row as Record<string, unknown>).promptSections = sections
     }
     return row as Pick<Project, K>
   }
@@ -74,15 +128,14 @@ export class ProjectDao extends BaseDao {
   /** 插入项目 */
   insert(project: Project): void {
     this.stmt(
-      'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, sandboxEnabled, settings, archivedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, settings, archivedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       project.id,
       project.name,
       project.path,
-      project.systemPrompt,
+      encodePromptSections(project.promptSections),
       project.dockerEnabled,
       project.dockerImage,
-      project.sandboxEnabled,
       JSON.stringify(project.settings),
       project.archivedAt,
       project.createdAt,
@@ -98,10 +151,9 @@ export class ProjectDao extends BaseDao {
         Project,
         | 'name'
         | 'path'
-        | 'systemPrompt'
+        | 'promptSections'
         | 'dockerEnabled'
         | 'dockerImage'
-        | 'sandboxEnabled'
         | 'settings'
         | 'archivedAt'
       >
@@ -117,9 +169,9 @@ export class ProjectDao extends BaseDao {
       sets.push('path = ?')
       values.push(fields.path)
     }
-    if (fields.systemPrompt !== undefined) {
+    if (fields.promptSections !== undefined) {
       sets.push('systemPrompt = ?')
-      values.push(fields.systemPrompt)
+      values.push(encodePromptSections(fields.promptSections))
     }
     if (fields.dockerEnabled !== undefined) {
       sets.push('dockerEnabled = ?')
@@ -128,10 +180,6 @@ export class ProjectDao extends BaseDao {
     if (fields.dockerImage !== undefined) {
       sets.push('dockerImage = ?')
       values.push(fields.dockerImage)
-    }
-    if (fields.sandboxEnabled !== undefined) {
-      sets.push('sandboxEnabled = ?')
-      values.push(fields.sandboxEnabled)
     }
     if (fields.settings !== undefined) {
       sets.push('settings = ?')

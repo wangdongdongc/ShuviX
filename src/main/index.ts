@@ -31,6 +31,7 @@ import { destroyTerminalsByWindow } from './services/terminalService'
 import esbuildPlugin from '../plugins/esbuild'
 import pyodidePlugin from '../plugins/pyodide'
 import pglitePlugin from '../plugins/pglite'
+import { createPreviewView, destroyPreviewView } from './services/previewViewService'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -366,6 +367,9 @@ function createWindow(): void {
   // 注册 Electron 主窗口为默认前端
   chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
 
+  // 创建预览面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
+  createPreviewView(mainWindow)
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
@@ -589,6 +593,7 @@ app.whenReady().then(async () => {
 
 // 应用退出前清理
 app.on('before-quit', () => {
+  destroyPreviewView()
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})

@@ -1,6 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { projectDao } from '../dao/projectDao'
 import type { Project, ProjectSettings, ReferenceDir } from '../types'
+import type { ProjectPromptSection } from '../../shared/types/promptSection'
 import { basename, resolve } from 'path'
 import { expandPath } from '../tools/utils/pathUtils'
 
@@ -19,7 +20,10 @@ export interface ProjectFieldMeta {
  */
 export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   name: { labelKey: 'projectForm.name', desc: 'Project display name' },
-  systemPrompt: { labelKey: 'projectForm.prompt', desc: 'Project-level system prompt' },
+  promptSections: {
+    labelKey: 'projectForm.promptSectionsTitle',
+    desc: 'Project-level system prompt as ordered cards (array of {id, title, content})'
+  },
   enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
   referenceDirs: {
     labelKey: 'projectForm.referenceDirs',
@@ -87,7 +91,7 @@ export class ProjectService {
   create(params: {
     name?: string
     path: string
-    systemPrompt?: string
+    promptSections?: ProjectPromptSection[]
     dockerEnabled?: boolean
     dockerImage?: string
     enabledTools?: string[]
@@ -106,10 +110,9 @@ export class ProjectService {
       id,
       name: params.name || basename(params.path) || params.path,
       path: resolve(expandPath(params.path)),
-      systemPrompt: params.systemPrompt || '',
+      promptSections: params.promptSections ?? [],
       dockerEnabled: params.dockerEnabled ? 1 : 0,
       dockerImage: params.dockerImage || '',
-      sandboxEnabled: 1,
       settings,
       archivedAt: params.archived ? now : 0,
       createdAt: now,
@@ -125,7 +128,7 @@ export class ProjectService {
     params: {
       name?: string
       path?: string
-      systemPrompt?: string
+      promptSections?: ProjectPromptSection[]
       dockerEnabled?: boolean
       dockerImage?: string
       enabledTools?: string[]
@@ -154,7 +157,7 @@ export class ProjectService {
     projectDao.update(id, {
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
-      ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
+      ...(params.promptSections !== undefined ? { promptSections: params.promptSections } : {}),
       ...(params.dockerEnabled !== undefined
         ? { dockerEnabled: params.dockerEnabled ? 1 : 0 }
         : {}),

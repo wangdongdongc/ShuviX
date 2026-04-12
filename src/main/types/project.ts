@@ -1,18 +1,20 @@
 import type { ReferenceDir, ToolSettings } from '../dao/types'
+import type { ProjectPromptSection } from '../../shared/types/promptSection'
 
 export type {
   Project,
   ProjectEnvVar,
   ProjectSettings,
   ReferenceDir,
-  ToolSettings
+  ToolSettings,
+  ProjectPromptSection
 } from '../dao/types'
 
 /** IPC: 创建项目参数 */
 export interface ProjectCreateParams {
   name?: string
   path: string
-  systemPrompt?: string
+  promptSections?: ProjectPromptSection[]
   dockerEnabled?: boolean
   dockerImage?: string
   enabledTools?: string[]
@@ -26,7 +28,7 @@ export interface ProjectUpdateParams {
   id: string
   name?: string
   path?: string
-  systemPrompt?: string
+  promptSections?: ProjectPromptSection[]
   dockerEnabled?: boolean
   dockerImage?: string
   enabledTools?: string[]

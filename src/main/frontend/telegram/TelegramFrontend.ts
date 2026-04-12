@@ -17,9 +17,7 @@ export class TelegramFrontend implements ChatFrontend {
   readonly id: string
   readonly capabilities: ChatFrontendCapabilities = {
     streaming: false,
-    toolApproval: true,
-    userInput: true,
-    sshCredentials: false
+    userInput: true
   }
 
   private alive = true
@@ -102,17 +100,25 @@ export class TelegramFrontend implements ChatFrontend {
         // 工具执行过程不发送，减少消息噪音
         break
 
-      case 'tool_approval_request': {
-        const { text, keyboard } = formatApprovalMessage(event)
-        await this.sendWithKeyboard(text, keyboard)
+      case 'input_request': {
+        const req = event.request
+        if (req.kind === 'approval') {
+          const { text, keyboard } = formatApprovalMessage(req)
+          await this.sendWithKeyboard(text, keyboard)
+        } else if (req.kind === 'choice') {
+          const { text, keyboard } = formatAskMessage(req)
+          await this.sendWithKeyboard(text, keyboard)
+        } else {
+          // sshCredentials 等暂不支持 → 友好降级
+          await this.sendText(`⚠️ Telegram 不支持此输入类型 (${req.kind}),请回到桌面端响应。`)
+        }
         break
       }
 
-      case 'user_input_request': {
-        const { text, keyboard } = formatAskMessage(event)
-        await this.sendWithKeyboard(text, keyboard)
+      case 'input_request_resolved':
+        // 其它前端已响应该请求,本端可清理本地暂存(若有)
+        this.askSelections.delete(event.requestId)
         break
-      }
 
       case 'error':
         await this.sendText(`⚠️ ${event.error}`)

@@ -214,14 +214,32 @@ function extractSummary(content: unknown): {
   for (const block of content) {
     if ((block.type === 'text' || block.type === 'input_text') && block.text) {
       text += block.text + ' '
+    } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+      text += block.thinking + ' '
     } else if (
       block.type === 'image_url' ||
       block.type === 'image' ||
       block.type === 'input_image'
     ) {
       hasImage = true
-    } else if (block.type === 'tool_call' || block.type === 'toolCall') {
+    } else if (
+      block.type === 'tool_call' ||
+      block.type === 'toolCall' ||
+      block.type === 'tool_use'
+    ) {
       hasToolCall = true
+      const name = (block.name as string) || '?'
+      text += `→ ${name}(...) `
+    } else if (block.type === 'tool_result') {
+      hasToolCall = true
+      const c = block.content
+      if (typeof c === 'string') {
+        text += c + ' '
+      } else if (Array.isArray(c)) {
+        for (const sub of c as ContentBlock[]) {
+          if (sub.type === 'text' && sub.text) text += sub.text + ' '
+        }
+      }
     }
   }
 
@@ -384,6 +402,70 @@ function ContentBlockView({
         <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
           {JSON.stringify(fr.response, null, 2)}
         </pre>
+      </div>
+    )
+  }
+  // Anthropic: thinking block
+  if (block.type === 'thinking') {
+    return (
+      <div className="bg-bg-tertiary rounded-md p-2 border-l-2 border-purple-400/40">
+        <div className="text-[10px] text-purple-400 font-medium mb-1">thinking</div>
+        <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed">
+          {(block.thinking as string) || ''}
+        </pre>
+      </div>
+    )
+  }
+  // Anthropic: tool_use block
+  if (block.type === 'tool_use') {
+    return (
+      <div className="bg-bg-tertiary rounded-md p-2">
+        <div className="text-[11px] text-orange-400 font-medium">
+          → {(block.name as string) || '?'}
+          {block.id ? (
+            <span className="ml-1 text-[10px] text-text-tertiary">({String(block.id)})</span>
+          ) : null}
+        </div>
+        <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+          {JSON.stringify(block.input ?? block.arguments, null, 2)}
+        </pre>
+      </div>
+    )
+  }
+  // Anthropic: tool_result block
+  if (block.type === 'tool_result') {
+    const c = block.content
+    const isError = block.is_error === true
+    return (
+      <div
+        className={`bg-bg-tertiary rounded-md p-2 border-l-2 ${
+          isError ? 'border-red-400/60' : 'border-green-400/40'
+        }`}
+      >
+        <div className="text-[11px] text-green-400 font-medium">
+          ← tool_result
+          {block.tool_use_id ? (
+            <span className="ml-1 text-[10px] text-text-tertiary">
+              ({String(block.tool_use_id)})
+            </span>
+          ) : null}
+          {isError && <span className="ml-1 text-[10px] text-red-400">error</span>}
+        </div>
+        {typeof c === 'string' ? (
+          <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+            {c}
+          </pre>
+        ) : Array.isArray(c) ? (
+          <div className="mt-1 space-y-1">
+            {(c as ContentBlock[]).map((sub, i) => (
+              <ContentBlockView key={i} block={sub} t={t} />
+            ))}
+          </div>
+        ) : (
+          <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
+            {JSON.stringify(c, null, 2)}
+          </pre>
+        )}
       </div>
     )
   }

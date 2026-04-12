@@ -8,8 +8,6 @@ import {
   useChatStore,
   selectIsStreaming,
   selectIsCompacting,
-  selectToolExecutions,
-  selectPendingUserInput,
   selectCanEdit
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
@@ -31,16 +29,14 @@ function formatTokenCount(n: number): string {
   return String(n)
 }
 
-interface InputAreaProps {
-  /** 用户通过输入框文本覆盖当前 pending action（审批拒绝 / ask 反馈） */
-  onUserActionOverride?: (text: string) => void
-}
-
 /**
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
+ *
+ * 注:不再有"pending action 时输入框走 override"的联动。
+ * 反馈给 AI 的入口由 PendingInputsPanel 中的"其它"输入框承担。
  */
-export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.Element {
+export function InputArea(): React.JSX.Element {
   const { t } = useTranslation()
   const {
     inputText,
@@ -62,24 +58,19 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
       []
     )
   )
-  const { projectPath, agentMdLoaded } = useSessionMeta()
+  const { projectPath } = useSessionMeta()
 
-  // 检测是否有待用户操作（用户输入 / bash 审批）
-  const toolExecutions = useChatStore(selectToolExecutions)
-  const pendingUserInput = useChatStore(selectPendingUserInput)
-  const hasPendingAction =
-    !!pendingUserInput || toolExecutions.some((te) => te.status === 'pending_approval')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
 
-  // 工具栏宽度不足时隐藏上下文用量和指令状态
+  // 工具栏宽度不足时隐藏上下文用量
   const [showToolbarExtras, setShowToolbarExtras] = useState(true)
   useEffect(() => {
     const el = toolbarRef.current
     if (!el) return
     const ro = new ResizeObserver(([entry]) => {
-      setShowToolbarExtras(entry.contentRect.width > 520)
+      setShowToolbarExtras(entry.contentRect.width > 420)
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -302,14 +293,6 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     }
   }
 
-  /** 用户通过输入框提交文本覆盖当前 pending action */
-  const handleOverrideSend = (): void => {
-    const text = inputText.trim()
-    if (!text || !onUserActionOverride) return
-    onUserActionOverride(text)
-    useChatStore.getState().setInputText('')
-  }
-
   /** 斜杠命令选中回调：设置芯片，输入框只保留参数；自动启用依赖工具 */
   const handleSlashSelect = useCallback(
     (commandId: string) => {
@@ -362,11 +345,6 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      // pending action 时优先走 override 流程
-      if (hasPendingAction && inputText.trim()) {
-        handleOverrideSend()
-        return
-      }
       // streaming 时发送 steer 消息
       if (isStreaming) {
         if (inputText.trim()) handleSteer()
@@ -376,15 +354,10 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
     }
   }
 
-  // pending action 时输入框临时可用
-  const effectiveStreaming = isStreaming && !hasPendingAction
   const canSend =
     (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
-    !effectiveStreaming &&
+    !isStreaming &&
     activeSessionId
-  const instructionBadgeText = agentMdLoaded ? 'AGENTS.MD' : 'None'
-  const instructionDotClass = agentMdLoaded ? 'bg-emerald-400/90' : 'bg-text-tertiary/45'
-
   return (
     <div
       className={`bg-bg-primary transition-colors ${
@@ -497,40 +470,12 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                 </span>
               )}
 
-              {/* 项目指令文件加载状态（空间不足时隐藏） */}
-              {showToolbarExtras && projectPath && (
-                <span className="relative inline-flex items-center group">
-                  <span
-                    className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors select-none"
-                    title={t('input.instructionsStatus')}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${instructionDotClass}`} />
-                    <span className="uppercase tracking-wide text-[10px] opacity-70">Instr</span>
-                    <span className="truncate max-w-[140px] text-text-secondary/90">
-                      {instructionBadgeText}
-                    </span>
-                  </span>
-
-                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[220px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block whitespace-nowrap">
-                    <div className="text-[10px] text-text-tertiary mb-1">
-                      {t('input.instructionsStatus')}
-                    </div>
-                    <div className="flex items-center justify-between gap-3 text-[11px]">
-                      <span className="text-text-secondary">AGENTS.MD</span>
-                      <span className={agentMdLoaded ? 'text-emerald-400' : 'text-text-tertiary'}>
-                        {agentMdLoaded ? t('input.loaded') : t('input.notLoaded')}
-                      </span>
-                    </div>
-                  </div>
-                </span>
-              )}
-
               {/* 右侧弹性空白 → 将按钮推到最右 */}
               <span className="flex-1" />
 
               {/* Compact + Mic + Send/Stop 按钮 */}
               <div className="flex items-center gap-0.5">
-                {assistantMsgCount >= 2 && !effectiveStreaming && !isCompacting && (
+                {assistantMsgCount >= 2 && !isStreaming && !isCompacting && (
                   <button
                     onClick={() => activeSessionId && window.api.compact.start(activeSessionId)}
                     className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
@@ -539,7 +484,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                     <Archive size={14} />
                   </button>
                 )}
-                {voice.isAvailable && !effectiveStreaming && (
+                {voice.isAvailable && !isStreaming && (
                   <button
                     onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
                     disabled={!activeSessionId}
@@ -567,7 +512,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                   </button>
                 )}
 
-                {effectiveStreaming ? (
+                {isStreaming ? (
                   <div className="flex items-center gap-1">
                     <button
                       onClick={handleSteer}
@@ -591,7 +536,7 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
                   </div>
                 ) : (
                   <button
-                    onClick={hasPendingAction ? handleOverrideSend : handleSend}
+                    onClick={handleSend}
                     disabled={!canSend}
                     className={`p-1.5 rounded-lg transition-colors ${
                       canSend
@@ -638,15 +583,13 @@ export function InputArea({ onUserActionOverride }: InputAreaProps): React.JSX.E
               placeholder={
                 !activeSessionId
                   ? t('input.placeholderNoSession')
-                  : effectiveStreaming
+                  : isStreaming
                     ? t('input.placeholderSteer')
                     : slashChip
                       ? t('input.placeholder')
-                      : hasPendingAction
-                        ? t('input.placeholderOverride')
-                        : modelSupportsVision
-                          ? t('input.placeholderVision')
-                          : t('input.placeholder')
+                      : modelSupportsVision
+                        ? t('input.placeholderVision')
+                        : t('input.placeholder')
               }
               disabled={!activeSessionId}
               rows={3}

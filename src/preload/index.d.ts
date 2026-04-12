@@ -116,8 +116,6 @@ declare global {
     toolArgs?: Record<string, unknown>
     messageId?: string
     turnIndex?: number
-    approvalRequired?: boolean
-    sshCredentialRequired?: boolean
   }
   interface ChatToolEndEvent extends ChatEventBase {
     type: 'tool_end'
@@ -129,27 +127,13 @@ declare global {
     /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
     details?: ToolResultDetails
   }
-  interface ChatApprovalRequestEvent extends ChatEventBase {
-    type: 'tool_approval_request'
-    toolCallId: string
-    toolName: string
-    toolArgs?: Record<string, unknown>
-  }
   interface ChatInputRequestEvent extends ChatEventBase {
-    type: 'user_input_request'
-    toolCallId: string
-    toolName: string
-    payload: {
-      question: string
-      detail?: string
-      options: Array<{ label: string; description: string }>
-      allowMultiple: boolean
-    }
+    type: 'input_request'
+    request: import('../shared/types/inputRequest').InputRequest
   }
-  interface ChatCredentialRequestEvent extends ChatEventBase {
-    type: 'ssh_credential_request'
-    toolCallId: string
-    toolName: string
+  interface ChatInputRequestResolvedEvent extends ChatEventBase {
+    type: 'input_request_resolved'
+    requestId: string
   }
   interface ChatImageDataEvent extends ChatEventBase {
     type: 'image_data'
@@ -240,10 +224,15 @@ declare global {
   interface ChatCompactionEndEvent extends ChatEventBase {
     type: 'compaction_end'
     message: string
+    instructionMessages?: string[]
   }
   interface ChatCompactionErrorEvent extends ChatEventBase {
     type: 'compaction_error'
     error: string
+  }
+  interface ChatInstructionsInjectedEvent extends ChatEventBase {
+    type: 'instructions_injected'
+    messages: string[]
   }
   interface ChatErrorEvent extends ChatEventBase {
     type: 'error'
@@ -264,9 +253,8 @@ declare global {
     | ChatToolCallGeneratingEvent
     | ChatToolStartEvent
     | ChatToolEndEvent
-    | ChatApprovalRequestEvent
     | ChatInputRequestEvent
-    | ChatCredentialRequestEvent
+    | ChatInputRequestResolvedEvent
     | ChatImageDataEvent
     | ChatRuntimeEvent
     | ChatPreviewEvent
@@ -280,6 +268,7 @@ declare global {
     | ChatCompactionStartEvent
     | ChatCompactionEndEvent
     | ChatCompactionErrorEvent
+    | ChatInstructionsInjectedEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
 
@@ -328,10 +317,9 @@ declare global {
     id: string
     name: string
     path: string
-    systemPrompt: string
+    promptSections: import('../shared/types/promptSection').ProjectPromptSection[]
     dockerEnabled: number
     dockerImage: string
-    sandboxEnabled: number
     settings: ProjectSettings
     archivedAt: number
     createdAt: number
@@ -349,6 +337,7 @@ declare global {
     autoApprove?: boolean
     allowList?: string[]
     telegramBotId?: string
+    enabledInstructionFiles?: string[]
   }
 
   /** 会话类型（对应 DB 表 sessions） */
@@ -373,8 +362,6 @@ declare global {
     workingDirectory?: string | null
     /** 当前生效的工具列表（由后端解析：session > project > all） */
     enabledTools?: string[]
-    /** 项目 AGENT.md 是否存在并已加载 */
-    agentMdLoaded?: boolean
   }
 
   // ---- 消息相关类型（从 shared 统一引用，消除重复定义） ----
@@ -461,28 +448,13 @@ declare global {
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
-      /** 响应工具审批请求（沙箱模式下 bash 命令需用户确认） */
-      approveToolCall: (params: {
-        toolCallId: string
-        approved: boolean
-        reason?: string
-      }) => Promise<{ success: boolean }>
-      /** 响应 ask 工具的用户选择 */
-      respondToAsk: (params: {
-        toolCallId: string
-        selections: string[]
-      }) => Promise<{ success: boolean }>
-      /** 响应 SSH 凭据输入（凭据不经过大模型） */
-      respondToSshCredentials: (params: {
-        toolCallId: string
-        credentials: {
-          host: string
-          port: number
-          username: string
-          password?: string
-          privateKey?: string
-          passphrase?: string
-        } | null
+      /**
+       * 统一的"用户输入响应"入口。命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
+       */
+      respondToInput: (params: {
+        sessionId: string
+        requestId: string
+        response: import('../shared/types/inputRequest').InputResponse
       }) => Promise<{ success: boolean }>
       /** 动态更新启用工具集 */
       setEnabledTools: (params: {
@@ -522,6 +494,8 @@ declare global {
       delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
       /** 获取已知项目字段的元数据（labelKey + desc） */
       getKnownFields: () => Promise<Record<string, ConfigMeta>>
+      /** 监听项目列表变更（创建/更新/删除/归档后触发） */
+      onChanged: (callback: () => void) => () => void
     }
     session: {
       list: () => Promise<Session[]>
@@ -537,7 +511,7 @@ declare global {
       previewAllowPatterns: (params: {
         command: string
         sessionId?: string
-        toolType?: 'bash' | 'ssh'
+        toolType?: 'bash' | 'ssh' | 'read' | 'write'
       }) => Promise<string[]>
       addAllowListPatterns: (params: SessionAllowListAddParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
@@ -549,6 +523,14 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
+      scanInstructionFiles: (
+        sessionId: string
+      ) => Promise<import('../shared/types/instructionFile').InstructionFileEntry[]>
+      updateInstructionFiles: (params: {
+        id: string
+        filenames: string[]
+      }) => Promise<{ success: boolean }>
+      onConfigChanged: (callback: (payload: { sessionId: string }) => void) => () => void
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
@@ -806,6 +788,19 @@ declare global {
       start: (params: { sessionId: string; workingDir: string }) => void
       stop: (params: { sessionId: string }) => void
     }
+    previewView: {
+      navigate: (url: string) => Promise<void>
+      goBack: () => Promise<void>
+      goForward: () => Promise<void>
+      reload: () => Promise<void>
+      stop: () => Promise<void>
+      getUrl: () => Promise<string>
+      updateBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
+      setVisible: (visible: boolean) => void
+      onDidStartLoading: (callback: (url: string) => void) => () => void
+      onDidNavigate: (callback: (url: string) => void) => () => void
+      onDidFinishLoad: (callback: () => void) => () => void
+    }
     plugin: {
       purposes: () => Promise<
         Array<{
@@ -858,6 +853,11 @@ declare global {
       getLastEvent: () => Promise<UpdateEvent | null>
       /** 监听更新状态事件，返回取消监听函数 */
       onEvent: (callback: (event: UpdateEvent) => void) => () => void
+    }
+    contextMenu: {
+      popup: (request: {
+        items: Array<{ id: string; label: string; type?: string; enabled?: boolean }>
+      }) => Promise<{ actionId: string | null }>
     }
   }
 
