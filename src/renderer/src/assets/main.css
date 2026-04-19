@@ -531,6 +531,9 @@ body {
   line-height: 1.7;
   font-size: var(--app-font-size, 14px);
   color: var(--color-text-primary);
+  /* white-space 是继承属性 —— 显式重置，避免在 white-space: pre-wrap 的容器里
+     (如 UserBubble) 被继承导致 markdown 中段间换行被渲染为硬换行 */
+  white-space: normal;
 }
 
 /* —— 标题 —— */
@@ -662,9 +665,10 @@ body {
   border-collapse: collapse;
   margin: 0.5em 0;
   font-size: 0.9em;
-  display: block;
-  overflow-x: auto;
+  display: table;
+  width: 100%;
   max-width: 100%;
+  table-layout: auto;
 }
 
 .markdown-body th,
@@ -673,6 +677,9 @@ body {
   border-bottom: 1px solid var(--color-border-secondary);
   padding: 5px 10px;
   text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body th {

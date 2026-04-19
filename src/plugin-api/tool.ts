@@ -34,6 +34,8 @@ export interface PluginTool<TParams extends TSchema = TSchema> {
   readonly description: string
   /** 参数 JSON Schema（TypeBox 定义） */
   readonly parameters: TParams
+  /** 新建会话时是否默认启用（省略时视为 true） */
+  readonly defaultEnabled?: boolean
   /** 前端渲染提示（可选） */
   readonly presentation?: ToolPresentation
 

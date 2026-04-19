@@ -118,14 +118,11 @@ export function registerSessionHandlers(): void {
   /** AI 自动生成会话标题（后台静默，对用户透明） */
   ipcMain.handle(
     'session:generateTitle',
-    async (
-      _event,
-      params: { sessionId: string; userMessage: string; assistantMessage: string }
-    ) => {
+    async (_event, params: { sessionId: string; conversationText: string }) => {
       const title =
         (await sessionService
           .getAgentSession(params.sessionId)
-          ?.generateTitle(params.userMessage, params.assistantMessage)) ?? null
+          ?.generateTitle(params.conversationText)) ?? null
       if (title) {
         sessionService.updateTitle(params.sessionId, title)
       }

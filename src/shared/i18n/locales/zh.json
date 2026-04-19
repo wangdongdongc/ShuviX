@@ -409,6 +409,10 @@
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
     "systemPrompt": "系统提示词",
+    "titleModelSection": "标题生成模型",
+    "titleModelHint": "选择用于自动生成会话标题的模型。未设置时不自动生成标题。",
+    "titleModelClear": "清除",
+    "titleModelSetup": "配置标题模型",
     "systemPromptPlaceholder": "设定 AI 助手的角色和行为...",
     "tokenUsageWarning": "智能体模式的 Token 用量通常远高于普通对话，建议在提供商平台关注用量或设置消费限额，避免产生意外费用。",
     "addProvider": "添加自定义提供商",
@@ -436,6 +440,8 @@
     "noMatchingModels": "未找到匹配模型",
     "saved": "已保存",
     "saveConfig": "保存配置",
+    "saveConfigAndEnable": "保存配置并开启",
+    "noEnabledModels": "未启用模型",
     "builtin": "内置",
     "custom": "自定义",
     "apiKeyPlaceholder": "输入 {{name}} API Key",
@@ -761,10 +767,10 @@
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "exploreLabel": "探索",
     "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构",
-    "esbuildLabel": "Esbuild 构建",
-    "esbuildHint": "使用 esbuild-wasm 构建 React 项目并启动本地预览服务器，返回 URL 供 preview 工具打开",
     "previewLabel": "预览面板",
     "previewHint": "在预览面板中打开任意 URL，或关闭预览面板",
+    "devLabel": "开发工具",
+    "devHint": "统一的 AI 前端开发工具。kind=widget 创建可复用小工具，kind=presentation 创建 Spectacle 幻灯片，kind=sketch 打开空白 React 画布。init 初始化，build 打包并返回预览 URL。",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "将复杂编程任务委托给 Claude Code — 自主 AI 编码智能体，擅长多文件修改、重构、调试等",
     "subAgentTab": "子智能体",
@@ -791,6 +797,31 @@
     "subAgentDeleteConfirm": "确定要删除子智能体「{{name}}」吗？已启用该工具的会话将不再可用。",
     "subAgentNameExists": "名称已存在",
     "subAgentNameInvalid": "仅允许小写字母、数字和连字符"
+  },
+
+  "widgets": {
+    "sectionTitle": "小组件",
+    "emptyHint": "使用 /widget 命令让 AI 帮你创建一个小组件",
+    "panelEmptyHint": "还没有小组件。使用 /widget 命令让 AI 帮你创建一个",
+    "refresh": "刷新",
+    "openExternal": "在浏览器中打开",
+    "serverRegistered": "{{count}} 个已注册",
+    "serverStopped": "服务未运行",
+    "stopServer": "停止",
+    "stopServerTooltip": "停止 widget HTTP 服务器（下次打开会自动重启）",
+    "open": "打开",
+    "archive": "归档",
+    "delete": "删除",
+    "never": "从未打开",
+    "justNow": "刚刚",
+    "minutesAgo": "{{count}} 分钟前",
+    "hoursAgo": "{{count}} 小时前",
+    "daysAgo": "{{count}} 天前",
+    "confirmDeleteTitle": "删除小组件",
+    "confirmDeleteDescription": "确定要删除小组件「{{name}}」吗？本地文件和所有历史状态都会被移除，且无法恢复。",
+    "archivedSection": "已归档",
+    "restore": "恢复",
+    "archivedAt": "已归档于"
   },
 
   "bindings": {
@@ -833,5 +864,28 @@
     "edit": "编辑",
     "window": "窗口",
     "dev": "开发"
+  },
+
+  "panel": {
+    "preview": "预览",
+    "terminal": "终端",
+    "widget": "小组件",
+    "urlPlaceholder": "输入 URL",
+    "newTerminal": "新建终端"
+  },
+
+  "command": {
+    "widget": {
+      "name": "Widget",
+      "description": "创建或维护一个可复用的小组件"
+    },
+    "presentation": {
+      "name": "Presentation",
+      "description": "在当前工作目录中创建 Spectacle 幻灯片"
+    },
+    "sketch": {
+      "name": "Sketch",
+      "description": "在当前工作目录中创建空白 React 画布"
+    }
   }
 }

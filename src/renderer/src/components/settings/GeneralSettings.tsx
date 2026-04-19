@@ -40,7 +40,11 @@ export function GeneralSettings(): React.JSX.Element {
     activeProvider,
     activeModel,
     setActiveProvider,
-    setActiveModel
+    setActiveModel,
+    titleProvider,
+    titleModel,
+    setTitleProvider,
+    setTitleModel
   } = useSettingsStore()
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
 
@@ -66,6 +70,31 @@ export function GeneralSettings(): React.JSX.Element {
   const handleModelChange = (modelId: string): void => {
     setActiveModel(modelId)
     window.api.settings.set({ key: 'general.defaultModel', value: modelId })
+  }
+
+  /** 切换标题生成 Provider 时自动选第一个可用模型并即时保存 */
+  const handleTitleProviderChange = (newProvider: string): void => {
+    setTitleProvider(newProvider)
+    window.api.settings.set({ key: 'general.titleProvider', value: newProvider })
+    const firstModel = availableModels.find((m) => m.providerId === newProvider)
+    if (firstModel) {
+      setTitleModel(firstModel.modelId)
+      window.api.settings.set({ key: 'general.titleModel', value: firstModel.modelId })
+    }
+  }
+
+  /** 切换标题生成模型并即时保存 */
+  const handleTitleModelChange = (modelId: string): void => {
+    setTitleModel(modelId)
+    window.api.settings.set({ key: 'general.titleModel', value: modelId })
+  }
+
+  /** 清除标题模型配置(不自动生成标题) */
+  const handleClearTitleModel = (): void => {
+    setTitleProvider('')
+    setTitleModel('')
+    window.api.settings.set({ key: 'general.titleProvider', value: '' })
+    window.api.settings.set({ key: 'general.titleModel', value: '' })
   }
 
   /** 系统提示词失焦时保存 */
@@ -238,18 +267,15 @@ export function GeneralSettings(): React.JSX.Element {
       {/* ── 默认模型 ── */}
       <div className="zen-section space-y-4">
         <label className="block text-xs font-medium text-text-primary">
-          {t('settings.defaultProvider')}
+          {t('settings.defaultModel')}
         </label>
 
-        {/* 默认 Provider */}
-        <div>
-          <label className="block text-[11px] text-text-tertiary mb-1">
-            {t('settings.defaultProvider')}
-          </label>
+        {/* 默认 Provider + 模型 同一行 */}
+        <div className="flex gap-2">
           <select
             value={activeProvider}
             onChange={(e) => handleProviderChange(e.target.value)}
-            className="zen-select"
+            className="zen-select flex-1"
           >
             {enabledProviderIds.map((pid) => {
               const m = availableModels.find((am) => am.providerId === pid)
@@ -260,17 +286,10 @@ export function GeneralSettings(): React.JSX.Element {
               )
             })}
           </select>
-        </div>
-
-        {/* 默认模型 */}
-        <div>
-          <label className="block text-[11px] text-text-tertiary mb-1">
-            {t('settings.defaultModel')}
-          </label>
           <select
             value={activeModel}
             onChange={(e) => handleModelChange(e.target.value)}
-            className="zen-select"
+            className="zen-select flex-[2]"
           >
             {availableModels
               .filter((m) => m.providerId === activeProvider)
@@ -296,6 +315,66 @@ export function GeneralSettings(): React.JSX.Element {
             placeholder={t('settings.systemPromptPlaceholder')}
           />
         </div>
+      </div>
+
+      {/* ── 标题生成模型 ── */}
+      <div className="zen-section space-y-3">
+        <label className="block text-xs font-medium text-text-primary">
+          {t('settings.titleModelSection')}
+        </label>
+        <p className="text-[10px] text-text-tertiary leading-relaxed">
+          {t('settings.titleModelHint')}
+        </p>
+        {titleProvider ? (
+          <div className="flex gap-2 items-center">
+            <select
+              value={titleProvider}
+              onChange={(e) => handleTitleProviderChange(e.target.value)}
+              className="zen-select flex-1"
+            >
+              {enabledProviderIds.map((pid) => {
+                const m = availableModels.find((am) => am.providerId === pid)
+                return (
+                  <option key={pid} value={pid}>
+                    {m?.providerName || pid}
+                  </option>
+                )
+              })}
+            </select>
+            <select
+              value={titleModel}
+              onChange={(e) => handleTitleModelChange(e.target.value)}
+              className="zen-select flex-[2]"
+            >
+              {availableModels
+                .filter((m) => m.providerId === titleProvider)
+                .map((m) => (
+                  <option key={m.id} value={m.modelId}>
+                    {m.modelId}
+                  </option>
+                ))}
+            </select>
+            <button
+              onClick={handleClearTitleModel}
+              className="px-2 py-1 rounded text-[11px] text-text-tertiary hover:text-error hover:bg-bg-hover transition-colors shrink-0"
+              title={t('settings.titleModelClear')}
+            >
+              {t('settings.titleModelClear')}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              // 用第一个可用 provider+model 初始化
+              if (enabledProviderIds.length > 0) {
+                handleTitleProviderChange(enabledProviderIds[0])
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
+          >
+            {t('settings.titleModelSetup')}
+          </button>
+        )}
       </div>
     </div>
   )

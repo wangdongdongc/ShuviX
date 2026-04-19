@@ -404,7 +404,6 @@ export function ChatView(): React.JSX.Element {
             <button
               onClick={toggleSidebar}
               className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-              title="Toggle sidebar"
             >
               <svg
                 width="14"
@@ -435,7 +434,6 @@ export function ChatView(): React.JSX.Element {
           <button
             onClick={togglePreview}
             className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title="Preview"
           >
             <svg
               width="14"

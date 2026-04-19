@@ -147,7 +147,7 @@ export interface ChatRuntimeEvent extends ChatEventBase {
 /** 预览面板生命周期事件（轻量通知，不持久化为消息；泛化了原 ChatDesignEvent） */
 export interface ChatPreviewEvent extends ChatEventBase {
   type: 'preview_event'
-  action: 'open' | 'close' | 'server_started' | 'server_stopped'
+  action: 'open' | 'close'
   url?: string
   title?: string
 }

@@ -45,6 +45,11 @@ export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')
 }
 
+/** Widgets 根目录：~/.shuvix/widgets/（懒创建） */
+export function getWidgetsDir(): string {
+  return ensureDir(join(homedir(), '.shuvix', 'widgets'))
+}
+
 /** 获取临时会话的工作目录 */
 export function getTempWorkspace(sessionId: string): string {
   return ensureDir(join(app.getPath('userData'), 'temp_workspace', sessionId))

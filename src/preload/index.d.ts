@@ -152,7 +152,7 @@ declare global {
   }
   interface ChatPreviewEvent extends ChatEventBase {
     type: 'preview_event'
-    action: 'open' | 'close' | 'server_started' | 'server_stopped'
+    action: 'open' | 'close'
     url?: string
     title?: string
   }
@@ -517,8 +517,7 @@ declare global {
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
-        userMessage: string
-        assistantMessage: string
+        conversationText: string
       }) => Promise<{ title: string | null }>
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
@@ -784,10 +783,6 @@ declare global {
         handler: (params: { ptyId: string; lines: number }) => string | null
       ) => () => void
     }
-    preview: {
-      start: (params: { sessionId: string; workingDir: string }) => void
-      stop: (params: { sessionId: string }) => void
-    }
     previewView: {
       navigate: (url: string) => Promise<void>
       goBack: () => Promise<void>
@@ -859,6 +854,36 @@ declare global {
         items: Array<{ id: string; label: string; type?: string; enabled?: boolean }>
       }) => Promise<{ actionId: string | null }>
     }
+    widget: {
+      list: () => Promise<WidgetSummary[]>
+      listArchived: () => Promise<WidgetSummary[]>
+      open: (
+        id: string
+      ) => Promise<
+        { success: true; url: string; widget: WidgetSummary } | { success: false; error: string }
+      >
+      rename: (params: {
+        id: string
+        name: string
+        description?: string
+      }) => Promise<{ success: boolean }>
+      setArchived: (params: { id: string; archived: boolean }) => Promise<{ success: boolean }>
+      delete: (id: string) => Promise<{ success: boolean }>
+      getServerStatus: () => Promise<{ running: boolean; port: number; widgetCount: number }>
+      stopServer: () => Promise<{ success: boolean }>
+      onChanged: (callback: () => void) => () => void
+    }
+  }
+
+  interface WidgetSummary {
+    id: string
+    name: string
+    description: string
+    createdAt: number
+    updatedAt: number
+    lastOpenedAt: number
+    openCount: number
+    archivedAt: number
   }
 
   interface Window {

@@ -246,15 +246,34 @@ export class DefaultChatGateway implements ChatGateway {
         group: e.group,
         defaultEnabled: e.defaultEnabled
       }))
-    /** 插件工具 */
-    const pluginTools = pluginRegistry.getActivatedEntries().flatMap(({ contribution }) =>
+    /** 插件工具（按 defaultEnabled 分为两组，分别插入通用工具组不同位置） */
+    const allPluginTools = pluginRegistry.getActivatedEntries().flatMap(({ contribution }) =>
       (contribution.tools ?? []).map((tool) => ({
         name: tool.name,
         label: tool.label,
         hint: tool.hint ?? tool.description.split('\n')[0],
-        group: 'general'
+        group: 'general' as const,
+        defaultEnabled: tool.defaultEnabled !== false
       }))
     )
+    const pluginDefaultOn = allPluginTools.filter((t) => t.defaultEnabled)
+    const pluginDefaultOff = allPluginTools.filter((t) => !t.defaultEnabled)
+
+    // 将默认启用的插件工具插入到 general 组 defaultEnabled=true 之后、defaultEnabled=false 之前
+    let insertIdx = 0
+    for (let i = builtinTools.length - 1; i >= 0; i--) {
+      if (builtinTools[i].group === 'general' && builtinTools[i].defaultEnabled) {
+        insertIdx = i + 1
+        break
+      }
+    }
+    const merged = [
+      ...builtinTools.slice(0, insertIdx),
+      ...pluginDefaultOn,
+      ...builtinTools.slice(insertIdx),
+      ...pluginDefaultOff
+    ]
+
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({
       name: info.name,
@@ -268,7 +287,7 @@ export class DefaultChatGateway implements ChatGateway {
       label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
       group: '__skills__'
     }))
-    return [...builtinTools, ...pluginTools, ...mcpTools, ...skillItems]
+    return [...merged, ...mcpTools, ...skillItems]
   }
 }
 

@@ -10,7 +10,7 @@ import { Type } from '@sinclair/typebox'
 import { processToolOutput } from './utils/processToolOutput'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
 import { sessionService } from '../services/sessionService'
 import {
   ensureAgentTerminal,
@@ -169,7 +169,7 @@ export class TerminalTool extends BaseTool<typeof TerminalParamsSchema> {
           )
         }
         if (response.extra?.rememberPattern) {
-          const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+          const patterns = extractPatterns(command)
           if (patterns.length > 0) {
             sessionService.addAllowListPatterns(this.ctx.sessionId, 'bash', patterns)
           }

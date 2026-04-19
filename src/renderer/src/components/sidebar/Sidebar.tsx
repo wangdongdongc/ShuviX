@@ -48,7 +48,9 @@ export function Sidebar(): React.JSX.Element {
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    () => new Set([TEMP_GROUP_KEY])
+  )
   const initialCollapseApplied = useRef(false)
 
   // ---------- 数据源：项目列表 + 会话列表 ----------
@@ -86,7 +88,8 @@ export function Sidebar(): React.JSX.Element {
   useEffect(() => {
     if (initialCollapseApplied.current || projects.length === 0) return
     initialCollapseApplied.current = true
-    const initial = new Set(projects.map((p) => p.id))
+    const initial = new Set<string>(projects.map((p) => p.id))
+    initial.add(TEMP_GROUP_KEY)
     if (archivedProjects.length > 0) initial.add(ARCHIVED_GROUP_KEY)
     setCollapsedGroups(initial) // eslint-disable-line react-hooks/set-state-in-effect
   }, [projects, archivedProjects])

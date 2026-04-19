@@ -4,12 +4,14 @@
  */
 
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Plus, X } from 'lucide-react'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useChatStore } from '../../stores/chatStore'
 import { XTerminal } from './XTerminal'
 
 export function TerminalPanel(): React.JSX.Element {
+  const { t } = useTranslation()
   const { tabs, activeTabId, createTab, closeTab, setActiveTab } = useTerminalStore()
   const projectPath = useChatStore((s) => s.projectPath)
 
@@ -53,7 +55,7 @@ export function TerminalPanel(): React.JSX.Element {
         <button
           onClick={handleNewTab}
           className="flex-shrink-0 p-1.5 mx-0.5 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 rounded transition-colors"
-          title="New Terminal"
+          title={t('panel.newTerminal')}
         >
           <Plus size={12} />
         </button>
@@ -68,7 +70,7 @@ export function TerminalPanel(): React.JSX.Element {
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-tertiary hover:text-text-secondary bg-bg-secondary/40 hover:bg-bg-secondary/70 rounded-md transition-colors"
             >
               <Plus size={12} />
-              <span>New Terminal</span>
+              <span>{t('panel.newTerminal')}</span>
             </button>
           </div>
         ) : (

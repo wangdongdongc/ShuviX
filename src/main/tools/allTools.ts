@@ -29,5 +29,8 @@ import './terminal'
 // 预览面板控制
 import './preview'
 
+// Dev 开发工具（widget / presentation / sketch）
+import './dev'
+
 // 子智能体（在 subagent/index.ts 中注册元数据）
 import '../subagent'

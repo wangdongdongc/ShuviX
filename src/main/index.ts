@@ -28,10 +28,13 @@ import { telegramService } from './services/telegramService'
 import { pluginRegistry } from './services/pluginRegistry'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
-import esbuildPlugin from '../plugins/esbuild'
 import pyodidePlugin from '../plugins/pyodide'
 import pglitePlugin from '../plugins/pglite'
+import devPlugin from '../plugins/dev'
+import { projectManager } from './services/bundlerRuntime'
 import { createPreviewView, destroyPreviewView } from './services/previewViewService'
+import { widgetServer } from './services/widgetServer'
+import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
 const log = createLogger('App')
@@ -543,6 +546,12 @@ app.whenReady().then(async () => {
     initI18n(savedLang || undefined)
   })
 
+  // 应用用户主题选择到 nativeTheme.themeSource —— 让 widget 等 webContents
+  // 的 prefers-color-scheme 跟随 ShuviX 设置，而不只是跟随 OS
+  measure('applyNativeTheme', () => {
+    applyNativeThemeSource(settingsDao.findByKey('general.theme'))
+  })
+
   measure('setupMenu', () => setupApplicationMenu())
 
   app.on('browser-window-created', (_, window) => {
@@ -550,9 +559,9 @@ app.whenReady().then(async () => {
   })
 
   // 注册并激活插件（必须在 IPC 注册前完成，确保前端查询时插件已就绪）
-  pluginRegistry.register(esbuildPlugin)
   pluginRegistry.register(pyodidePlugin)
   pluginRegistry.register(pglitePlugin)
+  pluginRegistry.register(devPlugin)
   await measureAsync('activatePlugins', () => pluginRegistry.activateAll())
 
   // 注册所有 IPC 处理器
@@ -600,6 +609,8 @@ app.on('before-quit', () => {
   sshManager.disconnectAll().catch(() => {})
   telegramService.stopAll().catch(() => {})
   abortAllAcpSessions()
+  widgetServer.dispose()
+  projectManager.disposeAll()
   pluginRegistry.deactivateAll().catch(() => {})
 })
 

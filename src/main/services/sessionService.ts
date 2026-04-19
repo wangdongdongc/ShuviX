@@ -10,7 +10,7 @@ import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
-import { splitCommand, toPattern, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
+import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
 import type { AllowToolType } from '../tools/utils/allowList'
 import { destroyAgentTerminal } from './agentTerminalManager'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
@@ -138,7 +138,7 @@ export class SessionService {
    *  不走该流程,直接 remember 整路径。
    */
   previewAllowPatterns(command: string, sessionId?: string, toolType?: 'bash' | 'ssh'): string[] {
-    const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+    const patterns = extractPatterns(command)
     if (!sessionId || !toolType) return patterns
     const sess = sessionDao.pickSettings(sessionId, ['allowList'])
     const existing = new Set(

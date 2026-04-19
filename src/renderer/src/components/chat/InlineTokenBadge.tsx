@@ -1,42 +1,111 @@
-import { useState } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AlertTriangle, X } from 'lucide-react'
 import type { ContentSegment } from '../../../../shared/utils/inlineTokens'
+import { useDialogClose } from '../../hooks/useDialogClose'
 
-/** Token badge — 交互式命令标签 + hover 展示 payload */
+/** Token badge — 交互式命令标签。点击打开 Modal，展示 payload 原文 */
 export function TokenBadge({
-  segment,
-  popoverDirection = 'down'
+  segment
 }: {
   segment: Extract<ContentSegment, { type: 'token' }>
-  /** 悬浮框方向：down（默认，向下）/ up（向上） */
-  popoverDirection?: 'up' | 'down'
 }): React.JSX.Element {
-  const [showPayload, setShowPayload] = useState(false)
+  const [open, setOpen] = useState(false)
   const { token } = segment
-  const popoverPos = popoverDirection === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'
 
   return (
-    <span className="relative inline-block">
+    <>
       <span
-        className="font-mono text-accent bg-accent/10 rounded px-1 cursor-help"
-        onMouseEnter={() => setShowPayload(true)}
-        onMouseLeave={() => setShowPayload(false)}
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setOpen(true)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            e.stopPropagation()
+            setOpen(true)
+          }
+        }}
+        className="font-mono text-accent bg-accent/10 hover:bg-accent/20 rounded px-1 cursor-pointer transition-colors"
       >
         {token.displayText}
       </span>
-      {showPayload && (
-        <div
-          className={`absolute left-0 ${popoverPos} z-50 w-[14rem] max-w-[75vw] rounded-lg border border-border-primary bg-bg-secondary shadow-xl p-3 text-xs text-text-secondary whitespace-pre-wrap break-words`}
-        >
-          {token.name && token.name !== token.id && (
-            <div className="text-[10px] text-text-tertiary mb-1">{token.name}</div>
-          )}
-          <code className="text-[11px] leading-relaxed">
-            {token.payload.length > 250 ? token.payload.slice(0, 250) + '…' : token.payload}
-          </code>
-        </div>
+      {open && (
+        <TokenPayloadDialog
+          title={token.name && token.name !== token.id ? token.name : token.displayText}
+          subtitle={token.name && token.name !== token.id ? token.displayText : undefined}
+          payload={token.payload}
+          onClose={() => setOpen(false)}
+        />
       )}
-    </span>
+    </>
+  )
+}
+
+/** Modal —— 直接展示 payload 原文 */
+function TokenPayloadDialog({
+  title,
+  subtitle,
+  payload,
+  onClose
+}: {
+  title: string
+  subtitle?: string
+  payload: string
+  onClose: () => void
+}): React.JSX.Element {
+  const overlayRef = useRef<HTMLDivElement>(null)
+  const { closing, handleClose } = useDialogClose(onClose)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') handleClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [handleClose])
+
+  const handleOverlayClick = (e: React.MouseEvent): void => {
+    if (e.target === overlayRef.current) handleClose()
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      onClick={handleOverlayClick}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+    >
+      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[640px] max-w-[92vw] max-h-[82vh] flex flex-col dialog-panel">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border-secondary">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-primary truncate">{title}</h3>
+            {subtitle && (
+              <div className="text-[11px] font-mono text-text-tertiary mt-0.5 truncate">
+                {subtitle}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleClose}
+            className="flex-shrink-0 p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+            aria-label="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Body —— 原文 */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 min-w-0">
+          <pre className="text-xs whitespace-pre-wrap break-words leading-relaxed font-mono text-text-secondary">
+            {payload}
+          </pre>
+        </div>
+      </div>
+    </div>
   )
 }
 

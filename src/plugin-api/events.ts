@@ -23,18 +23,6 @@ export interface PluginPreviewPanelCloseEvent {
   type: 'plugin:preview_panel_close'
 }
 
-/** 插件通知预览服务器已启动 */
-export interface PluginPreviewServerStartedEvent {
-  type: 'plugin:preview_server_started'
-  /** dev server URL */
-  url: string
-}
-
-/** 插件通知预览服务器已停止 */
-export interface PluginPreviewServerStoppedEvent {
-  type: 'plugin:preview_server_stopped'
-}
-
 // ─── Runtime 状态上报 ──────────────────────────────────
 
 /** 插件 runtime 描述信息（展示在 StatusBanner 上） */
@@ -62,6 +50,4 @@ export interface PluginRuntimeStatusEvent {
 export type PluginEvent =
   | PluginPreviewPanelOpenEvent
   | PluginPreviewPanelCloseEvent
-  | PluginPreviewServerStartedEvent
-  | PluginPreviewServerStoppedEvent
   | PluginRuntimeStatusEvent

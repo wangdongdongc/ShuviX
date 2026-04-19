@@ -328,6 +328,27 @@ Complete the user's search request efficiently and report your findings clearly.
       // SQLite 3.35+ 支持 DROP COLUMN(better-sqlite3 内置版本满足)
       db.exec(`ALTER TABLE projects DROP COLUMN sandboxEnabled`)
     }
+  },
+  {
+    version: 9,
+    description: '新增 widgets 表（AI 创建的常驻迷你 Web 小工具）',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS widgets (
+          id           TEXT PRIMARY KEY,
+          name         TEXT NOT NULL,
+          description  TEXT NOT NULL DEFAULT '',
+          entryFile    TEXT NOT NULL DEFAULT 'index.tsx',
+          createdAt    INTEGER NOT NULL,
+          updatedAt    INTEGER NOT NULL,
+          lastOpenedAt INTEGER NOT NULL DEFAULT 0,
+          openCount    INTEGER NOT NULL DEFAULT 0,
+          archivedAt   INTEGER NOT NULL DEFAULT 0,
+          metadata     TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_widgets_lastOpenedAt ON widgets(lastOpenedAt DESC);
+      `)
+    }
   }
 ]
 

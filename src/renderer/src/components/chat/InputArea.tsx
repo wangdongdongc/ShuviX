@@ -558,7 +558,6 @@ export function InputArea(): React.JSX.Element {
                 className="absolute left-4 top-2 z-10 pointer-events-auto text-sm"
               >
                 <TokenBadge
-                  popoverDirection="up"
                   segment={{
                     type: 'token',
                     uid: 'input',

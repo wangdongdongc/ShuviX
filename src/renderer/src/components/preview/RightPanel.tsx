@@ -1,30 +1,36 @@
 /**
  * RightPanel — 右侧面板容器
- * 顶部标签栏切换 Preview / Terminal
+ * 顶部标签栏切换 Preview / Terminal / Widget
  *
- * 两个面板始终挂载，通过 visibility 切换，避免 xterm/iframe 重建
+ * 各面板始终挂载，通过 visibility 切换，避免 xterm/iframe/WebContentsView 重建
  */
 
-import { Monitor, TerminalSquare } from 'lucide-react'
+import { Monitor, TerminalSquare, Wrench } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { usePreviewStore, type PanelTab } from '../../stores/previewStore'
 import { PreviewPanel } from './PreviewPanel'
 import { TerminalPanel } from '../terminal/TerminalPanel'
+import { WidgetPanel } from './WidgetPanel'
+import { useWidgetStore } from '../../stores/widgetStore'
 
-const tabs: { key: PanelTab; label: string; Icon: typeof Monitor }[] = [
-  { key: 'preview', label: 'Preview', Icon: Monitor },
-  { key: 'terminal', label: 'Terminal', Icon: TerminalSquare }
+const tabs: { key: PanelTab; labelKey: string; Icon: typeof Monitor }[] = [
+  { key: 'preview', labelKey: 'panel.preview', Icon: Monitor },
+  { key: 'terminal', labelKey: 'panel.terminal', Icon: TerminalSquare },
+  { key: 'widget', labelKey: 'panel.widget', Icon: Wrench }
 ]
 
 export function RightPanel(): React.JSX.Element {
+  const { t } = useTranslation()
   const activeTab = usePreviewStore((s) => s.activeTab)
   const setActiveTab = usePreviewStore((s) => s.setActiveTab)
   const width = usePreviewStore((s) => s.width)
+  const widgetCount = useWidgetStore((s) => s.widgets.length)
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ width, minWidth: 200 }}>
       {/* 顶部标签栏 */}
       <div className="titlebar-drag flex-shrink-0 flex items-center border-b border-border-secondary/30 bg-bg-primary">
-        {tabs.map(({ key, label, Icon }) => (
+        {tabs.map(({ key, labelKey, Icon }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -35,7 +41,12 @@ export function RightPanel(): React.JSX.Element {
             }`}
           >
             <Icon size={12} />
-            <span>{label}</span>
+            <span>{t(labelKey)}</span>
+            {key === 'widget' && widgetCount > 0 && (
+              <span className="ml-0.5 text-[10px] text-text-tertiary/60 tabular-nums">
+                {widgetCount}
+              </span>
+            )}
             {activeTab === key && (
               <span className="absolute bottom-0 left-2 right-2 h-[2px] bg-accent rounded-t" />
             )}
@@ -43,7 +54,7 @@ export function RightPanel(): React.JSX.Element {
         ))}
       </div>
 
-      {/* 内容区 — 两个面板共存，visibility 切换 */}
+      {/* 内容区 — 三个面板共存，visibility 切换 */}
       <div className="flex-1 min-h-0 relative">
         <div
           className="absolute inset-0"
@@ -60,6 +71,14 @@ export function RightPanel(): React.JSX.Element {
           }
         >
           <TerminalPanel />
+        </div>
+        <div
+          className="absolute inset-0"
+          style={
+            activeTab === 'widget' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
+          }
+        >
+          <WidgetPanel />
         </div>
       </div>
     </div>

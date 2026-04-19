@@ -194,7 +194,7 @@ const api = {
       ipcRenderer.invoke('session:addAllowListPatterns', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeAllowListEntry', params),
-    generateTitle: (params: { sessionId: string; userMessage: string; assistantMessage: string }) =>
+    generateTitle: (params: { sessionId: string; conversationText: string }) =>
       ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
@@ -516,13 +516,6 @@ const api = {
     }
   },
 
-  // ============ Preview (plugin-based) ============
-  preview: {
-    start: (params: { sessionId: string; workingDir: string }) =>
-      ipcRenderer.send('preview:start', params),
-    stop: (params: { sessionId: string }) => ipcRenderer.send('preview:stop', params)
-  },
-
   // ============ Preview WebContentsView ============
   previewView: {
     navigate: (url: string) => ipcRenderer.invoke('preview-view:navigate', url),
@@ -608,6 +601,56 @@ const api = {
     popup: (request: {
       items: Array<{ id: string; label: string; type?: string; enabled?: boolean }>
     }) => ipcRenderer.invoke('contextMenu:popup', request)
+  },
+
+  // ============ Widgets ============
+  widget: {
+    /** 获取所有未归档 widget */
+    list: () => ipcRenderer.invoke('widget:list'),
+    /** 获取已归档 widget */
+    listArchived: () => ipcRenderer.invoke('widget:listArchived'),
+    /** 打开 widget：懒启动 server + 注册 + 计数，返回 URL */
+    open: (id: string) =>
+      ipcRenderer.invoke('widget:open', id) as Promise<
+        | {
+            success: true
+            url: string
+            widget: {
+              id: string
+              name: string
+              description: string
+              createdAt: number
+              updatedAt: number
+              lastOpenedAt: number
+              openCount: number
+              archivedAt: number
+            }
+          }
+        | { success: false; error: string }
+      >,
+    /** 重命名 widget（同时更新 description，若提供） */
+    rename: (params: { id: string; name: string; description?: string }) =>
+      ipcRenderer.invoke('widget:rename', params),
+    /** 归档 / 取消归档 */
+    setArchived: (params: { id: string; archived: boolean }) =>
+      ipcRenderer.invoke('widget:setArchived', params),
+    /** 删除 widget（目录 + DB 记录） */
+    delete: (id: string) => ipcRenderer.invoke('widget:delete', id),
+    /** 获取 widget HTTP 服务器状态 */
+    getServerStatus: () =>
+      ipcRenderer.invoke('widget:getServerStatus') as Promise<{
+        running: boolean
+        port: number
+        widgetCount: number
+      }>,
+    /** 停止 widget HTTP 服务器（下次打开时自动重启） */
+    stopServer: () => ipcRenderer.invoke('widget:stopServer'),
+    /** 监听 widget 列表 / 服务器状态变更 */
+    onChanged: (callback: () => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('widget:changed', handler)
+      return () => ipcRenderer.removeListener('widget:changed', handler)
+    }
   }
 }
 

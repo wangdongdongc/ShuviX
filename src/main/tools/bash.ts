@@ -17,7 +17,7 @@ import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
 import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
 import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BashToolDetails } from '../../shared/types/chatMessage'
@@ -228,7 +228,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         }
         // 副作用:用户勾选"记住此模式" → 写入会话 allowList
         if (response.extra?.rememberPattern) {
-          const patterns = [...new Set(splitCommand(params.command).map((u) => toPattern(u)))]
+          const patterns = extractPatterns(params.command)
           if (patterns.length > 0) {
             sessionService.addAllowListPatterns(this.ctx.sessionId, 'bash', patterns)
           }

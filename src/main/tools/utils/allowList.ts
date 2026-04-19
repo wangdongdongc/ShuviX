@@ -341,6 +341,65 @@ export function splitCommand(command: string): string[] {
 }
 
 /**
+ * 复合/控制流结构的首 token 集合。
+ * 任一子单元以这些 token 开头 → 命令无法安全归纳为模式(fail-closed)。
+ */
+const COMPLEX_FIRST_TOKENS = new Set([
+  '{',
+  '}',
+  '(',
+  ')',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'fi',
+  'for',
+  'while',
+  'until',
+  'do',
+  'done',
+  'case',
+  'esac',
+  'function',
+  'select',
+  'time',
+  'coproc',
+  '!'
+])
+
+/**
+ * 判定命令单元是否包含复合结构(用于 fail-closed 模式提取)。
+ * - 首 token 是 `{`/`(` 或 if/for/while 等控制流关键字
+ * - 单元内含 `$(...)`、反引号、进程替换 `<(...)`/`>(...)`
+ */
+function isComplexUnit(unit: string): boolean {
+  const tokens = tokenize(unit)
+  if (tokens.length === 0) return false
+  if (COMPLEX_FIRST_TOKENS.has(tokens[0])) return true
+  if (/\$\(|`|<\(|>\(/.test(unit)) return true
+  return false
+}
+
+/**
+ * 从原始命令提取可入 allowList 的模式列表。
+ *
+ * Fail-closed:命令含复合结构(`{ }`、`( )`、`$()`、反引号、if/for/while 等)
+ * 时返回空数组 — 这些结构无法安全归纳为 `cmd *` 模式,用户应按次授权。
+ *
+ * 例:
+ * - `npm run test && ls -la` → `['npm run *', 'ls *']`
+ * - `{ echo hi; ls; }`       → `[]`(含 brace group)
+ * - `curl "$(cat url.txt)"`  → `[]`(含命令替换)
+ */
+export function extractPatterns(command: string): string[] {
+  const units = splitCommand(command)
+  if (units.length === 0) return []
+  if (units.some(isComplexUnit)) return []
+  return [...new Set(units.map(toPattern))]
+}
+
+/**
  * 检查单个命令单元是否匹配允许列表中的某一条。
  * - 精确匹配：`npm run test` 仅匹配 `npm run test`
  * - 通配符匹配：`npm run *` 匹配 `npm run`（无参数）和 `npm run dev`（有参数）
@@ -366,6 +425,8 @@ export function isCommandAllowed(allowList: string[] | undefined, command: strin
   if (!allowList || allowList.length === 0) return false
   const units = splitCommand(command)
   if (units.length === 0) return false
+  // Fail-closed:复合结构不通过 allowList 自动放行,强制走用户审批
+  if (units.some(isComplexUnit)) return false
   return units.every((unit) => allowList.some((entry) => matchesEntry(entry, unit)))
 }
 

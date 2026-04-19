@@ -23,6 +23,7 @@ import { registerCustomSubAgentHandlers } from './customSubAgentHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerPreviewViewHandlers } from './previewViewHandlers'
 import { registerContextMenuHandlers } from './contextMenuHandlers'
+import { registerWidgetHandlers } from './widgetHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -54,4 +55,5 @@ export function registerIpcHandlers(): void {
   registerTerminalHandlers()
   registerPreviewViewHandlers()
   registerContextMenuHandlers()
+  registerWidgetHandlers()
 }

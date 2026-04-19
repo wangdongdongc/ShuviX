@@ -291,6 +291,20 @@ export interface PreviewToolDetails {
   error?: string
 }
 
+/** dev 工具详情 —— 统一 widget / presentation / sketch 三种 kind */
+export interface DevToolDetails {
+  type: 'dev'
+  action: 'init' | 'build'
+  kind: 'widget' | 'presentation' | 'sketch'
+  /** 仅 kind='widget' 时有值 */
+  widgetId?: string
+  /** 仅 kind='widget' 且 action='init' 时的友好名 */
+  name?: string
+  url?: string
+  success: boolean
+  error?: string
+}
+
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
   | EditToolDetails
@@ -309,6 +323,7 @@ export type ToolResultDetails =
   | SqlToolDetails
   | McpToolDetails
   | PreviewToolDetails
+  | DevToolDetails
 
 /** 工具使用元数据 */
 export interface ToolUseMeta {

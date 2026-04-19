@@ -22,11 +22,8 @@ function syncPreviewOffset(offset: number): void {
 /** ChatView 容器的 data 属性，用于 DOM 测量 */
 export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
-/** 预览模式：url = 外部网页预览，preview = 本地设计项目预览 */
-export type PreviewMode = 'url' | 'preview'
-
 /** 右侧面板激活的标签页 */
-export type PanelTab = 'preview' | 'terminal'
+export type PanelTab = 'preview' | 'terminal' | 'widget'
 
 const PREVIEW_MIN = 320
 const PREVIEW_MAX = 960
@@ -40,14 +37,6 @@ interface PreviewState {
   width: number
   /** ChatView 锁定宽度（仅在开关瞬间短暂锁定，窗口 resize 完成后自动解锁） */
   lockedChatWidth: number | null
-  /** 预览模式 */
-  mode: PreviewMode
-  /** 设计预览 dev server URL */
-  designUrl: string | null
-  /** dev server 正在启动中 */
-  isStartingServer: boolean
-  /** dev server 已运行 */
-  isServerRunning: boolean
   /** 右侧面板当前激活的标签页 */
   activeTab: PanelTab
 
@@ -56,16 +45,6 @@ interface PreviewState {
   close: () => void
   setUrl: (url: string) => void
   setWidth: (width: number) => void
-  /** 打开预览模式 */
-  openPreview: (previewUrl: string) => void
-  /** 切换回 URL 模式 */
-  switchToUrl: () => void
-  /** 手动启动 preview server */
-  startPreviewServer: (sessionId: string, workingDir: string) => void
-  /** 手动停止 preview server */
-  stopPreviewServer: (sessionId: string) => void
-  /** 设置 server 运行状态（供外部事件同步） */
-  setServerRunning: (running: boolean) => void
   /** 切换右侧面板标签页 */
   setActiveTab: (tab: PanelTab) => void
 }
@@ -115,10 +94,6 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
   url: 'about:blank',
   width: 480,
   lockedChatWidth: null,
-  mode: 'url' as PreviewMode,
-  designUrl: null,
-  isStartingServer: false,
-  isServerRunning: false,
   activeTab: 'preview' as PanelTab,
 
   toggle: () => {
@@ -153,7 +128,7 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
     const { isOpen, width } = get()
     if (!isOpen) return
     const chatWidth = measureChatWidth()
-    set({ isOpen: false, lockedChatWidth: chatWidth, isServerRunning: false })
+    set({ isOpen: false, lockedChatWidth: chatWidth })
     syncPreviewOffset(0)
     persistPanelLayout({ previewOpen: false })
     unlockAfterAnimate(adjustWindowWidth(-totalOffset(width)))
@@ -174,34 +149,5 @@ export const usePreviewStore = create<PreviewState>((set, get) => ({
     }
   },
 
-  openPreview: (previewUrl) => {
-    const { isOpen, width } = get()
-    if (!isOpen) {
-      const chatWidth = measureChatWidth()
-      set({ isOpen: true, lockedChatWidth: chatWidth, mode: 'preview', designUrl: previewUrl })
-      syncPreviewOffset(totalOffset(width))
-      persistPanelLayout({ previewOpen: true })
-      unlockAfterAnimate(adjustWindowWidth(totalOffset(width)))
-    } else {
-      set({ mode: 'preview', designUrl: previewUrl })
-    }
-  },
-  switchToUrl: () => {
-    set({ mode: 'url' })
-  },
-
-  setServerRunning: (running) => set({ isServerRunning: running }),
-
-  setActiveTab: (tab) => set({ activeTab: tab }),
-
-  startPreviewServer: (sessionId, workingDir) => {
-    set({ isStartingServer: true })
-    window.api.preview.start({ sessionId, workingDir })
-  },
-
-  stopPreviewServer: (sessionId) => {
-    window.api.preview.stop({ sessionId })
-    set({ isServerRunning: false })
-    get().switchToUrl()
-  }
+  setActiveTab: (tab) => set({ activeTab: tab })
 }))

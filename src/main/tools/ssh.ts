@@ -11,7 +11,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { processToolOutput } from './utils/processToolOutput'
 import { sanitizeBinaryOutput, collapseProgressOutput } from './utils/shell'
 import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
-import { isCommandAllowedUnified, splitCommand, toPattern } from './utils/allowList'
+import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
 import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SshToolDetails } from '../../shared/types/chatMessage'
@@ -359,7 +359,7 @@ async function handleExec(
       )
     }
     if (response.extra?.rememberPattern) {
-      const patterns = [...new Set(splitCommand(command).map((u) => toPattern(u)))]
+      const patterns = extractPatterns(command)
       if (patterns.length > 0) {
         sessionService.addAllowListPatterns(ctx.sessionId, 'ssh', patterns)
       }

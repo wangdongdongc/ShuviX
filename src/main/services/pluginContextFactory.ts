@@ -52,21 +52,6 @@ export function createPluginContext(pluginId: string): PluginContext {
             action: 'close' as const
           })
           break
-        case 'plugin:preview_server_started':
-          chatFrontendRegistry.broadcast({
-            type: 'preview_event' as const,
-            sessionId,
-            action: 'server_started' as const,
-            url: event.url
-          })
-          break
-        case 'plugin:preview_server_stopped':
-          chatFrontendRegistry.broadcast({
-            type: 'preview_event' as const,
-            sessionId,
-            action: 'server_stopped' as const
-          })
-          break
         case 'plugin:runtime_status':
           pluginRegistry.updateRuntimeStatus(sessionId, event.runtimeId, event.status)
           chatFrontendRegistry.broadcast({

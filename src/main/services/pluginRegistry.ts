@@ -104,6 +104,17 @@ class PluginRegistry {
     return names
   }
 
+  /** 获取默认启用的插件工具名列表（defaultEnabled !== false） */
+  getDefaultEnabledToolNames(): string[] {
+    const names: string[] = []
+    for (const entry of this.plugins.values()) {
+      for (const tool of entry.contribution?.tools ?? []) {
+        if (tool.defaultEnabled !== false) names.push(tool.name)
+      }
+    }
+    return names
+  }
+
   /** 获取所有插件工具的渲染配置（toolName → presentation） */
   getAllToolPresentations(): Record<string, ToolPresentation> {
     const result: Record<string, ToolPresentation> = {}

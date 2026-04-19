@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { motion } from 'framer-motion'
 import {
@@ -52,6 +52,24 @@ export function ProviderSettings(): React.JSX.Element {
     modelId: string
     caps: Record<string, unknown>
   } | null>(null)
+
+  /** 初始加载已开启提供商的模型列表（用于警告图标判断） */
+  useEffect(() => {
+    const enabledIds = providers.filter((p) => p.isEnabled).map((p) => p.id)
+    const missing = enabledIds.filter((id) => !providerModels[id])
+    if (missing.length === 0) return
+    Promise.all(
+      missing.map((id) => window.api.provider.listModels(id).then((m) => [id, m] as const))
+    )
+      .then((results) => {
+        setProviderModels((prev) => {
+          const next = { ...prev }
+          for (const [id, models] of results) next[id] = models
+          return next
+        })
+      })
+      .catch(() => {})
+  }, [providers]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 展开提供商时加载其模型列表 */
   const handleToggleExpand = async (providerId: string): Promise<void> => {
@@ -143,8 +161,8 @@ export function ProviderSettings(): React.JSX.Element {
     return false
   }
 
-  /** 保存单个提供商配置 */
-  const handleSaveProvider = async (providerId: string): Promise<void> => {
+  /** 保存单个提供商配置，可选同时开启 */
+  const handleSaveProvider = async (providerId: string, alsoEnable?: boolean): Promise<void> => {
     const edits = localEdits[providerId]
     const provider = providers.find((p) => p.id === providerId)
     if (!edits || !provider) return
@@ -172,6 +190,9 @@ export function ProviderSettings(): React.JSX.Element {
     }
     if (Object.keys(updates).length > 0) {
       await window.api.provider.updateConfig({ id: providerId, ...updates })
+    }
+    if (alsoEnable) {
+      await window.api.provider.toggleEnabled({ id: providerId, isEnabled: true })
     }
     // 刷新
     const updated = await window.api.provider.listAll()
@@ -302,9 +323,10 @@ export function ProviderSettings(): React.JSX.Element {
             const edits = localEdits[p.id] || {}
             const models = providerModels[p.id] || []
             const query = (modelSearch[p.id] || '').trim().toLowerCase()
+            const sortedModels = [...models].sort((a, b) => b.isEnabled - a.isEnabled)
             const filteredModels = query
-              ? models.filter((m) => m.modelId.toLowerCase().includes(query))
-              : models
+              ? sortedModels.filter((m) => m.modelId.toLowerCase().includes(query))
+              : sortedModels
 
             return (
               <motion.div
@@ -345,6 +367,14 @@ export function ProviderSettings(): React.JSX.Element {
                       <Trash2 size={13} />
                     </button>
                   )}
+                  {/* 无启用模型警告 */}
+                  {!!p.isEnabled &&
+                    providerModels[p.id] &&
+                    !providerModels[p.id].some((m) => m.isEnabled) && (
+                      <span className="text-[10px] text-amber-500 shrink-0 mr-1">
+                        {t('settings.noEnabledModels')}
+                      </span>
+                    )}
                   {/* 启用/禁用开关 */}
                   <button
                     onClick={(e) => {
@@ -453,16 +483,22 @@ export function ProviderSettings(): React.JSX.Element {
                     {/* 保存按钮 */}
                     {(hasEdits(p.id) || savedIds.has(p.id)) && (
                       <button
-                        onClick={() => handleSaveProvider(p.id)}
+                        onClick={() => handleSaveProvider(p.id, !p.isEnabled || undefined)}
                         disabled={savedIds.has(p.id) || !hasEdits(p.id)}
                         className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                           savedIds.has(p.id)
                             ? 'bg-success/20 text-success'
-                            : 'bg-accent text-white hover:bg-accent-hover'
+                            : !p.isEnabled
+                              ? 'bg-green-600 text-white hover:bg-green-500'
+                              : 'bg-accent text-white hover:bg-accent-hover'
                         }`}
                       >
                         <Save size={14} />
-                        {savedIds.has(p.id) ? t('settings.saved') : t('settings.saveConfig')}
+                        {savedIds.has(p.id)
+                          ? t('settings.saved')
+                          : !p.isEnabled
+                            ? t('settings.saveConfigAndEnable')
+                            : t('settings.saveConfig')}
                       </button>
                     )}
 
@@ -489,27 +525,25 @@ export function ProviderSettings(): React.JSX.Element {
                       )}
 
                       {/* 手动添加模型 */}
-                      {!p.isBuiltin && (
-                        <div className="flex items-center gap-2 mb-2">
-                          <input
-                            type="text"
-                            value={newModelId[p.id] || ''}
-                            onChange={(e) =>
-                              setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
-                            }
-                            onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
-                            placeholder={t('settings.addModelPlaceholder')}
-                            className="zen-input flex-1 font-mono text-[11px]"
-                          />
-                          <button
-                            onClick={() => handleAddModel(p.id)}
-                            disabled={!newModelId[p.id]?.trim()}
-                            className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          >
-                            {t('common.add')}
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 mb-2">
+                        <input
+                          type="text"
+                          value={newModelId[p.id] || ''}
+                          onChange={(e) =>
+                            setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
+                          }
+                          onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
+                          placeholder={t('settings.addModelPlaceholder')}
+                          className="zen-input flex-1 font-mono text-[11px]"
+                        />
+                        <button
+                          onClick={() => handleAddModel(p.id)}
+                          disabled={!newModelId[p.id]?.trim()}
+                          className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {t('common.add')}
+                        </button>
+                      </div>
 
                       <input
                         type="text"
@@ -584,16 +618,14 @@ export function ProviderSettings(): React.JSX.Element {
                                 >
                                   <SlidersHorizontal size={12} />
                                 </button>
-                                {/* 自定义提供商的模型可删除 */}
-                                {!p.isBuiltin && (
-                                  <button
-                                    onClick={() => handleDeleteModel(m.id, p.id)}
-                                    className="p-0.5 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
-                                    title={t('settings.deleteModel')}
-                                  >
-                                    <X size={12} />
-                                  </button>
-                                )}
+                                {/* 删除模型 */}
+                                <button
+                                  onClick={() => handleDeleteModel(m.id, p.id)}
+                                  className="p-0.5 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
+                                  title={t('settings.deleteModel')}
+                                >
+                                  <X size={12} />
+                                </button>
                                 <button
                                   onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
                                   className={`w-7 h-4 rounded-full relative transition-colors ${

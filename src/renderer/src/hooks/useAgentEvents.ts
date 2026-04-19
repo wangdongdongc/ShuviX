@@ -224,22 +224,14 @@ export function useAgentEvents(): void {
         break
 
       case 'preview_event':
-        if (event.action === 'server_started') {
-          usePreviewStore.setState({ isStartingServer: false, isServerRunning: true })
-          // 重启后端口可能变化，用 openPreview 同时切回 preview 模式 + 更新 URL
-          if (event.url) {
-            usePreviewStore.getState().openPreview(event.url)
-          }
-        } else if (event.action === 'server_stopped') {
-          usePreviewStore.setState({ isServerRunning: false, isStartingServer: false })
-        } else if (event.action === 'open' && event.url) {
+        if (event.action === 'open' && event.url) {
           let url = event.url
           if (window.api?.app?.platform === 'web') {
             url = `${window.location.origin}/shuvix/preview/${sid}/`
           }
-          usePreviewStore.getState().openPreview(url)
+          usePreviewStore.getState().open(url)
         } else if (event.action === 'close') {
-          usePreviewStore.getState().switchToUrl()
+          usePreviewStore.getState().setUrl('about:blank')
         }
         break
 
@@ -274,8 +266,11 @@ export function useAgentEvents(): void {
           }
         }
 
-        // 首次对话时后台让 AI 生成标题（对用户透明）
-        // 仅当会话仍持有默认占位标题时才生成，避免压缩后老会话被重命名
+        // 两次标题生成策略(参考 Claude Code):
+        //   - 首轮(textMsgCount ≤ 2):快速粗生成,基于第一轮 user+assistant
+        //   - 第三轮(textMsgCount 3-4):精化重生成,基于更多上下文(最后 1000 字)
+        //   - 之后不再触发
+        // 未配置标题模型时,后端 generateTitle 直接返回 null,不浪费调用
         if (savedMsg && sid === store.activeSessionId) {
           const currentSession = store.sessions.find((s) => s.id === sid)
           const defaultTitle = i18n.t('agent.defaultTitle')
@@ -284,15 +279,23 @@ export function useAgentEvents(): void {
           const textMsgCount = sidMsgs.filter(
             (m: ChatMessage) => m.type === 'text' || !m.type
           ).length
-          if (isUntitled && textMsgCount <= 3) {
-            const userMsg = sidMsgs.find((m: ChatMessage) => m.role === 'user')
-            if (userMsg) {
+          // 首轮:isUntitled 才触发;第三轮:无条件触发(覆盖粗标题)
+          const shouldGenerate =
+            (isUntitled && textMsgCount <= 2) || (textMsgCount >= 3 && textMsgCount <= 4)
+          if (shouldGenerate) {
+            // 拼接对话最后 1000 字符作为输入
+            const MAX_CHARS = 1000
+            const conversationText = sidMsgs
+              .filter(
+                (m: ChatMessage) =>
+                  (m.role === 'user' || m.role === 'assistant') && m.type === 'text'
+              )
+              .map((m: ChatMessage) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+              .join('\n')
+              .slice(-MAX_CHARS)
+            if (conversationText.trim()) {
               window.api.session
-                .generateTitle({
-                  sessionId: sid,
-                  userMessage: userMsg.content,
-                  assistantMessage: savedMsg.content
-                })
+                .generateTitle({ sessionId: sid, conversationText })
                 .then((res) => {
                   if (res.title) {
                     useChatStore.getState().updateSessionTitle(sid, res.title)
@@ -359,6 +362,8 @@ export function useAgentEvents(): void {
           msgs.push(JSON.parse(event.message))
           store.setMessages(msgs)
         }
+        // 后端在压缩结束时 invalidate 了 AgentSession，需要重建以便后续 prompt 生效
+        await window.api.agent.init({ sessionId: sid })
         break
 
       case 'compaction_error':

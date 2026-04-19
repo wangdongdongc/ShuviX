@@ -409,6 +409,10 @@
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
     "systemPrompt": "System Prompt",
+    "titleModelSection": "Title Generation Model",
+    "titleModelHint": "Select a model for auto-generating session titles. If not set, titles will not be auto-generated.",
+    "titleModelClear": "Clear",
+    "titleModelSetup": "Configure title model",
     "systemPromptPlaceholder": "Define the AI assistant's role and behavior...",
     "tokenUsageWarning": "Agent mode consumes significantly more tokens than simple chat. It is recommended to monitor your usage or set spending limits on your provider's platform to avoid unexpected charges.",
     "addProvider": "Add Custom Provider",
@@ -436,6 +440,8 @@
     "noMatchingModels": "No matching models found",
     "saved": "Saved",
     "saveConfig": "Save Configuration",
+    "saveConfigAndEnable": "Save & Enable",
+    "noEnabledModels": "No models enabled",
     "builtin": "Built-in",
     "custom": "Custom",
     "apiKeyPlaceholder": "Enter {{name}} API Key",
@@ -761,10 +767,10 @@
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "exploreLabel": "Explore",
     "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure",
-    "esbuildLabel": "Esbuild Build",
-    "esbuildHint": "Build React projects with esbuild-wasm and start a local dev server, returning the URL for the preview tool to open",
     "previewLabel": "Preview Panel",
     "previewHint": "Open any URL in the preview panel, or close the preview panel",
+    "devLabel": "Dev Tool",
+    "devHint": "Unified AI frontend dev tool. kind=widget creates a reusable mini utility, kind=presentation scaffolds a Spectacle deck, kind=sketch opens a blank React canvas. init scaffolds; build recompiles and returns the preview URL.",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "Delegate complex coding tasks to Claude Code — an autonomous AI agent for multi-file changes, refactoring, debugging and more",
     "subAgentTab": "Sub-Agent",
@@ -791,6 +797,31 @@
     "subAgentDeleteConfirm": "Are you sure you want to delete sub-agent \"{{name}}\"? Sessions using this tool will lose access.",
     "subAgentNameExists": "Name already exists",
     "subAgentNameInvalid": "Only lowercase letters, numbers, and hyphens allowed"
+  },
+
+  "widgets": {
+    "sectionTitle": "Widgets",
+    "emptyHint": "Use the /widget command to ask the AI to build a mini tool",
+    "panelEmptyHint": "No widgets yet. Use the /widget command to ask the AI to build one",
+    "refresh": "Refresh",
+    "openExternal": "Open in browser",
+    "serverRegistered": "{{count}} registered",
+    "serverStopped": "Server stopped",
+    "stopServer": "Stop",
+    "stopServerTooltip": "Stop the widget HTTP server (auto-restarts on next open)",
+    "open": "Open",
+    "archive": "Archive",
+    "delete": "Delete",
+    "never": "Never opened",
+    "justNow": "Just now",
+    "minutesAgo": "{{count}}m ago",
+    "hoursAgo": "{{count}}h ago",
+    "daysAgo": "{{count}}d ago",
+    "confirmDeleteTitle": "Delete Widget",
+    "confirmDeleteDescription": "Delete widget \"{{name}}\"? Local files and all history will be removed and cannot be recovered.",
+    "archivedSection": "Archived",
+    "restore": "Restore",
+    "archivedAt": "Archived at"
   },
 
   "bindings": {
@@ -833,5 +864,28 @@
     "edit": "Edit",
     "window": "Window",
     "dev": "Dev"
+  },
+
+  "panel": {
+    "preview": "Preview",
+    "terminal": "Terminal",
+    "widget": "Widget",
+    "urlPlaceholder": "Enter a URL",
+    "newTerminal": "New Terminal"
+  },
+
+  "command": {
+    "widget": {
+      "name": "Widget",
+      "description": "Create or maintain a reusable mini component"
+    },
+    "presentation": {
+      "name": "Presentation",
+      "description": "Create a Spectacle slide deck in the current working directory"
+    },
+    "sketch": {
+      "name": "Sketch",
+      "description": "Create a blank React canvas in the current working directory"
+    }
   }
 }

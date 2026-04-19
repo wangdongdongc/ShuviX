@@ -1,44 +1,19 @@
 import { useCallback, useEffect, useRef, useState, startTransition } from 'react'
-import {
-  ArrowLeft,
-  ArrowRight,
-  RotateCw,
-  ExternalLink,
-  Globe,
-  Square,
-  Palette,
-  Play,
-  Loader2
-} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Globe } from 'lucide-react'
 import { usePreviewStore } from '../../stores/previewStore'
-import { useChatStore } from '../../stores/chatStore'
 
 /**
  * Preview 侧边面板 — 右侧预览区
  * 内容由主进程的 WebContentsView 渲染（覆盖在 placeholder 上方），
  * 本组件仅提供工具栏 + 状态栏 + bounds 同步。
- *
- * 支持两种模式：
- * - url: 外部网页预览（输入 URL）
- * - preview: 本地设计项目预览（esbuild-wasm 打包）
  */
 export function PreviewPanel(): React.JSX.Element {
-  const {
-    url,
-    mode,
-    designUrl,
-    setUrl,
-    switchToUrl,
-    isStartingServer,
-    isServerRunning,
-    startPreviewServer,
-    stopPreviewServer
-  } = usePreviewStore()
+  const { t } = useTranslation()
+  const { url, setUrl } = usePreviewStore()
   const width = usePreviewStore((s) => s.width)
   const isOpen = usePreviewStore((s) => s.isOpen)
   const activeTab = usePreviewStore((s) => s.activeTab)
-  const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const projectPath = useChatStore((s) => s.projectPath)
 
   /** placeholder div — WebContentsView 叠放在这个区域上方 */
   const placeholderRef = useRef<HTMLDivElement>(null)
@@ -52,23 +27,32 @@ export function PreviewPanel(): React.JSX.Element {
   /** 跟踪当前 WebContentsView 的实际 URL，防止重复导航 */
   const viewUrlRef = useRef('')
 
-  // 实际显示的 URL：design 模式用 designUrl，url 模式用 url
-  const activeUrl = mode === 'preview' && designUrl ? designUrl : url
-  const isDesignMode = mode === 'preview'
-  const isBlank = !isDesignMode && url === 'about:blank'
+  // 检测是否有对话框覆盖层打开（WebContentsView 在原生层渲染，需要手动让位）
+  const [hasDialogOverlay, setHasDialogOverlay] = useState(false)
+  useEffect(() => {
+    const check = (): void => {
+      setHasDialogOverlay(document.querySelector('.dialog-overlay') !== null)
+    }
+    const mo = new MutationObserver(check)
+    mo.observe(document.body, { childList: true, subtree: true })
+    check()
+    return () => mo.disconnect()
+  }, [])
+
+  const isBlank = url === 'about:blank'
 
   // WebContentsView 是否应该可见
-  const shouldShowView = isOpen && activeTab === 'preview' && !isBlank
+  const shouldShowView = isOpen && activeTab === 'preview' && !isBlank && !hasDialogOverlay
 
   // ====== WebContentsView 导航 ======
 
-  // activeUrl 变化时导航 WebContentsView
+  // url 变化时导航 WebContentsView
   useEffect(() => {
-    if (!activeUrl || activeUrl === 'about:blank') return
-    if (activeUrl === viewUrlRef.current) return
-    viewUrlRef.current = activeUrl
-    window.api.previewView.navigate(activeUrl)
-  }, [activeUrl])
+    if (!url || url === 'about:blank') return
+    if (url === viewUrlRef.current) return
+    viewUrlRef.current = url
+    window.api.previewView.navigate(url)
+  }, [url])
 
   // ====== WebContentsView 事件监听 ======
 
@@ -77,23 +61,18 @@ export function PreviewPanel(): React.JSX.Element {
       window.api.previewView.onDidStartLoading((navUrl: string) => {
         setIsLoading(true)
         viewUrlRef.current = navUrl
-        // 内部导航时同步 URL 到输入框
-        if (!isDesignMode) {
-          startTransition(() => setInputUrl(navUrl))
-        }
+        startTransition(() => setInputUrl(navUrl))
       }),
       window.api.previewView.onDidNavigate((navUrl: string) => {
         viewUrlRef.current = navUrl
-        if (!isDesignMode) {
-          startTransition(() => setInputUrl(navUrl))
-        }
+        startTransition(() => setInputUrl(navUrl))
       }),
       window.api.previewView.onDidFinishLoad(() => {
         setIsLoading(false)
       })
     ]
     return () => cleanups.forEach((c) => c())
-  }, [isDesignMode])
+  }, [])
 
   // ====== Bounds 同步 ======
 
@@ -152,12 +131,10 @@ export function PreviewPanel(): React.JSX.Element {
     return () => ro.disconnect()
   }, [])
 
-  // 外部 url 变化时同步到输入框（仅 url 模式）
+  // 外部 url 变化时同步到输入框
   useEffect(() => {
-    if (!isDesignMode) {
-      startTransition(() => setInputUrl(url))
-    }
-  }, [url, isDesignMode])
+    startTransition(() => setInputUrl(url))
+  }, [url])
 
   // ====== 操作 ======
 
@@ -168,12 +145,9 @@ export function PreviewPanel(): React.JSX.Element {
     if (!/^https?:\/\//i.test(target) && target !== 'about:blank') {
       target = 'https://' + target
     }
-    if (isDesignMode) {
-      switchToUrl()
-    }
     setUrl(target)
     setIsLoading(true)
-  }, [inputUrl, setUrl, isDesignMode, switchToUrl])
+  }, [inputUrl, setUrl])
 
   const handleBack = useCallback(() => {
     window.api.previewView.goBack()
@@ -194,21 +168,10 @@ export function PreviewPanel(): React.JSX.Element {
   }, [])
 
   const handleOpenExternal = useCallback(() => {
-    if (activeUrl && activeUrl !== 'about:blank') {
-      window.open(activeUrl, '_blank')
+    if (url && url !== 'about:blank') {
+      window.open(url, '_blank')
     }
-  }, [activeUrl])
-
-  // ====== Server 生命周期 ======
-  const handleStartServer = useCallback(() => {
-    if (!activeSessionId || !projectPath) return
-    startPreviewServer(activeSessionId, projectPath)
-  }, [activeSessionId, projectPath, startPreviewServer])
-
-  const handleStopServer = useCallback(() => {
-    if (!activeSessionId) return
-    stopPreviewServer(activeSessionId)
-  }, [activeSessionId, stopPreviewServer])
+  }, [url])
 
   const btnClass =
     'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
@@ -217,42 +180,6 @@ export function PreviewPanel(): React.JSX.Element {
     <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
       {/* ====== 工具栏 ====== */}
       <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-secondary/30">
-        {/* Start / Stop 按钮 */}
-        <div className="titlebar-no-drag flex items-center flex-shrink-0">
-          {isStartingServer ? (
-            <button
-              disabled
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-text-tertiary cursor-not-allowed"
-              title="Starting..."
-            >
-              <Loader2 size={10} className="animate-spin" />
-              <span>Starting...</span>
-            </button>
-          ) : isServerRunning ? (
-            <button
-              onClick={handleStopServer}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-error hover:text-error hover:bg-error/10 transition-colors"
-              title="Stop preview server"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleStartServer}
-              disabled={!activeSessionId || !projectPath}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Start preview server"
-            >
-              <Play size={10} fill="currentColor" />
-              <span>Start</span>
-            </button>
-          )}
-        </div>
-
-        {/* 分隔线 */}
-        <div className="w-px h-3.5 bg-border-secondary/60 mx-1 flex-shrink-0" />
-
         {/* 导航：后退、前进、刷新/停止加载 */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
           <button onClick={handleBack} className={btnClass} title="Back">
@@ -263,7 +190,7 @@ export function PreviewPanel(): React.JSX.Element {
           </button>
           {isLoading ? (
             <button onClick={handleStop} className={btnClass} title="Stop">
-              <Square size={11} />
+              <Globe size={11} />
             </button>
           ) : (
             <button onClick={handleRefresh} className={btnClass} title="Refresh">
@@ -281,19 +208,12 @@ export function PreviewPanel(): React.JSX.Element {
           }}
         >
           <div className="flex items-center bg-bg-secondary/60 border border-border-secondary/50 rounded-md px-1.5 py-0.5 gap-1 transition-colors focus-within:border-accent/40">
-            {isDesignMode ? (
-              <Palette size={10} className="flex-shrink-0 text-accent" />
-            ) : (
-              <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
-            )}
+            <Globe size={10} className="flex-shrink-0 text-text-tertiary" />
             <input
               type="text"
-              value={isDesignMode ? designUrl || '' : inputUrl === 'about:blank' ? '' : inputUrl}
-              onChange={(e) => {
-                if (!isDesignMode) setInputUrl(e.target.value)
-              }}
-              readOnly={isDesignMode}
-              placeholder="Enter URL or start a preview server..."
+              value={inputUrl === 'about:blank' ? '' : inputUrl}
+              onChange={(e) => setInputUrl(e.target.value)}
+              placeholder={t('panel.urlPlaceholder')}
               className="flex-1 min-w-0 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
             />
           </div>
@@ -311,7 +231,7 @@ export function PreviewPanel(): React.JSX.Element {
       <div ref={contentRef} className="flex-1 min-h-0 relative">
         {isBlank ? (
           <div className="flex items-center justify-center h-full select-none">
-            <p className="text-xs text-text-tertiary/40">Start a preview server or enter a URL</p>
+            <p className="text-xs text-text-tertiary/40">Enter a URL</p>
           </div>
         ) : (
           <>

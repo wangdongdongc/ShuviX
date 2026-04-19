@@ -21,19 +21,12 @@ export type {
   PluginEvent,
   PluginPreviewPanelOpenEvent,
   PluginPreviewPanelCloseEvent,
-  PluginPreviewServerStartedEvent,
-  PluginPreviewServerStoppedEvent,
   PluginRuntimeStatusEvent,
   PluginRuntimeInfo
 } from './events'
 
 // main→plugin 事件
-export type {
-  HostEvent,
-  PreviewStartEvent,
-  PreviewStopEvent,
-  RuntimeDestroyEvent
-} from './hostEvents'
+export type { HostEvent, RuntimeDestroyEvent } from './hostEvents'
 export { HostEventType } from './hostEvents'
 
 // 核心类型

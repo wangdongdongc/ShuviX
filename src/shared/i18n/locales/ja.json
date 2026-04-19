@@ -405,6 +405,10 @@
     "defaultProvider": "デフォルトプロバイダー",
     "defaultModel": "デフォルトモデル",
     "systemPrompt": "システムプロンプト",
+    "titleModelSection": "タイトル生成モデル",
+    "titleModelHint": "セッションタイトルの自動生成に使用するモデルを選択します。未設定の場合、タイトルは自動生成されません。",
+    "titleModelClear": "クリア",
+    "titleModelSetup": "タイトルモデルを設定",
     "systemPromptPlaceholder": "AIアシスタントの役割と動作を設定...",
     "tokenUsageWarning": "エージェントモードでは通常の会話よりも大幅に多くのトークンを消費します。予期しない課金を避けるため、プロバイダーのプラットフォームで使用量の確認や利用上限の設定をお勧めします。",
     "addProvider": "カスタムプロバイダーを追加",
@@ -432,6 +436,8 @@
     "noMatchingModels": "一致するモデルが見つかりません",
     "saved": "保存済み",
     "saveConfig": "設定を保存",
+    "saveConfigAndEnable": "保存して有効にする",
+    "noEnabledModels": "モデル未有効",
     "builtin": "内蔵",
     "custom": "カスタム",
     "apiKeyPlaceholder": "{{name}} APIキーを入力",
@@ -747,10 +753,10 @@
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "exploreLabel": "探索",
     "exploreHint": "読み取り専用コードベース検索サブエージェント、ファイル検索・コード検索・プロジェクト構造探索に対応",
-    "esbuildLabel": "Esbuild ビルド",
-    "esbuildHint": "esbuild-wasm で React プロジェクトをビルドしてローカル Dev サーバーを起動、URL を preview ツールに渡す",
     "previewLabel": "プレビューパネル",
     "previewHint": "任意の URL をプレビューパネルで開く、またはパネルを閉じる",
+    "devLabel": "開発ツール",
+    "devHint": "統合 AI フロントエンド開発ツール。kind=widget で再利用可能なミニツール、kind=presentation で Spectacle スライド、kind=sketch で空の React キャンバスを作成。init で初期化、build で再コンパイル＋プレビュー URL 取得。",
     "claudeCodeLabel": "Claude Code",
     "claudeCodeHint": "複雑なコーディングタスクを Claude Code に委託 — マルチファイル変更、リファクタリング、デバッグなどに対応する自律型 AI エージェント",
     "subAgentTab": "サブエージェント",
@@ -777,6 +783,31 @@
     "subAgentDeleteConfirm": "サブエージェント「{{name}}」を削除してもよろしいですか？このツールを有効にしているセッションでは使用できなくなります。",
     "subAgentNameExists": "名前は既に存在します",
     "subAgentNameInvalid": "小文字英字、数字、ハイフンのみ使用可能"
+  },
+
+  "widgets": {
+    "sectionTitle": "Widgets",
+    "emptyHint": "/widget コマンドで AI にミニツールを作ってもらえます",
+    "panelEmptyHint": "widget はまだありません。/widget コマンドで AI に作ってもらえます",
+    "refresh": "更新",
+    "openExternal": "ブラウザで開く",
+    "serverRegistered": "{{count}} 個登録済み",
+    "serverStopped": "サーバー停止中",
+    "stopServer": "停止",
+    "stopServerTooltip": "widget HTTP サーバーを停止（次に開くと自動再起動）",
+    "open": "開く",
+    "archive": "アーカイブ",
+    "delete": "削除",
+    "never": "未使用",
+    "justNow": "たった今",
+    "minutesAgo": "{{count}} 分前",
+    "hoursAgo": "{{count}} 時間前",
+    "daysAgo": "{{count}} 日前",
+    "confirmDeleteTitle": "Widget を削除",
+    "confirmDeleteDescription": "Widget「{{name}}」を削除しますか？ローカルファイルとすべての履歴が削除され、復元できません。",
+    "archivedSection": "アーカイブ済み",
+    "restore": "復元",
+    "archivedAt": "アーカイブ日時"
   },
 
   "bindings": {
@@ -819,5 +850,28 @@
     "edit": "編集",
     "window": "ウィンドウ",
     "dev": "開発"
+  },
+
+  "panel": {
+    "preview": "プレビュー",
+    "terminal": "ターミナル",
+    "widget": "ウィジェット",
+    "urlPlaceholder": "URL を入力",
+    "newTerminal": "新規ターミナル"
+  },
+
+  "command": {
+    "widget": {
+      "name": "Widget",
+      "description": "再利用可能な小コンポーネントを作成・維持"
+    },
+    "presentation": {
+      "name": "Presentation",
+      "description": "現在の作業ディレクトリに Spectacle スライドデッキを作成"
+    },
+    "sketch": {
+      "name": "Sketch",
+      "description": "現在の作業ディレクトリに空の React キャンバスを作成"
+    }
   }
 }

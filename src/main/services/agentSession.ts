@@ -44,6 +44,27 @@ import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
 
+/**
+ * 标题生成 system prompt — 参考 Claude Code sessionTitle.ts 的结构化设计。
+ * 不走 i18n(这是工程指令,不是用户界面文案)。
+ */
+const TITLE_GEN_SYSTEM_PROMPT = `Generate a concise title (3-7 words) that captures the main topic or goal of this conversation.
+The title should be clear enough that the user recognizes the session in a list.
+
+Rules:
+- Use the same language as the user's message
+- Use sentence case (capitalize only the first word and proper nouns)
+- Return JSON with a single "title" field
+
+Good examples:
+{"title": "Fix login button on mobile"}
+{"title": "调试 CI 流水线失败问题"}
+{"title": "Add OAuth authentication"}
+{"title": "重构 API 客户端错误处理"}
+
+Bad (too vague): {"title": "Code changes"} {"title": "对话记录"}
+Bad (too long): {"title": "Investigate and fix the issue with the login button not working on mobile devices"}`
+
 /** AgentSession.create 工厂参数 */
 export interface AgentSessionCreateParams {
   sessionId: string
@@ -403,38 +424,90 @@ export class AgentSession {
     return this.agent
   }
 
-  /** AI 生成简短标题 */
-  async generateTitle(userMessage: string, assistantMessage: string): Promise<string | null> {
+  /**
+   * AI 生成简短标题。
+   *
+   * - 使用 settings 中用户配置的 titleProvider / titleModel(而非当前会话模型),
+   *   未配置时返回 null(不生成)
+   * - Prompt 参考 Claude Code:JSON 输出 + good/bad 示例 + 语言自适应
+   * - conversationText 是全部消息的最后 1000 字符(由调用方拼接传入)
+   */
+  async generateTitle(conversationText: string): Promise<string | null> {
+    const titleProvider = settingsDao.findByKey('general.titleProvider')
+    const titleModelId = settingsDao.findByKey('general.titleModel')
+    if (!titleProvider || !titleModelId) return null
+
+    const providerRow = providerDao.pick(titleProvider, ['apiKey'])
+    if (!providerRow?.apiKey) {
+      log.warn(`标题模型 provider ${titleProvider} 无 API Key,跳过标题生成`)
+      return null
+    }
+
     try {
-      const currentProvider = providerDao.pick(String(this.agent.state.model.provider), ['apiKey'])
-      const resolvedApiKey = currentProvider?.apiKey
+      const modelRow = providerDao
+        .findModelsByProvider(titleProvider)
+        .find((m) => m.modelId === titleModelId)
+      const caps = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+      const model = resolveModel({
+        provider: titleProvider,
+        model: titleModelId,
+        capabilities: caps
+      })
+
       const result = await completeSimple(
-        this.agent.state.model,
+        model,
         {
-          systemPrompt: t('agent.titleGenPrompt'),
+          systemPrompt: TITLE_GEN_SYSTEM_PROMPT,
           messages: [
             {
               role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: `用户: ${userMessage.slice(0, 500)}\n助手: ${assistantMessage.slice(0, 500)}`
-                }
-              ],
+              content: [{ type: 'text', text: conversationText }],
               timestamp: Date.now()
             }
           ]
         },
-        resolvedApiKey ? { apiKey: resolvedApiKey } : {}
+        { apiKey: providerRow.apiKey }
       )
-      const text = result.content
+
+      const raw = result.content
         ?.filter((c): c is TextContent => c.type === 'text')
         .map((c) => c.text)
         .join('')
         .trim()
-      if (text && text.length > 0) {
-        return text.slice(0, 30)
+
+      if (!raw) return null
+
+      // 三层 fallback 提取 title:
+      // 1. 直接 JSON.parse(strip code fence 后)
+      // 2. 正则匹配 {"title":"..."} 片段(应对模型在 JSON 前后加了多余文字)
+      // 3. 直接用原始文本(去掉引号/句号等杂物)
+      //
+      // Claude Code 通过 API output_config.json_schema 强制 JSON 输出,
+      // pi-ai 不支持该参数,所以必须在应用层清洗
+      const stripped = raw
+        .replace(/^```(?:json)?\s*\n?/i, '')
+        .replace(/\n?```\s*$/, '')
+        .trim()
+
+      // L1: 直接 parse
+      try {
+        const parsed = JSON.parse(stripped)
+        if (typeof parsed.title === 'string' && parsed.title.trim()) {
+          return parsed.title.trim().slice(0, 30)
+        }
+      } catch {
+        /* continue to L2 */
       }
+
+      // L2: 正则提取 {"title":"..."}
+      const match = stripped.match(/\{\s*"title"\s*:\s*"([^"]*)"\s*\}/)
+      if (match?.[1]?.trim()) {
+        return match[1].trim().slice(0, 30)
+      }
+
+      // L3: 最后兜底 — 去掉引号/句号等杂物,取前 30 字
+      const fallback = stripped.replace(/^["'`]+|["'`.,。！!]+$/g, '').trim()
+      return fallback.slice(0, 30) || null
     } catch (err) {
       log.error(`生成标题失败: ${err}`)
     }
