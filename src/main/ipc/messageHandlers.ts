@@ -53,6 +53,15 @@ export function registerMessageHandlers(): void {
     )
   )
 
+  /** 删除单条 error_event 消息（UI 便捷操作，不影响 agent 上下文） */
+  ipcMain.handle(
+    'message:deleteErrorEvent',
+    (_event, params: { sessionId: string; messageId: string }) =>
+      operationContext.run(createElectronContext(params.sessionId), () => ({
+        success: messageService.deleteErrorEvent(params.sessionId, params.messageId)
+      }))
+  )
+
   /** 统计会话已归档消息数 */
   ipcMain.handle('message:countArchived', (_event, sessionId: string) =>
     messageService.countArchived(sessionId)

@@ -6,11 +6,12 @@
  * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
  */
 
-import { stat as fsStat, readdir as fsReaddir, open as fsOpen } from 'fs/promises'
+import { stat as fsStat, readdir as fsReaddir, open as fsOpen, readFile } from 'fs/promises'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { extname } from 'path'
 import { Type } from '@sinclair/typebox'
+import { nativeImage } from 'electron'
 import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import {
@@ -19,16 +20,16 @@ import {
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
-import { processToolOutput } from './utils/processToolOutput'
-import { resolveReadPath, suggestSimilarFiles } from './utils/pathUtils'
-import { recordRead } from './utils/fileTime'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
+import { resolveReadPath, suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
+import { recordRead } from '../utils/toolUtils/fileTime'
+import { BaseTool } from '../services/baseTool'
 import {
-  BaseTool,
   resolveProjectConfig,
   assertSandboxRead,
   TOOL_ABORTED,
   type ToolContext
-} from './types'
+} from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { ReadToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -98,12 +99,7 @@ const KNOWN_BINARY_EXTENSIONS = new Set([
   '.flac',
   '.ogg',
   '.webm',
-  '.jpg',
-  '.jpeg',
-  '.png',
-  '.gif',
-  '.bmp',
-  '.webp',
+  // 未支持的图像/字体格式（支持的图像见 IMAGE_EXTENSIONS）
   '.ico',
   '.tiff',
   '.heic',
@@ -117,6 +113,31 @@ const KNOWN_BINARY_EXTENSIONS = new Set([
   '.protobuf',
   '.pb'
 ])
+
+/** 支持作为图像返回的扩展名 → MIME 映射 */
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp'
+}
+
+/** 单张图片返回给模型的字节上限；超过则自动缩放 + JPEG 重编码 */
+const MAX_IMAGE_BYTES = 1 * 1024 * 1024
+
+/**
+ * 图像压缩阶梯：从保守到激进依次尝试（最大宽度 × JPEG 质量），命中首个 ≤ 上限的即返回。
+ * 分辨率足够下探到 800px，质量下探到 55；对截图/文档类图片仍能看清内容。
+ */
+const IMAGE_COMPRESS_STEPS: ReadonlyArray<{ maxWidth: number; quality: number }> = [
+  { maxWidth: 2000, quality: 85 },
+  { maxWidth: 1600, quality: 80 },
+  { maxWidth: 1200, quality: 75 },
+  { maxWidth: 1000, quality: 65 },
+  { maxWidth: 800, quality: 55 }
+]
 
 /** 检测文件是否为二进制（只读取前 8KB，检查 NULL 字节） */
 async function isBinaryFile(filepath: string, fileSize: number): Promise<boolean> {
@@ -171,7 +192,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   readonly name = 'read'
   readonly label = t('tool.readLabel')
   readonly description =
-    'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Also supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown).'
+    'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
   readonly parameters = ReadParamsSchema
 
   constructor(private ctx: ToolContext) {
@@ -248,6 +269,11 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
           toolCallId,
           signal
         )
+      }
+
+      // 图像文件：以 base64 + mimeType 返回给模型（多模态输入）
+      if (ext in IMAGE_MIME_BY_EXT) {
+        return await readImage(absolutePath, params.path, fileStat.size, ext)
       }
 
       // 旧版 Word .doc 文件：使用 word-extractor 提取文字
@@ -389,6 +415,75 @@ async function readRichFile(
       truncated: processed.truncated
     }
   }
+}
+
+/**
+ * 图像文件：以 base64 + mimeType 返回，供多模态模型直接查看
+ * - ≤ MAX_IMAGE_BYTES：按原格式直出
+ * - > MAX_IMAGE_BYTES：用 Electron nativeImage 按阶梯缩放 + 重编码为 JPEG，直到落在上限内
+ * - 典型来源：browser 工具的 screenshot action 落盘产物
+ */
+async function readImage(
+  absolutePath: string,
+  displayPath: string,
+  fileSize: number,
+  ext: string
+): Promise<ReadResult> {
+  const buffer = await readFile(absolutePath)
+  const format = ext.slice(1).toUpperCase()
+
+  // 未超限：直出原图
+  if (fileSize <= MAX_IMAGE_BYTES) {
+    const mimeType = IMAGE_MIME_BY_EXT[ext] ?? 'image/png'
+    return {
+      content: [
+        { type: 'image' as const, data: buffer.toString('base64'), mimeType },
+        {
+          type: 'text' as const,
+          text: `Image: ${displayPath} (${format}, ${formatSize(fileSize)})`
+        }
+      ],
+      details: { type: 'read', fileSize, format, truncated: false }
+    }
+  }
+
+  // 超限：用 nativeImage 解码 → 阶梯式压缩
+  const img = nativeImage.createFromBuffer(buffer)
+  if (img.isEmpty()) {
+    throw new Error(
+      `Image too large (${formatSize(fileSize)}) and cannot be decoded for compression: ${displayPath}`
+    )
+  }
+  const { width: origW, height: origH } = img.getSize()
+
+  for (const step of IMAGE_COMPRESS_STEPS) {
+    const targetWidth = Math.min(origW, step.maxWidth)
+    const working = targetWidth < origW ? img.resize({ width: targetWidth, quality: 'good' }) : img
+    const jpeg = working.toJPEG(step.quality)
+    if (jpeg.length <= MAX_IMAGE_BYTES) {
+      const { width: newW, height: newH } = working.getSize()
+      const note =
+        `Auto-compressed from ${format} ${origW}×${origH} ${formatSize(fileSize)} → ` +
+        `JPEG ${newW}×${newH} ${formatSize(jpeg.length)} (quality ${step.quality})`
+      log.info(`readImage: ${displayPath} — ${note}`)
+      return {
+        content: [
+          { type: 'image' as const, data: jpeg.toString('base64'), mimeType: 'image/jpeg' },
+          {
+            type: 'text' as const,
+            text: `Image: ${displayPath}\n${note}`
+          }
+        ],
+        details: { type: 'read', fileSize: jpeg.length, format: 'JPEG', truncated: true }
+      }
+    }
+  }
+
+  // 阶梯走完仍 > 1MB —— 极端罕见（巨图 + 大量纯色块抗压）
+  throw new Error(
+    `Image too large to compress under ${formatSize(MAX_IMAGE_BYTES)}: ${displayPath} ` +
+      `(${formatSize(fileSize)}, ${origW}×${origH}). Re-capture with a narrower viewport or target a single element (browser devtools_action="snapshot" + uid).`
+  )
 }
 
 /**
@@ -595,7 +690,7 @@ async function readTextFile(
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'read',
   group: 'general',

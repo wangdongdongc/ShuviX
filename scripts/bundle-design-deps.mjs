@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url'
 import { mkdirSync, writeFileSync, copyFileSync } from 'fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const outdir = resolve(__dirname, '../resources/plugins/esbuild/deps')
+const outdir = resolve(__dirname, '../resources/bundler/deps')
 
 mkdirSync(outdir, { recursive: true })
 

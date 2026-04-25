@@ -6,15 +6,15 @@
 import { constants } from 'fs'
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from 'fs/promises'
 import { Type } from '@sinclair/typebox'
-import { resolveToCwd } from './utils/pathUtils'
-import { assertNotModifiedSinceRead, withFileLock, recordRead } from './utils/fileTime'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
+import { assertNotModifiedSinceRead, withFileLock, recordRead } from '../utils/toolUtils/fileTime'
+import { BaseTool } from '../services/baseTool'
 import {
-  BaseTool,
   resolveProjectConfig,
   assertSandboxWrite,
   TOOL_ABORTED,
   type ToolContext
-} from './types'
+} from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { EditToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -26,8 +26,8 @@ import {
   normalizeToLF,
   restoreLineEndings,
   stripBom
-} from './utils/editDiff'
-import { replaceWithFallback } from './utils/replacers'
+} from '../utils/toolUtils/editDiff'
+import { replaceWithFallback } from '../utils/toolUtils/replacers'
 
 const EditParamsSchema = Type.Object({
   path: Type.String({ description: 'The absolute path to the file to modify' }),
@@ -179,7 +179,7 @@ export class EditTool extends BaseTool<typeof EditParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'edit',
   group: 'general',

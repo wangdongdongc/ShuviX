@@ -4,7 +4,8 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool } from '../services/baseTool'
+import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { AskToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -102,7 +103,7 @@ export class AskTool extends BaseTool<typeof AskParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ask',
   group: 'general',

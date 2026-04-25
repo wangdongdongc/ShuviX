@@ -8,7 +8,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join, basename } from 'path'
 import type { SlashCommand } from '../../shared/types/slashCommand'
 import { skillService } from './skillService'
-import { pluginRegistry } from './pluginRegistry'
+import { getBuiltinCommands } from './devCommands'
 import { createLogger } from '../logger'
 
 const log = createLogger('CommandService')
@@ -150,9 +150,9 @@ class CommandService {
     }
   }
 
-  /** 获取插件贡献的命令 */
+  /** 获取内置斜杠命令（dev 工具伴生的 /widget /presentation /sketch） */
   getBuiltinCommands(): SlashCommand[] {
-    return pluginRegistry.getAllCommands()
+    return getBuiltinCommands()
   }
 }
 

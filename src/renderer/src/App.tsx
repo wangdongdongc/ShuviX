@@ -1,13 +1,13 @@
 import { useEffect } from 'react'
 import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
-import { usePreviewStore, CHAT_CONTAINER_ATTR } from './stores/previewStore'
+import { useBrowserStore, CHAT_CONTAINER_ATTR } from './stores/browserStore'
 import { useSidebarStore } from './stores/sidebarStore'
 import { Sidebar } from './components/sidebar/Sidebar'
 import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle'
 import { ChatView } from './components/chat/ChatView'
-import { RightPanel } from './components/preview/RightPanel'
-import { PreviewResizeHandle } from './components/preview/PreviewResizeHandle'
+import { RightPanel } from './components/browser/RightPanel'
+import { BrowserResizeHandle } from './components/browser/BrowserResizeHandle'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
 import { useSessionInit } from './hooks/useSessionInit'
@@ -28,8 +28,8 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
 function App(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
-  const isPreviewOpen = usePreviewStore((s) => s.isOpen)
-  const lockedChatWidth = usePreviewStore((s) => s.lockedChatWidth)
+  const isBrowserOpen = useBrowserStore((s) => s.isOpen)
+  const lockedChatWidth = useBrowserStore((s) => s.lockedChatWidth)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
   const sidebarWidth = useSidebarStore((s) => s.width)
   const isSidebarResizing = useSidebarStore((s) => s.isResizing)
@@ -95,8 +95,8 @@ function App(): React.JSX.Element {
       >
         <ChatView />
       </div>
-      {(isPreviewOpen || lockedChatWidth != null) && <PreviewResizeHandle />}
-      {(isPreviewOpen || lockedChatWidth != null) && <RightPanel />}
+      {(isBrowserOpen || lockedChatWidth != null) && <BrowserResizeHandle />}
+      {(isBrowserOpen || lockedChatWidth != null) && <RightPanel />}
     </div>
   )
 }

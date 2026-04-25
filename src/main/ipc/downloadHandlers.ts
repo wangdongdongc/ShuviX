@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { downloadManager } from '../services/downloadManager'
+import { downloadManager } from '../utils/downloadManager'
 
 /**
  * 注册下载管理 IPC 处理器

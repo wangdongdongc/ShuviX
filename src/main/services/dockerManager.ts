@@ -29,6 +29,9 @@ export class DockerManager {
   /** sessionId → 容器信息（含延迟销毁定时器） */
   private containers = new Map<string, ContainerInfo>()
 
+  /** sessionId → 正在进行的 ensureContainer Promise，用于并发调用去重 */
+  private inflightEnsure = new Map<string, Promise<{ containerId: string; isNew: boolean }>>()
+
   /** 检测 Docker 状态：'ready' | 'notInstalled' | 'notRunning' */
   getDockerStatus(): 'ready' | 'notInstalled' | 'notRunning' {
     try {
@@ -122,8 +125,27 @@ export class DockerManager {
     return { ok: true }
   }
 
-  /** 为 session 确保容器运行中（已有则复用，自动取消待销毁定时器） */
+  /**
+   * 为 session 确保容器运行中（已有则复用，自动取消待销毁定时器）
+   * 同一 sessionId 的并发调用共享同一个 Promise，避免两次 docker create 互相覆盖
+   */
   async ensureContainer(
+    sessionId: string,
+    image: string,
+    workingDirectory: string,
+    opts?: { memory?: string; cpus?: string; referenceDirs?: ReferenceDir[] }
+  ): Promise<{ containerId: string; isNew: boolean }> {
+    const inflight = this.inflightEnsure.get(sessionId)
+    if (inflight) return inflight
+
+    const p = this._ensureContainerImpl(sessionId, image, workingDirectory, opts).finally(() => {
+      if (this.inflightEnsure.get(sessionId) === p) this.inflightEnsure.delete(sessionId)
+    })
+    this.inflightEnsure.set(sessionId, p)
+    return p
+  }
+
+  private async _ensureContainerImpl(
     sessionId: string,
     image: string,
     workingDirectory: string,

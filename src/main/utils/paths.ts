@@ -2,7 +2,7 @@
  * 路径相关工具函数 — 所有数据目录的统一入口
  */
 
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, existsSync } from 'fs'
 import { app } from 'electron'
@@ -45,6 +45,16 @@ export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')
 }
 
+/**
+ * 内置 Skills 资源目录 —— 随应用版本包发布，只读
+ * 打包后位于 Resources/skills/，开发时位于 resources/skills/
+ */
+export function getBuiltinSkillsDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'skills')
+    : resolve(__dirname, '../../resources/skills')
+}
+
 /** Widgets 根目录：~/.shuvix/widgets/（懒创建） */
 export function getWidgetsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'widgets'))
@@ -67,7 +77,7 @@ export function getToolResultsDir(sessionId: string): string {
 
 /**
  * 合并 PATH — 打包后的 Electron GUI 应用不继承 shell PATH，
- * 需要手动追加常见路径以便找到 npx / docker / claude-agent-acp 等命令。
+ * 需要手动追加常见路径以便找到 npx / docker 等命令。
  */
 const EXTRA_PATHS = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
 export const mergedPATH = [

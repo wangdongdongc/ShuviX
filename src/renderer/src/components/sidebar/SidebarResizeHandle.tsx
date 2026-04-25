@@ -3,7 +3,7 @@ import { useSidebarStore, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../../sto
 
 /**
  * 侧边栏右侧的拖拽分隔条
- * 与 PreviewResizeHandle 对称，拖拽方向为正向（向右变宽）
+ * 与 BrowserResizeHandle 对称，拖拽方向为正向（向右变宽）
  */
 export function SidebarResizeHandle(): React.JSX.Element {
   const width = useSidebarStore((s) => s.width)

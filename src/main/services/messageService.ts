@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { messageDao, messageStepDao, STEP_TYPES } from '../dao/messageDao'
 import { sessionDao } from '../dao/sessionDao'
-import { getOperationContext } from '../frontend/core/OperationContext'
+import { getOperationContext } from '../utils/operationContext'
 import type { Message, MessageMetadata, MessageType } from '../types'
 import type {
   ChatMessage,
@@ -275,6 +275,13 @@ export class MessageService {
       type: 'error_event',
       content: p.content
     }) as unknown as ErrorEventMessage
+  }
+
+  /** 删除单条 error_event 消息（仅限该类型，避免误删其他消息） */
+  deleteErrorEvent(sessionId: string, messageId: string): boolean {
+    const target = messageDao.pick(messageId, ['type', 'sessionId'])
+    if (!target || target.sessionId !== sessionId || target.type !== 'error_event') return false
+    return messageDao.deleteById(sessionId, messageId) > 0
   }
 }
 

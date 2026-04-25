@@ -21,13 +21,14 @@ import './ssh'
 import './database'
 
 // Skill 工具（元数据注册；实例化由 agentToolBuilder 负责）
-import './skill'
+// skill.ts 已迁至 services/skillTool.ts；这里仍然 import 触发其 registerBuiltinTool() 副作用
+import '../services/skillTool'
 
 // 终端工具
 import './terminal'
 
-// 预览面板控制
-import './preview'
+// 浏览器面板控制
+import './browser'
 
 // Dev 开发工具（widget / presentation / sketch）
 import './dev'

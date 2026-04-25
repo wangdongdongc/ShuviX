@@ -98,8 +98,17 @@ class McpService {
     this.connections.set(serverId, conn)
 
     try {
+      // 内置 server: 替换 url/headers 中的 {{ENV_VAR}} 占位符；若引用的 env 为空则跳过连接
+      const { resolved, missingKey } = this.resolveBuiltinTemplates(server)
+      if (missingKey) {
+        conn.status = 'error'
+        conn.error = `Missing required env variable: ${missingKey}`
+        log.warn(`skip ${server.name}: env variable ${missingKey} is not set`)
+        return
+      }
+
       // 根据类型创建 transport
-      conn.transport = this.createTransport(server)
+      conn.transport = this.createTransport(resolved)
 
       // 监听 transport 关闭事件（子进程退出等）
       conn.transport.onclose = () => {
@@ -301,6 +310,16 @@ class McpService {
     return names
   }
 
+  /** 判断某个 server 按名称是否已连接成功（供子智能体依赖预检查） */
+  isConnectedByName(serverName: string): boolean {
+    for (const [serverId, conn] of this.connections) {
+      if (conn.status !== 'connected') continue
+      const server = mcpDao.pick(serverId, ['name'])
+      if (server?.name === serverName) return true
+    }
+    return false
+  }
+
   /** 按服务器名获取所有 AgentTool（用于 agentToolBuilder 按服务器级别注入） */
   getAgentToolsByServerName(serverName: string): AgentTool<TSchema, McpToolDetails>[] {
     for (const [serverId, conn] of this.connections) {
@@ -366,6 +385,33 @@ class McpService {
       }
     }
     throw new Error(`不支持的 MCP transport 类型: ${server.type}`)
+  }
+
+  /**
+   * 对内置 server 的 url / headers 做 {{ENV_VAR}} 模板替换
+   * - 非内置直接透传
+   * - 如果占位符引用的 env 值为空/缺失，返回 missingKey 提示调用方跳过连接
+   */
+  private resolveBuiltinTemplates(server: McpServer): {
+    resolved: McpServer
+    missingKey?: string
+  } {
+    if (!server.isBuiltin) return { resolved: server }
+    const env = this.parseJsonObject(server.env)
+    let missingKey: string | undefined
+    const substitute = (s: string): string =>
+      s.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+        const val = env[key]
+        if (!val) {
+          if (!missingKey) missingKey = key
+          return ''
+        }
+        return val
+      })
+    const url = substitute(server.url)
+    const headers = substitute(server.headers)
+    if (missingKey) return { resolved: server, missingKey }
+    return { resolved: { ...server, url, headers } }
   }
 
   /** 安全解析 JSON 数组 */

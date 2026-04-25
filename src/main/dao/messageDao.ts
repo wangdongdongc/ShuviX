@@ -141,6 +141,14 @@ export class MessageDao extends BaseDao {
     ).changes
   }
 
+  /** 按 id 删除单条消息 */
+  deleteById(sessionId: string, messageId: string): number {
+    return this.stmt('DELETE FROM messages WHERE sessionId = ? AND id = ?').run(
+      sessionId,
+      messageId
+    ).changes
+  }
+
   /** 归档会话的所有未归档消息（Full Compaction 用） */
   archiveBySessionId(sessionId: string): number {
     return this.stmt('UPDATE messages SET archived = 1 WHERE sessionId = ? AND archived = 0').run(

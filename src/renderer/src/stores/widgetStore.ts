@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { usePreviewStore } from './previewStore'
+import { useBrowserStore } from './browserStore'
 
 type WidgetItem = WidgetSummary
 
@@ -15,7 +15,7 @@ interface WidgetState {
   loaded: boolean
   serverStatus: ServerStatus | null
   reload: () => Promise<void>
-  /** 点击卡片 —— 在 Preview tab 的 WebContentsView 中打开该 widget */
+  /** 点击卡片 —— 在 Browser tab 的 WebContentsView 中打开该 widget */
   openWidget: (id: string) => Promise<{ success: boolean; error?: string }>
   renameWidget: (id: string, name: string, description?: string) => Promise<void>
   archiveWidget: (id: string, archived: boolean) => Promise<void>
@@ -43,14 +43,14 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
     if (!res.success) {
       return { success: false, error: res.error }
     }
-    // 切到 Preview tab 并加载 widget URL
-    const preview = usePreviewStore.getState()
-    if (!preview.isOpen) {
-      preview.open(res.url)
+    // 切到 Browser tab 并加载 widget URL
+    const browser = useBrowserStore.getState()
+    if (!browser.isOpen) {
+      browser.open(res.url)
     } else {
-      preview.setUrl(res.url)
+      browser.setUrl(res.url)
     }
-    preview.setActiveTab('preview')
+    browser.setActiveTab('browser')
     // 刷新卡片顺序（lastOpenedAt）
     void get().reload()
     return { success: true }

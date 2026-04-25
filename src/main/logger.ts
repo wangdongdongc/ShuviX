@@ -1,5 +1,5 @@
 import log from 'electron-log/main'
-import { getOperationContext } from './frontend/core/OperationContext'
+import { getOperationContext } from './utils/operationContext'
 
 // 日志文件轮转：单文件 5MB
 log.transports.file.maxSize = 5 * 1024 * 1024

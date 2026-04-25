@@ -209,49 +209,6 @@ export interface SkillToolDetails {
   error?: boolean
 }
 
-/** 持久化的子智能体工具条目 */
-export interface PersistedSubAgentToolEntry {
-  toolName: string
-  status: 'done' | 'error'
-  summary?: string
-}
-
-/** 持久化的子智能体时间线条目 */
-export type PersistedSubAgentTimelineEntry =
-  | { type: 'tool'; tool: PersistedSubAgentToolEntry }
-  | { type: 'text'; content: string }
-  | { type: 'thinking'; content: string }
-
-/** 持久化的子智能体 token 用量 */
-export interface PersistedSubAgentUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
-  details?: Array<{
-    input: number
-    output: number
-    cacheRead: number
-    cacheWrite: number
-    total: number
-    stopReason: string
-  }>
-}
-
-/** 子智能体工具详情（统一类型，覆盖所有子智能体后端） */
-export interface SubAgentToolDetails {
-  type: 'sub-agent'
-  /** 子智能体类型名（如 'explore', 'claude-code'） */
-  subAgentType: string
-  taskId: string
-  description: string
-  error?: string
-  prompt?: string
-  timeline?: PersistedSubAgentTimelineEntry[]
-  usage?: PersistedSubAgentUsage
-}
-
 /** Python 工具详情 */
 export interface PythonToolDetails {
   type: 'python'
@@ -280,9 +237,9 @@ export interface McpToolDetails {
   isError?: boolean
 }
 
-/** preview 工具详情 */
-export interface PreviewToolDetails {
-  type: 'preview'
+/** browser 工具详情 */
+export interface BrowserToolDetails {
+  type: 'browser'
   action: string
   devtoolsAction?: string
   success?: boolean
@@ -294,7 +251,7 @@ export interface PreviewToolDetails {
 /** dev 工具详情 —— 统一 widget / presentation / sketch 三种 kind */
 export interface DevToolDetails {
   type: 'dev'
-  action: 'init' | 'build'
+  action: 'init' | 'build' | 'export'
   kind: 'widget' | 'presentation' | 'sketch'
   /** 仅 kind='widget' 时有值 */
   widgetId?: string
@@ -303,6 +260,10 @@ export interface DevToolDetails {
   url?: string
   success: boolean
   error?: string
+  /** 仅 action='export' 时有值 */
+  targetPath?: string
+  /** 仅 action='export' 时有值：导出写入的文件数 */
+  filesWrittenCount?: number
 }
 
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
@@ -318,11 +279,10 @@ export type ToolResultDetails =
   | SshToolDetails
   | DatabaseToolDetails
   | SkillToolDetails
-  | SubAgentToolDetails
   | PythonToolDetails
   | SqlToolDetails
   | McpToolDetails
-  | PreviewToolDetails
+  | BrowserToolDetails
   | DevToolDetails
 
 /** 工具使用元数据 */

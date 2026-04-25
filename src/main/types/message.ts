@@ -20,7 +20,6 @@ export type {
   AskToolDetails,
   SshToolDetails,
   SkillToolDetails,
-  SubAgentToolDetails,
   McpToolDetails,
   StepTextMeta,
   StepThinkingMeta,

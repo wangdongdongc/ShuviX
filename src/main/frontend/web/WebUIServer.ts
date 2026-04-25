@@ -46,10 +46,10 @@ class WebUIServer {
     // REST API
     this.app.use('/shuvix/api', createApiRouter())
 
-    // Design Preview 反向代理：/shuvix/preview/:sessionId/* → 127.0.0.1:<devServerPort>/*
+    // Design Browser 反向代理：/shuvix/browser/:sessionId/* → 127.0.0.1:<devServerPort>/*
     // TODO: Re-implement via plugin query API when design plugin exposes dev server info
-    this.app.use('/shuvix/preview/:sessionId', (_req, res) => {
-      res.status(404).json({ error: 'Preview proxy not yet available via plugin API' })
+    this.app.use('/shuvix/browser/:sessionId', (_req, res) => {
+      res.status(404).json({ error: 'Browser proxy not yet available via plugin API' })
     })
 
     // 静态资源：WebUI 前端
@@ -99,8 +99,8 @@ class WebUIServer {
       const frontend = new WebFrontend(socket, sessionId)
       chatFrontendRegistry.bind(sessionId, frontend)
 
-      // NOTE: Design preview active-session notification removed during plugin migration.
-      // The plugin's emitEvent mechanism handles this going forward via ChatPreviewEvent.
+      // NOTE: Design browser active-session notification removed during plugin migration.
+      // The plugin's emitEvent mechanism handles this going forward via ChatBrowserEvent.
 
       socket.on('close', () => {
         chatFrontendRegistry.unbind(sessionId, frontend.id)

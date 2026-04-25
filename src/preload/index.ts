@@ -45,7 +45,15 @@ import type {
   TelegramBindSessionParams,
   TelegramUnbindSessionParams
 } from '../main/types'
-import type { ChatEvent } from '../main/frontend'
+import type { ChatEvent } from '../main/frontend/core/types'
+import type {
+  ConfigSharePayload,
+  ExportOptions,
+  ExportSnapshot,
+  ImportPlan,
+  ImportResult,
+  ImportSelection
+} from '../shared/types/configShare'
 
 /** 暴露给 Renderer 的 API */
 const api = {
@@ -63,8 +71,8 @@ const api = {
     windowReady: () => ipcRenderer.send('app:window-ready'),
     /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
     adjustWindowWidth: (delta: number) => ipcRenderer.invoke('app:adjust-window-width', delta),
-    /** 设置预览面板宽度偏移（保存窗口尺寸时扣除） */
-    setPreviewOffset: (offset: number) => ipcRenderer.invoke('app:set-preview-offset', offset),
+    /** 设置浏览器面板宽度偏移（保存窗口尺寸时扣除） */
+    setBrowserOffset: (offset: number) => ipcRenderer.invoke('app:set-browser-offset', offset),
     /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
     onSettingsChanged: (callback: () => void) => {
       const handler = (): void => callback()
@@ -217,6 +225,8 @@ const api = {
     add: (params: MessageAddParams) => ipcRenderer.invoke('message:add', params),
     addErrorEvent: (params: { sessionId: string; content: string }) =>
       ipcRenderer.invoke('message:addErrorEvent', params),
+    deleteErrorEvent: (params: { sessionId: string; messageId: string }) =>
+      ipcRenderer.invoke('message:deleteErrorEvent', params),
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
     rollback: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('message:rollback', params),
@@ -289,9 +299,16 @@ const api = {
       ipcRenderer.invoke('customSubAgent:toggle', params)
   },
 
+  // ============ 临时子会话（右侧 Sub-agent 面板） ============
+  subSession: {
+    /** 销毁指定子会话 — 中止运行中的 Agent 并清理服务端 registry */
+    destroy: (subSessionId: string) => ipcRenderer.invoke('subSession:destroy', subSessionId)
+  },
+
   // ============ 工具 ============
   tools: {
-    list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId)
+    list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId),
+    presentations: () => ipcRenderer.invoke('tools:presentations')
   },
 
   // ============ MCP Host（ShuviX 对外 MCP 服务） ============
@@ -315,6 +332,27 @@ const api = {
     getLog: (id: string) => ipcRenderer.invoke('mcpServer:getLog', id),
     /** 清空日志 */
     clearLogs: () => ipcRenderer.invoke('mcpServer:clearLogs')
+  },
+
+  // ============ 配置导出/导入 ============
+  config: {
+    /** 构建 Dialog 渲染用的"已开启候选集" */
+    buildExportSnapshot: (): Promise<ExportSnapshot> =>
+      ipcRenderer.invoke('config:buildExportSnapshot'),
+    /** 按用户勾选构建并编码 payload */
+    buildExportPayload: (options: ExportOptions): Promise<string> =>
+      ipcRenderer.invoke('config:buildExportPayload', options),
+    /** 解码并校验粘贴的分享串 */
+    parseImportPayload: (encoded: string): Promise<ConfigSharePayload> =>
+      ipcRenderer.invoke('config:parseImportPayload', encoded),
+    /** 预计算每项将执行的动作 */
+    planImport: (payload: ConfigSharePayload): Promise<ImportPlan> =>
+      ipcRenderer.invoke('config:planImport', payload),
+    /** 执行导入 */
+    applyImport: (params: {
+      payload: ConfigSharePayload
+      selection: ImportSelection
+    }): Promise<ImportResult> => ipcRenderer.invoke('config:applyImport', params)
   },
 
   // ============ MCP 客户端管理 ============
@@ -516,41 +554,35 @@ const api = {
     }
   },
 
-  // ============ Preview WebContentsView ============
-  previewView: {
-    navigate: (url: string) => ipcRenderer.invoke('preview-view:navigate', url),
-    goBack: () => ipcRenderer.invoke('preview-view:go-back'),
-    goForward: () => ipcRenderer.invoke('preview-view:go-forward'),
-    reload: () => ipcRenderer.invoke('preview-view:reload'),
-    stop: () => ipcRenderer.invoke('preview-view:stop'),
-    getUrl: () => ipcRenderer.invoke('preview-view:get-url') as Promise<string>,
+  // ============ Browser WebContentsView ============
+  browserView: {
+    navigate: (url: string) => ipcRenderer.invoke('browser-view:navigate', url),
+    goBack: () => ipcRenderer.invoke('browser-view:go-back'),
+    goForward: () => ipcRenderer.invoke('browser-view:go-forward'),
+    reload: () => ipcRenderer.invoke('browser-view:reload'),
+    stop: () => ipcRenderer.invoke('browser-view:stop'),
+    getUrl: () => ipcRenderer.invoke('browser-view:get-url') as Promise<string>,
     updateBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
-      ipcRenderer.send('preview-view:update-bounds', bounds),
-    setVisible: (visible: boolean) => ipcRenderer.send('preview-view:set-visible', visible),
+      ipcRenderer.send('browser-view:update-bounds', bounds),
+    setVisible: (visible: boolean) => ipcRenderer.send('browser-view:set-visible', visible),
     /** WebContentsView 开始加载 */
     onDidStartLoading: (callback: (url: string) => void) => {
       const handler = (_: unknown, url: string): void => callback(url)
-      ipcRenderer.on('preview-view:did-start-loading', handler)
-      return () => ipcRenderer.removeListener('preview-view:did-start-loading', handler)
+      ipcRenderer.on('browser-view:did-start-loading', handler)
+      return () => ipcRenderer.removeListener('browser-view:did-start-loading', handler)
     },
     /** WebContentsView 导航完成（URL 变化） */
     onDidNavigate: (callback: (url: string) => void) => {
       const handler = (_: unknown, url: string): void => callback(url)
-      ipcRenderer.on('preview-view:did-navigate', handler)
-      return () => ipcRenderer.removeListener('preview-view:did-navigate', handler)
+      ipcRenderer.on('browser-view:did-navigate', handler)
+      return () => ipcRenderer.removeListener('browser-view:did-navigate', handler)
     },
     /** WebContentsView 加载完成 */
     onDidFinishLoad: (callback: () => void) => {
       const handler = (): void => callback()
-      ipcRenderer.on('preview-view:did-finish-load', handler)
-      return () => ipcRenderer.removeListener('preview-view:did-finish-load', handler)
+      ipcRenderer.on('browser-view:did-finish-load', handler)
+      return () => ipcRenderer.removeListener('browser-view:did-finish-load', handler)
     }
-  },
-
-  // ============ Plugin ============
-  plugin: {
-    purposes: () => ipcRenderer.invoke('plugin:purposes'),
-    toolPresentations: () => ipcRenderer.invoke('tools:presentations')
   },
 
   // ============ Skill 管理 ============
@@ -645,6 +677,17 @@ const api = {
       }>,
     /** 停止 widget HTTP 服务器（下次打开时自动重启） */
     stopServer: () => ipcRenderer.invoke('widget:stopServer'),
+    /** 弹出文件夹选择器（返回所选路径；用户取消返回 canceled） */
+    pickExportDir: () =>
+      ipcRenderer.invoke('widget:pickExportDir') as Promise<
+        { success: true; path: string } | { success: false; reason: string }
+      >,
+    /** 导出 widget 为独立 Vite 项目 */
+    exportAsVite: (params: { id: string; targetPath: string }) =>
+      ipcRenderer.invoke('widget:exportAsVite', params) as Promise<
+        | { success: true; filesWritten: string[]; targetPath: string }
+        | { success: false; code: string; error: string }
+      >,
     /** 监听 widget 列表 / 服务器状态变更 */
     onChanged: (callback: () => void) => {
       const handler = (): void => callback()

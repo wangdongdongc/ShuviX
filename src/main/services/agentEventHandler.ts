@@ -4,11 +4,11 @@ import { isAssistantMessage, isUserMessage } from '../utils/messageGuards'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified } from '../tools/utils/allowList'
+import { isCommandAllowedUnified } from '../utils/toolUtils/allowList'
 import { dockerManager } from './dockerManager'
-import { parallelCoordinator } from './parallelExecution'
+import { transformToolResultForPersist } from './stepPersistPipeline'
 import type { Message, MessageMetadata, ToolResultDetails } from '../types'
-import type { ChatEvent, RuntimeStatus } from '../frontend'
+import type { ChatEvent, RuntimeStatus } from '../frontend/core'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentEvent')
@@ -103,14 +103,8 @@ function handleAgentEnd(
   dockerManager.scheduleDestroy(ctx.sessionId, () => {
     ctx.emitRuntimeEvent('docker', null)
   })
-  // 检查 agent_end 中的消息是否携带错误信息
+  // 注意：per-message 错误已在 handleMessageEnd 中广播，这里不再重复广播
   const endMessages = event.messages
-  for (const m of endMessages) {
-    if (isAssistantMessage(m) && m.errorMessage) {
-      log.error(`流式错误: ${m.errorMessage}`)
-      ctx.broadcastEvent({ type: 'error', sessionId: ctx.sessionId, error: m.errorMessage })
-    }
-  }
   // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
   const details: Array<{
     input: number
@@ -376,11 +370,10 @@ function handleMessageEnd(
     ctx.state.streamBuffer = { content: '', thinking: '', images: [] }
   }
 
-  // 注册并行执行 batch
+  // 识别多工具批次（用于下方的 tool_start 预展示）
   let batchToolCalls: typeof rawToolCalls | null = null
   if (rawToolCalls.length >= 2) {
     batchToolCalls = rawToolCalls
-    parallelCoordinator.registerBatch(ctx.sessionId, batchToolCalls)
   }
 
   ctx.broadcastEvent({ type: 'text_end', sessionId: ctx.sessionId })
@@ -462,21 +455,31 @@ function handleToolExecutionEnd(
         details?: ToolResultDetails
       }
     | undefined
-  const resultContent =
-    result?.content
-      ?.map((c: TextContent | ImageContent) => (c.type === 'text' ? c.text : JSON.stringify(c)))
+  const rawContent = result?.content ?? []
+  // 实时广播内容：文本原样；非文本 JSON.stringify（与历史行为一致，UI 负责解析图像/附件）
+  const broadcastContent =
+    rawContent
+      .map((c: TextContent | ImageContent) => (c.type === 'text' ? c.text : JSON.stringify(c)))
       .join('\n') || ''
-  // 工具已返回强类型 details，直接透传到持久化和前端
-  const toolDetails = result?.details
+
+  // 入库内容：走 stepPersistPipeline，按工具/内容类型做瘦身（如图片 → 路径提示）
+  const { content: persistContent, details: persistDetails } = transformToolResultForPersist({
+    toolName: event.toolName,
+    toolCallId: event.toolCallId,
+    sessionId: ctx.sessionId,
+    isError: event.isError || false,
+    content: rawContent,
+    details: result?.details
+  })
 
   // 查找对应的 tool_use 消息 ID 并原地更新
   const toolUseMessageId = ctx.state.toolUseMessageIds.get(event.toolCallId)
   if (toolUseMessageId) {
     messageService.completeToolUse({
       messageId: toolUseMessageId,
-      content: resultContent,
+      content: persistContent,
       isError: event.isError || false,
-      details: toolDetails
+      details: persistDetails
     })
     ctx.state.toolUseMessageIds.delete(event.toolCallId)
   }
@@ -485,10 +488,10 @@ function handleToolExecutionEnd(
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
-    result: resultContent,
+    result: broadcastContent,
     isError: event.isError || false,
     messageId: toolUseMessageId,
-    details: toolDetails
+    details: result?.details
   })
 }
 

@@ -5,14 +5,12 @@ import {
   type ImageContent,
   completeSimple
 } from '@mariozechner/pi-ai'
-import { parallelCoordinator } from './parallelExecution'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
-import { subAgentRegistry } from '../subagent'
 import { resolveModel } from './agentModelResolver'
-import { clearSession as clearFileTimeSession } from '../tools/utils/fileTime'
+import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
 import type {
@@ -31,15 +29,15 @@ import {
   type SessionEventHandlerContext
 } from './agentEventHandler'
 import { isAssistantMessage } from '../utils/messageGuards'
-import { chatFrontendRegistry } from '../frontend'
+import { chatFrontendRegistry } from '../frontend/core'
 import type { ChatEvent, RuntimeStatus } from '../frontend/core/types'
-import type { ToolContext } from '../tools/types'
+import type { ToolContext } from './toolContext'
 import type { InputRequest, InputResponse } from '../../shared/types/inputRequest'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { getTempWorkspace } from '../utils/paths'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
-import { injectInstructionMessages } from './instructionInjector'
+import { injectInstructionMessages } from './instruction'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
@@ -225,8 +223,7 @@ export class AgentSession {
 
     // 构建子智能体上下文（使 explore 等子智能体工具可用）
     const subAgentCtx: SubAgentBuildContext = {
-      modelConfig: { provider, model, capabilities },
-      broadcastEvent: (e) => chatFrontendRegistry.broadcast(e)
+      modelConfig: { provider, model, capabilities }
     }
     const tools = buildTools(toolContext, enabledTools, subAgentCtx, project?.path)
 
@@ -324,11 +321,14 @@ export class AgentSession {
     this.agent.steer(msg as Parameters<typeof this.agent.steer>[0])
   }
 
-  /** 中止生成；若已有部分内容则持久化并返回 */
+  /** 中止生成；若已有部分内容则持久化并返回
+   *
+   *  注：不 cascade 到子智能体。子智能体视为独立的临时会话，
+   *  父会话的中止/销毁不影响已启动的子 agent —— 只有用户在右侧
+   *  Sub-agent 面板上手动关闭，或 IPC subSession:destroy 才会销毁它们。
+   */
   abort(): Message | null {
     log.info(`中止 session=${this.sessionId}`)
-    parallelCoordinator.cancelBatch(this.sessionId)
-    subAgentRegistry.abortAll(this.sessionId)
     this.agent.abort()
     // 只取消本 session 的 pending 项 — 全部 resolve 为 cancel(reason=aborted)
     for (const [id, pending] of this.pendingInputs) {
@@ -563,18 +563,14 @@ export class AgentSession {
   /** 使 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
   invalidate(): void {
     this.agent.abort()
-    subAgentRegistry.destroyAll(this.sessionId)
-    parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用，含 Docker 清理） */
+  /** 完全销毁（删除会话时调用，含 Docker 清理）。不 cascade 到子智能体（由用户 / IPC 控制）。 */
   destroy(): void {
     this.agent.abort()
-    subAgentRegistry.destroyAll(this.sessionId)
-    parallelCoordinator.clearSession(this.sessionId)
     clearFileTimeSession(this.sessionId)
     dockerManager
       .destroyContainer(this.sessionId)

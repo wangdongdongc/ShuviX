@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitizeBinaryOutput, collapseProgressOutput } from '../utils/shell'
+import { sanitizeBinaryOutput, collapseProgressOutput } from '../../utils/toolUtils/shell'
 
 // ─── sanitizeBinaryOutput ───────────────────────────────────────────────────
 

@@ -93,7 +93,7 @@ vi.mock('word-extractor', () => ({
 }))
 
 import { ReadTool } from '../read'
-import type { ToolContext } from '../types'
+import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
 

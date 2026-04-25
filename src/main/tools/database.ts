@@ -6,7 +6,8 @@
 import { Type } from '@sinclair/typebox'
 import { dbManager } from '../services/dbManager'
 import { dbCredentialDao } from '../dao/dbCredentialDao'
-import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool } from '../services/baseTool'
+import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { DatabaseToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
@@ -115,7 +116,7 @@ export class DatabaseTool extends BaseTool<typeof DatabaseParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'database',
   group: 'remote',

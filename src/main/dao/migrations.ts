@@ -256,7 +256,7 @@ export const migrations: Migration[] = [
   },
   {
     version: 6,
-    description: '新增 custom_sub_agents 表（子智能体配置，含内置 explore）',
+    description: '新增 custom_sub_agents 表（子智能体配置）',
     up: (db) => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS custom_sub_agents (
@@ -274,43 +274,8 @@ export const migrations: Migration[] = [
           updatedAt INTEGER NOT NULL
         );
       `)
-
-      // 种子数据：内置 explore 子智能体
-      const now = Date.now()
-      const exploreDesc =
-        'Fast read-only agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.\n\nWhen NOT to use this tool:\n- If you want to read a specific file path, use Read directly\n- If you are searching for a specific class/function definition, use Grep/Glob directly\n- If you are searching within 2-3 known files, use Read directly'
-      const explorePrompt = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
-
-Your strengths:
-- Rapidly finding files using glob patterns
-- Searching code and text with powerful regex patterns
-- Reading and analyzing file contents
-
-Guidelines:
-- Use Glob for broad file pattern matching
-- Use Grep for searching file contents with regex
-- Use Read when you know the specific file path you need to read
-- Use Ls for listing directory contents
-- Adapt your search approach based on the thoroughness level specified by the caller
-- Return file paths as absolute paths in your final response
-- For clear communication, avoid using emojis
-- Do not create any files or run commands that modify the user's system state in any way
-
-Complete the user's search request efficiently and report your findings clearly.`
-      db.prepare(
-        `INSERT INTO custom_sub_agents (id, name, displayName, description, systemPrompt, tools, maxTurns, isBuiltin, metadata, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, '{}', ?, ?)`
-      ).run(
-        'builtin-explore',
-        'explore',
-        'Explore',
-        exploreDesc,
-        explorePrompt,
-        '["read","ls","grep","glob"]',
-        40,
-        now,
-        now
-      )
+      // 原本此处种子了内置 explore 子智能体，v10 迁移已将其移至代码定义
+      // (src/main/subagent/builtins/)，并清除 isBuiltin=1 的 DB 行。
     }
   },
   {
@@ -348,6 +313,50 @@ Complete the user's search request efficiently and report your findings clearly.
         );
         CREATE INDEX IF NOT EXISTS idx_widgets_lastOpenedAt ON widgets(lastOpenedAt DESC);
       `)
+    }
+  },
+  {
+    version: 10,
+    description:
+      '为 mcp_servers 表添加 isBuiltin 列并种子内置 Tavily MCP；将内置 sub-agent 迁移至代码定义',
+    up: (db) => {
+      // 1. 扩展 mcp_servers：isBuiltin 标记内置 server（不可删除，除 env/isEnabled 外字段只读）
+      db.exec(`ALTER TABLE mcp_servers ADD COLUMN isBuiltin INTEGER NOT NULL DEFAULT 0`)
+
+      const now = Date.now()
+
+      // 2. 种子：内置 Tavily MCP（远程 HTTP endpoint，{{TAVILY_API_KEY}} 在连接时替换）
+      db.prepare(
+        `INSERT OR IGNORE INTO mcp_servers
+           (id, name, type, command, args, env, url, headers, metadata, isEnabled, isBuiltin, cachedTools, createdAt, updatedAt)
+         VALUES (?, ?, 'http', '', '[]', ?, ?, '{}', '{}', 0, 1, '[]', ?, ?)`
+      ).run(
+        'builtin-mcp-tavily',
+        'tavily',
+        JSON.stringify({ TAVILY_API_KEY: '' }),
+        'https://mcp.tavily.com/mcp/?tavilyApiKey={{TAVILY_API_KEY}}',
+        now,
+        now
+      )
+
+      // 3. 将 v6 种子的内置 sub-agent（explore 等）从 DB 迁移至代码定义：
+      //    先把用户已禁用的项名存到 settings（保留用户偏好），再删除所有 isBuiltin=1 行。
+      //    此后内置 sub-agent 由 src/main/subagent/builtins/ 加载，i18n 与 prompt 随版本更新无需 DB 迁移。
+      interface BuiltinRow {
+        name: string
+        isEnabled: number
+      }
+      const builtinRows = db
+        .prepare('SELECT name, isEnabled FROM custom_sub_agents WHERE isBuiltin = 1')
+        .all() as BuiltinRow[]
+      const disabledNames = builtinRows.filter((r) => r.isEnabled === 0).map((r) => r.name)
+      if (disabledNames.length > 0) {
+        db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+          'subagent.builtinDisabled',
+          JSON.stringify(disabledNames)
+        )
+      }
+      db.exec(`DELETE FROM custom_sub_agents WHERE isBuiltin = 1`)
     }
   }
 ]

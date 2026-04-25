@@ -42,8 +42,28 @@ export class SshManager {
   /** sessionId → SSH 连接信息 */
   private connections = new Map<string, SshConnectionInfo>()
 
-  /** 建立 SSH 连接 */
+  /** sessionId → 正在进行的 connect Promise，用于并发调用去重 */
+  private inflightConnect = new Map<string, Promise<{ success: boolean; error?: string }>>()
+
+  /**
+   * 建立 SSH 连接
+   * 同一 sessionId 的并发调用共享同一个 Promise，避免两次 disconnect + connect 互相覆盖
+   */
   async connect(
+    sessionId: string,
+    credentials: SshCredentials
+  ): Promise<{ success: boolean; error?: string }> {
+    const inflight = this.inflightConnect.get(sessionId)
+    if (inflight) return inflight
+
+    const p = this._connectImpl(sessionId, credentials).finally(() => {
+      if (this.inflightConnect.get(sessionId) === p) this.inflightConnect.delete(sessionId)
+    })
+    this.inflightConnect.set(sessionId, p)
+    return p
+  }
+
+  private async _connectImpl(
     sessionId: string,
     credentials: SshCredentials
   ): Promise<{ success: boolean; error?: string }> {

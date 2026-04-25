@@ -1,5 +1,5 @@
 /**
- * 面板布局持久化 — 统一管理 sidebar/chat/preview 的宽度和开关状态
+ * 面板布局持久化 — 统一管理 sidebar/chat/browser 的宽度和开关状态
  *
  * 持久化 key: window.panelLayout
  * 主进程启动时从此 key 读取并计算窗口宽度，关闭时保存 chatWidth
@@ -12,8 +12,8 @@ interface PanelLayout {
   sidebarWidth: number
   sidebarOpen: boolean
   chatWidth: number
-  previewWidth: number
-  previewOpen: boolean
+  browserWidth: number
+  browserOpen: boolean
 }
 
 /** 合并部分布局字段并持久化（debounce 避免高频写入） */
@@ -26,6 +26,21 @@ export function persistPanelLayout(partial: Partial<PanelLayout>): void {
   timer = setTimeout(flush, 200)
 }
 
+/** 从持久化 JSON 读取布局，兼容旧 key（previewWidth / previewOpen） */
+function parseLayout(raw: string): PanelLayout {
+  const parsed = JSON.parse(raw) as Partial<PanelLayout> & {
+    previewWidth?: number
+    previewOpen?: boolean
+  }
+  return {
+    sidebarWidth: parsed.sidebarWidth ?? 240,
+    sidebarOpen: parsed.sidebarOpen ?? true,
+    chatWidth: parsed.chatWidth ?? 720,
+    browserWidth: parsed.browserWidth ?? parsed.previewWidth ?? 480,
+    browserOpen: parsed.browserOpen ?? parsed.previewOpen ?? false
+  }
+}
+
 async function flush(): Promise<void> {
   timer = null
   const update = pendingUpdate
@@ -33,13 +48,13 @@ async function flush(): Promise<void> {
   try {
     const raw = await window.api?.settings?.get(SETTINGS_KEY)
     const current: PanelLayout = raw
-      ? JSON.parse(raw)
+      ? parseLayout(raw)
       : {
           sidebarWidth: 240,
           sidebarOpen: true,
           chatWidth: 720,
-          previewWidth: 480,
-          previewOpen: false
+          browserWidth: 480,
+          browserOpen: false
         }
     const merged = { ...current, ...update }
     window.api?.settings?.set({ key: SETTINGS_KEY, value: JSON.stringify(merged) })
@@ -52,7 +67,7 @@ async function flush(): Promise<void> {
 export async function loadPanelLayout(): Promise<Partial<PanelLayout>> {
   try {
     const raw = await window.api?.settings?.get(SETTINGS_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) return parseLayout(raw)
   } catch {
     /* ignore */
   }

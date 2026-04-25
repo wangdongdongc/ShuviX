@@ -9,15 +9,15 @@ import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
-import { getDefaultEnabledTools, filterAvailableTools } from '../utils/tools'
-import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../tools/utils/allowList'
-import type { AllowToolType } from '../tools/utils/allowList'
+import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
+import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../utils/toolUtils/allowList'
+import type { AllowToolType } from '../utils/toolUtils/allowList'
 import { destroyAgentTerminal } from './agentTerminalManager'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
 import type { InputResponse } from '../../shared/types/inputRequest'
 import { AgentSession } from './agentSession'
-import { scanInstructionFiles } from './instructionFileScanner'
+import { scanInstructionFiles } from './instruction'
 import type { InstructionFileEntry } from '../../shared/types/instructionFile'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 import { createLogger } from '../logger'
@@ -183,7 +183,7 @@ export class SessionService {
     // 清理 agent 终端
     destroyAgentTerminal(id)
     // 清理 Telegram 绑定（异步，不阻塞删除）
-    import('./telegramService').then(({ telegramService }) => {
+    import('./telegram').then(({ telegramService }) => {
       telegramService.unbindSession(id).catch(() => {})
     })
     // 再清理持久化数据

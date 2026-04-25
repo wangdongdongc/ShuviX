@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { expandPath, resolveToCwd, suggestSimilarFiles } from '../utils/pathUtils'
+import { expandPath, resolveToCwd, suggestSimilarFiles } from '../../utils/toolUtils/pathUtils'
 
 /** 临时测试目录 */
 const TEST_DIR = join(tmpdir(), 'shuvix-pathutils-test-' + Date.now())

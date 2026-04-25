@@ -14,8 +14,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
-          pythonWorker: resolve(__dirname, 'src/plugins/pyodide/pythonWorker.ts'),
-          sqlWorker: resolve(__dirname, 'src/plugins/pglite/sqlWorker.ts')
+          pythonWorker: resolve(__dirname, 'src/main/services/pyodide/pythonWorker.ts'),
+          sqlWorker: resolve(__dirname, 'src/main/services/pglite/sqlWorker.ts')
         }
       }
     }

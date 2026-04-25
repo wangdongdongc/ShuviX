@@ -6,7 +6,7 @@
  */
 
 import { customSubAgentDao } from '../dao/customSubAgentDao'
-import { registerBuiltinTool, unregisterBuiltinTool } from '../tools/registry'
+import { registerBuiltinTool, unregisterBuiltinTool } from '../services/toolRegistry'
 import { subAgentRegistry } from './registry'
 import { CustomSubAgentProvider } from './providers/CustomSubAgentProvider'
 import type { CustomSubAgent } from '../dao/types'

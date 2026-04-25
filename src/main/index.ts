@@ -22,18 +22,22 @@ import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
 import { mcpServerService } from './services/mcpServerService'
-import { abortAllAcpSessions } from './subagent'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
-import { telegramService } from './services/telegramService'
-import { pluginRegistry } from './services/pluginRegistry'
+import { telegramService } from './services/telegram'
+// 触发 TelegramBotServer 模块加载以注册 TelegramBotGateway 工厂
+// 服务层只持有 gateway 接口，不直接 import frontend/telegram
+import './frontend/telegram/TelegramBotServer'
+// 触发所有内置工具的 registerBuiltinTool() 副作用
+// services / frontend 层消费注册表前必须由 main-entry 先注册
+import './tools/allTools'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
-import pyodidePlugin from '../plugins/pyodide'
-import pglitePlugin from '../plugins/pglite'
-import devPlugin from '../plugins/dev'
-import { projectManager } from './services/bundlerRuntime'
-import { createPreviewView, destroyPreviewView } from './services/previewViewService'
-import { widgetServer } from './services/widgetServer'
+// pglite / pyodide: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
+import { disposePglite } from './services/pglite'
+import { disposePyodide } from './services/pyodide'
+import { projectManager } from './services/bundler'
+import { createBrowserView, destroyBrowserView } from './services/browser'
+import { widgetServer } from './services/widget'
 import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
@@ -269,23 +273,23 @@ interface PanelLayout {
   sidebarWidth: number
   sidebarOpen: boolean
   chatWidth: number
-  previewWidth: number
-  previewOpen: boolean
+  browserWidth: number
+  browserOpen: boolean
 }
 
 const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   sidebarWidth: 240,
   sidebarOpen: true,
   chatWidth: 720,
-  previewWidth: 480,
-  previewOpen: false
+  browserWidth: 480,
+  browserOpen: false
 }
 
 /** 从面板布局计算窗口宽度 */
 function calcWindowWidth(layout: PanelLayout): number {
   let w = layout.chatWidth
   if (layout.sidebarOpen) w += layout.sidebarWidth + HANDLE_WIDTH
-  if (layout.previewOpen) w += layout.previewWidth + HANDLE_WIDTH
+  if (layout.browserOpen) w += layout.browserWidth + HANDLE_WIDTH
   return Math.max(800, w)
 }
 
@@ -294,13 +298,17 @@ function getSavedPanelLayout(): PanelLayout {
   try {
     const raw = settingsDao.findByKey('window.panelLayout')
     if (!raw) return DEFAULT_PANEL_LAYOUT
-    const saved = JSON.parse(raw) as Partial<PanelLayout>
+    const saved = JSON.parse(raw) as Partial<PanelLayout> & {
+      previewWidth?: number
+      previewOpen?: boolean
+    }
     return {
       sidebarWidth: Number(saved.sidebarWidth) || DEFAULT_PANEL_LAYOUT.sidebarWidth,
       sidebarOpen: saved.sidebarOpen ?? DEFAULT_PANEL_LAYOUT.sidebarOpen,
       chatWidth: Math.max(400, Number(saved.chatWidth) || DEFAULT_PANEL_LAYOUT.chatWidth),
-      previewWidth: Number(saved.previewWidth) || DEFAULT_PANEL_LAYOUT.previewWidth,
-      previewOpen: saved.previewOpen ?? DEFAULT_PANEL_LAYOUT.previewOpen
+      browserWidth:
+        Number(saved.browserWidth ?? saved.previewWidth) || DEFAULT_PANEL_LAYOUT.browserWidth,
+      browserOpen: saved.browserOpen ?? saved.previewOpen ?? DEFAULT_PANEL_LAYOUT.browserOpen
     }
   } catch {
     return DEFAULT_PANEL_LAYOUT
@@ -309,8 +317,8 @@ function getSavedPanelLayout(): PanelLayout {
 
 function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
   const layout = getSavedPanelLayout()
-  // preview 不自动恢复（renderer 侧不恢复 previewOpen），计算窗口宽度时排除 preview
-  const defaultWidth = calcWindowWidth({ ...layout, previewOpen: false })
+  // browser 不自动恢复（renderer 侧不恢复 browserOpen），计算窗口宽度时排除 browser
+  const defaultWidth = calcWindowWidth({ ...layout, browserOpen: false })
   const defaults = { width: defaultWidth, height: 800 }
   try {
     const raw = settingsDao.findByKey('window.mainBounds')
@@ -370,8 +378,8 @@ function createWindow(): void {
   // 注册 Electron 主窗口为默认前端
   chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
 
-  // 创建预览面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
-  createPreviewView(mainWindow)
+  // 创建浏览器面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
+  createBrowserView(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -409,7 +417,7 @@ function createWindow(): void {
       // 反推 chatWidth = 窗口宽度 - 其他面板
       let chatWidth = windowWidth
       if (layout.sidebarOpen) chatWidth -= layout.sidebarWidth + HANDLE_WIDTH
-      if (layout.previewOpen) chatWidth -= layout.previewWidth + HANDLE_WIDTH
+      if (layout.browserOpen) chatWidth -= layout.browserWidth + HANDLE_WIDTH
       chatWidth = Math.max(400, Math.round(chatWidth))
       settingsDao.upsert('window.panelLayout', JSON.stringify({ ...layout, chatWidth }))
     }
@@ -485,9 +493,9 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   }
 })
 
-// 设置预览面板宽度偏移 — 仅重置窗口最小宽度为固定值
+// 设置浏览器面板宽度偏移 — 仅重置窗口最小宽度为固定值
 // CSS min-width (chat 400px) 已保证内容不会被过度压缩
-ipcMain.handle('app:set-preview-offset', (_event, _offset: number) => {
+ipcMain.handle('app:set-browser-offset', (_event, _offset: number) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setMinimumSize(800, 600)
   }
@@ -558,12 +566,6 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 注册并激活插件（必须在 IPC 注册前完成，确保前端查询时插件已就绪）
-  pluginRegistry.register(pyodidePlugin)
-  pluginRegistry.register(pglitePlugin)
-  pluginRegistry.register(devPlugin)
-  await measureAsync('activatePlugins', () => pluginRegistry.activateAll())
-
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
 
@@ -602,16 +604,16 @@ app.whenReady().then(async () => {
 
 // 应用退出前清理
 app.on('before-quit', () => {
-  destroyPreviewView()
+  destroyBrowserView()
   dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
   telegramService.stopAll().catch(() => {})
-  abortAllAcpSessions()
   widgetServer.dispose()
   projectManager.disposeAll()
-  pluginRegistry.deactivateAll().catch(() => {})
+  disposePglite()
+  disposePyodide()
 })
 
 // macOS 下关闭窗口不退出应用

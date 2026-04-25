@@ -1,8 +1,12 @@
 import { Bot, type Context } from 'grammy'
 import { chatFrontendRegistry, chatGateway, operationContext } from '../core'
-import { telegramService } from '../../services/telegramService'
+import {
+  telegramService,
+  registerTelegramBotGatewayFactory,
+  type TelegramBotGateway
+} from '../../services/telegram'
 import { TelegramFrontend } from './TelegramFrontend'
-import { createTelegramContext } from '../core/OperationContext'
+import { createTelegramContext } from '../../utils/operationContext'
 import { compressImageBuffer } from '../../utils/imageProcessing'
 import { createLogger } from '../../logger'
 
@@ -10,9 +14,10 @@ const log = createLogger('Telegram:Bot')
 
 /**
  * Telegram Bot 服务器 — 管理 grammY Bot 生命周期
- * 每个注册的 Bot 一个实例，由 TelegramService 创建和管理
+ * 每个注册的 Bot 一个实例，由 TelegramService 通过 `createTelegramBotGateway`
+ * 间接创建（服务层只看到 `TelegramBotGateway` 接口）。
  */
-export class TelegramBotServer {
+export class TelegramBotServer implements TelegramBotGateway {
   private bot: Bot | null = null
   /** chatId → TelegramFrontend */
   private activeFrontends = new Map<number, TelegramFrontend>()
@@ -325,3 +330,7 @@ export class TelegramBotServer {
     return this.activeFrontends.get(chatId)
   }
 }
+
+// 在模块加载时反向注入工厂 —— services 层调用 createTelegramBotGateway(botId)
+// 时会通过这里创建 TelegramBotServer 实例。
+registerTelegramBotGatewayFactory((botId) => new TelegramBotServer(botId))

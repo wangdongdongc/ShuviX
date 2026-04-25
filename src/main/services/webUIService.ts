@@ -2,7 +2,8 @@ import { createLogger } from '../logger'
 
 const log = createLogger('WebUI')
 
-export type ShareMode = 'readonly' | 'chat' | 'full'
+import type { ShareMode } from '../types/webUI'
+export type { ShareMode } from '../types/webUI'
 
 /** WebUIServer 接口（避免直接 import 造成循环依赖） */
 interface WebUIServerRef {

@@ -114,7 +114,6 @@ export interface StreamingDeltaBuffer {
   content: string
   thinking: string
   toolCallArgsDelta: string
-  subAgents: Map<string, { content: string; thinking: string }>
 }
 
 /** 运行时资源状态信息 */
@@ -130,55 +129,8 @@ export interface SessionResourceInfo {
   runtimes: Record<string, RuntimeInfo>
 }
 
-/** 子智能体内部工具执行 */
-export interface SubAgentToolExecution {
-  toolCallId: string
-  toolName: string
-  status: 'running' | 'done' | 'error'
-  /** 工具参数摘要（后端统一生成） */
-  summary?: string
-}
-
-/** 子智能体 token 用量 */
-export interface SubAgentUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
-  details: Array<{
-    input: number
-    output: number
-    cacheRead: number
-    cacheWrite: number
-    total: number
-    stopReason: string
-  }>
-}
-
-/** 子智能体时间线条目 — tool / text / thinking 按时间顺序混排 */
-export type SubAgentTimelineEntry =
-  | { type: 'tool'; tool: SubAgentToolExecution }
-  | { type: 'text'; content: string }
-  | { type: 'thinking'; content: string }
-
-/** 子智能体执行状态 */
-export interface SubAgentExecution {
-  subAgentId: string
-  subAgentType: string
-  description: string
-  /** 关联主 Agent 的 explore 工具调用 */
-  parentToolCallId?: string
-  status: 'running' | 'done' | 'error'
-  /** 按时间顺序的工具调用 / 文本 / 思考流 */
-  timeline: SubAgentTimelineEntry[]
-  result?: string
-  usage?: SubAgentUsage
-}
-
 /** 空数组常量，避免选择器每次返回新引用 */
 const EMPTY_TOOLS: ToolExecution[] = []
-const EMPTY_SUBAGENTS: SubAgentExecution[] = []
 
 /** 每个会话的输入框草稿状态 */
 type PendingImage = { data: string; mimeType: string; preview: string }
@@ -201,8 +153,6 @@ interface ChatState {
   sessionStreams: Record<string, SessionStreamState>
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
-  /** 各 session 的子智能体执行状态（按 sessionId 隔离，临时，不持久化） */
-  sessionSubAgentExecutions: Record<string, SubAgentExecution[]>
   /** 当前模型是否支持深度思考 */
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
@@ -263,6 +213,7 @@ interface ChatState {
   setActiveSessionId: (id: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
+  removeMessage: (id: string) => void
   replaceMessage: (id: string, message: ChatMessage) => void
   appendStreamingContent: (sessionId: string, delta: string) => void
   appendStreamingThinking: (sessionId: string, delta: string) => void
@@ -285,20 +236,6 @@ interface ChatState {
     updates: Partial<ToolExecution>
   ) => void
   clearToolExecutions: (sessionId: string) => void
-  addSubAgentExecution: (sessionId: string, exec: SubAgentExecution) => void
-  addSubAgentTool: (sessionId: string, subAgentId: string, tool: SubAgentToolExecution) => void
-  updateSubAgentTool: (
-    sessionId: string,
-    subAgentId: string,
-    toolCallId: string,
-    updates: Partial<SubAgentToolExecution>
-  ) => void
-  endSubAgentExecution: (
-    sessionId: string,
-    subAgentId: string,
-    result?: string,
-    usage?: SubAgentUsage
-  ) => void
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
@@ -325,8 +262,6 @@ interface ChatState {
   setRuntime: (sessionId: string, runtimeId: string, info: RuntimeInfo | null) => void
   /** 批量设置运行时资源状态（session 初始化时使用） */
   setRuntimes: (sessionId: string, runtimes: Record<string, RuntimeInfo>) => void
-  appendSubAgentStreamingContent: (sessionId: string, subAgentId: string, delta: string) => void
-  appendSubAgentStreamingThinking: (sessionId: string, subAgentId: string, delta: string) => void
   /** 添加一个新的 pending 输入请求 */
   addPendingInput: (sessionId: string, request: InputRequest) => void
   /** 移除某个已解决的 pending 请求(同时清掉草稿) */
@@ -397,11 +332,6 @@ export const selectCompletedStreamingToolCalls = (
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
-export const selectSubAgentExecutions = (s: ChatState): SubAgentExecution[] =>
-  s.activeSessionId
-    ? s.sessionSubAgentExecutions[s.activeSessionId] || EMPTY_SUBAGENTS
-    : EMPTY_SUBAGENTS
-
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
 export const selectPendingInputs = (s: ChatState): InputRequest[] =>
@@ -452,7 +382,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
-  sessionSubAgentExecutions: {},
   sessionPendingInputs: {},
   sessionInputDrafts: {},
   sessionOtherInputs: {},
@@ -493,6 +422,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  removeMessage: (id) => set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
   replaceMessage: (id, message) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? message : m))
@@ -647,61 +577,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return { sessionToolExecutions: rest }
     }),
 
-  addSubAgentExecution: (sessionId, exec) =>
-    set((state) => {
-      const prev = state.sessionSubAgentExecutions[sessionId] || []
-      return {
-        sessionSubAgentExecutions: {
-          ...state.sessionSubAgentExecutions,
-          [sessionId]: [...prev, exec]
-        }
-      }
-    }),
-
-  addSubAgentTool: (sessionId, subAgentId, tool) =>
-    set((state) => {
-      const prev = state.sessionSubAgentExecutions[sessionId] || []
-      const updated = prev.map((sa) =>
-        sa.subAgentId === subAgentId
-          ? { ...sa, timeline: [...sa.timeline, { type: 'tool' as const, tool }] }
-          : sa
-      )
-      return {
-        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
-      }
-    }),
-
-  updateSubAgentTool: (sessionId, subAgentId, toolCallId, updates) =>
-    set((state) => {
-      const prev = state.sessionSubAgentExecutions[sessionId] || []
-      const updated = prev.map((sa) =>
-        sa.subAgentId === subAgentId
-          ? {
-              ...sa,
-              timeline: sa.timeline.map((entry) =>
-                entry.type === 'tool' && entry.tool.toolCallId === toolCallId
-                  ? { ...entry, tool: { ...entry.tool, ...updates } }
-                  : entry
-              )
-            }
-          : sa
-      )
-      return {
-        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
-      }
-    }),
-
-  endSubAgentExecution: (sessionId, subAgentId, result, usage) =>
-    set((state) => {
-      const prev = state.sessionSubAgentExecutions[sessionId] || []
-      const updated = prev.map((sa) =>
-        sa.subAgentId === subAgentId ? { ...sa, status: 'done' as const, result, usage } : sa
-      )
-      return {
-        sessionSubAgentExecutions: { ...state.sessionSubAgentExecutions, [sessionId]: updated }
-      }
-    }),
-
   setInputText: (text) => set({ inputText: text }),
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
@@ -763,52 +638,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [sessionId]: { runtimes }
       }
     })),
-
-  appendSubAgentStreamingContent: (sessionId, subAgentId, delta) =>
-    set((state) => {
-      const execs = state.sessionSubAgentExecutions[sessionId]
-      if (!execs) return state
-      return {
-        sessionSubAgentExecutions: {
-          ...state.sessionSubAgentExecutions,
-          [sessionId]: execs.map((sa) => {
-            if (sa.subAgentId !== subAgentId) return sa
-            const tl = sa.timeline
-            const last = tl[tl.length - 1]
-            if (last && last.type === 'text') {
-              // 追加到最后一个 text 条目
-              const updated = [...tl]
-              updated[updated.length - 1] = { type: 'text', content: last.content + delta }
-              return { ...sa, timeline: updated }
-            }
-            // 新建 text 条目
-            return { ...sa, timeline: [...tl, { type: 'text' as const, content: delta }] }
-          })
-        }
-      }
-    }),
-
-  appendSubAgentStreamingThinking: (sessionId, subAgentId, delta) =>
-    set((state) => {
-      const execs = state.sessionSubAgentExecutions[sessionId]
-      if (!execs) return state
-      return {
-        sessionSubAgentExecutions: {
-          ...state.sessionSubAgentExecutions,
-          [sessionId]: execs.map((sa) => {
-            if (sa.subAgentId !== subAgentId) return sa
-            const tl = sa.timeline
-            const last = tl[tl.length - 1]
-            if (last && last.type === 'thinking') {
-              const updated = [...tl]
-              updated[updated.length - 1] = { type: 'thinking', content: last.content + delta }
-              return { ...sa, timeline: updated }
-            }
-            return { ...sa, timeline: [...tl, { type: 'thinking' as const, content: delta }] }
-          })
-        }
-      }
-    }),
 
   addPendingInput: (sessionId, request) =>
     set((state) => {
@@ -902,8 +731,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   flushStreamingDeltas: (buffers) =>
     set((state) => {
       const newStreams = { ...state.sessionStreams }
-      let newSubAgents = state.sessionSubAgentExecutions
-      let subAgentsChanged = false
 
       for (const [sessionId, buf] of buffers) {
         if (buf.content || buf.thinking || buf.toolCallArgsDelta) {
@@ -926,45 +753,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           newStreams[sessionId] = updated
         }
-
-        if (buf.subAgents.size > 0) {
-          const prevExecs = state.sessionSubAgentExecutions[sessionId]
-          if (prevExecs) {
-            if (!subAgentsChanged) {
-              newSubAgents = { ...state.sessionSubAgentExecutions }
-              subAgentsChanged = true
-            }
-            newSubAgents[sessionId] = prevExecs.map((sa) => {
-              const subBuf = buf.subAgents.get(sa.subAgentId)
-              if (!subBuf) return sa
-              let tl = sa.timeline
-              if (subBuf.thinking) {
-                const last = tl[tl.length - 1]
-                if (last && last.type === 'thinking') {
-                  tl = [...tl]
-                  tl[tl.length - 1] = { type: 'thinking', content: last.content + subBuf.thinking }
-                } else {
-                  tl = [...tl, { type: 'thinking' as const, content: subBuf.thinking }]
-                }
-              }
-              if (subBuf.content) {
-                const last = tl[tl.length - 1]
-                if (last && last.type === 'text') {
-                  tl = [...tl]
-                  tl[tl.length - 1] = { type: 'text', content: last.content + subBuf.content }
-                } else {
-                  tl = [...tl, { type: 'text' as const, content: subBuf.content }]
-                }
-              }
-              return tl !== sa.timeline ? { ...sa, timeline: tl } : sa
-            })
-          }
-        }
       }
 
-      const result: Partial<ChatState> = { sessionStreams: newStreams }
-      if (subAgentsChanged) result.sessionSubAgentExecutions = newSubAgents
-      return result
+      return { sessionStreams: newStreams }
     }),
 
   handleStepEnd: (sessionId, stepMessage) =>
@@ -1050,10 +841,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restToolExecs = { ...state.sessionToolExecutions }
       delete restToolExecs[sessionId]
 
-      // 清除该 session 的子智能体执行状态
-      const restSubAgents = { ...state.sessionSubAgentExecutions }
-      delete restSubAgents[sessionId]
-
       // 清除该 session 的待处理用户输入(以及对应草稿和"其它"文本)
       const restPendingInputs = { ...state.sessionPendingInputs }
       delete restPendingInputs[sessionId]
@@ -1071,7 +858,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         sessionStreams: newStreams,
         sessionToolExecutions: restToolExecs,
-        sessionSubAgentExecutions: restSubAgents,
         sessionPendingInputs: restPendingInputs,
         sessionInputDrafts: restInputDrafts,
         sessionOtherInputs: restOtherInputs,

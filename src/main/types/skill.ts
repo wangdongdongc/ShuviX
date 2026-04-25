@@ -14,8 +14,8 @@ export interface Skill {
   /** 是否全局启用 */
   isEnabled: boolean
   /** skill 来源 */
-  source: 'default' | 'project' | 'external'
-  /** 外部目录名称（仅 source='external' 时有值） */
+  source: 'default' | 'project' | 'external' | 'builtin'
+  /** 外部目录名称（external 用用户取名；builtin 固定为 'builtin'） */
   dirName?: string
 }
 

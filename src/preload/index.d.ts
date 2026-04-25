@@ -60,6 +60,14 @@ import type {
   TelegramUnbindSessionParams,
   ToolResultDetails
 } from '../main/types'
+import type {
+  ConfigSharePayload,
+  ExportOptions,
+  ExportSnapshot,
+  ImportPlan,
+  ImportResult,
+  ImportSelection
+} from '../shared/types/configShare'
 
 declare global {
   /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
@@ -150,8 +158,8 @@ declare global {
     runtimeId: string
     status: RuntimeStatus | null
   }
-  interface ChatPreviewEvent extends ChatEventBase {
-    type: 'preview_event'
+  interface ChatBrowserEvent extends ChatEventBase {
+    type: 'browser_event'
     action: 'open' | 'close'
     url?: string
     title?: string
@@ -161,62 +169,20 @@ declare global {
     action: 'open'
     ptyId: string
   }
-  interface ChatSubAgentStartEvent extends ChatEventBase {
-    type: 'subagent_start'
-    subAgentId: string
-    subAgentType: string
+  interface ChatSubSessionRegisterEvent extends ChatEventBase {
+    type: 'sub_session_register'
+    parentSessionId: string
+    subAgentName: string
+    displayName: string
     description: string
-    parentToolCallId?: string
+    systemPrompt: string
+    prompt: string
   }
-  interface ChatSubAgentEndEvent extends ChatEventBase {
-    type: 'subagent_end'
-    subAgentId: string
-    subAgentType: string
-    result?: string
-    usage?: {
-      input: number
-      output: number
-      cacheRead: number
-      cacheWrite: number
-      total: number
-      details: Array<{
-        input: number
-        output: number
-        cacheRead: number
-        cacheWrite: number
-        total: number
-        stopReason: string
-      }>
-    }
-  }
-  interface ChatSubAgentToolStartEvent extends ChatEventBase {
-    type: 'subagent_tool_start'
-    subAgentId: string
-    subAgentType: string
-    toolCallId: string
-    toolName: string
-    summary?: string
-  }
-  interface ChatSubAgentToolEndEvent extends ChatEventBase {
-    type: 'subagent_tool_end'
-    subAgentId: string
-    subAgentType: string
-    toolCallId: string
-    toolName?: string
-    result?: string
+  interface ChatSubSessionEndEvent extends ChatEventBase {
+    type: 'sub_session_end'
+    parentSessionId: string
+    result: string
     isError?: boolean
-  }
-  interface ChatSubAgentTextDeltaEvent extends ChatEventBase {
-    type: 'subagent_text_delta'
-    subAgentId: string
-    subAgentType: string
-    delta: string
-  }
-  interface ChatSubAgentThinkingDeltaEvent extends ChatEventBase {
-    type: 'subagent_thinking_delta'
-    subAgentId: string
-    subAgentType: string
-    delta: string
   }
   interface ChatCompactionStartEvent extends ChatEventBase {
     type: 'compaction_start'
@@ -257,14 +223,10 @@ declare global {
     | ChatInputRequestResolvedEvent
     | ChatImageDataEvent
     | ChatRuntimeEvent
-    | ChatPreviewEvent
+    | ChatBrowserEvent
     | ChatTerminalToolEvent
-    | ChatSubAgentStartEvent
-    | ChatSubAgentEndEvent
-    | ChatSubAgentToolStartEvent
-    | ChatSubAgentToolEndEvent
-    | ChatSubAgentTextDeltaEvent
-    | ChatSubAgentThinkingDeltaEvent
+    | ChatSubSessionRegisterEvent
+    | ChatSubSessionEndEvent
     | ChatCompactionStartEvent
     | ChatCompactionEndEvent
     | ChatCompactionErrorEvent
@@ -433,8 +395,8 @@ declare global {
       openFolder: (folderPath: string) => Promise<{ success: boolean }>
       /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
       adjustWindowWidth: (delta: number) => Promise<void>
-      /** 设置预览面板宽度偏移（保存窗口尺寸时扣除） */
-      setPreviewOffset: (offset: number) => Promise<void>
+      /** 设置浏览器面板宽度偏移（保存窗口尺寸时扣除） */
+      setBrowserOffset: (offset: number) => Promise<void>
       /** 通知主进程渲染已就绪，可以显示窗口 */
       windowReady: () => void
       onSettingsChanged: (callback: () => void) => () => void
@@ -535,6 +497,11 @@ declare global {
       list: (sessionId: string) => Promise<ChatMessage[]>
       add: (params: MessageAddParams) => Promise<ChatMessage>
       addErrorEvent: (params: { sessionId: string; content: string }) => Promise<ErrorEventMessage>
+      /** 删除单条 error_event 消息（UI 操作，不影响 agent 上下文） */
+      deleteErrorEvent: (params: {
+        sessionId: string
+        messageId: string
+      }) => Promise<{ success: boolean }>
       clear: (sessionId: string) => Promise<{ success: boolean }>
       /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
@@ -594,6 +561,9 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       toggle: (params: { id: string; enabled: boolean }) => Promise<{ success: boolean }>
     }
+    subSession: {
+      destroy: (subSessionId: string) => Promise<{ success: boolean }>
+    }
     tools: {
       list: (sessionId?: string) => Promise<
         Array<{
@@ -605,6 +575,21 @@ declare global {
           serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
           isEnabled?: boolean
         }>
+      >
+      presentations: () => Promise<
+        Record<
+          string,
+          {
+            icon?: LucideIconName
+            iconColor?: ThemeColor
+            summaryField?: string
+            formItems?: Array<{
+              field: string
+              label?: string
+              renderer?: { type: 'code'; language?: string } | { type: 'text' }
+            }>
+          }
+        >
       >
     }
     mcpServer: {
@@ -635,6 +620,16 @@ declare global {
         | undefined
       >
       clearLogs: () => Promise<void>
+    }
+    config: {
+      buildExportSnapshot: () => Promise<ExportSnapshot>
+      buildExportPayload: (options: ExportOptions) => Promise<string>
+      parseImportPayload: (encoded: string) => Promise<ConfigSharePayload>
+      planImport: (payload: ConfigSharePayload) => Promise<ImportPlan>
+      applyImport: (params: {
+        payload: ConfigSharePayload
+        selection: ImportSelection
+      }) => Promise<ImportResult>
     }
     mcp: {
       list: () => Promise<McpServerInfo[]>
@@ -783,7 +778,7 @@ declare global {
         handler: (params: { ptyId: string; lines: number }) => string | null
       ) => () => void
     }
-    previewView: {
+    browserView: {
       navigate: (url: string) => Promise<void>
       goBack: () => Promise<void>
       goForward: () => Promise<void>
@@ -795,33 +790,6 @@ declare global {
       onDidStartLoading: (callback: (url: string) => void) => () => void
       onDidNavigate: (callback: (url: string) => void) => () => void
       onDidFinishLoad: (callback: () => void) => () => void
-    }
-    plugin: {
-      purposes: () => Promise<
-        Array<{
-          key: string
-          icon: string
-          labelKey: string
-          tipKey: string
-          i18n: Record<string, Record<string, string>>
-          enabledTools: string[]
-        }>
-      >
-      toolPresentations: () => Promise<
-        Record<
-          string,
-          {
-            icon?: LucideIconName
-            iconColor?: ThemeColor
-            summaryField?: string
-            formItems?: Array<{
-              field: string
-              label?: string
-              renderer?: { type: 'code'; language?: string } | { type: 'text' }
-            }>
-          }
-        >
-      >
     }
     skill: {
       list: () => Promise<Skill[]>
@@ -871,6 +839,16 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       getServerStatus: () => Promise<{ running: boolean; port: number; widgetCount: number }>
       stopServer: () => Promise<{ success: boolean }>
+      pickExportDir: () => Promise<
+        { success: true; path: string } | { success: false; reason: string }
+      >
+      exportAsVite: (params: {
+        id: string
+        targetPath: string
+      }) => Promise<
+        | { success: true; filesWritten: string[]; targetPath: string }
+        | { success: false; code: string; error: string }
+      >
       onChanged: (callback: () => void) => () => void
     }
   }

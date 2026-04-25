@@ -15,15 +15,15 @@ import { registerCommandHandlers } from './commandHandlers'
 import { registerSttHandlers } from './sttHandlers'
 import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
-import { registerPluginHandlers } from './pluginHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
 import { registerMcpServerHandlers } from './mcpServerHandlers'
 import { registerCompactionHandlers } from './compactionHandlers'
 import { registerCustomSubAgentHandlers } from './customSubAgentHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
-import { registerPreviewViewHandlers } from './previewViewHandlers'
+import { registerBrowserViewHandlers } from './browserViewHandlers'
 import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
+import { registerConfigShareHandlers } from './configShareHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -47,13 +47,13 @@ export function registerIpcHandlers(): void {
   registerSttHandlers()
   registerTtsHandlers()
   registerDownloadHandlers()
-  registerPluginHandlers()
   registerUpdateHandlers()
   registerMcpServerHandlers()
   registerCompactionHandlers()
   registerCustomSubAgentHandlers()
   registerTerminalHandlers()
-  registerPreviewViewHandlers()
+  registerBrowserViewHandlers()
   registerContextMenuHandlers()
   registerWidgetHandlers()
+  registerConfigShareHandlers()
 }

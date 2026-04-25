@@ -112,9 +112,9 @@ export class McpDao extends BaseDao {
     this.stmt('UPDATE mcp_servers SET cachedTools = ? WHERE id = ?').run(tools, id)
   }
 
-  /** 删除 MCP Server */
+  /** 删除 MCP Server（内置 server 不可删除） */
   deleteById(id: string): void {
-    this.stmt('DELETE FROM mcp_servers WHERE id = ?').run(id)
+    this.stmt('DELETE FROM mcp_servers WHERE id = ? AND isBuiltin = 0').run(id)
   }
 }
 

@@ -91,7 +91,10 @@ export const UserBubble = memo(function UserBubble({
             ))}
           </div>
         )}
-        <div className="text-sm text-text-primary whitespace-pre-wrap break-all leading-relaxed">
+        <div
+          className="text-text-primary whitespace-pre-wrap break-all leading-relaxed"
+          style={{ fontSize: 'var(--app-font-size, 14px)' }}
+        >
           {segments.map((seg, idx) => {
             if (seg.type === 'text') return <span key={idx}>{seg.text}</span>
             if (seg.type === 'token') return <TokenBadge key={idx} segment={seg} />

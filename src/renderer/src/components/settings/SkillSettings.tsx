@@ -9,6 +9,7 @@ import {
   FolderPlus,
   ChevronDown,
   ChevronRight,
+  Lock,
   X
 } from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -21,7 +22,7 @@ interface SkillInfo {
   content: string
   basePath: string
   isEnabled: boolean
-  source: 'default' | 'project' | 'external'
+  source: 'default' | 'project' | 'external' | 'builtin'
   dirName?: string
 }
 
@@ -246,8 +247,15 @@ export function SkillSettings(): React.JSX.Element {
                   {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                 </span>
                 <div className="flex-1 min-w-0 cursor-pointer" onClick={toggleCollapse}>
-                  <span className="text-xs font-medium text-text-primary">
-                    {group.isDefault ? t('settings.skillDirDefault') : group.dirName}
+                  <span className="text-xs font-medium text-text-primary inline-flex items-center gap-1">
+                    {group.dirName === 'builtin' && (
+                      <Lock size={10} className="text-text-tertiary" />
+                    )}
+                    {group.isDefault
+                      ? t('settings.skillDirDefault')
+                      : group.dirName === 'builtin'
+                        ? t('settings.skillDirBuiltin')
+                        : group.dirName}
                   </span>
                   <span className="text-[10px] text-text-tertiary ml-2 truncate">
                     {group.dirPath}
@@ -262,7 +270,7 @@ export function SkillSettings(): React.JSX.Element {
                   <FolderOpen size={11} />
                   {t('settings.skillOpenDir')}
                 </button>
-                {!group.isDefault && (
+                {!group.isDefault && group.dirName !== 'builtin' && group.dirName !== 'project' && (
                   <button
                     onClick={() => setRemovingDir(group)}
                     className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:text-error bg-bg-tertiary hover:bg-error/10 transition-colors"

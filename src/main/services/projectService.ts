@@ -3,7 +3,7 @@ import { projectDao } from '../dao/projectDao'
 import type { Project, ProjectSettings, ReferenceDir } from '../types'
 import type { ProjectPromptSection } from '../../shared/types/promptSection'
 import { basename, resolve } from 'path'
-import { expandPath } from '../tools/utils/pathUtils'
+import { expandPath } from '../utils/toolUtils/pathUtils'
 
 // ---------- 项目字段元数据注册表 ----------
 

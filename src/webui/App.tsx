@@ -4,9 +4,9 @@ import { useSettingsStore } from '../renderer/src/stores/settingsStore'
 import { useSessionInit } from '../renderer/src/hooks/useSessionInit'
 import { useAgentEvents } from '../renderer/src/hooks/useAgentEvents'
 import { ChatView } from '../renderer/src/components/chat/ChatView'
-import { PreviewPanel } from '../renderer/src/components/preview/PreviewPanel'
-import { PreviewResizeHandle } from '../renderer/src/components/preview/PreviewResizeHandle'
-import { usePreviewStore } from '../renderer/src/stores/previewStore'
+import { BrowserPanel } from '../renderer/src/components/browser/BrowserPanel'
+import { BrowserResizeHandle } from '../renderer/src/components/browser/BrowserResizeHandle'
+import { useBrowserStore } from '../renderer/src/stores/browserStore'
 import { SESSION_ID } from './api'
 
 /**
@@ -74,15 +74,15 @@ export default function WebApp(): React.JSX.Element {
     }
   }, [theme, darkTheme, lightTheme])
 
-  const isPreviewOpen = usePreviewStore((s) => s.isOpen)
+  const isBrowserOpen = useBrowserStore((s) => s.isOpen)
 
   return (
     <div className="h-screen flex bg-bg-primary text-text-primary">
       <div className="flex-1 min-h-0">
         <ChatView />
       </div>
-      {isPreviewOpen && <PreviewResizeHandle />}
-      {isPreviewOpen && <PreviewPanel />}
+      {isBrowserOpen && <BrowserResizeHandle />}
+      {isBrowserOpen && <BrowserPanel />}
     </div>
   )
 }

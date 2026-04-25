@@ -89,8 +89,6 @@
     "sqlWasmRuntime": "Postgres 数据库",
     "sqlPersistent": "持久化",
     "sqlTemporary": "临时",
-    "acpAgentRunning": "{{name}} 运行中",
-    "destroyAcp": "终止 ACP Agent 会话",
     "destroyReason_manual": "手动销毁",
     "autoApproveLabel": "命令免审批",
     "autoApproveWarning": "所有 Bash 和 SSH 命令将自动执行，不再逐条审批。AI 可能生成意外命令，请谨慎使用。",
@@ -215,7 +213,15 @@
     "result": "结果",
     "output": "输出",
     "thinking": "思考",
-    "internalTools": "内部工具"
+    "internalTools": "内部工具",
+    "explore": {
+      "displayName": "代码探索",
+      "shortDescription": "只读探索代码库，按模式/关键词快速查找文件和定义"
+    },
+    "research": {
+      "displayName": "深度研究",
+      "shortDescription": "多步联网搜索并生成带引用的研究报告（需配置 Tavily API Key）"
+    }
   },
 
   "ssh": {
@@ -576,6 +582,9 @@
     "mcpArgsPlaceholder": "每行一个参数",
     "mcpEnv": "环境变量",
     "mcpEnvPlaceholder": "KEY=VALUE 格式，每行一个",
+    "mcpEnvKeyPlaceholder": "KEY",
+    "mcpEnvValuePlaceholder": "value",
+    "mcpEnvAdd": "添加变量",
     "mcpUrl": "服务地址",
     "mcpUrlPlaceholder": "如 https://mcp.example.com/sse",
     "mcpHeaders": "请求头",
@@ -591,6 +600,10 @@
     "mcpReconnect": "重连",
     "mcpDelete": "删除",
     "mcpDeleteConfirm": "确定要删除 MCP Server「{{name}}」吗？",
+    "mcpBuiltin": "内置",
+    "mcpBuiltinCannotDelete": "内置服务不可删除",
+    "mcpBuiltinConfigureHint": "请在下方「环境变量」中配置所需 API Key 以启用此内置服务",
+    "mcpBuiltinReadonlyNotice": "内置服务的连接参数已预置，仅需填写环境变量即可启用",
     "mcpSaving": "保存中...",
     "mcpNameRequired": "名称不能为空",
     "mcpCommandRequired": "启动命令不能为空",
@@ -649,6 +662,7 @@
     "skillImportDir": "从目录导入",
     "skillOpenDir": "打开 Skills 目录",
     "skillDirDefault": "默认",
+    "skillDirBuiltin": "内置",
     "skillDirAdd": "添加目录",
     "skillDirRemove": "移除",
     "skillDirRemoveConfirm": "从技能来源中移除目录「{{name}}」？其中的技能将不再加载。",
@@ -767,12 +781,10 @@
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "exploreLabel": "探索",
     "exploreHint": "只读代码库搜索子智能体，用于查找文件、搜索代码和探索项目结构",
-    "previewLabel": "预览面板",
-    "previewHint": "在预览面板中打开任意 URL，或关闭预览面板",
+    "browserLabel": "浏览器",
+    "browserHint": "在内置浏览器面板中打开任意 URL，或关闭面板",
     "devLabel": "开发工具",
     "devHint": "统一的 AI 前端开发工具。kind=widget 创建可复用小工具，kind=presentation 创建 Spectacle 幻灯片，kind=sketch 打开空白 React 画布。init 初始化，build 打包并返回预览 URL。",
-    "claudeCodeLabel": "Claude Code",
-    "claudeCodeHint": "将复杂编程任务委托给 Claude Code — 自主 AI 编码智能体，擅长多文件修改、重构、调试等",
     "subAgentTab": "子智能体",
     "subAgentDesc": "创建专注于特定任务的子智能体，配置专属 Prompt 和工具集。子智能体采用独立上下文来完成任务，有助于减轻长对话 / 复杂任务的上下文负担。",
     "subAgentBuiltin": "内置",
@@ -821,7 +833,17 @@
     "confirmDeleteDescription": "确定要删除小组件「{{name}}」吗？本地文件和所有历史状态都会被移除，且无法恢复。",
     "archivedSection": "已归档",
     "restore": "恢复",
-    "archivedAt": "已归档于"
+    "archivedAt": "已归档于",
+    "exportAsVite": "导出为独立 Vite 项目…",
+    "exportSuccessTitle": "导出成功",
+    "exportSuccessDescription": "小组件「{{name}}」已导出到：\n\n{{path}}\n\n进入目录后运行 npm install && npm run dev 即可继续开发。详见 EXPORT_NOTES.md。",
+    "exportOpenFolder": "打开目录",
+    "exportFailedTitle": "导出失败",
+    "exportFailedDescription": "小组件「{{name}}」导出失败：\n\n{{reason}}",
+    "exportErrorTargetNotEmpty": "目标目录不是空文件夹。请选择或新建一个空文件夹后重试。",
+    "exportErrorWidgetNotFound": "目标小组件不存在（可能已被删除）。",
+    "exportErrorInvalidPath": "目标路径无效：不允许选择用户主目录、~/.shuvix 目录或小组件源目录本身。",
+    "exportErrorCopyFailed": "拷贝过程中出错：{{reason}}"
   },
 
   "bindings": {
@@ -867,9 +889,17 @@
   },
 
   "panel": {
-    "preview": "预览",
+    "browser": "浏览器",
     "terminal": "终端",
     "widget": "小组件",
+    "subAgent": "子智能体",
+    "subAgentNone": "当前没有运行中的子智能体。",
+    "subAgentStatusRunning": "运行中",
+    "subAgentStatusDone": "已完成",
+    "subAgentStatusError": "失败",
+    "subAgentClose": "关闭子智能体",
+    "subAgentSystemPrompt": "系统提示词",
+    "subAgentUserPrompt": "上级指令",
     "urlPlaceholder": "输入 URL",
     "newTerminal": "新建终端"
   },
@@ -887,5 +917,44 @@
       "name": "Sketch",
       "description": "在当前工作目录中创建空白 React 画布"
     }
+  },
+
+  "configShare": {
+    "entryExport": "导出配置",
+    "entryImport": "导入配置",
+    "exportTitle": "导出配置",
+    "exportDesc": "勾选想分享的提供商、模型和 MCP 服务器。默认不包含 API Key 与 MCP 敏感信息（env/headers 的值），需显式勾选。生成的字符串将复制到剪贴板。",
+    "importTitle": "导入配置",
+    "importDesc": "将收到的配置字符串粘贴到下方。系统会自动解析并列出其中的项；你可以选择要导入的子集，导入时将按名称覆盖本地同名配置。",
+    "sectionProviders": "模型提供商",
+    "sectionMcp": "MCP 服务器",
+    "selectAll": "全选",
+    "selectNone": "全不选",
+    "includeApiKey": "包含 API Key",
+    "includeSensitive": "包含敏感信息",
+    "copyToClipboard": "复制到剪贴板",
+    "copiedHint": "已复制到剪贴板",
+    "exportFooterHint": "未勾选的项不会导出",
+    "pastePlaceholder": "在此粘贴以 shvx1: 开头的配置字符串…",
+    "parseSuccessHint": "已识别 {{providers}} 个提供商、{{mcp}} 个 MCP 服务器",
+    "parseErrorMagic": "格式不正确：缺少 shvx1: 前缀",
+    "parseErrorBase64": "无法解码：base64 字符串已损坏",
+    "parseErrorJson": "无法解析：JSON 格式错误",
+    "parseErrorVersion": "版本不受支持，请升级 ShuviX",
+    "parseErrorSchema": "数据结构不符合预期",
+    "parseErrorUnknown": "解析失败，请检查配置字符串",
+    "actionCreate": "新增",
+    "actionOverwrite": "覆盖",
+    "actionMergeBuiltin": "合并内置",
+    "actionSkipMissingBuiltin": "跳过（本端无同名内置）",
+    "badgeBuiltin": "内置",
+    "applyButton": "执行覆盖保存",
+    "confirmApplyTitle": "确认导入配置",
+    "confirmApplyDesc": "将新增 {{create}} 项，覆盖 {{overwrite}} 项。此操作不可撤销，是否继续？",
+    "resultSummary": "成功 {{ok}} 项，失败 {{fail}} 项",
+    "resultSuccess": "成功",
+    "resultFailure": "失败",
+    "resultDone": "完成",
+    "emptyExportHint": "当前没有已开启的提供商或 MCP 服务器可供导出"
   }
 }

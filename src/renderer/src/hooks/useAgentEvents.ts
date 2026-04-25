@@ -1,7 +1,8 @@
 import { useEffect, useCallback } from 'react'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
+import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { usePreviewStore } from '../stores/previewStore'
+import { useBrowserStore } from '../stores/browserStore'
 import { useTerminalStore } from '../stores/terminalStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 import i18n from '../i18n'
@@ -10,9 +11,9 @@ import i18n from '../i18n'
 const isSettingsWindow = window.location.hash.startsWith('#settings')
 
 // ---- Streaming delta rAF buffer ----
-// High-frequency delta events (text, thinking, toolcall args, subagent text/thinking)
-// are accumulated here and flushed to the store once per animation frame,
-// reducing hundreds of store updates per second down to ~60.
+// High-frequency delta events (text, thinking, toolcall args) are accumulated here
+// and flushed to the store once per animation frame, reducing hundreds of store
+// updates per second down to ~60.
 
 const deltaBuffers = new Map<string, StreamingDeltaBuffer>()
 let rafId: number | null = null
@@ -20,22 +21,26 @@ let rafId: number | null = null
 function getBuffer(sessionId: string): StreamingDeltaBuffer {
   let buf = deltaBuffers.get(sessionId)
   if (!buf) {
-    buf = { content: '', thinking: '', toolCallArgsDelta: '', subAgents: new Map() }
+    buf = { content: '', thinking: '', toolCallArgsDelta: '' }
     deltaBuffers.set(sessionId, buf)
   }
   return buf
 }
 
-function getSubBuf(
-  buf: StreamingDeltaBuffer,
-  subAgentId: string
-): { content: string; thinking: string } {
-  let sub = buf.subAgents.get(subAgentId)
-  if (!sub) {
-    sub = { content: '', thinking: '' }
-    buf.subAgents.set(subAgentId, sub)
+function dispatchFlush(snapshot: Map<string, StreamingDeltaBuffer>): void {
+  const mainBuf = new Map<string, StreamingDeltaBuffer>()
+  for (const [sid, buf] of snapshot) {
+    if (isSubSession(sid)) {
+      // 子会话：直接 apply 到 subSessionStore（不走 chatStore 的 flushStreamingDeltas）
+      const subState = useSubSessionStore.getState()
+      if (buf.content) subState.appendTextDelta(sid, buf.content)
+      if (buf.thinking) subState.appendThinkingDelta(sid, buf.thinking)
+      if (buf.toolCallArgsDelta) subState.appendStreamingToolCallDelta(sid, buf.toolCallArgsDelta)
+    } else {
+      mainBuf.set(sid, buf)
+    }
   }
-  return sub
+  if (mainBuf.size > 0) useChatStore.getState().flushStreamingDeltas(mainBuf)
 }
 
 function scheduleFlush(): void {
@@ -45,7 +50,7 @@ function scheduleFlush(): void {
     if (deltaBuffers.size === 0) return
     const snapshot = new Map(deltaBuffers)
     deltaBuffers.clear()
-    useChatStore.getState().flushStreamingDeltas(snapshot)
+    dispatchFlush(snapshot)
   })
 }
 
@@ -58,7 +63,7 @@ function flushNow(): void {
   if (deltaBuffers.size === 0) return
   const snapshot = new Map(deltaBuffers)
   deltaBuffers.clear()
-  useChatStore.getState().flushStreamingDeltas(snapshot)
+  dispatchFlush(snapshot)
 }
 
 /**
@@ -91,20 +96,119 @@ export function useAgentEvents(): void {
           return
         }
         break // argsDelta undefined = new tool call start, fall through to non-delta handling
-
-      case 'subagent_text_delta':
-        getSubBuf(getBuffer(sid), event.subAgentId).content += event.delta
-        scheduleFlush()
-        return
-
-      case 'subagent_thinking_delta':
-        getSubBuf(getBuffer(sid), event.subAgentId).thinking += event.delta
-        scheduleFlush()
-        return
     }
 
     // ---- Non-delta events: flush pending deltas first to preserve ordering ----
     flushNow()
+
+    // sub_session_register / sub_session_end 由 subSessionStore 消费（与 chatStore 无关）
+    if (event.type === 'sub_session_register') {
+      useSubSessionStore.getState().register({
+        subSessionId: event.sessionId,
+        parentSessionId: event.parentSessionId,
+        subAgentName: event.subAgentName,
+        displayName: event.displayName,
+        description: event.description,
+        systemPrompt: event.systemPrompt,
+        prompt: event.prompt
+      })
+      // 仅当新子会话归属当前激活的主会话时，才自动切到右侧 Sub-agent 面板
+      if (event.parentSessionId === useChatStore.getState().activeSessionId) {
+        const browser = useBrowserStore.getState()
+        if (!browser.isOpen) browser.open()
+        browser.setActiveTab('subagent')
+      }
+      return
+    }
+    if (event.type === 'sub_session_end') {
+      useSubSessionStore.getState().markEnded({
+        subSessionId: event.sessionId,
+        result: event.result,
+        isError: event.isError
+      })
+      return
+    }
+
+    // 子会话的流式事件：路由到 subSessionStore
+    if (isSubSession(sid)) {
+      const subStore = useSubSessionStore.getState()
+      switch (event.type) {
+        case 'agent_start':
+          subStore.handleAgentStart(sid)
+          return
+        case 'agent_end': {
+          const finalMsg = event.message ? (JSON.parse(event.message) as ChatMessage) : undefined
+          subStore.handleAgentEnd(sid, finalMsg)
+          return
+        }
+        case 'toolcall_generating':
+          subStore.finalizeStreamingToolCall(sid)
+          subStore.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
+          return
+        case 'tool_start': {
+          const toolMsg: ChatMessage | null = event.messageId
+            ? ({
+                id: event.messageId,
+                sessionId: sid,
+                role: 'assistant' as const,
+                type: 'tool_use' as const,
+                content: '',
+                metadata: {
+                  toolCallId: event.toolCallId,
+                  toolName: event.toolName,
+                  args: event.toolArgs ?? {}
+                },
+                model: '',
+                createdAt: Date.now()
+              } as ChatMessage)
+            : null
+          subStore.handleToolStart(
+            sid,
+            {
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              args: event.toolArgs ?? {},
+              turnIndex: event.turnIndex,
+              status: 'running',
+              messageId: event.messageId
+            },
+            toolMsg
+          )
+          return
+        }
+        case 'tool_end': {
+          const entry = useSubSessionStore.getState().subSessions[sid]
+          const existing = entry?.messages.find((m) => m.id === event.messageId)
+          let updated: ChatMessage | null = null
+          if (existing && existing.type === 'tool_use') {
+            updated = {
+              ...existing,
+              content: event.result || '',
+              metadata: {
+                ...(existing.metadata as unknown as Record<string, unknown>),
+                isError: event.isError || false,
+                details: event.details
+              }
+            } as ChatMessage
+          }
+          subStore.handleToolEnd(
+            sid,
+            event.toolCallId,
+            {
+              status: event.isError ? 'error' : 'done',
+              result: event.result,
+              details: event.details
+            },
+            event.messageId,
+            updated
+          )
+          return
+        }
+        // 其它事件（step_end / input_request / runtime / compaction 等）子会话不会触发；忽略。
+        default:
+          return
+      }
+    }
 
     const store = useChatStore.getState()
 
@@ -223,24 +327,24 @@ export function useAgentEvents(): void {
         store.setRuntime(sid, event.runtimeId, event.status)
         break
 
-      case 'preview_event':
+      case 'browser_event':
         if (event.action === 'open' && event.url) {
           let url = event.url
           if (window.api?.app?.platform === 'web') {
-            url = `${window.location.origin}/shuvix/preview/${sid}/`
+            url = `${window.location.origin}/shuvix/browser/${sid}/`
           }
-          usePreviewStore.getState().open(url)
+          useBrowserStore.getState().open(url)
         } else if (event.action === 'close') {
-          usePreviewStore.getState().setUrl('about:blank')
+          useBrowserStore.getState().setUrl('about:blank')
         }
         break
 
       case 'terminal_event':
         if (event.action === 'open') {
           useTerminalStore.getState().connectAgentTerminal(event.ptyId)
-          const preview = usePreviewStore.getState()
-          if (!preview.isOpen) preview.open()
-          preview.setActiveTab('terminal')
+          const browser = useBrowserStore.getState()
+          if (!browser.isOpen) browser.open()
+          browser.setActiveTab('terminal')
         }
         break
 
@@ -305,44 +409,6 @@ export function useAgentEvents(): void {
             }
           }
         }
-        break
-      }
-
-      case 'subagent_start':
-        store.addSubAgentExecution(sid, {
-          subAgentId: event.subAgentId,
-          subAgentType: event.subAgentType,
-          description: event.description,
-          parentToolCallId: event.parentToolCallId,
-          status: 'running',
-          timeline: []
-        })
-        break
-
-      case 'subagent_end':
-        store.endSubAgentExecution(sid, event.subAgentId, event.result, event.usage)
-        break
-
-      case 'subagent_tool_start':
-        store.addSubAgentTool(sid, event.subAgentId, {
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          status: 'running',
-          summary: event.summary
-        })
-        break
-
-      case 'subagent_tool_end': {
-        const updates: Record<string, unknown> = {}
-        // 终态：设置 status
-        if (event.result != null || event.isError != null) {
-          updates.status = event.isError ? 'error' : 'done'
-        }
-        // 中间更新 / 终态都可能携带更新的 toolName
-        if (event.toolName) {
-          updates.toolName = event.toolName
-        }
-        store.updateSubAgentTool(sid, event.subAgentId, event.toolCallId, updates)
         break
       }
 

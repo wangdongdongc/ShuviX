@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { telegramService } from '../services/telegramService'
+import { telegramService } from '../services/telegram'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 import type {
   TelegramBotAddParams,

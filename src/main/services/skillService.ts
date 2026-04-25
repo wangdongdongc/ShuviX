@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync
 import { join } from 'path'
 import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
 import log from 'electron-log/main'
-import { getDefaultSkillsDir } from '../utils/paths'
+import { getDefaultSkillsDir, getBuiltinSkillsDir } from '../utils/paths'
 
 /** 配置文件结构 */
 interface SkillConfig {
@@ -21,7 +21,10 @@ interface SkillConfig {
   dirs: SkillDir[]
 }
 
-type SkillSource = 'default' | 'project' | 'external'
+type SkillSource = 'default' | 'project' | 'external' | 'builtin'
+
+/** 内置 skill 的固定目录名（对应 dirName 字段，构建出 builtin:<name> 标识） */
+const BUILTIN_DIR_NAME = 'builtin'
 
 class SkillService {
   /** skills 根目录 */
@@ -177,17 +180,22 @@ class SkillService {
     const config = this.readConfig()
     const allSkills: Skill[] = []
 
-    // 1. 默认目录
+    // 1. 内置目录（随应用发布，只读）
+    allSkills.push(
+      ...this.scanSkillsDir(getBuiltinSkillsDir(), 'builtin', config, BUILTIN_DIR_NAME)
+    )
+
+    // 2. 默认目录
     allSkills.push(...this.scanSkillsDir(this.skillsDir, 'default', config))
 
-    // 2. 外部目录
+    // 3. 外部目录
     for (const dir of config.dirs) {
       allSkills.push(...this.scanSkillsDir(dir.path, 'external', config, dir.name))
     }
 
     if (!projectPath) return allSkills.sort((a, b) => a.name.localeCompare(b.name))
 
-    // 3. 项目级 skills（同名覆盖）
+    // 4. 项目级 skills（同名覆盖）
     const projectSkillsDir = join(projectPath, '.claude', 'skills')
     const projectSkills = this.scanSkillsDir(projectSkillsDir, 'project', config)
     if (projectSkills.length === 0) return allSkills.sort((a, b) => a.name.localeCompare(b.name))
@@ -204,6 +212,20 @@ class SkillService {
   findAllGrouped(projectPath?: string): SkillGroup[] {
     const config = this.readConfig()
     const groups: SkillGroup[] = []
+
+    // 内置目录（仅在存在任一内置 skill 时才展示分组）
+    const builtinDir = getBuiltinSkillsDir()
+    const builtinSkills = this.scanSkillsDir(builtinDir, 'builtin', config, BUILTIN_DIR_NAME).sort(
+      (a, b) => a.name.localeCompare(b.name)
+    )
+    if (builtinSkills.length > 0) {
+      groups.push({
+        dirName: BUILTIN_DIR_NAME,
+        dirPath: builtinDir,
+        isDefault: false,
+        skills: builtinSkills
+      })
+    }
 
     // 默认目录
     groups.push({
@@ -282,7 +304,11 @@ class SkillService {
       const skill = this.findByName(params.name)
       if (!skill) throw new Error(`Skill "${params.name}" not found`)
       if (skill.source !== 'default') {
-        throw new Error('Cannot edit skills from external directories')
+        throw new Error(
+          skill.source === 'builtin'
+            ? 'Cannot edit built-in skills (bundled with the app)'
+            : 'Cannot edit skills from external directories'
+        )
       }
 
       const dir = skill.basePath

@@ -12,10 +12,8 @@ export type {
   ChatImageDataEvent,
   ChatRuntimeEvent,
   RuntimeStatus,
-  ChatSubAgentStartEvent,
-  ChatSubAgentEndEvent,
-  ChatSubAgentTextDeltaEvent,
-  ChatSubAgentThinkingDeltaEvent,
+  ChatSubSessionRegisterEvent,
+  ChatSubSessionEndEvent,
   ChatErrorEvent,
   ChatTokenUsage
 } from './types'
@@ -28,11 +26,11 @@ export type { ChatGateway } from './ChatGateway'
 
 export { DefaultChatGateway, chatGateway } from './DefaultChatGateway'
 
-export type { OperationContext, OperationSource } from './OperationContext'
+export type { OperationContext, OperationSource } from '../../utils/operationContext'
 export {
   operationContext,
   getOperationContext,
   createElectronContext,
   createTelegramContext,
   createWebUIContext
-} from './OperationContext'
+} from '../../utils/operationContext'

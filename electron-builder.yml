@@ -11,10 +11,12 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 extraResources:
-  - from: resources/plugins/pyodide/pyodide-wheels
-    to: plugins/pyodide/pyodide-wheels
-  - from: resources/plugins/esbuild
-    to: plugins/esbuild
+  - from: resources/pyodide/pyodide-wheels
+    to: pyodide/pyodide-wheels
+  - from: resources/bundler
+    to: bundler
+  - from: resources/skills
+    to: skills
   - from: node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm
 asarUnpack:

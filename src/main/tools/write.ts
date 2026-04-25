@@ -6,15 +6,20 @@
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from 'fs/promises'
 import { dirname } from 'path'
 import { Type } from '@sinclair/typebox'
-import { resolveToCwd } from './utils/pathUtils'
-import { assertNotModifiedSinceRead, withFileLock, recordRead, getReadTime } from './utils/fileTime'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import {
-  BaseTool,
+  assertNotModifiedSinceRead,
+  withFileLock,
+  recordRead,
+  getReadTime
+} from '../utils/toolUtils/fileTime'
+import { BaseTool } from '../services/baseTool'
+import {
   resolveProjectConfig,
   assertSandboxWrite,
   TOOL_ABORTED,
   type ToolContext
-} from './types'
+} from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -114,7 +119,7 @@ export class WriteTool extends BaseTool<typeof WriteParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'write',
   group: 'general',

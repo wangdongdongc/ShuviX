@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
-import { subAgentRegistry } from '../subagent'
+import { getBuiltinToolPresentations } from '../services/toolRegistry'
+import { subAgentManager } from '../subagent/SubAgentManager'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -94,12 +95,15 @@ export function registerAgentHandlers(): void {
     operationContext.run(createElectronContext(sessionId), () => chatGateway.listTools(sessionId))
   )
 
-  /** 销毁指定会话的 ACP Agent session */
-  ipcMain.handle(
-    'acp:destroySession',
-    (_event, params: { sessionId: string; agentName: string }) => {
-      subAgentRegistry.get(params.agentName)?.destroy(params.sessionId)
-      return { success: true }
-    }
-  )
+  /** 获取所有工具的 UI 渲染配置（图标、摘要字段、表单项等） */
+  ipcMain.handle('tools:presentations', () => getBuiltinToolPresentations())
+
+  /**
+   * 销毁指定的临时子会话（用户点关闭按钮触发）。
+   * 中止子 Agent 并从 transientSessionRegistry 移除。
+   */
+  ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
+    subAgentManager.destroy(subSessionId)
+    return { success: true }
+  })
 }

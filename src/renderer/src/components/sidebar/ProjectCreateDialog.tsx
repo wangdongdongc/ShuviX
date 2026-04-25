@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   X,
@@ -13,7 +13,6 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react'
-import { icons } from 'lucide-react'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
@@ -36,21 +35,49 @@ interface ProjectCreateDialogProps {
   initialPurpose?: string
 }
 
-/** 用途预设：工具名称列表 */
-const PURPOSE_PRESETS: Record<string, string[]> = {
-  bash: ['bash', 'read', 'ask'],
-  office: ['read', 'ask', 'python'],
-  dev: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore']
-}
-
-/** 插件 purpose 类型 */
-interface PluginPurpose {
+interface BuiltinPurpose {
   key: string
-  icon: string
+  icon: ComponentType<{ size?: number; className?: string }>
   labelKey: string
   tipKey: string
-  i18n: Record<string, Record<string, string>>
+  /** 预选工具名（在工具选择步骤默认勾上） */
   enabledTools: string[]
+}
+
+/** 内置用途定义（原 plugin 贡献的 sql 已内置化；顺序即 UI 展示顺序） */
+const BUILTIN_PURPOSES: readonly BuiltinPurpose[] = [
+  {
+    key: 'bash',
+    icon: Terminal,
+    labelKey: 'projectForm.purposeBash',
+    tipKey: 'projectForm.purposeTipBash',
+    enabledTools: ['bash', 'read', 'ask']
+  },
+  {
+    key: 'office',
+    icon: FileText,
+    labelKey: 'projectForm.purposeOffice',
+    tipKey: 'projectForm.purposeTipOffice',
+    enabledTools: ['read', 'ask', 'python']
+  },
+  {
+    key: 'sql',
+    icon: Database,
+    labelKey: 'projectForm.purposeSQL',
+    tipKey: 'projectForm.purposeTipSql',
+    enabledTools: ['read', 'ask', 'postgres']
+  },
+  {
+    key: 'dev',
+    icon: Wrench,
+    labelKey: 'projectForm.purposeDev',
+    tipKey: 'projectForm.purposeTipDev',
+    enabledTools: ['bash', 'read', 'write', 'edit', 'ask', 'ls', 'grep', 'glob', 'explore']
+  }
+]
+
+function findPurpose(key: string | null | undefined): BuiltinPurpose | undefined {
+  return key ? BUILTIN_PURPOSES.find((p) => p.key === key) : undefined
 }
 
 /** Skills 分组标识 */
@@ -68,7 +95,7 @@ export function ProjectCreateDialog({
   onCreated,
   initialPurpose
 }: ProjectCreateDialogProps): React.JSX.Element {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
 
   // 向导步骤
@@ -92,14 +119,6 @@ export function ProjectCreateDialog({
     []
   )
   const [envVisibility, setEnvVisibility] = useState<Record<number, boolean>>({})
-  const [pluginPurposes, setPluginPurposes] = useState<PluginPurpose[]>([])
-
-  // 加载插件 purposes
-  useEffect(() => {
-    window.api.plugin.purposes().then((purposes) => {
-      setPluginPurposes(purposes)
-    })
-  }, [])
 
   // 加载工具列表
   useEffect(() => {
@@ -117,17 +136,14 @@ export function ProjectCreateDialog({
   useEffect(() => {
     if (!initialPurpose || allTools.length === 0 || purposeApplied.current) return
     purposeApplied.current = true
-    let preset = PURPOSE_PRESETS[initialPurpose]
-    if (!preset) {
-      const pp = pluginPurposes.find((p) => p.key === initialPurpose)
-      preset = pp?.enabledTools || PURPOSE_PRESETS.bash
-    }
+    const preset =
+      findPurpose(initialPurpose)?.enabledTools ?? findPurpose('bash')?.enabledTools ?? []
     const connectedMcp = allTools
       .filter((t) => t.group?.startsWith('mcp:') && t.serverStatus === 'connected')
       .map((t) => t.name)
     const enabledSkills = allTools.filter((t) => t.group === SKILLS_GROUP).map((t) => t.name)
     setEnabledTools([...new Set([...preset, ...connectedMcp, ...enabledSkills])])
-  }, [initialPurpose, allTools, pluginPurposes])
+  }, [initialPurpose, allTools])
 
   // 按 Escape 关闭（step 0 直接关闭，其他步骤回退）
   useEffect(() => {
@@ -144,12 +160,7 @@ export function ProjectCreateDialog({
   /** 选择用途 → 预选工具 → 进入工具选择步骤 */
   const handlePurposeSelect = (key: string): void => {
     setPurpose(key)
-    // 先检查内置预设，再查插件 purpose
-    let preset = PURPOSE_PRESETS[key]
-    if (!preset) {
-      const pluginPurpose = pluginPurposes.find((p) => p.key === key)
-      preset = pluginPurpose?.enabledTools || PURPOSE_PRESETS.bash
-    }
+    const preset = findPurpose(key)?.enabledTools ?? findPurpose('bash')?.enabledTools ?? []
     // 默认选中已连接的 MCP 工具和已启用的 Skills
     const connectedMcp = mcpTools.filter((t) => t.serverStatus === 'connected').map((t) => t.name)
     const enabledSkills = skillTools.map((t) => t.name)
@@ -269,88 +280,23 @@ export function ProjectCreateDialog({
               <p className="text-[11px] text-text-tertiary mt-1">{t('projectForm.purposeDesc')}</p>
             </div>
             <div className="grid grid-cols-4 gap-3">
-              <button
-                onClick={() => handlePurposeSelect('bash')}
-                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'bash' ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Terminal
-                    size={20}
-                    className="text-text-secondary group-hover:text-accent transition-colors"
-                  />
-                </div>
-                <div className="text-xs font-medium text-text-primary">
-                  {t('projectForm.purposeBash')}
-                </div>
-              </button>
-
-              <button
-                onClick={() => handlePurposeSelect('office')}
-                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'office' ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <FileText
-                    size={20}
-                    className="text-text-secondary group-hover:text-accent transition-colors"
-                  />
-                </div>
-                <div className="text-xs font-medium text-text-primary">
-                  {t('projectForm.purposeOffice')}
-                </div>
-              </button>
-
-              {pluginPurposes.map((pp) => {
-                const IconComponent = icons[pp.icon as keyof typeof icons]
-                return (
-                  <button
-                    key={pp.key}
-                    onClick={() => handlePurposeSelect(pp.key)}
-                    className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                      purpose === pp.key ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                    }`}
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                      {IconComponent ? (
-                        <IconComponent
-                          size={20}
-                          className="text-text-secondary group-hover:text-accent transition-colors"
-                        />
-                      ) : (
-                        <Wrench
-                          size={20}
-                          className="text-text-secondary group-hover:text-accent transition-colors"
-                        />
-                      )}
-                    </div>
-                    <div className="text-xs font-medium text-text-primary">
-                      {pp.i18n[i18n.language]?.[pp.labelKey] ??
-                        pp.i18n['en']?.[pp.labelKey] ??
-                        pp.labelKey}
-                    </div>
-                  </button>
-                )
-              })}
-
-              <button
-                onClick={() => handlePurposeSelect('dev')}
-                className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
-                  purpose === 'dev' ? 'border-accent bg-accent/5' : 'border-border-secondary'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                  <Wrench
-                    size={20}
-                    className="text-text-secondary group-hover:text-accent transition-colors"
-                  />
-                </div>
-                <div className="text-xs font-medium text-text-primary">
-                  {t('projectForm.purposeDev')}
-                </div>
-              </button>
+              {BUILTIN_PURPOSES.map(({ key, icon: Icon, labelKey }) => (
+                <button
+                  key={key}
+                  onClick={() => handlePurposeSelect(key)}
+                  className={`group flex flex-col items-center gap-3 p-5 rounded-xl border transition-all hover:border-accent/50 hover:bg-accent/5 ${
+                    purpose === key ? 'border-accent bg-accent/5' : 'border-border-secondary'
+                  }`}
+                >
+                  <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
+                    <Icon
+                      size={20}
+                      className="text-text-secondary group-hover:text-accent transition-colors"
+                    />
+                  </div>
+                  <div className="text-xs font-medium text-text-primary">{t(labelKey)}</div>
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -359,24 +305,17 @@ export function ProjectCreateDialog({
         {step === 1 && (
           <>
             <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0 space-y-3">
-              {purpose &&
-                (() => {
-                  const pluginPurpose = pluginPurposes.find((p) => p.key === purpose)
-                  const tipKey = pluginPurpose
-                    ? pluginPurpose.tipKey
-                    : `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
-                  const tipText = pluginPurpose
-                    ? (pluginPurpose.i18n[i18n.language]?.[pluginPurpose.tipKey] ??
-                      pluginPurpose.i18n['en']?.[pluginPurpose.tipKey] ??
-                      t(tipKey))
-                    : t(tipKey)
-                  return (
-                    <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
-                      <Info size={14} className="text-accent shrink-0 mt-0.5" />
-                      <p className="text-[11px] text-text-secondary leading-relaxed">{tipText}</p>
-                    </div>
-                  )
-                })()}
+              {purpose && (
+                <div className="flex gap-2 p-3 rounded-lg bg-accent/5 border border-accent/20">
+                  <Info size={14} className="text-accent shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-text-secondary leading-relaxed">
+                    {t(
+                      findPurpose(purpose)?.tipKey ??
+                        `projectForm.purposeTip${purpose.charAt(0).toUpperCase() + purpose.slice(1)}`
+                    )}
+                  </p>
+                </div>
+              )}
               <div className="zen-section">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
                   <Wrench size={12} />

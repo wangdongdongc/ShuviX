@@ -11,16 +11,40 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import { BaseTool, resolveProjectConfig, type ToolContext } from './types'
+import { resolve } from 'path'
+import i18next from 'i18next'
+import { BaseTool } from '../services/baseTool'
+import { resolveProjectConfig, assertSandboxWrite, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { DevToolDetails } from '../../shared/types/chatMessage'
-import { widgetService } from '../services/widgetService'
-import { projectManager, bundlerService } from '../services/bundlerRuntime'
+import { widgetService, exportWidget, WidgetExportError } from '../services/widget'
+import { projectManager, bundlerService } from '../services/bundler'
+import { sessionService } from '../services/sessionService'
 import { t } from '../i18n'
 
+/** 把 widget 目录注入调用会话的 allowList（读写），确保 AI 后续可用 read/write 直接操作 */
+function grantWidgetSessionAccess(sessionId: string, widgetDir: string): void {
+  sessionService.addAllowListPatterns(sessionId, 'read', [widgetDir])
+  sessionService.addAllowListPatterns(sessionId, 'write', [widgetDir])
+}
+
+/** 当前 UI 语言对应的人类可读名（用于提示 AI 用相同语言写 widget 元数据） */
+function currentUiLanguageLabel(): string {
+  const lng = (i18next.language || 'en').split('-')[0].toLowerCase()
+  switch (lng) {
+    case 'zh':
+      return '中文 (Chinese)'
+    case 'ja':
+      return '日本語 (Japanese)'
+    default:
+      return 'English'
+  }
+}
+
 const DevParamsSchema = Type.Object({
-  action: Type.Union([Type.Literal('init'), Type.Literal('build')], {
-    description: '"init" scaffolds a new project; "build" recompiles and triggers live-reload'
+  action: Type.Union([Type.Literal('init'), Type.Literal('build'), Type.Literal('export')], {
+    description:
+      '"init" scaffolds a new project; "build" recompiles and triggers live-reload; "export" (kind="widget" only) copies the widget into a standalone Vite project at `targetPath`.'
   }),
   kind: Type.Union([Type.Literal('widget'), Type.Literal('presentation'), Type.Literal('sketch')], {
     description:
@@ -42,32 +66,43 @@ const DevParamsSchema = Type.Object({
     Type.String({
       description: 'One-sentence description. Recommended when kind="widget" and action="init".'
     })
+  ),
+  targetPath: Type.Optional(
+    Type.String({
+      description:
+        'Required when action="export". Absolute path to an empty (or not-yet-existing) folder inside the session working directory. The exported project will be written here.'
+    })
   )
 })
 
 type DevParams = {
-  action: 'init' | 'build'
+  action: 'init' | 'build' | 'export'
   kind: 'widget' | 'presentation' | 'sketch'
   id?: string
   name?: string
   description?: string
+  targetPath?: string
 }
 
 export class DevTool extends BaseTool<typeof DevParamsSchema> {
   readonly name = 'dev'
   readonly label = t('tool.devLabel')
-  readonly description = [
-    'Scaffold and live-preview small web projects. Pick a `kind`:',
-    '- kind="widget": persistent mini utility saved under ~/.shuvix/widgets/<id>/ and surfaced in the Widget tab. Use for JSON formatters, expression playgrounds, regex testers, anything the user may want to reuse.',
-    '- kind="presentation": Spectacle slide deck scaffolded in workingDir/.shuvix/design/. Session-scoped (not persisted in a library).',
-    '- kind="sketch": blank React canvas in workingDir/.shuvix/design/. AI decides the full UI shape. Session-scoped.',
-    'Actions: "init" creates the project skeleton, "build" compiles and returns the dev-server URL (call the `preview` tool action="open" with the URL).',
-    'For kind="widget" you MUST provide id (kebab-case), plus name+description on init.'
-  ].join(' ')
+  readonly description: string
   readonly parameters = DevParamsSchema
 
   constructor(private ctx: ToolContext) {
     super()
+    const uiLang = currentUiLanguageLabel()
+    this.description = [
+      'Scaffold and live-preview small web projects. Pick a `kind`:',
+      '- kind="widget": persistent mini utility saved under ~/.shuvix/widgets/<id>/ and surfaced in the Widget tab. Use for JSON formatters, expression playgrounds, regex testers, anything the user may want to reuse.',
+      '- kind="presentation": Spectacle slide deck scaffolded in workingDir/.shuvix/design/. Session-scoped (not persisted in a library).',
+      '- kind="sketch": blank React canvas in workingDir/.shuvix/design/. AI decides the full UI shape. Session-scoped.',
+      'Actions: "init" creates the project skeleton, "build" compiles and returns the dev-server URL (call the `browser` tool action="open" with the URL).',
+      'For kind="widget" you MUST provide id (kebab-case), plus name+description on init.',
+      `For kind="widget": write the \`name\` and \`description\` parameters in ${uiLang} — that is the user's current ShuviX UI language, and these fields are shown verbatim on the Widget library card. The \`id\` stays kebab-case ASCII regardless of language.`,
+      'Entry-file contract (ALL kinds): the host HTML only provides an empty <div id="root"></div>. The entry file (index.tsx) MUST end with `const root = document.getElementById("root"); if (root) createRoot(root).render(<YourComponent />)`. If you refactor the entry, KEEP that mount block at the bottom — without it the page renders blank with no error.'
+    ].join(' ')
   }
 
   async preExecute(): Promise<void> {
@@ -110,9 +145,9 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
           id: params.id,
           name: params.name,
           description: params.description ?? '',
-          template: 'blank',
-          sessionId: this.ctx.sessionId
+          template: 'blank'
         })
+        grantWidgetSessionAccess(this.ctx.sessionId, result.projectDir)
         const text = result.buildSuccess
           ? [
               `Widget "${params.name}" initialized.`,
@@ -124,7 +159,9 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
               'Next steps:',
               '1. Use write/edit to implement the widget (start with index.tsx).',
               '2. Call `dev` again with action="build", kind="widget", id=same to rebuild.',
-              '3. Call the `preview` tool action="open" with the url above.'
+              '3. Call the `browser` tool action="open" with the url above.',
+              '',
+              '⚠️  index.tsx MUST end with a createRoot(...).render(...) mount block (see scaffold). If you rewrite the file and drop that block, the page will render blank.'
             ].join('\n')
           : [
               `Widget "${params.name}" initialized but the initial build FAILED.`,
@@ -152,9 +189,14 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
       }
     }
 
+    if (params.action === 'export') {
+      return this.runWidgetExport(params)
+    }
+
     // action === 'build'
     try {
-      const result = await widgetService.build(params.id, this.ctx.sessionId)
+      grantWidgetSessionAccess(this.ctx.sessionId, widgetService.getWidgetDir(params.id))
+      const result = await widgetService.build(params.id)
       const text = result.buildSuccess
         ? `Widget "${params.id}" rebuilt. url: ${result.url}`
         : [
@@ -175,6 +217,58 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
       }
     } catch (e) {
       return this.failure(params, (e as Error).message)
+    }
+  }
+
+  // ────── widget export ──────
+
+  private async runWidgetExport(params: DevParams): Promise<AgentToolResult<DevToolDetails>> {
+    if (!params.id) {
+      return this.failure(params, 'widget export requires `id`')
+    }
+    if (!params.targetPath) {
+      return this.failure(
+        params,
+        'widget export requires absolute `targetPath` inside the session working directory'
+      )
+    }
+    const absolutePath = resolve(params.targetPath)
+    const config = resolveProjectConfig(this.ctx.sessionId)
+    try {
+      // sandbox：AI 触发的导出必须写入 workingDirectory 内
+      await assertSandboxWrite(this.ctx, config, '', this.name, absolutePath)
+    } catch (e) {
+      return this.failure(params, (e as Error).message)
+    }
+    try {
+      const result = await exportWidget({ id: params.id, targetPath: absolutePath })
+      const text = [
+        `Widget "${params.id}" exported to a standalone Vite project.`,
+        `- targetPath: ${result.targetPath}`,
+        `- filesWritten: ${result.filesWritten.length}`,
+        '',
+        'Next steps:',
+        `1. cd ${result.targetPath}`,
+        '2. npm install',
+        '3. npm run dev',
+        '',
+        'See EXPORT_NOTES.md in the target folder for known differences from the ShuviX runtime.'
+      ].join('\n')
+      return {
+        content: [{ type: 'text', text }],
+        details: {
+          type: 'dev',
+          action: 'export',
+          kind: 'widget',
+          widgetId: params.id,
+          success: true,
+          targetPath: result.targetPath,
+          filesWrittenCount: result.filesWritten.length
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof WidgetExportError ? `[${e.code}] ${e.message}` : (e as Error).message
+      return this.failure(params, msg)
     }
   }
 
@@ -204,7 +298,9 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
           'Next steps:',
           '1. Use write/edit to modify files under the projectDir (entry is index.tsx).',
           `2. Call \`dev\` again with action="build", kind="${params.kind}" to start the dev server and get the URL.`,
-          '3. Call the `preview` tool action="open" with the URL.'
+          '3. Call the `browser` tool action="open" with the URL.',
+          '',
+          '⚠️  index.tsx MUST end with a createRoot(...).render(...) mount block (see scaffold). If you rewrite the file and drop that block, the page will render blank.'
         ].join('\n')
         return {
           content: [{ type: 'text', text }],
@@ -257,7 +353,7 @@ export class DevTool extends BaseTool<typeof DevParamsSchema> {
         const result = await bundlerService.rebuild(sessionId, designDir)
         const url = info?.url ?? ''
         const text = result.success
-          ? `${labelForKind(params.kind)} rebuilt OK (${result.duration}ms)${url ? `. Preview auto-refreshed (${url}).` : '.'}`
+          ? `${labelForKind(params.kind)} rebuilt OK (${result.duration}ms)${url ? `. Browser panel auto-refreshed (${url}).` : '.'}`
           : [
               `Rebuild failed:`,
               ...(result.errors ?? []).map((e) => `  ${e}`),
@@ -310,7 +406,7 @@ function labelForKind(kind: 'widget' | 'presentation' | 'sketch'): string {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'dev',
   group: 'general',

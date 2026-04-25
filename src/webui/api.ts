@@ -97,7 +97,7 @@ export function createWebApi(): typeof window.api {
       },
       openFolder: noop,
       adjustWindowWidth: noop,
-      setPreviewOffset: noop,
+      setBrowserOffset: noop,
       windowReady: noopVoid,
       onSettingsChanged: () => () => {}
     },

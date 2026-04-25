@@ -9,7 +9,7 @@ import {
   replaceWithFallback,
   levenshtein,
   dedent
-} from '../utils/replacers'
+} from '../../utils/toolUtils/replacers'
 
 // ─── 工具函数 ──────────────────────────────────────────
 

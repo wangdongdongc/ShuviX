@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { existsSync, unlinkSync } from 'fs'
 import { getWhisperModelsDir } from '../../utils/paths'
-import { downloadManager } from '../downloadManager'
+import { downloadManager } from '../../utils/downloadManager'
 import { createLogger } from '../../logger'
 
 const log = createLogger('WhisperModel')

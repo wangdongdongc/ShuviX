@@ -4,7 +4,7 @@ import { spawn } from 'child_process'
 import { app, BrowserWindow } from 'electron'
 import { getQwen3TtsDir } from '../../utils/paths'
 import { listFiles } from '@huggingface/hub'
-import { downloadManager } from '../downloadManager'
+import { downloadManager } from '../../utils/downloadManager'
 import { createLogger } from '../../logger'
 
 const log = createLogger('Qwen3Model')

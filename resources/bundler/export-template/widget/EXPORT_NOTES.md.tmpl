@@ -1,0 +1,35 @@
+# {{WIDGET_NAME}} — Exported Project
+
+This project was exported from ShuviX Widget `{{WIDGET_ID}}` on {{EXPORT_DATE}}.
+
+## Getting started
+
+```bash
+npm install
+npm run dev
+```
+
+Vite will serve at `http://localhost:5173`. Edit `index.tsx` and save — HMR updates the browser automatically.
+
+## Project layout
+
+| Path | Purpose |
+| --- | --- |
+| `index.html` | Static entry — loads `/src/index.css` (Tailwind) and `/index.tsx` |
+| `index.tsx` | React entry — calls `createRoot(...).render(...)` itself (same contract as in ShuviX) |
+| `src/index.css` | Tailwind v4 import (`@import "tailwindcss";`) |
+| `vite.config.ts` | Vite config with `@vitejs/plugin-react` + `@tailwindcss/vite` |
+| `tsconfig.json` / `tsconfig.node.json` | TypeScript config |
+| `README.md` | Original widget README (preserved as-is) |
+
+## Differences from the ShuviX runtime
+
+ShuviX's internal esbuild runtime handles a few things differently than stock Vite. If your widget exhibits behavioral drift, check these:
+
+1. **Asset imports** — ShuviX loads `.svg` / `.png` / `.jpg` / `.gif` as **data URLs** (inlined strings). Vite defaults to serving them as **URLs** pointing to `/assets/...`. For `<img src={x}>` both work. Code that treats the import as raw data URL text will not.
+2. **Tailwind** — ShuviX ships the Tailwind browser runtime (all utilities available at runtime, no config). This project uses `@tailwindcss/vite`, which scans your source files and emits only the used utilities at build time. Class detection is usually fine; if a class is built dynamically from strings (`` `p-${n}` ``), add it to a safelist or use static fragments.
+3. **Dependencies** — Only `react`, `react-dom`, `react-router`, `spectacle` were available in ShuviX. They are declared here with matching versions. Add any additional npm packages via `npm install <pkg>`.
+
+## Continuing development in ShuviX
+
+The source files here (`index.tsx` etc.) are unchanged copies of what lived under `~/.shuvix/widgets/{{WIDGET_ID}}/`. Edits made here do **not** sync back to ShuviX. Consider this exported project a fork.

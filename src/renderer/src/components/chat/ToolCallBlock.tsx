@@ -226,7 +226,7 @@ export function ToolCallBlock({
       {expanded && !hasEditDiff && !hasPendingInput && (
         <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
           {presentation && args ? (
-            <PluginToolDetail presentation={presentation} args={args} result={result} />
+            <ToolFormDetail presentation={presentation} args={args} result={result} />
           ) : (
             <>
               {args && Object.keys(args).length > 0 && (
@@ -257,7 +257,7 @@ export function ToolCallBlock({
   )
 }
 
-// ─── 插件工具摘要生成 ──────────────────────────────────
+// ─── 折叠态摘要生成（基于 presentation 配置） ─────────
 
 /** 根据 presentation 配置生成折叠态图标 + 摘要文本 */
 function buildPresentationSummary(
@@ -289,10 +289,10 @@ function buildPresentationSummary(
   }
 }
 
-// ─── 插件工具通用展开详情 ──────────────────────────────
+// ─── 展开态详情渲染（基于 presentation.formItems） ────
 
 /** 根据 formItems 配置渲染展开态表单详情 */
-function PluginToolDetail({
+function ToolFormDetail({
   presentation: pres,
   args,
   result

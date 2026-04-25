@@ -144,9 +144,9 @@ export interface ChatRuntimeEvent extends ChatEventBase {
   status: RuntimeStatus | null
 }
 
-/** 预览面板生命周期事件（轻量通知，不持久化为消息；泛化了原 ChatDesignEvent） */
-export interface ChatPreviewEvent extends ChatEventBase {
-  type: 'preview_event'
+/** 浏览器面板生命周期事件（轻量通知，不持久化为消息；泛化了原 ChatDesignEvent） */
+export interface ChatBrowserEvent extends ChatEventBase {
+  type: 'browser_event'
   action: 'open' | 'close'
   url?: string
   title?: string
@@ -161,61 +161,36 @@ export interface ChatTerminalToolEvent extends ChatEventBase {
 
 // ─── 子智能体 ──────────────────────────────────────────────
 
-/** 子智能体开始执行 */
-export interface ChatSubAgentStartEvent extends ChatEventBase {
-  type: 'subagent_start'
-  subAgentId: string
-  subAgentType: string
+/**
+ * 子智能体会话注册（在主会话中启动一个临时子会话）。
+ * 子智能体运行期间的 ChatEvent（agent_start / text_delta / tool_start / ...）
+ * 统一以 subSessionId 作为 event.sessionId 下发；renderer 通过 register 事件
+ * 知晓该 sessionId 属于哪个父会话 + 名称。
+ */
+export interface ChatSubSessionRegisterEvent extends ChatEventBase {
+  type: 'sub_session_register'
+  /** 父会话 sessionId */
+  parentSessionId: string
+  /** 子智能体类型名（如 'explore'） */
+  subAgentName: string
+  /** UI 展示名 */
+  displayName: string
+  /** 用户给出的任务简述（父工具 args.description） */
   description: string
-  parentToolCallId?: string
+  /** 子智能体的系统提示词（UI 以卡片形式展示） */
+  systemPrompt: string
+  /** 父 Agent 发给子智能体的初始 user prompt（UI 以卡片形式展示） */
+  prompt: string
 }
 
-/** 子智能体执行完成 */
-export interface ChatSubAgentEndEvent extends ChatEventBase {
-  type: 'subagent_end'
-  subAgentId: string
-  subAgentType: string
-  result?: string
-  usage?: ChatTokenUsage
-}
-
-/** 子智能体内部工具开始 */
-export interface ChatSubAgentToolStartEvent extends ChatEventBase {
-  type: 'subagent_tool_start'
-  subAgentId: string
-  subAgentType: string
-  toolCallId: string
-  toolName: string
-  /** 工具参数摘要（后端统一生成，前端直接展示） */
-  summary?: string
-}
-
-/** 子智能体内部工具更新/完成 */
-export interface ChatSubAgentToolEndEvent extends ChatEventBase {
-  type: 'subagent_tool_end'
-  subAgentId: string
-  subAgentType: string
-  toolCallId: string
-  /** 工具显示名（可选，仅有值时才覆盖已有名称） */
-  toolName?: string
-  result?: string
+/** 子会话终结（在 agent_end 之后发出，携带最终结果摘要） */
+export interface ChatSubSessionEndEvent extends ChatEventBase {
+  type: 'sub_session_end'
+  parentSessionId: string
+  /** 子会话最终 result 文本（父的 tool_result） */
+  result: string
+  /** 是否以异常结束 */
   isError?: boolean
-}
-
-/** 子智能体文本增量 */
-export interface ChatSubAgentTextDeltaEvent extends ChatEventBase {
-  type: 'subagent_text_delta'
-  subAgentId: string
-  subAgentType: string
-  delta: string
-}
-
-/** 子智能体思考增量 */
-export interface ChatSubAgentThinkingDeltaEvent extends ChatEventBase {
-  type: 'subagent_thinking_delta'
-  subAgentId: string
-  subAgentType: string
-  delta: string
 }
 
 // ─── 压缩归档 ────────────────────────────────────────────
@@ -280,14 +255,10 @@ export type ChatEvent =
   | ChatInputRequestResolvedEvent
   | ChatImageDataEvent
   | ChatRuntimeEvent
-  | ChatPreviewEvent
+  | ChatBrowserEvent
   | ChatTerminalToolEvent
-  | ChatSubAgentStartEvent
-  | ChatSubAgentEndEvent
-  | ChatSubAgentToolStartEvent
-  | ChatSubAgentToolEndEvent
-  | ChatSubAgentTextDeltaEvent
-  | ChatSubAgentThinkingDeltaEvent
+  | ChatSubSessionRegisterEvent
+  | ChatSubSessionEndEvent
   | ChatCompactionStartEvent
   | ChatCompactionEndEvent
   | ChatCompactionErrorEvent

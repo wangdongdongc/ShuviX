@@ -1,5 +1,7 @@
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ErrorEventMessage, UserTextMessage } from '../../stores/chatStore'
+import { useChatStore } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { InstructionBubble } from './InstructionBubble'
@@ -24,11 +26,32 @@ interface MessageRendererProps {
 }
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
+  const { t } = useTranslation()
+  const removeMessage = useChatStore((s) => s.removeMessage)
+  const handleDelete = async (): Promise<void> => {
+    try {
+      await window.api.message.deleteErrorEvent({
+        sessionId: msg.sessionId,
+        messageId: msg.id
+      })
+    } finally {
+      removeMessage(msg.id)
+    }
+  }
   return (
-    <div className="relative flex items-center gap-1.5 pl-10 mr-4 my-1 text-[11px] text-error/90">
+    <div className="group relative flex items-center gap-1.5 pl-10 pr-8 mr-4 my-1 text-[11px] text-error/90">
       <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
       <AlertCircle size={12} />
       <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+      <button
+        type="button"
+        onClick={handleDelete}
+        className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-error/10 text-error/70 hover:text-error"
+        title={t('common.delete', '删除')}
+        aria-label={t('common.delete', '删除')}
+      >
+        <Trash2 size={12} />
+      </button>
     </div>
   )
 }

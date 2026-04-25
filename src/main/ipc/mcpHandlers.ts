@@ -33,6 +33,7 @@ export function registerMcpHandlers(): void {
       headers: JSON.stringify(params.headers ?? {}),
       metadata: '{}',
       isEnabled: 1,
+      isBuiltin: 0,
       cachedTools: '[]',
       createdAt: now,
       updatedAt: now
@@ -47,13 +48,19 @@ export function registerMcpHandlers(): void {
 
   /** 更新 MCP Server 配置 */
   ipcMain.handle('mcp:update', async (_event, params: McpServerUpdateParams) => {
+    const existing = mcpDao.pick(params.id, ['isBuiltin'])
+    const isBuiltin = existing?.isBuiltin === 1
+
     const fields: Record<string, unknown> = {}
-    if (params.name !== undefined) fields.name = params.name
-    if (params.type !== undefined) fields.type = params.type
-    if (params.command !== undefined) fields.command = params.command
-    if (params.args !== undefined) fields.args = JSON.stringify(params.args)
+    // 内置 server: 仅允许修改 env / isEnabled / headers；其余字段忽略
+    if (!isBuiltin) {
+      if (params.name !== undefined) fields.name = params.name
+      if (params.type !== undefined) fields.type = params.type
+      if (params.command !== undefined) fields.command = params.command
+      if (params.args !== undefined) fields.args = JSON.stringify(params.args)
+      if (params.url !== undefined) fields.url = params.url
+    }
     if (params.env !== undefined) fields.env = JSON.stringify(params.env)
-    if (params.url !== undefined) fields.url = params.url
     if (params.headers !== undefined) fields.headers = JSON.stringify(params.headers)
     if (params.isEnabled !== undefined) fields.isEnabled = params.isEnabled ? 1 : 0
 
@@ -71,8 +78,12 @@ export function registerMcpHandlers(): void {
     return { success: true }
   })
 
-  /** 删除 MCP Server */
+  /** 删除 MCP Server（内置 server 不可删除） */
   ipcMain.handle('mcp:delete', async (_event, id: string) => {
+    const existing = mcpDao.pick(id, ['isBuiltin', 'name'])
+    if (existing?.isBuiltin === 1) {
+      return { success: false, error: `Built-in MCP server "${existing.name}" cannot be deleted` }
+    }
     await mcpService.disconnect(id)
     mcpDao.deleteById(id)
     return { success: true }

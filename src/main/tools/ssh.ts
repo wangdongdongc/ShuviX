@@ -8,10 +8,11 @@ import { Type } from '@sinclair/typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
-import { processToolOutput } from './utils/processToolOutput'
-import { sanitizeBinaryOutput, collapseProgressOutput } from './utils/shell'
-import { BaseTool, TOOL_ABORTED, type ToolContext } from './types'
-import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
+import { sanitizeBinaryOutput, collapseProgressOutput } from '../utils/toolUtils/shell'
+import { BaseTool } from '../services/baseTool'
+import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'
 import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { SshToolDetails } from '../../shared/types/chatMessage'
@@ -447,7 +448,7 @@ async function handleDisconnect(ctx: ToolContext): Promise<AgentToolResult<SshTo
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ssh',
   group: 'remote',

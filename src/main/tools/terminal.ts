@@ -7,10 +7,11 @@
  */
 
 import { Type } from '@sinclair/typebox'
-import { processToolOutput } from './utils/processToolOutput'
-import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
+import { BaseTool } from '../services/baseTool'
+import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
+import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'
 import { sessionService } from '../services/sessionService'
 import {
   ensureAgentTerminal,
@@ -221,7 +222,7 @@ export class TerminalTool extends BaseTool<typeof TerminalParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'terminal',
   group: 'general',

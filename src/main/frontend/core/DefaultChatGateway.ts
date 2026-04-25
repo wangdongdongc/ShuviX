@@ -4,15 +4,15 @@ import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '
 import type { InputResponse } from '../../../shared/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
-import { getBuiltinToolEntries } from '../../tools/registry'
+import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
 import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
-import { pluginRegistry } from '../../services/pluginRegistry'
-import { subAgentRegistry } from '../../subagent'
+import { destroySqlSession, getSqlRuntimeStatus } from '../../services/pglite'
+import { destroyPythonSession, getPythonRuntimeStatus } from '../../services/pyodide'
 import type { InlineToken } from '../../../shared/types/chatMessage'
 import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
@@ -172,12 +172,11 @@ export class DefaultChatGateway implements ChatGateway {
       }
     }
 
-    const pluginRuntimes = pluginRegistry.getRuntimeStatuses(sessionId)
-    for (const [runtimeId, info] of Object.entries(pluginRuntimes)) {
-      result[runtimeId] = info
-    }
-
-    // ACP sessions are event-driven only (no central status store)
+    // 各服务模块自维护的运行时状态（原由 pluginRegistry 集中缓存）
+    const sql = getSqlRuntimeStatus(sessionId)
+    if (sql) result['sql'] = sql
+    const python = getPythonRuntimeStatus(sessionId)
+    if (python) result['python'] = python
 
     return result
   }
@@ -209,14 +208,16 @@ export class DefaultChatGateway implements ChatGateway {
       broadcastDestroy()
       return { success: true }
     }
-    if (runtimeId.startsWith('acp:')) {
-      subAgentRegistry.get(runtimeId.slice(4))?.destroy(sessionId)
-      broadcastDestroy()
+    // 模块自管理的运行时（原 plugin 贡献）
+    if (runtimeId === 'sql') {
+      destroySqlSession(sessionId)
       return { success: true }
     }
-    // Plugin runtimes
-    pluginRegistry.dispatchEvent({ type: 'runtime:destroy', sessionId, runtimeId })
-    return { success: true }
+    if (runtimeId === 'python') {
+      destroyPythonSession(sessionId)
+      return { success: true }
+    }
+    return { success: false }
   }
 
   // ─── 工具发现 ──────────────────────────────────
@@ -246,33 +247,8 @@ export class DefaultChatGateway implements ChatGateway {
         group: e.group,
         defaultEnabled: e.defaultEnabled
       }))
-    /** 插件工具（按 defaultEnabled 分为两组，分别插入通用工具组不同位置） */
-    const allPluginTools = pluginRegistry.getActivatedEntries().flatMap(({ contribution }) =>
-      (contribution.tools ?? []).map((tool) => ({
-        name: tool.name,
-        label: tool.label,
-        hint: tool.hint ?? tool.description.split('\n')[0],
-        group: 'general' as const,
-        defaultEnabled: tool.defaultEnabled !== false
-      }))
-    )
-    const pluginDefaultOn = allPluginTools.filter((t) => t.defaultEnabled)
-    const pluginDefaultOff = allPluginTools.filter((t) => !t.defaultEnabled)
-
-    // 将默认启用的插件工具插入到 general 组 defaultEnabled=true 之后、defaultEnabled=false 之前
-    let insertIdx = 0
-    for (let i = builtinTools.length - 1; i >= 0; i--) {
-      if (builtinTools[i].group === 'general' && builtinTools[i].defaultEnabled) {
-        insertIdx = i + 1
-        break
-      }
-    }
-    const merged = [
-      ...builtinTools.slice(0, insertIdx),
-      ...pluginDefaultOn,
-      ...builtinTools.slice(insertIdx),
-      ...pluginDefaultOff
-    ]
+    // 过去的 "plugin 工具" (postgres / python) 已合并进 builtinTools，无需再单独拼接
+    const merged = builtinTools
 
     /** MCP 工具 */
     const mcpTools = mcpService.getAllToolInfos().map((info) => ({

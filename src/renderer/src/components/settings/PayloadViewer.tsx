@@ -85,11 +85,13 @@ interface ResponseData {
 function Section({
   title,
   count,
+  extra,
   defaultOpen = false,
   children
 }: {
   title: string
   count?: number
+  extra?: React.ReactNode
   defaultOpen?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
@@ -105,10 +107,28 @@ function Section({
         {count !== undefined && (
           <span className="ml-1 text-[10px] text-text-tertiary font-normal">({count})</span>
         )}
+        {extra && (
+          <span className="ml-auto text-[10px] text-text-tertiary font-normal">{extra}</span>
+        )}
       </button>
       {open && <div className="border-t border-border-primary">{children}</div>}
     </div>
   )
+}
+
+/** 计算值编码为 UTF-8 后的字节数（payload 实际传输尺寸） */
+const byteEncoder = new TextEncoder()
+function byteSize(value: unknown): number {
+  if (value === null || value === undefined) return 0
+  const s = typeof value === 'string' ? value : JSON.stringify(value)
+  return byteEncoder.encode(s).length
+}
+
+/** 格式化字节数为易读形式 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
 /** 单条可折叠项（消息 / 工具定义） */
@@ -884,61 +904,96 @@ export function PayloadViewer({
       </Section>
 
       {/* 消息列表 */}
-      <Section title={t('settings.payloadMessages')} count={allMessages.length} defaultOpen>
-        {allMessages.length === 0 ? (
-          <div className="px-3 py-2 text-[11px] text-text-tertiary">
-            {t('settings.payloadNoMessages')}
-          </div>
-        ) : (
-          allMessages.map((msg: NormalizedMessage, i: number) => {
-            const role = msg.role || 'unknown'
-            const { text, hasImage, hasToolCall } = extractSummary(msg.content)
-            const toolCallsSummary = msg.tool_calls ? extractToolCallsSummary(msg.tool_calls) : ''
-            const summary = toolCallsSummary || truncate(text || t('settings.payloadEmpty'), 80)
+      {(() => {
+        const messageSizes = allMessages.map((m) => byteSize(m))
+        const messagesTotal = messageSizes.reduce((a, b) => a + b, 0)
+        const maxSize = Math.max(1, ...messageSizes)
+        return (
+          <Section
+            title={t('settings.payloadMessages')}
+            count={allMessages.length}
+            extra={messagesTotal > 0 ? formatBytes(messagesTotal) : undefined}
+            defaultOpen
+          >
+            {allMessages.length === 0 ? (
+              <div className="px-3 py-2 text-[11px] text-text-tertiary">
+                {t('settings.payloadNoMessages')}
+              </div>
+            ) : (
+              allMessages.map((msg: NormalizedMessage, i: number) => {
+                const role = msg.role || 'unknown'
+                const { text, hasImage, hasToolCall } = extractSummary(msg.content)
+                const toolCallsSummary = msg.tool_calls
+                  ? extractToolCallsSummary(msg.tool_calls)
+                  : ''
+                const summary = toolCallsSummary || truncate(text || t('settings.payloadEmpty'), 80)
+                const size = messageSizes[i]
+                // 相对最大消息 ≥50% 的视为"异常大"，用红色高亮帮助定位
+                const isLarge = size / maxSize >= 0.5 && size >= 10 * 1024
 
-            return (
-              <CollapsibleItem
-                key={i}
-                icon={roleIcon(role)}
-                label={role}
-                labelColor={roleLabelColor(role)}
-                summary={summary}
-                badge={
-                  <>
-                    {hasImage && (
-                      <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-purple-500/15 text-purple-400">
-                        <Image size={9} /> {t('settings.payloadImage')}
-                      </span>
-                    )}
-                    {(hasToolCall || msg.tool_calls) && (
-                      <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-orange-500/15 text-orange-400">
-                        <Wrench size={9} /> {t('settings.payloadTool')}
-                      </span>
-                    )}
-                  </>
-                }
-              >
-                <MessageContent
-                  content={msg.content}
-                  toolCalls={msg.tool_calls}
-                  toolCallId={msg.tool_call_id}
-                  name={msg.name}
-                  t={t}
-                />
-              </CollapsibleItem>
-            )
-          })
-        )}
-      </Section>
+                return (
+                  <CollapsibleItem
+                    key={i}
+                    icon={roleIcon(role)}
+                    label={role}
+                    labelColor={roleLabelColor(role)}
+                    summary={summary}
+                    badge={
+                      <>
+                        <span
+                          className={`flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono ${
+                            isLarge
+                              ? 'bg-red-500/15 text-red-400'
+                              : 'bg-bg-tertiary text-text-tertiary'
+                          }`}
+                          title={`${size.toLocaleString()} bytes`}
+                        >
+                          {formatBytes(size)}
+                        </span>
+                        {hasImage && (
+                          <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-purple-500/15 text-purple-400">
+                            <Image size={9} /> {t('settings.payloadImage')}
+                          </span>
+                        )}
+                        {(hasToolCall || msg.tool_calls) && (
+                          <span className="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] bg-orange-500/15 text-orange-400">
+                            <Wrench size={9} /> {t('settings.payloadTool')}
+                          </span>
+                        )}
+                      </>
+                    }
+                  >
+                    <MessageContent
+                      content={msg.content}
+                      toolCalls={msg.tool_calls}
+                      toolCallId={msg.tool_call_id}
+                      name={msg.name}
+                      t={t}
+                    />
+                  </CollapsibleItem>
+                )
+              })
+            )}
+          </Section>
+        )
+      })()}
 
       {/* 工具定义 */}
-      {tools.length > 0 && (
-        <Section title={t('settings.payloadToolDefs')} count={tools.length}>
-          {tools.map((tool: ToolDefinition, i: number) => (
-            <ToolItem key={i} tool={tool} />
-          ))}
-        </Section>
-      )}
+      {tools.length > 0 &&
+        (() => {
+          const toolsTotal = tools.reduce((acc, tool) => acc + byteSize(tool), 0)
+          return (
+            <Section
+              title={t('settings.payloadToolDefs')}
+              count={tools.length}
+              extra={toolsTotal > 0 ? formatBytes(toolsTotal) : undefined}
+            >
+              {tools.map((tool: ToolDefinition, i: number) => (
+                <ToolItem key={i} tool={tool} />
+              ))}
+            </Section>
+          )
+        })()}
 
       {/* AI 响应内容 */}
       {parsedResponse && <ResponseSection data={parsedResponse} t={t} />}

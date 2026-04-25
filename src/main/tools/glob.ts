@@ -7,18 +7,18 @@ import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { statSync } from 'fs'
 import { Type } from '@sinclair/typebox'
+import { BaseTool } from '../services/baseTool'
 import {
-  BaseTool,
   resolveProjectConfig,
   assertSandboxRead,
   TOOL_ABORTED,
   type ToolContext
-} from './types'
+} from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { GlobToolDetails } from '../../shared/types/chatMessage'
-import { resolveToCwd } from './utils/pathUtils'
-import { rgFilesList } from './utils/ripgrep'
-import { processToolOutput } from './utils/processToolOutput'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
+import { rgFilesList } from '../utils/toolUtils/ripgrep'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:glob')
@@ -159,7 +159,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'glob',
   group: 'ripgrep',

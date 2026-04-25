@@ -23,13 +23,7 @@ const CustomSubAgentParamsSchema = Type.Object({
   prompt: Type.String({
     description:
       'The task for the sub-agent to perform. This is the ONLY context the sub-agent receives — it does NOT have access to your conversation history. Be thorough and specific.'
-  }),
-  task_id: Type.Optional(
-    Type.String({
-      description:
-        'Resume a previous session by providing its task_id. The sub-agent retains its full conversation history from the previous run.'
-    })
-  )
+  })
 })
 
 /** 构建工具描述（给主 Agent 看） */
@@ -59,6 +53,7 @@ export class CustomSubAgentProvider implements SubAgentProvider {
     this.description = buildDescription(config)
     this.agentType = {
       name: config.name,
+      displayName: config.displayName,
       description: config.description,
       tools: config.tools,
       maxTurns: config.maxTurns,
@@ -77,18 +72,17 @@ export class CustomSubAgentProvider implements SubAgentProvider {
       )
     }
 
-    const { taskId, result } = await subAgentManager.runTask({
+    const { result } = await subAgentManager.runTask({
       parentSessionId: params.ctx.sessionId,
       parentToolCallId: params.toolCallId,
-      taskId: params.taskId,
       agentType: this.agentType,
       prompt: params.prompt,
+      description: params.description,
       modelConfig: this.modelConfig,
-      parentAbortSignal: params.signal,
-      onEvent: params.onEvent
+      parentAbortSignal: params.signal
     })
 
-    return { taskId, result }
+    return { result }
   }
 
   destroy(sessionId: string): void {

@@ -1,17 +1,19 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, Terminal, FileText, Wrench, Settings, Sliders } from 'lucide-react'
-import { icons } from 'lucide-react'
+import {
+  MessageSquarePlus,
+  Terminal,
+  FileText,
+  Wrench,
+  Database,
+  Settings,
+  Sliders,
+  Download,
+  Upload
+} from 'lucide-react'
 import { SessionConfigPanel } from './SessionConfigPanel'
-
-interface PluginPurpose {
-  key: string
-  icon: string
-  labelKey: string
-  tipKey: string
-  i18n: Record<string, Record<string, string>>
-  enabledTools: string[]
-}
+import { ConfigExportDialog } from '../welcome/ConfigExportDialog'
+import { ConfigImportDialog } from '../welcome/ConfigImportDialog'
 
 interface WelcomeViewProps {
   onNewChat: () => void
@@ -33,18 +35,16 @@ const modKey = isMac ? '⌘' : 'Ctrl'
 const BUILTIN_PURPOSES = [
   { key: 'bash', icon: Terminal, labelKey: 'projectForm.purposeBash' },
   { key: 'office', icon: FileText, labelKey: 'projectForm.purposeOffice' },
+  { key: 'sql', icon: Database, labelKey: 'projectForm.purposeSQL' },
   { key: 'dev', icon: Wrench, labelKey: 'projectForm.purposeDev' }
 ] as const
 
 /** 欢迎页 — 无活跃会话时显示 */
 export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): React.JSX.Element {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const isDesktop = window.api.app.platform !== 'web'
-  const [pluginPurposes, setPluginPurposes] = useState<PluginPurpose[]>([])
-
-  useEffect(() => {
-    window.api.plugin.purposes().then(setPluginPurposes)
-  }, [])
+  const [exportOpen, setExportOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   return (
     <div className="flex-1 flex items-center justify-center overflow-y-auto">
@@ -64,7 +64,7 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
 
         {/* Divider + Purpose Cards */}
         {isDesktop && (
-          <div className="mb-8">
+          <div className="mb-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px bg-border-primary/60" />
               <span className="text-xs text-text-tertiary shrink-0">
@@ -72,7 +72,7 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
               </span>
               <div className="flex-1 h-px bg-border-primary/60" />
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               {BUILTIN_PURPOSES.map(({ key, icon: Icon, labelKey }) => (
                 <button
                   key={key}
@@ -88,36 +88,27 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
                   <span className="text-xs font-medium text-text-primary">{t(labelKey)}</span>
                 </button>
               ))}
-              {pluginPurposes.map((pp) => {
-                const IconComponent = icons[pp.icon as keyof typeof icons]
-                return (
-                  <button
-                    key={pp.key}
-                    onClick={() => onCreateProject(pp.key)}
-                    className="group flex flex-col items-center gap-2.5 p-4 rounded-xl border border-border-primary/50 bg-bg-secondary/30 hover:border-accent/50 hover:bg-accent/5 transition-all"
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center group-hover:bg-accent/10 transition-colors">
-                      {IconComponent ? (
-                        <IconComponent
-                          size={18}
-                          className="text-text-secondary group-hover:text-accent transition-colors"
-                        />
-                      ) : (
-                        <Wrench
-                          size={18}
-                          className="text-text-secondary group-hover:text-accent transition-colors"
-                        />
-                      )}
-                    </div>
-                    <span className="text-xs font-medium text-text-primary">
-                      {pp.i18n[i18n.language]?.[pp.labelKey] ??
-                        pp.i18n['en']?.[pp.labelKey] ??
-                        pp.labelKey}
-                    </span>
-                  </button>
-                )
-              })}
             </div>
+          </div>
+        )}
+
+        {/* Config Import / Export */}
+        {isDesktop && (
+          <div className="flex items-center justify-center gap-2 mb-6">
+            <button
+              onClick={() => setImportOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary/60 bg-bg-secondary/30 hover:border-accent/50 hover:bg-accent/5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <Upload size={12} />
+              {t('configShare.entryImport')}
+            </button>
+            <button
+              onClick={() => setExportOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-primary/60 bg-bg-secondary/30 hover:border-accent/50 hover:bg-accent/5 text-xs text-text-secondary hover:text-text-primary transition-colors"
+            >
+              <Download size={12} />
+              {t('configShare.entryExport')}
+            </button>
           </div>
         )}
 
@@ -143,6 +134,8 @@ export function WelcomeView({ onNewChat, onCreateProject }: WelcomeViewProps): R
           )}
         </div>
       </div>
+      {exportOpen && <ConfigExportDialog onClose={() => setExportOpen(false)} />}
+      {importOpen && <ConfigImportDialog onClose={() => setImportOpen(false)} />}
     </div>
   )
 }

@@ -89,8 +89,6 @@
     "sqlWasmRuntime": "Postgres Database",
     "sqlPersistent": "Persistent",
     "sqlTemporary": "Temporary",
-    "acpAgentRunning": "{{name}} running",
-    "destroyAcp": "Terminate ACP Agent session",
     "destroyReason_manual": "manually destroyed",
     "autoApproveLabel": "Auto-Approve",
     "autoApproveWarning": "All Bash and SSH commands will execute automatically without approval. The AI may generate unexpected commands — use with caution.",
@@ -215,7 +213,15 @@
     "result": "Result",
     "output": "Output",
     "thinking": "Thinking",
-    "internalTools": "Internal tools"
+    "internalTools": "Internal tools",
+    "explore": {
+      "displayName": "Explore",
+      "shortDescription": "Read-only codebase exploration — find files by patterns and search code with regex"
+    },
+    "research": {
+      "displayName": "Research",
+      "shortDescription": "Multi-step web research with citations (requires Tavily API Key)"
+    }
   },
 
   "ssh": {
@@ -576,6 +582,9 @@
     "mcpArgsPlaceholder": "One argument per line",
     "mcpEnv": "Environment Variables",
     "mcpEnvPlaceholder": "KEY=VALUE format, one per line",
+    "mcpEnvKeyPlaceholder": "KEY",
+    "mcpEnvValuePlaceholder": "value",
+    "mcpEnvAdd": "Add variable",
     "mcpUrl": "Server URL",
     "mcpUrlPlaceholder": "e.g. https://mcp.example.com/sse",
     "mcpHeaders": "Headers",
@@ -591,6 +600,10 @@
     "mcpReconnect": "Reconnect",
     "mcpDelete": "Delete",
     "mcpDeleteConfirm": "Are you sure you want to delete MCP Server \"{{name}}\"?",
+    "mcpBuiltin": "Built-in",
+    "mcpBuiltinCannotDelete": "Built-in servers cannot be deleted",
+    "mcpBuiltinConfigureHint": "Fill in the required API Key in the Env section below to enable this built-in server",
+    "mcpBuiltinReadonlyNotice": "Connection parameters for built-in servers are preset; only environment variables need to be configured",
     "mcpSaving": "Saving...",
     "mcpNameRequired": "Name is required",
     "mcpCommandRequired": "Command is required",
@@ -649,6 +662,7 @@
     "skillImportDir": "Import from Directory",
     "skillOpenDir": "Open Skills Directory",
     "skillDirDefault": "Default",
+    "skillDirBuiltin": "Built-in",
     "skillDirAdd": "Add Directory",
     "skillDirRemove": "Remove",
     "skillDirRemoveConfirm": "Remove directory \"{{name}}\" from skill sources? Skills in it will no longer be loaded.",
@@ -767,12 +781,10 @@
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "exploreLabel": "Explore",
     "exploreHint": "Read-only codebase search sub-agent for finding files, searching code, and exploring project structure",
-    "previewLabel": "Preview Panel",
-    "previewHint": "Open any URL in the preview panel, or close the preview panel",
+    "browserLabel": "Browser",
+    "browserHint": "Open any URL in the embedded browser panel, or close it",
     "devLabel": "Dev Tool",
     "devHint": "Unified AI frontend dev tool. kind=widget creates a reusable mini utility, kind=presentation scaffolds a Spectacle deck, kind=sketch opens a blank React canvas. init scaffolds; build recompiles and returns the preview URL.",
-    "claudeCodeLabel": "Claude Code",
-    "claudeCodeHint": "Delegate complex coding tasks to Claude Code — an autonomous AI agent for multi-file changes, refactoring, debugging and more",
     "subAgentTab": "Sub-Agent",
     "subAgentDesc": "Create task-focused sub-agents with dedicated prompts and tool sets. Sub-agents work in isolated contexts, helping reduce context burden for long conversations and complex tasks.",
     "subAgentBuiltin": "Built-in",
@@ -821,7 +833,17 @@
     "confirmDeleteDescription": "Delete widget \"{{name}}\"? Local files and all history will be removed and cannot be recovered.",
     "archivedSection": "Archived",
     "restore": "Restore",
-    "archivedAt": "Archived at"
+    "archivedAt": "Archived at",
+    "exportAsVite": "Export as Vite project…",
+    "exportSuccessTitle": "Export complete",
+    "exportSuccessDescription": "Widget \"{{name}}\" was exported to:\n\n{{path}}\n\nRun npm install && npm run dev inside that folder to continue development. See EXPORT_NOTES.md for details.",
+    "exportOpenFolder": "Open folder",
+    "exportFailedTitle": "Export failed",
+    "exportFailedDescription": "Failed to export widget \"{{name}}\":\n\n{{reason}}",
+    "exportErrorTargetNotEmpty": "Target directory is not empty. Pick or create an empty folder and try again.",
+    "exportErrorWidgetNotFound": "Widget not found (may have been deleted).",
+    "exportErrorInvalidPath": "Invalid target path: home directory, ~/.shuvix, and the widget source directory itself are not allowed.",
+    "exportErrorCopyFailed": "Copy failed: {{reason}}"
   },
 
   "bindings": {
@@ -867,9 +889,17 @@
   },
 
   "panel": {
-    "preview": "Preview",
+    "browser": "Browser",
     "terminal": "Terminal",
     "widget": "Widget",
+    "subAgent": "Sub-agent",
+    "subAgentNone": "No sub-agent is running.",
+    "subAgentStatusRunning": "Running",
+    "subAgentStatusDone": "Done",
+    "subAgentStatusError": "Error",
+    "subAgentClose": "Close sub-agent",
+    "subAgentSystemPrompt": "System prompt",
+    "subAgentUserPrompt": "User prompt",
     "urlPlaceholder": "Enter a URL",
     "newTerminal": "New Terminal"
   },
@@ -887,5 +917,44 @@
       "name": "Sketch",
       "description": "Create a blank React canvas in the current working directory"
     }
+  },
+
+  "configShare": {
+    "entryExport": "Export Config",
+    "entryImport": "Import Config",
+    "exportTitle": "Export Configuration",
+    "exportDesc": "Select the providers, models, and MCP servers you want to share. API keys and MCP sensitive values (env/headers) are excluded by default — check the boxes to include them. The encoded string will be copied to your clipboard.",
+    "importTitle": "Import Configuration",
+    "importDesc": "Paste the configuration string below. ShuviX will parse it and list the items; you can choose a subset to import. Items will overwrite local entries with the same name.",
+    "sectionProviders": "Model Providers",
+    "sectionMcp": "MCP Servers",
+    "selectAll": "Select all",
+    "selectNone": "Select none",
+    "includeApiKey": "Include API key",
+    "includeSensitive": "Include secrets",
+    "copyToClipboard": "Copy to clipboard",
+    "copiedHint": "Copied to clipboard",
+    "exportFooterHint": "Unchecked items are excluded",
+    "pastePlaceholder": "Paste a configuration string starting with shvx:…",
+    "parseSuccessHint": "Parsed {{providers}} provider(s), {{mcp}} MCP server(s)",
+    "parseErrorMagic": "Invalid format: missing shvx1: prefix",
+    "parseErrorBase64": "Cannot decode: corrupted base64 string",
+    "parseErrorJson": "Cannot parse: malformed JSON",
+    "parseErrorVersion": "Unsupported version — please update ShuviX",
+    "parseErrorSchema": "Unexpected data structure",
+    "parseErrorUnknown": "Parse failed, please check the configuration string",
+    "actionCreate": "Create",
+    "actionOverwrite": "Overwrite",
+    "actionMergeBuiltin": "Merge builtin",
+    "actionSkipMissingBuiltin": "Skip (no matching builtin here)",
+    "badgeBuiltin": "Builtin",
+    "applyButton": "Apply & Overwrite",
+    "confirmApplyTitle": "Confirm Import",
+    "confirmApplyDesc": "{{create}} to create, {{overwrite}} to overwrite. This action cannot be undone. Continue?",
+    "resultSummary": "{{ok}} succeeded, {{fail}} failed",
+    "resultSuccess": "Succeeded",
+    "resultFailure": "Failed",
+    "resultDone": "Done",
+    "emptyExportHint": "No enabled providers or MCP servers to export"
   }
 }

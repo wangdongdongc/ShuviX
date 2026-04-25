@@ -5,19 +5,20 @@
 
 import { spawn } from 'child_process'
 import { Type } from '@sinclair/typebox'
-import { processToolOutput } from './utils/processToolOutput'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import {
   getShellConfig,
   sanitizeBinaryOutput,
   killProcessTree,
   collapseProgressOutput
-} from './utils/shell'
+} from '../utils/toolUtils/shell'
 import { buildSpawnEnv } from '../utils/paths'
 import { dockerManager } from '../services/dockerManager'
 import { settingsService } from '../services/settingsService'
-import { BaseTool, resolveProjectConfig, TOOL_ABORTED, type ToolContext } from './types'
+import { BaseTool } from '../services/baseTool'
+import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified, extractPatterns } from './utils/allowList'
+import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'
 import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BashToolDetails } from '../../shared/types/chatMessage'
@@ -300,7 +301,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'bash',
   group: 'general',

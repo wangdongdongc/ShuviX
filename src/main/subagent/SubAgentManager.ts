@@ -4,22 +4,25 @@
  * 管理 explore 等进程内子智能体的 Agent 实例生命周期。
  * 纯内存管理，不写 DB，父会话销毁时统一清理。
  *
- * 与父 Agent 解耦：自行解析模型配置，
- * 不依赖父 Agent 的 Model 对象。
+ * 每个 runTask 调用会生成一个临时的 subSessionId，并以该 id 为
+ * event.sessionId 广播标准 ChatEvent（agent_start / text_delta / tool_start /
+ * tool_end / agent_end 等），由右侧 Sub-agent 面板负责流式展示。
  */
 
 import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
+import { v4 as uuid } from 'uuid'
 import { isAssistantMessage } from '../utils/messageGuards'
-import type { ChatTokenUsage } from '../frontend'
-import { getBuiltinToolEntries } from '../tools/registry'
-import { SkillTool } from '../tools/skill'
-import type { ToolContext } from '../tools/types'
-import { parallelCoordinator } from '../services/parallelExecution'
+import type { ChatTokenUsage } from '../frontend/core'
+import { getBuiltinToolEntries } from '../services/toolRegistry'
+import { SkillTool } from '../services/skillTool'
+import type { ToolContext } from '../services/toolContext'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerDao } from '../dao/providerDao'
 import { mcpService } from '../services/mcpService'
-import type { ChatEvent } from '../frontend'
-import { extractArgsSummary, type SubAgentModelConfig } from './types'
+import { chatFrontendRegistry } from '../frontend/core'
+import type { SubAgentModelConfig } from './types'
+import { transientSessionRegistry } from './transientSessionRegistry'
+import { t } from '../i18n'
 import { createLogger } from '../logger'
 
 const log = createLogger('SubAgent')
@@ -30,6 +33,8 @@ const log = createLogger('SubAgent')
 export interface InProcessAgentType {
   /** 类型名称（如 'explore'） */
   name: string
+  /** UI 展示名（右侧 Sub-agent 面板子 Tab 标题） */
+  displayName: string
   /** 描述（展示给主 Agent，帮助它决定何时使用） */
   description: string
   /** 固定工具名称列表（不受父级 enabledTools 限制） */
@@ -42,89 +47,54 @@ export interface InProcessAgentType {
 
 // ─── 子智能体会话 ──────────────────────────────────────────
 
-/** 活跃的子智能体会话（纯内存） */
 interface SubAgentSession {
-  taskId: string
+  subSessionId: string
   type: InProcessAgentType
   agent: Agent
   abortController: AbortController
-  turnCount: number
+  /** 已开始但尚未结束的工具调用：toolCallId → toolName */
+  pendingToolCalls: Map<string, string>
+  /**
+   * 已被 abort 主动 finalize 的 toolCallId；
+   * 后续从 pi-agent-core 到达的 tool_execution_end 会被忽略，
+   * 避免覆盖"已被用户中止"为"完成"。
+   */
+  finalizedToolCalls: Set<string>
+  /** 是否已被 abort（来自父 agent 或用户直接关闭子 tab） */
+  aborted: boolean
 }
 
 // ─── 工具构建 ──────────────────────────────────────────
 
 type AnyAgentTool = Agent['state']['tools'][number]
 
-/** 包装单个工具的 execute 方法，接入并行执行协调器 */
-function wrapToolForSubAgent(parallelKey: string, tool: AnyAgentTool): AnyAgentTool {
-  const originalExecute = tool.execute.bind(tool)
-  const preExecute =
-    'preExecute' in tool
-      ? (tool as { preExecute: (...a: unknown[]) => Promise<void> }).preExecute.bind(tool)
-      : undefined
-  parallelCoordinator.registerExecutor(parallelKey, tool.name, tool, originalExecute, preExecute)
-  return {
-    ...tool,
-    execute: async (
-      toolCallId: string,
-      params: Record<string, unknown>,
-      signal?: AbortSignal,
-      onUpdate?: (partialResult: unknown) => void
-    ) => {
-      await Promise.resolve()
-      return parallelCoordinator.execute(
-        parallelKey,
-        toolCallId,
-        tool.name,
-        params,
-        signal,
-        onUpdate,
-        originalExecute
-      )
-    }
-  } as AnyAgentTool
-}
-
-/**
- * 为子智能体构建工具集（动态查找，支持内置工具、MCP、Skills）
- * 不包含子智能体工具，天然防递归
- */
 function buildSubAgentTools(ctx: ToolContext, agentType: InProcessAgentType): AnyAgentTool[] {
-  const parallelKey = ctx.parallelSessionKey || ctx.sessionId
   const tools: AnyAgentTool[] = []
-
-  // 构建内置工具 factory 查找表
   const builtinEntries = getBuiltinToolEntries()
   const builtinMap = new Map(builtinEntries.filter((e) => e.factory).map((e) => [e.name, e]))
-
-  // 收集 skill 名称
   const skillNames: string[] = []
 
   for (const toolName of agentType.tools) {
     if (toolName.startsWith('mcp:')) {
-      // MCP 服务器工具
       const serverName = toolName.slice(4)
       const mcpTools = mcpService.getAgentToolsByServerName(serverName)
       for (const t of mcpTools) {
-        tools.push(wrapToolForSubAgent(parallelKey, t))
+        tools.push(t)
       }
     } else if (toolName.startsWith('skill:')) {
-      // 收集 skill 名称，后面统一构造
       skillNames.push(toolName.slice(6))
     } else {
-      // 内置工具
       const entry = builtinMap.get(toolName)
       if (entry?.factory) {
         const tool = entry.factory(ctx) as AnyAgentTool
-        tools.push(wrapToolForSubAgent(parallelKey, tool))
+        tools.push(tool)
       }
     }
   }
 
-  // Skills 统一构造为一个 SkillTool
   if (skillNames.length > 0) {
     const skillTool = new SkillTool(skillNames) as unknown as AnyAgentTool
-    tools.push(wrapToolForSubAgent(parallelKey, skillTool))
+    tools.push(skillTool)
   }
 
   return tools
@@ -134,125 +104,180 @@ function buildSubAgentTools(ctx: ToolContext, agentType: InProcessAgentType): An
 
 export interface RunTaskParams {
   parentSessionId: string
-  /** 父级工具调用 ID（用于前端关联子智能体与 explore 工具调用） */
   parentToolCallId?: string
-  taskId?: string
   agentType: InProcessAgentType
   prompt: string
-  /** 模型配置（纯数据，SubAgentManager 自行解析为 Model + StreamFn） */
+  description: string
   modelConfig: SubAgentModelConfig
   parentAbortSignal?: AbortSignal
-  onEvent: (event: ChatEvent) => void
 }
 
 /** 进程内子智能体会话管理器 */
 class SubAgentManager {
-  /** parentSessionId → Map<taskId, SubAgentSession> */
-  private sessions = new Map<string, Map<string, SubAgentSession>>()
+  /** parentSessionId → Set<subSessionId> */
+  private byParent = new Map<string, Set<string>>()
+  /** subSessionId → SubAgentSession */
+  private sessions = new Map<string, SubAgentSession>()
 
   /** 最大并发子智能体数 */
   private readonly MAX_CONCURRENT = 5
 
-  /** 生成或恢复子智能体并执行 prompt */
-  async runTask(params: RunTaskParams): Promise<{ taskId: string; result: string }> {
-    const { parentSessionId, agentType, prompt, modelConfig, parentAbortSignal, onEvent } = params
+  /** 生成子智能体会话并执行 prompt；返回最终 result 文本供父 tool_call 使用 */
+  async runTask(params: RunTaskParams): Promise<{ result: string }> {
+    const { parentSessionId, agentType, prompt, description, modelConfig, parentAbortSignal } =
+      params
 
-    // 恢复已有会话 or 创建新会话
-    let session: SubAgentSession
-    const taskId = params.taskId
-
-    if (taskId) {
-      const existing = this.sessions.get(parentSessionId)?.get(taskId)
-      if (existing) {
-        session = existing
-        log.info(`Resuming sub-agent task=${taskId} type=${agentType.name}`)
-      } else {
-        log.warn(`Sub-agent task=${taskId} not found, creating new session`)
-        session = this.createSession(parentSessionId, agentType, modelConfig, onEvent)
-      }
-    } else {
-      // 并发数检查
-      const existing = this.sessions.get(parentSessionId)
-      if (existing && existing.size >= this.MAX_CONCURRENT) {
-        throw new Error(
-          `Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`
-        )
-      }
-      session = this.createSession(parentSessionId, agentType, modelConfig, onEvent)
+    const parentSet = this.byParent.get(parentSessionId)
+    if (parentSet && parentSet.size >= this.MAX_CONCURRENT) {
+      throw new Error(
+        `Maximum concurrent sub-agents (${this.MAX_CONCURRENT}) reached. Wait for existing tasks to complete.`
+      )
     }
 
-    // 链接父级中止信号
-    if (parentAbortSignal) {
-      if (parentAbortSignal.aborted) {
-        session.abortController.abort()
-        throw new Error('Parent agent was aborted')
-      }
-      parentAbortSignal.addEventListener('abort', () => session.agent.abort(), { once: true })
-    }
+    const session = this.createSession(parentSessionId, agentType, modelConfig)
 
-    // 广播子智能体开始事件
-    onEvent({
-      type: 'subagent_start',
-      sessionId: parentSessionId,
-      subAgentId: session.taskId,
-      subAgentType: agentType.name,
-      description: prompt.slice(0, 100),
-      parentToolCallId: params.parentToolCallId
+    // 注册到临时会话表（用于 IPC 分叉与 UI 面板发现）
+    transientSessionRegistry.register({
+      sessionId: session.subSessionId,
+      parentSessionId,
+      subAgentName: agentType.name,
+      displayName: agentType.displayName,
+      description
     })
 
+    // 广播子会话注册事件 → 右侧 Sub-agent 面板显示新子 Tab
+    chatFrontendRegistry.broadcast({
+      type: 'sub_session_register',
+      sessionId: session.subSessionId,
+      parentSessionId,
+      subAgentName: agentType.name,
+      displayName: agentType.displayName,
+      description,
+      systemPrompt: agentType.systemPrompt,
+      prompt
+    })
+
+    // 链接父级中止信号：父 agent 中止时，同步把子 agent 也中止并把在飞的工具调用标记为"已被用户中止"
+    if (parentAbortSignal) {
+      if (parentAbortSignal.aborted) {
+        session.aborted = true
+        this.finalizeAbortedToolCalls(session.subSessionId)
+        session.abortController.abort()
+        session.agent.abort()
+      } else {
+        parentAbortSignal.addEventListener(
+          'abort',
+          () => {
+            session.aborted = true
+            this.finalizeAbortedToolCalls(session.subSessionId)
+            session.agent.abort()
+          },
+          { once: true }
+        )
+      }
+    }
+
     // 执行 prompt
+    let execError: string | undefined
     try {
       await session.agent.prompt(prompt)
       await session.agent.waitForIdle()
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      log.error(`Sub-agent error: ${message}`)
-      // 即使出错也返回已有内容
+      execError = err instanceof Error ? err.message : String(err)
+      log.error(`Sub-agent subSession=${session.subSessionId} error: ${execError}`)
     }
 
-    // 提取最终文本结果
-    const result = this.extractLastText(session.agent.state.messages)
+    // 若 abort 前还有未 finalize 的工具调用（理论上 listener 已处理，这里做兜底）
+    if (session.aborted && session.pendingToolCalls.size > 0) {
+      this.finalizeAbortedToolCalls(session.subSessionId)
+    }
 
-    // 提取子智能体 token 用量
-    const usage = this.extractUsage(session.agent.state.messages)
+    const abortedNote = t('agent.toolAborted') || 'Aborted by user.'
+    const result = session.aborted
+      ? abortedNote
+      : this.extractResult(session.agent.state.messages, execError)
+    const isError = !!execError || session.aborted
 
-    // 广播子智能体结束事件
-    onEvent({
-      type: 'subagent_end',
-      sessionId: parentSessionId,
-      subAgentId: session.taskId,
-      subAgentType: agentType.name,
+    // 广播子会话结束事件（agent_end 已由 forwardEvent 翻译广播；此事件用于右侧面板状态切换）
+    chatFrontendRegistry.broadcast({
+      type: 'sub_session_end',
+      sessionId: session.subSessionId,
+      parentSessionId,
       result,
-      usage: usage.total > 0 ? { ...usage, details: usage.details } : undefined
+      isError
     })
 
-    return { taskId: session.taskId, result }
+    // 保留 registry 条目与 session 直到用户显式关闭 sub-tab（IPC 触发 destroy）
+    return { result }
   }
 
   /** 中止指定父会话的所有子智能体 */
   abortAll(parentSessionId: string): void {
-    const map = this.sessions.get(parentSessionId)
-    if (!map) return
-    for (const [taskId, session] of map) {
-      log.info(`Aborting sub-agent task=${taskId}`)
-      session.agent.abort()
-      session.abortController.abort()
+    const ids = this.byParent.get(parentSessionId)
+    if (!ids) return
+    for (const id of ids) {
+      const s = this.sessions.get(id)
+      if (s) {
+        s.agent.abort()
+        s.abortController.abort()
+      }
     }
   }
 
-  /** 销毁指定父会话的所有子智能体 */
+  /** 销毁指定父会话的所有子智能体（清理 registry 与 session） */
   destroyAll(parentSessionId: string): void {
-    const map = this.sessions.get(parentSessionId)
-    if (!map) return
-    for (const [taskId, session] of map) {
-      log.info(`Destroying sub-agent task=${taskId}`)
-      session.agent.abort()
-      session.abortController.abort()
-      // 清理并行协调器
-      const parallelKey = `${parentSessionId}:sub:${taskId}`
-      parallelCoordinator.clearSession(parallelKey)
+    const ids = this.byParent.get(parentSessionId)
+    if (!ids) return
+    for (const id of [...ids]) {
+      this.destroy(id)
     }
-    this.sessions.delete(parentSessionId)
+  }
+
+  /** 销毁指定子会话（用户点 × 关闭子 Tab 触发） */
+  destroy(subSessionId: string): void {
+    const s = this.sessions.get(subSessionId)
+    if (!s) return
+    s.agent.abort()
+    s.abortController.abort()
+    const entry = transientSessionRegistry.get(subSessionId)
+    if (entry) {
+      this.removeSession(entry.parentSessionId, subSessionId)
+    }
+    transientSessionRegistry.unregister(subSessionId)
+  }
+
+  /** 查询是否存在指定子会话 */
+  has(subSessionId: string): boolean {
+    return this.sessions.has(subSessionId)
+  }
+
+  /**
+   * 把仍在飞的工具调用标记为"已被用户中止"。
+   * 在父 agent abort 或用户显式关闭子 tab 时调用：
+   * pi-agent-core 自身不会对进行中的 MCP 等外部工具主动取消 —— 它们会
+   * 在后台继续跑到完成并发送 tool_execution_end。为了让子会话面板上
+   * 的工具调用立刻呈现"已被用户中止"，我们主动广播 tool_end(isError=true)，
+   * 并在 finalizedToolCalls 里登记，后续到达的真实 tool_execution_end 会被忽略，
+   * 避免把状态改回"完成"。
+   */
+  private finalizeAbortedToolCalls(subSessionId: string): void {
+    const s = this.sessions.get(subSessionId)
+    if (!s) return
+    const abortedContent = t('agent.toolAborted') || 'Aborted by user.'
+    for (const [toolCallId, toolName] of s.pendingToolCalls) {
+      const messageId = `${subSessionId}-tc-${toolCallId}`
+      s.finalizedToolCalls.add(toolCallId)
+      chatFrontendRegistry.broadcast({
+        type: 'tool_end',
+        sessionId: subSessionId,
+        toolCallId,
+        toolName,
+        result: abortedContent,
+        isError: true,
+        messageId
+      })
+    }
+    s.pendingToolCalls.clear()
   }
 
   // ─── 内部方法 ──────────────────────────────────────────
@@ -260,17 +285,12 @@ class SubAgentManager {
   private createSession(
     parentSessionId: string,
     agentType: InProcessAgentType,
-    modelConfig: SubAgentModelConfig,
-    onEvent: (event: ChatEvent) => void
+    modelConfig: SubAgentModelConfig
   ): SubAgentSession {
-    const taskId = crypto.randomUUID()
-    const parallelKey = `${parentSessionId}:sub:${taskId}`
+    const subSessionId = `sub-${uuid()}`
 
-    // 子智能体的 ToolContext：继承 sessionId（沙箱配置），独立的 parallelSessionKey
     const subToolContext: ToolContext = {
-      sessionId: parentSessionId,
-      parallelSessionKey: parallelKey
-      // 不提供交互回调：子智能体不需要 requestApproval/requestUserInput/requestSshCredentials
+      sessionId: parentSessionId
     }
 
     const tools = buildSubAgentTools(subToolContext, agentType)
@@ -292,31 +312,86 @@ class SubAgentManager {
       getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined
     })
 
-    // 订阅子智能体事件，转发到父会话（带 subAgentId 标注）
+    // 订阅子智能体事件，翻译为标准 ChatEvent 并广播（sessionId=subSessionId）
     agent.subscribe((event: AgentEvent) => {
-      this.forwardEvent(event, parentSessionId, taskId, agentType.name, onEvent)
+      this.forwardEvent(event, subSessionId, agent)
     })
 
     const abortController = new AbortController()
     const session: SubAgentSession = {
-      taskId,
+      subSessionId,
       type: agentType,
       agent,
       abortController,
-      turnCount: 0
+      pendingToolCalls: new Map(),
+      finalizedToolCalls: new Set(),
+      aborted: false
     }
 
-    // 存入管理器
-    if (!this.sessions.has(parentSessionId)) {
-      this.sessions.set(parentSessionId, new Map())
+    this.sessions.set(subSessionId, session)
+    let set = this.byParent.get(parentSessionId)
+    if (!set) {
+      set = new Set()
+      this.byParent.set(parentSessionId, set)
     }
-    this.sessions.get(parentSessionId)!.set(taskId, session)
+    set.add(subSessionId)
 
-    log.info(`Created sub-agent task=${taskId} type=${agentType.name} parent=${parentSessionId}`)
+    log.info(
+      `Created sub-agent subSession=${subSessionId} type=${agentType.name} parent=${parentSessionId}`
+    )
     return session
   }
 
-  /** 从消息列表中提取 token 用量（与 agentEventHandler 中 handleAgentEnd 相同逻辑） */
+  private removeSession(parentSessionId: string, subSessionId: string): void {
+    this.sessions.delete(subSessionId)
+    const set = this.byParent.get(parentSessionId)
+    if (set) {
+      set.delete(subSessionId)
+      if (set.size === 0) this.byParent.delete(parentSessionId)
+    }
+  }
+
+  /** 提取子 Agent 最终文本结果，附加诊断信息 */
+  private extractResult(messages: AgentMessage[], execError?: string): string {
+    let lastText = ''
+    let lastStopReason = ''
+    let lastErrorMessage = ''
+    let assistantCount = 0
+    let toolUseCount = 0
+    for (const msg of messages) {
+      if (!isAssistantMessage(msg)) continue
+      assistantCount++
+      if (msg.stopReason) lastStopReason = msg.stopReason
+      if (msg.errorMessage) lastErrorMessage = msg.errorMessage
+      if (typeof msg.content === 'string') {
+        if (msg.content) lastText = msg.content
+      } else if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (part.type === 'text' && part.text) lastText = part.text
+          else if (part.type === 'toolCall') toolUseCount++
+        }
+      }
+    }
+
+    if (lastText) {
+      const notes: string[] = []
+      if (lastStopReason && lastStopReason !== 'stop') notes.push(`stopReason=${lastStopReason}`)
+      if (lastErrorMessage) notes.push(`error=${lastErrorMessage}`)
+      if (execError) notes.push(`execError=${execError}`)
+      return notes.length > 0 ? `${lastText}\n\n[Note] ${notes.join('; ')}` : lastText
+    }
+
+    const parts: string[] = []
+    parts.push(
+      `Sub-agent did not produce a final text response (${assistantCount} assistant message(s), ${toolUseCount} tool call(s)).`
+    )
+    if (lastStopReason) parts.push(`stopReason=${lastStopReason}.`)
+    if (lastErrorMessage) parts.push(`Model errorMessage: ${lastErrorMessage}.`)
+    if (execError) parts.push(`Execution threw: ${execError}.`)
+    return parts.join(' ')
+  }
+
+  /** 从 agent.state.messages 提取 token 总用量（用于 agent_end 事件） */
   private extractUsage(messages: AgentMessage[]): ChatTokenUsage {
     const details: ChatTokenUsage['details'] = []
     for (const m of messages) {
@@ -344,41 +419,89 @@ class SubAgentManager {
     return { ...totals, details }
   }
 
-  /** 从消息列表中提取最后一条 assistant 消息的文本内容 */
-  private extractLastText(messages: AgentMessage[]): string {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i]
-      if (msg.role !== 'assistant') continue
-      if (typeof msg.content === 'string') return msg.content
-      if (Array.isArray(msg.content)) {
-        const textParts = msg.content
-          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-          .map((p) => p.text)
-        if (textParts.length > 0) return textParts.join('\n')
-      }
-    }
-    return '(No result)'
-  }
+  /**
+   * 将 pi-agent-core 的 AgentEvent 翻译为 ShuviX ChatEvent 并广播。
+   * 以 subSessionId 作为 event.sessionId，让 renderer 以"正常会话"的方式渲染。
+   */
+  private forwardEvent(event: AgentEvent, subSessionId: string, agent: Agent): void {
+    const broadcast = chatFrontendRegistry.broadcast.bind(chatFrontendRegistry)
 
-  /** 转发子智能体事件到父会话（工具 + 文本 + 思考流式事件） */
-  private forwardEvent(
-    event: AgentEvent,
-    parentSessionId: string,
-    taskId: string,
-    subAgentType: string,
-    onEvent: (event: ChatEvent) => void
-  ): void {
+    if (event.type === 'agent_start') {
+      broadcast({ type: 'agent_start', sessionId: subSessionId })
+      return
+    }
+
+    if (event.type === 'agent_end') {
+      // 构造最终 assistant 消息（非持久化），让 renderer finishStreaming 落位
+      const lastAssistant = [...agent.state.messages].reverse().find(isAssistantMessage)
+      let content = ''
+      if (lastAssistant) {
+        if (typeof lastAssistant.content === 'string') {
+          content = lastAssistant.content
+        } else if (Array.isArray(lastAssistant.content)) {
+          const parts = lastAssistant.content
+            .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+            .map((p) => p.text)
+          content = parts.join('\n')
+        }
+      }
+      const usage = this.extractUsage(agent.state.messages)
+      const finalMsg = {
+        id: `${subSessionId}-final-${Date.now()}`,
+        sessionId: subSessionId,
+        role: 'assistant' as const,
+        type: 'text' as const,
+        content,
+        metadata: usage.total > 0 ? { usage } : null,
+        model: lastAssistant?.model || '',
+        createdAt: Date.now()
+      }
+      broadcast({
+        type: 'agent_end',
+        sessionId: subSessionId,
+        message: JSON.stringify(finalMsg),
+        usage: usage.total > 0 ? usage : undefined
+      })
+      return
+    }
+
+    if (event.type === 'message_update') {
+      const msgEvent = event.assistantMessageEvent
+      if (msgEvent.type === 'text_delta' && msgEvent.delta) {
+        broadcast({ type: 'text_delta', sessionId: subSessionId, delta: msgEvent.delta })
+      } else if (msgEvent.type === 'thinking_delta' && msgEvent.delta) {
+        broadcast({ type: 'thinking_delta', sessionId: subSessionId, delta: msgEvent.delta })
+      }
+      return
+    }
+
     if (event.type === 'tool_execution_start') {
-      onEvent({
-        type: 'subagent_tool_start',
-        sessionId: parentSessionId,
-        subAgentId: taskId,
-        subAgentType,
+      const s = this.sessions.get(subSessionId)
+      // 若会话已被 abort，则不再进入新的工具调用流转
+      if (s && !s.aborted) s.pendingToolCalls.set(event.toolCallId, event.toolName)
+      const messageId = `${subSessionId}-tc-${event.toolCallId}`
+      broadcast({
+        type: 'tool_start',
+        sessionId: subSessionId,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        summary: extractArgsSummary(event.args as Record<string, unknown>)
+        toolArgs: (event.args as Record<string, unknown>) ?? {},
+        messageId
       })
-    } else if (event.type === 'tool_execution_end') {
+      return
+    }
+
+    if (event.type === 'tool_execution_end') {
+      const s = this.sessions.get(subSessionId)
+      // 已被 finalizeAbortedToolCalls 标记的 toolCallId：吞掉真实的 end 事件，
+      // 避免覆盖 "已被用户中止" 为 "完成"。
+      if (s?.finalizedToolCalls.has(event.toolCallId)) {
+        s.finalizedToolCalls.delete(event.toolCallId)
+        return
+      }
+      if (s) s.pendingToolCalls.delete(event.toolCallId)
+
+      const messageId = `${subSessionId}-tc-${event.toolCallId}`
       const result = event.result
       const content = result?.content as Array<{ type: string; text?: string }> | undefined
       const text =
@@ -386,34 +509,16 @@ class SubAgentManager {
           ?.filter((c): c is { type: 'text'; text: string } => c.type === 'text')
           .map((c) => c.text)
           .join('\n') ?? ''
-      onEvent({
-        type: 'subagent_tool_end',
-        sessionId: parentSessionId,
-        subAgentId: taskId,
-        subAgentType,
+      broadcast({
+        type: 'tool_end',
+        sessionId: subSessionId,
         toolCallId: event.toolCallId,
         toolName: event.toolName ?? '',
-        result: text.length > 500 ? text.slice(0, 500) + '...' : text
+        result: text,
+        isError: result?.isError ?? false,
+        messageId
       })
-    } else if (event.type === 'message_update') {
-      const msgEvent = event.assistantMessageEvent
-      if (msgEvent.type === 'text_delta' && msgEvent.delta) {
-        onEvent({
-          type: 'subagent_text_delta',
-          sessionId: parentSessionId,
-          subAgentId: taskId,
-          subAgentType,
-          delta: msgEvent.delta
-        })
-      } else if (msgEvent.type === 'thinking_delta' && msgEvent.delta) {
-        onEvent({
-          type: 'subagent_thinking_delta',
-          sessionId: parentSessionId,
-          subAgentId: taskId,
-          subAgentType,
-          delta: msgEvent.delta
-        })
-      }
+      return
     }
   }
 }

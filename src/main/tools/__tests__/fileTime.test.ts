@@ -9,7 +9,7 @@ import {
   withFileLock,
   clearSession,
   _resetAll
-} from '../utils/fileTime'
+} from '../../utils/toolUtils/fileTime'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-filetime-test-' + Date.now())
 const TEST_FILE = join(TEST_DIR, 'test.txt')

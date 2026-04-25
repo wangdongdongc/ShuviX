@@ -1,46 +1,15 @@
 import type { AgentState } from '@mariozechner/pi-agent-core'
-import '../tools/allTools'
-import { getBuiltinToolEntries } from '../tools/registry'
-import { SkillTool } from '../tools/skill'
+import { getBuiltinToolEntries } from './toolRegistry'
+import { SkillTool } from './skillTool'
 import { subAgentRegistry, SubAgentTool, type SubAgentModelConfig } from '../subagent'
-import { BaseTool, type ToolContext } from '../tools/types'
+import { type ToolContext } from './toolContext'
 import { mcpService } from './mcpService'
-import { parallelCoordinator } from './parallelExecution'
-import { pluginRegistry } from './pluginRegistry'
-import { PluginToolAdapter } from './pluginToolAdapter'
-import type { ChatEvent } from '../frontend'
 
 type AnyAgentTool = AgentState['tools'][number]
 
 /** 子智能体构建上下文（仅主 Agent 有，子智能体不传此参数以防递归） */
 export interface SubAgentBuildContext {
   modelConfig: SubAgentModelConfig
-  broadcastEvent: (event: ChatEvent) => void
-}
-
-/** 包装单个工具的 execute 方法，接入并行执行协调器 */
-function wrapToolForParallel(sessionId: string, tool: AnyAgentTool): AnyAgentTool {
-  const originalExecute = tool instanceof BaseTool ? tool.execute.bind(tool) : tool.execute
-  // BaseTool 实例直接读取 preExecute；MCP 等外部工具无此方法
-  const preExecute = tool instanceof BaseTool ? tool.preExecute.bind(tool) : undefined
-  parallelCoordinator.registerExecutor(sessionId, tool.name, tool, originalExecute, preExecute)
-
-  return {
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      // 让出一个 microtask，等待 handleMessageEnd 注册 batch
-      await Promise.resolve()
-      return parallelCoordinator.execute(
-        sessionId,
-        toolCallId,
-        tool.name,
-        params,
-        signal,
-        onUpdate,
-        originalExecute
-      )
-    }
-  }
 }
 
 /** 根据启用列表构建工具子集（内置 + MCP + Skill 合并） */
@@ -58,20 +27,13 @@ export function buildTools(
     }
   }
 
-  // 插件贡献的工具
-  for (const { contribution } of pluginRegistry.getActivatedEntries()) {
-    for (const tool of contribution.tools ?? []) {
-      builtinAll[tool.name] = new PluginToolAdapter(tool, ctx)
-    }
-  }
-
   // 子智能体工具（仅主 Agent 有 SubAgentBuildContext 时注册，子智能体不传此参数，天然防递归）
   if (subAgentCtx) {
     for (const provider of subAgentRegistry.getAll()) {
       if (enabledTools.includes(provider.name)) {
         // 进程内子智能体需要模型配置
         provider.setModelConfig?.(subAgentCtx.modelConfig)
-        builtinAll[provider.name] = new SubAgentTool(ctx, provider, subAgentCtx.broadcastEvent)
+        builtinAll[provider.name] = new SubAgentTool(ctx, provider)
       }
     }
   }
@@ -93,7 +55,7 @@ export function buildTools(
     builtinAll['skill'] = new SkillTool(enabledSkillNames, projectPath)
   }
 
-  // 过滤内置 + 插件 + 子智能体工具（排除 skill: 和 mcp: 前缀项）
+  // 过滤内置 + 子智能体工具（排除 skill: 和 mcp: 前缀项）
   const tools = enabledTools
     .filter((name) => !name.startsWith('skill:') && !name.startsWith('mcp:'))
     .filter((name) => name in builtinAll)
@@ -107,5 +69,5 @@ export function buildTools(
   // 追加所有启用 MCP 服务器的工具
   tools.push(...mcpTools)
 
-  return tools.map((tool) => wrapToolForParallel(ctx.sessionId, tool))
+  return tools
 }

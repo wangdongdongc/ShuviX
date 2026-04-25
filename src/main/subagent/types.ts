@@ -1,13 +1,12 @@
 /**
  * 子智能体模块类型定义
  *
- * SubAgentProvider 接口 — 所有子智能体后端（进程内 / ACP / 远程）的统一抽象。
+ * SubAgentProvider 接口 — 所有子智能体后端的统一抽象。
  * 新增子智能体类型只需实现此接口。
  */
 
 import type { TSchema } from '@sinclair/typebox'
-import type { ChatEvent } from '../frontend'
-import type { ToolContext } from '../tools/types'
+import type { ToolContext } from '../services/toolContext'
 import type { ModelCapabilities } from '../types'
 
 // ─── 模型配置 ──────────────────────────────────────────
@@ -26,28 +25,24 @@ export interface SubAgentRunParams {
   /** 父级工具上下文（含 sessionId、requestUserInput 等回调） */
   ctx: ToolContext
   toolCallId: string
-  /** 用于恢复已有会话（explore 支持） */
-  taskId?: string
   prompt: string
   description: string
   signal?: AbortSignal
-  onEvent: (event: ChatEvent) => void
 }
 
-/** 子智能体执行结果 */
+/** 子智能体执行结果（仅最终文本；流式过程已通过 ChatEvent 广播） */
 export interface SubAgentRunResult {
-  taskId: string
   result: string
 }
 
 /**
  * SubAgentProvider — 子智能体后端抽象
  *
- * 每种执行后端（进程内 Agent、ACP 外部进程、远程 HTTP 等）实现此接口。
+ * 每种执行后端（进程内 Agent、远程 HTTP 等）实现此接口。
  * SubAgentTool 统一调用 provider.runTask() 处理 timeline 收集和事件装饰。
  */
 export interface SubAgentProvider {
-  /** 工具名（注册到 ALL_TOOL_NAMES 的标识符，如 'explore', 'claude-code'） */
+  /** 工具名（注册到 ALL_TOOL_NAMES 的标识符，如 'explore'） */
   readonly name: string
   /** 展示名（UI 显示） */
   readonly displayName: string
@@ -56,7 +51,7 @@ export interface SubAgentProvider {
   /** 工具参数 schema；为 undefined 时使用默认的 {description, prompt} schema */
   readonly parameterSchema?: TSchema
 
-  /** 注入模型配置（进程内子智能体需要，ACP 等外部子智能体不需要） */
+  /** 注入模型配置（进程内子智能体需要，外部后端可不实现） */
   setModelConfig?(config: SubAgentModelConfig): void
 
   /** 执行任务 */

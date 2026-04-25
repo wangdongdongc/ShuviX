@@ -6,18 +6,18 @@
 import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { Type } from '@sinclair/typebox'
+import { BaseTool } from '../services/baseTool'
 import {
-  BaseTool,
   resolveProjectConfig,
   assertSandboxRead,
   TOOL_ABORTED,
   type ToolContext
-} from './types'
+} from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { GrepToolDetails } from '../../shared/types/chatMessage'
-import { resolveToCwd } from './utils/pathUtils'
-import { rgSearch } from './utils/ripgrep'
-import { processToolOutput } from './utils/processToolOutput'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
+import { rgSearch } from '../utils/toolUtils/ripgrep'
+import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:grep')
@@ -170,7 +170,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   }
 }
 
-import { registerBuiltinTool } from './registry'
+import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'grep',
   group: 'ripgrep',

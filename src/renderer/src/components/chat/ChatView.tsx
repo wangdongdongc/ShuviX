@@ -14,7 +14,7 @@ import {
   type AssistantTextMessage
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
-import { usePreviewStore } from '../../stores/previewStore'
+import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
@@ -168,8 +168,8 @@ export function ChatView(): React.JSX.Element {
   const [archivedOffset, setArchivedOffset] = useState(0)
   const [archivedLoading, setArchivedLoading] = useState(false)
   const hasMoreArchived = archivedOffset < archivedCount
-  const togglePreview = usePreviewStore((s) => s.toggle)
-  const isPreviewOpen = usePreviewStore((s) => s.isOpen)
+  const toggleBrowser = useBrowserStore((s) => s.toggle)
+  const isBrowserOpen = useBrowserStore((s) => s.isOpen)
   const toggleSidebar = useSidebarStore((s) => s.toggle)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
 
@@ -398,7 +398,7 @@ export function ChatView(): React.JSX.Element {
             ))}
         </div>
 
-        {/* 右侧：侧边栏 + Preview 按钮 */}
+        {/* 右侧：侧边栏 + Browser 按钮 */}
         <div className="titlebar-no-drag flex items-center gap-0.5 flex-shrink-0">
           {window.api?.app?.platform !== 'web' && (
             <button
@@ -432,7 +432,7 @@ export function ChatView(): React.JSX.Element {
             </button>
           )}
           <button
-            onClick={togglePreview}
+            onClick={toggleBrowser}
             className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
           >
             <svg
@@ -447,7 +447,7 @@ export function ChatView(): React.JSX.Element {
             >
               <rect width="18" height="18" x="3" y="3" rx="2" />
               <path d="M15 3v18" />
-              {isPreviewOpen && (
+              {isBrowserOpen && (
                 <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />
               )}
             </svg>

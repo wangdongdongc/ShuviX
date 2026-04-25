@@ -68,7 +68,7 @@ vi.mock('../../logger', () => ({
 }))
 
 import { ListTool } from '../ls'
-import type { ToolContext } from '../types'
+import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
 

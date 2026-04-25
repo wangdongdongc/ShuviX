@@ -3,7 +3,7 @@ import i18next from 'i18next'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSidebarStore } from '../stores/sidebarStore'
-import { usePreviewStore } from '../stores/previewStore'
+import { useBrowserStore } from '../stores/browserStore'
 import { loadPanelLayout } from '../stores/panelLayout'
 import { useUpdateStore } from '../stores/updateStore'
 
@@ -27,7 +27,7 @@ export function useAppInit(): void {
         window.api.settings.getAll(),
         window.api.settings.getKnownKeys(),
         window.api.project.getKnownFields(),
-        window.api.plugin.toolPresentations()
+        window.api.tools.presentations()
       ])
       lap('settings + meta + toolPresentations (parallel)')
       useSettingsStore.getState().loadSettings(settings)
@@ -84,8 +84,8 @@ export function useAppInit(): void {
       loadPanelLayout().then((layout) => {
         if (layout.sidebarWidth) useSidebarStore.setState({ width: layout.sidebarWidth })
         if (layout.sidebarOpen === false) useSidebarStore.setState({ isOpen: false })
-        if (layout.previewWidth) usePreviewStore.setState({ width: layout.previewWidth })
-        // preview open 状态不自动恢复（preview 依赖运行时 server，重启后需重新启动）
+        if (layout.browserWidth) useBrowserStore.setState({ width: layout.browserWidth })
+        // browser open 状态不自动恢复（browser 依赖运行时 server，重启后需重新启动）
       })
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口

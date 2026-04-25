@@ -22,6 +22,8 @@ export interface McpServer {
   metadata: string
   /** 是否启用 */
   isEnabled: number
+  /** 是否为内置 server（随产品发布，不可删除；除 env/isEnabled 外其他字段只读） */
+  isBuiltin: number
   /** 上次连接时发现的工具列表 JSON（持久化缓存） */
   cachedTools: string
   createdAt: number
