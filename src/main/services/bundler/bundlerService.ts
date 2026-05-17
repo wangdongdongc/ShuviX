@@ -8,6 +8,7 @@
  */
 
 import * as esbuild from 'esbuild-wasm'
+import * as childProcess from 'child_process'
 import { resolve, dirname } from 'path'
 import { existsSync, readFileSync, statSync } from 'fs'
 import type { Logger } from './types'
@@ -100,8 +101,33 @@ export class BundlerService {
     this.initPromise = (async () => {
       this.log.info('Initializing esbuild-wasm')
 
-      // Node.js 环境下 esbuild-wasm 自动定位 wasm 二进制，无需指定 wasmURL/wasmModule
-      await esbuild.initialize({})
+      // esbuild-wasm 硬编码 spawn("node", [bin/esbuild]) 启动 WASM worker。
+      // 打包后的 Electron 应用 PATH 中没有 node，会 ENOENT。
+      // 临时把 "node" 重定向到 Electron 自身（ELECTRON_RUN_AS_NODE=1）作为 Node 运行。
+      const cp = childProcess as { spawn: typeof childProcess.spawn }
+      const originalSpawn = cp.spawn
+      cp.spawn = ((
+        command: string,
+        args?: readonly string[] | childProcess.SpawnOptions,
+        options?: childProcess.SpawnOptions
+      ) => {
+        if (command === 'node' && Array.isArray(args)) {
+          const opts = options ?? {}
+          const env = { ...(opts.env ?? process.env), ELECTRON_RUN_AS_NODE: '1' }
+          return originalSpawn(process.execPath, args, { ...opts, env })
+        }
+        return (originalSpawn as (...a: unknown[]) => childProcess.ChildProcess)(
+          command,
+          args,
+          options
+        )
+      }) as typeof childProcess.spawn
+
+      try {
+        await esbuild.initialize({})
+      } finally {
+        cp.spawn = originalSpawn
+      }
 
       this.initialized = true
       this.log.info('esbuild-wasm initialized')
