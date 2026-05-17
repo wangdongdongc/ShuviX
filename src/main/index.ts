@@ -14,7 +14,6 @@ import {
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
-import { dockerManager } from './services/dockerManager'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -35,9 +34,10 @@ import { destroyTerminalsByWindow } from './services/terminalService'
 // pglite / pyodide: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
 import { disposePglite } from './services/pglite'
 import { disposePyodide } from './services/pyodide'
-import { projectManager } from './services/bundler'
-import { createBrowserView, destroyBrowserView } from './services/browser'
+import { createBrowserView, destroyBrowserView, initBrowserSession } from './services/browser'
 import { widgetServer } from './services/widget'
+import { cliServer } from './services/cliServer'
+import { closeAllWatchers } from './services/filesWatcherService'
 import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
@@ -378,6 +378,8 @@ function createWindow(): void {
   // 注册 Electron 主窗口为默认前端
   chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
 
+  // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
+  initBrowserSession()
   // 创建浏览器面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
   createBrowserView(mainWindow)
 
@@ -532,7 +534,8 @@ app.whenReady().then(async () => {
     return net.fetch(`file://${filePath}`)
   })
 
-  // 允许渲染进程请求麦克风权限（语音输入）
+  // 允许渲染进程请求麦克风权限（语音输入）。
+  // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     if (permission === 'media') {
       callback(true)
@@ -594,6 +597,11 @@ app.whenReady().then(async () => {
     log.error(`telegram autoStartBots failed: ${err}`)
   })
 
+  // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
+  cliServer.start().catch((err) => {
+    log.error(`cliServer.start failed: ${err}`)
+  })
+
   measure('createWindow', () => createWindow())
 
   app.on('activate', () => {
@@ -605,15 +613,15 @@ app.whenReady().then(async () => {
 // 应用退出前清理
 app.on('before-quit', () => {
   destroyBrowserView()
-  dockerManager.destroyAll().catch(() => {})
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
   telegramService.stopAll().catch(() => {})
   widgetServer.dispose()
-  projectManager.disposeAll()
+  cliServer.stop()
   disposePglite()
   disposePyodide()
+  closeAllWatchers()
 })
 
 // macOS 下关闭窗口不退出应用

@@ -5,7 +5,7 @@
  * 工具集、系统提示词均由用户配置决定。
  */
 
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import type {
   SubAgentModelConfig,
   SubAgentProvider,

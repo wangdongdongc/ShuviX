@@ -1,7 +1,26 @@
 import { useCallback, useEffect, useRef, useState, startTransition } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Globe } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  RotateCw,
+  ExternalLink,
+  Globe,
+  TriangleAlert,
+  X
+} from 'lucide-react'
 import { useBrowserStore } from '../../stores/browserStore'
+
+interface LoadError {
+  errorCode: number
+  errorDescription: string
+  url: string
+}
+
+/** Chromium net error code 范围：CERT_* 在 -200 ~ -211 */
+function isCertError(code: number): boolean {
+  return code <= -200 && code >= -211
+}
 
 /**
  * Browser 侧边面板 — 右侧浏览器区
@@ -23,6 +42,7 @@ export function BrowserPanel(): React.JSX.Element {
   const [inputUrl, setInputUrl] = useState(url)
   const [isLoading, setIsLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState(0)
+  const [loadError, setLoadError] = useState<LoadError | null>(null)
 
   /** 跟踪当前 WebContentsView 的实际 URL，防止重复导航 */
   const viewUrlRef = useRef('')
@@ -41,8 +61,9 @@ export function BrowserPanel(): React.JSX.Element {
 
   const isBlank = url === 'about:blank'
 
-  // WebContentsView 是否应该可见
-  const shouldShowView = isOpen && activeTab === 'browser' && !isBlank && !hasDialogOverlay
+  // WebContentsView 是否应该可见（错误态时让 WebContentsView 让位给覆盖层）
+  const shouldShowView =
+    isOpen && activeTab === 'browser' && !isBlank && !hasDialogOverlay && !loadError
 
   // ====== WebContentsView 导航 ======
 
@@ -60,6 +81,7 @@ export function BrowserPanel(): React.JSX.Element {
     const cleanups = [
       window.api.browserView.onDidStartLoading((navUrl: string) => {
         setIsLoading(true)
+        setLoadError(null)
         viewUrlRef.current = navUrl
         startTransition(() => setInputUrl(navUrl))
       }),
@@ -69,6 +91,11 @@ export function BrowserPanel(): React.JSX.Element {
       }),
       window.api.browserView.onDidFinishLoad(() => {
         setIsLoading(false)
+        setLoadError(null)
+      }),
+      window.api.browserView.onDidFailLoad((info) => {
+        setIsLoading(false)
+        setLoadError(info)
       })
     ]
     return () => cleanups.forEach((c) => c())
@@ -167,11 +194,29 @@ export function BrowserPanel(): React.JSX.Element {
     setIsLoading(false)
   }, [])
 
+  const handleRetry = useCallback(() => {
+    if (!loadError) return
+    setLoadError(null)
+    setIsLoading(true)
+    viewUrlRef.current = ''
+    window.api.browserView.navigate(loadError.url || url)
+  }, [loadError, url])
+
   const handleOpenExternal = useCallback(() => {
     if (url && url !== 'about:blank') {
       window.open(url, '_blank')
     }
   }, [url])
+
+  const handleClose = useCallback(() => {
+    window.api.browserView.stop()
+    window.api.browserView.navigate('about:blank')
+    viewUrlRef.current = 'about:blank'
+    setUrl('about:blank')
+    setInputUrl('')
+    setIsLoading(false)
+    setLoadError(null)
+  }, [setUrl])
 
   const btnClass =
     'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
@@ -219,11 +264,16 @@ export function BrowserPanel(): React.JSX.Element {
           </div>
         </form>
 
-        {/* 在浏览器中打开 */}
+        {/* 在浏览器中打开 / 关闭当前页 */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
           <button onClick={handleOpenExternal} className={btnClass} title="Open in browser">
             <ExternalLink size={11} />
           </button>
+          {!isBlank && (
+            <button onClick={handleClose} className={btnClass} title={t('browser.close')}>
+              <X size={12} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -243,6 +293,35 @@ export function BrowserPanel(): React.JSX.Element {
             )}
             {/* WebContentsView 占位区域 — 主进程的 WebContentsView 叠放在此 div 上方 */}
             <div ref={placeholderRef} className="w-full h-full" />
+            {/* 加载错误覆盖层 — WebContentsView 已隐藏，覆盖在 placeholder 上 */}
+            {loadError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center px-6 bg-bg-primary">
+                <TriangleAlert size={36} className="text-amber-500/80 mb-3" />
+                <h2 className="text-sm font-medium text-text-primary mb-2">
+                  {t('browser.error.title')}
+                </h2>
+                <p className="text-[11px] text-text-secondary mb-1 text-center">
+                  {t('browser.error.code', {
+                    code: loadError.errorCode,
+                    description: loadError.errorDescription
+                  })}
+                </p>
+                {isCertError(loadError.errorCode) && (
+                  <p className="text-[11px] text-amber-500/90 mb-1 text-center max-w-md">
+                    {t('browser.error.certHint')}
+                  </p>
+                )}
+                <p className="text-[10px] text-text-tertiary mb-4 break-all text-center max-w-md">
+                  {loadError.url}
+                </p>
+                <button
+                  onClick={handleRetry}
+                  className="px-3 py-1 rounded-md text-[11px] bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+                >
+                  {t('browser.error.retry')}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -63,7 +63,8 @@ import type { WorkerResponse } from '../sqlWorker'
 const workerManager = new PgliteWorkerManager()
 
 // Patch worker path to use built output in test environment
-const WORKER_PATH = resolve(__dirname, '../../../../out/main/sqlWorker.js')
+// __dirname = src/main/services/pglite/__tests__ → repo root 是 5 个 ..
+const WORKER_PATH = resolve(__dirname, '../../../../../out/main/sqlWorker.js')
 vi.spyOn(
   workerManager as unknown as { getWorkerPath: () => string },
   'getWorkerPath'

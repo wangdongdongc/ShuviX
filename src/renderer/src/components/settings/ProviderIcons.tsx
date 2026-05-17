@@ -139,6 +139,64 @@ function OpenCodeIcon(): React.JSX.Element {
   )
 }
 
+function FireworksIcon(): React.JSX.Element {
+  return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2l1.2 5.3L18.5 8.5l-5.3 1.2L12 15l-1.2-5.3L5.5 8.5l5.3-1.2L12 2zm6.5 12l.8 2.7 2.7.8-2.7.8-.8 2.7-.8-2.7-2.7-.8 2.7-.8.8-2.7zm-13 0l.8 2.7 2.7.8-2.7.8-.8 2.7-.8-2.7L2 17.5l2.7-.8L5.5 14z" />
+    </svg>
+  )
+}
+
+function DeepSeekIcon(): React.JSX.Element {
+  return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21.5 9.5c-.6.4-1.5.5-2.2.2.5-.6.7-1.4.6-2.2-.3.7-1 1.2-1.7 1.3-1.5.2-3 1-3.8 2.4l-.4.7-3.5-2.3c-.4-.3-1-.1-1.1.4l-.1.5-2.7-.7c-.4-.1-.7.4-.4.7l1.6 1.7-2.8 2.6c-.4.4-.1 1 .4 1H7c-.7 1.1-.4 2.6.7 3.3 1 .7 2.4.5 3.1-.4l1.3-1.6 1.4 1.6c.6.7 1.6.9 2.4.4.8-.5 1.1-1.5.8-2.3-.2-.5-.6-1-1.1-1.2 1.4-.4 2.6-1.4 3.2-2.7.4-.9 1.4-1.5 2.4-1.5 0-.7-.3-1.4-.8-1.9zm-5.7 4.3a.7.7 0 1 1 0-1.4.7.7 0 0 1 0 1.4z" />
+    </svg>
+  )
+}
+
+function MoonshotIcon(): React.JSX.Element {
+  return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19.5 14.5A8 8 0 1 1 9.5 4.5a6.2 6.2 0 0 0 10 10z" />
+    </svg>
+  )
+}
+
+function XiaomiIcon(): React.JSX.Element {
+  return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M5 3h14a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3zm1 5.5v7H7.6v-4.5l1.4 3h.6l1.4-3v4.5h1.6v-7H10.6l-1.3 2.8L8 8.5H6zm10.4 0v7H18v-7h-1.6z" />
+    </svg>
+  )
+}
+
+function CloudflareWorkersIcon(): React.JSX.Element {
+  return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17.5 18H7a4.5 4.5 0 0 1-.7-8.94A6 6 0 0 1 18 11.06 3.5 3.5 0 0 1 17.5 18z" />
+    </svg>
+  )
+}
+
+function CloudflareGatewayIcon(): React.JSX.Element {
+  return (
+    <svg
+      width={S}
+      height={S}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M17.5 14H7a4.5 4.5 0 0 1-.7-8.94A6 6 0 0 1 18 7.06 3.5 3.5 0 0 1 17.5 14z" />
+      <path d="M4 19h13m0 0l-3-2.5M17 19l-3 2.5" />
+    </svg>
+  )
+}
+
 /** 自定义供应商 — AI 星芒图标 */
 function DefaultProviderIcon(): React.JSX.Element {
   return (
@@ -163,7 +221,14 @@ const PROVIDER_ICONS: Record<string, () => React.JSX.Element> = {
   huggingface: HuggingFaceIcon,
   'kimi-coding': KimiIcon,
   zai: ZAIIcon,
-  opencode: OpenCodeIcon
+  opencode: OpenCodeIcon,
+  fireworks: FireworksIcon,
+  deepseek: DeepSeekIcon,
+  moonshotai: MoonshotIcon,
+  'moonshotai-cn': MoonshotIcon,
+  xiaomi: XiaomiIcon,
+  'cloudflare-workers-ai': CloudflareWorkersIcon,
+  'cloudflare-ai-gateway': CloudflareGatewayIcon
 }
 
 export function ProviderIcon({ name }: { name: string }): React.JSX.Element {

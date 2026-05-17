@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, ImagePlus, Mic, X, Archive } from 'lucide-react'
+import { Send, Square, Mic, X, Archive } from 'lucide-react'
 import { TokenBadge } from './InlineTokenBadge'
 import { makeTokenMarker, expandCommandTemplate } from '../../../../shared/utils/inlineTokens'
 import type { InlineToken } from '../../../../shared/types/chatMessage'
@@ -12,10 +12,8 @@ import {
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ModelPicker } from './ModelPicker'
-import { ThinkingPicker } from './ThinkingPicker'
 import { ToolPicker } from './ToolPicker'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
@@ -58,10 +56,7 @@ export function InputArea(): React.JSX.Element {
       []
     )
   )
-  const { projectPath } = useSessionMeta()
-
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
 
   // 工具栏宽度不足时隐藏上下文用量
@@ -76,7 +71,7 @@ export function InputArea(): React.JSX.Element {
     return () => ro.disconnect()
   }, [])
 
-  const { isDragging, handleImageFiles, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
 
   // 语音输入
@@ -206,7 +201,9 @@ export function InputArea(): React.JSX.Element {
     if (slashChip) {
       // 芯片模式：从芯片中获取模板并展开
       const uid = 't0'
-      const expandedText = expandCommandTemplate(slashChip.template, rawText)
+      const expandedText = expandCommandTemplate(slashChip.template, rawText, {
+        sessionId: activeSessionId
+      })
       const token: InlineToken = {
         type: 'cmd',
         id: slashChip.commandId,
@@ -225,7 +222,9 @@ export function InputArea(): React.JSX.Element {
       if (cmd) {
         autoEnableRequiredTools(cmd.requiredTools)
         const uid = 't0'
-        const expandedText = expandCommandTemplate(cmd.template, args)
+        const expandedText = expandCommandTemplate(cmd.template, args, {
+          sessionId: activeSessionId
+        })
         const token: InlineToken = {
           type: 'cmd',
           id: cmd.commandId,
@@ -368,7 +367,7 @@ export function InputArea(): React.JSX.Element {
       onDrop={handleDrop}
     >
       <div className="max-w-3xl mx-auto p-2">
-        <div className="border border-border-secondary/40 bg-bg-secondary/50 shadow-sm rounded-lg">
+        <div className="border border-border-secondary/40 bg-bg-primary shadow-sm rounded-lg">
           {/* 拖拽调节手柄 */}
           <div
             onMouseDown={handleResizeStart}
@@ -407,149 +406,6 @@ export function InputArea(): React.JSX.Element {
                 selectedIndex={slash.selectedIndex}
               />
             )}
-
-            {/* 底部工具栏 */}
-            <div
-              ref={toolbarRef}
-              className="absolute left-2 right-2 bottom-1.5 z-10 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap"
-            >
-              {/* Pickers 组：不可收缩 */}
-              <div className="flex-shrink-0 flex items-center gap-1.5">
-                <ModelPicker readonly={!canEdit} />
-                {canEdit && <ThinkingPicker />}
-                {canEdit && <ToolPicker />}
-              </div>
-
-              {/* 分隔线 */}
-              {(modelSupportsVision ||
-                (showToolbarExtras && (maxContextTokens > 0 || projectPath))) && (
-                <span className="flex-shrink-0 h-3 w-px bg-border-secondary" />
-              )}
-
-              {/* 图片上传按钮（仅当模型支持 vision 时显示） */}
-              {modelSupportsVision && (
-                <>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex-shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-400/70 hover:text-emerald-400 transition-colors"
-                    title={t('input.uploadImage')}
-                  >
-                    <ImagePlus size={12} />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) void handleImageFiles(e.target.files)
-                      e.target.value = ''
-                    }}
-                  />
-                </>
-              )}
-
-              {/* 上下文用量指示器（空间不足时隐藏） */}
-              {showToolbarExtras && maxContextTokens > 0 && (
-                <span className="relative inline-flex items-center group/token">
-                  <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
-                    {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
-                    {' / '}
-                    {formatTokenCount(maxContextTokens)}
-                  </span>
-                  {/* 悬浮 tooltip：详细用量 */}
-                  <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
-                    <div className="text-[11px] text-text-primary">
-                      {t('input.contextUsage', {
-                        used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-',
-                        max: maxContextTokens.toLocaleString()
-                      })}
-                    </div>
-                  </div>
-                </span>
-              )}
-
-              {/* 右侧弹性空白 → 将按钮推到最右 */}
-              <span className="flex-1" />
-
-              {/* Compact + Mic + Send/Stop 按钮 */}
-              <div className="flex items-center gap-0.5">
-                {assistantMsgCount >= 2 && !isStreaming && !isCompacting && (
-                  <button
-                    onClick={() => activeSessionId && window.api.compact.start(activeSessionId)}
-                    className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
-                    title={t('compact.button')}
-                  >
-                    <Archive size={14} />
-                  </button>
-                )}
-                {voice.isAvailable && !isStreaming && (
-                  <button
-                    onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
-                    disabled={!activeSessionId}
-                    className={`p-1 rounded transition-colors ${
-                      voice.isRecording
-                        ? 'text-error hover:bg-error/10'
-                        : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
-                    }`}
-                    title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
-                  >
-                    {voice.isRecording ? (
-                      <div className="flex items-center gap-1">
-                        <span className="relative flex h-2.5 w-2.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
-                        </span>
-                        <span className="text-[10px] tabular-nums">
-                          {Math.floor(voice.duration / 60)}:
-                          {String(voice.duration % 60).padStart(2, '0')}
-                        </span>
-                      </div>
-                    ) : (
-                      <Mic size={14} />
-                    )}
-                  </button>
-                )}
-
-                {isStreaming ? (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={handleSteer}
-                      disabled={!inputText.trim()}
-                      className={`p-1.5 rounded-lg transition-colors ${
-                        inputText.trim()
-                          ? 'bg-warning text-white hover:bg-warning/80'
-                          : 'text-text-tertiary cursor-not-allowed'
-                      }`}
-                      title={t('input.steer')}
-                    >
-                      <Send size={14} />
-                    </button>
-                    <button
-                      onClick={handleAbort}
-                      className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
-                      title={t('input.stopGen')}
-                    >
-                      <Square size={14} fill="currentColor" />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={handleSend}
-                    disabled={!canSend}
-                    className={`p-1.5 rounded-lg transition-colors ${
-                      canSend
-                        ? 'bg-accent text-white hover:bg-accent-hover'
-                        : 'text-text-tertiary cursor-not-allowed'
-                    }`}
-                    title={t('input.send')}
-                  >
-                    <Send size={14} />
-                  </button>
-                )}
-              </div>
-            </div>
 
             {/* 斜杠命令芯片：绝对定位在 textarea 首行，text-indent 让出空间 */}
             {slashChip && (
@@ -599,6 +455,83 @@ export function InputArea(): React.JSX.Element {
               className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
             />
 
+            {/* Compact + Mic + Send/Stop 按钮（保留在输入框右下角） */}
+            <div className="absolute right-2 bottom-1.5 z-10 flex items-center gap-0.5">
+              {assistantMsgCount >= 1 && !isStreaming && !isCompacting && (
+                <button
+                  onClick={() => activeSessionId && window.api.compact.start(activeSessionId)}
+                  className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+                  title={t('compact.button')}
+                >
+                  <Archive size={14} />
+                </button>
+              )}
+              {voice.isAvailable && !isStreaming && (
+                <button
+                  onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
+                  disabled={!activeSessionId}
+                  className={`p-1 rounded transition-colors ${
+                    voice.isRecording
+                      ? 'text-error hover:bg-error/10'
+                      : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
+                  }`}
+                  title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
+                >
+                  {voice.isRecording ? (
+                    <div className="flex items-center gap-1">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
+                      </span>
+                      <span className="text-[10px] tabular-nums">
+                        {Math.floor(voice.duration / 60)}:
+                        {String(voice.duration % 60).padStart(2, '0')}
+                      </span>
+                    </div>
+                  ) : (
+                    <Mic size={14} />
+                  )}
+                </button>
+              )}
+
+              {isStreaming ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handleSteer}
+                    disabled={!inputText.trim()}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      inputText.trim()
+                        ? 'bg-warning text-white hover:bg-warning/80'
+                        : 'text-text-tertiary cursor-not-allowed'
+                    }`}
+                    title={t('input.steer')}
+                  >
+                    <Send size={14} />
+                  </button>
+                  <button
+                    onClick={handleAbort}
+                    className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
+                    title={t('input.stopGen')}
+                  >
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  className={`p-1.5 rounded-lg transition-colors ${
+                    canSend
+                      ? 'bg-accent text-white hover:bg-accent-hover'
+                      : 'text-text-tertiary cursor-not-allowed'
+                  }`}
+                  title={t('input.send')}
+                >
+                  <Send size={14} />
+                </button>
+              )}
+            </div>
+
             {/* 语音输入错误提示 */}
             {voice.error && (
               <div className="absolute right-2 bottom-12 z-20 rounded-md border border-error/30 bg-error/10 px-2 py-1 text-[11px] text-error whitespace-nowrap">
@@ -606,6 +539,49 @@ export function InputArea(): React.JSX.Element {
               </div>
             )}
           </div>
+        </div>
+
+        {/* 外置工具栏（位于对话框下方） */}
+        <div
+          ref={toolbarRef}
+          className="mt-1.5 px-1 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap"
+        >
+          {/* Pickers 组：不可收缩 */}
+          <div className="flex-shrink-0 flex items-center gap-1.5">
+            <ModelPicker readonly={!canEdit} />
+            {canEdit && <ToolPicker />}
+          </div>
+
+          {/* 弹性空白 → 把上下文指示器推到最右 */}
+          <span className="flex-1" />
+
+          {/* 上下文用量指示器（空间不足时隐藏，位于右侧） */}
+          {showToolbarExtras && (maxContextTokens > 0 || usedContextTokens !== null) && (
+            <span className="relative inline-flex items-center group/token">
+              <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
+                {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
+                {maxContextTokens > 0 && (
+                  <>
+                    {' / '}
+                    {formatTokenCount(maxContextTokens)}
+                  </>
+                )}
+              </span>
+              {/* 悬浮 tooltip：详细用量 */}
+              <div className="pointer-events-none absolute right-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
+                <div className="text-[11px] text-text-primary">
+                  {maxContextTokens > 0
+                    ? t('input.contextUsage', {
+                        used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-',
+                        max: maxContextTokens.toLocaleString()
+                      })
+                    : t('input.contextUsageUnknownMax', {
+                        used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-'
+                      })}
+                </div>
+              </div>
+            </span>
+          )}
         </div>
       </div>
     </div>

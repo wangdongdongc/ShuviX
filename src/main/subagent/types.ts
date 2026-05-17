@@ -5,7 +5,7 @@
  * 新增子智能体类型只需实现此接口。
  */
 
-import type { TSchema } from '@sinclair/typebox'
+import type { TSchema } from 'typebox'
 import type { ToolContext } from '../services/toolContext'
 import type { ModelCapabilities } from '../types'
 

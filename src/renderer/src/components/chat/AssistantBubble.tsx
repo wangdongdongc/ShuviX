@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import { SystemNoticeCard } from './SystemNoticeCard'
 import { copyToClipboard } from '../../utils/clipboard'
-import assistantAvatar from '../../assets/ngnl_xiubi_color_mini.jpg'
+import { ProviderIcon } from '../settings/ProviderIcons'
 import { CodeBlock } from './CodeBlock'
 import { StepBlock } from './StepBlock'
 import { ToolCallBlock } from './ToolCallBlock'
@@ -65,6 +65,9 @@ export const AssistantBubble = memo(function AssistantBubble({
   const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
+  const sessionProvider = useChatStore(
+    (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.provider ?? ''
+  )
 
   const displayContent = isStreaming ? storeStreamingContent : msg.content
   const thinking = (isStreaming ? storeStreamingThinking : null) || msg.metadata?.thinking || null
@@ -81,9 +84,9 @@ export const AssistantBubble = memo(function AssistantBubble({
     <div className="group relative flex gap-3 pl-10 pr-4 py-3">
       {/* 时间线 */}
       <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
-      {/* 头像节点 */}
-      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 rounded-full overflow-hidden ring-2 ring-bg-primary z-10">
-        <img src={assistantAvatar} alt="assistant" className="w-full h-full object-cover" />
+      {/* 提供商图标节点 */}
+      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full bg-bg-primary ring-2 ring-bg-primary text-text-secondary z-10">
+        <ProviderIcon name={sessionProvider} />
       </div>
 
       {/* 内容 */}

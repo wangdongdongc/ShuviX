@@ -9,7 +9,9 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
+import i18next from 'i18next'
 import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
+import type { SlashCommand } from '../../shared/types/slashCommand'
 import log from 'electron-log/main'
 import { getDefaultSkillsDir, getBuiltinSkillsDir } from '../utils/paths'
 
@@ -272,6 +274,45 @@ class SkillService {
    */
   findEnabled(projectPath?: string): Skill[] {
     return this.findAll(projectPath).filter((s) => s.isEnabled)
+  }
+
+  /**
+   * 把已启用的 Skill 适配成 SlashCommand 形态，供 commandService 合入命令池。
+   * 模板 = 原 SKILL.md 正文（已剥过 frontmatter）+ "Base directory" 头 + 静态替换 ${CLAUDE_SKILL_DIR}。
+   * ${CLAUDE_SESSION_ID} 留到前端 expand 时替换（renderer 知道 activeSessionId）。
+   *
+   * commandId 直接用 skill.name（已经处理过命名空间，比如外部目录的 dirName:name）。
+   *
+   * 内置 skill 的 description 会被 i18n key `command.skills.<rawName>` 覆盖（若已配置），
+   * 因为 SKILL.md frontmatter 的 description 通常含大量触发关键词，不适合作 popover 文案。
+   */
+  findEnabledAsCommands(projectPath?: string): SlashCommand[] {
+    return this.findEnabled(projectPath).map((s) => {
+      const baseDir = s.basePath
+      const normalizedDir = process.platform === 'win32' ? baseDir.replace(/\\/g, '/') : baseDir
+      const body = s.content.trim()
+      const template = `Base directory for this skill: ${normalizedDir}\n\n${body}`.replaceAll(
+        '${CLAUDE_SKILL_DIR}',
+        normalizedDir
+      )
+      // 内置 skill 用单独维护的多语言短描述覆盖（仅显示用，不影响注入正文）
+      let description = s.description
+      if (s.source === 'builtin') {
+        const rawName = s.dirName ? s.name.slice(s.dirName.length + 1) : s.name
+        const key = `command.skills.${rawName}`
+        if (i18next.exists(key)) {
+          description = i18next.t(key)
+        }
+      }
+      return {
+        commandId: s.name,
+        name: s.name,
+        description,
+        template,
+        filePath: join(baseDir, 'SKILL.md'),
+        kind: 'skill'
+      }
+    })
   }
 
   /**

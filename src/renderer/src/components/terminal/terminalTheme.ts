@@ -5,7 +5,7 @@ export function resolveTerminalTheme(): ITheme {
   const s = getComputedStyle(document.documentElement)
   const v = (name: string): string => s.getPropertyValue(name).trim()
 
-  const bgSecondary = v('--theme-bg-secondary') || '#161b22'
+  const bgPrimary = v('--theme-bg-primary') || '#0d1117'
   const textPrimary = v('--theme-text-primary') || '#e6edf3'
   const textSecondary = v('--theme-text-secondary') || '#8b949e'
   const textTertiary = v('--theme-text-tertiary') || '#6e7681'
@@ -13,16 +13,16 @@ export function resolveTerminalTheme(): ITheme {
   const accent = v('--theme-accent') || '#58a6ff'
 
   const shared = {
-    background: bgSecondary,
+    background: bgPrimary,
     foreground: textPrimary,
     cursor: textSecondary,
-    cursorAccent: bgSecondary,
+    cursorAccent: bgPrimary,
     scrollbarSliderBackground: borderPrimary + '80',
     scrollbarSliderHoverBackground: textTertiary + 'aa',
     scrollbarSliderActiveBackground: textTertiary
   }
 
-  if (isLightColor(bgSecondary)) {
+  if (isLightColor(bgPrimary)) {
     return {
       ...shared,
       selectionBackground: accent + '30',
@@ -50,7 +50,7 @@ export function resolveTerminalTheme(): ITheme {
     ...shared,
     selectionBackground: accent + '40',
     selectionForeground: textPrimary,
-    black: bgSecondary,
+    black: bgPrimary,
     red: '#f97583',
     green: '#85e89d',
     yellow: '#ffea7f',

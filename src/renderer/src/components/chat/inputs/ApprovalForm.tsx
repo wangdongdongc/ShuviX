@@ -67,10 +67,10 @@ export function ApprovalForm({
   const { t } = useTranslation()
   const { toolName, command, description, pathIsDirectory } = request
 
-  // 命令类(bash/terminal/ssh):显示拆解后的多个 patterns(后端拉取);
+  // 命令类(bash/ssh):显示拆解后的多个 patterns(后端拉取);
   // 路径类(read/write/edit/...):显示单元素 [absolutePath];
   // 二者统一渲染为预览块,允许用户在按下"允许并记住"前看到具体将写入 allowList 的内容
-  const isCommandApproval = toolName === 'bash' || toolName === 'terminal' || toolName === 'ssh'
+  const isCommandApproval = toolName === 'bash' || toolName === 'ssh'
   const isPathApproval = !isCommandApproval
   const canRemember = !!command
 

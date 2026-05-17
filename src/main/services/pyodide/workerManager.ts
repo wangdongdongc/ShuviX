@@ -8,7 +8,10 @@ import { resolve, join } from 'path'
 import { existsSync } from 'fs'
 import { resolveProjectConfig } from '../toolContext'
 import { createLogger } from '../../logger'
-import type { MountConfig, WorkerResponse } from './pythonWorker'
+import type { ExecuteMessage, MountConfig, WorkerResponse } from './pythonWorker'
+
+/** workerManager 对外暴露的 execute 入参（去掉 `type` / `id`） */
+export type ExecuteRequest = Omit<ExecuteMessage, 'type' | 'id'>
 
 const log = createLogger('pyodide:workerManager')
 
@@ -166,14 +169,12 @@ export class PyodideWorkerManager {
     })
   }
 
-  /** 执行 Python 代码 */
+  /** 执行 Python 代码（CLI 调用模式） */
   async execute(
     sessionId: string,
     id: string,
-    code: string,
-    packages?: string[],
-    timeoutMs = 30_000,
-    modulePaths?: string[]
+    request: ExecuteRequest,
+    timeoutMs = 60_000
   ): Promise<WorkerResponse> {
     const entry = this.workers.get(sessionId)
     if (!entry?.ready) {
@@ -189,7 +190,8 @@ export class PyodideWorkerManager {
       }, timeoutMs)
 
       entry.pending.set(id, { resolve, reject, timer })
-      entry.worker.postMessage({ type: 'execute', id, code, packages, modulePaths })
+      const msg: ExecuteMessage = { type: 'execute', id, ...request }
+      entry.worker.postMessage(msg)
     })
   }
 

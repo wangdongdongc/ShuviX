@@ -7,7 +7,7 @@
  */
 
 import { resolve } from 'path'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
 import { BaseTool } from './baseTool'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
@@ -48,7 +48,7 @@ export class SkillTool extends BaseTool<typeof SkillParamsSchema> {
         .map((s) => `'${s.name}'`)
         .join(', ')
       const hint = examples ? ` (e.g., ${examples}, ...)` : ''
-      ;(this.parameters.properties.name as { description: string }).description =
+      ;(this.parameters.properties.name as unknown as { description: string }).description =
         `The name of the skill from available_skills${hint}`
 
       const skillListXml = this.skills

@@ -10,18 +10,20 @@
  * 消费方：
  * - src/main/index.ts —— 创建/销毁面板
  * - src/main/ipc/browserViewHandlers.ts —— 向 renderer 暴露 browserView:* IPC
- * - src/main/tools/browser.ts —— browser 工具（open/close/devtools/help）
+ * - src/main/services/cliServer.ts —— 把 devtools actions 暴露给 `shuvix browser …` CLI
+ *   （AI 通过 `bash` 调 CLI，配合 resources/skills/browser/SKILL.md）
  */
 
 export {
+  BROWSER_PARTITION,
   createBrowserView,
   destroyBrowserView,
   getBrowserView,
-  getBrowserHostWindow
+  getBrowserHostWindow,
+  initBrowserSession
 } from './browserViewService'
 export { browserCdpService } from './browserCdpService'
 export {
-  DEVTOOLS_HELP,
   snapshotAction,
   screenshotAction,
   printToPdfAction,

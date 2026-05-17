@@ -1,9 +1,19 @@
 import { useRef, useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronUp, Search } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  Search,
+  Eye,
+  Wrench,
+  Brain,
+  Image as ImageIcon,
+  Mic
+} from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
+import { ProviderIcon } from '../settings/ProviderIcons'
 import type { ThinkingLevel } from '../../../../main/types'
 
 interface ModelPickerProps {
@@ -20,10 +30,35 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
   const {
     activeSessionId,
     setSessions,
+    modelSupportsReasoning,
     setModelSupportsReasoning,
+    thinkingLevel,
     setThinkingLevel,
     setModelSupportsVision
   } = useChatStore()
+
+  const thinkingLevels = [
+    { value: 'off', label: t('input.thinkOff') },
+    { value: 'low', label: t('input.thinkLow') },
+    { value: 'medium', label: t('input.thinkMedium') },
+    { value: 'high', label: t('input.thinkHigh') },
+    { value: 'xhigh', label: t('input.thinkXHigh') }
+  ]
+
+  /** 切换思考深度 */
+  const handleSetThinkingLevel = async (level: string): Promise<void> => {
+    setThinkingLevel(level)
+    if (activeSessionId) {
+      await window.api.agent.setThinkingLevel({
+        sessionId: activeSessionId,
+        level: level as ThinkingLevel
+      })
+      await window.api.session.updateThinkingLevel({
+        id: activeSessionId,
+        thinkingLevel: level
+      })
+    }
+  }
   const {
     availableModels,
     providers,
@@ -150,15 +185,17 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
   return (
     <div ref={pickerRef} className="relative flex items-center group">
       {isReadonly ? (
-        <span className="inline-flex items-center text-[11px] text-blue-400/70 cursor-default">
+        <span className="inline-flex items-center gap-1 text-[11px] text-text-tertiary cursor-default">
           <span className="max-w-[120px] truncate">{activeModel}</span>
+          {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
         </span>
       ) : (
         <button
           onClick={togglePicker}
-          className="inline-flex items-center gap-1 text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors border border-blue-400/30 hover:border-blue-400/50 rounded px-1.5 py-0.5"
+          className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
         >
           <span className="max-w-[120px] truncate">{activeModel}</span>
+          {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
           <ChevronDown size={11} />
         </button>
       )}
@@ -171,11 +208,11 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
       )}
 
       {!isReadonly && pickerOpen && (
-        <div className="picker-panel absolute left-0 bottom-8 w-[320px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden flex flex-col">
+        <div className="picker-panel absolute left-0 bottom-8 w-[300px] rounded-md border border-border-primary bg-bg-secondary shadow-lg overflow-hidden flex flex-col">
           {/* 搜索框 */}
-          <div className="px-2 py-2 border-b border-border-secondary">
-            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-bg-primary border border-border-primary">
-              <Search size={12} className="text-text-tertiary" />
+          <div className="px-2 py-1.5 border-b border-border-secondary">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-bg-primary border border-border-secondary">
+              <Search size={11} className="text-text-tertiary" />
               <input
                 type="text"
                 value={searchQuery}
@@ -187,7 +224,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
           </div>
 
           {/* 供应商列表 */}
-          <div className="max-h-64 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto py-1">
             {enabledProviders.map((provider) => {
               const models = providerModelsMap.get(provider.id) || []
               // 搜索模式下：如果有匹配模型，自动展开；无匹配则跳过整个供应商
@@ -198,27 +235,28 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
               const isActiveProvider = provider.id === activeProvider
 
               return (
-                <div key={provider.id} className="border-b border-border-secondary last:border-b-0">
+                <div key={provider.id}>
                   {/* 供应商标题（可点击展开/收起） */}
                   <button
                     onClick={() => toggleProviderExpand(provider.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-[11px] transition-colors ${
-                      isActiveProvider
-                        ? 'bg-accent/10 text-accent'
-                        : 'text-text-primary hover:bg-bg-hover'
+                    className={`w-full flex items-center gap-1.5 px-2.5 py-1 text-[11px] transition-colors hover:bg-bg-hover ${
+                      isActiveProvider ? 'text-text-primary font-medium' : 'text-text-secondary'
                     }`}
                   >
-                    <span className="font-medium">{provider.displayName || provider.name}</span>
-                    <span className="text-text-tertiary">
-                      {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    <ProviderIcon name={provider.name} />
+                    <span className="truncate flex-1 text-left">
+                      {provider.displayName || provider.name}
+                    </span>
+                    <span className="text-text-tertiary flex-shrink-0">
+                      {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                     </span>
                   </button>
 
                   {/* 展开的模型列表 */}
                   {isExpanded && (
-                    <div className="py-1">
+                    <div>
                       {models.length === 0 ? (
-                        <div className="px-3 py-2 text-[10px] text-text-tertiary italic">
+                        <div className="pl-5 pr-2.5 py-1 text-[10px] text-text-tertiary italic">
                           {searchQuery
                             ? t('input.noModelMatch') || 'No matching models'
                             : t('input.noModels') || 'No models available'}
@@ -240,38 +278,19 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
                               onClick={() => {
                                 void handlePickModel(provider.id, m.modelId)
                               }}
-                              className={`w-full text-left px-3 py-1.5 transition-colors flex items-center gap-1.5 ${
+                              className={`w-full text-left pl-5 pr-2.5 py-1 transition-colors flex items-center gap-1.5 hover:bg-bg-hover ${
                                 isSelected
-                                  ? 'bg-accent/20 text-accent'
-                                  : 'text-text-primary hover:bg-bg-hover'
+                                  ? 'bg-bg-hover text-text-primary font-medium'
+                                  : 'text-text-secondary hover:text-text-primary'
                               }`}
                             >
-                              <span
-                                className={`text-[11px] truncate flex-1 ${isSelected ? 'font-medium' : ''}`}
-                              >
-                                {m.modelId}
-                              </span>
-                              <div className="flex items-center gap-0.5 shrink-0">
-                                {caps.vision && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-blue-500/20 text-blue-400">
-                                    Vision
-                                  </span>
-                                )}
-                                {caps.functionCalling && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-green-500/20 text-green-400">
-                                    Tools
-                                  </span>
-                                )}
-                                {caps.reasoning && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-purple-500/20 text-purple-400">
-                                    Reasoning
-                                  </span>
-                                )}
-                                {caps.imageOutput && (
-                                  <span className="px-1 py-0.5 text-[8px] rounded bg-orange-500/20 text-orange-400">
-                                    ImgOut
-                                  </span>
-                                )}
+                              <span className="text-[11px] truncate flex-1">{m.modelId}</span>
+                              <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
+                                {caps.vision && <Eye size={10} />}
+                                {caps.functionCalling && <Wrench size={10} />}
+                                {caps.reasoning && <Brain size={10} />}
+                                {caps.imageOutput && <ImageIcon size={10} />}
+                                {caps.audioInput && <Mic size={10} />}
                               </div>
                             </button>
                           )
@@ -283,6 +302,30 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
               )
             })}
           </div>
+
+          {/* 思考深度（仅在当前模型支持 reasoning 时显示） */}
+          {modelSupportsReasoning && (
+            <div className="flex items-center gap-1 border-t border-border-secondary px-2 py-1.5">
+              <Brain size={11} className="text-text-tertiary flex-shrink-0" />
+              <div className="flex items-center gap-0.5 flex-1">
+                {thinkingLevels.map((l) => (
+                  <button
+                    key={l.value}
+                    onClick={() => {
+                      void handleSetThinkingLevel(l.value)
+                    }}
+                    className={`flex-1 text-[10px] px-1 py-0.5 rounded transition-colors ${
+                      thinkingLevel === l.value
+                        ? 'bg-bg-hover text-text-primary font-medium'
+                        : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'
+                    }`}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

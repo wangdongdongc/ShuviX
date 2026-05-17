@@ -226,7 +226,7 @@ export function Sidebar(): React.JSX.Element {
       className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer ${
         activeSessionId === session.id
           ? 'bg-bg-active/80 text-text-primary'
-          : 'text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary'
+          : 'text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary'
       }`}
     >
       <MessageSquare
@@ -244,7 +244,7 @@ export function Sidebar(): React.JSX.Element {
               : 'text-text-tertiary/40'
         }`}
       />
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-6">
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
         <span className="truncate">{session.title}</span>
         {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
         {telegramBindings.has(session.id) && (
@@ -298,7 +298,7 @@ export function Sidebar(): React.JSX.Element {
       <div
         className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
       >
-        <h1 className="text-xs font-medium text-text-tertiary tracking-wide uppercase">
+        <h1 className="text-[13px] font-medium text-text-tertiary tracking-wide uppercase">
           {t('sidebar.title')}
         </h1>
       </div>
@@ -314,171 +314,181 @@ export function Sidebar(): React.JSX.Element {
         ) : (
           <>
             {/* 按项目分组展示（项目按名称排序，临时对话始终最后） */}
-            {sortedGroups.map(([groupKey, groupSessions]) => {
+            {sortedGroups.map(([groupKey, groupSessions], idx) => {
               const collapsed = collapsedGroups.has(groupKey)
               const isTemp = groupKey === TEMP_GROUP_KEY
               const groupLabel = isTemp
                 ? t('sidebar.tempChats')
                 : projectNames[groupKey] || t('sidebar.unnamedProject')
+              const showDividerAbove = isTemp && idx > 0
               return (
-                <div
-                  key={groupKey}
-                  className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
-                >
+                <div key={groupKey}>
+                  {showDividerAbove && (
+                    <div className="mx-4 my-2 border-t border-border-secondary/30" />
+                  )}
                   <div
-                    className="relative flex items-center w-full px-1.5 py-0.5 text-[11px] group/header"
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      const items = [
-                        { id: 'new-chat', label: t('sidebar.newChat') },
-                        ...(!isTemp
-                          ? [{ id: 'edit-project', label: t('sidebar.editProject') }]
-                          : [])
-                      ]
-                      showContextMenu(items, (actionId) => {
-                        if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
-                        if (actionId === 'edit-project') setEditingProjectId(groupKey)
-                      })
-                    }}
+                    className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
                   >
-                    <button
-                      onClick={() => toggleGroup(groupKey)}
-                      className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
-                        activeGroupKey === groupKey
-                          ? 'text-text-secondary'
-                          : 'text-text-tertiary hover:text-text-secondary'
-                      }`}
+                    <div
+                      className="relative flex items-center w-full px-1.5 py-0.5 text-[12px] group/header"
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const items = [
+                          { id: 'new-chat', label: t('sidebar.newChat') },
+                          ...(!isTemp
+                            ? [{ id: 'edit-project', label: t('sidebar.editProject') }]
+                            : [])
+                        ]
+                        showContextMenu(items, (actionId) => {
+                          if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
+                          if (actionId === 'edit-project') setEditingProjectId(groupKey)
+                        })
+                      }}
                     >
-                      {isTemp ? (
-                        <MessageCircle size={12} className="flex-shrink-0 text-blue-400" />
-                      ) : collapsed ? (
-                        <FolderClosed size={12} className="flex-shrink-0 text-amber-400" />
-                      ) : (
-                        <FolderOpen size={12} className="flex-shrink-0 text-amber-500" />
-                      )}
-                      <span className="truncate font-medium uppercase tracking-wider">
-                        {groupLabel}
-                      </span>
-                    </button>
-                    {/* 项目操作按钮 — 绝对定位，不占文本空间 */}
-                    <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleNewChat(isTemp ? null : groupKey)
-                        }}
-                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                        title={t('sidebar.newChat')}
+                        onClick={() => toggleGroup(groupKey)}
+                        className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
+                          activeGroupKey === groupKey
+                            ? 'text-text-primary'
+                            : 'text-text-secondary hover:text-text-primary'
+                        }`}
                       >
-                        <MessageSquarePlus size={11} />
+                        {isTemp ? (
+                          <MessageCircle size={12} className="flex-shrink-0" />
+                        ) : collapsed ? (
+                          <FolderClosed size={12} className="flex-shrink-0" />
+                        ) : (
+                          <FolderOpen size={12} className="flex-shrink-0" />
+                        )}
+                        <span className="truncate font-medium uppercase tracking-wider">
+                          {groupLabel}
+                        </span>
                       </button>
-                      {!isTemp && (
+                      {/* 项目操作按钮 — 绝对定位，不占文本空间 */}
+                      <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
                         <button
-                          onClick={() => setEditingProjectId(groupKey)}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleNewChat(isTemp ? null : groupKey)
+                          }}
                           className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                          title={t('sidebar.editProject')}
+                          title={t('sidebar.newChat')}
                         >
-                          <Pencil size={10} />
+                          <MessageSquarePlus size={11} />
                         </button>
-                      )}
+                        {!isTemp && (
+                          <button
+                            onClick={() => setEditingProjectId(groupKey)}
+                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                            title={t('sidebar.editProject')}
+                          >
+                            <Pencil size={10} />
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    <AnimatedCollapse open={!collapsed}>
+                      <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
+                    </AnimatedCollapse>
                   </div>
-                  <AnimatedCollapse open={!collapsed}>
-                    <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
-                  </AnimatedCollapse>
                 </div>
               )
             })}
 
             {/* 已归档项目 */}
             {archivedProjects.length > 0 && (
-              <div className="mb-0.5 rounded-md">
-                <div className="flex items-center w-full px-1.5 py-0.5 text-[11px] group/header">
-                  <button
-                    onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
-                    className="flex items-center gap-1.5 flex-1 min-w-0 text-text-tertiary hover:text-text-secondary transition-colors"
-                  >
-                    <Archive size={11} className="flex-shrink-0 text-purple-400/70" />
-                    <span className="truncate font-medium uppercase tracking-wider">
-                      {t('sidebar.archivedProjects')}
-                    </span>
-                  </button>
-                </div>
-                <AnimatedCollapse open={!collapsedGroups.has(ARCHIVED_GROUP_KEY)}>
-                  <div className="ml-1.5 pl-0.5">
-                    {archivedProjects.map((p) => (
-                      <div
-                        key={p.id}
-                        className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 text-text-tertiary"
-                        onContextMenu={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          showContextMenu(
-                            [
-                              { id: 'restore-project', label: t('sidebar.restoreProject') },
-                              { id: 'sep', label: '', type: 'separator' },
-                              { id: 'delete-project', label: t('sidebar.deleteProject') }
-                            ],
-                            (actionId) => {
-                              if (actionId === 'restore-project') void handleRestoreProject(p.id)
-                              if (actionId === 'delete-project') setDeletingProjectId(p.id)
-                            }
-                          )
-                        }}
-                      >
-                        <FolderClosed size={11} className="flex-shrink-0 text-purple-400/50" />
-                        <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-6">
-                          <span className="truncate">{p.name}</span>
-                        </div>
-                        <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-                          <button
-                            onClick={() => void handleRestoreProject(p.id)}
-                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary"
-                            title={t('sidebar.restoreProject')}
-                          >
-                            <RotateCcw size={11} className="text-green-400/70" />
-                          </button>
-                          <button
-                            onClick={() => setDeletingProjectId(p.id)}
-                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400"
-                            title={t('sidebar.deleteProject')}
-                          >
-                            <Trash2 size={11} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+              <>
+                {sortedGroups.length > 0 && (
+                  <div className="mx-4 my-2 border-t border-border-secondary/30" />
+                )}
+                <div className="mb-0.5 rounded-md">
+                  <div className="flex items-center w-full px-1.5 py-0.5 text-[12px] group/header">
+                    <button
+                      onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
+                      className="flex items-center gap-1.5 flex-1 min-w-0 text-text-secondary hover:text-text-primary transition-colors"
+                    >
+                      <Archive size={11} className="flex-shrink-0" />
+                      <span className="truncate font-medium uppercase tracking-wider">
+                        {t('sidebar.archivedProjects')}
+                      </span>
+                    </button>
                   </div>
-                </AnimatedCollapse>
-              </div>
+                  <AnimatedCollapse open={!collapsedGroups.has(ARCHIVED_GROUP_KEY)}>
+                    <div className="ml-1.5 pl-0.5">
+                      {archivedProjects.map((p) => (
+                        <div
+                          key={p.id}
+                          className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 text-text-secondary"
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            showContextMenu(
+                              [
+                                { id: 'restore-project', label: t('sidebar.restoreProject') },
+                                { id: 'sep', label: '', type: 'separator' },
+                                { id: 'delete-project', label: t('sidebar.deleteProject') }
+                              ],
+                              (actionId) => {
+                                if (actionId === 'restore-project') void handleRestoreProject(p.id)
+                                if (actionId === 'delete-project') setDeletingProjectId(p.id)
+                              }
+                            )
+                          }}
+                        >
+                          <FolderClosed size={11} className="flex-shrink-0" />
+                          <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
+                            <span className="truncate">{p.name}</span>
+                          </div>
+                          <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+                            <button
+                              onClick={() => void handleRestoreProject(p.id)}
+                              className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary"
+                              title={t('sidebar.restoreProject')}
+                            >
+                              <RotateCcw size={11} className="text-green-400/70" />
+                            </button>
+                            <button
+                              onClick={() => setDeletingProjectId(p.id)}
+                              className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400"
+                              title={t('sidebar.deleteProject')}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </AnimatedCollapse>
+                </div>
+              </>
             )}
           </>
         )}
       </div>
 
       {/* 底部操作区 */}
-      <div className="px-2 py-1 border-t border-border-secondary/30 space-y-0.5">
-        {hasUpdate && (
-          <button
-            onClick={() => window.api.app.openSettings('about')}
-            className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[12px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
-          >
-            <ArrowUpCircle size={14} />
-            <span>
-              {updateEvent?.type === 'ready'
-                ? t('sidebar.updateReady')
-                : t('sidebar.updateAvailable')}
-            </span>
-          </button>
-        )}
+      <div className="flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30">
         <button
           onClick={() => window.api.app.openSettings()}
-          className="flex items-center gap-2 w-full pl-3 pr-2 py-1.5 rounded-md text-[12px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
+          className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
         >
           <Settings size={14} className="text-text-tertiary/70" />
           <span>{t('sidebar.settings')}</span>
         </button>
+        {hasUpdate && (
+          <button
+            onClick={() => window.api.app.openSettings('about')}
+            className="flex-shrink-0 p-1.5 rounded-md text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+            title={
+              updateEvent?.type === 'ready'
+                ? t('sidebar.updateReady')
+                : t('sidebar.updateAvailable')
+            }
+          >
+            <ArrowUpCircle size={14} />
+          </button>
+        )}
       </div>
 
       {/* 项目编辑弹窗 */}

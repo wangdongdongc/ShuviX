@@ -17,12 +17,17 @@ extraResources:
     to: bundler
   - from: resources/skills
     to: skills
+  # CLI shim 必须以可执行文件形式落到磁盘（不能藏在 asar 里），
+  # extraResources 默认就在 Resources/ 下，路径保留 +x 权限
+  - from: resources/cli
+    to: cli
   - from: node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm
 asarUnpack:
   - resources/**
   - out/main/pythonWorker.js
   - out/main/sqlWorker.js
+  - out/main/cli.js
   - out/main/chunks/**
   - node_modules/@vscode/ripgrep/**
   - node_modules/pyodide/**

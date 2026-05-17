@@ -8,7 +8,12 @@ import { existsSync, statSync } from 'fs'
 import { projectDao } from '../dao/projectDao'
 import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from './sessionService'
-import { getTempWorkspace, getToolResultsBase, getDefaultSkillsDir } from '../utils/paths'
+import {
+  getTempWorkspace,
+  getToolResultsBase,
+  getDefaultSkillsDir,
+  getBuiltinSkillsDir
+} from '../utils/paths'
 import { skillService } from './skillService'
 import { buildAllowEntry, isPathAllowedUnified } from '../utils/toolUtils/allowList'
 import type { ReferenceDir, ProjectEnvVar } from '../types'
@@ -55,7 +60,7 @@ export interface ProjectConfig {
 
 /** 工具上下文 — 所有工具共享的运行时信息 */
 export interface ToolContext {
-  /** 当前会话 ID（通过它查询项目配置 + Docker 容器管理） */
+  /** 当前会话 ID（通过它查询项目配置等） */
   sessionId: string
   /**
    * 统一的"请求用户输入"入口。所有需要用户介入的工具(命令审批 / 选择题 / SSH 凭证)
@@ -121,6 +126,8 @@ export async function assertSandboxRead(
   if (absolutePath.startsWith(getToolResultsBase() + sep)) return
   // 允许读取全局 skills 目录（skill 工具加载后 AI 需读取伴随文件）
   if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return
+  // 允许读取内置 skills 目录（随 app 发布的 SKILL.md 同目录引用文件）
+  if (absolutePath.startsWith(getBuiltinSkillsDir() + sep)) return
   // 允许读取用户配置的外部 skill 目录
   if (skillService.listExternalDirs().some((d) => absolutePath.startsWith(d.path + sep))) return
 

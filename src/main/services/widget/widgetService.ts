@@ -169,6 +169,35 @@ class WidgetService {
     return { id, url, buildSuccess: result.success, buildErrors: result.errors }
   }
 
+  /**
+   * 启动单个 widget —— 注册到 server（若未注册）并确保 server 已启动
+   * 与 open() 的差异：不更新 lastOpenedAt / openCount，仅用于"启动"按钮
+   */
+  async startWidget(id: string): Promise<{ url: string; buildSuccess: boolean }> {
+    const widget = widgetDao.findById(id)
+    if (!widget) throw new Error(`Widget "${id}" not found`)
+    const dir = this.getWidgetDir(id)
+    if (!existsSync(dir)) {
+      throw new Error(`Widget directory missing: ${dir}`)
+    }
+    let buildSuccess = true
+    if (!widgetServer.hasWidget(id)) {
+      const build = await widgetServer.registerAndBuild(id, dir, widget.entryFile)
+      buildSuccess = build.success
+    } else {
+      await widgetServer.ensureStarted()
+    }
+    const url = widgetServer.getUrl(id) ?? ''
+    broadcastWidgetChanged()
+    return { url, buildSuccess }
+  }
+
+  /** 停止单个 widget —— 仅从 server 注销，不关闭 server */
+  stopWidget(id: string): void {
+    widgetServer.unregisterWidget(id)
+    broadcastWidgetChanged()
+  }
+
   /** 侧边栏卡片点击 —— 惰性启动 server，确保注册，更新计数 */
   async open(id: string): Promise<{ url: string; widget: WidgetSummary }> {
     const widget = widgetDao.findById(id)
@@ -294,7 +323,7 @@ ${params.description}
 - 其他组件 / 样式 可按需组织
 
 ## 可用依赖
-React、ReactDOM、React Router、Spectacle、Tailwind CSS v4 —— 无其他 npm 包。
+React、ReactDOM、React Router、Tailwind CSS v4 —— 无其他 npm 包。
 
 ## 设计规范（维护时也要遵守）
 Widget 是**紧凑的单一用途工具**，不是落地页 / 仪表盘。类比：菜单栏小应用、浏览器扩展弹窗。

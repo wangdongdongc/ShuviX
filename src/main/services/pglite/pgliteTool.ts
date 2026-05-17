@@ -3,7 +3,7 @@
  * 支持多语句、扩展加载、COPY FROM 读取项目文件
  */
 
-import { Type, type Static } from '@sinclair/typebox'
+import { Type, type Static } from 'typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { t } from '../../i18n'
 import {

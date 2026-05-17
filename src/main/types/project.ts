@@ -15,8 +15,6 @@ export interface ProjectCreateParams {
   name?: string
   path: string
   promptSections?: ProjectPromptSection[]
-  dockerEnabled?: boolean
-  dockerImage?: string
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
@@ -29,8 +27,6 @@ export interface ProjectUpdateParams {
   name?: string
   path?: string
   promptSections?: ProjectPromptSection[]
-  dockerEnabled?: boolean
-  dockerImage?: string
   enabledTools?: string[]
   referenceDirs?: ReferenceDir[]
   tool?: ToolSettings

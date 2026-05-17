@@ -1,25 +1,25 @@
 /**
- * Python 工具集成测试
- * 使用真实的 Pyodide WASM 运行时（通过 worker_threads）
- * 测试：基本执行、REPL 模式、多轮共享作用域、文件系统挂载、预装包、并发执行
+ * Python Worker 集成测试（新 CLI 协议）
+ *
+ * 使用真实的 Pyodide WASM 运行时（worker_threads）。
+ * 覆盖：去 REPL 化、mode 分发、fresh globals 隔离、argv 注入、PYTHONPATH 动态挂载、
+ * 文件系统挂载、只读保护、预装包、并发、终止重建。
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-
-// ---- 测试目录 ----
 
 const TEST_BASE = join(tmpdir(), 'shuvix-python-test-' + Date.now())
 const PROJECT_DIR = join(TEST_BASE, 'project')
 const REF_RW_DIR = join(TEST_BASE, 'ref-rw')
 const REF_RO_DIR = join(TEST_BASE, 'ref-ro')
+const EXTRA_LIB_DIR = join(TEST_BASE, 'extra-lib')
 
 const SESSION_ID = 'test-python-session'
 const SESSION_ID_2 = 'test-python-session-2'
 
-// resolveProjectConfig 通常访问 sessionDao / sessionService；在集成测试里 stub 掉只返回本测试的路径
 vi.mock('../../toolContext', () => ({
   resolveProjectConfig: (sessionId: string) => {
     const dirs: Record<
@@ -46,51 +46,50 @@ vi.mock('../../toolContext', () => ({
   TOOL_ABORTED: 'Aborted'
 }))
 
-// runtimeStatus 依赖 chatFrontendRegistry（完整 frontend 模块图），测试里空实现即可
-vi.mock('../runtimeStatus', () => ({
-  setPythonRuntimeReady: () => {},
-  setPythonRuntimeDestroyed: () => {},
-  getPythonRuntimeStatus: () => undefined
-}))
-
-import { PyodideWorkerManager } from '../workerManager'
+import { PyodideWorkerManager, type ExecuteRequest } from '../workerManager'
 import type { WorkerResponse } from '../pythonWorker'
 
 const pythonWorkerManager = new PyodideWorkerManager()
 
-// ---- Helpers ----
+const REPO_ROOT = resolve(__dirname, '../../../../..')
+vi.spyOn(
+  pythonWorkerManager as unknown as { getWorkerPath: () => string },
+  'getWorkerPath'
+).mockReturnValue(join(REPO_ROOT, 'out/main/pythonWorker.js'))
+vi.spyOn(
+  pythonWorkerManager as unknown as { getWheelsDir: () => string | undefined },
+  'getWheelsDir'
+).mockReturnValue(join(REPO_ROOT, 'resources/pyodide/pyodide-wheels'))
 
-async function exec(
+let execCounter = 0
+async function run(
   sessionId: string,
-  code: string,
-  packages?: string[],
+  request: ExecuteRequest,
   timeoutMs = 30_000
 ): Promise<WorkerResponse> {
-  const id = 'tc-' + Math.random().toString(36).slice(2, 8)
-  return pythonWorkerManager.execute(sessionId, id, code, packages, timeoutMs)
+  const id = 'tc-' + ++execCounter
+  return pythonWorkerManager.execute(sessionId, id, request, timeoutMs)
 }
 
-function getOutput(r: WorkerResponse): string {
-  const parts: string[] = []
-  if (r.stdout) parts.push(r.stdout)
-  if (r.stderr) parts.push(r.stderr)
-  if (r.error) parts.push(r.error)
-  return parts.join('\n')
+async function dashC(
+  sessionId: string,
+  code: string,
+  extraArgs: string[] = []
+): Promise<WorkerResponse> {
+  return run(sessionId, { mode: '-c', code, pythonArgv: ['-c', ...extraArgs] })
 }
-
-// ---- Setup / Teardown ----
 
 beforeAll(async () => {
-  // Create test directory structure
   mkdirSync(PROJECT_DIR, { recursive: true })
   mkdirSync(REF_RW_DIR, { recursive: true })
   mkdirSync(REF_RO_DIR, { recursive: true })
+  mkdirSync(EXTRA_LIB_DIR, { recursive: true })
 
   writeFileSync(join(PROJECT_DIR, 'data.txt'), 'hello from project')
   writeFileSync(join(REF_RW_DIR, 'rw.txt'), 'readwrite ref')
   writeFileSync(join(REF_RO_DIR, 'ro.txt'), 'readonly ref')
+  writeFileSync(join(EXTRA_LIB_DIR, 'mylib.py'), 'def hello(): return "from-extra-lib"\n')
 
-  // Initialize the Pyodide worker (this takes ~5-15s)
   await pythonWorkerManager.ensureReady(SESSION_ID)
 }, 120_000)
 
@@ -99,201 +98,268 @@ afterAll(() => {
   rmSync(TEST_BASE, { recursive: true, force: true })
 })
 
-// ---- Tests ----
-
-describe('基本执行', () => {
-  it('print 输出', async () => {
-    const r = await exec(SESSION_ID, 'print("hello")')
-    expect(r.type).toBe('result')
+describe('-c 模式基本执行', () => {
+  it('print 输出到 stdout，exitCode 0', async () => {
+    const r = await dashC(SESSION_ID, 'print("hello")')
     expect(r.stdout).toContain('hello')
+    expect(r.exitCode).toBe(0)
   })
 
-  it('REPL 自动输出表达式', async () => {
-    const r = await exec(SESSION_ID, '1 + 1')
-    expect(r.type).toBe('result')
-    expect(getOutput(r)).toContain('2')
+  it('裸表达式不再自动 print（无 REPL 行为）', async () => {
+    const r = await dashC(SESSION_ID, '1 + 1')
+    expect(r.stdout ?? '').toBe('')
+    expect(r.exitCode).toBe(0)
   })
 
-  it('多行语句', async () => {
-    const r = await exec(SESSION_ID, 'x = 10\ny = 20\nx + y')
-    expect(r.type).toBe('result')
-    expect(getOutput(r)).toContain('30')
+  it('运行时异常 → exitCode 1，traceback 进 stderr', async () => {
+    const r = await dashC(SESSION_ID, '1 / 0')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('ZeroDivisionError')
   })
 
-  it('语法错误', async () => {
-    const r = await exec(SESSION_ID, 'def foo(')
-    expect(r.type).toBe('error')
-    expect(r.error).toContain('SyntaxError')
+  it('SyntaxError → exitCode 1', async () => {
+    const r = await dashC(SESSION_ID, 'def foo(')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('SyntaxError')
   })
 
-  it('运行时错误', async () => {
-    const r = await exec(SESSION_ID, '1 / 0')
-    expect(r.type).toBe('error')
-    expect(r.error).toContain('ZeroDivisionError')
-  })
-})
-
-describe('REPL 交互模式', () => {
-  it('字符串表达式自动输出 repr', async () => {
-    const r = await exec(SESSION_ID, '"hello"')
-    expect(getOutput(r)).toContain("'hello'")
+  it('sys.exit(2) 透传退出码', async () => {
+    const r = await dashC(SESSION_ID, 'import sys; sys.exit(2)')
+    expect(r.exitCode).toBe(2)
   })
 
-  it('_ 引用上一个结果', async () => {
-    await exec(SESSION_ID, '42')
-    const r = await exec(SESSION_ID, '_ * 2')
-    expect(getOutput(r)).toContain('84')
-  })
-
-  it('print 不重复输出', async () => {
-    const r = await exec(SESSION_ID, 'print("hi")')
-    const output = getOutput(r)
-    // "hi" should appear only once (from print), not twice (from print + REPL)
-    const count = output.split('hi').length - 1
-    expect(count).toBe(1)
+  it('sys.exit("msg") → 退出码 1，msg 进 stderr', async () => {
+    const r = await dashC(SESSION_ID, 'import sys; sys.exit("bad")')
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('bad')
   })
 })
 
-describe('多轮共享作用域', () => {
-  it('变量在后续轮次保留', async () => {
-    await exec(SESSION_ID, 'shared_var = 42')
-    const r = await exec(SESSION_ID, 'shared_var * 2')
-    expect(getOutput(r)).toContain('84')
+describe('sys.argv 注入', () => {
+  it('-c 模式后续参数进 sys.argv', async () => {
+    const r = await dashC(SESSION_ID, 'import sys; print("|".join(sys.argv))', ['a', 'b'])
+    expect(r.stdout).toContain('-c|a|b')
   })
 
-  it('import 在后续轮次保留', async () => {
-    await exec(SESSION_ID, 'import json')
-    const r = await exec(SESSION_ID, 'json.dumps({"a": 1})')
-    expect(getOutput(r)).toContain('"a"')
-  })
-
-  it('函数定义在后续轮次可用', async () => {
-    await exec(SESSION_ID, 'def greet(name): return f"Hello, {name}!"')
-    const r = await exec(SESSION_ID, 'greet("World")')
-    expect(getOutput(r)).toContain('Hello, World!')
+  it('-c 单独时 sys.argv = ["-c"]', async () => {
+    const r = await dashC(SESSION_ID, 'import sys; print(len(sys.argv), sys.argv[0])')
+    expect(r.stdout).toContain('1 -c')
   })
 })
 
-describe('文件系统挂载 — 项目目录 (readwrite)', () => {
-  it('工作目录为项目目录', async () => {
-    const r = await exec(SESSION_ID, 'import os; os.getcwd()')
-    expect(getOutput(r)).toContain(PROJECT_DIR)
+describe('每次调用 fresh globals', () => {
+  it('-c 设置的变量不会泄漏到下一次调用', async () => {
+    await dashC(SESSION_ID, 'leaky_var = 999')
+    const r = await dashC(SESSION_ID, 'print(leaky_var if "leaky_var" in dir() else "absent")')
+    expect(r.stdout).toContain('absent')
   })
 
-  it('相对路径读取项目文件', async () => {
-    const r = await exec(SESSION_ID, `open('data.txt').read()`)
-    expect(getOutput(r)).toContain('hello from project')
+  it('import 的模块对象不在 globals，但 sys.modules 缓存仍然命中', async () => {
+    await dashC(SESSION_ID, 'import json; json.dumps({"a": 1})')
+    // 新一轮 globals 是空的，但 import json 走 sys.modules 缓存（同进程内）
+    const r = await dashC(SESSION_ID, 'import json; print(json.dumps({"b": 2}))')
+    expect(r.stdout).toContain('"b": 2')
+  })
+})
+
+describe('-m 模式', () => {
+  it('runpy 跑标准库模块', async () => {
+    // base64 是 stdlib 自带的可执行模块
+    const r = await run(SESSION_ID, {
+      mode: '-m',
+      code: '',
+      target: 'base64',
+      pythonArgv: ['base64', '-h']
+    })
+    // base64 -h 打印 usage 到 stdout 或 stderr，并 sys.exit(0)
+    expect((r.stdout ?? '') + (r.stderr ?? '')).toMatch(/usage|Usage/i)
   })
 
-  it('读取项目目录文件', async () => {
-    const r = await exec(SESSION_ID, `open('${PROJECT_DIR}/data.txt').read()`)
-    expect(getOutput(r)).toContain('hello from project')
+  it('未知模块 → exitCode 1，stderr 含 ModuleNotFoundError', async () => {
+    const r = await run(SESSION_ID, {
+      mode: '-m',
+      code: '',
+      target: 'no_such_module_xyz',
+      pythonArgv: ['no_such_module_xyz']
+    })
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toMatch(/ModuleNotFoundError|No module named/)
+  })
+})
+
+describe('script 模式', () => {
+  it('runpy.run_path 跑项目目录里的 .py 文件', async () => {
+    const scriptPath = join(PROJECT_DIR, 'hello.py')
+    writeFileSync(
+      scriptPath,
+      'import sys\nprint("script-ran", sys.argv[1] if len(sys.argv) > 1 else "noarg")\n'
+    )
+    const r = await run(SESSION_ID, {
+      mode: 'script',
+      code: '',
+      target: scriptPath,
+      pythonArgv: [scriptPath, 'hi']
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('script-ran hi')
+  })
+})
+
+describe('stdin 模式', () => {
+  it('当 mode=stdin 时，code 字段携带的内容作为 stdin 程序执行', async () => {
+    const r = await run(SESSION_ID, {
+      mode: 'stdin',
+      code: 'print("from-stdin")',
+      pythonArgv: ['-']
+    })
+    expect(r.stdout).toContain('from-stdin')
+  })
+})
+
+describe('version 模式', () => {
+  it('打印 Python 版本号', async () => {
+    const r = await run(SESSION_ID, { mode: 'version', code: '', pythonArgv: ['python'] })
+    expect(r.stdout).toMatch(/Python \d+\.\d+/)
+    expect(r.exitCode).toBe(0)
+  })
+})
+
+describe('cwd 注入', () => {
+  it('execute 传 cwd 时 os.getcwd 返回该路径', async () => {
+    const r = await run(SESSION_ID, {
+      mode: '-c',
+      code: 'import os; print(os.getcwd())',
+      pythonArgv: ['-c'],
+      cwd: REF_RW_DIR
+    })
+    expect(r.stdout).toContain(REF_RW_DIR)
   })
 
-  it('写入项目目录文件', async () => {
+  it('未传 cwd 时默认 workingDirectory', async () => {
+    const r = await dashC(SESSION_ID, 'import os; print(os.getcwd())')
+    expect(r.stdout).toContain(PROJECT_DIR)
+  })
+})
+
+describe('PYTHONPATH 动态挂载', () => {
+  it('挂载 EXTRA_LIB_DIR 后能 import 其中的模块', async () => {
+    const r = await run(SESSION_ID, {
+      mode: '-c',
+      code: 'import mylib; print(mylib.hello())',
+      pythonArgv: ['-c'],
+      pythonPathDirs: [EXTRA_LIB_DIR]
+    })
+    expect(r.exitCode).toBe(0)
+    expect(r.stdout).toContain('from-extra-lib')
+  })
+})
+
+describe('文件系统 — 工作目录 (readwrite)', () => {
+  it('相对路径读项目文件', async () => {
+    const r = await dashC(SESSION_ID, `print(open('data.txt').read())`)
+    expect(r.stdout).toContain('hello from project')
+  })
+
+  it('绝对路径写项目文件', async () => {
     const newFile = join(PROJECT_DIR, 'new_from_python.txt')
-    await exec(SESSION_ID, `f = open('${newFile}', 'w')\nf.write('written by python')\nf.close()`)
-    // Verify file exists on host
+    const code = `f=open(${JSON.stringify(newFile)},'w'); f.write('written by python'); f.close()`
+    const r = await dashC(SESSION_ID, code)
+    expect(r.exitCode).toBe(0)
     expect(existsSync(newFile)).toBe(true)
     expect(readFileSync(newFile, 'utf-8')).toBe('written by python')
   })
 })
 
-describe('文件系统挂载 — 引用目录 (readwrite)', () => {
-  it('读取 readwrite 引用目录', async () => {
-    const r = await exec(SESSION_ID, `open('${REF_RW_DIR}/rw.txt').read()`)
-    expect(getOutput(r)).toContain('readwrite ref')
+describe('文件系统 — 引用目录 (readwrite)', () => {
+  it('读 readwrite 引用目录', async () => {
+    const r = await dashC(
+      SESSION_ID,
+      `print(open(${JSON.stringify(join(REF_RW_DIR, 'rw.txt'))}).read())`
+    )
+    expect(r.stdout).toContain('readwrite ref')
   })
 
-  it('写入 readwrite 引用目录', async () => {
+  it('写 readwrite 引用目录成功', async () => {
     const newFile = join(REF_RW_DIR, 'new_rw.txt')
-    await exec(SESSION_ID, `f = open('${newFile}', 'w')\nf.write('rw written')\nf.close()`)
+    const code = `f=open(${JSON.stringify(newFile)},'w'); f.write('rw written'); f.close()`
+    await dashC(SESSION_ID, code)
     expect(existsSync(newFile)).toBe(true)
     expect(readFileSync(newFile, 'utf-8')).toBe('rw written')
   })
 })
 
-describe('文件系统挂载 — 引用目录 (readonly)', () => {
-  it('读取 readonly 引用目录', async () => {
-    const r = await exec(SESSION_ID, `open('${REF_RO_DIR}/ro.txt').read()`)
-    expect(getOutput(r)).toContain('readonly ref')
+describe('文件系统 — 引用目录 (readonly)', () => {
+  it('读 readonly 引用目录', async () => {
+    const r = await dashC(
+      SESSION_ID,
+      `print(open(${JSON.stringify(join(REF_RO_DIR, 'ro.txt'))}).read())`
+    )
+    expect(r.stdout).toContain('readonly ref')
   })
 
-  it('写入 readonly 引用目录被拒绝', async () => {
-    const r = await exec(SESSION_ID, `open('${REF_RO_DIR}/forbidden.txt', 'w')`)
-    expect(r.type).toBe('error')
-    expect(r.error).toContain('PermissionError')
+  it('写 readonly 引用目录被拒（PermissionError）', async () => {
+    const r = await dashC(
+      SESSION_ID,
+      `open(${JSON.stringify(join(REF_RO_DIR, 'forbidden.txt'))}, 'w')`
+    )
+    expect(r.exitCode).toBe(1)
+    expect(r.stderr).toContain('PermissionError')
   })
 })
 
 describe('预装包验证', () => {
-  const preinstalledPackages = [
+  const preinstalled = [
     ['yaml', 'pyyaml'],
     ['bs4', 'beautifulsoup4'],
-    ['soupsieve', 'soupsieve'],
     ['dateutil', 'python-dateutil'],
     ['pytz', 'pytz'],
     ['regex', 'regex']
   ]
 
-  for (const [importName, pkgName] of preinstalledPackages) {
+  for (const [importName, pkgName] of preinstalled) {
     it(`${pkgName} 可直接 import`, async () => {
-      const r = await exec(SESSION_ID, `import ${importName}\nprint("${importName} ok")`)
-      expect(r.type).toBe('result')
+      const r = await dashC(SESSION_ID, `import ${importName}; print("${importName} ok")`)
+      expect(r.exitCode).toBe(0)
       expect(r.stdout).toContain(`${importName} ok`)
     })
   }
 })
 
-describe('并发执行', () => {
-  it('同一 session 串行处理多个请求', async () => {
-    // Send 3 requests without awaiting — worker processes them in order
-    // Use expressions (not print) to avoid stdout batching issues
-    const p1 = exec(SESSION_ID, '"first_val"')
-    const p2 = exec(SESSION_ID, '"second_val"')
-    const p3 = exec(SESSION_ID, '"third_val"')
+describe('并发执行（同 session 串行）', () => {
+  it('多个 execute 顺序处理', async () => {
+    const p1 = dashC(SESSION_ID, 'print("first")')
+    const p2 = dashC(SESSION_ID, 'print("second")')
+    const p3 = dashC(SESSION_ID, 'print("third")')
     const [r1, r2, r3] = await Promise.all([p1, p2, p3])
-
-    expect(getOutput(r1)).toContain('first_val')
-    expect(getOutput(r2)).toContain('second_val')
-    expect(getOutput(r3)).toContain('third_val')
+    expect(r1.stdout).toContain('first')
+    expect(r2.stdout).toContain('second')
+    expect(r3.stdout).toContain('third')
   })
 
   it('不同 session 并行执行互不影响', async () => {
-    // Create a second session
     await pythonWorkerManager.ensureReady(SESSION_ID_2)
-
-    // Execute in both sessions in parallel
+    // 各自 session 内可以独立 import + 用 sys.modules 缓存，不会因为 fresh globals 互相污染
     const [r1, r2] = await Promise.all([
-      exec(SESSION_ID, 'session_id = "s1"\nsession_id'),
-      exec(SESSION_ID_2, 'session_id = "s2"\nsession_id')
+      dashC(SESSION_ID, 'print("S1")'),
+      dashC(SESSION_ID_2, 'print("S2")')
     ])
-
-    expect(getOutput(r1)).toContain("'s1'")
-    expect(getOutput(r2)).toContain("'s2'")
-
-    // Verify isolation — session 1's variable doesn't leak
-    const r3 = await exec(SESSION_ID_2, 'session_id')
-    expect(getOutput(r3)).toContain("'s2'")
-
+    expect(r1.stdout).toContain('S1')
+    expect(r2.stdout).toContain('S2')
     pythonWorkerManager.terminate(SESSION_ID_2)
   }, 120_000)
 })
 
 describe('终止与重建', () => {
-  it('terminate 后 isActive 返回 false', () => {
-    // Session 1 should still be active
+  it('terminate 后 isActive=false', () => {
     expect(pythonWorkerManager.isActive(SESSION_ID)).toBe(true)
     pythonWorkerManager.terminate(SESSION_ID)
     expect(pythonWorkerManager.isActive(SESSION_ID)).toBe(false)
   })
 
-  it('terminate 后重新 ensureReady 可再次执行', async () => {
-    // Small delay to let the old worker's exit event fire before creating a new one
+  it('terminate 后 ensureReady 可再次执行', async () => {
     await new Promise((r) => setTimeout(r, 200))
     await pythonWorkerManager.ensureReady(SESSION_ID)
-    const r = await exec(SESSION_ID, 'print("reborn")')
-    expect(r.type).toBe('result')
+    const r = await dashC(SESSION_ID, 'print("reborn")')
     expect(r.stdout).toContain('reborn')
   }, 120_000)
 })

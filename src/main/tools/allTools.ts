@@ -24,14 +24,5 @@ import './database'
 // skill.ts 已迁至 services/skillTool.ts；这里仍然 import 触发其 registerBuiltinTool() 副作用
 import '../services/skillTool'
 
-// 终端工具
-import './terminal'
-
-// 浏览器面板控制
-import './browser'
-
-// Dev 开发工具（widget / presentation / sketch）
-import './dev'
-
 // 子智能体（在 subagent/index.ts 中注册元数据）
 import '../subagent'

@@ -15,7 +15,10 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           pythonWorker: resolve(__dirname, 'src/main/services/pyodide/pythonWorker.ts'),
-          sqlWorker: resolve(__dirname, 'src/main/services/pglite/sqlWorker.ts')
+          sqlWorker: resolve(__dirname, 'src/main/services/pglite/sqlWorker.ts'),
+          // CLI 入口：通过 ELECTRON_RUN_AS_NODE=1 在 Electron 内以 node 模式运行；
+          // 产物 out/main/cli.js，由 resources/cli/shuvix-cli{,.cmd} shim 触发
+          cli: resolve(__dirname, 'src/cli/index.ts')
         }
       }
     }

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# shuvix-cli — POSIX shim that runs the bundled Electron binary in node mode.
+#
+# Required env (injected by ShuviX's bash tool when launching the AI):
+#   SHUVIX_ELECTRON  absolute path to the Electron binary shipped with ShuviX
+#   SHUVIX_CLI_JS    absolute path to the bundled cli.js
+#
+# Mirrors VSCode's `code` script: ELECTRON_RUN_AS_NODE=1 turns Electron into a
+# plain node interpreter; we forward all argv through.
+set -e
+
+if [ -z "$SHUVIX_ELECTRON" ] || [ -z "$SHUVIX_CLI_JS" ]; then
+  echo "shuvix-cli: SHUVIX_ELECTRON and SHUVIX_CLI_JS must be set." >&2
+  echo "(This wrapper is meant to be invoked from a shell launched by ShuviX.)" >&2
+  exit 2
+fi
+
+# Save & strip user NODE_OPTIONS to avoid contaminating the embedded node runtime
+# (e.g. global --max-old-space-size, --import loaders, etc.).
+export SHUVIX_NODE_OPTIONS="$NODE_OPTIONS"
+unset NODE_OPTIONS
+
+ELECTRON_RUN_AS_NODE=1 exec "$SHUVIX_ELECTRON" "$SHUVIX_CLI_JS" "$@"

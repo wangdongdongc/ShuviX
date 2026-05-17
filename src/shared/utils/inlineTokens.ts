@@ -13,15 +13,24 @@ export function makeTokenMarker(uid: string): string {
   return `{{shuvixInlineToken:${uid}}}`
 }
 
-/** 展开命令模板：替换 $ARGUMENTS 占位符，若无占位符则追加到末尾 */
-export function expandCommandTemplate(template: string, args: string): string {
-  if (template.includes('$ARGUMENTS')) {
-    return template.replaceAll('$ARGUMENTS', args)
+/**
+ * 展开命令模板：替换 $ARGUMENTS 占位符，若无占位符则追加到末尾
+ * 同时替换 ${CLAUDE_SESSION_ID}（若提供 sessionId）
+ */
+export function expandCommandTemplate(
+  template: string,
+  args: string,
+  opts?: { sessionId?: string }
+): string {
+  let result = template.includes('$ARGUMENTS')
+    ? template.replaceAll('$ARGUMENTS', args)
+    : args
+      ? `${template}\n\n${args}`
+      : template
+  if (opts?.sessionId) {
+    result = result.replaceAll('${CLAUDE_SESSION_ID}', opts.sessionId)
   }
-  if (args) {
-    return `${template}\n\n${args}`
-  }
-  return template
+  return result
 }
 
 /**

@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wrench, Trash2, Archive, Square, CircleOff, ChevronRight, RotateCcw } from 'lucide-react'
+import {
+  Wrench,
+  Trash2,
+  Archive,
+  Square,
+  CircleOff,
+  ChevronRight,
+  RotateCcw,
+  Play,
+  Loader2
+} from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useContextMenu } from '../../hooks/useContextMenu'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -17,8 +27,11 @@ export function WidgetPanel(): React.JSX.Element {
   const archived = useWidgetStore((s) => s.archived)
   const loaded = useWidgetStore((s) => s.loaded)
   const serverStatus = useWidgetStore((s) => s.serverStatus)
+  const startingIds = useWidgetStore((s) => s.startingIds)
   const reload = useWidgetStore((s) => s.reload)
   const openWidget = useWidgetStore((s) => s.openWidget)
+  const startWidget = useWidgetStore((s) => s.startWidget)
+  const stopWidgetAction = useWidgetStore((s) => s.stopWidget)
   const archiveWidget = useWidgetStore((s) => s.archiveWidget)
   const deleteWidget = useWidgetStore((s) => s.deleteWidget)
   const stopServer = useWidgetStore((s) => s.stopServer)
@@ -118,36 +131,45 @@ export function WidgetPanel(): React.JSX.Element {
         ) : (
           <>
             {widgets.length > 0 && (
-              <div className="grid grid-cols-1 gap-2 p-3">
-                {widgets.map((w) => (
-                  <WidgetCard
-                    key={w.id}
-                    widget={w}
-                    onOpen={() => void openWidget(w.id)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      e.stopPropagation()
-                      showContextMenu(
-                        [
-                          { id: 'open', label: t('widgets.open') },
-                          { id: 'export', label: t('widgets.exportAsVite') },
-                          { id: 'archive', label: t('widgets.archive') },
-                          { id: 'sep', label: '', type: 'separator' },
-                          { id: 'delete', label: t('widgets.delete') }
-                        ],
-                        (actionId) => {
-                          if (actionId === 'open') void openWidget(w.id)
-                          if (actionId === 'export') void handleExport(w)
-                          if (actionId === 'archive') void archiveWidget(w.id, true)
-                          if (actionId === 'delete') setDeletingId(w.id)
-                        }
-                      )
-                    }}
-                    onArchive={() => void archiveWidget(w.id, true)}
-                    onRequestDelete={() => setDeletingId(w.id)}
-                    t={t}
-                  />
-                ))}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2 p-3">
+                {widgets.map((w) => {
+                  const isRunning =
+                    running && (serverStatus?.registeredIds?.includes(w.id) ?? false)
+                  const isStarting = startingIds.has(w.id)
+                  return (
+                    <WidgetCard
+                      key={w.id}
+                      widget={w}
+                      isRunning={isRunning}
+                      isStarting={isStarting}
+                      onOpen={() => void openWidget(w.id)}
+                      onStart={() => void startWidget(w.id)}
+                      onStop={() => void stopWidgetAction(w.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        showContextMenu(
+                          [
+                            { id: 'open', label: t('widgets.open') },
+                            { id: 'export', label: t('widgets.exportAsVite') },
+                            { id: 'archive', label: t('widgets.archive') },
+                            { id: 'sep', label: '', type: 'separator' },
+                            { id: 'delete', label: t('widgets.delete') }
+                          ],
+                          (actionId) => {
+                            if (actionId === 'open') void openWidget(w.id)
+                            if (actionId === 'export') void handleExport(w)
+                            if (actionId === 'archive') void archiveWidget(w.id, true)
+                            if (actionId === 'delete') setDeletingId(w.id)
+                          }
+                        )
+                      }}
+                      onArchive={() => void archiveWidget(w.id, true)}
+                      onRequestDelete={() => setDeletingId(w.id)}
+                      t={t}
+                    />
+                  )
+                })}
               </div>
             )}
             {archived.length > 0 && (
@@ -167,7 +189,7 @@ export function WidgetPanel(): React.JSX.Element {
                   <span className="text-text-tertiary/50 tabular-nums">{archived.length}</span>
                 </button>
                 <AnimatedCollapse open={archivedOpen}>
-                  <div className="grid grid-cols-1 gap-1.5 px-3 pb-3 pt-1">
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-1.5 px-3 pb-3 pt-1">
                     {archived.map((w) => (
                       <ArchivedWidgetRow
                         key={w.id}
@@ -258,7 +280,11 @@ function errorMessageForExportCode(
 
 interface WidgetCardProps {
   widget: WidgetSummary
+  isRunning: boolean
+  isStarting: boolean
   onOpen: () => void
+  onStart: () => void
+  onStop: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onArchive: () => void
   onRequestDelete: () => void
@@ -267,23 +293,63 @@ interface WidgetCardProps {
 
 function WidgetCard({
   widget,
+  isRunning,
+  isStarting,
   onOpen,
+  onStart,
+  onStop,
   onContextMenu,
   onArchive,
   onRequestDelete,
   t
 }: WidgetCardProps): React.JSX.Element {
   const last = widget.lastOpenedAt || widget.createdAt
+  // 卡片本体仅在 widget 运行时点击跳转浏览器；未运行时点击不做事，请用启动按钮
+  const handleCardClick = (): void => {
+    if (isRunning) onOpen()
+  }
+  const handleToggleClick = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (isStarting) return
+    if (isRunning) onStop()
+    else onStart()
+  }
+  const toggleTitle = isStarting
+    ? t('widgets.starting')
+    : isRunning
+      ? t('widgets.stopWidgetTooltip')
+      : t('widgets.startWidgetTooltip')
   return (
     <div
-      onClick={onOpen}
+      onClick={handleCardClick}
       onContextMenu={onContextMenu}
-      className="group relative rounded-md border border-border-secondary/40 bg-bg-secondary/30 hover:border-border-secondary hover:bg-bg-hover/60 transition-colors cursor-pointer p-2.5"
+      className={`group relative rounded-md border border-border-secondary/40 bg-bg-secondary/30 hover:border-border-secondary hover:bg-bg-hover/60 transition-colors p-2.5 ${
+        isRunning ? 'cursor-pointer' : 'cursor-default'
+      }`}
     >
       <div className="flex items-start gap-2">
-        <div className="flex-shrink-0 w-7 h-7 rounded-md bg-bg-tertiary/60 flex items-center justify-center">
-          <Wrench size={13} className="text-text-tertiary" />
-        </div>
+        <button
+          type="button"
+          onClick={handleToggleClick}
+          disabled={isStarting}
+          title={toggleTitle}
+          aria-label={toggleTitle}
+          className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+            isStarting
+              ? 'bg-bg-tertiary/60 text-text-tertiary cursor-wait'
+              : isRunning
+                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-error/15 hover:text-error'
+                : 'bg-bg-tertiary/60 text-text-tertiary hover:bg-emerald-500/15 hover:text-emerald-500'
+          }`}
+        >
+          {isStarting ? (
+            <Loader2 size={13} className="animate-spin" />
+          ) : isRunning ? (
+            <Square size={11} className="fill-current" />
+          ) : (
+            <Play size={12} className="fill-current" />
+          )}
+        </button>
         <div className="flex-1 min-w-0">
           <div className="text-[12px] font-semibold text-text-primary truncate pr-14">
             {widget.name}

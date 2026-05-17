@@ -8,7 +8,6 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join, basename } from 'path'
 import type { SlashCommand } from '../../shared/types/slashCommand'
 import { skillService } from './skillService'
-import { getBuiltinCommands } from './devCommands'
 import { createLogger } from '../logger'
 
 const log = createLogger('CommandService')
@@ -102,9 +101,8 @@ class CommandService {
 
     if (!commandId) return null
 
-    // 查找匹配的命令（文件系统 + 插件）
+    // 查找匹配的命令（仅来自项目级 .claude/commands/）
     const commands = workingDir ? this.discoverCommands(workingDir) : []
-    commands.push(...this.getBuiltinCommands())
     const command = commands.find((c) => c.commandId === commandId)
     if (!command) return null
 
@@ -148,11 +146,6 @@ class CommandService {
       log.warn(`加载命令文件失败: ${filePath}`, e)
       return null
     }
-  }
-
-  /** 获取内置斜杠命令（dev 工具伴生的 /widget /presentation /sketch） */
-  getBuiltinCommands(): SlashCommand[] {
-    return getBuiltinCommands()
   }
 }
 

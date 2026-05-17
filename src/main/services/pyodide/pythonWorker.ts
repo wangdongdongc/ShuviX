@@ -1,12 +1,19 @@
 /**
- * Python Worker — 在 worker_threads 中运行 Pyodide WASM Python 运行时
- * 支持 REPL 交互模式、多轮共享作用域、NODEFS 文件系统挂载
+ * Python Worker —— 在 worker_threads 中运行 Pyodide WASM 解释器
+ *
+ * 行为定位：贴近 `python3` 原生 CLI 的子集
+ *   - 每次 execute 全新 globals 命名空间（无 REPL 持久态，无 `_` 自动回显）
+ *   - 支持 mode 分发：script / -c / -m / stdin / version
+ *   - sys.argv 由调用方完整提供
+ *   - PYTHONPATH / cwd 路径按需 NODEFS 挂载（只读）
+ *
+ * 仍由 worker 长驻：Pyodide 冷启动 ~3s，per-session 复用规避重复冷启。
  */
 
 import { parentPort } from 'worker_threads'
 import { platform } from 'process'
+import { resolve as resolvePath, sep as pathSep } from 'path'
 
-/** 将宿主机路径转换为 Emscripten POSIX 虚拟文件系统挂载点路径 */
 function toEmscriptenPath(hostPath: string): string {
   if (platform !== 'win32') return hostPath
   return '/' + hostPath.replace(/\\/g, '/').replace(':', '')
@@ -17,23 +24,28 @@ function toEmscriptenPath(hostPath: string): string {
 interface InitMessage {
   type: 'init'
   mounts: MountConfig[]
-  /** 项目工作目录（用于设置 Python 的 cwd） */
+  /** 工作目录默认值（execute 未传 cwd 时回退到这里） */
   workingDirectory: string
   /** 预装 wheel 文件的目录路径 */
   wheelsDir?: string
 }
 
-interface ExecuteMessage {
+export type ExecMode = 'script' | '-c' | '-m' | 'stdin' | 'version'
+
+export interface ExecuteMessage {
   type: 'execute'
   id: string
+  mode: ExecMode
+  /** mode='-c' / 'stdin' 时承载源码 */
   code: string
-  packages?: string[]
-  /**
-   * 本次执行前挂载到 pyodide 虚拟文件系统并追加到 sys.path 的宿主目录
-   * 只读，幂等（已挂载的路径会被跳过）。典型用途：让 skill 目录下的 .py
-   * 模块直接可被 `import`，无需把脚本内容塞进 code。
-   */
-  modulePaths?: string[]
+  /** mode='script' 时为脚本路径；mode='-m' 时为模块名 */
+  target?: string
+  /** 注入 Python 端的 sys.argv */
+  pythonArgv: string[]
+  /** 调用方 cwd（pyodide 内 chdir 目标）；不传则用 init 阶段的 workingDirectory */
+  cwd?: string
+  /** PYTHONPATH 已切分后的列表，每项为宿主机绝对路径 */
+  pythonPathDirs?: string[]
 }
 
 export interface MountConfig {
@@ -48,22 +60,27 @@ export interface WorkerResponse {
   id?: string
   stdout?: string
   stderr?: string
-  returnValue?: string
+  /** Python 进程退出码：0 成功，非 0 表示错误（含 SystemExit code） */
+  exitCode?: number
+  /** 严重错误时（wrapper 自身崩了 / 启动失败）携带的错误描述 */
   error?: string
 }
 
-// ---- Pyodide 运行时 ----
+// ---- Pyodide 运行时状态 ----
 
 type PyodideInstance = Awaited<ReturnType<typeof import('pyodide').loadPyodide>>
-type PyProxy = PyodideInstance['globals']
 
 let pyodide: PyodideInstance | null = null
-let persistentGlobals: PyProxy | null = null
-let readonlyPaths: string[] = []
-/** 已通过 modulePaths 加载过的宿主文件（按绝对路径去重，避免重复 exec） */
-const loadedModulePaths = new Set<string>()
 
-/** 递归创建目录 */
+/** 已挂载的宿主机绝对路径集合（init 阶段挂载 + execute 时动态挂载） */
+const mountedHostPaths = new Set<string>()
+/** Emscripten 侧只读挂载点列表，写保护用 */
+const readonlyMountPoints: string[] = []
+/** init 阶段确定的默认 cwd（POSIX 形态，pyodide 内可用） */
+let defaultPosixCwd = '/'
+
+// ---- 工具函数 ----
+
 function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, path: string): void {
   const parts = path.split('/').filter(Boolean)
   let current = ''
@@ -81,6 +98,54 @@ function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, p
   }
 }
 
+function isUnderMountedHostPath(absHostPath: string): boolean {
+  for (const existing of mountedHostPaths) {
+    if (absHostPath === existing) return true
+    if (absHostPath.startsWith(existing + pathSep)) return true
+  }
+  return false
+}
+
+/** 把当前 readonlyMountPoints 同步到 Python 侧的 builtins._shuvix_readonly_paths */
+function syncReadonlyPathsToPython(): void {
+  if (!pyodide) return
+  const json = JSON.stringify(readonlyMountPoints)
+  pyodide.runPython(`import builtins; builtins._shuvix_readonly_paths = ${json}`)
+}
+
+function mountOne(hostPath: string, access: 'readonly' | 'readwrite'): void {
+  if (!pyodide) return
+  const abs = resolvePath(hostPath)
+  if (mountedHostPaths.has(abs)) return
+  const mountPoint = toEmscriptenPath(abs)
+  const FS = pyodide.FS
+  mkdirRecursive(FS, mountPoint)
+  FS.mount(FS.filesystems.NODEFS, { root: abs }, mountPoint)
+  mountedHostPaths.add(abs)
+  if (access === 'readonly') {
+    readonlyMountPoints.push(mountPoint)
+  }
+}
+
+/** execute 时按需挂载 PYTHONPATH / cwd 路径，避免 Python `import` 找不到文件 */
+async function ensureDynamicMounts(paths: string[]): Promise<void> {
+  if (!pyodide) return
+  let needSync = false
+  for (const p of paths) {
+    if (!p) continue
+    const abs = resolvePath(p)
+    if (isUnderMountedHostPath(abs)) continue
+    // 用 fs 检查是否真实存在；不存在的目录跳过（让 Python 报真实错误）
+    const { existsSync } = await import('fs')
+    if (!existsSync(abs)) continue
+    mountOne(abs, 'readonly')
+    needSync = true
+  }
+  if (needSync) syncReadonlyPathsToPython()
+}
+
+// ---- 初始化 ----
+
 async function init(
   mounts: MountConfig[],
   workingDirectory: string,
@@ -89,55 +154,35 @@ async function init(
   const { loadPyodide } = await import('pyodide')
   pyodide = await loadPyodide({})
 
-  // 挂载文件系统（Windows 路径需转换为 POSIX 挂载点）
-  const FS = pyodide.FS
-  readonlyPaths = []
+  // 挂载工作目录 + 引用目录
   for (const mount of mounts) {
-    const mountPoint = toEmscriptenPath(mount.hostPath)
-    mkdirRecursive(FS, mountPoint)
-    FS.mount(FS.filesystems.NODEFS, { root: mount.hostPath }, mountPoint)
-    if (mount.access === 'readonly') {
-      readonlyPaths.push(mountPoint)
-    }
+    mountOne(mount.hostPath, mount.access)
   }
 
-  // 设置工作目录为项目目录（使用 POSIX 挂载点路径）
-  const posixWorkDir = toEmscriptenPath(workingDirectory)
-  pyodide.runPython(`import os; os.chdir(${JSON.stringify(posixWorkDir)})`)
+  defaultPosixCwd = toEmscriptenPath(resolvePath(workingDirectory))
+  pyodide.runPython(`import os; os.chdir(${JSON.stringify(defaultPosixCwd)})`)
 
-  // 创建持久化全局作用域
-  persistentGlobals = pyodide.globals.get('dict')()
-  pyodide.runPython(
-    `
-import sys
-sys.path.insert(0, '')
-`,
-    { globals: persistentGlobals as PyProxy }
-  )
-
-  // 注入只读路径保护（hook builtins.open）— 即使初始为空也先建好 _readonly_paths
-  // 与 guard，以便后续通过 modulePaths 追加的路径也能受保护
-  const pathsRepr = readonlyPaths.map((p) => `"${p.replace(/"/g, '\\"')}"`).join(', ')
-  pyodide.runPython(
-    `
-import builtins as _builtins
+  // 安装写保护 hook：拦截 builtins.open；只读路径表存到 builtins._shuvix_readonly_paths，
+  // 这样 fresh globals 也能命中（不依赖 persistent globals）
+  pyodide.runPython(`
+import builtins as _b
 import os as _os
 
-_readonly_paths = [${pathsRepr}]
-_original_open = _builtins.open
+_b._shuvix_readonly_paths = []
+_original_open = _b.open
 
 def _guarded_open(file, mode='r', *args, **kwargs):
     if isinstance(file, str) and any(c in mode for c in 'wxa+'):
         abs_path = _os.path.abspath(file)
-        for rp in _readonly_paths:
+        for rp in _b._shuvix_readonly_paths:
             if abs_path == rp or abs_path.startswith(rp + _os.sep):
                 raise PermissionError(f"Write denied: {abs_path} is inside a read-only directory")
     return _original_open(file, mode, *args, **kwargs)
 
-_builtins.open = _guarded_open
-`,
-    { globals: persistentGlobals as PyProxy }
-  )
+_b.open = _guarded_open
+`)
+
+  syncReadonlyPathsToPython()
 
   // 预装本地 wheel 包（离线加载，无需联网）
   if (wheelsDir) {
@@ -149,7 +194,6 @@ _builtins.open = _guarded_open
         await pyodide.loadPackage(wheelPaths)
       }
     } catch (err) {
-      // 预装失败不阻塞初始化，仅记录
       parentPort!.postMessage({
         type: 'error',
         error: `Warning: failed to load pre-bundled packages: ${err instanceof Error ? err.message : String(err)}`
@@ -160,180 +204,146 @@ _builtins.open = _guarded_open
   parentPort!.postMessage({ type: 'ready' } satisfies WorkerResponse)
 }
 
-/**
- * 按需把宿主 .py 文件读入并在持久化 globals 中 exec。
- * - 幂等：同一路径多次调用只加载一次
- * - 源文件在独立命名空间（__name__ != '__main__'）内 exec，因此 `if __name__ == '__main__':`
- *   守卫里的 main() 不会被意外触发
- * - 顶层函数/类/常量会被提升到 persistentGlobals，agent 的后续 code 可直接调用
- */
-async function loadModuleFiles(paths: string[]): Promise<void> {
-  if (!pyodide || !persistentGlobals) return
-  const { readFileSync } = await import('fs')
-  const { resolve: resolvePath, basename } = await import('path')
-  for (const hostPath of paths) {
-    if (!hostPath) continue
-    const abs = resolvePath(hostPath)
-    if (loadedModulePaths.has(abs)) continue
-    let source: string
-    try {
-      source = readFileSync(abs, 'utf-8')
-    } catch (err) {
-      throw new Error(
-        `Failed to read modulePath "${abs}": ${err instanceof Error ? err.message : String(err)}`
-      )
+// ---- 执行 ----
+
+function buildBody(msg: ExecuteMessage): string {
+  switch (msg.mode) {
+    case '-c': {
+      return `exec(compile(${JSON.stringify(msg.code)}, '<string>', 'exec'), _ns)`
     }
-    // JSON.stringify 产出的字符串是合法的 Python 字符串字面量；借此安全地把
-    // 源码和路径带入 Python 上下文，避免三引号/反斜杠转义问题
-    const srcLit = JSON.stringify(source)
-    const fileLit = JSON.stringify(abs)
-    const modName = basename(abs).replace(/\.py$/i, '') || 'module'
-    const nameLit = JSON.stringify(modName)
-    const wrapper = `
-_ns = {'__name__': ${nameLit}, '__file__': ${fileLit}, '__builtins__': __builtins__}
-exec(compile(${srcLit}, ${fileLit}, 'exec'), _ns)
-for _k, _v in _ns.items():
-    if not _k.startswith('_'):
-        globals()[_k] = _v
-del _ns
-try:
-    del _k, _v
-except NameError:
-    pass
-`
-    try {
-      pyodide.runPython(wrapper, { globals: persistentGlobals as PyProxy })
-    } catch (err) {
-      throw new Error(
-        `Failed to load module "${abs}": ${err instanceof Error ? err.message : String(err)}`
-      )
+    case 'stdin': {
+      return `exec(compile(${JSON.stringify(msg.code)}, '<stdin>', 'exec'), _ns)`
     }
-    loadedModulePaths.add(abs)
+    case '-m': {
+      // runpy 会自己处理 sys.argv[0]（alter_sys=True）；这里只需保证 module 名称正确
+      return `import runpy; runpy.run_module(${JSON.stringify(msg.target ?? '')}, run_name='__main__', alter_sys=True)`
+    }
+    case 'script': {
+      const posix = toEmscriptenPath(resolvePath(msg.target ?? ''))
+      return `import runpy; runpy.run_path(${JSON.stringify(posix)}, run_name='__main__')`
+    }
+    case 'version': {
+      return `import sys; _pyver = sys.version.split()[0]; print(f'Python {_pyver} (Pyodide WebAssembly runtime)')`
+    }
   }
 }
 
-async function execute(
-  id: string,
-  code: string,
-  packages?: string[],
-  modulePaths?: string[]
-): Promise<void> {
-  if (!pyodide || !persistentGlobals) {
+async function execute(msg: ExecuteMessage): Promise<void> {
+  if (!pyodide) {
     parentPort!.postMessage({
       type: 'error',
-      id,
-      error: 'Pyodide runtime not initialized'
+      id: msg.id,
+      error: 'Pyodide runtime not initialized',
+      exitCode: 1
     } satisfies WorkerResponse)
     return
   }
 
-  // 先按需加载宿主 .py 模块（skill 脚本等），顶层定义直接进入 persistentGlobals
-  if (modulePaths && modulePaths.length > 0) {
-    try {
-      await loadModuleFiles(modulePaths)
-    } catch (err) {
-      parentPort!.postMessage({
-        type: 'error',
-        id,
-        stdout: '',
-        stderr: '',
-        error: err instanceof Error ? err.message : String(err)
-      } satisfies WorkerResponse)
-      return
-    }
+  // 1. 动态挂载 PYTHONPATH 目录 + cwd 父目录 + script 父目录
+  const dynamicPaths: string[] = []
+  if (msg.pythonPathDirs) dynamicPaths.push(...msg.pythonPathDirs)
+  if (msg.cwd) dynamicPaths.push(msg.cwd)
+  if (msg.mode === 'script' && msg.target) {
+    const { dirname } = await import('path')
+    dynamicPaths.push(dirname(resolvePath(msg.target)))
   }
-
-  // 安装请求的包
-  if (packages && packages.length > 0) {
-    try {
-      await pyodide.loadPackage('micropip')
-      const micropip = pyodide.pyimport('micropip')
-      for (const pkg of packages) {
-        await micropip.install(pkg)
-      }
-    } catch (err: unknown) {
-      parentPort!.postMessage({
-        type: 'error',
-        id,
-        stdout: '',
-        stderr: '',
-        error: `Failed to install packages: ${err instanceof Error ? err.message : String(err)}`
-      } satisfies WorkerResponse)
-      return
-    }
-  }
-
-  // 捕获 stdout/stderr
-  const stdout: string[] = []
-  const stderr: string[] = []
-  pyodide.setStdout({ batched: (msg: string) => stdout.push(msg) })
-  pyodide.setStderr({ batched: (msg: string) => stderr.push(msg) })
-
   try {
-    // REPL 交互模式：将代码按 'single' 模式编译（最后一个表达式自动输出）
-    // 策略：先尝试 exec 模式编译整体代码，提取最后一个表达式单独用 single 模式
-    const replCode = `
-import ast as _ast, sys as _sys
-
-_code = ${JSON.stringify(code)}
-try:
-    _tree = _ast.parse(_code, mode='exec')
-except SyntaxError:
-    # 语法错误让后面的 exec 报出
-    exec(_code)
-    _result = None
-else:
-    _result = None
-    if _tree.body and isinstance(_tree.body[-1], _ast.Expr):
-        # 最后一条是表达式 → 拆分：前面用 exec，最后一条用 eval
-        _last_expr = _tree.body.pop()
-        if _tree.body:
-            exec(compile(_ast.Module(body=_tree.body, type_ignores=[]), '<input>', 'exec'))
-        _result = eval(compile(_ast.Expression(body=_last_expr.value), '<input>', 'eval'))
-        if _result is not None:
-            _repr = repr(_result)
-            print(_repr)
-            _ = _result
-    else:
-        exec(compile(_tree, '<input>', 'exec'))
-`
-
-    await pyodide.runPythonAsync(replCode, { globals: persistentGlobals as PyProxy })
-
-    // 获取返回值
-    let returnValue: string | undefined
-    try {
-      const result = persistentGlobals!.get('_result')
-      if (result !== undefined && result !== null) {
-        returnValue = String(result)
-      }
-    } catch {
-      // _result 可能不存在
-    }
-
-    parentPort!.postMessage({
-      type: 'result',
-      id,
-      stdout: stdout.join('\n'),
-      stderr: stderr.join('\n'),
-      returnValue
-    } satisfies WorkerResponse)
-  } catch (err: unknown) {
+    await ensureDynamicMounts(dynamicPaths)
+  } catch (err) {
     parentPort!.postMessage({
       type: 'error',
-      id,
-      stdout: stdout.join('\n'),
-      stderr: stderr.join('\n'),
-      error: err instanceof Error ? err.message : String(err)
+      id: msg.id,
+      error: `Failed to mount dynamic paths: ${err instanceof Error ? err.message : String(err)}`,
+      exitCode: 1
     } satisfies WorkerResponse)
+    return
+  }
+
+  // 2. 合成 wrapper
+  const argvJson = JSON.stringify(msg.pythonArgv)
+  const cwdPosix = msg.cwd ? toEmscriptenPath(resolvePath(msg.cwd)) : defaultPosixCwd
+  const cwdLit = JSON.stringify(cwdPosix)
+  const pythonPathPosix = (msg.pythonPathDirs ?? []).map((p) => toEmscriptenPath(resolvePath(p)))
+  const pathsJson = JSON.stringify(pythonPathPosix)
+  const body = buildBody(msg)
+
+  const wrapper = `
+import sys as _sys, os as _os, builtins as _b, traceback as _tb
+
+_sys.argv = ${argvJson}
+try:
+    _os.chdir(${cwdLit})
+except OSError:
+    pass
+
+for _p in ${pathsJson}:
+    if _p and _p not in _sys.path:
+        _sys.path.insert(0, _p)
+
+_ns = {'__name__': '__main__', '__file__': '<input>', '__builtins__': _b.__dict__}
+_shuvix_exit_code = 0
+try:
+    ${body}
+except SystemExit as _e:
+    _c = _e.code
+    if _c is None:
+        _shuvix_exit_code = 0
+    elif isinstance(_c, int):
+        _shuvix_exit_code = _c
+    else:
+        _sys.stderr.write(str(_c) + '\\n')
+        _shuvix_exit_code = 1
+except BaseException:
+    _tb.print_exc()
+    _shuvix_exit_code = 1
+`
+
+  // 3. stdout/stderr 捕获（每次 execute 重置）
+  const stdoutBuf: string[] = []
+  const stderrBuf: string[] = []
+  pyodide.setStdout({ batched: (m: string) => stdoutBuf.push(m) })
+  pyodide.setStderr({ batched: (m: string) => stderrBuf.push(m) })
+
+  // 4. 在全新的 globals 字典里执行 wrapper
+  const freshGlobals = pyodide.globals.get('dict')()
+  try {
+    await pyodide.runPythonAsync(wrapper, { globals: freshGlobals })
+    let exitCode = 0
+    try {
+      const v = freshGlobals.get('_shuvix_exit_code') as unknown
+      if (typeof v === 'number') exitCode = v
+    } catch {
+      // ignore
+    }
+    parentPort!.postMessage({
+      type: exitCode === 0 ? 'result' : 'error',
+      id: msg.id,
+      stdout: stdoutBuf.join('\n'),
+      stderr: stderrBuf.join('\n'),
+      exitCode
+    } satisfies WorkerResponse)
+  } catch (err: unknown) {
+    // wrapper 本身报错（极少见，通常是语法错误塞进 wrapper / pyodide 崩溃）
+    parentPort!.postMessage({
+      type: 'error',
+      id: msg.id,
+      stdout: stdoutBuf.join('\n'),
+      stderr: stderrBuf.join('\n'),
+      error: err instanceof Error ? err.message : String(err),
+      exitCode: 1
+    } satisfies WorkerResponse)
+  } finally {
+    try {
+      ;(freshGlobals as unknown as { destroy(): void }).destroy()
+    } catch {
+      // ignore
+    }
   }
 }
 
-// ---- 执行队列（确保同一 worker 内串行执行，避免 stdout/stderr handler 竞争） ----
+// ---- 执行队列 ----
 
 let execQueue: Promise<void> = Promise.resolve()
-
-// ---- 消息处理 ----
 
 parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
   if (msg.type === 'init') {
@@ -348,6 +358,6 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
       }
     })
   } else if (msg.type === 'execute') {
-    execQueue = execQueue.then(() => execute(msg.id, msg.code, msg.packages, msg.modulePaths))
+    execQueue = execQueue.then(() => execute(msg))
   }
 })

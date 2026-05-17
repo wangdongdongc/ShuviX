@@ -11,27 +11,10 @@ import { tmpdir } from 'node:os'
 const TEST_DIR = join(tmpdir(), 'shuvix-read-test-' + Date.now())
 const SESSION_ID = 'test-session'
 
-// mock types 模块（完全替换，不加载原始模块避免触发 Electron/DB 依赖）
-vi.mock('../types', () => ({
-  BaseTool: class {
-    async securityCheck(..._args: unknown[]): Promise<void> {}
-    async executeInternal(..._args: unknown[]): Promise<unknown> {
-      return {}
-    }
-    async execute(
-      toolCallId: string,
-      params: unknown,
-      signal?: AbortSignal,
-      onUpdate?: unknown
-    ): Promise<unknown> {
-      await this.securityCheck(toolCallId, params, signal)
-      return this.executeInternal(toolCallId, params, signal, onUpdate)
-    }
-  },
+// mock toolContext（避免加载 projectDao/sessionService → electron app.getPath）
+vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: () => ({
     workingDirectory: TEST_DIR,
-    dockerEnabled: false,
-    dockerImage: '',
     referenceDirs: []
   }),
   isPathWithinWorkspace: (absolutePath: string, workingDirectory: string) => {
@@ -43,6 +26,23 @@ vi.mock('../types', () => ({
   assertSandboxRead: () => {},
   assertSandboxWrite: () => {},
   TOOL_ABORTED: 'Aborted'
+}))
+
+// mock toolRegistry — 文件底部的 registerBuiltinTool 在测试里是 no-op
+vi.mock('../../services/toolRegistry', () => ({
+  registerBuiltinTool: () => {}
+}))
+
+// mock electron — 仅 read.ts 需要 nativeImage，其他保持空
+vi.mock('electron', () => ({
+  nativeImage: {
+    createFromBuffer: () => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 0, height: 0 }),
+      toPNG: () => Buffer.alloc(0),
+      toDataURL: () => 'data:image/png;base64,'
+    })
+  }
 }))
 
 // mock i18n — 返回 key 本身（带参数展开）
@@ -115,14 +115,14 @@ beforeAll(() => {
   // 超长单行文件（minified）
   writeFileSync(join(TEST_DIR, 'minified.js'), 'x'.repeat(5000) + '\nshort line\n')
 
-  // 二进制文件（含 NULL 字节）
+  // 二进制文件（含 NULL 字节，文件扩展名为文本类，触发 isBinaryFile 路径）
   const binBuf = Buffer.alloc(100)
   binBuf[50] = 0 // NULL 字节
   binBuf.write('hello', 0)
-  writeFileSync(join(TEST_DIR, 'binary.dat'), binBuf)
+  writeFileSync(join(TEST_DIR, 'binary.log'), binBuf)
 
-  // 已知二进制扩展名
-  writeFileSync(join(TEST_DIR, 'image.png'), 'not really a png')
+  // 已知二进制扩展名（.exe 在 KNOWN_BINARY_EXTENSIONS）
+  writeFileSync(join(TEST_DIR, 'archive.exe'), 'not really an exe')
 
   // 子目录
   mkdirSync(join(TEST_DIR, 'subdir'), { recursive: true })
@@ -247,7 +247,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
   it('已知扩展名直接拒绝', async () => {
     const tool = new ReadTool(ctx)
     try {
-      await tool.execute('tc9', { path: join(TEST_DIR, 'image.png') })
+      await tool.execute('tc9', { path: join(TEST_DIR, 'archive.exe') })
       expect.fail('应该抛错')
     } catch (err: unknown) {
       expect(err instanceof Error ? err.message : '').toContain('Unsupported format')
@@ -257,7 +257,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
   it('NULL 字节检测拒绝', async () => {
     const tool = new ReadTool(ctx)
     try {
-      await tool.execute('tc10', { path: join(TEST_DIR, 'binary.dat') })
+      await tool.execute('tc10', { path: join(TEST_DIR, 'binary.log') })
       expect.fail('应该抛错')
     } catch (err: unknown) {
       expect(err instanceof Error ? err.message : '').toContain('Unsupported format')

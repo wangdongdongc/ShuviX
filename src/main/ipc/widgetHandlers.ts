@@ -18,6 +18,22 @@ export function registerWidgetHandlers(): void {
     }
   })
 
+  /** 启动单个 widget —— 注册到 server，但不打开浏览器 */
+  ipcMain.handle('widget:startWidget', async (_event, id: string) => {
+    try {
+      const result = await widgetService.startWidget(id)
+      return { success: true, url: result.url, buildSuccess: result.buildSuccess }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  /** 停止单个 widget —— 从 server 注销，不影响其他 widget */
+  ipcMain.handle('widget:stopWidget', (_event, id: string) => {
+    widgetService.stopWidget(id)
+    return { success: true }
+  })
+
   ipcMain.handle(
     'widget:rename',
     (_event, params: { id: string; name: string; description?: string }) => {

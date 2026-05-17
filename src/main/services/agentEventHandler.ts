@@ -5,7 +5,6 @@ import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'
 import { sessionDao } from '../dao/sessionDao'
 import { isCommandAllowedUnified } from '../utils/toolUtils/allowList'
-import { dockerManager } from './dockerManager'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import type { Message, MessageMetadata, ToolResultDetails } from '../types'
 import type { ChatEvent, RuntimeStatus } from '../frontend/core'
@@ -20,7 +19,7 @@ function checkToolApproval(
   args: Record<string, unknown>
 ): { approvalRequired: boolean; sshCredentialRequired: boolean; isUserInput: boolean } {
   let approvalRequired = false
-  if (toolName === 'bash' || (toolName === 'terminal' && args?.action === 'exec')) {
+  if (toolName === 'bash') {
     const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
     if (!sess?.autoApprove) {
       const command = (args?.command as string) || ''
@@ -91,7 +90,7 @@ function handleTurnEnd(ctx: SessionEventHandlerContext): void {
   log.info(`Turn ${ctx.state.turnCounter} 结束 session=${ctx.sessionId}`)
 }
 
-/** agent_end 事件：Docker 清理、token 统计、持久化 */
+/** agent_end 事件：token 统计、持久化 */
 function handleAgentEnd(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'agent_end' }>
@@ -99,10 +98,6 @@ function handleAgentEnd(
   log.info(`结束 session=${ctx.sessionId}`)
   ctx.state.preEmittedToolCalls.clear()
   ctx.state.toolUseMessageIds.clear()
-  // Docker 模式下，回复完成后延迟销毁容器（空闲超时后自动清理）
-  dockerManager.scheduleDestroy(ctx.sessionId, () => {
-    ctx.emitRuntimeEvent('docker', null)
-  })
   // 注意：per-message 错误已在 handleMessageEnd 中广播，这里不再重复广播
   const endMessages = event.messages
   // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
@@ -287,6 +282,17 @@ function handleMessageEnd(
         /* 序列化失败则不存响应 */
       }
       httpLogService.updateUsage(logId, usage.input, usage.output, usage.totalTokens, responseJson)
+    }
+    // 实时上报 prompt token 用量（每个 LLM step 完成后），让 UI 在多轮工具调用过程中也能更新上下文指示器
+    if (msg.usage) {
+      const promptTokens = (msg.usage.totalTokens || 0) - (msg.usage.output || 0)
+      if (promptTokens > 0) {
+        ctx.broadcastEvent({
+          type: 'token_usage',
+          sessionId: ctx.sessionId,
+          promptTokens
+        })
+      }
     }
     // 提取 Google Gemini 图片输出
     const images = msgWithImages._images

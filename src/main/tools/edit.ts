@@ -5,7 +5,7 @@
 
 import { constants } from 'fs'
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from 'fs/promises'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { assertNotModifiedSinceRead, withFileLock, recordRead } from '../utils/toolUtils/fileTime'
 import { BaseTool } from '../services/baseTool'

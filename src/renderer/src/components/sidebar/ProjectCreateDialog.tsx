@@ -58,7 +58,7 @@ const BUILTIN_PURPOSES: readonly BuiltinPurpose[] = [
     icon: FileText,
     labelKey: 'projectForm.purposeOffice',
     tipKey: 'projectForm.purposeTipOffice',
-    enabledTools: ['read', 'ask', 'python']
+    enabledTools: ['read', 'ask', 'bash', 'skill:python']
   },
   {
     key: 'sql',

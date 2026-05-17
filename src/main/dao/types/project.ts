@@ -44,10 +44,6 @@ export interface Project {
   path: string
   /** 项目级 system prompt 卡片数组(应用层视图,DAO 序列化为 JSON 信封写入 systemPrompt 列) */
   promptSections: ProjectPromptSection[]
-  /** 是否启用 Docker 隔离 */
-  dockerEnabled: number
-  /** Docker 镜像名 */
-  dockerImage: string
   /** 项目扩展配置 */
   settings: ProjectSettings
   /** 归档时间戳（0 表示未归档） */

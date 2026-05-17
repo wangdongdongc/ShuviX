@@ -128,14 +128,12 @@ export class ProjectDao extends BaseDao {
   /** 插入项目 */
   insert(project: Project): void {
     this.stmt(
-      'INSERT INTO projects (id, name, path, systemPrompt, dockerEnabled, dockerImage, settings, archivedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO projects (id, name, path, systemPrompt, settings, archivedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       project.id,
       project.name,
       project.path,
       encodePromptSections(project.promptSections),
-      project.dockerEnabled,
-      project.dockerImage,
       JSON.stringify(project.settings),
       project.archivedAt,
       project.createdAt,
@@ -146,18 +144,7 @@ export class ProjectDao extends BaseDao {
   /** 更新项目 */
   update(
     id: string,
-    fields: Partial<
-      Pick<
-        Project,
-        | 'name'
-        | 'path'
-        | 'promptSections'
-        | 'dockerEnabled'
-        | 'dockerImage'
-        | 'settings'
-        | 'archivedAt'
-      >
-    >
+    fields: Partial<Pick<Project, 'name' | 'path' | 'promptSections' | 'settings' | 'archivedAt'>>
   ): void {
     const sets: string[] = []
     const values: (string | number)[] = []
@@ -172,14 +159,6 @@ export class ProjectDao extends BaseDao {
     if (fields.promptSections !== undefined) {
       sets.push('systemPrompt = ?')
       values.push(encodePromptSections(fields.promptSections))
-    }
-    if (fields.dockerEnabled !== undefined) {
-      sets.push('dockerEnabled = ?')
-      values.push(fields.dockerEnabled)
-    }
-    if (fields.dockerImage !== undefined) {
-      sets.push('dockerImage = ?')
-      values.push(fields.dockerImage)
     }
     if (fields.settings !== undefined) {
       sets.push('settings = ?')

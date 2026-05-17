@@ -21,9 +21,11 @@ import { registerCompactionHandlers } from './compactionHandlers'
 import { registerCustomSubAgentHandlers } from './customSubAgentHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
+import { registerBrowserDataHandlers } from './browserDataHandlers'
 import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
+import { registerFilesHandlers } from './filesHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -53,7 +55,9 @@ export function registerIpcHandlers(): void {
   registerCustomSubAgentHandlers()
   registerTerminalHandlers()
   registerBrowserViewHandlers()
+  registerBrowserDataHandlers()
   registerContextMenuHandlers()
   registerWidgetHandlers()
   registerConfigShareHandlers()
+  registerFilesHandlers()
 }

@@ -5,7 +5,7 @@
  * （services 构造 tool 实例并调度，tool 实现继承此类）。
  */
 
-import type { TSchema, Static } from '@sinclair/typebox'
+import type { TSchema, Static } from 'typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 
 /**

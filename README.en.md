@@ -40,7 +40,6 @@
 - 🔄 **Multi-model switching** — Connect to mainstream LLMs and switch between them freely
 - 🛠️ **Agentic toolchain** — Built-in tools for file I/O, terminal execution, code search, and more
 - 📁 **Project sandbox** — Restrict AI access to project directories only; shell commands require user approval before execution
-- 🐳 **Docker isolation** — Optionally isolate command execution in Docker containers to protect the host environment
 - 💾 **Local-first** — All data stored in local SQLite, your privacy is fully protected
 
 ## 🖼️ Preview

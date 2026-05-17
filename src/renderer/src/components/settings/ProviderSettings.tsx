@@ -11,7 +11,11 @@ import {
   Plus,
   X,
   SlidersHorizontal,
-  TriangleAlert
+  TriangleAlert,
+  Wrench,
+  Brain,
+  Image as ImageIcon,
+  Mic
 } from 'lucide-react'
 import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -574,32 +578,12 @@ export function ProviderSettings(): React.JSX.Element {
                                   {m.modelId}
                                 </span>
                                 {/* 能力标签 */}
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {caps.vision && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-blue-500/20 text-blue-400">
-                                      Vision
-                                    </span>
-                                  )}
-                                  {caps.functionCalling && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-green-500/20 text-green-400">
-                                      Tools
-                                    </span>
-                                  )}
-                                  {caps.reasoning && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-400">
-                                      Reasoning
-                                    </span>
-                                  )}
-                                  {caps.imageOutput && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-orange-500/20 text-orange-400">
-                                      ImgOut
-                                    </span>
-                                  )}
-                                  {caps.audioInput && (
-                                    <span className="px-1 py-0.5 text-[9px] rounded bg-cyan-500/20 text-cyan-400">
-                                      Audio
-                                    </span>
-                                  )}
+                                <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
+                                  {caps.vision && <Eye size={10} />}
+                                  {caps.functionCalling && <Wrench size={10} />}
+                                  {caps.reasoning && <Brain size={10} />}
+                                  {caps.imageOutput && <ImageIcon size={10} />}
+                                  {caps.audioInput && <Mic size={10} />}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1.5">

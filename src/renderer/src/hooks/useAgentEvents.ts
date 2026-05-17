@@ -3,7 +3,6 @@ import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../st
 import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useBrowserStore } from '../stores/browserStore'
-import { useTerminalStore } from '../stores/terminalStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 import i18n from '../i18n'
 
@@ -248,6 +247,12 @@ export function useAgentEvents(): void {
         store.appendStreamingImage(sid, JSON.parse(event.image))
         break
 
+      case 'token_usage':
+        if (sid === store.activeSessionId) {
+          store.setUsedContextTokens(event.promptTokens > 0 ? event.promptTokens : null)
+        }
+        break
+
       case 'tool_start': {
         // 原子操作：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁）
         // 工具执行状态统一为 'running';"等待用户输入"由独立的 input_request 事件驱动
@@ -336,15 +341,6 @@ export function useAgentEvents(): void {
           useBrowserStore.getState().open(url)
         } else if (event.action === 'close') {
           useBrowserStore.getState().setUrl('about:blank')
-        }
-        break
-
-      case 'terminal_event':
-        if (event.action === 'open') {
-          useTerminalStore.getState().connectAgentTerminal(event.ptyId)
-          const browser = useBrowserStore.getState()
-          if (!browser.isOpen) browser.open()
-          browser.setActiveTab('terminal')
         }
         break
 

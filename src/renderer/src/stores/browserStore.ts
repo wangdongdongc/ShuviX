@@ -23,7 +23,7 @@ function syncBrowserOffset(offset: number): void {
 export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
 /** 右侧面板激活的标签页 */
-export type PanelTab = 'browser' | 'terminal' | 'widget' | 'subagent'
+export type PanelTab = 'browser' | 'terminal' | 'files' | 'widget' | 'subagent'
 
 const BROWSER_MIN = 320
 const BROWSER_MAX = 960

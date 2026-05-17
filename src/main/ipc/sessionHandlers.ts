@@ -1,6 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
-import { dockerManager } from '../services/dockerManager'
+import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import type {
   SessionUpdateModelConfigParams,
@@ -111,7 +111,12 @@ export function registerSessionHandlers(): void {
 
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
   ipcMain.handle('session:delete', (_event, id: string) => {
+    // 删除前捕获 workingDirectory，删除后用于关闭 watcher（仅当当前 watcher 监听的就是此目录时）
+    // 注：同项目的多个会话共享 workingDirectory，此时不应误关 —— closeWatcherIfWorkingDirectory
+    // 只做"路径相同则关"的窄判断；项目目录被多个会话共用时不影响其它会话的后续 scan
+    const wd = sessionService.getById(id)?.workingDirectory
     sessionService.delete(id)
+    if (wd) closeWatcherIfWorkingDirectory(wd)
     return { success: true }
   })
 
@@ -129,11 +134,6 @@ export function registerSessionHandlers(): void {
       return { title }
     }
   )
-
-  /** 校验 Docker 环境（不传 image 仅检查命令可用性，传 image 则完整校验） */
-  ipcMain.handle('docker:validate', async (_event, params?: { image?: string }) => {
-    return dockerManager.validateSetup(params?.image)
-  })
 
   /** 选择文件并读取其文本内容（用于 SSH 私钥等） */
   ipcMain.handle(

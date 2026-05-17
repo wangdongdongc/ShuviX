@@ -92,8 +92,6 @@ export class ProjectService {
     name?: string
     path: string
     promptSections?: ProjectPromptSection[]
-    dockerEnabled?: boolean
-    dockerImage?: string
     enabledTools?: string[]
     referenceDirs?: ReferenceDir[]
     tool?: import('../dao/types').ToolSettings
@@ -111,8 +109,6 @@ export class ProjectService {
       name: params.name || basename(params.path) || params.path,
       path: resolve(expandPath(params.path)),
       promptSections: params.promptSections ?? [],
-      dockerEnabled: params.dockerEnabled ? 1 : 0,
-      dockerImage: params.dockerImage || '',
       settings,
       archivedAt: params.archived ? now : 0,
       createdAt: now,
@@ -129,8 +125,6 @@ export class ProjectService {
       name?: string
       path?: string
       promptSections?: ProjectPromptSection[]
-      dockerEnabled?: boolean
-      dockerImage?: string
       enabledTools?: string[]
       referenceDirs?: ReferenceDir[]
       tool?: import('../dao/types').ToolSettings
@@ -158,10 +152,6 @@ export class ProjectService {
       ...(params.name !== undefined ? { name: params.name } : {}),
       ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
       ...(params.promptSections !== undefined ? { promptSections: params.promptSections } : {}),
-      ...(params.dockerEnabled !== undefined
-        ? { dockerEnabled: params.dockerEnabled ? 1 : 0 }
-        : {}),
-      ...(params.dockerImage !== undefined ? { dockerImage: params.dockerImage } : {}),
       ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })

@@ -79,17 +79,9 @@ export function AboutSettings(): React.JSX.Element {
         )
       case 'available':
         return (
-          <div className="mt-1 space-y-1">
-            <p className="text-[11px] text-blue-400">
-              {t('about.updateAvailable', { version: updateEvent.version })}
-            </p>
-            <button
-              onClick={handleDownload}
-              className="text-[11px] px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-            >
-              {t('about.updateDownload')}
-            </button>
-          </div>
+          <p className="text-[11px] text-blue-400 mt-1">
+            {t('about.updateAvailable', { version: updateEvent.version })}
+          </p>
         )
       case 'downloading':
         return (
@@ -127,6 +119,7 @@ export function AboutSettings(): React.JSX.Element {
 
   const isChecking = updateEvent?.type === 'checking'
   const isDownloading = updateEvent?.type === 'downloading'
+  const isAvailable = updateEvent?.type === 'available'
 
   return (
     <div className="flex-1 px-5 py-5 space-y-6">
@@ -142,12 +135,20 @@ export function AboutSettings(): React.JSX.Element {
             </p>
           )}
           <button
-            onClick={handleCheck}
+            onClick={isAvailable ? handleDownload : handleCheck}
             disabled={isChecking || isDownloading}
-            className="flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded border border-border-primary bg-bg-secondary hover:bg-bg-hover text-[11px] text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded border text-[11px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              isAvailable
+                ? 'border-blue-600 bg-blue-600 hover:bg-blue-500 hover:border-blue-500 text-white'
+                : 'border-border-primary bg-bg-secondary hover:bg-bg-hover text-text-primary'
+            }`}
           >
-            <RefreshCw size={11} className={isChecking ? 'animate-spin' : ''} />
-            {t('about.checkUpdate')}
+            {isAvailable ? (
+              <Download size={11} />
+            ) : (
+              <RefreshCw size={11} className={isChecking ? 'animate-spin' : ''} />
+            )}
+            {isAvailable ? t('about.updateDownload') : t('about.checkUpdate')}
           </button>
           {renderUpdateStatus()}
         </div>

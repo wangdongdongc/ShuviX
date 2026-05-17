@@ -212,11 +212,17 @@ export class WidgetServer {
   }
 
   /** 当前服务器运行状态（供 UI 展示） */
-  getStatus(): { running: boolean; port: number; widgetCount: number } {
+  getStatus(): {
+    running: boolean
+    port: number
+    widgetCount: number
+    registeredIds: string[]
+  } {
     return {
       running: this.server !== null,
       port: this.port,
-      widgetCount: this.entries.size
+      widgetCount: this.entries.size,
+      registeredIds: Array.from(this.entries.keys())
     }
   }
 

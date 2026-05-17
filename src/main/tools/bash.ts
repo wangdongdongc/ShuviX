@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import {
   getShellConfig,
@@ -13,8 +13,6 @@ import {
   collapseProgressOutput
 } from '../utils/toolUtils/shell'
 import { buildSpawnEnv } from '../utils/paths'
-import { dockerManager } from '../services/dockerManager'
-import { settingsService } from '../services/settingsService'
 import { BaseTool } from '../services/baseTool'
 import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
@@ -44,7 +42,7 @@ const BashParamsSchema = Type.Object({
   )
 })
 
-/** 默认本地执行实现 */
+/** 在本地 shell 中执行命令 */
 function defaultSpawn(
   command: string,
   cwd: string,
@@ -119,20 +117,6 @@ function defaultSpawn(
   })
 }
 
-/** 读取 Docker 配置 */
-function getDockerConfig(): { useDocker: boolean; image: string; memory?: string; cpus?: string } {
-  const dockerEnabled = settingsService.get('tool.bash.dockerEnabled') === 'true'
-  const dockerImage = settingsService.get('tool.bash.dockerImage') || ''
-  const dockerMemory = settingsService.get('tool.bash.dockerMemory') || ''
-  const dockerCpus = settingsService.get('tool.bash.dockerCpus') || ''
-  return {
-    useDocker: dockerEnabled && !!dockerImage,
-    image: dockerImage,
-    memory: dockerMemory || undefined,
-    cpus: dockerCpus || undefined
-  }
-}
-
 export class BashTool extends BaseTool<typeof BashParamsSchema> {
   readonly name = 'bash'
   readonly label = t('tool.bashLabel')
@@ -144,40 +128,8 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     super()
   }
 
-  /** 资源初始化：Docker 模式下确保容器运行 */
   async preExecute(): Promise<void> {
-    const docker = getDockerConfig()
-    if (!docker.useDocker) return
-
-    const config = resolveProjectConfig(this.ctx.sessionId)
-    try {
-      const container = await dockerManager.ensureContainer(
-        this.ctx.sessionId,
-        docker.image,
-        config.workingDirectory,
-        {
-          memory: docker.memory,
-          cpus: docker.cpus,
-          referenceDirs: config.referenceDirs.length > 0 ? config.referenceDirs : undefined
-        }
-      )
-      if (container.isNew)
-        this.ctx.emitChatEvent?.({
-          type: 'runtime_event',
-          runtimeId: 'docker',
-          status: {
-            label: docker.image,
-            icon: 'Container',
-            color: '#10b981',
-            description: container.containerId.slice(0, 12)
-          }
-        })
-    } catch {
-      const status = dockerManager.getDockerStatus()
-      if (status === 'notInstalled') throw new Error(t('settings.toolBashDockerNotInstalled'))
-      if (status === 'notRunning') throw new Error(t('settings.toolBashDockerNotRunning'))
-      throw new Error(t('settings.toolBashDockerNotRunning'))
-    }
+    /* no-op */
   }
 
   /** 安全检查 — requestApproval 为动态条件性审批，留在 executeInternal 中 */
@@ -192,7 +144,6 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
   ): Promise<AgentToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
-    const docker = getDockerConfig()
 
     // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
     if (this.ctx.requestUserInput) {
@@ -238,32 +189,12 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     }
 
     try {
-      let result: { stdout: string; stderr: string; exitCode: number }
-
-      if (docker.useDocker) {
-        // Docker 模式：preExecute 已确保容器就绪，直接获取并执行
-        const containerInfo = dockerManager.getContainerInfo(this.ctx.sessionId)
-        if (!containerInfo) {
-          throw new Error(t('settings.toolBashDockerNotRunning'))
-        }
-        log.info(`(docker ${docker.image}): ${params.command}`)
-        result = await dockerManager.exec(
-          containerInfo.containerId,
-          params.command,
-          config.workingDirectory,
-          signal,
-          config.envVars
-        )
-      } else {
-        // 本地模式
-        result = await defaultSpawn(
-          params.command,
-          config.workingDirectory,
-          timeout,
-          signal,
-          config.envVars
-        )
-      }
+      // 注入 SHUVIX_SESSION_ID，让 shuvix-cli 把当前 session id 透传给主进程
+      // （主进程据此把 widget 目录加入 session 的 read/write allowList）
+      const result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal, {
+        ...config.envVars,
+        SHUVIX_SESSION_ID: this.ctx.sessionId
+      })
       const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
       // 折叠进度输出（仅匹配进度类命令时生效）
       const combined = collapseProgressOutput(raw, params.command)
@@ -289,8 +220,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         details: {
           type: 'bash',
           exitCode: result.exitCode,
-          truncated: processed.truncated,
-          docker: docker.useDocker || undefined
+          truncated: processed.truncated
         }
       }
     } catch (err: unknown) {

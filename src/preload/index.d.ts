@@ -112,6 +112,10 @@ declare global {
       }>
     }
   }
+  interface ChatTokenUsageEvent extends ChatEventBase {
+    type: 'token_usage'
+    promptTokens: number
+  }
   interface ChatToolCallGeneratingEvent extends ChatEventBase {
     type: 'toolcall_generating'
     toolName: string
@@ -164,11 +168,6 @@ declare global {
     url?: string
     title?: string
   }
-  interface ChatTerminalToolEvent extends ChatEventBase {
-    type: 'terminal_event'
-    action: 'open'
-    ptyId: string
-  }
   interface ChatSubSessionRegisterEvent extends ChatEventBase {
     type: 'sub_session_register'
     parentSessionId: string
@@ -216,6 +215,7 @@ declare global {
     | ChatTextEndEvent
     | ChatStepEndEvent
     | ChatAgentEndEvent
+    | ChatTokenUsageEvent
     | ChatToolCallGeneratingEvent
     | ChatToolStartEvent
     | ChatToolEndEvent
@@ -224,7 +224,6 @@ declare global {
     | ChatImageDataEvent
     | ChatRuntimeEvent
     | ChatBrowserEvent
-    | ChatTerminalToolEvent
     | ChatSubSessionRegisterEvent
     | ChatSubSessionEndEvent
     | ChatCompactionStartEvent
@@ -280,8 +279,6 @@ declare global {
     name: string
     path: string
     promptSections: import('../shared/types/promptSection').ProjectPromptSection[]
-    dockerEnabled: number
-    dockerImage: string
     settings: ProjectSettings
     archivedAt: number
     createdAt: number
@@ -531,9 +528,6 @@ declare global {
       get: (id: string) => Promise<HttpLog | undefined>
       clear: () => Promise<{ success: boolean }>
     }
-    docker: {
-      validate: (params?: { image?: string }) => Promise<{ ok: boolean; error?: string }>
-    }
     runtime: {
       statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
       destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
@@ -774,9 +768,6 @@ declare global {
       destroy: (terminalId: string) => Promise<{ success: boolean }>
       onData: (callback: (payload: { terminalId: string; data: string }) => void) => () => void
       onExit: (callback: (payload: { terminalId: string; exitCode: number }) => void) => () => void
-      onReadLines: (
-        handler: (params: { ptyId: string; lines: number }) => string | null
-      ) => () => void
     }
     browserView: {
       navigate: (url: string) => Promise<void>
@@ -790,6 +781,14 @@ declare global {
       onDidStartLoading: (callback: (url: string) => void) => () => void
       onDidNavigate: (callback: (url: string) => void) => () => void
       onDidFinishLoad: (callback: () => void) => () => void
+      onDidFailLoad: (
+        callback: (info: { errorCode: number; errorDescription: string; url: string }) => void
+      ) => () => void
+    }
+    browserData: {
+      listSites: () => Promise<Array<{ host: string; cookieCount: number }>>
+      clearSite: (host: string) => Promise<void>
+      clearAll: () => Promise<void>
     }
     skill: {
       list: () => Promise<Skill[]>
@@ -837,8 +836,19 @@ declare global {
       }) => Promise<{ success: boolean }>
       setArchived: (params: { id: string; archived: boolean }) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
-      getServerStatus: () => Promise<{ running: boolean; port: number; widgetCount: number }>
+      getServerStatus: () => Promise<{
+        running: boolean
+        port: number
+        widgetCount: number
+        registeredIds: string[]
+      }>
       stopServer: () => Promise<{ success: boolean }>
+      startWidget: (
+        id: string
+      ) => Promise<
+        { success: true; url: string; buildSuccess: boolean } | { success: false; error: string }
+      >
+      stopWidget: (id: string) => Promise<{ success: true }>
       pickExportDir: () => Promise<
         { success: true; path: string } | { success: false; reason: string }
       >
@@ -850,6 +860,14 @@ declare global {
         | { success: false; code: string; error: string }
       >
       onChanged: (callback: () => void) => () => void
+    }
+    files: {
+      scan: (params: { sessionId: string }) => Promise<{
+        paths: string[]
+        truncated: boolean
+        root: string | null
+      }>
+      onChanged: (callback: (payload: { root: string }) => void) => () => void
     }
   }
 

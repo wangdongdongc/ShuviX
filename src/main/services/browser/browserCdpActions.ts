@@ -11,7 +11,11 @@ import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import type { BrowserToolDetails } from '../../../shared/types/chatMessage'
 import { browserCdpService } from './browserCdpService'
 import { getBrowserView } from './browserViewService'
-import { assertSandboxWrite, resolveProjectConfig, type ToolContext } from '../toolContext'
+import {
+  isPathWithinWorkspace,
+  isPathWithinReadwriteReferenceDirs,
+  resolveProjectConfig
+} from '../toolContext'
 import { getToolResultsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 
@@ -21,44 +25,44 @@ type Result = AgentToolResult<BrowserToolDetails>
 
 // ====== Help 文本 ======
 
-/** DevTools 操作的使用说明（参数错误、tools/browser 的 help action 都会引用） */
-export const DEVTOOLS_HELP = `### DevTools Actions (action="devtools", devtools_action=...)
+/** Browser CLI 操作的使用说明（参数错误时回显，最终文档以 SKILL.md 为准） */
+export const DEVTOOLS_HELP = `### shuvix browser <subcommand>
+
+**Panel**
+- \`shuvix browser open <url>\` — open the browser panel at URL
+- \`shuvix browser close\` — close the panel and detach CDP
 
 **Observation**
-- **snapshot**: Capture accessibility tree with element UIDs. No params.
-  Returns indented text tree, e.g. \`uid=e3 button "Submit"\`.
-  Always take a snapshot before using click/fill/type.
-- **screenshot**: Capture page image. Params: { fullPage?: boolean, uid?: string }.
-  The PNG is saved to a session-scoped file under the app's tool_results directory; the tool returns ONLY that absolute path (no inline image data, to keep the conversation context small). Use the \`read\` tool on that path when you actually need to view the screenshot.
-- **print_to_pdf**: Render the current page to a PDF file. Params: { outputPath } (required, absolute or workspace-relative).
-  Optional: { pageSize: "A4"|"A3"|"A5"|"Letter"|"Legal" (default "A4"), landscape?: boolean, printBackground?: boolean (default true), scale?: number, margin?: { top, bottom, left, right } (inches, default 0.4), preferCSSPageSize?: boolean (default **true** — respect the page's @page CSS; set to false only when you explicitly want outer params to override the CSS) }
-  Useful for exporting designed HTML templates (e.g. via the "kami" skill) to print-quality PDF. When the HTML declares @page (size + margin), keep preferCSSPageSize at its default — otherwise Chrome may over-shrink margins and push content onto an extra mostly-blank page.
+- \`shuvix browser snapshot\` — accessibility tree with element UIDs (always run before click/fill/type).
+- \`shuvix browser screenshot [--full-page] [--uid <id>]\` — PNG written to the session's tool_results dir; stdout prints the absolute path. Use the \`read\` tool on that path when you need to view it.
+- \`shuvix browser pdf --out <path> [--page-size A4|A3|A5|Letter|Legal] [--landscape] [--no-print-background] [--no-prefer-css-page-size] [--scale <n>]\` — write current page to PDF inside the session sandbox.
 
 **Interaction**
-- **click**: Click element. Params: { uid } (required). uid comes from snapshot.
-- **fill**: Fill input/select. Params: { uid, value } (required)
-- **type**: Type into focused element. Params: { text } (required). Optional: { uid, submitKey }
-- **press_key**: Press key combo. Params: { key } (required, e.g. "Enter", "Control+A")
-- **scroll**: Scroll page. Optional: { direction: "up"|"down"|"left"|"right", amount: 500, uid }
+- \`shuvix browser click --uid <id>\`
+- \`shuvix browser fill --uid <id> --value <text>\`
+- \`shuvix browser type --text <text> [--uid <id>] [--submit-key <key>]\`
+- \`shuvix browser press-key --key <combo>\` — e.g. \`Enter\`, \`Control+A\`
+- \`shuvix browser scroll [--direction up|down|left|right] [--amount 500] [--uid <id>]\`
 
 **Navigation**
-- **navigate**: Navigate page. Params: { navigateAction: "goto"|"back"|"forward"|"reload", url }
+- \`shuvix browser navigate [--url <url>] [--nav goto|back|forward|reload]\` (default: goto)
 
 **Evaluation**
-- **evaluate**: Execute JavaScript. Params: { expression } (required). Returns JSON result.
+- \`shuvix browser evaluate --expression <js>\` — returns JSON result
 
 **Waiting**
-- **wait_for**: Wait for text on page. Params: { text } (required). Optional: { timeout: 10000 }
+- \`shuvix browser wait-for --text <s> [--timeout 10000]\`
 
 **Debugging**
-- **get_network_requests**: List captured HTTP requests since last navigation.
-- **get_console_messages**: List captured console messages since last navigation.
+- \`shuvix browser network\` — captured HTTP requests since last navigation
+- \`shuvix browser console\` — captured console messages since last navigation
 
-### Typical Workflow
-1. browser({ action: "open", url: "..." })
-2. browser({ action: "devtools", devtools_action: "snapshot" })
-3. browser({ action: "devtools", devtools_action: "click", devtools_params: { uid: "e7" } })
-4. browser({ action: "devtools", devtools_action: "screenshot" })`
+### Typical workflow
+1. \`shuvix browser open https://example.com\`
+2. \`shuvix browser snapshot\`
+3. \`shuvix browser click --uid e7\`
+4. \`shuvix browser screenshot --full-page\`
+5. \`read <printed-path>\` if you need to view the PNG`
 
 /** 参数错误时返回错误信息 + devtools 帮助文档 */
 function paramError(devtoolsAction: string, message: string): Result {
@@ -94,11 +98,8 @@ export async function snapshotAction(): Promise<Result> {
  */
 export async function screenshotAction(
   params: Record<string, unknown> = {},
-  ctx?: ToolContext
+  sessionId: string
 ): Promise<Result> {
-  if (!ctx) {
-    return paramError('screenshot', 'screenshot requires tool context (internal plumbing issue).')
-  }
   const view = getBrowserView()
   if (!view) {
     return paramError(
@@ -177,7 +178,7 @@ export async function screenshotAction(
 
   // 统一落盘到 session 的 tool_results 目录 —— 截图往往很大，内联会把对话上下文撑爆
   // agent 需要看时用 `read` 工具读该路径即可
-  const dir = getToolResultsDir(ctx.sessionId)
+  const dir = getToolResultsDir(sessionId)
   const filename = `screenshot-${Date.now()}.png`
   const absolutePath = join(dir, filename)
   await mkdir(dirname(absolutePath), { recursive: true })
@@ -215,7 +216,7 @@ export async function screenshotAction(
  */
 export async function printToPdfAction(
   params: Record<string, unknown>,
-  ctx: ToolContext
+  sessionId: string
 ): Promise<Result> {
   const outputPath = params.outputPath as string | undefined
   if (!outputPath) {
@@ -231,11 +232,19 @@ export async function printToPdfAction(
   }
 
   // 解析为绝对路径（相对路径按 workspace 解析）+ 沙箱检查
-  const config = resolveProjectConfig(ctx.sessionId)
+  // CLI 路径无 interactive approval 通道，越界直接拒绝（与 widget.export 同款）
+  const config = resolveProjectConfig(sessionId)
   const absolutePath = isAbsolute(outputPath)
     ? outputPath
     : resolve(config.workingDirectory, outputPath)
-  await assertSandboxWrite(ctx, config, '', 'browser', absolutePath, outputPath)
+  const inWorkspace = isPathWithinWorkspace(absolutePath, config.workingDirectory)
+  const inReadwriteRef = isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)
+  if (!inWorkspace && !inReadwriteRef) {
+    return paramError(
+      'print_to_pdf',
+      `outputPath "${absolutePath}" is outside the session sandbox (workingDirectory + readwrite referenceDirs).`
+    )
+  }
 
   const ALLOWED_PAGE_SIZES = [
     'A0',

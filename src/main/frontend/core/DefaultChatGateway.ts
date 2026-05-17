@@ -6,13 +6,11 @@ import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
-import { dockerManager } from '../../services/dockerManager'
 import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
 import { destroySqlSession, getSqlRuntimeStatus } from '../../services/pglite'
-import { destroyPythonSession, getPythonRuntimeStatus } from '../../services/pyodide'
 import type { InlineToken } from '../../../shared/types/chatMessage'
 import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
@@ -143,16 +141,6 @@ export class DefaultChatGateway implements ChatGateway {
   getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus> {
     const result: Record<string, RuntimeStatus> = {}
 
-    const docker = dockerManager.getContainerInfo(sessionId)
-    if (docker) {
-      result['docker'] = {
-        label: docker.image,
-        icon: 'Container',
-        color: '#10b981',
-        description: docker.containerId.slice(0, 12)
-      }
-    }
-
     const ssh = sshManager.getConnectionInfo(sessionId)
     if (ssh) {
       result['ssh'] = {
@@ -175,8 +163,6 @@ export class DefaultChatGateway implements ChatGateway {
     // 各服务模块自维护的运行时状态（原由 pluginRegistry 集中缓存）
     const sql = getSqlRuntimeStatus(sessionId)
     if (sql) result['sql'] = sql
-    const python = getPythonRuntimeStatus(sessionId)
-    if (python) result['python'] = python
 
     return result
   }
@@ -191,11 +177,6 @@ export class DefaultChatGateway implements ChatGateway {
       })
     }
 
-    if (runtimeId === 'docker') {
-      const containerId = await dockerManager.destroyContainer(sessionId)
-      if (containerId) broadcastDestroy()
-      return { success: !!containerId }
-    }
     if (runtimeId === 'ssh') {
       if (!sshManager.getConnectionInfo(sessionId)) return { success: false }
       await sshManager.disconnect(sessionId)
@@ -211,10 +192,6 @@ export class DefaultChatGateway implements ChatGateway {
     // 模块自管理的运行时（原 plugin 贡献）
     if (runtimeId === 'sql') {
       destroySqlSession(sessionId)
-      return { success: true }
-    }
-    if (runtimeId === 'python') {
-      destroyPythonSession(sessionId)
       return { success: true }
     }
     return { success: false }

@@ -1,6 +1,6 @@
 /**
- * TerminalPanel — 终端面板，支持多标签
- * 每个标签对应一个独立的 PTY 终端实例（由 terminalStore 管理生命周期）
+ * TerminalPanel — 终端面板，垂直堆叠的纯色卡片布局
+ * 所有终端同屏可见，从上到下排列；卡片无头部、无边框，与 xterm 共享同一背景色。
  */
 
 import { useCallback } from 'react'
@@ -12,7 +12,7 @@ import { XTerminal } from './XTerminal'
 
 export function TerminalPanel(): React.JSX.Element {
   const { t } = useTranslation()
-  const { tabs, activeTabId, createTab, closeTab, setActiveTab } = useTerminalStore()
+  const { tabs, createTab, closeTab } = useTerminalStore()
   const projectPath = useChatStore((s) => s.projectPath)
 
   const handleNewTab = useCallback(() => {
@@ -27,66 +27,45 @@ export function TerminalPanel(): React.JSX.Element {
     [closeTab]
   )
 
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* 标签栏 */}
-      <div className="flex-shrink-0 flex items-center min-h-7 bg-bg-secondary/40 border-b border-border-secondary/30">
-        <div className="flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-2.5 h-7 text-[11px] transition-colors group whitespace-nowrap ${
-                activeTabId === tab.id
-                  ? 'text-text-primary bg-bg-primary'
-                  : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/30'
-              }`}
-            >
-              <span>{tab.title}</span>
-              <span
-                onClick={(e) => handleCloseTab(e, tab.id)}
-                className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-bg-hover transition-opacity"
-              >
-                <X size={10} />
-              </span>
-            </button>
-          ))}
-        </div>
+  if (tabs.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full bg-bg-secondary">
         <button
           onClick={handleNewTab}
-          className="flex-shrink-0 p-1.5 mx-0.5 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 rounded transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-tertiary hover:text-text-secondary bg-bg-primary hover:bg-bg-hover/40 rounded-md transition-colors"
+        >
+          <Plus size={12} />
+          <span>{t('panel.newTerminal')}</span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-full overflow-y-auto bg-bg-secondary">
+      <div className="flex flex-col gap-2 p-2">
+        {tabs.map((tab) => (
+          <div key={tab.id} className="group relative rounded-md overflow-hidden bg-bg-primary">
+            <button
+              onClick={(e) => handleCloseTab(e, tab.id)}
+              className="absolute top-1 right-1 z-10 p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/70 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+              title={t('panel.closeTerminal')}
+            >
+              <X size={11} />
+            </button>
+            <div className="h-72 p-1.5">
+              <XTerminal tab={tab} />
+            </div>
+          </div>
+        ))}
+        <button
+          onClick={handleNewTab}
+          className="flex items-center justify-center gap-1.5 w-full py-1.5 text-[11px] text-text-tertiary hover:text-text-secondary bg-bg-primary/60 hover:bg-bg-primary rounded-md transition-colors"
           title={t('panel.newTerminal')}
         >
           <Plus size={12} />
+          <span>{t('panel.newTerminal')}</span>
         </button>
-      </div>
-
-      {/* 终端内容区 */}
-      <div className="flex-1 min-h-0 relative bg-bg-secondary">
-        {tabs.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <button
-              onClick={handleNewTab}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-tertiary hover:text-text-secondary bg-bg-secondary/40 hover:bg-bg-secondary/70 rounded-md transition-colors"
-            >
-              <Plus size={12} />
-              <span>{t('panel.newTerminal')}</span>
-            </button>
-          </div>
-        ) : (
-          tabs.map((tab) => {
-            const isActive = activeTabId === tab.id
-            return (
-              <div
-                key={tab.id}
-                className="absolute inset-0"
-                style={isActive ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-              >
-                <XTerminal tab={tab} visible={isActive} />
-              </div>
-            )
-          })
-        )}
       </div>
     </div>
   )

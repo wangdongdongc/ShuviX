@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Terminal,
-  Container,
   Loader2,
   Plus,
   Trash2,
@@ -13,31 +12,13 @@ import {
   FolderOpen,
   TriangleAlert,
   Database,
-  Bot
+  Bot,
+  Globe
 } from 'lucide-react'
 import { SubAgentPanel } from './SubAgentPanel'
 
 /** 子分类标识 */
-type ToolSubTab = 'bash' | 'ssh' | 'database' | 'subagent'
-
-/** 内存预设选项 */
-const MEMORY_OPTIONS = ['256m', '512m', '1g', '2g', ''] as const
-/** CPU 预设选项 */
-const CPU_OPTIONS = ['0.5', '1', '2', ''] as const
-
-/** 内存选项显示文本 */
-function memoryLabel(v: string, unlimited: string): string {
-  if (!v) return unlimited
-  if (v.endsWith('m')) return `${v.slice(0, -1)} MB`
-  if (v.endsWith('g')) return `${Number(v.slice(0, -1))} GB`
-  return v
-}
-
-/** CPU 选项显示文本 */
-function cpuLabel(v: string, unlimited: string): string {
-  if (!v) return unlimited
-  return `${v} Core${Number(v) > 1 ? 's' : ''}`
-}
+type ToolSubTab = 'ssh' | 'database' | 'browser' | 'subagent'
 
 /** SSH 凭据信息（来自 IPC） */
 interface SshCredentialInfo {
@@ -84,19 +65,13 @@ function SubTabButton({
 
 /** 工具配置页（含子分类侧边栏） */
 export function ToolSettings(): React.JSX.Element {
-  const [subTab, setSubTab] = useState<ToolSubTab>('bash')
+  const [subTab, setSubTab] = useState<ToolSubTab>('ssh')
   const { t } = useTranslation()
 
   return (
     <div className="flex flex-1 min-h-0 h-full">
       {/* 左侧子分类导航 */}
       <div className="flex-shrink-0 border-r border-border-secondary py-4 px-2.5 space-y-0.5">
-        <SubTabButton
-          icon={<Terminal size={13} />}
-          label={t('tool.bashLabel')}
-          active={subTab === 'bash'}
-          onClick={() => setSubTab('bash')}
-        />
         <SubTabButton
           icon={<Terminal size={13} />}
           label={t('tool.sshLabel')}
@@ -110,6 +85,12 @@ export function ToolSettings(): React.JSX.Element {
           onClick={() => setSubTab('database')}
         />
         <SubTabButton
+          icon={<Globe size={13} />}
+          label={t('tool.browserLabel')}
+          active={subTab === 'browser'}
+          onClick={() => setSubTab('browser')}
+        />
+        <SubTabButton
           icon={<Bot size={13} />}
           label={t('tool.subAgentTab')}
           active={subTab === 'subagent'}
@@ -119,9 +100,9 @@ export function ToolSettings(): React.JSX.Element {
 
       {/* 右侧内容区 */}
       <div className="flex-1 min-w-0 overflow-y-auto">
-        {subTab === 'bash' && <BashToolPanel />}
         {subTab === 'ssh' && <SshToolPanel />}
         {subTab === 'database' && <DatabaseToolPanel />}
+        {subTab === 'browser' && <BrowserToolPanel />}
         {subTab === 'subagent' && <SubAgentPanel />}
       </div>
     </div>
@@ -129,55 +110,82 @@ export function ToolSettings(): React.JSX.Element {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Bash 工具面板
+// Browser 工具面板
 // ────────────────────────────────────────────────────────────────
 
-function BashToolPanel(): React.JSX.Element {
+interface SavedSite {
+  host: string
+  cookieCount: number
+}
+
+function BrowserToolPanel(): React.JSX.Element {
   const { t } = useTranslation()
 
-  const [dockerEnabled, setDockerEnabled] = useState(false)
-  const [dockerImage, setDockerImage] = useState('')
-  const [dockerMemory, setDockerMemory] = useState('512m')
-  const [dockerCpus, setDockerCpus] = useState('1')
-  const [dockerStatus, setDockerStatus] = useState<'ready' | 'notInstalled' | 'notRunning' | null>(
-    null
-  )
+  const [ignoreCert, setIgnoreCert] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [sites, setSites] = useState<SavedSite[]>([])
+  const [sitesLoading, setSitesLoading] = useState(true)
+  const [confirmHost, setConfirmHost] = useState<string | null>(null)
+  const [clearingHost, setClearingHost] = useState<string | null>(null)
+  const [confirmClearAll, setConfirmClearAll] = useState(false)
+  const [clearingAll, setClearingAll] = useState(false)
 
-  useEffect(() => {
-    Promise.all([window.api.settings.getAll(), window.api.docker.validate()]).then(
-      ([settings, dockerResult]) => {
-        setDockerEnabled(settings['tool.bash.dockerEnabled'] === 'true')
-        setDockerImage(settings['tool.bash.dockerImage'] || '')
-        setDockerMemory(settings['tool.bash.dockerMemory'] || '512m')
-        setDockerCpus(settings['tool.bash.dockerCpus'] || '1')
-        if (dockerResult.ok) {
-          setDockerStatus('ready')
-        } else {
-          setDockerStatus(dockerResult.error === 'dockerNotRunning' ? 'notRunning' : 'notInstalled')
-        }
-        setLoading(false)
-      }
-    )
+  const loadSites = useCallback(async () => {
+    setSitesLoading(true)
+    try {
+      const list = await window.api.browserData.listSites()
+      setSites(list)
+    } finally {
+      setSitesLoading(false)
+    }
   }, [])
 
-  const save = (key: string, value: string): void => {
-    window.api.settings.set({ key, value })
+  useEffect(() => {
+    window.api.settings.getAll().then((settings) => {
+      setIgnoreCert(settings['tool.browser.ignoreCertificateErrors'] === 'true')
+      setLoading(false)
+    })
+    loadSites()
+  }, [loadSites])
+
+  const handleToggle = (): void => {
+    const next = !ignoreCert
+    setIgnoreCert(next)
+    window.api.settings.set({
+      key: 'tool.browser.ignoreCertificateErrors',
+      value: String(next)
+    })
   }
 
-  const dockerAvailable = dockerStatus === 'ready'
+  const handleClearSite = async (host: string): Promise<void> => {
+    setClearingHost(host)
+    try {
+      await window.api.browserData.clearSite(host)
+      await loadSites()
+    } finally {
+      setClearingHost(null)
+      setConfirmHost(null)
+    }
+  }
 
-  const handleToggleDocker = (): void => {
-    if (!dockerAvailable) return
-    const next = !dockerEnabled
-    setDockerEnabled(next)
-    save('tool.bash.dockerEnabled', String(next))
+  const handleClearAll = async (): Promise<void> => {
+    setClearingAll(true)
+    try {
+      await window.api.browserData.clearAll()
+      await loadSites()
+    } finally {
+      setClearingAll(false)
+      setConfirmClearAll(false)
+    }
   }
 
   return (
     <div className="px-5 py-5 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-text-primary">{t('settings.toolBashTitle')}</h3>
+        <h3 className="text-sm font-semibold text-text-primary">
+          {t('settings.toolBrowserTitle')}
+        </h3>
+        <p className="text-[11px] text-text-tertiary mt-1">{t('settings.toolBrowserDesc')}</p>
       </div>
 
       {loading && (
@@ -188,106 +196,146 @@ function BashToolPanel(): React.JSX.Element {
       )}
 
       {!loading && (
-        <div className="space-y-4">
-          {/* Docker 隔离开关 */}
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Container size={12} className="text-text-secondary" />
+              <Globe size={12} className="text-text-secondary" />
               <span className="text-xs font-medium text-text-secondary">
-                {t('settings.toolBashDocker')}
+                {t('settings.toolBrowserIgnoreCertificateErrors')}
               </span>
             </div>
             <button
-              onClick={handleToggleDocker}
-              disabled={!dockerAvailable}
+              onClick={handleToggle}
               className={`relative w-8 h-[18px] rounded-full transition-colors ${
-                dockerEnabled && dockerAvailable ? 'bg-accent' : 'bg-bg-hover'
-              } ${!dockerAvailable ? 'opacity-50 cursor-not-allowed' : ''}`}
+                ignoreCert ? 'bg-accent' : 'bg-bg-hover'
+              }`}
             >
               <span
                 className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                  dockerEnabled ? 'left-[16px]' : 'left-[2px]'
+                  ignoreCert ? 'left-[16px]' : 'left-[2px]'
                 }`}
               />
             </button>
           </div>
-          <p className="text-[10px] text-text-tertiary -mt-2">
-            {dockerStatus === 'notInstalled'
-              ? t('settings.toolBashDockerNotInstalled')
-              : dockerStatus === 'notRunning'
-                ? t('settings.toolBashDockerNotRunning')
-                : t('settings.toolBashDockerHint')}
+          <p className="text-[10px] text-text-tertiary -mt-1">
+            {t('settings.toolBrowserIgnoreCertificateErrorsHint')}
           </p>
 
-          {/* Docker 开启后的详细配置 */}
-          {dockerEnabled && dockerAvailable && (
-            <div className="space-y-3 pl-0.5">
-              <div>
-                <label className="block text-[10px] text-text-tertiary mb-1">
-                  {t('settings.toolBashImage')}
-                </label>
-                <input
-                  value={dockerImage}
-                  onChange={(e) => setDockerImage(e.target.value)}
-                  onBlur={() => save('tool.bash.dockerImage', dockerImage)}
-                  className="zen-input font-mono"
-                  placeholder={t('settings.toolBashImagePlaceholder')}
-                />
-              </div>
-
-              <p className="text-[10px] text-text-tertiary">{t('settings.toolBashResourceHint')}</p>
-
-              <div>
-                <label className="block text-[10px] text-text-tertiary mb-1.5">
-                  {t('settings.toolBashMemory')}
-                </label>
-                <div className="flex gap-1.5">
-                  {MEMORY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt || '__unlimited'}
-                      onClick={() => {
-                        setDockerMemory(opt)
-                        save('tool.bash.dockerMemory', opt)
-                      }}
-                      className={`px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors ${
-                        dockerMemory === opt
-                          ? 'border-accent text-accent bg-accent/10'
-                          : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-                      }`}
-                    >
-                      {memoryLabel(opt, t('settings.toolBashUnlimited'))}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] text-text-tertiary mb-1.5">
-                  {t('settings.toolBashCpus')}
-                </label>
-                <div className="flex gap-1.5">
-                  {CPU_OPTIONS.map((opt) => (
-                    <button
-                      key={opt || '__unlimited'}
-                      onClick={() => {
-                        setDockerCpus(opt)
-                        save('tool.bash.dockerCpus', opt)
-                      }}
-                      className={`px-2.5 py-1 rounded-md text-[10px] font-medium border transition-colors ${
-                        dockerCpus === opt
-                          ? 'border-accent text-accent bg-accent/10'
-                          : 'border-border-primary text-text-tertiary hover:border-accent/50 hover:text-text-secondary'
-                      }`}
-                    >
-                      {cpuLabel(opt, t('settings.toolBashUnlimited'))}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          {ignoreCert && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
+              <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-[10px] text-text-secondary leading-relaxed">
+                {t('settings.toolBrowserSecurityWarning')}
+              </p>
             </div>
           )}
         </div>
       )}
+
+      {/* ────── 已保存站点 ────── */}
+      <div className="pt-2">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h4 className="text-xs font-semibold text-text-primary">
+              {t('settings.toolBrowserSavedSitesTitle')}
+            </h4>
+            <p className="text-[10px] text-text-tertiary mt-0.5">
+              {t('settings.toolBrowserSavedSitesDesc')}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {sites.length > 0 &&
+              (confirmClearAll ? (
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={handleClearAll}
+                    disabled={clearingAll}
+                    className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {clearingAll && <Loader2 size={9} className="animate-spin" />}
+                    {t('common.confirm')}
+                  </button>
+                  <button
+                    onClick={() => setConfirmClearAll(false)}
+                    disabled={clearingAll}
+                    className="px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-secondary rounded transition-colors disabled:opacity-50"
+                  >
+                    {t('ssh.cancel')}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmClearAll(true)}
+                  className="text-[10px] text-text-tertiary hover:text-danger transition-colors"
+                >
+                  {t('settings.toolBrowserClearAll')}
+                </button>
+              ))}
+            <button
+              onClick={loadSites}
+              disabled={sitesLoading}
+              className="text-[10px] text-text-tertiary hover:text-text-secondary disabled:opacity-50 transition-colors"
+            >
+              {sitesLoading ? <Loader2 size={11} className="animate-spin" /> : t('common.refresh')}
+            </button>
+          </div>
+        </div>
+
+        {sitesLoading && sites.length === 0 ? (
+          <div className="flex items-center gap-2 text-text-tertiary py-2">
+            <Loader2 size={12} className="animate-spin" />
+            <span className="text-[11px]">{t('common.loading') || 'Loading...'}</span>
+          </div>
+        ) : sites.length === 0 ? (
+          <div className="text-center py-4">
+            <p className="text-[11px] text-text-tertiary">{t('settings.toolBrowserNoSites')}</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border-primary/60 border border-border-primary/60 rounded-lg overflow-hidden bg-bg-tertiary/30">
+            {sites.map((site) => (
+              <div
+                key={site.host}
+                className="group flex items-center gap-2 px-2.5 py-1 hover:bg-bg-hover/40 transition-colors"
+              >
+                <Globe size={10} className="text-text-tertiary shrink-0" />
+                <span className="text-[11px] text-text-primary truncate font-mono flex-1 min-w-0">
+                  {site.host}
+                </span>
+                <span className="text-[10px] text-text-tertiary tabular-nums shrink-0">
+                  {site.cookieCount}
+                </span>
+                {confirmHost === site.host ? (
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={() => handleClearSite(site.host)}
+                      disabled={clearingHost === site.host}
+                      className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {clearingHost === site.host && <Loader2 size={9} className="animate-spin" />}
+                      {t('common.confirm')}
+                    </button>
+                    <button
+                      onClick={() => setConfirmHost(null)}
+                      disabled={clearingHost === site.host}
+                      className="px-1.5 py-0.5 text-[10px] text-text-tertiary hover:text-text-secondary rounded transition-colors disabled:opacity-50"
+                    >
+                      {t('ssh.cancel')}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmHost(site.host)}
+                    className="p-0.5 text-text-tertiary hover:text-danger transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                    title={t('settings.toolBrowserClearSite')}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

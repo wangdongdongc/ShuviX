@@ -76,7 +76,7 @@ export function useSessionInit(activeSessionId: string | null): void {
       const restoredLevel = hasReasoning ? result.modelMetadata.thinkingLevel || 'medium' : 'off'
       store.setThinkingLevel(restoredLevel)
 
-      // 7. 查询 Docker/SSH 实时资源状态
+      // 7. 查询运行时资源状态（SSH / DB / SQL / Python 等）
       const runtimes = await window.api.runtime.statuses(activeSessionId)
       if (!cancelled) {
         store.setRuntimes(activeSessionId, runtimes)

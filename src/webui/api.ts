@@ -225,13 +225,6 @@ export function createWebApi(): typeof window.api {
       clear: noop
     },
 
-    docker: {
-      validate: () => Promise.resolve({ ok: false }),
-      sessionStatus: (sid) => api(`/sessions/${sid}/docker`),
-      destroySession: (sid) =>
-        api(`/sessions/${sid}/docker/destroy`, { method: 'POST', body: '{}' })
-    },
-
     ssh: {
       sessionStatus: (sid) => api(`/sessions/${sid}/ssh`),
       disconnectSession: (sid) =>

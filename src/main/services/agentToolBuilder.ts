@@ -52,7 +52,7 @@ export function buildTools(
 
   // 有启用的 skill 或有项目路径（可能有 .claude/skills/）时注册 skill 工具
   if (enabledSkillNames.length > 0 || projectPath) {
-    builtinAll['skill'] = new SkillTool(enabledSkillNames, projectPath)
+    builtinAll['skill'] = new SkillTool(enabledSkillNames, projectPath) as AnyAgentTool
   }
 
   // 过滤内置 + 子智能体工具（排除 skill: 和 mcp: 前缀项）

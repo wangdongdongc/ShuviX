@@ -4,7 +4,7 @@
  * exec 动作每次都需用户审批
  */
 
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'

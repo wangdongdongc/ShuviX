@@ -16,7 +16,7 @@ description: "Typeset professional printable documents — resumes, one-pagers, 
 - 若你（agent）发现 `browser` 工具不在可用工具列表：告知用户到 **设置 → 工具** 启用 `browser` 工具（针对当前项目），启用后再继续。仅需一次，之后都能自动调用。
 - **不要**尝试安装 weasyprint / wkhtmltopdf / pandoc 或任何系统级 PDF 工具。ShuviX 的 `browser` 工具已完整覆盖此路径。
 
-**PPTX** 产出（slides 类型）走 `python` 工具（Pyodide + 预装 python-pptx）。**关键**：`templates/slides.py` / `slides_en.py` 是**可直接 import 的模块**，通过 `python` 工具的 `modulePaths` 参数挂载 `templates/` 目录后 `from slides import ...` 即可调用。**绝对不要**把 slides.py 的内容整段复制到 `code` 参数里。详见 Step 6B。
+**PPTX** 产出（slides 类型）走 `shuvix python` CLI（Pyodide + 预装 python-pptx，通过 `bash` 工具调用）。**关键**：`templates/slides.py` / `slides_en.py` 是**可直接 import 的模块**，通过 `PYTHONPATH` 环境变量指向 `templates/` 目录后 `from slides import ...` 即可调用。**绝对不要**把 slides.py 的内容整段复制到代码里。详见 Step 6B。
 
 ## Step 1 · 判断语言
 
@@ -113,9 +113,9 @@ description: "Typeset professional printable documents — resumes, one-pagers, 
 - **多出一页只有页眉**：内容溢出可用区几毫米。先确认你用的是最新版 `print_to_pdf`（默认 preferCSSPageSize: true）；仍溢出则回到 body 删一个无关 section，或把某个 `font-size: 10pt` 的段落改 9.5pt。**不要**靠外层 margin 硬挤。
 - **某一页非常单薄（只有标题或一小块）**：`break-inside: avoid` 把一个大 section 踢到下一页，前一页填不满。查 `production.md` 第 4 部分；通常是内容安排问题，不是渲染 bug——拆 section 或调序即可。
 
-## Step 6B · 幻灯片产出 PPTX（走 python 工具 + modulePaths）
+## Step 6B · 幻灯片产出 PPTX（走 shuvix python CLI + PYTHONPATH）
 
-适用于 slides。`templates/slides.py`（中文）/ `templates/slides_en.py`（英文）是**可直接被 python 工具加载的函数库**，提供：
+适用于 slides。`templates/slides.py`（中文）/ `templates/slides_en.py`（英文）是**可被 `shuvix python` 通过 `PYTHONPATH` 加载的函数库**，提供：
 
 | 函数 | 用途 |
 |---|---|
@@ -129,14 +129,18 @@ description: "Typeset professional printable documents — resumes, one-pagers, 
 | `quote_slide(prs, quote, source)` | 引用 |
 | `ending_slide(prs, message, contact)` | 结束页 |
 
-**关键**：把 `.py` 文件的绝对路径塞给 `python` 工具的 `modulePaths` 参数，让工具自己读入并装进 REPL。**不要**把 slides.py 的代码拷贝到 `code` 里。
+**关键**：把 `templates/` 目录通过 `PYTHONPATH` 环境变量传给 `shuvix python`，然后 `import slides` 即可。**不要**把 slides.py 的代码拷贝到 `-c` 字符串里。
 
-正确调用姿势（中文示例）：
+正确调用姿势（中文示例，通过 `bash` 工具发起）：
 
-```
-python({
-  modulePaths: ["<kami-skill-path>/templates/slides.py"],
-  code: `
+```bash
+PYTHONPATH=<kami-skill-path>/templates shuvix python -c '
+from slides import (
+    Presentation, SLIDE_W, SLIDE_H,
+    cover_slide, toc_slide, chapter_slide,
+    content_slide, metrics_slide, ending_slide,
+)
+
 prs = Presentation()
 prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H
 
@@ -163,11 +167,10 @@ ending_slide(prs, message="Thank you", contact="zhang@example.com")
 
 prs.save("/workspace/deck.pptx")
 print("saved deck.pptx")
-`
-})
+'
 ```
 
-`<kami-skill-path>` = 你从 skill 工具加载时拿到的 `Base directory for this skill`。首次调用后，slides.py 的定义会一直留在本 session 的 REPL 全局作用域里，后续追加/修改只需改 `code` 即可。
+`<kami-skill-path>` = 你从 skill 工具加载时拿到的 `Base directory for this skill`。每次 `shuvix python` 调用都是全新进程，没有跨调用的全局作用域——所以**每次都需要重新 import**，且需要把所有逻辑一次性写在 `-c` 字符串里（或落到一个 `.py` 文件后用 `shuvix python script.py` 跑）。
 
 英文文档切换到 `templates/slides_en.py`（注意**下划线**，Python import 约束）。
 

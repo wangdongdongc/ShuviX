@@ -1,24 +1,13 @@
 /**
  * Pyodide 模块入口
  *
- * - PyodideTool (name='python') 在模块 load 时通过 registerBuiltinTool 自注册
- * - 导出 destroyPythonSession / disposePyodide / getPythonRuntimeStatus 给上层调用
+ * `python` 已从内置 tool 降级为 skill + `shuvix python` CLI 形态。
+ * 模块层只暴露 worker 生命周期管理给 cliServer 用，并提供应用退出钩子。
  */
 
-import './pyodideTool'
 import { pyodideWorkerManager } from './workerManager'
-import { setPythonRuntimeDestroyed, getPythonRuntimeStatus } from './runtimeStatus'
-
-/** 销毁指定 session 的 Python worker + 广播运行时销毁事件 */
-export function destroyPythonSession(sessionId: string): void {
-  if (!pyodideWorkerManager.isActive(sessionId)) return
-  pyodideWorkerManager.terminate(sessionId)
-  setPythonRuntimeDestroyed(sessionId)
-}
 
 /** 终止所有 Python worker（应用退出时调用） */
 export function disposePyodide(): void {
   pyodideWorkerManager.terminateAll()
 }
-
-export { getPythonRuntimeStatus }

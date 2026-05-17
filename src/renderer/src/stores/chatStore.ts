@@ -181,7 +181,7 @@ interface ChatState {
     template: string
     requiredTools?: string[]
   }>
-  /** 各 session 的活跃 Docker/SSH 资源信息 */
+  /** 各 session 的活跃运行时资源（SSH / DB / SQL / Python 等） */
   sessionResources: Record<string, SessionResourceInfo>
   /**
    * 各 session 的待处理用户输入请求列表(按 sessionId 隔离)。

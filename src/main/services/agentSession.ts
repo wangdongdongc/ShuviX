@@ -11,7 +11,6 @@ import { sessionDao } from '../dao/sessionDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
-import { dockerManager } from './dockerManager'
 import { sshManager } from './sshManager'
 import type {
   ModelCapabilities,
@@ -188,7 +187,9 @@ export class AgentSession {
     this.projectPath = projectPath
     this.workingDirectory = workingDirectory
 
-    // 订阅 Agent 事件，转发到 Renderer
+    // 订阅 Agent 事件，转发到 Renderer。
+    // 0.65+ 起 listener 签名变为 (event, signal) => Promise<void> | void；
+    // forwardEvent 内部全部为同步 DB 写入与广播，保持 sync 即可，agent_end 不会被阻塞 idle。
     this.agent.subscribe((event: AgentEvent) => {
       this.forwardEvent(event)
     })
@@ -389,8 +390,8 @@ export class AgentSession {
       baseUrl,
       apiProtocol
     })
-    this.agent.setModel(resolvedModel)
-    this.agent.setThinkingLevel(caps.reasoning ? 'medium' : 'off')
+    this.agent.state.model = resolvedModel
+    this.agent.state.thinkingLevel = caps.reasoning ? 'medium' : 'off'
     log.info(
       `切换模型 session=${this.sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`
     )
@@ -398,14 +399,14 @@ export class AgentSession {
 
   /** 设置思考深度 */
   setThinkingLevel(level: ThinkingLevel): void {
-    this.agent.setThinkingLevel(level)
+    this.agent.state.thinkingLevel = level
     log.info(`setThinkingLevel=${level}`)
   }
 
   /** 动态更新启用工具集 */
   setEnabledTools(enabledTools: string[]): void {
     const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx, this.projectPath)
-    this.agent.setTools(tools)
+    this.agent.state.tools = tools
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
@@ -560,7 +561,7 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
+  /** 使 Agent 失效（回退时使用，下次 init 会重建） */
   invalidate(): void {
     this.agent.abort()
     clearFileTimeSession(this.sessionId)
@@ -568,18 +569,10 @@ export class AgentSession {
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用，含 Docker 清理）。不 cascade 到子智能体（由用户 / IPC 控制）。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体（由用户 / IPC 控制）。 */
   destroy(): void {
     this.agent.abort()
     clearFileTimeSession(this.sessionId)
-    dockerManager
-      .destroyContainer(this.sessionId)
-      .then((containerId) => {
-        if (containerId) {
-          this.emitRuntimeEvent('docker', null)
-        }
-      })
-      .catch(() => {})
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
   }

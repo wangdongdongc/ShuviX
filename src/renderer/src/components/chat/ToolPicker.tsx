@@ -88,24 +88,24 @@ export function ToolPicker(): React.JSX.Element | null {
     <div ref={toolsRef} className="relative flex items-center group">
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 text-[11px] text-amber-400/70 hover:text-amber-400 transition-colors border border-amber-400/30 hover:border-amber-400/50 rounded px-1.5 py-0.5"
+        className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
       >
         <Wrench size={11} />
         <span>{enabledBuiltinTools.length}</span>
         {hasSubAgentTools && (
-          <span className="inline-flex items-center gap-0.5 text-amber-300/80">
+          <span className="inline-flex items-center gap-0.5">
             <Bot size={10} />
             <span>{enabledSubAgentTools.length}</span>
           </span>
         )}
         {hasMcpTools && (
-          <span className="inline-flex items-center gap-0.5 text-purple-400/80">
+          <span className="inline-flex items-center gap-0.5">
             <Server size={10} />
             <span>{enabledMcpTools.length}</span>
           </span>
         )}
         {hasSkillTools && (
-          <span className="inline-flex items-center gap-0.5 text-emerald-400/80">
+          <span className="inline-flex items-center gap-0.5">
             <BookOpen size={10} />
             <span>{enabledSkillTools.length}</span>
           </span>
@@ -126,7 +126,7 @@ export function ToolPicker(): React.JSX.Element | null {
             {/* 子智能体 */}
             {enabledSubAgentTools.length > 0 && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-amber-400">[SubAgents]</span>
+                <span className="text-[10px] text-text-secondary">[SubAgents]</span>
                 <span className="text-[11px] text-text-primary truncate">
                   {enabledSubAgentTools.map((t) => t.name).join(', ')}
                 </span>
@@ -135,7 +135,7 @@ export function ToolPicker(): React.JSX.Element | null {
             {/* MCP 服务器 */}
             {enabledMcpTools.length > 0 && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-purple-400">[MCP]</span>
+                <span className="text-[10px] text-text-secondary">[MCP]</span>
                 <span className="text-[11px] text-text-primary truncate">
                   {enabledMcpTools
                     .map((t) => (t.name.startsWith('mcp:') ? t.name.slice(4) : t.name))
@@ -146,7 +146,7 @@ export function ToolPicker(): React.JSX.Element | null {
             {/* Skills */}
             {enabledSkillTools.length > 0 && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-emerald-400">[Skills]</span>
+                <span className="text-[10px] text-text-secondary">[Skills]</span>
                 <span className="text-[11px] text-text-primary truncate">
                   {enabledSkillTools
                     .map((t) => (t.name.startsWith('skill:') ? t.name.slice(6) : t.name))

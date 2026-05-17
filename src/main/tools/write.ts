@@ -5,7 +5,7 @@
 
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from 'fs/promises'
 import { dirname } from 'path'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import {
   assertNotModifiedSinceRead,

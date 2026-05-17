@@ -5,7 +5,7 @@
  * 子智能体的流式展示由右侧 Sub-agent 面板负责，父对话框中仅作为普通 tool call。
  */
 
-import { Type, type TSchema } from '@sinclair/typebox'
+import { Type, type TSchema } from 'typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
 import { BaseTool } from '../services/baseTool'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'

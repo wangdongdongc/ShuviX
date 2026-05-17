@@ -73,6 +73,9 @@ export default defineConfig(
         { type: 'renderer', pattern: 'src/renderer' },
         { type: 'webui', pattern: 'src/webui' },
         { type: 'preload', pattern: 'src/preload' },
+        // CLI 进程：通过 ELECTRON_RUN_AS_NODE 在 Electron 内以 node 模式运行；
+        // 与主进程通过 Unix socket / named pipe 通信，不直接依赖任何 src/ 模块
+        { type: 'cli', pattern: 'src/cli' },
         { type: 'shared-node', pattern: 'src/shared/node' },
         { type: 'shared', pattern: 'src/shared' },
         // main-entry：bootstrap，单文件；可引一切
@@ -139,6 +142,11 @@ export default defineConfig(
             {
               from: { type: 'preload' },
               allow: { to: { type: ['preload', 'shared', 'main-types'] } }
+            },
+            // cli：通过 socket 与主进程通信，仅消费 shared 类型
+            {
+              from: { type: 'cli' },
+              allow: { to: { type: ['cli', 'shared'] } }
             },
             // shared：叶子层
             { from: { type: 'shared' }, allow: { to: { type: ['shared'] } } },

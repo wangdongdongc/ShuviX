@@ -25,8 +25,6 @@ interface TerminalState {
   closeTab: (id: string) => void
   setActiveTab: (id: string) => void
   updateTitle: (id: string, title: string) => void
-  /** 连接 agent 创建的终端（PTY 已存在于 main process，跳过 IPC create） */
-  connectAgentTerminal: (ptyId: string, title?: string) => void
 }
 
 /** IPC 全局监听（只注册一次） */
@@ -42,24 +40,6 @@ function ensureIpcListeners(): void {
     if (tab) {
       tab.term.write(payload.data)
     }
-  })
-
-  // main process 请求读取 xterm buffer 最后 N 行
-  window.api.terminal.onReadLines(({ ptyId, lines }) => {
-    const { tabs } = useTerminalStore.getState()
-    const tab = tabs.find((t) => t.ptyId === ptyId)
-    if (!tab) return null
-    const buf = tab.term.buffer.active
-    const totalLines = buf.baseY + buf.cursorY
-    const start = Math.max(0, totalLines - lines)
-    const result: string[] = []
-    for (let i = start; i <= totalLines; i++) {
-      const line = buf.getLine(i)
-      if (line) result.push(line.translateToString(true))
-    }
-    // 去掉尾部空行
-    while (result.length > 0 && result[result.length - 1].trim() === '') result.pop()
-    return result.join('\n')
   })
 
   // PTY 退出
@@ -89,7 +69,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const term = new Terminal({
       cursorBlink: true,
       fontSize: useSettingsStore.getState().fontSize - 1,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily:
+        '"SFMono Nerd Font Mono", "MesloLGS NF", "MesloLGM Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "SauceCodePro Nerd Font Mono", Menlo, Monaco, "Courier New", monospace',
       theme: resolveTerminalTheme(),
       scrollback: 5000
     })
@@ -150,45 +131,5 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   updateTitle: (id, title) => {
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, title } : t)) }))
-  },
-
-  connectAgentTerminal: (ptyId, title) => {
-    ensureIpcListeners()
-    const { tabs } = get()
-
-    // 已有该 ptyId 的 tab → 激活即可
-    const existing = tabs.find((t) => t.ptyId === ptyId)
-    if (existing) {
-      set({ activeTabId: existing.id })
-      return
-    }
-
-    const idx = ++tabCounter
-    const id = `agent_${idx}_${Date.now()}`
-
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: useSettingsStore.getState().fontSize - 1,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      theme: resolveTerminalTheme(),
-      scrollback: 5000
-    })
-    const fitAddon = new FitAddon()
-    term.loadAddon(fitAddon)
-
-    // PTY 已由 main process 创建，直接绑定 ptyId
-    term.onData((data) => {
-      window.api.terminal.write({ terminalId: ptyId, data })
-    })
-
-    const tab: TerminalTab = {
-      id,
-      ptyId,
-      title: title || `Agent Terminal`,
-      exited: false,
-      term,
-      fitAddon
-    }
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }))
   }
 }))

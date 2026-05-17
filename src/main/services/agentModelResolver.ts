@@ -21,7 +21,16 @@ const BUILTIN_ENV_MAP: Record<string, string> = {
   huggingface: 'HF_TOKEN',
   opencode: 'OPENCODE_API_KEY',
   'kimi-coding': 'KIMI_API_KEY',
-  zai: 'ZAI_API_KEY'
+  zai: 'ZAI_API_KEY',
+  // pi-ai 0.68.1+ 新增 provider env 映射
+  fireworks: 'FIREWORKS_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  moonshotai: 'MOONSHOT_API_KEY',
+  'moonshotai-cn': 'MOONSHOT_API_KEY',
+  xiaomi: 'XIAOMI_API_KEY',
+  // Cloudflare：apiKey 走 CLOUDFLARE_API_KEY；ACCOUNT_ID / GATEWAY_ID 需用户额外通过启动环境变量注入
+  'cloudflare-workers-ai': 'CLOUDFLARE_API_KEY',
+  'cloudflare-ai-gateway': 'CLOUDFLARE_API_KEY'
 }
 
 export interface ResolveModelParams {

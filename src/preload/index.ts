@@ -256,11 +256,6 @@ const api = {
     clear: () => ipcRenderer.invoke('httpLog:clear')
   },
 
-  // ============ Docker ============
-  docker: {
-    validate: (params?: { image?: string }) => ipcRenderer.invoke('docker:validate', params)
-  },
-
   // ============ Runtime (统一资源) ============
   runtime: {
     statuses: (sessionId: string) => ipcRenderer.invoke('runtime:statuses', sessionId),
@@ -539,18 +534,6 @@ const api = {
       ): void => callback(payload)
       ipcRenderer.on('terminal:exit', handler)
       return () => ipcRenderer.removeListener('terminal:exit', handler)
-    },
-    /** 响应 main process 读取 xterm buffer 最后 N 行的请求 */
-    onReadLines: (handler: (params: { ptyId: string; lines: number }) => string | null) => {
-      const listener = (
-        _: Electron.IpcRendererEvent,
-        params: { requestId: string; ptyId: string; lines: number }
-      ): void => {
-        const content = handler({ ptyId: params.ptyId, lines: params.lines })
-        ipcRenderer.send('terminal:readLinesResult', { requestId: params.requestId, content })
-      }
-      ipcRenderer.on('terminal:readLines', listener)
-      return () => ipcRenderer.removeListener('terminal:readLines', listener)
     }
   },
 
@@ -582,7 +565,32 @@ const api = {
       const handler = (): void => callback()
       ipcRenderer.on('browser-view:did-finish-load', handler)
       return () => ipcRenderer.removeListener('browser-view:did-finish-load', handler)
+    },
+    /** WebContentsView 加载失败（含证书错误、DNS 错误等） */
+    onDidFailLoad: (
+      callback: (info: { errorCode: number; errorDescription: string; url: string }) => void
+    ) => {
+      const handler = (
+        _: unknown,
+        info: { errorCode: number; errorDescription: string; url: string }
+      ): void => callback(info)
+      ipcRenderer.on('browser-view:did-fail-load', handler)
+      return () => ipcRenderer.removeListener('browser-view:did-fail-load', handler)
     }
+  },
+
+  // ============ Browser 分区数据 ============
+  browserData: {
+    /** 列出内置浏览器分区中"写过 cookie 的 host"，按字母序 */
+    listSites: () =>
+      ipcRenderer.invoke('browser-data:list-sites') as Promise<
+        Array<{ host: string; cookieCount: number }>
+      >,
+    /** 清除指定 host 的全部存储数据（cookies / localStorage / IndexedDB / cache） */
+    clearSite: (host: string) =>
+      ipcRenderer.invoke('browser-data:clear-site', host) as Promise<void>,
+    /** 清除浏览器分区下全部数据（所有 origin） */
+    clearAll: () => ipcRenderer.invoke('browser-data:clear-all') as Promise<void>
   },
 
   // ============ Skill 管理 ============
@@ -674,9 +682,18 @@ const api = {
         running: boolean
         port: number
         widgetCount: number
+        registeredIds: string[]
       }>,
     /** 停止 widget HTTP 服务器（下次打开时自动重启） */
     stopServer: () => ipcRenderer.invoke('widget:stopServer'),
+    /** 启动单个 widget —— 注册到 server 并返回 URL，不打开浏览器 */
+    startWidget: (id: string) =>
+      ipcRenderer.invoke('widget:startWidget', id) as Promise<
+        { success: true; url: string; buildSuccess: boolean } | { success: false; error: string }
+      >,
+    /** 停止单个 widget —— 从 server 注销，不影响其他 widget */
+    stopWidget: (id: string) =>
+      ipcRenderer.invoke('widget:stopWidget', id) as Promise<{ success: true }>,
     /** 弹出文件夹选择器（返回所选路径；用户取消返回 canceled） */
     pickExportDir: () =>
       ipcRenderer.invoke('widget:pickExportDir') as Promise<
@@ -693,6 +710,24 @@ const api = {
       const handler = (): void => callback()
       ipcRenderer.on('widget:changed', handler)
       return () => ipcRenderer.removeListener('widget:changed', handler)
+    }
+  },
+
+  // ============ Files (会话工作目录文件树) ============
+  files: {
+    /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore），同时启动文件监听 */
+    scan: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('files:scan', params) as Promise<{
+        paths: string[]
+        truncated: boolean
+        root: string | null
+      }>,
+    /** 监听工作目录文件变动事件（按 root 路径标识，同项目内多会话共享） */
+    onChanged: (callback: (payload: { root: string }) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, payload: { root: string }): void =>
+        callback(payload)
+      ipcRenderer.on('files:changed', handler)
+      return () => ipcRenderer.removeListener('files:changed', handler)
     }
   }
 }

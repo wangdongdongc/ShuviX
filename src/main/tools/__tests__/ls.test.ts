@@ -13,27 +13,10 @@ const TEST_DIR = join(tmpdir(), 'shuvix-ls-test-' + Date.now())
 const MANY_DIR = join(tmpdir(), 'shuvix-ls-many-' + Date.now())
 const SESSION_ID = 'test-session-ls'
 
-// mock types 模块（完全替换，避免触发 Electron/DB 依赖）
-vi.mock('../types', () => ({
-  BaseTool: class {
-    async securityCheck(..._args: unknown[]): Promise<void> {}
-    async executeInternal(..._args: unknown[]): Promise<unknown> {
-      return {}
-    }
-    async execute(
-      toolCallId: string,
-      params: unknown,
-      signal?: AbortSignal,
-      onUpdate?: unknown
-    ): Promise<unknown> {
-      await this.securityCheck(toolCallId, params, signal)
-      return this.executeInternal(toolCallId, params, signal, onUpdate)
-    }
-  },
+// mock toolContext（避免加载 projectDao/sessionService → electron app.getPath）
+vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: () => ({
     workingDirectory: TEST_DIR,
-    dockerEnabled: false,
-    dockerImage: '',
     referenceDirs: []
   }),
   isPathWithinWorkspace: (absolutePath: string, workingDirectory: string) => {
@@ -44,6 +27,11 @@ vi.mock('../types', () => ({
   assertSandboxRead: () => {},
   assertSandboxWrite: () => {},
   TOOL_ABORTED: 'Aborted'
+}))
+
+// mock toolRegistry — 文件底部的 registerBuiltinTool 在测试里是 no-op
+vi.mock('../../services/toolRegistry', () => ({
+  registerBuiltinTool: () => {}
 }))
 
 // mock i18n

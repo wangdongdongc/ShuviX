@@ -1,4 +1,4 @@
-/** 斜杠命令定义（从 .claude/commands/ 发现） */
+/** 斜杠命令定义（来自 .claude/commands/ 项目命令 或 skill） */
 export interface SlashCommand {
   /** 命令标识符，如 "opsx:explore" 或 "review" */
   commandId: string
@@ -12,4 +12,6 @@ export interface SlashCommand {
   filePath: string
   /** 依赖的工具名（选中命令时自动启用这些工具） */
   requiredTools?: string[]
+  /** 命令来源——'project' 来自 .claude/commands/，'skill' 来自 SKILL.md */
+  kind?: 'project' | 'skill'
 }

@@ -358,6 +358,25 @@ export const migrations: Migration[] = [
       }
       db.exec(`DELETE FROM custom_sub_agents WHERE isBuiltin = 1`)
     }
+  },
+  {
+    version: 11,
+    description: '禁用 pi-ai 0.71 已移除的 google-gemini-cli / google-antigravity provider',
+    up: (db) => {
+      const removed = ['google-gemini-cli', 'google-antigravity']
+      const stmt = db.prepare(
+        `UPDATE providers SET isEnabled = 0, updatedAt = ? WHERE name = ? AND isEnabled = 1`
+      )
+      const now = Date.now()
+      for (const name of removed) {
+        const result = stmt.run(now, name)
+        if (result.changes > 0) {
+          log.warn(
+            `Provider "${name}" 已被 pi-ai 0.71 移除，自动禁用。如需继续使用请通过自定义 provider 重新接入。`
+          )
+        }
+      }
+    }
   }
 ]
 

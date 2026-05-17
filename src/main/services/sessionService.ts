@@ -12,7 +12,6 @@ import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
 import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
-import { destroyAgentTerminal } from './agentTerminalManager'
 import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
 
 import type { InputResponse } from '../../shared/types/inputRequest'
@@ -180,8 +179,6 @@ export class SessionService {
       this.agentSessions.delete(id)
       log.info(`移除 AgentSession session=${id} 剩余=${this.agentSessions.size}`)
     }
-    // 清理 agent 终端
-    destroyAgentTerminal(id)
     // 清理 Telegram 绑定（异步，不阻塞删除）
     import('./telegram').then(({ telegramService }) => {
       telegramService.unbindSession(id).catch(() => {})
@@ -278,7 +275,7 @@ export class SessionService {
     return { success: true, created: true, ...meta }
   }
 
-  /** 使指定 session 的 Agent 失效（回退时使用，不销毁 Docker，下次 init 会重建） */
+  /** 使指定 session 的 Agent 失效（回退时使用，下次 init 会重建） */
   invalidateAgent(sessionId: string): void {
     const s = this.agentSessions.get(sessionId)
     if (s) {

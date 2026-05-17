@@ -5,15 +5,14 @@ slides_en.py — kami slide deck library (16:9, parchment aesthetic, Inter + New
 ┌──────────────────────────────────────────────────────────────────────┐
 │  How to use this inside ShuviX (AI — READ THIS FIRST)                │
 │                                                                      │
-│  ❌ DO NOT copy this file's code into the python tool's `code` arg    │
+│  ❌ DO NOT copy this file's code into the shuvix python -c argument   │
 │  ❌ DO NOT rewrite slides_en.py yourself                              │
-│  ✅ Pass this file's absolute path to the python tool's `modulePaths` │
-│     arg; your `code` is then just "call the functions with data"     │
+│  ✅ Put this file's directory on PYTHONPATH, then import slides_en   │
 │                                                                      │
-│  Minimal example:                                                    │
-│    python({                                                          │
-│      modulePaths: ["<absolute path to this file>"],                  │
-│      code: '''                                                       │
+│  Minimal example (invoke through the bash tool):                     │
+│    PYTHONPATH=<dir containing this file> shuvix python -c '          │
+│    from slides_en import (Presentation, SLIDE_W, SLIDE_H,            │
+│        cover_slide, content_slide)                                   │
 │    prs = Presentation()                                              │
 │    prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H              │
 │    cover_slide(prs, title="...", subtitle="...",                     │
@@ -21,10 +20,9 @@ slides_en.py — kami slide deck library (16:9, parchment aesthetic, Inter + New
 │    content_slide(prs, eyebrow="...", title="...",                    │
 │                  body="...", page_num=2)                             │
 │    prs.save("/workspace/deck.pptx")                                  │
-│    '''                                                               │
-│    })                                                                │
+│    '                                                                 │
 │                                                                      │
-│  Top-level names available after loading (no import needed):         │
+│  Top-level names importable from slides_en:                          │
 │    Presentation, SLIDE_W, SLIDE_H                                    │
 │    cover_slide, toc_slide, chapter_slide,                            │
 │    content_slide, metrics_slide, quote_slide, ending_slide           │

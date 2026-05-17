@@ -5,26 +5,24 @@ slides.py — kami 幻灯片设计系统 · 函数库（16:9 宽屏，parchment 
 ┌──────────────────────────────────────────────────────────────────────┐
 │  在 ShuviX 里的正确用法（AI 必读）                                    │
 │                                                                      │
-│  ❌ 不要把本文件的代码复制到 python 工具的 `code` 参数里              │
+│  ❌ 不要把本文件的代码复制到 shuvix python 的 -c 字符串里             │
 │  ❌ 不要自己 rewrite 一份 slides.py                                   │
-│  ✅ 把本文件的绝对路径传给 python 工具的 `modulePaths` 参数            │
-│     然后 `code` 里只写"调用函数 + 填数据"                             │
+│  ✅ 把本文件**所在目录**塞进 PYTHONPATH，然后 import slides            │
 │                                                                      │
-│  最小示例：                                                          │
-│    python({                                                          │
-│      modulePaths: ["<此文件绝对路径>"],                               │
-│      code: '''                                                       │
-│    prs = Presentation()                                              │
-│    prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H              │
-│    cover_slide(prs, title="...", subtitle="...",                     │
-│                author="...", date="...")                             │
-│    content_slide(prs, eyebrow="...", title="...",                    │
-│                  body="...", page_num=2)                             │
-│    prs.save("/workspace/deck.pptx")                                  │
-│    '''                                                               │
-│    })                                                                │
+│  最小示例（通过 bash 工具调用）：                                     │
+│    PYTHONPATH=<此文件所在目录> shuvix python -c '                     │
+│    from slides import (Presentation, SLIDE_W, SLIDE_H,                │
+│        cover_slide, content_slide)                                    │
+│    prs = Presentation()                                               │
+│    prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H               │
+│    cover_slide(prs, title="...", subtitle="...",                      │
+│                author="...", date="...")                              │
+│    content_slide(prs, eyebrow="...", title="...",                     │
+│                  body="...", page_num=2)                              │
+│    prs.save("/workspace/deck.pptx")                                   │
+│    '                                                                  │
 │                                                                      │
-│  可调用的顶层函数（load 后直接用，无需 import）：                     │
+│  可 import 的顶层函数：                                              │
 │    Presentation, SLIDE_W, SLIDE_H                                    │
 │    cover_slide, toc_slide, chapter_slide,                            │
 │    content_slide, metrics_slide, quote_slide, ending_slide           │

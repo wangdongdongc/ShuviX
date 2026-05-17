@@ -3,7 +3,7 @@
  * 用户在前端选择后，结果返回给 AI 继续推理
  */
 
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { BaseTool } from '../services/baseTool'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'

@@ -106,20 +106,11 @@ export interface EditToolDetails {
   firstChangedLine?: number
 }
 
-/** terminal 工具详情 */
-export interface TerminalToolDetails {
-  type: 'terminal'
-  exitCode: number
-  truncated: boolean
-}
-
 /** bash 工具详情 */
 export interface BashToolDetails {
   type: 'bash'
   exitCode: number
   truncated: boolean
-  /** 是否在 Docker 容器中执行 */
-  docker?: boolean
   /** 完整输出是否已持久化到磁盘 */
   persisted?: boolean
 }
@@ -248,29 +239,10 @@ export interface BrowserToolDetails {
   error?: string
 }
 
-/** dev 工具详情 —— 统一 widget / presentation / sketch 三种 kind */
-export interface DevToolDetails {
-  type: 'dev'
-  action: 'init' | 'build' | 'export'
-  kind: 'widget' | 'presentation' | 'sketch'
-  /** 仅 kind='widget' 时有值 */
-  widgetId?: string
-  /** 仅 kind='widget' 且 action='init' 时的友好名 */
-  name?: string
-  url?: string
-  success: boolean
-  error?: string
-  /** 仅 action='export' 时有值 */
-  targetPath?: string
-  /** 仅 action='export' 时有值：导出写入的文件数 */
-  filesWrittenCount?: number
-}
-
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
   | EditToolDetails
   | BashToolDetails
-  | TerminalToolDetails
   | ReadToolDetails
   | GlobToolDetails
   | GrepToolDetails
@@ -283,7 +255,6 @@ export type ToolResultDetails =
   | SqlToolDetails
   | McpToolDetails
   | BrowserToolDetails
-  | DevToolDetails
 
 /** 工具使用元数据 */
 export interface ToolUseMeta {

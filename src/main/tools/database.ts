@@ -3,7 +3,7 @@
  * 单一 query 接口，连接由 dbManager 自动管理（自动建立、空闲超时自动断开）
  */
 
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { dbManager } from '../services/dbManager'
 import { dbCredentialDao } from '../dao/dbCredentialDao'
 import { BaseTool } from '../services/baseTool'

@@ -7,7 +7,7 @@
  * - systemPrompt / 工具 description 保持英文（LLM 提示稳定）
  */
 
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import type {
   SubAgentModelConfig,
   SubAgentProvider,

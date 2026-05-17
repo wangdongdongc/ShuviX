@@ -59,6 +59,13 @@ export interface ChatAgentEndEvent extends ChatEventBase {
   usage?: ChatTokenUsage
 }
 
+/** 单步 token 用量上报（每个 LLM step 完成后即时下发，用于实时刷新上下文用量指示器） */
+export interface ChatTokenUsageEvent extends ChatEventBase {
+  type: 'token_usage'
+  /** 当前 prompt 占用的 token 数（= total - output，含 cacheRead/cacheWrite） */
+  promptTokens: number
+}
+
 // ─── 工具调用生成 ──────────────────────────────────────
 
 /** 工具调用正在生成中（LLM 正在输出 tool_use 块，尚未开始执行） */
@@ -152,13 +159,6 @@ export interface ChatBrowserEvent extends ChatEventBase {
   title?: string
 }
 
-/** 终端工具事件 — 通知 renderer 打开/连接 agent 终端 */
-export interface ChatTerminalToolEvent extends ChatEventBase {
-  type: 'terminal_event'
-  action: 'open'
-  ptyId: string
-}
-
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /**
@@ -248,6 +248,7 @@ export type ChatEvent =
   | ChatTextEndEvent
   | ChatStepEndEvent
   | ChatAgentEndEvent
+  | ChatTokenUsageEvent
   | ChatToolCallGeneratingEvent
   | ChatToolStartEvent
   | ChatToolEndEvent
@@ -256,7 +257,6 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatBrowserEvent
-  | ChatTerminalToolEvent
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
   | ChatCompactionStartEvent
