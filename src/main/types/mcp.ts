@@ -52,4 +52,6 @@ export interface McpToolInfo {
   serverId: string
   /** 服务器连接状态 */
   serverStatus: McpServerStatus
+  /** 是否为 ShuviX 自带的内置 MCP 服务器 */
+  isBuiltin?: boolean
 }

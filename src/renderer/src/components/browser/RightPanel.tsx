@@ -27,9 +27,9 @@ interface TabDef {
 }
 
 const tabs: TabDef[] = [
+  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'browser', labelKey: 'panel.browser', Icon: Monitor },
   { key: 'terminal', labelKey: 'panel.terminal', Icon: TerminalSquare },
-  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
   { key: 'subagent', labelKey: 'panel.subAgent', Icon: Bot }
 ]

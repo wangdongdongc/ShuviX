@@ -421,8 +421,12 @@ const api = {
 
   // ============ 斜杠命令 ============
   command: {
-    /** 获取当前会话可用的斜杠命令列表 */
-    list: (params: { sessionId: string }) => ipcRenderer.invoke('command:list', params)
+    /**
+     * 获取斜杠命令列表
+     * - sessionId 非空：返回项目命令 + 全部 skill 命令
+     * - sessionId 为 null：仅返回不依赖项目的命令（欢迎页等无会话场景）
+     */
+    list: (params: { sessionId: string | null }) => ipcRenderer.invoke('command:list', params)
   },
 
   // ============ 语音转文字 ============
@@ -722,6 +726,11 @@ const api = {
         truncated: boolean
         root: string | null
       }>,
+    /** 读取文件内容用于面板预览。沙箱外路径返回 not-allowed，不弹审批 */
+    read: (params: { sessionId: string; path: string }) =>
+      ipcRenderer.invoke('files:read', params) as Promise<
+        import('../shared/types/filePreview').FileReadResult
+      >,
     /** 监听工作目录文件变动事件（按 root 路径标识，同项目内多会话共享） */
     onChanged: (callback: (payload: { root: string }) => void) => {
       const handler = (_: Electron.IpcRendererEvent, payload: { root: string }): void =>

@@ -292,12 +292,15 @@ export function ProviderSettings(): React.JSX.Element {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 px-5 py-5 space-y-1.5 overflow-y-auto">
-        {/* Token 用量提示 */}
-        <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
-          <TriangleAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-text-secondary leading-relaxed">
-            {t('settings.tokenUsageWarning')}
-          </p>
+        {/* 标题 + Token 用量提示 */}
+        <div className="pb-3">
+          <h2 className="text-base font-semibold text-text-primary mb-1.5">
+            {t('settings.providerSectionTitle')}
+          </h2>
+          <div className="flex items-start gap-1.5 text-[11px] text-text-tertiary leading-relaxed">
+            <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-[3px]" />
+            <p>{t('settings.tokenUsageWarning')}</p>
+          </div>
         </div>
 
         {/* 添加自定义提供商按钮 */}

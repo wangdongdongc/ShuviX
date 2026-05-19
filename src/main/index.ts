@@ -2,8 +2,6 @@ import {
   app,
   shell,
   session,
-  net,
-  protocol,
   BrowserWindow,
   Menu,
   ipcMain,
@@ -38,6 +36,10 @@ import { createBrowserView, destroyBrowserView, initBrowserSession } from './ser
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
+import {
+  registerCustomProtocolHandlers,
+  registerCustomProtocolSchemes
+} from './services/customProtocols'
 import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
@@ -315,10 +317,18 @@ function getSavedPanelLayout(): PanelLayout {
   }
 }
 
+/** 启动时尚未创建 webContents，需根据保存的 uiZoom 计算 zoomFactor 把 CSS 像素换算成 DIP */
+function getStartupZoomFactor(): number {
+  const pct = Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1
+  return Math.max(0.5, Math.min(2.2, pct * 1.1))
+}
+
 function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
   const layout = getSavedPanelLayout()
   // browser 不自动恢复（renderer 侧不恢复 browserOpen），计算窗口宽度时排除 browser
-  const defaultWidth = calcWindowWidth({ ...layout, browserOpen: false })
+  // calcWindowWidth 返回 CSS 像素；BrowserWindow.width 需要 DIP，按 zoomFactor 换算
+  const zoom = getStartupZoomFactor()
+  const defaultWidth = Math.round(calcWindowWidth({ ...layout, browserOpen: false }) * zoom)
   const defaults = { width: defaultWidth, height: 800 }
   try {
     const raw = settingsDao.findByKey('window.mainBounds')
@@ -416,12 +426,18 @@ function createWindow(): void {
       const zoom = mainWindow.webContents.getZoomFactor()
       const windowWidth = bounds.width / zoom // CSS 像素
       const layout = getSavedPanelLayout()
-      // 反推 chatWidth = 窗口宽度 - 其他面板
+      // 反推 chatWidth = 窗口宽度 - 其他面板。
+      // browserOpen 不读 DB —— DB 里的值在「上次会话开过、本次未操作过」时会过期。
+      // 用主进程实时跟踪的 currentBrowserOffset（renderer 每次 set-browser-offset 都会更新）。
+      const browserActuallyOpen = currentBrowserOffset > 0
       let chatWidth = windowWidth
       if (layout.sidebarOpen) chatWidth -= layout.sidebarWidth + HANDLE_WIDTH
-      if (layout.browserOpen) chatWidth -= layout.browserWidth + HANDLE_WIDTH
+      if (browserActuallyOpen) chatWidth -= layout.browserWidth + HANDLE_WIDTH
       chatWidth = Math.max(400, Math.round(chatWidth))
-      settingsDao.upsert('window.panelLayout', JSON.stringify({ ...layout, chatWidth }))
+      settingsDao.upsert(
+        'window.panelLayout',
+        JSON.stringify({ ...layout, chatWidth, browserOpen: browserActuallyOpen })
+      )
     }
   })
 
@@ -495,9 +511,14 @@ ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
   }
 })
 
-// 设置浏览器面板宽度偏移 — 仅重置窗口最小宽度为固定值
+// 主进程跟踪 RightPanel 实际开启状态 —— renderer 每次开关/拖拽都会调用 set-browser-offset，
+// 关闭窗口时据此正确反推 chatWidth，不再依赖可能过期的 panelLayout.browserOpen
+let currentBrowserOffset = 0
+
+// 设置浏览器面板宽度偏移 — 重置窗口最小宽度为固定值，同时记录当前面板是否开启
 // CSS min-width (chat 400px) 已保证内容不会被过度压缩
-ipcMain.handle('app:set-browser-offset', (_event, _offset: number) => {
+ipcMain.handle('app:set-browser-offset', (_event, offset: number) => {
+  currentBrowserOffset = Number.isFinite(offset) ? offset : 0
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setMinimumSize(800, 600)
   }
@@ -516,23 +537,15 @@ if (!gotTheLock) {
   })
 }
 
-// 注册自定义协议（必须在 app.whenReady 之前调用）
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: 'shuvix-media',
-    privileges: { stream: true, supportFetchAPI: true, bypassCSP: true }
-  }
-])
+// 自定义协议 scheme 注册必须早于 app.whenReady
+registerCustomProtocolSchemes()
 
 app.whenReady().then(async () => {
   mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
 
-  // 注册 shuvix-media:// 协议，安全地为渲染进程提供本地文件（TTS 音频等）
-  protocol.handle('shuvix-media', (request) => {
-    const filePath = decodeURIComponent(new URL(request.url).pathname)
-    return net.fetch(`file://${filePath}`)
-  })
+  // shuvix-media:// + shuvix-preview://
+  registerCustomProtocolHandlers()
 
   // 允许渲染进程请求麦克风权限（语音输入）。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。

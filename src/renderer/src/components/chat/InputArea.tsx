@@ -119,7 +119,7 @@ export function InputArea(): React.JSX.Element {
   // 拖拽调节的 textarea 最小高度
   const DRAG_MIN = 60
   const DRAG_MAX = 480
-  const DEFAULT_MIN_H = 72
+  const DEFAULT_MIN_H = 60
   const [minH, setMinH] = useState(() => {
     const stored = localStorage.getItem('inputMinHeight')
     if (stored) {
@@ -192,7 +192,19 @@ export function InputArea(): React.JSX.Element {
     const rawText = inputText.trim()
     const images = pendingImages
     // 有芯片时即使参数为空也允许发送（纯命令）
-    if ((!rawText && !slashChip && images.length === 0) || isStreaming || !activeSessionId) return
+    if ((!rawText && !slashChip && images.length === 0) || isStreaming) return
+
+    // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）
+    let sid = activeSessionId
+    if (!sid) {
+      const session = await window.api.session.create(null)
+      sid = session.id
+      await window.api.agent.init({ sessionId: sid })
+      const sessions = await window.api.session.list()
+      const s = useChatStore.getState()
+      s.setSessions(sessions)
+      s.setActiveSessionId(sid)
+    }
 
     // ─── 前端斜杠命令展开 + Token 构造 ───
     let contentText: string
@@ -202,7 +214,7 @@ export function InputArea(): React.JSX.Element {
       // 芯片模式：从芯片中获取模板并展开
       const uid = 't0'
       const expandedText = expandCommandTemplate(slashChip.template, rawText, {
-        sessionId: activeSessionId
+        sessionId: sid
       })
       const token: InlineToken = {
         type: 'cmd',
@@ -223,7 +235,7 @@ export function InputArea(): React.JSX.Element {
         autoEnableRequiredTools(cmd.requiredTools)
         const uid = 't0'
         const expandedText = expandCommandTemplate(cmd.template, args, {
-          sessionId: activeSessionId
+          sessionId: sid
         })
         const token: InlineToken = {
           type: 'cmd',
@@ -245,8 +257,8 @@ export function InputArea(): React.JSX.Element {
     store.setInputText('')
     store.clearPendingImages()
     setSlashChip(null)
-    store.setIsStreaming(activeSessionId, true)
-    store.clearStreamingContent(activeSessionId)
+    store.setIsStreaming(sid, true)
+    store.clearStreamingContent(sid)
 
     // 发送给 Agent（附带图片 + 内联 Token），后端直接使用不再重复查询
     const agentImages =
@@ -258,7 +270,7 @@ export function InputArea(): React.JSX.Element {
           }))
         : undefined
     await window.api.agent.prompt({
-      sessionId: activeSessionId,
+      sessionId: sid,
       text: contentText,
       images: agentImages,
       inlineTokens
@@ -354,9 +366,7 @@ export function InputArea(): React.JSX.Element {
   }
 
   const canSend =
-    (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
-    !isStreaming &&
-    activeSessionId
+    (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) && !isStreaming
   return (
     <div
       className={`bg-bg-primary transition-colors ${
@@ -367,7 +377,7 @@ export function InputArea(): React.JSX.Element {
       onDrop={handleDrop}
     >
       <div className="max-w-3xl mx-auto p-2">
-        <div className="border border-border-secondary/40 bg-bg-primary shadow-sm rounded-lg">
+        <div className="border border-border-secondary/40 bg-bg-primary shadow-sm rounded-2xl">
           {/* 拖拽调节手柄 */}
           <div
             onMouseDown={handleResizeStart}
@@ -436,23 +446,20 @@ export function InputArea(): React.JSX.Element {
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={
-                !activeSessionId
-                  ? t('input.placeholderNoSession')
-                  : isStreaming
-                    ? t('input.placeholderSteer')
-                    : slashChip
-                      ? t('input.placeholder')
-                      : modelSupportsVision
-                        ? t('input.placeholderVision')
-                        : t('input.placeholder')
+                isStreaming
+                  ? t('input.placeholderSteer')
+                  : slashChip
+                    ? t('input.placeholder')
+                    : modelSupportsVision
+                      ? t('input.placeholderVision')
+                      : t('input.placeholder')
               }
-              disabled={!activeSessionId}
               rows={3}
               style={{
                 minHeight: `${minH}px`,
                 textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
               }}
-              className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto disabled:opacity-50"
+              className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto"
             />
 
             {/* Compact + Mic + Send/Stop 按钮（保留在输入框右下角） */}

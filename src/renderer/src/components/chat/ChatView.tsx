@@ -4,8 +4,6 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Folder, Settings2, Archive } from 'lucide-react'
 import {
   useChatStore,
-  selectStreamingContent,
-  selectStreamingThinking,
   selectIsStreaming,
   selectIsCompacting,
   selectCanChat,
@@ -21,7 +19,6 @@ import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
-import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
@@ -141,15 +138,11 @@ function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): Visib
  */
 export function ChatView(): React.JSX.Element {
   const { messages, activeSessionId, sessions } = useChatStore()
-  const streamingContent = useChatStore(selectStreamingContent)
-  const streamingThinking = useChatStore(selectStreamingThinking)
   const isStreaming = useChatStore(selectIsStreaming)
   const isCompacting = useChatStore(selectIsCompacting)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
-  const atBottomRef = useRef(true)
-  const scrollRafRef = useRef<number>(0)
 
   const { projectPath } = useSessionMeta()
   const activeSession = sessions.find((s) => s.id === activeSessionId)
@@ -158,8 +151,6 @@ export function ChatView(): React.JSX.Element {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
-  const [showCreateProject, setShowCreateProject] = useState(false)
-  const [createPurpose, setCreatePurpose] = useState<string | undefined>()
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   // ── 归档消息回溯 ──
@@ -196,20 +187,8 @@ export function ChatView(): React.JSX.Element {
     confirmRollback,
     cancelRollback,
     handleRegenerate,
-    handleInputResponse,
-    handleNewChat
+    handleInputResponse
   } = useChatActions(activeSessionId)
-
-  // 跟踪用户是否在底部附近
-  const handleAtBottomChange = useCallback((atBottom: boolean) => {
-    atBottomRef.current = atBottom
-  }, [])
-
-  // Virtuoso followOutput：新项出现时自动跟随
-  const followOutput = useCallback(
-    (isAtBottom: boolean) => (isAtBottom ? ('auto' as const) : (false as const)),
-    []
-  )
 
   // ── 归档消息：会话切换时重置并获取归档数 ──
   useEffect(() => {
@@ -251,24 +230,6 @@ export function ChatView(): React.JSX.Element {
     () => (archivedItems.length > 0 ? [...archivedItems, ...liveItems] : liveItems),
     [archivedItems, liveItems]
   )
-  // 流式内容增长时，若用户在底部则自动滚动
-  // 使用 rAF 合并同帧内多次更新，scrollTo 代替 scrollToIndex 避免 index 定位抖动
-  useEffect(() => {
-    if (!atBottomRef.current || !virtuosoRef.current) return
-    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
-    scrollRafRef.current = requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollTo({ top: Number.MAX_SAFE_INTEGER })
-      scrollRafRef.current = 0
-    })
-  }, [streamingContent, streamingThinking, messages])
-
-  // 组件卸载时清理 rAF
-  useEffect(() => {
-    return () => {
-      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
-    }
-  }, [])
-
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -458,13 +419,7 @@ export function ChatView(): React.JSX.Element {
       {activeSessionId && <StatusBanner sessionId={activeSessionId} />}
 
       {!activeSessionId ? (
-        <WelcomeView
-          onNewChat={handleNewChat}
-          onCreateProject={(purpose) => {
-            setCreatePurpose(purpose)
-            setShowCreateProject(true)
-          }}
-        />
+        <WelcomeView />
       ) : (
         <>
           {/* 压缩中冻结遮罩 */}
@@ -488,13 +443,10 @@ export function ChatView(): React.JSX.Element {
                 Footer: StreamingFooter,
                 ...(ArchivedBanner ? { Header: ArchivedBanner } : {})
               }}
-              followOutput={followOutput}
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}
               increaseViewportBy={{ top: 200, bottom: 400 }}
               computeItemKey={(_index, item) => item.msg.id}
-              atBottomStateChange={handleAtBottomChange}
-              atBottomThreshold={300}
             />
           )}
 
@@ -524,26 +476,6 @@ export function ChatView(): React.JSX.Element {
         <SessionConfigDialog
           sessionId={activeSessionId}
           onClose={() => setShowSessionConfig(false)}
-        />
-      )}
-
-      {/* 新建项目弹窗（欢迎页触发） */}
-      {showCreateProject && (
-        <ProjectCreateDialog
-          initialPurpose={createPurpose}
-          onClose={() => {
-            setShowCreateProject(false)
-            setCreatePurpose(undefined)
-          }}
-          onCreated={async (projectId) => {
-            setShowCreateProject(false)
-            setCreatePurpose(undefined)
-            // 在新项目下创建一个会话并激活
-            const session = await window.api.session.create(projectId)
-            const allSessions = await window.api.session.list()
-            useChatStore.getState().setSessions(allSessions)
-            useChatStore.getState().setActiveSessionId(session.id)
-          }}
         />
       )}
     </div>

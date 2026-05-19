@@ -421,7 +421,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   },
   setMessages: (messages) => set({ messages }),
-  addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  addMessage: (message) =>
+    set((state) =>
+      state.messages.some((m) => m.id === message.id)
+        ? state
+        : { messages: [...state.messages, message] }
+    ),
   removeMessage: (id) => set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
   replaceMessage: (id, message) =>
     set((state) => ({

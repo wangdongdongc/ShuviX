@@ -688,8 +688,12 @@ declare global {
       start: (sessionId: string) => Promise<unknown>
     }
     command: {
-      /** 获取当前会话可用的斜杠命令列表 */
-      list: (params: { sessionId: string }) => Promise<
+      /**
+       * 获取斜杠命令列表
+       * - sessionId 非空：返回项目命令 + 全部 skill 命令
+       * - sessionId 为 null：仅返回不依赖项目的命令（欢迎页等无会话场景）
+       */
+      list: (params: { sessionId: string | null }) => Promise<
         Array<{
           commandId: string
           name: string
@@ -867,6 +871,10 @@ declare global {
         truncated: boolean
         root: string | null
       }>
+      read: (params: {
+        sessionId: string
+        path: string
+      }) => Promise<import('../shared/types/filePreview').FileReadResult>
       onChanged: (callback: (payload: { root: string }) => void) => () => void
     }
   }

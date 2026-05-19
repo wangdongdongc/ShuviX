@@ -7,7 +7,8 @@ import {
   Trash2,
   Puzzle,
   BookOpen,
-  Settings
+  Settings,
+  WifiOff
 } from 'lucide-react'
 import type { ReferenceDir } from '../../../../main/types/project'
 import type { ProjectPromptSection } from '../../../../shared/types/promptSection'
@@ -270,11 +271,29 @@ export function ExtensionsPanel({
                     onChange={() => onToggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
+                  {tool.isBuiltin && (
+                    <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
+                      {t('input.skillBuiltinBadge')}
+                    </span>
+                  )}
                   <span
-                    className={`text-[11px] font-mono ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
+                    className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-text-secondary' : 'text-red-400'}`}
                   >
                     {serverName}
                   </span>
+                  {!isOnline && (
+                    <span
+                      className="flex items-center gap-0.5 text-[10px] text-red-400 flex-shrink-0"
+                      title={t('settings.mcpStatusDisconnected')}
+                    >
+                      <WifiOff size={10} />
+                    </span>
+                  )}
+                  {tool.label && (
+                    <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                      {tool.label}
+                    </span>
+                  )}
                 </label>
               )
             })}
@@ -290,7 +309,9 @@ export function ExtensionsPanel({
           </div>
           <div className="divide-y divide-border-secondary">
             {skillTools.map((tool) => {
-              const shortName = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+              const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+              const builtin = short.startsWith('builtin:')
+              const label = builtin ? short.slice('builtin:'.length) : short
               return (
                 <label
                   key={tool.name}
@@ -302,7 +323,19 @@ export function ExtensionsPanel({
                     onChange={() => onToggle(tool.name)}
                     className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                   />
-                  <span className="text-[11px] font-mono text-text-secondary">{shortName}</span>
+                  {builtin && (
+                    <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
+                      {t('input.skillBuiltinBadge')}
+                    </span>
+                  )}
+                  <span className="text-[11px] font-mono text-text-secondary whitespace-nowrap flex-shrink-0">
+                    {label}
+                  </span>
+                  {tool.label && (
+                    <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                      {tool.label}
+                    </span>
+                  )}
                 </label>
               )
             })}

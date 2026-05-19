@@ -6,7 +6,7 @@
  * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
  */
 
-import { stat as fsStat, readdir as fsReaddir, open as fsOpen, readFile } from 'fs/promises'
+import { stat as fsStat, readdir as fsReaddir, readFile } from 'fs/promises'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { extname } from 'path'
@@ -23,6 +23,11 @@ import {
 import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { resolveReadPath, suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import { recordRead } from '../utils/toolUtils/fileTime'
+import {
+  KNOWN_BINARY_EXTENSIONS,
+  IMAGE_MIME_BY_EXT,
+  isBinaryFile
+} from '../utils/toolUtils/binaryDetect'
 import { BaseTool } from '../services/baseTool'
 import {
   resolveProjectConfig,
@@ -66,64 +71,6 @@ const RICH_FILE_EXTENSIONS = new Set([
   '.zip'
 ])
 
-/** 已知的不支持二进制格式（直接拒绝读取，避免乱码） */
-const KNOWN_BINARY_EXTENSIONS = new Set([
-  '.ppt', // Office 旧版二进制格式（.doc 已由 word-extractor 处理，.xls 已在 RICH 集合中）
-  '.odt',
-  '.ods',
-  '.odp', // OpenDocument
-  '.rtf',
-  '.exe',
-  '.dll',
-  '.so',
-  '.dylib', // 可执行 / 库
-  '.bin',
-  '.dat',
-  '.db',
-  '.sqlite',
-  '.class',
-  '.pyc',
-  '.o',
-  '.obj',
-  '.wasm',
-  '.tar',
-  '.gz',
-  '.bz2',
-  '.7z',
-  '.rar',
-  '.mp3',
-  '.mp4',
-  '.avi',
-  '.mov',
-  '.wav',
-  '.flac',
-  '.ogg',
-  '.webm',
-  // 未支持的图像/字体格式（支持的图像见 IMAGE_EXTENSIONS）
-  '.ico',
-  '.tiff',
-  '.heic',
-  '.ttf',
-  '.otf',
-  '.woff',
-  '.woff2',
-  '.iso',
-  '.dmg',
-  '.pkg',
-  '.protobuf',
-  '.pb'
-])
-
-/** 支持作为图像返回的扩展名 → MIME 映射 */
-const IMAGE_MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp'
-}
-
 /** 单张图片返回给模型的字节上限；超过则自动缩放 + JPEG 重编码 */
 const MAX_IMAGE_BYTES = 1 * 1024 * 1024
 
@@ -138,24 +85,6 @@ const IMAGE_COMPRESS_STEPS: ReadonlyArray<{ maxWidth: number; quality: number }>
   { maxWidth: 1000, quality: 65 },
   { maxWidth: 800, quality: 55 }
 ]
-
-/** 检测文件是否为二进制（只读取前 8KB，检查 NULL 字节） */
-async function isBinaryFile(filepath: string, fileSize: number): Promise<boolean> {
-  if (fileSize === 0) return false
-  const fh = await fsOpen(filepath, 'r')
-  try {
-    const sampleSize = Math.min(8192, fileSize)
-    const bytes = Buffer.alloc(sampleSize)
-    const result = await fh.read(bytes, 0, sampleSize, 0)
-    if (result.bytesRead === 0) return false
-    for (let i = 0; i < result.bytesRead; i++) {
-      if (bytes[i] === 0) return true
-    }
-    return false
-  } finally {
-    await fh.close()
-  }
-}
 
 /** 单例 MarkItDown 实例 */
 let markitdownInstance: MarkItDown | null = null

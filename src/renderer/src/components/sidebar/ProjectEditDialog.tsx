@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X, Wrench, Database, Terminal, Plus, Trash2, Eye, EyeOff } from 'lucide-react'
-import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
+import { X, Database, Terminal, Plus, Trash2, Eye, EyeOff } from 'lucide-react'
+import { type ToolItem } from '../common/ToolSelectList'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { usePanelTransition } from '../../hooks/usePanelTransition'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -20,7 +20,7 @@ interface ProjectEditDialogProps {
   onClose: () => void
 }
 
-type EditTab = 'tools' | 'extensions' | 'project' | 'advanced'
+type EditTab = 'extensions' | 'project' | 'advanced'
 
 /** Skills 分组标识 */
 const SKILLS_GROUP = '__skills__'
@@ -59,16 +59,22 @@ export function ProjectEditDialog({
     Promise.all([window.api.project.getById(projectId), window.api.tools.list()]).then(
       ([project, tools]) => {
         setAllTools(tools)
+        const defaultExtensions = (): string[] => {
+          const connectedMcp = tools
+            .filter((t) => t.group?.startsWith('mcp:') && t.serverStatus === 'connected')
+            .map((t) => t.name)
+          const enabledSkills = tools.filter((t) => t.group === SKILLS_GROUP).map((t) => t.name)
+          return [...new Set([...connectedMcp, ...enabledSkills])]
+        }
         if (project) {
           setName(project.name)
           setPath(project.path)
           setPromptSections(project.promptSections ?? [])
-          // 从 settings 恢复 enabledTools 和 referenceDirs
           const settings = project.settings || {}
           if (Array.isArray(settings.enabledTools)) {
             setEnabledTools(settings.enabledTools)
           } else {
-            setEnabledTools(tools.filter((t) => t.defaultEnabled).map((t) => t.name))
+            setEnabledTools(defaultExtensions())
           }
           if (Array.isArray(settings.referenceDirs)) {
             setReferenceDirs(settings.referenceDirs)
@@ -80,7 +86,7 @@ export function ProjectEditDialog({
             setEnvVars(settings.tool.envVars)
           }
         } else {
-          setEnabledTools(tools.filter((t) => t.defaultEnabled).map((t) => t.name))
+          setEnabledTools(defaultExtensions())
         }
         setLoading(false)
       }
@@ -158,7 +164,6 @@ export function ProjectEditDialog({
 
   // Tab 定义
   const tabs: Array<{ key: EditTab; label: string }> = [
-    { key: 'tools', label: t('projectForm.wizardStepTools') },
     { key: 'extensions', label: t('projectForm.wizardStepExtensions') },
     { key: 'project', label: t('projectForm.wizardStepProject') },
     { key: 'advanced', label: t('projectForm.wizardStepAdvanced') }
@@ -204,25 +209,6 @@ export function ProjectEditDialog({
           </button>
         </div>
 
-        {/* ========== Tab: 工具选择 ========== */}
-        {tab === 'tools' && (
-          <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0 space-y-3">
-            <div className="zen-section">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-2">
-                <Wrench size={12} />
-                {t('projectForm.tools')}
-              </label>
-              <ToolSelectList
-                tools={allTools}
-                enabledTools={enabledTools}
-                onChange={setEnabledTools}
-                builtinOnly
-              />
-              <p className="text-[10px] text-text-tertiary mt-2">{t('projectForm.toolsHint')}</p>
-            </div>
-          </div>
-        )}
-
         {/* ========== Tab: 扩展能力（MCP / Skills） ========== */}
         {tab === 'extensions' && (
           <div className="px-5 py-4 overflow-y-auto flex-1 min-h-0">
@@ -258,7 +244,7 @@ export function ProjectEditDialog({
             <div className="zen-card">
               <div className="zen-card-header">
                 <Database size={12} />
-                {t('tool.localDbLabel')}
+                {t('projectForm.pglitePersistSection')}
               </div>
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <input

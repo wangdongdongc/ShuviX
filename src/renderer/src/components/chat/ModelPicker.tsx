@@ -8,7 +8,8 @@ import {
   Wrench,
   Brain,
   Image as ImageIcon,
-  Mic
+  Mic,
+  Settings
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -180,6 +181,19 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     }
 
     closePicker()
+  }
+
+  // 无任何已启用的提供商：以异常色按钮提示去配置
+  if (enabledProviders.length === 0) {
+    return (
+      <button
+        onClick={() => window.api.app.openSettings('providers')}
+        className="inline-flex items-center gap-1 text-[11px] text-error bg-error/10 hover:bg-error/20 rounded px-1.5 py-0.5 transition-colors"
+      >
+        <Settings size={11} />
+        <span>{t('settings.providerSectionTitle')}</span>
+      </button>
+    )
   }
 
   return (

@@ -5,7 +5,7 @@ import {
   MessageSquare,
   Settings,
   Trash2,
-  Pencil,
+  Settings2,
   FolderClosed,
   FolderOpen,
   Globe,
@@ -383,7 +383,7 @@ export function Sidebar(): React.JSX.Element {
                             className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
                             title={t('sidebar.editProject')}
                           >
-                            <Pencil size={10} />
+                            <Settings2 size={12} />
                           </button>
                         )}
                       </div>

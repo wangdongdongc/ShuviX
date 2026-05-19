@@ -56,7 +56,7 @@ export function SessionConfigDialog({
       onClick={handleClose}
     >
       <div
-        className="w-[520px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
+        className="w-[560px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary/50 bg-bg-secondary/50">
@@ -69,22 +69,24 @@ export function SessionConfigDialog({
           </button>
         </div>
 
-        <div className="px-4 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
+        <div className="px-5 py-5 space-y-5 overflow-y-auto flex-1 min-h-0">
           {/* 会话标题 */}
-          <div>
-            <label className="block text-[10px] text-text-tertiary mb-1">
+          <section>
+            <h3 className="text-[13px] font-semibold text-text-primary mb-2 px-1">
               {t('sessionConfig.sessionTitle')}
-            </label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => void handleSaveTitle()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleSaveTitle()
-              }}
-              className="zen-input"
-            />
-          </div>
+            </h3>
+            <div className="rounded-xl border border-border-secondary/60 bg-bg-secondary/30 px-4 py-2">
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={() => void handleSaveTitle()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleSaveTitle()
+                }}
+                className="w-full bg-transparent border-none outline-none text-[13px] text-text-primary placeholder:text-text-tertiary"
+              />
+            </div>
+          </section>
 
           <SessionConfigPanel sessionId={sessionId} />
         </div>

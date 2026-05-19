@@ -350,7 +350,8 @@ class McpService {
         description: `${toolCount} tool(s)`,
         group: `mcp:${s.name}`,
         serverId: s.id,
-        serverStatus: status
+        serverStatus: status,
+        isBuiltin: !!s.isBuiltin
       }
     })
   }
