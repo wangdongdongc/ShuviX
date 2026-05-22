@@ -72,4 +72,13 @@ export function registerSkillHandlers(): void {
     skillService.removeExternalDir(name)
     return { success: true }
   })
+
+  /** 切换分组总开关（关闭后整组 skills 失效） */
+  ipcMain.handle(
+    'skill:setGroupEnabled',
+    (_event, params: { dirName: string; isEnabled: boolean }) => {
+      skillService.setGroupEnabled(params.dirName, params.isEnabled)
+      return { success: true }
+    }
+  )
 }

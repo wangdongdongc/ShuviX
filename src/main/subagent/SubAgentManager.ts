@@ -9,7 +9,13 @@
  * tool_end / agent_end 等），由右侧 Sub-agent 面板负责流式展示。
  */
 
-import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool
+} from '@mariozechner/pi-agent-core'
+import type { TSchema } from 'typebox'
 import { v4 as uuid } from 'uuid'
 import { isAssistantMessage } from '../utils/messageGuards'
 import type { ChatTokenUsage } from '../frontend/core'
@@ -19,6 +25,11 @@ import type { ToolContext } from '../services/toolContext'
 import { resolveModel } from '../services/agentModelResolver'
 import { providerDao } from '../dao/providerDao'
 import { mcpService } from '../services/mcpService'
+import {
+  wrapToolOutput,
+  getOutputStrategy,
+  type ProcessToolOutputOverrides
+} from '../services/wrapToolOutput'
 import { chatFrontendRegistry } from '../frontend/core'
 import type { SubAgentModelConfig } from './types'
 import { transientSessionRegistry } from './transientSessionRegistry'
@@ -73,31 +84,41 @@ function buildSubAgentTools(ctx: ToolContext, agentType: InProcessAgentType): An
   const builtinEntries = getBuiltinToolEntries()
   const builtinMap = new Map(builtinEntries.filter((e) => e.factory).map((e) => [e.name, e]))
   const skillNames: string[] = []
+  const wrap = (tool: object): AnyAgentTool =>
+    wrapToolOutput(
+      tool as AgentTool<TSchema, unknown>,
+      ctx.sessionId,
+      getOutputStrategy(tool),
+      pickOverrides(tool)
+    ) as unknown as AnyAgentTool
 
   for (const toolName of agentType.tools) {
     if (toolName.startsWith('mcp:')) {
       const serverName = toolName.slice(4)
-      const mcpTools = mcpService.getAgentToolsByServerName(serverName)
-      for (const t of mcpTools) {
-        tools.push(t)
+      for (const mcpTool of mcpService.getAgentToolsByServerName(serverName)) {
+        tools.push(wrap(mcpTool))
       }
     } else if (toolName.startsWith('skill:')) {
       skillNames.push(toolName.slice(6))
     } else {
       const entry = builtinMap.get(toolName)
       if (entry?.factory) {
-        const tool = entry.factory(ctx) as AnyAgentTool
-        tools.push(tool)
+        tools.push(wrap(entry.factory(ctx)))
       }
     }
   }
 
   if (skillNames.length > 0) {
-    const skillTool = new SkillTool(skillNames) as unknown as AnyAgentTool
-    tools.push(skillTool)
+    tools.push(wrap(new SkillTool(skillNames)))
   }
 
   return tools
+}
+
+function pickOverrides(tool: object): ProcessToolOutputOverrides | undefined {
+  const t = tool as { outputMaxBytes?: number; outputMaxLines?: number }
+  if (t.outputMaxBytes == null && t.outputMaxLines == null) return undefined
+  return { maxBytes: t.outputMaxBytes, maxLines: t.outputMaxLines }
 }
 
 // ─── SubAgentManager ──────────────────────────────────────────

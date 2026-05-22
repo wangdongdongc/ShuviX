@@ -7,16 +7,26 @@
 
 import type { TSchema, Static } from 'typebox'
 import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { TruncateStrategy } from '../utils/toolUtils/processToolOutput'
 
 /**
  * 工具基类 — 所有内置工具必须继承此类
  * 生命周期：preExecute → securityCheck → executeInternal
+ *
+ * 输出截断/落盘统一由 wrapToolOutput 在构建工具列表时处理（见 agentToolBuilder），
+ * 子类不要在 executeInternal 里再调 processToolOutput；如需调整策略，仅覆写 outputStrategy 即可。
  */
 export abstract class BaseTool<TParams extends TSchema = TSchema> {
   abstract readonly name: string
   abstract readonly label: string
   abstract readonly description: string
   abstract readonly parameters: TParams
+  /** 输出过长时的截断策略 —— 包装器读取此字段决定保留首部 / 尾部 / 首尾 */
+  readonly outputStrategy: TruncateStrategy = 'middle'
+  /** 自定义最大字节数；不设置则采用 processToolOutput 的默认值 */
+  readonly outputMaxBytes?: number
+  /** 自定义最大行数；不设置则采用 processToolOutput 的默认值 */
+  readonly outputMaxLines?: number
 
   /** 资源初始化（容器创建、连接建立等），在 securityCheck 之前调用 */
   abstract preExecute(toolCallId: string, params: Record<string, unknown>): Promise<void>

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Download, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Download, Loader2, X } from 'lucide-react'
 import type { ExportSnapshot, ExportOptions } from '../../../../shared/types/configShare'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { copyToClipboard } from '../../utils/clipboard'
+import { SettingsSection } from '../settings/SettingsPrimitives'
 
 export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { t } = useTranslation()
@@ -44,7 +45,6 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
   const toggleProvider = (name: string): void => {
     setSelectedProviders((prev) => {
       const next = toggleSet(prev, name)
-      // 取消勾选 provider 时，同步移除其 models
       if (!next.has(name)) {
         setSelectedModels((prevM) => {
           const nextM = new Set(prevM)
@@ -59,7 +59,6 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
   const toggleModel = (providerName: string, modelId: string): void => {
     const key = `${providerName}::${modelId}`
     setSelectedModels((prev) => toggleSet(prev, key))
-    // 勾选 model 时自动勾选其 provider
     setSelectedProviders((prev) => {
       if (prev.has(providerName)) return prev
       const next = new Set(prev)
@@ -73,6 +72,9 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
     setSelectedProviders(new Set(snapshot.providers.map((p) => p.name)))
     setSelectedModels(new Set(allModelKeys))
     setSelectedMcps(new Set(snapshot.mcpServers.map((s) => s.name)))
+    // 同时勾选所有敏感信息开关
+    setIncludeApiKey(Object.fromEntries(snapshot.providers.map((p) => [p.name, true])))
+    setIncludeSensitive(Object.fromEntries(snapshot.mcpServers.map((s) => [s.name, true])))
   }
 
   const selectNone = (): void => {
@@ -117,15 +119,16 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
       onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
       <div
-        className="w-[560px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
         onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[600px] max-w-[92vw] max-h-[88vh] flex flex-col dialog-panel"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary/50 bg-bg-secondary/50">
-          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+        {/* 头部 */}
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary inline-flex items-center gap-2">
             <Download size={14} />
             {t('configShare.exportTitle')}
           </h3>
@@ -137,173 +140,172 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
           </button>
         </div>
 
-        <div className="px-4 py-3 overflow-y-auto flex-1 min-h-0 space-y-4">
-          <p className="text-[11px] text-text-tertiary leading-relaxed">
+        {/* 内容 */}
+        <div className="px-5 py-5 overflow-y-auto flex-1 min-h-0 space-y-5">
+          <p className="text-[11px] text-text-tertiary leading-relaxed px-1">
             {t('configShare.exportDesc')}
           </p>
 
           {snapshot === null ? (
-            <div className="text-xs text-text-tertiary py-8 text-center">
-              {t('common.refresh')}…
+            <div className="flex items-center justify-center gap-2 py-10 text-text-tertiary">
+              <Loader2 size={14} className="animate-spin" />
+              <span className="text-[11px]">{t('common.loading') || 'Loading...'}</span>
             </div>
           ) : isEmpty ? (
-            <div className="text-xs text-text-tertiary py-8 text-center">
+            <div className="text-[11px] text-text-tertiary py-10 text-center">
               {t('configShare.emptyExportHint')}
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 px-1">
                 <button
                   onClick={selectAll}
-                  className="px-2.5 py-1 rounded-md text-[11px] bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+                  className="px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
                 >
                   {t('configShare.selectAll')}
                 </button>
                 <button
                   onClick={selectNone}
-                  className="px-2.5 py-1 rounded-md text-[11px] bg-bg-secondary border border-border-primary text-text-secondary hover:bg-bg-hover transition-colors"
+                  className="px-2 py-1 rounded text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
                 >
                   {t('configShare.selectNone')}
                 </button>
               </div>
 
               {snapshot.providers.length > 0 && (
-                <div className="zen-section">
-                  <div className="text-[11px] font-medium text-text-secondary mb-2">
-                    {t('configShare.sectionProviders')}
-                  </div>
-                  <div className="space-y-2">
-                    {snapshot.providers.map((p) => {
-                      const checked = selectedProviders.has(p.name)
-                      return (
-                        <div key={p.name} className="zen-card p-0 overflow-hidden">
-                          <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary/40">
-                            <label className="flex items-center gap-2 cursor-pointer select-none">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleProvider(p.name)}
-                                className="rounded border-border-primary accent-accent w-3.5 h-3.5"
-                              />
-                              <span className="text-xs font-medium text-text-primary">
-                                {p.displayName}
-                              </span>
-                              {p.isBuiltin && (
-                                <span className="text-[10px] text-text-tertiary">
-                                  {t('configShare.badgeBuiltin')}
-                                </span>
-                              )}
-                            </label>
-                            <label
-                              className={`flex items-center gap-1.5 select-none ${checked ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'}`}
-                            >
-                              <input
-                                type="checkbox"
-                                disabled={!checked}
-                                checked={Boolean(includeApiKey[p.name])}
-                                onChange={(e) =>
-                                  setIncludeApiKey((prev) => ({
-                                    ...prev,
-                                    [p.name]: e.target.checked
-                                  }))
-                                }
-                                className="rounded border-border-primary accent-accent w-3 h-3"
-                              />
-                              <span className="text-[10px] text-text-secondary">
-                                {t('configShare.includeApiKey')}
-                              </span>
-                            </label>
-                          </div>
-                          {p.models.length > 0 && (
-                            <div className="px-3 py-2 grid grid-cols-2 gap-y-1 gap-x-3">
-                              {p.models.map((m) => {
-                                const key = `${p.name}::${m.modelId}`
-                                return (
-                                  <label
-                                    key={key}
-                                    className="flex items-center gap-1.5 cursor-pointer select-none"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedModels.has(key)}
-                                      onChange={() => toggleModel(p.name, m.modelId)}
-                                      className="rounded border-border-primary accent-accent w-3 h-3"
-                                    />
-                                    <span className="text-[11px] font-mono text-accent truncate">
-                                      {m.modelId}
-                                    </span>
-                                  </label>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {snapshot.mcpServers.length > 0 && (
-                <div className="zen-section">
-                  <div className="text-[11px] font-medium text-text-secondary mb-2">
-                    {t('configShare.sectionMcp')}
-                  </div>
-                  <div className="space-y-1">
-                    {snapshot.mcpServers.map((s) => {
-                      const checked = selectedMcps.has(s.name)
-                      return (
-                        <div
-                          key={s.name}
-                          className="flex items-center justify-between px-3 py-2 rounded-md bg-bg-secondary/40 border border-border-primary/40"
-                        >
-                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                <SettingsSection title={t('configShare.sectionProviders')}>
+                  {snapshot.providers.map((p) => {
+                    const checked = selectedProviders.has(p.name)
+                    return (
+                      <div key={p.name} className="px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <label className="flex items-center gap-2 cursor-pointer select-none min-w-0">
                             <input
                               type="checkbox"
                               checked={checked}
-                              onChange={() => setSelectedMcps((prev) => toggleSet(prev, s.name))}
-                              className="rounded border-border-primary accent-accent w-3.5 h-3.5"
+                              onChange={() => toggleProvider(p.name)}
+                              className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
                             />
-                            <span className="text-xs text-text-primary">{s.name}</span>
-                            <span className="text-[10px] text-text-tertiary uppercase">
-                              {s.type}
+                            <span className="text-[13px] font-medium text-text-primary truncate">
+                              {p.displayName}
                             </span>
-                            {s.isBuiltin && (
-                              <span className="text-[9px] text-amber-500 bg-amber-500/10 px-1 py-0.5 rounded">
-                                {t('settings.mcpBuiltin')}
+                            {p.isBuiltin && (
+                              <span className="text-[9px] font-normal text-text-tertiary bg-bg-tertiary/60 px-1.5 py-0.5 rounded-md shrink-0">
+                                {t('configShare.badgeBuiltin')}
                               </span>
                             )}
                           </label>
                           <label
-                            className={`flex items-center gap-1.5 select-none ${checked ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'}`}
+                            className={`flex items-center gap-1.5 select-none shrink-0 ${
+                              checked ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'
+                            }`}
                           >
                             <input
                               type="checkbox"
                               disabled={!checked}
-                              checked={Boolean(includeSensitive[s.name])}
+                              checked={Boolean(includeApiKey[p.name])}
                               onChange={(e) =>
-                                setIncludeSensitive((prev) => ({
+                                setIncludeApiKey((prev) => ({
                                   ...prev,
-                                  [s.name]: e.target.checked
+                                  [p.name]: e.target.checked
                                 }))
                               }
-                              className="rounded border-border-primary accent-accent w-3 h-3"
+                              className="rounded border-border-primary w-3 h-3 accent-red-500"
                             />
-                            <span className="text-[10px] text-text-secondary">
-                              {t('configShare.includeSensitive')}
+                            <AlertTriangle size={10} className="text-error" />
+                            <span className="text-[11px] text-error">
+                              {t('configShare.includeApiKey')}
                             </span>
                           </label>
                         </div>
-                      )
-                    })}
-                  </div>
-                </div>
+                        {p.models.length > 0 && (
+                          <div className="mt-2 pl-6 grid grid-cols-2 gap-y-1 gap-x-3">
+                            {p.models.map((m) => {
+                              const key = `${p.name}::${m.modelId}`
+                              return (
+                                <label
+                                  key={key}
+                                  className="flex items-center gap-1.5 cursor-pointer select-none"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedModels.has(key)}
+                                    onChange={() => toggleModel(p.name, m.modelId)}
+                                    className="rounded border-border-primary accent-accent w-3 h-3"
+                                  />
+                                  <span className="text-[11px] font-mono text-accent truncate">
+                                    {m.modelId}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </SettingsSection>
+              )}
+
+              {snapshot.mcpServers.length > 0 && (
+                <SettingsSection title={t('configShare.sectionMcp')}>
+                  {snapshot.mcpServers.map((s) => {
+                    const checked = selectedMcps.has(s.name)
+                    return (
+                      <div
+                        key={s.name}
+                        className="flex items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <label className="flex items-center gap-2 cursor-pointer select-none min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setSelectedMcps((prev) => toggleSet(prev, s.name))}
+                            className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
+                          />
+                          <span className="text-[13px] text-text-primary truncate">{s.name}</span>
+                          <span className="text-[9px] font-normal text-text-tertiary bg-bg-tertiary/60 px-1.5 py-0.5 rounded-md uppercase shrink-0">
+                            {s.type}
+                          </span>
+                          {s.isBuiltin && (
+                            <span className="text-[9px] font-normal text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-md shrink-0">
+                              {t('settings.mcpBuiltin')}
+                            </span>
+                          )}
+                        </label>
+                        <label
+                          className={`flex items-center gap-1.5 select-none shrink-0 ${
+                            checked ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            disabled={!checked}
+                            checked={Boolean(includeSensitive[s.name])}
+                            onChange={(e) =>
+                              setIncludeSensitive((prev) => ({
+                                ...prev,
+                                [s.name]: e.target.checked
+                              }))
+                            }
+                            className="rounded border-border-primary w-3 h-3 accent-red-500"
+                          />
+                          <AlertTriangle size={10} className="text-error" />
+                          <span className="text-[11px] text-error">
+                            {t('configShare.includeSensitive')}
+                          </span>
+                        </label>
+                      </div>
+                    )
+                  })}
+                </SettingsSection>
               )}
             </>
           )}
         </div>
 
-        <div className="px-4 py-3 border-t border-border-secondary/50 bg-bg-secondary/30 flex items-center justify-between">
+        {/* 底部 */}
+        <div className="px-5 py-3 border-t border-border-secondary shrink-0 flex items-center justify-between">
           {copied ? (
             <span className="text-[11px] text-success inline-flex items-center gap-1">
               <Check size={12} />

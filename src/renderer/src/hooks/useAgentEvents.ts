@@ -338,7 +338,9 @@ export function useAgentEvents(): void {
           if (window.api?.app?.platform === 'web') {
             url = `${window.location.origin}/shuvix/browser/${sid}/`
           }
-          useBrowserStore.getState().open(url)
+          const browser = useBrowserStore.getState()
+          browser.open(url)
+          browser.setActiveTab('browser')
         } else if (event.action === 'close') {
           useBrowserStore.getState().setUrl('about:blank')
         }

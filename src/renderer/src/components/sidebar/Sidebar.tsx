@@ -5,21 +5,27 @@ import {
   MessageSquare,
   Settings,
   Trash2,
-  Pencil,
+  Settings2,
   FolderClosed,
   FolderOpen,
   Globe,
   MessageCircle,
   RotateCcw,
   ArrowUpCircle,
-  Archive
+  Archive,
+  MoreHorizontal,
+  PictureInPicture2
 } from 'lucide-react'
 import { useChatStore, selectAllPendingCounts } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { useUpdateStore } from '../../stores/updateStore'
+import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { SessionConfigDialog } from '../chat/SessionConfigDialog'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
+import { CalendarView } from './CalendarView'
 import type { Session } from '../../stores/chatStore'
 import { useContextMenu } from '../../hooks/useContextMenu'
 
@@ -43,14 +49,24 @@ export function Sidebar(): React.JSX.Element {
   } = useChatStore()
   const updateEvent = useUpdateStore((s) => s.updateEvent)
   const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
+  const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
+  const focusMode = useSettingsStore((s) => s.focusMode)
+  /** 专注模式生效条件：开关打开 + 已选中会话 → 淡化未选中区域 */
+  const dim = focusMode && !!activeSessionId
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
+  const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
     () => new Set([TEMP_GROUP_KEY])
   )
+  // 日历视图独立维护折叠状态——默认全展开（空 Set），与项目视图互不影响
+  const [calendarCollapsedGroups, setCalendarCollapsedGroups] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [viewMode, setViewMode] = useState<'projects' | 'calendar'>('projects')
   const initialCollapseApplied = useRef(false)
 
   // ---------- 数据源：项目列表 + 会话列表 ----------
@@ -104,35 +120,27 @@ export function Sidebar(): React.JSX.Element {
   }, [activeSessionId, sessions])
 
   // 按项目分组：先为每个项目建空组，再将会话分配进去，最后追加临时对话组
-  const sortedGroups = useMemo(() => {
-    // 以项目列表为骨架
+  const computeGroups = (input: Session[]): Array<[string, Session[]]> => {
     const map = new Map<string, Session[]>()
     for (const p of projects) map.set(p.id, [])
-
-    // 将会话分配到对应项目，无项目的归入临时组
     const tempSessions: Session[] = []
-    for (const s of sessions) {
-      if (s.projectId && map.has(s.projectId)) {
-        map.get(s.projectId)!.push(s)
-      } else if (!s.projectId) {
-        tempSessions.push(s)
-      }
+    for (const s of input) {
+      if (s.projectId && map.has(s.projectId)) map.get(s.projectId)!.push(s)
+      else if (!s.projectId) tempSessions.push(s)
     }
-
-    // 项目按名称排序
     const sorted = Array.from(map.entries()).sort(([a], [b]) => {
       const nameA = (projectNames[a] || '').toLowerCase()
       const nameB = (projectNames[b] || '').toLowerCase()
       return nameA.localeCompare(nameB, 'zh-CN')
     })
-
-    // 临时对话始终放最后（有会话时才显示）
-    if (tempSessions.length > 0) {
-      sorted.push([TEMP_GROUP_KEY, tempSessions])
-    }
-
+    if (tempSessions.length > 0) sorted.push([TEMP_GROUP_KEY, tempSessions])
     return sorted
-  }, [projects, sessions, projectNames])
+  }
+  const sortedGroups = useMemo(
+    () => computeGroups(sessions),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, projects, projectNames]
+  )
 
   /** 恢复归档项目 */
   const handleRestoreProject = async (projectId: string): Promise<void> => {
@@ -173,9 +181,12 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
-  /** 切换会话 */
+  /** 切换会话；若该会话已悬浮，则同时把悬浮窗拉到前台 */
   const handleSelectSession = (id: string): void => {
     setActiveSessionId(id)
+    if (pinnedSessionIds.has(id)) {
+      void window.api.pinChat.focus(id)
+    }
   }
 
   /** 删除会话（有消息时先确认） */
@@ -205,77 +216,213 @@ export function Sidebar(): React.JSX.Element {
     })
   }
 
+  /** 切换日历视图分组折叠状态（独立于项目视图） */
+  const toggleCalendarGroup = (key: string): void => {
+    setCalendarCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   /** 全局 pending 输入计数(供脉冲指示器) */
   const allPendingCounts = useChatStore(selectAllPendingCounts)
 
   /** 渲染单个会话项 */
-  const renderSessionItem = (session: Session): React.JSX.Element => (
-    <div
-      key={session.id}
-      onClick={() => handleSelectSession(session.id)}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        showContextMenu(
-          [{ id: 'delete-session', label: t('sidebar.deleteSession') }],
-          (actionId) => {
-            if (actionId === 'delete-session') handleDelete(session.id)
-          }
-        )
-      }}
-      className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer ${
-        activeSessionId === session.id
-          ? 'bg-bg-active/80 text-text-primary'
-          : 'text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary'
-      }`}
-    >
-      <MessageSquare
-        size={11}
-        fill={
-          activeSessionId === session.id || sessionStreams[session.id]?.isStreaming
-            ? 'currentColor'
-            : 'none'
-        }
-        className={`flex-shrink-0 ${
-          sessionStreams[session.id]?.isStreaming
-            ? 'text-accent animate-pulse'
-            : activeSessionId === session.id
-              ? 'text-accent'
-              : 'text-text-tertiary/40'
+  const renderSessionItem = (session: Session): React.JSX.Element => {
+    // 仅当会话位于活动项目组、且不是当前选中会话时才逐项淡化；
+    // 非活动项目组已由外层 groupDim 统一淡化，避免 opacity 叠加导致过透明。
+    const sessionGroupKey = session.projectId || TEMP_GROUP_KEY
+    const sessionDim = dim && activeGroupKey === sessionGroupKey
+    return (
+      <div
+        key={session.id}
+        onClick={() => handleSelectSession(session.id)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          showContextMenu(
+            [
+              { id: 'session-config', label: t('sessionConfig.title') },
+              { id: 'sep', label: '', type: 'separator' },
+              { id: 'delete-session', label: t('sidebar.deleteSession') }
+            ],
+            (actionId) => {
+              if (actionId === 'session-config') setConfiguringSessionId(session.id)
+              if (actionId === 'delete-session') handleDelete(session.id)
+            }
+          )
+        }}
+        className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+          activeSessionId === session.id
+            ? 'bg-bg-active/80 text-text-primary'
+            : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${sessionDim ? 'opacity-30 hover:opacity-100' : ''}`
         }`}
-      />
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
-        <span className="truncate">{session.title}</span>
-        {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
-        {telegramBindings.has(session.id) && (
-          <MessageCircle size={10} className="text-blue-500 shrink-0" />
+      >
+        {pinnedSessionIds.has(session.id) ? (
+          <PictureInPicture2
+            size={11}
+            className={`flex-shrink-0 ${
+              sessionStreams[session.id]?.isStreaming ? 'text-accent animate-pulse' : 'text-accent'
+            }`}
+          />
+        ) : (
+          <MessageSquare
+            size={11}
+            fill={
+              activeSessionId === session.id || sessionStreams[session.id]?.isStreaming
+                ? 'currentColor'
+                : 'none'
+            }
+            className={`flex-shrink-0 ${
+              sessionStreams[session.id]?.isStreaming
+                ? 'text-accent animate-pulse'
+                : activeSessionId === session.id
+                  ? 'text-accent'
+                  : 'text-text-tertiary/40'
+            }`}
+          />
         )}
-        {/* 待处理用户输入提醒:脉冲圆点 + 计数 */}
-        {allPendingCounts[session.id] > 0 && (
-          <span className="flex items-center gap-1 ml-auto shrink-0">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
+          <span className="truncate">{session.title}</span>
+          {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
+          {telegramBindings.has(session.id) && (
+            <MessageCircle size={10} className="text-blue-500 shrink-0" />
+          )}
+          {/* 待处理用户输入提醒:脉冲圆点 + 计数 */}
+          {allPendingCounts[session.id] > 0 && (
+            <span className="flex items-center gap-1 ml-auto shrink-0">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+              </span>
+              <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
+                {allPendingCounts[session.id]}
+              </span>
             </span>
-            <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
-              {allPendingCounts[session.id]}
-            </span>
-          </span>
-        )}
+          )}
+        </div>
+        <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setConfiguringSessionId(session.id)
+            }}
+            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
+            title={t('sessionConfig.title')}
+          >
+            <Settings2 size={11} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDelete(session.id)
+            }}
+            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
       </div>
-      <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            handleDelete(session.id)
-          }}
-          className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
+    )
+  }
+
+  /**
+   * 渲染按项目分组的会话列表（项目视图 + 日历视图共用）
+   * - hideEmptyGroups: 日历视图下传 true，过滤掉当日无会话的项目组
+   */
+  const renderGroupedSessions = (
+    groups: Array<[string, Session[]]>,
+    options: {
+      hideEmptyGroups?: boolean
+      collapseState?: { collapsed: Set<string>; toggle: (key: string) => void }
+    } = {}
+  ): React.ReactNode => {
+    const visible = options.hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
+    const collapseSet = options.collapseState?.collapsed ?? collapsedGroups
+    const collapseToggle = options.collapseState?.toggle ?? toggleGroup
+    return visible.map(([groupKey, groupSessions], idx) => {
+      const collapsed = collapseSet.has(groupKey)
+      const isTemp = groupKey === TEMP_GROUP_KEY
+      const groupLabel = isTemp
+        ? t('sidebar.tempChats')
+        : projectNames[groupKey] || t('sidebar.unnamedProject')
+      const showDividerAbove = isTemp && idx > 0
+      // 非活动项目组在专注模式下整组淡化（含 header + 折叠内会话）；
+      // 活动项目组保持原状，由 renderSessionItem 内的逐项 dim 处理非选中会话。
+      const groupDim = dim && activeGroupKey !== groupKey
+      return (
+        <div
+          key={groupKey}
+          className={`transition-opacity duration-200 ${groupDim ? 'opacity-30 hover:opacity-100' : ''}`}
         >
-          <Trash2 size={11} />
-        </button>
-      </div>
-    </div>
-  )
+          {showDividerAbove && <div className="mx-4 my-2 border-t border-border-secondary/30" />}
+          <div
+            className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
+          >
+            <div
+              className="relative flex items-center w-full px-1.5 py-0.5 text-[12px] group/header"
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const items = [
+                  { id: 'new-chat', label: t('sidebar.newChat') },
+                  ...(!isTemp ? [{ id: 'edit-project', label: t('sidebar.editProject') }] : [])
+                ]
+                showContextMenu(items, (actionId) => {
+                  if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
+                  if (actionId === 'edit-project') setEditingProjectId(groupKey)
+                })
+              }}
+            >
+              <button
+                onClick={() => collapseToggle(groupKey)}
+                className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
+                  activeGroupKey === groupKey
+                    ? 'text-text-primary'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {isTemp ? (
+                  <MessageCircle size={12} className="flex-shrink-0" />
+                ) : collapsed ? (
+                  <FolderClosed size={12} className="flex-shrink-0" />
+                ) : (
+                  <FolderOpen size={12} className="flex-shrink-0" />
+                )}
+                <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
+              </button>
+              <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleNewChat(isTemp ? null : groupKey)
+                  }}
+                  className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                  title={t('sidebar.newChat')}
+                >
+                  <MessageSquarePlus size={11} />
+                </button>
+                {!isTemp && (
+                  <button
+                    onClick={() => setEditingProjectId(groupKey)}
+                    className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                    title={t('sidebar.editProject')}
+                  >
+                    <Settings2 size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+            <AnimatedCollapse open={!collapsed}>
+              <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
+            </AnimatedCollapse>
+          </div>
+        </div>
+      )
+    })
+  }
 
   // 监听菜单栏「新建对话 / 新建项目」
   useEffect(() => {
@@ -296,105 +443,69 @@ export function Sidebar(): React.JSX.Element {
     <div className="flex flex-col h-full bg-bg-secondary/50">
       {/* 窗口拖拽区 + 标题（macOS 为交通灯留出顶部空间） */}
       <div
-        className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'}`}
+        className={`titlebar-drag flex items-center pl-3 pr-2 pb-2 transition-opacity duration-200 ${window.api.app.platform === 'darwin' ? 'pt-10' : 'pt-3'} ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
       >
         <h1 className="text-[13px] font-medium text-text-tertiary tracking-wide uppercase">
-          {t('sidebar.title')}
+          {viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
         </h1>
+        <div className="titlebar-no-drag ml-auto flex items-center">
+          <button
+            onClick={() =>
+              showContextMenu(
+                [
+                  {
+                    id: 'view-projects',
+                    label:
+                      viewMode === 'projects'
+                        ? `✓ ${t('sidebar.viewProjects')}`
+                        : `   ${t('sidebar.viewProjects')}`
+                  },
+                  {
+                    id: 'view-calendar',
+                    label:
+                      viewMode === 'calendar'
+                        ? `✓ ${t('sidebar.viewCalendar')}`
+                        : `   ${t('sidebar.viewCalendar')}`
+                  }
+                ],
+                (id) => {
+                  if (id === 'view-projects') setViewMode('projects')
+                  if (id === 'view-calendar') setViewMode('calendar')
+                }
+              )
+            }
+            title={t('sidebar.switchView')}
+            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        </div>
       </div>
 
       {/* 会话列表 */}
       <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
-        {sessions.length === 0 &&
-        Object.keys(projectNames).length === 0 &&
-        archivedProjects.length === 0 ? (
+        {viewMode === 'calendar' ? (
+          <CalendarView
+            renderGroupedSessionsForDay={(daySessions) =>
+              renderGroupedSessions(computeGroups(daySessions), {
+                hideEmptyGroups: true,
+                collapseState: {
+                  collapsed: calendarCollapsedGroups,
+                  toggle: toggleCalendarGroup
+                }
+              })
+            }
+          />
+        ) : sessions.length === 0 &&
+          Object.keys(projectNames).length === 0 &&
+          archivedProjects.length === 0 ? (
           <div className="px-3 py-8 text-center text-text-tertiary text-xs">
             {t('sidebar.emptyHint')}
           </div>
         ) : (
           <>
             {/* 按项目分组展示（项目按名称排序，临时对话始终最后） */}
-            {sortedGroups.map(([groupKey, groupSessions], idx) => {
-              const collapsed = collapsedGroups.has(groupKey)
-              const isTemp = groupKey === TEMP_GROUP_KEY
-              const groupLabel = isTemp
-                ? t('sidebar.tempChats')
-                : projectNames[groupKey] || t('sidebar.unnamedProject')
-              const showDividerAbove = isTemp && idx > 0
-              return (
-                <div key={groupKey}>
-                  {showDividerAbove && (
-                    <div className="mx-4 my-2 border-t border-border-secondary/30" />
-                  )}
-                  <div
-                    className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
-                  >
-                    <div
-                      className="relative flex items-center w-full px-1.5 py-0.5 text-[12px] group/header"
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        const items = [
-                          { id: 'new-chat', label: t('sidebar.newChat') },
-                          ...(!isTemp
-                            ? [{ id: 'edit-project', label: t('sidebar.editProject') }]
-                            : [])
-                        ]
-                        showContextMenu(items, (actionId) => {
-                          if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
-                          if (actionId === 'edit-project') setEditingProjectId(groupKey)
-                        })
-                      }}
-                    >
-                      <button
-                        onClick={() => toggleGroup(groupKey)}
-                        className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
-                          activeGroupKey === groupKey
-                            ? 'text-text-primary'
-                            : 'text-text-secondary hover:text-text-primary'
-                        }`}
-                      >
-                        {isTemp ? (
-                          <MessageCircle size={12} className="flex-shrink-0" />
-                        ) : collapsed ? (
-                          <FolderClosed size={12} className="flex-shrink-0" />
-                        ) : (
-                          <FolderOpen size={12} className="flex-shrink-0" />
-                        )}
-                        <span className="truncate font-medium uppercase tracking-wider">
-                          {groupLabel}
-                        </span>
-                      </button>
-                      {/* 项目操作按钮 — 绝对定位，不占文本空间 */}
-                      <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleNewChat(isTemp ? null : groupKey)
-                          }}
-                          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                          title={t('sidebar.newChat')}
-                        >
-                          <MessageSquarePlus size={11} />
-                        </button>
-                        {!isTemp && (
-                          <button
-                            onClick={() => setEditingProjectId(groupKey)}
-                            className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                            title={t('sidebar.editProject')}
-                          >
-                            <Pencil size={10} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <AnimatedCollapse open={!collapsed}>
-                      <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
-                    </AnimatedCollapse>
-                  </div>
-                </div>
-              )
-            })}
+            {renderGroupedSessions(sortedGroups)}
 
             {/* 已归档项目 */}
             {archivedProjects.length > 0 && (
@@ -402,7 +513,9 @@ export function Sidebar(): React.JSX.Element {
                 {sortedGroups.length > 0 && (
                   <div className="mx-4 my-2 border-t border-border-secondary/30" />
                 )}
-                <div className="mb-0.5 rounded-md">
+                <div
+                  className={`mb-0.5 rounded-md transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+                >
                   <div className="flex items-center w-full px-1.5 py-0.5 text-[12px] group/header">
                     <button
                       onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
@@ -468,7 +581,11 @@ export function Sidebar(): React.JSX.Element {
       </div>
 
       {/* 底部操作区 */}
-      <div className="flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30">
+      <div
+        className={`flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30 transition-opacity duration-200 ${
+          dim ? 'opacity-30 hover:opacity-100' : ''
+        }`}
+      >
         <button
           onClick={() => window.api.app.openSettings()}
           className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
@@ -494,6 +611,14 @@ export function Sidebar(): React.JSX.Element {
       {/* 项目编辑弹窗 */}
       {editingProjectId && (
         <ProjectEditDialog projectId={editingProjectId} onClose={() => setEditingProjectId(null)} />
+      )}
+
+      {/* 会话配置弹窗 */}
+      {configuringSessionId && (
+        <SessionConfigDialog
+          sessionId={configuringSessionId}
+          onClose={() => setConfiguringSessionId(null)}
+        />
       )}
 
       {/* 删除会话确认弹窗 */}

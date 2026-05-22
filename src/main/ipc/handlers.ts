@@ -26,6 +26,7 @@ import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
+import { registerPinChatHandlers } from './pinChatHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -60,4 +61,5 @@ export function registerIpcHandlers(): void {
   registerWidgetHandlers()
   registerConfigShareHandlers()
   registerFilesHandlers()
+  registerPinChatHandlers()
 }

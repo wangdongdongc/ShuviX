@@ -9,6 +9,7 @@ import type {
 } from '../../../../shared/types/configShare'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { SettingsSection } from '../settings/SettingsPrimitives'
 
 const PARSE_DEBOUNCE_MS = 300
 
@@ -69,7 +70,6 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
           const payload = await window.api.config.parseImportPayload(text)
           const plan = await window.api.config.planImport(payload)
           setParseState({ status: 'ok', payload, plan })
-          // 默认全部勾选
           setSelectedProviders(new Set(plan.providers.map((p) => p.name)))
           setSelectedModels(
             new Set(plan.providers.flatMap((p) => p.modelIds.map((id) => `${p.name}::${id}`)))
@@ -149,21 +149,26 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
           ? 'text-warning bg-warning/10'
           : action === 'skipMissingBuiltin'
             ? 'text-error bg-error/10'
-            : 'text-text-secondary bg-bg-tertiary'
-    return <span className={`px-1.5 py-0.5 rounded text-[10px] ${color}`}>{t(labelKey)}</span>
+            : 'text-text-secondary bg-bg-tertiary/60'
+    return (
+      <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-normal ${color}`}>
+        {t(labelKey)}
+      </span>
+    )
   }
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
       onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
       <div
-        className="w-[560px] max-w-[90vw] bg-bg-primary border border-border-secondary rounded-xl shadow-xl max-h-[85vh] flex flex-col dialog-panel"
         onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[600px] max-w-[92vw] max-h-[88vh] flex flex-col dialog-panel"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary/50 bg-bg-secondary/50">
-          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+        {/* 头部 */}
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary inline-flex items-center gap-2">
             <Upload size={14} />
             {t('configShare.importTitle')}
           </h3>
@@ -175,12 +180,13 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
           </button>
         </div>
 
-        <div className="px-4 py-3 overflow-y-auto flex-1 min-h-0 space-y-3">
+        {/* 内容 */}
+        <div className="px-5 py-5 overflow-y-auto flex-1 min-h-0 space-y-5">
           {result ? (
             <ResultView result={result} />
           ) : (
             <>
-              <p className="text-[11px] text-text-tertiary leading-relaxed">
+              <p className="text-[11px] text-text-tertiary leading-relaxed px-1">
                 {t('configShare.importDesc')}
               </p>
 
@@ -188,106 +194,95 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t('configShare.pastePlaceholder')}
-                className="zen-input min-h-[120px] font-mono text-[11px] leading-relaxed"
+                className="zen-textarea min-h-[120px] font-mono text-[11px] leading-relaxed"
                 spellCheck={false}
               />
 
               {parseState.status === 'error' && (
-                <div className="text-[11px] text-error">{t(parseState.errorKey)}</div>
+                <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/5">
+                  <X size={12} className="text-error shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-error leading-relaxed">{t(parseState.errorKey)}</p>
+                </div>
               )}
 
               {parseState.status === 'ok' && (
                 <>
-                  <div className="text-[11px] text-text-tertiary">
+                  <p className="text-[11px] text-text-tertiary leading-relaxed px-1">
                     {t('configShare.parseSuccessHint', {
                       providers: parseState.plan.providers.length,
                       mcp: parseState.plan.mcpServers.length
                     })}
-                  </div>
+                  </p>
 
                   {parseState.plan.providers.length > 0 && (
-                    <div className="zen-section">
-                      <div className="text-[11px] font-medium text-text-secondary mb-2">
-                        {t('configShare.sectionProviders')}
-                      </div>
-                      <div className="space-y-2">
-                        {parseState.plan.providers.map((p) => {
-                          const checked = selectedProviders.has(p.name)
-                          return (
-                            <div key={p.name} className="zen-card p-0 overflow-hidden">
-                              <div className="flex items-center justify-between px-3 py-2 border-b border-border-primary/40">
-                                <label className="flex items-center gap-2 cursor-pointer select-none min-w-0">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      setSelectedProviders((prev) => toggleSet(prev, p.name))
-                                    }
-                                    className="rounded border-border-primary accent-accent w-3.5 h-3.5"
-                                  />
-                                  <span className="text-xs font-medium text-text-primary truncate">
-                                    {p.name}
-                                  </span>
-                                  {renderActionBadge(p.action)}
-                                </label>
-                              </div>
-                              {p.modelIds.length > 0 && (
-                                <div className="px-3 py-2 grid grid-cols-2 gap-y-1 gap-x-3">
-                                  {p.modelIds.map((id) => {
-                                    const key = `${p.name}::${id}`
-                                    return (
-                                      <label
-                                        key={key}
-                                        className="flex items-center gap-1.5 cursor-pointer select-none"
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={selectedModels.has(key)}
-                                          onChange={() =>
-                                            setSelectedModels((prev) => toggleSet(prev, key))
-                                          }
-                                          className="rounded border-border-primary accent-accent w-3 h-3"
-                                        />
-                                        <span className="text-[11px] font-mono text-accent truncate">
-                                          {id}
-                                        </span>
-                                      </label>
-                                    )
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {parseState.plan.mcpServers.length > 0 && (
-                    <div className="zen-section">
-                      <div className="text-[11px] font-medium text-text-secondary mb-2">
-                        {t('configShare.sectionMcp')}
-                      </div>
-                      <div className="space-y-1">
-                        {parseState.plan.mcpServers.map((s) => (
-                          <div
-                            key={s.name}
-                            className="flex items-center justify-between px-3 py-2 rounded-md bg-bg-secondary/40 border border-border-primary/40"
-                          >
+                    <SettingsSection title={t('configShare.sectionProviders')}>
+                      {parseState.plan.providers.map((p) => {
+                        const checked = selectedProviders.has(p.name)
+                        return (
+                          <div key={p.name} className="px-4 py-3">
                             <label className="flex items-center gap-2 cursor-pointer select-none min-w-0">
                               <input
                                 type="checkbox"
-                                checked={selectedMcps.has(s.name)}
-                                onChange={() => setSelectedMcps((prev) => toggleSet(prev, s.name))}
-                                className="rounded border-border-primary accent-accent w-3.5 h-3.5"
+                                checked={checked}
+                                onChange={() =>
+                                  setSelectedProviders((prev) => toggleSet(prev, p.name))
+                                }
+                                className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
                               />
-                              <span className="text-xs text-text-primary truncate">{s.name}</span>
-                              {renderActionBadge(s.action)}
+                              <span className="text-[13px] font-medium text-text-primary truncate">
+                                {p.name}
+                              </span>
+                              {renderActionBadge(p.action)}
                             </label>
+                            {p.modelIds.length > 0 && (
+                              <div className="mt-2 pl-6 grid grid-cols-2 gap-y-1 gap-x-3">
+                                {p.modelIds.map((id) => {
+                                  const key = `${p.name}::${id}`
+                                  return (
+                                    <label
+                                      key={key}
+                                      className="flex items-center gap-1.5 cursor-pointer select-none"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedModels.has(key)}
+                                        onChange={() =>
+                                          setSelectedModels((prev) => toggleSet(prev, key))
+                                        }
+                                        className="rounded border-border-primary accent-accent w-3 h-3"
+                                      />
+                                      <span className="text-[11px] font-mono text-accent truncate">
+                                        {id}
+                                      </span>
+                                    </label>
+                                  )
+                                })}
+                              </div>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                    </div>
+                        )
+                      })}
+                    </SettingsSection>
+                  )}
+
+                  {parseState.plan.mcpServers.length > 0 && (
+                    <SettingsSection title={t('configShare.sectionMcp')}>
+                      {parseState.plan.mcpServers.map((s) => (
+                        <label
+                          key={s.name}
+                          className="flex items-center gap-2 cursor-pointer select-none px-4 py-3"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedMcps.has(s.name)}
+                            onChange={() => setSelectedMcps((prev) => toggleSet(prev, s.name))}
+                            className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
+                          />
+                          <span className="text-[13px] text-text-primary truncate">{s.name}</span>
+                          {renderActionBadge(s.action)}
+                        </label>
+                      ))}
+                    </SettingsSection>
                   )}
                 </>
               )}
@@ -295,7 +290,8 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
           )}
         </div>
 
-        <div className="px-4 py-3 border-t border-border-secondary/50 bg-bg-secondary/30 flex items-center justify-end gap-2">
+        {/* 底部 */}
+        <div className="px-5 py-3 border-t border-border-secondary shrink-0 flex items-center justify-end gap-2">
           <button
             onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
@@ -338,30 +334,33 @@ function ResultView({ result }: { result: ImportResult }): React.JSX.Element {
     result.providers.filter((r) => r.ok).length + result.mcpServers.filter((r) => r.ok).length
   const totalFail =
     result.providers.filter((r) => !r.ok).length + result.mcpServers.filter((r) => !r.ok).length
+  const items = [...result.providers, ...result.mcpServers]
   return (
     <div className="space-y-3">
-      <div className="text-[11px] text-text-secondary">
+      <p className="text-[11px] text-text-secondary px-1">
         {t('configShare.resultSummary', { ok: totalOk, fail: totalFail })}
-      </div>
-      {[...result.providers, ...result.mcpServers].map((r) => (
-        <div
-          key={r.name}
-          className="flex items-center justify-between px-3 py-1.5 rounded-md bg-bg-secondary/40 border border-border-primary/40"
-        >
-          <span className="text-xs text-text-primary truncate">{r.name}</span>
-          {r.ok ? (
-            <span className="text-[11px] text-success inline-flex items-center gap-1">
-              <Check size={12} />
-              {t('configShare.resultSuccess')}
-            </span>
-          ) : (
-            <span className="text-[11px] text-error truncate ml-2" title={r.error}>
-              {t('configShare.resultFailure')}
-              {r.error ? `: ${r.error}` : ''}
-            </span>
-          )}
-        </div>
-      ))}
+      </p>
+      <SettingsSection title={t('configShare.resultDone')}>
+        {items.map((r) => (
+          <div key={r.name} className="flex items-center justify-between gap-3 px-4 py-2.5">
+            <span className="text-[12px] text-text-primary truncate">{r.name}</span>
+            {r.ok ? (
+              <span className="text-[11px] text-success inline-flex items-center gap-1 shrink-0">
+                <Check size={11} />
+                {t('configShare.resultSuccess')}
+              </span>
+            ) : (
+              <span
+                className="text-[11px] text-error truncate ml-2 shrink-0 max-w-[260px]"
+                title={r.error}
+              >
+                {t('configShare.resultFailure')}
+                {r.error ? `: ${r.error}` : ''}
+              </span>
+            )}
+          </div>
+        ))}
+      </SettingsSection>
     </div>
   )
 }

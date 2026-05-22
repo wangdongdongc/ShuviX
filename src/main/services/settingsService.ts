@@ -26,6 +26,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.language': { labelKey: 'settings.language', desc: 'zh | en | ja' },
   'general.fontSize': { labelKey: 'settings.fontSize', desc: 'number as string, 12-20' },
   'general.uiZoom': { labelKey: 'settings.uiZoom', desc: 'number as string, 50-200 (percent)' },
+  'appearance.focusMode': {
+    labelKey: 'settings.focusMode',
+    desc: 'true | false — fade unselected sidebar items, chat header, input area, settings button, and inactive right-panel tabs when a session is selected'
+  },
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
   'general.systemPrompt': { labelKey: 'settings.systemPrompt', desc: 'global system prompt text' },

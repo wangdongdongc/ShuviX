@@ -35,6 +35,8 @@ interface SettingsState {
   fontSize: number
   /** UI 缩放比例 (%) */
   uiZoom: number
+  /** 专注模式：选中会话时淡化未选中的会话项与边缘 UI 区域 */
+  focusMode: boolean
   /** 语音 STT 后端 */
   voiceSttBackend: 'openai' | 'local'
   /** 语音输入语言 */
@@ -68,6 +70,7 @@ interface SettingsState {
     | 'skills'
     | 'voice'
     | 'bindings'
+    | 'systemPrompt'
     | 'httpLogs'
     | 'about'
   /** 标题生成模型 provider ID(空 = 不自动生成标题) */
@@ -96,6 +99,7 @@ interface SettingsState {
   setLightTheme: (theme: LightThemeId) => void
   setFontSize: (size: number) => void
   setUiZoom: (zoom: number) => void
+  setFocusMode: (enabled: boolean) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (
     tab:
@@ -106,6 +110,7 @@ interface SettingsState {
       | 'skills'
       | 'voice'
       | 'bindings'
+      | 'systemPrompt'
       | 'httpLogs'
       | 'about'
   ) => void
@@ -128,6 +133,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   lightTheme: 'github-light',
   fontSize: 14,
   uiZoom: 100,
+  focusMode: true,
   voiceSttBackend: 'openai',
   voiceSttLanguage: 'auto',
   voiceLocalModel: 'large-v3-turbo',
@@ -160,6 +166,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setLightTheme: (lightTheme) => set({ lightTheme }),
   setFontSize: (size) => set({ fontSize: size }),
   setUiZoom: (zoom) => set({ uiZoom: zoom }),
+  setFocusMode: (enabled) => set({ focusMode: enabled }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
 
@@ -178,6 +185,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       lightTheme,
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
+      focusMode: settings['appearance.focusMode'] !== 'false',
       voiceSttBackend: (settings['voice.sttBackend'] as 'openai' | 'local') || 'openai',
       voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
       voiceLocalModel: settings['voice.localModel'] || 'large-v3-turbo',

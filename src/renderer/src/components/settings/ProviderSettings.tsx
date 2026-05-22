@@ -1,12 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { motion } from 'framer-motion'
 import {
   Eye,
   EyeOff,
   Save,
-  ChevronDown,
-  ChevronRight,
   Trash2,
   Plus,
   X,
@@ -15,7 +12,8 @@ import {
   Wrench,
   Brain,
   Image as ImageIcon,
-  Mic
+  Mic,
+  AlertCircle
 } from 'lucide-react'
 import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -23,12 +21,20 @@ import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
 import { ProviderIcon } from './ProviderIcons'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import {
+  SettingsSection,
+  SettingsRow,
+  SettingsBlock,
+  Toggle,
+  InlineInput,
+  InlineSelect
+} from './SettingsPrimitives'
 
-/** 提供商设置 */
+/** 提供商设置（双层结构：左侧提供商列表 + 右侧详情） */
 export function ProviderSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const { providers, setProviders, setAvailableModels } = useSettingsStore()
-  const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [localEdits, setLocalEdits] = useState<
     Record<
@@ -38,14 +44,16 @@ export function ProviderSettings(): React.JSX.Element {
         apiKey?: string
         baseUrl?: string
         apiProtocol?: ProviderInfo['apiProtocol']
-        customHeaders?: string // 存入 metadata.customHeaders
+        customHeaders?: string
       }
     >
   >({})
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({})
   const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null)
-  const [syncMessages, setSyncMessages] = useState<Record<string, string>>({})
+  const [syncMessages, setSyncMessages] = useState<
+    Record<string, { text: string; isError: boolean }>
+  >({})
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [newModelId, setNewModelId] = useState<Record<string, string>>({})
@@ -57,7 +65,24 @@ export function ProviderSettings(): React.JSX.Element {
     caps: Record<string, unknown>
   } | null>(null)
 
-  /** 初始加载已开启提供商的模型列表（用于警告图标判断） */
+  /** 排序：1) 已启用优先；2) 同组内自定义优先 */
+  const sortedProviders = useMemo(
+    () =>
+      [...providers].sort((a, b) => {
+        if (a.isEnabled !== b.isEnabled) return a.isEnabled ? -1 : 1
+        if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? 1 : -1
+        return 0
+      }),
+    [providers]
+  )
+
+  /** 加载某个 provider 的模型列表 */
+  const loadModelsFor = useCallback(async (providerId: string): Promise<void> => {
+    const models = await window.api.provider.listModels(providerId)
+    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+  }, [])
+
+  /** 初始：预加载已启用 provider 的模型（用于无启用模型警告） */
   useEffect(() => {
     const enabledIds = providers.filter((p) => p.isEnabled).map((p) => p.id)
     const missing = enabledIds.filter((id) => !providerModels[id])
@@ -75,44 +100,46 @@ export function ProviderSettings(): React.JSX.Element {
       .catch(() => {})
   }, [providers]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** 展开提供商时加载其模型列表 */
-  const handleToggleExpand = async (providerId: string): Promise<void> => {
-    if (expandedProvider === providerId) {
-      setExpandedProvider(null)
-      return
+  /** 默认选中第一个 provider */
+  useEffect(() => {
+    if (selectedProviderId) {
+      const exists = providers.some((p) => p.id === selectedProviderId)
+      if (exists) return
     }
-    setExpandedProvider(providerId)
+    if (sortedProviders.length > 0) {
+      setSelectedProviderId(sortedProviders[0].id)
+    } else {
+      setSelectedProviderId(null)
+    }
+  }, [providers, sortedProviders, selectedProviderId])
+
+  /** 切换选中 provider（懒加载该 provider 模型列表） */
+  const handleSelectProvider = (providerId: string): void => {
+    setSelectedProviderId(providerId)
     if (!providerModels[providerId]) {
-      const models = await window.api.provider.listModels(providerId)
-      setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+      void loadModelsFor(providerId)
     }
   }
 
-  /** 切换提供商启用/禁用 */
   const handleToggleProvider = async (providerId: string, isEnabled: boolean): Promise<void> => {
     await window.api.provider.toggleEnabled({ id: providerId, isEnabled })
-    // 刷新列表
     const updated = await window.api.provider.listAll()
     setProviders(updated)
     const available = await window.api.provider.listAvailableModels()
     setAvailableModels(available)
   }
 
-  /** 切换模型启用/禁用 */
   const handleToggleModel = async (
     modelId: string,
     providerId: string,
     isEnabled: boolean
   ): Promise<void> => {
     await window.api.provider.toggleModelEnabled({ id: modelId, isEnabled })
-    // 刷新该提供商的模型列表
-    const models = await window.api.provider.listModels(providerId)
-    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    await loadModelsFor(providerId)
     const available = await window.api.provider.listAvailableModels()
     setAvailableModels(available)
   }
 
-  /** 更新本地编辑状态 */
   const updateLocalEdit = (
     providerId: string,
     field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol' | 'customHeaders',
@@ -124,7 +151,6 @@ export function ProviderSettings(): React.JSX.Element {
     }))
   }
 
-  /** 从 provider.metadata JSON 中提取 customHeaders 字符串 */
   const getCustomHeaders = (provider: ProviderInfo): string => {
     try {
       const meta = JSON.parse(provider.metadata || '{}')
@@ -134,7 +160,6 @@ export function ProviderSettings(): React.JSX.Element {
     }
   }
 
-  /** 将 customHeaders 字符串合并回 metadata JSON */
   const buildMetadata = (provider: ProviderInfo, customHeadersStr: string): string => {
     let meta: Record<string, unknown> = {}
     try {
@@ -150,7 +175,6 @@ export function ProviderSettings(): React.JSX.Element {
     return JSON.stringify(meta)
   }
 
-  /** 判断指定 provider 是否有真正变更 */
   const hasEdits = (providerId: string): boolean => {
     const edits = localEdits[providerId]
     if (!edits) return false
@@ -165,7 +189,6 @@ export function ProviderSettings(): React.JSX.Element {
     return false
   }
 
-  /** 保存单个提供商配置，可选同时开启 */
   const handleSaveProvider = async (providerId: string, alsoEnable?: boolean): Promise<void> => {
     const edits = localEdits[providerId]
     const provider = providers.find((p) => p.id === providerId)
@@ -198,7 +221,6 @@ export function ProviderSettings(): React.JSX.Element {
     if (alsoEnable) {
       await window.api.provider.toggleEnabled({ id: providerId, isEnabled: true })
     }
-    // 刷新
     const updated = await window.api.provider.listAll()
     setProviders(updated)
     setLocalEdits((prev) => {
@@ -216,7 +238,6 @@ export function ProviderSettings(): React.JSX.Element {
     }, 2000)
   }
 
-  /** 添加自定义提供商（由 AddProviderDialog 回调） */
   const handleAddProvider = async (provider: {
     name: string
     baseUrl: string
@@ -231,414 +252,179 @@ export function ProviderSettings(): React.JSX.Element {
     setAvailableModels(available)
   }
 
-  /** 删除自定义提供商 */
   const handleDeleteProvider = async (providerId: string): Promise<void> => {
     await window.api.provider.delete({ id: providerId })
     const updated = await window.api.provider.listAll()
     setProviders(updated)
     const available = await window.api.provider.listAvailableModels()
     setAvailableModels(available)
-    if (expandedProvider === providerId) setExpandedProvider(null)
+    if (selectedProviderId === providerId) {
+      setSelectedProviderId(null)
+    }
   }
 
-  /** 手动添加模型 */
   const handleAddModel = async (providerId: string): Promise<void> => {
     const modelId = newModelId[providerId]?.trim()
     if (!modelId) return
     await window.api.provider.addModel({ providerId, modelId })
-    const models = await window.api.provider.listModels(providerId)
-    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    await loadModelsFor(providerId)
     const available = await window.api.provider.listAvailableModels()
     setAvailableModels(available)
     setNewModelId((prev) => ({ ...prev, [providerId]: '' }))
   }
 
-  /** 删除模型 */
   const handleDeleteModel = async (modelId: string, providerId: string): Promise<void> => {
     await window.api.provider.deleteModel(modelId)
-    const models = await window.api.provider.listModels(providerId)
-    setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+    await loadModelsFor(providerId)
     const available = await window.api.provider.listAvailableModels()
     setAvailableModels(available)
   }
 
-  /**
-   * 从提供商拉取并同步模型列表
-   * 支持 OpenAI 兼容协议
-   */
   const handleSyncModels = async (providerId: string): Promise<void> => {
     setSyncingProviderId(providerId)
-    setSyncMessages((prev) => ({ ...prev, [providerId]: '' }))
+    setSyncMessages((prev) => {
+      const next = { ...prev }
+      delete next[providerId]
+      return next
+    })
     try {
       const result = await window.api.provider.syncModels({ providerId })
-      const models = await window.api.provider.listModels(providerId)
-      setProviderModels((prev) => ({ ...prev, [providerId]: models }))
+      await loadModelsFor(providerId)
       const available = await window.api.provider.listAvailableModels()
       setAvailableModels(available)
       setSyncMessages((prev) => ({
         ...prev,
-        [providerId]: t('settings.syncSuccess', { total: result.total, added: result.added })
+        [providerId]: {
+          text: t('settings.syncSuccess', { total: result.total, added: result.added }),
+          isError: false
+        }
       }))
     } catch (err: unknown) {
       setSyncMessages((prev) => ({
         ...prev,
-        [providerId]: err instanceof Error ? err.message : t('settings.syncFailed')
+        [providerId]: {
+          text: err instanceof Error ? err.message : t('settings.syncFailed'),
+          isError: true
+        }
       }))
     } finally {
       setSyncingProviderId(null)
     }
   }
 
+  const selectedProvider = providers.find((p) => p.id === selectedProviderId) ?? null
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 px-5 py-5 space-y-1.5 overflow-y-auto">
-        {/* Token 用量提示 */}
-        <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
-          <TriangleAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-text-secondary leading-relaxed">
-            {t('settings.tokenUsageWarning')}
-          </p>
-        </div>
-
-        {/* 添加自定义提供商按钮 */}
-        <button
-          onClick={() => setShowAddDialog(true)}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-border-secondary text-xs text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
-        >
-          <Plus size={14} />
-          {t('settings.addProvider')}
-        </button>
-
-        {/* 添加提供商弹窗 */}
-        {showAddDialog && (
-          <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
-        )}
-
-        {[...providers]
-          .sort((a, b) => {
-            // 自定义在前，内置在后
-            if (a.isBuiltin !== b.isBuiltin) return a.isBuiltin ? 1 : -1
-            // 同组内已启用排前面
-            if (a.isEnabled !== b.isEnabled) return a.isEnabled ? -1 : 1
-            return 0
-          })
-          .map((p) => {
-            const isExpanded = expandedProvider === p.id
-            const edits = localEdits[p.id] || {}
-            const models = providerModels[p.id] || []
-            const query = (modelSearch[p.id] || '').trim().toLowerCase()
-            const sortedModels = [...models].sort((a, b) => b.isEnabled - a.isEnabled)
-            const filteredModels = query
-              ? sortedModels.filter((m) => m.modelId.toLowerCase().includes(query))
-              : sortedModels
-
+    <div className="flex flex-1 min-h-0 h-full">
+      {/* 左侧：提供商列表 */}
+      <div className="w-[220px] flex-shrink-0 border-r border-border-secondary flex flex-col">
+        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+          {sortedProviders.map((p) => {
+            const isSelected = selectedProviderId === p.id
+            const hasModels = providerModels[p.id]
+            const noEnabledModels =
+              !!p.isEnabled && hasModels && !hasModels.some((m) => m.isEnabled)
             return (
-              <motion.div
+              <button
                 key={p.id}
-                layout="position"
-                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-                className="border border-border-secondary rounded-lg overflow-hidden"
+                onClick={() => handleSelectProvider(p.id)}
+                className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
+                  isSelected
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+                } ${!p.isEnabled ? 'opacity-60' : ''}`}
               >
-                {/* 提供商头部 */}
-                <div
-                  onClick={() => handleToggleExpand(p.id)}
-                  className="flex items-center gap-3 px-3 py-2 bg-bg-primary/30 cursor-pointer hover:bg-bg-hover/50 transition-colors"
-                >
-                  <span className="text-text-tertiary">
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </span>
-                  <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                    <ProviderIcon name={p.name} />
-                    <span className="text-xs font-medium text-text-primary shrink-0">
-                      {p.displayName || p.name}
-                    </span>
-                    {p.baseUrl && (
-                      <span className="text-[10px] text-text-tertiary font-normal truncate">
-                        {p.baseUrl.replace(/^https?:\/\//, '')}
-                      </span>
-                    )}
-                  </span>
-                  {/* 删除自定义提供商 */}
-                  {!p.isBuiltin && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setDeletingProviderId(p.id)
-                      }}
-                      className="p-1 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors mr-1"
-                      title={t('settings.deleteProvider')}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                  {/* 无启用模型警告 */}
-                  {!!p.isEnabled &&
-                    providerModels[p.id] &&
-                    !providerModels[p.id].some((m) => m.isEnabled) && (
-                      <span className="text-[10px] text-amber-500 shrink-0 mr-1">
-                        {t('settings.noEnabledModels')}
-                      </span>
-                    )}
-                  {/* 启用/禁用开关 */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleToggleProvider(p.id, !p.isEnabled)
-                    }}
-                    className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${
-                      p.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
-                        p.isEnabled ? 'left-[18px]' : 'left-0.5'
-                      }`}
-                    />
-                  </button>
+                <ProviderIcon name={p.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium truncate">{p.displayName || p.name}</div>
                 </div>
-
-                {/* 展开内容 */}
-                {isExpanded && (
-                  <div className="px-4 py-3 space-y-3 border-t border-border-secondary">
-                    {/* 自定义提供商：名称 */}
-                    {!p.isBuiltin && (
-                      <div>
-                        <label className="block text-[11px] text-text-tertiary mb-1">
-                          {t('settings.providerName')}
-                        </label>
-                        <input
-                          type="text"
-                          value={edits.name ?? p.name}
-                          onChange={(e) => updateLocalEdit(p.id, 'name', e.target.value)}
-                          placeholder={t('settings.providerNamePlaceholder')}
-                          className="zen-input"
-                        />
-                      </div>
-                    )}
-                    {/* API Key */}
-                    <div>
-                      <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
-                      <div className="zen-input-group">
-                        <input
-                          type={showKeys[p.id] ? 'text' : 'password'}
-                          value={edits.apiKey ?? p.apiKey}
-                          onChange={(e) => updateLocalEdit(p.id, 'apiKey', e.target.value)}
-                          placeholder={t('settings.apiKeyPlaceholder', {
-                            name: p.displayName || p.name
-                          })}
-                        />
-                        <button
-                          onClick={() => setShowKeys((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                          className="px-2 text-text-tertiary hover:text-text-secondary"
-                        >
-                          {showKeys[p.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Base URL */}
-                    <div>
-                      <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
-                      <input
-                        type="text"
-                        value={edits.baseUrl ?? p.baseUrl}
-                        onChange={(e) => updateLocalEdit(p.id, 'baseUrl', e.target.value)}
-                        placeholder={t('settings.baseUrlPlaceholder')}
-                        className="zen-input"
-                      />
-                    </div>
-
-                    {/* 自定义提供商：接口类型 */}
-                    {!p.isBuiltin && (
-                      <div>
-                        <label className="block text-[11px] text-text-tertiary mb-1">
-                          {t('settings.apiProtocol')}
-                        </label>
-                        <select
-                          value={edits.apiProtocol ?? p.apiProtocol}
-                          onChange={(e) => updateLocalEdit(p.id, 'apiProtocol', e.target.value)}
-                          className="zen-select"
-                        >
-                          {API_PROTOCOL_OPTIONS.map((p) => (
-                            <option key={p.value} value={p.value}>
-                              {t(p.labelKey)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    {/* 自定义提供商：自定义请求头 */}
-                    {!p.isBuiltin && (
-                      <div>
-                        <label className="block text-[11px] text-text-tertiary mb-1">
-                          {t('settings.customHeaders')}
-                        </label>
-                        <textarea
-                          value={edits.customHeaders ?? getCustomHeaders(p)}
-                          onChange={(e) => updateLocalEdit(p.id, 'customHeaders', e.target.value)}
-                          placeholder={t('settings.customHeadersPlaceholder')}
-                          rows={3}
-                          className="zen-input font-mono text-[11px] resize-y"
-                        />
-                      </div>
-                    )}
-
-                    {/* 保存按钮 */}
-                    {(hasEdits(p.id) || savedIds.has(p.id)) && (
-                      <button
-                        onClick={() => handleSaveProvider(p.id, !p.isEnabled || undefined)}
-                        disabled={savedIds.has(p.id) || !hasEdits(p.id)}
-                        className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                          savedIds.has(p.id)
-                            ? 'bg-success/20 text-success'
-                            : !p.isEnabled
-                              ? 'bg-green-600 text-white hover:bg-green-500'
-                              : 'bg-accent text-white hover:bg-accent-hover'
-                        }`}
-                      >
-                        <Save size={14} />
-                        {savedIds.has(p.id)
-                          ? t('settings.saved')
-                          : !p.isEnabled
-                            ? t('settings.saveConfigAndEnable')
-                            : t('settings.saveConfig')}
-                      </button>
-                    )}
-
-                    {/* 模型列表 */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="block text-[11px] text-text-tertiary">
-                          {t('settings.modelManagement')}
-                        </label>
-                        <button
-                          onClick={() => handleSyncModels(p.id)}
-                          disabled={syncingProviderId === p.id}
-                          className="px-2 py-1 text-[10px] rounded-md border border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-                        >
-                          {syncingProviderId === p.id
-                            ? t('settings.syncing')
-                            : t('settings.syncModels')}
-                        </button>
-                      </div>
-                      {syncMessages[p.id] && (
-                        <div className="text-[10px] text-text-tertiary mb-2">
-                          {syncMessages[p.id]}
-                        </div>
-                      )}
-
-                      {/* 手动添加模型 */}
-                      <div className="flex items-center gap-2 mb-2">
-                        <input
-                          type="text"
-                          value={newModelId[p.id] || ''}
-                          onChange={(e) =>
-                            setNewModelId((prev) => ({ ...prev, [p.id]: e.target.value }))
-                          }
-                          onKeyDown={(e) => e.key === 'Enter' && handleAddModel(p.id)}
-                          placeholder={t('settings.addModelPlaceholder')}
-                          className="zen-input flex-1 font-mono text-[11px]"
-                        />
-                        <button
-                          onClick={() => handleAddModel(p.id)}
-                          disabled={!newModelId[p.id]?.trim()}
-                          className="px-2 py-1.5 text-[10px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        >
-                          {t('common.add')}
-                        </button>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={modelSearch[p.id] || ''}
-                        onChange={(e) =>
-                          setModelSearch((prev) => ({ ...prev, [p.id]: e.target.value }))
-                        }
-                        placeholder={t('settings.searchModel')}
-                        className="zen-input mb-2 text-[11px]"
-                      />
-
-                      <div className="space-y-1 max-h-60 overflow-y-auto">
-                        {filteredModels.map((m) => {
-                          const caps = (() => {
-                            try {
-                              return JSON.parse(m.capabilities || '{}')
-                            } catch {
-                              return {}
-                            }
-                          })()
-                          return (
-                            <div
-                              key={m.id}
-                              className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-bg-hover transition-colors"
-                            >
-                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                <span className="text-xs text-text-primary font-mono truncate">
-                                  {m.modelId}
-                                </span>
-                                {/* 能力标签 */}
-                                <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
-                                  {caps.vision && <Eye size={10} />}
-                                  {caps.functionCalling && <Wrench size={10} />}
-                                  {caps.reasoning && <Brain size={10} />}
-                                  {caps.imageOutput && <ImageIcon size={10} />}
-                                  {caps.audioInput && <Mic size={10} />}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                {/* 编辑能力 */}
-                                <button
-                                  onClick={() =>
-                                    setEditingModel({
-                                      id: m.id,
-                                      providerId: p.id,
-                                      modelId: m.modelId,
-                                      caps
-                                    })
-                                  }
-                                  className="p-0.5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
-                                  title={t('settings.editCapabilities')}
-                                >
-                                  <SlidersHorizontal size={12} />
-                                </button>
-                                {/* 删除模型 */}
-                                <button
-                                  onClick={() => handleDeleteModel(m.id, p.id)}
-                                  className="p-0.5 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
-                                  title={t('settings.deleteModel')}
-                                >
-                                  <X size={12} />
-                                </button>
-                                <button
-                                  onClick={() => handleToggleModel(m.id, p.id, !m.isEnabled)}
-                                  className={`w-7 h-4 rounded-full relative transition-colors ${
-                                    m.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                                  }`}
-                                >
-                                  <span
-                                    className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                                      m.isEnabled ? 'left-[14px]' : 'left-0.5'
-                                    }`}
-                                  />
-                                </button>
-                              </div>
-                            </div>
-                          )
-                        })}
-                        {filteredModels.length === 0 && (
-                          <div className="px-2 py-2 text-[11px] text-text-tertiary">
-                            {t('settings.noMatchingModels')}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                {noEnabledModels && (
+                  <TriangleAlert
+                    size={10}
+                    className="text-amber-500 shrink-0"
+                    aria-label={t('settings.noEnabledModels')}
+                  />
                 )}
-              </motion.div>
+                <span onClick={(e) => e.stopPropagation()} className="shrink-0">
+                  <Toggle
+                    on={!!p.isEnabled}
+                    onClick={() => handleToggleProvider(p.id, !p.isEnabled)}
+                  />
+                </span>
+              </button>
             )
           })}
+        </div>
+        {/* 添加自定义提供商 */}
+        <div className="border-t border-border-secondary p-2">
+          <button
+            onClick={() => setShowAddDialog(true)}
+            className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-border-secondary text-[11px] text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
+          >
+            <Plus size={12} />
+            {t('settings.addProvider')}
+          </button>
+        </div>
       </div>
+
+      {/* 右侧：详情面板 */}
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        {selectedProvider ? (
+          <ProviderDetail
+            provider={selectedProvider}
+            edits={localEdits[selectedProvider.id] || {}}
+            models={providerModels[selectedProvider.id] || []}
+            modelSearch={modelSearch[selectedProvider.id] || ''}
+            newModelId={newModelId[selectedProvider.id] || ''}
+            syncing={syncingProviderId === selectedProvider.id}
+            syncMessage={syncMessages[selectedProvider.id] ?? null}
+            showKey={!!showKeys[selectedProvider.id]}
+            saved={savedIds.has(selectedProvider.id)}
+            hasEdits={hasEdits(selectedProvider.id)}
+            getCustomHeaders={getCustomHeaders}
+            onToggleShowKey={() =>
+              setShowKeys((prev) => ({
+                ...prev,
+                [selectedProvider.id]: !prev[selectedProvider.id]
+              }))
+            }
+            onUpdateEdit={(field, value) => updateLocalEdit(selectedProvider.id, field, value)}
+            onSave={() =>
+              handleSaveProvider(selectedProvider.id, !selectedProvider.isEnabled || undefined)
+            }
+            onSetModelSearch={(v) =>
+              setModelSearch((prev) => ({ ...prev, [selectedProvider.id]: v }))
+            }
+            onSetNewModelId={(v) =>
+              setNewModelId((prev) => ({ ...prev, [selectedProvider.id]: v }))
+            }
+            onAddModel={() => handleAddModel(selectedProvider.id)}
+            onSyncModels={() => handleSyncModels(selectedProvider.id)}
+            onToggleModel={(modelId, isEnabled) =>
+              handleToggleModel(modelId, selectedProvider.id, isEnabled)
+            }
+            onDeleteModel={(modelId) => handleDeleteModel(modelId, selectedProvider.id)}
+            onEditModel={(model, caps) =>
+              setEditingModel({
+                id: model.id,
+                providerId: selectedProvider.id,
+                modelId: model.modelId,
+                caps
+              })
+            }
+            onDeleteProvider={() => setDeletingProviderId(selectedProvider.id)}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-text-tertiary text-[11px]">
+            {t('settings.providerSectionTitle')}
+          </div>
+        )}
+      </div>
+
+      {/* 添加提供商弹窗 */}
+      {showAddDialog && (
+        <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
+      )}
 
       {/* 模型能力编辑弹窗 */}
       {editingModel && (
@@ -650,8 +436,7 @@ export function ProviderSettings(): React.JSX.Element {
               id: editingModel.id,
               capabilities: newCaps
             })
-            const models = await window.api.provider.listModels(editingModel.providerId)
-            setProviderModels((prev) => ({ ...prev, [editingModel.providerId]: models }))
+            await loadModelsFor(editingModel.providerId)
           }}
           onClose={() => setEditingModel(null)}
         />
@@ -675,6 +460,333 @@ export function ProviderSettings(): React.JSX.Element {
           onCancel={() => setDeletingProviderId(null)}
         />
       )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────
+// 详情面板
+// ────────────────────────────────────────────────────────────────
+
+interface ProviderDetailProps {
+  provider: ProviderInfo
+  edits: {
+    name?: string
+    apiKey?: string
+    baseUrl?: string
+    apiProtocol?: ProviderInfo['apiProtocol']
+    customHeaders?: string
+  }
+  models: ProviderModelInfo[]
+  modelSearch: string
+  newModelId: string
+  syncing: boolean
+  syncMessage: { text: string; isError: boolean } | null
+  showKey: boolean
+  saved: boolean
+  hasEdits: boolean
+  getCustomHeaders: (p: ProviderInfo) => string
+  onToggleShowKey: () => void
+  onUpdateEdit: (
+    field: 'name' | 'apiKey' | 'baseUrl' | 'apiProtocol' | 'customHeaders',
+    value: string
+  ) => void
+  onSave: () => void
+  onSetModelSearch: (v: string) => void
+  onSetNewModelId: (v: string) => void
+  onAddModel: () => void
+  onSyncModels: () => void
+  onToggleModel: (modelId: string, isEnabled: boolean) => void
+  onDeleteModel: (modelId: string) => void
+  onEditModel: (model: ProviderModelInfo, caps: Record<string, unknown>) => void
+  onDeleteProvider: () => void
+}
+
+function ProviderDetail({
+  provider: p,
+  edits,
+  models,
+  modelSearch,
+  newModelId,
+  syncing,
+  syncMessage,
+  showKey,
+  saved,
+  hasEdits,
+  getCustomHeaders,
+  onToggleShowKey,
+  onUpdateEdit,
+  onSave,
+  onSetModelSearch,
+  onSetNewModelId,
+  onAddModel,
+  onSyncModels,
+  onToggleModel,
+  onDeleteModel,
+  onEditModel,
+  onDeleteProvider
+}: ProviderDetailProps): React.JSX.Element {
+  const { t } = useTranslation()
+
+  const query = modelSearch.trim().toLowerCase()
+  const sortedModels = [...models].sort((a, b) => b.isEnabled - a.isEnabled)
+  const filteredModels = query
+    ? sortedModels.filter((m) => m.modelId.toLowerCase().includes(query))
+    : sortedModels
+
+  const noEnabledModels = !!p.isEnabled && models.length > 0 && !models.some((m) => m.isEnabled)
+
+  return (
+    <div className="flex flex-col">
+      {/* 头部：provider 名称 + 操作 */}
+      <div className="px-5 py-3 border-b border-border-secondary flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <ProviderIcon name={p.name} />
+          <h3 className="text-sm font-semibold text-text-primary truncate">
+            {p.displayName || p.name}
+          </h3>
+          {p.baseUrl && (
+            <span className="text-[11px] font-mono text-text-tertiary truncate">
+              {p.baseUrl.replace(/^https?:\/\//, '')}
+            </span>
+          )}
+        </div>
+        {!p.isBuiltin && (
+          <button
+            onClick={onDeleteProvider}
+            className="p-1.5 rounded-md text-error hover:bg-error/10 transition-colors shrink-0"
+            title={t('settings.deleteProvider')}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
+
+      <div className="flex-1 px-5 py-5 space-y-5">
+        {/* 警告：无启用模型 */}
+        {noEnabledModels && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
+            <AlertCircle size={12} className="text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-500 leading-relaxed">
+              {t('settings.noEnabledModels')}
+            </p>
+          </div>
+        )}
+
+        {/* 基本信息 */}
+        <SettingsSection title={t('settings.providerConfigGroup')}>
+          {!p.isBuiltin && (
+            <SettingsRow
+              title={t('settings.providerName')}
+              control={
+                <InlineInput
+                  value={edits.name ?? p.name}
+                  onChange={(v) => onUpdateEdit('name', v)}
+                  placeholder={t('settings.providerNamePlaceholder')}
+                  width={260}
+                />
+              }
+            />
+          )}
+          <SettingsRow
+            title="API Key"
+            control={
+              <div className="zen-input-group inline-flex items-center" style={{ width: 260 }}>
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={edits.apiKey ?? p.apiKey}
+                  onChange={(e) => onUpdateEdit('apiKey', e.target.value)}
+                  placeholder={t('settings.apiKeyPlaceholder', {
+                    name: p.displayName || p.name
+                  })}
+                  className="font-mono"
+                />
+                <button
+                  onClick={onToggleShowKey}
+                  className="px-2 text-text-tertiary hover:text-text-primary transition-colors"
+                  type="button"
+                >
+                  {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
+              </div>
+            }
+          />
+          <SettingsRow
+            title="Base URL"
+            control={
+              <InlineInput
+                value={edits.baseUrl ?? p.baseUrl}
+                onChange={(v) => onUpdateEdit('baseUrl', v)}
+                placeholder={t('settings.baseUrlPlaceholder')}
+                monospace
+                width={260}
+              />
+            }
+          />
+          {!p.isBuiltin && (
+            <SettingsRow
+              title={t('settings.apiProtocol')}
+              control={
+                <InlineSelect
+                  value={edits.apiProtocol ?? p.apiProtocol}
+                  onChange={(v) => onUpdateEdit('apiProtocol', v)}
+                  width={260}
+                >
+                  {API_PROTOCOL_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {t(opt.labelKey)}
+                    </option>
+                  ))}
+                </InlineSelect>
+              }
+            />
+          )}
+          {!p.isBuiltin && (
+            <SettingsBlock label={t('settings.customHeaders')}>
+              <textarea
+                value={edits.customHeaders ?? getCustomHeaders(p)}
+                onChange={(e) => onUpdateEdit('customHeaders', e.target.value)}
+                placeholder={t('settings.customHeadersPlaceholder')}
+                rows={3}
+                className="zen-textarea font-mono text-[11px]"
+              />
+            </SettingsBlock>
+          )}
+          {(hasEdits || saved) && (
+            <div className="px-4 py-3">
+              <button
+                onClick={onSave}
+                disabled={saved || !hasEdits}
+                className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  saved
+                    ? 'bg-success/20 text-success'
+                    : !p.isEnabled
+                      ? 'bg-green-600 text-white hover:bg-green-500'
+                      : 'bg-accent text-white hover:bg-accent-hover'
+                }`}
+              >
+                <Save size={14} />
+                {saved
+                  ? t('settings.saved')
+                  : !p.isEnabled
+                    ? t('settings.saveConfigAndEnable')
+                    : t('settings.saveConfig')}
+              </button>
+            </div>
+          )}
+        </SettingsSection>
+
+        {/* 模型管理 */}
+        <SettingsSection
+          title={t('settings.modelManagement')}
+          headerAction={
+            <button
+              onClick={onSyncModels}
+              disabled={syncing}
+              className="px-2 py-1 text-[11px] rounded text-accent hover:bg-accent/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              {syncing ? t('settings.syncing') : t('settings.syncModels')}
+            </button>
+          }
+        >
+          {/* 同步消息（成功/失败均显示在列表顶部） */}
+          {syncMessage && (
+            <div
+              className={`px-4 py-2 text-[11px] leading-relaxed ${
+                syncMessage.isError
+                  ? 'bg-red-500/5 text-danger'
+                  : 'bg-emerald-500/5 text-emerald-500'
+              }`}
+            >
+              {syncMessage.text}
+            </div>
+          )}
+
+          {/* 添加 + 搜索 */}
+          <div className="px-4 py-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newModelId}
+                onChange={(e) => onSetNewModelId(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && onAddModel()}
+                placeholder={t('settings.addModelPlaceholder')}
+                className="zen-input flex-1 font-mono text-[11px]"
+              />
+              <button
+                onClick={onAddModel}
+                disabled={!newModelId.trim()}
+                className="px-2.5 py-1 text-[11px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                {t('common.add')}
+              </button>
+            </div>
+            <input
+              type="text"
+              value={modelSearch}
+              onChange={(e) => onSetModelSearch(e.target.value)}
+              placeholder={t('settings.searchModel')}
+              className="zen-input text-[11px]"
+            />
+          </div>
+
+          {/* 模型列表 */}
+          {filteredModels.length === 0 ? (
+            <div className="px-4 py-6 text-center text-[11px] text-text-tertiary">
+              {t('settings.noMatchingModels')}
+            </div>
+          ) : (
+            filteredModels.map((m) => {
+              const caps = (() => {
+                try {
+                  return JSON.parse(m.capabilities || '{}')
+                } catch {
+                  return {}
+                }
+              })()
+              return (
+                <SettingsRow
+                  key={m.id}
+                  title={
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[12px] truncate">{m.modelId}</span>
+                      <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
+                        {caps.vision && <Eye size={10} />}
+                        {caps.functionCalling && <Wrench size={10} />}
+                        {caps.reasoning && <Brain size={10} />}
+                        {caps.imageOutput && <ImageIcon size={10} />}
+                        {caps.audioInput && <Mic size={10} />}
+                      </div>
+                    </div>
+                  }
+                  control={
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => onEditModel(m, caps)}
+                        className="p-1 rounded text-text-tertiary hover:text-text-primary transition-colors"
+                        title={t('settings.editCapabilities')}
+                      >
+                        <SlidersHorizontal size={12} />
+                      </button>
+                      <button
+                        onClick={() => onDeleteModel(m.id)}
+                        className="p-1 rounded text-text-tertiary hover:text-danger transition-colors"
+                        title={t('settings.deleteModel')}
+                      >
+                        <X size={12} />
+                      </button>
+                      <Toggle
+                        on={!!m.isEnabled}
+                        onClick={() => onToggleModel(m.id, !m.isEnabled)}
+                      />
+                    </div>
+                  }
+                />
+              )
+            })
+          )}
+        </SettingsSection>
+      </div>
     </div>
   )
 }

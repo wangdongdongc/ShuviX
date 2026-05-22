@@ -8,7 +8,6 @@ import { Type } from 'typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
 import { sessionDao } from '../dao/sessionDao'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { sanitizeBinaryOutput, collapseProgressOutput } from '../utils/toolUtils/shell'
 import { BaseTool } from '../services/baseTool'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
@@ -376,17 +375,7 @@ async function handleExec(
     const result = await sshManager.exec(ctx.sessionId, command, timeout ?? DEFAULT_TIMEOUT, signal)
     const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
     // 清理控制字符 + 折叠进度输出（仅匹配进度类命令时生效）
-    const combined = collapseProgressOutput(sanitizeBinaryOutput(raw), command)
-
-    // 统一截断/持久化处理
-    const processed = processToolOutput({
-      sessionId: ctx.sessionId,
-      toolCallId,
-      fullText: combined,
-      strategy: 'middle'
-    })
-
-    let text = processed.text
+    let text = collapseProgressOutput(sanitizeBinaryOutput(raw), command)
 
     if (result.exitCode === 124) {
       text += `\n\n[Command timed out (${timeout ?? DEFAULT_TIMEOUT}s)]`
@@ -394,13 +383,14 @@ async function handleExec(
       text += `\n\n[Exit code: ${result.exitCode}]`
     }
 
+    // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
     return {
       content: [{ type: 'text' as const, text }],
       details: {
         type: 'ssh',
         action: 'exec',
         exitCode: result.exitCode,
-        truncated: processed.truncated
+        truncated: false
       }
     }
   } catch (err: unknown) {

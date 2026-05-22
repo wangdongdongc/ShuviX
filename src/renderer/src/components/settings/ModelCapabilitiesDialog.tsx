@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { X } from 'lucide-react'
 import { useDialogClose } from '../../hooks/useDialogClose'
+import { SettingsSection, SettingsRow, Toggle, InlineInput } from './SettingsPrimitives'
 
 interface ModelCapabilitiesDialogProps {
   modelId: string
@@ -32,9 +34,7 @@ const BOOL_CAPS = [
   { key: 'pdfInput', labelKey: 'settings.capPdfInput', descKey: 'settings.capPdfInputDesc' }
 ] as const
 
-/**
- * 模型能力编辑对话框 — 布尔能力 + Token 限制 + 定价
- */
+/** 模型能力编辑对话框 — 布尔能力 + Token 限制 + 定价（卡片式布局） */
 export function ModelCapabilitiesDialog({
   modelId,
   capabilities,
@@ -42,14 +42,12 @@ export function ModelCapabilitiesDialog({
   onClose
 }: ModelCapabilitiesDialogProps): React.JSX.Element {
   const { t } = useTranslation()
-  const overlayRef = useRef<HTMLDivElement>(null)
   const { closing, handleClose } = useDialogClose(onClose)
   const [saving, setSaving] = useState(false)
 
   // 编辑副本
   const [caps, setCaps] = useState<Record<string, unknown>>({ ...capabilities })
 
-  // ESC 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') handleClose()
@@ -57,11 +55,6 @@ export function ModelCapabilitiesDialog({
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [handleClose])
-
-  // 点击遮罩关闭
-  const handleOverlayClick = (e: React.MouseEvent): void => {
-    if (e.target === overlayRef.current) handleClose()
-  }
 
   const toggleBool = (key: string): void => {
     setCaps((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -101,101 +94,104 @@ export function ModelCapabilitiesDialog({
     }
   }
 
+  /** 带单位后缀的数值输入 control */
+  const numberWithUnit = (
+    value: number | string | undefined,
+    onChange: (v: string) => void,
+    unit: string
+  ): React.JSX.Element => (
+    <div className="flex items-center gap-2">
+      <InlineInput type="number" value={value ?? ''} onChange={onChange} width={120} />
+      <span className="text-[10px] text-text-tertiary tabular-nums whitespace-nowrap">{unit}</span>
+    </div>
+  )
+
   return (
     <div
-      ref={overlayRef}
-      onClick={handleOverlayClick}
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+      onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[480px] max-w-[90vw] dialog-panel">
-        {/* 标题 */}
-        <div className="px-5 py-4 border-b border-border-secondary">
-          <h3 className="text-sm font-semibold text-text-primary">
-            {t('settings.editCapabilities')}
-          </h3>
-          <p className="text-[11px] text-text-tertiary mt-0.5 font-mono">{modelId}</p>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[92vw] max-h-[88vh] flex flex-col dialog-panel"
+      >
+        {/* 头部 */}
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-primary">
+              {t('settings.editCapabilities')}
+            </h3>
+            <p className="text-[11px] text-text-tertiary mt-0.5 font-mono truncate">{modelId}</p>
+          </div>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors shrink-0"
+          >
+            <X size={14} />
+          </button>
         </div>
 
-        {/* 内容 — 可滚动 */}
-        <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
-          {/* 模态能力 */}
-          <div>
-            <div className="text-[11px] font-medium text-text-secondary mb-2">
-              {t('settings.capSectionModality')}
-            </div>
-            <div className="space-y-2">
-              {BOOL_CAPS.map(({ key, labelKey, descKey }) => (
-                <div key={key} className="flex items-start gap-3">
-                  <button
-                    onClick={() => toggleBool(key)}
-                    className={`mt-0.5 w-8 h-4.5 rounded-full relative transition-colors flex-shrink-0 ${
-                      caps[key] ? 'bg-accent' : 'bg-bg-tertiary'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${
-                        caps[key] ? 'left-[18px]' : 'left-0.5'
-                      }`}
-                    />
-                  </button>
-                  <div className="min-w-0">
-                    <div className="text-xs text-text-primary">{t(labelKey)}</div>
-                    <div className="text-[10px] text-text-tertiary">{t(descKey)}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+        {/* 内容 */}
+        <div className="px-5 py-5 overflow-y-auto flex-1 space-y-5">
+          {/* 能力 */}
+          <SettingsSection title={t('settings.capSectionModality')}>
+            {BOOL_CAPS.map(({ key, labelKey, descKey }) => (
+              <SettingsRow
+                key={key}
+                title={t(labelKey)}
+                description={t(descKey)}
+                control={<Toggle on={!!caps[key]} onClick={() => toggleBool(key)} />}
+              />
+            ))}
+          </SettingsSection>
 
           {/* Token 限制 */}
-          <div>
-            <div className="text-[11px] font-medium text-text-secondary mb-2">
-              {t('settings.capSectionTokens')}
-            </div>
-            <div className="space-y-2">
-              <NumberField
-                label={t('settings.capMaxInputTokens')}
-                desc={t('settings.capMaxInputTokensDesc')}
-                unit="tokens"
-                value={caps.maxInputTokens as number | undefined}
-                onChange={(v) => setNumber('maxInputTokens', v)}
-              />
-              <NumberField
-                label={t('settings.capMaxOutputTokens')}
-                desc={t('settings.capMaxOutputTokensDesc')}
-                unit="tokens"
-                value={caps.maxOutputTokens as number | undefined}
-                onChange={(v) => setNumber('maxOutputTokens', v)}
-              />
-            </div>
-          </div>
+          <SettingsSection title={t('settings.capSectionTokens')}>
+            <SettingsRow
+              title={t('settings.capMaxInputTokens')}
+              description={t('settings.capMaxInputTokensDesc')}
+              control={numberWithUnit(
+                caps.maxInputTokens as number | undefined,
+                (v) => setNumber('maxInputTokens', v),
+                'tokens'
+              )}
+            />
+            <SettingsRow
+              title={t('settings.capMaxOutputTokens')}
+              description={t('settings.capMaxOutputTokensDesc')}
+              control={numberWithUnit(
+                caps.maxOutputTokens as number | undefined,
+                (v) => setNumber('maxOutputTokens', v),
+                'tokens'
+              )}
+            />
+          </SettingsSection>
 
           {/* 定价 */}
-          <div>
-            <div className="text-[11px] font-medium text-text-secondary mb-2">
-              {t('settings.capSectionPricing')}
-            </div>
-            <div className="space-y-2">
-              <NumberField
-                label={t('settings.capInputCost')}
-                desc={t('settings.capInputCostDesc')}
-                unit="$/M tokens"
-                value={getCostDisplay('inputCostPerToken')}
-                onChange={(v) => setCostFromDisplay('inputCostPerToken', v)}
-              />
-              <NumberField
-                label={t('settings.capOutputCost')}
-                desc={t('settings.capOutputCostDesc')}
-                unit="$/M tokens"
-                value={getCostDisplay('outputCostPerToken')}
-                onChange={(v) => setCostFromDisplay('outputCostPerToken', v)}
-              />
-            </div>
-          </div>
+          <SettingsSection title={t('settings.capSectionPricing')}>
+            <SettingsRow
+              title={t('settings.capInputCost')}
+              description={t('settings.capInputCostDesc')}
+              control={numberWithUnit(
+                getCostDisplay('inputCostPerToken'),
+                (v) => setCostFromDisplay('inputCostPerToken', v),
+                '$/M'
+              )}
+            />
+            <SettingsRow
+              title={t('settings.capOutputCost')}
+              description={t('settings.capOutputCostDesc')}
+              control={numberWithUnit(
+                getCostDisplay('outputCostPerToken'),
+                (v) => setCostFromDisplay('outputCostPerToken', v),
+                '$/M'
+              )}
+            />
+          </SettingsSection>
         </div>
 
         {/* 按钮 */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
           <button
             onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
@@ -210,39 +206,6 @@ export function ModelCapabilitiesDialog({
             {saving ? t('common.saving') : t('common.save')}
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** 数值输入字段 */
-function NumberField({
-  label,
-  desc,
-  unit,
-  value,
-  onChange
-}: {
-  label: string
-  desc: string
-  unit: string
-  value: number | string | undefined
-  onChange: (v: string) => void
-}): React.JSX.Element {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-text-primary">{label}</div>
-        <div className="text-[10px] text-text-tertiary">{desc}</div>
-      </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        <input
-          type="number"
-          value={value ?? ''}
-          onChange={(e) => onChange(e.target.value)}
-          className="zen-input w-28 text-right font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-        />
-        <span className="text-[10px] text-text-tertiary w-16">{unit}</span>
       </div>
     </div>
   )

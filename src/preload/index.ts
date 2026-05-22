@@ -246,7 +246,19 @@ const api = {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params),
     /** 获取已知设置 key 的元数据（labelKey + desc） */
-    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys')
+    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys'),
+    /** 列出全部内置系统提示词卡片 */
+    listBuiltinSections: () => ipcRenderer.invoke('settings:listBuiltinSections'),
+    /** 写入被禁用的内置卡片 id 列表 */
+    setBuiltinDisabled: (ids: string[]) => ipcRenderer.invoke('settings:setBuiltinDisabled', ids),
+    /** 读取用户自定义系统提示词卡片 */
+    getCustomSections: () => ipcRenderer.invoke('settings:getCustomSections'),
+    /** 写入用户自定义系统提示词卡片 */
+    setCustomSections: (sections: { id: string; title: string; content: string }[]) =>
+      ipcRenderer.invoke('settings:setCustomSections', sections),
+    /** 预览内置卡片实际内容（主要给 environment 卡片用） */
+    previewBuiltinSection: (params: { id: string; sessionId?: string }) =>
+      ipcRenderer.invoke('settings:previewBuiltinSection', params)
   },
 
   // ============ HTTP 日志 ============
@@ -421,8 +433,12 @@ const api = {
 
   // ============ 斜杠命令 ============
   command: {
-    /** 获取当前会话可用的斜杠命令列表 */
-    list: (params: { sessionId: string }) => ipcRenderer.invoke('command:list', params)
+    /**
+     * 获取斜杠命令列表
+     * - sessionId 非空：返回项目命令 + 全部 skill 命令
+     * - sessionId 为 null：仅返回不依赖项目的命令（欢迎页等无会话场景）
+     */
+    list: (params: { sessionId: string | null }) => ipcRenderer.invoke('command:list', params)
   },
 
   // ============ 语音转文字 ============
@@ -615,7 +631,10 @@ const api = {
     addExternalDir: (dir: { name: string; path: string }) =>
       ipcRenderer.invoke('skill:addExternalDir', dir),
     /** 移除外部 skill 源目录 */
-    removeExternalDir: (name: string) => ipcRenderer.invoke('skill:removeExternalDir', name)
+    removeExternalDir: (name: string) => ipcRenderer.invoke('skill:removeExternalDir', name),
+    /** 切换分组总开关 */
+    setGroupEnabled: (params: { dirName: string; isEnabled: boolean }) =>
+      ipcRenderer.invoke('skill:setGroupEnabled', params)
   },
 
   // ============ 自动更新 ============
@@ -713,6 +732,27 @@ const api = {
     }
   },
 
+  // ============ 悬浮聊天（Floating Pin Chat） ============
+  // 多窗模型：每个 sessionId 对应一个独立的悬浮窗口；多个会话可同时悬浮、并行运行 Agent。
+  pinChat: {
+    /** 把指定 session 提到悬浮窗口（已悬浮则 focus） */
+    pin: (sessionId: string) => ipcRenderer.invoke('pinChat:pin', sessionId),
+    /** 取消指定 session 的悬浮，恢复到主窗口 */
+    unpin: (sessionId: string) => ipcRenderer.invoke('pinChat:unpin', sessionId),
+    /** 聚焦指定 session 的悬浮窗口 */
+    focus: (sessionId: string) => ipcRenderer.invoke('pinChat:focus', sessionId),
+    /** 主动查询当前所有悬浮会话（窗口刚加载时同步用） */
+    getState: () =>
+      ipcRenderer.invoke('pinChat:getState') as Promise<{ pinnedSessionIds: string[] }>,
+    /** 监听悬浮状态变化（主窗 + 所有悬浮窗都会收到） */
+    onStateChanged: (callback: (state: { pinnedSessionIds: string[] }) => void) => {
+      const handler = (_: Electron.IpcRendererEvent, state: { pinnedSessionIds: string[] }): void =>
+        callback(state)
+      ipcRenderer.on('window:pin-state-changed', handler)
+      return () => ipcRenderer.removeListener('window:pin-state-changed', handler)
+    }
+  },
+
   // ============ Files (会话工作目录文件树) ============
   files: {
     /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore），同时启动文件监听 */
@@ -722,6 +762,11 @@ const api = {
         truncated: boolean
         root: string | null
       }>,
+    /** 读取文件内容用于面板预览。沙箱外路径返回 not-allowed，不弹审批 */
+    read: (params: { sessionId: string; path: string }) =>
+      ipcRenderer.invoke('files:read', params) as Promise<
+        import('../shared/types/filePreview').FileReadResult
+      >,
     /** 监听工作目录文件变动事件（按 root 路径标识，同项目内多会话共享） */
     onChanged: (callback: (payload: { root: string }) => void) => {
       const handler = (_: Electron.IpcRendererEvent, payload: { root: string }): void =>

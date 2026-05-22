@@ -17,6 +17,7 @@ import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useSubSessionStore, selectSubSessionList } from '../../stores/subSessionStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 interface TabDef {
   key: PanelTab
@@ -27,9 +28,9 @@ interface TabDef {
 }
 
 const tabs: TabDef[] = [
+  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'browser', labelKey: 'panel.browser', Icon: Monitor },
   { key: 'terminal', labelKey: 'panel.terminal', Icon: TerminalSquare },
-  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
   { key: 'subagent', labelKey: 'panel.subAgent', Icon: Bot }
 ]
@@ -42,6 +43,9 @@ export function RightPanel(): React.JSX.Element {
   const widgetCount = useWidgetStore((s) => s.widgets.length)
   const allSubSessions = useSubSessionStore(selectSubSessionList)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const focusMode = useSettingsStore((s) => s.focusMode)
+  /** 专注模式生效条件：开关打开 + 已选中主会话 → 淡化未选中 tab */
+  const dim = focusMode && !!activeSessionId
 
   // 仅统计归属当前主会话的子会话
   const subAgentCount = useMemo(
@@ -87,10 +91,10 @@ export function RightPanel(): React.JSX.Element {
             key={key}
             onClick={() => setActiveTab(key)}
             title={compact ? t(labelKey) : undefined}
-            className={`titlebar-no-drag flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-colors relative whitespace-nowrap flex-shrink-0 ${
+            className={`titlebar-no-drag flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-all duration-200 relative whitespace-nowrap flex-shrink-0 ${
               activeTab === key
                 ? 'text-text-primary'
-                : 'text-text-tertiary hover:text-text-secondary'
+                : `text-text-tertiary hover:text-text-secondary ${dim ? 'opacity-30 hover:opacity-100' : ''}`
             }`}
           >
             <Icon size={12} />

@@ -67,7 +67,7 @@ export class SessionService {
       projectId: pid,
       provider: this.getDefaultProvider(),
       model: this.getDefaultModel(),
-      systemPrompt: settingsDao.findByKey('systemPrompt') || 'You are a helpful assistant.',
+      systemPrompt: settingsDao.findByKey('systemPrompt') || '',
       modelMetadata: { enabledTools },
       settings: {},
       createdAt: now,
@@ -298,28 +298,29 @@ export class SessionService {
 
   // ─── private ──────────────────────────────────
 
-  /** 获取默认提供商 ID（优先使用用户配置，回退到第一个已启用的提供商） */
+  /**
+   * 获取默认提供商 ID。
+   * 用户配置存在且依然处于启用状态时返回该值；否则返回空字符串（不做自动回退）。
+   * 这样用户在设置中把默认显式选为「无」时，新会话也不会被静默配上某个模型。
+   */
   private getDefaultProvider(): string {
     const configured = settingsDao.findByKey('general.defaultProvider')
-    if (configured) {
-      const enabled = providerDao.findEnabled()
-      if (enabled.some((p) => p.id === configured)) return configured
-    }
+    if (!configured) return ''
     const enabled = providerDao.findEnabled()
-    return enabled.length > 0 ? enabled[0].id : ''
+    return enabled.some((p) => p.id === configured) ? configured : ''
   }
 
-  /** 获取默认模型 ID（优先使用用户配置，回退到第一个已启用模型） */
+  /**
+   * 获取默认模型 ID。
+   * 仅当 provider 已确定且配置模型仍处于启用列表中时返回该值；否则返回空字符串。
+   */
   private getDefaultModel(): string {
     const providerId = this.getDefaultProvider()
     if (!providerId) return ''
     const configured = settingsDao.findByKey('general.defaultModel')
-    if (configured) {
-      const models = providerDao.findEnabledModels(providerId)
-      if (models.some((m) => m.modelId === configured)) return configured
-    }
+    if (!configured) return ''
     const models = providerDao.findEnabledModels(providerId)
-    return models.length > 0 ? models[0].modelId : ''
+    return models.some((m) => m.modelId === configured) ? configured : ''
   }
 }
 

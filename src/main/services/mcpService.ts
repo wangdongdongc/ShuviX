@@ -234,14 +234,21 @@ class McpService {
     if (!conn || conn.status !== 'connected') {
       throw new Error(`MCP server ${serverId} is not connected`)
     }
-    const result = await conn.client.callTool({ name: toolName, arguments: args })
+    // SDK 默认 60s 对慢工具（browser/lighthouse/大文件解析等）太短；
+    // 抬到 5 分钟，并在收到 progress 通知时刷新计时，以总上限 10 分钟兜底。
+    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, {
+      timeout: 5 * 60 * 1000,
+      resetTimeoutOnProgress: true,
+      maxTotalTimeout: 10 * 60 * 1000
+    })
     const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
     return { content: result.content as unknown[], isError }
   }
 
   // ─── 桥接层：MCP → AgentTool ───
 
-  /** 将单个 MCP 工具转为 AgentTool */
+  /** 将单个 MCP 工具转为 AgentTool；
+   *  输出长度的截断/落盘由 wrapToolOutput 在构建工具时统一处理 */
   private mcpToolToAgentTool(
     serverId: string,
     serverName: string,
@@ -350,7 +357,8 @@ class McpService {
         description: `${toolCount} tool(s)`,
         group: `mcp:${s.name}`,
         serverId: s.id,
-        serverStatus: status
+        serverStatus: status,
+        isBuiltin: !!s.isBuiltin
       }
     })
   }

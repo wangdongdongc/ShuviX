@@ -18,14 +18,16 @@ export function getAllToolNames(projectPath?: string): string[] {
   return [...builtinNames, ...mcpService.getAllToolNames(), ...skillNames]
 }
 
-/** 计算新会话的默认启用工具列表（创建会话时调用，结果持久化） */
+/**
+ * 计算新会话/项目的默认 enabledTools 列表（创建时调用，结果持久化）。
+ *
+ * Why: 内置工具与 SubAgent 现已始终默认启用、不通过 enabledTools 控制，
+ * 此处只产出 mcp:/skill: 两类条目。
+ */
 export function getDefaultEnabledTools(projectPath?: string): string[] {
-  const defaultBuiltinNames = getBuiltinToolEntries()
-    .filter((e) => e.defaultEnabled)
-    .map((e) => e.name)
   const mcpNames = mcpService.getAllToolNames()
   const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
-  const result = [...defaultBuiltinNames, ...mcpNames, ...skillNames]
+  const result = [...mcpNames, ...skillNames]
   log.info(`getDefaultEnabledTools count=${result.length} skills=[${skillNames.join(',')}]`)
   return result
 }

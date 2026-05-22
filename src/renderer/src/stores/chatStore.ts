@@ -294,6 +294,20 @@ interface ChatState {
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
 
+/** 以本地时区按"YYYY-MM-DD"分组会话；用 updatedAt（最后活跃时间）作为落点。
+ *  不是 zustand selector——每次调用都返回新 Map，需在组件内用 useMemo 包裹。 */
+export const groupSessionsByDay = (sessions: Session[]): Map<string, Session[]> => {
+  const map = new Map<string, Session[]>()
+  for (const session of sessions) {
+    const d = new Date(session.updatedAt)
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const arr = map.get(key)
+    if (arr) arr.push(session)
+    else map.set(key, [session])
+  }
+  return map
+}
+
 export const selectStreamingContent = (s: ChatState): string =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.content || '' : ''
 
@@ -421,7 +435,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   },
   setMessages: (messages) => set({ messages }),
-  addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  addMessage: (message) =>
+    set((state) =>
+      state.messages.some((m) => m.id === message.id)
+        ? state
+        : { messages: [...state.messages, message] }
+    ),
   removeMessage: (id) => set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
   replaceMessage: (id, message) =>
     set((state) => ({

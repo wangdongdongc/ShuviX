@@ -34,6 +34,7 @@ import type { ToolContext } from './toolContext'
 import type { InputRequest, InputResponse } from '../../shared/types/inputRequest'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
+import { renderForPrompt as renderSystemPromptSections } from './systemPrompt/systemPromptService'
 import { getTempWorkspace } from '../utils/paths'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { injectInstructionMessages } from './instruction'
@@ -78,7 +79,7 @@ export interface AgentSessionCreateParams {
   modelMetadata?: SessionModelMetadata
 }
 
-/** 合并系统提示词：全局 + 项目级 + 参考目录 + 工作目录 */
+/** 合并系统提示词：全局自由文本 + 系统级卡片（内置 + 自定义）+ 项目段 + 项目卡片 */
 function buildSystemPrompt(
   project:
     | {
@@ -88,10 +89,22 @@ function buildSystemPrompt(
       }
     | undefined,
   workingDirectory: string,
-  sessionId: string
+  sessionId: string,
+  modelCtx?: { modelId?: string; modelDisplayName?: string }
 ): string {
-  const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
-  let prompt = globalPrompt
+  const segments: string[] = []
+  const globalPrompt = (settingsDao.findByKey('systemPrompt') || '').trim()
+  if (globalPrompt) segments.push(globalPrompt)
+
+  // 系统级提示词卡片（内置 + 自定义），按代码顺序连续
+  const cardsBlock = renderSystemPromptSections({
+    workingDirectory: workingDirectory || project?.path,
+    modelId: modelCtx?.modelId,
+    modelDisplayName: modelCtx?.modelDisplayName
+  })
+  if (cardsBlock) segments.push(cardsBlock)
+
+  let prompt = segments.join('\n\n')
   if (project) {
     const workDir = workingDirectory || project.path
     prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory. Always prioritize working within this directory to complete tasks.`
@@ -132,7 +145,8 @@ function buildSystemPrompt(
     prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}. Always prioritize working within this directory to complete tasks.`
   }
 
-  return prompt
+  // 去掉前导空行（当 globalPrompt 为空、卡片也都禁用时拼接结果可能以 \n\n 开头）
+  return prompt.replace(/^\n+/, '')
 }
 
 /**
@@ -219,7 +233,9 @@ export class AgentSession {
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
-    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
+    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId, {
+      modelId: model
+    })
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
     // 构建子智能体上下文（使 explore 等子智能体工具可用）

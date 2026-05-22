@@ -8,7 +8,8 @@ import {
   Wrench,
   Brain,
   Image as ImageIcon,
-  Mic
+  Mic,
+  Settings
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -182,26 +183,57 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     closePicker()
   }
 
+  // 无任何已启用的提供商：以异常色按钮提示去配置
+  if (enabledProviders.length === 0) {
+    return (
+      <button
+        onClick={() => window.api.app.openSettings('providers')}
+        className="inline-flex items-center gap-1 text-[11px] text-error bg-error/10 hover:bg-error/20 rounded px-1.5 py-0.5 transition-colors"
+      >
+        <Settings size={11} />
+        <span>{t('settings.providerSectionTitle')}</span>
+      </button>
+    )
+  }
+
+  const noModelSelected = !activeModel
+
   return (
     <div ref={pickerRef} className="relative flex items-center group">
       {isReadonly ? (
         <span className="inline-flex items-center gap-1 text-[11px] text-text-tertiary cursor-default">
-          <span className="max-w-[120px] truncate">{activeModel}</span>
-          {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
+          {noModelSelected ? (
+            <span className="text-amber-500">{t('input.selectModel')}</span>
+          ) : (
+            <>
+              <span className="max-w-[120px] truncate">{activeModel}</span>
+              {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
+            </>
+          )}
         </span>
       ) : (
         <button
           onClick={togglePicker}
-          className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
+          className={`inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent ${
+            noModelSelected
+              ? 'text-amber-500 hover:text-amber-400'
+              : 'text-text-tertiary hover:text-text-secondary hover:border-border-secondary'
+          }`}
         >
-          <span className="max-w-[120px] truncate">{activeModel}</span>
-          {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
+          {noModelSelected ? (
+            <span>{t('input.selectModel')}</span>
+          ) : (
+            <>
+              <span className="max-w-[120px] truncate">{activeModel}</span>
+              {modelSupportsReasoning && thinkingLevel !== 'off' && <Brain size={10} />}
+            </>
+          )}
           <ChevronDown size={11} />
         </button>
       )}
 
-      {/* 悬浮 tooltip：完整模型名（展开时不显示） */}
-      {!pickerOpen && (
+      {/* 悬浮 tooltip：完整模型名（展开时 / 未选择模型时不显示） */}
+      {!pickerOpen && !noModelSelected && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover:block">
           <div className="text-[11px] text-text-primary whitespace-nowrap">{activeModel}</div>
         </div>

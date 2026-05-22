@@ -85,6 +85,9 @@ function printUsage(): void {
       '',
       '  shuvix python [options] [-c cmd | -m mod | script | -] [arg ...]',
       '                Pyodide WebAssembly Python — see `shuvix python --help`',
+      '',
+      '  shuvix pglite [-c sql | -f path | -] [--extension name ...]',
+      '                Embedded PGLite Postgres — see `shuvix pglite --help`',
       ''
     ].join('\n')
   )
@@ -362,6 +365,75 @@ async function runPython(rest: string[]): Promise<void> {
   process.exit(data.exitCode ?? 0)
 }
 
+// ────────────────────── pglite ──────────────────────
+// `shuvix pglite` 与 python 类似的 raw 透传模式：
+//   1. argv 整体发给主进程让 argvParser 解析
+//   2. `-` 或 (无参 + stdin pipe) 时预读 stdin 当 SQL 文本
+//   3. `-f path` 时本地 readFileSync 后把内容塞 stdin 字段（handler 协议不感知文件 IO）
+
+async function runPglite(rest: string[]): Promise<void> {
+  let stdinContent: string | undefined
+
+  // -f 模式：CLI 端读文件 → 作为 stdin 字段上送
+  const fIdx = rest.indexOf('-f')
+  if (fIdx !== -1) {
+    const path = rest[fIdx + 1]
+    if (!path) {
+      process.stderr.write('shuvix pglite: -f requires a path argument\n')
+      process.exit(2)
+    }
+    try {
+      stdinContent = readFileSync(path, 'utf-8')
+    } catch (e) {
+      process.stderr.write(`shuvix pglite: failed to read "${path}": ${(e as Error).message}\n`)
+      process.exit(1)
+    }
+  } else if (shouldReadStdin(rest)) {
+    try {
+      stdinContent = await readAllStdin()
+    } catch (e) {
+      process.stderr.write(`shuvix pglite: failed to read stdin: ${(e as Error).message}\n`)
+      process.exit(1)
+    }
+  }
+
+  const token = readToken()
+  const sessionId = process.env.SHUVIX_SESSION_ID || undefined
+
+  let resp: CliResponse
+  try {
+    resp = await sendRequest({
+      token,
+      command: 'pglite.run',
+      params: {
+        argv: rest,
+        stdin: stdinContent
+      },
+      sessionId
+    })
+  } catch (e) {
+    process.stderr.write((e as Error).message + '\n')
+    process.exit(2)
+  }
+
+  if (!resp.success) {
+    process.stderr.write(`Error: ${resp.error || 'unknown error'}\n`)
+    process.exit(1)
+  }
+
+  const data = resp.data as PythonResponseData | undefined
+  if (!data) {
+    process.exit(0)
+  }
+  if (data.stdout) {
+    process.stdout.write(data.stdout.endsWith('\n') ? data.stdout : data.stdout + '\n')
+  }
+  if (data.stderr) {
+    process.stderr.write(data.stderr.endsWith('\n') ? data.stderr : data.stderr + '\n')
+  }
+  process.exit(data.exitCode ?? 0)
+}
+
 // ────────────────────── transport ──────────────────────
 
 function sendRequest(payload: object): Promise<CliResponse> {
@@ -410,9 +482,14 @@ async function main(): Promise<void> {
     process.exit(argv.length === 0 ? 1 : 0)
   }
 
-  // `shuvix python ...` 走专用分支：原始 argv 透传 + 异步 stdin 预读 + 自定义 IO 路由
+  // `shuvix python ...` / `shuvix pglite ...` 都走专用分支：原始 argv 透传 + 异步 stdin
+  // 预读 + 自定义 IO 路由（区别于 widget/browser 的 JSON.stringify 输出语义）
   if (argv[0] === 'python') {
     await runPython(argv.slice(1))
+    return
+  }
+  if (argv[0] === 'pglite') {
+    await runPglite(argv.slice(1))
     return
   }
 

@@ -3,22 +3,29 @@ import { useChatStore } from './stores/chatStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useBrowserStore, CHAT_CONTAINER_ATTR } from './stores/browserStore'
 import { useSidebarStore } from './stores/sidebarStore'
+import { usePinChatStore } from './stores/pinChatStore'
 import { Sidebar } from './components/sidebar/Sidebar'
 import { SidebarResizeHandle } from './components/sidebar/SidebarResizeHandle'
 import { ChatView } from './components/chat/ChatView'
+import { PinnedChatShell } from './components/chat/PinnedChatShell'
 import { RightPanel } from './components/browser/RightPanel'
 import { BrowserResizeHandle } from './components/browser/BrowserResizeHandle'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
 import { useSessionInit } from './hooks/useSessionInit'
 import { useAgentEvents } from './hooks/useAgentEvents'
+import { usePinChatSync } from './hooks/usePinChatSync'
 
-/** 根据 URL hash 判断当前是否是独立设置窗口 */
+/** 根据 URL hash 判断当前窗口类型 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
+const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 
 /**
  * 应用主入口
- * 根据 hash 区分：主窗口（侧边栏 + 聊天区）或设置窗口（独立设置页）
+ * 根据 hash 区分三种渲染：
+ * - 设置窗口（#settings）
+ * - 悬浮聊天窗口（#pinned-chat）
+ * - 主窗口（侧边栏 + 聊天区 + 浏览器面板）
  *
  * 核心流程由三个 hook 分别承担：
  * - useAppInit()         应用级初始化（设置、提供商、会话列表）
@@ -26,6 +33,15 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
  * - useAgentEvents()     Agent 流式事件分发
  */
 function App(): React.JSX.Element {
+  // 悬浮窗口由 PinnedChatShell 自己管初始化钩子，主流程跳出
+  if (isPinnedWindow) {
+    return <PinnedChatShell />
+  }
+
+  return <MainOrSettings />
+}
+
+function MainOrSettings(): React.JSX.Element {
   const { activeSessionId } = useChatStore()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
   const isBrowserOpen = useBrowserStore((s) => s.isOpen)
@@ -33,11 +49,13 @@ function App(): React.JSX.Element {
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
   const sidebarWidth = useSidebarStore((s) => s.width)
   const isSidebarResizing = useSidebarStore((s) => s.isResizing)
+  const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
 
   // ========== 核心流程 hook ==========
   useAppInit()
   useSessionInit(activeSessionId)
   useAgentEvents()
+  usePinChatSync()
 
   // ========== 外观 ==========
 
@@ -74,6 +92,10 @@ function App(): React.JSX.Element {
     return <SettingsPanel />
   }
 
+  // 主窗口 ChatView 模式：当前 active session 正在悬浮 → 显示占位态
+  const pinnedMode =
+    activeSessionId && pinnedSessionIds.has(activeSessionId) ? 'placeholder' : undefined
+
   // 主窗口：侧边栏 + 聊天区 + 预览面板
   return (
     <div className="flex h-full bg-bg-primary">
@@ -93,7 +115,7 @@ function App(): React.JSX.Element {
           lockedChatWidth != null ? { width: lockedChatWidth, flexShrink: 0 } : { flex: '1 1 0%' }
         }
       >
-        <ChatView />
+        <ChatView pinnedMode={pinnedMode} />
       </div>
       {(isBrowserOpen || lockedChatWidth != null) && <BrowserResizeHandle />}
       {(isBrowserOpen || lockedChatWidth != null) && <RightPanel />}

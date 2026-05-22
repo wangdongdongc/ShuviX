@@ -35,6 +35,8 @@ export interface SkillGroup {
   dirPath: string
   /** 是否为默认目录 */
   isDefault: boolean
+  /** 分组总开关：关闭后整组 skills 失效 */
+  isEnabled: boolean
   /** 该目录下的 skills */
   skills: Skill[]
 }

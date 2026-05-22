@@ -173,12 +173,15 @@ export function useAppInit(): void {
       if (savedLang && savedLang !== i18next.language) {
         i18next.changeLanguage(savedLang)
       }
-      const [allProviders, availableModels] = await Promise.all([
+      const [allProviders, availableModels, toolPresentations] = await Promise.all([
         window.api.provider.listAll(),
-        window.api.provider.listAvailableModels()
+        window.api.provider.listAvailableModels(),
+        // 工具渲染配置中的 label 由主进程 i18n 决定，语言切换后需重新拉取
+        window.api.tools.presentations()
       ])
       useSettingsStore.getState().setProviders(allProviders)
       useSettingsStore.getState().setAvailableModels(availableModels)
+      useChatStore.getState().setToolPresentations(toolPresentations)
     })
     return unsubscribe
   }, [])

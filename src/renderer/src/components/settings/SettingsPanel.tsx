@@ -9,7 +9,8 @@ import {
   BookOpen,
   Wrench,
   Share2,
-  Mic
+  Mic,
+  ScrollText
 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
@@ -22,6 +23,7 @@ import { SkillSettings } from './SkillSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
 import { VoiceSettings } from './VoiceSettings'
+import { SystemPromptSettings } from './SystemPromptSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -35,6 +37,7 @@ const VALID_TABS = new Set([
   'skills',
   'voice',
   'bindings',
+  'systemPrompt',
   'httpLogs',
   'about'
 ])
@@ -76,6 +79,12 @@ export function SettingsPanel(): React.JSX.Element {
             label={t('settings.tabProviders')}
             active={activeSettingsTab === 'providers'}
             onClick={() => setActiveSettingsTab('providers')}
+          />
+          <TabButton
+            icon={<ScrollText size={14} />}
+            label={t('settings.tabSystemPrompt')}
+            active={activeSettingsTab === 'systemPrompt'}
+            onClick={() => setActiveSettingsTab('systemPrompt')}
           />
           <TabButton
             icon={<Wrench size={14} />}
@@ -148,6 +157,11 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'bindings' && (
             <div className="flex-1 overflow-y-auto">
               <BindingsSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'systemPrompt' && (
+            <div className="flex-1 overflow-y-auto">
+              <SystemPromptSettings />
             </div>
           )}
           {activeSettingsTab === 'httpLogs' && (

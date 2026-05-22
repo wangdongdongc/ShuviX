@@ -5,7 +5,6 @@
 
 import { spawn } from 'child_process'
 import { Type } from 'typebox'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import {
   getShellConfig,
   sanitizeBinaryOutput,
@@ -197,17 +196,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       })
       const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
       // 折叠进度输出（仅匹配进度类命令时生效）
-      const combined = collapseProgressOutput(raw, params.command)
-
-      // 统一截断/持久化处理
-      const processed = processToolOutput({
-        sessionId: this.ctx.sessionId,
-        toolCallId,
-        fullText: combined,
-        strategy: 'middle'
-      })
-
-      let text = processed.text
+      let text = collapseProgressOutput(raw, params.command)
 
       if (result.exitCode === 124) {
         text += `\n\n[Command timed out (${timeout}s)]`
@@ -215,12 +204,13 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         text += `\n\n[Exit code: ${result.exitCode}]`
       }
 
+      // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
       return {
         content: [{ type: 'text' as const, text }],
         details: {
           type: 'bash',
           exitCode: result.exitCode,
-          truncated: processed.truncated
+          truncated: false
         }
       }
     } catch (err: unknown) {

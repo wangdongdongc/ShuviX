@@ -5,25 +5,24 @@ import {
   Globe,
   Copy,
   X,
-  Radio,
   Bot,
-  Plug,
   Plus,
   Play,
   Square,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
   Trash2
 } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
+import { useDialogClose } from '../../hooks/useDialogClose'
 import type { Session } from '../../stores/chatStore'
+import { SettingsSection, SettingsRow, InlineInput } from './SettingsPrimitives'
 
 /** 前端类型定义 */
 interface FrontendType {
   id: string
   icon: React.ReactNode
   labelKey: string
-  available: boolean
 }
 
 /** 前端返回的 Bot 信息 */
@@ -42,11 +41,8 @@ interface TelegramBotInfo {
 
 /**
  * 会话绑定设置 — 2 层抽屉
- * Layer 1: 前端类型列表（WebUI / Telegram Bot / WebSocket API …）
+ * Layer 1: 前端类型列表（WebUI / Telegram Bot）
  * Layer 2: 选中类型的详情（运行状态 + 已绑定会话列表）
- *
- * 注意：设置窗口是独立渲染进程，不共享主窗口的 chatStore，
- * 因此此组件自行通过 IPC 加载 sessions 和分享状态。
  */
 export function BindingsSettings(): React.JSX.Element {
   const { t } = useTranslation()
@@ -85,9 +81,8 @@ export function BindingsSettings(): React.JSX.Element {
   }, [])
 
   const frontendTypes: FrontendType[] = [
-    { id: 'webui', icon: <Globe size={16} />, labelKey: 'bindings.webui', available: true },
-    { id: 'telegram', icon: <Bot size={16} />, labelKey: 'bindings.telegram', available: true },
-    { id: 'websocket', icon: <Plug size={16} />, labelKey: 'bindings.websocket', available: false }
+    { id: 'webui', icon: <Globe size={13} />, labelKey: 'bindings.webui' },
+    { id: 'telegram', icon: <Bot size={13} />, labelKey: 'bindings.telegram' }
   ]
 
   const getSharedCount = (id: string): number => {
@@ -100,23 +95,42 @@ export function BindingsSettings(): React.JSX.Element {
     <div className="relative overflow-hidden h-full">
       {/* Layer 1: 前端类型列表 */}
       <div
-        className={`absolute inset-0 transition-transform duration-200 ease-out ${
+        className={`absolute inset-0 overflow-y-auto transition-transform duration-200 ease-out ${
           activeType ? '-translate-x-full' : 'translate-x-0'
         }`}
       >
-        <div className="p-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-1">{t('bindings.title')}</h3>
-          <p className="text-xs text-text-tertiary mb-4">{t('bindings.description')}</p>
-          <div className="space-y-2">
-            {frontendTypes.map((ft) => (
-              <FrontendTypeCard
-                key={ft.id}
-                type={ft}
-                sharedCount={getSharedCount(ft.id)}
-                onClick={() => ft.available && setActiveType(ft.id)}
-              />
-            ))}
-          </div>
+        <div className="flex-1 px-5 py-5 space-y-5">
+          <SettingsSection title={t('bindings.title')} description={t('bindings.description')}>
+            {frontendTypes.map((ft) => {
+              const count = getSharedCount(ft.id)
+              return (
+                <SettingsRow
+                  key={ft.id}
+                  icon={<span className="text-text-secondary shrink-0">{ft.icon}</span>}
+                  title={t(ft.labelKey)}
+                  description={
+                    count > 0 ? t('bindings.sessionCount', { count }) : t('bindings.noSessions')
+                  }
+                  control={
+                    <div className="flex items-center gap-2">
+                      {count > 0 && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-normal bg-emerald-500/10 text-emerald-500">
+                          <span className="w-1 h-1 rounded-full bg-emerald-500" />
+                          {t('bindings.running')}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => setActiveType(ft.id)}
+                        className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                      >
+                        <ChevronRight size={12} />
+                      </button>
+                    </div>
+                  }
+                />
+              )
+            })}
+          </SettingsSection>
         </div>
       </div>
 
@@ -142,46 +156,30 @@ export function BindingsSettings(): React.JSX.Element {
   )
 }
 
-/** 前端类型卡片 */
-function FrontendTypeCard({
-  type,
-  sharedCount,
-  onClick
+/** Layer 2 头部（返回 + 标题 + 可选 action） */
+function DetailHeader({
+  icon,
+  title,
+  onBack,
+  action
 }: {
-  type: FrontendType
-  sharedCount: number
-  onClick: () => void
+  icon: React.ReactNode
+  title: string
+  onBack: () => void
+  action?: React.ReactNode
 }): React.JSX.Element {
-  const { t } = useTranslation()
-
   return (
-    <button
-      onClick={onClick}
-      disabled={!type.available}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${
-        type.available
-          ? 'border-border-primary bg-bg-secondary hover:bg-bg-hover cursor-pointer'
-          : 'border-border-primary/50 bg-bg-secondary/50 opacity-50 cursor-not-allowed'
-      }`}
-    >
-      <div className="text-text-secondary">{type.icon}</div>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-text-primary">{t(type.labelKey)}</div>
-        <div className="text-[10px] text-text-tertiary mt-0.5">
-          {type.available
-            ? sharedCount > 0
-              ? t('bindings.sessionCount', { count: sharedCount })
-              : t('bindings.noSessions')
-            : t('bindings.comingSoon')}
-        </div>
-      </div>
-      {type.available && sharedCount > 0 && (
-        <div className="flex items-center gap-1">
-          <Radio size={10} className="text-green-500" />
-          <span className="text-[10px] text-green-500">{t('bindings.running')}</span>
-        </div>
-      )}
-    </button>
+    <div className="flex items-center gap-2 px-5 py-3 border-b border-border-secondary sticky top-0 bg-bg-primary z-10">
+      <button
+        onClick={onBack}
+        className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
+      >
+        <ArrowLeft size={14} />
+      </button>
+      <span className="text-text-secondary">{icon}</span>
+      <h3 className="text-sm font-semibold text-text-primary flex-1">{title}</h3>
+      {action}
+    </div>
   )
 }
 
@@ -224,100 +222,101 @@ function WebUIDetail({
   }
 
   return (
-    <div className="p-6">
-      {/* 返回 + 标题 */}
-      <div className="flex items-center gap-2 mb-4">
-        <button
-          onClick={onBack}
-          className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
-        >
-          <ArrowLeft size={14} />
-        </button>
-        <Globe size={16} className="text-text-secondary" />
-        <h3 className="text-sm font-semibold text-text-primary">{t('bindings.webui')}</h3>
-      </div>
+    <div className="flex flex-col">
+      <DetailHeader icon={<Globe size={14} />} title={t('bindings.webui')} onBack={onBack} />
 
-      {/* 服务器状态 */}
-      <div className="px-4 py-3 rounded-xl border border-border-primary bg-bg-secondary mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-text-secondary">{t('bindings.serverStatus')}</span>
-          <span
-            className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-              serverStatus.running
-                ? 'bg-green-500/10 text-green-500'
-                : 'bg-text-tertiary/10 text-text-tertiary'
-            }`}
-          >
-            {serverStatus.running ? t('bindings.running') : t('bindings.stopped')}
-          </span>
-        </div>
-        {serverStatus.running && serverStatus.port && (
-          <div className="text-[10px] text-text-tertiary space-y-0.5">
-            <div>
-              {t('bindings.port')}: {serverStatus.port}
-            </div>
-            {serverStatus.urls?.map((url) => (
-              <div key={url} className="flex items-center gap-1">
-                <span className="truncate">{url}</span>
-                <button
-                  onClick={() => handleCopy(url)}
-                  className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary shrink-0"
+      <div className="px-5 py-5 space-y-5">
+        {/* 服务器状态 */}
+        <SettingsSection title={t('bindings.serverStatus')}>
+          <SettingsRow
+            title={t('bindings.serverStatus')}
+            control={
+              <span
+                className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                  serverStatus.running
+                    ? 'bg-emerald-500/10 text-emerald-500'
+                    : 'bg-text-tertiary/10 text-text-tertiary'
+                }`}
+              >
+                {serverStatus.running ? t('bindings.running') : t('bindings.stopped')}
+              </span>
+            }
+          />
+          {serverStatus.running && serverStatus.port && (
+            <>
+              <SettingsRow
+                title={t('bindings.port')}
+                control={
+                  <span className="text-[11px] font-mono text-text-secondary">
+                    {serverStatus.port}
+                  </span>
+                }
+              />
+              {serverStatus.urls?.map((url) => (
+                <div
+                  key={url}
+                  className="flex items-center gap-2 px-4 py-2.5 group hover:bg-bg-hover/40 transition-colors"
                 >
-                  <Copy size={9} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+                  <span className="text-[11px] font-mono text-text-secondary truncate flex-1">
+                    {url}
+                  </span>
+                  <button
+                    onClick={() => handleCopy(url)}
+                    className="p-1 rounded text-text-tertiary hover:text-text-primary opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                    title={copiedUrl === url ? t('common.copied') : t('common.copy')}
+                  >
+                    <Copy size={11} />
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+        </SettingsSection>
 
-      {/* 已绑定会话列表 */}
-      <div>
-        <h4 className="text-xs font-medium text-text-secondary mb-2">
-          {t('bindings.boundSessions')} ({sharedSessions.length})
-        </h4>
-        {sharedSessions.length === 0 ? (
-          <div className="text-center py-6 text-text-tertiary text-xs">
-            {t('bindings.noSessionsHint')}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {sharedSessions.map((s) => {
+        {/* 已绑定会话 */}
+        <SettingsSection title={`${t('bindings.boundSessions')} (${sharedSessions.length})`}>
+          {sharedSessions.length === 0 ? (
+            <div className="px-4 py-6 text-center">
+              <p className="text-[11px] text-text-tertiary">{t('bindings.noSessionsHint')}</p>
+            </div>
+          ) : (
+            sharedSessions.map((s) => {
               const url = `${baseUrl}/shuvix/sessions/${s.id}`
               return (
-                <div
-                  key={s.id}
-                  className="px-3 py-2.5 rounded-lg border border-border-primary bg-bg-secondary"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-text-primary font-medium truncate flex-1">
-                      {s.title}
-                    </span>
-                    <button
-                      onClick={() => void handleRemoveShare(s.id)}
-                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-error transition-colors shrink-0 ml-2"
-                      title={t('bindings.removeShare')}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                  {baseUrl && (
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] text-text-tertiary truncate flex-1">{url}</span>
+                <div key={s.id} className="flex flex-col">
+                  <div className="flex items-center gap-3 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] text-text-primary truncate">{s.title}</div>
+                      {baseUrl && (
+                        <div className="text-[11px] font-mono text-text-tertiary truncate mt-0.5">
+                          {url}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {baseUrl && (
+                        <button
+                          onClick={() => handleCopy(url)}
+                          className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
+                          title={copiedUrl === url ? t('common.copied') : t('common.copy')}
+                        >
+                          <Copy size={11} />
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleCopy(url)}
-                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary shrink-0"
-                        title={copiedUrl === url ? t('common.copied') : t('common.copy')}
+                        onClick={() => void handleRemoveShare(s.id)}
+                        className="p-1 text-text-tertiary hover:text-danger transition-colors"
+                        title={t('bindings.removeShare')}
                       >
-                        <Copy size={10} />
+                        <X size={12} />
                       </button>
                     </div>
-                  )}
+                  </div>
                 </div>
               )
-            })}
-          </div>
-        )}
+            })
+          )}
+        </SettingsSection>
       </div>
     </div>
   )
@@ -334,7 +333,7 @@ function TelegramDetail({
   const { t } = useTranslation()
   const [bots, setBots] = useState<TelegramBotInfo[]>([])
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null)
-  const [showAddForm, setShowAddForm] = useState(false)
+  const [showAddDialog, setShowAddDialog] = useState(false)
 
   const loadBots = useCallback(async () => {
     const list = await window.api.telegram.listBots()
@@ -363,127 +362,61 @@ function TelegramDetail({
   }
 
   return (
-    <div className="p-6">
-      {/* 返回 + 标题 + 添加按钮 */}
-      <div className="flex items-center gap-2 mb-4">
-        <button
-          onClick={onBack}
-          className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
-        >
-          <ArrowLeft size={14} />
-        </button>
-        <Bot size={16} className="text-text-secondary" />
-        <h3 className="text-sm font-semibold text-text-primary flex-1">{t('bindings.telegram')}</h3>
-        <button
-          onClick={() => setShowAddForm(true)}
-          className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
-        >
-          <Plus size={12} />
-          {t('bindings.telegramAddBot')}
-        </button>
+    <div className="flex flex-col">
+      <DetailHeader
+        icon={<Bot size={14} />}
+        title={t('bindings.telegram')}
+        onBack={onBack}
+        action={
+          <button
+            onClick={() => setShowAddDialog(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
+          >
+            <Plus size={11} />
+            {t('bindings.telegramAddBot')}
+          </button>
+        }
+      />
+
+      <div className="px-5 py-5 space-y-5">
+        <SettingsSection title={t('bindings.telegram')} description={t('bindings.description')}>
+          {bots.length === 0 ? (
+            <div className="px-4 py-6 text-center">
+              <p className="text-[11px] text-text-tertiary">{t('bindings.telegramNoBots')}</p>
+            </div>
+          ) : (
+            bots.map((bot) => (
+              <BotItem
+                key={bot.id}
+                bot={bot}
+                expanded={expandedBotId === bot.id}
+                onToggle={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
+                onStart={() => void handleStartBot(bot.id)}
+                onStop={() => void handleStopBot(bot.id)}
+                onDelete={() => void handleDeleteBot(bot.id)}
+                onUpdated={loadBots}
+              />
+            ))
+          )}
+        </SettingsSection>
       </div>
 
-      {/* 添加 Bot 表单 */}
-      {showAddForm && (
-        <AddBotForm
+      {showAddDialog && (
+        <AddBotDialog
           onAdded={async () => {
-            setShowAddForm(false)
+            setShowAddDialog(false)
             await loadBots()
             onReload()
           }}
-          onCancel={() => setShowAddForm(false)}
+          onClose={() => setShowAddDialog(false)}
         />
       )}
-
-      {/* Bot 列表 */}
-      {bots.length === 0 && !showAddForm ? (
-        <div className="text-center py-8 text-text-tertiary text-xs">
-          {t('bindings.telegramNoBots')}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {bots.map((bot) => (
-            <BotCard
-              key={bot.id}
-              bot={bot}
-              expanded={expandedBotId === bot.id}
-              onToggle={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
-              onStart={() => void handleStartBot(bot.id)}
-              onStop={() => void handleStopBot(bot.id)}
-              onDelete={() => void handleDeleteBot(bot.id)}
-              onUpdated={loadBots}
-            />
-          ))}
-        </div>
-      )}
     </div>
   )
 }
 
-/** 添加 Bot 表单 */
-function AddBotForm({
-  onAdded,
-  onCancel
-}: {
-  onAdded: () => void
-  onCancel: () => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const [token, setToken] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [error, setError] = useState('')
-
-  const handleSubmit = async (): Promise<void> => {
-    if (!token.trim()) return
-    setAdding(true)
-    setError('')
-    try {
-      await window.api.telegram.addBot({ token: token.trim() })
-      onAdded()
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t('bindings.telegramTokenInvalid'))
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  return (
-    <div className="px-4 py-3 rounded-xl border border-accent/30 bg-accent/5 mb-4">
-      <div className="space-y-2">
-        <div>
-          <div className="text-xs text-text-secondary mb-1">{t('bindings.telegramBotToken')}</div>
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void handleSubmit()}
-            placeholder={t('bindings.telegramBotTokenHint')}
-            className="zen-input"
-          />
-        </div>
-        {error && <div className="text-[10px] text-red-400">{error}</div>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            onClick={onCancel}
-            className="px-3 py-1.5 text-xs rounded-lg text-text-secondary hover:bg-bg-hover transition-colors"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            onClick={() => void handleSubmit()}
-            disabled={adding || !token.trim()}
-            className="px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
-          >
-            {adding ? t('bindings.telegramValidating') : t('common.add')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** 单个 Bot 卡片 */
-function BotCard({
+/** 单个 Bot 行 + 可展开管理面板 */
+function BotItem({
   bot,
   expanded,
   onToggle,
@@ -504,52 +437,48 @@ function BotCard({
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-secondary overflow-hidden">
-      {/* 摘要行 */}
-      <button
+    <div className="flex flex-col">
+      <div
         onClick={onToggle}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-bg-hover transition-colors"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-bg-hover/40 transition-colors"
       >
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-text-primary truncate">{bot.name}</span>
+        <span className="text-text-tertiary shrink-0">
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[13px] text-text-primary truncate">{bot.name}</span>
             {bot.username && (
-              <span className="text-[10px] text-text-tertiary">@{bot.username}</span>
+              <span className="text-[10px] font-mono text-text-tertiary shrink-0">
+                @{bot.username}
+              </span>
             )}
           </div>
-          <div className="text-[10px] text-text-tertiary mt-0.5">
+          <div className="text-[11px] text-text-tertiary mt-0.5">
             {bot.boundSessionTitle
               ? t('bindings.telegramBoundTo', { title: bot.boundSessionTitle })
               : t('bindings.telegramUnbound')}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span
-            className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-              bot.running
-                ? 'bg-green-500/10 text-green-500'
-                : 'bg-text-tertiary/10 text-text-tertiary'
-            }`}
-          >
-            {bot.running ? t('bindings.running') : t('bindings.stopped')}
-          </span>
-          {expanded ? (
-            <ChevronUp size={12} className="text-text-tertiary" />
-          ) : (
-            <ChevronDown size={12} className="text-text-tertiary" />
-          )}
-        </div>
-      </button>
+        <span
+          className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 ${
+            bot.running
+              ? 'bg-emerald-500/10 text-emerald-500'
+              : 'bg-text-tertiary/10 text-text-tertiary'
+          }`}
+        >
+          {bot.running ? t('bindings.running') : t('bindings.stopped')}
+        </span>
+      </div>
 
-      {/* 展开详情 */}
       {expanded && (
-        <div className="px-4 pb-3 space-y-3 border-t border-border-primary/50 pt-3">
+        <div className="px-4 py-3 space-y-3 bg-bg-tertiary/15">
           {/* 启停按钮 */}
           <div className="flex items-center gap-2">
             {bot.running ? (
               <button
                 onClick={onStop}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1 text-[11px] rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
               >
                 <Square size={10} />
                 {t('bindings.telegramStopBot')}
@@ -557,7 +486,7 @@ function BotCard({
             ) : (
               <button
                 onClick={onStart}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-green-500/10 text-green-500 hover:bg-green-500/20 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1 text-[11px] rounded-md bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 transition-colors"
               >
                 <Play size={10} />
                 {t('bindings.telegramStartBot')}
@@ -569,10 +498,10 @@ function BotCard({
           <BotAllowedUsers bot={bot} onUpdated={onUpdated} />
 
           {/* 删除 */}
-          <div className="pt-1 border-t border-border-primary/30">
+          <div className="pt-2 border-t border-border-secondary/30">
             {confirmDelete ? (
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-red-400 flex-1">
+                <span className="text-[11px] text-red-400 flex-1">
                   {t('bindings.telegramDeleteConfirm')}
                 </span>
                 <button
@@ -591,9 +520,9 @@ function BotCard({
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="flex items-center gap-1 text-[10px] text-red-400 hover:text-red-300 transition-colors"
+                className="flex items-center gap-1 text-[11px] text-red-400 hover:text-red-300 transition-colors"
               >
-                <Trash2 size={10} />
+                <Trash2 size={11} />
                 {t('bindings.telegramDeleteBot')}
               </button>
             )}
@@ -632,25 +561,18 @@ function BotAllowedUsers({
 
   return (
     <div>
-      <div className="text-xs text-text-secondary mb-1">
+      <div className="text-[12px] text-text-primary mb-1">
         {t('bindings.telegramEditAllowedUsers')}
       </div>
-      <div className="text-[10px] text-text-tertiary mb-2">
+      <div className="text-[11px] text-text-tertiary mb-2 leading-relaxed">
         {t('bindings.telegramAllowedUsersHint')}
       </div>
       <div className="flex gap-2 mb-2">
-        <input
-          type="text"
-          value={newUserId}
-          onChange={(e) => setNewUserId(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void handleAddUser()}
-          placeholder="User ID"
-          className="zen-input flex-1"
-        />
+        <InlineInput value={newUserId} onChange={setNewUserId} placeholder="User ID" width={200} />
         <button
           onClick={() => void handleAddUser()}
           disabled={!newUserId.trim()}
-          className="p-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 transition-colors"
+          className="p-1.5 rounded-md bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-50 transition-colors"
         >
           <Plus size={12} />
         </button>
@@ -660,19 +582,111 @@ function BotAllowedUsers({
           {bot.allowedUsers.map((id) => (
             <span
               key={id}
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full bg-bg-hover text-text-secondary"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono rounded-full bg-bg-hover text-text-secondary"
             >
               {id}
               <button
                 onClick={() => void handleRemoveUser(id)}
-                className="text-text-tertiary hover:text-error"
+                className="text-text-tertiary hover:text-danger"
               >
-                <X size={8} />
+                <X size={9} />
               </button>
             </span>
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/** 添加 Bot 弹窗 */
+function AddBotDialog({
+  onAdded,
+  onClose
+}: {
+  onAdded: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const { closing, handleClose } = useDialogClose(onClose)
+  const [token, setToken] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') handleClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [handleClose])
+
+  const handleSubmit = async (): Promise<void> => {
+    if (!token.trim()) return
+    setAdding(true)
+    setError('')
+    try {
+      await window.api.telegram.addBot({ token: token.trim() })
+      onAdded()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t('bindings.telegramTokenInvalid'))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return (
+    <div
+      onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[440px] max-w-[92vw] flex flex-col dialog-panel"
+      >
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary">
+            {t('bindings.telegramAddBot')}
+          </h3>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="px-5 py-5 space-y-2">
+          <label className="block text-[11px] text-text-tertiary">
+            {t('bindings.telegramBotToken')}
+          </label>
+          <InlineInput
+            type="password"
+            value={token}
+            onChange={setToken}
+            placeholder={t('bindings.telegramBotTokenHint')}
+            autoFocus
+            width={400}
+          />
+          {error && <p className="text-[11px] text-danger">{error}</p>}
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
+          <button
+            onClick={handleClose}
+            className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={adding || !token.trim()}
+            className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {adding ? t('bindings.telegramValidating') : t('common.add')}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

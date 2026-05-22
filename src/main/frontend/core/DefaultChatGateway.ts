@@ -10,7 +10,6 @@ import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
-import { destroySqlSession, getSqlRuntimeStatus } from '../../services/pglite'
 import type { InlineToken } from '../../../shared/types/chatMessage'
 import { resolveTokensForAgent } from '../../../shared/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
@@ -160,10 +159,6 @@ export class DefaultChatGateway implements ChatGateway {
       }
     }
 
-    // 各服务模块自维护的运行时状态（原由 pluginRegistry 集中缓存）
-    const sql = getSqlRuntimeStatus(sessionId)
-    if (sql) result['sql'] = sql
-
     return result
   }
 
@@ -189,11 +184,6 @@ export class DefaultChatGateway implements ChatGateway {
       broadcastDestroy()
       return { success: true }
     }
-    // 模块自管理的运行时（原 plugin 贡献）
-    if (runtimeId === 'sql') {
-      destroySqlSession(sessionId)
-      return { success: true }
-    }
     return { success: false }
   }
 
@@ -206,6 +196,7 @@ export class DefaultChatGateway implements ChatGateway {
     group?: string
     defaultEnabled?: boolean
     serverStatus?: string
+    isBuiltin?: boolean
   }> {
     // 解析项目路径（用于发现项目级 skills）
     let projectPath: string | undefined
@@ -232,7 +223,8 @@ export class DefaultChatGateway implements ChatGateway {
       name: info.name,
       label: info.label,
       group: info.group,
-      serverStatus: info.serverStatus
+      serverStatus: info.serverStatus,
+      isBuiltin: info.isBuiltin
     }))
     /** 已启用 Skill（含项目级 .claude/skills/） */
     const skillItems = skillService.findEnabled(projectPath).map((s) => ({
