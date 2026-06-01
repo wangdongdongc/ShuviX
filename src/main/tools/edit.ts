@@ -15,7 +15,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { EditToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'

@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Copy, FileText, Globe, RefreshCw, Terminal, TriangleAlert, X } from 'lucide-react'
+import { Copy, FileText, Globe, RefreshCw, TriangleAlert, X } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useChatStore, type ShareMode } from '../../stores/chatStore'
 import type { InstructionFileEntry } from '../../../../shared/types/instructionFile'
+import { SettingsSection, SettingsRow, Toggle, InlineSelect } from '../settings/SettingsPrimitives'
 
 /**
  * 会话配置面板（除会话标题外的所有配置）。
  * 既可嵌入到 SessionConfigDialog 弹窗中，也可在空会话时直接居中展示。
+ *
+ * 视觉：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
  *
  * 状态来源：
  * - autoApprove / allowList / lanShareMode / boundBotId 全部从 chatStore 派生，
@@ -37,7 +40,6 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
     }
   }
 
-  // 打开面板时扫描一次
   useEffect(() => {
     void scanInstructionFiles()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,7 +59,6 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
     Array<{ id: string; name: string; username: string; boundSessionId: string | null }>
   >([])
 
-  // 加载分享 URL 列表与 Telegram Bot 列表（挂载时 + 收到配置变更事件时）
   useEffect(() => {
     let cancelled = false
 
@@ -102,7 +103,6 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
 
   const handleSetShareMode = async (mode: ShareMode | null): Promise<void> => {
     await window.api.webui.setShared({ sessionId, shared: mode !== null, mode: mode ?? undefined })
-    // store 由 session:configChanged 事件刷新
   }
 
   const handleCopyShareUrl = (url: string): void => {
@@ -118,7 +118,6 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
     if (botId) {
       await window.api.telegram.bindSession({ botId, sessionId })
     }
-    // 更新 session.settings 中的 telegramBotId（store 中 telegramBindings 由事件刷新）
     useChatStore.getState().updateSessionSettings(sessionId, { telegramBotId: botId ?? undefined })
   }
 
@@ -134,215 +133,181 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
     useChatStore.getState().updateSessionSettings(sessionId, { allowList: next })
   }
 
+  const shareModeDescKey = lanShareMode
+    ? `sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}Desc`
+    : ''
+
   return (
-    <div className="space-y-4">
-      {/* 命令审批分组 */}
-      <div className="zen-section space-y-2">
-        <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-          <Terminal size={12} />
-          {t('sessionConfig.commandGroup')}
-        </label>
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-text-secondary">{t('sessionConfig.autoApprove')}</span>
-          <button
-            onClick={handleToggleAutoApprove}
-            className={`relative w-8 h-[18px] rounded-full transition-colors ${
-              autoApprove ? 'bg-amber-500' : 'bg-bg-hover'
-            }`}
-          >
-            <span
-              className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                autoApprove ? 'left-[16px]' : 'left-[2px]'
-              }`}
-            />
-          </button>
-        </div>
+    <div className="space-y-5">
+      {/* 命令审批 */}
+      <SettingsSection title={t('sessionConfig.commandGroup')}>
+        <SettingsRow
+          title={t('sessionConfig.autoApprove')}
+          description={t('sessionConfig.autoApproveDesc')}
+          control={
+            <Toggle on={autoApprove} color="amber" onClick={() => void handleToggleAutoApprove()} />
+          }
+        />
         {autoApprove && (
-          <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/5">
-            <TriangleAlert size={11} className="text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-relaxed">
+          <div className="flex items-start gap-2 px-4 py-2.5 bg-amber-500/[0.06]">
+            <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
               {t('chat.autoApproveWarning')}
             </p>
           </div>
         )}
         {!autoApprove && allowList.length > 0 && (
-          <div className="border-t border-border-secondary pt-2">
-            <span className="text-[10px] text-text-tertiary">{t('sessionConfig.allowList')}</span>
-            <div className="flex flex-col gap-1 mt-1">
+          <div className="px-4 py-3">
+            <div className="text-[11px] text-text-tertiary mb-1.5">
+              {t('sessionConfig.allowListTitle')}
+            </div>
+            <div className="flex flex-col gap-1">
               {allowList.map((entry) => (
                 <div
                   key={entry}
                   title={entry}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-bg-tertiary text-[10px] font-mono text-text-secondary"
+                  className="group flex items-center gap-1.5 px-2 py-1 rounded bg-bg-tertiary/60"
                 >
-                  <span className="flex-1 truncate">{entry}</span>
+                  <span className="flex-1 truncate text-[11px] font-mono text-text-secondary">
+                    {entry}
+                  </span>
                   <button
                     onClick={() => void handleRemoveAllowEntry(entry)}
-                    className="text-text-tertiary hover:text-red-500 transition-colors shrink-0"
+                    className="text-text-tertiary hover:text-red-500 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
                   >
-                    <X size={9} />
+                    <X size={10} />
                   </button>
                 </div>
               ))}
             </div>
           </div>
         )}
-      </div>
+      </SettingsSection>
 
-      {/* LAN 分享分组 */}
-      <div className="zen-section space-y-2">
-        <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-          <Globe size={12} />
-          {t('sessionConfig.lanShareGroup')}
-        </label>
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-text-secondary">{t('sessionConfig.lanShare')}</span>
-          <button
-            onClick={() => void handleSetShareMode(lanShareMode ? null : 'readonly')}
-            className={`relative w-8 h-[18px] rounded-full transition-colors ${
-              lanShareMode ? 'bg-accent' : 'bg-bg-hover'
-            }`}
-          >
-            <span
-              className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                lanShareMode ? 'left-[16px]' : 'left-[2px]'
-              }`}
+      {/* WebUI / 局域网共享 */}
+      <SettingsSection title={t('sessionConfig.lanShareGroup')}>
+        <SettingsRow
+          title={t('sessionConfig.lanShare')}
+          description={t('sessionConfig.lanShareDesc')}
+          control={
+            <Toggle
+              on={!!lanShareMode}
+              onClick={() => void handleSetShareMode(lanShareMode ? null : 'readonly')}
             />
-          </button>
-        </div>
-        <p className="text-[10px] text-text-tertiary">{t('sessionConfig.lanShareDesc')}</p>
-
+          }
+        />
         {lanShareMode && (
-          <div className="border-t border-border-secondary pt-2 space-y-1.5">
-            <span className="text-[10px] text-text-tertiary">{t('sessionConfig.shareMode')}</span>
-            <div className="inline-flex w-full p-0.5 rounded-md bg-bg-tertiary">
-              {(['readonly', 'chat', 'full'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => void handleSetShareMode(mode)}
-                  className={`flex-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${
-                    lanShareMode === mode
-                      ? 'bg-bg-primary text-accent shadow-sm'
-                      : 'text-text-tertiary hover:text-text-secondary'
-                  }`}
+          <SettingsRow
+            title={t('sessionConfig.shareMode')}
+            description={t(shareModeDescKey)}
+            control={
+              <InlineSelect
+                value={lanShareMode}
+                onChange={(v) => void handleSetShareMode(v as ShareMode)}
+              >
+                <option value="readonly">{t('sessionConfig.shareModeReadonly')}</option>
+                <option value="chat">{t('sessionConfig.shareModeChat')}</option>
+                <option value="full">{t('sessionConfig.shareModeFull')}</option>
+              </InlineSelect>
+            }
+          />
+        )}
+        {lanShareMode && shareUrls.length > 0 && (
+          <div className="px-4 py-3">
+            <div className="text-[11px] text-text-tertiary mb-1.5">
+              {t('sessionConfig.lanShareUrlsTitle')}
+            </div>
+            <div className="flex flex-col">
+              {shareUrls.map((url) => (
+                <div
+                  key={url}
+                  className="group flex items-center gap-1.5 px-2 py-1 rounded hover:bg-bg-hover/60 transition-colors"
                 >
-                  {t(`sessionConfig.shareMode${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}
-                </button>
+                  <Globe size={11} className="text-text-tertiary shrink-0" />
+                  <span className="flex-1 truncate text-[11px] font-mono text-text-secondary">
+                    {url}
+                  </span>
+                  <button
+                    onClick={() => handleCopyShareUrl(url)}
+                    className="p-0.5 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-accent transition-all shrink-0"
+                    title={copied ? t('common.copied') : t('common.copy')}
+                  >
+                    <Copy size={11} />
+                  </button>
+                </div>
               ))}
             </div>
-            <p className="text-[9px] text-text-tertiary leading-relaxed">
-              {lanShareMode === 'readonly'
-                ? t('sessionConfig.shareModeReadonlyDesc')
-                : lanShareMode === 'chat'
-                  ? t('sessionConfig.shareModeChatDesc')
-                  : t('sessionConfig.shareModeFullDesc')}
-            </p>
           </div>
         )}
+      </SettingsSection>
 
-        {lanShareMode && shareUrls.length > 0 && (
-          <div className="border-t border-border-secondary pt-2 flex flex-col">
-            {shareUrls.map((url) => (
-              <div
-                key={url}
-                className="group flex items-center gap-1.5 px-1 py-1 rounded hover:bg-bg-hover/60 transition-colors"
-              >
-                <Globe size={10} className="text-text-tertiary shrink-0" />
-                <span className="text-[10px] font-mono text-text-secondary truncate flex-1">
-                  {url}
-                </span>
-                <button
-                  onClick={() => handleCopyShareUrl(url)}
-                  className="p-0.5 rounded text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-accent transition-all shrink-0"
-                  title={copied ? t('common.copied') : t('common.copy')}
-                >
-                  <Copy size={10} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 项目指令文件分组 */}
-      <div className="zen-section space-y-2">
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-            <FileText size={12} />
-            {t('sessionConfig.instructionFilesGroup')}
-          </label>
+      {/* 项目指令文件 */}
+      <SettingsSection
+        title={t('sessionConfig.instructionFilesGroup')}
+        headerAction={
           <button
             onClick={() => void scanInstructionFiles()}
             disabled={instructionScanning}
-            className="p-0.5 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-50"
+            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-50"
             title={t('sessionConfig.instructionFilesRescan')}
           >
             <RefreshCw size={11} className={instructionScanning ? 'animate-spin' : ''} />
           </button>
-        </div>
+        }
+        footer={t('sessionConfig.instructionFilesHint')}
+      >
         {instructionFiles.length === 0 ? (
-          <p className="text-[10px] text-text-tertiary">
+          <div className="px-4 py-3 text-[11px] text-text-tertiary">
             {t('sessionConfig.instructionFilesEmpty')}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {instructionFiles.map((f) => {
-              const enabled = enabledInstructionFiles.includes(f.filename)
-              return (
-                <div
-                  key={f.filename}
-                  className="flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-bg-hover/40 transition-colors"
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <FileText size={11} className="text-text-tertiary shrink-0" />
-                    <span className="text-xs font-mono text-text-secondary truncate">
-                      {f.filename}
-                    </span>
-                    <span className="text-[10px] text-text-tertiary shrink-0">{f.size}B</span>
-                  </div>
-                  <button
-                    onClick={() => void handleToggleInstructionFile(f.filename)}
-                    className={`relative w-8 h-[18px] rounded-full transition-colors shrink-0 ${
-                      enabled ? 'bg-accent' : 'bg-bg-hover'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
-                        enabled ? 'left-[16px]' : 'left-[2px]'
-                      }`}
-                    />
-                  </button>
-                </div>
-              )
-            })}
           </div>
+        ) : (
+          instructionFiles.map((f) => {
+            const enabled = enabledInstructionFiles.includes(f.filename)
+            return (
+              <SettingsRow
+                key={f.filename}
+                icon={<FileText size={12} className="text-text-tertiary shrink-0" />}
+                title={
+                  <>
+                    <span className="font-mono">{f.filename}</span>
+                    <span className="text-[11px] text-text-tertiary font-normal">{f.size} B</span>
+                  </>
+                }
+                control={
+                  <Toggle
+                    on={enabled}
+                    onClick={() => void handleToggleInstructionFile(f.filename)}
+                  />
+                }
+              />
+            )
+          })
         )}
-        <p className="text-[10px] text-text-tertiary">{t('sessionConfig.instructionFilesHint')}</p>
-      </div>
+      </SettingsSection>
 
-      {/* Telegram Bot 分组 */}
-      <div className="zen-section space-y-2">
-        <label className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
-          <Bot size={12} />
-          {t('sessionConfig.telegramGroup')}
-        </label>
-        <select
-          value={boundBotId ?? ''}
-          onChange={(e) => void handleSelectTelegramBot(e.target.value || null)}
-          className="zen-select"
-        >
-          <option value="">{t('sessionConfig.telegramNone')}</option>
-          {telegramBots
-            .filter((b) => !b.boundSessionId || b.boundSessionId === sessionId)
-            .map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-                {b.username ? ` (@${b.username})` : ''}
-              </option>
-            ))}
-        </select>
-        <p className="text-[10px] text-text-tertiary">{t('sessionConfig.telegramBotDesc')}</p>
-      </div>
+      {/* Telegram Bot */}
+      <SettingsSection title={t('sessionConfig.telegramGroup')}>
+        <SettingsRow
+          title={t('sessionConfig.telegramTitle')}
+          description={t('sessionConfig.telegramBotDesc')}
+          control={
+            <InlineSelect
+              value={boundBotId ?? ''}
+              onChange={(v) => void handleSelectTelegramBot(v || null)}
+            >
+              <option value="">{t('sessionConfig.telegramNone')}</option>
+              {telegramBots
+                .filter((b) => !b.boundSessionId || b.boundSessionId === sessionId)
+                .map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                    {b.username ? ` (@${b.username})` : ''}
+                  </option>
+                ))}
+            </InlineSelect>
+          }
+        />
+      </SettingsSection>
     </div>
   )
 }

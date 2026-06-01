@@ -68,6 +68,15 @@ npm run build:win    # Windows
 npm run build:linux  # Linux
 ```
 
+## 🪝 Hooks (extensibility)
+
+ShuviX supports Claude Code–style hooks: subprocess scripts attached to agent lifecycle events (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`), communicating via stdin/stdout JSON + exit code.
+
+- **Config files**: `~/.shuvix/hooks.json` (global) + `<project>/.shuvix/hooks.json` (project)
+- **Quick start**: copy [example-hooks.json](src/main/services/hooks/__tests__/fixtures/example-hooks.json) as a starting point
+- **Full schema** (events, input/output, env vars, deny/rewrite semantics): see the JSDoc at the top of [types.ts](src/main/services/hooks/types.ts)
+- **Management UI**: Settings → Hooks (health status bar, loaded list, one-click open config file)
+
 ## 📄 License
 
 This project is open source under the **MIT** license.

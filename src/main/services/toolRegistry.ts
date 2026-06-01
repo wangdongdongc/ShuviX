@@ -11,7 +11,7 @@ import type { ToolContext } from '../services/toolContext'
 import type { ToolPresentation } from '../../shared/types/toolPresentation'
 
 /** 工具在 UI 中的分组标识 */
-export type BuiltinGroup = 'general' | 'ripgrep' | 'remote' | 'subagent' | 'system'
+export type BuiltinGroup = 'general' | 'ripgrep' | 'remote' | 'agent' | 'system'
 
 export interface BuiltinToolMeta {
   name: string

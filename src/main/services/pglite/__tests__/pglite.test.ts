@@ -50,13 +50,6 @@ vi.mock('../../toolContext', async () => {
   }
 })
 
-// runtimeStatus 依赖 chatFrontendRegistry（需要完整 frontend 模块图），测试里只需空实现
-vi.mock('../runtimeStatus', () => ({
-  setSqlRuntimeReady: () => {},
-  setSqlRuntimeDestroyed: () => {},
-  getSqlRuntimeStatus: () => undefined
-}))
-
 import { PgliteWorkerManager } from '../workerManager'
 import type { WorkerResponse } from '../sqlWorker'
 

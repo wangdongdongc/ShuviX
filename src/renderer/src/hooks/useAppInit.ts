@@ -4,7 +4,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSidebarStore } from '../stores/sidebarStore'
 import { useBrowserStore } from '../stores/browserStore'
-import { loadPanelLayout } from '../stores/panelLayout'
+import { loadPanelLayout, isPinnedScope } from '../stores/panelLayout'
 import { useUpdateStore } from '../stores/updateStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
@@ -85,7 +85,11 @@ export function useAppInit(): void {
         if (layout.sidebarWidth) useSidebarStore.setState({ width: layout.sidebarWidth })
         if (layout.sidebarOpen === false) useSidebarStore.setState({ isOpen: false })
         if (layout.browserWidth) useBrowserStore.setState({ width: layout.browserWidth })
-        // browser open 状态不自动恢复（browser 依赖运行时 server，重启后需重新启动）
+        // 悬浮窗：右面板默认 'files' tab,没有 browser tab 的运行时依赖问题,可安全恢复 isOpen
+        // 主窗口：browser 依赖运行时 server,重启后需用户重新打开,故不自动恢复
+        if (isPinnedScope && layout.browserOpen) {
+          useBrowserStore.setState({ isOpen: true })
+        }
       })
 
       // 数据就绪后等待浏览器完成绘制，再通知主进程显示窗口
@@ -173,12 +177,15 @@ export function useAppInit(): void {
       if (savedLang && savedLang !== i18next.language) {
         i18next.changeLanguage(savedLang)
       }
-      const [allProviders, availableModels] = await Promise.all([
+      const [allProviders, availableModels, toolPresentations] = await Promise.all([
         window.api.provider.listAll(),
-        window.api.provider.listAvailableModels()
+        window.api.provider.listAvailableModels(),
+        // 工具渲染配置中的 label 由主进程 i18n 决定，语言切换后需重新拉取
+        window.api.tools.presentations()
       ])
       useSettingsStore.getState().setProviders(allProviders)
       useSettingsStore.getState().setAvailableModels(availableModels)
+      useChatStore.getState().setToolPresentations(toolPresentations)
     })
     return unsubscribe
   }, [])

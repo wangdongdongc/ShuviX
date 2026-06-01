@@ -1,5 +1,6 @@
 import { BaseDao } from './database'
-import type { Project, ProjectSettings, ProjectPromptSection } from './types'
+import type { Project, ProjectSettings } from './types'
+import { parsePromptSections, encodePromptSections } from '../../shared/utils/promptSectionCodec'
 
 /**
  * DB 原始行类型:
@@ -18,35 +19,6 @@ function safeParseSettings(json: string | undefined | null): ProjectSettings {
   } catch {
     return {}
   }
-}
-
-/**
- * 解析 systemPrompt 列的 JSON 信封 → ProjectPromptSection[]
- * 防御性 fallback:遇到老 plain text / 损坏数据返回空数组
- */
-function parsePromptSections(raw: string | undefined | null): ProjectPromptSection[] {
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    if (parsed && Array.isArray(parsed.sections)) {
-      return parsed.sections.filter(
-        (s: unknown): s is ProjectPromptSection =>
-          typeof s === 'object' &&
-          s !== null &&
-          typeof (s as { id?: unknown }).id === 'string' &&
-          typeof (s as { title?: unknown }).title === 'string' &&
-          typeof (s as { content?: unknown }).content === 'string'
-      )
-    }
-  } catch {
-    /* 旧 plain text 或损坏,按空处理 */
-  }
-  return []
-}
-
-/** 序列化 ProjectPromptSection[] → JSON 信封字符串 */
-function encodePromptSections(sections: ProjectPromptSection[]): string {
-  return JSON.stringify({ sections })
 }
 
 /** 将 DB 行映射为应用层 Project 对象 */

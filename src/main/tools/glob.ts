@@ -14,11 +14,10 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GlobToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:glob')
@@ -45,6 +44,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   readonly description =
     'Fast file pattern matching tool that finds files by name/path patterns. Returns matching file paths sorted by modification time (most recent first). Respects .gitignore automatically. Use this when you need to find files by name patterns. For searching file contents, use the grep tool instead.'
   readonly parameters = GlobParamsSchema
+  readonly outputStrategy = 'tail' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -75,7 +75,7 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   }
 
   protected async executeInternal(
-    toolCallId: string,
+    _toolCallId: string,
     params: { pattern: string; path?: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<GlobToolDetails>> {
@@ -140,20 +140,13 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       )
     }
 
-    // 统一截断/持久化处理
-    const processed = processToolOutput({
-      sessionId: this.ctx.sessionId,
-      toolCallId,
-      fullText: outputLines.join('\n'),
-      strategy: 'tail'
-    })
-
+    // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
     return {
-      content: [{ type: 'text' as const, text: processed.text }],
+      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
       details: {
         type: 'glob',
         count: files.length,
-        truncated: truncated || processed.truncated
+        truncated
       }
     }
   }

@@ -1,491 +1,244 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, Pencil, Eye, Loader2 } from 'lucide-react'
-import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
+import { FolderOpen, Eye, Loader2, RefreshCw, X } from 'lucide-react'
 import { useDialogClose } from '../../hooks/useDialogClose'
-
-// ─── 类型 ──────────────────────────────────────────
-
-interface SubAgentInfo {
-  id: string
-  name: string
-  displayName: string
-  description: string
-  systemPrompt: string
-  tools: string[]
-  maxTurns: number
-  isBuiltin: boolean
-  isEnabled: boolean
-  metadata: Record<string, unknown>
-  createdAt: number
-  updatedAt: number
-}
-
-// ─── 名称校验 ──────────────────────────────────────────
-
-const NAME_REGEX = /^[a-z][a-z0-9-]*$/
-
-// ─── 主面板 ──────────────────────────────────────────
+import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
 
 export function SubAgentPanel(): React.JSX.Element {
   const { t } = useTranslation()
 
   const [agents, setAgents] = useState<SubAgentInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [viewing, setViewing] = useState<SubAgentInfo | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  // Dialog 状态
-  const [dialogAgent, setDialogAgent] = useState<SubAgentInfo | undefined>(undefined)
-  const [dialogMode, setDialogMode] = useState<'create' | 'edit' | 'view' | null>(null)
-
-  // 删除确认
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-
-  const loadData = useCallback(() => {
-    window.api.customSubAgent.list().then((list) => {
-      setAgents(list as SubAgentInfo[])
-      setLoading(false)
-    })
+  const load = useCallback(async () => {
+    const list = await window.api.subAgent.list()
+    setAgents(list)
+    setLoading(false)
   }, [])
 
   useEffect(() => {
-    loadData()
-  }, [loadData])
+    load()
+  }, [load])
 
-  const builtinAgents = agents.filter((a) => a.isBuiltin)
-  const customAgents = agents.filter((a) => !a.isBuiltin)
-
-  const handleAdd = (): void => {
-    setDialogAgent(undefined)
-    setDialogMode('create')
+  const handleRefresh = async (): Promise<void> => {
+    setRefreshing(true)
+    try {
+      await window.api.subAgent.refresh()
+      await load()
+    } finally {
+      setRefreshing(false)
+    }
   }
 
-  const handleEdit = (agent: SubAgentInfo): void => {
-    setDialogAgent(agent)
-    setDialogMode('edit')
+  const handleOpenFolder = async (): Promise<void> => {
+    await window.api.subAgent.openFolder()
   }
 
-  const handleView = (agent: SubAgentInfo): void => {
-    setDialogAgent(agent)
-    setDialogMode('view')
+  const handleToggle = async (agent: SubAgentInfo): Promise<void> => {
+    if (agent.source === 'builtin') return
+    await window.api.subAgent.setEnabled({ name: agent.name, enabled: !agent.isEnabled })
+    await load()
   }
 
-  const handleToggle = (agent: SubAgentInfo): void => {
-    window.api.customSubAgent.toggle({ id: agent.id, enabled: !agent.isEnabled }).then(loadData)
-  }
-
-  const handleDelete = (id: string): void => {
-    window.api.customSubAgent.delete(id).then(() => {
-      setDeletingId(null)
-      loadData()
-    })
-  }
-
-  const handleDialogClose = (): void => {
-    setDialogMode(null)
-    setDialogAgent(undefined)
-  }
-
-  const handleDialogSave = (): void => {
-    handleDialogClose()
-    loadData()
-  }
+  const builtins = agents.filter((a) => a.source === 'builtin')
+  const userAgents = agents.filter((a) => a.source === 'user')
 
   return (
-    <div className="px-5 py-5 space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold text-text-primary">{t('tool.subAgentTab')}</h3>
-        <p className="text-[10px] text-text-tertiary mt-1">{t('tool.subAgentDesc')}</p>
-      </div>
-
+    <div className="flex-1 px-5 py-5 space-y-5">
       {loading ? (
-        <div className="flex items-center gap-2 text-text-tertiary py-2">
+        <div className="flex items-center gap-2 text-text-tertiary py-2 px-1">
           <Loader2 size={14} className="animate-spin" />
+          <span className="text-[11px]">{t('common.loading') || 'Loading...'}</span>
         </div>
       ) : (
         <>
-          {/* 内置子智能体列表 */}
-          {builtinAgents.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-medium text-text-tertiary uppercase tracking-wide">
-                {t('tool.subAgentBuiltin')}
-              </p>
-              {builtinAgents.map((agent) => (
-                <div
-                  key={agent.id}
-                  className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border-primary bg-bg-secondary/30"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-text-primary">
-                        {agent.displayName}
-                      </span>
-                      <span className="px-1.5 py-0.5 rounded text-[9px] bg-accent/10 text-accent font-medium">
+          {/* 顶部操作栏 */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleOpenFolder}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
+            >
+              <FolderOpen size={12} />
+              {t('tool.subAgentOpenFolder')}
+            </button>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+              {t('tool.subAgentRefresh')}
+            </button>
+          </div>
+
+          {/* 说明 */}
+          <p className="text-[11px] text-text-tertiary leading-relaxed">
+            {t('tool.subAgentFsHint')}
+          </p>
+
+          {/* 内置 */}
+          {builtins.length > 0 && (
+            <SettingsSection title={t('tool.subAgentBuiltin')}>
+              {builtins.map((agent) => (
+                <SettingsRow
+                  key={`builtin:${agent.name}`}
+                  title={
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="truncate">{agent.displayName}</span>
+                      <code className="text-[9px] text-text-tertiary font-mono shrink-0">
+                        {agent.name}
+                      </code>
+                      <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal bg-accent/10 text-accent shrink-0">
                         {t('tool.subAgentBuiltin')}
                       </span>
                     </div>
-                    <p className="text-[10px] text-text-tertiary mt-0.5 truncate">
-                      {agent.description.split('\n')[0]}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1 ml-2">
+                  }
+                  description={firstLine(agent.whenToUse)}
+                  control={
                     <button
-                      onClick={() => handleView(agent)}
-                      className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover"
+                      onClick={() => setViewing(agent)}
+                      className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
                       title={t('tool.subAgentViewTitle')}
                     >
-                      <Eye size={13} />
+                      <Eye size={12} />
                     </button>
-                    <button
-                      onClick={() => handleToggle(agent)}
-                      className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${
-                        agent.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
-                          agent.isEnabled ? 'left-[18px]' : 'left-0.5'
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
+                  }
+                />
               ))}
-            </div>
+            </SettingsSection>
           )}
 
-          {/* 自定义子智能体列表 */}
-          <div className="space-y-2">
-            {customAgents.length > 0 && (
-              <p className="text-[10px] font-medium text-text-tertiary uppercase tracking-wide">
-                {t('tool.subAgentCustom')}
-              </p>
-            )}
-            {customAgents.map((agent) => (
-              <div
-                key={agent.id}
-                className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border-primary"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-text-primary">
-                      {agent.displayName}
-                    </span>
-                    <code className="text-[9px] text-text-tertiary font-mono">{agent.name}</code>
-                  </div>
-                  <p className="text-[10px] text-text-tertiary mt-0.5 truncate">
-                    {agent.description || agent.systemPrompt.slice(0, 80)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 ml-2">
-                  <button
-                    onClick={() => handleEdit(agent)}
-                    className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                  {deletingId === agent.id ? (
+          {/* 用户自定义 */}
+          <SettingsSection title={t('tool.subAgentCustom')}>
+            {userAgents.length === 0 ? (
+              <div className="px-4 py-6 text-center">
+                <p className="text-[11px] text-text-tertiary">{t('tool.subAgentCustomEmpty')}</p>
+                <p className="text-[10px] text-text-tertiary mt-1">
+                  {t('tool.subAgentCustomEmptyHint')}
+                </p>
+              </div>
+            ) : (
+              userAgents.map((agent) => (
+                <SettingsRow
+                  key={`user:${agent.name}`}
+                  title={
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="truncate">{agent.displayName}</span>
+                      <code className="text-[9px] text-text-tertiary font-mono shrink-0">
+                        {agent.name}
+                      </code>
+                    </div>
+                  }
+                  description={firstLine(agent.whenToUse) || agent.systemPrompt.slice(0, 80)}
+                  control={
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => handleDelete(agent.id)}
-                        className="px-2 py-1 rounded text-[10px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                        onClick={() => setViewing(agent)}
+                        className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
+                        title={t('tool.subAgentViewTitle')}
                       >
-                        {t('common.confirm')}
+                        <Eye size={12} />
                       </button>
-                      <button
-                        onClick={() => setDeletingId(null)}
-                        className="px-2 py-1 rounded text-[10px] font-medium text-text-tertiary hover:text-text-secondary"
-                      >
-                        {t('common.cancel')}
-                      </button>
+                      <Toggle on={agent.isEnabled} onClick={() => handleToggle(agent)} />
                     </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeletingId(agent.id)}
-                      className="p-1.5 rounded-md text-text-tertiary hover:text-red-400 hover:bg-red-500/10"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleToggle(agent)}
-                    className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${
-                      agent.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
-                        agent.isEnabled ? 'left-[18px]' : 'left-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* 新建按钮 */}
-          <button
-            onClick={handleAdd}
-            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed border-border-primary text-text-tertiary text-xs hover:text-accent hover:border-accent/50 transition-colors"
-          >
-            <Plus size={13} />
-            {t('tool.subAgentAddBtn')}
-          </button>
+                  }
+                />
+              ))
+            )}
+          </SettingsSection>
         </>
       )}
 
-      {/* Dialog */}
-      {dialogMode && (
-        <SubAgentDialog
-          agent={dialogAgent}
-          mode={dialogMode}
-          onClose={handleDialogClose}
-          onSave={handleDialogSave}
-        />
-      )}
+      {/* View dialog */}
+      {viewing && <ViewDialog agent={viewing} onClose={() => setViewing(null)} />}
     </div>
   )
 }
 
-// ─── Dialog ──────────────────────────────────────────
+function firstLine(s: string): string {
+  return s.split('\n')[0]
+}
 
-function SubAgentDialog({
+// ─── View Dialog ─────────────────────────────────────────
+
+function ViewDialog({
   agent,
-  mode,
-  onClose,
-  onSave
+  onClose
 }: {
-  agent?: SubAgentInfo
-  mode: 'create' | 'edit' | 'view'
+  agent: SubAgentInfo
   onClose: () => void
-  onSave: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const overlayRef = useRef<HTMLDivElement>(null)
   const { closing, handleClose } = useDialogClose(onClose)
-
-  const viewOnly = mode === 'view'
-  const isEdit = mode === 'edit'
-
-  // 表单字段
-  const [name, setName] = useState(agent?.name || '')
-  const [displayName, setDisplayName] = useState(agent?.displayName || '')
-  const [description, setDescription] = useState(agent?.description || '')
-  const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt || '')
-  const [maxTurns, setMaxTurns] = useState(agent?.maxTurns || 40)
-  const [selectedTools, setSelectedTools] = useState<string[]>(agent?.tools || [])
-
-  // 可用工具列表（排除 subagent 组，防递归）
-  const [allTools, setAllTools] = useState<ToolItem[]>([])
-
-  // 错误
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') handleClose()
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [handleClose])
-
-  useEffect(() => {
-    if (!viewOnly) {
-      window.api.tools.list().then((toolList) => {
-        const filtered = (toolList as ToolItem[]).filter(
-          (tool) => tool.group !== 'subagent' && tool.group !== 'system'
-        )
-        setAllTools(filtered)
-      })
-    }
-  }, [viewOnly])
-
-  const handleOverlayClick = (e: React.MouseEvent): void => {
-    if (e.target === overlayRef.current) handleClose()
-  }
-
-  const canSubmit = name.trim() && displayName.trim() && !saving
-
-  const handleSubmit = async (): Promise<void> => {
-    if (!canSubmit) return
-    setError('')
-
-    if (!NAME_REGEX.test(name)) {
-      setError(t('tool.subAgentNameInvalid'))
-      return
-    }
-
-    setSaving(true)
-    try {
-      if (isEdit && agent) {
-        await window.api.customSubAgent.update({
-          id: agent.id,
-          displayName: displayName.trim(),
-          description: description.trim(),
-          systemPrompt: systemPrompt.trim(),
-          tools: selectedTools,
-          maxTurns
-        })
-      } else {
-        await window.api.customSubAgent.add({
-          name: name.trim(),
-          displayName: displayName.trim(),
-          description: description.trim(),
-          systemPrompt: systemPrompt.trim(),
-          tools: selectedTools,
-          maxTurns
-        })
-      }
-      onSave()
-      handleClose()
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const title = viewOnly
-    ? t('tool.subAgentViewTitle')
-    : isEdit
-      ? t('tool.subAgentEditTitle')
-      : t('tool.subAgentCreateTitle')
 
   return (
     <div
-      ref={overlayRef}
-      onClick={handleOverlayClick}
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/30 ${
+        closing ? 'animate-fade-out' : 'animate-fade-in'
+      }`}
+      onClick={handleClose}
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[90vw] max-h-[85vh] flex flex-col dialog-panel">
-        {/* 标题 */}
-        <div className="px-5 py-4 border-b border-border-secondary shrink-0">
-          <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-        </div>
-
-        {/* 内容 */}
-        <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
-          {/* Name */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('tool.subAgentName')}
-            </label>
-            <input
-              autoFocus={!isEdit && !viewOnly}
-              value={name}
-              onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-              disabled={isEdit || viewOnly}
-              className="zen-input font-mono"
-              placeholder="code-reviewer"
-            />
-            {!viewOnly && !isEdit && (
-              <p className="text-[9px] text-text-tertiary mt-0.5">{t('tool.subAgentNameHint')}</p>
-            )}
+      <div
+        className={`bg-bg-primary border border-border-primary rounded-lg shadow-xl w-[640px] max-h-[80vh] flex flex-col ${
+          closing ? 'animate-scale-out' : 'animate-scale-in'
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border-secondary">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-medium truncate">{agent.displayName}</span>
+            <code className="text-[10px] text-text-tertiary font-mono">{agent.name}</code>
+            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal bg-bg-secondary text-text-tertiary shrink-0">
+              {agent.source === 'builtin' ? t('tool.subAgentBuiltin') : t('tool.subAgentCustom')}
+            </span>
           </div>
-
-          {/* Display Name */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('tool.subAgentDisplayName')}
-            </label>
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              disabled={viewOnly}
-              className="zen-input"
-              placeholder="Code Reviewer"
-            />
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('tool.subAgentDescription')}
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={viewOnly}
-              rows={3}
-              className="zen-textarea text-[11px]"
-              placeholder={viewOnly ? '' : t('tool.subAgentDescHint')}
-            />
-          </div>
-
-          {/* System Prompt */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('tool.subAgentPrompt')}
-            </label>
-            <textarea
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              disabled={viewOnly}
-              rows={viewOnly ? 6 : 8}
-              className="zen-textarea font-mono text-[11px]"
-              placeholder={viewOnly ? '' : t('tool.subAgentPromptHint')}
-            />
-          </div>
-
-          {/* Max Turns */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('tool.subAgentMaxTurns')}
-            </label>
-            <input
-              type="number"
-              value={maxTurns}
-              onChange={(e) => setMaxTurns(Math.max(1, parseInt(e.target.value) || 1))}
-              disabled={viewOnly}
-              className="zen-input w-24"
-              min={1}
-              max={200}
-            />
-          </div>
-
-          {/* 工具选择 */}
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-2">
-              {t('tool.subAgentTools')}
-            </label>
-            {viewOnly ? (
-              <div className="text-[10px] text-text-secondary font-mono space-y-0.5">
-                {selectedTools.map((tool) => (
-                  <div key={tool}>{tool}</div>
-                ))}
-              </div>
-            ) : (
-              <ToolSelectList
-                tools={allTools}
-                enabledTools={selectedTools}
-                onChange={setSelectedTools}
-              />
-            )}
-          </div>
-
-          {/* 错误提示 */}
-          {error && <p className="text-[10px] text-red-400">{error}</p>}
-        </div>
-
-        {/* 按钮 */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
-          <button
-            onClick={handleClose}
-            className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
-          >
-            {viewOnly ? t('common.close') : t('common.cancel')}
+          <button onClick={handleClose} className="text-text-tertiary hover:text-text-primary">
+            <X size={16} />
           </button>
-          {!viewOnly && (
-            <button
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {saving ? t('common.saving') : t('common.save')}
-            </button>
-          )}
         </div>
+
+        <div className="overflow-auto px-4 py-3 space-y-3 text-[11px]">
+          <Field label={t('tool.subAgentWhenToUse')} value={agent.whenToUse} />
+          <Field label={t('tool.subAgentTools')} value={agent.tools.join(', ') || '—'} />
+          <Field label={t('tool.subAgentMaxTurns')} value={String(agent.maxTurns)} />
+          {agent.requiredMcp && agent.requiredMcp.length > 0 && (
+            <Field label={t('tool.subAgentRequiredMcp')} value={agent.requiredMcp.join(', ')} />
+          )}
+          <Field label={t('tool.subAgentBasePath')} value={agent.basePath} monospace />
+          <div>
+            <div className="font-medium text-text-secondary mb-1">
+              {t('tool.subAgentSystemPrompt')}
+            </div>
+            <pre className="bg-bg-secondary/50 border border-border-secondary rounded p-2 text-[10px] whitespace-pre-wrap break-words leading-relaxed max-h-[40vh] overflow-auto">
+              {agent.systemPrompt}
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Field({
+  label,
+  value,
+  monospace
+}: {
+  label: string
+  value: string
+  monospace?: boolean
+}): React.JSX.Element {
+  return (
+    <div>
+      <div className="font-medium text-text-secondary mb-1">{label}</div>
+      <div
+        className={`text-text-primary break-words ${
+          monospace ? 'font-mono text-[10px] text-text-tertiary' : ''
+        }`}
+      >
+        {value}
       </div>
     </div>
   )

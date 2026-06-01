@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Folder, Settings2, Archive } from 'lucide-react'
+import { Folder, Settings2, Archive, PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
 import {
   useChatStore,
-  selectStreamingContent,
-  selectStreamingThinking,
   selectIsStreaming,
   selectIsCompacting,
   selectCanChat,
@@ -16,12 +14,12 @@ import {
 import { useChatActions } from '../../hooks/useChatActions'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { useSessionMeta } from '../../hooks/useSessionMeta'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { WelcomeView, EmptySessionHint } from './WelcomeView'
-import { ProjectCreateDialog } from '../sidebar/ProjectCreateDialog'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 import { StatusBanner } from './StatusBanner'
@@ -138,18 +136,23 @@ function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): Visib
 /**
  * 聊天主视图 — 消息列表 + 输入区
  * 使用 react-virtuoso 虚拟滚动，仅渲染可视区域内的消息
+ *
+ * pinnedMode:
+ * - undefined: 默认主窗口形态
+ * - 'floating': 在悬浮窗口里渲染，header 精简为标题 + 文件夹 + 关闭 X
+ * - 'placeholder': 当前会话已被悬浮，正文替换为占位提示（恢复 / 聚焦悬浮窗）
  */
-export function ChatView(): React.JSX.Element {
+interface ChatViewProps {
+  pinnedMode?: 'floating' | 'placeholder'
+}
+
+export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element {
   const { messages, activeSessionId, sessions } = useChatStore()
-  const streamingContent = useChatStore(selectStreamingContent)
-  const streamingThinking = useChatStore(selectStreamingThinking)
   const isStreaming = useChatStore(selectIsStreaming)
   const isCompacting = useChatStore(selectIsCompacting)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
-  const atBottomRef = useRef(true)
-  const scrollRafRef = useRef<number>(0)
 
   const { projectPath } = useSessionMeta()
   const activeSession = sessions.find((s) => s.id === activeSessionId)
@@ -158,8 +161,6 @@ export function ChatView(): React.JSX.Element {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
-  const [showCreateProject, setShowCreateProject] = useState(false)
-  const [createPurpose, setCreatePurpose] = useState<string | undefined>()
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   // ── 归档消息回溯 ──
@@ -172,6 +173,31 @@ export function ChatView(): React.JSX.Element {
   const isBrowserOpen = useBrowserStore((s) => s.isOpen)
   const toggleSidebar = useSidebarStore((s) => s.toggle)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
+
+  /** 悬浮窗"始终置顶"状态 —— 仅 floating 模式下使用 */
+  const [alwaysOnTop, setAlwaysOnTopState] = useState(true)
+  useEffect(() => {
+    if (pinnedMode !== 'floating' || !activeSessionId) return
+    let cancelled = false
+    window.api.pinChat.getAlwaysOnTop(activeSessionId).then(({ alwaysOnTop }) => {
+      if (!cancelled) setAlwaysOnTopState(alwaysOnTop)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [pinnedMode, activeSessionId])
+  const handleToggleAlwaysOnTop = useCallback(async () => {
+    if (!activeSessionId) return
+    const next = !alwaysOnTop
+    const { alwaysOnTop: applied } = await window.api.pinChat.setAlwaysOnTop({
+      sessionId: activeSessionId,
+      value: next
+    })
+    setAlwaysOnTopState(applied)
+  }, [activeSessionId, alwaysOnTop])
+  const focusMode = useSettingsStore((s) => s.focusMode)
+  /** 专注模式生效条件：开关打开 + 已选中会话 */
+  const dim = focusMode && !!activeSessionId
 
   /** 开始编辑会话标题 */
   const startEditTitle = (): void => {
@@ -196,20 +222,8 @@ export function ChatView(): React.JSX.Element {
     confirmRollback,
     cancelRollback,
     handleRegenerate,
-    handleInputResponse,
-    handleNewChat
+    handleInputResponse
   } = useChatActions(activeSessionId)
-
-  // 跟踪用户是否在底部附近
-  const handleAtBottomChange = useCallback((atBottom: boolean) => {
-    atBottomRef.current = atBottom
-  }, [])
-
-  // Virtuoso followOutput：新项出现时自动跟随
-  const followOutput = useCallback(
-    (isAtBottom: boolean) => (isAtBottom ? ('auto' as const) : (false as const)),
-    []
-  )
 
   // ── 归档消息：会话切换时重置并获取归档数 ──
   useEffect(() => {
@@ -251,24 +265,6 @@ export function ChatView(): React.JSX.Element {
     () => (archivedItems.length > 0 ? [...archivedItems, ...liveItems] : liveItems),
     [archivedItems, liveItems]
   )
-  // 流式内容增长时，若用户在底部则自动滚动
-  // 使用 rAF 合并同帧内多次更新，scrollTo 代替 scrollToIndex 避免 index 定位抖动
-  useEffect(() => {
-    if (!atBottomRef.current || !virtuosoRef.current) return
-    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
-    scrollRafRef.current = requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollTo({ top: Number.MAX_SAFE_INTEGER })
-      scrollRafRef.current = 0
-    })
-  }, [streamingContent, streamingThinking, messages])
-
-  // 组件卸载时清理 rAF
-  useEffect(() => {
-    return () => {
-      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
-    }
-  }, [])
-
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -338,24 +334,10 @@ export function ChatView(): React.JSX.Element {
     <div className="relative flex flex-col h-full">
       {/* 窗口拖拽区 + 会话标题栏（单行布局） */}
       <div
-        className={`titlebar-drag flex-shrink-0 flex items-center px-2 ${window.api.app.platform === 'darwin' ? 'h-10' : 'h-8'}`}
+        className={`titlebar-drag flex-shrink-0 flex items-center px-2 transition-opacity duration-200 ${window.api.app.platform === 'darwin' ? 'h-10' : 'h-8'} ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
       >
-        {/* 左侧：工作目录 */}
-        <div className="titlebar-no-drag flex items-center min-w-0 flex-shrink-0">
-          {projectPath && (
-            <button
-              onClick={() => window.api.app.openFolder(projectPath)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors cursor-pointer min-w-0"
-              title={projectPath}
-            >
-              <Folder size={10} className="flex-shrink-0 text-text-tertiary/70" />
-              <span className="truncate">{projectPath.split('/').pop() || projectPath}</span>
-            </button>
-          )}
-        </div>
-
-        {/* 中间：会话标题（居中） */}
-        <div className="flex-1 flex items-center justify-center min-w-0">
+        {/* 左侧：会话名 + 会话设置 + 工作目录（容器不加 no-drag，剩余空间可拖动） */}
+        <div className="flex items-center gap-0.5 min-w-0 flex-1">
           {sessionTitle &&
             (editingTitle && window.api.app.platform !== 'web' ? (
               <input
@@ -367,104 +349,200 @@ export function ChatView(): React.JSX.Element {
                   if (e.key === 'Enter') void commitEditTitle()
                   if (e.key === 'Escape') setEditingTitle(false)
                 }}
-                className="titlebar-no-drag bg-transparent text-center text-xs font-medium text-text-primary outline-none border-b border-accent/50 px-2 py-0.5 max-w-[80%]"
+                className="titlebar-no-drag bg-transparent text-xs font-medium text-text-primary outline-none border-b border-accent/50 px-2 py-0.5 min-w-0 flex-shrink"
                 autoFocus
               />
-            ) : (
-              <div className="titlebar-no-drag flex items-center gap-0.5 max-w-[80%]">
-                {window.api.app.platform !== 'web' ? (
-                  <button
-                    onClick={startEditTitle}
-                    className="text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate"
-                    title={t('common.clickToEdit')}
-                  >
-                    {sessionTitle}
-                  </button>
-                ) : (
-                  <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate">
-                    {sessionTitle}
-                  </span>
-                )}
-                {window.api.app.platform !== 'web' && (
-                  <button
-                    onClick={() => setShowSessionConfig(true)}
-                    className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
-                    title={t('sessionConfig.title')}
-                  >
-                    <Settings2 size={12} />
-                  </button>
-                )}
-              </div>
-            ))}
-        </div>
-
-        {/* 右侧：侧边栏 + Browser 按钮 */}
-        <div className="titlebar-no-drag flex items-center gap-0.5 flex-shrink-0">
-          {window.api?.app?.platform !== 'web' && (
-            <button
-              onClick={toggleSidebar}
-              className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+            ) : window.api.app.platform !== 'web' ? (
+              <button
+                onClick={startEditTitle}
+                className="titlebar-no-drag text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate min-w-0"
+                title={t('common.clickToEdit')}
               >
-                <rect width="18" height="18" x="3" y="3" rx="2" />
-                <path d="M9 3v18" />
-                {isSidebarOpen && (
-                  <rect
-                    x="3"
-                    y="3"
-                    width="6"
-                    height="18"
-                    rx="2"
-                    fill="currentColor"
-                    stroke="none"
-                  />
-                )}
-              </svg>
+                {sessionTitle}
+              </button>
+            ) : (
+              <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate min-w-0">
+                {sessionTitle}
+              </span>
+            ))}
+          {sessionTitle && window.api.app.platform !== 'web' && (
+            <button
+              onClick={() => setShowSessionConfig(true)}
+              className="titlebar-no-drag p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+              title={t('sessionConfig.title')}
+            >
+              <Settings2 size={12} />
             </button>
           )}
-          <button
-            onClick={toggleBrowser}
-            className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {projectPath && (
+            <button
+              onClick={() => window.api.app.openFolder(projectPath)}
+              className="titlebar-no-drag p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+              title={projectPath}
             >
-              <rect width="18" height="18" x="3" y="3" rx="2" />
-              <path d="M15 3v18" />
-              {isBrowserOpen && (
-                <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />
+              <Folder size={12} />
+            </button>
+          )}
+        </div>
+
+        {/* 右侧：按模式渲染不同按钮簇 */}
+        <div className="titlebar-no-drag flex items-center gap-0.5 flex-shrink-0">
+          {pinnedMode === 'floating' ? (
+            <>
+              <button
+                onClick={handleToggleAlwaysOnTop}
+                className={`p-1 rounded-md transition-colors ${
+                  alwaysOnTop
+                    ? 'text-accent hover:text-accent hover:bg-accent/10'
+                    : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'
+                }`}
+                title={
+                  alwaysOnTop ? t('pinChat.disableAlwaysOnTop') : t('pinChat.enableAlwaysOnTop')
+                }
+              >
+                {alwaysOnTop ? <Pin size={14} /> : <PinOff size={14} />}
+              </button>
+              <button
+                onClick={toggleBrowser}
+                className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+                title={t('panel.files')}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect width="18" height="18" x="3" y="3" rx="2" />
+                  <path d="M15 3v18" />
+                  {isBrowserOpen && (
+                    <rect
+                      x="15"
+                      y="3"
+                      width="6"
+                      height="18"
+                      rx="2"
+                      fill="currentColor"
+                      stroke="none"
+                    />
+                  )}
+                </svg>
+              </button>
+              <button
+                onClick={() => activeSessionId && void window.api.pinChat.unpin(activeSessionId)}
+                className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+                title={t('pinChat.unpin')}
+              >
+                <X size={14} />
+              </button>
+            </>
+          ) : (
+            <>
+              {pinnedMode !== 'placeholder' && activeSessionId && (
+                <button
+                  onClick={() => void window.api.pinChat.pin(activeSessionId)}
+                  className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+                  title={t('pinChat.pin')}
+                >
+                  <PictureInPicture2 size={14} />
+                </button>
               )}
-            </svg>
-          </button>
+              {window.api?.app?.platform !== 'web' && (
+                <button
+                  onClick={toggleSidebar}
+                  className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect width="18" height="18" x="3" y="3" rx="2" />
+                    <path d="M9 3v18" />
+                    {isSidebarOpen && (
+                      <rect
+                        x="3"
+                        y="3"
+                        width="6"
+                        height="18"
+                        rx="2"
+                        fill="currentColor"
+                        stroke="none"
+                      />
+                    )}
+                  </svg>
+                </button>
+              )}
+              <button
+                onClick={toggleBrowser}
+                className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect width="18" height="18" x="3" y="3" rx="2" />
+                  <path d="M15 3v18" />
+                  {isBrowserOpen && (
+                    <rect
+                      x="15"
+                      y="3"
+                      width="6"
+                      height="18"
+                      rx="2"
+                      fill="currentColor"
+                      stroke="none"
+                    />
+                  )}
+                </svg>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {activeSessionId && <StatusBanner sessionId={activeSessionId} />}
+      {activeSessionId && pinnedMode !== 'placeholder' && (
+        <StatusBanner sessionId={activeSessionId} />
+      )}
 
-      {!activeSessionId ? (
-        <WelcomeView
-          onNewChat={handleNewChat}
-          onCreateProject={(purpose) => {
-            setCreatePurpose(purpose)
-            setShowCreateProject(true)
-          }}
-        />
+      {pinnedMode === 'placeholder' ? (
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="flex flex-col items-center gap-4 text-center max-w-sm">
+            <PictureInPicture2 size={36} className="text-text-tertiary/60" />
+            <div className="text-sm text-text-secondary">{t('pinChat.placeholderTitle')}</div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => activeSessionId && void window.api.pinChat.focus(activeSessionId)}
+                className="px-3 py-1.5 text-xs rounded-md bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+              >
+                {t('pinChat.focusFloating')}
+              </button>
+              <button
+                onClick={() => activeSessionId && void window.api.pinChat.unpin(activeSessionId)}
+                className="px-3 py-1.5 text-xs rounded-md bg-bg-hover/60 text-text-secondary hover:bg-bg-hover transition-colors"
+              >
+                {t('pinChat.restoreHere')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : !activeSessionId ? (
+        <WelcomeView />
       ) : (
         <>
           {/* 压缩中冻结遮罩 */}
@@ -488,13 +566,10 @@ export function ChatView(): React.JSX.Element {
                 Footer: StreamingFooter,
                 ...(ArchivedBanner ? { Header: ArchivedBanner } : {})
               }}
-              followOutput={followOutput}
               initialTopMostItemIndex={visibleItems.length - 1}
               key={activeSessionId}
               increaseViewportBy={{ top: 200, bottom: 400 }}
               computeItemKey={(_index, item) => item.msg.id}
-              atBottomStateChange={handleAtBottomChange}
-              atBottomThreshold={300}
             />
           )}
 
@@ -511,7 +586,9 @@ export function ChatView(): React.JSX.Element {
           )}
           {/* 输入区 + 待处理用户输入悬浮面板 — readonly 隐藏 */}
           {canChat && (
-            <div className="relative">
+            <div
+              className={`relative transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
+            >
               <PendingInputsPanel onResponse={handleInputResponse} />
               <InputArea />
             </div>
@@ -524,26 +601,6 @@ export function ChatView(): React.JSX.Element {
         <SessionConfigDialog
           sessionId={activeSessionId}
           onClose={() => setShowSessionConfig(false)}
-        />
-      )}
-
-      {/* 新建项目弹窗（欢迎页触发） */}
-      {showCreateProject && (
-        <ProjectCreateDialog
-          initialPurpose={createPurpose}
-          onClose={() => {
-            setShowCreateProject(false)
-            setCreatePurpose(undefined)
-          }}
-          onCreated={async (projectId) => {
-            setShowCreateProject(false)
-            setCreatePurpose(undefined)
-            // 在新项目下创建一个会话并激活
-            const session = await window.api.session.create(projectId)
-            const allSessions = await window.api.session.list()
-            useChatStore.getState().setSessions(allSessions)
-            useChatStore.getState().setActiveSessionId(session.id)
-          }}
         />
       )}
     </div>

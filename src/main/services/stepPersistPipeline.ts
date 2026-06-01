@@ -16,7 +16,7 @@
  * - 注册制 + 谓词匹配，支持后续按工具/内容类型追加更多规则
  */
 
-import type { ImageContent, TextContent } from '@mariozechner/pi-ai'
+import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type { ToolResultDetails } from '../../shared/types/chatMessage'
 
 /** 传入管线的原始上下文（不可变——transformer 应返回新对象） */

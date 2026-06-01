@@ -1,10 +1,10 @@
-import { Agent, type AgentEvent, type AgentMessage } from '@mariozechner/pi-agent-core'
+import { Agent, type AgentEvent, type AgentMessage } from '@earendil-works/pi-agent-core'
 import {
   type TextContent,
   type ThinkingContent,
   type ImageContent,
   completeSimple
-} from '@mariozechner/pi-ai'
+} from '@earendil-works/pi-ai'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
@@ -34,9 +34,11 @@ import type { ToolContext } from './toolContext'
 import type { InputRequest, InputResponse } from '../../shared/types/inputRequest'
 import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
+import { renderForPrompt as renderSystemPromptSections } from './systemPrompt/systemPromptService'
 import { getTempWorkspace } from '../utils/paths'
 import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { injectInstructionMessages } from './instruction'
+import { hookService } from './hooks'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
@@ -78,7 +80,7 @@ export interface AgentSessionCreateParams {
   modelMetadata?: SessionModelMetadata
 }
 
-/** 合并系统提示词：全局 + 项目级 + 参考目录 + 工作目录 */
+/** 合并系统提示词：全局自由文本 + 系统级卡片（内置 + 自定义）+ 项目段 + 项目卡片 */
 function buildSystemPrompt(
   project:
     | {
@@ -88,10 +90,26 @@ function buildSystemPrompt(
       }
     | undefined,
   workingDirectory: string,
-  sessionId: string
+  sessionId: string,
+  modelCtx?: { modelId?: string; modelDisplayName?: string }
 ): string {
-  const globalPrompt = settingsDao.findByKey('systemPrompt') || ''
-  let prompt = globalPrompt
+  const segments: string[] = []
+  // 系统提示词总开关 — 关闭时跳过全局自由文本 + 内置/自定义卡片；项目级提示仍生效
+  const systemPromptEnabled = settingsDao.findByKey('general.systemPromptEnabled') !== 'false'
+  if (systemPromptEnabled) {
+    const globalPrompt = (settingsDao.findByKey('general.systemPrompt') || '').trim()
+    if (globalPrompt) segments.push(globalPrompt)
+
+    // 系统级提示词卡片（内置 + 自定义），按代码顺序连续
+    const cardsBlock = renderSystemPromptSections({
+      workingDirectory: workingDirectory || project?.path,
+      modelId: modelCtx?.modelId,
+      modelDisplayName: modelCtx?.modelDisplayName
+    })
+    if (cardsBlock) segments.push(cardsBlock)
+  }
+
+  let prompt = segments.join('\n\n')
   if (project) {
     const workDir = workingDirectory || project.path
     prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory. Always prioritize working within this directory to complete tasks.`
@@ -132,7 +150,8 @@ function buildSystemPrompt(
     prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}. Always prioritize working within this directory to complete tasks.`
   }
 
-  return prompt
+  // 去掉前导空行（当 globalPrompt 为空、卡片也都禁用时拼接结果可能以 \n\n 开头）
+  return prompt.replace(/^\n+/, '')
 }
 
 /**
@@ -171,6 +190,9 @@ export class AgentSession {
 
   // 缓存的事件处理器上下文
   private eventCtx: SessionEventHandlerContext | null = null
+
+  // SessionStart hook 是否已触发（首次 prompt 时懒触发，避免改 create() 的同步签名）
+  private sessionStartHookFired = false
 
   private constructor(
     sessionId: string,
@@ -219,7 +241,9 @@ export class AgentSession {
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
-    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
+    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId, {
+      modelId: model
+    })
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
     // 构建子智能体上下文（使 explore 等子智能体工具可用）
@@ -275,6 +299,46 @@ export class AgentSession {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
+
+    // ── SessionStart hook（首次 prompt 时懒触发） ──
+    if (!this.sessionStartHookFired) {
+      this.sessionStartHookFired = true
+      try {
+        const ssOutputs = await hookService.fire('SessionStart', {
+          session_id: this.sessionId,
+          hook_event_name: 'SessionStart',
+          cwd: this.workingDirectory
+        })
+        this.applyAdditionalContext(ssOutputs, 'SessionStart')
+      } catch (err) {
+        log.warn(`SessionStart hook error: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    // ── UserPromptSubmit hook ──
+    try {
+      const upsOutputs = await hookService.fire('UserPromptSubmit', {
+        session_id: this.sessionId,
+        hook_event_name: 'UserPromptSubmit',
+        cwd: this.workingDirectory,
+        prompt: text
+      })
+      // deny → 丢弃本次 prompt，前端展示原因
+      const denied = upsOutputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
+      if (denied) {
+        const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
+        chatFrontendRegistry.broadcast({
+          type: 'error',
+          sessionId: this.sessionId,
+          error: reason
+        })
+        return
+      }
+      this.applyAdditionalContext(upsOutputs, 'UserPromptSubmit')
+    } catch (err) {
+      log.warn(`UserPromptSubmit hook error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
     try {
       if (images && images.length > 0) {
         await this.agent.prompt(text, images)
@@ -284,6 +348,37 @@ export class AgentSession {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
       chatFrontendRegistry.broadcast({ type: 'error', sessionId: this.sessionId, error: message })
+    }
+  }
+
+  /**
+   * 把 hook 返回的 additionalContext 注入 agent 上下文。
+   *
+   * 走 user-role 消息并裹 <system-reminder> 标签 —— pi-ai 的 Message 类型
+   * 不含 system role（系统提示由 agent.state.systemPrompt 单独承载），
+   * 模型把 <system-reminder> 文本识别为带外提示，不当作用户输入。
+   * 不写库：hook 注入是会话级临时上下文，不进聊天历史。
+   *
+   * 超过 10000 字会截断（与 types.ts JSDoc 一致）。
+   */
+  private applyAdditionalContext(
+    outputs: ReadonlyArray<{ additionalContext?: string }>,
+    eventLabel: string
+  ): void {
+    const MAX_LEN = 10000
+    for (const out of outputs) {
+      let ctx = out.additionalContext
+      if (typeof ctx !== 'string' || !ctx) continue
+      if (ctx.length > MAX_LEN) {
+        log.warn(`${eventLabel} hook additionalContext 超过 ${MAX_LEN} 字，已截断`)
+        ctx = ctx.slice(0, MAX_LEN)
+      }
+      const wrapped = `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`
+      this.agent.state.messages.push({
+        role: 'user',
+        content: [{ type: 'text', text: wrapped }],
+        timestamp: Date.now()
+      } as AgentMessage)
     }
   }
 
@@ -330,6 +425,7 @@ export class AgentSession {
    */
   abort(): Message | null {
     log.info(`中止 session=${this.sessionId}`)
+    this.fireStopHook('aborted')
     this.agent.abort()
     // 只取消本 session 的 pending 项 — 全部 resolve 为 cancel(reason=aborted)
     for (const [id, pending] of this.pendingInputs) {
@@ -563,6 +659,7 @@ export class AgentSession {
 
   /** 使 Agent 失效（回退时使用，下次 init 会重建） */
   invalidate(): void {
+    this.fireStopHook('invalidated')
     this.agent.abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
@@ -571,10 +668,25 @@ export class AgentSession {
 
   /** 完全销毁（删除会话时调用）。不 cascade 到子智能体（由用户 / IPC 控制）。 */
   destroy(): void {
+    this.fireStopHook('destroyed')
     this.agent.abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
+  }
+
+  /** Stop hook 触发：fire-and-forget，不阻塞调用方的同步路径 */
+  private fireStopHook(reason: string): void {
+    void hookService
+      .fire('Stop', {
+        session_id: this.sessionId,
+        hook_event_name: 'Stop',
+        cwd: this.workingDirectory,
+        reason
+      })
+      .catch((err) =>
+        log.warn(`Stop hook error: ${err instanceof Error ? err.message : String(err)}`)
+      )
   }
 
   // ─── 事件处理内部 ──────────────────────────────────

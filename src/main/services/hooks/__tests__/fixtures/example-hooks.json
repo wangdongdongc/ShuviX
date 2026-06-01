@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git -C \"$SHUVIX_PROJECT_DIR\" rev-parse --short HEAD || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{event: .hook_event_name, prompt: .prompt}' >> \"$SHUVIX_PROJECT_DIR/.shuvix/prompts.log\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -e '.tool_input.command | test(\"rm -rf /\")' >/dev/null 2>&1 && { echo 'blocked: rm -rf /' >&2; exit 2; } || true",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "edit|write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$SHUVIX_PROJECT_DIR/.shuvix/audit-edit.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit|write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$SHUVIX_PROJECT_DIR\" && npx --no-install eslint --fix --quiet . || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"session $SHUVIX_SESSION_ID stopped\" >> \"$SHUVIX_PROJECT_DIR/.shuvix/session.log\""
+          }
+        ]
+      }
+    ]
+  }
+}

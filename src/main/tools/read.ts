@@ -6,7 +6,7 @@
  * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
  */
 
-import { stat as fsStat, readdir as fsReaddir, open as fsOpen, readFile } from 'fs/promises'
+import { stat as fsStat, readdir as fsReaddir, readFile } from 'fs/promises'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { extname } from 'path'
@@ -20,9 +20,13 @@ import {
   DEFAULT_MAX_LINES,
   DEFAULT_MAX_BYTES
 } from '../../shared/node/truncate'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { resolveReadPath, suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import { recordRead } from '../utils/toolUtils/fileTime'
+import {
+  KNOWN_BINARY_EXTENSIONS,
+  IMAGE_MIME_BY_EXT,
+  isBinaryFile
+} from '../utils/toolUtils/binaryDetect'
 import { BaseTool } from '../services/baseTool'
 import {
   resolveProjectConfig,
@@ -30,7 +34,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { ReadToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -66,64 +70,6 @@ const RICH_FILE_EXTENSIONS = new Set([
   '.zip'
 ])
 
-/** 已知的不支持二进制格式（直接拒绝读取，避免乱码） */
-const KNOWN_BINARY_EXTENSIONS = new Set([
-  '.ppt', // Office 旧版二进制格式（.doc 已由 word-extractor 处理，.xls 已在 RICH 集合中）
-  '.odt',
-  '.ods',
-  '.odp', // OpenDocument
-  '.rtf',
-  '.exe',
-  '.dll',
-  '.so',
-  '.dylib', // 可执行 / 库
-  '.bin',
-  '.dat',
-  '.db',
-  '.sqlite',
-  '.class',
-  '.pyc',
-  '.o',
-  '.obj',
-  '.wasm',
-  '.tar',
-  '.gz',
-  '.bz2',
-  '.7z',
-  '.rar',
-  '.mp3',
-  '.mp4',
-  '.avi',
-  '.mov',
-  '.wav',
-  '.flac',
-  '.ogg',
-  '.webm',
-  // 未支持的图像/字体格式（支持的图像见 IMAGE_EXTENSIONS）
-  '.ico',
-  '.tiff',
-  '.heic',
-  '.ttf',
-  '.otf',
-  '.woff',
-  '.woff2',
-  '.iso',
-  '.dmg',
-  '.pkg',
-  '.protobuf',
-  '.pb'
-])
-
-/** 支持作为图像返回的扩展名 → MIME 映射 */
-const IMAGE_MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp'
-}
-
 /** 单张图片返回给模型的字节上限；超过则自动缩放 + JPEG 重编码 */
 const MAX_IMAGE_BYTES = 1 * 1024 * 1024
 
@@ -138,24 +84,6 @@ const IMAGE_COMPRESS_STEPS: ReadonlyArray<{ maxWidth: number; quality: number }>
   { maxWidth: 1000, quality: 65 },
   { maxWidth: 800, quality: 55 }
 ]
-
-/** 检测文件是否为二进制（只读取前 8KB，检查 NULL 字节） */
-async function isBinaryFile(filepath: string, fileSize: number): Promise<boolean> {
-  if (fileSize === 0) return false
-  const fh = await fsOpen(filepath, 'r')
-  try {
-    const sampleSize = Math.min(8192, fileSize)
-    const bytes = Buffer.alloc(sampleSize)
-    const result = await fh.read(bytes, 0, sampleSize, 0)
-    if (result.bytesRead === 0) return false
-    for (let i = 0; i < result.bytesRead; i++) {
-      if (bytes[i] === 0) return true
-    }
-    return false
-  } finally {
-    await fh.close()
-  }
-}
 
 /** 单例 MarkItDown 实例 */
 let markitdownInstance: MarkItDown | null = null
@@ -194,6 +122,11 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   readonly description =
     'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
   readonly parameters = ReadParamsSchema
+  readonly outputStrategy = 'head' as const
+  // 纯文本路径已经按 DEFAULT_MAX_BYTES 控制了原始字节，但行号前缀 + 头/尾元信息会额外
+  // 再吃掉约 14KB。把 wrapToolOutput 的阈值抬到 80KB，避免 read 自家输出又被 wrapper 落盘
+  // 导致 agent 反复读取持久化文件出现死循环。
+  readonly outputMaxBytes = 80 * 1024
 
   constructor(private ctx: ToolContext) {
     super()
@@ -221,7 +154,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
   }
 
   protected async executeInternal(
-    toolCallId: string,
+    _toolCallId: string,
     params: { path: string; offset?: number; limit?: number },
     signal?: AbortSignal
   ): Promise<ReadResult> {
@@ -230,7 +163,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
     // URL：抓取网页并转换为 Markdown
     if (isUrl(params.path)) {
       try {
-        return await readUrl(params.path, this.ctx.sessionId, toolCallId, signal)
+        return await readUrl(params.path, signal)
       } catch (err: unknown) {
         if (err instanceof Error && err.message === TOOL_ABORTED) throw err
         const errMsg = err instanceof Error ? err.message : String(err)
@@ -261,14 +194,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
       // 判断是否为富文本文件，使用 markitdown-ts 转换
       const ext = extname(absolutePath).toLowerCase()
       if (RICH_FILE_EXTENSIONS.has(ext)) {
-        return await readRichFile(
-          absolutePath,
-          params.path,
-          fileStat.size,
-          this.ctx.sessionId,
-          toolCallId,
-          signal
-        )
+        return await readRichFile(absolutePath, params.path, fileStat.size, signal)
       }
 
       // 图像文件：以 base64 + mimeType 返回给模型（多模态输入）
@@ -278,14 +204,7 @@ export class ReadTool extends BaseTool<typeof ReadParamsSchema> {
 
       // 旧版 Word .doc 文件：使用 word-extractor 提取文字
       if (ext === '.doc') {
-        return await readLegacyDoc(
-          absolutePath,
-          params.path,
-          fileStat.size,
-          this.ctx.sessionId,
-          toolCallId,
-          signal
-        )
+        return await readLegacyDoc(absolutePath, params.path, fileStat.size, signal)
       }
 
       // 已知二进制格式：直接拒绝
@@ -376,13 +295,12 @@ async function readDirectory(
 
 /**
  * 富文本文件：通过 markitdown-ts 转换为 Markdown
+ * 输出长度的截断/落盘由 wrapToolOutput 在构建工具时统一处理
  */
 async function readRichFile(
   absolutePath: string,
   displayPath: string,
   fileSize: number,
-  sessionId: string,
-  toolCallId: string,
   signal?: AbortSignal
 ): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -393,26 +311,17 @@ async function readRichFile(
     throw new Error(`Failed to convert: ${displayPath}`)
   }
 
-  // 文件信息头
   const ext = extname(absolutePath).toLowerCase().slice(1).toUpperCase()
   const header = `File: ${displayPath} (${ext}, ${formatSize(fileSize)}) — converted to Markdown\n\n`
 
-  // 统一截断/持久化处理
-  const processed = processToolOutput({
-    sessionId,
-    toolCallId,
-    fullText: result.markdown,
-    strategy: 'head'
-  })
-
   return {
-    content: [{ type: 'text' as const, text: header + processed.text }],
+    content: [{ type: 'text' as const, text: header + result.markdown }],
     details: {
       type: 'read',
       fileSize,
       format: ext,
       converted: true,
-      truncated: processed.truncated
+      truncated: false
     }
   }
 }
@@ -488,13 +397,12 @@ async function readImage(
 
 /**
  * 旧版 Word .doc 文件：通过 word-extractor 提取纯文本
+ * 输出长度的截断/落盘由 wrapToolOutput 在构建工具时统一处理
  */
 async function readLegacyDoc(
   absolutePath: string,
   displayPath: string,
   fileSize: number,
-  sessionId: string,
-  toolCallId: string,
   signal?: AbortSignal
 ): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -506,25 +414,16 @@ async function readLegacyDoc(
     throw new Error(`Failed to convert: ${displayPath}`)
   }
 
-  // 文件信息头
   const header = `File: ${displayPath} (DOC, ${formatSize(fileSize)}) — converted to Markdown\n\n`
 
-  // 统一截断/持久化处理
-  const processed = processToolOutput({
-    sessionId,
-    toolCallId,
-    fullText: body,
-    strategy: 'head'
-  })
-
   return {
-    content: [{ type: 'text' as const, text: header + processed.text }],
+    content: [{ type: 'text' as const, text: header + body }],
     details: {
       type: 'read',
       fileSize,
       format: 'DOC',
       converted: true,
-      truncated: processed.truncated
+      truncated: false
     }
   }
 }
@@ -533,12 +432,7 @@ async function readLegacyDoc(
  * URL 抓取：通过 markitdown-ts 抓取网页并转换为 Markdown
  * 自定义 fetch 实现超时、User-Agent、响应体大小限制
  */
-async function readUrl(
-  url: string,
-  sessionId: string,
-  toolCallId: string,
-  signal?: AbortSignal
-): Promise<ReadResult> {
+async function readUrl(url: string, signal?: AbortSignal): Promise<ReadResult> {
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
   log.info(`Fetching URL: ${url}`)
@@ -574,25 +468,16 @@ async function readUrl(
     throw new Error(`Failed to fetch or convert URL: ${url}`)
   }
 
-  // 信息头
   const title = result.title ? ` — ${result.title}` : ''
   const header = `URL: ${url}${title} — converted to Markdown\n\n`
 
-  // 统一截断/持久化处理
-  const processed = processToolOutput({
-    sessionId,
-    toolCallId,
-    fullText: result.markdown,
-    strategy: 'head'
-  })
-
   return {
-    content: [{ type: 'text' as const, text: header + processed.text }],
+    content: [{ type: 'text' as const, text: header + result.markdown }],
     details: {
       type: 'read',
       format: 'URL',
       converted: true,
-      truncated: processed.truncated,
+      truncated: false,
       url
     }
   }

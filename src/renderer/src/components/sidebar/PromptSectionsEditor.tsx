@@ -27,9 +27,8 @@ interface PromptSectionsEditorProps {
 /**
  * 项目提示词卡片编辑器
  *
- * - 每张卡片有可编辑的 title + content
- * - 拖拽手柄(GripVertical)位于卡片左上,只有它能触发拖拽,避免和文本输入冲突
- * - 末尾"添加卡片"按钮追加空白卡片
+ * 渲染为 SettingsSection 卡片内的扁平行：每行 = grip + title/content 输入 + 删除按钮，
+ * divide-y 自然分隔（由父 SettingsSection 提供）。末尾追加一行"添加卡片"。
  */
 export function PromptSectionsEditor({
   sections,
@@ -60,11 +59,11 @@ export function PromptSectionsEditor({
   }
 
   return (
-    <div className="space-y-2">
+    <>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={sections.map((s) => s.id)} strategy={verticalListSortingStrategy}>
           {sections.map((section) => (
-            <SortableCard
+            <SortableRow
               key={section.id}
               section={section}
               onChangeTitle={(title) => updateSection(section.id, { title })}
@@ -75,30 +74,32 @@ export function PromptSectionsEditor({
         </SortableContext>
       </DndContext>
 
-      <button
-        onClick={addSection}
-        className="flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 transition-colors px-2 py-1"
-      >
-        <Plus size={12} />
-        {t('projectForm.addPromptSection')}
-      </button>
-    </div>
+      <div className="px-4 py-2.5">
+        <button
+          onClick={addSection}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
+        >
+          <Plus size={11} />
+          {t('projectForm.addPromptSection')}
+        </button>
+      </div>
+    </>
   )
 }
 
-interface SortableCardProps {
+interface SortableRowProps {
   section: ProjectPromptSection
   onChangeTitle: (title: string) => void
   onChangeContent: (content: string) => void
   onRemove: () => void
 }
 
-function SortableCard({
+function SortableRow({
   section,
   onChangeTitle,
   onChangeContent,
   onRemove
-}: SortableCardProps): React.JSX.Element {
+}: SortableRowProps): React.JSX.Element {
   const { t } = useTranslation()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: section.id
@@ -110,7 +111,7 @@ function SortableCard({
     opacity: isDragging ? 0.5 : 1
   }
 
-  // 内容 textarea 高度随文本自适应(min: 1 行)
+  // 内容 textarea 高度随文本自适应
   const contentRef = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
     const el = contentRef.current
@@ -123,25 +124,25 @@ function SortableCard({
     <div
       ref={setNodeRef}
       style={style}
-      className="group/card flex items-start gap-1 px-1.5 py-1 rounded border border-border-secondary bg-bg-primary/40 hover:border-border-primary transition-colors"
+      className="group/row flex items-start gap-2 px-4 py-3 hover:bg-bg-hover/40 transition-colors"
     >
       {/* 拖拽手柄 */}
       <button
         type="button"
         {...attributes}
         {...listeners}
-        className="flex-shrink-0 self-stretch flex items-center px-0.5 rounded text-text-tertiary/60 hover:text-text-secondary hover:bg-bg-hover/50 cursor-grab active:cursor-grabbing transition-colors"
+        className="shrink-0 self-stretch flex items-center px-0.5 rounded text-text-tertiary opacity-0 group-hover/row:opacity-100 hover:text-text-secondary cursor-grab active:cursor-grabbing transition-all"
         title={t('projectForm.dragToReorder')}
       >
-        <GripVertical size={11} />
+        <GripVertical size={12} />
       </button>
 
       {/* 卡片主体 */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
         <input
           value={section.title}
           onChange={(e) => onChangeTitle(e.target.value)}
-          className="w-full px-1 py-0.5 rounded text-[11px] font-medium bg-transparent border border-transparent hover:border-border-secondary focus:border-accent/50 outline-none text-text-primary placeholder:text-text-tertiary/60 transition-colors"
+          className="w-full px-1.5 py-1 rounded-md text-[12px] font-medium bg-transparent border border-transparent hover:border-border-secondary/50 focus:border-accent/60 outline-none text-text-primary placeholder:text-text-tertiary transition-colors"
           placeholder={t('projectForm.promptSectionTitlePlaceholder')}
         />
         <textarea
@@ -149,7 +150,7 @@ function SortableCard({
           value={section.content}
           onChange={(e) => onChangeContent(e.target.value)}
           rows={1}
-          className="w-full px-1 py-0.5 rounded text-[10px] leading-snug bg-transparent border border-transparent hover:border-border-secondary focus:border-accent/50 outline-none text-text-secondary placeholder:text-text-tertiary/60 transition-colors resize-none overflow-hidden"
+          className="w-full px-1.5 py-1 rounded-md text-[11px] leading-relaxed bg-transparent border border-transparent hover:border-border-secondary/50 focus:border-accent/60 outline-none text-text-secondary placeholder:text-text-tertiary transition-colors resize-none overflow-hidden"
           placeholder={t('projectForm.promptSectionContentPlaceholder')}
         />
       </div>
@@ -158,10 +159,10 @@ function SortableCard({
       <button
         type="button"
         onClick={onRemove}
-        className="flex-shrink-0 self-start p-0.5 rounded text-text-tertiary/60 opacity-0 group-hover/card:opacity-100 hover:text-error hover:bg-bg-hover/50 transition-all"
+        className="shrink-0 self-start p-1 rounded text-text-tertiary opacity-0 group-hover/row:opacity-100 hover:text-error hover:bg-error/10 transition-all"
         title={t('projectForm.deletePromptSection')}
       >
-        <Trash2 size={11} />
+        <Trash2 size={12} />
       </button>
     </div>
   )

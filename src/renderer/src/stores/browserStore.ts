@@ -94,7 +94,8 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   url: 'about:blank',
   width: 480,
   lockedChatWidth: null,
-  activeTab: 'browser' as PanelTab,
+  // 默认进入 Files 标签 —— 用户更多用文件树而非内置浏览器；浏览器只在 agent 调用 browser 工具时才常用
+  activeTab: 'files' as PanelTab,
 
   toggle: () => {
     const { isOpen, width } = get()

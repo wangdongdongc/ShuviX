@@ -17,6 +17,7 @@ import { resolve } from 'path'
 import { readFileSync } from 'fs'
 import { bundlerService, bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
+import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 
 const log = createLogger('WidgetServer')
 
@@ -257,9 +258,18 @@ export class WidgetServer {
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const url = req.url ?? '/'
     res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
-    // /w/<id>/<rest>
-    const match = url.match(/^\/w\/([a-z0-9]+(?:-[a-z0-9]+)+)(\/.*)?$/)
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
+    // /w/<id>/<rest> —— 注意 rest 可能带 ?query，先剥离 query string
+    const pathOnly = url.split('?')[0]
+    const match = pathOnly.match(/^\/w\/([a-z0-9]+(?:-[a-z0-9]+)+)(\/.*)?$/)
     if (!match) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
       res.end('Not found')
@@ -271,6 +281,21 @@ export class WidgetServer {
     if (!entry) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
       res.end(`Widget ${widgetId} not registered`)
+      return
+    }
+
+    // /db/<table> —— widget DB REST API
+    if (rest.startsWith('/db/')) {
+      const table = rest.slice(4)
+      this.handleDbRequest(req, res, widgetId, table, url).catch((err) => {
+        log.warn(`unhandled db error widget=${widgetId} table=${table}:`, err)
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(
+            JSON.stringify({ code: 'INTERNAL', message: (err as Error).message ?? String(err) })
+          )
+        }
+      })
       return
     }
 
@@ -326,6 +351,93 @@ export class WidgetServer {
     for (const c of entry.sseClients) {
       c.write('event: reload\ndata: ok\n\n')
     }
+  }
+
+  // ────── widget DB REST API ──────
+
+  private async handleDbRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    widgetId: string,
+    table: string,
+    fullUrl: string
+  ): Promise<void> {
+    const method = (req.method ?? 'GET').toUpperCase()
+    if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(method)) {
+      this.respondJson(res, 405, {
+        code: 'METHOD_NOT_ALLOWED',
+        message: `Method ${method} not allowed`
+      })
+      return
+    }
+    if (!table) {
+      this.respondJson(res, 400, { code: 'NO_TABLE', message: 'Table name is required' })
+      return
+    }
+
+    const qsIdx = fullUrl.indexOf('?')
+    const searchParams = new URLSearchParams(qsIdx === -1 ? '' : fullUrl.slice(qsIdx + 1))
+
+    let body: unknown = undefined
+    if (method === 'POST' || method === 'PATCH') {
+      try {
+        body = await readJsonBody(req)
+      } catch (e) {
+        this.respondJson(res, 400, {
+          code: 'INVALID_JSON',
+          message: (e as Error).message
+        })
+        return
+      }
+    }
+
+    const restReq: RestRequest = {
+      widgetId,
+      table,
+      method: method as RestMethod,
+      searchParams,
+      body
+    }
+
+    try {
+      const result = await handleRestRequest(restReq)
+      this.respondJson(res, 200, result.rows)
+    } catch (e) {
+      if (e instanceof WidgetDbError) {
+        this.respondJson(res, e.status, { code: e.code, message: e.message })
+        return
+      }
+      const msg = (e as Error).message ?? String(e)
+      log.warn(`db request failed widget=${widgetId} table=${table}: ${msg}`)
+      this.respondJson(res, 500, { code: 'INTERNAL', message: msg })
+    }
+  }
+
+  private respondJson(res: ServerResponse, status: number, body: unknown): void {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify(body))
+  }
+}
+
+/** 收完请求体并解析为 JSON。空 body 视为 undefined。 */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const MAX_BYTES = 4 * 1024 * 1024 // 4MB
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer)
+    total += buf.length
+    if (total > MAX_BYTES) {
+      throw new Error(`Request body too large (> ${MAX_BYTES} bytes)`)
+    }
+    chunks.push(buf)
+  }
+  const text = Buffer.concat(chunks).toString('utf-8').trim()
+  if (!text) return undefined
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    throw new Error(`Invalid JSON: ${(e as Error).message}`)
   }
 }
 

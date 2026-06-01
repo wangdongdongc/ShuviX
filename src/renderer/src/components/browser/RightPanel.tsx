@@ -5,7 +5,7 @@
  * 各面板始终挂载，通过 visibility 切换，避免 xterm/iframe/WebContentsView 重建
  */
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderTree, Monitor, TerminalSquare, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
@@ -17,6 +17,7 @@ import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useSubSessionStore, selectSubSessionList } from '../../stores/subSessionStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 interface TabDef {
   key: PanelTab
@@ -27,14 +28,19 @@ interface TabDef {
 }
 
 const tabs: TabDef[] = [
+  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'browser', labelKey: 'panel.browser', Icon: Monitor },
   { key: 'terminal', labelKey: 'panel.terminal', Icon: TerminalSquare },
-  { key: 'files', labelKey: 'panel.files', Icon: FolderTree },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
   { key: 'subagent', labelKey: 'panel.subAgent', Icon: Bot }
 ]
 
-export function RightPanel(): React.JSX.Element {
+interface RightPanelProps {
+  /** 悬浮窗模式 —— 隐藏 browser tab（WebContentsView 当前为全局单例，无法跨窗口） */
+  pinnedMode?: boolean
+}
+
+export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const activeTab = useBrowserStore((s) => s.activeTab)
   const setActiveTab = useBrowserStore((s) => s.setActiveTab)
@@ -42,6 +48,9 @@ export function RightPanel(): React.JSX.Element {
   const widgetCount = useWidgetStore((s) => s.widgets.length)
   const allSubSessions = useSubSessionStore(selectSubSessionList)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const focusMode = useSettingsStore((s) => s.focusMode)
+  /** 专注模式生效条件：开关打开 + 已选中主会话 → 淡化未选中 tab */
+  const dim = focusMode && !!activeSessionId
 
   // 仅统计归属当前主会话的子会话
   const subAgentCount = useMemo(
@@ -52,8 +61,21 @@ export function RightPanel(): React.JSX.Element {
     [allSubSessions, activeSessionId]
   )
 
+  // 悬浮窗:browser tab 走主窗的全局 WebContentsView,无法跨窗口共享 → 隐藏
+  // widget tab 当前也由主窗的 widgetServer 集中托管,在悬浮窗里展示意义不大 → 隐藏
   // subagent tab 只在当前主会话下有子会话时显示；其它 tab 始终显示
-  const visibleTabs = tabs.filter((t) => (t.key === 'subagent' ? subAgentCount > 0 : true))
+  const visibleTabs = tabs.filter((t) => {
+    if (pinnedMode && (t.key === 'browser' || t.key === 'widget')) return false
+    if (t.key === 'subagent') return subAgentCount > 0
+    return true
+  })
+
+  // 悬浮窗默认 tab 落在 'files' 上;若 activeTab 是被隐藏的 browser/widget tab,自动切到 files
+  useEffect(() => {
+    if (pinnedMode && (activeTab === 'browser' || activeTab === 'widget')) {
+      setActiveTab('files')
+    }
+  }, [pinnedMode, activeTab, setActiveTab])
 
   // 测量带文字的标签栏自然宽度，若超出容器则切换为仅图标模式
   const tabBarRef = useRef<HTMLDivElement | null>(null)
@@ -87,10 +109,10 @@ export function RightPanel(): React.JSX.Element {
             key={key}
             onClick={() => setActiveTab(key)}
             title={compact ? t(labelKey) : undefined}
-            className={`titlebar-no-drag flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-colors relative whitespace-nowrap flex-shrink-0 ${
+            className={`titlebar-no-drag flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-all duration-200 relative whitespace-nowrap flex-shrink-0 ${
               activeTab === key
                 ? 'text-text-primary'
-                : 'text-text-tertiary hover:text-text-secondary'
+                : `text-text-tertiary hover:text-text-secondary ${dim ? 'opacity-30 hover:opacity-100' : ''}`
             }`}
           >
             <Icon size={12} />

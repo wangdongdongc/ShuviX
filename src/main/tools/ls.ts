@@ -13,11 +13,10 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { LsToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:ls')
@@ -102,6 +101,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly description =
     'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.'
   readonly parameters = LsParamsSchema
+  readonly outputStrategy = 'tail' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -128,7 +128,7 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   }
 
   protected async executeInternal(
-    toolCallId: string,
+    _toolCallId: string,
     params: { path?: string; ignore?: string[] },
     signal?: AbortSignal
   ): Promise<AgentToolResult<LsToolDetails>> {
@@ -179,21 +179,14 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
       output += `\n[Results truncated, showing first ${LIMIT} files. Use the glob tool to filter by pattern, or narrow the directory scope.]`
     }
 
-    // 统一截断/持久化处理
-    const processed = processToolOutput({
-      sessionId: this.ctx.sessionId,
-      toolCallId,
-      fullText: output,
-      strategy: 'tail'
-    })
-
+    // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
     return {
-      content: [{ type: 'text' as const, text: processed.text }],
+      content: [{ type: 'text' as const, text: output }],
       details: {
         type: 'ls',
         path: searchPath,
         count: files.length,
-        truncated: truncated || processed.truncated
+        truncated
       }
     }
   }

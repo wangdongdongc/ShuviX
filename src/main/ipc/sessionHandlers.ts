@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
 import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
+import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import type {
   SessionUpdateModelConfigParams,
   SessionUpdateThinkingLevelParams,
@@ -110,7 +111,11 @@ export function registerSessionHandlers(): void {
   )
 
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
-  ipcMain.handle('session:delete', (_event, id: string) => {
+  ipcMain.handle('session:delete', async (_event, id: string) => {
+    // 若被删的会话正处于悬浮态，先关闭对应悬浮窗
+    if (isPinned(id)) {
+      await unpinPinnedChat(id, 'session-deleted')
+    }
     // 删除前捕获 workingDirectory，删除后用于关闭 watcher（仅当当前 watcher 监听的就是此目录时）
     // 注：同项目的多个会话共享 workingDirectory，此时不应误关 —— closeWatcherIfWorkingDirectory
     // 只做"路径相同则关"的窄判断；项目目录被多个会话共用时不影响其它会话的后续 scan

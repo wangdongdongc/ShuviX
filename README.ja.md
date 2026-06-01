@@ -68,6 +68,15 @@ npm run build:win    # Windows
 npm run build:linux  # Linux
 ```
 
+## 🪝 Hooks（拡張機構）
+
+ShuviX は Claude Code 互換の hooks をサポートします: エージェントのライフサイクル節目（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`）でサブプロセススクリプトを起動し、stdin/stdout JSON + 終了コードで通信します。
+
+- **設定ファイル**: `~/.shuvix/hooks.json`（グローバル）+ `<project>/.shuvix/hooks.json`（プロジェクト）
+- **クイックスタート**: [example-hooks.json](src/main/services/hooks/__tests__/fixtures/example-hooks.json) を出発点としてコピー
+- **完全な schema**（イベント、入出力、環境変数、拒否/書き換えの意味論）: [types.ts](src/main/services/hooks/types.ts) 冒頭の JSDoc を参照
+- **管理 UI**: 設定 → Hooks（健全性ステータスバー、読み込み済み一覧、ワンクリックで設定ファイルを開く）
+
 ## 📄 ライセンス
 
 本プロジェクトは **MIT** ライセンスの下でオープンソースです。

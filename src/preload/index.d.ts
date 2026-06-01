@@ -49,9 +49,6 @@ import type {
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
-  CustomSubAgent,
-  CustomSubAgentAddParams,
-  CustomSubAgentUpdateParams,
   ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -68,6 +65,7 @@ import type {
   ImportResult,
   ImportSelection
 } from '../shared/types/configShare'
+import type { ResolvedHook, HookFileStatus } from '../shared/types/hook'
 
 declare global {
   /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
@@ -380,6 +378,20 @@ declare global {
     desc: string
   }
 
+  /** Sub-agent 元信息（文件系统驱动；与主进程 AgentDefinition 对齐） */
+  interface SubAgentInfo {
+    name: string
+    displayName: string
+    whenToUse: string
+    systemPrompt: string
+    tools: string[]
+    maxTurns: number
+    source: 'builtin' | 'user'
+    requiredMcp?: string[]
+    basePath: string
+    isEnabled: boolean
+  }
+
   /** 暴露给 Renderer 的 API 类型 */
   interface ShuviXAPI {
     app: {
@@ -522,6 +534,28 @@ declare global {
       set: (params: SettingsSetParams) => Promise<{ success: boolean }>
       /** 获取已知设置 key 的元数据（labelKey + desc） */
       getKnownKeys: () => Promise<Record<string, ConfigMeta>>
+      /** 列出全部内置系统提示词卡片 */
+      listBuiltinSections: () => Promise<
+        Array<{
+          id: string
+          title: string
+          content: string | null
+          disabled: boolean
+          dynamic: boolean
+        }>
+      >
+      /** 写入被禁用的内置卡片 id 列表 */
+      setBuiltinDisabled: (ids: string[]) => Promise<{ success: boolean }>
+      /** 读取用户自定义系统提示词卡片 */
+      getCustomSections: () => Promise<
+        import('../shared/types/promptSection').ProjectPromptSection[]
+      >
+      /** 写入用户自定义系统提示词卡片 */
+      setCustomSections: (
+        sections: import('../shared/types/promptSection').ProjectPromptSection[]
+      ) => Promise<{ success: boolean }>
+      /** 预览内置卡片实际内容 */
+      previewBuiltinSection: (params: { id: string; sessionId?: string }) => Promise<string>
     }
     httpLog: {
       list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
@@ -548,12 +582,14 @@ declare global {
         params: DbCredentialTestParams
       ) => Promise<{ success: boolean; error?: string }>
     }
-    customSubAgent: {
-      list: () => Promise<CustomSubAgent[]>
-      add: (params: CustomSubAgentAddParams) => Promise<{ id: string }>
-      update: (params: CustomSubAgentUpdateParams) => Promise<{ success: boolean }>
-      delete: (id: string) => Promise<{ success: boolean }>
-      toggle: (params: { id: string; enabled: boolean }) => Promise<{ success: boolean }>
+    subAgent: {
+      list: () => Promise<SubAgentInfo[]>
+      refresh: () => Promise<{ success: boolean }>
+      setEnabled: (params: {
+        name: string
+        enabled: boolean
+      }) => Promise<{ success: boolean; error?: string }>
+      openFolder: () => Promise<{ success: boolean }>
     }
     subSession: {
       destroy: (subSessionId: string) => Promise<{ success: boolean }>
@@ -688,8 +724,12 @@ declare global {
       start: (sessionId: string) => Promise<unknown>
     }
     command: {
-      /** 获取当前会话可用的斜杠命令列表 */
-      list: (params: { sessionId: string }) => Promise<
+      /**
+       * 获取斜杠命令列表
+       * - sessionId 非空：返回项目命令 + 全部 skill 命令
+       * - sessionId 为 null：仅返回不依赖项目的命令（欢迎页等无会话场景）
+       */
+      list: (params: { sessionId: string | null }) => Promise<
         Array<{
           commandId: string
           name: string
@@ -803,6 +843,19 @@ declare global {
       pickExternalDir: () => Promise<{ success: boolean; path?: string; reason?: string }>
       addExternalDir: (dir: SkillDir) => Promise<{ success: boolean; reason?: string }>
       removeExternalDir: (name: string) => Promise<{ success: boolean }>
+      setGroupEnabled: (params: {
+        dirName: string
+        isEnabled: boolean
+      }) => Promise<{ success: boolean }>
+    }
+    hook: {
+      list: (opts?: { includeBuiltin?: boolean }) => Promise<ResolvedHook[]>
+      status: () => Promise<{ global: HookFileStatus; project: HookFileStatus }>
+      reload: () => Promise<{ success: boolean }>
+      openConfigFile: (
+        scope: 'global' | 'project',
+        projectDir?: string
+      ) => Promise<{ success: boolean; path?: string; reason?: string }>
     }
     update: {
       /** 检查更新 */
@@ -867,7 +920,30 @@ declare global {
         truncated: boolean
         root: string | null
       }>
+      read: (params: {
+        sessionId: string
+        path: string
+      }) => Promise<import('../shared/types/filePreview').FileReadResult>
       onChanged: (callback: (payload: { root: string }) => void) => () => void
+    }
+    pinChat: {
+      /** 把指定 session 提到悬浮窗口（已悬浮则 focus） */
+      pin: (sessionId: string) => Promise<{ success: boolean }>
+      /** 取消指定 session 的悬浮，恢复到主窗口 */
+      unpin: (sessionId: string) => Promise<{ success: boolean }>
+      /** 聚焦指定 session 的悬浮窗口 */
+      focus: (sessionId: string) => Promise<{ success: boolean }>
+      /** 主动查询当前所有悬浮会话 */
+      getState: () => Promise<{ pinnedSessionIds: string[] }>
+      /** 切换悬浮窗"始终置顶"特性,false 即让窗口降为普通窗口 */
+      setAlwaysOnTop: (params: {
+        sessionId: string
+        value: boolean
+      }) => Promise<{ alwaysOnTop: boolean }>
+      /** 查询当前悬浮窗的"始终置顶"状态 */
+      getAlwaysOnTop: (sessionId: string) => Promise<{ alwaysOnTop: boolean }>
+      /** 监听悬浮状态变化 */
+      onStateChanged: (callback: (state: { pinnedSessionIds: string[] }) => void) => () => void
     }
   }
 

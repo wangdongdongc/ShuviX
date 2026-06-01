@@ -16,6 +16,7 @@ import { widgetDao, type Widget } from '../../dao/widgetDao'
 import { widgetServer } from './widgetServer'
 import { getWidgetsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
+import { applyWidgetSchema, WidgetDbError } from './widgetDb'
 
 /** 广播 widget 列表 / 服务器状态变更 —— 所有 BrowserWindow 都会收到 */
 export function broadcastWidgetChanged(): void {
@@ -103,6 +104,20 @@ class WidgetService {
     return widgetDao.findById(id)
   }
 
+  /**
+   * 如果 widget 元数据里保存了 dbSchema，重跑一遍保证 schema/表都在
+   * （应用首次启动或 DB 被清理后能自愈）。失败仅记日志，不抛出。
+   */
+  private async reapplySavedSchemaIfAny(widget: Widget): Promise<void> {
+    const saved = widget.metadata?.dbSchema
+    if (typeof saved !== 'string' || saved.trim().length === 0) return
+    try {
+      await applyWidgetSchema(widget.id, saved)
+    } catch (e) {
+      log.warn(`reapplying saved dbSchema for ${widget.id} failed: ${(e as Error).message}`)
+    }
+  }
+
   /** 初始化新 widget —— 写 scaffold 文件 + 插入 DB + 首次打包 */
   async init(params: InitWidgetParams): Promise<InitWidgetResult> {
     this.validateId(params.id)
@@ -163,6 +178,7 @@ class WidgetService {
     if (widgetServer.hasWidget(id)) {
       result = await widgetServer.rebuild(id)
     } else {
+      await this.reapplySavedSchemaIfAny(widget)
       result = await widgetServer.registerAndBuild(id, dir, widget.entryFile)
     }
     const url = widgetServer.getUrl(id) ?? ''
@@ -182,6 +198,7 @@ class WidgetService {
     }
     let buildSuccess = true
     if (!widgetServer.hasWidget(id)) {
+      await this.reapplySavedSchemaIfAny(widget)
       const build = await widgetServer.registerAndBuild(id, dir, widget.entryFile)
       buildSuccess = build.success
     } else {
@@ -207,6 +224,7 @@ class WidgetService {
       throw new Error(`Widget directory missing: ${dir}`)
     }
     if (!widgetServer.hasWidget(id)) {
+      await this.reapplySavedSchemaIfAny(widget)
       await widgetServer.registerAndBuild(id, dir, widget.entryFile)
     } else {
       // 已注册则确保 server 已启动（首次 registerAndBuild 已启动）
@@ -226,6 +244,37 @@ class WidgetService {
       widgetServer.unregisterWidget(id)
     }
     broadcastWidgetChanged()
+  }
+
+  /**
+   * 安装/更新 widget 的 DB schema
+   *
+   * 流程：
+   *   1. 跑 DDL（如失败抛出，metadata 不更新）
+   *   2. 成功后把 DDL 字符串写入 widget.metadata.dbSchema
+   *
+   * 同一 widget 重复调用 = 覆盖式更新 schema（用户加表/索引/迁移走这个）。
+   * 应用启动时 widget 注册阶段也会自动重跑一次保证幂等。
+   */
+  async setDbSchema(id: string, ddl: string): Promise<{ id: string; applied: boolean }> {
+    this.validateId(id)
+    const widget = widgetDao.findById(id)
+    if (!widget) throw new Error(`Widget "${id}" not found`)
+
+    try {
+      await applyWidgetSchema(id, ddl)
+    } catch (e) {
+      if (e instanceof WidgetDbError) {
+        throw new Error(`[${e.code}] ${e.message}`)
+      }
+      throw e
+    }
+
+    widgetDao.update(id, {
+      metadata: { ...widget.metadata, dbSchema: ddl }
+    })
+    log.info(`db-init succeeded for widget=${id}`)
+    return { id, applied: true }
   }
 
   /** 删除 widget：移除 DB 记录 + 服务器注册 + 文件目录 */

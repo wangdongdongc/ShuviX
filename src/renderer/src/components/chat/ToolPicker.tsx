@@ -1,12 +1,35 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wrench, Server, BookOpen, Bot } from 'lucide-react'
+import { Server, BookOpen, WifiOff } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
-import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
+import type { ToolItem } from '../common/ToolSelectList'
+
+const SKILLS_GROUP = '__skills__'
+
+/** 提取 MCP 服务器短名（mcp:context7 → context7） */
+function mcpShortName(name: string): string {
+  return name.startsWith('mcp:') ? name.slice(4) : name
+}
+
+/** 提取 Skill 短名（skill:pdf → pdf） */
+function skillShortName(name: string): string {
+  return name.startsWith('skill:') ? name.slice(6) : name
+}
+
+/** 解析 skill 显示信息：内置 skill 去掉 builtin: 前缀并标记为内置 */
+function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
+  const short = skillShortName(name)
+  if (short.startsWith('builtin:')) {
+    return { label: short.slice('builtin:'.length), builtin: true }
+  }
+  return { label: short, builtin: false }
+}
 
 /**
- * 工具选择器 — 动态切换会话启用的工具集
+ * 工具选择器 — 动态切换会话启用的 MCP / Skill 集
+ *
+ * 内置工具与 SubAgent 始终启用，不在此处控制。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -19,7 +42,6 @@ export function ToolPicker(): React.JSX.Element | null {
   const close = useCallback(() => setOpen(false), [])
   useClickOutside(toolsRef, close, open)
 
-  /** 拉取工具列表并清理陈旧名称 */
   const fetchTools = useCallback(() => {
     const sid = useChatStore.getState().activeSessionId
     window.api.tools.list(sid ?? undefined).then((tools) => {
@@ -34,49 +56,26 @@ export function ToolPicker(): React.JSX.Element | null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 挂载时加载一次
   useEffect(() => {
     fetchTools()
   }, [fetchTools])
 
-  // 每次打开下拉面板时实时刷新
   useEffect(() => {
     if (open) fetchTools()
   }, [open, fetchTools])
 
-  if (allTools.length === 0) return null
+  const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
+  const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
-  // 仅统计在 allTools 中实际存在的已启用工具
-  const validNames = new Set(allTools.map((t) => t.name))
-  const activeEnabledTools = enabledTools.filter((n) => validNames.has(n))
+  if (mcpTools.length === 0 && skillTools.length === 0) return null
 
-  // 分类统计
-  const enabledBuiltinTools = allTools.filter(
-    (t) =>
-      (t.group === 'general' || t.group === 'ripgrep' || t.group === 'remote') &&
-      activeEnabledTools.includes(t.name)
-  )
-  const enabledSubAgentTools = allTools.filter(
-    (t) => t.group === 'subagent' && activeEnabledTools.includes(t.name)
-  )
-  const enabledMcpTools = allTools.filter(
-    (t) => t.group?.startsWith('mcp:') && activeEnabledTools.includes(t.name)
-  )
-  const enabledSkillTools = allTools.filter(
-    (t) => t.group === '__skills__' && activeEnabledTools.includes(t.name)
-  )
+  const enabledMcpTools = mcpTools.filter((t) => enabledTools.includes(t.name))
+  const enabledSkillTools = skillTools.filter((t) => enabledTools.includes(t.name))
 
-  // 是否有 MCP / Skill / SubAgent 工具可用（影响标签是否显示）
-  const hasMcpTools = allTools.some((t) => t.group?.startsWith('mcp:'))
-  const hasSkillTools = allTools.some((t) => t.group === '__skills__')
-  const hasSubAgentTools = allTools.some((t) => t.group === 'subagent')
-
-  /** 工具变更：更新本地状态 + 同步 Agent + 持久化 */
   const handleChange = async (newTools: string[]): Promise<void> => {
     setEnabledTools(newTools)
     if (activeSessionId) {
       await window.api.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      // 持久化到 session modelMetadata
       await window.api.session.updateEnabledTools({
         id: activeSessionId,
         enabledTools: newTools
@@ -84,27 +83,26 @@ export function ToolPicker(): React.JSX.Element | null {
     }
   }
 
+  const toggle = (name: string): void => {
+    const next = enabledTools.includes(name)
+      ? enabledTools.filter((n) => n !== name)
+      : [...enabledTools, name]
+    void handleChange(next)
+  }
+
   return (
     <div ref={toolsRef} className="relative flex items-center group">
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
+        className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
       >
-        <Wrench size={11} />
-        <span>{enabledBuiltinTools.length}</span>
-        {hasSubAgentTools && (
-          <span className="inline-flex items-center gap-0.5">
-            <Bot size={10} />
-            <span>{enabledSubAgentTools.length}</span>
-          </span>
-        )}
-        {hasMcpTools && (
+        {mcpTools.length > 0 && (
           <span className="inline-flex items-center gap-0.5">
             <Server size={10} />
             <span>{enabledMcpTools.length}</span>
           </span>
         )}
-        {hasSkillTools && (
+        {skillTools.length > 0 && (
           <span className="inline-flex items-center gap-0.5">
             <BookOpen size={10} />
             <span>{enabledSkillTools.length}</span>
@@ -112,45 +110,24 @@ export function ToolPicker(): React.JSX.Element | null {
         )}
       </button>
 
-      {/* 悬浮 tooltip：已启用的工具列表（展开时不显示） */}
-      {!open && activeEnabledTools.length > 0 && (
+      {/* 悬浮 tooltip：已启用的工具列表 */}
+      {!open && (enabledMcpTools.length > 0 || enabledSkillTools.length > 0) && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[200px] max-w-[280px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
           <div className="text-[10px] text-text-tertiary mb-1">{t('input.tools')}</div>
           <div className="space-y-1 max-h-40 overflow-y-auto">
-            {/* 内置工具 */}
-            {enabledBuiltinTools.length > 0 && (
-              <div className="text-[11px] text-text-primary">
-                {enabledBuiltinTools.map((t) => t.name).join(', ')}
-              </div>
-            )}
-            {/* 子智能体 */}
-            {enabledSubAgentTools.length > 0 && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-text-secondary">[SubAgents]</span>
-                <span className="text-[11px] text-text-primary truncate">
-                  {enabledSubAgentTools.map((t) => t.name).join(', ')}
-                </span>
-              </div>
-            )}
-            {/* MCP 服务器 */}
             {enabledMcpTools.length > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-text-secondary">[MCP]</span>
                 <span className="text-[11px] text-text-primary truncate">
-                  {enabledMcpTools
-                    .map((t) => (t.name.startsWith('mcp:') ? t.name.slice(4) : t.name))
-                    .join(', ')}
+                  {enabledMcpTools.map((t) => mcpShortName(t.name)).join(', ')}
                 </span>
               </div>
             )}
-            {/* Skills */}
             {enabledSkillTools.length > 0 && (
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-text-secondary">[Skills]</span>
                 <span className="text-[11px] text-text-primary truncate">
-                  {enabledSkillTools
-                    .map((t) => (t.name.startsWith('skill:') ? t.name.slice(6) : t.name))
-                    .join(', ')}
+                  {enabledSkillTools.map((t) => parseSkillDisplay(t.name).label).join(', ')}
                 </span>
               </div>
             )}
@@ -160,18 +137,84 @@ export function ToolPicker(): React.JSX.Element | null {
 
       {open && (
         <div className="picker-panel absolute left-0 bottom-8 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
-          <div className="px-2 py-1.5 border-b border-border-secondary text-[10px] text-text-tertiary">
-            {t('input.tools')}
-          </div>
           <div className="py-1 max-h-[60vh] overflow-y-auto">
-            <ToolSelectList
-              tools={allTools}
-              enabledTools={enabledTools}
-              onChange={(tools) => {
-                void handleChange(tools)
-              }}
-              compact
-            />
+            {mcpTools.length > 0 && (
+              <div className="py-0.5">
+                <div className="px-2 py-1 text-[10px] font-medium text-text-tertiary">MCP</div>
+                {mcpTools.map((tool) => {
+                  const isOnline = tool.serverStatus === 'connected'
+                  return (
+                    <label
+                      key={tool.name}
+                      className={`flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer ${!isOnline ? 'opacity-50' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabledTools.includes(tool.name)}
+                        onChange={() => toggle(tool.name)}
+                        className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                      />
+                      {tool.isBuiltin && (
+                        <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
+                          {t('input.skillBuiltinBadge')}
+                        </span>
+                      )}
+                      <span
+                        className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${isOnline ? 'text-purple-300' : 'text-red-300/60'}`}
+                      >
+                        {mcpShortName(tool.name)}
+                      </span>
+                      {!isOnline && (
+                        <span
+                          className="flex items-center gap-0.5 text-[10px] text-red-400"
+                          title={t('settings.mcpStatusDisconnected')}
+                        >
+                          <WifiOff size={10} />
+                        </span>
+                      )}
+                      <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                        {tool.label}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            {mcpTools.length > 0 && skillTools.length > 0 && (
+              <div className="border-t border-border-secondary my-0.5" />
+            )}
+            {skillTools.length > 0 && (
+              <div className="py-0.5">
+                <div className="px-2 py-1 text-[10px] font-medium text-text-tertiary">SKILL</div>
+                {skillTools.map((tool) => {
+                  const { label, builtin } = parseSkillDisplay(tool.name)
+                  return (
+                    <label
+                      key={tool.name}
+                      className="flex items-center gap-1.5 w-full px-2 py-0.5 hover:bg-bg-hover transition-colors cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabledTools.includes(tool.name)}
+                        onChange={() => toggle(tool.name)}
+                        className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                      />
+                      {builtin && (
+                        <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
+                          {t('input.skillBuiltinBadge')}
+                        </span>
+                      )}
+                      <span className="text-[11px] font-mono text-emerald-300 whitespace-nowrap flex-shrink-0">
+                        {label}
+                      </span>
+                      <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+                        {tool.label}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

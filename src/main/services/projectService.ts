@@ -24,7 +24,10 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
     labelKey: 'projectForm.promptSectionsTitle',
     desc: 'Project-level system prompt as ordered cards (array of {id, title, content})'
   },
-  enabledTools: { labelKey: 'projectForm.tools', desc: 'List of enabled tool names (string[])' },
+  enabledTools: {
+    labelKey: 'projectForm.wizardStepExtensions',
+    desc: 'List of enabled MCP/Skill identifiers — entries must be prefixed with mcp: or skill: (string[])'
+  },
   referenceDirs: {
     labelKey: 'projectForm.referenceDirs',
     desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite'

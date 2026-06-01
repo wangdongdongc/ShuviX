@@ -1,7 +1,15 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { X } from 'lucide-react'
 import { API_PROTOCOL_OPTIONS } from '../../../../shared/types/provider'
 import { useDialogClose } from '../../hooks/useDialogClose'
+import {
+  SettingsSection,
+  SettingsRow,
+  SettingsBlock,
+  InlineInput,
+  InlineSelect
+} from './SettingsPrimitives'
 
 interface AddProviderDialogProps {
   onAdd: (provider: {
@@ -14,12 +22,9 @@ interface AddProviderDialogProps {
   onClose: () => void
 }
 
-/**
- * 新增提供商弹窗 — 带淡入淡出动画
- */
+/** 新增提供商弹窗（卡片式） */
 export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): React.JSX.Element {
   const { t } = useTranslation()
-  const overlayRef = useRef<HTMLDivElement>(null)
   const { closing, handleClose } = useDialogClose(onClose)
 
   const [name, setName] = useState('')
@@ -31,7 +36,6 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
 
   const canSubmit = name.trim() && baseUrl.trim() && !adding
 
-  // ESC 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') handleClose()
@@ -39,11 +43,6 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [handleClose])
-
-  // 点击遮罩关闭
-  const handleOverlayClick = (e: React.MouseEvent): void => {
-    if (e.target === overlayRef.current) handleClose()
-  }
 
   const handleSubmit = async (): Promise<void> => {
     if (!canSubmit) return
@@ -72,81 +71,97 @@ export function AddProviderDialog({ onAdd, onClose }: AddProviderDialogProps): R
 
   return (
     <div
-      ref={overlayRef}
-      onClick={handleOverlayClick}
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 dialog-overlay${closing ? ' dialog-closing' : ''}`}
+      onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[400px] max-w-[90vw] dialog-panel">
-        {/* 标题 */}
-        <div className="px-5 py-4 border-b border-border-secondary">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[520px] max-w-[92vw] max-h-[88vh] flex flex-col dialog-panel"
+      >
+        {/* 头部 */}
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-text-primary">{t('settings.newProvider')}</h3>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            <X size={14} />
+          </button>
         </div>
 
-        {/* 表单 */}
-        <div className="px-5 py-4 space-y-3">
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('settings.providerName')}
-            </label>
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('settings.providerNamePlaceholder')}
-              className="zen-input"
+        {/* 内容 */}
+        <div className="px-5 py-5 overflow-y-auto flex-1 space-y-5">
+          <SettingsSection title={t('settings.providerConfigGroup')}>
+            <SettingsRow
+              title={t('settings.providerName')}
+              control={
+                <InlineInput
+                  value={name}
+                  onChange={setName}
+                  placeholder={t('settings.providerNamePlaceholder')}
+                  autoFocus
+                  width={260}
+                />
+              }
             />
-          </div>
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">Base URL</label>
-            <input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.example.com/v1"
-              className="zen-input font-mono"
+            <SettingsRow
+              title="Base URL"
+              control={
+                <InlineInput
+                  value={baseUrl}
+                  onChange={setBaseUrl}
+                  placeholder="https://api.example.com/v1"
+                  monospace
+                  width={260}
+                />
+              }
             />
-          </div>
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="zen-input font-mono"
+            <SettingsRow
+              title="API Key"
+              control={
+                <InlineInput
+                  type="password"
+                  value={apiKey}
+                  onChange={setApiKey}
+                  placeholder="sk-..."
+                  monospace
+                  width={260}
+                />
+              }
             />
-          </div>
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('settings.apiProtocol')}
-            </label>
-            <select
-              value={apiProtocol}
-              onChange={(e) => setApiProtocol(e.target.value as ProviderInfo['apiProtocol'])}
-              className="zen-select"
-            >
-              {API_PROTOCOL_OPTIONS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {t(p.labelKey)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] text-text-tertiary mb-1">
-              {t('settings.customHeaders')}
-            </label>
-            <textarea
-              value={customHeaders}
-              onChange={(e) => setCustomHeaders(e.target.value)}
-              placeholder={t('settings.customHeadersPlaceholder')}
-              rows={3}
-              className="zen-input font-mono text-[11px] resize-y"
+            <SettingsRow
+              title={t('settings.apiProtocol')}
+              control={
+                <InlineSelect
+                  value={apiProtocol}
+                  onChange={(v) => setApiProtocol(v as ProviderInfo['apiProtocol'])}
+                  width={260}
+                >
+                  {API_PROTOCOL_OPTIONS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {t(p.labelKey)}
+                    </option>
+                  ))}
+                </InlineSelect>
+              }
             />
-          </div>
+          </SettingsSection>
+
+          <SettingsSection title={t('settings.customHeaders')}>
+            <SettingsBlock>
+              <textarea
+                value={customHeaders}
+                onChange={(e) => setCustomHeaders(e.target.value)}
+                placeholder={t('settings.customHeadersPlaceholder')}
+                rows={3}
+                className="zen-textarea font-mono text-[11px]"
+              />
+            </SettingsBlock>
+          </SettingsSection>
         </div>
 
         {/* 按钮 */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
           <button
             onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"

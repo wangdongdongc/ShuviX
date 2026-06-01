@@ -24,5 +24,5 @@ import './database'
 // skill.ts 已迁至 services/skillTool.ts；这里仍然 import 触发其 registerBuiltinTool() 副作用
 import '../services/skillTool'
 
-// 子智能体（在 subagent/index.ts 中注册元数据）
-import '../subagent'
+// 统一 Agent 派发工具（替代原 subagent/* 多工具体系）
+import '../agents/AgentTool'

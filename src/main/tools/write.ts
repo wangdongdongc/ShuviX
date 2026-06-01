@@ -20,7 +20,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:write')

@@ -2,8 +2,6 @@ import {
   app,
   shell,
   session,
-  net,
-  protocol,
   BrowserWindow,
   Menu,
   ipcMain,
@@ -14,6 +12,8 @@ import {
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
+import { hookService } from './services/hooks'
+import { registerAllBuiltins } from './services/hooks/builtin'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -31,6 +31,8 @@ import './frontend/telegram/TelegramBotServer'
 import './tools/allTools'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
+import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
+import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './services/panelLayoutState'
 // pglite / pyodide: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
 import { disposePglite } from './services/pglite'
 import { disposePyodide } from './services/pyodide'
@@ -38,6 +40,10 @@ import { createBrowserView, destroyBrowserView, initBrowserSession } from './ser
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
+import {
+  registerCustomProtocolHandlers,
+  registerCustomProtocolSchemes
+} from './services/customProtocols'
 import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync } from './perf'
@@ -315,10 +321,18 @@ function getSavedPanelLayout(): PanelLayout {
   }
 }
 
+/** 启动时尚未创建 webContents，需根据保存的 uiZoom 计算 zoomFactor 把 CSS 像素换算成 DIP */
+function getStartupZoomFactor(): number {
+  const pct = Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1
+  return Math.max(0.5, Math.min(2.2, pct * 1.1))
+}
+
 function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
   const layout = getSavedPanelLayout()
   // browser 不自动恢复（renderer 侧不恢复 browserOpen），计算窗口宽度时排除 browser
-  const defaultWidth = calcWindowWidth({ ...layout, browserOpen: false })
+  // calcWindowWidth 返回 CSS 像素；BrowserWindow.width 需要 DIP，按 zoomFactor 换算
+  const zoom = getStartupZoomFactor()
+  const defaultWidth = Math.round(calcWindowWidth({ ...layout, browserOpen: false }) * zoom)
   const defaults = { width: defaultWidth, height: 800 }
   try {
     const raw = settingsDao.findByKey('window.mainBounds')
@@ -378,6 +392,14 @@ function createWindow(): void {
   // 注册 Electron 主窗口为默认前端
   chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
 
+  // 初始化悬浮聊天服务（owns 悬浮窗 + pin 状态）
+  // 由 main-entry 注入 ElectronFrontend 工厂，避免 service 层反向依赖 frontend-impl
+  initPinnedChatService({
+    mainWindow,
+    getThemeBgColor,
+    createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
+  })
+
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
   initBrowserSession()
   // 创建浏览器面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
@@ -397,10 +419,14 @@ function createWindow(): void {
     shell.openExternal(url)
   })
 
-  // 关闭前清理该窗口关联的终端实例
+  // 关闭前清理该窗口关联的终端实例 + 释放 browserOffset 跟踪
   const mainWebContentsId = mainWindow.webContents.id
   mainWindow.on('close', () => {
     destroyTerminalsByWindow(mainWebContentsId)
+    void unpinAllPinnedChat('window-closed')
+  })
+  mainWindow.on('closed', () => {
+    clearBrowserOffset(mainWebContentsId)
   })
 
   // 关闭前保存窗口位置和尺寸
@@ -416,12 +442,18 @@ function createWindow(): void {
       const zoom = mainWindow.webContents.getZoomFactor()
       const windowWidth = bounds.width / zoom // CSS 像素
       const layout = getSavedPanelLayout()
-      // 反推 chatWidth = 窗口宽度 - 其他面板
+      // 反推 chatWidth = 窗口宽度 - 其他面板。
+      // browserOpen 不读 DB —— DB 里的值在「上次会话开过、本次未操作过」时会过期。
+      // 用主进程实时跟踪的 browserOffsetByWindow（renderer 每次 set-browser-offset 都会更新）。
+      const browserActuallyOpen = getBrowserOffset(mainWebContentsId) > 0
       let chatWidth = windowWidth
       if (layout.sidebarOpen) chatWidth -= layout.sidebarWidth + HANDLE_WIDTH
-      if (layout.browserOpen) chatWidth -= layout.browserWidth + HANDLE_WIDTH
+      if (browserActuallyOpen) chatWidth -= layout.browserWidth + HANDLE_WIDTH
       chatWidth = Math.max(400, Math.round(chatWidth))
-      settingsDao.upsert('window.panelLayout', JSON.stringify({ ...layout, chatWidth }))
+      settingsDao.upsert(
+        'window.panelLayout',
+        JSON.stringify({ ...layout, chatWidth, browserOpen: browserActuallyOpen })
+      )
     }
   })
 
@@ -479,28 +511,30 @@ ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
   return { success: true }
 })
 
-// 调整主窗口宽度（delta 为 CSS 像素，自动按 zoom factor 换算为屏幕像素）
-ipcMain.handle('app:adjust-window-width', (_event, delta: number) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  const zoom = mainWindow.webContents.getZoomFactor()
+// 调整调用方窗口的宽度（delta 为 CSS 像素，按窗口自身 zoom factor 换算）
+// 主窗口最小宽度 800，悬浮窗最小宽度 320（保留各自创建时的 minWidth）
+ipcMain.handle('app:adjust-window-width', (event, delta: number) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || win.isDestroyed()) return
+  const zoom = win.webContents.getZoomFactor()
   const scaledDelta = Math.round(delta * zoom)
-  const bounds = mainWindow.getBounds()
-  const newWidth = Math.max(800, bounds.width + scaledDelta)
-  // 获取窗口所在显示器的工作区域，防止超出屏幕
+  const bounds = win.getBounds()
+  const [minWidth] = win.getMinimumSize()
+  const newWidth = Math.max(minWidth || 320, bounds.width + scaledDelta)
   const display = screen.getDisplayMatching(bounds)
   const maxRight = display.workArea.x + display.workArea.width
   const clampedWidth = Math.min(newWidth, maxRight - bounds.x)
   if (clampedWidth !== bounds.width) {
-    mainWindow.setBounds({ ...bounds, width: clampedWidth }, process.platform === 'darwin')
+    win.setBounds({ ...bounds, width: clampedWidth }, process.platform === 'darwin')
   }
 })
 
-// 设置浏览器面板宽度偏移 — 仅重置窗口最小宽度为固定值
-// CSS min-width (chat 400px) 已保证内容不会被过度压缩
-ipcMain.handle('app:set-browser-offset', (_event, _offset: number) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setMinimumSize(800, 600)
-  }
+// 设置浏览器面板宽度偏移 —— 按 sender 窗口分别跟踪
+// 状态存放在 services/panelLayoutState，避免与 pinnedChatService 间产生循环依赖
+ipcMain.handle('app:set-browser-offset', (event, offset: number) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || win.isDestroyed()) return
+  setBrowserOffset(win.webContents.id, offset)
 })
 
 // 单实例锁：阻止第二个进程启动，避免并发访问数据库
@@ -516,23 +550,15 @@ if (!gotTheLock) {
   })
 }
 
-// 注册自定义协议（必须在 app.whenReady 之前调用）
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: 'shuvix-media',
-    privileges: { stream: true, supportFetchAPI: true, bypassCSP: true }
-  }
-])
+// 自定义协议 scheme 注册必须早于 app.whenReady
+registerCustomProtocolSchemes()
 
 app.whenReady().then(async () => {
   mark('app.whenReady')
   electronApp.setAppUserModelId('com.shuvix')
 
-  // 注册 shuvix-media:// 协议，安全地为渲染进程提供本地文件（TTS 音频等）
-  protocol.handle('shuvix-media', (request) => {
-    const filePath = decodeURIComponent(new URL(request.url).pathname)
-    return net.fetch(`file://${filePath}`)
-  })
+  // shuvix-media:// + shuvix-preview://
+  registerCustomProtocolHandlers()
 
   // 允许渲染进程请求麦克风权限（语音输入）。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
@@ -567,6 +593,13 @@ app.whenReady().then(async () => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+  })
+
+  // 初始化 hook 系统：先注册内置 hook，再启动用户配置 watcher
+  // —— 保证内置安全策略不会被用户 hook 偷偷绕过（builtin → global → project 顺序执行）
+  measure('hookService.start', () => {
+    registerAllBuiltins(hookService)
+    hookService.start()
   })
 
   // 注册所有 IPC 处理器
@@ -622,6 +655,7 @@ app.on('before-quit', () => {
   disposePglite()
   disposePyodide()
   closeAllWatchers()
+  hookService.stop().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

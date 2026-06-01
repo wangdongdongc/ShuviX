@@ -81,6 +81,14 @@ interface ResponseData {
   [key: string]: unknown
 }
 
+/**
+ * 嵌套卡片采用"两色交替"配色而非层层加深：
+ * - Section 外卡（灰）→ 展开容器（白，回到页面同色）→ 内层内容卡（灰）→ ……
+ * - 同一色调里靠 padding/border 拉开层级，避免视觉越往里越黑。
+ */
+const CARD_GRAY = 'rounded-lg border border-border-secondary/50 bg-bg-tertiary/30 p-2'
+const CARD_WHITE = 'rounded-lg border border-border-secondary/50 bg-bg-primary p-2'
+
 /** 可折叠区块 */
 function Section({
   title,
@@ -97,10 +105,10 @@ function Section({
 }): React.JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="border border-border-primary rounded-lg overflow-hidden">
+    <div className="rounded-xl border border-border-secondary/60 bg-bg-tertiary/30 overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-text-primary bg-bg-tertiary hover:bg-bg-hover transition-colors"
+        className="w-full flex items-center gap-1.5 px-3 py-2 text-[13px] font-semibold text-text-primary hover:bg-bg-hover/40 transition-colors"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span>{title}</span>
@@ -111,7 +119,7 @@ function Section({
           <span className="ml-auto text-[10px] text-text-tertiary font-normal">{extra}</span>
         )}
       </button>
-      {open && <div className="border-t border-border-primary">{children}</div>}
+      {open && <div className="border-t border-border-secondary/40">{children}</div>}
     </div>
   )
 }
@@ -149,26 +157,28 @@ function CollapsibleItem({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <div className="border-b border-border-primary last:border-b-0">
+    <div className="border-b border-border-secondary/40 last:border-b-0">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-bg-hover/50 transition-colors"
+        className={`w-full flex items-center gap-2 px-4 py-2.5 text-left transition-colors ${
+          open ? 'bg-bg-hover/30' : 'hover:bg-bg-hover/50'
+        }`}
       >
-        <span className="flex-shrink-0 mt-0.5">
-          {open ? (
-            <ChevronDown size={10} className="text-text-tertiary" />
-          ) : (
-            <ChevronRight size={10} className="text-text-tertiary" />
-          )}
+        <span className="flex-shrink-0 inline-flex items-center justify-center w-3 h-3 text-text-tertiary">
+          {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </span>
-        <span className="flex-shrink-0 mt-0.5">{icon}</span>
-        <span className={`flex-shrink-0 text-[10px] font-semibold uppercase mt-px ${labelColor}`}>
+        <span className="flex-shrink-0 inline-flex items-center">{icon}</span>
+        <span className={`flex-shrink-0 text-[10px] font-semibold uppercase ${labelColor}`}>
           {label}
         </span>
         {badge}
         <span className="flex-1 min-w-0 text-[11px] text-text-secondary truncate">{summary}</span>
       </button>
-      {open && <div className="px-3 pb-3 pl-[52px]">{children}</div>}
+      {open && (
+        <div className="px-3 pt-1 pb-2">
+          <div className={CARD_WHITE}>{children}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -322,7 +332,7 @@ function MessageContent({
         <div className="space-y-1.5">
           <div className="text-[10px] text-text-tertiary font-medium">tool_calls:</div>
           {toolCalls.map((tc: ToolCallEntry, i: number) => (
-            <div key={i} className="bg-bg-tertiary rounded-md p-2">
+            <div key={i} className={CARD_GRAY}>
               <div className="text-[11px] text-orange-400 font-medium">
                 {tc.function?.name || tc.name || '?'}
               </div>
@@ -402,7 +412,7 @@ function ContentBlockView({
   if (block.type === 'functionCall' || block.functionCall) {
     const fc = block.functionCall || block
     return (
-      <div className="bg-bg-tertiary rounded-md p-2">
+      <div className={CARD_GRAY}>
         <div className="text-[11px] text-orange-400 font-medium">{fc.name || '?'}</div>
         <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
           {JSON.stringify(fc.args || fc.arguments, null, 2)}
@@ -414,7 +424,7 @@ function ContentBlockView({
   if (block.type === 'functionResponse' || block.functionResponse) {
     const fr = block.functionResponse || block
     return (
-      <div className="bg-bg-tertiary rounded-md p-2">
+      <div className={CARD_GRAY}>
         <div className="text-[11px] text-green-400 font-medium">
           {'← '}
           {fr.name || '?'}
@@ -428,7 +438,7 @@ function ContentBlockView({
   // Anthropic: thinking block
   if (block.type === 'thinking') {
     return (
-      <div className="bg-bg-tertiary rounded-md p-2 border-l-2 border-purple-400/40">
+      <div className={CARD_GRAY}>
         <div className="text-[10px] text-purple-400 font-medium mb-1">thinking</div>
         <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words leading-relaxed">
           {(block.thinking as string) || ''}
@@ -439,7 +449,7 @@ function ContentBlockView({
   // Anthropic: tool_use block
   if (block.type === 'tool_use') {
     return (
-      <div className="bg-bg-tertiary rounded-md p-2">
+      <div className={CARD_GRAY}>
         <div className="text-[11px] text-orange-400 font-medium">
           → {(block.name as string) || '?'}
           {block.id ? (
@@ -457,12 +467,8 @@ function ContentBlockView({
     const c = block.content
     const isError = block.is_error === true
     return (
-      <div
-        className={`bg-bg-tertiary rounded-md p-2 border-l-2 ${
-          isError ? 'border-red-400/60' : 'border-green-400/40'
-        }`}
-      >
-        <div className="text-[11px] text-green-400 font-medium">
+      <div className={CARD_GRAY}>
+        <div className={`text-[11px] font-medium ${isError ? 'text-red-400' : 'text-green-400'}`}>
           ← tool_result
           {block.tool_use_id ? (
             <span className="ml-1 text-[10px] text-text-tertiary">
@@ -787,7 +793,7 @@ function ResponseSection({
         <div className="px-3 py-2 space-y-1.5">
           <div className="text-[10px] text-text-tertiary font-medium">tool_calls:</div>
           {toolCalls.map((tc: ContentBlock, i: number) => (
-            <div key={i} className="bg-bg-tertiary rounded-md p-2">
+            <div key={i} className={CARD_GRAY}>
               <div className="text-[11px] text-orange-400 font-medium">{tc.name || '?'}</div>
               <pre className="mt-1 text-[10px] text-text-secondary whitespace-pre-wrap break-words">
                 {JSON.stringify(tc.arguments, null, 2)}
@@ -897,7 +903,7 @@ export function PayloadViewer({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* 基本参数 */}
       <Section title={t('settings.payloadBasicParams')}>
         <BasicParams data={parsed} />

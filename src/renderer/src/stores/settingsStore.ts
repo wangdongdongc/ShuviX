@@ -25,6 +25,8 @@ interface SettingsState {
   activeModel: string
   /** 系统提示词 */
   systemPrompt: string
+  /** 系统提示词总开关 — 关闭后不向 LLM 追加自由文本 + 内置/自定义卡片 */
+  systemPromptEnabled: boolean
   /** 主题模式 */
   theme: 'dark' | 'light' | 'system'
   /** 深色模式使用的具体主题 */
@@ -35,6 +37,8 @@ interface SettingsState {
   fontSize: number
   /** UI 缩放比例 (%) */
   uiZoom: number
+  /** 专注模式：选中会话时淡化未选中的会话项与边缘 UI 区域 */
+  focusMode: boolean
   /** 语音 STT 后端 */
   voiceSttBackend: 'openai' | 'local'
   /** 语音输入语言 */
@@ -66,8 +70,10 @@ interface SettingsState {
     | 'tools'
     | 'mcp'
     | 'skills'
+    | 'hooks'
     | 'voice'
     | 'bindings'
+    | 'contextMgmt'
     | 'httpLogs'
     | 'about'
   /** 标题生成模型 provider ID(空 = 不自动生成标题) */
@@ -89,6 +95,7 @@ interface SettingsState {
   setActiveProvider: (provider: string) => void
   setActiveModel: (model: string) => void
   setSystemPrompt: (prompt: string) => void
+  setSystemPromptEnabled: (enabled: boolean) => void
   setTitleProvider: (provider: string) => void
   setTitleModel: (model: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
@@ -96,6 +103,7 @@ interface SettingsState {
   setLightTheme: (theme: LightThemeId) => void
   setFontSize: (size: number) => void
   setUiZoom: (zoom: number) => void
+  setFocusMode: (enabled: boolean) => void
   setIsSettingsOpen: (open: boolean) => void
   setActiveSettingsTab: (
     tab:
@@ -104,8 +112,10 @@ interface SettingsState {
       | 'tools'
       | 'mcp'
       | 'skills'
+      | 'hooks'
       | 'voice'
       | 'bindings'
+      | 'contextMgmt'
       | 'httpLogs'
       | 'about'
   ) => void
@@ -123,11 +133,13 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   activeProvider: '',
   activeModel: '',
   systemPrompt: 'You are a helpful assistant.',
+  systemPromptEnabled: true,
   theme: 'dark',
   darkTheme: 'github-dark',
   lightTheme: 'github-light',
   fontSize: 14,
   uiZoom: 100,
+  focusMode: true,
   voiceSttBackend: 'openai',
   voiceSttLanguage: 'auto',
   voiceLocalModel: 'large-v3-turbo',
@@ -153,6 +165,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setActiveProvider: (provider) => set({ activeProvider: provider }),
   setActiveModel: (model) => set({ activeModel: model }),
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
+  setSystemPromptEnabled: (enabled) => set({ systemPromptEnabled: enabled }),
   setTitleProvider: (provider) => set({ titleProvider: provider }),
   setTitleModel: (model) => set({ titleModel: model }),
   setTheme: (theme) => set({ theme }),
@@ -160,6 +173,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setLightTheme: (lightTheme) => set({ lightTheme }),
   setFontSize: (size) => set({ fontSize: size }),
   setUiZoom: (zoom) => set({ uiZoom: zoom }),
+  setFocusMode: (enabled) => set({ focusMode: enabled }),
   setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
   setActiveSettingsTab: (tab) => set({ activeSettingsTab: tab }),
 
@@ -173,11 +187,13 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     const lightTheme = (rawLight === 'light' ? 'github-light' : rawLight) as LightThemeId
     set({
       systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
+      systemPromptEnabled: settings['general.systemPromptEnabled'] !== 'false',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       darkTheme,
       lightTheme,
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
+      focusMode: settings['appearance.focusMode'] !== 'false',
       voiceSttBackend: (settings['voice.sttBackend'] as 'openai' | 'local') || 'openai',
       voiceSttLanguage: settings['voice.sttLanguage'] || 'auto',
       voiceLocalModel: settings['voice.localModel'] || 'large-v3-turbo',

@@ -55,6 +55,21 @@ export function getBuiltinSkillsDir(): string {
     : resolve(__dirname, '../../resources/skills')
 }
 
+/** 全局 Agents 目录：~/.shuvix/agents/（不自动创建，由 agentService 管理） */
+export function getDefaultAgentsDir(): string {
+  return join(homedir(), '.shuvix', 'agents')
+}
+
+/**
+ * 内置 Agents 资源目录 —— 随应用版本包发布，只读
+ * 打包后位于 Resources/agents/，开发时位于 resources/agents/
+ */
+export function getBuiltinAgentsDir(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'agents')
+    : resolve(__dirname, '../../resources/agents')
+}
+
 /** Widgets 根目录：~/.shuvix/widgets/（懒创建） */
 export function getWidgetsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'widgets'))

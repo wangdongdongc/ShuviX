@@ -8,7 +8,38 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Search, X } from 'lucide-react'
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
+import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { useChatStore } from '../../stores/chatStore'
+import { FilePreview } from './FilePreview'
+import { AudioDock } from './AudioDock'
+import { VideoDock } from './VideoDock'
+
+/** 音频扩展名 → MIME。点击命中即走底部 dock，不进预览覆盖层。
+ *  与 main 的 AUDIO_MIME_BY_EXT 同步；renderer 这里独立列表是为了在点击瞬间就分流，
+ *  不必等 files.read RPC 返回 'media' kind 才知道是音频。 */
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/opus'
+}
+
+/** 视频扩展名 → MIME。同上：渲染端表用于点击瞬间分流到底部 VideoDock */
+const VIDEO_MIME_BY_EXT: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/x-m4v',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogv': 'video/ogg'
+}
+
+function extOf(path: string): string {
+  const idx = path.lastIndexOf('.')
+  return idx >= 0 ? path.slice(idx).toLowerCase() : ''
+}
 
 interface ScanState {
   /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
@@ -36,6 +67,20 @@ export function FilesPanel(): React.JSX.Element {
   /** 搜索查询字符串。空字符串视作未触发搜索 */
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  /** 预览状态：被选中的文件相对路径（相对当前 projectPath）；null = 未预览 */
+  const [previewRelPath, setPreviewRelPath] = useState<string | null>(null)
+  /** 媒体 dock 状态（音视频共享同一槽位）—— 与预览状态独立，让用户听/看的同时仍能浏览树。
+   *  音视频互斥：放新的会替换旧的；这与"一个文件预览面板只有一个 dock"的语义一致。
+   *  relPath 同时存一份：dock 上的"展开"按钮需要把它转回 previewRelPath 走覆盖预览。 */
+  const [playingMedia, setPlayingMedia] = useState<{
+    absPath: string
+    relPath: string
+    mimeType: string
+    fileName: string
+    type: 'audio' | 'video'
+  } | null>(null)
+  /** 暴露的 FilesTree model 句柄，关闭预览时用来取消 pierre 选中（否则再点同一文件不会触发） */
+  const treeModelRef = useRef<FileTreeModel | null>(null)
 
   // 渲染层防抖：200ms 内的连续 onChanged 事件合并为一次重扫
   const rescanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -67,6 +112,12 @@ export function FilesPanel(): React.JSX.Element {
     if (!projectPath) return
     void scan() // eslint-disable-line react-hooks/set-state-in-effect
   }, [projectPath, refreshNonce, scan])
+
+  // 项目 / 会话切换时关闭预览 + 停止音频（避免读到旧会话工作目录里的文件）
+  useEffect(() => {
+    setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
+    setPlayingMedia(null)
+  }, [projectPath, sessionId])
 
   // 订阅文件变动事件，按 root 过滤；防抖 200ms 后重扫
   useEffect(() => {
@@ -138,9 +189,54 @@ export function FilesPanel(): React.JSX.Element {
         key={freshState.forRoot}
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
+        onFileSelect={(rel) => {
+          // 音频 / 视频：上底部 dock，文件树继续可见；其它走预览覆盖层
+          const ext = extOf(rel)
+          const audioMime = AUDIO_MIME_BY_EXT[ext]
+          const videoMime = VIDEO_MIME_BY_EXT[ext]
+          if (audioMime || videoMime) {
+            if (!projectPath) return
+            const abs = joinPath(projectPath, rel)
+            const name = abs.split(/[/\\]/).pop() || abs
+            setPlayingMedia({
+              absPath: abs,
+              relPath: rel,
+              mimeType: (audioMime || videoMime) as string,
+              fileName: name,
+              type: audioMime ? 'audio' : 'video'
+            })
+          } else {
+            setPreviewRelPath(rel)
+          }
+        }}
+        modelOutRef={treeModelRef}
       />
     )
   }
+
+  /**
+   * 关闭预览：清掉本地状态 + 取消 pierre 树的选中。
+   * 不取消选中会卡 pierre 的 selectionVersion —— 再次点击同一文件 #applySelection
+   * 短路（selection 未变），useFileTreeSelection 不更新，预览无法重新打开。
+   */
+  const closePreview = useCallback(() => {
+    setPreviewRelPath((prev) => {
+      if (prev) treeModelRef.current?.getItem(prev)?.deselect()
+      return null
+    })
+  }, [])
+
+  // 文件被删时关闭预览（freshState.paths 已经经过 watcher 同步重扫）
+  useEffect(() => {
+    if (!previewRelPath || !freshState) return
+    if (!freshState.paths.includes(previewRelPath)) {
+      setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
+    }
+  }, [freshState, previewRelPath])
+
+  /** 把 pierre 树相对路径拼成宿主机绝对路径（不引 node:path，兼容 win 分隔符） */
+  const previewAbsPath =
+    previewRelPath && projectPath ? joinPath(projectPath, previewRelPath) : null
 
   const folderName = projectPath ? basename(projectPath) : ''
 
@@ -221,7 +317,45 @@ export function FilesPanel(): React.JSX.Element {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 pt-2">{content}</div>
+      <div className="flex-1 min-h-0 pt-2 relative">
+        {content}
+        {previewAbsPath && sessionId && (
+          <div className="absolute inset-0 z-10 flex flex-col bg-bg-secondary">
+            <FilePreview path={previewAbsPath} sessionId={sessionId} onClose={closePreview} />
+          </div>
+        )}
+      </div>
+
+      {/* 媒体 dock —— flex-shrink-0，与文件树并列垂直布局，不遮挡 */}
+      {playingMedia &&
+        sessionId &&
+        (playingMedia.type === 'audio' ? (
+          <AudioDock
+            path={playingMedia.absPath}
+            mimeType={playingMedia.mimeType}
+            fileName={playingMedia.fileName}
+            sessionId={sessionId}
+            onClose={() => setPlayingMedia(null)}
+            onExpand={() => {
+              setPreviewRelPath(playingMedia.relPath)
+              setPlayingMedia(null)
+            }}
+          />
+        ) : (
+          // key 强制切片时整组件 remount —— aspect 自动复位 + 原生 video 元素重挂载
+          <VideoDock
+            key={playingMedia.absPath}
+            path={playingMedia.absPath}
+            mimeType={playingMedia.mimeType}
+            fileName={playingMedia.fileName}
+            sessionId={sessionId}
+            onClose={() => setPlayingMedia(null)}
+            onExpand={() => {
+              setPreviewRelPath(playingMedia.relPath)
+              setPlayingMedia(null)
+            }}
+          />
+        ))}
     </div>
   )
 }
@@ -233,6 +367,14 @@ function basename(p: string): string {
   return idx >= 0 ? s.slice(idx + 1) : s
 }
 
+/** 用宿主机分隔符（POSIX `/`，win `\`）把 base 与相对路径拼接，去重边界分隔符 */
+function joinPath(base: string, rel: string): string {
+  const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  const left = base.replace(/[/\\]+$/, '')
+  const right = rel.replace(/^[/\\]+/, '')
+  return `${left}${sep}${right}`
+}
+
 /**
  * 树渲染容器
  * key 由父组件按 root 切换，保证不同工作目录间彻底重建模型；
@@ -242,11 +384,23 @@ function basename(p: string): string {
  */
 function FilesTree({
   paths,
-  searchQuery
+  searchQuery,
+  onFileSelect,
+  modelOutRef
 }: {
   paths: string[]
   searchQuery: string
+  /** 用户点击文件行（不含目录）时回调，传相对路径 */
+  onFileSelect: (relPath: string) => void
+  /** 让父组件持有 model 引用，用于关闭预览时 deselect */
+  modelOutRef?: React.RefObject<FileTreeModel | null>
 }): React.JSX.Element {
+  // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
+  const onSelectRef = useRef(onFileSelect)
+  useEffect(() => {
+    onSelectRef.current = onFileSelect
+  }, [onFileSelect])
+
   const { model } = useFileTree({
     paths,
     initialExpansion: 'closed',
@@ -256,6 +410,36 @@ function FilesTree({
     density: 'compact',
     itemHeight: 22
   })
+
+  // 把 model 暴露给父组件 —— 关闭预览时父组件需要 deselect
+  useEffect(() => {
+    if (!modelOutRef) return
+    modelOutRef.current = model
+    return () => {
+      modelOutRef.current = null
+    }
+  }, [model, modelOutRef])
+
+  // 选择订阅 —— 不能用 useFileTree options 里的 onSelectionChange（pierre 只在 model
+  // 构造时消费一次）；也不用 useFileTreeSelection 包装（useSyncExternalStore 的订阅在
+  // mount 之后才挂上去，且内部 selector 每次渲染都是新函数会破坏其缓存，导致 workspace
+  // 切换后首次 click 偶发性丢失）。直接 model.subscribe 是最稳的路径：mount 即时挂载，
+  // pierre 内部已经吃掉 initial snapshot 不会回调一次空选区，关闭闭包变量 lastNotified
+  // 在 unmount 时随 cleanup 一起释放，无跨 mount 状态泄漏。
+  useEffect(() => {
+    let lastNotified: string | null = model.getSelectedPaths()[0] ?? null
+    const unsubscribe = model.subscribe(() => {
+      const p = model.getSelectedPaths()[0] ?? null
+      if (lastNotified === p) return
+      lastNotified = p
+      if (!p) return
+      const item = model.getItem(p)
+      // 目录交给树自身展开/收起，不进预览
+      if (!item || item.isDirectory()) return
+      onSelectRef.current(p)
+    })
+    return unsubscribe
+  }, [model])
 
   // 首次挂载已经把 paths 传给了 useFileTree；后续 paths 变化通过 resetPaths 同步
   const isFirst = useRef(true)

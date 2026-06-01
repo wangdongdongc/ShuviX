@@ -13,11 +13,10 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GrepToolDetails } from '../../shared/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgSearch } from '../utils/toolUtils/ripgrep'
-import { processToolOutput } from '../utils/toolUtils/processToolOutput'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:grep')
@@ -50,6 +49,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly description =
     'Search file contents using regex patterns. Returns matching file paths, line numbers, and line text. Results respect .gitignore automatically. Use the include parameter to filter by file type. For searching file names instead of content, use the glob tool.'
   readonly parameters = GrepParamsSchema
+  readonly outputStrategy = 'tail' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -80,7 +80,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   }
 
   protected async executeInternal(
-    toolCallId: string,
+    _toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<GrepToolDetails>> {
@@ -151,20 +151,13 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       )
     }
 
-    // 统一截断/持久化处理
-    const processed = processToolOutput({
-      sessionId: this.ctx.sessionId,
-      toolCallId,
-      fullText: outputLines.join('\n'),
-      strategy: 'tail'
-    })
-
+    // 输出长度的截断/落盘统一由 wrapToolOutput 在构建工具时处理
     return {
-      content: [{ type: 'text' as const, text: processed.text }],
+      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
       details: {
         type: 'grep',
         matches: matches.length,
-        truncated: truncated || processed.truncated
+        truncated
       }
     }
   }

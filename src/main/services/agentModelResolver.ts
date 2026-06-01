@@ -1,4 +1,4 @@
-import { type Model, type Api, type KnownProvider, getModel } from '@mariozechner/pi-ai'
+import { type Model, type Api, type KnownProvider, getModel } from '@earendil-works/pi-ai'
 import { providerDao } from '../dao/providerDao'
 import type { ModelCapabilities } from '../types'
 import { buildCustomProviderCompat } from '../utils/providerCompat'

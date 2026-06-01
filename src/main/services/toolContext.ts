@@ -146,6 +146,29 @@ export async function assertSandboxRead(
 }
 
 /**
+ * 只读沙箱归属判定 —— 永不弹审批。
+ * 被动 UI（预览面板、tooltip）专用：调用方需要"在沙箱内就读、不在就显示占位"的同步语义，
+ * 不能像 assertSandboxRead 那样在沙箱外触发 requestUserInput 弹窗。
+ *
+ * 允许清单与 assertSandboxRead 的"无审批通行"分支一致：
+ *   - workspace + referenceDirs
+ *   - tool_results 持久化目录
+ *   - 默认 / 内置 / 用户外接 skills 目录
+ *
+ * 不查 session allowList —— 工具级 per-path 授权不应静默放宽 UI 范围。
+ */
+export function isPathInSandboxRead(config: ProjectConfig, absolutePath: string): boolean {
+  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return true
+  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return true
+  if (absolutePath.startsWith(getToolResultsBase() + sep)) return true
+  if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return true
+  if (absolutePath.startsWith(getBuiltinSkillsDir() + sep)) return true
+  if (skillService.listExternalDirs().some((d) => absolutePath.startsWith(d.path + sep)))
+    return true
+  return false
+}
+
+/**
  * 沙箱守卫：写入访问（workspace + readwrite 参考目录允许）
  * 用于 write、edit 等写入工具
  */

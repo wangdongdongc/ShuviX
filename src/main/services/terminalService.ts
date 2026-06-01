@@ -4,11 +4,12 @@
  */
 
 import * as pty from 'node-pty'
-import { BrowserWindow } from 'electron'
+import { webContents } from 'electron'
 import log from 'electron-log'
 
 interface TerminalInstance {
   pty: pty.IPty
+  /** 创建终端的 renderer 的 webContents.id —— pty 输出回送时按此 id 路由 */
   windowId: number
 }
 
@@ -48,19 +49,20 @@ export function createTerminal(params: {
 
   terminals.set(terminalId, { pty: ptyProcess, windowId })
 
-  // PTY 输出 → 渲染进程
+  // PTY 输出 → 渲染进程 (按 webContents.id 路由,BrowserWindow.id 与 webContents.id 是两套 ID,
+  // 主窗口偶然相等,悬浮窗会发散 —— 必须用 webContents.fromId)
   ptyProcess.onData((data) => {
-    const win = BrowserWindow.fromId(windowId)
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('terminal:data', { terminalId, data })
+    const wc = webContents.fromId(windowId)
+    if (wc && !wc.isDestroyed()) {
+      wc.send('terminal:data', { terminalId, data })
     }
   })
 
   // PTY 退出 → 通知渲染进程
   ptyProcess.onExit(({ exitCode }) => {
-    const win = BrowserWindow.fromId(windowId)
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('terminal:exit', { terminalId, exitCode })
+    const wc = webContents.fromId(windowId)
+    if (wc && !wc.isDestroyed()) {
+      wc.send('terminal:exit', { terminalId, exitCode })
     }
     terminals.delete(terminalId)
     log.info(`[Terminal] ${terminalId} exited with code ${exitCode}`)

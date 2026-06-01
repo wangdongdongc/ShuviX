@@ -38,18 +38,22 @@ export function ZenSelect({
     close()
   }
 
+  const placeholderActive = !value
+
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative w-full">
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1 bg-transparent border-0 border-b border-border-secondary rounded-none py-1.5 text-[11px] text-text-primary whitespace-nowrap hover:border-accent/50 transition-colors cursor-pointer"
+        className={`w-full flex items-center justify-between gap-1 bg-bg-primary border border-border-secondary/50 rounded-md px-2.5 py-1 text-[11px] hover:border-border-secondary transition-colors cursor-pointer ${
+          placeholderActive ? 'text-text-tertiary' : 'text-text-primary'
+        } ${open ? 'border-accent/60' : ''}`}
       >
-        <span>{selectedLabel}</span>
-        <ChevronDown size={10} className="text-text-tertiary flex-shrink-0" />
+        <span className="truncate">{selectedLabel}</span>
+        <ChevronDown size={11} className="text-text-tertiary flex-shrink-0" />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 min-w-[120px] max-h-60 rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-y-auto z-50">
+        <div className="absolute left-0 right-0 top-full mt-1 max-h-60 rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-y-auto z-50">
           {/* 空值选项（placeholder） */}
           {placeholder && (
             <button

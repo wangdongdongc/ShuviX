@@ -28,9 +28,22 @@ interface ExecuteMessage {
   extensions?: string[]
 }
 
+/** 参数化结构化查询 —— 返回行数组而非 psql 文本 */
+interface QueryMessage {
+  type: 'query'
+  id: string
+  sql: string
+  params?: unknown[]
+}
+
 export interface MountConfig {
   hostPath: string
   access: 'readonly' | 'readwrite'
+}
+
+export interface QueryField {
+  name: string
+  dataTypeID: number
 }
 
 export interface WorkerResponse {
@@ -40,6 +53,10 @@ export interface WorkerResponse {
   error?: string
   rowCount?: number
   columnCount?: number
+  /** 结构化查询返回的行（仅 query 消息使用） */
+  rows?: unknown[]
+  fields?: QueryField[]
+  affectedRows?: number
 }
 
 // ---- PGLite 运行时 ----
@@ -174,6 +191,57 @@ async function init(mounts: MountConfig[], dataDir?: string): Promise<void> {
   parentPort!.postMessage({ type: 'ready' } satisfies WorkerResponse)
 }
 
+/** pglite 是单连接：任何错误都可能让事务停在 aborted 态，后续所有查询全挂。
+ *  在 catch 里盲发一次 ROLLBACK 兜底，让 worker 自愈。 */
+async function rollbackQuietly(): Promise<void> {
+  if (!db) return
+  try {
+    await db.exec('ROLLBACK')
+  } catch {
+    // 无事务时 ROLLBACK 只产生 NOTICE，不会抛；这里捕获是给其它意外兜底
+  }
+}
+
+async function query(id: string, sql: string, params?: unknown[]): Promise<void> {
+  if (!db) {
+    parentPort!.postMessage({
+      type: 'error',
+      id,
+      error: 'PGLite runtime not initialized'
+    } satisfies WorkerResponse)
+    return
+  }
+
+  try {
+    // 多语句 query：pglite 的 `query()` 只跑单语句 + 参数；多语句拆开执行，
+    // 取最后一个产生结果集的语句作为返回（与 PostgREST 行为对齐）。
+    // 用 `pg.query` 走的是 extended protocol，参数化、类型安全。
+    const result = await db.query(sql, params ?? [])
+    const fields: QueryField[] = (result.fields ?? []).map(
+      (f: { name: string; dataTypeID: number }) => ({
+        name: f.name,
+        dataTypeID: f.dataTypeID
+      })
+    )
+    parentPort!.postMessage({
+      type: 'result',
+      id,
+      rows: result.rows ?? [],
+      fields,
+      affectedRows: result.affectedRows ?? 0,
+      rowCount: (result.rows ?? []).length,
+      columnCount: fields.length
+    } satisfies WorkerResponse)
+  } catch (err: unknown) {
+    await rollbackQuietly()
+    parentPort!.postMessage({
+      type: 'error',
+      id,
+      error: err instanceof Error ? err.message : String(err)
+    } satisfies WorkerResponse)
+  }
+}
+
 async function execute(id: string, sql: string, extensions?: string[]): Promise<void> {
   if (!db) {
     parentPort!.postMessage({
@@ -225,6 +293,7 @@ async function execute(id: string, sql: string, extensions?: string[]): Promise<
       columnCount: lastColumnCount
     } satisfies WorkerResponse)
   } catch (err: unknown) {
+    await rollbackQuietly()
     parentPort!.postMessage({
       type: 'error',
       id,
@@ -239,7 +308,7 @@ let execQueue: Promise<void> = Promise.resolve()
 
 // ---- 消息处理 ----
 
-parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
+parentPort!.on('message', (msg: InitMessage | ExecuteMessage | QueryMessage) => {
   if (msg.type === 'init') {
     execQueue = execQueue.then(async () => {
       try {
@@ -253,5 +322,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage) => {
     })
   } else if (msg.type === 'execute') {
     execQueue = execQueue.then(() => execute(msg.id, msg.sql, msg.extensions))
+  } else if (msg.type === 'query') {
+    execQueue = execQueue.then(() => query(msg.id, msg.sql, msg.params))
   }
 })

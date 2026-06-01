@@ -194,7 +194,9 @@ export function ToolCallBlock({
           ))}
         {icon}
         <span className="font-medium text-text-secondary flex-shrink-0">
-          {presentation?.label || toolName}
+          {toolName === 'Agent' && typeof args?.subagent_type === 'string' && args.subagent_type
+            ? `${presentation?.label || 'Agent'} · ${args.subagent_type}`
+            : presentation?.label || toolName}
         </span>
         {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}
         {!detail && <span className="flex-1" />}

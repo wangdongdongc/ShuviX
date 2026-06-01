@@ -19,7 +19,7 @@ import { writeFileSync, unlinkSync, existsSync, chmodSync, mkdirSync, type PathL
 import { join } from 'path'
 import { homedir, platform, userInfo } from 'os'
 import { createLogger } from '../logger'
-import { widgetService, exportWidget, WidgetExportError } from './widget'
+import { widgetService, exportWidget, WidgetExportError, runWidgetDbQuery } from './widget'
 import { sessionService } from './sessionService'
 import {
   resolveProjectConfig,
@@ -46,7 +46,9 @@ import {
 } from './browser'
 import { pyodideWorkerManager, type ExecuteRequest } from './pyodide/workerManager'
 import { parseShuvixPythonArgv, splitPythonPath } from './pyodide/argvParser'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import { pgliteWorkerManager } from './pglite/workerManager'
+import { parseShuvixPgliteArgv } from './pglite/argvParser'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BrowserToolDetails } from '../../shared/types/chatMessage'
 
 const log = createLogger('cliServer')
@@ -304,6 +306,29 @@ class CliServer {
       return widgetService.listActive()
     })
 
+    this.handlers.set('widget.db-init', async (p) => {
+      const id = String(p.id ?? '')
+      const sql = String(p.sql ?? '')
+      if (!id) throw new Error('id required')
+      if (!sql.trim()) throw new Error('sql required (use --sql "<DDL>" or --file <path>)')
+      return await widgetService.setDbSchema(id, sql)
+    })
+
+    this.handlers.set('widget.db-query', async (p) => {
+      const id = String(p.id ?? '')
+      const sql = String(p.sql ?? '')
+      if (!id) throw new Error('id required')
+      if (!sql.trim()) throw new Error('sql required (use --sql "<SQL>" or --file <path>)')
+      // 校验 widget 存在 —— 否则 query 会落到一个不存在的 widget 的 schema
+      const widget = widgetService.getById(id)
+      if (!widget) throw new Error(`widget "${id}" not found`)
+      const result = await runWidgetDbQuery(id, sql)
+      if (result.error) {
+        return { stdout: '', stderr: result.error, exitCode: 1 }
+      }
+      return { stdout: result.output, stderr: '', exitCode: 0 }
+    })
+
     // ────────────────── browser.* ──────────────────
     // 浏览器面板是全局单例（挂在主窗口上），devtools 操作直接打 CDP。
     // open/close 走 chat event 给 renderer 显示/隐藏面板，必须有 sessionId。
@@ -423,6 +448,75 @@ class CliServer {
         stdout: resp.stdout ?? '',
         stderr: resp.stderr ?? resp.error ?? '',
         exitCode: resp.exitCode ?? (resp.type === 'error' ? 1 : 0)
+      }
+    })
+
+    // ────────────────── pglite.* ──────────────────
+    // `shuvix pglite` CLI 入口。argv 由 CLI 端透传上来；-f 模式时 CLI 端已 readFileSync
+    // 把内容塞进 stdin 字段。worker 长驻按 session 的 pglitePersist 设置自动走 memory /
+    // persistent 模式（workerManager 内置）。
+
+    this.handlers.set('pglite.run', async (p, sessionId) => {
+      if (!sessionId) throw new Error('pglite.run requires SHUVIX_SESSION_ID')
+
+      const argv = Array.isArray(p.argv) ? (p.argv as string[]) : []
+      const stdinContent = typeof p.stdin === 'string' ? (p.stdin as string) : undefined
+      const timeoutMs = typeof p.timeoutMs === 'number' ? (p.timeoutMs as number) : 60_000
+
+      const parsed = parseShuvixPgliteArgv(argv, stdinContent !== undefined)
+      if (parsed.helpText !== undefined) {
+        return { stdout: parsed.helpText, stderr: '', exitCode: 0 }
+      }
+      if (parsed.error !== undefined) {
+        return { stdout: '', stderr: parsed.error, exitCode: 2 }
+      }
+      if (!parsed.request) {
+        return { stdout: '', stderr: 'shuvix pglite: internal parse failure', exitCode: 1 }
+      }
+
+      const req = parsed.request
+
+      // version 模式不需要起 worker，直接返回版本信息
+      if (req.mode === 'version') {
+        return {
+          stdout: 'PGLite (ShuviX embedded WebAssembly Postgres)',
+          stderr: '',
+          exitCode: 0
+        }
+      }
+
+      // 从 parsed.request 提取真正要跑的 SQL：
+      //   -c → request.sql
+      //   stdin → CLI 端预读的 stdinContent
+      //   file → CLI 端 readFileSync 后塞到 stdinContent
+      let sqlText: string
+      if (req.mode === '-c') {
+        sqlText = req.sql
+      } else {
+        if (stdinContent === undefined) {
+          return {
+            stdout: '',
+            stderr: `shuvix pglite: ${req.mode} requested but no content was forwarded by CLI`,
+            exitCode: 1
+          }
+        }
+        sqlText = stdinContent
+      }
+
+      await pgliteWorkerManager.ensureReady(sessionId)
+      const execId = `cli-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
+      const resp = await pgliteWorkerManager.execute(
+        sessionId,
+        execId,
+        sqlText,
+        req.extensions.length > 0 ? req.extensions : undefined,
+        timeoutMs
+      )
+
+      return {
+        stdout: resp.output ?? '',
+        stderr: resp.error ?? '',
+        exitCode: resp.type === 'error' ? 1 : 0
       }
     })
   }

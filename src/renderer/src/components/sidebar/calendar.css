@@ -1,0 +1,77 @@
+@import 'react-day-picker/style.css';
+
+.calendar-container {
+  container-type: inline-size;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.rdp-root {
+  --rdp-accent-color: var(--theme-accent);
+  --rdp-accent-background-color: var(--theme-accent-muted);
+  --rdp-day-width: clamp(26px, 12cqw, 40px);
+  --rdp-day-height: clamp(26px, 12cqw, 40px);
+  --rdp-day_button-width: var(--rdp-day-width);
+  --rdp-day_button-height: var(--rdp-day-height);
+  --rdp-day_button-border-radius: 6px;
+  --rdp-day-font: 12px var(--font-sans, system-ui);
+  --rdp-weekday-text-color: var(--theme-text-tertiary);
+  --rdp-weekday-padding: 4px 0;
+  --rdp-week_number-text-color: var(--theme-text-tertiary);
+  --rdp-month_caption-font: 600 13px var(--font-sans, system-ui);
+  --rdp-outside-opacity: 0.35;
+  --rdp-nav_button-width: 18px;
+  --rdp-nav_button-height: 18px;
+  --rdp-nav-height: 22px;
+  --rdp-disabled-opacity: 0.35;
+  font-size: 12px;
+  max-width: 100%;
+  contain: layout style;
+}
+
+.rdp-day_button {
+  position: relative;
+}
+
+.rdp-has-sessions .rdp-day_button::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--theme-accent);
+}
+
+.rdp-selected.rdp-has-sessions .rdp-day_button::after {
+  background: var(--theme-bg-primary);
+}
+
+.rdp-today:not(.rdp-selected) .rdp-day_button {
+  color: var(--theme-accent);
+  font-weight: 600;
+}
+
+/* 弱化月份切换箭头：去掉 accent 蓝，跟标题栏图标同灰阶 */
+.rdp-button_previous,
+.rdp-button_next {
+  color: var(--theme-text-tertiary);
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.rdp-button_previous:hover,
+.rdp-button_next:hover {
+  color: var(--theme-text-secondary);
+  opacity: 1;
+  background: transparent;
+}
+
+.rdp-chevron {
+  fill: currentColor;
+  width: 12px;
+  height: 12px;
+}

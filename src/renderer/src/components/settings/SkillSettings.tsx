@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { motion } from 'framer-motion'
 import {
@@ -10,10 +10,13 @@ import {
   ChevronDown,
   ChevronRight,
   Lock,
-  X
+  X,
+  AlertCircle
 } from 'lucide-react'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SkillFormDialog } from './SkillFormDialog'
+import { useDialogClose } from '../../hooks/useDialogClose'
+import { Toggle, InlineInput } from './SettingsPrimitives'
 
 /** Skill 信息 */
 interface SkillInfo {
@@ -31,27 +34,29 @@ interface SkillGroup {
   dirName: string
   dirPath: string
   isDefault: boolean
+  isEnabled: boolean
   skills: SkillInfo[]
 }
 
-/** Skill 设置页 — 管理已安装的 Skills（按目录分卡片） */
+/** Skill 设置页 — 双层结构：左侧分组列表 + 右侧详情 */
 export function SkillSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const [groups, setGroups] = useState<SkillGroup[]>([])
+  const [selectedDirName, setSelectedDirName] = useState<string | null>(null)
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null)
-  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set())
 
-  // 弹窗状态：null=关闭, { initial: null }=新增, { initial: SkillInfo }=编辑
   const [dialogState, setDialogState] = useState<{
     initial: { name: string; description: string; content: string } | null
   } | null>(null)
 
-  // 添加目录流程
   const [addDirState, setAddDirState] = useState<{
     path: string
     name: string
     error: string | null
   } | null>(null)
+
+  const [deletingSkill, setDeletingSkill] = useState<SkillInfo | null>(null)
+  const [removingDir, setRemovingDir] = useState<SkillGroup | null>(null)
 
   const loadGroups = useCallback(async () => {
     const list = await window.api.skill.listGrouped()
@@ -63,18 +68,38 @@ export function SkillSettings(): React.JSX.Element {
     void loadGroups()
   }, [loadGroups])
 
-  /** 打开目录 */
+  /** 默认选中第一个分组 */
+  useEffect(() => {
+    if (selectedDirName) {
+      const exists = groups.some((g) => g.dirName === selectedDirName)
+      if (exists) return
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync selection with newly loaded groups
+    setSelectedDirName(groups.length > 0 ? groups[0].dirName : null)
+  }, [groups, selectedDirName])
+
+  const selectedGroup = useMemo(
+    () => groups.find((g) => g.dirName === selectedDirName) ?? null,
+    [groups, selectedDirName]
+  )
+
   const handleOpenDir = (dirPath: string): void => {
     window.api.app.openFolder(dirPath)
   }
 
-  /** 启用/禁用切换 */
-  const handleToggle = async (s: SkillInfo): Promise<void> => {
+  const handleToggleSkill = async (s: SkillInfo): Promise<void> => {
     await window.api.skill.update({ name: s.name, isEnabled: !s.isEnabled })
     await loadGroups()
   }
 
-  /** 保存编辑 */
+  const handleToggleGroup = async (group: SkillGroup): Promise<void> => {
+    await window.api.skill.setGroupEnabled({
+      dirName: group.dirName,
+      isEnabled: !group.isEnabled
+    })
+    await loadGroups()
+  }
+
   const handleSave = async (data: {
     name: string
     description: string
@@ -89,18 +114,12 @@ export function SkillSettings(): React.JSX.Element {
     await loadGroups()
   }
 
-  /** 待删除的 skill */
-  const [deletingSkill, setDeletingSkill] = useState<SkillInfo | null>(null)
-
   const confirmDelete = async (): Promise<void> => {
     if (!deletingSkill) return
     await window.api.skill.deleteDefault(deletingSkill.name)
     setDeletingSkill(null)
     await loadGroups()
   }
-
-  /** 待移除的目录 */
-  const [removingDir, setRemovingDir] = useState<SkillGroup | null>(null)
 
   const confirmRemoveDir = async (): Promise<void> => {
     if (!removingDir) return
@@ -109,14 +128,12 @@ export function SkillSettings(): React.JSX.Element {
     await loadGroups()
   }
 
-  /** 添加外部目录 — 第1步：选择文件夹 */
   const handleAddDir = async (): Promise<void> => {
     const result = await window.api.skill.pickExternalDir()
     if (!result.success || !result.path) return
     setAddDirState({ path: result.path, name: '', error: null })
   }
 
-  /** 添加外部目录 — 第2步：确认名称 */
   const confirmAddDir = async (): Promise<void> => {
     if (!addDirState || !addDirState.name.trim()) return
     const result = await window.api.skill.addExternalDir({
@@ -131,182 +148,81 @@ export function SkillSettings(): React.JSX.Element {
     }
   }
 
-  /** 渲染单个 skill 行 */
-  const renderSkillItem = (s: SkillInfo): React.JSX.Element => {
-    const isExpanded = expandedSkill === s.name
-    const isDefault = s.source === 'default'
-    // 外部 skill 显示时去掉 dirName: 前缀（卡片头部已有目录名）
-    const displayName = s.dirName ? s.name.slice(s.dirName.length + 1) : s.name
-
-    return (
-      <motion.div
-        key={s.name}
-        layout="position"
-        transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-        className="border border-border-secondary rounded-lg overflow-hidden"
-      >
-        {/* Skill 头部 */}
-        <div
-          onClick={() => setExpandedSkill(isExpanded ? null : s.name)}
-          className="flex items-center gap-3 px-3 py-2 bg-bg-primary/30 cursor-pointer hover:bg-bg-hover/50 transition-colors"
-        >
-          <span className="text-text-tertiary">
-            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </span>
-          <span className="flex-1 min-w-0 flex items-center gap-1.5">
-            <BookOpen size={14} className="shrink-0 text-text-tertiary" />
-            <span className="text-xs font-medium text-text-primary shrink-0">{displayName}</span>
-            <span className="text-[10px] text-text-tertiary truncate">{s.description}</span>
-          </span>
-          {/* 编辑（仅默认目录） */}
-          {isDefault && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                setDialogState({ initial: s })
-              }}
-              className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
-              title={t('common.edit')}
-            >
-              <Pencil size={13} />
-            </button>
-          )}
-          {/* 删除（仅默认目录） */}
-          {isDefault && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                setDeletingSkill(s)
-              }}
-              className="p-1 rounded text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
-              title={t('common.delete')}
-            >
-              <Trash2 size={13} />
-            </button>
-          )}
-          {/* 启用/禁用开关 */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleToggle(s)
-            }}
-            className={`w-9 h-5 rounded-full relative transition-colors shrink-0 ${
-              s.isEnabled ? 'bg-accent' : 'bg-bg-tertiary'
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
-                s.isEnabled ? 'left-[18px]' : 'left-0.5'
-              }`}
-            />
-          </button>
-        </div>
-
-        {/* 展开内容 */}
-        {isExpanded && (
-          <div className="px-4 py-3 border-t border-border-secondary">
-            <pre className="text-[11px] text-text-secondary font-mono whitespace-pre-wrap break-words max-h-60 overflow-y-auto leading-relaxed">
-              {s.content}
-            </pre>
-          </div>
-        )}
-      </motion.div>
-    )
-  }
+  /** 分组标题（用于左侧列表与右侧头部） */
+  const groupTitle = useCallback(
+    (group: SkillGroup): string => {
+      if (group.isDefault) return t('settings.skillDirDefault')
+      if (group.dirName === 'builtin') return t('settings.skillDirBuiltin')
+      if (group.dirName === 'project') return t('settings.skillGroupProject')
+      return group.dirName
+    },
+    [t]
+  )
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 px-5 py-5 space-y-4 overflow-y-auto">
-        {/* 按目录分组卡片 */}
-        {groups.map((group) => {
-          const isCollapsed = collapsedDirs.has(group.dirName)
-          const sortedSkills = [...group.skills].sort((a, b) =>
-            a.isEnabled === b.isEnabled ? 0 : a.isEnabled ? -1 : 1
-          )
-
-          const toggleCollapse = (): void => {
-            setCollapsedDirs((prev) => {
-              const next = new Set(prev)
-              if (next.has(group.dirName)) next.delete(group.dirName)
-              else next.add(group.dirName)
-              return next
-            })
-          }
-
-          return (
-            <div
-              key={group.dirName}
-              className="border border-border-secondary rounded-xl overflow-hidden"
-            >
-              {/* 卡片头部 */}
-              <div className="flex items-center gap-2 px-4 py-2.5 bg-bg-secondary/50 border-b border-border-secondary">
-                <span
-                  onClick={toggleCollapse}
-                  className="cursor-pointer text-text-tertiary shrink-0"
-                >
-                  {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                </span>
-                <div className="flex-1 min-w-0 cursor-pointer" onClick={toggleCollapse}>
-                  <span className="text-xs font-medium text-text-primary inline-flex items-center gap-1">
-                    {group.dirName === 'builtin' && (
-                      <Lock size={10} className="text-text-tertiary" />
-                    )}
-                    {group.isDefault
-                      ? t('settings.skillDirDefault')
-                      : group.dirName === 'builtin'
-                        ? t('settings.skillDirBuiltin')
-                        : group.dirName}
-                  </span>
-                  <span className="text-[10px] text-text-tertiary ml-2 truncate">
-                    {group.dirPath}
-                  </span>
-                </div>
-
-                {/* 目录操作按钮 */}
-                <button
-                  onClick={() => handleOpenDir(group.dirPath)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:text-text-primary bg-bg-tertiary hover:bg-bg-hover transition-colors"
-                >
-                  <FolderOpen size={11} />
-                  {t('settings.skillOpenDir')}
-                </button>
-                {!group.isDefault && group.dirName !== 'builtin' && group.dirName !== 'project' && (
-                  <button
-                    onClick={() => setRemovingDir(group)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:text-error bg-bg-tertiary hover:bg-error/10 transition-colors"
-                  >
-                    <X size={11} />
-                    {t('settings.skillDirRemove')}
-                  </button>
+    <div className="flex flex-1 min-h-0 h-full">
+      {/* 左侧：分组列表 */}
+      <div className="w-[220px] flex-shrink-0 border-r border-border-secondary flex flex-col">
+        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+          {groups.map((group) => {
+            const isSelected = selectedDirName === group.dirName
+            const isBuiltin = group.dirName === 'builtin'
+            return (
+              <button
+                key={group.dirName}
+                onClick={() => setSelectedDirName(group.dirName)}
+                className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
+                  isSelected
+                    ? 'bg-accent/10 text-accent'
+                    : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
+                } ${!group.isEnabled ? 'opacity-60' : ''}`}
+              >
+                {isBuiltin ? (
+                  <Lock size={12} className="shrink-0 text-text-tertiary" />
+                ) : (
+                  <BookOpen size={12} className="shrink-0 text-text-tertiary" />
                 )}
-              </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium truncate">{groupTitle(group)}</div>
+                </div>
+                <span onClick={(e) => e.stopPropagation()} className="shrink-0">
+                  <Toggle on={group.isEnabled} onClick={() => void handleToggleGroup(group)} />
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        {/* 添加外部目录 */}
+        <div className="border-t border-border-secondary p-2">
+          <button
+            onClick={handleAddDir}
+            className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg border border-dashed border-border-secondary text-[11px] text-text-secondary hover:text-text-primary hover:border-accent/40 hover:bg-accent/5 transition-colors"
+          >
+            <FolderPlus size={12} />
+            {t('settings.skillDirAdd')}
+          </button>
+        </div>
+      </div>
 
-              {!isCollapsed && (
-                <>
-                  {/* Skill 列表 */}
-                  <div className="px-3 py-2 space-y-1.5">
-                    {sortedSkills.length === 0 ? (
-                      <div className="text-center py-4">
-                        <p className="text-[11px] text-text-tertiary">{t('settings.skillEmpty')}</p>
-                      </div>
-                    ) : (
-                      sortedSkills.map((s) => renderSkillItem(s))
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          )
-        })}
-
-        {/* 添加目录按钮 */}
-        <button
-          onClick={handleAddDir}
-          className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-xl border border-dashed border-border-secondary text-xs text-text-tertiary hover:text-text-primary hover:border-text-tertiary transition-colors"
-        >
-          <FolderPlus size={14} />
-          {t('settings.skillDirAdd')}
-        </button>
+      {/* 右侧：详情面板 */}
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        {selectedGroup ? (
+          <SkillGroupDetail
+            group={selectedGroup}
+            title={groupTitle(selectedGroup)}
+            expandedSkill={expandedSkill}
+            onExpand={setExpandedSkill}
+            onOpenDir={() => handleOpenDir(selectedGroup.dirPath)}
+            onRemoveDir={() => setRemovingDir(selectedGroup)}
+            onToggleSkill={(s) => void handleToggleSkill(s)}
+            onEditSkill={(s) => setDialogState({ initial: s })}
+            onDeleteSkill={(s) => setDeletingSkill(s)}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-text-tertiary text-[11px]">
+            {t('settings.skillGroupSelect')}
+          </div>
+        )}
       </div>
 
       {/* 添加/编辑 Skill 弹窗 */}
@@ -355,7 +271,208 @@ export function SkillSettings(): React.JSX.Element {
   )
 }
 
-/** 添加目录 — 名称输入弹窗 */
+// ────────────────────────────────────────────────────────────────
+// 右侧详情面板
+// ────────────────────────────────────────────────────────────────
+
+interface SkillGroupDetailProps {
+  group: SkillGroup
+  title: string
+  expandedSkill: string | null
+  onExpand: (name: string | null) => void
+  onOpenDir: () => void
+  onRemoveDir: () => void
+  onToggleSkill: (s: SkillInfo) => void
+  onEditSkill: (s: SkillInfo) => void
+  onDeleteSkill: (s: SkillInfo) => void
+}
+
+function SkillGroupDetail({
+  group,
+  title,
+  expandedSkill,
+  onExpand,
+  onOpenDir,
+  onRemoveDir,
+  onToggleSkill,
+  onEditSkill,
+  onDeleteSkill
+}: SkillGroupDetailProps): React.JSX.Element {
+  const { t } = useTranslation()
+
+  const sortedSkills = useMemo(
+    () =>
+      [...group.skills].sort((a, b) => (a.isEnabled === b.isEnabled ? 0 : a.isEnabled ? -1 : 1)),
+    [group.skills]
+  )
+
+  const isBuiltin = group.dirName === 'builtin'
+  const canRemove = !group.isDefault && !isBuiltin && group.dirName !== 'project'
+
+  return (
+    <div className="flex flex-col">
+      {/* 头部：分组名称 + 操作 */}
+      <div className="px-5 py-3 border-b border-border-secondary flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            {isBuiltin && <Lock size={13} className="text-text-tertiary shrink-0" />}
+            <h3 className="text-sm font-semibold text-text-primary truncate">{title}</h3>
+          </div>
+          {!isBuiltin && (
+            <div className="mt-1 text-[11px] font-mono text-text-tertiary break-all">
+              {group.dirPath}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {!isBuiltin && (
+            <button
+              onClick={onOpenDir}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+            >
+              <FolderOpen size={11} />
+              {t('settings.skillOpenDir')}
+            </button>
+          )}
+          {canRemove && (
+            <button
+              onClick={onRemoveDir}
+              className="p-1.5 rounded-md text-error hover:bg-error/10 transition-colors shrink-0"
+              title={t('settings.skillDirRemove')}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 px-5 py-5 space-y-3">
+        {/* 总开关关闭提示 */}
+        {!group.isEnabled && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5">
+            <AlertCircle size={12} className="text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-500 leading-relaxed">
+              {t('settings.skillGroupDisabledHint')}
+            </p>
+          </div>
+        )}
+
+        {/* skill 列表 */}
+        <div className="rounded-xl border border-border-secondary overflow-hidden">
+          {sortedSkills.length === 0 ? (
+            <div className="px-4 py-6 text-center">
+              <p className="text-[11px] text-text-tertiary">{t('settings.skillEmpty')}</p>
+            </div>
+          ) : (
+            sortedSkills.map((s) => (
+              <SkillItem
+                key={s.name}
+                skill={s}
+                groupEnabled={group.isEnabled}
+                isExpanded={expandedSkill === s.name}
+                onToggleExpand={() => onExpand(expandedSkill === s.name ? null : s.name)}
+                onToggle={() => onToggleSkill(s)}
+                onEdit={() => onEditSkill(s)}
+                onDelete={() => onDeleteSkill(s)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────
+// 单个 skill 行
+// ────────────────────────────────────────────────────────────────
+
+interface SkillItemProps {
+  skill: SkillInfo
+  groupEnabled: boolean
+  isExpanded: boolean
+  onToggleExpand: () => void
+  onToggle: () => void
+  onEdit: () => void
+  onDelete: () => void
+}
+
+function SkillItem({
+  skill: s,
+  groupEnabled,
+  isExpanded,
+  onToggleExpand,
+  onToggle,
+  onEdit,
+  onDelete
+}: SkillItemProps): React.JSX.Element {
+  const { t } = useTranslation()
+  const isDefault = s.source === 'default'
+  // 外部 skill 显示时去掉 dirName: 前缀
+  const displayName = s.dirName ? s.name.slice(s.dirName.length + 1) : s.name
+
+  return (
+    <motion.div
+      layout="position"
+      transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+      className="flex flex-col border-b border-border-secondary/60 last:border-b-0"
+    >
+      <div
+        onClick={onToggleExpand}
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-bg-hover/40 transition-colors"
+      >
+        <span className="text-text-tertiary shrink-0">
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+        <BookOpen size={13} className="shrink-0 text-text-tertiary" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[13px] text-text-primary truncate">{displayName}</span>
+          </div>
+          {s.description && (
+            <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed truncate">
+              {s.description}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+          {isDefault && (
+            <button
+              onClick={onEdit}
+              className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
+              title={t('common.edit')}
+            >
+              <Pencil size={12} />
+            </button>
+          )}
+          {isDefault && (
+            <button
+              onClick={onDelete}
+              className="p-1 text-text-tertiary hover:text-danger transition-colors"
+              title={t('common.delete')}
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+          <Toggle on={s.isEnabled} onClick={onToggle} disabled={!groupEnabled} />
+        </div>
+      </div>
+
+      {isExpanded && (
+        <div className="px-4 py-3 bg-bg-tertiary/15">
+          <pre className="text-[11px] text-text-secondary font-mono whitespace-pre-wrap break-words max-h-60 overflow-y-auto leading-relaxed">
+            {s.content}
+          </pre>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────
+// 添加目录弹窗
+// ────────────────────────────────────────────────────────────────
+
 function AddDirDialog({
   path,
   name,
@@ -372,50 +489,66 @@ function AddDirDialog({
   onCancel: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
+  const { closing, handleClose } = useDialogClose(onCancel)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') handleClose()
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [handleClose])
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel()
-      }}
+      onClick={handleClose}
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/40 titlebar-no-drag dialog-overlay${closing ? ' dialog-closing' : ''}`}
     >
-      <div className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[400px] max-w-[90vw] p-5 space-y-3">
-        <h3 className="text-sm font-semibold text-text-primary">{t('settings.skillDirAdd')}</h3>
-
-        {/* 路径显示 */}
-        <div>
-          <label className="block text-[11px] text-text-tertiary mb-1">
-            {t('settings.skillDirPath')}
-          </label>
-          <p className="text-xs text-text-secondary font-mono bg-bg-tertiary rounded-lg px-3 py-2 truncate">
-            {path}
-          </p>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-bg-primary border border-border-primary rounded-xl shadow-xl w-[440px] max-w-[92vw] flex flex-col dialog-panel"
+      >
+        {/* 头部 */}
+        <div className="px-5 py-3 border-b border-border-secondary shrink-0 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary">{t('settings.skillDirAdd')}</h3>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded-lg hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            <X size={14} />
+          </button>
         </div>
 
-        {/* 名称输入 */}
-        <div>
-          <label className="block text-[11px] text-text-tertiary mb-1">
-            {t('settings.skillDirName')}
-          </label>
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && name.trim()) onConfirm()
-              if (e.key === 'Escape') onCancel()
-            }}
-            className="zen-input font-mono"
-            placeholder={t('settings.skillDirNamePlaceholder')}
-          />
-          {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
+        {/* 内容 */}
+        <div className="px-5 py-5 space-y-4">
+          <div>
+            <label className="block text-[11px] text-text-tertiary mb-1.5">
+              {t('settings.skillDirPath')}
+            </label>
+            <p className="text-[11px] text-text-secondary font-mono bg-bg-primary border border-border-secondary/50 rounded-md px-2.5 py-1.5 truncate">
+              {path}
+            </p>
+          </div>
+          <div>
+            <label className="block text-[11px] text-text-tertiary mb-1.5">
+              {t('settings.skillDirName')}
+            </label>
+            <InlineInput
+              value={name}
+              onChange={onNameChange}
+              placeholder={t('settings.skillDirNamePlaceholder')}
+              autoFocus
+              monospace
+              width={300}
+            />
+            {error && <p className="text-[11px] text-danger mt-1.5">{error}</p>}
+          </div>
         </div>
 
         {/* 按钮 */}
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">
           <button
-            onClick={onCancel}
+            onClick={handleClose}
             className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
           >
             {t('common.cancel')}

@@ -1,12 +1,33 @@
 /**
  * 面板布局持久化 — 统一管理 sidebar/chat/browser 的宽度和开关状态
  *
- * 持久化 key: window.panelLayout
- * 主进程启动时从此 key 读取并计算窗口宽度，关闭时保存 chatWidth
- * renderer 侧在面板宽度/开关变化时实时更新
+ * 作用域（scope）按窗口区分：
+ * - 主窗口：window.panelLayout
+ * - 悬浮窗：window.panelLayout.pinned.<sessionId>
+ *
+ * 主进程启动主窗口时从主窗口 key 读取窗口宽度；
+ * pinnedChatService 在创建/关闭悬浮窗时按 sessionId 维度读写。
  */
 
-const SETTINGS_KEY = 'window.panelLayout'
+/** 当前 renderer window 的作用域（由 URL hash 推导，模块加载时确定一次） */
+function detectScope(): string {
+  const hash = typeof window !== 'undefined' ? window.location.hash : ''
+  if (hash.startsWith('#pinned-chat')) {
+    const qIdx = hash.indexOf('?')
+    if (qIdx >= 0) {
+      const params = new URLSearchParams(hash.slice(qIdx + 1))
+      const sid = params.get('sessionId')
+      if (sid) return `pinned.${sid}`
+    }
+  }
+  return 'main'
+}
+
+const SCOPE = detectScope()
+const SETTINGS_KEY = SCOPE === 'main' ? 'window.panelLayout' : `window.panelLayout.${SCOPE}`
+
+/** 是否为悬浮窗作用域（pinned 窗口可恢复 browserOpen，主窗口由 useAppInit 自己决定） */
+export const isPinnedScope = SCOPE !== 'main'
 
 interface PanelLayout {
   sidebarWidth: number

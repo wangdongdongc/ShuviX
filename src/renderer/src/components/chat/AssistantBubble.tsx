@@ -68,6 +68,9 @@ export const AssistantBubble = memo(function AssistantBubble({
   const sessionProvider = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.provider ?? ''
   )
+  const sessionModel = useChatStore(
+    (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.model ?? ''
+  )
 
   const displayContent = isStreaming ? storeStreamingContent : msg.content
   const thinking = (isStreaming ? storeStreamingThinking : null) || msg.metadata?.thinking || null
@@ -93,7 +96,7 @@ export const AssistantBubble = memo(function AssistantBubble({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {msg.model || 'Assistant'}
+            {msg.model || sessionModel || 'Assistant'}
           </span>
           {/* 复制 */}
           {!isStreaming && displayContent && (

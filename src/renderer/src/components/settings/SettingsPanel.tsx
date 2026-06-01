@@ -9,7 +9,9 @@ import {
   BookOpen,
   Wrench,
   Share2,
-  Mic
+  Mic,
+  Brain,
+  Webhook
 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { TabButton } from './TabButton'
@@ -19,9 +21,11 @@ import { HttpLogSettings } from './HttpLogSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
+import { HookSettings } from './HookSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
 import { VoiceSettings } from './VoiceSettings'
+import { ContextManagementSettings } from './ContextManagementSettings'
 
 /**
  * 设置面板 — 独立窗口（分组 Tab）
@@ -33,8 +37,10 @@ const VALID_TABS = new Set([
   'tools',
   'mcp',
   'skills',
+  'hooks',
   'voice',
   'bindings',
+  'contextMgmt',
   'httpLogs',
   'about'
 ])
@@ -78,6 +84,12 @@ export function SettingsPanel(): React.JSX.Element {
             onClick={() => setActiveSettingsTab('providers')}
           />
           <TabButton
+            icon={<Brain size={14} />}
+            label={t('settings.tabContextMgmt')}
+            active={activeSettingsTab === 'contextMgmt'}
+            onClick={() => setActiveSettingsTab('contextMgmt')}
+          />
+          <TabButton
             icon={<Wrench size={14} />}
             label={t('settings.tabTools')}
             active={activeSettingsTab === 'tools'}
@@ -94,6 +106,12 @@ export function SettingsPanel(): React.JSX.Element {
             label={t('settings.tabSkills')}
             active={activeSettingsTab === 'skills'}
             onClick={() => setActiveSettingsTab('skills')}
+          />
+          <TabButton
+            icon={<Webhook size={14} />}
+            label={t('settings.tabHooks')}
+            active={activeSettingsTab === 'hooks'}
+            onClick={() => setActiveSettingsTab('hooks')}
           />
           <TabButton
             icon={<Mic size={14} />}
@@ -140,6 +158,7 @@ export function SettingsPanel(): React.JSX.Element {
               <SkillSettings />
             </div>
           )}
+          {activeSettingsTab === 'hooks' && <HookSettings />}
           {activeSettingsTab === 'voice' && (
             <div className="flex-1 overflow-y-auto">
               <VoiceSettings />
@@ -148,6 +167,11 @@ export function SettingsPanel(): React.JSX.Element {
           {activeSettingsTab === 'bindings' && (
             <div className="flex-1 overflow-y-auto">
               <BindingsSettings />
+            </div>
+          )}
+          {activeSettingsTab === 'contextMgmt' && (
+            <div className="flex-1 overflow-y-auto">
+              <ContextManagementSettings />
             </div>
           )}
           {activeSettingsTab === 'httpLogs' && (

@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
-import { subAgentManager } from '../subagent/SubAgentManager'
+import { agentManager } from '../agents/AgentManager'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -103,7 +103,7 @@ export function registerAgentHandlers(): void {
    * 中止子 Agent 并从 transientSessionRegistry 移除。
    */
   ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
-    subAgentManager.destroy(subSessionId)
+    agentManager.destroy(subSessionId)
     return { success: true }
   })
 }

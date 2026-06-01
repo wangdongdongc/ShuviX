@@ -18,8 +18,8 @@ import {
   type AssistantMessage as PiAssistantMessage,
   type ToolResultMessage,
   completeSimple
-} from '@mariozechner/pi-ai'
-import type { AgentMessage } from '@mariozechner/pi-agent-core'
+} from '@earendil-works/pi-ai'
+import { type AgentMessage, convertToLlm } from '@earendil-works/pi-agent-core'
 import { messageDao, messageStepDao } from '../dao/messageDao'
 import { sessionDao } from '../dao/sessionDao'
 import { providerDao } from '../dao/providerDao'
@@ -191,7 +191,7 @@ class CompactionService {
         {
           systemPrompt:
             'You are a helpful AI assistant tasked with summarizing conversations. Respond with TEXT ONLY.',
-          messages: [...agentMessages, summaryRequestMsg]
+          messages: convertToLlm([...agentMessages, summaryRequestMsg])
         },
         apiKey ? { apiKey } : {}
       )

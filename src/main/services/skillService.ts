@@ -19,6 +19,8 @@ import { getDefaultSkillsDir, getBuiltinSkillsDir } from '../utils/paths'
 interface SkillConfig {
   /** 禁用的 skill 名称集合（默认全部启用） */
   disabled: string[]
+  /** 禁用的分组目录名集合（默认全部启用，分组关闭后整组失效） */
+  disabledDirs: string[]
   /** 用户添加的外部 skill 目录 */
   dirs: SkillDir[]
 }
@@ -50,12 +52,16 @@ class SkillService {
     try {
       if (existsSync(configPath)) {
         const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
-        return { disabled: raw.disabled ?? [], dirs: raw.dirs ?? [] }
+        return {
+          disabled: raw.disabled ?? [],
+          disabledDirs: raw.disabledDirs ?? [],
+          dirs: raw.dirs ?? []
+        }
       }
     } catch (e) {
       log.warn('读取 skills 配置失败:', e)
     }
-    return { disabled: [], dirs: [] }
+    return { disabled: [], disabledDirs: [], dirs: [] }
   }
 
   /** 写入配置文件 */
@@ -214,6 +220,7 @@ class SkillService {
   findAllGrouped(projectPath?: string): SkillGroup[] {
     const config = this.readConfig()
     const groups: SkillGroup[] = []
+    const isGroupEnabled = (dirName: string): boolean => !config.disabledDirs.includes(dirName)
 
     // 内置目录（仅在存在任一内置 skill 时才展示分组）
     const builtinDir = getBuiltinSkillsDir()
@@ -225,6 +232,7 @@ class SkillService {
         dirName: BUILTIN_DIR_NAME,
         dirPath: builtinDir,
         isDefault: false,
+        isEnabled: isGroupEnabled(BUILTIN_DIR_NAME),
         skills: builtinSkills
       })
     }
@@ -234,6 +242,7 @@ class SkillService {
       dirName: 'default',
       dirPath: this.skillsDir,
       isDefault: true,
+      isEnabled: isGroupEnabled('default'),
       skills: this.scanSkillsDir(this.skillsDir, 'default', config).sort((a, b) =>
         a.name.localeCompare(b.name)
       )
@@ -245,6 +254,7 @@ class SkillService {
         dirName: dir.name,
         dirPath: dir.path,
         isDefault: false,
+        isEnabled: isGroupEnabled(dir.name),
         skills: this.scanSkillsDir(dir.path, 'external', config, dir.name).sort((a, b) =>
           a.name.localeCompare(b.name)
         )
@@ -260,6 +270,7 @@ class SkillService {
           dirName: 'project',
           dirPath: projectSkillsDir,
           isDefault: false,
+          isEnabled: isGroupEnabled('project'),
           skills: projectSkills.sort((a, b) => a.name.localeCompare(b.name))
         })
       }
@@ -270,10 +281,18 @@ class SkillService {
 
   /**
    * 获取所有已启用的 Skill
-   * 项目级 skills 始终启用
+   * 项目级 skills 始终启用；分组总开关关闭时整组失效
    */
   findEnabled(projectPath?: string): Skill[] {
-    return this.findAll(projectPath).filter((s) => s.isEnabled)
+    const config = this.readConfig()
+    const disabledDirSet = new Set(config.disabledDirs)
+    return this.findAll(projectPath).filter((s) => {
+      if (!s.isEnabled) return false
+      // 默认目录用 'default'；项目级用 'project'；其它用 dirName
+      const groupKey =
+        s.source === 'default' ? 'default' : s.source === 'project' ? 'project' : (s.dirName ?? '')
+      return !disabledDirSet.has(groupKey)
+    })
   }
 
   /**
@@ -413,6 +432,18 @@ class SkillService {
     config.dirs = config.dirs.filter((d) => d.name !== name)
     // 清理该目录下 skill 的 disabled 记录
     config.disabled = config.disabled.filter((n) => !n.startsWith(prefix))
+    config.disabledDirs = config.disabledDirs.filter((n) => n !== name)
+    this.writeConfig(config)
+  }
+
+  /** 切换分组总开关：关闭后该分组所有 skills 失效 */
+  setGroupEnabled(dirName: string, isEnabled: boolean): void {
+    const config = this.readConfig()
+    if (isEnabled) {
+      config.disabledDirs = config.disabledDirs.filter((n) => n !== dirName)
+    } else if (!config.disabledDirs.includes(dirName)) {
+      config.disabledDirs.push(dirName)
+    }
     this.writeConfig(config)
   }
 }

@@ -14,6 +14,8 @@ export interface ToolItem {
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
   /** Skill 的启用/禁用状态（仅 skill 类型工具） */
   isEnabled?: boolean
+  /** 是否为 ShuviX 自带的内置项（builtin MCP server / builtin skill 等） */
+  isBuiltin?: boolean
 }
 
 interface ToolSelectListProps {
@@ -23,10 +25,8 @@ interface ToolSelectListProps {
   enabledTools: string[]
   /** 切换工具启用状态 */
   onChange: (enabledTools: string[]) => void
-  /** 是否使用紧凑模式（如 ToolPicker 下拉面板） */
+  /** 是否使用紧凑模式 */
   compact?: boolean
-  /** 仅显示内置工具（隐藏 MCP / Skills） */
-  builtinOnly?: boolean
 }
 
 /** 从 mcp:<serverName> 中提取服务器短名 */
@@ -44,14 +44,13 @@ function skillShortName(fullName: string): string {
 
 /**
  * 通用工具选择列表 — 支持内置工具、MCP 工具分组和 Skills 分组
- * 被 ToolPicker / ProjectEditDialog / ProjectCreateDialog 共用
+ * 当前仅被 SubAgentPanel 使用，用于定义自定义 SubAgent 的工具子集。
  */
 export function ToolSelectList({
   tools,
   enabledTools,
   onChange,
-  compact,
-  builtinOnly
+  compact
 }: ToolSelectListProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -66,7 +65,7 @@ export function ToolSelectList({
   const builtinTools = tools.filter((t) => t.group === 'general')
   const ripgrepTools = tools.filter((t) => t.group === 'ripgrep')
   const remoteTools = tools.filter((t) => t.group === 'remote')
-  const subAgentTools = tools.filter((t) => t.group === 'subagent')
+  const subAgentTools = tools.filter((t) => t.group === 'agent')
   const mcpTools = tools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = tools.filter((t) => t.group === SKILLS_GROUP)
 
@@ -250,7 +249,7 @@ export function ToolSelectList({
       )}
 
       {/* MCP 服务器（每个服务器一行开关） */}
-      {!builtinOnly && mcpTools.length > 0 && (
+      {mcpTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
           <div className={compact ? '' : 'border-l-2 border-purple-500/40 pl-3'}>
             {!compact && (
@@ -302,7 +301,7 @@ export function ToolSelectList({
       )}
 
       {/* Skills（每个 skill 一行开关） */}
-      {!builtinOnly && skillTools.length > 0 && (
+      {skillTools.length > 0 && (
         <div className={compact ? 'border-t border-border-secondary mt-0.5' : 'mt-3'}>
           <div className={compact ? '' : 'border-l-2 border-emerald-500/40 pl-3'}>
             {!compact && (

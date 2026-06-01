@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "Build, maintain, and export ShuviX Widgets — small, persistent React utilities saved under ~/.shuvix/widgets/<id>/ and surfaced in the right-panel Widget tab. Trigger when the user wants a JSON formatter, expression playground, regex tester, unit converter, color picker, time-zone helper, base64 encoder, or anything else they describe as 'a small tool', '小工具', 'mini app', 'widget', '小组件'. Also trigger when the user wants to maintain (extend, refactor, restyle) an existing widget by id, or export one as a standalone Vite project. Drives the `bash` tool to invoke the bundled `shuvix` CLI plus `read`/`write`/`edit` for source files."
+description: "Build, maintain, and export ShuviX Widgets — small, persistent React utilities saved under ~/.shuvix/widgets/<id>/ and surfaced in the right-panel Widget tab. Widgets can also persist data via a built-in PostgREST-style HTTP DB API (no auth, schema-isolated per widget). Trigger when the user wants a JSON formatter, expression playground, regex tester, unit converter, color picker, time-zone helper, base64 encoder, todo list, note pad, bookmark store, log viewer, or anything else they describe as 'a small tool', '小工具', 'mini app', 'widget', '小组件'. Also trigger when the user wants to maintain (extend, refactor, restyle) an existing widget by id, or export one as a standalone Vite project. Drives the `bash` tool to invoke the bundled `shuvix` CLI plus `read`/`write`/`edit` for source files."
 ---
 
 # Widget
@@ -18,6 +18,8 @@ A **Widget** is a persistent mini React app the user can invoke any time from th
 | `shuvix widget init <id> --name "Display Name" [--description "..."]` | Scaffold a new widget at `~/.shuvix/widgets/<id>/` and trigger initial build. Returns projectDir + url + buildSuccess + buildErrors. Also auto-grants this session read/write access to the widget dir. |
 | `shuvix widget build <id>` | Recompile the widget. Returns url + buildSuccess + buildErrors. The widget's browser panel auto-refreshes via SSE. |
 | `shuvix widget export <id> --to <absolutePath>` | Copy the widget into a standalone Vite project at the given path. The path **must** be inside this session's working directory (or a readwrite reference dir) — CLI rejects out-of-sandbox targets. |
+| `shuvix widget db-init <id> --sql "<DDL>"` | Install / update the widget's DB schema. Idempotent `CREATE TABLE IF NOT EXISTS ...` DDL recommended. Re-runnable on failure (failed SQL is **not** persisted). Use `--file <path>` for multiline SQL. |
+| `shuvix widget db-query <id> --sql "<SQL>"` | Run raw SQL scoped to the widget's own schema (debugging / data inspection). SELECT / INSERT / UPDATE / DELETE / DROP all allowed within scope. Returns psql-style table on stdout. Use `--file <path>` for multiline SQL. |
 
 All commands print machine-readable JSON to stdout on success, plain error text to stderr on failure, and use exit code 0/1 accordingly. Read both — the JSON `url` is what you pass to `shuvix browser open <url>` (see the **browser** skill) to preview the widget inside the right-panel browser tab.
 
@@ -71,6 +73,113 @@ If you refactor `index.tsx` and drop this block, the page renders blank with no 
 - **Tailwind CSS v4** — class names via `className`; `dark:` variant auto-follows ShuviX's theme via `prefers-color-scheme`
 - **React Router** — `createHashRouter` from `react-router` for multi-page widgets
 - **No other npm packages.** No axios, lodash, date-fns, icon libraries, chart libraries — if you need an icon, use inline SVG; if you need HTTP, use `fetch`. The bundler will fail on unknown imports.
+
+## Persistent storage — DB REST API
+
+Widgets can persist data via a built-in PostgREST-style HTTP API served by the same widget server. **All widgets share a single embedded PostgreSQL (PGlite) instance, but each widget gets its own isolated schema automatically** — you write `CREATE TABLE todos (...)` and `fetch('/w/<id>/db/todos')` with bare table names, the backend rewrites them to scope to the widget's private schema. Two widgets can both have a `todos` table without conflict, but **a widget cannot read another widget's data**.
+
+### Step 1 — define schema (CLI, once per design)
+
+Use `shuvix widget db-init <id>` **after** `widget init`, **as a separate step**. If the DDL fails, fix and re-run — failed SQL is never persisted.
+
+```bash
+shuvix widget db-init my-todo --sql "
+CREATE TABLE IF NOT EXISTS todos (
+  id        serial PRIMARY KEY,
+  text      text   NOT NULL,
+  done      bool   NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS todos_done_idx ON todos(done);
+"
+```
+
+Always use `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` so the DDL is idempotent — ShuviX re-runs it automatically when the widget is registered (e.g. after restart) so your schema is self-healing.
+
+For multi-line DDL prefer `--file <path>` to avoid shell-escaping pain:
+
+```bash
+shuvix widget db-init my-todo --file schema.sql
+```
+
+### Step 2 — call the API from widget code
+
+Endpoint shape: `/w/<id>/db/<table>` (use `import.meta.env` or hardcode the widget id you were given). Same origin as the widget's HTML — no auth, no CORS dance.
+
+```ts
+// Read with filters / ordering / pagination
+const res = await fetch('/w/my-todo/db/todos?done=is.false&order=created_at.desc&limit=20')
+const rows = await res.json()      // → array of row objects
+
+// Insert one or many
+await fetch('/w/my-todo/db/todos', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ text: 'buy milk' })
+})
+// or body: [{ text: 'a' }, { text: 'b' }]
+
+// Update — WHERE clause REQUIRED (no "update all" footgun)
+await fetch('/w/my-todo/db/todos?id=eq.7', {
+  method: 'PATCH',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ done: true })
+})
+
+// Delete — WHERE clause REQUIRED
+await fetch('/w/my-todo/db/todos?id=eq.7', { method: 'DELETE' })
+```
+
+**All write methods return the affected rows as a JSON array** (PostgREST `Prefer: return=representation` default). Errors come back as `{ "code": "...", "message": "..." }` with 4xx (bad query / constraint) or 5xx (internal).
+
+### URL operator cheat sheet
+
+PostgREST-compatible subset. Each filter is `?column=operator.value`; multiple filters AND together.
+
+| Operator | SQL meaning | Example |
+|---|---|---|
+| `eq` | `=` | `?id=eq.5` |
+| `neq` | `<>` | `?status=neq.archived` |
+| `gt` `gte` `lt` `lte` | `> >= < <=` | `?score=gte.80&score=lt.100` |
+| `like` `ilike` | LIKE / ILIKE (case-insensitive); `*` is wildcard | `?name=ilike.*foo*` |
+| `in` | `IN (...)` | `?status=in.(active,pending)` |
+| `is` | `IS NULL/TRUE/FALSE/UNKNOWN` | `?deleted_at=is.null` |
+
+Control parameters (not filters):
+- `?select=col1,col2` — column projection (default `*`)
+- `?order=col.desc.nullslast,col2.asc` — multi-column sort, optional `nullsfirst`/`nullslast`
+- `?limit=20&offset=40` — pagination
+
+### Available PostgreSQL extensions
+
+Pre-loaded and usable in DDL / queries — no extra step needed:
+
+- **`pg_trgm`** — trigram fuzzy search: `WHERE text % 'searchterm'` or GIN index `USING gin (text gin_trgm_ops)`
+- **`vector`** — embedding columns: `embedding vector(1536)`, similarity `<->`, `<#>`, `<=>`
+- Others available: `hstore`, `ltree`, `citext`, `tablefunc`, `cube`, `earthdistance`, `intarray`, `unaccent`, `fuzzystrmatch`
+
+### Debugging / inspecting data
+
+Use `shuvix widget db-query <id> --sql "SELECT ..."` during development to see what's actually stored:
+
+```bash
+shuvix widget db-query my-todo --sql "SELECT id, text, done FROM todos ORDER BY id DESC LIMIT 10"
+shuvix widget db-query my-todo --sql "DELETE FROM todos WHERE done"   # housekeeping
+```
+
+The SQL is auto-scoped to the widget's schema; write bare table names like `todos`, **never** reference another widget's schema (`widget_other.foo`) — that's blocked.
+
+### Not supported (one-line refusals — don't try these)
+
+- Embedded resources `?select=*,fk(*)` — issue two requests instead
+- Logical operators `and()`, `or()` nesting — keep filters AND-only
+- RPC endpoints `/rpc/funcname` — call SQL through `db-query` instead
+- Upsert / `on_conflict` / `Prefer` headers — use PATCH after a SELECT
+- Cross-widget data access — widgets are isolated; communicate through the user, not the DB
+
+### Decide first: does this widget need persistence?
+
+If the widget is **stateless** (JSON formatter, regex tester, base64 encoder, calculators, date helpers) — **don't** call `db-init`, just use `useState`. The DB API is for widgets that store user-generated records across sessions: notes, todos, bookmarks, history, snippets, saved configs.
 
 ## ⚠️ DESIGN GUIDE — follow this strictly
 

@@ -6,7 +6,7 @@
 import { Type } from 'typebox'
 import { BaseTool } from '../services/baseTool'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { AskToolDetails } from '../../shared/types/chatMessage'
 import { t } from '../i18n'
 

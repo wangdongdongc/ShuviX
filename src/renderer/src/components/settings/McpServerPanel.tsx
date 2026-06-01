@@ -7,11 +7,17 @@ import {
   Terminal,
   ChevronDown,
   ChevronRight,
-  Trash2,
   Loader2,
   ScrollText
 } from 'lucide-react'
-import { ConfirmDialog } from '../common/ConfirmDialog'
+import {
+  SettingsSection,
+  SettingsRow,
+  SettingsBlock,
+  Toggle,
+  InlineInput
+} from './SettingsPrimitives'
+import { McpServerLogsDialog } from './McpServerLogsDialog'
 
 interface McpHostStatus {
   running: boolean
@@ -27,35 +33,10 @@ interface McpHostToolDesc {
   inputSchema: Record<string, unknown>
 }
 
-interface McpHostLogSummary {
-  id: string
-  sessionId: string
-  clientName: string
-  clientVersion: string
-  toolName: string
-  isError: number
-  durationMs: number
-  createdAt: number
-}
-
-interface McpServerLogDetail {
-  id: string
-  sessionId: string
-  clientName: string
-  clientVersion: string
-  toolName: string
-  arguments: string
-  result: string
-  isError: number
-  durationMs: number
-  createdAt: number
-}
-
 /** MCP Server 对外服务配置面板 */
 export function McpServerPanel(): React.JSX.Element {
   const { t } = useTranslation()
 
-  // 状态
   const [status, setStatus] = useState<McpHostStatus | null>(null)
   const [enabled, setEnabled] = useState(false)
   const [port, setPort] = useState('3399')
@@ -66,14 +47,8 @@ export function McpServerPanel(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const [startError, setStartError] = useState('')
+  const [logsOpen, setLogsOpen] = useState(false)
 
-  // 日志
-  const [logs, setLogs] = useState<McpHostLogSummary[]>([])
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
-  const [logDetail, setLogDetail] = useState<McpServerLogDetail | null>(null)
-  const [showClearConfirm, setShowClearConfirm] = useState(false)
-
-  // 加载设置（不读取 mcpServer.enabled，始终从运行状态获取）
   const loadSettings = useCallback(async () => {
     const [portVal, dbVal, sshVal] = await Promise.all([
       window.api.settings.get('mcpServer.port'),
@@ -93,30 +68,23 @@ export function McpServerPanel(): React.JSX.Element {
   }, [])
 
   const loadTools = useCallback(async () => {
-    const t = await window.api.mcpServer.getTools()
-    setTools(t)
-  }, [])
-
-  const loadLogs = useCallback(async () => {
-    const rows = await window.api.mcpServer.listLogs({ limit: 100 })
-    setLogs(rows)
+    const list = await window.api.mcpServer.getTools()
+    setTools(list)
   }, [])
 
   useEffect(() => {
-    loadSettings()
-    loadStatus()
-    loadTools()
-    loadLogs()
-  }, [loadSettings, loadStatus, loadTools, loadLogs])
+    void loadSettings()
+    void loadStatus()
+    void loadTools()
+  }, [loadSettings, loadStatus, loadTools])
 
-  // 主开关（不持久化，出于安全考虑每次启动应用默认关闭）
+  // 主开关
   const handleToggleEnabled = async (): Promise<void> => {
     setLoading(true)
     setStartError('')
     try {
       const newEnabled = !enabled
       setEnabled(newEnabled)
-
       if (newEnabled) {
         await window.api.settings.set({ key: 'mcpServer.port', value: port })
         const s = await window.api.mcpServer.start()
@@ -135,7 +103,6 @@ export function McpServerPanel(): React.JSX.Element {
     }
   }
 
-  // 端口变更
   const handlePortBlur = async (): Promise<void> => {
     const num = Number(port)
     if (!num || num < 1 || num > 65535) {
@@ -145,7 +112,6 @@ export function McpServerPanel(): React.JSX.Element {
     await window.api.settings.set({ key: 'mcpServer.port', value: port })
   }
 
-  // Database 功能开关
   const handleToggleDatabase = async (): Promise<void> => {
     const newVal = !dbFeature
     setDbFeature(newVal)
@@ -154,17 +120,13 @@ export function McpServerPanel(): React.JSX.Element {
       value: String(newVal)
     })
     if (status?.running) {
-      if (newVal) {
-        await window.api.mcpServer.enableFeature('database')
-      } else {
-        await window.api.mcpServer.disableFeature('database')
-      }
+      if (newVal) await window.api.mcpServer.enableFeature('database')
+      else await window.api.mcpServer.disableFeature('database')
     }
     await loadTools()
     await loadStatus()
   }
 
-  // SSH 功能开关
   const handleToggleSsh = async (): Promise<void> => {
     const newVal = !sshFeature
     setSshFeature(newVal)
@@ -173,373 +135,197 @@ export function McpServerPanel(): React.JSX.Element {
       value: String(newVal)
     })
     if (status?.running) {
-      if (newVal) {
-        await window.api.mcpServer.enableFeature('ssh')
-      } else {
-        await window.api.mcpServer.disableFeature('ssh')
-      }
+      if (newVal) await window.api.mcpServer.enableFeature('ssh')
+      else await window.api.mcpServer.disableFeature('ssh')
     }
     await loadTools()
     await loadStatus()
   }
 
-  // 复制
   const handleCopy = async (text: string): Promise<void> => {
     await navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
-  // 日志详情
-  const handleLogClick = async (id: string): Promise<void> => {
-    if (selectedLogId === id) {
-      setSelectedLogId(null)
-      setLogDetail(null)
-      return
-    }
-    setSelectedLogId(id)
-    const detail = await window.api.mcpServer.getLog(id)
-    setLogDetail(detail ?? null)
-  }
-
-  // 清空日志
-  const handleClearLogs = async (): Promise<void> => {
-    await window.api.mcpServer.clearLogs()
-    setLogs([])
-    setSelectedLogId(null)
-    setLogDetail(null)
-    setShowClearConfirm(false)
-  }
-
   const serverUrl = `http://127.0.0.1:${port}/mcp`
   const isRunning = status?.running ?? false
 
   const claudeDesktopConfig = JSON.stringify(
-    {
-      mcpServers: {
-        shuvix: { url: serverUrl }
-      }
-    },
+    { mcpServers: { shuvix: { url: serverUrl } } },
     null,
     2
   )
 
   return (
-    <div className="p-6 space-y-6">
-      {/* 标题 */}
-      <div>
-        <h3 className="text-sm font-semibold text-text-primary">{t('settings.mcpServerTitle')}</h3>
-        <p className="text-[11px] text-text-tertiary mt-1">{t('settings.mcpServerDesc')}</p>
-      </div>
-
-      {/* 主开关 + 状态 */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleToggleEnabled}
-            disabled={loading}
-            className={`relative w-8 h-[18px] rounded-full transition-colors ${
-              enabled ? 'bg-accent' : 'bg-bg-tertiary'
-            } ${loading ? 'opacity-50' : ''}`}
-          >
-            <span
-              className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${
-                enabled ? 'left-[16px]' : 'left-[2px]'
-              }`}
-            />
-          </button>
-          <span className="text-xs text-text-primary">{t('settings.mcpServerEnabled')}</span>
-          {loading && <Loader2 size={12} className="animate-spin text-text-tertiary" />}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500' : 'bg-gray-400'}`} />
-          <span className="text-[11px] text-text-secondary">
-            {isRunning ? t('settings.mcpServerRunning') : t('settings.mcpServerStopped')}
-          </span>
-        </div>
-      </div>
-
-      {startError && (
-        <div className="text-[11px] text-red-400 bg-red-500/10 rounded-md px-3 py-2">
-          {t('settings.mcpServerStartError', { error: startError })}
-        </div>
-      )}
-
-      {/* 端口配置 */}
-      <div className="flex items-center gap-3">
-        <label className="text-xs text-text-secondary w-16">{t('settings.mcpServerPort')}</label>
-        <input
-          type="number"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-          onBlur={handlePortBlur}
-          disabled={isRunning}
-          className="zen-input w-24 text-xs"
-          min={1}
-          max={65535}
-          placeholder={t('settings.mcpServerPortDefault')}
+    <div className="flex-1 px-5 py-5 space-y-5">
+      {/* 服务状态 */}
+      <SettingsSection
+        title={t('settings.mcpServerStatusGroup')}
+        description={t('settings.mcpServerDesc')}
+      >
+        <SettingsRow
+          title={t('settings.mcpServerEnabled')}
+          control={
+            <div className="flex items-center gap-2">
+              {loading && <Loader2 size={11} className="animate-spin text-text-tertiary" />}
+              <span className="inline-flex items-center gap-1 text-[10px] text-text-tertiary">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-500' : 'bg-gray-400'}`}
+                />
+                {isRunning ? t('settings.mcpServerRunning') : t('settings.mcpServerStopped')}
+              </span>
+              <Toggle on={enabled} onClick={() => void handleToggleEnabled()} />
+            </div>
+          }
         />
-        {isRunning && (
-          <span className="text-[10px] text-text-tertiary">
-            {t('settings.mcpServerPortDefault')}
-          </span>
+        <SettingsRow
+          title={t('settings.mcpServerPort')}
+          control={
+            <InlineInput
+              type="number"
+              value={port}
+              onChange={setPort}
+              onBlur={() => void handlePortBlur()}
+              disabled={isRunning}
+              placeholder={t('settings.mcpServerPortDefault')}
+              width={120}
+              min={1}
+              max={65535}
+            />
+          }
+        />
+        {startError && (
+          <div className="px-4 py-2 text-[11px] text-red-400 bg-red-500/5">
+            {t('settings.mcpServerStartError', { error: startError })}
+          </div>
         )}
-      </div>
-
-      {/* 功能 & 工具 */}
-      <div>
-        <h4 className="text-xs font-medium text-text-primary mb-2">
-          {t('settings.mcpServerFeatures')}
-        </h4>
-
-        <div className="border border-border-secondary rounded-lg overflow-hidden divide-y divide-border-secondary">
-          {/* Database */}
-          <div className="flex items-center justify-between px-3 py-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <Database size={13} className="text-amber-500 flex-shrink-0" />
-              <div className="min-w-0">
-                <span className="text-xs font-medium text-text-primary">
-                  {t('settings.mcpServerFeatureDatabase')}
-                </span>
-                <p className="text-[10px] text-text-tertiary leading-tight mt-0.5">
-                  {t('settings.mcpServerFeatureDatabaseDesc')}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleToggleDatabase}
-              className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ml-3 ${
-                dbFeature ? 'bg-accent' : 'bg-bg-hover'
-              }`}
-            >
-              <span
-                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${
-                  dbFeature ? 'left-[16px]' : 'left-[2px]'
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* SSH */}
-          <div className="flex items-center justify-between px-3 py-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <Terminal size={13} className="text-cyan-400 flex-shrink-0" />
-              <div className="min-w-0">
-                <span className="text-xs font-medium text-text-primary">
-                  {t('settings.mcpServerFeatureSsh')}
-                </span>
-                <p className="text-[10px] text-text-tertiary leading-tight mt-0.5">
-                  {t('settings.mcpServerFeatureSshDesc')}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleToggleSsh}
-              className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ml-3 ${
-                sshFeature ? 'bg-accent' : 'bg-bg-hover'
-              }`}
-            >
-              <span
-                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${
-                  sshFeature ? 'left-[16px]' : 'left-[2px]'
-                }`}
-              />
-            </button>
-          </div>
-
-          {/* 工具列表（可展开） */}
-          {tools.length > 0 && (
-            <>
-              <button
-                onClick={() => setToolsExpanded(!toolsExpanded)}
-                className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-text-secondary hover:text-text-primary w-full"
-              >
-                {toolsExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                <span>
-                  {t('settings.mcpServerTools')} ({tools.length})
-                </span>
-              </button>
-              {toolsExpanded && (
-                <div className="px-3 py-2 space-y-2">
-                  {tools.map((tool) => (
-                    <div key={tool.name} className="bg-bg-tertiary/30 rounded-md px-2.5 py-2">
-                      <div className="text-[11px] font-mono text-accent">{tool.name}</div>
-                      <div className="text-[10px] text-text-tertiary mt-0.5 leading-relaxed">
-                        {tool.description}
-                      </div>
-                      {(tool.inputSchema as { properties?: Record<string, unknown> })
-                        ?.properties && (
-                        <div className="mt-1.5 space-y-0.5">
-                          {Object.entries(
-                            (tool.inputSchema as { properties: Record<string, unknown> }).properties
-                          ).map(([name, raw]) => {
-                            const schema = raw as { type?: string; description?: string } | null
-                            return (
-                              <div key={name} className="text-[10px] text-text-tertiary">
-                                <span className="font-mono text-text-secondary">{name}</span>
-                                {schema?.type && (
-                                  <span className="text-text-tertiary ml-1">({schema.type})</span>
-                                )}
-                                {schema?.description && (
-                                  <span className="ml-1">— {schema.description}</span>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+        {/* 接入信息：运行时直接接续显示 */}
+        {isRunning && (
+          <>
+            <SettingsRow
+              title={t('settings.mcpServerUrl')}
+              control={
+                <div className="flex items-center gap-1.5">
+                  <code className="text-[11px] font-mono text-accent bg-bg-tertiary/40 px-2 py-0.5 rounded">
+                    {serverUrl}
+                  </code>
+                  <button
+                    onClick={() => handleCopy(serverUrl)}
+                    className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                    title={t('settings.mcpServerCopy')}
+                  >
+                    {copied ? <Check size={11} className="text-emerald-500" /> : <Copy size={11} />}
+                  </button>
                 </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* 连接指南（仅运行时显示） */}
-      {isRunning && (
-        <div>
-          <h4 className="text-xs font-medium text-text-primary mb-2">
-            {t('settings.mcpServerConnectionInfo')}
-          </h4>
-          <p className="text-[11px] text-text-tertiary mb-3">
-            {t('settings.mcpServerConnectionHint')}
-          </p>
-
-          {/* 服务地址 */}
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[11px] text-text-secondary">{t('settings.mcpServerUrl')}:</span>
-            <code className="text-[11px] font-mono text-accent bg-bg-tertiary px-2 py-0.5 rounded">
-              {serverUrl}
-            </code>
-            <button
-              onClick={() => handleCopy(serverUrl)}
-              className="text-text-tertiary hover:text-text-primary transition-colors"
-              title={t('settings.mcpServerCopy')}
+              }
+            />
+            <SettingsBlock
+              label={t('settings.mcpServerClaudeDesktop')}
+              description={t('settings.mcpServerConnectionHint')}
             >
-              {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-            </button>
-          </div>
-
-          {/* Claude Desktop 配置 */}
-          <div>
-            <div className="text-[11px] text-text-secondary mb-1.5">
-              {t('settings.mcpServerClaudeDesktop')}
-            </div>
-            <div className="relative">
-              <pre className="text-[10px] font-mono text-text-secondary bg-bg-tertiary rounded-lg p-3 overflow-x-auto">
-                {claudeDesktopConfig}
-              </pre>
-              <button
-                onClick={() => handleCopy(claudeDesktopConfig)}
-                className="absolute top-2 right-2 text-text-tertiary hover:text-text-primary transition-colors"
-                title={t('settings.mcpServerCopy')}
-              >
-                <Copy size={11} />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 调用日志 */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className="text-xs font-medium text-text-primary flex items-center gap-1.5">
-            <ScrollText size={13} />
-            {t('settings.mcpServerLogs')}
-          </h4>
-          {logs.length > 0 && (
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-red-400 transition-colors"
-            >
-              <Trash2 size={10} />
-              {t('settings.mcpServerLogClear')}
-            </button>
-          )}
-        </div>
-
-        {logs.length === 0 ? (
-          <div className="text-[11px] text-text-tertiary text-center py-6">
-            {t('settings.mcpServerLogEmpty')}
-          </div>
-        ) : (
-          <div className="border border-border-secondary rounded-lg overflow-hidden">
-            {logs.map((log) => (
-              <div key={log.id}>
+              <div className="relative">
+                <pre className="text-[10px] font-mono text-text-secondary bg-bg-primary border border-border-secondary/50 rounded-md p-3 overflow-x-auto">
+                  {claudeDesktopConfig}
+                </pre>
                 <button
-                  onClick={() => handleLogClick(log.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 text-[11px] hover:bg-bg-hover transition-colors border-b border-border-secondary last:border-b-0 ${
-                    selectedLogId === log.id ? 'bg-bg-hover' : ''
-                  }`}
+                  onClick={() => handleCopy(claudeDesktopConfig)}
+                  className="absolute top-2 right-2 p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                  title={t('settings.mcpServerCopy')}
                 >
-                  {/* 状态 */}
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                      log.isError ? 'bg-red-500' : 'bg-green-500'
-                    }`}
-                  />
-                  {/* 时间 */}
-                  <span className="text-text-tertiary w-14 text-[10px] flex-shrink-0">
-                    {new Date(log.createdAt).toLocaleTimeString()}
-                  </span>
-                  {/* 客户端 */}
-                  <span className="text-text-secondary truncate w-24 flex-shrink-0">
-                    {log.clientName}
-                  </span>
-                  {/* 工具 */}
-                  <span className="font-mono text-accent truncate flex-1">{log.toolName}</span>
-                  {/* 耗时 */}
-                  <span className="text-text-tertiary text-[10px] w-12 text-right flex-shrink-0">
-                    {log.durationMs}ms
-                  </span>
+                  <Copy size={11} />
                 </button>
+              </div>
+            </SettingsBlock>
+          </>
+        )}
+      </SettingsSection>
 
-                {/* 展开详情 */}
-                {selectedLogId === log.id && logDetail && (
-                  <div className="px-3 py-2 bg-bg-tertiary/50 border-b border-border-secondary space-y-2">
-                    <div>
-                      <div className="text-[10px] text-text-tertiary mb-0.5">Arguments</div>
-                      <pre className="text-[10px] font-mono text-text-secondary bg-bg-primary rounded p-2 overflow-x-auto max-h-32 overflow-y-auto">
-                        {formatJson(logDetail.arguments)}
-                      </pre>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-text-tertiary mb-0.5">Result</div>
-                      <pre className="text-[10px] font-mono text-text-secondary bg-bg-primary rounded p-2 overflow-x-auto max-h-48 overflow-y-auto">
-                        {logDetail.result}
-                      </pre>
-                    </div>
+      {/* 对外功能 */}
+      <SettingsSection title={t('settings.mcpServerFeaturesGroup')}>
+        <SettingsRow
+          icon={<Database size={13} className="text-amber-500 shrink-0" />}
+          title={t('settings.mcpServerFeatureDatabase')}
+          description={t('settings.mcpServerFeatureDatabaseDesc')}
+          control={<Toggle on={dbFeature} onClick={() => void handleToggleDatabase()} />}
+        />
+        <SettingsRow
+          icon={<Terminal size={13} className="text-cyan-400 shrink-0" />}
+          title={t('settings.mcpServerFeatureSsh')}
+          description={t('settings.mcpServerFeatureSshDesc')}
+          control={<Toggle on={sshFeature} onClick={() => void handleToggleSsh()} />}
+        />
+      </SettingsSection>
+
+      {/* 已注册工具 */}
+      {tools.length > 0 && (
+        <SettingsSection
+          title={`${t('settings.mcpServerToolsGroup')} (${tools.length})`}
+          headerAction={
+            <button
+              onClick={() => setToolsExpanded(!toolsExpanded)}
+              className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              title={toolsExpanded ? '收起' : '展开'}
+            >
+              {toolsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </button>
+          }
+        >
+          {toolsExpanded ? (
+            tools.map((tool) => (
+              <div key={tool.name} className="px-4 py-3">
+                <div className="text-[12px] font-mono text-accent">{tool.name}</div>
+                <div className="text-[11px] text-text-tertiary mt-0.5 leading-relaxed">
+                  {tool.description}
+                </div>
+                {(tool.inputSchema as { properties?: Record<string, unknown> })?.properties && (
+                  <div className="mt-2 space-y-0.5">
+                    {Object.entries(
+                      (tool.inputSchema as { properties: Record<string, unknown> }).properties
+                    ).map(([name, raw]) => {
+                      const schema = raw as { type?: string; description?: string } | null
+                      return (
+                        <div key={name} className="text-[10px] text-text-tertiary">
+                          <span className="font-mono text-text-secondary">{name}</span>
+                          {schema?.type && (
+                            <span className="text-text-tertiary ml-1">({schema.type})</span>
+                          )}
+                          {schema?.description && (
+                            <span className="ml-1">— {schema.description}</span>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 清空确认 */}
-      {showClearConfirm && (
-        <ConfirmDialog
-          title={t('settings.mcpServerLogClear')}
-          description={t('settings.mcpServerLogClearConfirm')}
-          confirmText={t('settings.mcpServerLogClear')}
-          cancelText={t('common.cancel')}
-          onConfirm={handleClearLogs}
-          onCancel={() => setShowClearConfirm(false)}
-        />
+            ))
+          ) : (
+            <div className="px-4 py-3 text-[11px] text-text-tertiary leading-relaxed">
+              {tools.map((tool) => tool.name).join(' · ')}
+            </div>
+          )}
+        </SettingsSection>
       )}
+
+      {/* 调用日志 */}
+      <SettingsSection title={t('settings.mcpServerLogs')}>
+        <SettingsRow
+          icon={<ScrollText size={13} className="text-text-tertiary shrink-0" />}
+          title={t('settings.mcpServerLogs')}
+          description={t('settings.mcpServerLogsDesc')}
+          control={
+            <button
+              onClick={() => setLogsOpen(true)}
+              className="px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
+            >
+              {t('settings.mcpServerLogsView')}
+            </button>
+          }
+        />
+      </SettingsSection>
+
+      {logsOpen && <McpServerLogsDialog onClose={() => setLogsOpen(false)} />}
     </div>
   )
-}
-
-function formatJson(str: string): string {
-  try {
-    return JSON.stringify(JSON.parse(str), null, 2)
-  } catch {
-    return str
-  }
 }

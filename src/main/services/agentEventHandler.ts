@@ -1,5 +1,5 @@
-import type { AgentEvent } from '@mariozechner/pi-agent-core'
-import type { AssistantMessage, ImageContent, TextContent } from '@mariozechner/pi-ai'
+import type { AgentEvent } from '@earendil-works/pi-agent-core'
+import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
 import { isAssistantMessage, isUserMessage } from '../utils/messageGuards'
 import { httpLogService } from './httpLogService'
 import { messageService } from './messageService'

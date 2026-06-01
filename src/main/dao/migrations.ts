@@ -377,6 +377,19 @@ export const migrations: Migration[] = [
         }
       }
     }
+  },
+  {
+    version: 12,
+    description:
+      '废弃 custom_sub_agents 表：sub-agent 改由文件系统管理（resources/agents + ~/.shuvix/agents/<name>/AGENT.md）',
+    up: (db) => {
+      // 用户自定义 sub-agent 不做数据迁移 —— 用户需在 ~/.shuvix/agents/ 下重建 AGENT.md。
+      // 历史 tool_use 消息（toolName='explore'/'research'/<custom>）不改写，依赖 ToolCallBlock fallback
+      // (presentation?.label || toolName) + Wrench 默认图标渲染。
+      db.exec(`DROP TABLE IF EXISTS custom_sub_agents`)
+      // 旧 settings key 设为孤儿（无副作用），如需洁癖可一并清理
+      db.prepare(`DELETE FROM settings WHERE key = ?`).run('subagent.builtinDisabled')
+    }
   }
 ]
 

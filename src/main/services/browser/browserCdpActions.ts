@@ -7,7 +7,7 @@
 
 import { writeFile, mkdir } from 'fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'path'
-import type { AgentToolResult } from '@mariozechner/pi-agent-core'
+import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BrowserToolDetails } from '../../../shared/types/chatMessage'
 import { browserCdpService } from './browserCdpService'
 import { getBrowserView } from './browserViewService'
