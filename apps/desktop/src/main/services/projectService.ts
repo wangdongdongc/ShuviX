@@ -1,0 +1,169 @@
+import { v7 as uuidv7 } from 'uuid'
+import { projectDao } from '../dao/projectDao'
+import type { Project, ProjectSettings, ReferenceDir } from '../types'
+import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
+import { basename, resolve } from 'path'
+import { expandPath } from '../utils/toolUtils/pathUtils'
+
+// ---------- 项目字段元数据注册表 ----------
+
+export interface ProjectFieldMeta {
+  /** 对应项目编辑页面的 i18n key（用于前端展示） */
+  labelKey: string
+  /** AI 可读描述（用于工具参数 description 和 prompt） */
+  desc: string
+}
+
+/**
+ * 所有已知的项目可修改字段元数据注册表
+ * 新增字段时在此追加一行，工具参数描述、AI prompt、审批弹窗标签自动同步
+ */
+export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
+  name: { labelKey: 'projectForm.name', desc: 'Project display name' },
+  promptSections: {
+    labelKey: 'projectForm.promptSectionsTitle',
+    desc: 'Project-level system prompt as ordered cards (array of {id, title, content})'
+  },
+  enabledTools: {
+    labelKey: 'projectForm.wizardStepExtensions',
+    desc: 'List of enabled MCP/Skill identifiers — entries must be prefixed with mcp: or skill: (string[])'
+  },
+  referenceDirs: {
+    labelKey: 'projectForm.referenceDirs',
+    desc: 'Reference directories for AI to access (array of {path, note?, access?}). access: readonly (default) or readwrite'
+  },
+  'tool.pglitePersist': {
+    labelKey: 'projectForm.pglitePersistLabel',
+    desc: 'Enable PGLite persistent storage — data stored in project folder .shuvix/pglite/data (boolean)'
+  }
+}
+
+/** 所有已知项目字段描述列表（供 AI prompt / 参数 description 使用） */
+export function getProjectFieldDescriptions(): string {
+  return Object.entries(KNOWN_PROJECT_FIELDS)
+    .map(([field, e]) => `${field} (${e.desc})`)
+    .join(', ')
+}
+
+/**
+ * 参考目录去重：基于 resolve 后的绝对路径去重，同时排除与项目根路径相同的条目
+ * @param dirs 原始参考目录列表
+ * @param projectPath 项目根目录绝对路径（可选，传入时会过滤掉与之相同的条目）
+ */
+function deduplicateReferenceDirs(dirs: ReferenceDir[], projectPath?: string): ReferenceDir[] {
+  const resolvedProjectPath = projectPath ? resolve(expandPath(projectPath)) : undefined
+  const seen = new Set<string>()
+  const result: ReferenceDir[] = []
+  for (const d of dirs) {
+    const abs = resolve(expandPath(d.path))
+    if (resolvedProjectPath && abs === resolvedProjectPath) continue
+    if (seen.has(abs)) continue
+    seen.add(abs)
+    result.push({ ...d, path: abs })
+  }
+  return result
+}
+
+// ---------- 项目服务 ----------
+
+/**
+ * 项目服务 — 编排项目相关的业务逻辑
+ */
+export class ProjectService {
+  /** 获取未归档项目 */
+  list(): Project[] {
+    return projectDao.findAllActive()
+  }
+
+  /** 获取已归档项目 */
+  listArchived(): Project[] {
+    return projectDao.findAllArchived()
+  }
+
+  /** 获取单个项目 */
+  getById(id: string): Project | undefined {
+    return projectDao.findById(id)
+  }
+
+  /** 根据路径查找项目 */
+  getByPath(path: string): Project | undefined {
+    return projectDao.findByPath(path)
+  }
+
+  /** 创建项目 */
+  create(params: {
+    name?: string
+    path: string
+    promptSections?: ProjectPromptSection[]
+    enabledTools?: string[]
+    referenceDirs?: ReferenceDir[]
+    tool?: import('../dao/types').ToolSettings
+    archived?: boolean
+  }): Project {
+    const now = Date.now()
+    const id = uuidv7()
+    const settings: ProjectSettings = {}
+    if (params.enabledTools) settings.enabledTools = params.enabledTools
+    if (params.referenceDirs)
+      settings.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, params.path)
+    if (params.tool) settings.tool = params.tool
+    const project: Project = {
+      id,
+      name: params.name || basename(params.path) || params.path,
+      path: resolve(expandPath(params.path)),
+      promptSections: params.promptSections ?? [],
+      settings,
+      archivedAt: params.archived ? now : 0,
+      createdAt: now,
+      updatedAt: now
+    }
+    projectDao.insert(project)
+    return project
+  }
+
+  /** 更新项目 */
+  update(
+    id: string,
+    params: {
+      name?: string
+      path?: string
+      promptSections?: ProjectPromptSection[]
+      enabledTools?: string[]
+      referenceDirs?: ReferenceDir[]
+      tool?: import('../dao/types').ToolSettings
+      archived?: boolean
+    }
+  ): void {
+    // 处理 settings 字段（合并而非覆盖）
+    let settingsUpdate: ProjectSettings | undefined
+    if (
+      params.enabledTools !== undefined ||
+      params.referenceDirs !== undefined ||
+      params.tool !== undefined
+    ) {
+      const existing = projectDao.pick(id, ['settings', 'path'])
+      const current: ProjectSettings = { ...(existing?.settings || {}) }
+      if (params.enabledTools !== undefined) current.enabledTools = params.enabledTools
+      if (params.referenceDirs !== undefined) {
+        const projPath = params.path ?? existing?.path
+        current.referenceDirs = deduplicateReferenceDirs(params.referenceDirs, projPath)
+      }
+      if (params.tool !== undefined) current.tool = { ...(current.tool || {}), ...params.tool }
+      settingsUpdate = current
+    }
+    projectDao.update(id, {
+      ...(params.name !== undefined ? { name: params.name } : {}),
+      ...(params.path !== undefined ? { path: resolve(expandPath(params.path)) } : {}),
+      ...(params.promptSections !== undefined ? { promptSections: params.promptSections } : {}),
+      ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
+      ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
+    })
+  }
+
+  /** 删除项目及其所有关联会话和消息 */
+  delete(id: string): void {
+    projectDao.deleteById(id)
+  }
+}
+
+export const projectService = new ProjectService()

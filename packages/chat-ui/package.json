@@ -1,0 +1,17 @@
+{
+  "name": "@shuvix/chat-ui",
+  "version": "0.1.0",
+  "description": "Reusable ShuviX chat frontend (React). Talks to any backend through the injected ChatApi contract; ships ChatEvent/ChatMessage types via @shuvix/chat-protocol.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api/chatApi.ts"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "dependencies": {
+    "@shuvix/chat-protocol": "*"
+  }
+}

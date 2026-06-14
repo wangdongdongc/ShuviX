@@ -1,0 +1,502 @@
+/**
+ * FilesPanel — 右侧面板"Files"标签
+ * 显示当前会话工作目录的文件树，并实时跟随磁盘变化
+ * 基于 @pierre/trees（path-first + Shadow DOM 隔离）
+ */
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { RefreshCw, Search, X } from 'lucide-react'
+import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
+import type { FileTree as FileTreeModel } from '@pierre/trees'
+import { useChatStore } from '@shuvix/chat-ui'
+import { FilePreview } from './FilePreview'
+import { AudioDock } from './AudioDock'
+import { VideoDock } from './VideoDock'
+
+/** 音频扩展名 → MIME。点击命中即走底部 dock，不进预览覆盖层。
+ *  与 main 的 AUDIO_MIME_BY_EXT 同步；renderer 这里独立列表是为了在点击瞬间就分流，
+ *  不必等 files.read RPC 返回 'media' kind 才知道是音频。 */
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/opus'
+}
+
+/** 视频扩展名 → MIME。同上：渲染端表用于点击瞬间分流到底部 VideoDock */
+const VIDEO_MIME_BY_EXT: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/x-m4v',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogv': 'video/ogg'
+}
+
+/** Markdown 扩展名：点击命中后不在右侧预览，改为在中间区打开 live-preview 编辑器 */
+const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
+
+function extOf(path: string): string {
+  const idx = path.lastIndexOf('.')
+  return idx >= 0 ? path.slice(idx).toLowerCase() : ''
+}
+
+interface ScanState {
+  /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
+  forRoot: string
+  paths: string[]
+  truncated: boolean
+}
+
+interface ScanError {
+  forRoot: string
+  message: string
+}
+
+export function FilesPanel(): React.JSX.Element {
+  const { t } = useTranslation()
+  const sessionId = useChatStore((s) => s.activeSessionId)
+  const projectPath = useChatStore((s) => s.projectPath)
+
+  const [state, setState] = useState<ScanState | null>(null)
+  const [error, setError] = useState<ScanError | null>(null)
+  /** 手动刷新触发器：递增以重跑扫描 effect */
+  const [refreshNonce, setRefreshNonce] = useState(0)
+  /** 搜索栏是否展开 */
+  const [searchOpen, setSearchOpen] = useState(false)
+  /** 搜索查询字符串。空字符串视作未触发搜索 */
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  /** 预览状态：被选中的文件相对路径（相对当前 projectPath）；null = 未预览 */
+  const [previewRelPath, setPreviewRelPath] = useState<string | null>(null)
+  /** 媒体 dock 状态（音视频共享同一槽位）—— 与预览状态独立，让用户听/看的同时仍能浏览树。
+   *  音视频互斥：放新的会替换旧的；这与"一个文件预览面板只有一个 dock"的语义一致。
+   *  relPath 同时存一份：dock 上的"展开"按钮需要把它转回 previewRelPath 走覆盖预览。 */
+  const [playingMedia, setPlayingMedia] = useState<{
+    absPath: string
+    relPath: string
+    mimeType: string
+    fileName: string
+    type: 'audio' | 'video'
+  } | null>(null)
+  /** 暴露的 FilesTree model 句柄，关闭预览时用来取消 pierre 选中（否则再点同一文件不会触发） */
+  const treeModelRef = useRef<FileTreeModel | null>(null)
+
+  // 渲染层防抖：200ms 内的连续 onChanged 事件合并为一次重扫
+  const rescanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
+   * 扫描当前会话工作目录。sessionId 从 store 即时读取，scan 结果按 root 标识 —
+   * 同项目内多个会话切换时 projectPath 不变，scan 不会重复触发；切换到不同项目时
+   * projectPath 变化，下方 effect 重新触发扫描
+   */
+  const scan = useCallback(async (): Promise<void> => {
+    const id = useChatStore.getState().activeSessionId
+    if (!id) return
+    try {
+      const r = await window.api.files.scan({ sessionId: id })
+      if (!r.root) return
+      // 异步竞态：若用户已切到不同 workingDirectory，丢弃旧结果
+      if (useChatStore.getState().projectPath !== r.root) return
+      setState({ forRoot: r.root, paths: r.paths, truncated: r.truncated })
+      setError(null)
+    } catch (e) {
+      const currentRoot = useChatStore.getState().projectPath
+      if (!currentRoot) return
+      setError({ forRoot: currentRoot, message: e instanceof Error ? e.message : String(e) })
+    }
+  }, [])
+
+  // 仅 projectPath / 手动刷新触发扫描；sessionId 变化但 wd 不变时不重扫
+  useEffect(() => {
+    if (!projectPath) return
+    void scan() // eslint-disable-line react-hooks/set-state-in-effect
+  }, [projectPath, refreshNonce, scan])
+
+  // 项目 / 会话切换时关闭预览 + 停止音频（避免读到旧会话工作目录里的文件）
+  useEffect(() => {
+    setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
+    setPlayingMedia(null)
+  }, [projectPath, sessionId])
+
+  // 订阅文件变动事件，按 root 过滤；防抖 200ms 后重扫
+  useEffect(() => {
+    if (!projectPath) return
+    const unsubscribe = window.api.files.onChanged((p) => {
+      if (p.root !== projectPath) return
+      if (rescanTimer.current) clearTimeout(rescanTimer.current)
+      rescanTimer.current = setTimeout(() => {
+        rescanTimer.current = null
+        void scan()
+      }, 200)
+    })
+    return () => {
+      unsubscribe()
+      if (rescanTimer.current) {
+        clearTimeout(rescanTimer.current)
+        rescanTimer.current = null
+      }
+    }
+  }, [projectPath, scan])
+
+  const handleRefresh = useCallback(() => {
+    setRefreshNonce((n) => n + 1)
+  }, [])
+
+  const toggleSearch = useCallback(() => {
+    setSearchOpen((v) => {
+      if (v) setSearchQuery('') // 关闭时清空查询
+      return !v
+    })
+  }, [])
+
+  // 搜索栏出现后聚焦输入框（自己控制，不走库的 openSearch，避免触发首项高亮）
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
+
+  // —— 派生状态：state / error 必须与当前 projectPath 匹配才视作有效 ——
+  const freshState = state && state.forRoot === projectPath ? state : null
+  const freshError = error && error.forRoot === projectPath ? error : null
+  const showLoading = !!sessionId && !!projectPath && !freshState && !freshError
+
+  // —— 内容区渲染 ——
+  let content: React.ReactNode
+  if (!sessionId || !projectPath) {
+    content = (
+      <div className="flex items-center justify-center h-full text-xs text-text-tertiary">
+        {t('panel.filesEmpty')}
+      </div>
+    )
+  } else if (freshError) {
+    content = (
+      <div className="flex flex-col items-center justify-center h-full gap-2 text-xs text-text-tertiary">
+        <span>{t('panel.filesError')}</span>
+        <span className="text-text-tertiary/70 max-w-[80%] text-center break-all">
+          {freshError.message}
+        </span>
+      </div>
+    )
+  } else if (!freshState) {
+    content = (
+      <div className="flex items-center justify-center h-full text-xs text-text-tertiary">
+        {t('panel.filesLoading')}
+      </div>
+    )
+  } else {
+    content = (
+      <FilesTree
+        key={freshState.forRoot}
+        paths={freshState.paths}
+        searchQuery={searchOpen ? searchQuery : ''}
+        onFileSelect={(rel) => {
+          // Markdown：不在右侧预览，改为在中间区打开 live-preview 编辑器。
+          // 归属会话保持激活，故本面板/当前文件夹不变；关掉残留的覆盖预览 + 取消树选中
+          // （否则再点同一文件 pierre 因选区未变而短路、无法重新打开）。
+          const ext = extOf(rel)
+          if (MARKDOWN_EXTS.has(ext)) {
+            if (!projectPath || !sessionId) return
+            useChatStore.getState().setActiveFile({ path: joinPath(projectPath, rel), sessionId })
+            setPreviewRelPath(null)
+            treeModelRef.current?.getItem(rel)?.deselect()
+            return
+          }
+          // 音频 / 视频：上底部 dock，文件树继续可见；其它走预览覆盖层
+          const audioMime = AUDIO_MIME_BY_EXT[ext]
+          const videoMime = VIDEO_MIME_BY_EXT[ext]
+          if (audioMime || videoMime) {
+            if (!projectPath) return
+            const abs = joinPath(projectPath, rel)
+            const name = abs.split(/[/\\]/).pop() || abs
+            setPlayingMedia({
+              absPath: abs,
+              relPath: rel,
+              mimeType: (audioMime || videoMime) as string,
+              fileName: name,
+              type: audioMime ? 'audio' : 'video'
+            })
+          } else {
+            setPreviewRelPath(rel)
+          }
+        }}
+        modelOutRef={treeModelRef}
+      />
+    )
+  }
+
+  /**
+   * 关闭预览：清掉本地状态 + 取消 pierre 树的选中。
+   * 不取消选中会卡 pierre 的 selectionVersion —— 再次点击同一文件 #applySelection
+   * 短路（selection 未变），useFileTreeSelection 不更新，预览无法重新打开。
+   */
+  const closePreview = useCallback(() => {
+    setPreviewRelPath((prev) => {
+      if (prev) treeModelRef.current?.getItem(prev)?.deselect()
+      return null
+    })
+  }, [])
+
+  // 文件被删时关闭预览（freshState.paths 已经经过 watcher 同步重扫）
+  useEffect(() => {
+    if (!previewRelPath || !freshState) return
+    if (!freshState.paths.includes(previewRelPath)) {
+      setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
+    }
+  }, [freshState, previewRelPath])
+
+  /** 把 pierre 树相对路径拼成宿主机绝对路径（不引 node:path，兼容 win 分隔符） */
+  const previewAbsPath =
+    previewRelPath && projectPath ? joinPath(projectPath, previewRelPath) : null
+
+  const folderName = projectPath ? basename(projectPath) : ''
+
+  return (
+    <div className="flex flex-col h-full bg-bg-secondary">
+      {/* 顶栏：左侧工作目录名（大写）+ 右侧 truncated 提示 + 搜索 + 刷新 */}
+      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30">
+        <span
+          className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary truncate max-w-[50%]"
+          title={projectPath ?? ''}
+        >
+          {folderName}
+        </span>
+        <div className="flex items-center gap-1 min-w-0">
+          {freshState?.truncated && (
+            <span className="text-[10px] text-text-tertiary/70 truncate">
+              {t('panel.filesTruncated', { count: freshState.paths.length })}
+            </span>
+          )}
+          <button
+            onClick={toggleSearch}
+            disabled={!freshState}
+            className={`p-1 rounded hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors ${
+              searchOpen
+                ? 'text-text-primary bg-bg-hover/30'
+                : 'text-text-tertiary hover:text-text-secondary'
+            }`}
+            title={t('panel.filesSearch')}
+          >
+            <Search size={11} />
+          </button>
+          <button
+            onClick={handleRefresh}
+            disabled={!sessionId || !projectPath}
+            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+            title={t('panel.filesRefresh')}
+          >
+            <RefreshCw size={11} className={showLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+
+      {/* 搜索栏：自渲染 input，绕开库内置 search UI 的 blur=close、首项高亮等问题 */}
+      {searchOpen && (
+        <div className="flex-shrink-0 flex items-center gap-1 px-2 pt-2">
+          <div className="flex-1 relative">
+            <Search
+              size={11}
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary/60 pointer-events-none"
+            />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setSearchQuery('')
+                  setSearchOpen(false)
+                }
+              }}
+              placeholder={t('panel.filesSearch')}
+              className="w-full pl-6 pr-6 py-1 rounded text-[11px] bg-bg-primary border border-border-secondary focus:border-accent/60 outline-none text-text-primary placeholder:text-text-tertiary/60 transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('')
+                  searchInputRef.current?.focus()
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-tertiary/60 hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+                title={t('common.clear')}
+              >
+                <X size={10} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 pt-2 relative">
+        {content}
+        {previewAbsPath && sessionId && (
+          <div className="absolute inset-0 z-10 flex flex-col bg-bg-secondary">
+            <FilePreview path={previewAbsPath} sessionId={sessionId} onClose={closePreview} />
+          </div>
+        )}
+      </div>
+
+      {/* 媒体 dock —— flex-shrink-0，与文件树并列垂直布局，不遮挡 */}
+      {playingMedia &&
+        sessionId &&
+        (playingMedia.type === 'audio' ? (
+          <AudioDock
+            path={playingMedia.absPath}
+            mimeType={playingMedia.mimeType}
+            fileName={playingMedia.fileName}
+            sessionId={sessionId}
+            onClose={() => setPlayingMedia(null)}
+            onExpand={() => {
+              setPreviewRelPath(playingMedia.relPath)
+              setPlayingMedia(null)
+            }}
+          />
+        ) : (
+          // key 强制切片时整组件 remount —— aspect 自动复位 + 原生 video 元素重挂载
+          <VideoDock
+            key={playingMedia.absPath}
+            path={playingMedia.absPath}
+            mimeType={playingMedia.mimeType}
+            fileName={playingMedia.fileName}
+            sessionId={sessionId}
+            onClose={() => setPlayingMedia(null)}
+            onExpand={() => {
+              setPreviewRelPath(playingMedia.relPath)
+              setPlayingMedia(null)
+            }}
+          />
+        ))}
+    </div>
+  )
+}
+
+/** 取路径最后一段（兼容 POSIX 与 Windows 分隔符），不依赖 node:path */
+function basename(p: string): string {
+  const s = p.replace(/[/\\]+$/, '')
+  const idx = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
+  return idx >= 0 ? s.slice(idx + 1) : s
+}
+
+/** 用宿主机分隔符（POSIX `/`，win `\`）把 base 与相对路径拼接，去重边界分隔符 */
+function joinPath(base: string, rel: string): string {
+  const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/'
+  const left = base.replace(/[/\\]+$/, '')
+  const right = rel.replace(/^[/\\]+/, '')
+  return `${left}${sep}${right}`
+}
+
+/**
+ * 树渲染容器
+ * key 由父组件按 root 切换，保证不同工作目录间彻底重建模型；
+ * 同一 root 下的增量更新通过 model.resetPaths 推送
+ *
+ * 搜索过滤完全走 controller.setSearch / closeSearch，不启用库内置的 search input UI
+ */
+function FilesTree({
+  paths,
+  searchQuery,
+  onFileSelect,
+  modelOutRef
+}: {
+  paths: string[]
+  searchQuery: string
+  /** 用户点击文件行（不含目录）时回调，传相对路径 */
+  onFileSelect: (relPath: string) => void
+  /** 让父组件持有 model 引用，用于关闭预览时 deselect */
+  modelOutRef?: React.RefObject<FileTreeModel | null>
+}): React.JSX.Element {
+  // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
+  const onSelectRef = useRef(onFileSelect)
+  useEffect(() => {
+    onSelectRef.current = onFileSelect
+  }, [onFileSelect])
+
+  const { model } = useFileTree({
+    paths,
+    initialExpansion: 'closed',
+    dragAndDrop: false,
+    flattenEmptyDirectories: true,
+    // 紧凑布局，与侧边栏视觉密度对齐
+    density: 'compact',
+    itemHeight: 22
+  })
+
+  // 把 model 暴露给父组件 —— 关闭预览时父组件需要 deselect
+  useEffect(() => {
+    if (!modelOutRef) return
+    modelOutRef.current = model
+    return () => {
+      modelOutRef.current = null
+    }
+  }, [model, modelOutRef])
+
+  // 选择订阅 —— 不能用 useFileTree options 里的 onSelectionChange（pierre 只在 model
+  // 构造时消费一次）；也不用 useFileTreeSelection 包装（useSyncExternalStore 的订阅在
+  // mount 之后才挂上去，且内部 selector 每次渲染都是新函数会破坏其缓存，导致 workspace
+  // 切换后首次 click 偶发性丢失）。直接 model.subscribe 是最稳的路径：mount 即时挂载，
+  // pierre 内部已经吃掉 initial snapshot 不会回调一次空选区，关闭闭包变量 lastNotified
+  // 在 unmount 时随 cleanup 一起释放，无跨 mount 状态泄漏。
+  useEffect(() => {
+    let lastNotified: string | null = model.getSelectedPaths()[0] ?? null
+    const unsubscribe = model.subscribe(() => {
+      const p = model.getSelectedPaths()[0] ?? null
+      if (lastNotified === p) return
+      lastNotified = p
+      if (!p) return
+      const item = model.getItem(p)
+      // 目录交给树自身展开/收起，不进预览
+      if (!item || item.isDirectory()) return
+      onSelectRef.current(p)
+    })
+    return unsubscribe
+  }, [model])
+
+  // 首次挂载已经把 paths 传给了 useFileTree；后续 paths 变化通过 resetPaths 同步
+  const isFirst = useRef(true)
+  useEffect(() => {
+    if (isFirst.current) {
+      isFirst.current = false
+      return
+    }
+    model.resetPaths(paths)
+  }, [paths, model])
+
+  // 把外部搜索查询透传到 controller —— 空串视作关闭搜索
+  // 库内部在点击行时会强制 closeSearch（fileTreeRowClickPlan.js: closeSearch: isSearchOpen），
+  // 因此订阅 isOpen，一旦库自行关闭而我们仍有查询，立刻重新 setSearch 恢复过滤
+  const { isOpen: libraryIsOpen } = useFileTreeSearch(model)
+  useEffect(() => {
+    if (searchQuery) {
+      if (!libraryIsOpen) model.setSearch(searchQuery)
+      else if (model.getSearchValue() !== searchQuery) model.setSearch(searchQuery)
+    } else if (libraryIsOpen) {
+      model.closeSearch()
+    }
+  }, [searchQuery, libraryIsOpen, model])
+
+  // 把 ShuviX 主题 CSS 变量桥接到 @pierre/trees 的覆盖变量
+  // 字号 / 行高 / 横向内边距 进一步压缩，对齐侧边栏密度（text-[12px] + px-1.5 风格）
+  const treeStyle = {
+    height: '100%',
+    width: '100%',
+    // 颜色
+    '--trees-bg-override': 'var(--color-bg-secondary)',
+    '--trees-fg-override': 'var(--color-text-primary)',
+    '--trees-fg-muted-override': 'var(--color-text-secondary)',
+    '--trees-selected-bg-override': 'var(--color-bg-active)',
+    '--trees-border-color-override': 'var(--color-border-secondary)',
+    '--trees-accent-override': 'var(--color-accent)',
+    // 字体与字号 — 与侧边栏对齐
+    '--trees-font-size-override': '12px',
+    '--trees-font-family-override': 'inherit',
+    // 横向内边距 — 默认 16px 偏宽，压到 8px
+    '--trees-padding-inline-override': '8px',
+    // 缩进每层 12px，跟侧边栏 ml-1.5 / pl-0.5 相近
+    '--trees-level-gap-override': '12px'
+  } as React.CSSProperties
+
+  return <FileTree model={model} style={treeStyle} />
+}

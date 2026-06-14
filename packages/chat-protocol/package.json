@@ -1,0 +1,22 @@
+{
+  "name": "@shuvix/chat-protocol",
+  "version": "0.1.0",
+  "description": "Shared chat protocol types (ChatMessage, ChatEvent, InputRequest, …), i18n locales, and pure helpers shared between ShuviX desktop, webui, and external agent servers.",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts",
+    "./types/*": "./src/types/*.ts",
+    "./utils/*": "./src/utils/*.ts",
+    "./i18n/*": "./src/i18n/*",
+    "./theme": "./src/theme.ts"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "i18next": "*"
+  },
+  "peerDependenciesMeta": {
+    "i18next": {
+      "optional": true
+    }
+  }
+}

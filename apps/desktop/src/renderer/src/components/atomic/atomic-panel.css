@@ -1,0 +1,357 @@
+/**
+ * Atomic Editor 面板 —— 把 --atomic-editor-* 主题变量映射到 ShuviX 的 token。
+ *
+ * 变量定义在 :root（而非 .atomic-panel）：表格右键菜单、搜索栏等是
+ * position:fixed 渲染到 <body> 下的，在 .atomic-panel 外面，只有放在
+ * :root 才能被它们继承到。
+ *
+ * 临时试验文件，可随欢迎页一并移除。
+ */
+:root {
+  /* —— 排版（写作面板：比聊天更大字号 + 更松行距，更适合长时间书写）—— */
+  --atomic-editor-body-size: calc(var(--app-font-size, 14px));
+  --atomic-editor-body-leading: 1.6;
+
+  /* —— 文字 —— */
+  --atomic-editor-fg: var(--color-text-primary);
+  --atomic-editor-fg-muted: var(--color-text-secondary);
+  --atomic-editor-fg-faint: var(--color-text-secondary);
+
+  /* —— 背景 / 表面（含 portal 弹层：表格菜单/搜索栏）—— */
+  --atomic-editor-bg: var(--color-bg-primary);
+  --atomic-editor-bg-surface: var(--color-bg-tertiary);
+  --atomic-editor-bg-panel: var(--color-bg-secondary);
+  --atomic-editor-border: var(--color-border-secondary);
+
+  /* —— 代码块：对齐消息气泡 .markdown-body pre —— */
+  --atomic-editor-code-bg: color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent);
+  --atomic-editor-code-rail: transparent; /* 去掉左侧紫色 rail，消息气泡没有 */
+
+  /* —— 强调 / 链接 / 选区 —— */
+  --atomic-editor-accent: var(--color-accent);
+  --atomic-editor-accent-bright: var(--color-accent);
+  --atomic-editor-accent-soft: var(--color-accent-muted);
+  --atomic-editor-link: var(--color-accent);
+  --atomic-editor-link-hover: var(--color-accent-hover);
+  --atomic-editor-selection-bg: var(--color-accent-muted);
+}
+
+/* —— 代码块语法高亮：映射到 ShuviX 的 hljs 双色板（跟随明暗主题）—— */
+[data-theme='dark'],
+[data-theme='github-dark'],
+[data-theme='nord'],
+[data-theme='tokyo-night'] {
+  --atomic-editor-hl-keyword: #ff7b72;
+  --atomic-editor-hl-string: #a5d6ff;
+  --atomic-editor-hl-number: #79c0ff;
+  --atomic-editor-hl-comment: #8b949e;
+  --atomic-editor-hl-function: #d2a8ff;
+  --atomic-editor-hl-type: #ffa657;
+  --atomic-editor-hl-variable: #ffa657;
+  --atomic-editor-hl-property: #79c0ff;
+  --atomic-editor-hl-operator: #c9d1d9;
+  --atomic-editor-hl-tag: #7ee787;
+  --atomic-editor-hl-regexp: #7ee787;
+  --atomic-editor-hl-escape: #79c0ff;
+  --atomic-editor-hl-invalid: #ffdcd7;
+}
+[data-theme='light'],
+[data-theme='github-light'],
+[data-theme='solarized-light'] {
+  --atomic-editor-hl-keyword: #cf222e;
+  --atomic-editor-hl-string: #0a3069;
+  --atomic-editor-hl-number: #0550ae;
+  --atomic-editor-hl-comment: #6e7781;
+  --atomic-editor-hl-function: #8250df;
+  --atomic-editor-hl-type: #953800;
+  --atomic-editor-hl-variable: #953800;
+  --atomic-editor-hl-property: #0550ae;
+  --atomic-editor-hl-operator: #24292f;
+  --atomic-editor-hl-tag: #116329;
+  --atomic-editor-hl-regexp: #116329;
+  --atomic-editor-hl-escape: #0550ae;
+  --atomic-editor-hl-invalid: #82071e;
+}
+
+.atomic-panel {
+  height: 100%;
+  background: var(--color-bg-primary);
+  /* 写作字体（仅编辑器）：系统字体（SF Pro / 苹方），与 Obsidian 一致，
+     笔画更实、更「立」；Avenir 偏细，故改回系统字 */
+  --atomic-editor-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* 笔记本标题栏分隔：极淡发丝线常驻；柔和「向下渐隐」阴影仅在内容下滑时出现。
+   用 ::after 渐变条而非 box-shadow —— 只在下方淡出，左右无外溢，且更接近渐进阴影。 */
+.notebook-titlebar {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border-secondary) 45%, transparent);
+}
+.notebook-titlebar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 6px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.notebook-titlebar.is-scrolled::after {
+  opacity: 1;
+}
+
+/* CM6 充满容器并内部滚动；正文限宽居中 */
+.atomic-panel .cm-editor {
+  height: 100%;
+}
+.atomic-panel .cm-scroller {
+  overflow: auto;
+  padding: 24px 28px 48px;
+}
+.atomic-panel .cm-content {
+  max-width: 700px;
+  margin: 0 auto;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* —— 代码块：逐行背景（.cm-line.cm-atomic-fenced-code）。
+   每行独立圆角会让左右边缘出现锯齿，故只让「首行圆上角、末行圆下角、
+   中间行直角」，拼出整体一张卡片、仅外圈带一点点圆角。 */
+.atomic-panel .cm-line.cm-atomic-fenced-code {
+  padding-left: 16px;
+  padding-right: 16px;
+  border-radius: 3px;
+  /* 代码行收紧：正文 1.8 行距对代码太松，字号也降一点，整体更紧凑 */
+  line-height: 1.5;
+  font-size: 0.85em;
+}
+/* 非首行：去掉上圆角 */
+.atomic-panel .cm-atomic-fenced-code + .cm-atomic-fenced-code {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+/* 非末行：去掉下圆角 */
+.atomic-panel .cm-atomic-fenced-code:has(+ .cm-atomic-fenced-code) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* --- 分割线（thematic break）加粗一点（仅 notebook 编辑器） */
+.atomic-panel .cm-line.cm-atomic-hr::after {
+  border-top-width: 2px;
+}
+
+/* 标题分级：对齐 Obsidian —— 字号更大、字重更统一（不过黑）、标题上方留白更舒展
+   （仅 notebook 编辑器）。padding-top 制造层级间的呼吸感 */
+.atomic-panel .cm-line.cm-atomic-h1 {
+  font-size: 1.8em;
+  font-weight: 600;
+  line-height: 1.3;
+  padding-top: 0.7em;
+}
+.atomic-panel .cm-line.cm-atomic-h2 {
+  font-size: 1.55em;
+  font-weight: 500;
+  line-height: 1.3;
+  padding-top: 0.6em;
+}
+.atomic-panel .cm-line.cm-atomic-h3 {
+  font-size: 1.35em;
+  font-weight: 500;
+  line-height: 1.3;
+  padding-top: 0.5em;
+}
+.atomic-panel .cm-line.cm-atomic-h4 {
+  font-size: 1.2em;
+  font-weight: 500;
+  padding-top: 0.45em;
+}
+.atomic-panel .cm-line.cm-atomic-h5 {
+  font-size: 1.08em;
+  font-weight: 500;
+  padding-top: 0.4em;
+}
+.atomic-panel .cm-line.cm-atomic-h6 {
+  font-size: 1em;
+  font-weight: 500;
+  padding-top: 0.35em;
+}
+/* atomic 的语法高亮给标题文字 span 写死了 font-weight:700，会盖掉上面的行级字重；
+   让 span 继承行的字重，标题轻重才真正由上面的规则控制 */
+.atomic-panel .cm-line.cm-atomic-h1 span,
+.atomic-panel .cm-line.cm-atomic-h2 span,
+.atomic-panel .cm-line.cm-atomic-h3 span,
+.atomic-panel .cm-line.cm-atomic-h4 span,
+.atomic-panel .cm-line.cm-atomic-h5 span,
+.atomic-panel .cm-line.cm-atomic-h6 span {
+  font-weight: inherit;
+}
+
+/* 已完成任务行：淡化整列文字 + 删除线，向 Obsidian 的「安静」靠拢。
+   行内文字被语法高亮 span 包裹、自带颜色，故需用后代选择器一并覆盖，
+   否则只有行级的删除线变淡、文字不变。 */
+.atomic-panel .cm-line.cm-atomic-task-done,
+.atomic-panel .cm-line.cm-atomic-task-done span {
+  color: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
+}
+.atomic-panel .cm-line.cm-atomic-task-done {
+  text-decoration-color: color-mix(in srgb, var(--color-text-secondary) 40%, transparent);
+}
+
+/* ============ 笔记本主题：Things ============
+   忠实 Obsidian「Things」配色（取自其 theme.css）：H1/H2 保持正文色（不上色），
+   H3 蓝 / H4 黄 / H5 红 / H6 灰，引用块青绿。
+   行内文字被 atomic 语法高亮 span 包裹、自带颜色，故每条都需连 span 一起覆盖，
+   否则只有行级变色、被 span 颜色盖掉。 */
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h3,
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h3 span {
+  color: #2e80f2;
+}
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h4,
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h4 span {
+  color: #e5b567;
+}
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h5,
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h5 span {
+  color: #e83e3e;
+}
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h6,
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-h6 span {
+  color: var(--color-text-secondary);
+}
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-blockquote,
+.atomic-panel[data-notebook-theme='things'] .cm-line.cm-atomic-blockquote span {
+  color: #3eb4bf;
+}
+
+/* ============ 双链 [[file]] / 内嵌 ![[image]] ============
+   atomic 的 wikiLinks 给链接文字加 .cm-atomic-wiki-link + 状态类，给 [[ ]] 语法加
+   .cm-atomic-wiki-link-hidden-syntax（需我们隐藏）；内嵌图片复用 imageBlocks 的 .cm-atomic-image。 */
+.atomic-panel .cm-atomic-wiki-link-hidden-syntax {
+  display: none;
+}
+.atomic-panel .cm-atomic-wiki-link {
+  color: var(--color-accent);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.atomic-panel .cm-atomic-wiki-link:hover {
+  text-decoration: underline;
+}
+/* 目标不存在：弱化 + 虚线下划线（Obsidian 同款「未创建」观感） */
+.atomic-panel .cm-atomic-wiki-link-missing,
+.atomic-panel .cm-atomic-wiki-link-unresolved {
+  color: var(--color-text-tertiary);
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.atomic-panel .cm-atomic-wiki-link-loading {
+  opacity: 0.6;
+}
+
+/* 内嵌图片：限宽、居中留白；与代码块等块级元素观感一致 */
+.atomic-panel .cm-atomic-image {
+  margin: 0.5em 0;
+}
+.atomic-panel .cm-atomic-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+/* ============ 查找面板（Ctrl+F）============
+   atomic 的查找面板渲染在 .atomic-panel 之外（见文件头注释：portal/fixed 到 body 层），
+   故这里**不能**加 .atomic-panel 作用域，必须用全局选择器命中 atomic 自带的同名类。
+   全局变量 --color-* 在 :root/[data-theme] 上，body 层也能取到。
+   atomic styles.css 用单类 .cm-atomic-search-input(0,1,0) 上样式；用「.cm-search 元素+类」
+   提高特异性并配合 !important 覆盖其尺寸/聚焦光晕。容器用 :has 限定，避免误伤其它 CM6 面板。 */
+/* 容器链：CM6 的 .cm-panels-top 包装 + atomic 的 .atomic-editor-search-panel(padding:0.5rem)
+   + .cm-panel 都会撑高这条「外框」。逐层清零内边距/最小高度，只在内层 .cm-search 给一档紧凑内边距。 */
+.cm-panels-top:has(.cm-atomic-search-input) {
+  padding: 0 !important;
+  min-height: 0 !important;
+  background: var(--color-bg-secondary);
+}
+.cm-search:has(.cm-atomic-search-input) {
+  padding: 5px 10px !important;
+  min-height: 0 !important;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border-secondary) 45%, transparent);
+}
+form:has(> .cm-atomic-search-input) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 !important;
+  min-height: 0 !important;
+}
+/* 输入框/按钮/计数：直接命中 atomic 专属类（仅此面板有），不挂任何外层作用域，
+   确保无论面板渲染在哪都生效；尺寸用 !important 压过 atomic 单类样式。 */
+input.cm-atomic-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 360px;
+  box-sizing: border-box !important;
+  height: 28px !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 9px !important;
+  font-size: 12px !important;
+  line-height: 1.2 !important;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-secondary) !important;
+  border-radius: 6px !important;
+  outline: none !important;
+  box-shadow: none !important;
+  appearance: none;
+  transition: border-color 0.15s ease;
+}
+input.cm-atomic-search-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+input.cm-atomic-search-input:focus {
+  /* 覆盖 atomic 的 box-shadow 聚焦光晕，改为细边框高亮 */
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent) !important;
+  box-shadow: none !important;
+}
+.cm-atomic-search-count {
+  flex-shrink: 0;
+  margin: 0 !important;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+button.cm-atomic-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px !important;
+  height: 26px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  appearance: none;
+}
+button.cm-atomic-search-btn:hover {
+  background: var(--color-bg-hover) !important;
+  color: var(--color-text-primary);
+}
+button.cm-atomic-search-btn svg {
+  width: 15px !important;
+  height: 15px !important;
+}

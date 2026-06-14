@@ -1,0 +1,1079 @@
+@import 'tailwindcss';
+
+/* 内容扫描走 tailwind.config.ts（绝对路径，含 @shuvix/chat-ui 包），
+   不依赖本 CSS 的目录深度——避免目录搬动后包内组件 class 被 purge。 */
+@config "../../../../tailwind.config.cjs";
+
+/* Tailwind 自定义颜色 token（默认值，会被 CSS 变量覆盖） */
+@theme {
+  --color-bg-primary: var(--theme-bg-primary);
+  --color-bg-secondary: var(--theme-bg-secondary);
+  --color-bg-tertiary: var(--theme-bg-tertiary);
+  --color-bg-hover: var(--theme-bg-hover);
+  --color-bg-active: var(--theme-bg-active);
+  --color-border-primary: var(--theme-border-primary);
+  --color-border-secondary: var(--theme-border-secondary);
+  --color-text-primary: var(--theme-text-primary);
+  --color-text-secondary: var(--theme-text-secondary);
+  --color-text-tertiary: var(--theme-text-tertiary);
+  --color-accent: var(--theme-accent);
+  --color-accent-hover: var(--theme-accent-hover);
+  --color-accent-muted: var(--theme-accent-muted);
+  --color-success: #22c55e;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+}
+
+/* ========== 深色主题 ========== */
+
+/* GitHub Dark（默认深色） */
+:root,
+[data-theme='github-dark'] {
+  color-scheme: dark;
+  --theme-bg-primary: #0d1117;
+  --theme-bg-secondary: #161b22;
+  --theme-bg-tertiary: #21262d;
+  --theme-bg-hover: #292e36;
+  --theme-bg-active: #30363d;
+  --theme-border-primary: #30363d;
+  --theme-border-secondary: #21262d;
+  --theme-text-primary: #e6edf3;
+  --theme-text-secondary: #8b949e;
+  --theme-text-tertiary: #6e7681;
+  --theme-accent: #58a6ff;
+  --theme-accent-hover: #79c0ff;
+  --theme-accent-muted: rgba(88, 166, 255, 0.15);
+  /* CodeMirror token 调色板 —— FilePreview CodeView 通过 var() 引用，切主题瞬时重绘 */
+  --cm-tok-keyword: #ff7b72;
+  --cm-tok-string: #a5d6ff;
+  --cm-tok-number: #79c0ff;
+  --cm-tok-comment: #8b949e;
+  --cm-tok-function: #d2a8ff;
+  --cm-tok-type: #ffa657;
+  --cm-tok-variable: #c9d1d9;
+  --cm-tok-constant: #79c0ff;
+  --cm-tok-operator: #ff7b72;
+  --cm-tok-punctuation: #8b949e;
+}
+
+/* Nord */
+[data-theme='nord'] {
+  color-scheme: dark;
+  --theme-bg-primary: #2e3440;
+  --theme-bg-secondary: #3b4252;
+  --theme-bg-tertiary: #434c5e;
+  --theme-bg-hover: #4c566a;
+  --theme-bg-active: #556078;
+  --theme-border-primary: #4c566a;
+  --theme-border-secondary: #3b4252;
+  --theme-text-primary: #eceff4;
+  --theme-text-secondary: #d8dee9;
+  --theme-text-tertiary: #81a1c1;
+  --theme-accent: #88c0d0;
+  --theme-accent-hover: #8fbcbb;
+  --theme-accent-muted: rgba(136, 192, 208, 0.15);
+  --cm-tok-keyword: #81a1c1;
+  --cm-tok-string: #a3be8c;
+  --cm-tok-number: #b48ead;
+  --cm-tok-comment: #616e88;
+  --cm-tok-function: #88c0d0;
+  --cm-tok-type: #8fbcbb;
+  --cm-tok-variable: #d8dee9;
+  --cm-tok-constant: #b48ead;
+  --cm-tok-operator: #81a1c1;
+  --cm-tok-punctuation: #d8dee9;
+}
+
+/* Tokyo Night */
+[data-theme='tokyo-night'] {
+  color-scheme: dark;
+  --theme-bg-primary: #1a1b26;
+  --theme-bg-secondary: #1f2335;
+  --theme-bg-tertiary: #292e42;
+  --theme-bg-hover: #33384e;
+  --theme-bg-active: #3b4261;
+  --theme-border-primary: #3b4261;
+  --theme-border-secondary: #292e42;
+  --theme-text-primary: #c0caf5;
+  --theme-text-secondary: #a9b1d6;
+  --theme-text-tertiary: #565f89;
+  --theme-accent: #bb9af7;
+  --theme-accent-hover: #c4a7f7;
+  --theme-accent-muted: rgba(187, 154, 247, 0.15);
+  --cm-tok-keyword: #bb9af7;
+  --cm-tok-string: #9ece6a;
+  --cm-tok-number: #ff9e64;
+  --cm-tok-comment: #565f89;
+  --cm-tok-function: #7aa2f7;
+  --cm-tok-type: #2ac3de;
+  --cm-tok-variable: #c0caf5;
+  --cm-tok-constant: #ff9e64;
+  --cm-tok-operator: #89ddff;
+  --cm-tok-punctuation: #a9b1d6;
+}
+
+/* Dracula */
+[data-theme='dracula'] {
+  color-scheme: dark;
+  --theme-bg-primary: #282a36;
+  --theme-bg-secondary: #1e1f29;
+  --theme-bg-tertiary: #343746;
+  --theme-bg-hover: #44475a;
+  --theme-bg-active: #4d5066;
+  --theme-border-primary: #44475a;
+  --theme-border-secondary: #343746;
+  --theme-text-primary: #f8f8f2;
+  --theme-text-secondary: #bfbfbf;
+  --theme-text-tertiary: #6272a4;
+  --theme-accent: #bd93f9;
+  --theme-accent-hover: #caa9fa;
+  --theme-accent-muted: rgba(189, 147, 249, 0.15);
+  --cm-tok-keyword: #ff79c6;
+  --cm-tok-string: #f1fa8c;
+  --cm-tok-number: #bd93f9;
+  --cm-tok-comment: #6272a4;
+  --cm-tok-function: #50fa7b;
+  --cm-tok-type: #8be9fd;
+  --cm-tok-variable: #f8f8f2;
+  --cm-tok-constant: #bd93f9;
+  --cm-tok-operator: #ff79c6;
+  --cm-tok-punctuation: #f8f8f2;
+}
+
+/* One Dark */
+[data-theme='one-dark'] {
+  color-scheme: dark;
+  --theme-bg-primary: #282c34;
+  --theme-bg-secondary: #21252b;
+  --theme-bg-tertiary: #2c313c;
+  --theme-bg-hover: #353b45;
+  --theme-bg-active: #3e4452;
+  --theme-border-primary: #3e4452;
+  --theme-border-secondary: #2c313c;
+  --theme-text-primary: #abb2bf;
+  --theme-text-secondary: #828997;
+  --theme-text-tertiary: #5c6370;
+  --theme-accent: #61afef;
+  --theme-accent-hover: #74b9f0;
+  --theme-accent-muted: rgba(97, 175, 239, 0.15);
+  --cm-tok-keyword: #c678dd;
+  --cm-tok-string: #98c379;
+  --cm-tok-number: #d19a66;
+  --cm-tok-comment: #5c6370;
+  --cm-tok-function: #61afef;
+  --cm-tok-type: #e5c07b;
+  --cm-tok-variable: #abb2bf;
+  --cm-tok-constant: #d19a66;
+  --cm-tok-operator: #56b6c2;
+  --cm-tok-punctuation: #abb2bf;
+}
+
+/* Catppuccin Mocha */
+[data-theme='catppuccin-mocha'] {
+  color-scheme: dark;
+  --theme-bg-primary: #1e1e2e;
+  --theme-bg-secondary: #181825;
+  --theme-bg-tertiary: #313244;
+  --theme-bg-hover: #45475a;
+  --theme-bg-active: #585b70;
+  --theme-border-primary: #45475a;
+  --theme-border-secondary: #313244;
+  --theme-text-primary: #cdd6f4;
+  --theme-text-secondary: #bac2de;
+  --theme-text-tertiary: #6c7086;
+  --theme-accent: #89b4fa;
+  --theme-accent-hover: #b4d0fb;
+  --theme-accent-muted: rgba(137, 180, 250, 0.15);
+  --cm-tok-keyword: #cba6f7;
+  --cm-tok-string: #a6e3a1;
+  --cm-tok-number: #fab387;
+  --cm-tok-comment: #6c7086;
+  --cm-tok-function: #89b4fa;
+  --cm-tok-type: #f9e2af;
+  --cm-tok-variable: #cdd6f4;
+  --cm-tok-constant: #fab387;
+  --cm-tok-operator: #89dceb;
+  --cm-tok-punctuation: #bac2de;
+}
+
+/* Gruvbox Dark */
+[data-theme='gruvbox-dark'] {
+  color-scheme: dark;
+  --theme-bg-primary: #282828;
+  --theme-bg-secondary: #1d2021;
+  --theme-bg-tertiary: #3c3836;
+  --theme-bg-hover: #504945;
+  --theme-bg-active: #665c54;
+  --theme-border-primary: #504945;
+  --theme-border-secondary: #3c3836;
+  --theme-text-primary: #ebdbb2;
+  --theme-text-secondary: #bdae93;
+  --theme-text-tertiary: #a89984;
+  --theme-accent: #83a598;
+  --theme-accent-hover: #8ec07c;
+  --theme-accent-muted: rgba(131, 165, 152, 0.15);
+  --cm-tok-keyword: #fb4934;
+  --cm-tok-string: #b8bb26;
+  --cm-tok-number: #d3869b;
+  --cm-tok-comment: #928374;
+  --cm-tok-function: #fabd2f;
+  --cm-tok-type: #fabd2f;
+  --cm-tok-variable: #ebdbb2;
+  --cm-tok-constant: #d3869b;
+  --cm-tok-operator: #fe8019;
+  --cm-tok-punctuation: #a89984;
+}
+
+/* ========== 浅色主题 ========== */
+
+/* GitHub Light（默认浅色） */
+[data-theme='github-light'] {
+  color-scheme: light;
+  --theme-bg-primary: #ffffff;
+  --theme-bg-secondary: #f6f8fa;
+  --theme-bg-tertiary: #eaeef2;
+  --theme-bg-hover: #dce1e6;
+  --theme-bg-active: #d0d7de;
+  --theme-border-primary: #d0d7de;
+  --theme-border-secondary: #e1e4e8;
+  --theme-text-primary: #1f2328;
+  --theme-text-secondary: #656d76;
+  --theme-text-tertiary: #8b949e;
+  --theme-accent: #0969da;
+  --theme-accent-hover: #0550ae;
+  --theme-accent-muted: rgba(9, 105, 218, 0.12);
+  --cm-tok-keyword: #cf222e;
+  --cm-tok-string: #0a3069;
+  --cm-tok-number: #0550ae;
+  --cm-tok-comment: #6e7781;
+  --cm-tok-function: #8250df;
+  --cm-tok-type: #953800;
+  --cm-tok-variable: #1f2328;
+  --cm-tok-constant: #0550ae;
+  --cm-tok-operator: #cf222e;
+  --cm-tok-punctuation: #6e7781;
+}
+
+/* Solarized Light */
+[data-theme='solarized-light'] {
+  color-scheme: light;
+  --theme-bg-primary: #fdf6e3;
+  --theme-bg-secondary: #eee8d5;
+  --theme-bg-tertiary: #e4ddc8;
+  --theme-bg-hover: #ddd6c1;
+  --theme-bg-active: #d3ccb7;
+  --theme-border-primary: #d3ccb7;
+  --theme-border-secondary: #e4ddc8;
+  --theme-text-primary: #657b83;
+  --theme-text-secondary: #839496;
+  --theme-text-tertiary: #93a1a1;
+  --theme-accent: #2aa198;
+  --theme-accent-hover: #268bd2;
+  --theme-accent-muted: rgba(42, 161, 152, 0.12);
+  --cm-tok-keyword: #859900;
+  --cm-tok-string: #2aa198;
+  --cm-tok-number: #d33682;
+  --cm-tok-comment: #93a1a1;
+  --cm-tok-function: #268bd2;
+  --cm-tok-type: #b58900;
+  --cm-tok-variable: #586e75;
+  --cm-tok-constant: #cb4b16;
+  --cm-tok-operator: #859900;
+  --cm-tok-punctuation: #93a1a1;
+}
+
+/* One Light */
+[data-theme='one-light'] {
+  color-scheme: light;
+  --theme-bg-primary: #fafafa;
+  --theme-bg-secondary: #f0f0f0;
+  --theme-bg-tertiary: #e5e5e6;
+  --theme-bg-hover: #dbdbdc;
+  --theme-bg-active: #d0d0d1;
+  --theme-border-primary: #d0d0d1;
+  --theme-border-secondary: #e5e5e6;
+  --theme-text-primary: #383a42;
+  --theme-text-secondary: #696c77;
+  --theme-text-tertiary: #a0a1a7;
+  --theme-accent: #4078f2;
+  --theme-accent-hover: #2f65d9;
+  --theme-accent-muted: rgba(64, 120, 242, 0.12);
+  --cm-tok-keyword: #a626a4;
+  --cm-tok-string: #50a14f;
+  --cm-tok-number: #986801;
+  --cm-tok-comment: #a0a1a7;
+  --cm-tok-function: #4078f2;
+  --cm-tok-type: #c18401;
+  --cm-tok-variable: #383a42;
+  --cm-tok-constant: #986801;
+  --cm-tok-operator: #0184bc;
+  --cm-tok-punctuation: #696c77;
+}
+
+/* Catppuccin Latte */
+[data-theme='catppuccin-latte'] {
+  color-scheme: light;
+  --theme-bg-primary: #eff1f5;
+  --theme-bg-secondary: #e6e9ef;
+  --theme-bg-tertiary: #dce0e8;
+  --theme-bg-hover: #ccd0da;
+  --theme-bg-active: #bcc0cc;
+  --theme-border-primary: #bcc0cc;
+  --theme-border-secondary: #dce0e8;
+  --theme-text-primary: #4c4f69;
+  --theme-text-secondary: #5c5f77;
+  --theme-text-tertiary: #7c7f93;
+  --theme-accent: #1e66f5;
+  --theme-accent-hover: #1557d0;
+  --theme-accent-muted: rgba(30, 102, 245, 0.12);
+  --cm-tok-keyword: #8839ef;
+  --cm-tok-string: #40a02b;
+  --cm-tok-number: #fe640b;
+  --cm-tok-comment: #7c7f93;
+  --cm-tok-function: #1e66f5;
+  --cm-tok-type: #df8e1d;
+  --cm-tok-variable: #4c4f69;
+  --cm-tok-constant: #fe640b;
+  --cm-tok-operator: #04a5e5;
+  --cm-tok-punctuation: #5c5f77;
+}
+
+/* 全局基础样式 */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* 窗口拖拽区（macOS 无边框模式下用于拖动窗口） */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* 自动隐藏滚动条：默认透明，hover 时显现 */
+.auto-hide-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.auto-hide-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+}
+.auto-hide-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* 完全隐藏滚动条（保留滚动功能） */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* 弹窗动画 */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.dialog-overlay {
+  animation: overlay-in 120ms ease-out;
+}
+.dialog-panel {
+  animation: dialog-in 120ms ease-out;
+}
+
+@keyframes overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes dialog-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+.dialog-overlay.dialog-closing {
+  animation: overlay-out 120ms ease-in forwards;
+}
+.dialog-closing .dialog-panel {
+  animation: dialog-out 120ms ease-in forwards;
+}
+
+/* ========== 折叠/展开过渡 ========== */
+
+.collapse-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms ease-out;
+}
+.collapse-grid.expanded {
+  grid-template-rows: 1fr;
+}
+.collapse-grid > .collapse-inner {
+  overflow: hidden;
+}
+
+/* ========== Terminal 面板 ========== */
+
+/* xterm 不支持 CSS padding，通过外层容器 padding 实现内边距 */
+.xterm-container {
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+/* xterm 滚动条宽度和圆角（颜色由 xterm theme 的 scrollbarSlider* 控制） */
+.xterm-container .xterm-viewport::-webkit-scrollbar {
+  width: 5px;
+}
+.xterm-container .xterm-viewport::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+}
+
+/* ========== Browser 面板 ========== */
+
+/* 加载进度条动画 */
+@keyframes browser-loading {
+  0% {
+    width: 0%;
+    margin-left: 0%;
+  }
+  50% {
+    width: 60%;
+    margin-left: 20%;
+  }
+  100% {
+    width: 0%;
+    margin-left: 100%;
+  }
+}
+.animate-browser-loading {
+  animation: browser-loading 1.5s ease-in-out infinite;
+}
+
+/* ========== Picker 下拉面板入场动画 ========== */
+@keyframes picker-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.picker-panel {
+  animation: picker-in 120ms ease-out;
+}
+
+/* ========== Zen 风格分组容器 ========== */
+
+/* 配置项分组：左线指示（替代灰色圆角边框） */
+.zen-section {
+  border: none;
+  border-left: 2px solid var(--color-border-secondary);
+  border-radius: 0;
+  padding-left: 14px;
+}
+
+/* 卡片式分组：微妙背景 + 圆角 */
+.zen-card {
+  background: color-mix(in srgb, var(--color-bg-tertiary) 40%, transparent);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.zen-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* ========== Zen 风格表单控件（与 InlineInput / InlineSelect 视觉一致的盒型） ========== */
+
+/* 单行输入：盒型 + 与卡片外背景一致 */
+.zen-input {
+  width: 100%;
+  background: var(--color-bg-primary);
+  border: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  outline: none;
+  transition:
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+}
+.zen-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.zen-input:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+}
+.zen-input:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+.zen-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 多行文本框 */
+.zen-textarea {
+  width: 100%;
+  background: var(--color-bg-primary);
+  border: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  outline: none;
+  resize: none;
+  transition:
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+}
+.zen-textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+.zen-textarea:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+}
+.zen-textarea:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+/* 下拉选择 */
+.zen-select {
+  width: 100%;
+  background: var(--color-bg-primary);
+  border: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--color-text-primary);
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.25s ease;
+}
+.zen-select:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+}
+.zen-select:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+.zen-select option {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+/* 复合输入组（密码 + 按钮等） */
+.zen-input-group {
+  display: flex;
+  align-items: center;
+  background: var(--color-bg-primary);
+  border: 1px solid color-mix(in srgb, var(--color-border-secondary) 50%, transparent);
+  border-radius: 6px;
+  transition: border-color 0.25s ease;
+}
+.zen-input-group:hover {
+  border-color: var(--color-border-secondary);
+}
+.zen-input-group:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+.zen-input-group input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--color-text-primary);
+  outline: none;
+}
+.zen-input-group input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* ========== Markdown Zen 样式 ========== */
+
+.markdown-body {
+  line-height: 1.7;
+  font-size: var(--app-font-size, 14px);
+  color: var(--color-text-primary);
+  /* white-space 是继承属性 —— 显式重置，避免在 white-space: pre-wrap 的容器里
+     (如 UserBubble) 被继承导致 markdown 中段间换行被渲染为硬换行 */
+  white-space: normal;
+}
+
+/* —— 标题 —— */
+.markdown-body h1 {
+  font-size: 1.4em;
+  font-weight: 600;
+  margin: 1em 0 0.35em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--color-border-secondary);
+  letter-spacing: -0.01em;
+}
+
+.markdown-body h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin: 0.9em 0 0.3em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--color-border-secondary);
+  letter-spacing: -0.01em;
+}
+
+.markdown-body h3 {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 0.8em 0 0.25em;
+}
+
+.markdown-body h4 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 0.7em 0 0.2em;
+}
+
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.6em 0 0.2em;
+  color: var(--color-text-secondary);
+}
+
+/* 首个标题不加顶部间距 */
+.markdown-body > h1:first-child,
+.markdown-body > h2:first-child,
+.markdown-body > h3:first-child {
+  margin-top: 0;
+}
+
+/* —— 段落 —— */
+.markdown-body p {
+  margin: 0.4em 0;
+}
+
+/* —— 链接 —— */
+.markdown-body a {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-primary);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 0.15s;
+  overflow-wrap: break-word;
+}
+
+.markdown-body a:hover {
+  text-decoration-color: var(--color-text-secondary);
+}
+
+/* —— 代码块 —— */
+.markdown-body pre {
+  background: color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  margin: 0.75em 0;
+  line-height: 1.4;
+}
+
+.markdown-body code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Ubuntu Mono', 'Fira Code', monospace;
+  font-size: calc(var(--app-font-size, 14px) - 1px);
+  line-height: 1.4;
+}
+
+/* 行内代码 */
+.markdown-body :not(pre) > code {
+  background: color-mix(in srgb, var(--color-bg-tertiary) 50%, transparent);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* —— 列表 —— */
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+  margin: 0.4em 0;
+}
+
+.markdown-body li {
+  margin-bottom: 0.1em;
+}
+
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin: 0.15em 0;
+}
+
+/* —— 引用块 —— */
+.markdown-body blockquote {
+  border-left: 2px solid var(--color-border-primary);
+  background: color-mix(in srgb, var(--color-bg-secondary) 40%, transparent);
+  padding: 0.3em 0.4em 0.3em 12px;
+  margin: 0.75em 0;
+  border-radius: 0 6px 6px 0;
+  color: var(--color-text-secondary);
+}
+
+.markdown-body blockquote p:first-child {
+  margin-top: 0;
+}
+.markdown-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* —— 表格 —— */
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: none;
+  border-bottom: 1px solid var(--color-border-secondary);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body th {
+  font-weight: 600;
+  border-bottom-color: var(--color-border-primary);
+  color: var(--color-text-secondary);
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: none;
+}
+
+/* —— 水平线 —— */
+.markdown-body hr {
+  border: none;
+  height: 1px;
+  background: var(--color-border-secondary);
+  margin: 1em 0;
+}
+
+/* —— CodeBlock 容器衔接 —— */
+.markdown-body .group\/code > pre {
+  margin-top: 0 !important;
+}
+
+/* —— 代码块滚动条 —— */
+.markdown-body pre::-webkit-scrollbar {
+  height: 4px;
+}
+.markdown-body pre::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.markdown-body pre:hover::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+}
+
+/* ========== highlight.js 代码高亮（跟随主题） ========== */
+
+/* 基础：背景透明（由 .markdown-body pre 控制背景） */
+.hljs {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+/* 暗色主题 token 配色（所有深色系主题共用） */
+[data-theme='dark'] .hljs-keyword,
+[data-theme='dark'] .hljs-selector-tag,
+[data-theme='dark'] .hljs-built_in,
+[data-theme='github-dark'] .hljs-keyword,
+[data-theme='github-dark'] .hljs-selector-tag,
+[data-theme='github-dark'] .hljs-built_in,
+[data-theme='nord'] .hljs-keyword,
+[data-theme='nord'] .hljs-selector-tag,
+[data-theme='nord'] .hljs-built_in,
+[data-theme='tokyo-night'] .hljs-keyword,
+[data-theme='tokyo-night'] .hljs-selector-tag,
+[data-theme='tokyo-night'] .hljs-built_in {
+  color: #ff7b72;
+}
+[data-theme='dark'] .hljs-string,
+[data-theme='dark'] .hljs-attr,
+[data-theme='github-dark'] .hljs-string,
+[data-theme='github-dark'] .hljs-attr,
+[data-theme='nord'] .hljs-string,
+[data-theme='nord'] .hljs-attr,
+[data-theme='tokyo-night'] .hljs-string,
+[data-theme='tokyo-night'] .hljs-attr {
+  color: #a5d6ff;
+}
+[data-theme='dark'] .hljs-number,
+[data-theme='dark'] .hljs-literal,
+[data-theme='github-dark'] .hljs-number,
+[data-theme='github-dark'] .hljs-literal,
+[data-theme='nord'] .hljs-number,
+[data-theme='nord'] .hljs-literal,
+[data-theme='tokyo-night'] .hljs-number,
+[data-theme='tokyo-night'] .hljs-literal {
+  color: #79c0ff;
+}
+[data-theme='dark'] .hljs-comment,
+[data-theme='dark'] .hljs-doctag,
+[data-theme='github-dark'] .hljs-comment,
+[data-theme='github-dark'] .hljs-doctag,
+[data-theme='nord'] .hljs-comment,
+[data-theme='nord'] .hljs-doctag,
+[data-theme='tokyo-night'] .hljs-comment,
+[data-theme='tokyo-night'] .hljs-doctag {
+  color: #8b949e;
+  font-style: italic;
+}
+[data-theme='dark'] .hljs-function,
+[data-theme='dark'] .hljs-title,
+[data-theme='github-dark'] .hljs-function,
+[data-theme='github-dark'] .hljs-title,
+[data-theme='nord'] .hljs-function,
+[data-theme='nord'] .hljs-title,
+[data-theme='tokyo-night'] .hljs-function,
+[data-theme='tokyo-night'] .hljs-title {
+  color: #d2a8ff;
+}
+[data-theme='dark'] .hljs-type,
+[data-theme='dark'] .hljs-title.class_,
+[data-theme='github-dark'] .hljs-type,
+[data-theme='github-dark'] .hljs-title.class_,
+[data-theme='nord'] .hljs-type,
+[data-theme='nord'] .hljs-title.class_,
+[data-theme='tokyo-night'] .hljs-type,
+[data-theme='tokyo-night'] .hljs-title.class_ {
+  color: #ffa657;
+}
+[data-theme='dark'] .hljs-params,
+[data-theme='github-dark'] .hljs-params,
+[data-theme='nord'] .hljs-params,
+[data-theme='tokyo-night'] .hljs-params {
+  color: #c9d1d9;
+}
+[data-theme='dark'] .hljs-meta,
+[data-theme='github-dark'] .hljs-meta,
+[data-theme='nord'] .hljs-meta,
+[data-theme='tokyo-night'] .hljs-meta {
+  color: #79c0ff;
+}
+[data-theme='dark'] .hljs-variable,
+[data-theme='dark'] .hljs-template-variable,
+[data-theme='github-dark'] .hljs-variable,
+[data-theme='github-dark'] .hljs-template-variable,
+[data-theme='nord'] .hljs-variable,
+[data-theme='nord'] .hljs-template-variable,
+[data-theme='tokyo-night'] .hljs-variable,
+[data-theme='tokyo-night'] .hljs-template-variable {
+  color: #ffa657;
+}
+[data-theme='dark'] .hljs-selector-class,
+[data-theme='github-dark'] .hljs-selector-class,
+[data-theme='nord'] .hljs-selector-class,
+[data-theme='tokyo-night'] .hljs-selector-class {
+  color: #7ee787;
+}
+[data-theme='dark'] .hljs-addition,
+[data-theme='github-dark'] .hljs-addition,
+[data-theme='nord'] .hljs-addition,
+[data-theme='tokyo-night'] .hljs-addition {
+  color: #aff5b4;
+  background: rgba(46, 160, 67, 0.15);
+}
+[data-theme='dark'] .hljs-deletion,
+[data-theme='github-dark'] .hljs-deletion,
+[data-theme='nord'] .hljs-deletion,
+[data-theme='tokyo-night'] .hljs-deletion {
+  color: #ffdcd7;
+  background: rgba(248, 81, 73, 0.15);
+}
+[data-theme='dark'] .hljs-regexp,
+[data-theme='github-dark'] .hljs-regexp,
+[data-theme='nord'] .hljs-regexp,
+[data-theme='tokyo-night'] .hljs-regexp {
+  color: #7ee787;
+}
+[data-theme='dark'] .hljs-symbol,
+[data-theme='github-dark'] .hljs-symbol,
+[data-theme='nord'] .hljs-symbol,
+[data-theme='tokyo-night'] .hljs-symbol {
+  color: #79c0ff;
+}
+
+/* 浅色主题 token 配色（所有浅色系主题共用） */
+[data-theme='light'] .hljs-keyword,
+[data-theme='light'] .hljs-selector-tag,
+[data-theme='light'] .hljs-built_in,
+[data-theme='github-light'] .hljs-keyword,
+[data-theme='github-light'] .hljs-selector-tag,
+[data-theme='github-light'] .hljs-built_in,
+[data-theme='solarized-light'] .hljs-keyword,
+[data-theme='solarized-light'] .hljs-selector-tag,
+[data-theme='solarized-light'] .hljs-built_in {
+  color: #cf222e;
+}
+[data-theme='light'] .hljs-string,
+[data-theme='light'] .hljs-attr,
+[data-theme='github-light'] .hljs-string,
+[data-theme='github-light'] .hljs-attr,
+[data-theme='solarized-light'] .hljs-string,
+[data-theme='solarized-light'] .hljs-attr {
+  color: #0a3069;
+}
+[data-theme='light'] .hljs-number,
+[data-theme='light'] .hljs-literal,
+[data-theme='github-light'] .hljs-number,
+[data-theme='github-light'] .hljs-literal,
+[data-theme='solarized-light'] .hljs-number,
+[data-theme='solarized-light'] .hljs-literal {
+  color: #0550ae;
+}
+[data-theme='light'] .hljs-comment,
+[data-theme='light'] .hljs-doctag,
+[data-theme='github-light'] .hljs-comment,
+[data-theme='github-light'] .hljs-doctag,
+[data-theme='solarized-light'] .hljs-comment,
+[data-theme='solarized-light'] .hljs-doctag {
+  color: #6e7781;
+  font-style: italic;
+}
+[data-theme='light'] .hljs-function,
+[data-theme='light'] .hljs-title,
+[data-theme='github-light'] .hljs-function,
+[data-theme='github-light'] .hljs-title,
+[data-theme='solarized-light'] .hljs-function,
+[data-theme='solarized-light'] .hljs-title {
+  color: #8250df;
+}
+[data-theme='light'] .hljs-type,
+[data-theme='light'] .hljs-title.class_,
+[data-theme='github-light'] .hljs-type,
+[data-theme='github-light'] .hljs-title.class_,
+[data-theme='solarized-light'] .hljs-type,
+[data-theme='solarized-light'] .hljs-title.class_ {
+  color: #953800;
+}
+[data-theme='light'] .hljs-params,
+[data-theme='github-light'] .hljs-params,
+[data-theme='solarized-light'] .hljs-params {
+  color: #24292f;
+}
+[data-theme='light'] .hljs-meta,
+[data-theme='github-light'] .hljs-meta,
+[data-theme='solarized-light'] .hljs-meta {
+  color: #0550ae;
+}
+[data-theme='light'] .hljs-variable,
+[data-theme='light'] .hljs-template-variable,
+[data-theme='github-light'] .hljs-variable,
+[data-theme='github-light'] .hljs-template-variable,
+[data-theme='solarized-light'] .hljs-variable,
+[data-theme='solarized-light'] .hljs-template-variable {
+  color: #953800;
+}
+[data-theme='light'] .hljs-selector-class,
+[data-theme='github-light'] .hljs-selector-class,
+[data-theme='solarized-light'] .hljs-selector-class {
+  color: #116329;
+}
+[data-theme='light'] .hljs-addition,
+[data-theme='github-light'] .hljs-addition,
+[data-theme='solarized-light'] .hljs-addition {
+  color: #116329;
+  background: rgba(46, 160, 67, 0.1);
+}
+[data-theme='light'] .hljs-deletion,
+[data-theme='github-light'] .hljs-deletion,
+[data-theme='solarized-light'] .hljs-deletion {
+  color: #82071e;
+  background: rgba(248, 81, 73, 0.1);
+}
+[data-theme='light'] .hljs-regexp,
+[data-theme='github-light'] .hljs-regexp,
+[data-theme='solarized-light'] .hljs-regexp {
+  color: #116329;
+}
+[data-theme='light'] .hljs-symbol,
+[data-theme='github-light'] .hljs-symbol,
+[data-theme='solarized-light'] .hljs-symbol {
+  color: #0550ae;
+}
