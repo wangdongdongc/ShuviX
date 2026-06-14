@@ -43,9 +43,11 @@ jobs:
 
       - name: Sync version from tag
         shell: bash
+        working-directory: apps/desktop
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
 
       - name: Build & Sign
+        working-directory: apps/desktop
         run: npx electron-vite build && npm run build:webui && npx electron-builder --${{ matrix.platform }} --publish never
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -61,6 +63,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         shell: bash
+        working-directory: apps/desktop
         run: |
           NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
 
@@ -116,6 +119,7 @@ jobs:
       - name: Remove universal Windows installer
         if: matrix.platform == 'win'
         shell: bash
+        working-directory: apps/desktop
         run: |
           for f in dist/*-setup.exe; do
             case "$f" in *-x64-*|*-arm64-*) ;; *) echo "Removing universal: $f"; rm -f "$f" "$f.blockmap";; esac
@@ -126,11 +130,11 @@ jobs:
         with:
           name: dist-${{ matrix.platform }}
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.exe
-            dist/*.yml
-            !dist/*.blockmap
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.yml
+            !apps/desktop/dist/*.blockmap
           if-no-files-found: ignore
 
   # ---- Linux 构建：在 Ubuntu 20.04 Docker 中编译，glibc 2.31 兼容 Ubuntu 20.04+ ----
@@ -182,23 +186,25 @@ jobs:
               apt-get update
               apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
 
+              # npm ci 在 workspace 根安装；构建命令在 apps/desktop 跑（配置在那里）
               npm ci
+              cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
               npm run build:webui
               npx electron-builder --linux --publish never
             '
           # Docker 内创建的文件属主为 root，修正权限以便后续 upload
-          sudo chown -R $(id -u):$(id -g) dist/ || true
+          sudo chown -R $(id -u):$(id -g) apps/desktop/dist/ || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-linux
           path: |
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.yml
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/*.yml
           if-no-files-found: ignore
 
   # ---- 发布阶段：所有构建完成后创建 Release 并上传全部产物 ----
