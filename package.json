@@ -16,7 +16,7 @@
     "lint": "npm run lint -w shuvix",
     "test": "npm run test -w shuvix",
     "format": "prettier --write .",
-    "postinstall": "electron-rebuild -f -w better-sqlite3,node-pty",
+    "postinstall": "node -e \"process.env.CI||require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})\"",
     "build:mac": "npm run build:mac -w shuvix",
     "build:win": "npm run build:win -w shuvix",
     "build:linux": "npm run build:linux -w shuvix"
