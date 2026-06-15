@@ -13,7 +13,7 @@
     "dev:webui": "npm run dev:webui -w shuvix",
     "build:webui": "npm run build:webui -w shuvix",
     "typecheck": "npm run typecheck -w shuvix",
-    "lint": "npm run lint -w shuvix",
+    "lint": "npm run lint -w shuvix && eslint packages",
     "test": "npm run test -w shuvix",
     "format": "prettier --write .",
     "postinstall": "node -e \"process.env.CI||require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})\"",
