@@ -19,7 +19,10 @@ jobs:
         include:
           - os: macos-latest
             platform: mac
-          - os: windows-latest
+          # 固定 windows-2022：windows-latest 已迁到 windows-2025，
+          # node-gyp 11 在该镜像上探测不到 VS（"Could not find any Visual Studio installation"），
+          # 导致 better-sqlite3/node-pty 从源码编译失败。windows-2022 自带可被 node-gyp 识别的 VS2022。
+          - os: windows-2022
             platform: win
 
     runs-on: ${{ matrix.os }}
