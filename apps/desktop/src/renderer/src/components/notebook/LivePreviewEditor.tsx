@@ -26,6 +26,21 @@ import {
 
 const SAVE_DEBOUNCE_MS = 200
 
+/**
+ * @atomic-editor 的表格单元格右键菜单是包内直接 new DOM 渲染的（class
+ * `.cm-atomic-table-menu` 挂到 document.body），标签写死英文且未暴露 i18n 配置。
+ * 这里按其稳定的英文文案映射到 notebook.menu.tableMenu.* 的翻译 key，菜单出现时
+ * 用 MutationObserver 捕获并改写按钮文字。英文文案随包升级可能变动，需对应更新。
+ */
+const TABLE_MENU_LABELS: Record<string, string> = {
+  'Insert row above': 'insertRowAbove',
+  'Insert row below': 'insertRowBelow',
+  'Delete row': 'deleteRow',
+  'Insert column left': 'insertColumnLeft',
+  'Insert column right': 'insertColumnRight',
+  'Delete column': 'deleteColumn'
+}
+
 /** shuvix-preview:// 图片 URL（主进程协议带沙箱校验） */
 function previewUrl(sessionId: string, absPath: string): string {
   return `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(absPath)}`
@@ -213,6 +228,26 @@ export function LivePreviewEditor({
     },
     [t]
   )
+
+  // 表格单元格右键菜单本地化：菜单挂到 document.body，出现时改写按钮文案
+  useEffect(() => {
+    const localize = (menu: HTMLElement): void => {
+      menu.querySelectorAll<HTMLElement>('.cm-atomic-table-menu-item').forEach((btn) => {
+        const key = TABLE_MENU_LABELS[btn.textContent?.trim() ?? '']
+        if (key) btn.textContent = t(`notebook.menu.tableMenu.${key}`)
+      })
+    }
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue
+          if (node.classList.contains('cm-atomic-table-menu')) localize(node)
+        }
+      }
+    })
+    observer.observe(document.body, { childList: true })
+    return () => observer.disconnect()
+  }, [t])
 
   const onMarkdownChange = useCallback(
     (md: string): void => {

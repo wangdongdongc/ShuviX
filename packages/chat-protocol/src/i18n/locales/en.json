@@ -74,7 +74,15 @@
       "copy": "Copy",
       "paste": "Paste",
       "pasteMatchStyle": "Paste and match style",
-      "selectAll": "Select all"
+      "selectAll": "Select all",
+      "tableMenu": {
+        "insertRowAbove": "Insert row above",
+        "insertRowBelow": "Insert row below",
+        "deleteRow": "Delete row",
+        "insertColumnLeft": "Insert column left",
+        "insertColumnRight": "Insert column right",
+        "deleteColumn": "Delete column"
+      }
     }
   },
   "chat": {
