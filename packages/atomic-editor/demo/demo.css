@@ -1,0 +1,580 @@
+/* Atomic Editor — demo showcase. "Lab notebook" aesthetic: a page of
+ * graph paper under an instrument-panel chrome, monospace labels, one
+ * violet accent used sparingly.
+ *
+ * Consistency strategy: the canonical palette is declared as the
+ * editor's OWN `--atomic-editor-*` tokens on :root, so the chrome and
+ * the editor draw from a single source — exactly how a consuming app
+ * themes the editor. The dark values mirror the package defaults; the
+ * light values mirror the package's `[data-theme="light"]` block. */
+
+:root[data-theme='dark'] {
+  --atomic-editor-fg: #dcddde;
+  --atomic-editor-fg-muted: #888c94;
+  --atomic-editor-fg-faint: #5f636b;
+  --atomic-editor-bg: #1e1e20;
+  /* Panel sits darker than the page so the reading column lifts off the
+   * graph-paper grid like a sheet on a workbench. */
+  --atomic-editor-bg-panel: #141416;
+  --atomic-editor-bg-surface: #2a2a2c;
+  --atomic-editor-border: #34343a;
+  --atomic-editor-accent: #7c3aed;
+  --atomic-editor-accent-bright: #a78bfa;
+  --atomic-editor-accent-soft: color-mix(in srgb, #7c3aed 72%, white 28%);
+  --atomic-editor-link: #818cf8;
+  --atomic-editor-link-hover: #a5b4fc;
+  --atomic-editor-code-bg: #242329;
+  --atomic-editor-selection-bg: color-mix(in srgb, #7c3aed 45%, transparent);
+}
+
+:root[data-theme='light'] {
+  --atomic-editor-fg: #24292f;
+  --atomic-editor-fg-muted: #57606a;
+  --atomic-editor-fg-faint: #8c959f;
+  --atomic-editor-bg: #ffffff;
+  --atomic-editor-bg-panel: #f7f6fb;
+  --atomic-editor-bg-surface: #eceaf5;
+  --atomic-editor-border: #dddae8;
+  --atomic-editor-accent: #6639ba;
+  --atomic-editor-accent-bright: #8250df;
+  --atomic-editor-accent-soft: #c4b5fd;
+  --atomic-editor-link: #6d28d9;
+  --atomic-editor-link-hover: #7c3aed;
+  --atomic-editor-code-bg: #f3f1fb;
+  --atomic-editor-selection-bg: color-mix(in srgb, #8250df 26%, transparent);
+}
+
+:root {
+  /* IBM Plex Mono powers in-editor code (and the source pane) via the
+   * editor's own font token; Martian Mono is the instrument/wordmark
+   * face used only in the chrome. */
+  --atomic-editor-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --lab-display: 'Martian Mono', 'IBM Plex Mono', ui-monospace, monospace;
+  --lab-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --lab-grid: color-mix(in srgb, var(--atomic-editor-fg) 10%, transparent);
+  --lab-accent-tint: color-mix(in srgb, var(--atomic-editor-accent) 15%, transparent);
+  --atomic-editor-radius: 6px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--atomic-editor-bg);
+  color: var(--atomic-editor-fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+.demo-root {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+  background: var(--atomic-editor-bg);
+}
+
+/* ---- shared chrome primitives ------------------------------------- */
+
+.demo-control-label,
+.demo-spotlight > .demo-control-label {
+  font-family: var(--lab-display);
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--atomic-editor-fg-faint);
+  white-space: nowrap;
+}
+
+/* ---- chrome: a slim always-on top bar; the rest is disclosed ------ */
+
+.demo-chrome {
+  background: var(--atomic-editor-bg-panel);
+  border-bottom: 1px solid var(--atomic-editor-border);
+  animation: lab-rise 0.4s ease both;
+}
+
+/* Slim bar — wordmark, version, and the controls/theme/github actions.
+ * Everything else lives in the disclosed panel so the editor owns the
+ * viewport by default. */
+.demo-topbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 1.25rem;
+}
+
+.demo-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.demo-title {
+  margin: 0;
+  font-family: var(--lab-display);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  display: inline-flex;
+  gap: 0.45em;
+}
+
+.demo-mark-soft {
+  color: var(--atomic-editor-fg-faint);
+  font-weight: 400;
+}
+
+/* Square ghost button for the theme toggle. */
+.demo-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  background: transparent;
+  color: var(--atomic-editor-fg-muted);
+  border: 1px solid var(--atomic-editor-border);
+  border-radius: var(--atomic-editor-radius);
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.demo-icon-btn:hover {
+  background: var(--lab-accent-tint);
+  color: var(--atomic-editor-accent-bright);
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 45%, var(--atomic-editor-border));
+}
+
+.demo-caret {
+  font-size: 0.7em;
+  opacity: 0.7;
+}
+
+/* Disclosed panel holding sample / content / actions / jump. */
+.demo-controls-panel {
+  border-top: 1px solid var(--atomic-editor-border);
+  animation: lab-reveal 0.22s ease both;
+}
+
+.demo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--atomic-editor-border);
+  border-radius: 999px;
+  color: var(--atomic-editor-fg-muted);
+  background: var(--atomic-editor-bg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.demo-pill:hover {
+  border-color: var(--atomic-editor-accent);
+  color: var(--atomic-editor-accent-bright);
+}
+
+.demo-pill-accent {
+  color: var(--atomic-editor-accent-bright);
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 50%, var(--atomic-editor-border));
+}
+
+.demo-sub {
+  margin: 0;
+  padding: 0.55rem 1.25rem 0;
+  font-size: 0.74rem;
+  color: var(--atomic-editor-fg-muted);
+  line-height: 1.4;
+  max-width: 56ch;
+}
+
+.demo-github {
+  font-family: var(--lab-mono);
+  font-size: 0.72rem;
+  color: var(--atomic-editor-accent-bright);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.demo-github:hover {
+  text-decoration: underline;
+}
+
+/* ---- toolbar ------------------------------------------------------ */
+
+.demo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1.3rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.demo-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.demo-segmented {
+  display: inline-flex;
+  border: 1px solid var(--atomic-editor-border);
+  border-radius: var(--atomic-editor-radius);
+  overflow: hidden;
+  background: var(--atomic-editor-bg);
+}
+
+.demo-segmented button {
+  background: transparent;
+  color: var(--atomic-editor-fg-muted);
+  border: none;
+  padding: 0.28rem 0.62rem;
+  font-family: var(--lab-mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+  border-right: 1px solid var(--atomic-editor-border);
+  white-space: nowrap;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.demo-segmented button:last-child {
+  border-right: none;
+}
+
+.demo-segmented button:hover {
+  background: var(--lab-accent-tint);
+  color: var(--atomic-editor-fg);
+}
+
+.demo-segmented button.active {
+  background: var(--atomic-editor-accent);
+  color: #fff;
+}
+
+.demo-meta {
+  font-family: var(--lab-mono);
+  font-size: 0.68rem;
+  color: var(--atomic-editor-fg-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- chips (content toggles + spotlight) -------------------------- */
+
+.demo-chip-group {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.demo-chip {
+  background: transparent;
+  color: var(--atomic-editor-fg-muted);
+  border: 1px solid var(--atomic-editor-border);
+  border-radius: 999px;
+  padding: 0.22rem 0.66rem;
+  font-family: var(--lab-mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.08s ease;
+}
+
+.demo-chip:hover {
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 50%, var(--atomic-editor-border));
+  color: var(--atomic-editor-fg);
+}
+
+.demo-chip:active {
+  transform: translateY(1px);
+}
+
+/* "On" toggle: tinted, not a heavy solid fill, so a row of four doesn't
+ * dominate the toolbar. */
+.demo-chip-toggle.active {
+  background: var(--lab-accent-tint);
+  color: var(--atomic-editor-accent-bright);
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 55%, var(--atomic-editor-border));
+}
+
+.demo-chip-toggle:not(.active) {
+  opacity: 0.6;
+}
+
+/* ---- actions ------------------------------------------------------ */
+
+.demo-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+.demo-btn {
+  background: transparent;
+  color: var(--atomic-editor-fg-muted);
+  border: 1px solid var(--atomic-editor-border);
+  border-radius: var(--atomic-editor-radius);
+  padding: 0.28rem 0.6rem;
+  font-family: var(--lab-mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.demo-btn:hover {
+  background: var(--lab-accent-tint);
+  color: var(--atomic-editor-fg);
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 45%, var(--atomic-editor-border));
+}
+
+.demo-btn.active {
+  background: var(--lab-accent-tint);
+  color: var(--atomic-editor-accent-bright);
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 55%, var(--atomic-editor-border));
+}
+
+.demo-perf {
+  font-family: var(--lab-mono);
+  font-size: 0.66rem;
+  color: var(--atomic-editor-fg-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+  padding-left: 0.2rem;
+}
+
+/* ---- spotlight rail ----------------------------------------------- */
+
+.demo-spotlight {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  border-top: 1px solid var(--atomic-editor-border);
+  padding: 0.45rem 1.25rem;
+}
+
+.demo-spotlight .demo-chip {
+  border-color: color-mix(in srgb, var(--atomic-editor-accent) 38%, var(--atomic-editor-border) 62%);
+  color: var(--atomic-editor-accent-bright);
+}
+
+.demo-spotlight .demo-chip::before {
+  content: '→';
+  margin-right: 0.4em;
+  opacity: 0.6;
+}
+
+.demo-spotlight .demo-chip:hover {
+  background: var(--lab-accent-tint);
+}
+
+.demo-spotlight-hint {
+  margin-left: auto;
+  font-family: var(--lab-mono);
+  font-size: 0.68rem;
+  color: var(--atomic-editor-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 26rem;
+}
+
+/* ---- canvas: a page on graph paper -------------------------------- */
+
+.demo-canvas {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  animation: lab-rise 0.5s ease 0.06s both;
+}
+
+.demo-editor-pane {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  /* Faint graph-paper grid; the reading column gets a solid bg below so
+   * the grid reads only in the side margins — a sheet on a workbench. */
+  background-color: var(--atomic-editor-bg-panel);
+  background-image: radial-gradient(var(--lab-grid) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: center top;
+}
+
+/* The reading column as a "page" floating on the grid. The page fill
+ * canNOT go on .cm-content: CodeMirror draws its selection in a layer at
+ * z-index -2, BEHIND the content, so an opaque content background hides
+ * the selection entirely. Instead we paint the page as a scroller
+ * ::before at z-index -3 — behind the selection layer (so the highlight
+ * shows on top of it) but above the pane's graph-paper grid (so the
+ * column reads as a solid sheet while the grid stays in the margins).
+ * .cm-content keeps only the 1px side rules as the page edges. */
+.demo-editor-pane .cm-scroller {
+  position: relative;
+}
+
+.demo-editor-pane .cm-scroller::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Match the reading column EXACTLY. Two gotchas: (1) `ch` resolves
+   * against THIS element's font, and the editor renders .cm-scroller at
+   * the theme base size while .cm-content is one step larger — so pin
+   * the same font-size or the stripe computes narrower. (2) .cm-content
+   * is box-sizing:border-box, so its `max-width: measure` already
+   * includes the padding — match `measure` with no extra, or the stripe
+   * overshoots into the margins. */
+  font-size: var(--atomic-editor-body-size, 1.0625rem);
+  width: min(var(--atomic-editor-measure, 70ch), 100%);
+  background: var(--atomic-editor-bg);
+  z-index: -3;
+  pointer-events: none;
+}
+
+.demo-editor-pane .cm-content,
+.demo-editor-pane .cm-panels {
+  border-inline: 1px solid var(--atomic-editor-border);
+}
+
+/* ---- raw-source split pane ---------------------------------------- */
+
+.demo-source-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--atomic-editor-border);
+  background: var(--atomic-editor-bg-panel);
+}
+
+.demo-source-head {
+  flex: 0 0 auto;
+  padding: 0.5rem 1rem;
+  font-family: var(--lab-display);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--atomic-editor-fg-faint);
+  border-bottom: 1px solid var(--atomic-editor-border);
+}
+
+.demo-source {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0.75rem 0;
+  overflow: auto;
+  font-family: var(--lab-mono);
+  font-size: 0.76rem;
+  line-height: 1.65;
+  color: var(--atomic-editor-fg);
+}
+
+.demo-source-plain {
+  padding: 0.75rem 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.demo-source-line {
+  display: grid;
+  grid-template-columns: 3ch 1fr;
+  gap: 1rem;
+  padding: 0 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.demo-source-line:hover {
+  background: var(--lab-accent-tint);
+}
+
+.demo-source-ln {
+  text-align: right;
+  color: var(--atomic-editor-fg-faint);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- focus + motion ----------------------------------------------- */
+
+.demo-btn:focus-visible,
+.demo-chip:focus-visible,
+.demo-segmented button:focus-visible,
+a.demo-pill:focus-visible,
+.demo-github:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--atomic-editor-accent);
+  border-radius: var(--atomic-editor-radius);
+}
+
+@keyframes lab-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lab-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-chrome,
+  .demo-controls-panel,
+  .demo-canvas {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---- responsive --------------------------------------------------- */
+
+@media (max-width: 820px) {
+  .demo-topbar,
+  .demo-toolbar,
+  .demo-spotlight {
+    gap: 0.45rem 1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .demo-sub {
+    display: none;
+  }
+  .demo-canvas {
+    flex-direction: column;
+  }
+  .demo-source-pane {
+    border-left: none;
+    border-top: 1px solid var(--atomic-editor-border);
+    max-height: 42%;
+  }
+}

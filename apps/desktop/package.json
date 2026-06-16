@@ -24,7 +24,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@atomic-editor/editor": "^0.4.3",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
@@ -100,6 +99,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@shuvix/atomic-editor": "*",
     "@shuvix/chat-protocol": "*",
     "@shuvix/chat-ui": "*",
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

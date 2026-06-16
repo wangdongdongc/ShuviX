@@ -5,6 +5,13 @@ import tailwindcss from '@tailwindcss/vite'
 
 const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
+const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
+// 子路径别名须在裸包别名之前——Vite 前缀匹配，否则 '@shuvix/atomic-editor' 会吞掉 '/code-languages'
+const atomicEditorAlias = {
+  '@shuvix/atomic-editor/code-languages': resolve(atomicEditorSrc, 'code-languages.ts'),
+  '@shuvix/atomic-editor/styles.css': resolve(atomicEditorSrc, 'styles/inline-preview.css'),
+  '@shuvix/atomic-editor': resolve(atomicEditorSrc, 'index.ts')
+}
 
 export default defineConfig({
   main: {
@@ -43,7 +50,8 @@ export default defineConfig({
       alias: {
         '@renderer': resolve('src/renderer/src'),
         '@shuvix/chat-protocol': chatProtocol,
-        '@shuvix/chat-ui': chatUi
+        '@shuvix/chat-ui': chatUi,
+        ...atomicEditorAlias
       }
     },
     plugins: [react(), tailwindcss()],

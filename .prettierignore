@@ -5,3 +5,6 @@ pnpm-lock.yaml
 LICENSE.md
 tsconfig.json
 tsconfig.*.json
+
+# Vendored upstream (git subtree) —— 不格式化，保持与上游一致以便干净合并
+packages/atomic-editor

@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next'
 import {
   AtomicCodeMirrorEditor,
   type AtomicCodeMirrorEditorHandle,
+  tableContextMenu,
+  type TableMenuItem,
   wikiLinks
-} from '@atomic-editor/editor'
-import { ATOMIC_CODE_LANGUAGES } from '@atomic-editor/editor/code-languages'
-import '@atomic-editor/editor/styles.css'
+} from '@shuvix/atomic-editor'
+import { ATOMIC_CODE_LANGUAGES } from '@shuvix/atomic-editor/code-languages'
+import '@shuvix/atomic-editor/styles.css'
 import '../atomic/atomic-panel.css'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
@@ -25,21 +27,6 @@ import {
 } from './wikiEmbed'
 
 const SAVE_DEBOUNCE_MS = 200
-
-/**
- * @atomic-editor 的表格单元格右键菜单是包内直接 new DOM 渲染的（class
- * `.cm-atomic-table-menu` 挂到 document.body），标签写死英文且未暴露 i18n 配置。
- * 这里按其稳定的英文文案映射到 notebook.menu.tableMenu.* 的翻译 key，菜单出现时
- * 用 MutationObserver 捕获并改写按钮文字。英文文案随包升级可能变动，需对应更新。
- */
-const TABLE_MENU_LABELS: Record<string, string> = {
-  'Insert row above': 'insertRowAbove',
-  'Insert row below': 'insertRowBelow',
-  'Delete row': 'deleteRow',
-  'Insert column left': 'insertColumnLeft',
-  'Insert column right': 'insertColumnRight',
-  'Delete column': 'deleteColumn'
-}
 
 /** shuvix-preview:// 图片 URL（主进程协议带沙箱校验） */
 function previewUrl(sessionId: string, absPath: string): string {
@@ -95,7 +82,7 @@ export function LivePreviewEditor({
   handleRef,
   fileContext
 }: LivePreviewEditorProps): React.JSX.Element {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
   const notebookTheme = useSettingsStore((s) => s.notebookTheme)
 
@@ -229,25 +216,31 @@ export function LivePreviewEditor({
     [t]
   )
 
-  // 表格单元格右键菜单本地化：菜单挂到 document.body，出现时改写按钮文案
-  useEffect(() => {
-    const localize = (menu: HTMLElement): void => {
-      menu.querySelectorAll<HTMLElement>('.cm-atomic-table-menu-item').forEach((btn) => {
-        const key = TABLE_MENU_LABELS[btn.textContent?.trim() ?? '']
-        if (key) btn.textContent = t(`notebook.menu.tableMenu.${key}`)
+  // 表格单元格右键菜单：交给 @shuvix/atomic-editor 的 renderMenu 钩子，用原生菜单
+  // （window.api.contextMenu.popup）呈现，文案按 item.id 取多语言——与编辑器主右键菜单
+  // 风格统一，且不再依赖匹配包内英文文案。
+  const renderTableMenu = useCallback(
+    (items: TableMenuItem[], _pos: { x: number; y: number }): void => {
+      const rows = items.filter((i) => i.group === 'row')
+      const cols = items.filter((i) => i.group === 'column')
+      // 用 i18n.t（而非 hook 的 t）：extensions 在 mount 时被一次性捕获，i18n 实例稳定
+      // 且 t 始终按当前语言解析，避免切换语言后菜单文案不更新。
+      const toEntry = (i: TableMenuItem): { id: string; label: string } => ({
+        id: i.id,
+        label: i18n.t(`notebook.menu.tableMenu.${i.id}`)
       })
-    }
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (!(node instanceof HTMLElement)) continue
-          if (node.classList.contains('cm-atomic-table-menu')) localize(node)
-        }
-      }
-    })
-    observer.observe(document.body, { childList: true })
-    return () => observer.disconnect()
-  }, [t])
+      const menuItems = [
+        ...rows.map(toEntry),
+        ...(rows.length && cols.length ? [{ type: 'separator' as const }] : []),
+        ...cols.map(toEntry)
+      ]
+      void window.api.contextMenu.popup({ items: menuItems }).then((result) => {
+        if (!result.actionId) return
+        items.find((i) => i.id === result.actionId)?.run()
+      })
+    },
+    [i18n]
+  )
 
   const onMarkdownChange = useCallback(
     (md: string): void => {
@@ -344,13 +337,15 @@ export function LivePreviewEditor({
   // 双链扩展（仅在有项目上下文时启用）：[[file]] 链接 + ![[image]] 内嵌。
   // atomic 在 mount 时一次性捕获 extensions（按 documentId），父组件按文件 key 重挂载，故稳定即可。
   const editorExtensions = useMemo<readonly Extension[]>(() => {
-    if (!sessionId) return [markdownKeymap]
+    const tableMenu = tableContextMenu(renderTableMenu)
+    if (!sessionId) return [markdownKeymap, tableMenu]
     return [
       markdownKeymap,
+      tableMenu,
       wikiLinks({ openOnClick: true, resolve: resolveWikiLink, onOpen: openWikiLink }),
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
     ]
-  }, [sessionId, resolveWikiLink, openWikiLink, resolveEmbedSrc])
+  }, [sessionId, renderTableMenu, resolveWikiLink, openWikiLink, resolveEmbedSrc])
 
   return (
     <div className="flex-1 min-h-0 relative overflow-hidden">

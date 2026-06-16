@@ -1,0 +1,65 @@
+{
+  "name": "@shuvix/atomic-editor",
+  "version": "0.4.3",
+  "description": "CodeMirror 6 markdown editor with Obsidian-style inline live preview. Vendored into ShuviX via git subtree from kenforthewin/atomic-editor (MIT) for source-level customization — see VENDORING.md.",
+  "private": true,
+  "license": "MIT",
+  "author": "Kenny Bergquist",
+  "homepage": "https://github.com/kenforthewin/atomic-editor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kenforthewin/atomic-editor.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./code-languages": "./src/code-languages.ts",
+    "./styles.css": "./src/styles/inline-preview.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "peerDependencies": {
+    "@codemirror/autocomplete": "^6.0.0",
+    "@codemirror/commands": "^6.0.0",
+    "@codemirror/lang-markdown": "^6.0.0",
+    "@codemirror/language": "^6.0.0",
+    "@codemirror/search": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
+    "@lezer/common": "^1.0.0",
+    "@lezer/highlight": "^1.0.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0",
+    "@codemirror/lang-cpp": "^6.0.0",
+    "@codemirror/lang-css": "^6.0.0",
+    "@codemirror/lang-go": "^6.0.0",
+    "@codemirror/lang-html": "^6.0.0",
+    "@codemirror/lang-java": "^6.0.0",
+    "@codemirror/lang-javascript": "^6.0.0",
+    "@codemirror/lang-json": "^6.0.0",
+    "@codemirror/lang-php": "^6.0.0",
+    "@codemirror/lang-python": "^6.0.0",
+    "@codemirror/lang-rust": "^6.0.0",
+    "@codemirror/lang-sql": "^6.0.0",
+    "@codemirror/lang-xml": "^6.0.0",
+    "@codemirror/lang-yaml": "^6.0.0",
+    "@codemirror/legacy-modes": "^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@codemirror/lang-cpp": { "optional": true },
+    "@codemirror/lang-css": { "optional": true },
+    "@codemirror/lang-go": { "optional": true },
+    "@codemirror/lang-html": { "optional": true },
+    "@codemirror/lang-java": { "optional": true },
+    "@codemirror/lang-javascript": { "optional": true },
+    "@codemirror/lang-json": { "optional": true },
+    "@codemirror/lang-php": { "optional": true },
+    "@codemirror/lang-python": { "optional": true },
+    "@codemirror/lang-rust": { "optional": true },
+    "@codemirror/lang-sql": { "optional": true },
+    "@codemirror/lang-xml": { "optional": true },
+    "@codemirror/lang-yaml": { "optional": true },
+    "@codemirror/legacy-modes": { "optional": true }
+  }
+}

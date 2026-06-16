@@ -12,8 +12,10 @@
     "src/main/dao/types/**/*.ts",
     "src/shared/**/*",
     "../../packages/chat-protocol/src/**/*",
-    "../../packages/chat-ui/src/**/*"
+    "../../packages/chat-ui/src/**/*",
+    "../../packages/atomic-editor/src/**/*"
   ],
+  "exclude": ["../../packages/atomic-editor/src/**/__tests__/**"],
   "compilerOptions": {
     "composite": true,
     "jsx": "react-jsx",
@@ -30,6 +32,12 @@
       ],
       "@shuvix/chat-ui/*": [
         "../../packages/chat-ui/src/*"
+      ],
+      "@shuvix/atomic-editor": [
+        "../../packages/atomic-editor/src/index.ts"
+      ],
+      "@shuvix/atomic-editor/code-languages": [
+        "../../packages/atomic-editor/src/code-languages.ts"
       ]
     }
   }
