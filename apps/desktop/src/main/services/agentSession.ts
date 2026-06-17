@@ -263,8 +263,15 @@ export class AgentSession {
         tools
       },
       getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined,
-      onPayload: (payload) => {
-        const logId = httpLogService.logRequest({ sessionId, provider, model, payload })
+      onPayload: (payload, requestModel) => {
+        // 用本次请求真正使用的模型对象记录日志，而非初始化时的闭包值
+        // （会话中途 setModel 切换后，闭包里的 provider/model 已过期）
+        const logId = httpLogService.logRequest({
+          sessionId,
+          provider: requestModel.provider,
+          model: requestModel.id,
+          payload
+        })
         session.addPendingLogId(logId)
       }
     })
