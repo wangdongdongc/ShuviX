@@ -243,6 +243,7 @@
     "folders": "文件夹",
     "name": "项目名称",
     "namePlaceholder": "项目名称",
+    "path": "路径",
     "selectFolder": "选择项目工作文件夹",
     "changeFolder": "更换",
     "toolsReminder": "工具决定了 AI 能使用哪些能力来完成任务。启用更多工具会增加每次对话的 Token 消耗，建议只保留需要的工具。",

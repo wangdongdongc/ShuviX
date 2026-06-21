@@ -1,0 +1,21 @@
+{
+  "name": "@shuvix/agent-runtime",
+  "version": "0.1.0",
+  "description": "Host-agnostic agent orchestration core for ShuviX — wraps @earendil-works/pi-agent-core + pi-ai, routes AgentEvent → ChatEvent, and exposes injection seams (persistence / config / event sink / env) so both the Electron desktop and the Chrome extension drive one orchestration codebase.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.75.5",
+    "@earendil-works/pi-ai": "^0.75.5",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "diff": "^8.0.3",
+    "typebox": "^1.1.37"
+  },
+  "peerDependencies": {
+    "@shuvix/chat-protocol": "*"
+  }
+}

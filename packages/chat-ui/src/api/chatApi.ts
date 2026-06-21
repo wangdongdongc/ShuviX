@@ -2,34 +2,17 @@
  * ChatApi — 可复用聊天前端与后端之间的唯一接口契约。
  *
  * 聊天组件树（components/chat + 相关 hooks）只通过 `getChatApi()` 访问后端，
- * 不直接依赖 Electron 的全局 `window.api`。这样：
- *   - 桌面端（Electron preload）/ WebUI 通过暴露 `window.api` 自动满足契约；
- *   - 外部服务端项目可在挂载前 `setChatApi(myAdapter)` 注入自己的 HTTP/WS 实现。
+ * 不直接依赖任何宿主的全局 `window.api`。这样：
+ *   - 桌面端（Electron preload）/ WebUI 通过暴露 `window.api` 满足契约；
+ *   - 外部宿主（Chrome 扩展、HTTP/WS 服务端）在挂载前 `setChatApi(myAdapter)` 注入实现。
  *
- * 当前 `ChatApi` 直接取自本仓库的全局 `ShuviXAPI`（零漂移：window.api 改了这里编译期即报错）。
- * 迁移到外部仓库时，将下面的 `Pick<ShuviXAPI, …>` 替换为独立声明的同形接口即可，
- * 取数点（getChatApi 调用）无需改动。
+ * 契约本身（接口与协议数据形状）定义在 `@shuvix/chat-protocol/chatApi`，与 ChatEvent /
+ * ChatMessage 并列为前↔后端协议的单一来源。Electron 侧通过编译期断言保证 window.api
+ * 结构满足该契约（见 apps/desktop/src/preload/chatApiContract.ts），零漂移。
  */
+import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 
-/** 聊天前端实际依赖的 window.api 命名空间子集 */
-export type ChatApiNamespace =
-  | 'agent'
-  | 'session'
-  | 'message'
-  | 'app'
-  | 'provider'
-  | 'tools'
-  | 'settings'
-  | 'command'
-  | 'runtime'
-  | 'compact'
-  | 'webui'
-  | 'telegram'
-  | 'pinChat'
-  | 'project'
-  | 'update'
-
-export type ChatApi = Pick<ShuviXAPI, ChatApiNamespace>
+export type { ChatApi }
 
 let injected: ChatApi | null = null
 

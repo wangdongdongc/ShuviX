@@ -25,6 +25,15 @@ vi.mock('../../services/toolContext', () => ({
   isPathWithinReferenceDirs: () => false,
   assertSandboxRead: () => {},
   assertSandboxWrite: () => {},
+  // 共享 createFileToolSuite 经此 policy 走 assertSandbox；测试里恒放行（沙箱 no-op）
+  makeDesktopSandboxPolicy: () => ({
+    isAllowedWithoutPrompt: () => true,
+    isAutoApprove: () => true,
+    isInAllowList: () => false,
+    buildApprovalCommand: () => '',
+    isDirectory: () => false,
+    persistAllow: () => {}
+  }),
   TOOL_ABORTED: 'Aborted'
 }))
 
@@ -92,7 +101,7 @@ vi.mock('word-extractor', () => ({
   }
 }))
 
-import { ReadTool } from '../read'
+import { makeReadTool } from '../read'
 import type { ToolContext } from '../../services/toolContext'
 
 const ctx: ToolContext = { sessionId: SESSION_ID }
@@ -150,7 +159,7 @@ afterAll(() => {
 
 describe('read 工具 - 纯文本文件', () => {
   it('读取纯文本文件返回带行号的内容', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc1', { path: join(TEST_DIR, 'hello.txt') })
     const text = getText(result)
     // 应包含行号
@@ -159,7 +168,7 @@ describe('read 工具 - 纯文本文件', () => {
   })
 
   it('分页读取 offset/limit', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc2', {
       path: join(TEST_DIR, 'hello.txt'),
       offset: 2,
@@ -173,7 +182,7 @@ describe('read 工具 - 纯文本文件', () => {
   })
 
   it('空文件正常返回', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc3', { path: join(TEST_DIR, 'empty.txt') })
     expect(getText(result)).toBeDefined()
     expect((result.details as { totalLines: number }).totalLines).toBeLessThanOrEqual(1)
@@ -182,7 +191,7 @@ describe('read 工具 - 纯文本文件', () => {
 
 describe('read 工具 - 单行截断', () => {
   it('超长单行被截断到 2000 字符', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc4', { path: join(TEST_DIR, 'minified.js') })
     const text = getText(result)
     // 第一行应被截断
@@ -194,7 +203,7 @@ describe('read 工具 - 单行截断', () => {
 
 describe('read 工具 - 目录读取', () => {
   it('读取目录返回排序的条目列表', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc5', { path: join(TEST_DIR, 'subdir') })
     const text = getText(result)
     // 目录条目加 / 后缀
@@ -204,7 +213,7 @@ describe('read 工具 - 目录读取', () => {
   })
 
   it('目录分页 offset/limit', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc6', {
       path: join(TEST_DIR, 'bigdir'),
       offset: 1,
@@ -221,7 +230,7 @@ describe('read 工具 - 目录读取', () => {
 
 describe('read 工具 - 文件不存在', () => {
   it('有近似文件时返回 Did you mean', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc7', { path: join(TEST_DIR, 'readme') })
       expect.fail('应该抛错')
@@ -231,7 +240,7 @@ describe('read 工具 - 文件不存在', () => {
   })
 
   it('无近似文件时返回普通 fileNotFound', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
       expect.fail('应该抛错')
@@ -245,7 +254,7 @@ describe('read 工具 - 文件不存在', () => {
 
 describe('read 工具 - 二进制文件拒绝', () => {
   it('已知扩展名直接拒绝', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc9', { path: join(TEST_DIR, 'archive.exe') })
       expect.fail('应该抛错')
@@ -255,7 +264,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
   })
 
   it('NULL 字节检测拒绝', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc10', { path: join(TEST_DIR, 'binary.log') })
       expect.fail('应该抛错')
@@ -267,7 +276,7 @@ describe('read 工具 - 二进制文件拒绝', () => {
 
 describe('read 工具 - 大文件字节上限', () => {
   it('超 50KB 时截断并提示 offset', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc11', {
       path: join(TEST_DIR, 'largedir', 'large.txt')
     })
@@ -280,7 +289,7 @@ describe('read 工具 - 大文件字节上限', () => {
 
 describe('read 工具 - URL 抓取', () => {
   it('URL 正确路由到 readUrl 并返回 Markdown', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc-url1', {
       path: 'https://example.com/page'
     })
@@ -295,7 +304,7 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   it('URL 返回包含页面标题', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc-url2', {
       path: 'https://example.com/page'
     })
@@ -304,7 +313,7 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   it('URL 抓取失败返回合适的错误', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc-url3', { path: 'https://fail-convert.example.com' })
       expect.fail('应该抛错')
@@ -316,7 +325,7 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   it('URL 返回空内容时报错', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     try {
       await tool.execute('tc-url4', { path: 'https://empty-page.example.com' })
       expect.fail('应该抛错')
@@ -327,7 +336,7 @@ describe('read 工具 - URL 抓取', () => {
   })
 
   it('http URL 也能正确识别', async () => {
-    const tool = new ReadTool(ctx)
+    const tool = makeReadTool(ctx)
     const result = await tool.execute('tc-url5', {
       path: 'http://example.com/page'
     })

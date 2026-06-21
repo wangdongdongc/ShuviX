@@ -4,7 +4,7 @@
  */
 
 import { stat } from 'fs/promises'
-import { relative, basename, dirname, resolve, sep } from 'path'
+import { relative, resolve } from 'path'
 import { Type } from 'typebox'
 import { BaseTool } from '../services/baseTool'
 import {
@@ -15,6 +15,7 @@ import {
 } from '../services/toolContext'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { LsToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { buildTree } from '@shuvix/agent-runtime'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { t } from '../i18n'
@@ -36,63 +37,6 @@ const LsParamsSchema = Type.Object({
     })
   )
 })
-
-/**
- * 从文件列表构建树形目录结构并渲染为缩进文本
- */
-function buildTree(files: string[]): string {
-  // 统一分隔符为 /
-  const normalized = files.map((f) => f.split(sep).join('/'))
-
-  // 构建目录→文件映射
-  const dirs = new Set<string>()
-  const filesByDir = new Map<string, string[]>()
-
-  for (const file of normalized) {
-    const dir = dirname(file)
-    const parts = dir === '.' ? [] : dir.split('/')
-
-    // 注册所有父目录
-    for (let i = 0; i <= parts.length; i++) {
-      const dirPath = i === 0 ? '.' : parts.slice(0, i).join('/')
-      dirs.add(dirPath)
-    }
-
-    // 文件归入所属目录
-    if (!filesByDir.has(dir)) filesByDir.set(dir, [])
-    filesByDir.get(dir)!.push(basename(file))
-  }
-
-  function renderDir(dirPath: string, depth: number): string {
-    const indent = '  '.repeat(depth)
-    let output = ''
-
-    if (depth > 0) {
-      output += `${indent}${basename(dirPath)}/\n`
-    }
-
-    const childIndent = '  '.repeat(depth + 1)
-
-    // 子目录（排序）
-    const children = Array.from(dirs)
-      .filter((d) => dirname(d) === dirPath && d !== dirPath)
-      .sort()
-
-    for (const child of children) {
-      output += renderDir(child, depth + 1)
-    }
-
-    // 文件（排序）
-    const dirFiles = filesByDir.get(dirPath) || []
-    for (const file of dirFiles.sort()) {
-      output += `${childIndent}${file}\n`
-    }
-
-    return output
-  }
-
-  return renderDir('.', 0)
-}
 
 /** ls 工具 */
 export class ListTool extends BaseTool<typeof LsParamsSchema> {

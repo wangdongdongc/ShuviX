@@ -3,6 +3,7 @@ import { join } from 'path'
 import { mark, measure } from '../perf'
 import { getDataDir } from '../utils/paths'
 import { runMigrations } from './migrations'
+import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
 
 /**
  * 数据库连接管理
@@ -31,43 +32,16 @@ class DatabaseManager {
   private seedProviders(): void {
     const now = Date.now()
 
-    // name 与 id 均为 pi-ai 的 provider slug
-    // apiProtocol 对内置提供商无实际作用（由 pi-ai 注册表决定），INSERT 时使用 DB 默认值
-    // baseUrl 留空 '' 时 agentModelResolver 不覆盖，pi-ai 使用其 canonical URL（含 placeholder 由 pi-ai 自行解析）
-    const builtinProviders: Array<[name: string, displayName: string, baseUrl: string]> = [
-      ['openai', 'OpenAI', 'https://api.openai.com/v1'],
-      ['anthropic', 'Anthropic', 'https://api.anthropic.com'],
-      ['google', 'Google', 'https://generativelanguage.googleapis.com/v1beta'],
-      ['xai', 'xAI (Grok)', 'https://api.x.ai/v1'],
-      ['groq', 'Groq', 'https://api.groq.com/openai/v1'],
-      ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1'],
-      ['mistral', 'Mistral', 'https://api.mistral.ai'],
-      ['openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1'],
-      ['minimax', 'MiniMax', 'https://api.minimax.io/anthropic'],
-      ['minimax-cn', 'MiniMax CN', 'https://api.minimaxi.com/anthropic'],
-      ['huggingface', 'Hugging Face', 'https://router.huggingface.co/v1'],
-      ['opencode', 'OpenCode', 'https://opencode.ai/zen'],
-      ['kimi-coding', 'Kimi Coding', 'https://api.kimi.com/coding'],
-      ['zai', 'ZAI (智谱)', 'https://api.z.ai/api/coding/paas/v4'],
-      // pi-ai 0.68.1+ 新增内置 provider
-      ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference'],
-      ['deepseek', 'DeepSeek', 'https://api.deepseek.com'],
-      ['moonshotai', 'Moonshot AI', 'https://api.moonshot.ai/v1'],
-      ['moonshotai-cn', 'Moonshot AI CN', 'https://api.moonshot.cn/v1'],
-      ['xiaomi', '小米 MiMo', 'https://token-plan-ams.xiaomimimo.com/anthropic'],
-      // Cloudflare 系列 baseUrl 含 {CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID} 占位符，pi-ai 在请求时从 process.env 替换；
-      // 留空让 pi-ai 使用 per-model canonical（gateway 有 anthropic/openai/compat 三种，按 model 决定）
-      ['cloudflare-workers-ai', 'Cloudflare Workers AI', ''],
-      ['cloudflare-ai-gateway', 'Cloudflare AI Gateway', '']
-    ]
-
+    // 内置提供商目录来自 @shuvix/chat-protocol（与扩展共用单一来源）。
+    // name 与 id 均为 pi-ai 的 provider slug；apiProtocol 对内置 provider 无实际作用（INSERT 用 DB 默认值）；
+    // baseUrl 留空 '' 时 agentModelResolver 不覆盖，pi-ai 使用其 canonical URL。
     const exists = this.db.prepare('SELECT 1 FROM providers WHERE name = ?')
     const insert = this.db.prepare(
       'INSERT INTO providers (id, name, displayName, baseUrl, isBuiltin, isEnabled, sortOrder, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?)'
     )
 
     const seedAll = this.db.transaction(() => {
-      builtinProviders.forEach(([name, displayName, baseUrl], i) => {
+      BUILTIN_PROVIDERS.forEach(({ name, displayName, baseUrl }, i) => {
         if (!exists.get(name)) {
           insert.run(name, name, displayName, baseUrl, i, now, now)
         }

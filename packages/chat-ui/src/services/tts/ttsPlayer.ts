@@ -1,3 +1,5 @@
+import { getChatApi } from '../../api/chatApi'
+
 /**
  * 全局 TTS 音频播放器 — 管理切片队列播放、中断和清理
  */
@@ -62,7 +64,7 @@ class TtsPlayer {
     this.notify()
 
     // 监听逐片推送，收到第一片立即播放
-    this.removeChunkListener = window.api.tts.onChunk((data) => {
+    this.removeChunkListener = getChatApi().tts.onChunk((data) => {
       if (!this._isLoading && !this._isPlaying) return
       this.queue.push(data.filePath)
       if (!this._isPlaying && this.queue.length === 1) {
@@ -71,7 +73,7 @@ class TtsPlayer {
     })
 
     try {
-      await window.api.tts.speakOnce({ text })
+      await getChatApi().tts.speakOnce({ text })
       // invoke 返回 = 所有片段合成完毕（或被中止）
       if (!this._isLoading && !this._isPlaying) return
       this._isLoading = false
@@ -118,7 +120,7 @@ class TtsPlayer {
   /** 停止播放并中止后台合成 */
   stop(): void {
     // 通知 main 中止后台合成
-    window.api.tts.abortTts()
+    getChatApi().tts.abortTts()
     // 清理 chunk 事件监听
     this.removeChunkListener?.()
     this.removeChunkListener = null

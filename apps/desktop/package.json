@@ -99,6 +99,8 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@shuvix/agent-runtime": "*",
+    "@shuvix/app-shell": "*",
     "@shuvix/atomic-editor": "*",
     "@shuvix/chat-protocol": "*",
     "@shuvix/chat-ui": "*",

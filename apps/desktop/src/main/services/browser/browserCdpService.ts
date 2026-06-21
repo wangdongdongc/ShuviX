@@ -6,6 +6,7 @@
  */
 
 import type { WebContents } from 'electron'
+import { CdpController, type CdpTransport } from '@shuvix/agent-runtime'
 import { getBrowserView } from './browserViewService'
 import { createLogger } from '../../logger'
 
@@ -13,16 +14,8 @@ const log = createLogger('BrowserCDP')
 
 // ====== CDP 类型 ======
 
-/** CDP Accessibility.getFullAXTree 返回的节点 */
-export interface AXNode {
-  nodeId: string
-  backendDOMNodeId?: number
-  role?: { type: string; value: string }
-  name?: { type: string; value: string }
-  properties?: Array<{ name: string; value: { type: string; value: unknown } }>
-  childIds?: string[]
-  ignored?: boolean
-}
+// A11y 快照 / UID 映射已下沉 @shuvix/agent-runtime（CdpController），此处再导出兼容既有引用
+export type { AXNode } from '@shuvix/agent-runtime'
 
 /** 网络请求条目 */
 export interface NetworkEntry {
@@ -53,20 +46,14 @@ const CDP_VERSION = '1.3'
 const MAX_NETWORK_ENTRIES = 200
 const MAX_CONSOLE_ENTRIES = 200
 
-/** 过滤掉的无意义角色 */
-const IGNORED_ROLES = new Set(['none', 'generic', 'InlineTextBox', 'LineBreak'])
-
 // ====== 服务 ======
 
 class BrowserCdpService {
   private attached = false
   private webContents: WebContents | null = null
 
-  // UID 系统
-  private uidCounter = 0
-  private uidMap = new Map<string, number>() // uid → backendDOMNodeId
-  private backendIdToUid = new Map<number, string>() // backendDOMNodeId → uid（反向）
-  private nodeMap = new Map<string, AXNode>() // uid → AXNode
+  // A11y 快照 / UID / 坐标解析等可移植内核（注入 webContents.debugger 传输）
+  private controller: CdpController | null = null
 
   // 网络/控制台
   private networkEnabled = false
@@ -105,6 +92,12 @@ class BrowserCdpService {
 
     this.attached = true
     this.webContents = wc
+
+    // 可移植内核：注入 webContents.debugger 作为 CdpTransport
+    const transport: CdpTransport = {
+      sendCommand: (method, params) => wc.debugger.sendCommand(method, params)
+    }
+    this.controller = new CdpController(transport)
 
     // 监听 CDP 事件（网络/控制台）
     this.messageHandler = (_event, method, params) => this.onCdpMessage(method, params)
@@ -151,11 +144,9 @@ class BrowserCdpService {
     this.webContents = null
     this.messageHandler = null
     this.detachHandler = null
-    // UID
-    this.uidCounter = 0
-    this.uidMap.clear()
-    this.backendIdToUid.clear()
-    this.nodeMap.clear()
+    // UID（下沉到 controller）
+    this.controller?.reset()
+    this.controller = null
     // 网络/控制台
     this.networkEnabled = false
     this.consoleEnabled = false
@@ -172,173 +163,37 @@ class BrowserCdpService {
     return wc.debugger.sendCommand(method, params) as Promise<T>
   }
 
-  // ====== A11y 快照 + UID ======
+  // ====== A11y 快照 + UID（委托共享 CdpController） ======
+
+  /** 确保已 attach 并返回 controller */
+  private requireController(): CdpController {
+    this.ensureAttached()
+    return this.controller!
+  }
 
   /** 生成 A11y 快照，构建 UID 映射，返回格式化文本 */
   async buildSnapshot(): Promise<{ text: string; elementCount: number }> {
-    const result = await this.sendCommand<{ nodes: AXNode[] }>('Accessibility.getFullAXTree')
-    const nodes = result.nodes
-
-    // 建立 nodeId → AXNode 索引
-    const nodeById = new Map<string, AXNode>()
-    for (const node of nodes) {
-      nodeById.set(node.nodeId, node)
-    }
-
-    // 找到根节点（第一个节点通常是根）
-    const root = nodes[0]
-    if (!root) return { text: '(empty page)', elementCount: 0 }
-
-    // 清理旧 UID（保留 backendDOMNodeId 仍存在的）
-    const seenBackendIds = new Set<number>()
-    for (const node of nodes) {
-      if (node.backendDOMNodeId != null) {
-        seenBackendIds.add(node.backendDOMNodeId)
-      }
-    }
-    for (const [uid, backendId] of this.uidMap) {
-      if (!seenBackendIds.has(backendId)) {
-        this.uidMap.delete(uid)
-        this.backendIdToUid.delete(backendId)
-        this.nodeMap.delete(uid)
-      }
-    }
-
-    // 递归格式化
-    let elementCount = 0
-    const lines: string[] = []
-
-    const format = (node: AXNode, depth: number): void => {
-      // 跳过 ignored 和无意义角色
-      if (node.ignored) {
-        // 但仍递归子节点
-        for (const childId of node.childIds || []) {
-          const child = nodeById.get(childId)
-          if (child) format(child, depth)
-        }
-        return
-      }
-
-      const role = node.role?.value || ''
-      if (IGNORED_ROLES.has(role) && !node.name?.value) {
-        // 无名 generic/none 节点：跳过自身，递归子节点
-        for (const childId of node.childIds || []) {
-          const child = nodeById.get(childId)
-          if (child) format(child, depth)
-        }
-        return
-      }
-
-      // 分配 UID
-      const backendId = node.backendDOMNodeId
-      let uid: string
-      if (backendId != null && this.backendIdToUid.has(backendId)) {
-        uid = this.backendIdToUid.get(backendId)!
-      } else {
-        uid = 'e' + (this.uidCounter++).toString(36)
-        if (backendId != null) {
-          this.uidMap.set(uid, backendId)
-          this.backendIdToUid.set(backendId, uid)
-        }
-      }
-      this.nodeMap.set(uid, node)
-      elementCount++
-
-      // 格式化行
-      const parts: string[] = [`uid=${uid}`]
-      if (role && !IGNORED_ROLES.has(role)) parts.push(role)
-      if (node.name?.value) parts.push(`"${node.name.value}"`)
-
-      // 属性
-      if (node.properties) {
-        for (const prop of node.properties) {
-          const val = prop.value?.value
-          if (prop.name === 'focused' && val === true) parts.push('[focused]')
-          else if (prop.name === 'checked' && val !== 'false') parts.push(`[checked=${val}]`)
-          else if (prop.name === 'expanded') parts.push(val ? '[expanded]' : '[collapsed]')
-          else if (prop.name === 'level' && typeof val === 'number') parts.push(`level=${val}`)
-          else if (prop.name === 'disabled' && val === true) parts.push('[disabled]')
-          else if (prop.name === 'required' && val === true) parts.push('[required]')
-          else if (prop.name === 'value' && val != null && val !== '') {
-            const s = String(val)
-            if (s.length <= 80) parts.push(`value="${s}"`)
-            else parts.push(`value="${s.slice(0, 77)}..."`)
-          }
-        }
-      }
-
-      lines.push('  '.repeat(depth) + '- ' + parts.join(' '))
-
-      // 递归子节点
-      for (const childId of node.childIds || []) {
-        const child = nodeById.get(childId)
-        if (child) format(child, depth + 1)
-      }
-    }
-
-    format(root, 0)
-
-    const pageUrl = this.webContents?.getURL() || ''
-    const header = `[snapshot] Page: ${pageUrl} — ${elementCount} elements\n`
-    return { text: header + lines.join('\n'), elementCount }
+    return this.requireController().buildSnapshot(this.webContents?.getURL() || '')
   }
 
   /** 将 UID 解析为页面中的 (x, y) 中心坐标 */
   async resolveCoordinates(uid: string): Promise<{ x: number; y: number }> {
-    const backendId = this.uidMap.get(uid)
-    if (backendId == null) {
-      throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
-    }
-
-    // 解析 backendNodeId → objectId
-    const { object } = await this.sendCommand<{ object: { objectId: string } }>('DOM.resolveNode', {
-      backendNodeId: backendId
-    })
-
-    // 获取元素的 bounding rect 中心点
-    const { result } = await this.sendCommand<{
-      result: { value: { x: number; y: number } }
-    }>('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration:
-        'function(){ const r = this.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }',
-      returnByValue: true
-    })
-
-    // 释放 object
-    await this.sendCommand('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
-
-    return result.value
+    return this.requireController().resolveCoordinates(uid)
   }
 
   /** Focus 元素（用于 fill/type） */
   async focusElement(uid: string): Promise<void> {
-    const backendId = this.uidMap.get(uid)
-    if (backendId == null) {
-      throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
-    }
-    await this.sendCommand('DOM.focus', { backendNodeId: backendId })
+    return this.requireController().focusElement(uid)
   }
 
   /** 在元素上执行 JS 函数 */
   async callOnElement<T>(uid: string, fn: string): Promise<T> {
-    const backendId = this.uidMap.get(uid)
-    if (backendId == null) {
-      throw new Error(`Element uid="${uid}" not found. Take a new snapshot.`)
-    }
+    return this.requireController().callOnElement<T>(uid, fn)
+  }
 
-    const { object } = await this.sendCommand<{ object: { objectId: string } }>('DOM.resolveNode', {
-      backendNodeId: backendId
-    })
-
-    const { result } = await this.sendCommand<{ result: { value: T } }>('Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration: fn,
-      returnByValue: true
-    })
-
-    await this.sendCommand('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
-    return result.value
+  /** 取某 uid 对应的 AX 节点（供动作生成描述） */
+  getNode(uid: string): import('@shuvix/agent-runtime').AXNode | undefined {
+    return this.controller?.getNode(uid)
   }
 
   // ====== 网络收集 ======

@@ -1,5 +1,6 @@
 import { getChatApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect, useCallback, useRef } from 'react'
+import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'

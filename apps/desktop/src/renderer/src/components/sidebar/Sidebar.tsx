@@ -1,25 +1,18 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  MessageSquarePlus,
-  MessageSquare,
   Settings,
   Trash2,
-  Settings2,
   FolderClosed,
-  FolderOpen,
   FolderPlus,
-  Globe,
-  MessageCircle,
   RotateCcw,
   ArrowUpCircle,
   Archive,
   MoreHorizontal,
-  PictureInPicture2,
   ChevronUp
 } from 'lucide-react'
 import { useChatStore, selectAllPendingCounts } from '@shuvix/chat-ui'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { SessionItem, SessionGroup, useSessionDelete, useFocusDim } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
@@ -51,12 +44,12 @@ export function Sidebar(): React.JSX.Element {
   const updateEvent = useUpdateStore((s) => s.updateEvent)
   const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
-  const focusMode = useSettingsStore((s) => s.focusMode)
-  /** 专注模式生效条件：开关打开 + 已选中会话 → 淡化未选中区域 */
-  const dim = focusMode && !!activeSessionId
+  /** 专注模式生效条件：开关打开 + 已选中会话 → 淡化未选中区域（共享 useFocusDim） */
+  const { dim } = useFocusDim()
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
-  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  // 删除会话全流程（检查/确认框/删除/移除）走共享 useSessionDelete，桌面/扩展同一套
+  const { requestDelete: handleDelete, deleteDialog } = useSessionDelete()
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
@@ -86,7 +79,7 @@ export function Sidebar(): React.JSX.Element {
 
   // 加载项目列表（创建/编辑后也会刷新）+ 监听后端 project:changed 事件
   useEffect(() => {
-    void reloadProjects() // eslint-disable-line react-hooks/set-state-in-effect
+    void reloadProjects()
     const unsubscribe = window.api.project.onChanged(() => {
       void reloadProjects()
     })
@@ -107,7 +100,7 @@ export function Sidebar(): React.JSX.Element {
     const initial = new Set<string>(projects.map((p) => p.id))
     initial.add(TEMP_GROUP_KEY)
     if (archivedProjects.length > 0) initial.add(ARCHIVED_GROUP_KEY)
-    setCollapsedGroups(initial) // eslint-disable-line react-hooks/set-state-in-effect
+    setCollapsedGroups(initial)
   }, [projects, archivedProjects])
 
   // ---------- 分组逻辑：项目为骨架，会话填入 ----------
@@ -201,23 +194,6 @@ export function Sidebar(): React.JSX.Element {
     }
   }
 
-  /** 删除会话（有消息时先确认） */
-  const handleDelete = async (id: string): Promise<void> => {
-    const msgs = await window.api.message.list(id)
-    if (msgs.length > 0) {
-      setDeletingSessionId(id)
-      return
-    }
-    await doDelete(id)
-  }
-
-  /** 执行删除 */
-  const doDelete = async (id: string): Promise<void> => {
-    await window.api.session.delete(id)
-    useChatStore.getState().removeSession(id)
-    setDeletingSessionId(null)
-  }
-
   /** 切换分组折叠状态 */
   const toggleGroup = (key: string): void => {
     setCollapsedGroups((prev) => {
@@ -241,17 +217,27 @@ export function Sidebar(): React.JSX.Element {
   /** 全局 pending 输入计数(供脉冲指示器) */
   const allPendingCounts = useChatStore(selectAllPendingCounts)
 
-  /** 渲染单个会话项 */
+  /** 渲染单个会话项（复用共享 SessionItem，注入桌面专属能力：pin/分享/Telegram/配置/右键菜单） */
   const renderSessionItem = (session: Session): React.JSX.Element => {
     // 仅当会话位于活动项目组、且不是当前选中会话时才逐项淡化；
     // 非活动项目组已由外层 groupDim 统一淡化，避免 opacity 叠加导致过透明。
     const sessionGroupKey = session.projectId || TEMP_GROUP_KEY
     const sessionDim = dim && activeGroupKey === sessionGroupKey
     return (
-      <div
+      <SessionItem
         key={session.id}
-        onClick={() => handleSelectSession(session.id)}
-        onContextMenu={(e) => {
+        session={session}
+        active={activeSessionId === session.id}
+        isStreaming={sessionStreams[session.id]?.isStreaming}
+        pendingCount={allPendingCounts[session.id]}
+        dim={sessionDim}
+        isPinned={pinnedSessionIds.has(session.id)}
+        isShared={sharedSessionIds.has(session.id)}
+        isTelegramBound={telegramBindings.has(session.id)}
+        onSelect={handleSelectSession}
+        onDelete={handleDelete}
+        onConfigure={(id) => setConfiguringSessionId(id)}
+        onContextMenu={(id, e) => {
           e.preventDefault()
           e.stopPropagation()
           showContextMenu(
@@ -261,82 +247,12 @@ export function Sidebar(): React.JSX.Element {
               { id: 'delete-session', label: t('sidebar.deleteSession') }
             ],
             (actionId) => {
-              if (actionId === 'session-config') setConfiguringSessionId(session.id)
-              if (actionId === 'delete-session') handleDelete(session.id)
+              if (actionId === 'session-config') setConfiguringSessionId(id)
+              if (actionId === 'delete-session') handleDelete(id)
             }
           )
         }}
-        className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
-          activeSessionId === session.id
-            ? 'bg-bg-active/80 text-text-primary'
-            : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${sessionDim ? 'opacity-30 hover:opacity-100' : ''}`
-        }`}
-      >
-        {pinnedSessionIds.has(session.id) ? (
-          <PictureInPicture2
-            size={11}
-            className={`flex-shrink-0 ${
-              sessionStreams[session.id]?.isStreaming ? 'text-accent animate-pulse' : 'text-accent'
-            }`}
-          />
-        ) : (
-          <MessageSquare
-            size={11}
-            fill={
-              activeSessionId === session.id || sessionStreams[session.id]?.isStreaming
-                ? 'currentColor'
-                : 'none'
-            }
-            className={`flex-shrink-0 ${
-              sessionStreams[session.id]?.isStreaming
-                ? 'text-accent animate-pulse'
-                : activeSessionId === session.id
-                  ? 'text-accent'
-                  : 'text-text-tertiary/40'
-            }`}
-          />
-        )}
-        <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
-          <span className="truncate">{session.title}</span>
-          {sharedSessionIds.has(session.id) && <Globe size={10} className="text-accent shrink-0" />}
-          {telegramBindings.has(session.id) && (
-            <MessageCircle size={10} className="text-blue-500 shrink-0" />
-          )}
-          {/* 待处理用户输入提醒:脉冲圆点 + 计数 */}
-          {allPendingCounts[session.id] > 0 && (
-            <span className="flex items-center gap-1 ml-auto shrink-0">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
-              </span>
-              <span className="text-[9px] text-amber-400 font-semibold tabular-nums">
-                {allPendingCounts[session.id]}
-              </span>
-            </span>
-          )}
-        </div>
-        <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setConfiguringSessionId(session.id)
-            }}
-            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-            title={t('sessionConfig.title')}
-          >
-            <Settings2 size={11} />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              handleDelete(session.id)
-            }}
-            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
-          >
-            <Trash2 size={11} />
-          </button>
-        </div>
-      </div>
+      />
     )
   }
 
@@ -365,73 +281,32 @@ export function Sidebar(): React.JSX.Element {
       // 活动项目组保持原状，由 renderSessionItem 内的逐项 dim 处理非选中会话。
       const groupDim = dim && activeGroupKey !== groupKey
       return (
-        <div
+        <SessionGroup
           key={groupKey}
-          className={`transition-opacity duration-200 ${groupDim ? 'opacity-30 hover:opacity-100' : ''}`}
+          label={groupLabel}
+          variant={isTemp ? 'temp' : 'project'}
+          collapsed={collapsed}
+          onToggle={() => collapseToggle(groupKey)}
+          onNewChat={() => handleNewChat(isTemp ? null : groupKey)}
+          active={activeGroupKey === groupKey}
+          dim={groupDim}
+          showDividerAbove={showDividerAbove}
+          onEdit={isTemp ? undefined : () => setEditingProjectId(groupKey)}
+          onHeaderContextMenu={(e: React.MouseEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const items = [
+              { id: 'new-chat', label: t('sidebar.newChat') },
+              ...(!isTemp ? [{ id: 'edit-project', label: t('sidebar.editProject') }] : [])
+            ]
+            showContextMenu(items, (actionId) => {
+              if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
+              if (actionId === 'edit-project') setEditingProjectId(groupKey)
+            })
+          }}
         >
-          {showDividerAbove && <div className="mx-4 my-2 border-t border-border-secondary/30" />}
-          <div
-            className={`mb-0.5 rounded-md ${activeGroupKey === groupKey ? 'bg-bg-primary/30' : ''}`}
-          >
-            <div
-              className="relative flex items-center w-full px-1.5 py-0.5 text-[12px] group/header"
-              onContextMenu={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                const items = [
-                  { id: 'new-chat', label: t('sidebar.newChat') },
-                  ...(!isTemp ? [{ id: 'edit-project', label: t('sidebar.editProject') }] : [])
-                ]
-                showContextMenu(items, (actionId) => {
-                  if (actionId === 'new-chat') handleNewChat(isTemp ? null : groupKey)
-                  if (actionId === 'edit-project') setEditingProjectId(groupKey)
-                })
-              }}
-            >
-              <button
-                onClick={() => collapseToggle(groupKey)}
-                className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-7 ${
-                  activeGroupKey === groupKey
-                    ? 'text-text-primary'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {isTemp ? (
-                  <MessageCircle size={12} className="flex-shrink-0" />
-                ) : collapsed ? (
-                  <FolderClosed size={12} className="flex-shrink-0" />
-                ) : (
-                  <FolderOpen size={12} className="flex-shrink-0" />
-                )}
-                <span className="truncate font-medium uppercase tracking-wider">{groupLabel}</span>
-              </button>
-              <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleNewChat(isTemp ? null : groupKey)
-                  }}
-                  className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                  title={t('sidebar.newChat')}
-                >
-                  <MessageSquarePlus size={11} />
-                </button>
-                {!isTemp && (
-                  <button
-                    onClick={() => setEditingProjectId(groupKey)}
-                    className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-                    title={t('sidebar.editProject')}
-                  >
-                    <Settings2 size={12} />
-                  </button>
-                )}
-              </div>
-            </div>
-            <AnimatedCollapse open={!collapsed}>
-              <div className="ml-1.5 pl-0.5">{groupSessions.map(renderSessionItem)}</div>
-            </AnimatedCollapse>
-          </div>
-        </div>
+          {groupSessions.map(renderSessionItem)}
+        </SessionGroup>
       )
     })
   }
@@ -649,23 +524,8 @@ export function Sidebar(): React.JSX.Element {
         />
       )}
 
-      {/* 删除会话确认弹窗 */}
-      {deletingSessionId && (
-        <ConfirmDialog
-          title={t('sidebar.confirmDelete')}
-          description={
-            <>
-              {t('sidebar.deleteWarning')}
-              <span className="text-error font-medium">{t('sidebar.deleteWarningBold')}</span>
-              {t('sidebar.deleteWarningEnd')}
-            </>
-          }
-          confirmText={t('common.delete')}
-          cancelText={t('common.cancel')}
-          onConfirm={() => doDelete(deletingSessionId)}
-          onCancel={() => setDeletingSessionId(null)}
-        />
-      )}
+      {/* 删除会话确认弹窗（共享 useSessionDelete 渲染） */}
+      {deleteDialog}
 
       {/* 删除项目确认弹窗 */}
       {deletingProjectId && (

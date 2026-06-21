@@ -1,446 +1,66 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+/**
+ * MCP 服务（桌面薄壳）—— 复用 @shuvix/agent-runtime 的共享 McpManager。
+ *
+ * 桌面只注入两处宿主特定逻辑：
+ *  - store：mcpDao（SQLite mcp_servers 表）
+ *  - createTransport：stdio（本地子进程，buildSpawnEnv 注入环境）+ http（Streamable HTTP/SSE）
+ * 连接/发现/调用/AgentTool 转换/内置模板替换等全部在共享 McpManager 内（与扩展同一套）。
+ */
+import { McpManager } from '@shuvix/agent-runtime'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { Type, type TSchema } from 'typebox'
-import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import { mcpDao } from '../dao/mcpDao'
-import type { McpServer, McpServerStatus, McpToolInfo, McpToolDetails } from '../types'
-import { createLogger } from '../logger'
 import { buildSpawnEnv } from '../utils/paths'
+import { createLogger } from '../logger'
+
 const log = createLogger('MCP')
 
-/** MCP tools/list 返回的单个工具结构 */
-interface McpDiscoveredTool {
-  name: string
-  description?: string
-  inputSchema: {
-    type: 'object'
-    properties?: Record<string, object>
-    required?: string[]
-    [key: string]: unknown
-  }
-}
-
-/** 单个 MCP Server 的运行时连接状态 */
-interface McpConnection {
-  client: Client
-  transport: Transport
-  tools: McpDiscoveredTool[]
-  status: McpServerStatus
-  error?: string
-}
-
-/**
- * 将 JSON Schema 对象转换为 TypeBox TSchema
- * MCP 工具的 inputSchema 是标准 JSON Schema，需要转为 pi-agent-core 所需的 TypeBox 格式
- * 这里采用简化方案：用 Type.Unsafe 直接包装 JSON Schema
- */
-function jsonSchemaToTypebox(schema: McpDiscoveredTool['inputSchema']): TSchema {
-  // Type.Unsafe 允许传入任意 JSON Schema，TypeBox 会原样透传给 LLM
-  return Type.Unsafe<Record<string, unknown>>(schema as Record<string, unknown>)
-}
-
-/**
- * 将 MCP callTool 结果中的 content 块提取为纯文本
- */
-interface McpContentBlock {
-  type: string
-  text?: string
-  mimeType?: string
-  resource?: unknown
-}
-
-function extractTextFromContent(content: unknown[]): string {
-  return content
-    .map((c) => {
-      const block = c as McpContentBlock
-      if (block.type === 'text') return block.text
-      if (block.type === 'image') return `[image: ${block.mimeType}]`
-      if (block.type === 'resource') return JSON.stringify(block.resource)
-      return JSON.stringify(c)
-    })
-    .join('\n')
-}
-
-/**
- * MCP 服务 — 管理所有 MCP Server 的连接、工具发现和工具调用
- *
- * 应用级单例，不绑定会话。所有会话通过 getAllAgentTools() 共享 MCP 工具。
- */
-class McpService {
-  /** serverId → 运行时连接（仅保存连接状态，不作为工具数据源） */
-  private connections = new Map<string, McpConnection>()
-
-  // ─── 连接管理 ───
-
-  /** 连接单个 MCP Server（根据 type 自动选择 transport） */
-  async connect(serverId: string): Promise<void> {
-    // 如果已连接，先断开
-    if (this.connections.has(serverId)) {
-      await this.disconnect(serverId)
-    }
-
-    const server = mcpDao.findById(serverId)
-    if (!server) {
-      log.warn(`connect: server ${serverId} 不存在`)
-      return
-    }
-
-    // 初始化连接记录
-    const conn: McpConnection = {
-      client: new Client({ name: 'shuvix', version: '1.0.0' }),
-      transport: null as unknown as Transport,
-      tools: [],
-      status: 'connecting'
-    }
-    this.connections.set(serverId, conn)
-
-    try {
-      // 内置 server: 替换 url/headers 中的 {{ENV_VAR}} 占位符；若引用的 env 为空则跳过连接
-      const { resolved, missingKey } = this.resolveBuiltinTemplates(server)
-      if (missingKey) {
-        conn.status = 'error'
-        conn.error = `Missing required env variable: ${missingKey}`
-        log.warn(`skip ${server.name}: env variable ${missingKey} is not set`)
-        return
-      }
-
-      // 根据类型创建 transport
-      conn.transport = this.createTransport(resolved)
-
-      // 监听 transport 关闭事件（子进程退出等）
-      conn.transport.onclose = () => {
-        log.info(`transport closed: ${server.name}`)
-        conn.status = 'disconnected'
-        conn.tools = []
-      }
-      conn.transport.onerror = (err: Error) => {
-        log.error(`transport error: ${server.name} ${err.message}`)
-        conn.status = 'error'
-        conn.error = err.message
-      }
-
-      // 连接并初始化
-      await conn.client.connect(conn.transport)
-
-      // 发现工具
-      const result = await conn.client.listTools()
-      conn.tools = result.tools as McpDiscoveredTool[]
-      conn.status = 'connected'
-      conn.error = undefined
-      // 工具列表持久化到 DB（唯一数据源）
-      mcpDao.updateCachedTools(
-        serverId,
-        JSON.stringify(
-          conn.tools.map((t) => ({
-            name: t.name,
-            description: t.description ?? '',
-            inputSchema: t.inputSchema
-          }))
-        )
-      )
-
-      log.info(`connected: ${server.name} (${conn.tools.length} tools)`)
-    } catch (err: unknown) {
-      conn.status = 'error'
-      conn.error = err instanceof Error ? err.message : String(err)
-      log.error(`connect failed: ${server.name} ${conn.error}`)
-    }
-  }
-
-  /** 断开单个 MCP Server */
-  async disconnect(serverId: string): Promise<void> {
-    const conn = this.connections.get(serverId)
-    if (!conn) return
-
-    try {
-      await conn.transport?.close()
-      await conn.client?.close()
-    } catch (err: unknown) {
-      log.warn(`disconnect error: ${serverId} ${err instanceof Error ? err.message : String(err)}`)
-    }
-
-    this.connections.delete(serverId)
-    log.info(`disconnected: ${serverId}`)
-  }
-
-  /** 启动所有已启用的 MCP Server */
-  async connectAll(): Promise<void> {
-    const servers = mcpDao.findEnabled()
-    if (servers.length === 0) return
-
-    log.info(`connectAll: ${servers.length} server(s)`)
-    // 并行连接，单个失败不影响其他
-    await Promise.allSettled(servers.map((s) => this.connect(s.id)))
-  }
-
-  /** 关闭所有连接 */
-  async disconnectAll(): Promise<void> {
-    const ids = [...this.connections.keys()]
-    await Promise.allSettled(ids.map((id) => this.disconnect(id)))
-    log.info(`disconnectAll: ${ids.length} server(s) closed`)
-  }
-
-  // ─── 状态查询 ───
-
-  /** 获取连接状态 */
-  getStatus(serverId: string): McpServerStatus {
-    return this.connections.get(serverId)?.status ?? 'disconnected'
-  }
-
-  /** 获取错误信息 */
-  getError(serverId: string): string | undefined {
-    return this.connections.get(serverId)?.error
-  }
-
-  /** 获取某个 server 发现的原始工具列表 */
-  getServerTools(serverId: string): McpDiscoveredTool[] {
-    return this.connections.get(serverId)?.tools ?? []
-  }
-
-  /** 获取某个 server 的工具信息（用于 IPC 返回给前端）
-   *  统一从 DB 读取工具列表（唯一数据源），附加运行时连接状态 */
-  getServerToolInfos(serverId: string): McpToolInfo[] {
-    const server = mcpDao.pick(serverId, ['id', 'name', 'cachedTools'])
-    if (!server) return []
-    const status = this.connections.get(serverId)?.status ?? 'disconnected'
-    let tools: McpDiscoveredTool[]
-    try {
-      tools = JSON.parse(server.cachedTools || '[]') as McpDiscoveredTool[]
-    } catch {
-      tools = []
-    }
-    return tools.map((t) => ({
-      name: `mcp__${server.name}__${t.name}`,
-      label: t.description || t.name,
-      description: t.description ?? '',
-      group: server.name,
-      serverId: server.id,
-      serverStatus: status
-    }))
-  }
-
-  // ─── 工具调用 ───
-
-  /** 调用 MCP 工具（原始调用） */
-  async callTool(
-    serverId: string,
-    toolName: string,
-    args: Record<string, unknown>
-  ): Promise<{ content: unknown[]; isError?: boolean }> {
-    const conn = this.connections.get(serverId)
-    if (!conn || conn.status !== 'connected') {
-      throw new Error(`MCP server ${serverId} is not connected`)
-    }
-    // SDK 默认 60s 对慢工具（browser/lighthouse/大文件解析等）太短；
-    // 抬到 5 分钟，并在收到 progress 通知时刷新计时，以总上限 10 分钟兜底。
-    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, {
-      timeout: 5 * 60 * 1000,
-      resetTimeoutOnProgress: true,
-      maxTotalTimeout: 10 * 60 * 1000
-    })
-    const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
-    return { content: result.content as unknown[], isError }
-  }
-
-  // ─── 桥接层：MCP → AgentTool ───
-
-  /** 将单个 MCP 工具转为 AgentTool；
-   *  输出长度的截断/落盘由 wrapToolOutput 在构建工具时统一处理 */
-  private mcpToolToAgentTool(
-    serverId: string,
-    serverName: string,
-    mcpTool: McpDiscoveredTool
-  ): AgentTool<TSchema, McpToolDetails> {
-    return {
-      name: `mcp__${serverName}__${mcpTool.name}`,
-      label: mcpTool.description || mcpTool.name,
-      description: mcpTool.description ?? '',
-      parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<McpToolDetails>> => {
-        try {
-          const result = await this.callTool(
-            serverId,
-            mcpTool.name,
-            params as Record<string, unknown>
-          )
-          const text = extractTextFromContent(result.content)
-          if (result.isError) {
-            return {
-              content: [{ type: 'text', text: `[MCP Error] ${text}` }],
-              details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
-            }
-          }
-          return {
-            content: [{ type: 'text', text }],
-            details: { type: 'mcp', server: serverName, tool: mcpTool.name }
-          }
-        } catch (err: unknown) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
-              }
-            ],
-            details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
-          }
-        }
-      }
-    }
-  }
-
-  /** 将单个 Server 的所有工具转为 AgentTool[] */
-  serverToAgentTools(serverId: string): AgentTool<TSchema, McpToolDetails>[] {
-    const conn = this.connections.get(serverId)
-    if (!conn || conn.status !== 'connected') return []
-    const server = mcpDao.pick(serverId, ['name'])
-    if (!server) return []
-    return conn.tools.map((t) => this.mcpToolToAgentTool(serverId, server.name, t))
-  }
-
-  /** 获取所有已连接 Server 的全部 AgentTool（flat 数组） */
-  getAllAgentTools(): AgentTool<TSchema, McpToolDetails>[] {
-    return [...this.connections.keys()].flatMap((id) => this.serverToAgentTools(id))
-  }
-
-  /** 获取所有已连接 Server 的名称列表（mcp:<serverName> 格式） */
-  getAllToolNames(): string[] {
-    const names: string[] = []
-    for (const [serverId, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      const server = mcpDao.pick(serverId, ['name'])
-      if (server) names.push(`mcp:${server.name}`)
-    }
-    return names
-  }
-
-  /** 判断某个 server 按名称是否已连接成功（供子智能体依赖预检查） */
-  isConnectedByName(serverName: string): boolean {
-    for (const [serverId, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      const server = mcpDao.pick(serverId, ['name'])
-      if (server?.name === serverName) return true
-    }
-    return false
-  }
-
-  /** 按服务器名获取所有 AgentTool（用于 agentToolBuilder 按服务器级别注入） */
-  getAgentToolsByServerName(serverName: string): AgentTool<TSchema, McpToolDetails>[] {
-    for (const [serverId, conn] of this.connections) {
-      if (conn.status !== 'connected') continue
-      const server = mcpDao.pick(serverId, ['name'])
-      if (server?.name === serverName) {
-        return this.serverToAgentTools(serverId)
-      }
-    }
+function parseJsonArray(json: string): string[] {
+  try {
+    const parsed = JSON.parse(json)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
     return []
   }
+}
 
-  /** 获取所有 Server 的信息（用于 tools:list IPC，每个 server 一条）
-   *  包含已断开/禁用 server（带 serverStatus 离线标识） */
-  getAllToolInfos(): McpToolInfo[] {
-    const allServers = mcpDao.findAll()
-    return allServers.map((s) => {
-      const status = this.connections.get(s.id)?.status ?? 'disconnected'
-      let toolCount = 0
-      try {
-        toolCount = JSON.parse(s.cachedTools || '[]').length
-      } catch {
-        /* ignore */
-      }
-      return {
-        name: `mcp:${s.name}`,
-        label: s.name,
-        description: `${toolCount} tool(s)`,
-        group: `mcp:${s.name}`,
-        serverId: s.id,
-        serverStatus: status,
-        isBuiltin: !!s.isBuiltin
-      }
-    })
-  }
-
-  // ─── 内部方法 ───
-
-  /** 根据 server 配置创建对应的 transport */
-  private createTransport(server: McpServer): Transport {
-    if (server.type === 'stdio') {
-      const args = this.parseJsonArray(server.args)
-      const env = this.parseJsonObject(server.env)
-      return new StdioClientTransport({
-        command: server.command,
-        args,
-        env: buildSpawnEnv(env) as Record<string, string>
-      })
-    } else if (server.type === 'http') {
-      const headers = this.parseJsonObject(server.headers)
-      // 优先使用 Streamable HTTP（MCP 最新规范），失败后回退 SSE
-      try {
-        return new StreamableHTTPClientTransport(new URL(server.url), {
-          requestInit: {
-            headers: headers as Record<string, string>
-          }
-        })
-      } catch {
-        return new SSEClientTransport(new URL(server.url), {
-          requestInit: {
-            headers: headers as Record<string, string>
-          }
-        })
-      }
-    }
-    throw new Error(`不支持的 MCP transport 类型: ${server.type}`)
-  }
-
-  /**
-   * 对内置 server 的 url / headers 做 {{ENV_VAR}} 模板替换
-   * - 非内置直接透传
-   * - 如果占位符引用的 env 值为空/缺失，返回 missingKey 提示调用方跳过连接
-   */
-  private resolveBuiltinTemplates(server: McpServer): {
-    resolved: McpServer
-    missingKey?: string
-  } {
-    if (!server.isBuiltin) return { resolved: server }
-    const env = this.parseJsonObject(server.env)
-    let missingKey: string | undefined
-    const substitute = (s: string): string =>
-      s.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
-        const val = env[key]
-        if (!val) {
-          if (!missingKey) missingKey = key
-          return ''
-        }
-        return val
-      })
-    const url = substitute(server.url)
-    const headers = substitute(server.headers)
-    if (missingKey) return { resolved: server, missingKey }
-    return { resolved: { ...server, url, headers } }
-  }
-
-  /** 安全解析 JSON 数组 */
-  private parseJsonArray(json: string): string[] {
-    try {
-      const parsed = JSON.parse(json)
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
-  }
-
-  /** 安全解析 JSON 对象 */
-  private parseJsonObject(json: string): Record<string, string> {
-    try {
-      const parsed = JSON.parse(json)
-      return typeof parsed === 'object' && parsed !== null ? parsed : {}
-    } catch {
-      return {}
-    }
+function parseJsonObject(json: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(json)
+    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+  } catch {
+    return {}
   }
 }
 
-export const mcpService = new McpService()
+/** 桌面 transport 工厂：stdio（本地进程）+ http（Streamable HTTP，失败回退 SSE） */
+function createTransport(server: McpServer): Transport {
+  if (server.type === 'stdio') {
+    return new StdioClientTransport({
+      command: server.command,
+      args: parseJsonArray(server.args),
+      env: buildSpawnEnv(parseJsonObject(server.env)) as Record<string, string>
+    })
+  } else if (server.type === 'http') {
+    const headers = parseJsonObject(server.headers) as Record<string, string>
+    try {
+      return new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } })
+    } catch {
+      return new SSEClientTransport(new URL(server.url), { requestInit: { headers } })
+    }
+  }
+  throw new Error(`不支持的 MCP transport 类型: ${server.type}`)
+}
+
+export const mcpService = new McpManager({
+  store: mcpDao,
+  createTransport,
+  logger: {
+    info: (m) => log.info(m),
+    warn: (m) => log.warn(m),
+    error: (m) => log.error(m)
+  }
+})

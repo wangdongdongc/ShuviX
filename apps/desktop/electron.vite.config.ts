@@ -5,6 +5,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
+const agentRuntime = resolve(__dirname, '../../packages/agent-runtime/src/index.ts')
+// 目录别名（非 index.ts 文件）：让裸包与子路径（/settings/*、/themes.css）都能解析
+const appShell = resolve(__dirname, '../../packages/app-shell/src')
 const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
 // 子路径别名须在裸包别名之前——Vite 前缀匹配，否则 '@shuvix/atomic-editor' 会吞掉 '/code-languages'
 const atomicEditorAlias = {
@@ -17,12 +20,14 @@ export default defineConfig({
   main: {
     resolve: {
       alias: {
-        '@shuvix/chat-protocol': chatProtocol
+        '@shuvix/chat-protocol': chatProtocol,
+        '@shuvix/agent-runtime': agentRuntime
       }
     },
     build: {
       // pi-ai/pi-agent-core 0.58+ 是纯 ESM（exports 无 require 条件），
-      // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED
+      // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED。
+      // @shuvix/agent-runtime 经别名解析为源码内联，无需在此列出。
       externalizeDeps: {
         exclude: ['@earendil-works/pi-ai', '@earendil-works/pi-agent-core']
       },
@@ -51,6 +56,7 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src'),
         '@shuvix/chat-protocol': chatProtocol,
         '@shuvix/chat-ui': chatUi,
+        '@shuvix/app-shell': appShell,
         ...atomicEditorAlias
       }
     },

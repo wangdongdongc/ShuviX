@@ -243,6 +243,7 @@
     "folders": "Folders",
     "name": "Project Name",
     "namePlaceholder": "Project name",
+    "path": "Path",
     "selectFolder": "Select project working folder",
     "changeFolder": "Change",
     "toolsReminder": "Tools determine what capabilities the AI can use. Enabling more tools increases token usage per conversation — keep only what you need.",

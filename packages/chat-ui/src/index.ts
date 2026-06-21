@@ -7,7 +7,7 @@
 
 // ── 注入口 ──
 export { getChatApi, setChatApi } from './api/chatApi'
-export type { ChatApi, ChatApiNamespace } from './api/chatApi'
+export type { ChatApi } from './api/chatApi'
 export { ChatHostProvider } from './host/ChatHost'
 export { useChatHost } from './host/chatHostContext'
 export type {

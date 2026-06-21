@@ -6,7 +6,8 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/cli/**/*",
-    "../../packages/chat-protocol/src/**/*"
+    "../../packages/chat-protocol/src/**/*",
+    "../../packages/agent-runtime/src/**/*"
   ],
   "compilerOptions": {
     "composite": true,
@@ -16,6 +17,9 @@
     "paths": {
       "@shuvix/chat-protocol/*": [
         "../../packages/chat-protocol/src/*"
+      ],
+      "@shuvix/agent-runtime": [
+        "../../packages/agent-runtime/src/index.ts"
       ]
     }
   }

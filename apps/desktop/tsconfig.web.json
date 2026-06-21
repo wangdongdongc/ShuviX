@@ -13,6 +13,7 @@
     "src/shared/**/*",
     "../../packages/chat-protocol/src/**/*",
     "../../packages/chat-ui/src/**/*",
+    "../../packages/app-shell/src/**/*",
     "../../packages/atomic-editor/src/**/*"
   ],
   "exclude": ["../../packages/atomic-editor/src/**/__tests__/**"],
@@ -32,6 +33,12 @@
       ],
       "@shuvix/chat-ui/*": [
         "../../packages/chat-ui/src/*"
+      ],
+      "@shuvix/app-shell": [
+        "../../packages/app-shell/src/index.ts"
+      ],
+      "@shuvix/app-shell/*": [
+        "../../packages/app-shell/src/*"
       ],
       "@shuvix/atomic-editor": [
         "../../packages/atomic-editor/src/index.ts"

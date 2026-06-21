@@ -7,7 +7,8 @@ export type {
   ToolFormItemRenderer as FormItemRenderer
 } from '@shuvix/chat-protocol/types/toolPresentation'
 
-// 消息相关类型从 preload 全局声明导入（ChatMessage 判别联合 + per-type 接口）
+// 消息相关类型从 @shuvix/chat-protocol 导入（ChatMessage 判别联合 + per-type 接口），
+// 不再依赖宿主的全局环境声明。
 export type {
   ChatMessage,
   UserTextMessage,
@@ -25,7 +26,8 @@ export type {
   ToolUseMeta,
   StepTextMeta,
   StepThinkingMeta
-}
+} from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 export type { ToolResultDetails }
 
 /** 分享模式类型（与后端 ShareMode 对齐） */

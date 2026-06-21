@@ -1,5 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { getModels } from '@earendil-works/pi-ai'
+import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
 import { createLogger } from '../logger'
@@ -229,18 +230,13 @@ export class ProviderService {
       throw new Error('请先配置 API Key')
     }
 
-    // 根据协议类型选择不同的远程拉取方式
+    // 远程拉取（OpenAI 兼容 / Google）—— 复用 @shuvix/chat-protocol 的共享 fetch 逻辑
     const protocol = provider.apiProtocol || 'openai-completions'
-    let fetchedModelIds: string[]
-    if (protocol === 'openai-completions' || protocol === 'openai-responses') {
-      const baseUrl = provider.baseUrl?.trim() || 'https://api.openai.com/v1'
-      fetchedModelIds = await this.fetchOpenAIModels(apiKey, baseUrl)
-    } else if (protocol === 'google-generative-ai') {
-      const baseUrl = provider.baseUrl?.trim() || 'https://generativelanguage.googleapis.com'
-      fetchedModelIds = await this.fetchGoogleModels(apiKey, baseUrl)
-    } else {
-      throw new Error('该协议类型暂不支持自动同步模型')
-    }
+    const fetchedModelIds = await fetchProviderModels({
+      apiProtocol: protocol,
+      apiKey,
+      baseUrl: provider.baseUrl
+    })
 
     const existingModelIds = new Set(
       providerDao.findModelsByProvider(providerId).map((m) => m.modelId)
@@ -263,66 +259,6 @@ export class ProviderService {
       total: fetchedModelIds.length,
       added
     }
-  }
-
-  /** 从 Google Generative AI 拉取模型列表 */
-  private async fetchGoogleModels(apiKey: string, baseUrl?: string): Promise<string[]> {
-    // 兼容带或不带版本路径的 baseUrl（如 .../v1beta 或裸域名）
-    let normalizedBaseUrl = (
-      baseUrl?.trim() || 'https://generativelanguage.googleapis.com'
-    ).replace(/\/+$/, '')
-    if (!normalizedBaseUrl.match(/\/v\d/)) {
-      normalizedBaseUrl += '/v1beta'
-    }
-    const url = `${normalizedBaseUrl}/models?key=${encodeURIComponent(apiKey)}&pageSize=1000`
-
-    const response = await fetch(url, { method: 'GET' })
-
-    if (!response.ok) {
-      const errText = await response.text()
-      throw new Error(`Google 模型拉取失败（${response.status}）：${errText}`)
-    }
-
-    const payload = (await response.json()) as { models?: Array<{ name?: string }> }
-    const modelIds = (payload.models || [])
-      .map((item) => item.name?.replace(/^models\//, '').trim())
-      .filter((id): id is string => Boolean(id))
-
-    if (modelIds.length === 0) {
-      throw new Error('Google 返回的模型列表为空')
-    }
-
-    return [...new Set(modelIds)].sort((a, b) => a.localeCompare(b))
-  }
-
-  /** 从 OpenAI 拉取模型列表 */
-  private async fetchOpenAIModels(apiKey: string, baseUrl?: string): Promise<string[]> {
-    const normalizedBaseUrl = (baseUrl?.trim() || 'https://api.openai.com/v1').replace(/\/+$/, '')
-    const url = `${normalizedBaseUrl}/models`
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`
-      }
-    })
-
-    if (!response.ok) {
-      const errText = await response.text()
-      throw new Error(`OpenAI 模型拉取失败（${response.status}）：${errText}`)
-    }
-
-    const payload = (await response.json()) as { data?: Array<{ id?: string }> }
-    const modelIds = (payload.data || [])
-      .map((item) => item.id?.trim())
-      .filter((id): id is string => Boolean(id))
-
-    if (modelIds.length === 0) {
-      throw new Error('OpenAI 返回的模型列表为空')
-    }
-
-    // 去重并按字典序稳定排序，保证 UI 顺序可预测
-    return [...new Set(modelIds)].sort((a, b) => a.localeCompare(b))
   }
 }
 

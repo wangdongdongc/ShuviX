@@ -48,3 +48,18 @@ export interface ProviderModelInfo {
 export interface AvailableModel extends ProviderModelInfo {
   providerName: string
 }
+
+/** 模型能力元数据（前端 IPC 视图，与 main/types 的 ModelCapabilities 同形） */
+export interface ModelCapabilities {
+  vision?: boolean
+  imageOutput?: boolean
+  functionCalling?: boolean
+  reasoning?: boolean
+  audioInput?: boolean
+  audioOutput?: boolean
+  pdfInput?: boolean
+  maxInputTokens?: number
+  maxOutputTokens?: number
+  inputCostPerToken?: number
+  outputCostPerToken?: number
+}

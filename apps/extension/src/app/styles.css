@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+/* 共享主题 token（11 套）+ 全局基础/组件样式（zen-input/滚动条/动画等），桌面/扩展共用 */
+@import '@shuvix/app-shell/themes.css';
+@import '@shuvix/app-shell/base.css';
+
+/* 内容扫描走扩展自己的 tailwind.config.cjs（绝对路径含 @shuvix/chat-ui 包源码）。 */
+@config '../../tailwind.config.cjs';
+
+/* Tailwind 语义色 token（chat-ui 组件用 bg-bg-primary / text-text-primary 等），由下方主题变量覆盖 */
+@theme {
+  --color-bg-primary: var(--theme-bg-primary);
+  --color-bg-secondary: var(--theme-bg-secondary);
+  --color-bg-tertiary: var(--theme-bg-tertiary);
+  --color-bg-hover: var(--theme-bg-hover);
+  --color-bg-active: var(--theme-bg-active);
+  --color-border-primary: var(--theme-border-primary);
+  --color-border-secondary: var(--theme-border-secondary);
+  --color-text-primary: var(--theme-text-primary);
+  --color-text-secondary: var(--theme-text-secondary);
+  --color-text-tertiary: var(--theme-text-tertiary);
+  --color-accent: var(--theme-accent);
+  --color-accent-hover: var(--theme-accent-hover);
+  --color-accent-muted: var(--theme-accent-muted);
+  --color-success: #22c55e;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+}
+/* 全局基础样式（height/reset/scrollbar/body bg）均来自共享 base.css */

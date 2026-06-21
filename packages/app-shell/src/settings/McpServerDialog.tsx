@@ -1,3 +1,7 @@
+/**
+ * McpServerDialog —— MCP Server 添加/编辑弹窗（共享）。
+ * `allowStdio=false`（扩展）时隐藏类型切换，强制 http（浏览器无法跑本地子进程）。
+ */
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, X } from 'lucide-react'
@@ -42,6 +46,8 @@ interface McpServerDialogProps {
   initial: McpServerDialogInitial | null
   onSave: (data: McpServerDialogData) => Promise<void>
   onClose: () => void
+  /** 是否允许 stdio（本地进程）类型；扩展传 false（仅 http） */
+  allowStdio?: boolean
 }
 
 /** 多行文本 → 数组（去空白行） */
@@ -76,11 +82,11 @@ function linesToHeaders(text: string): Record<string, string> {
   return obj
 }
 
-/** MCP Server 添加/编辑 弹窗 */
 export function McpServerDialog({
   initial,
   onSave,
-  onClose
+  onClose,
+  allowStdio = true
 }: McpServerDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
@@ -89,7 +95,9 @@ export function McpServerDialog({
   const isBuiltin = initial?.isBuiltin === true
 
   const [name, setName] = useState(initial?.name ?? '')
-  const [type, setType] = useState<'stdio' | 'http'>(initial?.type ?? 'stdio')
+  const [type, setType] = useState<'stdio' | 'http'>(
+    initial?.type ?? (allowStdio ? 'stdio' : 'http')
+  )
   const [command, setCommand] = useState(initial?.command ?? '')
   const [argsText, setArgsText] = useState(initial?.argsText ?? '')
   const [envPairs, setEnvPairs] = useState<Array<{ key: string; value: string }>>(
@@ -191,7 +199,8 @@ export function McpServerDialog({
                 />
               }
             />
-            {!isBuiltin && (
+            {/* 类型切换：仅在允许 stdio 时显示（扩展仅 http，隐藏） */}
+            {!isBuiltin && allowStdio && (
               <SettingsRow
                 title={t('settings.mcpType')}
                 control={
@@ -208,8 +217,8 @@ export function McpServerDialog({
             )}
           </SettingsSection>
 
-          {/* stdio 配置（仅自定义） */}
-          {!isBuiltin && type === 'stdio' && (
+          {/* stdio 配置（仅自定义 + 允许 stdio） */}
+          {!isBuiltin && allowStdio && type === 'stdio' && (
             <SettingsSection title={t('settings.mcpStdioGroup')}>
               <SettingsRow
                 title={t('settings.mcpCommand')}

@@ -16,6 +16,7 @@ import {
 } from '../utils/paths'
 import { skillService } from './skillService'
 import { buildAllowEntry, isPathAllowedUnified } from '../utils/toolUtils/allowList'
+import { assertSandbox, type SandboxPolicy } from '@shuvix/agent-runtime'
 import type { ReferenceDir, ProjectEnvVar } from '../types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
@@ -120,29 +121,18 @@ export async function assertSandboxRead(
   absolutePath: string,
   displayPath?: string
 ): Promise<void> {
-  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
-  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return
-  // 允许读取持久化的工具大结果文件
-  if (absolutePath.startsWith(getToolResultsBase() + sep)) return
-  // 允许读取全局 skills 目录（skill 工具加载后 AI 需读取伴随文件）
-  if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return
-  // 允许读取内置 skills 目录（随 app 发布的 SKILL.md 同目录引用文件）
-  if (absolutePath.startsWith(getBuiltinSkillsDir() + sep)) return
-  // 允许读取用户配置的外部 skill 目录
-  if (skillService.listExternalDirs().some((d) => absolutePath.startsWith(d.path + sep))) return
-
-  // 走会话级 autoApprove + allowList 检查
-  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
-  if (sess?.autoApprove) return
-  if (isPathAllowedUnified(sess?.allowList, 'read', absolutePath)) return
-
-  await requestPathApproval(ctx, {
-    toolCallId,
-    toolName,
-    mode: 'read',
+  // 放行短路 + 越界审批逻辑已下沉 @shuvix/agent-runtime（assertSandbox），桌面经 policy 注入平台细节
+  await assertSandbox(
+    makeDesktopSandboxPolicy(ctx, () => config),
+    'read',
     absolutePath,
-    displayPath
-  })
+    {
+      toolCallId,
+      toolName,
+      displayPath,
+      abortError: TOOL_ABORTED
+    }
+  )
 }
 
 /**
@@ -191,91 +181,72 @@ export async function assertSandboxWrite(
   absolutePath: string,
   displayPath?: string
 ): Promise<void> {
-  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return
-  if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return
-
-  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
-  if (sess?.autoApprove) return
-  if (isPathAllowedUnified(sess?.allowList, 'write', absolutePath)) return
-
   // 在只读参考目录内时,审批描述显式说明"批准会授予写权限"
   const isInsideReadonlyRef = isPathWithinReferenceDirs(absolutePath, config.referenceDirs)
-  await requestPathApproval(ctx, {
-    toolCallId,
-    toolName,
-    mode: 'write',
+  await assertSandbox(
+    makeDesktopSandboxPolicy(ctx, () => config),
+    'write',
     absolutePath,
-    displayPath,
-    description: isInsideReadonlyRef
-      ? 'This path is inside a read-only reference directory. Approving will grant write access.'
-      : undefined
-  })
+    {
+      toolCallId,
+      toolName,
+      displayPath,
+      abortError: TOOL_ABORTED,
+      description: isInsideReadonlyRef
+        ? 'This path is inside a read-only reference directory. Approving will grant write access.'
+        : undefined
+    }
+  )
 }
 
 /**
- * 路径越界 → 通过统一的 ApprovalInputRequest 机制等待用户批准。
- *
- * - 不通过 → throw(让 AI 收到 tool error 自行决定下一步)
- * - 通过 → return(单次放行)
- * - 通过 + extra.rememberPattern → 把 absolutePath 写入会话 allowList(read/write)
- * - **目录场景特殊**:read 模式下若 absolutePath 是目录,无论用户是否勾选"记住",
- *   都自动加入 allowList。这样后续访问该目录下的任何文件不再重复弹审批。
+ * 构造桌面 SandboxPolicy —— 把桌面平台细节（workspace/参考目录/skills/tool_results 放行、
+ * SQLite autoApprove+allowList、写 allowList、statSync 判目录、前端 requestUserInput）注入共享 assertSandbox。
+ * read 与 write 的"无审批通行"范围不同（见 isAllowedWithoutPrompt 的 mode 分支）。
+ * 目录自动入 allowList 的特殊处理由 ApprovalForm 在前端通过 pathIsDirectory + rememberPattern 表达。
  */
-async function requestPathApproval(
+export function makeDesktopSandboxPolicy(
   ctx: ToolContext,
-  params: {
-    toolCallId: string
-    toolName: string
-    mode: 'read' | 'write'
-    absolutePath: string
-    displayPath?: string
-    description?: string
-  }
-): Promise<void> {
-  if (!ctx.requestUserInput) {
-    // 无前端 → 直接拒绝
-    const p = params.displayPath ?? params.absolutePath
-    throw new Error(`Sandbox: access denied to path outside workspace: ${p}`)
-  }
-  // 探测路径类型 — 仅 read 关心目录(write 通常指向具体文件,目录 vs 文件不影响 UX)
-  let pathIsDirectory = false
-  if (params.mode === 'read') {
-    try {
-      pathIsDirectory =
-        existsSync(params.absolutePath) && statSync(params.absolutePath).isDirectory()
-    } catch {
-      /* 路径不存在或权限不足 — 当作非目录处理 */
+  getConfig: () => ProjectConfig
+): SandboxPolicy {
+  // 同一次 assert 内复用一次 SQLite 读取（autoApprove + allowList）
+  let settings: { autoApprove?: boolean; allowList?: string[] } | undefined
+  let settingsLoaded = false
+  const getSettings = (): { autoApprove?: boolean; allowList?: string[] } | undefined => {
+    if (!settingsLoaded) {
+      settings = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
+      settingsLoaded = true
     }
+    return settings
   }
-  // command 字段直接复用 allowList 条目格式 — 既是审批面板的展示文本,
-  // 也是用户勾选"允许并记住"时写入 allowList 的字面值
-  const command = buildAllowEntry(params.mode, params.absolutePath)
-  const response = await ctx.requestUserInput({
-    id: params.toolCallId,
-    kind: 'approval',
-    toolName: params.toolName,
-    command,
-    description: params.description,
-    pathIsDirectory,
-    createdAt: Date.now()
-  })
 
-  if (response.kind === 'cancel') {
-    throw new Error(TOOL_ABORTED)
-  }
-  if (response.kind === 'other') {
-    const p = params.displayPath ?? params.absolutePath
-    throw new Error(`User declined access to ${p} and provided feedback instead: ${response.text}`)
-  }
-  if (response.kind !== 'approval' || !response.approved) {
-    const p = params.displayPath ?? params.absolutePath
-    throw new Error(
-      (response.kind === 'approval' && response.reason) || `User denied access to ${p}`
-    )
-  }
-  // 通过审批 — 仅当用户在前端明确确认"允许并记住"(预览态 → Confirm)时才写入 allowList
-  if (response.extra?.rememberPattern) {
-    sessionService.addAllowListPatterns(ctx.sessionId, params.mode, [params.absolutePath])
+  return {
+    isAllowedWithoutPrompt(mode, p) {
+      const config = getConfig()
+      if (isPathWithinWorkspace(p, config.workingDirectory)) return true
+      if (mode === 'read') {
+        if (isPathWithinReferenceDirs(p, config.referenceDirs)) return true
+        if (p.startsWith(getToolResultsBase() + sep)) return true
+        if (p.startsWith(getDefaultSkillsDir() + sep)) return true
+        if (p.startsWith(getBuiltinSkillsDir() + sep)) return true
+        if (skillService.listExternalDirs().some((d) => p.startsWith(d.path + sep))) return true
+        return false
+      }
+      // write：仅工作目录 + 可读写参考目录
+      return isPathWithinReadwriteReferenceDirs(p, config.referenceDirs)
+    },
+    isAutoApprove: () => !!getSettings()?.autoApprove,
+    isInAllowList: (mode, p) => isPathAllowedUnified(getSettings()?.allowList, mode, p),
+    buildApprovalCommand: (mode, p) => buildAllowEntry(mode, p),
+    isDirectory: (p) => {
+      try {
+        return existsSync(p) && statSync(p).isDirectory()
+      } catch {
+        return false
+      }
+    },
+    persistAllow: (mode, p) => sessionService.addAllowListPatterns(ctx.sessionId, mode, [p]),
+    requestUserInput: ctx.requestUserInput
   }
 }
 

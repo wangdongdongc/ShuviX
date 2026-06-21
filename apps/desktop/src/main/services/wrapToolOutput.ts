@@ -107,9 +107,13 @@ export function wrapToolOutput<P extends TSchema, D>(
     const result = await originalExecute(toolCallId, effectiveParams, signal, onUpdate)
     let truncated = false
     let persisted = false
-    const newContent = result.content.map((block) => {
-      if (block.type !== 'text') return block
-      const proc = processToolOutput({
+    const newContent: typeof result.content = []
+    for (const block of result.content) {
+      if (block.type !== 'text') {
+        newContent.push(block)
+        continue
+      }
+      const proc = await processToolOutput({
         sessionId,
         toolCallId,
         fullText: block.text,
@@ -119,8 +123,8 @@ export function wrapToolOutput<P extends TSchema, D>(
       })
       if (proc.truncated) truncated = true
       if (proc.persisted) persisted = true
-      return { ...block, text: proc.text }
-    })
+      newContent.push({ ...block, text: proc.text })
+    }
     const newDetails = mergeTruncatedIntoDetails(result.details, truncated, persisted)
     const wrappedResult = { ...result, content: newContent, details: newDetails }
 

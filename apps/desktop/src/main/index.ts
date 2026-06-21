@@ -540,6 +540,7 @@ ipcMain.handle('app:set-browser-offset', (event, offset: number) => {
 // 单实例锁：阻止第二个进程启动，避免并发访问数据库
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
+  log.info('另一个 ShuviX 实例已在运行（单实例锁未获取），本进程退出')
   app.quit()
 } else {
   app.on('second-instance', () => {

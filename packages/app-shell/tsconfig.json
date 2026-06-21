@@ -1,0 +1,14 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "include": ["src/**/*"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@shuvix/chat-protocol/*": ["../chat-protocol/src/*"],
+      "@shuvix/chat-ui": ["../chat-ui/src/index.ts"],
+      "@shuvix/chat-ui/*": ["../chat-ui/src/*"]
+    }
+  }
+}

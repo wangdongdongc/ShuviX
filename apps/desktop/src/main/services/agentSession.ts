@@ -1,13 +1,8 @@
-import { Agent, type AgentEvent, type AgentMessage } from '@earendil-works/pi-agent-core'
-import {
-  type TextContent,
-  type ThinkingContent,
-  type ImageContent,
-  completeSimple
-} from '@earendil-works/pi-ai'
+import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
+import { type TextContent, completeSimple } from '@earendil-works/pi-ai'
+import { RuntimeSession } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
-import { sessionDao } from '../dao/sessionDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
@@ -15,21 +10,13 @@ import { sshManager } from './sshManager'
 import type {
   ModelCapabilities,
   ThinkingLevel,
-  Message,
-  MessageMetadata,
+  ChatMessage,
   ProjectSettings,
   ProjectPromptSection
 } from '../types'
 import type { SessionModelMetadata } from '../dao/types'
-import { t } from '../i18n'
-import {
-  forwardAgentEvent,
-  type SessionEventState,
-  type SessionEventHandlerContext
-} from './agentEventHandler'
-import { isAssistantMessage } from '../utils/messageGuards'
 import { chatFrontendRegistry } from '../frontend/core'
-import type { ChatEvent, RuntimeStatus } from '@shuvix/chat-protocol/events'
+import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ToolContext } from './toolContext'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { httpLogService } from './httpLogService'
@@ -40,6 +27,15 @@ import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { injectInstructionMessages } from './instruction'
 import { hookService } from './hooks'
 import { createLogger } from '../logger'
+import {
+  electronPersistence,
+  electronEventSink,
+  electronHttpLog,
+  electronToolResultTransform,
+  createShouldDeferToolDisplay,
+  runtimeLogger,
+  localize
+} from './agentRuntimeAdapters'
 
 const log = createLogger('AgentSession')
 
@@ -155,66 +151,40 @@ function buildSystemPrompt(
 }
 
 /**
- * AgentSession — 封装单个 session 的所有 Agent 状态和操作
- * 通过 AgentSession.create() 工厂方法创建
+ * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
+ *
+ * 核心循环（事件转发、流式落库、用户输入挂起、abort/steer/applyModel）委托给
+ * @shuvix/agent-runtime 的 RuntimeSession；本类保留桌面特有逻辑：systemPrompt 组装、
+ * 工具集（buildTools）、hooks、指令注入、generateTitle、ssh / fileTime 清理。
+ *
+ * 通过 AgentSession.create() 工厂方法创建。
  */
 export class AgentSession {
   readonly sessionId: string
 
-  // 核心
-  private agent: Agent
+  private runtime: RuntimeSession
   private toolContext: ToolContext
   private subAgentCtx: SubAgentBuildContext | undefined
   private projectPath?: string
   private workingDirectory: string
 
-  /**
-   * 统一的"等待用户输入"挂起表(keyed by request.id == toolCallId)
-   * - 命令审批 / 选择题 / SSH 凭证全部走这一张表
-   * - 永不超时,只能由 respondToInput / abort 触发 resolve
-   */
-  private pendingInputs = new Map<
-    string,
-    { request: InputRequest; resolve: (response: InputResponse) => void }
-  >()
-
-  // 事件状态（可变引用，传给 event handler）
-  private eventState: SessionEventState = {
-    streamBuffer: { content: '', thinking: '', images: [] },
-    turnCounter: 0,
-    pendingLogIds: [],
-    preEmittedToolCalls: new Set(),
-    toolUseMessageIds: new Map(),
-    generatingToolCall: null
-  }
-
-  // 缓存的事件处理器上下文
-  private eventCtx: SessionEventHandlerContext | null = null
-
-  // SessionStart hook 是否已触发（首次 prompt 时懒触发，避免改 create() 的同步签名）
+  // SessionStart hook 是否已触发（首次 prompt 时懒触发）
   private sessionStartHookFired = false
 
   private constructor(
     sessionId: string,
-    agent: Agent,
+    runtime: RuntimeSession,
     toolContext: ToolContext,
     subAgentCtx: SubAgentBuildContext | undefined,
     workingDirectory: string,
     projectPath?: string
   ) {
     this.sessionId = sessionId
-    this.agent = agent
+    this.runtime = runtime
     this.toolContext = toolContext
     this.subAgentCtx = subAgentCtx
     this.projectPath = projectPath
     this.workingDirectory = workingDirectory
-
-    // 订阅 Agent 事件，转发到 Renderer。
-    // 0.65+ 起 listener 签名变为 (event, signal) => Promise<void> | void；
-    // forwardEvent 内部全部为同步 DB 写入与广播，保持 sync 即可，agent_end 不会被阻塞 idle。
-    this.agent.subscribe((event: AgentEvent) => {
-      this.forwardEvent(event)
-    })
   }
 
   /** 工厂方法：构建完整的 AgentSession（含 Agent、工具、历史消息恢复） */
@@ -232,12 +202,12 @@ export class AgentSession {
 
     // 前向引用：所有回调在 agent 执行时调用，构造期不会触发
     // eslint-disable-next-line prefer-const
-    let session: AgentSession
+    let runtime: RuntimeSession
 
-    // 构建 ToolContext（回调通过闭包引用 session）
+    // 构建 ToolContext（回调通过闭包引用 runtime）
     const toolContext: ToolContext = {
       sessionId,
-      requestUserInput: (request) => session.requestUserInput(request),
+      requestUserInput: (request) => runtime.requestUserInput(request),
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
@@ -246,7 +216,7 @@ export class AgentSession {
     })
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
-    // 构建子智能体上下文（使 explore 等子智能体工具可用）
+    // 子智能体上下文（使 explore 等子智能体工具可用）
     const subAgentCtx: SubAgentBuildContext = {
       modelConfig: { provider, model, capabilities }
     }
@@ -264,21 +234,32 @@ export class AgentSession {
       },
       getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined,
       onPayload: (payload, requestModel) => {
-        // 用本次请求真正使用的模型对象记录日志，而非初始化时的闭包值
-        // （会话中途 setModel 切换后，闭包里的 provider/model 已过期）
+        // 用本次请求真正使用的模型对象记录日志（中途 setModel 后闭包里的 provider/model 已过期）
         const logId = httpLogService.logRequest({
           sessionId,
           provider: requestModel.provider,
           model: requestModel.id,
           payload
         })
-        session.addPendingLogId(logId)
+        runtime.addPendingLogId(logId)
       }
     })
 
-    session = new AgentSession(
+    runtime = new RuntimeSession({
       sessionId,
       agent,
+      eventSink: electronEventSink,
+      persistence: electronPersistence,
+      shouldDeferToolDisplay: createShouldDeferToolDisplay(sessionId),
+      transformToolResult: electronToolResultTransform,
+      httpLog: electronHttpLog,
+      logger: runtimeLogger,
+      localize
+    })
+
+    const session = new AgentSession(
+      sessionId,
+      runtime,
       toolContext,
       subAgentCtx,
       workingDirectory,
@@ -298,7 +279,7 @@ export class AgentSession {
 
   // ─── Public API ──────────────────────────────────────
 
-  /** 向 Agent 发送消息（支持附带图片） */
+  /** 向 Agent 发送消息（支持附带图片）。桌面特有：SessionStart / UserPromptSubmit hooks。 */
   async prompt(
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
@@ -334,11 +315,7 @@ export class AgentSession {
       const denied = upsOutputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
       if (denied) {
         const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
-        chatFrontendRegistry.broadcast({
-          type: 'error',
-          sessionId: this.sessionId,
-          error: reason
-        })
+        this.runtime.broadcast({ type: 'error', sessionId: this.sessionId, error: reason })
         return
       }
       this.applyAdditionalContext(upsOutputs, 'UserPromptSubmit')
@@ -346,33 +323,20 @@ export class AgentSession {
       log.warn(`UserPromptSubmit hook error: ${err instanceof Error ? err.message : String(err)}`)
     }
 
-    try {
-      if (images && images.length > 0) {
-        await this.agent.prompt(text, images)
-      } else {
-        await this.agent.prompt(text)
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      chatFrontendRegistry.broadcast({ type: 'error', sessionId: this.sessionId, error: message })
-    }
+    await this.runtime.prompt(text, images)
   }
 
   /**
    * 把 hook 返回的 additionalContext 注入 agent 上下文。
-   *
-   * 走 user-role 消息并裹 <system-reminder> 标签 —— pi-ai 的 Message 类型
-   * 不含 system role（系统提示由 agent.state.systemPrompt 单独承载），
-   * 模型把 <system-reminder> 文本识别为带外提示，不当作用户输入。
-   * 不写库：hook 注入是会话级临时上下文，不进聊天历史。
-   *
-   * 超过 10000 字会截断（与 types.ts JSDoc 一致）。
+   * 走 user-role 消息并裹 <system-reminder> 标签；不写库（会话级临时上下文）。
+   * 超过 10000 字会截断。
    */
   private applyAdditionalContext(
     outputs: ReadonlyArray<{ additionalContext?: string }>,
     eventLabel: string
   ): void {
     const MAX_LEN = 10000
+    const messages = this.runtime.getAgent().state.messages
     for (const out of outputs) {
       let ctx = out.additionalContext
       if (typeof ctx !== 'string' || !ctx) continue
@@ -381,7 +345,7 @@ export class AgentSession {
         ctx = ctx.slice(0, MAX_LEN)
       }
       const wrapped = `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`
-      this.agent.state.messages.push({
+      messages.push({
         role: 'user',
         content: [{ type: 'text', text: wrapped }],
         timestamp: Date.now()
@@ -390,99 +354,38 @@ export class AgentSession {
   }
 
   /**
-   * 首次 prompt 前的指令懒注入。
-   * 由调用方（DefaultChatGateway）在写入用户消息**之前**调用，
+   * 首次 prompt 前的指令懒注入。由调用方在写入用户消息**之前**调用，
    * 确保指令消息在持久化顺序和广播顺序上都早于用户消息。
    */
   ensureInstructionsInjected(): void {
-    if (this.agent.state.messages.length > 0) return
+    const agent = this.runtime.getAgent()
+    if (agent.state.messages.length > 0) return
     const inserted = injectInstructionMessages(this.sessionId, this.workingDirectory)
     if (inserted.length === 0) return
     // 同步进 agent 内存上下文
     for (const msg of dbMessagesToAgentMessages(inserted)) {
-      this.agent.state.messages.push(msg)
+      agent.state.messages.push(msg)
     }
     // 通知前端追加这些消息（UI 通过 InstructionBubble 渲染）
-    chatFrontendRegistry.broadcast({
+    this.runtime.broadcast({
       type: 'instructions_injected',
       sessionId: this.sessionId,
       messages: inserted.map((m) => JSON.stringify(m))
     })
   }
 
-  /** 向运行中的 Agent 注入 steer 消息（同步入队，下次 LLM 调用前生效） */
+  /** 向运行中的 Agent 注入 steer 消息 */
   steer(text: string): void {
-    log.info(`steer session=${this.sessionId} text=${text.slice(0, 50)}...`)
-    // _isSteer 标记用于 agentEventHandler 区分 steer 消息与初始 prompt
-    // pi-agent-core 会透传完整对象到 message_start/message_end 事件
-    const msg = {
-      role: 'user' as const,
-      content: [{ type: 'text' as const, text }],
-      timestamp: Date.now(),
-      _isSteer: true
-    }
-    this.agent.steer(msg as Parameters<typeof this.agent.steer>[0])
+    this.runtime.steer(text)
   }
 
-  /** 中止生成；若已有部分内容则持久化并返回
-   *
-   *  注：不 cascade 到子智能体。子智能体视为独立的临时会话，
-   *  父会话的中止/销毁不影响已启动的子 agent —— 只有用户在右侧
-   *  Sub-agent 面板上手动关闭，或 IPC subSession:destroy 才会销毁它们。
-   */
-  abort(): Message | null {
-    log.info(`中止 session=${this.sessionId}`)
+  /** 中止生成；桌面特有：触发 Stop hook */
+  abort(): ChatMessage | null {
     this.fireStopHook('aborted')
-    this.agent.abort()
-    // 只取消本 session 的 pending 项 — 全部 resolve 为 cancel(reason=aborted)
-    for (const [id, pending] of this.pendingInputs) {
-      pending.resolve({ kind: 'cancel', reason: 'aborted' })
-      chatFrontendRegistry.broadcast({
-        type: 'input_request_resolved',
-        sessionId: this.sessionId,
-        requestId: id
-      })
-    }
-    this.pendingInputs.clear()
-    // 标记所有未完成的工具调用为已中止
-    if (this.eventState.toolUseMessageIds.size > 0) {
-      const abortedContent = t('agent.toolAborted')
-      for (const [toolCallId, msgId] of this.eventState.toolUseMessageIds) {
-        messageService.completeToolUse({
-          messageId: msgId,
-          content: abortedContent,
-          isError: true
-        })
-        chatFrontendRegistry.broadcast({
-          type: 'tool_end',
-          sessionId: this.sessionId,
-          toolCallId,
-          toolName: '',
-          result: abortedContent,
-          isError: true,
-          messageId: msgId
-        })
-      }
-      this.eventState.toolUseMessageIds.clear()
-      this.eventState.streamBuffer = { content: '', thinking: '', images: [] }
-      return null
-    }
-    // 中止时将 thinking 独立落库为 step_thinking
-    const buf = this.eventState.streamBuffer
-    if (buf.thinking) {
-      const session = sessionDao.pick(this.sessionId, ['model'])
-      messageService.addStepThinking({
-        sessionId: this.sessionId,
-        content: buf.thinking,
-        turnIndex: this.eventState.turnCounter,
-        model: session?.model || ''
-      })
-      buf.thinking = ''
-    }
-    return this.persistStreamBuffer()
+    return this.runtime.abort()
   }
 
-  /** 切换模型 */
+  /** 切换模型（桌面：查 provider 模型能力 → resolveModel → applyModel） */
   setModel(provider: string, model: string, baseUrl?: string, apiProtocol?: string): void {
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
@@ -493,48 +396,38 @@ export class AgentSession {
       baseUrl,
       apiProtocol
     })
-    this.agent.state.model = resolvedModel
-    this.agent.state.thinkingLevel = caps.reasoning ? 'medium' : 'off'
-    log.info(
-      `切换模型 session=${this.sessionId} provider=${provider} model=${model} reasoning=${caps.reasoning ? 'medium' : 'off'}`
-    )
+    this.runtime.applyModel(resolvedModel, caps.reasoning ? 'medium' : 'off')
   }
 
   /** 设置思考深度 */
   setThinkingLevel(level: ThinkingLevel): void {
-    this.agent.state.thinkingLevel = level
-    log.info(`setThinkingLevel=${level}`)
+    this.runtime.setThinkingLevel(level)
   }
 
-  /** 动态更新启用工具集 */
+  /** 动态更新启用工具集（桌面：重新 buildTools → applyTools） */
   setEnabledTools(enabledTools: string[]): void {
     const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx, this.projectPath)
-    this.agent.state.tools = tools
+    this.runtime.applyTools(tools)
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
   /** 获取消息列表 */
   getMessages(): AgentMessage[] {
-    return this.agent.state.messages
+    return this.runtime.getMessages()
   }
 
   /** 清除消息历史 */
   clearMessages(): void {
-    this.agent.state.messages = []
+    this.runtime.clearMessages()
   }
 
   /** 获取底层 Agent 实例（用于外部恢复历史消息等） */
   getAgent(): Agent {
-    return this.agent
+    return this.runtime.getAgent()
   }
 
   /**
-   * AI 生成简短标题。
-   *
-   * - 使用 settings 中用户配置的 titleProvider / titleModel(而非当前会话模型),
-   *   未配置时返回 null(不生成)
-   * - Prompt 参考 Claude Code:JSON 输出 + good/bad 示例 + 语言自适应
-   * - conversationText 是全部消息的最后 1000 字符(由调用方拼接传入)
+   * AI 生成简短标题（使用 settings 中配置的 titleProvider / titleModel）。
    */
   async generateTitle(conversationText: string): Promise<string | null> {
     const titleProvider = settingsDao.findByKey('general.titleProvider')
@@ -581,13 +474,6 @@ export class AgentSession {
 
       if (!raw) return null
 
-      // 三层 fallback 提取 title:
-      // 1. 直接 JSON.parse(strip code fence 后)
-      // 2. 正则匹配 {"title":"..."} 片段(应对模型在 JSON 前后加了多余文字)
-      // 3. 直接用原始文本(去掉引号/句号等杂物)
-      //
-      // Claude Code 通过 API output_config.json_schema 强制 JSON 输出,
-      // pi-ai 不支持该参数,所以必须在应用层清洗
       const stripped = raw
         .replace(/^```(?:json)?\s*\n?/i, '')
         .replace(/\n?```\s*$/, '')
@@ -609,7 +495,7 @@ export class AgentSession {
         return match[1].trim().slice(0, 30)
       }
 
-      // L3: 最后兜底 — 去掉引号/句号等杂物,取前 30 字
+      // L3: 兜底 — 去掉引号/句号等杂物
       const fallback = stripped.replace(/^["'`]+|["'`.,。！!]+$/g, '').trim()
       return fallback.slice(0, 30) || null
     } catch (err) {
@@ -618,48 +504,14 @@ export class AgentSession {
     return null
   }
 
-  // ─── 用户输入挂起 / 响应 ─────────────────────────────
+  // ─── 用户输入挂起 / 响应（委托 runtime） ────────────────
 
-  /**
-   * 统一的"请求用户输入"入口(ToolContext.requestUserInput 的实现)。
-   * 永不超时;只能由 respondToInput 或 abort 触发 resolve。
-   *
-   * 若没有任何前端声明 'userInput' 能力(罕见,如纯自动化场景),
-   * 立即返回 cancel,工具据此报错或降级。
-   */
   requestUserInput(request: InputRequest): Promise<InputResponse> {
-    if (!chatFrontendRegistry.hasCapability(this.sessionId, 'userInput')) {
-      // 没有任何前端能展示输入面板 → 复用 abort 路径,工具按"中断"处理
-      return Promise.resolve({
-        kind: 'cancel',
-        reason: 'aborted'
-      })
-    }
-    return new Promise<InputResponse>((resolve) => {
-      this.pendingInputs.set(request.id, { request, resolve })
-      chatFrontendRegistry.broadcast({
-        type: 'input_request',
-        sessionId: this.sessionId,
-        request
-      })
-    })
+    return this.runtime.requestUserInput(request)
   }
 
-  /**
-   * 响应一个挂起的用户输入请求。
-   * @returns 是否命中本 session 的 pending 项
-   */
   respondToInput(requestId: string, response: InputResponse): boolean {
-    const pending = this.pendingInputs.get(requestId)
-    if (!pending) return false
-    this.pendingInputs.delete(requestId)
-    pending.resolve(response)
-    chatFrontendRegistry.broadcast({
-      type: 'input_request_resolved',
-      sessionId: this.sessionId,
-      requestId
-    })
-    return true
+    return this.runtime.respondToInput(requestId, response)
   }
 
   // ─── 生命周期 ──────────────────────────────────────
@@ -667,16 +519,16 @@ export class AgentSession {
   /** 使 Agent 失效（回退时使用，下次 init 会重建） */
   invalidate(): void {
     this.fireStopHook('invalidated')
-    this.agent.abort()
+    this.runtime.getAgent().abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体（由用户 / IPC 控制）。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
   destroy(): void {
     this.fireStopHook('destroyed')
-    this.agent.abort()
+    this.runtime.getAgent().abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
@@ -694,102 +546,5 @@ export class AgentSession {
       .catch((err) =>
         log.warn(`Stop hook error: ${err instanceof Error ? err.message : String(err)}`)
       )
-  }
-
-  // ─── 事件处理内部 ──────────────────────────────────
-
-  /** 追加 pending log ID（供 streamFn 的 onPayload 回调使用） */
-  addPendingLogId(logId: string): void {
-    this.eventState.pendingLogIds.push(logId)
-  }
-
-  /** 构建 per-session 事件处理器上下文 */
-  private getEventContext(): SessionEventHandlerContext {
-    if (!this.eventCtx) {
-      this.eventCtx = {
-        sessionId: this.sessionId,
-        state: this.eventState,
-        broadcastEvent: (e) => chatFrontendRegistry.broadcast(e),
-        persistStreamBuffer: (meta) => this.persistStreamBuffer(meta),
-        emitRuntimeEvent: (runtimeId, status) => this.emitRuntimeEvent(runtimeId, status)
-      }
-    }
-    return this.eventCtx
-  }
-
-  /** 转发 Agent 事件到 Renderer */
-  private forwardEvent(event: AgentEvent): void {
-    forwardAgentEvent(this.getEventContext(), event)
-  }
-
-  /** 将流式缓冲区内容持久化为 assistant 消息 */
-  private persistStreamBuffer(extraMeta?: MessageMetadata): Message | null {
-    const buf = this.eventState.streamBuffer
-    if (!buf.content && !buf.images?.length) {
-      this.eventState.streamBuffer = { content: '', thinking: '', images: [] }
-      return null
-    }
-
-    const meta: MessageMetadata = { ...extraMeta }
-    if (buf.images?.length) {
-      meta.images = buf.images.map((img) => ({
-        data: `data:${img.mimeType};base64,${img.data}`,
-        mimeType: img.mimeType,
-        ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
-      }))
-    }
-    const session = sessionDao.pick(this.sessionId, ['model'])
-
-    const msg = messageService.addAssistantText({
-      sessionId: this.sessionId,
-      content: buf.content,
-      metadata: Object.keys(meta).length > 0 ? meta : undefined,
-      model: session?.model || ''
-    })
-
-    // 同步到 Agent 内存上下文（含图片）
-    this.appendAssistantToAgent(buf.content, buf.thinking, buf.images)
-    this.eventState.streamBuffer = { content: '', thinking: '', images: [] }
-    return msg
-  }
-
-  /** 将 AI 生成的图片同步到 Agent 内存上下文中的 assistant 消息 */
-  private appendAssistantToAgent(
-    _content: string,
-    _thinking?: string,
-    images?: Array<{ data: string; mimeType: string; thoughtSignature?: string }>
-  ): void {
-    if (!images?.length) return
-
-    const messages = this.agent.state.messages
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i]
-      if (isAssistantMessage(msg)) {
-        const contentArr = msg.content as unknown as (
-          | TextContent
-          | ThinkingContent
-          | ImageContent
-        )[]
-        for (const img of images) {
-          contentArr.push({
-            type: 'image',
-            data: img.data,
-            mimeType: img.mimeType,
-            ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
-          } as ImageContent)
-        }
-        break
-      }
-    }
-  }
-
-  /** 通知前端运行时资源状态变更（不持久化为消息） */
-  emitRuntimeEvent(runtimeId: string, status: RuntimeStatus | null): void {
-    chatFrontendRegistry.broadcast({
-      type: 'runtime_event',
-      sessionId: this.sessionId,
-      runtimeId,
-      status
-    })
   }
 }

@@ -1,0 +1,375 @@
+/**
+ * 浏览器 ChatApi 适配器 —— chat-ui 的后端契约在 Side Panel 进程内的本地实现。
+ *
+ * agent / session / message / settings / provider 为真实实现（IndexedDB + chrome.storage +
+ * 进程内 RuntimeSession）；其余命名空间为 noop（扩展形态无关）。仿 webui/api.ts 结构，但
+ * 同进程直接 await，无 HTTP/WS。
+ */
+import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { messageStore } from '../storage/messageStore'
+import { sessionStore } from '../storage/sessionStore'
+import { settingsStore } from '../storage/settingsStore'
+import { mcpStore } from '../storage/mcpStore'
+import { projectStore } from '../storage/projectStore'
+import { mcpManager } from './mcpRuntime'
+import { eventBus } from './eventBus'
+import {
+  ensureRuntimeSession,
+  getRuntimeSession,
+  removeRuntimeSession,
+  setSessionModel
+} from './agentRuntime'
+
+const ok = { success: true as const }
+
+/** 活跃模型选择（用于 session.create 的默认 provider/model） */
+async function activeSelection(): Promise<{ provider: string; model: string }> {
+  const provider = (await settingsStore.get('activeProvider')) || 'anthropic'
+  const model = (await settingsStore.get('activeModel')) || 'claude-opus-4-8'
+  return { provider, model }
+}
+
+export const chatApiAdapter: ChatApi = {
+  app: {
+    platform: 'web',
+    openSettings: async () => ok,
+    openExternal: async (url) => {
+      window.open(url, '_blank', 'noopener')
+      return ok
+    },
+    openFolder: async () => ok,
+    adjustWindowWidth: async () => {},
+    setBrowserOffset: async () => {},
+    windowReady: () => {},
+    onSettingsChanged: () => () => {},
+    onNewChat: () => () => {},
+    onNewProject: () => () => {}
+  },
+
+  agent: {
+    init: async ({ sessionId }) => {
+      const { created, provider, model, caps } = await ensureRuntimeSession(sessionId)
+      return {
+        success: true,
+        created,
+        provider,
+        model,
+        capabilities: caps,
+        modelMetadata: {},
+        workingDirectory: '',
+        enabledTools: ['ask']
+      }
+    },
+    prompt: async ({ sessionId, text, images }) => {
+      await ensureRuntimeSession(sessionId)
+      const rt = getRuntimeSession(sessionId)
+      if (!rt) {
+        eventBus.emit({ type: 'error', sessionId, error: 'Agent 未初始化' })
+        return { success: false }
+      }
+      // 后端统一持久化用户消息并广播（chat-ui 通过 user_message 事件落到 store）
+      const userMsg = messageStore.add({ sessionId, role: 'user', type: 'text', content: text })
+      eventBus.emit({ type: 'user_message', sessionId, message: JSON.stringify(userMsg) })
+      await rt.prompt(text, images)
+      return ok
+    },
+    steer: async ({ sessionId, text }) => {
+      getRuntimeSession(sessionId)?.steer(text)
+      return ok
+    },
+    abort: async (sessionId) => {
+      const saved = getRuntimeSession(sessionId)?.abort() ?? null
+      return { success: true, savedMessage: saved ?? undefined }
+    },
+    setModel: async ({ sessionId, provider, model }) => {
+      await setSessionModel(sessionId, provider, model)
+      return ok
+    },
+    setThinkingLevel: async ({ sessionId, level }) => {
+      getRuntimeSession(sessionId)?.setThinkingLevel(level)
+      return ok
+    },
+    respondToInput: async ({ sessionId, requestId, response }) => {
+      getRuntimeSession(sessionId)?.respondToInput(requestId, response)
+      return ok
+    },
+    setEnabledTools: async () => ok, // 扩展工具集固定（ask + 已连接 MCP 工具）
+    onEvent: (callback) => eventBus.subscribe(callback)
+  },
+
+  provider: {
+    listAll: async () => settingsStore.listProviders(),
+    listEnabled: async () => settingsStore.listProviders().filter((p) => p.isEnabled),
+    getById: async (id) => settingsStore.listProviders().find((p) => p.id === id),
+    updateConfig: async ({ id, name, apiKey, baseUrl, apiProtocol, metadata }) => {
+      await settingsStore.updateConfig(id, { name, apiKey, baseUrl, apiProtocol, metadata })
+      return ok
+    },
+    toggleEnabled: async ({ id, isEnabled }) => {
+      await settingsStore.toggleEnabled(id, isEnabled)
+      return ok
+    },
+    listModels: async (providerId) => settingsStore.listModelsFor(providerId),
+    listAvailableModels: async () => settingsStore.listAvailableModels(),
+    toggleModelEnabled: async ({ id, isEnabled }) => {
+      await settingsStore.toggleModelEnabled(id, isEnabled)
+      return ok
+    },
+    syncModels: async ({ providerId }) => settingsStore.syncModels(providerId),
+    add: async (params) => {
+      const id = await settingsStore.addCustomProvider(params)
+      return settingsStore.getProviderWithKey(id)!
+    },
+    delete: async ({ id }) => {
+      await settingsStore.deleteProvider(id)
+      return ok
+    },
+    addModel: async ({ providerId, modelId }) => {
+      await settingsStore.addModel(providerId, modelId)
+      return ok
+    },
+    deleteModel: async (id) => {
+      await settingsStore.deleteModel(id)
+      return ok
+    },
+    updateModelCapabilities: async ({ id, capabilities }) => {
+      await settingsStore.updateModelCapabilities(id, capabilities as Record<string, unknown>)
+      return ok
+    }
+  },
+
+  // 文件夹项目（与桌面同一概念，存 chrome IndexedDB 目录句柄）。创建经侧栏「打开文件夹」
+  // 直接走 projectStore.createFromHandle（需句柄，无法走标准 {path} 入参）。
+  project: {
+    list: async () => projectStore.list(),
+    listArchived: async () => projectStore.listArchived(),
+    getById: async (id) => projectStore.getById(id),
+    create: async () => {
+      throw new Error('扩展项目须经「打开文件夹」创建')
+    },
+    update: async ({ id, name, archived }) => {
+      if (name !== undefined) await projectStore.rename(id, name)
+      if (archived !== undefined) await projectStore.setArchived(id, archived)
+      return ok
+    },
+    delete: async ({ id }) => {
+      // 级联删除该项目下的会话
+      for (const s of await sessionStore.list()) {
+        if (s.projectId === id) {
+          removeRuntimeSession(s.id)
+          await sessionStore.delete(s.id)
+        }
+      }
+      await projectStore.delete(id)
+      return ok
+    },
+    getKnownFields: async () => ({}),
+    onChanged: (cb) => projectStore.onChanged(cb)
+  },
+
+  session: {
+    list: async () => sessionStore.list(),
+    create: async (projectId) => {
+      const sel = await activeSelection()
+      return sessionStore.create({ ...sel, projectId: projectId ?? null })
+    },
+    updateTitle: async ({ id, title }) => {
+      await sessionStore.updateTitle(id, title)
+      return ok
+    },
+    updateModelConfig: async ({ id, provider, model }) => {
+      await sessionStore.updateModelConfig(id, provider, model)
+      return ok
+    },
+    updateProject: async () => ok,
+    updateThinkingLevel: async () => ok,
+    updateEnabledTools: async () => ok,
+    updateAutoApprove: async () => ok,
+    previewAllowPatterns: async () => [],
+    addAllowListPatterns: async () => ok,
+    removeAllowListEntry: async () => ok,
+    // 扩展无标题模型：用首条用户消息片段作标题（启发式），并落库 IndexedDB
+    generateTitle: async ({ sessionId, conversationText }) => {
+      const firstUser = conversationText.split('\n').find((l) => l.startsWith('User: '))
+      const raw = (firstUser ? firstUser.slice(6) : conversationText).trim().replace(/\s+/g, ' ')
+      const title = raw.slice(0, 24) || null
+      if (title) await sessionStore.updateTitle(sessionId, title)
+      return { title }
+    },
+    delete: async (id) => {
+      removeRuntimeSession(id)
+      await sessionStore.delete(id)
+      return ok
+    },
+    getById: async (id) => sessionStore.getById(id),
+    scanInstructionFiles: async () => [],
+    updateInstructionFiles: async () => ok,
+    onConfigChanged: () => () => {}
+  },
+
+  message: {
+    list: async (sessionId) => messageStore.list(sessionId),
+    add: async (p) =>
+      messageStore.add({
+        sessionId: p.sessionId,
+        role: p.role,
+        type: p.type,
+        content: p.content,
+        metadata: p.metadata,
+        model: p.model
+      }),
+    // 仅持久化并返回；不可再 emit 'error' —— 否则与 useAgentEvents 的 'error' 处理形成反馈死循环
+    addErrorEvent: async ({ sessionId, content }) =>
+      messageStore.addErrorEvent({ sessionId, content }),
+    deleteErrorEvent: async ({ sessionId, messageId }) => {
+      await messageStore.deleteOne(sessionId, messageId)
+      return ok
+    },
+    clear: async (sessionId) => {
+      await messageStore.clear(sessionId)
+      return ok
+    },
+    rollback: async () => ok,
+    deleteFrom: async ({ sessionId, messageId }) => {
+      await messageStore.deleteFrom(sessionId, messageId)
+      return ok
+    },
+    countArchived: async () => 0,
+    listArchived: async () => [] as ChatMessage[]
+  },
+
+  settings: {
+    getAll: async () => settingsStore.getAll(),
+    get: async (key) => settingsStore.get(key),
+    set: async ({ key, value }) => {
+      await settingsStore.set(key, value)
+      return ok
+    },
+    getKnownKeys: async () => ({}),
+    listBuiltinSections: async () => [],
+    setBuiltinDisabled: async () => ok,
+    getCustomSections: async () => [],
+    setCustomSections: async () => ok,
+    previewBuiltinSection: async () => ''
+  },
+
+  runtime: {
+    statuses: async () => ({}),
+    destroy: async () => ok
+  },
+
+  tools: {
+    list: async () => [
+      { name: 'ask', label: 'Ask', group: 'general', defaultEnabled: true, isEnabled: true }
+    ],
+    presentations: async () => ({})
+  },
+
+  command: {
+    list: async () => []
+  },
+
+  // MCP 客户端（浏览器 http-only）：chrome.storage 存储 + 共享 McpManager 连接
+  mcp: {
+    list: async () =>
+      mcpStore.findAll().map((s) => {
+        let toolCount = 0
+        try {
+          toolCount = JSON.parse(s.cachedTools || '[]').length
+        } catch {
+          /* ignore */
+        }
+        return {
+          ...s,
+          status: mcpManager.getStatus(s.id),
+          error: mcpManager.getError(s.id),
+          toolCount
+        }
+      }),
+    add: async (params) => {
+      const s = mcpStore.add(params)
+      if (s.isEnabled) await mcpManager.connect(s.id)
+      return ok
+    },
+    update: async (params) => {
+      const s = mcpStore.update(params)
+      if (s) {
+        // 配置/启停变化 → 启用则（重）连，否则断开
+        if (s.isEnabled) await mcpManager.connect(s.id)
+        else await mcpManager.disconnect(s.id)
+      }
+      return ok
+    },
+    delete: async (id) => {
+      await mcpManager.disconnect(id)
+      mcpStore.delete(id)
+      return ok
+    },
+    connect: async (id) => {
+      await mcpManager.connect(id)
+      return ok
+    },
+    disconnect: async (id) => {
+      await mcpManager.disconnect(id)
+      return ok
+    },
+    getTools: async (id) => mcpManager.getServerToolInfos(id)
+  },
+
+  compact: {
+    start: async () => undefined
+  },
+
+  webui: {
+    setShared: async () => ok,
+    isShared: async () => false,
+    getShareMode: async () => null,
+    listShared: async () => [],
+    serverStatus: async () => ({ running: false })
+  },
+
+  telegram: {
+    listBots: async () => [],
+    addBot: async () => {
+      throw new Error('扩展不支持 Telegram')
+    },
+    updateBot: async () => ok,
+    deleteBot: async () => ok,
+    validateToken: async () => ({ valid: false }),
+    bindSession: async () => ok,
+    unbindSession: async () => ok,
+    getSessionBotId: async () => null,
+    startBot: async () => ok,
+    stopBot: async () => ok,
+    getBotStatus: async () => ({ running: false })
+  },
+
+  pinChat: {
+    pin: async () => ok,
+    unpin: async () => ok,
+    focus: async () => ok,
+    getState: async () => ({ pinnedSessionIds: [] }),
+    setAlwaysOnTop: async () => ({ alwaysOnTop: false }),
+    getAlwaysOnTop: async () => ({ alwaysOnTop: false }),
+    onStateChanged: () => () => {}
+  },
+
+  update: {
+    check: async () => ok,
+    download: async () => ok,
+    install: async () => ok,
+    getLastEvent: async () => null,
+    onEvent: () => () => {}
+  },
+
+  stt: {
+    transcribe: async () => ({ text: '' })
+  },
+
+  tts: {
+    speakOnce: async () => {},
+    abortTts: async () => {},
+    onChunk: () => () => {}
+  }
+}

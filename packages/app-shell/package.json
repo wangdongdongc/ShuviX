@@ -1,0 +1,25 @@
+{
+  "name": "@shuvix/app-shell",
+  "version": "0.1.0",
+  "description": "Reusable ShuviX app shell — sidebar (session list) + injectable settings container (tabs) + shared theme tokens. Host-agnostic, prop-driven; consumed by the Electron desktop and the Chrome extension.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./themes.css": "./src/themes.css",
+    "./base.css": "./src/base.css"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "peerDependencies": {
+    "@shuvix/chat-protocol": "*",
+    "@shuvix/chat-ui": "*",
+    "react": "*",
+    "react-dom": "*",
+    "react-i18next": "*"
+  },
+  "dependencies": {
+    "lucide-react": "*"
+  }
+}

@@ -1,37 +1,17 @@
-import { type Model, type Api, type KnownProvider, getModel } from '@earendil-works/pi-ai'
+/**
+ * 模型解析（桌面 wrapper）：从 providerDao 读取提供商信息，委托 @shuvix/agent-runtime 的
+ * 宿主无关 resolveModel 构造 pi-ai Model 对象。env 注入走 electronEnv（process.env）。
+ *
+ * 保留与既有调用方一致的签名（create / setModel / generateTitle 直接调用）。
+ */
+import type { Model, Api } from '@earendil-works/pi-ai'
+import {
+  resolveModel as resolveModelCore,
+  type ResolveModelProviderInfo
+} from '@shuvix/agent-runtime'
 import { providerDao } from '../dao/providerDao'
 import type { ModelCapabilities } from '../types'
-import { buildCustomProviderCompat } from '../utils/providerCompat'
-
-/**
- * 内置提供商 → 环境变量名映射
- * pi-ai SDK 通过环境变量获取 API Key，此处将用户在 DB 中配置的 key 注入 process.env
- */
-const BUILTIN_ENV_MAP: Record<string, string> = {
-  openai: 'OPENAI_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-  google: 'GEMINI_API_KEY',
-  xai: 'XAI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  cerebras: 'CEREBRAS_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  'minimax-cn': 'MINIMAX_CN_API_KEY',
-  huggingface: 'HF_TOKEN',
-  opencode: 'OPENCODE_API_KEY',
-  'kimi-coding': 'KIMI_API_KEY',
-  zai: 'ZAI_API_KEY',
-  // pi-ai 0.68.1+ 新增 provider env 映射
-  fireworks: 'FIREWORKS_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  moonshotai: 'MOONSHOT_API_KEY',
-  'moonshotai-cn': 'MOONSHOT_API_KEY',
-  xiaomi: 'XIAOMI_API_KEY',
-  // Cloudflare：apiKey 走 CLOUDFLARE_API_KEY；ACCOUNT_ID / GATEWAY_ID 需用户额外通过启动环境变量注入
-  'cloudflare-workers-ai': 'CLOUDFLARE_API_KEY',
-  'cloudflare-ai-gateway': 'CLOUDFLARE_API_KEY'
-}
+import { electronEnv } from './agentRuntimeAdapters'
 
 export interface ResolveModelParams {
   provider: string
@@ -41,98 +21,19 @@ export interface ResolveModelParams {
   apiProtocol?: string // setModel 传入的覆盖值
 }
 
-/**
- * 统一模型解析逻辑：从 provider + model + capabilities 解析出 pi-ai Model 对象
- * 用于 createAgent 和 setModel，消除两处重复的 ~100 行逻辑
- */
+/** 统一模型解析逻辑：从 provider + model + capabilities 解析出 pi-ai Model 对象 */
 export function resolveModel(params: ResolveModelParams): Model<Api> {
-  const { provider, model, capabilities: caps } = params
-
-  const providerInfo = providerDao.findById(provider)
-  const isBuiltin = providerInfo?.isBuiltin ?? false
-
-  if (!isBuiltin) {
-    // 自定义提供商：手动构造 Model 对象，用 capabilities 填充
-    const inputModalities: ('text' | 'image')[] = ['text']
-    if (caps.vision) inputModalities.push('image')
-    const resolvedApi = (params.apiProtocol ||
-      providerInfo?.apiProtocol ||
-      'openai-completions') as Api
-    // 从 metadata 中解析自定义请求头
-    let customHeaders: Record<string, string> | undefined
-    if (providerInfo?.metadata) {
-      try {
-        const meta = JSON.parse(providerInfo.metadata)
-        if (meta?.customHeaders && typeof meta.customHeaders === 'object') {
-          const h = meta.customHeaders
-          if (Object.keys(h).length > 0) customHeaders = h
-        }
-      } catch {
-        // 忽略无效 JSON
+  const p = providerDao.findById(params.provider)
+  const providerInfo: ResolveModelProviderInfo | null = p
+    ? {
+        id: p.id,
+        name: p.name,
+        isBuiltin: !!p.isBuiltin,
+        apiKey: p.apiKey,
+        baseUrl: p.baseUrl,
+        apiProtocol: p.apiProtocol,
+        metadata: p.metadata
       }
-    }
-    return {
-      id: model,
-      name: model,
-      api: resolvedApi,
-      provider,
-      baseUrl: params.baseUrl || providerInfo?.baseUrl || '',
-      reasoning: caps.reasoning ?? false,
-      input: inputModalities,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: caps.maxInputTokens ?? 128000,
-      maxTokens: caps.maxOutputTokens ?? 16384,
-      ...(buildCustomProviderCompat(resolvedApi)
-        ? { compat: buildCustomProviderCompat(resolvedApi) }
-        : {}),
-      ...(customHeaders ? { headers: customHeaders } : {})
-    }
-  }
-
-  // 内置提供商：通过 SDK 解析（name 即 pi-ai 的 provider slug）
-  const slug = (providerInfo?.name || '').toLowerCase()
-  if (providerInfo?.apiKey) {
-    const envKey = BUILTIN_ENV_MAP[slug]
-    if (envKey) {
-      process.env[envKey] = providerInfo.apiKey
-    }
-  }
-
-  let resolvedModel: Model<Api>
-  const piModel = getModel(slug as KnownProvider, model as Parameters<typeof getModel>[1])
-  if (piModel) {
-    resolvedModel = piModel
-    if (params.baseUrl || providerInfo?.baseUrl) {
-      resolvedModel.baseUrl = params.baseUrl || providerInfo!.baseUrl!
-    }
-  } else {
-    // 模型不在 pi-ai 注册表中（如远程同步到的新模型），按自定义方式构造
-    const inputModalities: ('text' | 'image')[] = ['text']
-    if (caps.vision) inputModalities.push('image')
-    const resolvedApi = (params.apiProtocol ||
-      providerInfo?.apiProtocol ||
-      'openai-completions') as Api
-    resolvedModel = {
-      id: model,
-      name: model,
-      api: resolvedApi,
-      provider,
-      baseUrl: params.baseUrl || providerInfo?.baseUrl || '',
-      reasoning: caps.reasoning ?? false,
-      input: inputModalities,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: caps.maxInputTokens ?? 128000,
-      maxTokens: caps.maxOutputTokens ?? 16384,
-      ...(buildCustomProviderCompat(resolvedApi)
-        ? { compat: buildCustomProviderCompat(resolvedApi) }
-        : {})
-    }
-  }
-
-  // 为 Kimi Coding 注入 coding agent 标识（Kimi API 要求特定 User-Agent）
-  if (resolvedModel.baseUrl?.includes('api.kimi.com')) {
-    resolvedModel.headers = { ...resolvedModel.headers, 'User-Agent': 'Claude-Code/1.0.0' }
-  }
-
-  return resolvedModel
+    : null
+  return resolveModelCore({ ...params, providerInfo, env: electronEnv })
 }

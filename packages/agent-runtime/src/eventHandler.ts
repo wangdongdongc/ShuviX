@@ -1,44 +1,20 @@
+/**
+ * Agent 事件路由（宿主无关）：把 pi-agent-core 的 AgentEvent 转换为 ChatEvent，
+ * 并通过注入的 persistence 落库、通过 broadcastEvent 广播。
+ *
+ * 从桌面版 agentEventHandler.ts 抽取，所有直接 import 的单例（messageService / sessionDao /
+ * httpLogService / transformToolResultForPersist / allowList）替换为 ctx.deps 注入。
+ */
 import type { AgentEvent } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
-import { isAssistantMessage, isUserMessage } from '../utils/messageGuards'
-import { httpLogService } from './httpLogService'
-import { messageService } from './messageService'
-import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified } from '../utils/toolUtils/allowList'
-import { transformToolResultForPersist } from './stepPersistPipeline'
-import type { Message, MessageMetadata, ToolResultDetails } from '../types'
-import type { ChatEvent, RuntimeStatus } from '../frontend/core'
-import { createLogger } from '../logger'
-
-const log = createLogger('AgentEvent')
-
-/** 检查工具是否需要用户审批/输入（复用于 handleMessageEnd 预展示和 handleToolExecutionStart） */
-function checkToolApproval(
-  sessionId: string,
-  toolName: string,
-  args: Record<string, unknown>
-): { approvalRequired: boolean; sshCredentialRequired: boolean; isUserInput: boolean } {
-  let approvalRequired = false
-  if (toolName === 'bash') {
-    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
-    if (!sess?.autoApprove) {
-      const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowedUnified(sess?.allowList, 'bash', command)
-    }
-  } else if (toolName === 'ssh' && args?.action === 'exec') {
-    const sess = sessionDao.pickSettings(sessionId, ['autoApprove', 'allowList'])
-    if (!sess?.autoApprove) {
-      const command = (args?.command as string) || ''
-      approvalRequired = !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
-    }
-  }
-  const isUserInput = toolName === 'ask'
-  const sshCredentialRequired =
-    toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
-  return { approvalRequired, sshCredentialRequired, isUserInput }
-}
-
-// ─── Per-session 事件上下文 ─────────────────────────────────
+import { isAssistantMessage, isUserMessage } from './messageGuards'
+import type {
+  ChatEvent,
+  ChatMessage,
+  MessageMetadata,
+  RuntimeStatus,
+  RuntimeEventDeps
+} from './types'
 
 /** AgentSession 的可变事件状态（直接引用，handler 可读写） */
 export interface SessionEventState {
@@ -57,20 +33,20 @@ export interface SessionEventState {
   generatingToolCall: { name: string; argsJson: string } | null
 }
 
-/** 事件处理器上下文 — per-session 直接引用，不再使用共享 Map */
+/** 事件处理器上下文 — per-session 直接引用 */
 export interface SessionEventHandlerContext {
   sessionId: string
   state: SessionEventState
   broadcastEvent: (event: ChatEvent) => void
-  persistStreamBuffer: (extraMeta?: MessageMetadata) => Message | null
+  persistStreamBuffer: (extraMeta?: MessageMetadata) => ChatMessage | null
   emitRuntimeEvent: (runtimeId: string, status: RuntimeStatus | null) => void
+  deps: RuntimeEventDeps
 }
 
 // ─── Handler 实现 ────────────────────────────────────────
 
-/** agent_start 事件：初始化缓冲区和 turn 计数 */
 function handleAgentStart(ctx: SessionEventHandlerContext): void {
-  log.info(`开始 session=${ctx.sessionId}`)
+  ctx.deps.logger.info(`开始 session=${ctx.sessionId}`)
   ctx.state.streamBuffer = { content: '', thinking: '', images: [] }
   ctx.state.turnCounter = 0
   ctx.state.preEmittedToolCalls.clear()
@@ -79,15 +55,13 @@ function handleAgentStart(ctx: SessionEventHandlerContext): void {
   ctx.broadcastEvent({ type: 'agent_start', sessionId: ctx.sessionId })
 }
 
-/** turn_start 事件：递增 turn 计数器 */
 function handleTurnStart(ctx: SessionEventHandlerContext): void {
   ctx.state.turnCounter += 1
-  log.info(`Turn ${ctx.state.turnCounter} 开始 session=${ctx.sessionId}`)
+  ctx.deps.logger.info(`Turn ${ctx.state.turnCounter} 开始 session=${ctx.sessionId}`)
 }
 
-/** turn_end 事件：记录日志 */
 function handleTurnEnd(ctx: SessionEventHandlerContext): void {
-  log.info(`Turn ${ctx.state.turnCounter} 结束 session=${ctx.sessionId}`)
+  ctx.deps.logger.info(`Turn ${ctx.state.turnCounter} 结束 session=${ctx.sessionId}`)
 }
 
 /** agent_end 事件：token 统计、持久化 */
@@ -95,12 +69,10 @@ function handleAgentEnd(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'agent_end' }>
 ): void {
-  log.info(`结束 session=${ctx.sessionId}`)
+  ctx.deps.logger.info(`结束 session=${ctx.sessionId}`)
   ctx.state.preEmittedToolCalls.clear()
   ctx.state.toolUseMessageIds.clear()
-  // 注意：per-message 错误已在 handleMessageEnd 中广播，这里不再重复广播
   const endMessages = event.messages
-  // 从 agent_end 自带的 messages 中提取每条 AssistantMessage 的 token 用量
   const details: Array<{
     input: number
     output: number
@@ -131,15 +103,14 @@ function handleAgentEnd(
     }),
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
   )
-  // 最后一轮 thinking 也独立落库为 step_thinking（与中间轮次一致）
+  // 最后一轮 thinking 也独立落库为 step_thinking
   const buf = ctx.state.streamBuffer
   if (buf.thinking) {
-    const session = sessionDao.pick(ctx.sessionId, ['model'])
-    const thinkingMsg = messageService.addStepThinking({
+    const thinkingMsg = ctx.deps.persistence.addStepThinking({
       sessionId: ctx.sessionId,
       content: buf.thinking,
       turnIndex: ctx.state.turnCounter,
-      model: session?.model || ''
+      model: ctx.deps.getModelId()
     })
     ctx.broadcastEvent({
       type: 'step_end',
@@ -149,7 +120,6 @@ function handleAgentEnd(
     })
     buf.thinking = ''
   }
-  // 后端统一落库：将缓冲区内容持久化为 assistant 消息（携带 usage，不含 thinking）
   const savedMsg = ctx.persistStreamBuffer(
     totalUsage.total > 0 ? { usage: { ...totalUsage, details } } : {}
   )
@@ -182,7 +152,6 @@ function handleMessageUpdate(
       delta: msgEvent.delta || ''
     })
   } else if (msgEvent.type === 'toolcall_start') {
-    // 从 partial message 中提取工具名
     const block = (
       msgEvent as {
         partial?: { content?: Array<{ type: string; name?: string }> }
@@ -192,14 +161,9 @@ function handleMessageUpdate(
     const toolName = block?.type === 'toolCall' ? block.name || '' : ''
     if (toolName) {
       ctx.state.generatingToolCall = { name: toolName, argsJson: '' }
-      ctx.broadcastEvent({
-        type: 'toolcall_generating',
-        sessionId: ctx.sessionId,
-        toolName
-      })
+      ctx.broadcastEvent({ type: 'toolcall_generating', sessionId: ctx.sessionId, toolName })
     }
   } else if (msgEvent.type === 'toolcall_delta') {
-    // 实时转发每个 delta，让前端能看到参数生成过程
     const gen = ctx.state.generatingToolCall
     if (gen) {
       const delta = (msgEvent as { delta?: string }).delta || ''
@@ -214,21 +178,16 @@ function handleMessageUpdate(
   }
 }
 
-/** message_end 事件：HTTP 日志更新、图片提取 */
+/** message_end 事件：HTTP 日志更新、图片提取、step 持久化、batch 预展示 */
 function handleMessageEnd(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'message_end' }>
 ): void {
-  // 工具调用生成阶段结束，清除状态
   ctx.state.generatingToolCall = null
-
   const msg = event.message
 
-  // steer 消息由 AgentSession.steer() 注入，带 _isSteer 标记以区分初始 prompt
-  // pi-agent-core 在 message_start/message_end 中透传完整对象
-  // 持久化为独立的 steer 类型，在 event 流中与 step/tool 自然衔接
+  // steer 消息（AgentSession.steer() 注入，带 _isSteer 标记）
   if (isUserMessage(msg) && '_isSteer' in msg) {
-    const session = sessionDao.pick(ctx.sessionId, ['model'])
     const text =
       typeof msg.content === 'string'
         ? msg.content
@@ -237,12 +196,12 @@ function handleMessageEnd(
             .map((c) => c.text)
             .join('\n')
     if (text) {
-      const steerMsg = messageService.add({
+      const steerMsg = ctx.deps.persistence.add({
         sessionId: ctx.sessionId,
         role: 'user',
         type: 'steer',
         content: text,
-        model: session?.model || ''
+        model: ctx.deps.getModelId()
       })
       ctx.broadcastEvent({
         type: 'step_end',
@@ -255,16 +214,15 @@ function handleMessageEnd(
   }
 
   if (isAssistantMessage(msg)) {
-    // 检查流式响应中的错误
     if (msg.stopReason === 'error' && msg.errorMessage) {
-      log.error(`API 错误: ${msg.errorMessage}`)
+      ctx.deps.logger.error(`API 错误: ${msg.errorMessage}`)
       ctx.broadcastEvent({ type: 'error', sessionId: ctx.sessionId, error: msg.errorMessage })
     }
     const logId = ctx.state.pendingLogIds.shift()
     const msgWithImages = msg as AssistantMessage & {
       _images?: Array<{ data: string; mimeType: string; thoughtSignature?: string }>
     }
-    if (logId) {
+    if (logId && ctx.deps.httpLog) {
       const usage = msg.usage
       const logImages = msgWithImages._images
       let responseJson: string | undefined
@@ -281,20 +239,20 @@ function handleMessageEnd(
       } catch {
         /* 序列化失败则不存响应 */
       }
-      httpLogService.updateUsage(logId, usage.input, usage.output, usage.totalTokens, responseJson)
+      ctx.deps.httpLog.updateUsage(
+        logId,
+        usage.input,
+        usage.output,
+        usage.totalTokens,
+        responseJson
+      )
     }
-    // 实时上报 prompt token 用量（每个 LLM step 完成后），让 UI 在多轮工具调用过程中也能更新上下文指示器
     if (msg.usage) {
       const promptTokens = (msg.usage.totalTokens || 0) - (msg.usage.output || 0)
       if (promptTokens > 0) {
-        ctx.broadcastEvent({
-          type: 'token_usage',
-          sessionId: ctx.sessionId,
-          promptTokens
-        })
+        ctx.broadcastEvent({ type: 'token_usage', sessionId: ctx.sessionId, promptTokens })
       }
     }
-    // 提取 Google Gemini 图片输出
     const images = msgWithImages._images
     if (images && images.length > 0) {
       ctx.state.streamBuffer.images.push(...images)
@@ -310,7 +268,7 @@ function handleMessageEnd(
       }
     }
   }
-  // 提取本次 LLM 回复中的工具调用
+
   let rawToolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = []
   if (isAssistantMessage(msg)) {
     rawToolCalls = (
@@ -325,16 +283,14 @@ function handleMessageEnd(
       .map((tc) => ({ id: tc.id!, name: tc.name!, arguments: tc.arguments || {} }))
   }
 
-  // 中间轮次 step 持久化：有工具调用 → 将 buffer 拆分为 step_thinking + step_text 落库
+  // 中间轮次 step 持久化：有工具调用 → 拆分 step_thinking + step_text
   if (rawToolCalls.length > 0) {
     const buf = ctx.state.streamBuffer
-    const session = sessionDao.pick(ctx.sessionId, ['model'])
     const turnIndex = ctx.state.turnCounter
-    const model = session?.model || ''
+    const model = ctx.deps.getModelId()
 
-    // 1) 思考 → step_thinking
     if (buf.thinking) {
-      const thinkingMsg = messageService.addStepThinking({
+      const thinkingMsg = ctx.deps.persistence.addStepThinking({
         sessionId: ctx.sessionId,
         content: buf.thinking,
         turnIndex,
@@ -348,7 +304,6 @@ function handleMessageEnd(
       })
     }
 
-    // 2) 文本 → step_text（如有图片一并存入 metadata）
     if (buf.content || buf.images.length) {
       const images = buf.images.length
         ? buf.images.map((img) => ({
@@ -357,7 +312,7 @@ function handleMessageEnd(
             ...(img.thoughtSignature && { thoughtSignature: img.thoughtSignature })
           }))
         : undefined
-      const textMsg = messageService.addStepText({
+      const textMsg = ctx.deps.persistence.addStepText({
         sessionId: ctx.sessionId,
         content: buf.content,
         turnIndex,
@@ -372,11 +327,9 @@ function handleMessageEnd(
       })
     }
 
-    // 重置 buffer：下一轮从空开始累积
     ctx.state.streamBuffer = { content: '', thinking: '', images: [] }
   }
 
-  // 识别多工具批次（用于下方的 tool_start 预展示）
   let batchToolCalls: typeof rawToolCalls | null = null
   if (rawToolCalls.length >= 2) {
     batchToolCalls = rawToolCalls
@@ -384,24 +337,19 @@ function handleMessageEnd(
 
   ctx.broadcastEvent({ type: 'text_end', sessionId: ctx.sessionId })
 
-  // 并行 batch 预展示
+  // 并行 batch 预展示（跳过需用户交互的工具）
   if (batchToolCalls) {
-    const sessionForTool = sessionDao.pick(ctx.sessionId, ['model'])
     const turnIndex = ctx.state.turnCounter
+    const model = ctx.deps.getModelId()
     for (const tc of batchToolCalls) {
-      const { approvalRequired, sshCredentialRequired, isUserInput } = checkToolApproval(
-        ctx.sessionId,
-        tc.name,
-        tc.arguments
-      )
-      if (approvalRequired || isUserInput || sshCredentialRequired) continue
-      const toolUseMsg = messageService.addToolUse({
+      if (ctx.deps.shouldDeferToolDisplay(tc.name, tc.arguments)) continue
+      const toolUseMsg = ctx.deps.persistence.addToolUse({
         sessionId: ctx.sessionId,
         toolCallId: tc.id,
         toolName: tc.name,
         args: tc.arguments,
         turnIndex,
-        model: sessionForTool?.model || ''
+        model
       })
       ctx.state.toolUseMessageIds.set(tc.id, toolUseMsg.id)
       ctx.broadcastEvent({
@@ -418,25 +366,23 @@ function handleMessageEnd(
   }
 }
 
-/** tool_execution_start 事件：持久化 tool_call、审批判断 */
+/** tool_execution_start 事件：持久化 tool_call */
 function handleToolExecutionStart(
   ctx: SessionEventHandlerContext,
   event: Extract<AgentEvent, { type: 'tool_execution_start' }>
 ): void {
-  // 并行 batch 预展示：如果已提前发送过 tool_start，跳过重复处理
   if (ctx.state.preEmittedToolCalls.has(event.toolCallId)) {
     ctx.state.preEmittedToolCalls.delete(event.toolCallId)
     return
   }
   const args = event.args as Record<string, unknown> | undefined
-  const sessionForTool = sessionDao.pick(ctx.sessionId, ['model'])
-  const toolUseMsg = messageService.addToolUse({
+  const toolUseMsg = ctx.deps.persistence.addToolUse({
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
     args,
     turnIndex: ctx.state.turnCounter,
-    model: sessionForTool?.model || ''
+    model: ctx.deps.getModelId()
   })
   ctx.state.toolUseMessageIds.set(event.toolCallId, toolUseMsg.id)
   ctx.broadcastEvent({
@@ -456,32 +402,26 @@ function handleToolExecutionEnd(
   event: Extract<AgentEvent, { type: 'tool_execution_end' }>
 ): void {
   const result = event.result as
-    | {
-        content?: Array<TextContent | ImageContent>
-        details?: ToolResultDetails
-      }
+    | { content?: Array<TextContent | ImageContent>; details?: import('./types').ToolResultDetails }
     | undefined
   const rawContent = result?.content ?? []
-  // 实时广播内容：文本原样；非文本 JSON.stringify（与历史行为一致，UI 负责解析图像/附件）
   const broadcastContent =
     rawContent
       .map((c: TextContent | ImageContent) => (c.type === 'text' ? c.text : JSON.stringify(c)))
       .join('\n') || ''
 
-  // 入库内容：走 stepPersistPipeline，按工具/内容类型做瘦身（如图片 → 路径提示）
-  const { content: persistContent, details: persistDetails } = transformToolResultForPersist({
+  const { content: persistContent, details: persistDetails } = ctx.deps.transformToolResult({
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     sessionId: ctx.sessionId,
     isError: event.isError || false,
-    content: rawContent,
+    content: rawContent as Array<{ type: string; text?: string }>,
     details: result?.details
   })
 
-  // 查找对应的 tool_use 消息 ID 并原地更新
   const toolUseMessageId = ctx.state.toolUseMessageIds.get(event.toolCallId)
   if (toolUseMessageId) {
-    messageService.completeToolUse({
+    ctx.deps.persistence.completeToolUse({
       messageId: toolUseMessageId,
       content: persistContent,
       isError: event.isError || false,
@@ -503,7 +443,7 @@ function handleToolExecutionEnd(
 
 // ─── 对外分发入口 ──────────────────────────────────────
 
-/** 将 pi-agent-core 事件转换并发送到 Renderer（薄分发器） */
+/** 将 pi-agent-core 事件转换并广播（薄分发器） */
 export function forwardAgentEvent(ctx: SessionEventHandlerContext, event: AgentEvent): void {
   switch (event.type) {
     case 'agent_start':

@@ -243,6 +243,7 @@
     "folders": "フォルダ",
     "name": "プロジェクト名",
     "namePlaceholder": "プロジェクト名",
+    "path": "パス",
     "selectFolder": "プロジェクト作業フォルダを選択",
     "changeFolder": "変更",
     "toolsReminder": "ツールはAIが使用できる機能を決定します。有効なツールが多いほどトークン消費が増えるため、必要なものだけを残すことをお勧めします。",

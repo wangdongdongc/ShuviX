@@ -9,7 +9,7 @@ import {
   replaceWithFallback,
   levenshtein,
   dedent
-} from '../../utils/toolUtils/replacers'
+} from '@shuvix/agent-runtime'
 
 // ─── 工具函数 ──────────────────────────────────────────
 

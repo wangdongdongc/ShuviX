@@ -31,9 +31,24 @@ export function SshCredentialsForm({
       handleConnect()
   }
 
-  /** 浏览并读取私钥文件 */
+  /** 浏览并读取私钥文件（Electron 宿主专属：通过 ipcRenderer 调系统文件对话框） */
   const handleBrowseKey = async (): Promise<void> => {
-    const result = await window.electron.ipcRenderer.invoke('dialog:readTextFile', {
+    const electron = (
+      globalThis as {
+        window?: {
+          electron?: {
+            ipcRenderer: {
+              invoke: (
+                channel: string,
+                ...args: unknown[]
+              ) => Promise<{ content?: string; path?: string } | undefined>
+            }
+          }
+        }
+      }
+    ).window?.electron
+    if (!electron) return
+    const result = await electron.ipcRenderer.invoke('dialog:readTextFile', {
       title: t('ssh.selectKeyFile'),
       filters: [{ name: 'All Files', extensions: ['*'] }]
     })

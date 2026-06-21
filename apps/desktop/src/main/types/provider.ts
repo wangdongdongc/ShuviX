@@ -1,20 +1,9 @@
 export type { ApiProtocol, Provider, ProviderModel } from '../dao/types'
 import type { ApiProtocol, ProviderModel } from '../dao/types'
 
-/** 模型能力元数据 */
-export interface ModelCapabilities {
-  vision?: boolean // 图像输入
-  imageOutput?: boolean // 图像生成输出
-  functionCalling?: boolean // 工具调用
-  reasoning?: boolean // 推理/思考
-  audioInput?: boolean
-  audioOutput?: boolean
-  pdfInput?: boolean
-  maxInputTokens?: number
-  maxOutputTokens?: number
-  inputCostPerToken?: number // 仅存储，暂不展示
-  outputCostPerToken?: number // 仅存储，暂不展示
-}
+// 模型能力元数据 —— 单一源在 @shuvix/chat-protocol（前端 IPC 视图复用），此处再导出
+export type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
+import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 
 /** 可用模型（含提供商显示名称，对应 findAllEnabledModels JOIN 结果） */
 export interface AvailableModel extends ProviderModel {

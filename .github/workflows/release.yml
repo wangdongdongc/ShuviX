@@ -210,9 +210,51 @@ jobs:
             apps/desktop/dist/*.yml
           if-no-files-found: ignore
 
+  # ---- Chrome 扩展构建：纯 Vite 产物（无原生模块），打成可「开发者模式加载」的 zip ----
+  build-extension:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & zip extension
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # manifest.version 只接受「数字.数字…」，去掉 -beta/-alpha 等预发布后缀
+          CHROME_VERSION="${VERSION%%-*}"
+          echo "Tag version: $VERSION  →  manifest version: $CHROME_VERSION"
+
+          # 构建前把 tag 版本写进 manifest（public/ 会被 vite 原样拷进 dist/）
+          node -e "const fs=require('fs');const f='apps/extension/public/manifest.json';const m=JSON.parse(fs.readFileSync(f));m.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(m,null,2)+'\n')" "$CHROME_VERSION"
+
+          npm run build:ext
+
+          # zip 根目录必须直接是 manifest.json（不可多套一层目录）
+          ( cd apps/extension/dist && zip -r "../shuvix-chrome-extension-${VERSION}.zip" . )
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-extension
+          path: apps/extension/*.zip
+          if-no-files-found: error
+
   # ---- 发布阶段：所有构建完成后创建 Release 并上传全部产物 ----
   publish:
-    needs: [build, build-linux]
+    needs: [build, build-linux, build-extension]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

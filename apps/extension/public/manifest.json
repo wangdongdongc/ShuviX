@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "ShuviX",
+  "version": "0.1.0",
+  "description": "ShuviX — 浏览器内运行 Agent 的 AI 助手（独立整页 App）",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "ShuviX"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "tabs", "scripting", "debugger", "declarativeNetRequest"],
+  "host_permissions": ["<all_urls>"]
+}

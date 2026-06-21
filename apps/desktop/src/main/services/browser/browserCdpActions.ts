@@ -358,7 +358,7 @@ export async function clickAction(params: Record<string, unknown> = {}): Promise
   // 等待一小段时间让页面响应
   await sleep(100)
 
-  const node = browserCdpService['nodeMap'].get(uid)
+  const node = browserCdpService.getNode(uid)
   const desc = node?.name?.value
     ? `Clicked ${node.role?.value || 'element'} "${node.name.value}" (uid=${uid}).`
     : `Clicked element uid=${uid}.`
