@@ -12,6 +12,7 @@ import {
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
+import { registerAppEventBridge } from './services/appEvents'
 import { hookService } from './services/hooks'
 import { registerAllBuiltins } from './services/hooks/builtin'
 import { sshManager } from './services/sshManager'
@@ -174,10 +175,7 @@ function openSettingsWindow(tab?: string): void {
 
   settingsWindow.on('closed', () => {
     settingsWindow = null
-    // 设置窗口关闭后通知主窗口刷新设置
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('app:settings-changed')
-    }
+    // 无需在此重同步：设置/提供商的每次变更已由对应 service 在数据层发布事件并广播到所有窗口
   })
 }
 
@@ -605,6 +603,9 @@ app.whenReady().then(async () => {
 
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
+
+  // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
+  registerAppEventBridge()
 
   // 初始化自动更新服务（绑定 electron-updater 事件）
   updateService.init()

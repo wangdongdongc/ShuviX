@@ -1,6 +1,5 @@
 import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
-import { type TextContent, completeSimple } from '@earendil-works/pi-ai'
-import { RuntimeSession } from '@shuvix/agent-runtime'
+import { RuntimeSession, generateSessionTitle } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
@@ -39,27 +38,6 @@ import {
 
 const log = createLogger('AgentSession')
 
-/**
- * 标题生成 system prompt — 参考 Claude Code sessionTitle.ts 的结构化设计。
- * 不走 i18n(这是工程指令,不是用户界面文案)。
- */
-const TITLE_GEN_SYSTEM_PROMPT = `Generate a concise title (3-7 words) that captures the main topic or goal of this conversation.
-The title should be clear enough that the user recognizes the session in a list.
-
-Rules:
-- Use the same language as the user's message
-- Use sentence case (capitalize only the first word and proper nouns)
-- Return JSON with a single "title" field
-
-Good examples:
-{"title": "Fix login button on mobile"}
-{"title": "调试 CI 流水线失败问题"}
-{"title": "Add OAuth authentication"}
-{"title": "重构 API 客户端错误处理"}
-
-Bad (too vague): {"title": "Code changes"} {"title": "对话记录"}
-Bad (too long): {"title": "Investigate and fix the issue with the login button not working on mobile devices"}`
-
 /** AgentSession.create 工厂参数 */
 export interface AgentSessionCreateParams {
   sessionId: string
@@ -86,8 +64,7 @@ function buildSystemPrompt(
       }
     | undefined,
   workingDirectory: string,
-  sessionId: string,
-  modelCtx?: { modelId?: string; modelDisplayName?: string }
+  sessionId: string
 ): string {
   const segments: string[] = []
   // 系统提示词总开关 — 关闭时跳过全局自由文本 + 内置/自定义卡片；项目级提示仍生效
@@ -98,9 +75,7 @@ function buildSystemPrompt(
 
     // 系统级提示词卡片（内置 + 自定义），按代码顺序连续
     const cardsBlock = renderSystemPromptSections({
-      workingDirectory: workingDirectory || project?.path,
-      modelId: modelCtx?.modelId,
-      modelDisplayName: modelCtx?.modelDisplayName
+      workingDirectory: workingDirectory || project?.path
     })
     if (cardsBlock) segments.push(cardsBlock)
   }
@@ -211,9 +186,7 @@ export class AgentSession {
       emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
     }
 
-    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId, {
-      modelId: model
-    })
+    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
     const resolvedModel = resolveModel({ provider, model, capabilities })
 
     // 子智能体上下文（使 explore 等子智能体工具可用）
@@ -450,54 +423,8 @@ export class AgentSession {
         model: titleModelId,
         capabilities: caps
       })
-
-      const result = await completeSimple(
-        model,
-        {
-          systemPrompt: TITLE_GEN_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: 'user',
-              content: [{ type: 'text', text: conversationText }],
-              timestamp: Date.now()
-            }
-          ]
-        },
-        { apiKey: providerRow.apiKey }
-      )
-
-      const raw = result.content
-        ?.filter((c): c is TextContent => c.type === 'text')
-        .map((c) => c.text)
-        .join('')
-        .trim()
-
-      if (!raw) return null
-
-      const stripped = raw
-        .replace(/^```(?:json)?\s*\n?/i, '')
-        .replace(/\n?```\s*$/, '')
-        .trim()
-
-      // L1: 直接 parse
-      try {
-        const parsed = JSON.parse(stripped)
-        if (typeof parsed.title === 'string' && parsed.title.trim()) {
-          return parsed.title.trim().slice(0, 30)
-        }
-      } catch {
-        /* continue to L2 */
-      }
-
-      // L2: 正则提取 {"title":"..."}
-      const match = stripped.match(/\{\s*"title"\s*:\s*"([^"]*)"\s*\}/)
-      if (match?.[1]?.trim()) {
-        return match[1].trim().slice(0, 30)
-      }
-
-      // L3: 兜底 — 去掉引号/句号等杂物
-      const fallback = stripped.replace(/^["'`]+|["'`.,。！!]+$/g, '').trim()
-      return fallback.slice(0, 30) || null
+      // LLM 调用 + 解析复用共享内核（与扩展同源）
+      return await generateSessionTitle({ model, apiKey: providerRow.apiKey, conversationText })
     } catch (err) {
       log.error(`生成标题失败: ${err}`)
     }

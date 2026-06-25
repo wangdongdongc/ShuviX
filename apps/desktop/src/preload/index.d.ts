@@ -382,7 +382,6 @@ declare global {
       setBrowserOffset: (offset: number) => Promise<void>
       /** 通知主进程渲染已就绪，可以显示窗口 */
       windowReady: () => void
-      onSettingsChanged: (callback: () => void) => () => void
       onNewChat: (callback: () => void) => () => void
       onNewProject: (callback: () => void) => () => void
     }
@@ -439,8 +438,6 @@ declare global {
       delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
       /** 获取已知项目字段的元数据（labelKey + desc） */
       getKnownFields: () => Promise<Record<string, ConfigMeta>>
-      /** 监听项目列表变更（创建/更新/删除/归档后触发） */
-      onChanged: (callback: () => void) => () => void
     }
     session: {
       list: () => Promise<Session[]>
@@ -474,7 +471,6 @@ declare global {
         id: string
         filenames: string[]
       }) => Promise<{ success: boolean }>
-      onConfigChanged: (callback: (payload: { sessionId: string }) => void) => () => void
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
@@ -886,7 +882,6 @@ declare global {
         | { success: true; filesWritten: string[]; targetPath: string }
         | { success: false; code: string; error: string }
       >
-      onChanged: (callback: () => void) => () => void
     }
     files: {
       scan: (params: { sessionId: string }) => Promise<{
@@ -903,7 +898,11 @@ declare global {
         path: string
         content: string
       }) => Promise<{ ok: true } | { ok: false; error: string }>
-      onChanged: (callback: (payload: { root: string }) => void) => () => void
+    }
+    events: {
+      subscribe: (
+        callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void
+      ) => () => void
     }
     pinChat: {
       /** 把指定 session 提到悬浮窗口（已悬浮则 focus） */
@@ -921,8 +920,6 @@ declare global {
       }) => Promise<{ alwaysOnTop: boolean }>
       /** 查询当前悬浮窗的"始终置顶"状态 */
       getAlwaysOnTop: (sessionId: string) => Promise<{ alwaysOnTop: boolean }>
-      /** 监听悬浮状态变化 */
-      onStateChanged: (callback: (state: { pinnedSessionIds: string[] }) => void) => () => void
     }
   }
 

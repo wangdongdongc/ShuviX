@@ -1,5 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { projectDao } from '../dao/projectDao'
+import { appEventBus } from '../utils/appEventBus'
 import type { Project, ProjectSettings, ReferenceDir } from '../types'
 import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 import { basename, resolve } from 'path'
@@ -118,6 +119,7 @@ export class ProjectService {
       updatedAt: now
     }
     projectDao.insert(project)
+    appEventBus.publish({ type: 'project.changed' })
     return project
   }
 
@@ -158,11 +160,13 @@ export class ProjectService {
       ...(params.archived !== undefined ? { archivedAt: params.archived ? Date.now() : 0 } : {}),
       ...(settingsUpdate !== undefined ? { settings: settingsUpdate } : {})
     })
+    appEventBus.publish({ type: 'project.changed' })
   }
 
   /** 删除项目及其所有关联会话和消息 */
   delete(id: string): void {
     projectDao.deleteById(id)
+    appEventBus.publish({ type: 'project.changed' })
   }
 }
 

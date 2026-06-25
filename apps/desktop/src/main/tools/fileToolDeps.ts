@@ -20,6 +20,7 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
+import { appEventBus } from '../utils/appEventBus'
 import { t } from '../i18n'
 
 const READ_DESCRIPTION =
@@ -53,6 +54,12 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
-    descriptions: { read: READ_DESCRIPTION, write: WRITE_DESCRIPTION, edit: EDIT_DESCRIPTION }
+    descriptions: { read: READ_DESCRIPTION, write: WRITE_DESCRIPTION, edit: EDIT_DESCRIPTION },
+    // write/edit 成功 → 发布 files.changed（带绝对路径，桌面 UI 路径空间即绝对路径）。
+    // chokidar 不监听 'change' 事件 → 已存在文件的内容编辑全靠这里触发预览刷新。
+    onFileChange: ({ portPath, kind }) => {
+      const root = resolveProjectConfig(sid).workingDirectory
+      if (root) appEventBus.publish({ type: 'files.changed', root, paths: [portPath], kind })
+    }
   }
 }

@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Check, Copy, Download, Loader2, X } from 'lucide-react'
 import type { ExportSnapshot, ExportOptions } from '@shuvix/chat-protocol/types/configShare'
-import { useDialogClose } from '@shuvix/chat-ui'
-import { copyToClipboard } from '@shuvix/chat-ui'
+import { getChatApi, useDialogClose, copyToClipboard } from '@shuvix/chat-ui'
 import { SettingsSection } from '../settings/SettingsPrimitives'
 
+/** 配置导出对话框（桌面/扩展共用）—— 经 getChatApi().config 取后端，宿主无关。 */
 export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
@@ -19,7 +19,7 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    void window.api.config.buildExportSnapshot().then(setSnapshot)
+    void getChatApi().config.buildExportSnapshot().then(setSnapshot)
   }, [])
 
   useEffect(() => {
@@ -104,7 +104,7 @@ export function ConfigExportDialog({ onClose }: { onClose: () => void }): React.
     if (copying) return
     setCopying(true)
     try {
-      const encoded = await window.api.config.buildExportPayload(buildOptions())
+      const encoded = await getChatApi().config.buildExportPayload(buildOptions())
       copyToClipboard(encoded)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)

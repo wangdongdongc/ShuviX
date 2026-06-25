@@ -17,8 +17,9 @@ export function usePinChatSync(): void {
     void window.api.pinChat.getState().then((state) => {
       if (!cancelled) setPinnedSessionIds(state.pinnedSessionIds)
     })
-    const off = window.api.pinChat.onStateChanged((state) => {
-      setPinnedSessionIds(state.pinnedSessionIds)
+    // AppEvent 'pinChat.changed'（替代旧 pinChat.onStateChanged）
+    const off = window.api.events.subscribe((event) => {
+      if (event.type === 'pinChat.changed') setPinnedSessionIds(event.pinnedSessionIds)
     })
     return () => {
       cancelled = true

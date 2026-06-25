@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { RefreshCw, Search, X } from 'lucide-react'
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
-import { useChatStore } from '@shuvix/chat-ui'
+import { useChatStore, getChatApi, useAppEvent } from '@shuvix/chat-ui'
 import { FilePreview } from './FilePreview'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
@@ -56,7 +56,13 @@ interface ScanError {
   message: string
 }
 
-export function FilesPanel(): React.JSX.Element {
+export interface FilesPanelProps {
+  /** 点击 Markdown 文件的处理：提供则交宿主（桌面在中间区打开 live-preview 编辑器）；
+   *  不提供则与其它文本一样走内联覆盖预览（扩展用此分支）。 */
+  onOpenMarkdown?: (params: { path: string; sessionId: string }) => void
+}
+
+export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
@@ -97,7 +103,7 @@ export function FilesPanel(): React.JSX.Element {
     const id = useChatStore.getState().activeSessionId
     if (!id) return
     try {
-      const r = await window.api.files.scan({ sessionId: id })
+      const r = await getChatApi().files.scan({ sessionId: id })
       if (!r.root) return
       // 异步竞态：若用户已切到不同 workingDirectory，丢弃旧结果
       if (useChatStore.getState().projectPath !== r.root) return
@@ -122,25 +128,22 @@ export function FilesPanel(): React.JSX.Element {
     setPlayingMedia(null)
   }, [projectPath, sessionId])
 
-  // 订阅文件变动事件，按 root 过滤；防抖 200ms 后重扫
-  useEffect(() => {
-    if (!projectPath) return
-    const unsubscribe = window.api.files.onChanged((p) => {
-      if (p.root !== projectPath) return
+  // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后重扫
+  useAppEvent('files.changed', (e) => {
+    if (!projectPath || e.root !== projectPath) return
+    if (rescanTimer.current) clearTimeout(rescanTimer.current)
+    rescanTimer.current = setTimeout(() => {
+      rescanTimer.current = null
+      void scan()
+    }, 200)
+  })
+  // 卸载时清理悬挂的防抖计时器
+  useEffect(
+    () => () => {
       if (rescanTimer.current) clearTimeout(rescanTimer.current)
-      rescanTimer.current = setTimeout(() => {
-        rescanTimer.current = null
-        void scan()
-      }, 200)
-    })
-    return () => {
-      unsubscribe()
-      if (rescanTimer.current) {
-        clearTimeout(rescanTimer.current)
-        rescanTimer.current = null
-      }
-    }
-  }, [projectPath, scan])
+    },
+    []
+  )
 
   const handleRefresh = useCallback(() => {
     setRefreshNonce((n) => n + 1)
@@ -193,13 +196,13 @@ export function FilesPanel(): React.JSX.Element {
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
         onFileSelect={(rel) => {
-          // Markdown：不在右侧预览，改为在中间区打开 live-preview 编辑器。
-          // 归属会话保持激活，故本面板/当前文件夹不变；关掉残留的覆盖预览 + 取消树选中
-          // （否则再点同一文件 pierre 因选区未变而短路、无法重新打开）。
+          // Markdown：宿主提供 onOpenMarkdown 时交其处理（桌面在中间区打开 live-preview 编辑器，
+          // 故关掉残留的覆盖预览 + 取消树选中，否则再点同一文件 pierre 因选区未变而短路无法重开）；
+          // 未提供时（扩展）回退到与其它文本一致的内联覆盖预览。
           const ext = extOf(rel)
-          if (MARKDOWN_EXTS.has(ext)) {
+          if (MARKDOWN_EXTS.has(ext) && onOpenMarkdown) {
             if (!projectPath || !sessionId) return
-            useChatStore.getState().setActiveFile({ path: joinPath(projectPath, rel), sessionId })
+            onOpenMarkdown({ path: joinPath(projectPath, rel), sessionId })
             setPreviewRelPath(null)
             treeModelRef.current?.getItem(rel)?.deselect()
             return

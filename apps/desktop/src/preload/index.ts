@@ -72,12 +72,6 @@ const api = {
     adjustWindowWidth: (delta: number) => ipcRenderer.invoke('app:adjust-window-width', delta),
     /** 设置浏览器面板宽度偏移（保存窗口尺寸时扣除） */
     setBrowserOffset: (offset: number) => ipcRenderer.invoke('app:set-browser-offset', offset),
-    /** 监听设置变更（设置窗口关闭后主窗口收到通知） */
-    onSettingsChanged: (callback: () => void) => {
-      const handler = (): void => callback()
-      ipcRenderer.on('app:settings-changed', handler)
-      return () => ipcRenderer.removeListener('app:settings-changed', handler)
-    },
     /** 监听菜单栏「新建对话」 */
     onNewChat: (callback: () => void) => {
       const handler = (): void => callback()
@@ -167,13 +161,8 @@ const api = {
     update: (params: ProjectUpdateParams) => ipcRenderer.invoke('project:update', params),
     delete: (params: ProjectDeleteParams) => ipcRenderer.invoke('project:delete', params),
     /** 获取已知项目字段的元数据（labelKey + desc） */
-    getKnownFields: () => ipcRenderer.invoke('project:getKnownFields'),
-    /** 监听项目列表变更（创建/更新/删除/归档后触发） */
-    onChanged: (callback: () => void) => {
-      const handler = (): void => callback()
-      ipcRenderer.on('project:changed', handler)
-      return () => ipcRenderer.removeListener('project:changed', handler)
-    }
+    getKnownFields: () => ipcRenderer.invoke('project:getKnownFields')
+    // 项目变更订阅已并入 events.subscribe（AppEvent 'project.changed'）
   },
 
   // ============ 会话管理 ============
@@ -209,13 +198,8 @@ const api = {
     scanInstructionFiles: (sessionId: string) =>
       ipcRenderer.invoke('session:scanInstructionFiles', sessionId),
     updateInstructionFiles: (params: { id: string; filenames: string[] }) =>
-      ipcRenderer.invoke('session:updateInstructionFiles', params),
-    /** 监听会话配置变更（如 LAN 分享 / Telegram 绑定切换） */
-    onConfigChanged: (callback: (payload: { sessionId: string }) => void) => {
-      const handler = (_e: unknown, payload: { sessionId: string }): void => callback(payload)
-      ipcRenderer.on('session:configChanged', handler)
-      return () => ipcRenderer.removeListener('session:configChanged', handler)
-    }
+      ipcRenderer.invoke('session:updateInstructionFiles', params)
+    // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
   // ============ 消息管理 ============
@@ -731,13 +715,8 @@ const api = {
       ipcRenderer.invoke('widget:exportAsVite', params) as Promise<
         | { success: true; filesWritten: string[]; targetPath: string }
         | { success: false; code: string; error: string }
-      >,
-    /** 监听 widget 列表 / 服务器状态变更 */
-    onChanged: (callback: () => void) => {
-      const handler = (): void => callback()
-      ipcRenderer.on('widget:changed', handler)
-      return () => ipcRenderer.removeListener('widget:changed', handler)
-    }
+      >
+    // widget 变更订阅已并入 events.subscribe（AppEvent 'widget.changed'）
   },
 
   // ============ 悬浮聊天（Floating Pin Chat） ============
@@ -757,14 +736,8 @@ const api = {
       ipcRenderer.invoke('pinChat:setAlwaysOnTop', params) as Promise<{ alwaysOnTop: boolean }>,
     /** 查询当前悬浮窗的"始终置顶"状态 */
     getAlwaysOnTop: (sessionId: string) =>
-      ipcRenderer.invoke('pinChat:getAlwaysOnTop', sessionId) as Promise<{ alwaysOnTop: boolean }>,
-    /** 监听悬浮状态变化（主窗 + 所有悬浮窗都会收到） */
-    onStateChanged: (callback: (state: { pinnedSessionIds: string[] }) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, state: { pinnedSessionIds: string[] }): void =>
-        callback(state)
-      ipcRenderer.on('window:pin-state-changed', handler)
-      return () => ipcRenderer.removeListener('window:pin-state-changed', handler)
-    }
+      ipcRenderer.invoke('pinChat:getAlwaysOnTop', sessionId) as Promise<{ alwaysOnTop: boolean }>
+    // 悬浮状态变更订阅已并入 events.subscribe（AppEvent 'pinChat.changed'）
   },
 
   // ============ Files (会话工作目录文件树) ============
@@ -785,13 +758,18 @@ const api = {
     write: (params: { sessionId: string; path: string; content: string }) =>
       ipcRenderer.invoke('files:write', params) as Promise<
         { ok: true } | { ok: false; error: string }
-      >,
-    /** 监听工作目录文件变动事件（按 root 路径标识，同项目内多会话共享） */
-    onChanged: (callback: (payload: { root: string }) => void) => {
-      const handler = (_: Electron.IpcRendererEvent, payload: { root: string }): void =>
-        callback(payload)
-      ipcRenderer.on('files:changed', handler)
-      return () => ipcRenderer.removeListener('files:changed', handler)
+      >
+    // 文件变动订阅已并入 events.subscribe（AppEvent 'files.changed'）
+  },
+  /** 通用内部事件订阅（main 经 'app:event' 广播 AppEvent，与 agent:event 并列） */
+  events: {
+    subscribe: (callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void) => {
+      const handler = (
+        _: Electron.IpcRendererEvent,
+        event: import('@shuvix/chat-protocol/appEvents').AppEvent
+      ): void => callback(event)
+      ipcRenderer.on('app:event', handler)
+      return () => ipcRenderer.removeListener('app:event', handler)
     }
   }
 }

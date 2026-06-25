@@ -19,13 +19,13 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 
-interface PromptSectionsEditorProps {
+export interface PromptSectionsEditorProps {
   sections: ProjectPromptSection[]
   onChange: (sections: ProjectPromptSection[]) => void
 }
 
 /**
- * 项目提示词卡片编辑器
+ * 提示词卡片编辑器（项目级 / 系统级共用，桌面/扩展共享）
  *
  * 渲染为 SettingsSection 卡片内的扁平行：每行 = grip + title/content 输入 + 删除按钮，
  * divide-y 自然分隔（由父 SettingsSection 提供）。末尾追加一行"添加卡片"。

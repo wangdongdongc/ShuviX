@@ -11,18 +11,16 @@
 
 import { mkdirSync, existsSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
-import { BrowserWindow } from 'electron'
 import { widgetDao, type Widget } from '../../dao/widgetDao'
+import { appEventBus } from '../../utils/appEventBus'
 import { widgetServer } from './widgetServer'
 import { getWidgetsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 import { applyWidgetSchema, WidgetDbError } from './widgetDb'
 
-/** 广播 widget 列表 / 服务器状态变更 —— 所有 BrowserWindow 都会收到 */
+/** 发布 widget 列表 / 服务器状态变更（AppEvent 'widget.changed'，经总线广播到所有窗口） */
 export function broadcastWidgetChanged(): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('widget:changed')
-  }
+  appEventBus.publish({ type: 'widget.changed' })
 }
 
 const log = createLogger('WidgetService')

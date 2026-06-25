@@ -28,10 +28,13 @@ function nextTs(): number {
   return t
 }
 
-const cache = new Map<string, ChatMessage[]>()
+/** 落库记录 = ChatMessage + 归档标记（压缩后旧消息置 archived=1，list 默认过滤） */
+type StoredMessage = ChatMessage & { archived?: 0 | 1 }
+
+const cache = new Map<string, StoredMessage[]>()
 const loaded = new Set<string>()
 
-function cacheOf(sessionId: string): ChatMessage[] {
+function cacheOf(sessionId: string): StoredMessage[] {
   let arr = cache.get(sessionId)
   if (!arr) {
     arr = []
@@ -41,30 +44,60 @@ function cacheOf(sessionId: string): ChatMessage[] {
 }
 
 /** 写入内存 + 异步落盘（write-behind，错误仅日志） */
-function insert(msg: ChatMessage): ChatMessage {
+function insert(msg: StoredMessage): ChatMessage {
   cacheOf(msg.sessionId).push(msg)
   void idb.put('messages', msg).catch((e) => console.error('[shuvix] persist message failed', e))
   return msg
 }
 
 export const messageStore = {
-  /** 确保某会话历史已从 IDB 载入内存 */
+  /** 确保某会话历史已从 IDB 载入内存（含已归档，list 时再过滤） */
   async ensureLoaded(sessionId: string): Promise<void> {
     if (loaded.has(sessionId)) return
-    const rows = await idb.getAllByIndex<ChatMessage>('messages', 'by-session', sessionId)
+    const rows = await idb.getAllByIndex<StoredMessage>('messages', 'by-session', sessionId)
     rows.sort((a, b) => a.createdAt - b.createdAt)
     cache.set(sessionId, rows)
     loaded.add(sessionId)
   },
 
-  /** 同步读取缓存（须先 ensureLoaded） */
+  /** 同步读取缓存中的「活跃」消息（须先 ensureLoaded；已归档消息不返回） */
   listSync(sessionId: string): ChatMessage[] {
-    return [...cacheOf(sessionId)]
+    return cacheOf(sessionId).filter((m) => !m.archived)
   },
 
   async list(sessionId: string): Promise<ChatMessage[]> {
     await this.ensureLoaded(sessionId)
     return this.listSync(sessionId)
+  },
+
+  /** 写入一条预构造好的消息（id/时间戳由调用方决定，如压缩摘要/指令消息） */
+  insertMessage(msg: ChatMessage): ChatMessage {
+    return insert(msg as StoredMessage)
+  },
+
+  /** 归档某会话当前全部活跃消息（压缩：旧消息退场，仅保留随后写入的摘要） */
+  async archiveBySessionId(sessionId: string): Promise<void> {
+    await this.ensureLoaded(sessionId)
+    const pending: Promise<void>[] = []
+    for (const m of cacheOf(sessionId)) {
+      if (!m.archived) {
+        m.archived = 1
+        pending.push(
+          idb.put('messages', m).catch((e) => console.error('[shuvix] archive failed', e))
+        )
+      }
+    }
+    await Promise.all(pending)
+  },
+
+  async countArchived(sessionId: string): Promise<number> {
+    await this.ensureLoaded(sessionId)
+    return cacheOf(sessionId).filter((m) => m.archived).length
+  },
+
+  async listArchived(sessionId: string): Promise<ChatMessage[]> {
+    await this.ensureLoaded(sessionId)
+    return cacheOf(sessionId).filter((m) => m.archived)
   },
 
   // ─── 通用构造 ───
@@ -196,6 +229,16 @@ export const messageStore = {
     const idx = arr.findIndex((m) => m.id === messageId)
     if (idx < 0) return
     const removed = arr.splice(idx)
+    await Promise.all(removed.map((m) => idb.delete('messages', m.id)))
+  },
+
+  /** 回退：保留该消息，删除其后的所有消息 */
+  async deleteAfter(sessionId: string, messageId: string): Promise<void> {
+    await this.ensureLoaded(sessionId)
+    const arr = cacheOf(sessionId)
+    const idx = arr.findIndex((m) => m.id === messageId)
+    if (idx < 0) return
+    const removed = arr.splice(idx + 1)
     await Promise.all(removed.map((m) => idb.delete('messages', m.id)))
   },
 

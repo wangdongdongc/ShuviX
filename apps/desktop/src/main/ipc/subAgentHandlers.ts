@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agentService'
 import { sessionService } from '../services/sessionService'
-import type { AgentDefinition } from '../agents/types'
+import type { AgentDefinition } from '@shuvix/agent-runtime'
 
 /**
  * Sub-Agent 文件系统管理 IPC 处理器

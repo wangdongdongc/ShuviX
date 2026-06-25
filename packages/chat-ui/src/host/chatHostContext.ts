@@ -12,7 +12,6 @@
  */
 
 import { createContext, useContext } from 'react'
-import type { ProviderInfo, AvailableModel } from '@shuvix/chat-protocol/types/provider'
 
 /** 外观（主题/字号/专注模式） */
 export interface ChatAppearance {
@@ -25,12 +24,12 @@ export interface ChatAppearance {
   focusMode: boolean
 }
 
-/** 模型/供应商选择状态 + 切换动作 */
+/**
+ * 模型/供应商「当前选中」状态 + 切换动作。
+ * 注意：供应商/模型「目录」(providers/availableModels)已收进 chat-ui 共享 modelCatalogStore
+ * （经 ChatApi.provider 拉取 + 订阅 providers.changed），ChatHost 只注入当前会话的选中模型镜像。
+ */
 export interface ChatModelSelection {
-  /** 供应商/模型列表是否已加载（用于 useSessionInit 的初始化时序） */
-  loaded: boolean
-  providers: ProviderInfo[]
-  availableModels: AvailableModel[]
   activeProvider: string
   activeModel: string
   setActiveProvider: (id: string) => void

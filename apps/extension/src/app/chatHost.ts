@@ -1,41 +1,39 @@
 /**
- * 扩展宿主状态 —— 把 settingsStore 组装成 chat-ui 的 ChatHostValue（外观 / 模型 / 语音）。
- * 仿桌面 settingsChatHost.ts，但数据源为 chrome.storage。
+ * 扩展宿主状态 —— 把 settingsStore 组装成 chat-ui 的 ChatHostValue（外观 / 当前选中模型）。
+ * 仿桌面 settingsChatHost.ts，但数据源为 chrome.storage；不提供 voice（扩展暂不支持语音）。
+ *
+ * 模型「目录」(providers/availableModels)已收进 chat-ui modelCatalogStore（经 ChatApi.provider 拉取 +
+ * 订阅 providers.changed），此处只注入当前会话的选中模型镜像。
  */
 import { useEffect, useState, useCallback } from 'react'
 import type { ChatHostValue } from '@shuvix/chat-ui'
-import type { ProviderInfo, AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import { settingsStore } from '../storage/settingsStore'
 import { useAppearance } from './appearanceStore'
 
 export function useExtensionChatHost(): ChatHostValue {
   const appearance = useAppearance()
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
-  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
-  const [activeProvider, setActiveProviderState] = useState('anthropic')
-  const [activeModel, setActiveModelState] = useState('claude-opus-4-8')
-  const [loaded, setLoaded] = useState(false)
+  const [activeProvider, setActiveProviderState] = useState('')
+  const [activeModel, setActiveModelState] = useState('')
 
   useEffect(() => {
-    setProviders(settingsStore.listProviders())
-    setAvailableModels(settingsStore.listAvailableModels())
     void (async () => {
-      const p = (await settingsStore.get('activeProvider')) || 'anthropic'
-      const m = (await settingsStore.get('activeModel')) || 'claude-opus-4-8'
-      setActiveProviderState(p)
-      setActiveModelState(m)
-      setLoaded(true)
+      // 初始活跃 = 设置中的默认模型（未配则首个已启用模型）。打开会话后由 useSessionInit
+      // 同步成该会话自己的模型。activeProvider/activeModel 仅是当前会话的内存镜像，不持久化。
+      const configured = await settingsStore.getConfiguredDefault()
+      const def = settingsStore.getDefaultSelection()
+      setActiveProviderState(configured.provider || def.provider)
+      setActiveModelState(configured.model || def.model)
     })()
   }, [])
 
+  // 仅内存镜像（驱动 ModelPicker 显示当前会话模型）；不落盘——切换会话模型不应改动默认模型。
+  // 每会话的模型由 ModelPicker 经 session.updateModelConfig 持久化（与桌面一致）。
   const setActiveProvider = useCallback((id: string) => {
     setActiveProviderState(id)
-    void settingsStore.set('activeProvider', id)
   }, [])
 
   const setActiveModel = useCallback((id: string) => {
     setActiveModelState(id)
-    void settingsStore.set('activeModel', id)
   }, [])
 
   return {
@@ -46,15 +44,7 @@ export function useExtensionChatHost(): ChatHostValue {
       fontSize: appearance.fontSize,
       focusMode: appearance.focusMode
     },
-    models: {
-      loaded,
-      providers,
-      availableModels,
-      activeProvider,
-      activeModel,
-      setActiveProvider,
-      setActiveModel
-    },
-    voice: { sttLanguage: 'auto', ttsEnabled: false }
+    models: { activeProvider, activeModel, setActiveProvider, setActiveModel }
+    // 不提供 voice —— 扩展暂不支持语音输入/朗读（STT 后端为 noop），据此隐藏麦克风等语音 UI
   }
 }

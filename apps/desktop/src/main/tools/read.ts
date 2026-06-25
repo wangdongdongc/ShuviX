@@ -12,6 +12,7 @@ import { nativeImage } from 'electron'
 import { MarkItDown } from 'markitdown-ts'
 import WordExtractor from 'word-extractor'
 import { createFileToolSuite, type ReadDecoders } from '@shuvix/agent-runtime'
+import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import { formatSize } from '../../shared/node/truncate'
 import { suggestSimilarFiles } from '../utils/toolUtils/pathUtils'
 import {
@@ -304,11 +305,8 @@ registerBuiltinTool({
   name: 'read',
   group: 'general',
   defaultEnabled: true,
-  getLabel: () => t('tool.readLabel'),
+  getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.read.labelKey),
   getHint: () => t('tool.readHint'),
   factory: (ctx) => makeReadTool(ctx),
-  presentation: {
-    icon: 'FileText',
-    summaryField: 'path'
-  }
+  presentation: BUILTIN_TOOL_PRESENTATIONS.read.presentation
 })

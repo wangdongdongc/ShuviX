@@ -95,3 +95,53 @@ export {
   DEFAULT_MAX_BYTES,
   MAX_LINE_LENGTH
 } from './fileTools/truncate'
+// 系统提示词卡片（内置定义 + 装配/视图）—— 内容来自共享 i18n，environment 由各端注入
+export {
+  BUILTIN_SECTION_ORDER,
+  ENVIRONMENT_SECTION_ID,
+  isBuiltinSectionId,
+  isDynamicBuiltin,
+  getBuiltinTitle,
+  getStaticBuiltinContent,
+  type BuiltinSectionId,
+  type BuiltinRenderCtx
+} from './systemPrompt/builtinSections'
+export {
+  listBuiltinSections,
+  previewBuiltinSection,
+  renderSystemPromptSections,
+  type SystemPromptDeps,
+  type BuiltinSectionViewItem
+} from './systemPrompt/render'
+// 子代理：执行内核 + 派发工具（注入注册表/工具解析/模型构建/事件广播，端无关）
+export {
+  createSubAgentManager,
+  type SubAgentManager,
+  type SubAgentManagerDeps,
+  type RunTaskParams,
+  type SubAgentRegisterMeta,
+  type AnyAgentTool
+} from './subagent/manager'
+export {
+  createDispatchAgentTool,
+  DispatchAgentTool,
+  type DispatchAgentToolDeps
+} from './subagent/dispatchTool'
+export type {
+  AgentDefinition,
+  InProcessAgentType,
+  SubAgentModelConfig,
+  SubAgentRegistry
+} from './subagent/types'
+// Full Compaction：宿主无关的压缩编排 + 纯提示词/预处理工具（端注入存储/模型/事件适配器）
+export {
+  runCompaction,
+  isCompacting,
+  buildCompactionPrompt,
+  formatCompactSummary,
+  buildSummaryContent,
+  prepareMessagesForCompaction,
+  type CompactionDeps
+} from './compaction'
+// 会话标题生成：宿主无关内核（端解析模型来源 + apiKey，触发策略在 chat-ui 共享）
+export { generateSessionTitle, parseTitle, TITLE_GEN_SYSTEM_PROMPT } from './title/generateTitle'

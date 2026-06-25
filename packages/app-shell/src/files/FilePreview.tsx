@@ -16,9 +16,10 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import { AlertCircle, FileX, ListOrdered, Loader2, Lock, Music, WrapText, X } from 'lucide-react'
-import { CodeBlock } from '@shuvix/chat-ui'
+import { CodeBlock, getChatApi, useAppEvent } from '@shuvix/chat-ui'
 import { CodeView } from './CodeView'
 import { HexView } from './HexView'
+import { useMediaUrl } from './mediaUrl'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 
 interface FilePreviewProps {
@@ -43,8 +44,8 @@ export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): Rea
     let cancelled = false
     // 路径切换时立即清除旧结果，显示 loading；不会引发额外副作用
     setResult(null) // eslint-disable-line react-hooks/set-state-in-effect
-    window.api.files
-      .read({ sessionId, path })
+    getChatApi()
+      .files.read({ sessionId, path })
       .then((r) => {
         if (!cancelled) setResult(r)
       })
@@ -61,6 +62,18 @@ export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): Rea
       cancelled = true
     }
   }, [path, sessionId])
+
+  // 内容级刷新：当前预览文件被 edit/write 改动时静默重读（不清空 → 不闪 loading）。
+  // 事件 paths 与 path 同一路径空间；省略 paths 视为"未知，保守重读"。
+  useAppEvent('files.changed', (e) => {
+    if (e.paths && !e.paths.includes(path)) return
+    getChatApi()
+      .files.read({ sessionId, path })
+      .then(setResult)
+      .catch(() => {
+        /* 读失败保留旧内容 */
+      })
+  })
 
   const { fileName, parentDir } = splitPath(path)
   // 只在非 markdown 文本预览下显示 wrap 开关 —— 图像 / hex / PDF / 媒体都用不上
@@ -244,7 +257,7 @@ function MediaView({
   t: (key: string, options?: Record<string, unknown>) => string
 }): React.JSX.Element {
   const [errored, setErrored] = useState(false)
-  const url = `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+  const url = useMediaUrl(sessionId, path, mimeType)
 
   if (errored) {
     return (
@@ -254,6 +267,10 @@ function MediaView({
         detail={`${mediaType} · ${mimeType}`}
       />
     )
+  }
+
+  if (!url) {
+    return <Placeholder icon={<Loader2 size={20} className="animate-spin" />} title="" />
   }
 
   if (mediaType === 'video') {
@@ -308,7 +325,10 @@ function MediaView({
  * 主进程协议 handler 见 src/main/index.ts 的 protocol.handle('shuvix-preview')。
  */
 function PdfView({ path, sessionId }: { path: string; sessionId: string }): React.JSX.Element {
-  const url = `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+  const url = useMediaUrl(sessionId, path, 'application/pdf')
+  if (!url) {
+    return <Placeholder icon={<Loader2 size={20} className="animate-spin" />} title="" />
+  }
   return (
     <iframe
       src={url}

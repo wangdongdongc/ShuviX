@@ -2,8 +2,8 @@ import type { AgentState, AgentTool } from '@earendil-works/pi-agent-core'
 import type { TSchema } from 'typebox'
 import { getBuiltinToolEntries } from './toolRegistry'
 import { SkillTool } from './skillTool'
-import { AgentTool as DispatchAgentTool } from '../agents/AgentTool'
-import type { SubAgentModelConfig } from '../agents/types'
+import { createAgentTool } from '../agents/AgentTool'
+import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { type ToolContext } from './toolContext'
 import { mcpService } from './mcpService'
 import { wrapToolOutput, getOutputStrategy } from './wrapToolOutput'
@@ -40,7 +40,7 @@ export function buildTools(
 
   // 统一 Agent 派发工具（仅主 Agent 传入 subAgentCtx，子智能体不传此参数，天然防递归）
   if (subAgentCtx) {
-    tools.push(wrap(new DispatchAgentTool(ctx, { modelConfig: subAgentCtx.modelConfig })))
+    tools.push(wrap(createAgentTool(ctx, { modelConfig: subAgentCtx.modelConfig })))
   }
 
   const enabledSkillNames = enabledTools

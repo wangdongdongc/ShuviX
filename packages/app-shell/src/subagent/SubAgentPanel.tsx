@@ -252,7 +252,12 @@ const SubSessionStream = memo(function SubSessionStream({
 })
 
 /** 子 Tab 栏 + 当前活跃子会话内容 */
-export function SubAgentPanel(): React.JSX.Element {
+export interface SubAgentPanelProps {
+  /** 关闭子会话时通知宿主后端销毁运行时（桌面 window.api.subSession.destroy；扩展可省略）。 */
+  onDestroySubSession?: (subSessionId: string) => void
+}
+
+export function SubAgentPanel({ onDestroySubSession }: SubAgentPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const allList = useSubSessionStore(selectSubSessionList)
   const activeId = useSubSessionStore((s) => s.activeSubSessionId)
@@ -281,8 +286,8 @@ export function SubAgentPanel(): React.JSX.Element {
 
   const handleClose = (e: React.MouseEvent, subSessionId: string): void => {
     e.stopPropagation()
-    // 通知服务端销毁，再从本地 store 移除
-    window.api.subSession?.destroy(subSessionId).catch(() => {})
+    // 通知宿主后端销毁，再从本地 store 移除
+    onDestroySubSession?.(subSessionId)
     closeSub(subSessionId)
   }
 

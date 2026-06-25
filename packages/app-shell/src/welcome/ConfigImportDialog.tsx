@@ -7,7 +7,7 @@ import type {
   ImportResult,
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
-import { useDialogClose } from '@shuvix/chat-ui'
+import { getChatApi, useDialogClose } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SettingsSection } from '../settings/SettingsPrimitives'
 
@@ -37,6 +37,7 @@ function mapParseError(err: unknown): string {
   }
 }
 
+/** 配置导入对话框（桌面/扩展共用）—— 经 getChatApi().config 取后端，宿主无关。 */
 export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
@@ -67,8 +68,8 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const payload = await window.api.config.parseImportPayload(text)
-          const plan = await window.api.config.planImport(payload)
+          const payload = await getChatApi().config.parseImportPayload(text)
+          const plan = await getChatApi().config.planImport(payload)
           setParseState({ status: 'ok', payload, plan })
           setSelectedProviders(new Set(plan.providers.map((p) => p.name)))
           setSelectedModels(
@@ -120,7 +121,7 @@ export function ConfigImportDialog({ onClose }: { onClose: () => void }): React.
     if (parseState.status !== 'ok' || applying) return
     setApplying(true)
     try {
-      const res = await window.api.config.applyImport({
+      const res = await getChatApi().config.applyImport({
         payload: parseState.payload,
         selection: buildSelection()
       })

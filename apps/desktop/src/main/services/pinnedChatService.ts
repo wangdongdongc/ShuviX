@@ -5,6 +5,7 @@ import { chatFrontendRegistry, type ChatFrontend } from '../frontend/core'
 import { settingsDao } from '../dao/settingsDao'
 import { destroyTerminalsByWindow } from './terminalService'
 import { getBrowserOffset, clearBrowserOffset } from './panelLayoutState'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
 const log = createLogger('PinnedChat')
@@ -69,8 +70,6 @@ interface PinnedEntry {
 }
 
 export type UnpinReason = 'user' | 'window-closed' | 'session-deleted' | 'app-quit'
-
-let mainWindow: BrowserWindow | null = null
 const pinned = new Map<string, PinnedEntry>()
 /** 正在拆除中的 sessionId — 防止 close → closed 链路的重入 unpin */
 const closing = new Set<string>()
@@ -161,15 +160,8 @@ function ensureMacAppVisible(): void {
 }
 
 function broadcastState(): void {
-  const state: PinnedChatState = { pinnedSessionIds: Array.from(pinned.keys()) }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('window:pin-state-changed', state)
-  }
-  for (const { window } of pinned.values()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send('window:pin-state-changed', state)
-    }
-  }
+  // 经内部事件总线广播到所有窗口（含悬浮窗），替代逐窗口 webContents.send
+  appEventBus.publish({ type: 'pinChat.changed', pinnedSessionIds: Array.from(pinned.keys()) })
 }
 
 function createFloatingWindow(sessionId: string): BrowserWindow {
@@ -256,7 +248,6 @@ export function initPinnedChatService(opts: {
   /** 由 main-entry 注入：为指定 BrowserWindow 构造 ChatFrontend 实例 */
   createFrontend: (window: BrowserWindow) => ChatFrontend
 }): void {
-  mainWindow = opts.mainWindow
   getThemeBgColor = opts.getThemeBgColor
   createPinnedFrontend = opts.createFrontend
 }

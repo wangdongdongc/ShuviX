@@ -12,7 +12,7 @@ import {
   collapseProgressOutput
 } from '../utils/toolUtils/shell'
 import { buildSpawnEnv } from '../utils/paths'
-import { BaseTool } from '../services/baseTool'
+import { BaseTool } from '@shuvix/agent-runtime'
 import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
 import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'

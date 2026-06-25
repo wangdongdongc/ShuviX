@@ -9,7 +9,7 @@
 import { resolve } from 'path'
 import { Type } from 'typebox'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
-import { BaseTool } from './baseTool'
+import { BaseTool } from '@shuvix/agent-runtime'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { SkillToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { skillService } from './skillService'

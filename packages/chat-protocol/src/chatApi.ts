@@ -10,6 +10,8 @@
  * window.api 结构满足本契约，从而零漂移。
  */
 import type { LucideIconName, ThemeColor } from './theme'
+import type { AppEvent } from './appEvents'
+import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage, ErrorEventMessage, MessageMetadata } from './types/chatMessage'
 import type {
   ProviderInfo,
@@ -30,6 +32,14 @@ import type { InstructionFileEntry } from './types/instructionFile'
 import type { ProjectPromptSection } from './types/promptSection'
 import type { InlineToken } from './types/chatMessage'
 import type { ChatEvent, RuntimeStatus } from './events'
+import type {
+  ConfigSharePayload,
+  ExportOptions,
+  ExportSnapshot,
+  ImportPlan,
+  ImportResult,
+  ImportSelection
+} from './types/configShare'
 
 // ─────────────────────────── 前端 IPC 视图数据形状 ───────────────────────────
 
@@ -380,7 +390,7 @@ export interface ChatApi {
     adjustWindowWidth: (delta: number) => Promise<void>
     setBrowserOffset: (offset: number) => Promise<void>
     windowReady: () => void
-    onSettingsChanged: (callback: () => void) => () => void
+    // 设置变更订阅已并入通用 events.subscribe（AppEvent 'settings.changed'）
     onNewChat: (callback: () => void) => () => void
     onNewProject: (callback: () => void) => () => void
   }
@@ -429,7 +439,7 @@ export interface ChatApi {
     update: (params: ProjectUpdateParams) => Promise<{ success: boolean }>
     delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
     getKnownFields: () => Promise<Record<string, ConfigMeta>>
-    onChanged: (callback: () => void) => () => void
+    // 变更订阅已并入通用 events.subscribe（AppEvent 'project.changed'）
   }
   session: {
     list: () => Promise<Session[]>
@@ -458,7 +468,7 @@ export interface ChatApi {
       id: string
       filenames: string[]
     }) => Promise<{ success: boolean }>
-    onConfigChanged: (callback: (payload: { sessionId: string }) => void) => () => void
+    // 配置变更订阅已并入通用 events.subscribe（AppEvent 'session.configChanged'）
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>
@@ -496,6 +506,17 @@ export interface ChatApi {
     getCustomSections: () => Promise<ProjectPromptSection[]>
     setCustomSections: (sections: ProjectPromptSection[]) => Promise<{ success: boolean }>
     previewBuiltinSection: (params: { id: string; sessionId?: string }) => Promise<string>
+  }
+  /** 配置分享：Provider + MCP 配置导出/导入为可粘贴串（桌面 DAO / 扩展 chrome.storage） */
+  config: {
+    buildExportSnapshot: () => Promise<ExportSnapshot>
+    buildExportPayload: (options: ExportOptions) => Promise<string>
+    parseImportPayload: (encoded: string) => Promise<ConfigSharePayload>
+    planImport: (payload: ConfigSharePayload) => Promise<ImportPlan>
+    applyImport: (params: {
+      payload: ConfigSharePayload
+      selection: ImportSelection
+    }) => Promise<ImportResult>
   }
   runtime: {
     statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
@@ -560,7 +581,7 @@ export interface ChatApi {
       value: boolean
     }) => Promise<{ alwaysOnTop: boolean }>
     getAlwaysOnTop: (sessionId: string) => Promise<{ alwaysOnTop: boolean }>
-    onStateChanged: (callback: (state: { pinnedSessionIds: string[] }) => void) => () => void
+    // 悬浮状态变更订阅已并入通用 events.subscribe（AppEvent 'pinChat.changed'）
   }
   update: {
     check: () => Promise<{ success: boolean }>
@@ -568,6 +589,29 @@ export interface ChatApi {
     install: () => Promise<{ success: boolean }>
     getLastEvent: () => Promise<UpdateEvent | null>
     onEvent: (callback: (event: UpdateEvent) => void) => () => void
+  }
+  /** 通用内部事件订阅（后端发布的全局状态事件，与 agent.onEvent 并列）。见 docs/internal-events.md */
+  events: {
+    subscribe: (callback: (event: AppEvent) => void) => () => void
+  }
+  /** 工作目录文件浏览（右侧面板 Files tab）。桌面走 Node fs + 文件监听；
+   *  扩展走 File System Access（无原生监听 → onChanged 为空操作，靠手动刷新）。 */
+  files: {
+    /** 扫描当前会话工作目录下的所有文件相对路径（遵循忽略规则），root 为工作目录标识 */
+    scan: (params: { sessionId: string }) => Promise<{
+      paths: string[]
+      truncated: boolean
+      root: string | null
+    }>
+    /** 读取文件内容用于面板预览（沙箱外返回 not-allowed，不弹审批） */
+    read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
+    /** 回写文件内容（沙箱外返回 ok:false，不弹审批） */
+    write: (params: {
+      sessionId: string
+      path: string
+      content: string
+    }) => Promise<{ ok: true } | { ok: false; error: string }>
+    // 文件变动订阅已并入通用 events.subscribe（AppEvent 'files.changed'），见 docs/internal-events.md
   }
   /** 语音转文字 —— chat-ui 仅用 transcribe（其余 stt 能力由宿主自行扩展） */
   stt: {

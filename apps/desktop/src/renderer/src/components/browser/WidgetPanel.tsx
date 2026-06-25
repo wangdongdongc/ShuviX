@@ -45,10 +45,10 @@ export function WidgetPanel(): React.JSX.Element {
 
   useEffect(() => {
     void reload()
-    const unsubscribe = window.api.widget.onChanged(() => {
-      void reload()
+    // AppEvent 'widget.changed'（替代旧 widget.onChanged）
+    return window.api.events.subscribe((event) => {
+      if (event.type === 'widget.changed') void reload()
     })
-    return unsubscribe
   }, [reload])
 
   const isEmpty = loaded && widgets.length === 0

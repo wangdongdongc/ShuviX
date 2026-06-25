@@ -6,7 +6,7 @@
 import { Type } from 'typebox'
 import { dbManager } from '../services/dbManager'
 import { dbCredentialDao } from '../dao/dbCredentialDao'
-import { BaseTool } from '../services/baseTool'
+import { BaseTool } from '@shuvix/agent-runtime'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { DatabaseToolDetails } from '@shuvix/chat-protocol/types/chatMessage'

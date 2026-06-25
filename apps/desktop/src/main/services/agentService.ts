@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 
 import { join } from 'path'
 import { shell } from 'electron'
 import { getBuiltinAgentsDir, getDefaultAgentsDir } from '../utils/paths'
-import type { AgentDefinition } from '../agents/types'
+import type { AgentDefinition } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')

@@ -69,10 +69,7 @@ export function registerSettingsHandlers(): void {
         win.webContents.setZoomFactor(zoom)
       })
     }
-    // 通知所有窗口设置已变更（主窗口监听后会刷新主题/字体等）
-    BrowserWindow.getAllWindows().forEach((win) => {
-      win.webContents.send('app:settings-changed')
-    })
+    // settings.changed 由 settingsService.set 在数据层发布（覆盖所有调用方），此处不再重复广播
     return { success: true }
   })
 
@@ -112,15 +109,13 @@ export function registerSettingsHandlers(): void {
     'settings:previewBuiltinSection',
     (_event, params: { id: string; sessionId?: string }) => {
       if (!params?.id || !isBuiltinSectionId(params.id)) return ''
+      // environment 卡片仅需工作目录（检测 git）；可选传 sessionId 取其项目路径
       const ctx: BuiltinRenderCtx = {}
       if (params.sessionId) {
-        const session = sessionDao.pick(params.sessionId, ['projectId', 'model'])
-        if (session) {
-          ctx.modelId = session.model
-          if (session.projectId) {
-            const project = projectDao.pick(session.projectId, ['path'])
-            if (project) ctx.workingDirectory = project.path
-          }
+        const session = sessionDao.pick(params.sessionId, ['projectId'])
+        if (session?.projectId) {
+          const project = projectDao.pick(session.projectId, ['path'])
+          if (project) ctx.workingDirectory = project.path
         }
       }
       return previewBuiltinSection(params.id, ctx)

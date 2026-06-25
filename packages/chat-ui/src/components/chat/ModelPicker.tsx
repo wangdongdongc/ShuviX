@@ -13,6 +13,7 @@ import {
   Settings
 } from 'lucide-react'
 import { useChatStore } from '../../stores/chatStore'
+import { useModelCatalogStore } from '../../stores/modelCatalogStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { ProviderIcon } from '../settings/ProviderIcons'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -60,14 +61,10 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
       })
     }
   }
-  const {
-    availableModels,
-    providers,
-    activeProvider,
-    activeModel,
-    setActiveProvider,
-    setActiveModel
-  } = useChatHost().models
+  // 目录(providers/availableModels)来自共享 modelCatalogStore；当前选中来自 ChatHost
+  const providers = useModelCatalogStore((s) => s.providers)
+  const availableModels = useModelCatalogStore((s) => s.availableModels)
+  const { activeProvider, activeModel, setActiveProvider, setActiveModel } = useChatHost().models
 
   const pickerRef = useRef<HTMLDivElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)

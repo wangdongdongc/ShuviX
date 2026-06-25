@@ -285,7 +285,10 @@ export function LivePreviewEditor({
       }
     }
     void doScan()
-    const unsub = window.api.files.onChanged(() => void doScan())
+    // 文件变更 → 重扫双链文件表（AppEvent 'files.changed'，替代旧 files.onChanged）
+    const unsub = window.api.events.subscribe((e) => {
+      if (e.type === 'files.changed') void doScan()
+    })
     return () => {
       cancelled = true
       unsub()

@@ -856,6 +856,8 @@
     "filesTruncated": "已显示前 {{count}} 个文件",
     "filesRefresh": "刷新",
     "filesSearch": "搜索",
+    "filesPermissionNeeded": "对文件夹「{{name}}」的访问权限已失效，点击重新授权以查看文件。",
+    "filesGrantAccess": "授权访问",
     "preview": {
       "close": "关闭预览",
       "binary": "不支持预览",

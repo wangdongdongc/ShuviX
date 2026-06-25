@@ -856,6 +856,8 @@
     "filesTruncated": "Showing first {{count}} files",
     "filesRefresh": "Refresh",
     "filesSearch": "Search",
+    "filesPermissionNeeded": "Access to folder “{{name}}” has expired. Grant access to view its files.",
+    "filesGrantAccess": "Grant access",
     "preview": {
       "close": "Close preview",
       "binary": "Preview not supported",

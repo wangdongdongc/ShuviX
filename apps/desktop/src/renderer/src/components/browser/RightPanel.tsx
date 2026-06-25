@@ -5,17 +5,21 @@
  * 各面板始终挂载，通过 visibility 切换，避免 xterm/iframe/WebContentsView 重建
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Bot, FolderTree, Monitor, TerminalSquare, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
 import { BrowserPanel } from './BrowserPanel'
 import { TerminalPanel } from '../terminal/TerminalPanel'
-import { FilesPanel } from '../files/FilesPanel'
+import {
+  FilesPanel,
+  SubAgentPanel,
+  MediaUrlProvider,
+  shuvixPreviewResolver
+} from '@shuvix/app-shell'
 import { WidgetPanel } from './WidgetPanel'
-import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
-import { useSubSessionStore, selectSubSessionList } from '@shuvix/chat-ui'
+import { useSubAgentCount } from '@shuvix/chat-ui'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../../stores/settingsStore'
 
@@ -46,20 +50,13 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
   const setActiveTab = useBrowserStore((s) => s.setActiveTab)
   const width = useBrowserStore((s) => s.width)
   const widgetCount = useWidgetStore((s) => s.widgets.length)
-  const allSubSessions = useSubSessionStore(selectSubSessionList)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const focusMode = useSettingsStore((s) => s.focusMode)
   /** 专注模式生效条件：开关打开 + 已选中主会话 → 淡化未选中 tab */
   const dim = focusMode && !!activeSessionId
 
-  // 仅统计归属当前主会话的子会话
-  const subAgentCount = useMemo(
-    () =>
-      activeSessionId
-        ? allSubSessions.filter((s) => s.parentSessionId === activeSessionId).length
-        : 0,
-    [allSubSessions, activeSessionId]
-  )
+  // 当前主会话下的子会话数（共享 useSubAgentCount）—— >0 才显示 Sub-agent tab
+  const subAgentCount = useSubAgentCount(activeSessionId)
 
   // 悬浮窗:browser tab 走主窗的全局 WebContentsView,无法跨窗口共享 → 隐藏
   // widget tab 当前也由主窗的 widgetServer 集中托管,在悬浮窗里展示意义不大 → 隐藏
@@ -181,7 +178,14 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
             activeTab === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
           }
         >
-          <FilesPanel />
+          {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；点击 .md 在中间区打开 live-preview 编辑器 */}
+          <MediaUrlProvider value={shuvixPreviewResolver}>
+            <FilesPanel
+              onOpenMarkdown={({ path, sessionId }) =>
+                useChatStore.getState().setActiveFile({ path, sessionId })
+              }
+            />
+          </MediaUrlProvider>
         </div>
         <div
           className="absolute inset-0"
@@ -197,7 +201,9 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
             activeTab === 'subagent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
           }
         >
-          <SubAgentPanel />
+          <SubAgentPanel
+            onDestroySubSession={(id) => window.api.subSession?.destroy(id).catch(() => {})}
+          />
         </div>
       </div>
     </div>

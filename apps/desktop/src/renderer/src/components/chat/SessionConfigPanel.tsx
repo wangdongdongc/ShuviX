@@ -89,8 +89,8 @@ export function SessionConfigPanel({ sessionId }: { sessionId: string }): React.
     void loadShareUrls()
     void loadBots()
 
-    const unsubscribe = getChatApi().session.onConfigChanged((payload) => {
-      if (payload.sessionId === sessionId) {
+    const unsubscribe = getChatApi().events.subscribe((event) => {
+      if (event.type === 'session.configChanged' && event.sessionId === sessionId) {
         void loadShareUrls()
         void loadBots()
       }

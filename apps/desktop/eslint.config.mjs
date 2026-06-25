@@ -101,15 +101,12 @@ export default defineConfig(
         // services/__tests__ 不算独立模块，归回 main-service（先于 module 规则匹配）
         { type: 'main-service', pattern: 'src/main/services/__tests__' },
         // main-service-contract：services/ 根目录的少量"工具子系统原语"
-        // baseTool（抽象基类）/ toolContext（ToolContext/sandbox/TOOL_ABORTED）/ toolRegistry（注册表）
+        // toolContext（ToolContext/sandbox/TOOL_ABORTED）/ toolRegistry（注册表）
         // 独立模块与 tool 实现层都需要它们，视为服务层内部的"合约原语"
+        // 注：BaseTool 已下沉 @shuvix/agent-runtime（包外，按 external 处理），消费方直接引包
         {
           type: 'main-service-contract',
-          pattern: [
-            'src/main/services/baseTool.ts',
-            'src/main/services/toolContext.ts',
-            'src/main/services/toolRegistry.ts'
-          ],
+          pattern: ['src/main/services/toolContext.ts', 'src/main/services/toolRegistry.ts'],
           mode: 'file'
         },
         // main-service-module：services/ 下的独立子目录模块（bundler / browser / widget / stt / tts / pglite / pyodide）

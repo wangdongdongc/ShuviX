@@ -12,6 +12,8 @@ import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
 import { mcpManager } from '../runtime/mcpRuntime'
 import { initAppearance } from './appearanceStore'
+import { initSidebar } from './sidebarStore'
+import { initPanel } from './panelStore'
 import { App } from './App'
 
 // ④ 注入本地 ChatApi 实现（进程内，直接 await）
@@ -20,6 +22,8 @@ setChatApi(chatApiAdapter)
 // ⑤ 启动前载入外观 + 模型启停状态 + MCP server 列表（让同步读取生效），再渲染
 void Promise.all([
   initAppearance(),
+  initSidebar(),
+  initPanel(),
   settingsStore.loadState().then(() => settingsStore.syncEnabledBuiltinModels()),
   mcpStore.loadState(),
   projectStore.loadState()

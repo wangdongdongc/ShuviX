@@ -15,9 +15,7 @@ export function useSettingsChatHost(): ChatHostValue {
   const fontSize = useSettingsStore((s) => s.fontSize)
   const focusMode = useSettingsStore((s) => s.focusMode)
 
-  const loaded = useSettingsStore((s) => s.loaded)
-  const providers = useSettingsStore((s) => s.providers)
-  const availableModels = useSettingsStore((s) => s.availableModels)
+  // 模型「目录」已收进 chat-ui modelCatalogStore；这里只注入当前会话选中模型镜像
   const activeProvider = useSettingsStore((s) => s.activeProvider)
   const activeModel = useSettingsStore((s) => s.activeModel)
   const setActiveProvider = useSettingsStore((s) => s.setActiveProvider)
@@ -30,9 +28,6 @@ export function useSettingsChatHost(): ChatHostValue {
     () => ({
       appearance: { theme, darkTheme, lightTheme, fontSize, focusMode },
       models: {
-        loaded,
-        providers,
-        availableModels,
         activeProvider,
         activeModel,
         setActiveProvider,
@@ -46,9 +41,6 @@ export function useSettingsChatHost(): ChatHostValue {
       lightTheme,
       fontSize,
       focusMode,
-      loaded,
-      providers,
-      availableModels,
       activeProvider,
       activeModel,
       setActiveProvider,

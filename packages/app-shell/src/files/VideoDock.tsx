@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Film, Maximize2, X } from 'lucide-react'
+import { useMediaUrl } from './mediaUrl'
 
 /** 视频区高度上下限；MAX 防止竖屏吃掉文件树，MIN 保证原生控件不被压扁 */
 const MAX_VIDEO_HEIGHT = 360
@@ -68,7 +69,7 @@ export function VideoDock({
       ? Math.min(MAX_VIDEO_HEIGHT, Math.max(MIN_VIDEO_HEIGHT, containerWidth * aspect))
       : FALLBACK_VIDEO_HEIGHT
 
-  const url = `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+  const url = useMediaUrl(sessionId, path, mimeType)
 
   if (errored) {
     return (
@@ -119,7 +120,7 @@ export function VideoDock({
       >
         <video
           key={path}
-          src={url}
+          src={url ?? undefined}
           controls
           autoPlay
           className="w-full h-full object-contain"
@@ -131,7 +132,7 @@ export function VideoDock({
           }}
           onError={() => setErrored(true)}
         >
-          <source src={url} type={mimeType} />
+          {url && <source src={url} type={mimeType} />}
         </video>
       </div>
     </div>

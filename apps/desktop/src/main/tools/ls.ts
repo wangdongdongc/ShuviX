@@ -6,7 +6,6 @@
 import { stat } from 'fs/promises'
 import { relative, resolve } from 'path'
 import { Type } from 'typebox'
-import { BaseTool } from '../services/baseTool'
 import {
   resolveProjectConfig,
   assertSandboxRead,
@@ -15,7 +14,7 @@ import {
 } from '../services/toolContext'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { LsToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import { buildTree } from '@shuvix/agent-runtime'
+import { BaseTool, buildTree } from '@shuvix/agent-runtime'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { t } from '../i18n'

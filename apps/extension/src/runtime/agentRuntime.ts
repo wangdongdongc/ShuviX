@@ -5,15 +5,12 @@
  * 与桌面 AgentSession 的对应：这里是「扩展宿主 wrapper」，提供浏览器适配器（messageStore /
  * eventBus / chrome.storage 模型解析），并组装工具集（共享 ask + 已连接 MCP 工具）。
  */
-import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
+import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core'
 import {
   RuntimeSession,
-  resolveModel,
   createAskTool,
-  type RuntimeEnv,
   type RuntimeEventSink,
   type RuntimePersistence,
-  type ResolveModelProviderInfo,
   type RuntimeLogger,
   type SpillSink
 } from '@shuvix/agent-runtime'
@@ -25,12 +22,20 @@ import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
 import { projectStore } from '../storage/projectStore'
 import { getTempWorkspaceHandle } from '../storage/opfsWorkspace'
+import { systemPromptStore } from '../storage/systemPromptStore'
 import { eventBus } from './eventBus'
 import { mcpManager } from './mcpRuntime'
 import { createFileTools } from './fileTools'
 import { browserTools } from './browserTools'
 import { createSpillSink } from './opfsSpillSink'
 import { wrapToolsOutput } from './wrapToolOutput'
+import { resolveSessionModel } from './resolveSessionModel'
+import {
+  registerSessionTools,
+  clearSessionTools,
+  createExtensionDispatchTool,
+  subAgentManager
+} from './subAgent'
 
 const BROWSER_PROMPT = `You can inspect and operate the user's open browser tabs. To open a web page, use
 open_tab (it opens a NEW tab and returns its id) — never use navigate to open a fresh page. Reading:
@@ -42,26 +47,26 @@ re-snapshot after the page changes; call release_tab when you finish operating a
 You cannot target the ShuviX app tab itself. You can also fetch public URLs (the "read" tool with an
 http/https URL).`
 
-/** 临时会话：拥有一个私有的隔离工作目录（OPFS），可用 read/write/edit 作为暂存空间 */
-const DEFAULT_SYSTEM_PROMPT = `You are ShuviX, a helpful AI assistant running inside a Chrome extension.
-You have a private, isolated scratch working directory. You can read, write, and edit files in it using
+// 「人设」段（identity/tone 等）由上下文管理设置装配（systemPromptStore.renderPersona，全量对齐桌面，
+// 总开关开启时完全替换默认人设）；以下是平台「操作上下文」段——与人设无关、始终追加，
+// 保证浏览器/文件工具的操作指令与工作目录说明不丢（镜像桌面「工作目录指引在开关外恒生效」）。
+
+/** 临时会话：私有隔离工作目录（OPFS）的操作上下文 */
+const SCRATCH_CONTEXT_PROMPT = `You have a private, isolated scratch working directory. You can read, write, and edit files in it using
 the file tools (paths are relative to the directory root; you cannot escape it) — use it for intermediate
 results, notes, or generated content.
 ${BROWSER_PROMPT}
 You can ask clarifying questions (the "ask" tool) and use any configured MCP tools.
 You do not have access to a shell or SSH. Keep answers concise and useful.`
 
-/** 绑定了项目文件夹的会话：可用 read/write/edit 操作该文件夹 */
-function projectSystemPrompt(folderName: string): string {
-  return `You are ShuviX, a helpful AI assistant running inside a Chrome extension.
-You are working inside the project folder "${folderName}". You can read, write, and edit files within
+/** 项目会话：绑定文件夹的操作上下文 */
+function projectContextPrompt(folderName: string): string {
+  return `You are working inside the project folder "${folderName}". You can read, write, and edit files within
 this folder using the file tools (paths are relative to the folder root; you cannot escape it).
 ${BROWSER_PROMPT}
 You can ask clarifying questions (the "ask" tool) and use any configured MCP tools.
 You do not have access to a shell or SSH. Keep answers concise and useful.`
 }
-
-const browserEnv: RuntimeEnv = { setApiKey: () => {} }
 
 const eventSink: RuntimeEventSink = {
   broadcast: (event) => eventBus.emit(event),
@@ -87,7 +92,7 @@ const logger: RuntimeLogger = {
 const sessions = new Map<string, RuntimeSession>()
 
 /** 把已存历史的「文本轮次」恢复为 Agent 上下文（MVP：仅 user/assistant 文本，跳过工具/步骤） */
-function restoreAgentMessages(msgs: ChatMessage[]): AgentMessage[] {
+export function restoreAgentMessages(msgs: ChatMessage[]): AgentMessage[] {
   const out: AgentMessage[] = []
   for (const m of msgs) {
     if (m.type === 'text' && (m.role === 'user' || m.role === 'assistant') && m.content) {
@@ -101,7 +106,7 @@ function restoreAgentMessages(msgs: ChatMessage[]): AgentMessage[] {
   return out
 }
 
-function capsFor(model: string): ModelCapabilities {
+export function capsFor(model: string): ModelCapabilities {
   const row = settingsStore.listAvailableModels().find((m) => m.modelId === model)
   if (!row?.capabilities) return {}
   try {
@@ -120,8 +125,11 @@ export async function ensureRuntimeSession(sessionId: string): Promise<{
   caps: ModelCapabilities
 }> {
   const session = await sessionStore.getById(sessionId)
-  const provider = session?.provider ?? 'anthropic'
-  const model = session?.model ?? 'claude-opus-4-8'
+  // 会话通常已带 provider/model（session.create 用活跃选择）；兜底取首个已启用模型而非写死
+  await settingsStore.loadState()
+  const def = settingsStore.getDefaultSelection()
+  const provider = session?.provider || def.provider
+  const model = session?.model || def.model
   const caps = capsFor(model)
 
   const existing = sessions.get(sessionId)
@@ -137,39 +145,22 @@ export async function ensureRuntimeSession(sessionId: string): Promise<{
   // 沙箱审批挂起原语（扩展夹内不弹，仅为将来越界能力预留）；runtime 后置赋值，闭包捕获
   const requestUserInput = (req: Parameters<RuntimeSession['requestUserInput']>[0]) =>
     runtime.requestUserInput(req)
+  // 用户可配置人设（上下文管理设置）；空串表示总开关关闭。操作上下文随后恒追加。
+  const persona = await systemPromptStore.renderPersona({})
   if (projectHandle) {
     fileTools = createFileTools(projectHandle, { requestUserInput })
-    systemPrompt = projectSystemPrompt(projectHandle.name)
+    systemPrompt = [persona, projectContextPrompt(projectHandle.name)].filter(Boolean).join('\n\n')
     // 项目根 spill 落 .shuvix/（写 .gitignore 避免污染仓库）
     spillSink = createSpillSink(projectHandle, { writeGitignore: true })
   } else {
     // 临时会话：OPFS 工作目录始终可用，跳过 FSA 权限校验
     const tempHandle = await getTempWorkspaceHandle(sessionId)
     fileTools = createFileTools(tempHandle, { requiresPermission: false, requestUserInput })
-    systemPrompt = DEFAULT_SYSTEM_PROMPT
+    systemPrompt = [persona, SCRATCH_CONTEXT_PROMPT].filter(Boolean).join('\n\n')
     spillSink = createSpillSink(tempHandle)
   }
 
-  const providerRow = await settingsStore.getProviderWithKey(provider)
-  const providerInfo: ResolveModelProviderInfo | null = providerRow
-    ? {
-        id: providerRow.id,
-        name: providerRow.name,
-        isBuiltin: !!providerRow.isBuiltin,
-        apiKey: providerRow.apiKey,
-        baseUrl: providerRow.baseUrl,
-        apiProtocol: providerRow.apiProtocol,
-        metadata: providerRow.metadata
-      }
-    : null
-
-  const resolvedModel = resolveModel({
-    provider,
-    model,
-    capabilities: caps,
-    providerInfo,
-    env: browserEnv
-  })
+  const resolvedModel = resolveSessionModel(provider, model, caps)
 
   // eslint-disable-next-line prefer-const
   let runtime: RuntimeSession
@@ -186,6 +177,23 @@ export async function ensureRuntimeSession(sessionId: string): Promise<{
       ...mcpManager.getAllAgentTools()
     ],
     spillSink
+  )
+  // 注册本会话的工具（含 ask/浏览器/文件/MCP，不含下方的 Agent 派发工具）——
+  // 子代理直接复用这「全部工具」（同一沙箱/工作目录），见 subAgent.resolveTools
+  registerSessionTools(sessionId, tools)
+  // Agent 派发工具始终注入：subagent_type 可选，省略即用默认子代理 —— 继承父会话全部工具
+  // （resolveTools 已排除 Agent 防递归）+ 同一份 systemPrompt。注册表里的具名定义是可选附加。
+  tools.push(
+    ...wrapToolsOutput(
+      [
+        createExtensionDispatchTool(
+          sessionId,
+          { provider, model, capabilities: caps },
+          systemPrompt
+        ) as unknown as AgentTool
+      ],
+      spillSink
+    )
   )
 
   const agent = new Agent({
@@ -234,28 +242,12 @@ export async function setSessionModel(
   const runtime = sessions.get(sessionId)
   if (!runtime) return
   const caps = capsFor(model)
-  const providerRow = await settingsStore.getProviderWithKey(provider)
-  const providerInfo: ResolveModelProviderInfo | null = providerRow
-    ? {
-        id: providerRow.id,
-        name: providerRow.name,
-        isBuiltin: !!providerRow.isBuiltin,
-        apiKey: providerRow.apiKey,
-        baseUrl: providerRow.baseUrl,
-        apiProtocol: providerRow.apiProtocol,
-        metadata: providerRow.metadata
-      }
-    : null
-  const resolvedModel = resolveModel({
-    provider,
-    model,
-    capabilities: caps,
-    providerInfo,
-    env: browserEnv
-  })
+  const resolvedModel = resolveSessionModel(provider, model, caps)
   runtime.applyModel(resolvedModel, caps.reasoning ? 'medium' : 'off')
 }
 
 export function removeRuntimeSession(sessionId: string): void {
+  subAgentManager.destroyAll(sessionId)
+  clearSessionTools(sessionId)
   sessions.delete(sessionId)
 }

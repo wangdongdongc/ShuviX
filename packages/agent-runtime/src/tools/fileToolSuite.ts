@@ -101,6 +101,11 @@ export interface FileToolDeps {
   abortError?: string
   labels: { read: string; write: string; edit: string }
   descriptions: { read: string; write: string; edit: string }
+  /**
+   * write/edit 成功后回调 —— 端用于发布文件变更事件（AppEvent 'files.changed'）。
+   * portPath 为该端 port 路径；端闭包负责归一到 UI 路径空间并 publish。见 docs/internal-events.md。
+   */
+  onFileChange?(e: { portPath: string; kind: 'write' | 'edit' }): void
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -253,7 +258,9 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
   ): Promise<AgentToolResult<undefined>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
-    return applyWrite(this.deps.port, this.deps.guards, portPath, params)
+    const res = await applyWrite(this.deps.port, this.deps.guards, portPath, params)
+    this.deps.onFileChange?.({ portPath, kind: 'write' })
+    return res
   }
 }
 
@@ -276,7 +283,9 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
   ): Promise<AgentToolResult<EditToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
-    return applyEdit(this.deps.port, this.deps.guards, portPath, params)
+    const res = await applyEdit(this.deps.port, this.deps.guards, portPath, params)
+    this.deps.onFileChange?.({ portPath, kind: 'edit' })
+    return res
   }
 }
 

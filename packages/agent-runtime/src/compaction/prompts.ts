@@ -4,6 +4,8 @@
  * 核心逻辑：
  * 1. 要求模型先在 <analysis> 中分析，再在 <summary> 中输出结构化总结
  * 2. formatCompactSummary() 剥离 analysis、提取 summary
+ *
+ * 纯函数、零依赖 —— 桌面与扩展共用（见 runCompaction）。
  */
 
 const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.

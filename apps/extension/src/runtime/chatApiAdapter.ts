@@ -6,28 +6,35 @@
  * 同进程直接 await，无 HTTP/WS。
  */
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
+import { configShareStore } from '../storage/configShareStore'
+import { systemPromptStore } from '../storage/systemPromptStore'
 import { mcpManager } from './mcpRuntime'
 import { eventBus } from './eventBus'
+import { getToolPresentations } from './toolPresentations'
 import {
   ensureRuntimeSession,
   getRuntimeSession,
   removeRuntimeSession,
   setSessionModel
 } from './agentRuntime'
+import { compactSession } from './compactionRuntime'
+import { generateTitleForSession } from './titleRuntime'
+import { filesRuntime, workingDirNameForSession } from './filesRuntime'
+import { appEventBus } from './appEventBus'
 
 const ok = { success: true as const }
 
-/** 活跃模型选择（用于 session.create 的默认 provider/model） */
+/**
+ * 新建会话的默认 provider/model —— 读「设置中的默认模型」(general.default*)，
+ * 与每会话 ModelPicker 选择解耦（对齐桌面）；校验一致性，不一致回退首个可用模型。
+ */
 async function activeSelection(): Promise<{ provider: string; model: string }> {
-  const provider = (await settingsStore.get('activeProvider')) || 'anthropic'
-  const model = (await settingsStore.get('activeModel')) || 'claude-opus-4-8'
-  return { provider, model }
+  return settingsStore.getNewSessionSelection()
 }
 
 export const chatApiAdapter: ChatApi = {
@@ -42,7 +49,6 @@ export const chatApiAdapter: ChatApi = {
     adjustWindowWidth: async () => {},
     setBrowserOffset: async () => {},
     windowReady: () => {},
-    onSettingsChanged: () => () => {},
     onNewChat: () => () => {},
     onNewProject: () => () => {}
   },
@@ -57,7 +63,8 @@ export const chatApiAdapter: ChatApi = {
         model,
         capabilities: caps,
         modelMetadata: {},
-        workingDirectory: '',
+        // 工作目录名(=项目根句柄名)，供 chatStore.projectPath / Files 面板新鲜度校验。无项目则空串。
+        workingDirectory: await workingDirNameForSession(sessionId),
         enabledTools: ['ask']
       }
     },
@@ -164,8 +171,8 @@ export const chatApiAdapter: ChatApi = {
       await projectStore.delete(id)
       return ok
     },
-    getKnownFields: async () => ({}),
-    onChanged: (cb) => projectStore.onChanged(cb)
+    getKnownFields: async () => ({})
+    // 变更订阅已并入 events.subscribe（AppEvent 'project.changed'）
   },
 
   session: {
@@ -189,12 +196,10 @@ export const chatApiAdapter: ChatApi = {
     previewAllowPatterns: async () => [],
     addAllowListPatterns: async () => ok,
     removeAllowListEntry: async () => ok,
-    // 扩展无标题模型：用首条用户消息片段作标题（启发式），并落库 IndexedDB
+    // LLM 标题生成（与桌面同源，见 titleRuntime）：优先专用标题模型，回退会话模型，
+    // 失败再退启发式；并落库 IndexedDB
     generateTitle: async ({ sessionId, conversationText }) => {
-      const firstUser = conversationText.split('\n').find((l) => l.startsWith('User: '))
-      const raw = (firstUser ? firstUser.slice(6) : conversationText).trim().replace(/\s+/g, ' ')
-      const title = raw.slice(0, 24) || null
-      if (title) await sessionStore.updateTitle(sessionId, title)
+      const title = await generateTitleForSession(sessionId, conversationText)
       return { title }
     },
     delete: async (id) => {
@@ -204,8 +209,8 @@ export const chatApiAdapter: ChatApi = {
     },
     getById: async (id) => sessionStore.getById(id),
     scanInstructionFiles: async () => [],
-    updateInstructionFiles: async () => ok,
-    onConfigChanged: () => () => {}
+    updateInstructionFiles: async () => ok
+    // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
   },
 
   message: {
@@ -230,13 +235,25 @@ export const chatApiAdapter: ChatApi = {
       await messageStore.clear(sessionId)
       return ok
     },
-    rollback: async () => ok,
-    deleteFrom: async ({ sessionId, messageId }) => {
-      await messageStore.deleteFrom(sessionId, messageId)
+    // 回退：保留该消息、删除其后，并失效运行时（下次交互从截断后的历史重建上下文）
+    rollback: async ({ sessionId, messageId }) => {
+      await messageStore.deleteAfter(sessionId, messageId)
+      removeRuntimeSession(sessionId)
       return ok
     },
-    countArchived: async () => 0,
-    listArchived: async () => [] as ChatMessage[]
+    deleteFrom: async ({ sessionId, messageId }) => {
+      await messageStore.deleteFrom(sessionId, messageId)
+      removeRuntimeSession(sessionId) // 删除消息后须失效运行时，否则上下文与持久化不一致
+      return ok
+    },
+    countArchived: async (sessionId) => messageStore.countArchived(sessionId),
+    listArchived: async ({ sessionId, limit, offset }) => {
+      // 对齐桌面：归档消息按时间倒序分页
+      const all = (await messageStore.listArchived(sessionId)).sort(
+        (a, b) => b.createdAt - a.createdAt
+      )
+      return all.slice(offset, offset + limit)
+    }
   },
 
   settings: {
@@ -247,12 +264,22 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getKnownKeys: async () => ({}),
-    listBuiltinSections: async () => [],
-    setBuiltinDisabled: async () => ok,
-    getCustomSections: async () => [],
-    setCustomSections: async () => ok,
-    previewBuiltinSection: async () => ''
+    // 系统提示词卡片（上下文管理）：复用桌面同源装配，KV 落 chrome.storage
+    listBuiltinSections: async () => systemPromptStore.listBuiltinSections(),
+    setBuiltinDisabled: async (ids) => {
+      await systemPromptStore.setBuiltinDisabled(ids)
+      return ok
+    },
+    getCustomSections: async () => systemPromptStore.getCustomSections(),
+    setCustomSections: async (sections) => {
+      await systemPromptStore.setCustomSections(sections)
+      return ok
+    },
+    previewBuiltinSection: async ({ id }) => systemPromptStore.previewBuiltinSection(id)
   },
+
+  // 配置分享：Provider + MCP 导出/导入（复用桌面同语义内核，见 configShareStore）
+  config: configShareStore,
 
   runtime: {
     statuses: async () => ({}),
@@ -263,7 +290,8 @@ export const chatApiAdapter: ChatApi = {
     list: async () => [
       { name: 'ask', label: 'Ask', group: 'general', defaultEnabled: true, isEnabled: true }
     ],
-    presentations: async () => ({})
+    // read/write/edit/ask 复用桌面同一渲染定义 + 浏览器工具（见 toolPresentations）
+    presentations: async () => getToolPresentations()
   },
 
   command: {
@@ -318,7 +346,7 @@ export const chatApiAdapter: ChatApi = {
   },
 
   compact: {
-    start: async () => undefined
+    start: async (sessionId) => compactSession(sessionId)
   },
 
   webui: {
@@ -351,8 +379,8 @@ export const chatApiAdapter: ChatApi = {
     focus: async () => ok,
     getState: async () => ({ pinnedSessionIds: [] }),
     setAlwaysOnTop: async () => ({ alwaysOnTop: false }),
-    getAlwaysOnTop: async () => ({ alwaysOnTop: false }),
-    onStateChanged: () => () => {}
+    getAlwaysOnTop: async () => ({ alwaysOnTop: false })
+    // 悬浮状态变更订阅已并入 events.subscribe（扩展无悬浮窗）
   },
 
   update: {
@@ -361,6 +389,18 @@ export const chatApiAdapter: ChatApi = {
     install: async () => ok,
     getLastEvent: async () => null,
     onEvent: () => () => {}
+  },
+
+  // 工作目录文件浏览（Files 面板）：File System Access 实现
+  files: {
+    scan: ({ sessionId }) => filesRuntime.scan(sessionId),
+    read: ({ sessionId, path }) => filesRuntime.read(sessionId, path),
+    write: ({ sessionId, path, content }) => filesRuntime.write(sessionId, path, content)
+  },
+
+  // 通用内部事件：进程内单例 bus，前端直接订阅（后端 publish 见 appEventBus）
+  events: {
+    subscribe: (cb) => appEventBus.subscribe(cb)
   },
 
   stt: {

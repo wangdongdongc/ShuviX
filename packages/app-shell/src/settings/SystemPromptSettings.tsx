@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle } from 'lucide-react'
-import { SettingsSection, SettingsBlock } from './SettingsPrimitives'
-import { PromptSectionsEditor } from '../sidebar/PromptSectionsEditor'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { getChatApi } from '@shuvix/chat-ui'
 import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
+import { SettingsSection, SettingsBlock } from './SettingsPrimitives'
+import { PromptSectionsEditor } from './PromptSectionsEditor'
 
 interface BuiltinSectionItem {
   id: string
@@ -14,72 +14,77 @@ interface BuiltinSectionItem {
   dynamic: boolean
 }
 
+export interface SystemPromptSettingsProps {
+  /** 总开关（由父 ContextManagementSettings 在二级 Tab 行末控制） */
+  enabled: boolean
+}
+
 /**
- * 系统提示词设置 Tab
+ * 系统提示词设置（桌面/扩展共用）—— 全部经 getChatApi().settings 取后端，宿主无关。
  *
- * - 全局自由文本（settings.systemPrompt 即 general.systemPrompt key）
- * - 内置卡片：仅可启用/禁用，内容由 i18n + main 端动态渲染
- * - 自定义卡片：复用项目级 PromptSectionsEditor（增删改 + 拖拽）
+ * - 全局自由文本（general.systemPrompt）
+ * - 内置卡片：仅可启用/禁用，内容由共享 i18n + 各端 environment 渲染
+ * - 自定义卡片：复用 PromptSectionsEditor（增删改 + 拖拽）
  */
-export function SystemPromptSettings(): React.JSX.Element {
+export function SystemPromptSettings({ enabled }: SystemPromptSettingsProps): React.JSX.Element {
   const { t, i18n: i18nInstance } = useTranslation()
-  const { systemPrompt, setSystemPrompt, systemPromptEnabled } = useSettingsStore()
-  const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt)
+  const [systemPrompt, setSystemPrompt] = useState('')
+  const [localSystemPrompt, setLocalSystemPrompt] = useState('')
   const [builtins, setBuiltins] = useState<BuiltinSectionItem[]>([])
   const [customSections, setCustomSections] = useState<ProjectPromptSection[]>([])
   const [previewOpen, setPreviewOpen] = useState<{ title: string; body: string } | null>(null)
 
+  // 全局自由文本：挂载时从后端读，本地编辑 → blur 落盘
   useEffect(() => {
-    setLocalSystemPrompt(systemPrompt)
-  }, [systemPrompt])
-
-  const reloadBuiltins = useCallback(async () => {
-    const list = await window.api.settings.listBuiltinSections()
-    setBuiltins(list)
+    void getChatApi()
+      .settings.get('general.systemPrompt')
+      .then((v) => {
+        const text = v ?? ''
+        setSystemPrompt(text)
+        setLocalSystemPrompt(text)
+      })
   }, [])
 
+  // 内置/自定义卡片随语言切换重载（promise.then(setter) 形态，避免 effect 内直接 setState）
   useEffect(() => {
-    reloadBuiltins()
-    window.api.settings.getCustomSections().then((sections) => setCustomSections(sections ?? []))
-  }, [reloadBuiltins, i18nInstance.language])
+    void getChatApi().settings.listBuiltinSections().then(setBuiltins)
+    void getChatApi()
+      .settings.getCustomSections()
+      .then((sections) => setCustomSections(sections ?? []))
+  }, [i18nInstance.language])
 
   const handleSystemPromptBlur = (): void => {
     if (localSystemPrompt !== systemPrompt) {
       setSystemPrompt(localSystemPrompt)
-      window.api.settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
+      void getChatApi().settings.set({ key: 'general.systemPrompt', value: localSystemPrompt })
     }
   }
 
   const handleToggleBuiltin = async (id: string, currentDisabled: boolean): Promise<void> => {
     const nextDisabled = !currentDisabled
-    setBuiltins((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, disabled: nextDisabled } : item))
+    const nextBuiltins = builtins.map((item) =>
+      item.id === id ? { ...item, disabled: nextDisabled } : item
     )
-    const nextIds = builtins
-      .map((item) => (item.id === id ? { ...item, disabled: nextDisabled } : item))
-      .filter((item) => item.disabled)
-      .map((item) => item.id)
-    await window.api.settings.setBuiltinDisabled(nextIds)
+    setBuiltins(nextBuiltins)
+    const nextIds = nextBuiltins.filter((item) => item.disabled).map((item) => item.id)
+    await getChatApi().settings.setBuiltinDisabled(nextIds)
   }
 
   const handleCustomChange = (sections: ProjectPromptSection[]): void => {
     setCustomSections(sections)
-    window.api.settings.setCustomSections(sections)
+    void getChatApi().settings.setCustomSections(sections)
   }
 
   const handlePreview = async (item: BuiltinSectionItem): Promise<void> => {
     try {
-      const body = await window.api.settings.previewBuiltinSection({ id: item.id })
+      const body = await getChatApi().settings.previewBuiltinSection({ id: item.id })
       setPreviewOpen({ title: item.title, body: body || t('systemPromptCards.envPreviewError') })
     } catch {
-      setPreviewOpen({
-        title: item.title,
-        body: t('systemPromptCards.envPreviewError')
-      })
+      setPreviewOpen({ title: item.title, body: t('systemPromptCards.envPreviewError') })
     }
   }
 
-  const disabled = !systemPromptEnabled
+  const disabled = !enabled
 
   return (
     <div className="flex-1 px-5 py-5 space-y-4">

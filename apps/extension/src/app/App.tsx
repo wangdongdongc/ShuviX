@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next'
 import {
   Settings,
   ArrowLeft,
-  PlugZap,
+  Layers,
+  Puzzle,
   Info,
+  Brain,
   FolderPlus,
   FolderClosed,
   RotateCcw,
@@ -21,6 +23,8 @@ import {
   getChatApi,
   useSessionInit,
   useAgentEvents,
+  useAppEvent,
+  useModelCatalogSync,
   type Session
 } from '@shuvix/chat-ui'
 import type { Project } from '@shuvix/chat-protocol/chatApi'
@@ -35,6 +39,11 @@ import {
   ProjectInfoForm,
   SessionItem,
   SessionGroup,
+  WelcomeView,
+  ContextManagementSettings,
+  ChatHeader,
+  PanelToggleButton,
+  SidebarResizeHandle,
   useSessionDelete,
   useFocusDim,
   type SettingsTab,
@@ -44,6 +53,21 @@ import type { ProviderInfo } from '@shuvix/chat-protocol/types/provider'
 import i18n from './i18n'
 import { useExtensionChatHost } from './chatHost'
 import { useAppearance, setAppearance } from './appearanceStore'
+import {
+  useSidebar,
+  toggleSidebar,
+  setSidebarWidth,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH
+} from './sidebarStore'
+import {
+  usePanel,
+  togglePanel,
+  setPanelWidth,
+  PANEL_MIN_WIDTH,
+  PANEL_MAX_WIDTH
+} from './panelStore'
+import { RightPanel } from './RightPanel'
 import { settingsStore } from '../storage/settingsStore'
 import { projectStore } from '../storage/projectStore'
 
@@ -51,6 +75,7 @@ import { projectStore } from '../storage/projectStore'
 function SessionRuntime({ sessionId }: { sessionId: string | null }): null {
   useSessionInit(sessionId)
   useAgentEvents()
+  useModelCatalogSync()
   return null
 }
 
@@ -112,14 +137,40 @@ function ExtProviderTab(): React.JSX.Element {
 
 /** 扩展外观 tab 绑定层（appearanceStore + chrome.storage；隐藏笔记本主题/缩放）。
  *  默认模型一节复用共享 ModelDefaultsSettings：可用模型现读 settingsStore（保证启用后即刷新），
- *  选中值/持久化走 ChatHost.models（即 session.create 用的默认模型）。标题模型扩展用启发式，关闭。 */
+ *  选中值/持久化走 ChatHost.models（即 session.create 用的默认模型）。标题模型对齐桌面（general.title*），
+ *  未配置时 titleRuntime 回退会话模型。 */
 function ExtAppearanceTab(): React.JSX.Element {
   const a = useAppearance()
   const { models } = useChatHost()
   const [availableModels, setAvailableModels] = useState(() => settingsStore.listAvailableModels())
+  // 「默认模型」「标题模型」均为独立持久化项(general.default* / general.title*)，仅设置页写。
+  const [defaultSel, setDefaultSel] = useState({ provider: '', model: '' })
+  const [titleSel, setTitleSel] = useState({ provider: '', model: '' })
   useEffect(() => {
     setAvailableModels(settingsStore.listAvailableModels())
+    void settingsStore.getConfiguredDefault().then(setDefaultSel)
+    void settingsStore.getConfiguredTitle().then(setTitleSel)
   }, [])
+  // 提供商/模型变更（同设置页 ProviderTab 启停/增删）→ 刷新可选模型列表
+  useAppEvent('providers.changed', () => setAvailableModels(settingsStore.listAvailableModels()))
+  const setDefaultProvider = (id: string): void => {
+    setDefaultSel((s) => ({ ...s, provider: id }))
+    models.setActiveProvider(id) // 同步内存镜像 → 立即反映到 ModelPicker / 欢迎页显示
+    void settingsStore.set('general.defaultProvider', id)
+  }
+  const setDefaultModel = (id: string): void => {
+    setDefaultSel((s) => ({ ...s, model: id }))
+    models.setActiveModel(id)
+    void settingsStore.set('general.defaultModel', id)
+  }
+  const setTitleProvider = (id: string): void => {
+    setTitleSel((s) => ({ ...s, provider: id }))
+    void settingsStore.set('general.titleProvider', id)
+  }
+  const setTitleModel = (id: string): void => {
+    setTitleSel((s) => ({ ...s, model: id }))
+    void settingsStore.set('general.titleModel', id)
+  }
   return (
     <>
       <AppearanceTab
@@ -142,11 +193,15 @@ function ExtAppearanceTab(): React.JSX.Element {
       />
       <ModelDefaultsSettings
         availableModels={availableModels}
-        defaultProvider={models.activeProvider}
-        defaultModel={models.activeModel}
-        setDefaultProvider={models.setActiveProvider}
-        setDefaultModel={models.setActiveModel}
-        caps={{ showTitleModel: false }}
+        defaultProvider={defaultSel.provider}
+        defaultModel={defaultSel.model}
+        setDefaultProvider={setDefaultProvider}
+        setDefaultModel={setDefaultModel}
+        caps={{ showTitleModel: true }}
+        titleProvider={titleSel.provider}
+        titleModel={titleSel.model}
+        setTitleProvider={setTitleProvider}
+        setTitleModel={setTitleModel}
       />
     </>
   )
@@ -185,8 +240,9 @@ function ExtSidebar({
   }, [])
   useEffect(() => {
     reloadProjects()
-    return getChatApi().project.onChanged(reloadProjects)
   }, [reloadProjects])
+  // 订阅 AppEvent 'project.changed'（替代旧 project.onChanged）
+  useAppEvent('project.changed', reloadProjects)
 
   // 按项目分组：每个项目一组（含空组）+ 临时对话组（projectId 为空的会话）
   const groups = useMemo(() => {
@@ -449,22 +505,28 @@ export function App(): React.JSX.Element {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
+  const { isOpen, width } = useSidebar()
+  const [resizing, setResizing] = useState(false)
+  const { isOpen: panelOpen, width: panelWidth } = usePanel()
+  const [panelResizing, setPanelResizing] = useState(false)
 
-  // 启动即初始化会话（API Key 在「设置 → 提供商」里配置，与桌面一致；无 key 时对话会报错引导）
+  // 启动仅加载会话列表，不自动选中 —— 无活跃会话时显示欢迎页（与桌面一致）。
+  // 首次发送由 InputArea 自动创建临时会话；API Key 在「设置 → 提供商」配置。
   useEffect(() => {
-    void (async () => {
-      await refreshSessions()
-      const list = useChatStore.getState().sessions
-      const sid = list[0]?.id ?? (await getChatApi().session.create(null)).id
-      await refreshSessions()
-      setActiveSessionId(sid)
-    })()
-  }, [setActiveSessionId])
+    void refreshSessions()
+  }, [])
 
   // 跟随 chatStore 活跃会话（侧栏点击切换）
   useEffect(() => {
     setSessionId(activeSessionId)
   }, [activeSessionId])
+
+  // 工具渲染配置（read/write/edit/ask 复用桌面定义 + 浏览器工具）；随语言切换重解析
+  useEffect(() => {
+    void getChatApi()
+      .tools.presentations()
+      .then((p) => useChatStore.getState().setToolPresentations(p))
+  }, [i18n.language])
 
   const handleNew = useCallback(
     async (projectId?: string | null) => {
@@ -494,13 +556,20 @@ export function App(): React.JSX.Element {
       {
         id: 'providers',
         label: t('settings.tabProviders'),
-        icon: <Settings size={14} />,
+        icon: <Layers size={14} />,
         content: <ExtProviderTab />
+      },
+      {
+        id: 'contextMgmt',
+        label: t('settings.tabContextMgmt'),
+        icon: <Brain size={14} />,
+        // 复用共享上下文管理（系统提示词卡片）；后端经 chatApiAdapter.settings → systemPromptStore
+        content: <ContextManagementSettings />
       },
       {
         id: 'mcp',
         label: t('settings.tabMcp'),
-        icon: <PlugZap size={14} />,
+        icon: <Puzzle size={14} />,
         content: (
           <div className="flex-1 overflow-y-auto">
             {/* 扩展仅 http（浏览器无法跑本地进程）→ allowStdio:false */}
@@ -553,23 +622,88 @@ export function App(): React.JSX.Element {
     )
   }
 
-  // 主界面：侧栏（会话列表）+ 对话
+  // 主界面：侧栏（会话列表，可折叠/拖宽）+ 顶栏 + 对话
   return (
     <ChatHostProvider value={host}>
       <SessionRuntime sessionId={sessionId} />
       <div className="h-full flex bg-bg-primary text-text-primary">
-        <div className="w-60 flex-shrink-0 border-r border-border-secondary">
-          <ExtSidebar
-            onNew={handleNew}
-            onDelete={handleDelete}
-            onOpenSettings={() => {
-              window.location.hash = '#settings'
-            }}
-          />
+        {/* 折叠：宽度归 0；拖宽：宿主 sidebarStore（chrome.storage 持久化）。
+            内层定宽避免折叠动画期内容被挤压回流。 */}
+        <div
+          className={`flex-shrink-0 overflow-hidden ${resizing ? '' : 'transition-[width] duration-200 ease-in-out'}`}
+          style={{ width: isOpen ? width : 0 }}
+        >
+          {/* 不加 border-r：分隔线由下方 SidebarResizeHandle(w-px) 提供，与桌面一致，避免双线显宽 */}
+          <div className="h-full" style={{ width }}>
+            <ExtSidebar
+              onNew={handleNew}
+              onDelete={handleDelete}
+              onOpenSettings={() => {
+                window.location.hash = '#settings'
+              }}
+            />
+          </div>
         </div>
-        {/* Conversation 是 Fragment（messages flex-1 + InputArea），需宿主提供 flex 列容器 + 定高 */}
-        <div className="flex-1 min-w-0 flex flex-col min-h-0">
-          {sessionId && <Conversation sessionId={sessionId} />}
+        {isOpen && (
+          <SidebarResizeHandle
+            width={width}
+            min={SIDEBAR_MIN_WIDTH}
+            max={SIDEBAR_MAX_WIDTH}
+            onResize={setSidebarWidth}
+            onResizeStart={() => setResizing(true)}
+            onResizeEnd={() => setResizing(false)}
+          />
+        )}
+        {/* Conversation 是 Fragment（messages flex-1 + InputArea），需宿主提供 flex 列容器 + 定高 +
+            relative（压缩中遮罩用 absolute inset-0，须定位到对话区而非整窗，对齐桌面 ChatView） */}
+        <div className="relative flex-1 min-w-0 flex flex-col min-h-0">
+          {/* 共享顶栏：会话标题（可改名）+ 折叠会话列表按钮（窄面板让宽用） */}
+          <ChatHeader
+            caps={{ editableTitle: true }}
+            rightActions={
+              <>
+                {/* 折叠会话列表 + 切换右侧面板 —— 复用共享按钮，样式与桌面一致 */}
+                <PanelToggleButton
+                  side="left"
+                  open={isOpen}
+                  onClick={toggleSidebar}
+                  title={t('sidebar.title')}
+                />
+                <PanelToggleButton
+                  side="right"
+                  open={panelOpen}
+                  onClick={togglePanel}
+                  title={t('panel.files')}
+                />
+              </>
+            }
+          />
+          {sessionId ? (
+            <Conversation sessionId={sessionId} />
+          ) : (
+            // 无活跃会话 → 复用共享欢迎页（含配置导入/导出，扩展显式开启）
+            <WelcomeView enableConfigShare />
+          )}
+        </div>
+        {/* 右侧面板（文件 / 子代理）：手柄在左侧，向左拖变宽(invert) */}
+        {panelOpen && (
+          <SidebarResizeHandle
+            width={panelWidth}
+            min={PANEL_MIN_WIDTH}
+            max={PANEL_MAX_WIDTH}
+            invert
+            onResize={setPanelWidth}
+            onResizeStart={() => setPanelResizing(true)}
+            onResizeEnd={() => setPanelResizing(false)}
+          />
+        )}
+        <div
+          className={`flex-shrink-0 overflow-hidden ${panelResizing ? '' : 'transition-[width] duration-200 ease-in-out'}`}
+          style={{ width: panelOpen ? panelWidth : 0 }}
+        >
+          <div className="h-full" style={{ width: panelWidth }}>
+            <RightPanel />
+          </div>
         </div>
       </div>
       {deleteDialog}

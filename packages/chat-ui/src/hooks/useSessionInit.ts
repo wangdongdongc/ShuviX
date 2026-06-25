@@ -1,6 +1,7 @@
 import { getChatApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect } from 'react'
 import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
+import { useModelCatalogStore } from '../stores/modelCatalogStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -11,7 +12,9 @@ const isSettingsWindow = window.location.hash.startsWith('#settings')
  * agent.init 返回的结果是唯一数据来源，确保指令状态等信息不存在时序竞争
  */
 export function useSessionInit(activeSessionId: string | null): void {
-  const { loaded, setActiveProvider, setActiveModel } = useChatHost().models
+  const { setActiveProvider, setActiveModel } = useChatHost().models
+  // 目录加载完成才初始化会话模型（时序与之前 host.models.loaded 一致）
+  const loaded = useModelCatalogStore((s) => s.loaded)
 
   useEffect(() => {
     if (isSettingsWindow || !activeSessionId || !loaded) return

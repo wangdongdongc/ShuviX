@@ -1,16 +1,10 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain } from 'electron'
 import { configShareService } from '../services/configShareService'
 import type {
   ConfigSharePayload,
   ExportOptions,
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
-
-function notifyAll(): void {
-  BrowserWindow.getAllWindows().forEach((win) => {
-    win.webContents.send('app:settings-changed')
-  })
-}
 
 /**
  * 配置导出/导入 IPC 处理器
@@ -35,9 +29,8 @@ export function registerConfigShareHandlers(): void {
   ipcMain.handle(
     'config:applyImport',
     async (_event, params: { payload: ConfigSharePayload; selection: ImportSelection }) => {
-      const result = await configShareService.applyImportPayload(params.payload, params.selection)
-      notifyAll()
-      return result
+      // providers.changed 由 configShareService.applyImportPayload 在服务层发布
+      return configShareService.applyImportPayload(params.payload, params.selection)
     }
   )
 }

@@ -1,3 +1,4 @@
+import i18next from 'i18next'
 import { settingsDao } from '../../dao/settingsDao'
 import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 import {
@@ -5,16 +6,25 @@ import {
   encodePromptSections
 } from '@shuvix/chat-protocol/utils/promptSectionCodec'
 import {
-  BUILTIN_SECTION_ORDER,
+  listBuiltinSections as sharedListBuiltinSections,
+  previewBuiltinSection as sharedPreviewBuiltinSection,
+  renderSystemPromptSections,
   isBuiltinSectionId,
-  getBuiltinTitle,
-  getBuiltinContent,
+  type BuiltinRenderCtx,
   type BuiltinSectionId,
-  type BuiltinRenderCtx
-} from './builtinSections'
+  type BuiltinSectionViewItem,
+  type SystemPromptDeps
+} from '@shuvix/agent-runtime'
+import { computeEnvironment } from './builtinSections'
 
 const KEY_BUILTIN_DISABLED = 'systemPromptBuiltinDisabled'
 const KEY_CUSTOM_SECTIONS = 'systemPromptCustomSections'
+
+/** 注入共享核心的桌面依赖：i18n 用默认 i18next 实例，environment 用 Node 计算 */
+const deps: SystemPromptDeps = {
+  t: (key) => i18next.t(key),
+  renderEnvironment: computeEnvironment
+}
 
 /** 读取被禁用的内置卡片 id 集合（过滤掉过期 id） */
 export function getBuiltinDisabled(): Set<BuiltinSectionId> {
@@ -48,66 +58,27 @@ export function setCustomSections(sections: ProjectPromptSection[]): void {
   settingsDao.upsert(KEY_CUSTOM_SECTIONS, encodePromptSections(sections))
 }
 
-/**
- * 列出全部内置卡片（按代码顺序），用于设置面板渲染
- * - title 取当前 i18n
- * - content：动态卡片返回 null（由前端按需调预览接口），静态卡片返回 i18n 文案
- */
-export interface BuiltinSectionViewItem {
-  id: BuiltinSectionId
-  title: string
-  /** 动态卡片为 null */
-  content: string | null
-  disabled: boolean
-  dynamic: boolean
-}
+export type { BuiltinSectionViewItem }
 
+/** 列出全部内置卡片（按代码顺序），用于设置面板渲染 */
 export function listBuiltinSections(): BuiltinSectionViewItem[] {
-  const disabled = getBuiltinDisabled()
-  return BUILTIN_SECTION_ORDER.map((id) => {
-    const dynamic = id === 'environment'
-    return {
-      id,
-      title: getBuiltinTitle(id),
-      content: dynamic ? null : getBuiltinContent(id, {}),
-      disabled: disabled.has(id),
-      dynamic
-    }
-  })
+  return sharedListBuiltinSections(getBuiltinDisabled(), deps)
 }
 
 /** 预览某张内置卡片的实际内容（前端用，主要用于 environment 卡片） */
 export function previewBuiltinSection(id: BuiltinSectionId, ctx: BuiltinRenderCtx): string {
-  if (!isBuiltinSectionId(id)) return ''
-  return getBuiltinContent(id, ctx)
+  return sharedPreviewBuiltinSection(id, deps, ctx)
 }
 
 /**
  * 装配最终的系统级提示词文本：
  *   内置卡片（按代码顺序，跳过 disabled） + 自定义卡片（按数组顺序）
- *
- * 段间用空行分隔。空段（content trim 后为空）整体跳过。
  */
 export function renderForPrompt(ctx: BuiltinRenderCtx): string {
-  const disabled = getBuiltinDisabled()
-  const blocks: string[] = []
-
-  for (const id of BUILTIN_SECTION_ORDER) {
-    if (disabled.has(id)) continue
-    const title = getBuiltinTitle(id).trim()
-    const content = getBuiltinContent(id, ctx).trim()
-    if (!title && !content) continue
-    if (title) blocks.push(`## ${title}\n${content}`)
-    else blocks.push(content)
-  }
-
-  for (const sec of getCustomSections()) {
-    const title = sec.title.trim()
-    const content = sec.content.trim()
-    if (!title && !content) continue
-    if (title) blocks.push(`## ${title}\n${content}`)
-    else blocks.push(content)
-  }
-
-  return blocks.join('\n\n')
+  return renderSystemPromptSections({
+    disabled: getBuiltinDisabled(),
+    customSections: getCustomSections(),
+    deps,
+    ctx
+  })
 }

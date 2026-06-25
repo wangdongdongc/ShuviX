@@ -30,7 +30,7 @@ import { HookSettings } from './HookSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
 import { VoiceSettings } from './VoiceSettings'
-import { ContextManagementSettings } from './ContextManagementSettings'
+import { ContextManagementSettings } from '@shuvix/app-shell'
 
 const VALID_TABS = new Set([
   'general',

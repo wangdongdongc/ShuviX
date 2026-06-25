@@ -8,9 +8,9 @@
  */
 
 import chokidar, { type FSWatcher } from 'chokidar'
-import { BrowserWindow } from 'electron'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { sessionService } from './sessionService'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
 const log = createLogger('FilesWatcher')
@@ -31,9 +31,8 @@ interface Current {
 let current: Current | null = null
 
 function broadcastChanged(root: string): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('files:changed', { root })
-  }
+  // chokidar 仅捕获结构变更(add/unlink) → 整树重扫，不带具体 paths；内容编辑由文件工具 onFileChange 带 paths 发布
+  appEventBus.publish({ type: 'files.changed', root })
 }
 
 function startWatcher(workingDirectory: string): void {

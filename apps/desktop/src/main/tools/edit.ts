@@ -3,6 +3,7 @@
  * 仅注入桌面端适配（Node fs / fileTime / 绝对路径 / SQLite SandboxPolicy，见 fileToolDeps）。
  */
 import { createFileToolSuite } from '@shuvix/agent-runtime'
+import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { ToolContext } from '../services/toolContext'
 import { makeDesktopFileToolDeps } from './fileToolDeps'
 import { registerBuiltinTool } from '../services/toolRegistry'
@@ -16,16 +17,8 @@ registerBuiltinTool({
   name: 'edit',
   group: 'general',
   defaultEnabled: true,
-  getLabel: () => t('tool.editLabel'),
+  getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.edit.labelKey),
   getHint: () => t('tool.editHint'),
   factory: (ctx) => makeEditTool(ctx),
-  presentation: {
-    icon: 'FilePen',
-    summaryField: 'path',
-    formItems: [
-      { field: 'path' },
-      { field: 'oldText', renderer: { type: 'code', language: 'typescript' } },
-      { field: 'newText', renderer: { type: 'code', language: 'typescript' } }
-    ]
-  }
+  presentation: BUILTIN_TOOL_PRESENTATIONS.edit.presentation
 })

@@ -477,7 +477,7 @@ export function InputArea(): React.JSX.Element {
                   <Archive size={14} />
                 </button>
               )}
-              {voice.isAvailable && !isStreaming && (
+              {chatHost.voice && voice.isAvailable && !isStreaming && (
                 <button
                   onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
                   disabled={!activeSessionId}

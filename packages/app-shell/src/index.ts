@@ -29,6 +29,11 @@ export { McpServerDialog } from './settings/McpServerDialog'
 export type { McpServerDialogData, McpServerDialogInitial } from './settings/McpServerDialog'
 export { ProjectInfoForm } from './settings/ProjectInfoForm'
 export type { ProjectInfoFormProps } from './settings/ProjectInfoForm'
+export { ContextManagementSettings } from './settings/ContextManagementSettings'
+export { SystemPromptSettings } from './settings/SystemPromptSettings'
+export type { SystemPromptSettingsProps } from './settings/SystemPromptSettings'
+export { PromptSectionsEditor } from './settings/PromptSectionsEditor'
+export type { PromptSectionsEditorProps } from './settings/PromptSectionsEditor'
 export { ProjectConfigDialog } from './settings/ProjectConfigDialog'
 export type { ProjectConfigDialogProps, ProjectConfigTab } from './settings/ProjectConfigDialog'
 
@@ -42,8 +47,31 @@ export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { useSessionDelete } from './sidebar/useSessionDelete'
 export type { UseSessionDeleteReturn } from './sidebar/useSessionDelete'
 export { useFocusDim } from './sidebar/useFocusDim'
+export { SidebarResizeHandle } from './sidebar/SidebarResizeHandle'
+export type { SidebarResizeHandleProps } from './sidebar/SidebarResizeHandle'
+
+// 聊天主视图顶栏（prop 驱动 + 能力开关 + 右侧插槽）
+export { ChatHeader } from './chat/ChatHeader'
+export type { ChatHeaderProps, ChatHeaderCaps } from './chat/ChatHeader'
+export { PanelToggleButton } from './chat/PanelToggleButton'
+export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
+
+// 右侧面板叶子组件（工作目录文件树 + 子代理）—— 经 getChatApi().files / chat-ui store 取后端，
+// 宿主差异走 props（markdown 打开方式、媒体 URL 解析、子会话销毁）
+export { FilesPanel } from './files/FilesPanel'
+export type { FilesPanelProps } from './files/FilesPanel'
+export { MediaUrlProvider, shuvixPreviewResolver } from './files/mediaUrl'
+export type { ResolveMediaUrl, MediaSource } from './files/mediaUrl'
+export { SubAgentPanel } from './subagent/SubAgentPanel'
+export type { SubAgentPanelProps } from './subagent/SubAgentPanel'
 
 // 通用 UI 原子
 export { AnimatedCollapse } from './common/AnimatedCollapse'
 export { ConfirmDialog } from './common/ConfirmDialog'
 export type { ConfirmDialogProps } from './common/ConfirmDialog'
+
+// 欢迎页 + 配置分享对话框（prop 驱动，经 getChatApi().config 取后端）
+export { WelcomeView } from './welcome/WelcomeView'
+export type { WelcomeViewProps } from './welcome/WelcomeView'
+export { ConfigExportDialog } from './welcome/ConfigExportDialog'
+export { ConfigImportDialog } from './welcome/ConfigImportDialog'

@@ -1,54 +1,9 @@
-import { getChatApi } from '@shuvix/chat-ui'
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Sliders, Download, Upload } from 'lucide-react'
+import { Sliders } from 'lucide-react'
 import { SessionConfigPanel } from './SessionConfigPanel'
-import { InputArea } from '@shuvix/chat-ui'
-import { ConfigExportDialog } from '../welcome/ConfigExportDialog'
-import { ConfigImportDialog } from '../welcome/ConfigImportDialog'
 
-/** 欢迎页 — 无活跃会话时显示：标题 + 复用对话输入框 + 配置导入/导出 */
-export function WelcomeView(): React.JSX.Element {
-  const { t } = useTranslation()
-  const isDesktop = getChatApi().app.platform !== 'web'
-  const [exportOpen, setExportOpen] = useState(false)
-  const [importOpen, setImportOpen] = useState(false)
-
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center overflow-y-auto px-4">
-      <div className="w-full max-w-3xl flex flex-col items-center">
-        <h1 className="text-2xl font-medium text-text-primary mb-6 text-center">
-          {t('chat.welcomePrompt')}
-        </h1>
-
-        <div className="w-full">
-          <InputArea />
-        </div>
-
-        {isDesktop && (
-          <div className="flex items-center justify-center gap-1 mt-4">
-            <button
-              onClick={() => setImportOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-            >
-              <Upload size={12} />
-              {t('configShare.entryImport')}
-            </button>
-            <button
-              onClick={() => setExportOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
-            >
-              <Download size={12} />
-              {t('configShare.entryExport')}
-            </button>
-          </div>
-        )}
-      </div>
-      {exportOpen && <ConfigExportDialog onClose={() => setExportOpen(false)} />}
-      {importOpen && <ConfigImportDialog onClose={() => setImportOpen(false)} />}
-    </div>
-  )
-}
+// WelcomeView 已移至 @shuvix/app-shell（桌面/扩展共用）。此文件仅保留桌面专属的 EmptySessionHint
+// （依赖 SessionConfigPanel，宿主专属，不进共享包）。
 
 /** 空会话引导 — 有活跃会话但无消息时显示，居中展示会话配置面板 */
 export function EmptySessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {

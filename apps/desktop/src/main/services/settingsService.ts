@@ -1,4 +1,5 @@
 import { settingsDao } from '../dao/settingsDao'
+import { appEventBus } from '../utils/appEventBus'
 
 // ---------- 设置元数据注册表 ----------
 
@@ -123,9 +124,10 @@ export class SettingsService {
     return settingsDao.findByKey(key)
   }
 
-  /** 保存设置 */
+  /** 保存设置 —— 在数据层写入后发布 settings.changed（无论调用方是 IPC 还是后端服务） */
   set(key: string, value: string): void {
     settingsDao.upsert(key, value)
+    appEventBus.publish({ type: 'settings.changed', keys: [key] })
   }
 }
 

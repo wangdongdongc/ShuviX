@@ -856,6 +856,8 @@
     "filesTruncated": "最初の {{count}} 件を表示しています",
     "filesRefresh": "更新",
     "filesSearch": "検索",
+    "filesPermissionNeeded": "フォルダ「{{name}}」へのアクセス権限が失効しました。ファイルを表示するには再度許可してください。",
+    "filesGrantAccess": "アクセスを許可",
     "preview": {
       "close": "プレビューを閉じる",
       "binary": "プレビュー非対応",

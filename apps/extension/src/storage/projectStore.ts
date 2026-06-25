@@ -8,6 +8,7 @@
 import { v4 as uuid } from 'uuid'
 import type { Project } from '@shuvix/chat-protocol/chatApi'
 import { idb } from './idb'
+import { appEventBus } from '../runtime/appEventBus'
 
 /** 内部记录：Project 元数据 + 目录句柄 */
 interface ProjectRecord {
@@ -21,10 +22,10 @@ interface ProjectRecord {
 
 const cache = new Map<string, ProjectRecord>()
 let loaded = false
-const listeners = new Set<() => void>()
 
+/** 项目数据变更 → 发布 project.changed（数据层，覆盖所有调用方，与桌面 projectService 对称） */
 function emit(): void {
-  for (const l of listeners) l()
+  appEventBus.publish({ type: 'project.changed' })
 }
 
 /** 内部记录 → chat-protocol Project（path 用文件夹名展示；扩展无真实路径） */
@@ -114,10 +115,6 @@ export const projectStore = {
     cache.delete(id)
     await idb.delete('projects', id)
     emit()
-  },
-
-  onChanged(cb: () => void): () => void {
-    listeners.add(cb)
-    return () => listeners.delete(cb)
   }
+  // 变更订阅已并入通用 events.subscribe（AppEvent 'project.changed'）
 }

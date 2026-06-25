@@ -1,23 +1,33 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ScrollText } from 'lucide-react'
-import { SystemPromptSettings } from './SystemPromptSettings'
+import { getChatApi } from '@shuvix/chat-ui'
 import { Toggle } from './SettingsPrimitives'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { SystemPromptSettings } from './SystemPromptSettings'
 
 /** 子分类标识 */
 type ContextSubTab = 'systemPrompt'
 
-/** 上下文管理 Tab — 包含系统提示词等与对话上下文相关的设置 */
+/**
+ * 上下文管理 Tab（桌面/扩展共用）—— 系统提示词等与对话上下文相关的设置。
+ *
+ * 总开关 general.systemPromptEnabled 经 getChatApi().settings 读写，宿主无关。
+ */
 export function ContextManagementSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const [subTab, setSubTab] = useState<ContextSubTab>('systemPrompt')
-  const { systemPromptEnabled, setSystemPromptEnabled } = useSettingsStore()
+  const [systemPromptEnabled, setSystemPromptEnabled] = useState(true)
+
+  useEffect(() => {
+    void getChatApi()
+      .settings.get('general.systemPromptEnabled')
+      .then((v) => setSystemPromptEnabled(v !== 'false'))
+  }, [])
 
   const handleToggleSystemPrompt = (): void => {
     const next = !systemPromptEnabled
     setSystemPromptEnabled(next)
-    window.api.settings.set({
+    void getChatApi().settings.set({
       key: 'general.systemPromptEnabled',
       value: next ? 'true' : 'false'
     })
@@ -54,7 +64,7 @@ export function ContextManagementSettings(): React.JSX.Element {
 
       {/* 右侧内容区 */}
       <div className="flex-1 min-w-0 overflow-y-auto">
-        {subTab === 'systemPrompt' && <SystemPromptSettings />}
+        {subTab === 'systemPrompt' && <SystemPromptSettings enabled={systemPromptEnabled} />}
       </div>
     </div>
   )

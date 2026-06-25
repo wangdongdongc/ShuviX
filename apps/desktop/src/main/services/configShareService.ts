@@ -1,11 +1,11 @@
 import { app } from 'electron'
 import { v7 as uuidv7 } from 'uuid'
 import { providerDao } from '../dao/providerDao'
+import { appEventBus } from '../utils/appEventBus'
 import { mcpDao } from '../dao/mcpDao'
 import { mcpService } from './mcpService'
 import { createLogger } from '../logger'
 import {
-  CONFIG_SHARE_MAGIC,
   type ConfigSharePayload,
   type ExportedMcpServer,
   type ExportedProvider,
@@ -15,6 +15,11 @@ import {
   type ImportResult,
   type ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
+import {
+  encodeConfigSharePayload,
+  parseConfigSharePayload,
+  planConfigImport
+} from '@shuvix/chat-protocol/configShareCore'
 import type { ApiProtocol } from '@shuvix/chat-protocol/types/provider'
 import type { McpServer } from '../dao/types'
 
@@ -33,10 +38,6 @@ function stripRecordValues<V>(record: Record<string, V>): Record<string, string>
   const out: Record<string, string> = {}
   for (const key of Object.keys(record)) out[key] = ''
   return out
-}
-
-function hasAnyValue(record: Record<string, string>): boolean {
-  return Object.values(record).some((v) => v !== '')
 }
 
 /**
@@ -142,85 +143,27 @@ class ConfigShareService {
       mcpServers: exportedMcpServers.length > 0 ? exportedMcpServers : undefined
     }
 
-    const json = JSON.stringify(payload)
-    return CONFIG_SHARE_MAGIC + Buffer.from(json, 'utf-8').toString('base64')
+    return encodeConfigSharePayload(payload)
   }
 
-  /** 解码并校验 payload，失败抛带可读 message 的 Error */
+  /** 解码并校验 payload，失败抛带可读 message 的 Error（复用共享内核） */
   parseImportPayload(encoded: string): ConfigSharePayload {
-    const trimmed = encoded.trim()
-    if (!trimmed.startsWith(CONFIG_SHARE_MAGIC)) {
-      throw new Error('MAGIC_MISMATCH')
-    }
-    const b64 = trimmed.slice(CONFIG_SHARE_MAGIC.length)
-    let json: string
-    try {
-      json = Buffer.from(b64, 'base64').toString('utf-8')
-    } catch {
-      throw new Error('BASE64_INVALID')
-    }
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(json)
-    } catch {
-      throw new Error('JSON_INVALID')
-    }
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error('SCHEMA_INVALID')
-    }
-    const payload = parsed as Partial<ConfigSharePayload>
-    if (payload.version !== 1) {
-      throw new Error('VERSION_UNSUPPORTED')
-    }
-    return payload as ConfigSharePayload
+    return parseConfigSharePayload(encoded)
   }
 
-  /** 预计算每项将执行的动作 */
+  /** 预计算每项将执行的动作（复用共享判定，注入本端 DAO 查询） */
   planImport(payload: ConfigSharePayload): ImportPlan {
-    const allProviders = providerDao.findAll()
-    const providerByName = new Map(allProviders.map((p) => [p.name, p]))
-
-    const providerPlans: ImportPlan['providers'] = (payload.providers ?? []).map((p) => {
-      const existing = providerByName.get(p.name)
-      let action: 'create' | 'overwrite' | 'mergeBuiltin'
-      if (!existing) {
-        action = 'create'
-      } else if (existing.isBuiltin === 1) {
-        action = 'mergeBuiltin'
-      } else {
-        action = 'overwrite'
-      }
-      return {
-        name: p.name,
-        action,
-        modelIds: p.models.map((m) => m.modelId),
-        missingApiKey: p.apiKey === null
+    const providerByName = new Map(providerDao.findAll().map((p) => [p.name, p]))
+    return planConfigImport(payload, {
+      findProvider: (name) => {
+        const p = providerByName.get(name)
+        return p ? { isBuiltin: p.isBuiltin === 1 } : undefined
+      },
+      findMcp: (name) => {
+        const s = mcpDao.findByName(name)
+        return s ? { isBuiltin: s.isBuiltin === 1 } : undefined
       }
     })
-
-    const mcpPlans: ImportPlan['mcpServers'] = (payload.mcpServers ?? []).map((s) => {
-      const existing = mcpDao.findByName(s.name)
-      let action: 'create' | 'overwrite' | 'mergeBuiltin' | 'skipMissingBuiltin'
-      if (s.isBuiltin) {
-        action = existing?.isBuiltin === 1 ? 'mergeBuiltin' : 'skipMissingBuiltin'
-      } else if (existing?.isBuiltin === 1) {
-        action = 'mergeBuiltin'
-      } else if (existing) {
-        action = 'overwrite'
-      } else {
-        action = 'create'
-      }
-      return {
-        name: s.name,
-        action,
-        missingSecrets:
-          s.sensitiveStripped ||
-          (s.env !== null && !hasAnyValue(s.env)) ||
-          (s.headers !== null && !hasAnyValue(s.headers))
-      }
-    })
-
-    return { providers: providerPlans, mcpServers: mcpPlans }
   }
 
   /** 按用户勾选执行导入，逐项收集成败 */
@@ -258,6 +201,8 @@ class ConfigShareService {
       }
     }
 
+    // 导入直接写 providerDao（未走 providerService）→ 在此发布 providers.changed
+    if (providerResults.length > 0) appEventBus.publish({ type: 'providers.changed' })
     return { providers: providerResults, mcpServers: mcpResults }
   }
 

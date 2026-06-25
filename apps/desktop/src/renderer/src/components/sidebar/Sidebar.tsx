@@ -77,13 +77,12 @@ export function Sidebar(): React.JSX.Element {
     setArchivedProjects(archivedList.map((p) => ({ id: p.id, name: p.name })))
   }
 
-  // 加载项目列表（创建/编辑后也会刷新）+ 监听后端 project:changed 事件
+  // 加载项目列表（创建/编辑后也会刷新）+ 订阅 AppEvent 'project.changed'
   useEffect(() => {
     void reloadProjects()
-    const unsubscribe = window.api.project.onChanged(() => {
-      void reloadProjects()
+    return window.api.events.subscribe((e) => {
+      if (e.type === 'project.changed') void reloadProjects()
     })
-    return unsubscribe
   }, [editingProjectId])
 
   /** 项目 id → 名称 快查表 */

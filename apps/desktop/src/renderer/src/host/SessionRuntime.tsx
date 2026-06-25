@@ -1,5 +1,4 @@
-import { useSessionInit } from '@shuvix/chat-ui'
-import { useAgentEvents } from '@shuvix/chat-ui'
+import { useSessionInit, useAgentEvents, useModelCatalogSync } from '@shuvix/chat-ui'
 import { useRightPanelBridge } from './useRightPanelBridge'
 
 /**
@@ -10,6 +9,7 @@ import { useRightPanelBridge } from './useRightPanelBridge'
 export function SessionRuntime({ sessionId }: { sessionId: string | null }): null {
   useSessionInit(sessionId)
   useAgentEvents()
+  useModelCatalogSync()
   useRightPanelBridge()
   return null
 }

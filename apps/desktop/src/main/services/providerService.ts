@@ -3,6 +3,7 @@ import { getModels } from '@earendil-works/pi-ai'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
+import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 import type {
   ApiProtocol,
@@ -18,6 +19,11 @@ const log = createLogger('ProviderService')
  * 提供商服务 — 编排提供商和模型的业务逻辑
  */
 export class ProviderService {
+  /** 提供商/模型数据变更后发布事件（在数据层写入处调用，覆盖所有调用方，不依赖 IPC 层） */
+  private notifyChanged(): void {
+    appEventBus.publish({ type: 'providers.changed' })
+  }
+
   // ============ 提供商操作 ============
 
   /** 获取所有提供商（含禁用的） */
@@ -61,11 +67,13 @@ export class ProviderService {
     if (config.metadata !== undefined) {
       providerDao.updateMetadata(id, config.metadata)
     }
+    this.notifyChanged()
   }
 
   /** 切换提供商启用状态 */
   toggleEnabled(id: string, isEnabled: boolean): void {
     providerDao.updateEnabled(id, isEnabled)
+    this.notifyChanged()
   }
 
   /** 添加自定义提供商 */
@@ -85,12 +93,15 @@ export class ProviderService {
       apiProtocol: params.apiProtocol,
       metadata: params.metadata
     })
+    this.notifyChanged()
     return providerDao.findById(id)!
   }
 
   /** 删除自定义提供商 */
   deleteProvider(id: string): boolean {
-    return providerDao.delete(id)
+    const ok = providerDao.delete(id)
+    this.notifyChanged()
+    return ok
   }
 
   // ============ 模型操作 ============
@@ -113,11 +124,13 @@ export class ProviderService {
   /** 切换模型启用状态 */
   toggleModelEnabled(id: string, isEnabled: boolean): void {
     providerDao.updateModelEnabled(id, isEnabled)
+    this.notifyChanged()
   }
 
   /** 批量更新模型启用状态 */
   batchToggleModels(updates: Array<{ id: string; isEnabled: boolean }>): void {
     providerDao.batchUpdateModelEnabled(updates)
+    this.notifyChanged()
   }
 
   /** 手动添加模型 */
@@ -128,16 +141,19 @@ export class ProviderService {
     if (provider) {
       this.fillMissingCapabilities(providerId, provider.name, provider.baseUrl)
     }
+    this.notifyChanged()
   }
 
   /** 删除模型 */
   deleteModel(id: string): void {
     providerDao.deleteModel(id)
+    this.notifyChanged()
   }
 
   /** 更新模型能力（patch 语义） */
   patchCapabilities(id: string, patch: Partial<ModelCapabilities>): void {
     providerDao.patchCapabilities(id, patch)
+    this.notifyChanged()
   }
 
   /**
@@ -246,6 +262,7 @@ export class ProviderService {
 
     // 自动补充新模型的能力信息
     this.fillMissingCapabilities(providerId, provider.name, provider.baseUrl)
+    this.notifyChanged()
 
     let added = 0
     for (const modelId of fetchedModelIds) {

@@ -14,6 +14,7 @@ import { createFileToolSuite } from '@shuvix/agent-runtime'
 import { createFsaPort, createFsaGuards, ensureRwPermission } from './fsaPort'
 import { isUrl, readUrl, readImage, IMAGE_MIME_BY_EXT } from './richReaders'
 import { createExtensionSandboxPolicy } from './sandboxPolicy'
+import { appEventBus } from './appEventBus'
 
 const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files in the working directory, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. For images (PNG, JPEG, GIF, WebP, BMP), returns inline image content for multimodal viewing (images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -60,6 +61,14 @@ export function createFileTools(
     policy: createExtensionSandboxPolicy(requestUserInput),
     ensureAccess,
     abortError: 'TOOL_ABORTED',
+    // write/edit 成功 → 发布 files.changed。portPath 是 root 相对，归一成 `root.name/rel`（UI 路径空间）
+    onFileChange: ({ portPath, kind }) =>
+      appEventBus.publish({
+        type: 'files.changed',
+        root: root.name,
+        paths: [`${root.name}/${portPath.replace(/^[/\\]+/, '')}`],
+        kind
+      }),
     labels: { read: 'Read', write: 'Write', edit: 'Edit' },
     descriptions: { read: READ_DESCRIPTION, write: WRITE_DESCRIPTION, edit: EDIT_DESCRIPTION },
     decoders: {

@@ -98,8 +98,7 @@ export function createWebApi(): typeof window.api {
       openFolder: noop,
       adjustWindowWidth: noop,
       setBrowserOffset: noop,
-      windowReady: noopVoid,
-      onSettingsChanged: () => () => {}
+      windowReady: noopVoid
     },
 
     agent: {
@@ -277,6 +276,11 @@ export function createWebApi(): typeof window.api {
       deleteDefault: noop,
       parseMarkdown: () => Promise.resolve(null),
       getDefaultDir: () => Promise.resolve('')
+    },
+
+    // 通用内部事件：WebUI 暂未经 WS 转发 AppEvent → no-op（不报错即可，后续可接 eventSource）
+    events: {
+      subscribe: () => () => {}
     }
   } as unknown as typeof window.api
 }

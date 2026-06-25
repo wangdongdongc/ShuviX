@@ -9,6 +9,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Maximize2, Music, X } from 'lucide-react'
+import { useMediaUrl } from './mediaUrl'
 
 interface AudioDockProps {
   /** 绝对路径 */
@@ -32,7 +33,7 @@ export function AudioDock({
 }: AudioDockProps): React.JSX.Element {
   const { t } = useTranslation()
   const [errored, setErrored] = useState(false)
-  const url = `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+  const url = useMediaUrl(sessionId, path, mimeType)
 
   if (errored) {
     return (
@@ -78,13 +79,13 @@ export function AudioDock({
       {/* 播放控件 —— key={path} 确保切歌时元素重挂载，立即加载新源 */}
       <audio
         key={path}
-        src={url}
+        src={url ?? undefined}
         controls
         autoPlay
         className="w-full"
         onError={() => setErrored(true)}
       >
-        <source src={url} type={mimeType} />
+        {url && <source src={url} type={mimeType} />}
       </audio>
     </div>
   )

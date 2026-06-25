@@ -14,7 +14,7 @@ import {
 import type { ReferenceDir } from '../../../../main/types/project'
 import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 import type { ToolItem } from '../common/ToolSelectList'
-import { PromptSectionsEditor } from './PromptSectionsEditor'
+import { PromptSectionsEditor } from '@shuvix/app-shell'
 import { SettingsSection, SettingsRow, Toggle, InlineInput } from '../settings/SettingsPrimitives'
 
 // ─── 基本信息：项目名称 ────────────────────────────────

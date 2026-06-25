@@ -6,7 +6,7 @@
 import { stat } from 'fs/promises'
 import { resolve, relative } from 'path'
 import { Type } from 'typebox'
-import { BaseTool } from '../services/baseTool'
+import { BaseTool } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
   assertSandboxRead,
