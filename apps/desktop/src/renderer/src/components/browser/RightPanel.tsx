@@ -178,13 +178,9 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
             activeTab === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
           }
         >
-          {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；点击 .md 在中间区打开 live-preview 编辑器 */}
+          {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；.md 与其它文本一致走内联覆盖预览（与扩展端保持一致） */}
           <MediaUrlProvider value={shuvixPreviewResolver}>
-            <FilesPanel
-              onOpenMarkdown={({ path, sessionId }) =>
-                useChatStore.getState().setActiveFile({ path, sessionId })
-              }
-            />
+            <FilesPanel />
           </MediaUrlProvider>
         </div>
         <div
