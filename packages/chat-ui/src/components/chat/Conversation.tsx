@@ -1,4 +1,4 @@
-import { getChatApi, useChatHost } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
@@ -174,7 +174,7 @@ export function Conversation({
     setArchivedOffset(0)
     setArchivedCount(0)
     if (!sessionId) return
-    getChatApi()
+    getSessionChannelApi()
       .message.countArchived(sessionId)
       .then((cnt) => setArchivedCount(cnt))
   }, [sessionId])
@@ -184,7 +184,7 @@ export function Conversation({
     if (!sessionId || archivedLoading || !hasMoreArchived) return
     setArchivedLoading(true)
     try {
-      const batch = await getChatApi().message.listArchived({
+      const batch = await getSessionChannelApi().message.listArchived({
         sessionId,
         limit: 5,
         offset: archivedOffset
@@ -295,7 +295,7 @@ export function Conversation({
       ) : (
         <Virtuoso
           ref={virtuosoRef}
-          className="flex-1"
+          className="flex-1 thin-scrollbar"
           data={visibleItems}
           itemContent={renderItem}
           components={{

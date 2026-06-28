@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Folder, Settings2 } from 'lucide-react'
-import { getChatApi, useChatStore, useSessionMeta } from '@shuvix/chat-ui'
+import { getHostApi, useChatStore, useSessionMeta } from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 /**
@@ -65,7 +65,9 @@ export function ChatHeader({
     setEditingTitle(false)
     const trimmed = draftTitle.trim()
     if (!trimmed || !activeSessionId || trimmed === sessionTitle) return
-    await getChatApi().session.updateTitle({ id: activeSessionId, title: trimmed })
+    const host = getHostApi()
+    if (!host) return // 渠道端只读：不可改标题
+    await host.session.updateTitle({ id: activeSessionId, title: trimmed })
     useChatStore.getState().updateSessionTitle(activeSessionId, trimmed)
   }
 
@@ -111,9 +113,9 @@ export function ChatHeader({
             <Settings2 size={12} />
           </button>
         )}
-        {caps.folder && projectPath && (
+        {caps.folder && projectPath && getHostApi() && (
           <button
-            onClick={() => getChatApi().app.openFolder(projectPath)}
+            onClick={() => getHostApi()?.app.openFolder(projectPath)}
             className={`${noDrag} p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0`}
             title={projectPath}
           >

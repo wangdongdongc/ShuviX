@@ -33,7 +33,16 @@
   --atomic-editor-accent-soft: var(--color-accent-muted);
   --atomic-editor-link: var(--color-accent);
   --atomic-editor-link-hover: var(--color-accent-hover);
-  --atomic-editor-selection-bg: var(--color-accent-muted);
+  /* 单层柔和高亮：只给 drawSelection 图层上色（见下方置空原生 ::selection 的规则），
+     避免「图层 + 原生选区」双层叠加把选区压得发暗、压住文字。 */
+  --atomic-editor-selection-bg: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* atomic-theme 同时给 .cm-selectionBackground 图层与原生 ::selection 上了同一强调色，
+   两层叠加导致选区偏暗、文字可读性差。这里置空编辑区内的原生 ::selection，
+   仅保留单层 drawSelection 图层着色（颜色由 --atomic-editor-selection-bg 控制）。 */
+.atomic-panel .cm-content ::selection {
+  background-color: transparent !important;
 }
 
 /* —— 代码块语法高亮：映射到 ShuviX 的 hljs 双色板（跟随明暗主题）—— */
@@ -111,7 +120,8 @@
 }
 .atomic-panel .cm-scroller {
   overflow: auto;
-  padding: 24px 28px 48px;
+  /* 底部留白加大：笔记本会话底部悬浮输入框约 ~120px，留白让末尾内容可滚动到输入框之上不被遮挡 */
+  padding: 24px 28px 128px;
 }
 .atomic-panel .cm-content {
   max-width: 700px;
@@ -256,9 +266,11 @@
   opacity: 0.6;
 }
 
-/* 内嵌图片：限宽、居中留白；与代码块等块级元素观感一致 */
+/* 内嵌图片：限宽、居中留白；与代码块等块级元素观感一致。
+   注意：必须用 padding 而非 margin —— CM 测块级 widget 高度取其盒子(offsetHeight)，不含 margin。
+   外边距会成为高度图统计不到的「空隙」，逐张图片累积，使其下方点击坐标→文本位置整体下移错位。 */
 .atomic-panel .cm-atomic-image {
-  margin: 0.5em 0;
+  padding: 0.5em 0;
 }
 .atomic-panel .cm-atomic-image img {
   display: block;

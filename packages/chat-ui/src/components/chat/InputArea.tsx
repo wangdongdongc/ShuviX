@@ -1,4 +1,4 @@
-import { getChatApi, useChatHost } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, Mic, X, Archive } from 'lucide-react'
@@ -27,6 +27,15 @@ function formatTokenCount(n: number): string {
   return String(n)
 }
 
+export interface InputAreaProps {
+  /**
+   * 笔记本会话模式：复用本输入框，但发送走 `agent.notebookPrompt`（每次开启独立子智能体；
+   * 子智能体上下文仅注入笔记本路径 + read 提示，正文由其自行读取），UI 调整为悬浮、矮、无压缩归档。
+   * 模型/工具选择沿用 ModelPicker/ToolPicker（写会话配置 → 子智能体继承，与普通会话一致）。
+   */
+  notebook?: boolean
+}
+
 /**
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
@@ -34,8 +43,9 @@ function formatTokenCount(n: number): string {
  * 注:不再有"pending action 时输入框走 override"的联动。
  * 反馈给 AI 的入口由 PendingInputsPanel 中的"其它"输入框承担。
  */
-export function InputArea(): React.JSX.Element {
+export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element {
   const { t } = useTranslation()
+  const isNotebook = !!notebook
   const {
     inputText,
     setInputText,
@@ -49,7 +59,10 @@ export function InputArea(): React.JSX.Element {
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
   const isCompacting = useChatStore(selectIsCompacting)
-  const canEdit = useChatStore(selectCanEdit)
+  const canEditSession = useChatStore(selectCanEdit)
+  // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具/压缩等）
+  const hasHost = getHostApi() !== null
+  const canEdit = canEditSession && hasHost
   const assistantMsgCount = useChatStore(
     useCallback(
       (s) => s.messages.filter((m) => m.role === 'assistant' && m.type === 'text').length,
@@ -118,11 +131,12 @@ export function InputArea(): React.JSX.Element {
     [slashChip, slashCommands, setInputText]
   )
 
-  // 拖拽调节的 textarea 最小高度
+  // 拖拽调节的 textarea 最小高度。笔记本模式默认更矮（悬浮少遮挡）、不读持久化高度、不展示拖拽手柄。
   const DRAG_MIN = 60
   const DRAG_MAX = 480
-  const DEFAULT_MIN_H = 60
+  const DEFAULT_MIN_H = isNotebook ? 44 : 60
   const [minH, setMinH] = useState(() => {
+    if (isNotebook) return DEFAULT_MIN_H
     const stored = localStorage.getItem('inputMinHeight')
     if (stored) {
       const n = Number(stored)
@@ -178,10 +192,12 @@ export function InputArea(): React.JSX.Element {
       const current = new Set(store.enabledTools)
       const missing = requiredTools.filter((name) => !current.has(name))
       if (missing.length === 0) return
+      const host = getHostApi()
+      if (!host) return // 渠道端无权改工具集；会话工具由宿主侧已配置
       const newTools = [...store.enabledTools, ...missing]
       store.setEnabledTools(newTools)
-      void getChatApi().agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      void getChatApi().session.updateEnabledTools({ id: activeSessionId, enabledTools: newTools })
+      void host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
+      void host.session.updateEnabledTools({ id: activeSessionId, enabledTools: newTools })
     },
     [activeSessionId]
   )
@@ -193,16 +209,35 @@ export function InputArea(): React.JSX.Element {
 
     const rawText = inputText.trim()
     const images = pendingImages
+
+    // 笔记本模式：每次发送开启独立子智能体（fire-and-forget）。子代理上下文仅注入笔记本路径 + read 提示，
+    // 正文由其自行读取。不走主会话流式态（笔记本无主 Agent）；进展看右侧子智能体面板。模型/工具由会话配置决定。
+    if (notebook) {
+      if (!rawText || !activeSessionId) return
+      const store = useChatStore.getState()
+      store.setInputText('')
+      store.clearPendingImages()
+      setSlashChip(null)
+      void getSessionChannelApi().agent.notebookPrompt({
+        sessionId: activeSessionId,
+        text: rawText
+      })
+      return
+    }
+
     // 有芯片时即使参数为空也允许发送（纯命令）
     if ((!rawText && !slashChip && images.length === 0) || isStreaming) return
 
-    // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）
+    // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）。
+    // 创建会话属宿主能力；渠道端总有一个已分享的当前会话，故此路径不会触发。
     let sid = activeSessionId
     if (!sid) {
-      const session = await getChatApi().session.create(null)
+      const host = getHostApi()
+      if (!host) return
+      const session = await host.session.create()
       sid = session.id
-      await getChatApi().agent.init({ sessionId: sid })
-      const sessions = await getChatApi().session.list()
+      await getSessionChannelApi().agent.init({ sessionId: sid })
+      const sessions = await host.session.list()
       const s = useChatStore.getState()
       s.setSessions(sessions)
       s.setActiveSessionId(sid)
@@ -271,7 +306,7 @@ export function InputArea(): React.JSX.Element {
             mimeType: img.mimeType
           }))
         : undefined
-    await getChatApi().agent.prompt({
+    await getSessionChannelApi().agent.prompt({
       sessionId: sid,
       text: contentText,
       images: agentImages,
@@ -285,7 +320,7 @@ export function InputArea(): React.JSX.Element {
     const sid = activeSessionId
     const store = useChatStore.getState()
     // 后端 abort 会持久化已生成的部分内容并返回已保存的消息
-    const result = await getChatApi().agent.abort(sid)
+    const result = await getSessionChannelApi().agent.abort(sid)
     store.finishStreaming(sid, result.savedMessage ?? undefined)
   }
 
@@ -298,11 +333,11 @@ export function InputArea(): React.JSX.Element {
     // 竞态保护：agent 可能刚好结束，检查 isStreaming 决定走 steer 还是 prompt
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
     if (stillStreaming) {
-      await getChatApi().agent.steer({ sessionId: activeSessionId, text })
+      await getSessionChannelApi().agent.steer({ sessionId: activeSessionId, text })
     } else {
       store.setIsStreaming(activeSessionId, true)
       store.clearStreamingContent(activeSessionId)
-      await getChatApi().agent.prompt({ sessionId: activeSessionId, text })
+      await getSessionChannelApi().agent.prompt({ sessionId: activeSessionId, text })
     }
   }
 
@@ -371,24 +406,115 @@ export function InputArea(): React.JSX.Element {
     (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
     !isStreaming &&
     !!activeModel
+
+  // ─── 复用片段：模型/工具选择器 + 麦克风 + 发送/停止 ──
+  // 普通会话：pickers 在外置工具栏、按钮在输入框右下角；笔记本：两者合并到输入框底部同一行。
+  const pickers = (
+    <div className="flex-shrink-0 flex items-center gap-1.5">
+      <ModelPicker readonly={!canEdit} />
+      {canEdit && <ToolPicker />}
+    </div>
+  )
+
+  const micButton =
+    chatHost.voice && voice.isAvailable && !isStreaming ? (
+      <button
+        onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
+        disabled={!activeSessionId}
+        className={`p-1 rounded transition-colors ${
+          voice.isRecording
+            ? 'text-error hover:bg-error/10'
+            : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
+        }`}
+        title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
+      >
+        {voice.isRecording ? (
+          <div className="flex items-center gap-1">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
+            </span>
+            <span className="text-[10px] tabular-nums">
+              {Math.floor(voice.duration / 60)}:{String(voice.duration % 60).padStart(2, '0')}
+            </span>
+          </div>
+        ) : (
+          <Mic size={14} />
+        )}
+      </button>
+    ) : null
+
+  const sendStopButtons = isStreaming ? (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={handleSteer}
+        disabled={!inputText.trim()}
+        className={`p-1.5 rounded-lg transition-colors ${
+          inputText.trim()
+            ? 'bg-warning text-white hover:bg-warning/80'
+            : 'text-text-tertiary cursor-not-allowed'
+        }`}
+        title={t('input.steer')}
+      >
+        <Send size={14} />
+      </button>
+      <button
+        onClick={handleAbort}
+        className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
+        title={t('input.stopGen')}
+      >
+        <Square size={14} fill="currentColor" />
+      </button>
+    </div>
+  ) : (
+    <button
+      onClick={handleSend}
+      disabled={!canSend}
+      className={`p-1.5 rounded-lg transition-colors ${
+        canSend
+          ? 'bg-accent text-white hover:bg-accent-hover'
+          : 'text-text-tertiary cursor-not-allowed'
+      }`}
+      title={t('input.send')}
+    >
+      <Send size={14} />
+    </button>
+  )
+
   return (
     <div
-      className={`bg-bg-primary transition-colors ${
-        isDragging ? 'border-t border-accent border-dashed bg-accent/5' : ''
-      }`}
+      className={
+        isNotebook
+          ? // 悬浮：绝对定位贴底，容器透明 + 不拦截指针，仅输入框本体接收事件，背景不遮挡正文
+            `absolute bottom-0 left-0 right-0 pointer-events-none transition-colors ${
+              isDragging ? 'bg-accent/5' : ''
+            }`
+          : `bg-bg-primary transition-colors ${
+              isDragging ? 'border-t border-accent border-dashed bg-accent/5' : ''
+            }`
+      }
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="max-w-3xl mx-auto p-2">
-        <div className="border border-border-secondary/40 bg-bg-primary shadow-sm rounded-2xl">
-          {/* 拖拽调节手柄 */}
-          <div
-            onMouseDown={handleResizeStart}
-            className="flex justify-center py-1 cursor-ns-resize group"
-          >
-            <div className="w-8 h-0.5 rounded-full bg-border-secondary group-hover:bg-text-tertiary transition-colors" />
-          </div>
+      <div className={`max-w-3xl mx-auto p-2 ${isNotebook ? 'pointer-events-auto' : ''}`}>
+        <div
+          className={`border border-border-secondary/40 rounded-2xl ${
+            isNotebook
+              ? // 悬浮：磨砂模糊背景（透出并虚化正文）+ 柔和阴影
+                'bg-bg-primary/80 backdrop-blur-md shadow-md'
+              : 'bg-bg-primary shadow-sm'
+          }`}
+        >
+          {/* 拖拽调节手柄（笔记本模式从简：不展示，靠内容自动增高） */}
+          {!isNotebook && (
+            <div
+              onMouseDown={handleResizeStart}
+              className="flex justify-center py-1 cursor-ns-resize group"
+            >
+              <div className="w-8 h-0.5 rounded-full bg-border-secondary group-hover:bg-text-tertiary transition-colors" />
+            </div>
+          )}
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
@@ -458,90 +584,32 @@ export function InputArea(): React.JSX.Element {
                       ? t('input.placeholderVision')
                       : t('input.placeholder')
               }
-              rows={3}
+              rows={isNotebook ? 1 : 3}
               style={{
                 minHeight: `${minH}px`,
                 textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
               }}
-              className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-9 resize-none outline-none overflow-y-auto"
+              className={`w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 resize-none outline-none overflow-y-auto ${
+                isNotebook ? 'pb-2' : 'pb-9'
+              }`}
             />
 
-            {/* Compact + Mic + Send/Stop 按钮（保留在输入框右下角） */}
-            <div className="absolute right-2 bottom-1.5 z-10 flex items-center gap-0.5">
-              {assistantMsgCount >= 1 && !isStreaming && !isCompacting && (
-                <button
-                  onClick={() => activeSessionId && getChatApi().compact.start(activeSessionId)}
-                  className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
-                  title={t('compact.button')}
-                >
-                  <Archive size={14} />
-                </button>
-              )}
-              {chatHost.voice && voice.isAvailable && !isStreaming && (
-                <button
-                  onClick={voice.isRecording ? voice.stopRecording : voice.startRecording}
-                  disabled={!activeSessionId}
-                  className={`p-1 rounded transition-colors ${
-                    voice.isRecording
-                      ? 'text-error hover:bg-error/10'
-                      : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
-                  }`}
-                  title={voice.isRecording ? t('voice.stopRecording') : t('voice.startRecording')}
-                >
-                  {voice.isRecording ? (
-                    <div className="flex items-center gap-1">
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-error opacity-75" />
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-error" />
-                      </span>
-                      <span className="text-[10px] tabular-nums">
-                        {Math.floor(voice.duration / 60)}:
-                        {String(voice.duration % 60).padStart(2, '0')}
-                      </span>
-                    </div>
-                  ) : (
-                    <Mic size={14} />
-                  )}
-                </button>
-              )}
-
-              {isStreaming ? (
-                <div className="flex items-center gap-1">
+            {/* 普通会话：Compact + Mic + Send/Stop 按钮保留在输入框右下角（绝对定位） */}
+            {!isNotebook && (
+              <div className="absolute right-2 bottom-1.5 z-10 flex items-center gap-0.5">
+                {hasHost && assistantMsgCount >= 1 && !isStreaming && !isCompacting && (
                   <button
-                    onClick={handleSteer}
-                    disabled={!inputText.trim()}
-                    className={`p-1.5 rounded-lg transition-colors ${
-                      inputText.trim()
-                        ? 'bg-warning text-white hover:bg-warning/80'
-                        : 'text-text-tertiary cursor-not-allowed'
-                    }`}
-                    title={t('input.steer')}
+                    onClick={() => activeSessionId && getHostApi()?.compact.start(activeSessionId)}
+                    className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+                    title={t('compact.button')}
                   >
-                    <Send size={14} />
+                    <Archive size={14} />
                   </button>
-                  <button
-                    onClick={handleAbort}
-                    className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
-                    title={t('input.stopGen')}
-                  >
-                    <Square size={14} fill="currentColor" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={handleSend}
-                  disabled={!canSend}
-                  className={`p-1.5 rounded-lg transition-colors ${
-                    canSend
-                      ? 'bg-accent text-white hover:bg-accent-hover'
-                      : 'text-text-tertiary cursor-not-allowed'
-                  }`}
-                  title={t('input.send')}
-                >
-                  <Send size={14} />
-                </button>
-              )}
-            </div>
+                )}
+                {micButton}
+                {sendStopButtons}
+              </div>
+            )}
 
             {/* 语音输入错误提示 */}
             {voice.error && (
@@ -550,50 +618,60 @@ export function InputArea(): React.JSX.Element {
               </div>
             )}
           </div>
-        </div>
 
-        {/* 外置工具栏（位于对话框下方） */}
-        <div
-          ref={toolbarRef}
-          className="mt-1.5 px-1 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap"
-        >
-          {/* Pickers 组：不可收缩 */}
-          <div className="flex-shrink-0 flex items-center gap-1.5">
-            <ModelPicker readonly={!canEdit} />
-            {canEdit && <ToolPicker />}
-          </div>
-
-          {/* 弹性空白 → 把上下文指示器推到最右 */}
-          <span className="flex-1" />
-
-          {/* 上下文用量指示器（空间不足时隐藏，位于右侧） */}
-          {showToolbarExtras && (maxContextTokens > 0 || usedContextTokens !== null) && (
-            <span className="relative inline-flex items-center group/token">
-              <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
-                {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
-                {maxContextTokens > 0 && (
-                  <>
-                    {' / '}
-                    {formatTokenCount(maxContextTokens)}
-                  </>
-                )}
-              </span>
-              {/* 悬浮 tooltip：详细用量 */}
-              <div className="pointer-events-none absolute right-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
-                <div className="text-[11px] text-text-primary">
-                  {maxContextTokens > 0
-                    ? t('input.contextUsage', {
-                        used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-',
-                        max: maxContextTokens.toLocaleString()
-                      })
-                    : t('input.contextUsageUnknownMax', {
-                        used: usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-'
-                      })}
-                </div>
-              </div>
-            </span>
+          {/* 笔记本：模型/工具选择器与按钮合并到输入框底部同一行（避免被正文遮挡、收纳进框内） */}
+          {isNotebook && (
+            <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary">
+              {pickers}
+              <span className="flex-1" />
+              {micButton}
+              {sendStopButtons}
+            </div>
           )}
         </div>
+
+        {/* 外置工具栏（位于对话框下方）—— 笔记本模式下选择器已并入框内，不再外置 */}
+        {!isNotebook && (
+          <div
+            ref={toolbarRef}
+            className="mt-1.5 px-1 flex items-center gap-2.5 text-text-tertiary whitespace-nowrap"
+          >
+            {pickers}
+
+            {/* 弹性空白 → 把上下文指示器推到最右 */}
+            <span className="flex-1" />
+
+            {/* 上下文用量指示器（空间不足时隐藏，位于右侧） */}
+            {showToolbarExtras && (maxContextTokens > 0 || usedContextTokens !== null) && (
+              <span className="relative inline-flex items-center group/token">
+                <span className="inline-flex items-center text-[11px] select-none text-text-tertiary">
+                  {usedContextTokens !== null ? formatTokenCount(usedContextTokens) : '-'}
+                  {maxContextTokens > 0 && (
+                    <>
+                      {' / '}
+                      {formatTokenCount(maxContextTokens)}
+                    </>
+                  )}
+                </span>
+                {/* 悬浮 tooltip：详细用量 */}
+                <div className="pointer-events-none absolute right-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap">
+                  <div className="text-[11px] text-text-primary">
+                    {maxContextTokens > 0
+                      ? t('input.contextUsage', {
+                          used:
+                            usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-',
+                          max: maxContextTokens.toLocaleString()
+                        })
+                      : t('input.contextUsageUnknownMax', {
+                          used:
+                            usedContextTokens !== null ? usedContextTokens.toLocaleString() : '-'
+                        })}
+                  </div>
+                </div>
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

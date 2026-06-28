@@ -1,4 +1,4 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getHostApi, getChannelBindingApi } from '@shuvix/chat-ui'
 import { useTranslation } from 'react-i18next'
 import { Globe, MessageCircle, TriangleAlert, X, icons } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
@@ -25,22 +25,26 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
 
   if (runtimeEntries.length === 0 && !autoApprove && !lanShareMode && !telegramBinding) return null
 
-  /** 点击关闭命令免审批 */
+  /** 点击关闭命令免审批（宿主能力；渠道端无此操作） */
   const handleDisableAutoApprove = async (): Promise<void> => {
-    await getChatApi().session.updateAutoApprove({ id: sessionId, autoApprove: false })
+    const host = getHostApi()
+    if (!host) return
+    await host.session.updateAutoApprove({ id: sessionId, autoApprove: false })
     useChatStore.getState().updateSessionSettings(sessionId, { autoApprove: false })
   }
 
   /** 点击关闭局域网分享 */
   const handleDisableLanShare = async (): Promise<void> => {
-    await getChatApi().webui.setShared({ sessionId, shared: false })
-    const shared = await getChatApi().webui.listShared()
+    const webui = getChannelBindingApi()?.webui
+    if (!webui) return
+    await webui.setShared({ sessionId, shared: false })
+    const shared = await webui.listShared()
     useChatStore.getState().setSharedSessionIds(new Map(shared.map((s) => [s.sessionId, s.mode])))
   }
 
   /** 点击取消 Telegram 绑定 */
   const handleDisableTelegram = async (): Promise<void> => {
-    await getChatApi().telegram.unbindSession({ sessionId })
+    await getChannelBindingApi()?.telegram?.unbindSession({ sessionId })
     useChatStore.getState().updateSessionSettings(sessionId, { telegramBotId: undefined })
     const bindings = new Map(useChatStore.getState().telegramBindings)
     bindings.delete(sessionId)
@@ -71,7 +75,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
             <span className="truncate max-w-[160px]">{info.label}</span>
             {info.description && <span className="opacity-60">({info.description})</span>}
             <button
-              onClick={() => getChatApi().runtime.destroy({ sessionId, runtimeId })}
+              onClick={() => getHostApi()?.runtime.destroy({ sessionId, runtimeId })}
               className="ml-0.5 rounded hover:bg-current/20 transition-colors p-0.5"
             >
               <X size={10} />

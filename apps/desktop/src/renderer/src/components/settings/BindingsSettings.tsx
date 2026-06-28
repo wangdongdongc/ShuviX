@@ -16,6 +16,8 @@ import {
 import { copyToClipboard } from '@shuvix/chat-ui'
 import { useDialogClose } from '@shuvix/chat-ui'
 import type { Session } from '@shuvix/chat-ui'
+import { getChannelBindingCaps } from '@shuvix/app-shell'
+import type { TelegramBotInfo } from '@shuvix/chat-protocol/chatApi'
 import { SettingsSection, SettingsRow, InlineInput } from './SettingsPrimitives'
 
 /** 前端类型定义 */
@@ -23,20 +25,6 @@ interface FrontendType {
   id: string
   icon: React.ReactNode
   labelKey: string
-}
-
-/** 前端返回的 Bot 信息 */
-interface TelegramBotInfo {
-  id: string
-  name: string
-  username: string
-  allowedUsers: number[]
-  isEnabled: boolean
-  running: boolean
-  boundSessionId: string | null
-  boundSessionTitle: string | null
-  createdAt: number
-  updatedAt: number
 }
 
 /**
@@ -80,10 +68,12 @@ export function BindingsSettings(): React.JSX.Element {
     }
   }, [])
 
+  // 据当前宿主提供的渠道 API 自动显隐：缺省渠道不出现在列表里
+  const caps = getChannelBindingCaps()
   const frontendTypes: FrontendType[] = [
-    { id: 'webui', icon: <Globe size={13} />, labelKey: 'bindings.webui' },
-    { id: 'telegram', icon: <Bot size={13} />, labelKey: 'bindings.telegram' }
-  ]
+    caps.webui && { id: 'webui', icon: <Globe size={13} />, labelKey: 'bindings.webui' },
+    caps.telegram && { id: 'telegram', icon: <Bot size={13} />, labelKey: 'bindings.telegram' }
+  ].filter(Boolean) as FrontendType[]
 
   const getSharedCount = (id: string): number => {
     if (id === 'webui') return sharedIds.size

@@ -1,13 +1,16 @@
 import { useTranslation } from 'react-i18next'
 import { Sliders } from 'lucide-react'
-import { SessionConfigPanel } from './SessionConfigPanel'
+import { getHostApi } from '@shuvix/chat-ui'
+import { SessionConfigPanel } from '@shuvix/app-shell'
 
-// WelcomeView 已移至 @shuvix/app-shell（桌面/扩展共用）。此文件仅保留桌面专属的 EmptySessionHint
-// （依赖 SessionConfigPanel，宿主专属，不进共享包）。
+// WelcomeView 与 SessionConfigPanel 均已移至 @shuvix/app-shell（桌面/扩展共用）。
+// 此文件仅保留桌面专属的 EmptySessionHint 包装（注入桌面能力开关）。
 
 /** 空会话引导 — 有活跃会话但无消息时显示，居中展示会话配置面板 */
 export function EmptySessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {
   const { t } = useTranslation()
+  // 会话配置面板全是宿主管理能力（审批/指令文件/绑定）：渠道端（无 HostApi）不展示
+  const hasHost = getHostApi() !== null
   return (
     <div className="flex-1 flex items-center justify-center overflow-y-auto">
       <div className="w-full max-w-lg px-8 py-12">
@@ -17,7 +20,7 @@ export function EmptySessionHint({ sessionId }: { sessionId: string }): React.JS
           </div>
           <p className="text-sm text-text-secondary">{t('chat.emptyHint')}</p>
         </div>
-        <SessionConfigPanel sessionId={sessionId} />
+        {hasHost && <SessionConfigPanel sessionId={sessionId} />}
       </div>
     </div>
   )

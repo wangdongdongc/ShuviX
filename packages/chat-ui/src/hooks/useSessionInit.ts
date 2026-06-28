@@ -1,4 +1,4 @@
-import { getChatApi, useChatHost } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect } from 'react'
 import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
 import { useModelCatalogStore } from '../stores/modelCatalogStore'
@@ -22,12 +22,12 @@ export function useSessionInit(activeSessionId: string | null): void {
 
     const loadSession = async (): Promise<void> => {
       // 1. 加载消息用于 UI 渲染
-      const msgs = await getChatApi().message.list(activeSessionId)
+      const msgs = await getSessionChannelApi().message.list(activeSessionId)
       if (cancelled) return
       useChatStore.getState().setMessages(msgs)
 
       // 2. 后端初始化 Agent 并返回完整会话元信息
-      const result = await getChatApi().agent.init({ sessionId: activeSessionId })
+      const result = await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
       if (cancelled) return
 
       const store = useChatStore.getState()
@@ -70,7 +70,7 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setThinkingLevel(restoredLevel)
 
       // 7. 查询运行时资源状态（SSH / DB / SQL / Python 等）
-      const runtimes = await getChatApi().runtime.statuses(activeSessionId)
+      const runtimes = await getSessionChannelApi().runtime.statuses(activeSessionId)
       if (!cancelled) {
         store.setRuntimes(activeSessionId, runtimes)
       }
@@ -87,7 +87,7 @@ export function useSessionInit(activeSessionId: string | null): void {
   useEffect(() => {
     if (isSettingsWindow) return
     let cancelled = false
-    getChatApi()
+    getSessionChannelApi()
       .command.list({ sessionId: activeSessionId })
       .then((commands) => {
         if (!cancelled) useChatStore.getState().setSlashCommands(commands)

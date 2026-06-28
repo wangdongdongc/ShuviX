@@ -43,7 +43,8 @@ class CompactionService {
       },
 
       resolveModelAndKey: async (sid) => {
-        const agentSession = sessionService.getAgentSession(sid)
+        // Agent 已延迟到首次发消息才创建；压缩需要运行时模型，故在此懒创建
+        const agentSession = await sessionService.ensureAgentSession(sid)
         if (!agentSession) {
           throw new Error('Agent 未初始化，请先打开该会话')
         }

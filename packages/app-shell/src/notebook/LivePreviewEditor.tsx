@@ -9,17 +9,19 @@ import {
 } from '@shuvix/atomic-editor'
 import { ATOMIC_CODE_LANGUAGES } from '@shuvix/atomic-editor/code-languages'
 import '@shuvix/atomic-editor/styles.css'
-import '../atomic/atomic-panel.css'
+import './atomic-panel.css'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
-import { useChatStore } from '@shuvix/chat-ui'
-import { useSettingsStore } from '../../stores/settingsStore'
+import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
+import { useResolveMediaUrl, type MediaSource } from '../files/mediaUrl'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import { NotebookMinimap } from './NotebookMinimap'
 import { parseHeadings, type NotebookHeading } from './notebookHeadings'
 import {
   type FileMap,
   buildFileMap,
+  imageLoadRemeasure,
   isImagePath,
   lookupAbs,
   refreshEmbeds,
@@ -28,9 +30,16 @@ import {
 
 const SAVE_DEBOUNCE_MS = 200
 
-/** shuvix-preview:// 图片 URL（主进程协议带沙箱校验） */
-function previewUrl(sessionId: string, absPath: string): string {
-  return `shuvix-preview://load/?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(absPath)}`
+/**
+ * 宿主能力注入（去除对 window.api / 桌面 store 的直接依赖，供桌面 + 扩展复用）。
+ */
+export interface NotebookCaps {
+  /** 笔记本主题预设（映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色）；缺省 'default' */
+  notebookTheme?: string
+  /** 打开外部链接（桌面：window.api.app.openExternal；扩展：window.open） */
+  openExternal?: (url: string) => void
+  /** 原生右键菜单（桌面注入 window.api.contextMenu.popup）；不提供则用浏览器默认右键 */
+  popupContextMenu?: (request: ContextMenuRequest) => Promise<ContextMenuResult>
 }
 
 /**
@@ -39,6 +48,17 @@ function previewUrl(sessionId: string, absPath: string): string {
  * react-hooks 的 refs / immutability / exhaustive-deps 限制，回调只需闭包 sessionId。
  */
 const FILE_MAPS = new Map<string, FileMap>()
+
+/**
+ * ![[image]] 内嵌图片 URL 缓存：sessionId → (absPath → MediaSource)。模块级（同 FILE_MAPS）以便
+ * wikiImageEmbeds 的同步 resolveSrc 回调读取，避免在 render 期访问 React ref。组件按 sessionId 卸载时 revoke。
+ */
+const EMBED_SOURCES = new Map<string, Map<string, MediaSource>>()
+/** 正在异步解析中的 `${sessionId}::${abs}`，避免重复触发 */
+const EMBED_PENDING = new Set<string>()
+/** 各 session 触发 CM6 内嵌图片重算的回调（组件挂载时注册）。供 resolveSrc 异步就绪后调用，
+ *  让 resolveSrc 只读模块级 map、不在 render 期访问 React ref（react-hooks/refs）。 */
+const EMBED_REFRESH = new Map<string, () => void>()
 
 export type SaveStatus = 'saved' | 'saving'
 
@@ -61,17 +81,21 @@ export interface LivePreviewEditorProps {
   onSaveStatusChange?: (status: SaveStatus) => void
   handleRef?: React.RefObject<LivePreviewEditorHandle | null>
   /**
-   * 项目文件上下文（来自 MarkdownFileView）。提供后启用 Obsidian 风格双链：
-   * `[[file]]` 可点击跳转、`![[image]]` 行内预览，均按文件名在该会话工作目录内解析。
-   * 笔记本式独立文档不传则不启用。
+   * 项目文件上下文（来自 NotebookView）。提供后启用 Obsidian 风格双链：
+   * `[[file]]` 可点击跳转（在右侧 Files 面板打开预览）、`![[image]]` 行内预览，
+   * 均按文件名在该会话工作目录内解析。笔记本式独立文档不传则不启用。
    */
   fileContext?: { sessionId: string }
+  /** 宿主能力注入（主题 / 外链 / 原生右键菜单） */
+  caps?: NotebookCaps
 }
 
 /**
- * LivePreviewEditor —— Atomic Editor（CM6 live preview）编辑区核心，供 MarkdownFileView 使用。
+ * LivePreviewEditor —— Atomic Editor（CM6 live preview）编辑区核心，供 NotebookView 使用。
  * 负责编辑器本体、防抖自动保存（+ 卸载 flush）、滚动阴影探测、右键菜单、右侧悬浮 minimap、
  * 笔记本主题预设（data-notebook-theme）。标题栏由父组件渲染，本组件只负责其下方的编辑区。
+ * 宿主无关：文件读写/扫描经 getSessionChannelApi().files、图片内嵌经注入的 mediaUrl seam、
+ * 主题/外链/右键菜单经 caps 注入。
  */
 export function LivePreviewEditor({
   documentId,
@@ -80,11 +104,13 @@ export function LivePreviewEditor({
   onScrolledChange,
   onSaveStatusChange,
   handleRef,
-  fileContext
+  fileContext,
+  caps
 }: LivePreviewEditorProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
-  const notebookTheme = useSettingsStore((s) => s.notebookTheme)
+  const notebookTheme = caps?.notebookTheme ?? 'default'
+  const resolveMedia = useResolveMediaUrl()
 
   const sessionId = fileContext?.sessionId
 
@@ -154,6 +180,9 @@ export function LivePreviewEditor({
   // + 原生编辑动作（剪切/复制/粘贴/全选用 role，OS 提供本地化文案 + macOS 服务）
   const onEditorContextMenu = useCallback(
     async (e: React.MouseEvent): Promise<void> => {
+      // 无原生右键菜单注入（如扩展端）→ 不拦截，交浏览器默认右键
+      const popup = caps?.popupContextMenu
+      if (!popup) return
       e.preventDefault()
       const m = (k: string, opts?: Record<string, unknown>): string =>
         t(`notebook.menu.${k}`, opts ?? {})
@@ -161,7 +190,7 @@ export function LivePreviewEditor({
         id: `para.h${i + 1}`,
         label: m('heading', { level: i + 1 })
       }))
-      const result = await window.api.contextMenu.popup({
+      const result = await popup({
         items: [
           {
             id: 'fmt',
@@ -213,14 +242,16 @@ export function LivePreviewEditor({
       const view = dom ? EditorView.findFromDOM(dom) : null
       if (view) runMarkdownCommand(view, result.actionId)
     },
-    [t]
+    [t, caps]
   )
 
-  // 表格单元格右键菜单：交给 @shuvix/atomic-editor 的 renderMenu 钩子，用原生菜单
-  // （window.api.contextMenu.popup）呈现，文案按 item.id 取多语言——与编辑器主右键菜单
-  // 风格统一，且不再依赖匹配包内英文文案。
+  // 表格单元格右键菜单：交给 @shuvix/atomic-editor 的 renderMenu 钩子，用注入的原生菜单
+  // （caps.popupContextMenu）呈现，文案按 item.id 取多语言——与编辑器主右键菜单风格统一，
+  // 且不再依赖匹配包内英文文案。无注入（扩展端）则不渲染自定义菜单。
   const renderTableMenu = useCallback(
     (items: TableMenuItem[], _pos: { x: number; y: number }): void => {
+      const popup = caps?.popupContextMenu
+      if (!popup) return
       const rows = items.filter((i) => i.group === 'row')
       const cols = items.filter((i) => i.group === 'column')
       // 用 i18n.t（而非 hook 的 t）：extensions 在 mount 时被一次性捕获，i18n 实例稳定
@@ -234,12 +265,12 @@ export function LivePreviewEditor({
         ...(rows.length && cols.length ? [{ type: 'separator' as const }] : []),
         ...cols.map(toEntry)
       ]
-      void window.api.contextMenu.popup({ items: menuItems }).then((result) => {
+      void popup({ items: menuItems }).then((result) => {
         if (!result.actionId) return
         items.find((i) => i.id === result.actionId)?.run()
       })
     },
-    [i18n]
+    [i18n, caps]
   )
 
   const onMarkdownChange = useCallback(
@@ -267,33 +298,30 @@ export function LivePreviewEditor({
     view.focus()
   }, [])
 
-  // 双链文件表：扫描会话工作目录建表；磁盘变更时重扫。建表后 dispatch refreshEmbeds
-  // 触发内嵌图片重算（首扫返回前 ![[...]] 暂以原文显示）。
-  useEffect(() => {
-    if (!sessionId) return undefined
-    let cancelled = false
-    const doScan = async (): Promise<void> => {
-      try {
-        const r = await window.api.files.scan({ sessionId })
-        if (cancelled || !r.root) return
-        FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
-        const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
-        const view = dom ? EditorView.findFromDOM(dom) : null
-        view?.dispatch({ effects: refreshEmbeds.of(null) })
-      } catch {
-        /* 扫描失败：双链暂不可解析，保持原文 */
-      }
-    }
-    void doScan()
-    // 文件变更 → 重扫双链文件表（AppEvent 'files.changed'，替代旧 files.onChanged）
-    const unsub = window.api.events.subscribe((e) => {
-      if (e.type === 'files.changed') void doScan()
-    })
-    return () => {
-      cancelled = true
-      unsub()
+  // 双链文件表：扫描会话工作目录建表。建表后 dispatch refreshEmbeds 触发内嵌图片重算
+  // （首扫返回前 ![[...]] 暂以原文显示）。
+  const rescanFileMap = useCallback(async (): Promise<void> => {
+    if (!sessionId) return
+    try {
+      const r = await getSessionChannelApi().files.scan({ sessionId })
+      if (!r.root) return
+      FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
+      const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
+      const view = dom ? EditorView.findFromDOM(dom) : null
+      view?.dispatch({ effects: refreshEmbeds.of(null) })
+    } catch {
+      /* 扫描失败：双链暂不可解析，保持原文 */
     }
   }, [sessionId])
+
+  useEffect(() => {
+    void rescanFileMap()
+  }, [rescanFileMap])
+
+  // 文件变更 → 重扫双链文件表（通用 AppEvent 'files.changed'，替代旧 files.onChanged）
+  useAppEvent('files.changed', () => {
+    void rescanFileMap()
+  })
 
   // 双链解析回调（闭包只依赖 sessionId，查表读模块级 FILE_MAPS，避开 react-hooks 限制）
   const resolveWikiLink = useCallback(
@@ -304,7 +332,7 @@ export function LivePreviewEditor({
       // 首次解析时若尚未扫描，补一次（atomic 期间显示 loading 态）
       if (!FILE_MAPS.has(sessionId)) {
         try {
-          const r = await window.api.files.scan({ sessionId })
+          const r = await getSessionChannelApi().files.scan({ sessionId })
           if (r.root) FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
         } catch {
           /* 忽略 */
@@ -321,37 +349,88 @@ export function LivePreviewEditor({
       const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, target)
       if (!abs) return
       if (/\.(md|mdx|markdown)$/i.test(abs)) {
-        useChatStore.getState().setActiveFile({ path: abs, sessionId })
+        // 点击 [[md]] → 在右侧 Files 面板打开该文件预览（不再在中间区打开）
+        useChatStore.getState().requestFilePreview(abs)
       } else {
-        void window.api.app.openExternal(`file://${abs}`)
+        caps?.openExternal?.(`file://${abs}`)
       }
     },
-    [sessionId]
+    [sessionId, caps]
   )
+  // ![[image]] 内嵌图片 URL 经注入的 mediaUrl seam 解析（桌面 shuvix-preview:// 同步；
+  // 扩展 blob: 异步）。resolveSrc 须同步返回，故走模块级 EMBED_SOURCES 缓存：异步来源就绪后
+  // 写缓存并 dispatch refreshEmbeds 触发重算，此时同步命中缓存。卸载时按 sessionId revoke（释放 blob）。
+  useEffect(() => {
+    if (!sessionId) return undefined
+    // 注册重算回调（闭包读 panelRef 在 effect 内，合法）；卸载时 revoke 全部 blob 并注销
+    EMBED_REFRESH.set(sessionId, () => {
+      const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
+      const view = dom ? EditorView.findFromDOM(dom) : null
+      view?.dispatch({ effects: refreshEmbeds.of(null) })
+    })
+    return () => {
+      EMBED_REFRESH.delete(sessionId)
+      const m = EMBED_SOURCES.get(sessionId)
+      if (m) {
+        for (const s of m.values()) s.revoke?.()
+        EMBED_SOURCES.delete(sessionId)
+      }
+    }
+  }, [sessionId])
   const resolveEmbedSrc = useCallback(
     (name: string): string | null => {
       if (!sessionId) return null
       const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, name)
-      return abs && isImagePath(abs) ? previewUrl(sessionId, abs) : null
+      if (!abs || !isImagePath(abs)) return null
+      const cached = EMBED_SOURCES.get(sessionId)?.get(abs)
+      if (cached) return cached.url
+      if (!resolveMedia) return null
+      const store = (s: MediaSource): void => {
+        let m = EMBED_SOURCES.get(sessionId)
+        if (!m) {
+          m = new Map()
+          EMBED_SOURCES.set(sessionId, m)
+        }
+        m.set(abs, s)
+      }
+      const src = resolveMedia({ sessionId, path: abs })
+      if (src instanceof Promise) {
+        const key = `${sessionId}::${abs}`
+        if (!EMBED_PENDING.has(key)) {
+          EMBED_PENDING.add(key)
+          void src
+            .then((s) => {
+              store(s)
+              EMBED_PENDING.delete(key)
+              EMBED_REFRESH.get(sessionId)?.()
+            })
+            .catch(() => EMBED_PENDING.delete(key))
+        }
+        return null
+      }
+      // 同步来源（桌面）：直接缓存并返回
+      store(src)
+      return src.url
     },
-    [sessionId]
+    [sessionId, resolveMedia]
   )
 
   // 双链扩展（仅在有项目上下文时启用）：[[file]] 链接 + ![[image]] 内嵌。
   // atomic 在 mount 时一次性捕获 extensions（按 documentId），父组件按文件 key 重挂载，故稳定即可。
   const editorExtensions = useMemo<readonly Extension[]>(() => {
     const tableMenu = tableContextMenu(renderTableMenu)
-    if (!sessionId) return [markdownKeymap, tableMenu]
+    if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure]
     return [
       markdownKeymap,
       tableMenu,
+      imageLoadRemeasure,
       wikiLinks({ openOnClick: true, resolve: resolveWikiLink, onOpen: openWikiLink }),
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
     ]
   }, [sessionId, renderTableMenu, resolveWikiLink, openWikiLink, resolveEmbedSrc])
 
   return (
-    <div className="flex-1 min-h-0 relative overflow-hidden">
+    <div className="flex-1 min-h-0 relative overflow-hidden thin-scrollbar">
       <div
         className="atomic-panel"
         data-notebook-theme={notebookTheme}
@@ -365,7 +444,7 @@ export function LivePreviewEditor({
           editorHandleRef={atomicRef}
           codeLanguages={ATOMIC_CODE_LANGUAGES}
           extensions={editorExtensions}
-          onLinkClick={(url) => void window.api.app.openExternal(url)}
+          onLinkClick={(url) => caps?.openExternal?.(url)}
         />
       </div>
       {headings.length > 0 && <NotebookMinimap headings={headings} onJump={onJump} />}

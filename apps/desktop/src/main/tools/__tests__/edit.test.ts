@@ -120,4 +120,20 @@ describe('edit 工具', () => {
       makeEditTool(ctx).execute('e8', { path: p, oldText: 'orig', newText: 'x' })
     ).rejects.toThrow(/modified since it was last read/)
   })
+
+  it('同文件并发多处 edit 全部累积（原子 read-modify-write，不丢改）', async () => {
+    // 同一回合内对四个不同位置并发 edit；修复前是「最后写入者」覆盖其余 → 仅一处生效。
+    const p = seed('concurrent.ts', 'a = 1\nb = 2\nc = 3\nd = 4\n')
+    const tool = makeEditTool(ctx)
+    const results = await Promise.all([
+      tool.execute('c1', { path: p, oldText: 'a = 1', newText: 'a = 10' }),
+      tool.execute('c2', { path: p, oldText: 'b = 2', newText: 'b = 20' }),
+      tool.execute('c3', { path: p, oldText: 'c = 3', newText: 'c = 30' }),
+      tool.execute('c4', { path: p, oldText: 'd = 4', newText: 'd = 40' })
+    ])
+    // 四次都成功
+    expect(results).toHaveLength(4)
+    // 四处改动全部落盘
+    expect(readFileSync(p, 'utf-8')).toBe('a = 10\nb = 20\nc = 30\nd = 40\n')
+  })
 })

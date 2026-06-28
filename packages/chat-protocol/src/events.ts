@@ -181,6 +181,8 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   systemPrompt: string
   /** 父 Agent 发给子智能体的初始 user prompt（UI 以卡片形式展示） */
   prompt: string
+  /** 额外注入子智能体上下文的人读文本（如笔记本会话的当前 md 内容）；UI 以折叠用户消息卡展示 */
+  contextNote?: string
 }
 
 /** 子会话终结（在 agent_end 之后发出，携带最终结果摘要） */

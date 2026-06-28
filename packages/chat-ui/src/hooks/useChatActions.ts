@@ -1,4 +1,4 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useState } from 'react'
 import { useChatStore } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -47,15 +47,17 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     // 只允许回退到用户输入的文本消息
     if (!target || target.role !== 'user' || target.type !== 'text') return
 
+    const host = getHostApi()
+    if (!host) return // 渠道端只读：不可回退历史
     const rollbackText = target.content
     // 删除该用户消息及之后的所有消息
-    await getChatApi().message.deleteFrom({
+    await host.message.deleteFrom({
       sessionId: activeSessionId,
       messageId: pendingRollbackId
     })
-    const msgs = await getChatApi().message.list(activeSessionId)
+    const msgs = await getSessionChannelApi().message.list(activeSessionId)
     store.setMessages(msgs)
-    await getChatApi().agent.init({ sessionId: activeSessionId })
+    await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
     // 将用户消息内容回填到输入框，便于编辑后重新发送
     store.setInputText(rollbackText)
   }, [activeSessionId, pendingRollbackId])
@@ -82,14 +84,16 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         }
       }
       if (!userMsgId) return
+      const host = getHostApi()
+      if (!host) return // 渠道端只读：不可重新生成（会删历史）
       // 删除用户消息及之后的所有消息
-      await getChatApi().message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
+      await host.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
       // 重新拉取消息 + 重建 Agent
-      const msgs = await getChatApi().message.list(activeSessionId)
+      const msgs = await getSessionChannelApi().message.list(activeSessionId)
       store.setMessages(msgs)
-      await getChatApi().agent.init({ sessionId: activeSessionId })
+      await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
       // 重新发送（后端统一持久化用户消息）
-      await getChatApi().agent.prompt({ sessionId: activeSessionId, text: lastUserText })
+      await getSessionChannelApi().agent.prompt({ sessionId: activeSessionId, text: lastUserText })
     },
     [activeSessionId]
   )
@@ -102,7 +106,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   const handleInputResponse = useCallback(
     async (requestId: string, response: InputResponse) => {
       if (!activeSessionId) return
-      await getChatApi().agent.respondToInput({
+      await getSessionChannelApi().agent.respondToInput({
         sessionId: activeSessionId,
         requestId,
         response
@@ -112,10 +116,12 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     [activeSessionId]
   )
 
-  /** 创建新会话 */
+  /** 创建新会话（宿主能力；渠道端无此入口） */
   const handleNewChat = useCallback(async () => {
-    const session = await getChatApi().session.create()
-    const sessions = await getChatApi().session.list()
+    const host = getHostApi()
+    if (!host) return
+    const session = await host.session.create()
+    const sessions = await host.session.list()
     useChatStore.getState().setSessions(sessions)
     useChatStore.getState().setActiveSessionId(session.id)
   }, [])

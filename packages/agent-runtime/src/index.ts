@@ -7,6 +7,12 @@
  */
 export * from './types'
 export { RuntimeSession, type RuntimeSessionDeps } from './runtimeSession'
+// 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
+export {
+  SessionManager,
+  type SessionManagerDeps,
+  type SessionDisposeReason
+} from './sessionManager'
 export {
   forwardAgentEvent,
   type SessionEventState,
@@ -133,6 +139,12 @@ export type {
   SubAgentModelConfig,
   SubAgentRegistry
 } from './subagent/types'
+export {
+  buildNotebookContextMessage,
+  notebookTaskName,
+  runNotebookTask,
+  type NotebookTaskInputs
+} from './subagent/notebookContext'
 // Full Compaction：宿主无关的压缩编排 + 纯提示词/预处理工具（端注入存储/模型/事件适配器）
 export {
   runCompaction,

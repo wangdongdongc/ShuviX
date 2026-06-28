@@ -73,6 +73,8 @@ export interface SessionSettings {
   allowList?: string[]
   telegramBotId?: string
   enabledInstructionFiles?: string[]
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  notebookPath?: string
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -145,42 +147,37 @@ interface SessionDraft {
 const sessionDrafts = new Map<string, SessionDraft>()
 
 /**
- * 当前激活目标的唯一来源：会话 / 项目文件 / 无。
+ * 当前激活目标的唯一来源：会话 / 无。
  * 单一来源（active）派生出所有镜像字段，杜绝多个独立「激活字段」相互竞争。
- * - file：从右侧文件面板点击 .md 打开的项目文件，在中间区做 live-preview 编辑；
- *   携带 sessionId —— 项目文件归属某个会话的工作目录，故打开文件时**保持该会话仍为激活会话**，
- *   右侧文件面板/当前文件夹/工具集 与「选中该会话」时一致。
- *   中间区由 App 优先渲染 activeFile（盖住 ChatView），所以二者并存不冲突。
+ * 注：md live-preview 现仅经「笔记本会话」进入（普通会话选择，中间区据 session.settings.notebookPath
+ * 决定渲染 NotebookView 还是 ChatView），不再有独立的「临时打开任意文件」激活态。
  */
-export type ActiveView =
-  | { type: 'session'; id: string }
-  | { type: 'file'; path: string; sessionId: string }
-  | null
+export type ActiveView = { type: 'session'; id: string } | null
 
 /** 由 active 派生出镜像字段，所有写入都经此，保证状态一致、无竞争 */
 function deriveActive(active: ActiveView): {
   active: ActiveView
   activeSessionId: string | null
-  activeFile: { path: string; sessionId: string } | null
 } {
   return {
     active,
-    // 会话 / 文件 都让其归属会话保持激活（文件随其 sessionId）
-    activeSessionId:
-      active?.type === 'session' ? active.id : active?.type === 'file' ? active.sessionId : null,
-    activeFile: active?.type === 'file' ? { path: active.path, sessionId: active.sessionId } : null
+    activeSessionId: active?.type === 'session' ? active.id : null
   }
 }
 
 interface ChatState {
   /** 所有会话 */
   sessions: Session[]
-  /** 当前激活目标（唯一来源）：会话 / 笔记本 / 项目文件 / 无，其余字段皆由其派生 */
+  /** 当前激活目标（唯一来源）：会话 / 无，其余字段皆由其派生 */
   active: ActiveView
   /** 当前活跃会话 ID —— 由 active 派生的只读镜像，勿直接 set */
   activeSessionId: string | null
-  /** 当前在中间区打开的项目文件（.md live-preview）—— 由 active 派生的只读镜像，勿直接 set */
-  activeFile: { path: string; sessionId: string } | null
+  /**
+   * 请求在右侧 Files 面板打开某文件预览的信号（绝对路径 + 单调 nonce）。
+   * 笔记本编辑器内点击 [[wiki-link]] 时设置；FilesPanel 订阅并打开预览。
+   * 含 nonce 以便重复点击同一文件也能触发（值变化）。
+   */
+  filePreviewRequest: { absPath: string; nonce: number } | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -245,8 +242,8 @@ interface ChatState {
   // Actions
   setSessions: (sessions: Session[]) => void
   setActiveSessionId: (id: string | null) => void
-  /** 在中间区打开/关闭项目 .md 文件；打开时其归属会话保持激活（右侧文件面板/当前文件夹不变） */
-  setActiveFile: (file: { path: string; sessionId: string } | null) => void
+  /** 请求在右侧 Files 面板打开某文件预览（绝对路径）；由笔记本编辑器 [[wiki-link]] 点击触发 */
+  requestFilePreview: (absPath: string) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -429,6 +426,7 @@ export const selectCanEdit = (s: ChatState): boolean =>
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
+  filePreviewRequest: null,
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
@@ -471,7 +469,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingImages: draft?.pendingImages ?? []
     })
   },
-  setActiveFile: (file) => set(deriveActive(file ? { type: 'file', ...file } : null)),
+  requestFilePreview: (absPath) =>
+    set((state) => ({
+      filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1 }
+    })),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>
     set((state) =>
@@ -661,11 +662,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   removeSession: (id) =>
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
-      // 删除的是当前激活会话、或中间区打开的是该会话的文件，才清空 active（笔记本不受影响）
-      ...((state.active?.type === 'session' && state.active.id === id) ||
-      (state.active?.type === 'file' && state.active.sessionId === id)
-        ? deriveActive(null)
-        : {})
+      // 删除的是当前激活会话才清空 active
+      ...(state.active?.type === 'session' && state.active.id === id ? deriveActive(null) : {})
     })),
   setShareMode: (mode) => set({ shareMode: mode }),
   setSharedSessionIds: (ids: Map<string, ShareMode>) => set({ sharedSessionIds: ids }),

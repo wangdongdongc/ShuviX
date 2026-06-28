@@ -11,7 +11,8 @@ import type {
   SessionUpdateAutoApproveParams,
   SessionAllowListAddParams,
   SessionAllowListRemoveParams,
-  SessionUpdateTitleParams
+  SessionUpdateTitleParams,
+  SessionCreateParams
 } from '../types'
 
 /**
@@ -24,9 +25,9 @@ export function registerSessionHandlers(): void {
     return sessionService.list()
   })
 
-  /** 创建新会话 */
-  ipcMain.handle('session:create', (_event, projectId?: string | null) => {
-    return sessionService.create(projectId)
+  /** 创建新会话（含笔记本会话：params.notebookPath 非空时绑定 md 文件） */
+  ipcMain.handle('session:create', (_event, params?: SessionCreateParams) => {
+    return sessionService.create(params)
   })
 
   /** 更新会话标题 */

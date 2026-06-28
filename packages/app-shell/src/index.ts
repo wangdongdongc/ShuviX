@@ -44,6 +44,16 @@ export { SessionList } from './sidebar/SessionList'
 export type { SessionListProps } from './sidebar/SessionList'
 export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
+export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
+export type { ProjectSessionGroupsProps } from './sidebar/ProjectSessionGroups'
+export { Sidebar } from './sidebar/Sidebar'
+export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
+export { CalendarView } from './sidebar/CalendarView'
+export type { CalendarViewProps } from './sidebar/CalendarView'
+export { ViewSwitchButton } from './sidebar/ViewSwitchButton'
+export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitchButton'
+export { useProjects } from './sidebar/useProjects'
+export type { UseProjectsReturn, ProjectRef } from './sidebar/useProjects'
 export { useSessionDelete } from './sidebar/useSessionDelete'
 export type { UseSessionDeleteReturn } from './sidebar/useSessionDelete'
 export { useFocusDim } from './sidebar/useFocusDim'
@@ -53,6 +63,17 @@ export type { SidebarResizeHandleProps } from './sidebar/SidebarResizeHandle'
 // 聊天主视图顶栏（prop 驱动 + 能力开关 + 右侧插槽）
 export { ChatHeader } from './chat/ChatHeader'
 export type { ChatHeaderProps, ChatHeaderCaps } from './chat/ChatHeader'
+// 聊天主视图正文外壳（顶栏 + 欢迎/笔记本/对话三态 + 横幅/浮层/占位插槽）
+export { ChatBody } from './chat/ChatBody'
+export type { ChatBodyProps } from './chat/ChatBody'
+// 会话配置面板 + 弹窗（绑定分节据 getChannelBindingCaps() 自动显隐，无需宿主传 caps）
+export { SessionConfigPanel } from './chat/SessionConfigPanel'
+export type { SessionConfigPanelProps } from './chat/SessionConfigPanel'
+export { SessionConfigDialog } from './chat/SessionConfigDialog'
+export type { SessionConfigDialogProps } from './chat/SessionConfigDialog'
+// 会话渠道绑定能力探测（设置页 + 会话设置共用单一来源）
+export { getChannelBindingCaps } from './chat/channelBindings'
+export type { ChannelBindingCaps, ChannelId } from './chat/channelBindings'
 export { PanelToggleButton } from './chat/PanelToggleButton'
 export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
 
@@ -60,10 +81,38 @@ export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
 // 宿主差异走 props（markdown 打开方式、媒体 URL 解析、子会话销毁）
 export { FilesPanel } from './files/FilesPanel'
 export type { FilesPanelProps } from './files/FilesPanel'
-export { MediaUrlProvider, shuvixPreviewResolver } from './files/mediaUrl'
+export { MediaUrlProvider, shuvixPreviewResolver, useResolveMediaUrl } from './files/mediaUrl'
 export type { ResolveMediaUrl, MediaSource } from './files/mediaUrl'
+// 宿主无关路径工具（不依赖 node:path）——供宿主拼接笔记本绑定路径 / 求相对路径复用
+export { extOf, basename, joinPath, relativize } from './files/paths'
+
+// 笔记本会话中间区视图（md live-preview 编辑器）—— 宿主无关，文件 IO 经 getChatApi().files，
+// 图片内嵌经 MediaUrlProvider，主题/外链/右键/平台经 caps 注入
+export { NotebookView } from './notebook/NotebookView'
+export type { NotebookViewProps } from './notebook/NotebookView'
+export { NotebookSession } from './notebook/NotebookSession'
+export type { NotebookSessionProps } from './notebook/NotebookSession'
+export { useCreateNotebook } from './notebook/useCreateNotebook'
+export { LivePreviewEditor } from './notebook/LivePreviewEditor'
+export type {
+  LivePreviewEditorHandle,
+  LivePreviewEditorProps,
+  NotebookCaps,
+  SaveStatus
+} from './notebook/LivePreviewEditor'
+
 export { SubAgentPanel } from './subagent/SubAgentPanel'
 export type { SubAgentPanelProps } from './subagent/SubAgentPanel'
+
+// 右键菜单（共享配置 + 注入式渲染器：桌面原生 / 扩展 DOM）
+export { ContextMenuProvider, useContextMenu } from './contextmenu/ContextMenuProvider'
+export type {
+  ContextMenuRenderer,
+  ContextMenuPosition,
+  ShowContextMenu
+} from './contextmenu/ContextMenuProvider'
+export { ContextMenuPopup } from './contextmenu/ContextMenuPopup'
+export type { ContextMenuPopupProps } from './contextmenu/ContextMenuPopup'
 
 // 通用 UI 原子
 export { AnimatedCollapse } from './common/AnimatedCollapse'

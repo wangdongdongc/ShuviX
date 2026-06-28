@@ -16,6 +16,8 @@ export interface SessionSettings {
   telegramBotId?: string
   /** 启用的项目指令文件名（来自 scanInstructionFiles 返回值；缺省视为全部关闭） */
   enabledInstructionFiles?: string[]
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  notebookPath?: string
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

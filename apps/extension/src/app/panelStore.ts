@@ -64,6 +64,14 @@ export function setPanelTab(tab: PanelTab): void {
   persist()
 }
 
+/** 确保面板打开并切到指定 tab（不 toggle）—— 笔记本 [[wiki-link]] 打开文件预览用 */
+export function showPanelTab(tab: PanelTab): void {
+  if (state.isOpen && state.activeTab === tab) return
+  state = { ...state, isOpen: true, activeTab: tab }
+  emit()
+  persist()
+}
+
 export function setPanelWidth(width: number): void {
   const clamped = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, width))
   state = { ...state, width: clamped }

@@ -7,13 +7,15 @@ import { useDialogClose } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SessionConfigPanel } from './SessionConfigPanel'
 
+export interface SessionConfigDialogProps {
+  sessionId: string
+  onClose: () => void
+}
+
 export function SessionConfigDialog({
   sessionId,
   onClose
-}: {
-  sessionId: string
-  onClose: () => void
-}): React.JSX.Element {
+}: SessionConfigDialogProps): React.JSX.Element {
   const { t } = useTranslation()
   const { closing, handleClose } = useDialogClose(onClose)
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))

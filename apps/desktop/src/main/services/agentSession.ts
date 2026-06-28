@@ -55,7 +55,7 @@ export interface AgentSessionCreateParams {
 }
 
 /** 合并系统提示词：全局自由文本 + 系统级卡片（内置 + 自定义）+ 项目段 + 项目卡片 */
-function buildSystemPrompt(
+export function buildSystemPrompt(
   project:
     | {
         path: string

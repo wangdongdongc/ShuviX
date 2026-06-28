@@ -64,6 +64,23 @@ body {
   display: none;
 }
 
+/* 细+淡的滚动条：用于对话列表与笔记本编辑器。自身滚动元素（Virtuoso 列表）+ 内部 .cm-scroller
+   （笔记本 CodeMirror）。比全局更细（4px），thumb 半透明淡化，仅 hover 时略加深。 */
+.thin-scrollbar::-webkit-scrollbar,
+.thin-scrollbar .cm-scroller::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb,
+.thin-scrollbar .cm-scroller::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
+  border-radius: 3px;
+}
+.thin-scrollbar:hover::-webkit-scrollbar-thumb,
+.thin-scrollbar:hover .cm-scroller::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-border-primary) 65%, transparent);
+}
+
 /* 弹窗动画 */
 @keyframes overlay-in {
   from {

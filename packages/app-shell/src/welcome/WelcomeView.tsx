@@ -1,4 +1,4 @@
-import { getChatApi, InputArea } from '@shuvix/chat-ui'
+import { getHostApi, InputArea } from '@shuvix/chat-ui'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Download, Upload } from 'lucide-react'
@@ -16,7 +16,8 @@ export interface WelcomeViewProps {
 /** 欢迎页（桌面/扩展共用）— 无活跃会话时显示：标题 + 复用对话输入框 + 配置导入/导出 */
 export function WelcomeView({ enableConfigShare }: WelcomeViewProps = {}): React.JSX.Element {
   const { t } = useTranslation()
-  const showConfigShare = enableConfigShare ?? getChatApi().app.platform !== 'web'
+  // 配置导入/导出依赖 HostApi.config（宿主能力）；渠道端（无 host）默认隐藏
+  const showConfigShare = enableConfigShare ?? getHostApi() !== null
   const [exportOpen, setExportOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
 

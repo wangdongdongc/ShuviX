@@ -1,4 +1,4 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getHostApi } from '@shuvix/chat-ui'
 import { FilePen, FileText, ShieldAlert } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -73,7 +73,8 @@ export function ApprovalForm({
   // 二者统一渲染为预览块,允许用户在按下"允许并记住"前看到具体将写入 allowList 的内容
   const isCommandApproval = toolName === 'bash' || toolName === 'ssh'
   const isPathApproval = !isCommandApproval
-  const canRemember = !!command
+  // 「记住/始终允许」会持久化 allowList（宿主能力）：渠道端（无 HostApi）一律隐藏
+  const canRemember = !!command && getHostApi() !== null
 
   const pathApproval: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
     if (!isPathApproval) return null
@@ -100,11 +101,12 @@ export function ApprovalForm({
       try {
         const sessionId = useChatStore.getState().activeSessionId || undefined
         const toolType = (toolName === 'ssh' ? 'ssh' : 'bash') as 'bash' | 'ssh'
-        const patterns = await getChatApi().session.previewAllowPatterns({
-          command,
-          sessionId,
-          toolType
-        })
+        const patterns =
+          (await getHostApi()?.session.previewAllowPatterns({
+            command,
+            sessionId,
+            toolType
+          })) ?? []
         if (!cancelled) setPreviewPatterns(patterns)
       } finally {
         if (!cancelled) setLoadingPatterns(false)

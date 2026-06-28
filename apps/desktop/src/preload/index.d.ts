@@ -4,6 +4,8 @@ import type {
   AgentInitParams,
   AgentInitResult,
   AgentPromptParams,
+  AgentNotebookPromptParams,
+  AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
@@ -30,6 +32,7 @@ import type {
   SessionAllowListAddParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
+  SessionCreateParams,
   SettingsSetParams,
   McpServerAddParams,
   McpServerUpdateParams,
@@ -388,6 +391,8 @@ declare global {
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
+      notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
+      subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
@@ -441,7 +446,7 @@ declare global {
     }
     session: {
       list: () => Promise<Session[]>
-      create: (projectId?: string | null) => Promise<Session>
+      create: (params?: SessionCreateParams) => Promise<Session>
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
       updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>

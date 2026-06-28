@@ -1,4 +1,4 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Server, BookOpen, WifiOff } from 'lucide-react'
@@ -45,7 +45,7 @@ export function ToolPicker(): React.JSX.Element | null {
 
   const fetchTools = useCallback(() => {
     const sid = useChatStore.getState().activeSessionId
-    getChatApi()
+    getSessionChannelApi()
       .tools.list(sid ?? undefined)
       .then((tools) => {
         setAllTools(tools)
@@ -76,10 +76,12 @@ export function ToolPicker(): React.JSX.Element | null {
   const enabledSkillTools = skillTools.filter((t) => enabledTools.includes(t.name))
 
   const handleChange = async (newTools: string[]): Promise<void> => {
+    const host = getHostApi()
+    if (!host) return // 渠道端无权改工具集（UI 已隐藏，双保险）
     setEnabledTools(newTools)
     if (activeSessionId) {
-      await getChatApi().agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      await getChatApi().session.updateEnabledTools({
+      await host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
+      await host.session.updateEnabledTools({
         id: activeSessionId,
         enabledTools: newTools
       })

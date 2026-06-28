@@ -1,19 +1,18 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
-import { WelcomeView, ChatHeader, PanelToggleButton } from '@shuvix/app-shell'
+import { WelcomeView, ChatBody, PanelToggleButton, SessionConfigDialog } from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
 import { StatusBanner } from './StatusBanner'
-import { SessionConfigDialog } from './SessionConfigDialog'
-import { Conversation } from '@shuvix/chat-ui'
+import { NotebookSessionView } from '../notebook/NotebookSessionView'
 
 /**
- * 聊天主视图（桌面/WebUI 外壳）—— 标题栏 + 侧边栏/浏览器开关 + 状态横幅 + 会话配置，
- * 正文对话区委托给可复用的 <Conversation>。
+ * 聊天主视图（桌面/WebUI 外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
+ * 桌面专属的状态横幅 / 会话配置弹窗 / 悬浮窗占位经其插槽注入。
  *
  * pinnedMode:
  * - undefined: 默认主窗口形态
@@ -35,15 +34,15 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const toggleSidebar = useSidebarStore((s) => s.toggle)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
 
-  const isWeb = getChatApi().app.platform === 'web'
+  const isWeb = getSessionChannelApi().app.platform === 'web'
 
   /** 悬浮窗"始终置顶"状态 —— 仅 floating 模式下使用 */
   const [alwaysOnTop, setAlwaysOnTopState] = useState(true)
   useEffect(() => {
     if (pinnedMode !== 'floating' || !activeSessionId) return
     let cancelled = false
-    getChatApi()
-      .pinChat.getAlwaysOnTop(activeSessionId)
+    getHostApi()
+      ?.pinChat.getAlwaysOnTop(activeSessionId)
       .then(({ alwaysOnTop }) => {
         if (!cancelled) setAlwaysOnTopState(alwaysOnTop)
       })
@@ -54,11 +53,11 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const handleToggleAlwaysOnTop = useCallback(async () => {
     if (!activeSessionId) return
     const next = !alwaysOnTop
-    const { alwaysOnTop: applied } = await getChatApi().pinChat.setAlwaysOnTop({
+    const res = await getHostApi()?.pinChat.setAlwaysOnTop({
       sessionId: activeSessionId,
       value: next
     })
-    setAlwaysOnTopState(applied)
+    if (res) setAlwaysOnTopState(res.alwaysOnTop)
   }, [activeSessionId, alwaysOnTop])
 
   /** 顶栏右侧按钮簇（桌面专属：pin/悬浮/浏览器/侧栏开关），按模式切换 */
@@ -83,7 +82,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
           title={t('panel.files')}
         />
         <button
-          onClick={() => activeSessionId && void getChatApi().pinChat.unpin(activeSessionId)}
+          onClick={() => activeSessionId && void getHostApi()?.pinChat.unpin(activeSessionId)}
           className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
           title={t('pinChat.unpin')}
         >
@@ -92,9 +91,9 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       </>
     ) : (
       <>
-        {pinnedMode !== 'placeholder' && activeSessionId && (
+        {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
           <button
-            onClick={() => void getChatApi().pinChat.pin(activeSessionId)}
+            onClick={() => void getHostApi()?.pinChat.pin(activeSessionId)}
             className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
             title={t('pinChat.pin')}
           >
@@ -106,61 +105,60 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       </>
     )
 
-  return (
-    <div className="relative flex flex-col h-full">
-      <ChatHeader
-        caps={{
-          windowDrag: true,
-          editableTitle: !isWeb,
-          folder: true,
-          sessionConfig: !isWeb
-        }}
-        heightClassName={getChatApi().app.platform === 'darwin' ? 'h-10' : 'h-8'}
-        onOpenSessionConfig={() => setShowSessionConfig(true)}
-        rightActions={rightActions}
-      />
-
-      {activeSessionId && pinnedMode !== 'placeholder' && (
-        <StatusBanner sessionId={activeSessionId} />
-      )}
-
-      {pinnedMode === 'placeholder' ? (
-        <div className="flex-1 flex items-center justify-center px-6">
-          <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-            <PictureInPicture2 size={36} className="text-text-tertiary/60" />
-            <div className="text-sm text-text-secondary">{t('pinChat.placeholderTitle')}</div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => activeSessionId && void getChatApi().pinChat.focus(activeSessionId)}
-                className="px-3 py-1.5 text-xs rounded-md bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
-              >
-                {t('pinChat.focusFloating')}
-              </button>
-              <button
-                onClick={() => activeSessionId && void getChatApi().pinChat.unpin(activeSessionId)}
-                className="px-3 py-1.5 text-xs rounded-md bg-bg-hover/60 text-text-secondary hover:bg-bg-hover transition-colors"
-              >
-                {t('pinChat.restoreHere')}
-              </button>
-            </div>
+  // 悬浮窗 placeholder：会话已被悬浮，正文替换为「聚焦悬浮窗 / 恢复到此处」占位
+  const placeholder =
+    pinnedMode === 'placeholder' ? (
+      <div className="flex-1 flex items-center justify-center px-6">
+        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
+          <PictureInPicture2 size={36} className="text-text-tertiary/60" />
+          <div className="text-sm text-text-secondary">{t('pinChat.placeholderTitle')}</div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => activeSessionId && void getHostApi()?.pinChat.focus(activeSessionId)}
+              className="px-3 py-1.5 text-xs rounded-md bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+            >
+              {t('pinChat.focusFloating')}
+            </button>
+            <button
+              onClick={() => activeSessionId && void getHostApi()?.pinChat.unpin(activeSessionId)}
+              className="px-3 py-1.5 text-xs rounded-md bg-bg-hover/60 text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {t('pinChat.restoreHere')}
+            </button>
           </div>
         </div>
-      ) : !activeSessionId ? (
-        <WelcomeView />
-      ) : (
-        <Conversation
-          sessionId={activeSessionId}
-          emptyState={<EmptySessionHint sessionId={activeSessionId} />}
-        />
-      )}
+      </div>
+    ) : undefined
 
-      {/* 会话配置弹窗（WebUI 中不显示） */}
-      {getChatApi().app.platform !== 'web' && showSessionConfig && activeSessionId && (
-        <SessionConfigDialog
-          sessionId={activeSessionId}
-          onClose={() => setShowSessionConfig(false)}
-        />
-      )}
-    </div>
+  return (
+    <ChatBody
+      headerCaps={{
+        windowDrag: true,
+        editableTitle: !isWeb,
+        folder: true,
+        sessionConfig: !isWeb
+      }}
+      headerHeightClassName={getSessionChannelApi().app.platform === 'darwin' ? 'h-10' : 'h-8'}
+      onOpenSessionConfig={() => setShowSessionConfig(true)}
+      rightActions={rightActions}
+      banner={
+        activeSessionId && pinnedMode !== 'placeholder' ? (
+          <StatusBanner sessionId={activeSessionId} />
+        ) : undefined
+      }
+      contentOverride={placeholder}
+      welcome={<WelcomeView />}
+      renderNotebook={(path, sid) => <NotebookSessionView path={path} sessionId={sid} />}
+      conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
+      overlays={
+        // 会话配置弹窗（WebUI 中不显示）
+        getSessionChannelApi().app.platform !== 'web' && showSessionConfig && activeSessionId ? (
+          <SessionConfigDialog
+            sessionId={activeSessionId}
+            onClose={() => setShowSessionConfig(false)}
+          />
+        ) : undefined
+      }
+    />
   )
 }

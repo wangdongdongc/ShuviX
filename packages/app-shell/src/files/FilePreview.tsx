@@ -15,8 +15,18 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import { AlertCircle, FileX, ListOrdered, Loader2, Lock, Music, WrapText, X } from 'lucide-react'
-import { CodeBlock, getChatApi, useAppEvent } from '@shuvix/chat-ui'
+import {
+  AlertCircle,
+  FileText,
+  FileX,
+  ListOrdered,
+  Loader2,
+  Lock,
+  Music,
+  WrapText,
+  X
+} from 'lucide-react'
+import { CodeBlock, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import { CodeView } from './CodeView'
 import { HexView } from './HexView'
 import { useMediaUrl } from './mediaUrl'
@@ -27,11 +37,18 @@ interface FilePreviewProps {
   path: string
   sessionId: string
   onClose: () => void
+  /** 提供则在预览顶栏下方显示「创建笔记本」横幅按钮（仅 markdown 预览时由 FilesPanel 传入） */
+  onCreateNotebook?: () => void
 }
 
 const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
 
-export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): React.JSX.Element {
+export function FilePreview({
+  path,
+  sessionId,
+  onClose,
+  onCreateNotebook
+}: FilePreviewProps): React.JSX.Element {
   const { t } = useTranslation()
   const [result, setResult] = useState<FileReadResult | null>(null)
   /** 单行 minified / 长 JSON 等长行场景下让 CodeView 自动换行；切换文件不复位（视为面板偏好）。
@@ -44,7 +61,7 @@ export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): Rea
     let cancelled = false
     // 路径切换时立即清除旧结果，显示 loading；不会引发额外副作用
     setResult(null) // eslint-disable-line react-hooks/set-state-in-effect
-    getChatApi()
+    getSessionChannelApi()
       .files.read({ sessionId, path })
       .then((r) => {
         if (!cancelled) setResult(r)
@@ -67,7 +84,7 @@ export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): Rea
   // 事件 paths 与 path 同一路径空间；省略 paths 视为"未知，保守重读"。
   useAppEvent('files.changed', (e) => {
     if (e.paths && !e.paths.includes(path)) return
-    getChatApi()
+    getSessionChannelApi()
       .files.read({ sessionId, path })
       .then(setResult)
       .catch(() => {
@@ -131,6 +148,18 @@ export function FilePreview({ path, sessionId, onClose }: FilePreviewProps): Rea
           </button>
         </div>
       </div>
+
+      {/* 「新建会话」横幅：仅 markdown 预览且宿主提供回调时显示。按钮平铺整条横幅，
+          高度与上方预览标题栏一致（h-7）。点击创建绑定该 md 的笔记本会话 */}
+      {onCreateNotebook && (
+        <button
+          onClick={onCreateNotebook}
+          className="flex-shrink-0 flex items-center justify-center gap-1.5 px-2 h-7 border-b border-border-secondary/30 text-xs font-medium text-accent bg-accent/5 hover:bg-accent/10 transition-colors"
+        >
+          <FileText size={13} />
+          {t('panel.preview.createNotebook')}
+        </button>
+      )}
 
       {/* 内容区不带 overflow —— CodeView 内部的 .cm-scroller / HexView 内部虚拟化 /
         PdfView iframe / 媒体元素 都管理自己的滚动；只有 MarkdownView 是普通文档流，

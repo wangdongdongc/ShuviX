@@ -1,8 +1,11 @@
 /**
- * WebUI window.api polyfill
- * 使用 HTTP + WebSocket 适配 Electron IPC 接口，
- * 使 renderer 组件无需修改即可在浏览器中运行
+ * WebUI 后端适配器 —— 局域网分享是「单会话渠道」，只实现 SessionChannelApi（看 + 发）。
+ *
+ * 经 setSessionChannelApi() 注入；getHostApi() 因此返回 null，宿主管理类 UI
+ * （模型/项目/设置/工具编辑/绑定…）自动隐藏。用 HTTP + WebSocket 适配 Electron IPC，
+ * 使 chat-ui / app-shell 的会话组件无需修改即可在浏览器中运行。
  */
+import type { SessionChannelApi } from '@shuvix/chat-ui'
 
 const API_BASE = '/shuvix/api'
 
@@ -14,8 +17,8 @@ function getSessionIdFromUrl(): string {
 
 export const SESSION_ID = getSessionIdFromUrl()
 
-/** 封装 fetch，自动处理 JSON */
-async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
+/** 封装 fetch，自动处理 JSON。导出供 App 引导（设置/分享模式）直接取数。 */
+export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init
@@ -80,25 +83,23 @@ function createEventSource(): {
 
 const eventSource = createEventSource()
 
-const noop = (): Promise<{ success: boolean }> => Promise.resolve({ success: false })
-const noopVoid = (): void => {}
+const ok = (): Promise<{ success: boolean }> => Promise.resolve({ success: false })
+const voidAsync = (): Promise<void> => Promise.resolve()
+const unsub = (): (() => void) => () => {}
 
 /**
- * 创建完整的 window.api polyfill
+ * 创建 WebUI 的 SessionChannelApi 实现。
+ * 已有服务端路由的接 HTTP/WS；渠道暂不支持的（steer/notebook/子代理发送/语音/归档分页/
+ * 斜杠命令/工具展示）给类型正确的空实现——它们不在「看 + 发」最小集的关键路径上。
  */
-export function createWebApi(): typeof window.api {
+export function createWebSessionChannelApi(): SessionChannelApi {
   return {
     app: {
       platform: 'web',
-      openSettings: noop,
-      openExternal: async (url: string) => {
+      openExternal: async (url) => {
         window.open(url, '_blank')
         return { success: true }
-      },
-      openFolder: noop,
-      adjustWindowWidth: noop,
-      setBrowserOffset: noop,
-      windowReady: noopVoid
+      }
     },
 
     agent: {
@@ -108,179 +109,63 @@ export function createWebApi(): typeof window.api {
           method: 'POST',
           body: JSON.stringify({ text: p.text, images: p.images })
         }),
+      // 以下发送变体暂无服务端路由（渠道核心为主会话 prompt），占位满足契约
+      notebookPrompt: ok,
+      subAgentPrompt: ok,
+      steer: ok,
       abort: (sid) => api(`/sessions/${sid}/abort`, { method: 'POST', body: '{}' }),
-      setModel: (p) =>
-        api(`/sessions/${p.sessionId}/model`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      setThinkingLevel: (p) =>
-        api(`/sessions/${p.sessionId}/thinking`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
       respondToInput: (p) =>
         api(`/sessions/${p.sessionId}/respond-input`, {
           method: 'POST',
           body: JSON.stringify({ requestId: p.requestId, response: p.response })
         }),
-      setEnabledTools: (p) =>
-        api(`/sessions/${p.sessionId}/tools`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
       onEvent: (cb) => eventSource.addListener(cb)
     },
 
-    provider: {
-      listAll: () =>
-        api<{ providers: ProviderInfo[] }>('/providers').then((d) => d.providers || []),
-      listEnabled: () => Promise.resolve([]),
-      getById: () => Promise.resolve(undefined),
-      updateConfig: noop,
-      toggleEnabled: noop,
-      listModels: () => Promise.resolve([]),
-      listAvailableModels: () =>
-        api<{ models: AvailableModel[] }>('/providers').then((d) => d.models || []),
-      toggleModelEnabled: noop,
-      syncModels: () => Promise.resolve({ providerId: '', total: 0, added: 0 }),
-      add: () => Promise.resolve({} as ProviderInfo),
-      delete: noop,
-      addModel: noop,
-      deleteModel: noop,
-      updateModelCapabilities: noop
-    },
-
-    project: {
-      list: () => Promise.resolve([]),
-      listArchived: () => Promise.resolve([]),
-      getById: () => Promise.resolve(null),
-      create: () => Promise.resolve({} as Project),
-      update: noop,
-      delete: noop,
-      getKnownFields: () => Promise.resolve({})
-    },
-
     session: {
-      list: () => Promise.resolve([]),
-      create: () => Promise.resolve({} as Session),
-      updateTitle: (p) =>
-        api(`/sessions/${p.id}/title`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      updateModelConfig: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/model`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      updateProject: noop,
-      updateThinkingLevel: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/thinking-level`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      updateEnabledTools: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/enabled-tools`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      updateSshAutoApprove: (p) =>
-        api(`/sessions/${(p as { id: string }).id}/ssh-auto-approve`, {
-          method: 'PUT',
-          body: JSON.stringify(p)
-        }),
-      generateTitle: () => Promise.resolve({ title: null }),
-      delete: noop,
       getById: (id) => api(`/sessions/${id}`)
     },
 
     message: {
       list: (sid) => api(`/sessions/${sid}/messages`),
-      add: (p) =>
-        api(`/sessions/${p.sessionId}/messages`, {
-          method: 'POST',
-          body: JSON.stringify(p)
-        }),
-      clear: noop,
-      rollback: noop,
-      deleteFrom: (p) =>
-        api(`/sessions/${p.sessionId}/messages/delete-from`, {
-          method: 'POST',
-          body: JSON.stringify(p)
-        })
+      // 服务端暂无归档分页路由：渠道展示活动消息即可
+      countArchived: () => Promise.resolve(0),
+      listArchived: () => Promise.resolve([])
     },
 
-    settings: {
-      getAll: () => api('/settings'),
-      get: (key) => api(`/settings?key=${encodeURIComponent(key)}`),
-      set: noop,
-      getKnownKeys: () => Promise.resolve({})
-    },
-
-    httpLog: {
-      list: () => Promise.resolve([]),
-      get: () => Promise.resolve(undefined),
-      clear: noop
-    },
-
-    ssh: {
-      sessionStatus: (sid) => api(`/sessions/${sid}/ssh`),
-      disconnectSession: (sid) =>
-        api(`/sessions/${sid}/ssh/disconnect`, { method: 'POST', body: '{}' })
-    },
-
-    design: {
-      init: noop,
-      startDev: noop,
-      stopDev: noop,
-      status: (p: { sessionId: string }) => api(`/sessions/${p.sessionId}/design`)
-    },
-
-    sshCredential: {
-      list: () => Promise.resolve([]),
-      add: () => Promise.resolve({ id: '' }),
-      update: noop,
-      delete: noop,
-      listNames: () => Promise.resolve([])
+    runtime: {
+      statuses: (sid) => api(`/sessions/${sid}/runtimes`)
     },
 
     tools: {
-      list: () => api('/tools')
+      list: () => api('/tools'),
+      presentations: () => Promise.resolve({})
     },
 
-    mcp: {
-      list: () => Promise.resolve([]),
-      add: () => Promise.resolve({ success: false, id: '' }),
-      update: noop,
-      delete: noop,
-      connect: noop,
-      disconnect: noop,
-      getTools: () => Promise.resolve([])
+    // 斜杠命令源未经服务端暴露：渠道返回空列表
+    command: {
+      list: () => Promise.resolve([])
     },
 
-    webui: {
-      setShared: noop,
-      isShared: () => Promise.resolve(false),
-      getShareMode: () =>
-        api(`/sessions/${SESSION_ID}/share-mode`).then(
-          (r) => (r as Record<string, unknown>).mode ?? null
-        ),
-      listShared: () => Promise.resolve([]),
-      serverStatus: () => Promise.resolve({ running: false })
+    // 工作目录文件（只读）：接服务端 /files 路由，供笔记本 / 文件预览
+    files: {
+      scan: (p) => api(`/sessions/${p.sessionId}/files`),
+      read: (p) => api(`/sessions/${p.sessionId}/files/read?path=${encodeURIComponent(p.path)}`)
     },
 
-    skill: {
-      list: () => Promise.resolve([]),
-      update: noop,
-      deleteDefault: noop,
-      parseMarkdown: () => Promise.resolve(null),
-      getDefaultDir: () => Promise.resolve('')
-    },
-
-    // 通用内部事件：WebUI 暂未经 WS 转发 AppEvent → no-op（不报错即可，后续可接 eventSource）
+    // 通用内部事件（AppEvent）暂未经 WS 转发 → no-op；后续可接 eventSource
     events: {
-      subscribe: () => () => {}
+      subscribe: unsub
+    },
+
+    // 语音渠道暂不支持
+    stt: {
+      transcribe: () => Promise.resolve({ text: '' })
+    },
+    tts: {
+      speakOnce: voidAsync,
+      abortTts: voidAsync,
+      onChunk: unsub
     }
-  } as unknown as typeof window.api
+  } satisfies SessionChannelApi
 }

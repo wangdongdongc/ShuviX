@@ -5,6 +5,8 @@ import { sessionService } from '../../services/sessionService'
 import { providerService } from '../../services/providerService'
 import { settingsService } from '../../services/settingsService'
 import { webUIService, type ShareMode } from '../../services/webUIService'
+import { scanSessionFiles } from '../../services/filesWatcherService'
+import { previewSessionFile } from '../../services/filePreviewService'
 import { createLogger } from '../../logger'
 
 const log = createLogger('WebUI:API')
@@ -301,6 +303,35 @@ export function createApiRouter(): Router {
         res.json(result)
       } catch (e) {
         log.warn(`POST runtimes/destroy 失败: ${e}`)
+        res.status(500).json({ error: 'Internal error' })
+      }
+    })
+  )
+
+  // ─── 工作目录文件（只读：扫描 + 预览，供笔记本/文件面板用） ──
+
+  router.get(
+    '/sessions/:id/files',
+    modeGuard('readonly'),
+    wrapRoute(async (req, res) => {
+      try {
+        res.json(await scanSessionFiles(getSessionId(req)))
+      } catch (e) {
+        log.warn(`GET files 失败: ${e}`)
+        res.status(500).json({ error: 'Internal error' })
+      }
+    })
+  )
+
+  router.get(
+    '/sessions/:id/files/read',
+    modeGuard('readonly'),
+    wrapRoute(async (req, res) => {
+      try {
+        const path = Array.isArray(req.query.path) ? req.query.path[0] : req.query.path
+        res.json(await previewSessionFile(getSessionId(req), String(path ?? '')))
+      } catch (e) {
+        log.warn(`GET files/read 失败: ${e}`)
         res.status(500).json({ error: 'Internal error' })
       }
     })

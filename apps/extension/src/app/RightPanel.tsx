@@ -12,6 +12,7 @@ import {
   FilesPanel,
   SubAgentPanel,
   MediaUrlProvider,
+  useCreateNotebook,
   type ResolveMediaUrl
 } from '@shuvix/app-shell'
 import {
@@ -21,8 +22,8 @@ import {
 } from '../runtime/filesRuntime'
 import { usePanel, setPanelTab, type PanelTab } from './panelStore'
 
-/** 浏览器媒体/PDF：读字节生成 blob: object URL（用完 revoke） */
-const extMediaResolver: ResolveMediaUrl = ({ sessionId, path }) =>
+/** 浏览器媒体/PDF：读字节生成 blob: object URL（用完 revoke）。中间区 NotebookView 也复用 */
+export const extMediaResolver: ResolveMediaUrl = ({ sessionId, path }) =>
   resolveMediaObjectUrl(sessionId, path)
 
 /**
@@ -33,6 +34,7 @@ const extMediaResolver: ResolveMediaUrl = ({ sessionId, path }) =>
 function FilesTab(): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
+  const createNotebook = useCreateNotebook()
   const [gate, setGate] = useState<{ status: PermissionState | 'none' | 'loading'; name: string }>({
     status: 'loading',
     name: ''
@@ -55,9 +57,9 @@ function FilesTab(): React.JSX.Element {
     return <div className="h-full" />
   }
   // 已授权 / 无工作目录（临时会话恒 granted）→ 交给共享 FilesPanel
-  // 不传 onOpenMarkdown → .md 走内联覆盖预览（扩展无中间区编辑器）
+  // .md 预览顶栏「创建笔记本」绑定该文件（扩展中间区也已支持 NotebookView）
   if (gate.status !== 'prompt' && gate.status !== 'denied') {
-    return <FilesPanel />
+    return <FilesPanel onCreateNotebook={createNotebook} />
   }
 
   return (

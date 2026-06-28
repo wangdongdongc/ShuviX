@@ -30,7 +30,7 @@ import { HookSettings } from './HookSettings'
 import { ToolSettings } from './ToolSettings'
 import { BindingsSettings } from './BindingsSettings'
 import { VoiceSettings } from './VoiceSettings'
-import { ContextManagementSettings } from '@shuvix/app-shell'
+import { ContextManagementSettings, getChannelBindingCaps } from '@shuvix/app-shell'
 
 const VALID_TABS = new Set([
   'general',
@@ -164,9 +164,14 @@ export function SettingsPanel(): React.JSX.Element {
     }
   ]
 
+  // 「会话绑定」Tab 据当前宿主提供的渠道 API 自动显隐：无任何渠道则整页不出现
+  const visibleTabs = getChannelBindingCaps().any
+    ? tabs
+    : tabs.filter((tab) => tab.id !== 'bindings')
+
   return (
     <SettingsContainer
-      tabs={tabs}
+      tabs={visibleTabs}
       activeTab={activeSettingsTab}
       onTabChange={(id) => setActiveSettingsTab(id as typeof activeSettingsTab)}
       title={t('settings.title')}

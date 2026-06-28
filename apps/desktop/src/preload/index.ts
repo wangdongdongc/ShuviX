@@ -4,6 +4,8 @@ import type { UpdateEvent } from '../main/types'
 import type {
   AgentInitParams,
   AgentPromptParams,
+  AgentNotebookPromptParams,
+  AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
@@ -28,6 +30,7 @@ import type {
   SessionAllowListAddParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
+  SessionCreateParams,
   SettingsSetParams,
   McpServerAddParams,
   McpServerUpdateParams,
@@ -93,6 +96,14 @@ const api = {
 
     /** 向指定 session 发送消息 */
     prompt: (params: AgentPromptParams) => ipcRenderer.invoke('agent:prompt', params),
+
+    /** 笔记本会话发送：每次开启独立子智能体 */
+    notebookPrompt: (params: AgentNotebookPromptParams) =>
+      ipcRenderer.invoke('agent:notebookPrompt', params),
+
+    /** 继续与已存在子代理对话：追加一轮用户消息 */
+    subAgentPrompt: (params: AgentSubAgentPromptParams) =>
+      ipcRenderer.invoke('agent:subAgentPrompt', params),
 
     /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
     steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
@@ -168,7 +179,7 @@ const api = {
   // ============ 会话管理 ============
   session: {
     list: () => ipcRenderer.invoke('session:list'),
-    create: (projectId?: string | null) => ipcRenderer.invoke('session:create', projectId),
+    create: (params?: SessionCreateParams) => ipcRenderer.invoke('session:create', params),
     updateTitle: (params: SessionUpdateTitleParams) =>
       ipcRenderer.invoke('session:updateTitle', params),
     updateModelConfig: (params: SessionUpdateModelConfigParams) =>

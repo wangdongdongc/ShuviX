@@ -7,6 +7,7 @@ const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
 const agentRuntime = resolve(__dirname, '../../packages/agent-runtime/src/index.ts')
 const appShell = resolve(__dirname, '../../packages/app-shell/src')
+const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
 
 // MV3 Chrome 扩展构建：
 //  - 两个入口：整页 App（app.html）+ 后台 Service Worker（src/background/sw.ts）
@@ -19,7 +20,11 @@ export default defineConfig({
       '@shuvix/chat-protocol': chatProtocol,
       '@shuvix/chat-ui': chatUi,
       '@shuvix/agent-runtime': agentRuntime,
-      '@shuvix/app-shell': appShell
+      '@shuvix/app-shell': appShell,
+      // 子路径别名须在裸包别名之前——Vite 前缀匹配，否则 '@shuvix/atomic-editor' 会吞掉 '/code-languages'
+      '@shuvix/atomic-editor/code-languages': resolve(atomicEditorSrc, 'code-languages.ts'),
+      '@shuvix/atomic-editor/styles.css': resolve(atomicEditorSrc, 'styles/inline-preview.css'),
+      '@shuvix/atomic-editor': resolve(atomicEditorSrc, 'index.ts')
     },
     // 跨包共享单一 React 实例（hooks 跨副本会炸）
     dedupe: ['react', 'react-dom']

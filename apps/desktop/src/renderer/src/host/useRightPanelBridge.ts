@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { getChatApi } from '@shuvix/chat-ui'
+import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useBrowserStore } from '../stores/browserStore'
 
@@ -15,7 +15,7 @@ import { useBrowserStore } from '../stores/browserStore'
  */
 export function useRightPanelBridge(): void {
   useEffect(() => {
-    const unsub = getChatApi().agent.onEvent((event) => {
+    const unsub = getSessionChannelApi().agent.onEvent((event) => {
       if (event.type === 'sub_session_register') {
         if (event.parentSessionId === useChatStore.getState().activeSessionId) {
           const browser = useBrowserStore.getState()
@@ -25,7 +25,7 @@ export function useRightPanelBridge(): void {
       } else if (event.type === 'browser_event') {
         if (event.action === 'open' && event.url) {
           let url = event.url
-          if (getChatApi()?.app?.platform === 'web') {
+          if (getSessionChannelApi()?.app?.platform === 'web') {
             url = `${window.location.origin}/shuvix/browser/${event.sessionId}/`
           }
           const browser = useBrowserStore.getState()

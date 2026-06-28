@@ -6,8 +6,10 @@
     "../../packages/chat-protocol/src/**/*",
     "../../packages/chat-ui/src/**/*",
     "../../packages/agent-runtime/src/**/*",
-    "../../packages/app-shell/src/**/*"
+    "../../packages/app-shell/src/**/*",
+    "../../packages/atomic-editor/src/**/*"
   ],
+  "exclude": ["../../packages/atomic-editor/src/**/__tests__/**"],
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -19,7 +21,11 @@
       "@shuvix/chat-ui/*": ["../../packages/chat-ui/src/*"],
       "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"],
       "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
-      "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"]
+      "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
+      "@shuvix/atomic-editor": ["../../packages/atomic-editor/src/index.ts"],
+      "@shuvix/atomic-editor/code-languages": [
+        "../../packages/atomic-editor/src/code-languages.ts"
+      ]
     }
   }
 }

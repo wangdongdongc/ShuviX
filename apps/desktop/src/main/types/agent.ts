@@ -47,6 +47,19 @@ export interface AgentPromptParams {
   inlineTokens?: Record<string, InlineToken>
 }
 
+/** 笔记本会话发送参数：每次开启独立子智能体；上下文注入笔记本文件路径 + read 提示（路径后端解析） */
+export interface AgentNotebookPromptParams {
+  sessionId: string
+  text: string
+  images?: ImageContentParam[]
+}
+
+/** 继续与已存在子代理对话参数：向其追加一轮用户消息（复用该子会话 Agent 与历史） */
+export interface AgentSubAgentPromptParams {
+  subSessionId: string
+  text: string
+}
+
 /** Agent steer 消息参数（运行中注入引导消息） */
 export interface AgentSteerParams {
   sessionId: string

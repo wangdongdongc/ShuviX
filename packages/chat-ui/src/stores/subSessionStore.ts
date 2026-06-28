@@ -25,6 +25,8 @@ export interface SubSessionState {
   systemPrompt: string
   /** 父 Agent 发给子智能体的初始 user prompt（register 事件携带） */
   prompt: string
+  /** 额外注入上下文的人读文本（如笔记本当前内容）；面板以折叠用户消息卡展示 */
+  contextNote?: string
   status: SubSessionStatus
   startedAt: number
   endedAt?: number
@@ -60,8 +62,11 @@ interface SubSessionStore {
     description: string
     systemPrompt: string
     prompt: string
+    contextNote?: string
   }): void
   markEnded(params: { subSessionId: string; result: string; isError?: boolean }): void
+  /** 用户后续追问：内联一条 user 消息到转写，并把子会话标记回运行态 */
+  appendUserMessage(subSessionId: string, message: ChatMessage): void
   /** 用户显式关闭：移除 store 条目（同时应触发 IPC subSession:destroy） */
   close(subSessionId: string): void
   setActive(subSessionId: string | null): void
@@ -95,6 +100,7 @@ function createEmpty(params: {
   description: string
   systemPrompt: string
   prompt: string
+  contextNote?: string
 }): SubSessionState {
   return {
     subSessionId: params.subSessionId,
@@ -104,6 +110,7 @@ function createEmpty(params: {
     description: params.description,
     systemPrompt: params.systemPrompt,
     prompt: params.prompt,
+    contextNote: params.contextNote,
     status: 'running',
     startedAt: Date.now(),
     messages: [],
@@ -150,6 +157,25 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
       }
     }),
 
+  appendUserMessage: (subSessionId, message) =>
+    set((state) => {
+      const prev = state.subSessions[subSessionId]
+      if (!prev) return {}
+      return {
+        subSessions: {
+          ...state.subSessions,
+          [subSessionId]: {
+            ...prev,
+            messages: [...prev.messages, message],
+            // 追问即重回运行态（紧随其后会到来 agent_start / 流式事件）
+            status: 'running',
+            endedAt: undefined,
+            result: undefined
+          }
+        }
+      }
+    }),
+
   close: (subSessionId) =>
     set((state) => {
       if (!state.subSessions[subSessionId]) return {}
@@ -172,6 +198,7 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
           ...state.subSessions,
           [subSessionId]: {
             ...prev,
+            status: 'running',
             isStreaming: true,
             streamingContent: '',
             streamingThinking: '',

@@ -1,4 +1,4 @@
-import { getChatApi } from '@shuvix/chat-ui'
+import { getHostApi } from '@shuvix/chat-ui'
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ErrorEventMessage, UserTextMessage } from '../../stores/chatStore'
@@ -31,7 +31,8 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
   const removeMessage = useChatStore((s) => s.removeMessage)
   const handleDelete = async (): Promise<void> => {
     try {
-      await getChatApi().message.deleteErrorEvent({
+      // 渠道端无写权限：仅本地移除（host 缺省即跳过持久化删除）
+      await getHostApi()?.message.deleteErrorEvent({
         sessionId: msg.sessionId,
         messageId: msg.id
       })

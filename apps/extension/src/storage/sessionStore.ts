@@ -34,18 +34,27 @@ export const sessionStore = {
     provider: string
     model: string
     projectId?: string | null
+    /** 绑定的 md 文件（相对项目根）；提供则创建笔记本会话 */
+    notebookPath?: string
+    title?: string
   }): Promise<Session> {
     await ensureLoaded()
     const now = Date.now()
+    const notebookPath = defaults.notebookPath
     const session: Session = {
       id: uuid(),
-      title: i18n.t('agent.defaultTitle'), // 默认「新对话」，与桌面一致；首轮后由 generateTitle 覆盖
+      // 默认「新对话」（首轮后由 generateTitle 覆盖）；笔记本会话取文件 basename
+      title:
+        defaults.title ??
+        (notebookPath
+          ? notebookPath.split('/').pop() || notebookPath
+          : i18n.t('agent.defaultTitle')),
       projectId: defaults.projectId ?? null,
       provider: defaults.provider,
       model: defaults.model,
       systemPrompt: '',
       modelMetadata: {},
-      settings: {},
+      settings: notebookPath ? { notebookPath } : {},
       createdAt: now,
       updatedAt: now
     }

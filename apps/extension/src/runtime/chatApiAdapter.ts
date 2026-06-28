@@ -18,10 +18,14 @@ import { eventBus } from './eventBus'
 import { getToolPresentations } from './toolPresentations'
 import {
   ensureRuntimeSession,
+  resolveSessionMeta,
   getRuntimeSession,
   removeRuntimeSession,
-  setSessionModel
+  setSessionModel,
+  buildSessionTools
 } from './agentRuntime'
+import { subAgentManager, registerSessionTools } from './subAgent'
+import { runNotebookTask } from '@shuvix/agent-runtime'
 import { compactSession } from './compactionRuntime'
 import { generateTitleForSession } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
@@ -55,10 +59,11 @@ export const chatApiAdapter: ChatApi = {
 
   agent: {
     init: async ({ sessionId }) => {
-      const { created, provider, model, caps } = await ensureRuntimeSession(sessionId)
+      // 仅解析元信息，不创建运行时 —— Agent 延迟到首次发送消息时（prompt → ensureRuntimeSession）创建
+      const { provider, model, caps } = await resolveSessionMeta(sessionId)
       return {
         success: true,
-        created,
+        created: !!getRuntimeSession(sessionId),
         provider,
         model,
         capabilities: caps,
@@ -79,6 +84,43 @@ export const chatApiAdapter: ChatApi = {
       const userMsg = messageStore.add({ sessionId, role: 'user', type: 'text', content: text })
       eventBus.emit({ type: 'user_message', sessionId, message: JSON.stringify(userMsg) })
       await rt.prompt(text, images)
+      return ok
+    },
+    // 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。仅注入笔记本路径 + read 提示，
+    // 正文由子代理自行读取；子代理不含 ask（面板只读无法应答）。信封组装与派发由共享 runNotebookTask 完成。
+    notebookPrompt: async ({ sessionId, text }) => {
+      // 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）
+      const notebookPath = (await sessionStore.getById(sessionId))?.settings?.notebookPath ?? ''
+      const parts = await buildSessionTools(sessionId, {
+        // 面板只读、无法应答交互式提问 → ask 已剔除；file tools 的 requestUserInput 为预留项
+        requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
+        includeAsk: false
+      })
+      // resolveTools 读 sessionTools map（笔记本无 runtime，故在此登记）；扩展按注册表解析 → tools 传 []
+      registerSessionTools(sessionId, parts.tools)
+      runNotebookTask(
+        subAgentManager,
+        {
+          sessionId,
+          text,
+          systemPrompt: parts.systemPrompt,
+          modelConfig: { provider: parts.provider, model: parts.model, capabilities: parts.caps },
+          tools: [],
+          notebookPath
+        },
+        (error) => eventBus.emit({ type: 'error', sessionId, error })
+      )
+      return ok
+    },
+    // 继续与已存在子代理对话：复用该子会话 Agent 追加一轮（fire-and-forget，进展走事件流）
+    subAgentPrompt: async ({ subSessionId, text }) => {
+      void subAgentManager.continueTask({ subSessionId, text }).catch((e: unknown) => {
+        eventBus.emit({
+          type: 'error',
+          sessionId: subSessionId,
+          error: e instanceof Error ? e.message : String(e)
+        })
+      })
       return ok
     },
     steer: async ({ sessionId, text }) => {
@@ -177,9 +219,14 @@ export const chatApiAdapter: ChatApi = {
 
   session: {
     list: async () => sessionStore.list(),
-    create: async (projectId) => {
+    create: async (params) => {
       const sel = await activeSelection()
-      return sessionStore.create({ ...sel, projectId: projectId ?? null })
+      return sessionStore.create({
+        ...sel,
+        projectId: params?.projectId ?? null,
+        notebookPath: params?.notebookPath,
+        title: params?.title
+      })
     },
     updateTitle: async ({ id, title }) => {
       await sessionStore.updateTitle(id, title)

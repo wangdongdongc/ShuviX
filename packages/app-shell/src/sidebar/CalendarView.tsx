@@ -4,31 +4,40 @@ import { DayPicker, useDayPicker } from 'react-day-picker'
 import { zhCN, enUS } from 'react-day-picker/locale'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useChatStore, groupSessionsByDay, type Session } from '@shuvix/chat-ui'
-import { useSidebarStore } from '../../stores/sidebarStore'
 import './calendar.css'
 
-interface Props {
-  /** 渲染当日会话（按项目-会话树形分组，由 Sidebar 提供） */
+export interface CalendarViewProps {
+  /** 渲染当日会话（按项目-会话树形分组，由宿主提供，复用 ProjectSessionGroups） */
   renderGroupedSessionsForDay: (sessions: Session[]) => React.ReactNode
+  /** 侧栏当前宽度（决定是否显示周序号 + 日格尺寸/占位高度估算）；由宿主侧栏 store 注入 */
+  width: number
+  /** 是否正在拖动侧栏：拖动期间不渲染 DayPicker，避免重 layout 卡顿（缺省 false） */
+  isResizing?: boolean
 }
 
 function dayKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-export function CalendarView({ renderGroupedSessionsForDay }: Props): React.JSX.Element {
+/**
+ * 日历视图（桌面/扩展共用）—— 按天浏览会话。月历 + 选中日的会话分组列表。
+ * 侧栏宽度 / 拖动态经 props 注入（宿主各自的 sidebar store）；会话数据读 chat-ui chatStore。
+ */
+export function CalendarView({
+  renderGroupedSessionsForDay,
+  width,
+  isResizing = false
+}: CalendarViewProps): React.JSX.Element {
   const { i18n, t } = useTranslation()
   const sessions = useChatStore((s) => s.sessions)
-  const isResizing = useSidebarStore((s) => s.isResizing)
-  const sidebarWidth = useSidebarStore((s) => s.width)
-  const showWeekNumber = sidebarWidth >= 240
+  const showWeekNumber = width >= 240
   const [selected, setSelected] = useState<Date>(() => new Date())
   const [month, setMonth] = useState<Date>(() => new Date())
 
   // 拖动占位高度：chrome（caption/nav/weekday header 恒定）+ 6 行 × day cell（跟随 sidebar 宽度）
   // 公式与 calendar.css 中 --rdp-day-height: clamp(26px, 12cqw, 40px) 一致
   // 容器宽度 = sidebar 宽度 - 周围 padding（pl-2 pr-1 = 12px）
-  const dayCellSize = Math.max(26, Math.min(40, (sidebarWidth - 12) * 0.12))
+  const dayCellSize = Math.max(26, Math.min(40, (width - 12) * 0.12))
   const calendarBoxRef = useRef<HTMLDivElement>(null)
   const chromeHeightRef = useRef<number>(46)
   useLayoutEffect(() => {

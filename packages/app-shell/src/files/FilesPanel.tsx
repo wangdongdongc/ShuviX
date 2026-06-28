@@ -6,13 +6,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Search, X } from 'lucide-react'
+import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
-import { useChatStore, getChatApi, useAppEvent } from '@shuvix/chat-ui'
+import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import { FilePreview } from './FilePreview'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
+import { extOf, basename, joinPath, relativize } from './paths'
 
 /** 音频扩展名 → MIME。点击命中即走底部 dock，不进预览覆盖层。
  *  与 main 的 AUDIO_MIME_BY_EXT 同步；renderer 这里独立列表是为了在点击瞬间就分流，
@@ -36,13 +37,8 @@ const VIDEO_MIME_BY_EXT: Record<string, string> = {
   '.ogv': 'video/ogg'
 }
 
-/** Markdown 扩展名：点击命中后不在右侧预览，改为在中间区打开 live-preview 编辑器 */
+/** Markdown 扩展名：从预览顶栏可创建绑定该文件的「笔记本会话」 */
 const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
-
-function extOf(path: string): string {
-  const idx = path.lastIndexOf('.')
-  return idx >= 0 ? path.slice(idx).toLowerCase() : ''
-}
 
 interface ScanState {
   /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
@@ -57,15 +53,17 @@ interface ScanError {
 }
 
 export interface FilesPanelProps {
-  /** 点击 Markdown 文件的处理：提供则交宿主（桌面在中间区打开 live-preview 编辑器）；
-   *  不提供则与其它文本一样走内联覆盖预览（扩展用此分支）。 */
-  onOpenMarkdown?: (params: { path: string; sessionId: string }) => void
+  /** 预览 Markdown 文件时，预览顶栏「创建笔记本」按钮的处理：提供则显示该按钮，
+   *  点击创建绑定该 md 的笔记本会话。不提供则不显示（宿主无中间区编辑器时）。 */
+  onCreateNotebook?: (params: { path: string; sessionId: string }) => void
 }
 
-export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.Element {
+export function FilesPanel({ onCreateNotebook }: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
+  // 笔记本编辑器内 [[wiki-link]] 点击 → 请求在本面板打开目标文件预览
+  const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
 
   const [state, setState] = useState<ScanState | null>(null)
   const [error, setError] = useState<ScanError | null>(null)
@@ -103,7 +101,7 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
     const id = useChatStore.getState().activeSessionId
     if (!id) return
     try {
-      const r = await getChatApi().files.scan({ sessionId: id })
+      const r = await getSessionChannelApi().files.scan({ sessionId: id })
       if (!r.root) return
       // 异步竞态：若用户已切到不同 workingDirectory，丢弃旧结果
       if (useChatStore.getState().projectPath !== r.root) return
@@ -170,8 +168,8 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
   let content: React.ReactNode
   if (!sessionId || !projectPath) {
     content = (
-      <div className="flex items-center justify-center h-full text-xs text-text-tertiary">
-        {t('panel.filesEmpty')}
+      <div className="flex items-center justify-center h-full">
+        <Folder size={48} strokeWidth={1.5} className="text-text-tertiary/30" />
       </div>
     )
   } else if (freshError) {
@@ -196,18 +194,9 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
         onFileSelect={(rel) => {
-          // Markdown：宿主提供 onOpenMarkdown 时交其处理（桌面在中间区打开 live-preview 编辑器，
-          // 故关掉残留的覆盖预览 + 取消树选中，否则再点同一文件 pierre 因选区未变而短路无法重开）；
-          // 未提供时（扩展）回退到与其它文本一致的内联覆盖预览。
+          // 音频 / 视频：上底部 dock，文件树继续可见；
+          // 其它（含 .md，banner「创建笔记本」从预览顶栏进入）走预览覆盖层
           const ext = extOf(rel)
-          if (MARKDOWN_EXTS.has(ext) && onOpenMarkdown) {
-            if (!projectPath || !sessionId) return
-            onOpenMarkdown({ path: joinPath(projectPath, rel), sessionId })
-            setPreviewRelPath(null)
-            treeModelRef.current?.getItem(rel)?.deselect()
-            return
-          }
-          // 音频 / 视频：上底部 dock，文件树继续可见；其它走预览覆盖层
           const audioMime = AUDIO_MIME_BY_EXT[ext]
           const videoMime = VIDEO_MIME_BY_EXT[ext]
           if (audioMime || videoMime) {
@@ -250,9 +239,19 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
     }
   }, [freshState, previewRelPath])
 
+  // 笔记本 [[wiki-link]] 请求：在本面板打开目标文件预览（绝对路径在 projectPath 下才处理）。
+  // 含 nonce → 重复点击同一文件也触发；宿主负责打开右面板并切到 Files tab。
+  useEffect(() => {
+    if (!filePreviewRequest || !projectPath) return
+    const rel = relativize(projectPath, filePreviewRequest.absPath)
+    if (rel) setPreviewRelPath(rel) // eslint-disable-line react-hooks/set-state-in-effect
+  }, [filePreviewRequest, projectPath])
+
   /** 把 pierre 树相对路径拼成宿主机绝对路径（不引 node:path，兼容 win 分隔符） */
   const previewAbsPath =
     previewRelPath && projectPath ? joinPath(projectPath, previewRelPath) : null
+  /** 预览的是否为 markdown —— 决定是否在预览顶栏显示「创建笔记本」按钮 */
+  const previewIsMarkdown = !!previewRelPath && MARKDOWN_EXTS.has(extOf(previewRelPath))
 
   const folderName = projectPath ? basename(projectPath) : ''
 
@@ -337,7 +336,16 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
         {content}
         {previewAbsPath && sessionId && (
           <div className="absolute inset-0 z-10 flex flex-col bg-bg-secondary">
-            <FilePreview path={previewAbsPath} sessionId={sessionId} onClose={closePreview} />
+            <FilePreview
+              path={previewAbsPath}
+              sessionId={sessionId}
+              onClose={closePreview}
+              onCreateNotebook={
+                previewIsMarkdown && onCreateNotebook
+                  ? () => onCreateNotebook({ path: previewAbsPath, sessionId })
+                  : undefined
+              }
+            />
           </div>
         )}
       </div>
@@ -374,21 +382,6 @@ export function FilesPanel({ onOpenMarkdown }: FilesPanelProps = {}): React.JSX.
         ))}
     </div>
   )
-}
-
-/** 取路径最后一段（兼容 POSIX 与 Windows 分隔符），不依赖 node:path */
-function basename(p: string): string {
-  const s = p.replace(/[/\\]+$/, '')
-  const idx = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
-  return idx >= 0 ? s.slice(idx + 1) : s
-}
-
-/** 用宿主机分隔符（POSIX `/`，win `\`）把 base 与相对路径拼接，去重边界分隔符 */
-function joinPath(base: string, rel: string): string {
-  const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/'
-  const left = base.replace(/[/\\]+$/, '')
-  const right = rel.replace(/^[/\\]+/, '')
-  return `${left}${sep}${right}`
 }
 
 /**

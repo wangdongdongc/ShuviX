@@ -9,6 +9,13 @@ export interface SessionInfo extends Session {
   enabledTools?: string[]
 }
 
+/** IPC: 创建会话参数（notebookPath 非空则创建笔记本会话） */
+export interface SessionCreateParams {
+  projectId?: string | null
+  notebookPath?: string
+  title?: string
+}
+
 /** IPC: 更新会话标题参数 */
 export interface SessionUpdateTitleParams {
   id: string

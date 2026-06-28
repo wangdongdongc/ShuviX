@@ -5,6 +5,8 @@ import { agentManager } from '../agents/AgentManager'
 import type {
   AgentInitParams,
   AgentPromptParams,
+  AgentNotebookPromptParams,
+  AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
@@ -30,6 +32,22 @@ export function registerAgentHandlers(): void {
       return { success: true }
     })
   )
+
+  /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，不 await 整轮） */
+  ipcMain.handle('agent:notebookPrompt', (_event, params: AgentNotebookPromptParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.notebookPrompt(params.sessionId, params.text, params.images)
+      return { success: true }
+    })
+  )
+
+  /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，不 await 整轮） */
+  ipcMain.handle('agent:subAgentPrompt', (_event, params: AgentSubAgentPromptParams) => {
+    void agentManager
+      .continueTask({ subSessionId: params.subSessionId, text: params.text })
+      .catch(() => {})
+    return { success: true }
+  })
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   ipcMain.handle('agent:steer', (_event, params: AgentSteerParams) =>

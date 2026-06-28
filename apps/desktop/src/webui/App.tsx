@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useChatStore } from '@shuvix/chat-ui'
+import { useChatStore, getSessionChannelApi, type ShareMode } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../renderer/src/stores/settingsStore'
 import { ChatHostProvider } from '@shuvix/chat-ui'
 import { useSettingsChatHost } from '../renderer/src/host/settingsChatHost'
@@ -8,7 +8,7 @@ import { ChatView } from '../renderer/src/components/chat/ChatView'
 import { BrowserPanel } from '../renderer/src/components/browser/BrowserPanel'
 import { BrowserResizeHandle } from '../renderer/src/components/browser/BrowserResizeHandle'
 import { useBrowserStore } from '../renderer/src/stores/browserStore'
-import { SESSION_ID } from './api'
+import { SESSION_ID, api } from './api'
 
 /**
  * WebUI 根组件 — 单会话视图
@@ -18,26 +18,22 @@ export default function WebApp(): React.JSX.Element {
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
 
   // ─── 初始化：加载设置 + 设置当前 session ───
+  // 渠道端无 HostApi：外观/分享模式经服务端 HTTP 直取，会话经 SessionChannelApi。
+  // provider 目录不加载（模型选择器属宿主能力，已自动隐藏）。
   useEffect(() => {
     const init = async (): Promise<void> => {
       // 加载设置（主题、字体等）
-      const settings = await window.api.settings.getAll()
+      const settings = await api<Record<string, string>>('/settings')
       useSettingsStore.getState().loadSettings(settings)
 
-      // 加载 provider 列表（ModelPicker 需要）
-      const [allProviders, availableModels] = await Promise.all([
-        window.api.provider.listAll(),
-        window.api.provider.listAvailableModels()
-      ])
-      useSettingsStore.getState().setProviders(allProviders)
-      useSettingsStore.getState().setAvailableModels(availableModels)
-
-      // 获取分享模式
-      const shareModeResult = await window.api.webui.getShareMode(SESSION_ID)
-      useChatStore.getState().setShareMode(shareModeResult)
+      // 获取分享模式（决定只读 / 可发消息）
+      const shareModeResult = await api<{ mode: ShareMode | null }>(
+        `/sessions/${SESSION_ID}/share-mode`
+      )
+      useChatStore.getState().setShareMode(shareModeResult.mode ?? null)
 
       // 获取会话信息并设为活跃
-      const sessionInfo = await window.api.session.getById(SESSION_ID)
+      const sessionInfo = await getSessionChannelApi().session.getById(SESSION_ID)
       if (sessionInfo) {
         useChatStore.getState().setSessions([sessionInfo])
         useChatStore.getState().setActiveSessionId(SESSION_ID)

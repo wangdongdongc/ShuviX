@@ -28,6 +28,7 @@ import {
 } from '../services/wrapToolOutput'
 import { chatFrontendRegistry } from '../frontend/core'
 import { transientSessionRegistry } from './transientSessionRegistry'
+import { httpLogService } from '../services/httpLogService'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 
@@ -98,5 +99,11 @@ export const agentManager = createSubAgentManager({
       displayName: meta.displayName,
       description: meta.description
     }),
-  onUnregister: (subSessionId) => transientSessionRegistry.unregister(subSessionId)
+  onUnregister: (subSessionId) => transientSessionRegistry.unregister(subSessionId),
+  // 子代理 LLM 请求也记入 LLM 日志（归到父会话，便于在日志里按可见会话查看）
+  httpLog: {
+    logRequest: (params) => httpLogService.logRequest(params),
+    updateUsage: (logId, input, output, total, responseJson) =>
+      httpLogService.updateUsage(logId, input, output, total, responseJson)
+  }
 })

@@ -1,5 +1,5 @@
 import type { SttBackend, SttStartOptions, SttState } from './types'
-import { getChatApi } from '../../api/chatApi'
+import { getSessionChannelApi } from '../../api/chatApi'
 
 /**
  * VAD 参数
@@ -53,7 +53,7 @@ export class WhisperBackend implements SttBackend {
   isAvailable(): boolean {
     let sttApi: { transcribe?: unknown } | undefined
     try {
-      sttApi = getChatApi().stt
+      sttApi = getSessionChannelApi().stt
     } catch {
       sttApi = undefined
     }
@@ -245,7 +245,7 @@ export class WhisperBackend implements SttBackend {
         // 解码失败时仍可用 WebM（OpenAI 模式）
       }
 
-      const result = await getChatApi().stt.transcribe({
+      const result = await getSessionChannelApi().stt.transcribe({
         audioData,
         pcmf32,
         language: this.language

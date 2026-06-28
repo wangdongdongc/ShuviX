@@ -1,4 +1,4 @@
-import { getChatApi, useChatHost } from '@shuvix/chat-ui'
+import { getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -49,13 +49,15 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
 
   /** 切换思考深度 */
   const handleSetThinkingLevel = async (level: string): Promise<void> => {
+    const host = getHostApi()
+    if (!host) return // 渠道端无权改会话配置（ModelPicker 已隐藏，双保险）
     setThinkingLevel(level)
     if (activeSessionId) {
-      await getChatApi().agent.setThinkingLevel({
+      await host.agent.setThinkingLevel({
         sessionId: activeSessionId,
         level: level as ThinkingLevel
       })
-      await getChatApi().session.updateThinkingLevel({
+      await host.session.updateThinkingLevel({
         id: activeSessionId,
         thinkingLevel: level
       })
@@ -123,23 +125,25 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
 
   /** 确认模型并提交 provider/model 切换 */
   const handlePickModel = async (providerId: string, modelId: string): Promise<void> => {
+    const host = getHostApi()
+    if (!host) return // 渠道端无权切换模型（ModelPicker 已隐藏，双保险）
     setActiveProvider(providerId)
     setActiveModel(modelId)
 
     // 会话级持久化
     if (activeSessionId) {
-      await getChatApi().session.updateModelConfig({
+      await host.session.updateModelConfig({
         id: activeSessionId,
         provider: providerId,
         model: modelId
       })
-      const sessions = await getChatApi().session.list()
+      const sessions = await host.session.list()
       setSessions(sessions)
     }
 
     const providerInfo = providers.find((p) => p.id === providerId)
     if (activeSessionId) {
-      await getChatApi().agent.setModel({
+      await host.agent.setModel({
         sessionId: activeSessionId,
         provider: providerId,
         model: modelId,
@@ -167,11 +171,11 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     const newLevel = hasReasoning ? 'medium' : 'off'
     setThinkingLevel(newLevel)
     if (activeSessionId) {
-      await getChatApi().agent.setThinkingLevel({
+      await host.agent.setThinkingLevel({
         sessionId: activeSessionId,
         level: newLevel as ThinkingLevel
       })
-      await getChatApi().session.updateThinkingLevel({
+      await host.session.updateThinkingLevel({
         id: activeSessionId,
         thinkingLevel: newLevel
       })
@@ -180,11 +184,12 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     closePicker()
   }
 
-  // 无任何已启用的提供商：以异常色按钮提示去配置
-  if (enabledProviders.length === 0) {
+  // 无任何已启用的提供商：以异常色按钮提示去配置（仅宿主可配置；渠道端只读时不显示，
+  // 落到下方 readonly 分支展示当前模型名即可）
+  if (enabledProviders.length === 0 && !isReadonly) {
     return (
       <button
-        onClick={() => getChatApi().app.openSettings('providers')}
+        onClick={() => getHostApi()?.app.openSettings('providers')}
         className="inline-flex items-center gap-1 text-[11px] text-error bg-error/10 hover:bg-error/20 rounded px-1.5 py-0.5 transition-colors"
       >
         <Settings size={11} />

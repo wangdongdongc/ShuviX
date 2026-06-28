@@ -6,6 +6,7 @@
  */
 import {
   MessageSquare,
+  FileText,
   PictureInPicture2,
   Globe,
   MessageCircle,
@@ -21,6 +22,8 @@ export interface SessionItemProps {
   pendingCount?: number
   /** 专注模式下淡化（由宿主计算后传入） */
   dim?: boolean
+  /** 笔记本会话（绑定 md 文件，纯预览）—— 显示笔记本图标，选中后中间区为 live-preview */
+  isNotebook?: boolean
   onSelect: (id: string) => void
   onDelete?: (id: string) => void
   // —— 桌面专属（可选） ——
@@ -37,6 +40,7 @@ export function SessionItem({
   isStreaming = false,
   pendingCount = 0,
   dim = false,
+  isNotebook = false,
   onSelect,
   onDelete,
   isPinned = false,
@@ -58,7 +62,12 @@ export function SessionItem({
             }`
       }`}
     >
-      {isPinned ? (
+      {isNotebook ? (
+        <FileText
+          size={11}
+          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
+        />
+      ) : isPinned ? (
         <PictureInPicture2
           size={11}
           className={`flex-shrink-0 ${isStreaming ? 'text-accent animate-pulse' : 'text-accent'}`}

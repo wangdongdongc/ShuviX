@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from 'uuid'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
@@ -10,12 +10,23 @@ import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
+import { getBuiltinToolEntries } from './toolRegistry'
 import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
-import type { Session, SessionInfo, AgentInitResult, ModelCapabilities } from '../types'
+import type {
+  Session,
+  SessionInfo,
+  SessionCreateParams,
+  SessionModelMetadata,
+  AgentInitResult,
+  ModelCapabilities
+} from '../types'
+import type { Project } from '../dao/types'
 
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { AgentSession } from './agentSession'
+import { SessionManager } from '@shuvix/agent-runtime'
+import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
+import { AgentSession, buildSystemPrompt } from './agentSession'
 import { scanInstructionFiles } from './instruction'
 import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
@@ -27,7 +38,36 @@ const log = createLogger('SessionService')
  * 会话服务 — 管理会话 CRUD 与 AgentSession 运行时生命周期
  */
 export class SessionService {
-  private agentSessions = new Map<string, AgentSession>()
+  /**
+   * AgentSession 运行时生命周期（Map + 懒创建 + 失效/销毁）由共享 SessionManager 托管；
+   * 构造（resolveSessionAgentContext + AgentSession.create）与清理（invalidate/destroy）经此注入。
+   */
+  private readonly agents = new SessionManager<AgentSession>({
+    create: (sessionId) => {
+      const ctx = this.resolveSessionAgentContext(sessionId)
+      if (!ctx) {
+        log.error(`创建 Agent 失败，未找到 session=${sessionId}`)
+        return undefined
+      }
+      log.info(`创建 Agent model=${ctx.model} session=${sessionId}`)
+      return AgentSession.create({
+        sessionId,
+        provider: ctx.provider,
+        model: ctx.model,
+        capabilities: ctx.capabilities,
+        project: ctx.project,
+        workingDirectory: ctx.workingDirectory,
+        enabledTools: ctx.enabledTools,
+        modelMetadata: ctx.modelMetadata
+      })
+    },
+    dispose: (sessionId, agent, reason) => {
+      // invalidate=回退重建（下次 ensure 重建），destroy/remove=删除会话
+      if (reason === 'invalidate') agent.invalidate()
+      else agent.destroy()
+      log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
+    }
+  })
 
   // ─── DB CRUD ──────────────────────────────────
 
@@ -51,10 +91,14 @@ export class SessionService {
     return { ...session, workingDirectory, enabledTools }
   }
 
-  /** 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具） */
-  create(projectId?: string | null): Session {
+  /**
+   * 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具）。
+   * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename。
+   */
+  create(params?: SessionCreateParams): Session {
     const id = uuidv7()
-    const pid = projectId ?? null
+    const pid = params?.projectId ?? null
+    const notebookPath = params?.notebookPath
     const project = pid ? projectDao.pick(pid, ['path', 'settings']) : undefined
     const enabledTools = project?.settings?.enabledTools
       ? filterAvailableTools(project.settings.enabledTools, project.path)
@@ -63,13 +107,13 @@ export class SessionService {
 
     const session: Session = {
       id,
-      title: t('agent.defaultTitle'),
+      title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
       projectId: pid,
       provider: this.getDefaultProvider(),
       model: this.getDefaultModel(),
       systemPrompt: settingsDao.findByKey('general.systemPrompt') || '',
       modelMetadata: { enabledTools },
-      settings: {},
+      settings: notebookPath ? { notebookPath } : {},
       createdAt: now,
       updatedAt: now
     }
@@ -172,13 +216,8 @@ export class SessionService {
 
   /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */
   delete(id: string): void {
-    // 先清理运行时 AgentSession
-    const agent = this.agentSessions.get(id)
-    if (agent) {
-      agent.destroy()
-      this.agentSessions.delete(id)
-      log.info(`移除 AgentSession session=${id} 剩余=${this.agentSessions.size}`)
-    }
+    // 先清理运行时 AgentSession（dispose 触发 destroy）
+    this.agents.remove(id, 'destroy')
     // 清理 Telegram 绑定（异步，不阻塞删除）
     import('./telegram').then(({ telegramService }) => {
       telegramService.unbindSession(id).catch(() => {})
@@ -209,28 +248,24 @@ export class SessionService {
 
   // ─── AgentSession 运行时管理 ──────────────────
 
-  /** 获取指定 session 的 AgentSession */
+  /** 获取指定 session 的 AgentSession（不创建） */
   getAgentSession(sessionId: string): AgentSession | undefined {
-    return this.agentSessions.get(sessionId)
+    return this.agents.get(sessionId)
   }
 
-  /** 初始化 Agent（已存在则跳过）；返回会话元信息供前端同步 */
-  initAgent(sessionId: string): AgentInitResult {
+  /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
+   *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。 */
+  private resolveSessionAgentContext(sessionId: string): {
+    provider: string
+    model: string
+    capabilities: ModelCapabilities
+    workingDirectory: string
+    enabledTools: string[]
+    project: Pick<Project, 'path' | 'promptSections' | 'settings'> | undefined
+    modelMetadata: SessionModelMetadata
+  } | null {
     const session = sessionDao.pick(sessionId, ['provider', 'model', 'projectId', 'modelMetadata'])
-    if (!session) {
-      log.error(`创建失败，未找到 session=${sessionId}`)
-      return {
-        success: false,
-        created: false,
-        provider: '',
-        model: '',
-        capabilities: {},
-        modelMetadata: {},
-        workingDirectory: '',
-        enabledTools: []
-      }
-    }
-
+    if (!session) return null
     const provider = session.provider || ''
     const model = session.model || ''
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
@@ -245,42 +280,91 @@ export class SessionService {
       session.modelMetadata.enabledTools ?? [],
       project?.path
     )
-    const meta = {
+    return {
       provider,
       model,
       capabilities,
-      modelMetadata: session.modelMetadata,
-      workingDirectory,
-      enabledTools
-    }
-
-    // 已存在则跳过
-    if (this.agentSessions.has(sessionId)) {
-      return { success: true, created: false, ...meta }
-    }
-
-    log.info(`创建 Agent model=${model} session=${sessionId}`)
-    const agentSession = AgentSession.create({
-      sessionId,
-      provider,
-      model,
-      capabilities,
-      project,
       workingDirectory,
       enabledTools,
+      project,
       modelMetadata: session.modelMetadata
-    })
-    this.agentSessions.set(sessionId, agentSession)
-
-    return { success: true, created: true, ...meta }
+    }
   }
 
-  /** 使指定 session 的 Agent 失效（回退时使用，下次 init 会重建） */
+  /**
+   * 返回会话元信息供前端同步（projectPath / 启用工具 / 模型能力 等）。
+   * **不创建 AgentSession** —— Agent 延迟到用户首次发送消息时（ensureAgentSession）才创建，
+   * 故仅打开会话（含笔记本会话）不会启动 Agent。
+   */
+  initAgent(sessionId: string): AgentInitResult {
+    const ctx = this.resolveSessionAgentContext(sessionId)
+    if (!ctx) {
+      log.error(`初始化失败，未找到 session=${sessionId}`)
+      return {
+        success: false,
+        created: false,
+        provider: '',
+        model: '',
+        capabilities: {},
+        modelMetadata: {},
+        workingDirectory: '',
+        enabledTools: []
+      }
+    }
+    return {
+      success: true,
+      // created 现仅表示「Agent 此刻是否已存在」（已不在 init 时创建）
+      created: this.agents.has(sessionId),
+      provider: ctx.provider,
+      model: ctx.model,
+      capabilities: ctx.capabilities,
+      modelMetadata: ctx.modelMetadata,
+      workingDirectory: ctx.workingDirectory,
+      enabledTools: ctx.enabledTools
+    }
+  }
+
+  /**
+   * 懒创建并返回指定 session 的 AgentSession（已存在直接返回）。
+   * 首次发送消息 / 压缩 / 其它需要运行时 Agent 的操作调用；session 不存在返回 undefined。
+   * 构造逻辑见 SessionManager 的 create 注入（resolveSessionAgentContext + AgentSession.create）。
+   */
+  ensureAgentSession(sessionId: string): Promise<AgentSession | undefined> {
+    return this.agents.ensure(sessionId)
+  }
+
+  /** 使指定 session 的 Agent 失效（回退时使用，下次 ensure 会重建） */
   invalidateAgent(sessionId: string): void {
-    const s = this.agentSessions.get(sessionId)
-    if (s) {
-      s.invalidate()
-      this.agentSessions.delete(sessionId)
+    this.agents.remove(sessionId, 'invalidate')
+  }
+
+  /**
+   * 解析笔记本会话「一次性子智能体」的运行数据（systemPrompt + 工具白名单 + 模型 + 路径），不创建任何运行时。
+   * 仅负责数据存取；信封组装与派发由 runNotebookTask（共享内核）完成。
+   * 复用会话的完整工具集（剔除 ask，面板只读无法应答）+ 完整 systemPrompt + 模型。session 不存在返回 null。
+   */
+  buildNotebookRunParams(sessionId: string): {
+    systemPrompt: string
+    /** 子代理工具白名单（buildSubAgentTools 按名解析） */
+    tools: string[]
+    modelConfig: SubAgentModelConfig
+    /** 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）；供注入上下文告知子代理 */
+    notebookPath: string
+  } | null {
+    const ctx = this.resolveSessionAgentContext(sessionId)
+    if (!ctx) return null
+    const notebookPath = sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath ?? ''
+    // 子代理工具白名单（buildSubAgentTools 按名解析）：内置工具与主 Agent 一致全量（剔除 ask，
+    // 面板只读无法应答）+ 会话启用的 mcp:/skill:（enabledTools 仅存这两类，内置默认全开不入表）。
+    const builtinNames = getBuiltinToolEntries()
+      .filter((e) => e.factory && e.name !== 'ask')
+      .map((e) => e.name)
+    const mcpSkill = ctx.enabledTools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
+    return {
+      systemPrompt: buildSystemPrompt(ctx.project, ctx.workingDirectory, sessionId),
+      tools: [...builtinNames, ...mcpSkill],
+      modelConfig: { provider: ctx.provider, model: ctx.model, capabilities: ctx.capabilities },
+      notebookPath
     }
   }
 
@@ -291,7 +375,7 @@ export class SessionService {
    * 所有类型的用户输入(审批 / 选择题 / SSH 凭证)都走这一个路径。
    */
   respondToInput(requestId: string, response: InputResponse): void {
-    for (const session of this.agentSessions.values()) {
+    for (const session of this.agents.values()) {
       if (session.respondToInput(requestId, response)) return
     }
   }
@@ -302,7 +386,7 @@ export class SessionService {
    * 实现：对每个会话用其当前 enabledTools 触发 setEnabledTools，间接重跑 buildTools。
    */
   rebuildToolsForAllSessions(): void {
-    for (const [sid, agentSession] of this.agentSessions) {
+    for (const [sid, agentSession] of this.agents.entries()) {
       const session = sessionDao.pick(sid, ['modelMetadata', 'projectId'])
       const projectPath = session?.projectId
         ? projectDao.pick(session.projectId, ['path'])?.path

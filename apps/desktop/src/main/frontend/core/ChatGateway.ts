@@ -24,6 +24,16 @@ export interface ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void>
 
+  /**
+   * 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。
+   * 上下文注入「当前笔记本文件路径 + 如需正文先用 read 读取」（路径由会话配置解析）。
+   */
+  notebookPrompt(
+    sessionId: string,
+    text: string,
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+  ): void
+
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
 

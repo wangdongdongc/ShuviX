@@ -7,7 +7,10 @@
 
 // ── 注入口 ──
 export { getChatApi, setChatApi } from './api/chatApi'
-export type { ChatApi } from './api/chatApi'
+export { getSessionChannelApi, setSessionChannelApi, getHostApi } from './api/chatApi'
+export type { ChatApi, SessionChannelApi, HostApi } from './api/chatApi'
+export { getChannelBindingApi, setChannelBindingApi } from './api/chatApi'
+export type { ChannelBindingApi } from './api/chatApi'
 export { ChatHostProvider } from './host/ChatHost'
 export { useChatHost } from './host/chatHostContext'
 export type {

@@ -8,7 +8,9 @@
     "paths": {
       "@shuvix/chat-protocol/*": ["../chat-protocol/src/*"],
       "@shuvix/chat-ui": ["../chat-ui/src/index.ts"],
-      "@shuvix/chat-ui/*": ["../chat-ui/src/*"]
+      "@shuvix/chat-ui/*": ["../chat-ui/src/*"],
+      "@shuvix/atomic-editor": ["../atomic-editor/src/index.ts"],
+      "@shuvix/atomic-editor/code-languages": ["../atomic-editor/src/code-languages.ts"]
     }
   }
 }

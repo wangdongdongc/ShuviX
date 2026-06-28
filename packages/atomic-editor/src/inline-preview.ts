@@ -56,6 +56,17 @@ function defaultOnLinkClick(url: string): void {
   }
 }
 
+// Autolinks carry no scheme: a bare email (`a@b.com`) or `www.` host won't
+// route through the OS opener as-is. Normalize to a usable URL so the host's
+// `openExternal` does the right thing (mail client / browser). Explicit
+// schemes (http:, https:, mailto:, …) and `[label](url)` destinations pass through.
+function normalizeLinkUrl(url: string): string {
+  if (/^[a-z][\w+.-]*:/i.test(url)) return url;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(url)) return `mailto:${url}`;
+  if (/^www\./i.test(url)) return `https://${url}`;
+  return url;
+}
+
 const FREEZE_TAIL_MS = 100;
 
 // ---- freeze plumbing -----------------------------------------------------
@@ -424,7 +435,23 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         // Image node falls through to line-based — images have
         // their own widget UX that the line-based reveal fits.
         let shouldHide: boolean;
-        if (LINK_CHILD_SYNTAX.has(node.name)) {
+        // Autolink / bare-email URL: the URL text IS the link's visible
+        // content (`<https://x>`, `<a@b.com>`, or a GFM bare `a@b.com`),
+        // so hiding it would erase the whole link off-line. Only a
+        // bracketed link's destination `[label](url)` — where the URL is
+        // preceded by `(` — is safe to hide; the `label` stays visible.
+        if (
+          node.name === 'URL' &&
+          doc.sliceString(Math.max(0, node.from - 1), node.from) !== '('
+        ) {
+          shouldHide = false;
+          // The URL is the link's sole visible content (autolink / bare email).
+          // Tag it `.cm-atomic-link` so it gets the same trailing open-icon and
+          // click-to-open affordance as a `[label](url)` link.
+          ranges.push(
+            Decoration.mark({ class: 'cm-atomic-link' }).range(node.from, node.to),
+          );
+        } else if (LINK_CHILD_SYNTAX.has(node.name)) {
           let parent = node.node.parent;
           while (parent && parent.name !== 'Link' && parent.name !== 'Image') {
             parent = parent.parent;
@@ -899,13 +926,24 @@ function makeLinkClickHandler(onLinkClick: (url: string) => void): Extension {
 
       const tree = syntaxTree(view.state);
       let node: SyntaxNode | null = tree.resolveInner(pos, 1);
-      while (node && node.name !== 'Link') node = node.parent;
+      // `[label](url)` → Link (URL is a child); `<url>`/`<a@b.com>` → Autolink
+      // (URL child); bare GFM email/URL → a standalone URL node with neither
+      // ancestor. Stop at whichever we hit first.
+      while (
+        node &&
+        node.name !== 'Link' &&
+        node.name !== 'Autolink' &&
+        node.name !== 'URL'
+      ) {
+        node = node.parent;
+      }
       if (!node) return false;
-      const urlNode = node.getChild('URL');
+      const urlNode = node.name === 'URL' ? node : node.getChild('URL');
       if (!urlNode) return false;
 
-      const url = view.state.doc.sliceString(urlNode.from, urlNode.to);
-      if (!url) return false;
+      const raw = view.state.doc.sliceString(urlNode.from, urlNode.to);
+      if (!raw) return false;
+      const url = normalizeLinkUrl(raw);
 
       event.preventDefault();
       event.stopPropagation();

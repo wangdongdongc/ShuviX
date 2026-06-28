@@ -1,10 +1,30 @@
-import { getChatApi, useChatHost } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect, useCallback, useRef } from 'react'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 import i18n from 'i18next'
+
+/**
+ * 写入一条 error_event 消息：宿主端经 HostApi 持久化；渠道端（无 HostApi，只读）
+ * 本地构造仅用于展示——渠道无写权限，但仍需把错误显示给用户。
+ */
+async function reportError(sessionId: string, content: string): Promise<ErrorEventMessage> {
+  const host = getHostApi()
+  if (host) return host.message.addErrorEvent({ sessionId, content })
+  return {
+    id: `local-error-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+    sessionId,
+    content,
+    model: '',
+    createdAt: Date.now(),
+    role: 'system_notify',
+    type: 'error_event',
+    metadata: null
+  }
+}
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -116,7 +136,8 @@ export function useAgentEvents(): void {
         displayName: event.displayName,
         description: event.description,
         systemPrompt: event.systemPrompt,
-        prompt: event.prompt
+        prompt: event.prompt,
+        contextNote: event.contextNote
       })
       // 注：右侧 Sub-agent 面板的自动切换由宿主的 useRightPanelBridge 处理（面板属宿主外壳，不在对话框内）
       return
@@ -134,6 +155,12 @@ export function useAgentEvents(): void {
     if (isSubSession(sid)) {
       const subStore = useSubSessionStore.getState()
       switch (event.type) {
+        case 'user_message': {
+          // 用户追问（继续与子代理对话）：内联到子会话转写
+          const msg = JSON.parse(event.message) as ChatMessage
+          subStore.appendUserMessage(sid, msg)
+          return
+        }
         case 'agent_start':
           subStore.handleAgentStart(sid)
           return
@@ -367,7 +394,7 @@ export function useAgentEvents(): void {
           const currentSession = store.sessions.find((s) => s.id === sid)
           const defaultTitle = i18n.t('agent.defaultTitle')
           const isUntitled = !currentSession || currentSession.title === defaultTitle
-          const sidMsgs = await getChatApi().message.list(sid)
+          const sidMsgs = await getSessionChannelApi().message.list(sid)
           const textMsgCount = sidMsgs.filter(
             (m: ChatMessage) => m.type === 'text' || !m.type
           ).length
@@ -386,8 +413,9 @@ export function useAgentEvents(): void {
               .join('\n')
               .slice(-MAX_CHARS)
             if (conversationText.trim()) {
-              getChatApi()
-                .session.generateTitle({ sessionId: sid, conversationText })
+              // 标题生成会持久化 → 宿主能力；渠道端跳过（由宿主负责生成并广播）
+              getHostApi()
+                ?.session.generateTitle({ sessionId: sid, conversationText })
                 .then((res) => {
                   if (res.title) {
                     useChatStore.getState().updateSessionTitle(sid, res.title)
@@ -417,17 +445,14 @@ export function useAgentEvents(): void {
           store.setMessages(msgs)
         }
         // 后端在压缩结束时 invalidate 了 AgentSession，需要重建以便后续 prompt 生效
-        await getChatApi().agent.init({ sessionId: sid })
+        await getSessionChannelApi().agent.init({ sessionId: sid })
         break
 
       case 'compaction_error':
         store.setCompacting(sid, false)
         // 把压缩失败错误写为一条 error_event 消息,UI 上能看到原因
         {
-          const errorMsg = await getChatApi().message.addErrorEvent({
-            sessionId: sid,
-            content: `压缩失败: ${event.error || 'Unknown error'}`
-          })
+          const errorMsg = await reportError(sid, `压缩失败: ${event.error || 'Unknown error'}`)
           if (sid === store.activeSessionId) store.addMessage(errorMsg)
         }
         break
@@ -444,10 +469,7 @@ export function useAgentEvents(): void {
         store.finishStreaming(sid)
         {
           const content = event.error || 'Unknown error'
-          const errorMsg = await getChatApi().message.addErrorEvent({
-            sessionId: sid,
-            content
-          })
+          const errorMsg = await reportError(sid, content)
           if (sid === store.activeSessionId) {
             store.addMessage(errorMsg)
           }
@@ -459,7 +481,7 @@ export function useAgentEvents(): void {
   // 注册 Agent 事件监听器（仅主窗口）
   useEffect(() => {
     if (isSettingsWindow) return
-    const unsubscribe = getChatApi().agent.onEvent(handleAgentEvent)
+    const unsubscribe = getSessionChannelApi().agent.onEvent(handleAgentEvent)
     return () => {
       unsubscribe()
       // Cancel any pending rAF flush on unmount

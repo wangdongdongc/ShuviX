@@ -53,6 +53,8 @@ export interface SessionSettings {
   allowList?: string[]
   telegramBotId?: string
   enabledInstructionFiles?: string[]
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  notebookPath?: string
 }
 
 export interface Session {
@@ -175,6 +177,22 @@ export interface AgentPromptParams {
   inlineTokens?: Record<string, InlineToken>
 }
 
+/**
+ * 笔记本会话发送：不走主会话，每次 prompt 开启一个独立子智能体；
+ * 子智能体上下文注入「当前笔记本文件路径 + 如需正文先用 read 读取」（路径后端由会话配置解析）。
+ */
+export interface AgentNotebookPromptParams {
+  sessionId: string
+  text: string
+  images?: ImageContentParam[]
+}
+
+/** 继续与已存在子代理对话：向其追加一轮用户消息（复用该子会话的 Agent 与历史） */
+export interface AgentSubAgentPromptParams {
+  subSessionId: string
+  text: string
+}
+
 export interface AgentSteerParams {
   sessionId: string
   text: string
@@ -261,6 +279,15 @@ export interface ProjectUpdateParams {
 
 export interface ProjectDeleteParams {
   id: string
+}
+
+export interface SessionCreateParams {
+  /** 所属项目 ID（null/缺省 = 临时会话） */
+  projectId?: string | null
+  /** 绑定的 md 文件（相对项目根）；提供则创建笔记本会话 */
+  notebookPath?: string
+  /** 会话标题；缺省时聊天会话用默认标题、笔记本会话用文件 basename */
+  title?: string
 }
 
 export interface SessionUpdateTitleParams {
@@ -378,38 +405,122 @@ export interface SlashCommandInfo {
   filePath: string
 }
 
-// ─────────────────────────── ChatApi 接口契约 ───────────────────────────
+// ─────────────────────────── 契约分层 ───────────────────────────
+//
+// 三层正交契约（见 docs / 设计讨论）：
+//
+//   SessionChannelApi  ── 「把单个会话同步给某个渠道」所需的最小操作集：看 + 发。
+//                         每个端（桌面 / WebUI / Telegram / 扩展）都实现。纯会话维度，
+//                         全部只读或发消息，**不含任何改配置 / 管理类能力**。
+//   HostApi            ── 应用级管理能力（provider / project / settings / mcp / pinChat /
+//                         update / config / compact，以及所有会改持久状态的方法）。
+//                         仅完整宿主（桌面）实现；渠道端取不到 → 相关 UI 自动隐藏。
+//   ChannelBindingApi  ── 宿主侧「把会话绑到哪些渠道」（见 ./channelBindingApi.ts）。桌面专属。
+//
+//   ChatApi = SessionChannelApi & HostApi —— 完整宿主对外暴露的全集（形状与历史一致）。
+//
+// 渠道端只需实现 SessionChannelApi；chat-ui 对话核心仅依赖它，宿主功能经 getHostApi() 降级。
 
-/** 聊天前端实际依赖的后端命名空间子集 */
-export interface ChatApi {
+/**
+ * 单会话渠道契约 —— 渲染并驱动**一个**会话所需的最小后端能力（只读 + 发消息）。
+ * 注意：这里**没有**任何 setModel / 改配置 / 新建删除会话 / 应用设置 —— 渠道端无权这些。
+ */
+export interface SessionChannelApi {
   app: {
     platform: 'darwin' | 'win32' | 'linux' | 'web'
-    openSettings: (tab?: string) => Promise<{ success: boolean }>
+    /** 用系统默认浏览器打开外部链接 */
     openExternal: (url: string) => Promise<{ success: boolean }>
-    openFolder: (folderPath: string) => Promise<{ success: boolean }>
-    adjustWindowWidth: (delta: number) => Promise<void>
-    setBrowserOffset: (offset: number) => Promise<void>
-    windowReady: () => void
-    // 设置变更订阅已并入通用 events.subscribe（AppEvent 'settings.changed'）
-    onNewChat: (callback: () => void) => () => void
-    onNewProject: (callback: () => void) => () => void
   }
   agent: {
     init: (params: AgentInitParams) => Promise<AgentInitResult>
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
+    /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，进展走事件流） */
+    notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
+    /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，进展走事件流） */
+    subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
-    setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
-    setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
       response: InputResponse
     }) => Promise<{ success: boolean }>
+    onEvent: (callback: (event: ChatEvent) => void) => () => void
+  }
+  session: {
+    /** 只读单个会话（含计算属性）。渠道端不得 list/create/delete/改配置 */
+    getById: (id: string) => Promise<SessionInfo | null>
+  }
+  message: {
+    list: (sessionId: string) => Promise<ChatMessage[]>
+    countArchived: (sessionId: string) => Promise<number>
+    listArchived: (params: {
+      sessionId: string
+      limit: number
+      offset: number
+    }) => Promise<ChatMessage[]>
+  }
+  runtime: {
+    statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
+  }
+  tools: {
+    list: (sessionId?: string) => Promise<ToolInfo[]>
+    presentations: () => Promise<Record<string, ToolPresentation>>
+  }
+  command: {
+    list: (params: { sessionId: string | null }) => Promise<SlashCommandInfo[]>
+  }
+  /** 工作目录文件浏览（只读）：扫描 + 预览读取。回写属 HostApi。 */
+  files: {
+    scan: (params: { sessionId: string }) => Promise<{
+      paths: string[]
+      truncated: boolean
+      root: string | null
+    }>
+    read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
+  }
+  /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
+  events: {
+    subscribe: (callback: (event: AppEvent) => void) => () => void
+  }
+  /** 语音转文字 */
+  stt: {
+    transcribe: (params: {
+      audioData: string
+      pcmf32?: string
+      language?: string
+    }) => Promise<{ text: string }>
+  }
+  /** 文字转语音 */
+  tts: {
+    speakOnce: (params: { text: string }) => Promise<void>
+    abortTts: () => Promise<void>
+    onChunk: (callback: (data: { filePath: string; index: number }) => void) => () => void
+  }
+}
+
+/**
+ * 宿主应用级能力 —— 仅完整宿主（桌面）实现。
+ * 含应用管理（provider/project/settings/mcp/pinChat/update/config/compact）
+ * 以及一切会改持久状态的方法（会话配置 setter、消息写操作、文件回写、模型切换等）。
+ * 渠道端取不到（getHostApi() 返回 null），对应 UI 自动隐藏。
+ */
+export interface HostApi {
+  app: {
+    openSettings: (tab?: string) => Promise<{ success: boolean }>
+    openFolder: (folderPath: string) => Promise<{ success: boolean }>
+    adjustWindowWidth: (delta: number) => Promise<void>
+    setBrowserOffset: (offset: number) => Promise<void>
+    windowReady: () => void
+    onNewChat: (callback: () => void) => () => void
+    onNewProject: (callback: () => void) => () => void
+  }
+  agent: {
+    setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+    setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
     setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{
       success: boolean
     }>
-    onEvent: (callback: (event: ChatEvent) => void) => () => void
   }
   provider: {
     listAll: () => Promise<ProviderInfo[]>
@@ -439,11 +550,10 @@ export interface ChatApi {
     update: (params: ProjectUpdateParams) => Promise<{ success: boolean }>
     delete: (params: ProjectDeleteParams) => Promise<{ success: boolean }>
     getKnownFields: () => Promise<Record<string, ConfigMeta>>
-    // 变更订阅已并入通用 events.subscribe（AppEvent 'project.changed'）
   }
   session: {
     list: () => Promise<Session[]>
-    create: (projectId?: string | null) => Promise<Session>
+    create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
@@ -462,16 +572,13 @@ export interface ChatApi {
       conversationText: string
     }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
-    getById: (id: string) => Promise<SessionInfo | null>
     scanInstructionFiles: (sessionId: string) => Promise<InstructionFileEntry[]>
     updateInstructionFiles: (params: {
       id: string
       filenames: string[]
     }) => Promise<{ success: boolean }>
-    // 配置变更订阅已并入通用 events.subscribe（AppEvent 'session.configChanged'）
   }
   message: {
-    list: (sessionId: string) => Promise<ChatMessage[]>
     add: (params: MessageAddParams) => Promise<ChatMessage>
     addErrorEvent: (params: { sessionId: string; content: string }) => Promise<ErrorEventMessage>
     deleteErrorEvent: (params: {
@@ -481,12 +588,6 @@ export interface ChatApi {
     clear: (sessionId: string) => Promise<{ success: boolean }>
     rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
     deleteFrom: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
-    countArchived: (sessionId: string) => Promise<number>
-    listArchived: (params: {
-      sessionId: string
-      limit: number
-      offset: number
-    }) => Promise<ChatMessage[]>
   }
   settings: {
     getAll: () => Promise<Record<string, string>>
@@ -507,7 +608,7 @@ export interface ChatApi {
     setCustomSections: (sections: ProjectPromptSection[]) => Promise<{ success: boolean }>
     previewBuiltinSection: (params: { id: string; sessionId?: string }) => Promise<string>
   }
-  /** 配置分享：Provider + MCP 配置导出/导入为可粘贴串（桌面 DAO / 扩展 chrome.storage） */
+  /** 配置分享：Provider + MCP 配置导出/导入为可粘贴串 */
   config: {
     buildExportSnapshot: () => Promise<ExportSnapshot>
     buildExportPayload: (options: ExportOptions) => Promise<string>
@@ -519,17 +620,17 @@ export interface ChatApi {
     }) => Promise<ImportResult>
   }
   runtime: {
-    statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
     destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
   }
-  tools: {
-    list: (sessionId?: string) => Promise<ToolInfo[]>
-    presentations: () => Promise<Record<string, ToolPresentation>>
+  /** 文件回写（属管理类，渠道端无权） */
+  files: {
+    write: (params: {
+      sessionId: string
+      path: string
+      content: string
+    }) => Promise<{ ok: true } | { ok: false; error: string }>
   }
-  command: {
-    list: (params: { sessionId: string | null }) => Promise<SlashCommandInfo[]>
-  }
-  /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询（桌面 window.api.mcp / 扩展 chrome.storage） */
+  /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询 */
   mcp: {
     list: () => Promise<McpServerInfo[]>
     add: (params: McpServerAddParams) => Promise<{ success: boolean }>
@@ -542,35 +643,6 @@ export interface ChatApi {
   compact: {
     start: (sessionId: string) => Promise<unknown>
   }
-  webui: {
-    setShared: (params: {
-      sessionId: string
-      shared: boolean
-      mode?: ShareMode
-    }) => Promise<{ success: boolean }>
-    isShared: (sessionId: string) => Promise<boolean>
-    getShareMode: (sessionId: string) => Promise<ShareMode | null>
-    listShared: () => Promise<Array<{ sessionId: string; mode: ShareMode }>>
-    serverStatus: () => Promise<{ running: boolean; port?: number; urls?: string[] }>
-  }
-  telegram: {
-    listBots: () => Promise<TelegramBotInfo[]>
-    addBot: (params: TelegramBotAddParams) => Promise<TelegramBotInfo>
-    updateBot: (params: TelegramBotUpdateParams) => Promise<{ success: boolean }>
-    deleteBot: (id: string) => Promise<{ success: boolean }>
-    validateToken: (token: string) => Promise<{
-      valid: boolean
-      username?: string
-      id?: number
-      error?: string
-    }>
-    bindSession: (params: TelegramBindSessionParams) => Promise<{ success: boolean }>
-    unbindSession: (params: TelegramUnbindSessionParams) => Promise<{ success: boolean }>
-    getSessionBotId: (sessionId: string) => Promise<string | null>
-    startBot: (botId: string) => Promise<{ success: boolean }>
-    stopBot: (botId: string) => Promise<{ success: boolean }>
-    getBotStatus: (botId: string) => Promise<{ running: boolean }>
-  }
   pinChat: {
     pin: (sessionId: string) => Promise<{ success: boolean }>
     unpin: (sessionId: string) => Promise<{ success: boolean }>
@@ -581,7 +653,6 @@ export interface ChatApi {
       value: boolean
     }) => Promise<{ alwaysOnTop: boolean }>
     getAlwaysOnTop: (sessionId: string) => Promise<{ alwaysOnTop: boolean }>
-    // 悬浮状态变更订阅已并入通用 events.subscribe（AppEvent 'pinChat.changed'）
   }
   update: {
     check: () => Promise<{ success: boolean }>
@@ -590,41 +661,11 @@ export interface ChatApi {
     getLastEvent: () => Promise<UpdateEvent | null>
     onEvent: (callback: (event: UpdateEvent) => void) => () => void
   }
-  /** 通用内部事件订阅（后端发布的全局状态事件，与 agent.onEvent 并列）。见 docs/internal-events.md */
-  events: {
-    subscribe: (callback: (event: AppEvent) => void) => () => void
-  }
-  /** 工作目录文件浏览（右侧面板 Files tab）。桌面走 Node fs + 文件监听；
-   *  扩展走 File System Access（无原生监听 → onChanged 为空操作，靠手动刷新）。 */
-  files: {
-    /** 扫描当前会话工作目录下的所有文件相对路径（遵循忽略规则），root 为工作目录标识 */
-    scan: (params: { sessionId: string }) => Promise<{
-      paths: string[]
-      truncated: boolean
-      root: string | null
-    }>
-    /** 读取文件内容用于面板预览（沙箱外返回 not-allowed，不弹审批） */
-    read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
-    /** 回写文件内容（沙箱外返回 ok:false，不弹审批） */
-    write: (params: {
-      sessionId: string
-      path: string
-      content: string
-    }) => Promise<{ ok: true } | { ok: false; error: string }>
-    // 文件变动订阅已并入通用 events.subscribe（AppEvent 'files.changed'），见 docs/internal-events.md
-  }
-  /** 语音转文字 —— chat-ui 仅用 transcribe（其余 stt 能力由宿主自行扩展） */
-  stt: {
-    transcribe: (params: {
-      audioData: string
-      pcmf32?: string
-      language?: string
-    }) => Promise<{ text: string }>
-  }
-  /** 文字转语音 —— chat-ui 仅用 onChunk/speakOnce/abortTts */
-  tts: {
-    speakOnce: (params: { text: string }) => Promise<void>
-    abortTts: () => Promise<void>
-    onChunk: (callback: (data: { filePath: string; index: number }) => void) => () => void
-  }
 }
+
+/**
+ * 完整宿主契约 = 单会话渠道能力 + 应用级管理能力。
+ * 形状与历史 ChatApi 一致（混合命名空间如 app/agent/session/message/runtime/files
+ * 由两侧交集合并），故现有消费方无感。
+ */
+export type ChatApi = SessionChannelApi & HostApi

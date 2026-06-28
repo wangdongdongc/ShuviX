@@ -30,6 +30,14 @@ export const shuvixPreviewResolver: ResolveMediaUrl = ({ sessionId, path }) => (
 })
 
 /**
+ * 取注入的媒体 URL 解析器本体（可能为 null）。用于无法用 useMediaUrl（每路径一 hook）的场景，
+ * 如笔记本编辑器内 `![[image]]` 内嵌：需在 CM6 同步回调中按需解析任意多张图片并自管缓存。
+ */
+export function useResolveMediaUrl(): ResolveMediaUrl | null {
+  return useContext(MediaUrlContext)
+}
+
+/**
  * 解析媒体/PDF 资源 URL。未就绪返回 null（调用方显示占位/loading）。
  * 异步来源(blob)在 path/session 变化或卸载时自动 revoke，避免内存泄漏。
  */

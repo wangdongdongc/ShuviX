@@ -15,7 +15,8 @@ import {
   FilesPanel,
   SubAgentPanel,
   MediaUrlProvider,
-  shuvixPreviewResolver
+  shuvixPreviewResolver,
+  useCreateNotebook
 } from '@shuvix/app-shell'
 import { WidgetPanel } from './WidgetPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
@@ -54,6 +55,8 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
   const focusMode = useSettingsStore((s) => s.focusMode)
   /** 专注模式生效条件：开关打开 + 已选中主会话 → 淡化未选中 tab */
   const dim = focusMode && !!activeSessionId
+  /** 「创建笔记本」处理器（共享逻辑：建笔记本会话 + 刷新 + 选中） */
+  const createNotebook = useCreateNotebook()
 
   // 当前主会话下的子会话数（共享 useSubAgentCount）—— >0 才显示 Sub-agent tab
   const subAgentCount = useSubAgentCount(activeSessionId)
@@ -178,9 +181,9 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
             activeTab === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
           }
         >
-          {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；.md 与其它文本一致走内联覆盖预览（与扩展端保持一致） */}
+          {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；.md 预览顶栏可「创建笔记本」绑定该文件 */}
           <MediaUrlProvider value={shuvixPreviewResolver}>
-            <FilesPanel />
+            <FilesPanel onCreateNotebook={createNotebook} />
           </MediaUrlProvider>
         </div>
         <div

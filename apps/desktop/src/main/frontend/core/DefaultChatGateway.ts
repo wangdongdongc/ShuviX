@@ -14,6 +14,8 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
+import { agentManager } from '../../agents/AgentManager'
+import { runNotebookTask } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 
 /**
@@ -32,7 +34,8 @@ export class DefaultChatGateway implements ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
   ): Promise<void> {
-    const session = sessionService.getAgentSession(sessionId)
+    // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
+    const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
@@ -66,6 +69,27 @@ export class DefaultChatGateway implements ChatGateway {
     })
     // 发送展开后的 prompt 给 Agent
     await session.prompt(promptText, images)
+  }
+
+  /**
+   * 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。
+   * 当前笔记本内容作为一条独立 user message 注入子代理上下文（在 text 之前）。
+   * 进展经 sub_session_* / 流式事件呈现在右侧 Sub-agent 面板。
+   */
+  notebookPrompt(
+    sessionId: string,
+    text: string,
+    _images?: Array<{ type: 'image'; data: string; mimeType: string }>
+  ): void {
+    const params = sessionService.buildNotebookRunParams(sessionId)
+    if (!params) {
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
+      return
+    }
+    // 信封组装 + fire-and-forget 派发由共享内核完成；此处仅供数据 + 错误落点
+    runNotebookTask(agentManager, { sessionId, text, ...params }, (error) =>
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
+    )
   }
 
   steer(sessionId: string, text: string): void {

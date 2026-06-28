@@ -13,10 +13,47 @@ import {
   StateEffect,
   StateField
 } from '@codemirror/state'
-import { Decoration, type DecorationSet, EditorView, WidgetType } from '@codemirror/view'
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  WidgetType
+} from '@codemirror/view'
 
 /** 文件列表异步就绪后由外部 dispatch，触发内嵌装饰重算 */
 export const refreshEmbeds = StateEffect.define<null>()
+
+/**
+ * 图片异步加载完成后请求 CM 重新测量行高。
+ *
+ * atomic-editor 的图片块（`![](url)`）与本文件的 `![[wiki]]` 内嵌都把 `<img>` 当块级 widget。
+ * 图片 decode 完才有真实高度，但若不通知 CM，块级 widget 在高度图里仍按加载前(≈0)记账，
+ * 导致其下方 posAtCoords（坐标→文档位置）映射偏移——鼠标点击落点与文本光标错位，
+ * 且上方图片越多累积越大。`<img>` 的 load 事件不冒泡，故在编辑器根上用捕获阶段统一监听，
+ * 任一图片 load/error 即请求重测，覆盖两种图片来源。
+ */
+export const imageLoadRemeasure: Extension = ViewPlugin.fromClass(
+  class {
+    private readonly onLoad: (e: Event) => void
+    constructor(private readonly view: EditorView) {
+      this.onLoad = (e: Event): void => {
+        const target = e.target as HTMLElement | null
+        // 冷缓存首次加载时图片由 0 撑开，请求重测让 CM 回填块级 widget 高度（暖缓存已由
+        // EmbedImageWidget 预留尺寸，无跳变）。注意：盒子留白须用 padding 而非 margin，
+        // 否则外边距空隙永远统计不进高度图，重测也无济于事（见 atomic-panel.css 内嵌图片规则）。
+        if (target && target.tagName === 'IMG') this.view.requestMeasure()
+      }
+      // load/error 不冒泡，须 capture=true 才能在根节点收到子孙 <img> 的事件
+      view.dom.addEventListener('load', this.onLoad, true)
+      view.dom.addEventListener('error', this.onLoad, true)
+    }
+    destroy(): void {
+      this.view.dom.removeEventListener('load', this.onLoad, true)
+      this.view.dom.removeEventListener('error', this.onLoad, true)
+    }
+  }
+)
 
 /** 项目文件名 → 绝对路径 的查表（按文件名全局匹配，类 Obsidian） */
 export interface FileMap {
@@ -64,6 +101,14 @@ export interface WikiEmbedConfig {
 /** 整行恰好是单个 ![[...]]（允许 |alias） */
 const SINGLE_EMBED_RE = /^!\[\[([^\]\n|]+?)(?:\|[^\]\n]*)?\]\]$/
 
+/**
+ * 已观测到的图片自然尺寸缓存（按 URL）。块级 widget 若不预留正确高度，
+ * 图片 decode 后才从 0 撑开，CM 高度图来不及回填 → 其下方坐标→位置映射偏移、点击错位。
+ * 仿 atomic-editor imageBlocks：从缓存把自然宽高写入 width/height 属性，挂载即预留正确比例的盒子
+ * （CSS `max-width:100%; height:auto` 仍按列宽缩放），重挂载不再有「先 0 后撑开」的跳变。
+ */
+const embedDimCache = new Map<string, { w: number; h: number }>()
+
 class EmbedImageWidget extends WidgetType {
   constructor(
     readonly src: string,
@@ -82,6 +127,17 @@ class EmbedImageWidget extends WidgetType {
     img.src = this.src
     img.alt = this.alt
     img.loading = 'lazy'
+    const cached = embedDimCache.get(this.src)
+    if (cached) {
+      img.width = cached.w
+      img.height = cached.h
+    } else {
+      img.addEventListener('load', () => {
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          embedDimCache.set(this.src, { w: img.naturalWidth, h: img.naturalHeight })
+        }
+      })
+    }
     wrap.appendChild(img)
     // 点击图片把光标落到源行 → 露出 ![[...]] 原文便于编辑
     wrap.addEventListener('mousedown', (e) => {
