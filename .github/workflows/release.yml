@@ -53,8 +53,12 @@ jobs:
         working-directory: apps/desktop
         run: npx electron-vite build && npm run build:webui && npx electron-builder --${{ matrix.platform }} --publish never
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # CSC_LINK 是 electron-builder 通用签名证书变量，不区分平台。
+          # 只在 mac runner 注入 Apple Developer ID 证书；Windows 必须留空，否则
+          # electron-builder 会用 Apple 证书给 setup.exe 签名，导致 electron-updater
+          # 在 Windows 校验时证书链连不到受信根（Apple CA 不在 Windows 信任库），更新被拒。
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || '' }}
           # 构建阶段先跳过公证，由下一步单独处理（支持重试）
           MAC_NOTARIZE: false
 
