@@ -169,19 +169,32 @@ jobs:
             bash -c '
               set -e
 
+              # CI 网络抖动重试帮手（最多 5 次，间隔 5s）
+              retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i failed: $*"; sleep 5; done; return 1; }
+
               # 基础构建工具
-              apt-get update
+              retry apt-get update
               apt-get install -y curl build-essential python3 fakeroot dpkg rpm git software-properties-common
 
               # GCC 11（Electron 39 头文件需要 <source_location>，GCC 10 不支持）
-              add-apt-repository -y ppa:ubuntu-toolchain-r/test
-              apt-get update
+              # 不用 add-apt-repository：它走 GPG keyserver 协议拉公钥，CI 里经常
+              # "retrieving gpg key timed out"。改用 HTTPS 直接拉 PPA 公钥再手动写 source。
+              fetch_gcc_key() {
+                curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x60C317803A41BA51845E371A1E9377A2BA9EF27F" -o /tmp/gcc-ppa.key \
+                  && gpg --dearmor < /tmp/gcc-ppa.key > /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg
+              }
+              retry fetch_gcc_key
+              # 只取 amd64（host 编译器）；arm64 交叉编译器来自 ports.ubuntu.com，不依赖此 PPA
+              echo "deb [arch=amd64] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu focal main" \
+                > /etc/apt/sources.list.d/ubuntu-toolchain-r.list
+              retry apt-get update
               apt-get install -y gcc-11 g++-11
               update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
               update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
 
               # 安装 Node.js 22
-              curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+              retry curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh
+              bash /tmp/nodesource.sh
               apt-get install -y nodejs
 
               # arm64 交叉编译工具链
@@ -190,7 +203,7 @@ jobs:
               echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list.d/arm64.list
               echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
               echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
-              apt-get update
+              retry apt-get update
               apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
 
               # npm ci 在 workspace 根安装；构建命令在 apps/desktop 跑（配置在那里）
