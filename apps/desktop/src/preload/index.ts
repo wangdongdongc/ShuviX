@@ -40,7 +40,6 @@ import type {
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
-  ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
   TelegramBindSessionParams,
@@ -104,6 +103,14 @@ const api = {
     /** 继续与已存在子代理对话：追加一轮用户消息 */
     subAgentPrompt: (params: AgentSubAgentPromptParams) =>
       ipcRenderer.invoke('agent:subAgentPrompt', params),
+
+    /** 销毁子会话 — 中止运行中的 Agent 并清理服务端 registry */
+    subSessionDestroy: (subSessionId: string) =>
+      ipcRenderer.invoke('subSession:destroy', subSessionId),
+
+    /** 中断子会话 — 软停止生成、保留部分结果，子会话以「已完成」收尾 */
+    subSessionInterrupt: (subSessionId: string) =>
+      ipcRenderer.invoke('subSession:interrupt', subSessionId),
 
     /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
     steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
@@ -298,16 +305,11 @@ const api = {
     openFolder: () => ipcRenderer.invoke('subAgent:openFolder')
   },
 
-  // ============ 临时子会话（右侧 Sub-agent 面板） ============
-  subSession: {
-    /** 销毁指定子会话 — 中止运行中的 Agent 并清理服务端 registry */
-    destroy: (subSessionId: string) => ipcRenderer.invoke('subSession:destroy', subSessionId)
-  },
-
   // ============ 工具 ============
   tools: {
     list: (sessionId?: string) => ipcRenderer.invoke('tools:list', sessionId),
-    presentations: () => ipcRenderer.invoke('tools:presentations')
+    presentations: () => ipcRenderer.invoke('tools:presentations'),
+    definitions: () => ipcRenderer.invoke('tools:definitions')
   },
 
   // ============ MCP Host（ShuviX 对外 MCP 服务） ============
@@ -372,16 +374,14 @@ const api = {
     getTools: (id: string) => ipcRenderer.invoke('mcp:getTools', id)
   },
 
-  // ============ WebUI 分享 ============
+  // ============ WebUI 分享（一律「仅查看」，无模式之分） ============
   webui: {
-    /** 切换指定 session 的分享状态 */
-    setShared: (params: { sessionId: string; shared: boolean; mode?: ShareMode }) =>
+    /** 切换指定 session 的分享状态（仅查看） */
+    setShared: (params: { sessionId: string; shared: boolean }) =>
       ipcRenderer.invoke('webui:setShared', params),
     /** 查询单个 session 是否已分享 */
     isShared: (sessionId: string) => ipcRenderer.invoke('webui:isShared', sessionId),
-    /** 获取指定 session 的分享模式 */
-    getShareMode: (sessionId: string) => ipcRenderer.invoke('webui:getShareMode', sessionId),
-    /** 获取所有已分享的 session 列表（含模式） */
+    /** 获取所有已分享的 session id 列表 */
     listShared: () => ipcRenderer.invoke('webui:listShared'),
     /** 获取 WebUI 服务器状态 */
     serverStatus: () => ipcRenderer.invoke('webui:serverStatus')

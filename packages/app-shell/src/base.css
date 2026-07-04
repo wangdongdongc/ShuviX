@@ -472,13 +472,16 @@ body {
 }
 
 /* —— 表格 —— */
+/* 宽表格在窄视口(扩展侧栏 / webui 手机)下应独立横向滚动，而非把整列撑出视口裁掉正文。
+   GitHub markdown 同方案：display:block + width:max-content + max-width:100% + overflow-x:auto。 */
 .markdown-body table {
   border-collapse: collapse;
   margin: 0.5em 0;
   font-size: 0.9em;
-  display: table;
-  width: 100%;
+  display: block;
+  width: max-content;
   max-width: 100%;
+  overflow-x: auto;
   table-layout: auto;
 }
 

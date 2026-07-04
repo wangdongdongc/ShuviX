@@ -137,9 +137,14 @@ export function useAgentEvents(): void {
         description: event.description,
         systemPrompt: event.systemPrompt,
         prompt: event.prompt,
+        promptInlineTokens: event.inlineTokens,
         contextNote: event.contextNote
       })
-      // 注：右侧 Sub-agent 面板的自动切换由宿主的 useRightPanelBridge 处理（面板属宿主外壳，不在对话框内）
+      // 当前会话起子代理 → 发「显示子智能体面板」信号（事件检测统一在此；各宿主订阅 chatStore
+      // .subAgentRevealRequest 后打开自己的右侧面板并切到 subagent tab，面板 store 各端不同故由宿主实现）
+      if (event.parentSessionId === useChatStore.getState().activeSessionId) {
+        useChatStore.getState().requestSubAgentReveal(event.sessionId)
+      }
       return
     }
     if (event.type === 'sub_session_end') {

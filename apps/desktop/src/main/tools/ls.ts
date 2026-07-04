@@ -37,12 +37,14 @@ const LsParamsSchema = Type.Object({
   )
 })
 
+const LS_DESCRIPTION =
+  'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.'
+
 /** ls 工具 */
 export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly name = 'ls'
   readonly label = t('tool.lsLabel')
-  readonly description =
-    'Lists files and directories in a given path as a tree structure. Uses ripgrep to respect .gitignore rules automatically. The path parameter is optional and defaults to the current working directory. Use the ignore parameter to exclude additional patterns.'
+  readonly description = LS_DESCRIPTION
   readonly parameters = LsParamsSchema
   readonly outputStrategy = 'tail' as const
 
@@ -146,5 +148,6 @@ registerBuiltinTool({
   presentation: {
     icon: 'FolderTree',
     summaryField: 'path'
-  }
+  },
+  describe: () => ({ description: LS_DESCRIPTION, parameters: LsParamsSchema })
 })

@@ -1,3 +1,4 @@
+import { completionStatus } from '@codemirror/autocomplete';
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
 import {
@@ -67,7 +68,12 @@ function normalizeLinkUrl(url: string): string {
   return url;
 }
 
-const FREEZE_TAIL_MS = 100;
+// Buffer after mouse release before the freeze lifts and the active line
+// reveals its raw source. The real anti-shift protection is the freeze held
+// during pointerdown→pointerup; this tail is just a small settle buffer, so
+// keep it short for a snappy reveal (keyboard cursor moves reveal instantly —
+// they never freeze).
+const FREEZE_TAIL_MS = 40;
 
 // ---- freeze plumbing -----------------------------------------------------
 
@@ -224,6 +230,19 @@ const INLINE_MARK_CLASS: Record<string, string> = {
   Link: 'cm-atomic-link',
 };
 
+// Inline constructs whose delimiter marks reveal LOCALLY — only when the
+// cursor touches that specific span (Obsidian-style), not merely its line.
+// Their marks (`**`, `*`, `` ` ``, `~~`) route through `activeInlineStarts`
+// instead of the line-based rule. Block/line constructs (headings, quotes,
+// fenced code) keep the line-based reveal. `Link` has its own set
+// (`activeLinkStarts`) since its children are handled on a separate path.
+const INLINE_REVEAL_NODES = new Set([
+  'Emphasis',
+  'StrongEmphasis',
+  'InlineCode',
+  'Strikethrough',
+]);
+
 class BulletWidget extends WidgetType {
   eq(): boolean {
     return true;
@@ -266,6 +285,14 @@ class TaskCheckboxWidget extends WidgetType {
     input.checked = this.checked;
     input.className = 'cm-atomic-list-marker cm-atomic-task-checkbox';
     input.setAttribute('contenteditable', 'false');
+    // Read-only viewer: render the checkbox as a non-interactive marker.
+    // `disabled` blocks the native toggle, and we skip wiring the click
+    // handler so a tick can't mutate the doc via a direct dispatch
+    // (EditorState.readOnly only guards commands, not manual dispatch).
+    if (view.state.readOnly) {
+      input.disabled = true;
+      return input;
+    }
     input.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -343,6 +370,26 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
     }
   }
 
+  // Does any selection range touch [from, to] (inclusive on both ends, so a
+  // cursor sitting exactly on a boundary counts as inside — the next
+  // keystroke would affect that span)? Only while focused. This is the core
+  // predicate for Obsidian-style LOCAL reveal: a specific span reveals its
+  // source when the cursor is on it, independent of the rest of the line.
+  const selTouches = (from: number, to: number): boolean =>
+    view.hasFocus &&
+    state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+
+  // The inner `[label]` of a `[[label]]` wiki-link is parsed by lezer as its
+  // own Link node. Leave it ENTIRELY to the wiki-links extension — don't
+  // style or hide it here. Otherwise the two extensions fight: when the
+  // wiki-link reveals its raw source, inline-preview would still hide the
+  // INNER brackets, leaving only one visible `[ ]` layer. Detected by the
+  // extra `[` immediately before and `]` immediately after the Link node.
+  const isWikiWrappedLink = (from: number, to: number): boolean =>
+    from >= 1 &&
+    doc.sliceString(from - 1, from) === '[' &&
+    doc.sliceString(to, to + 1) === ']';
+
   // Decorate the whole parsed tree — not the current viewport — so
   // that scrolling never needs to rebuild the decoration set. Prior
   // design walked viewport-only and rebuilt on every scroll, which
@@ -370,6 +417,11 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
   // aren't included; they already have their own widget UX and the
   // line-based reveal is the right fit for `![alt](url)`.
   const activeLinkStarts = new Set<number>();
+
+  // Starts of inline constructs (Emphasis/StrongEmphasis/InlineCode/
+  // Strikethrough) the cursor is currently touching — their marks reveal.
+  // Populated in the same pre-order walk (parent entered before its marks).
+  const activeInlineStarts = new Set<number>();
 
   // Single pre-order walk. A tree walk visits a parent before its
   // children, which lets us compute two pieces of look-ahead state on
@@ -401,16 +453,18 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
           for (let n = firstLine; n <= lastLine; n++) activeLines.add(n);
         }
       }
-      if (node.name === 'Link' && view.hasFocus) {
-        for (const range of state.selection.ranges) {
-          // Inclusive overlap: cursor sitting exactly on either
-          // boundary counts as inside, matching the UX where the
-          // next keystroke affects the link.
-          if (range.from <= node.to && range.to >= node.from) {
-            activeLinkStarts.add(node.from);
-            break;
-          }
+      // Local-reveal bookkeeping: record inline constructs the cursor
+      // touches, so their delimiter marks reveal independently of the
+      // rest of the line. A parent is entered before its mark children,
+      // so the set is ready by the time those marks are processed.
+      if (node.name === 'Link') {
+        // Skip the inner Link of a `[[wiki]]` — it belongs to the
+        // wiki-links extension (see isWikiWrappedLink).
+        if (!isWikiWrappedLink(node.from, node.to) && selTouches(node.from, node.to)) {
+          activeLinkStarts.add(node.from);
         }
+      } else if (INLINE_REVEAL_NODES.has(node.name)) {
+        if (selTouches(node.from, node.to)) activeInlineStarts.add(node.from);
       }
       const lineClass = LINE_CLASS_BY_BLOCK[node.name];
       if (lineClass) {
@@ -423,7 +477,11 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
       }
 
       const markClass = INLINE_MARK_CLASS[node.name];
-      if (markClass && node.from < node.to) {
+      if (
+        markClass &&
+        node.from < node.to &&
+        !(node.name === 'Link' && isWikiWrappedLink(node.from, node.to))
+      ) {
         ranges.push(Decoration.mark({ class: markClass }).range(node.from, node.to));
       }
 
@@ -457,10 +515,32 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
             parent = parent.parent;
           }
           if (parent && parent.name === 'Link') {
-            shouldHide = !activeLinkStarts.has(parent.from);
+            // Wiki inner `[label]`: leave the brackets alone (never hide)
+            // so the wiki-links extension fully owns `[[...]]`.
+            shouldHide = isWikiWrappedLink(parent.from, parent.to)
+              ? false
+              : !activeLinkStarts.has(parent.from);
           } else {
             shouldHide = !activeLines.has(lineNum);
           }
+        } else if (
+          node.name === 'EmphasisMark' ||
+          node.name === 'CodeMark' ||
+          node.name === 'StrikethroughMark'
+        ) {
+          // Inline delimiter marks: reveal only when the cursor is inside
+          // THIS construct (local reveal). Walk up to the enclosing inline
+          // node and consult activeInlineStarts. A CodeMark under a
+          // FencedCode (not an inline node) finds no inline parent and
+          // falls back to the line-based rule — correct, since fenced
+          // blocks reveal by line/block, not per-delimiter.
+          let parent = node.node.parent;
+          while (parent && !INLINE_REVEAL_NODES.has(parent.name)) {
+            parent = parent.parent;
+          }
+          shouldHide = parent
+            ? !activeInlineStarts.has(parent.from)
+            : !activeLines.has(lineNum);
         } else {
           shouldHide = !activeLines.has(lineNum);
         }
@@ -501,56 +581,69 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         const taskFrom =
           taskLead != null ? line.from + taskLead[1].length : undefined;
 
-        // Hanging-indent every list item. Layout:
-        //
-        //   <--BASE--><--ALCOVE--> first-line text
-        //             •            wrapped lines land at the
-        //                          same column as the first-line
-        //                          text, not back under the marker
-        //
-        // ALCOVE_EM is a fixed 1.2em regardless of list kind.
-        // Every marker (bullet widget, checkbox widget, ordered
-        // number via mark decoration) is forced into an
-        // inline-block of exactly that width via CSS — so the
-        // alignment math doesn't depend on per-font marker
-        // widths. `padding-left` sets the content column;
-        // negative `text-indent` of the same magnitude pulls the
-        // first line back so the marker lands in the alcove.
+        // A marker only becomes a list item once it is followed by a SPACE
+        // (Obsidian-style): while the user is still typing `-` or `1.` with
+        // nothing after it, lezer already parses an empty list item, but we
+        // must NOT indent or render a marker yet — it reads as a premature
+        // jump. Bail until the trailing whitespace exists.
+        const nextChar = doc.sliceString(node.to, node.to + 1);
+        const hasTrailingSpace = nextChar === ' ' || nextChar === '\t';
+        if (!hasTrailingSpace) return;
+
+        // Obsidian-style list indent: only the LINE START (the marker)
+        // is aligned — every item's marker begins at the same column
+        // (BASE + nesting). The content follows immediately after the
+        // marker with a fixed gap (the marker's CSS margin-right), so
+        // the text column is NOT forced to align across items: a bullet
+        // sits closer to its text than "10." does. We deliberately do
+        // NOT reserve a fixed-width alcove (which would tabular-align the
+        // text and make the marker→text gap vary per kind/width).
+        // `padding-left` sets the marker column; there is no negative
+        // `text-indent`, so content is never pulled to a fixed column.
+        // Trade-off: a wrapped line returns to the marker column rather
+        // than hanging under the content — fine for short list items.
         const rawIndent = node.from - line.from;
         const depth = Math.max(0, Math.floor(rawIndent / 2));
         const BASE_EM = 0.8;
-        const ALCOVE_EM = 1.2;
-        const LEVEL_EM = 0.6;
-        const padding = BASE_EM + ALCOVE_EM + depth * LEVEL_EM;
+        const LEVEL_EM = 1.5;
+        const padding = BASE_EM + depth * LEVEL_EM;
         ranges.push(
           Decoration.line({
             attributes: {
-              style: `padding-left: ${padding}em; text-indent: -${ALCOVE_EM}em`,
+              style: `padding-left: ${padding}em`,
             },
           }).range(line.from),
         );
 
-        // Figure out how far past node.to the mark's trailing
-        // space lives. For tasks, CM6 pre-computed taskFrom as
-        // the start of the `[ ]`; the `- ` span runs from
-        // node.from to taskFrom, which already covers the space.
-        // For bullets / ordered, include a single trailing space
-        // if present so text flows from padding-left without a
-        // spurious leading space.
-        const hasTrailingSpace =
-          doc.sliceString(node.to, node.to + 1) === ' ';
-        const markEnd = hasTrailingSpace ? node.to + 1 : node.to;
+        // Include the single trailing space (guaranteed present — see the
+        // hasTrailingSpace gate above) so bullet/ordered content flows from
+        // padding-left without a spurious leading space. For tasks, taskFrom
+        // already covers the `- ` span up to the `[`.
+        const markEnd = node.to + 1;
 
         if (taskFrom !== undefined) {
-          // Hide `- ` (ListMark through the space before `[`).
-          pushReplace(ranges, doc, node.from, taskFrom);
+          // Task item: the marker region is `- [ ]` (line start through
+          // the 3-char `[ ]`/`[x]`). Reveal it as raw source only when the
+          // cursor is on the marker (local reveal); otherwise hide the
+          // `- ` (the TaskMarker branch swaps `[ ]` for the checkbox). Both
+          // branches use the same region so they agree.
+          if (!selTouches(line.from, taskFrom + 3)) {
+            pushReplace(ranges, doc, node.from, taskFrom);
+          }
         } else {
           const markText = doc.sliceString(node.from, node.to);
           if (markText === '-' || markText === '*' || markText === '+') {
-            // Bullet: substitute with the fixed-width marker
-            // widget, swallowing the trailing space so content
-            // starts precisely at padding-left.
-            pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
+            // Bullet: substitute the raw `- ` with the dot widget — but
+            // NOT when the cursor is on the marker itself. Local reveal:
+            // the `- ` reverts to source only when you're on it (Obsidian-
+            // style), while editing the item text keeps the dot. The
+            // reveal region stops at the dash (`node.to`), NOT the trailing
+            // space (`markEnd`): otherwise a cursor sitting right after
+            // `- ` (the content start, where it lands as you finish typing)
+            // would count as "on the marker" and show `-` instead of a dot.
+            if (!selTouches(line.from, node.to)) {
+              pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
+            }
           } else {
             // Ordered list (or anything else with a non-standard
             // mark text like `1.`, `42.`): keep the text visible
@@ -614,23 +707,28 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
       if (node.name === 'TaskMarker' && node.from < node.to) {
         const markText = doc.sliceString(node.from, node.to);
         const checked = /\[x\]/i.test(markText);
-        // Swallow the single trailing space after `[ ]` / `[x]` so the
-        // checkbox widget owns the alcove exactly (mirrors how bullet
-        // markers also swallow their trailing space). Without this the
-        // space stays visible, pushing first-line content to the right
-        // of where wrapped lines start — visible as a 0.3em hang.
-        const hasTrailingSpace =
-          node.to < doc.length &&
-          doc.sliceString(node.to, node.to + 1) === ' ';
-        const replaceTo = hasTrailingSpace ? node.to + 1 : node.to;
-        pushReplace(ranges, doc, node.from, replaceTo, {
-          widget: new TaskCheckboxWidget(checked),
-        });
+        const taskLine = doc.lineAt(node.from);
+        // Local reveal: when the cursor is on the marker region
+        // (`- [ ]`, i.e. line start through the checkbox), show the raw
+        // `[ ]` for editing instead of the checkbox widget. Same region as
+        // the ListMark branch so the `- ` and `[ ]` reveal together.
+        const revealSource = selTouches(taskLine.from, node.to);
+        if (!revealSource) {
+          // Replace ONLY `[ ]` / `[x]` — deliberately leave the trailing
+          // space as real text. The checkbox is a native `<input>`; its
+          // marker→text gap can't be padding (that would stretch the square),
+          // and a margin sits OUTSIDE the border-box CM measures for the
+          // caret, so a swallowed-space + margin left the caret glued to the
+          // box. Keeping the space real means the caret after `- [ ] ` lands
+          // at the real text boundary (past the space) — the actual input
+          // position — while the space + a small checkbox margin form the gap.
+          pushReplace(ranges, doc, node.from, node.to, {
+            widget: new TaskCheckboxWidget(checked),
+          });
+        }
         if (checked) {
-          const lineNum = doc.lineAt(node.from).number;
-          const line = doc.line(lineNum);
           ranges.push(
-            Decoration.line({ class: 'cm-atomic-task-done' }).range(line.from),
+            Decoration.line({ class: 'cm-atomic-task-done' }).range(taskLine.from),
           );
         }
       }
@@ -857,6 +955,12 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(
 // look identical anyway, so we always continue tight.
 function insertTightListItem(view: EditorView): boolean {
   const { state } = view;
+  // When an autocomplete popup is showing options, Enter must accept the
+  // completion, not continue the list. This handler runs at Prec.highest
+  // (to beat lang-markdown's own Enter), so it would otherwise swallow the
+  // key before the lower-precedence completion keymap — bail out and let it
+  // fall through.
+  if (completionStatus(state) === 'active') return false;
   const sel = state.selection.main;
   if (!sel.empty) return false;
   const from = sel.from;

@@ -6,30 +6,20 @@ import {
   ChatBody,
   PanelToggleButton,
   SidebarResizeHandle,
-  NotebookSession,
-  MediaUrlProvider,
   ContextMenuProvider,
-  useSessionDelete
+  useSessionDelete,
+  SessionConfigDialog,
+  StatusBanner,
+  usePanelStore,
+  useSidebarStore
 } from '@shuvix/app-shell'
 import i18n from './i18n'
 import { SessionRuntime } from './SessionRuntime'
 import { ExtSidebar } from './ExtSidebar'
-import {
-  useSidebar,
-  toggleSidebar,
-  setSidebarWidth,
-  SIDEBAR_MIN_WIDTH,
-  SIDEBAR_MAX_WIDTH
-} from './sidebarStore'
-import {
-  usePanel,
-  togglePanel,
-  setPanelWidth,
-  showPanelTab,
-  PANEL_MIN_WIDTH,
-  PANEL_MAX_WIDTH
-} from './panelStore'
-import { RightPanel, extMediaResolver } from './RightPanel'
+import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './sidebarStore'
+import { PANEL_MIN_WIDTH, PANEL_MAX_WIDTH } from './panelStore'
+import { RightPanel } from './RightPanel'
+import { ExtNotebookSession } from './ExtNotebookSession'
 
 type ChatHostValue = React.ComponentProps<typeof ChatHostProvider>['value']
 
@@ -48,10 +38,13 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
   const [sessionId, setSessionId] = useState<string | null>(null)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
-  const { isOpen, width } = useSidebar()
+  const isOpen = useSidebarStore((s) => s.isOpen)
+  const width = useSidebarStore((s) => s.width)
   const [resizing, setResizing] = useState(false)
-  const { isOpen: panelOpen, width: panelWidth } = usePanel()
+  const panelOpen = usePanelStore((s) => s.isOpen)
+  const panelWidth = usePanelStore((s) => s.width)
   const [panelResizing, setPanelResizing] = useState(false)
+  const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   // 启动仅加载会话列表，不自动选中 —— 无活跃会话时显示欢迎页（与桌面一致）。
   // 首次发送由 InputArea 自动创建临时会话；API Key 在「设置 → 提供商」配置。
@@ -67,20 +60,14 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
   // 笔记本 [[wiki-link]] 点击 → 打开右侧 Files 面板（FilesPanel 自身订阅 filePreviewRequest 打开预览）
   const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
   useEffect(() => {
-    if (filePreviewRequest) showPanelTab('files')
+    if (filePreviewRequest) usePanelStore.getState().showTab('files')
   }, [filePreviewRequest])
 
-  // 子智能体启动（含笔记本每次发送）→ 自动打开右侧「子智能体」Tab（对齐桌面 useRightPanelBridge）
+  // 子智能体启动（含笔记本每次发送）→ 自动打开右侧「子智能体」Tab（共享信号，事件检测在 useAgentEvents）
+  const subAgentRevealRequest = useChatStore((s) => s.subAgentRevealRequest)
   useEffect(() => {
-    return getChatApi().agent.onEvent((event) => {
-      if (
-        event.type === 'sub_session_register' &&
-        event.parentSessionId === useChatStore.getState().activeSessionId
-      ) {
-        showPanelTab('subagent')
-      }
-    })
-  }, [])
+    if (subAgentRevealRequest) usePanelStore.getState().showTab('subagent')
+  }, [subAgentRevealRequest])
 
   // 工具渲染配置（read/write/edit/ask 复用桌面定义 + 浏览器工具）；随语言切换重解析
   useEffect(() => {
@@ -128,7 +115,7 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
               width={width}
               min={SIDEBAR_MIN_WIDTH}
               max={SIDEBAR_MAX_WIDTH}
-              onResize={setSidebarWidth}
+              onResize={(w) => useSidebarStore.getState().setWidth(w)}
               onResizeStart={() => setResizing(true)}
               onResizeEnd={() => setResizing(false)}
             />
@@ -138,34 +125,41 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
             笔记本传相对 notebookPath，后端按 sessionId 解析工作目录句柄，切换项目时不依赖全局 projectPath。 */}
           <ChatBody
             className="relative flex-1 min-w-0 flex flex-col min-h-0"
-            headerCaps={{ editableTitle: true }}
+            headerCaps={{ editableTitle: true, sessionConfig: true }}
+            onOpenSessionConfig={() => setShowSessionConfig(true)}
+            banner={
+              // 运行时/分享/审批状态横幅（复用 app-shell；扩展仅免审批项会出现，余项按能力自隐）
+              activeSessionId ? <StatusBanner sessionId={activeSessionId} /> : undefined
+            }
+            overlays={
+              // 会话配置弹窗：复用 app-shell 共享组件；绑定分节据宿主能力自动显隐
+              showSessionConfig && activeSessionId ? (
+                <SessionConfigDialog
+                  sessionId={activeSessionId}
+                  onClose={() => setShowSessionConfig(false)}
+                />
+              ) : undefined
+            }
             rightActions={
               <>
                 {/* 折叠会话列表 + 切换右侧面板 —— 复用共享按钮，样式与桌面一致 */}
                 <PanelToggleButton
                   side="left"
                   open={isOpen}
-                  onClick={toggleSidebar}
+                  onClick={() => useSidebarStore.getState().toggle()}
                   title={t('sidebar.title')}
                 />
                 <PanelToggleButton
                   side="right"
                   open={panelOpen}
-                  onClick={togglePanel}
+                  onClick={() => usePanelStore.getState().toggle()}
                   title={t('panel.files')}
                 />
               </>
             }
             welcome={<WelcomeView enableConfigShare />}
             renderNotebook={(path, sid) => (
-              <MediaUrlProvider value={extMediaResolver}>
-                <NotebookSession
-                  key={sid}
-                  path={path}
-                  sessionId={sid}
-                  caps={{ openExternal: (u) => window.open(u, '_blank') }}
-                />
-              </MediaUrlProvider>
+              <ExtNotebookSession key={sid} path={path} sessionId={sid} />
             )}
           />
           {/* 右侧面板（文件 / 子代理）：手柄在左侧，向左拖变宽(invert) */}
@@ -175,7 +169,7 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
               min={PANEL_MIN_WIDTH}
               max={PANEL_MAX_WIDTH}
               invert
-              onResize={setPanelWidth}
+              onResize={(w) => usePanelStore.getState().setWidth(w)}
               onResizeStart={() => setPanelResizing(true)}
               onResizeEnd={() => setPanelResizing(false)}
             />

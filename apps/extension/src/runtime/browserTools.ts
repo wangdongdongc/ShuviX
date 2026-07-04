@@ -10,6 +10,7 @@
  */
 import { Type } from 'typebox'
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import * as cdp from './cdp'
 
 const ABORT = 'TOOL_ABORTED'
@@ -394,3 +395,75 @@ export const browserTools: AgentTool[] = [
   screenshotTool,
   releaseTool
 ] as AgentTool[]
+
+/** 会改变用户真实页面状态、需 autoApprove 门控的工具名（点击/输入/按键/导航） */
+const MUTATING_TOOL_NAMES = new Set(['click', 'fill', 'key', 'navigate'])
+
+export interface BrowserApprovalDeps {
+  /** 会话级自动批准开关：开 → 直接放行；关 → 每次操作前弹审批 */
+  isAutoApprove: () => boolean
+  /** 挂起/恢复审批（RuntimeSession.requestUserInput）；无前端时返回 cancel → 操作中止 */
+  requestUserInput: (req: InputRequest) => Promise<InputResponse>
+}
+
+/** 把某次操作渲染成审批面板里展示的命令文本 */
+function describeBrowserOp(name: string, params: Record<string, unknown>): string {
+  const tabId = params.tabId
+  switch (name) {
+    case 'click':
+      return `click(tab ${tabId}, element ${String(params.uid)})`
+    case 'fill': {
+      const text = String(params.text ?? '')
+      const shown = text.length > 80 ? `${text.slice(0, 80)}…` : text
+      return `fill(tab ${tabId}, element ${String(params.uid)}, text: ${JSON.stringify(shown)})`
+    }
+    case 'key':
+      return `key(tab ${tabId}, ${String(params.key)})`
+    case 'navigate':
+      return `navigate(tab ${tabId} → ${String(params.url)})`
+    default:
+      return `${name}(tab ${tabId})`
+  }
+}
+
+/**
+ * 给「操作用户真实浏览器」的工具套上审批门控（CDP 点击/输入/按键/导航）。
+ * autoApprove 开 → 透传；关 → 每次操作前向前端弹 Allow/Deny：
+ *   - 允许 → 执行原 execute；
+ *   - 拒绝 → 返回一条「已拒绝」工具结果（agent 可据此改道，不视为崩溃）；
+ *   - 中止/无前端（cancel）→ 抛 ABORT 终止本轮。
+ * 只读/低危工具（list_tabs/read_page/snapshot/screenshot/open_tab/release_tab）原样返回。
+ */
+export function gateBrowserTools(tools: AgentTool[], deps: BrowserApprovalDeps): AgentTool[] {
+  return tools.map((tool) => {
+    if (!MUTATING_TOOL_NAMES.has(tool.name)) return tool
+    const run = tool.execute.bind(tool)
+    return {
+      ...tool,
+      async execute(id: string, params: Record<string, unknown>, signal?: AbortSignal) {
+        if (!deps.isAutoApprove()) {
+          const response = await deps.requestUserInput({
+            id,
+            kind: 'approval',
+            toolName: tool.name,
+            command: describeBrowserOp(tool.name, params),
+            createdAt: Date.now()
+          })
+          if (response.kind === 'cancel') throw new Error(ABORT)
+          if (response.kind !== 'approval' || !response.approved) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `User denied the browser operation "${tool.name}". Do not retry it; consider an alternative or ask the user.`
+                }
+              ],
+              details: undefined
+            } satisfies ToolResult
+          }
+        }
+        return run(id, params, signal)
+      }
+    } as AgentTool
+  })
+}

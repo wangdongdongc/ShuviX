@@ -5,9 +5,14 @@ import { PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
-import { WelcomeView, ChatBody, PanelToggleButton, SessionConfigDialog } from '@shuvix/app-shell'
+import {
+  WelcomeView,
+  ChatBody,
+  PanelToggleButton,
+  SessionConfigDialog,
+  StatusBanner
+} from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
-import { StatusBanner } from './StatusBanner'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 
 /**
@@ -101,7 +106,8 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
           </button>
         )}
         {!isWeb && <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />}
-        <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />
+        {/* 右侧面板（浏览器/文件/子代理）属宿主能力；WebUI 为「仅查看」渠道，不提供 → 隐藏切换按钮 */}
+        {!isWeb && <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />}
       </>
     )
 

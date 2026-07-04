@@ -71,6 +71,7 @@ interface SettingsState {
   /** 设置面板当前 Tab */
   activeSettingsTab:
     | 'general'
+    | 'projects'
     | 'providers'
     | 'tools'
     | 'mcp'
@@ -114,6 +115,7 @@ interface SettingsState {
   setActiveSettingsTab: (
     tab:
       | 'general'
+      | 'projects'
       | 'providers'
       | 'tools'
       | 'mcp'

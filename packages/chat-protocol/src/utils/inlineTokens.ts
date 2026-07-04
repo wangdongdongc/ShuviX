@@ -33,6 +33,63 @@ export function expandCommandTemplate(
   return result
 }
 
+/** slash 命令的最小定义（构造内联 Token 所需字段） */
+export interface SlashCommandLike {
+  commandId: string
+  name: string
+  template: string
+}
+
+/** 构造内联 Token + 标记文本的结果 */
+export interface CommandTokenResult {
+  /** 含 {{shuvixInlineToken:uid}} 标记 + 可选参数的展示文本（落库/广播用） */
+  contentText: string
+  /** 单条 cmd 类型内联 Token 字典 */
+  inlineTokens: Record<string, InlineToken>
+}
+
+/**
+ * 用已知命令定义 + 参数构造 cmd 类型内联 Token 与标记文本。
+ * 所有发送 slash 命令的入口（主输入框芯片态/直输态、子代理追问）共用此构造逻辑，避免重复。
+ */
+export function buildCommandToken(
+  cmd: SlashCommandLike,
+  args: string,
+  opts?: { sessionId?: string; uid?: string }
+): CommandTokenResult {
+  const uid = opts?.uid ?? 't0'
+  const payload = expandCommandTemplate(cmd.template, args, { sessionId: opts?.sessionId })
+  const token: InlineToken = {
+    type: 'cmd',
+    id: cmd.commandId,
+    displayText: `/${cmd.commandId}`,
+    payload,
+    name: cmd.name
+  }
+  return {
+    contentText: args ? `${makeTokenMarker(uid)} ${args}` : makeTokenMarker(uid),
+    inlineTokens: { [uid]: token }
+  }
+}
+
+/**
+ * 从原始输入识别 slash 命令（"/cmd 参数"）并构造内联 Token；非命令或未匹配返回 null。
+ * 命中时一并回传匹配到的命令定义（调用方据 requiredTools 等做后续处理）。
+ */
+export function parseSlashCommandInput<C extends SlashCommandLike>(
+  rawText: string,
+  commands: C[],
+  opts?: { sessionId?: string; uid?: string }
+): (CommandTokenResult & { command: C }) | null {
+  if (!rawText.startsWith('/')) return null
+  const spaceIdx = rawText.indexOf(' ')
+  const cmdId = spaceIdx === -1 ? rawText.slice(1) : rawText.slice(1, spaceIdx)
+  const args = spaceIdx === -1 ? '' : rawText.slice(spaceIdx + 1).trim()
+  const command = commands.find((c) => c.commandId === cmdId)
+  if (!command) return null
+  return { ...buildCommandToken(command, args, opts), command }
+}
+
 /**
  * 将 content 中的 token 标记替换为 payload，生成发送给 Agent 的文本
  * - cmd 类型：payload 替换整条消息（因为展开的模板已包含用户参数）
@@ -53,6 +110,18 @@ export function resolveTokensForAgent(
   return content.replace(TOKEN_RE, (_, uid: string) => {
     return tokens[uid]?.payload ?? ''
   })
+}
+
+/**
+ * 把 content 中的 token 标记替换为该 token 的人读标签（displayText，如 "/review"），用于派生展示名/标题。
+ * 与 resolveTokensForAgent（替换为发给 LLM 的 payload）不同——此处只为人读，不展开模板正文。
+ */
+export function inlineTokensToPlainText(
+  content: string,
+  tokens?: Record<string, InlineToken>
+): string {
+  if (!tokens || Object.keys(tokens).length === 0) return content
+  return content.replace(TOKEN_RE, (_, uid: string) => tokens[uid]?.displayText ?? '')
 }
 
 // ---- 前端内容分段 ----

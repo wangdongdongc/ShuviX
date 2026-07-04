@@ -359,13 +359,20 @@ function buildDecorations(
         ? target.status ?? 'resolved'
         : 'missing';
 
-    builder.add(link.from, link.to, Decoration.mark({ class: 'cm-atomic-wiki-link-hidden-syntax' }));
+    // Replace the whole `[[target]]` with an atomic widget rather than
+    // hiding the raw text (font-size:0) + placing a side:-1 widget at `to`.
+    // With the zero-width-text approach, clicking in the trailing space of
+    // the line (common in list/task items) resolved to the collapsed text's
+    // leftmost position — i.e. `link.from` — dropping the caret *before* the
+    // link. A replace decoration is a single atomic box: clicks map cleanly
+    // to `from` (left half) or `to` (right half / trailing space), so the
+    // caret lands after the link as expected. Editing the raw form still
+    // works via the Backspace-reveal keymap (doc positions are unchanged).
     builder.add(
+      link.from,
       link.to,
-      link.to,
-      Decoration.widget({
+      Decoration.replace({
         widget: new WikiLinkWidget(link.target, label, status),
-        side: -1,
       }),
     );
   }
@@ -526,11 +533,15 @@ function inlineCodeSpans(text: string): { from: number; to: number }[] {
 }
 
 function isSelectionInsideLink(state: EditorState, link: ParsedWikiLink): boolean {
+  // Inclusive on both boundaries: a cursor sitting immediately before `[[`
+  // or right after `]]` already reveals the raw link (aggressive reveal,
+  // matching the inline-preview behavior for bold/italic/code/etc.).
+  // Previously this required the cursor to be strictly inside, so you had to
+  // step one char into the link before it revealed.
   return state.selection.ranges.some((range) => {
     const from = Math.min(range.from, range.to);
     const to = Math.max(range.from, range.to);
-    if (from === to) return from > link.from && from < link.to;
-    return from < link.to && to > link.from;
+    return from <= link.to && to >= link.from;
   });
 }
 

@@ -209,16 +209,12 @@ export function makeDesktopSandboxPolicy(
   ctx: ToolContext,
   getConfig: () => ProjectConfig
 ): SandboxPolicy {
-  // 同一次 assert 内复用一次 SQLite 读取（autoApprove + allowList）
-  let settings: { autoApprove?: boolean; allowList?: string[] } | undefined
-  let settingsLoaded = false
-  const getSettings = (): { autoApprove?: boolean; allowList?: string[] } | undefined => {
-    if (!settingsLoaded) {
-      settings = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
-      settingsLoaded = true
-    }
-    return settings
-  }
+  // 每次读取都直连 SQLite —— 不跨调用缓存。
+  // policy 实例在建会话时创建一次、整会话复用（buildTools → makeDesktopFileToolDeps），
+  // 若在此缓存 autoApprove/allowList，则会话中途开启「免审批」或「允许并记住」写入 SQLite 后，
+  // 复用的 policy 仍持旧快照 → 反复弹审批。与 bash/ssh 每次执行现读 SQLite 的行为保持一致。
+  const getSettings = (): { autoApprove?: boolean; allowList?: string[] } | undefined =>
+    sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
 
   return {
     isAllowedWithoutPrompt(mode, p) {

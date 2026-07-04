@@ -116,11 +116,13 @@ function defaultSpawn(
   })
 }
 
+const BASH_DESCRIPTION =
+  'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. Prefer built-in tools over shell commands where one fits: `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Use bash when no built-in tool can accomplish the task.'
+
 export class BashTool extends BaseTool<typeof BashParamsSchema> {
   readonly name = 'bash'
   readonly label = t('tool.bashLabel')
-  readonly description =
-    'Execute a bash command in the working directory. The command runs in a bash shell with pipe and redirect support. Use this for running scripts, installing packages, git operations, builds, etc. IMPORTANT: Prefer built-in tools over shell commands when possible — use `ls` instead of `find`/`ls`, `grep` instead of `grep`/`rg`, `glob` instead of `find -name`, `read` instead of `cat`/`head`/`tail`, `write` instead of `echo >`, `edit` instead of `sed`/`awk`. Only use bash when no built-in tool can accomplish the task.'
+  readonly description = BASH_DESCRIPTION
   readonly parameters = BashParamsSchema
 
   constructor(private ctx: ToolContext) {
@@ -234,5 +236,6 @@ registerBuiltinTool({
     iconColor: '#eab308',
     summaryField: 'description',
     formItems: [{ field: 'command', renderer: { type: 'code', language: 'bash' } }]
-  }
+  },
+  describe: () => ({ description: BASH_DESCRIPTION, parameters: BashParamsSchema })
 })

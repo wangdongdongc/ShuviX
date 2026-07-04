@@ -1,5 +1,9 @@
 import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
-import { RuntimeSession, generateSessionTitle } from '@shuvix/agent-runtime'
+import {
+  RuntimeSession,
+  generateSessionTitle,
+  resolveInitialThinkingLevel
+} from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
@@ -199,9 +203,10 @@ export class AgentSession {
       initialState: {
         systemPrompt,
         model: resolvedModel,
-        thinkingLevel: capabilities.reasoning
-          ? (modelMetadata?.thinkingLevel as ThinkingLevel) || 'medium'
-          : 'off',
+        thinkingLevel: resolveInitialThinkingLevel({
+          persisted: modelMetadata?.thinkingLevel,
+          reasoning: capabilities.reasoning
+        }),
         messages: [],
         tools
       },
@@ -369,7 +374,8 @@ export class AgentSession {
       baseUrl,
       apiProtocol
     })
-    this.runtime.applyModel(resolvedModel, caps.reasoning ? 'medium' : 'off')
+    // 切模型保留当前思考深度（省略第二参 → RuntimeSession 内保持不变，思考与能力点解绑）
+    this.runtime.applyModel(resolvedModel)
   }
 
   /** 设置思考深度 */

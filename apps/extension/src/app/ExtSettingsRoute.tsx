@@ -1,11 +1,22 @@
 import { useTranslation } from 'react-i18next'
-import { Settings, ArrowLeft, Layers, Puzzle, Info, Brain } from 'lucide-react'
-import { ChatHostProvider, getChatApi } from '@shuvix/chat-ui'
+import {
+  Settings,
+  ArrowLeft,
+  Layers,
+  Puzzle,
+  Info,
+  Brain,
+  Wrench,
+  FolderClosed
+} from 'lucide-react'
+import { ChatHostProvider, getChatApi, useChatStore } from '@shuvix/chat-ui'
 import {
   SettingsContainer,
   AboutTab,
   McpClientPanel,
   ContextManagementSettings,
+  BuiltinToolsView,
+  ProjectsSettings,
   type SettingsTab
 } from '@shuvix/app-shell'
 import { ExtAppearanceTab } from './settings/ExtAppearanceTab'
@@ -25,6 +36,14 @@ export function ExtSettingsRoute({
   route: string
 }): React.JSX.Element {
   const { t } = useTranslation()
+
+  /** 删除归档项目（级联其会话，window.confirm 确认） */
+  const deleteProject = async (id: string, name: string): Promise<void> => {
+    if (!window.confirm(t('sidebar.confirmDeleteProject') + `\n${name}`)) return
+    await getChatApi().project.delete({ id })
+    useChatStore.getState().setSessions(await getChatApi().session.list())
+  }
+
   const tabs: SettingsTab[] = [
     {
       id: 'appearance',
@@ -35,6 +54,12 @@ export function ExtSettingsRoute({
           <ExtAppearanceTab />
         </div>
       )
+    },
+    {
+      id: 'projects',
+      label: t('settings.tabProjects'),
+      icon: <FolderClosed size={14} />,
+      content: <ProjectsSettings onDeleteProject={(id, name) => void deleteProject(id, name)} />
     },
     {
       id: 'providers',
@@ -48,6 +73,13 @@ export function ExtSettingsRoute({
       icon: <Brain size={14} />,
       // 复用共享上下文管理（系统提示词卡片）；后端经 chatApiAdapter.settings → systemPromptStore
       content: <ContextManagementSettings />
+    },
+    {
+      id: 'tools',
+      label: t('settings.tabTools'),
+      icon: <Wrench size={14} />,
+      // 复用共享 BuiltinToolsView：仅展示工具定义（扩展无 SSH/DB 等专属配置 → 不注入 renderToolExtra/extraTabs）
+      content: <BuiltinToolsView loadDefinitions={() => getChatApi().tools.definitions()} />
     },
     {
       id: 'mcp',

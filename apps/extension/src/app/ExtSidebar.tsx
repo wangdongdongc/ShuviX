@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useChatStore, getChatApi, type Session } from '@shuvix/chat-ui'
+import { getChatApi, type Session } from '@shuvix/chat-ui'
 import {
   Sidebar,
   ProjectConfigDialog,
@@ -8,10 +8,10 @@ import {
   ProjectSessionGroups,
   CalendarView,
   ViewSwitchButton,
-  useProjects
+  useProjects,
+  useSidebarStore
 } from '@shuvix/app-shell'
 import { projectStore } from '../storage/projectStore'
-import { useSidebar } from './sidebarStore'
 
 /**
  * 扩展侧栏 —— 薄封装共享 <Sidebar>，仅注入扩展专属行为：
@@ -19,6 +19,7 @@ import { useSidebar } from './sidebarStore'
  *  - 项目编辑弹窗经 overlays 注入（ProjectConfigDialog 仅「项目信息」tab）
  *  - 项目 / 日历视图切换（与桌面一致，复用共享 CalendarView + ProjectSessionGroups）
  *  - 打开设置切 hash；无 pin/徽标/窗口拖拽/原生右键菜单等桌面能力
+ *  - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
 export function ExtSidebar({
   onNew,
@@ -30,8 +31,8 @@ export function ExtSidebar({
   onOpenSettings: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const { projects, archivedProjects } = useProjects()
-  const { width } = useSidebar()
+  const { projects } = useProjects()
+  const width = useSidebarStore((s) => s.width)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'projects' | 'calendar'>('projects')
   const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
@@ -47,13 +48,6 @@ export function ExtSidebar({
     }
   }
 
-  /** 删除项目（级联其会话，需确认）—— 仅从「已归档」区触发 */
-  const deleteProject = async (id: string, name: string): Promise<void> => {
-    if (!window.confirm(t('sidebar.confirmDeleteProject') + `\n${name}`)) return
-    await getChatApi().project.delete({ id })
-    useChatStore.getState().setSessions(await getChatApi().session.list())
-  }
-
   const toggleCalendarGroup = (key: string): void =>
     setCalendarCollapsed((prev) => {
       const next = new Set(prev)
@@ -65,13 +59,11 @@ export function ExtSidebar({
   return (
     <Sidebar
       projects={projects}
-      archivedProjects={archivedProjects}
       title={viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
       onOpenFolder={openFolder}
       onOpenSettings={onOpenSettings}
       onDeleteSession={onDelete}
       onEditProject={setEditingProjectId}
-      onDeleteProject={(id, name) => void deleteProject(id, name)}
       titleActions={<ViewSwitchButton viewMode={viewMode} onChange={setViewMode} />}
       bodyOverride={
         viewMode === 'calendar' ? (

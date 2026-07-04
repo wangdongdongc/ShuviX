@@ -14,7 +14,6 @@
  * 参数 / 数据形状沿用 chatApi.ts 中的对应类型（前↔后端协议单一来源）。
  */
 import type {
-  ShareMode,
   TelegramBotInfo,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
@@ -22,16 +21,16 @@ import type {
   TelegramUnbindSessionParams
 } from './chatApi'
 
-/** WebUI / 局域网共享：把会话经本地 HTTP 服务广播给同网设备（宿主需能跑监听端口的 server） */
+/**
+ * WebUI / 局域网共享：把会话经本地 HTTP 服务广播给同网设备（宿主需能跑监听端口的 server）。
+ * 分享一律为「仅查看」——同网设备只能查看会话现存内容（消息/笔记本只读、右侧面板不可用），不可发送/编辑。
+ * 故只有 on/off（shared），无分享模式之分。
+ */
 export interface WebUiBindingApi {
-  setShared: (params: {
-    sessionId: string
-    shared: boolean
-    mode?: ShareMode
-  }) => Promise<{ success: boolean }>
+  setShared: (params: { sessionId: string; shared: boolean }) => Promise<{ success: boolean }>
   isShared: (sessionId: string) => Promise<boolean>
-  getShareMode: (sessionId: string) => Promise<ShareMode | null>
-  listShared: () => Promise<Array<{ sessionId: string; mode: ShareMode }>>
+  /** 已分享（仅查看）的会话 id 列表 */
+  listShared: () => Promise<string[]>
   serverStatus: () => Promise<{ running: boolean; port?: number; urls?: string[] }>
 }
 

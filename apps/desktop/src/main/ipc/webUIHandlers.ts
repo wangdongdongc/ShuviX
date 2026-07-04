@@ -1,35 +1,26 @@
 import { ipcMain } from 'electron'
 import { webUIService } from '../services/webUIService'
-import type { ShareMode } from '../services/webUIService'
 // 副作用导入：触发 WebUIServer 实例化 + 注册到 webUIService
 import '../frontend/web/WebUIServer'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 
 /**
- * WebUI 分享管理 IPC 处理器
+ * WebUI 分享管理 IPC 处理器（分享一律「仅查看」，无模式之分）
  */
 export function registerWebUIHandlers(): void {
-  /** 切换指定 session 的分享状态 */
-  ipcMain.handle(
-    'webui:setShared',
-    (_event, params: { sessionId: string; shared: boolean; mode?: ShareMode }) => {
-      webUIService.setShared(params.sessionId, params.shared, params.mode)
-      broadcastSessionConfigChanged(params.sessionId)
-      return { success: true }
-    }
-  )
+  /** 切换指定 session 的分享状态（仅查看） */
+  ipcMain.handle('webui:setShared', (_event, params: { sessionId: string; shared: boolean }) => {
+    webUIService.setShared(params.sessionId, params.shared)
+    broadcastSessionConfigChanged(params.sessionId)
+    return { success: true }
+  })
 
   /** 查询单个 session 是否已分享 */
   ipcMain.handle('webui:isShared', (_event, sessionId: string) => {
     return webUIService.isShared(sessionId)
   })
 
-  /** 获取指定 session 的分享模式 */
-  ipcMain.handle('webui:getShareMode', (_event, sessionId: string) => {
-    return webUIService.getShareMode(sessionId)
-  })
-
-  /** 获取所有已分享的 session 列表（含模式） */
+  /** 获取所有已分享的 session id 列表 */
   ipcMain.handle('webui:listShared', () => {
     return webUIService.listShared()
   })

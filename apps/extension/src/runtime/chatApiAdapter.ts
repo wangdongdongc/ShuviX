@@ -8,6 +8,7 @@
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
+import { scanInstructionFiles } from './instructionFilesRuntime'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
@@ -16,6 +17,7 @@ import { systemPromptStore } from '../storage/systemPromptStore'
 import { mcpManager } from './mcpRuntime'
 import { eventBus } from './eventBus'
 import { getToolPresentations } from './toolPresentations'
+import { getBuiltinToolDefinitions } from './toolDefinitions'
 import {
   ensureRuntimeSession,
   resolveSessionMeta,
@@ -25,7 +27,7 @@ import {
   buildSessionTools
 } from './agentRuntime'
 import { subAgentManager, registerSessionTools } from './subAgent'
-import { runNotebookTask } from '@shuvix/agent-runtime'
+import { runNotebookTask, resolveInitialThinkingLevel } from '@shuvix/agent-runtime'
 import { compactSession } from './compactionRuntime'
 import { generateTitleForSession } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
@@ -90,7 +92,8 @@ export const chatApiAdapter: ChatApi = {
     // 正文由子代理自行读取；子代理不含 ask（面板只读无法应答）。信封组装与派发由共享 runNotebookTask 完成。
     notebookPrompt: async ({ sessionId, text }) => {
       // 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）
-      const notebookPath = (await sessionStore.getById(sessionId))?.settings?.notebookPath ?? ''
+      const session = await sessionStore.getById(sessionId)
+      const notebookPath = session?.settings?.notebookPath ?? ''
       const parts = await buildSessionTools(sessionId, {
         // 面板只读、无法应答交互式提问 → ask 已剔除；file tools 的 requestUserInput 为预留项
         requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
@@ -104,7 +107,16 @@ export const chatApiAdapter: ChatApi = {
           sessionId,
           text,
           systemPrompt: parts.systemPrompt,
-          modelConfig: { provider: parts.provider, model: parts.model, capabilities: parts.caps },
+          modelConfig: {
+            provider: parts.provider,
+            model: parts.model,
+            capabilities: parts.caps,
+            // 笔记本子代理继承会话所选思考深度（与桌面/主会话同一 helper）
+            thinkingLevel: resolveInitialThinkingLevel({
+              persisted: session?.modelMetadata?.thinkingLevel,
+              reasoning: parts.caps.reasoning
+            })
+          },
           tools: [],
           notebookPath
         },
@@ -121,6 +133,15 @@ export const chatApiAdapter: ChatApi = {
           error: e instanceof Error ? e.message : String(e)
         })
       })
+      return ok
+    },
+    // 子会话基础能力：销毁（中止 + 移出注册表）/ 中断（软停止）——与桌面同走共享 subAgentManager
+    subSessionDestroy: async (subSessionId) => {
+      subAgentManager.destroy(subSessionId)
+      return ok
+    },
+    subSessionInterrupt: async (subSessionId) => {
+      subAgentManager.interrupt(subSessionId)
       return ok
     },
     steer: async ({ sessionId, text }) => {
@@ -239,10 +260,18 @@ export const chatApiAdapter: ChatApi = {
     updateProject: async () => ok,
     updateThinkingLevel: async () => ok,
     updateEnabledTools: async () => ok,
-    updateAutoApprove: async () => ok,
+    // autoApprove 门控「操作用户真实浏览器」的 CDP 工具（见 browserTools 审批）；关时逐次确认
+    updateAutoApprove: async ({ id, autoApprove }) => {
+      await sessionStore.updateSettings(id, { autoApprove })
+      return ok
+    },
     previewAllowPatterns: async () => [],
     addAllowListPatterns: async () => ok,
-    removeAllowListEntry: async () => ok,
+    removeAllowListEntry: async ({ id, entry }) => {
+      const cur = sessionStore.getSettingsSync(id).allowList ?? []
+      await sessionStore.updateSettings(id, { allowList: cur.filter((e) => e !== entry) })
+      return ok
+    },
     // LLM 标题生成（与桌面同源，见 titleRuntime）：优先专用标题模型，回退会话模型，
     // 失败再退启发式；并落库 IndexedDB
     generateTitle: async ({ sessionId, conversationText }) => {
@@ -255,8 +284,12 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getById: async (id) => sessionStore.getById(id),
-    scanInstructionFiles: async () => [],
-    updateInstructionFiles: async () => ok
+    // 顶层扫描 AGENTS.md/CLAUDE.md（FSA/OPFS 工作目录）；启用项注入系统提示（见 buildSessionTools）
+    scanInstructionFiles: async (sessionId) => scanInstructionFiles(sessionId),
+    updateInstructionFiles: async ({ id, filenames }) => {
+      await sessionStore.updateSettings(id, { enabledInstructionFiles: filenames })
+      return ok
+    }
     // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
   },
 
@@ -338,7 +371,8 @@ export const chatApiAdapter: ChatApi = {
       { name: 'ask', label: 'Ask', group: 'general', defaultEnabled: true, isEnabled: true }
     ],
     // read/write/edit/ask 复用桌面同一渲染定义 + 浏览器工具（见 toolPresentations）
-    presentations: async () => getToolPresentations()
+    presentations: async () => getToolPresentations(),
+    definitions: async () => getBuiltinToolDefinitions()
   },
 
   command: {
@@ -396,29 +430,8 @@ export const chatApiAdapter: ChatApi = {
     start: async (sessionId) => compactSession(sessionId)
   },
 
-  webui: {
-    setShared: async () => ok,
-    isShared: async () => false,
-    getShareMode: async () => null,
-    listShared: async () => [],
-    serverStatus: async () => ({ running: false })
-  },
-
-  telegram: {
-    listBots: async () => [],
-    addBot: async () => {
-      throw new Error('扩展不支持 Telegram')
-    },
-    updateBot: async () => ok,
-    deleteBot: async () => ok,
-    validateToken: async () => ({ valid: false }),
-    bindSession: async () => ok,
-    unbindSession: async () => ok,
-    getSessionBotId: async () => null,
-    startBot: async () => ok,
-    stopBot: async () => ok,
-    getBotStatus: async () => ({ running: false })
-  },
+  // 注：渠道绑定（webui 局域网分享 / telegram）属 ChannelBindingApi，非 ChatApi。
+  // 扩展两者皆不支持（MV3 无法监听端口、无出站 Bot 托管），故不注入 setChannelBindingApi → 相关 UI 自动隐藏。
 
   pinChat: {
     pin: async () => ok,

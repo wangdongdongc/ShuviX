@@ -45,7 +45,7 @@ export function BindingsSettings(): React.JSX.Element {
       window.api.telegram.listBots(),
       window.api.session.list()
     ])
-    setSharedIds(new Set(shared.map((s) => s.sessionId)))
+    setSharedIds(new Set(shared))
     setTelegramBotCount(bots.length)
     setSessions(allSessions)
   }, [])
@@ -58,7 +58,7 @@ export function BindingsSettings(): React.JSX.Element {
       window.api.session.list()
     ]).then(([shared, bots, allSessions]) => {
       if (!cancelled) {
-        setSharedIds(new Set(shared.map((s) => s.sessionId)))
+        setSharedIds(new Set(shared))
         setTelegramBotCount(bots.length)
         setSessions(allSessions)
       }

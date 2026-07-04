@@ -10,6 +10,7 @@ import {
   RuntimeSession,
   SessionManager,
   createAskTool,
+  resolveInitialThinkingLevel,
   type RuntimeEventSink,
   type RuntimePersistence,
   type RuntimeLogger,
@@ -17,7 +18,6 @@ import {
 } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
@@ -27,7 +27,8 @@ import { systemPromptStore } from '../storage/systemPromptStore'
 import { eventBus } from './eventBus'
 import { mcpManager } from './mcpRuntime'
 import { createFileTools } from './fileTools'
-import { browserTools } from './browserTools'
+import { buildInstructionPromptSection } from './instructionFilesRuntime'
+import { browserTools, gateBrowserTools } from './browserTools'
 import { createSpillSink } from './opfsSpillSink'
 import { wrapToolsOutput } from './wrapToolOutput'
 import { resolveSessionModel } from './resolveSessionModel'
@@ -184,9 +185,16 @@ export async function buildSessionTools(
   let systemPrompt: string
   let spillSink: SpillSink
   const persona = await systemPromptStore.renderPersona({})
+  // 已启用的项目指令文件（AGENTS.md/CLAUDE.md）内容段，追加进系统提示（空 = 不注入，镜像桌面）
+  const instructionSection = await buildInstructionPromptSection(
+    sessionId,
+    session?.settings?.enabledInstructionFiles ?? []
+  )
   if (projectHandle) {
     fileTools = createFileTools(projectHandle, { requestUserInput: opts.requestUserInput })
-    systemPrompt = [persona, projectContextPrompt(projectHandle.name)].filter(Boolean).join('\n\n')
+    systemPrompt = [persona, projectContextPrompt(projectHandle.name), instructionSection]
+      .filter(Boolean)
+      .join('\n\n')
     spillSink = createSpillSink(projectHandle, { writeGitignore: true })
   } else {
     const tempHandle = await getTempWorkspaceHandle(sessionId)
@@ -194,9 +202,20 @@ export async function buildSessionTools(
       requiresPermission: false,
       requestUserInput: opts.requestUserInput
     })
-    systemPrompt = [persona, SCRATCH_CONTEXT_PROMPT].filter(Boolean).join('\n\n')
+    systemPrompt = [persona, SCRATCH_CONTEXT_PROMPT, instructionSection]
+      .filter(Boolean)
+      .join('\n\n')
     spillSink = createSpillSink(tempHandle)
   }
+
+  // 浏览器「操作真实页面」工具的 autoApprove 门控：仅交互式会话（includeAsk）启用——
+  // 笔记本一次性子任务无审批 UI，按原行为透传。门控读会话 settings.autoApprove（默认关 → 逐次确认）。
+  const browser = opts.includeAsk
+    ? gateBrowserTools(browserTools, {
+        isAutoApprove: () => sessionStore.getSettingsSync(sessionId).autoApprove === true,
+        requestUserInput: opts.requestUserInput
+      })
+    : browserTools
 
   // ask（可选）+ 浏览器 + 文件 + 已连接 MCP；全部经 wrapToolsOutput 统一截断/落盘
   const tools = wrapToolsOutput(
@@ -204,7 +223,7 @@ export async function buildSessionTools(
       ...(opts.includeAsk
         ? [createAskTool({ requestUserInput: opts.requestUserInput, abortError: 'TOOL_ABORTED' })]
         : []),
-      ...browserTools,
+      ...browser,
       ...fileTools,
       ...mcpManager.getAllAgentTools()
     ],
@@ -244,9 +263,10 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
     initialState: {
       systemPrompt: parts.systemPrompt,
       model: resolvedModel,
-      thinkingLevel: parts.caps.reasoning
-        ? (session?.modelMetadata?.thinkingLevel as ThinkingLevel) || 'medium'
-        : 'off',
+      thinkingLevel: resolveInitialThinkingLevel({
+        persisted: session?.modelMetadata?.thinkingLevel,
+        reasoning: parts.caps.reasoning
+      }),
       messages: [],
       tools
     },
@@ -287,7 +307,8 @@ export async function setSessionModel(
   if (!runtime) return
   const caps = capsFor(model)
   const resolvedModel = resolveSessionModel(provider, model, caps)
-  runtime.applyModel(resolvedModel, caps.reasoning ? 'medium' : 'off')
+  // 切模型保留当前思考深度（省略第二参 → 保持不变，思考与能力点解绑）
+  runtime.applyModel(resolvedModel)
 }
 
 export function removeRuntimeSession(sessionId: string): void {

@@ -301,6 +301,8 @@ export const makeReadTool = (ctx: ToolContext): ReturnType<typeof createFileTool
   createFileToolSuite(makeDesktopFileToolDeps(ctx, readDecoders)).read
 
 import { registerBuiltinTool } from '../services/toolRegistry'
+import { ReadParamsSchema } from '@shuvix/agent-runtime'
+import { READ_DESCRIPTION } from './fileToolDeps'
 registerBuiltinTool({
   name: 'read',
   group: 'general',
@@ -308,5 +310,6 @@ registerBuiltinTool({
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.read.labelKey),
   getHint: () => t('tool.readHint'),
   factory: (ctx) => makeReadTool(ctx),
-  presentation: BUILTIN_TOOL_PRESENTATIONS.read.presentation
+  presentation: BUILTIN_TOOL_PRESENTATIONS.read.presentation,
+  describe: () => ({ description: READ_DESCRIPTION, parameters: ReadParamsSchema })
 })

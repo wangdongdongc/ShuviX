@@ -69,12 +69,13 @@ export function ApprovalForm({
   const { toolName, command, description, pathIsDirectory } = request
 
   // 命令类(bash/ssh):显示拆解后的多个 patterns(后端拉取);
-  // 路径类(read/write/edit/...):显示单元素 [absolutePath];
-  // 二者统一渲染为预览块,允许用户在按下"允许并记住"前看到具体将写入 allowList 的内容
+  // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),显示单元素 [absolutePath];
+  // 简单类(浏览器操作等):command 不入 allowList,只展示文本 + Allow/Deny,无"记住"。
   const isCommandApproval = toolName === 'bash' || toolName === 'ssh'
-  const isPathApproval = !isCommandApproval
-  // 「记住/始终允许」会持久化 allowList（宿主能力）：渠道端（无 HostApi）一律隐藏
-  const canRemember = !!command && getHostApi() !== null
+  const isPathApproval = !isCommandApproval && /^(Read|Write)\(.+\)$/.test(command)
+  const isSimpleApproval = !isCommandApproval && !isPathApproval
+  // 「记住/始终允许」会持久化 allowList（宿主能力）：渠道端（无 HostApi）或简单审批一律隐藏
+  const canRemember = !!command && getHostApi() !== null && !isSimpleApproval
 
   const pathApproval: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
     if (!isPathApproval) return null

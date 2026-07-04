@@ -9,7 +9,7 @@
 <img src="./resources/icon_mini.jpg" width="180" alt="ShuviX Logo">
 
 [![version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)](https://github.com/wangdongdongc/ShuviX/releases)
-[![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](../../LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](#-ビルド)
 [![Electron](https://img.shields.io/badge/Electron-47848F?style=flat-square&logo=electron&logoColor=white)](https://www.electronjs.org/)
 
@@ -20,7 +20,7 @@
   <a href="https://github.com/wangdongdongc/ShuviX">
     <img src="https://img.shields.io/badge/GitHub-000000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" />
   </a>
-  <a href="./docs/">
+  <a href="../../docs/">
     <img src="https://img.shields.io/badge/Docs-722ED1?style=for-the-badge" alt="Docs" />
   </a>
   <a href="https://github.com/wangdongdongc/ShuviX/releases">

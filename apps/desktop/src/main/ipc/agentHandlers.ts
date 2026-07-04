@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
+import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
 import { agentManager } from '../agents/AgentManager'
 import type {
   AgentInitParams,
@@ -36,7 +37,7 @@ export function registerAgentHandlers(): void {
   /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，不 await 整轮） */
   ipcMain.handle('agent:notebookPrompt', (_event, params: AgentNotebookPromptParams) =>
     operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.notebookPrompt(params.sessionId, params.text, params.images)
+      chatGateway.notebookPrompt(params.sessionId, params.text, params.images, params.inlineTokens)
       return { success: true }
     })
   )
@@ -44,7 +45,11 @@ export function registerAgentHandlers(): void {
   /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，不 await 整轮） */
   ipcMain.handle('agent:subAgentPrompt', (_event, params: AgentSubAgentPromptParams) => {
     void agentManager
-      .continueTask({ subSessionId: params.subSessionId, text: params.text })
+      .continueTask({
+        subSessionId: params.subSessionId,
+        text: params.text,
+        inlineTokens: params.inlineTokens
+      })
       .catch(() => {})
     return { success: true }
   })
@@ -116,12 +121,24 @@ export function registerAgentHandlers(): void {
   /** 获取所有工具的 UI 渲染配置（图标、摘要字段、表单项等） */
   ipcMain.handle('tools:presentations', () => getBuiltinToolPresentations())
 
+  /** 获取所有内置工具的完整定义（name + description + 参数 schema），供设置页只读展示 */
+  ipcMain.handle('tools:definitions', () => getBuiltinToolDefinitions())
+
   /**
    * 销毁指定的临时子会话（用户点关闭按钮触发）。
    * 中止子 Agent 并从 transientSessionRegistry 移除。
    */
   ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
     agentManager.destroy(subSessionId)
+    return { success: true }
+  })
+
+  /**
+   * 中断运行中的子会话（用户点中断按钮触发）。
+   * 软停止当前生成、保留已产出内容，子会话以「已完成」收尾并保留在面板。
+   */
+  ipcMain.handle('subSession:interrupt', (_event, subSessionId: string) => {
+    agentManager.interrupt(subSessionId)
     return { success: true }
   })
 }

@@ -15,20 +15,20 @@ import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
-import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /**
  * 桌面侧边栏 —— 薄封装共享 <Sidebar>，注入桌面专属能力：
  *   - 窗口拖拽 / 置顶徽标 / 分享·Telegram 徽标（caps）
  *   - 打开文件夹走 Electron 目录对话框；置顶会话选中时聚焦悬浮窗
- *   - 会话/分组/归档右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
- *   - 会话配置弹窗、项目编辑弹窗、删除项目确认；标题行视图切换（项目 / 日历，原生菜单）
+ *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
+ *   - 会话配置弹窗、项目编辑弹窗；标题行视图切换（项目 / 日历，原生菜单）
  *   - 底部更新提示；日历视图经 bodyOverride 复用 ProjectSessionGroups
+ *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
 export function Sidebar(): React.JSX.Element {
   const { t } = useTranslation()
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
-  const { projects, archivedProjects } = useProjects()
+  const { projects } = useProjects()
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const updateEvent = useUpdateStore((s) => s.updateEvent)
   const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
@@ -39,7 +39,6 @@ export function Sidebar(): React.JSX.Element {
   const [viewMode, setViewMode] = useState<'projects' | 'calendar'>('projects')
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
-  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null)
   const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
 
   // 在指定项目下新建会话（日历视图 + 文件夹流程用）
@@ -64,25 +63,11 @@ export function Sidebar(): React.JSX.Element {
     if (pinnedSessionIds.has(id)) void window.api.pinChat.focus(id)
   }
 
-  /** 删除归档项目（含级联会话）；若当前活跃会话属于该项目先切走 */
-  const doDeleteProject = async (projectId: string): Promise<void> => {
-    const store = useChatStore.getState()
-    const activeSession = store.sessions.find((s) => s.id === store.activeSessionId)
-    if (activeSession?.projectId === projectId) {
-      const other = store.sessions.find((s) => s.projectId !== projectId)
-      if (other) store.setActiveSessionId(other.id)
-    }
-    await getChatApi().project.delete({ id: projectId })
-    store.setSessions(await getChatApi().session.list())
-    setDeletingProjectId(null)
-  }
-
   return (
     <SharedSidebar
       caps={{ windowDrag: true, pin: true, badges: true }}
       title={viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
       projects={projects}
-      archivedProjects={archivedProjects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
       onOpenSettings={(tab) => void getChatApi().app.openSettings(tab)}
@@ -90,7 +75,6 @@ export function Sidebar(): React.JSX.Element {
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
-      onDeleteProject={(id) => setDeletingProjectId(id)}
       titleActions={<ViewSwitchButton viewMode={viewMode} onChange={setViewMode} />}
       footerActions={
         hasUpdate ? (
@@ -152,24 +136,6 @@ export function Sidebar(): React.JSX.Element {
             />
           )}
           {deleteDialog}
-          {deletingProjectId && (
-            <ConfirmDialog
-              title={t('sidebar.confirmDeleteProject')}
-              description={
-                <>
-                  {t('sidebar.deleteProjectWarning')}
-                  <span className="text-error font-medium">
-                    {t('sidebar.deleteProjectWarningBold')}
-                  </span>
-                  {t('sidebar.deleteProjectWarningEnd')}
-                </>
-              }
-              confirmText={t('common.delete')}
-              cancelText={t('common.cancel')}
-              onConfirm={() => void doDeleteProject(deletingProjectId)}
-              onCancel={() => setDeletingProjectId(null)}
-            />
-          )}
         </>
       }
     />

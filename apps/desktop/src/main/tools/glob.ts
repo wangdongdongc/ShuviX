@@ -37,12 +37,14 @@ const GlobParamsSchema = Type.Object({
   )
 })
 
+const GLOB_DESCRIPTION =
+  'Fast file pattern matching tool that finds files by name/path patterns. Returns matching file paths sorted by modification time (most recent first). Respects .gitignore automatically. Use this when you need to find files by name patterns. For searching file contents, use the grep tool instead.'
+
 /** glob 工具 */
 export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
   readonly name = 'glob'
   readonly label = t('tool.globLabel')
-  readonly description =
-    'Fast file pattern matching tool that finds files by name/path patterns. Returns matching file paths sorted by modification time (most recent first). Respects .gitignore automatically. Use this when you need to find files by name patterns. For searching file contents, use the grep tool instead.'
+  readonly description = GLOB_DESCRIPTION
   readonly parameters = GlobParamsSchema
   readonly outputStrategy = 'tail' as const
 
@@ -163,5 +165,6 @@ registerBuiltinTool({
   presentation: {
     icon: 'FileSearch2',
     summaryField: 'pattern'
-  }
+  },
+  describe: () => ({ description: GLOB_DESCRIPTION, parameters: GlobParamsSchema })
 })

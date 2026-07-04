@@ -42,12 +42,14 @@ const GrepParamsSchema = Type.Object({
   )
 })
 
+const GREP_DESCRIPTION =
+  'Search file contents using regex patterns. Returns matching file paths, line numbers, and line text. Results respect .gitignore automatically. Use the include parameter to filter by file type. For searching file names instead of content, use the glob tool.'
+
 /** Grep 工具类 */
 export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly name = 'grep'
   readonly label = t('tool.grepLabel')
-  readonly description =
-    'Search file contents using regex patterns. Returns matching file paths, line numbers, and line text. Results respect .gitignore automatically. Use the include parameter to filter by file type. For searching file names instead of content, use the glob tool.'
+  readonly description = GREP_DESCRIPTION
   readonly parameters = GrepParamsSchema
   readonly outputStrategy = 'tail' as const
 
@@ -174,5 +176,6 @@ registerBuiltinTool({
   presentation: {
     icon: 'Search',
     summaryField: 'pattern'
-  }
+  },
+  describe: () => ({ description: GREP_DESCRIPTION, parameters: GrepParamsSchema })
 })

@@ -26,6 +26,8 @@ export class ChatFrontendRegistry {
   private defaultFrontends = new Map<string, ChatFrontend>()
   /** 会话级额外绑定：sessionId → (frontendId → ChatFrontend) */
   private sessionBindings = new Map<string, Map<string, ChatFrontend>>()
+  /** 子会话 → 父会话 映射（register 时建立、end 时清理），供子会话事件回溯送达父会话绑定的前端 */
+  private subToParent = new Map<string, string>()
 
   /** 注册默认前端（绑定到所有现有和未来的会话），同 id 覆盖 */
   registerDefault(frontend: ChatFrontend): void {
@@ -94,6 +96,17 @@ export class ChatFrontendRegistry {
    */
   broadcast(event: ChatEvent): void {
     const frontends = this.getFrontends(event.sessionId)
+
+    // 子会话事件统一带 sessionId=subSessionId；会话级绑定的前端（如 WebUI 只绑父会话）据此收不到。
+    // 故额外把子会话事件送达「父会话」绑定的前端：register/end 自带 parentSessionId（并维护 sub→parent
+    // 映射），其余流式事件经该映射回溯。默认前端（Electron 主窗）本就收全部，去重后不重复发。
+    const parentSessionId = this.resolveSubSessionParent(event)
+    if (parentSessionId) {
+      for (const pf of this.getFrontends(parentSessionId)) {
+        if (!frontends.some((f) => f.id === pf.id)) frontends.push(pf)
+      }
+    }
+
     const isStreaming = STREAMING_EVENT_TYPES.has(event.type)
     const requiredCap = INTERACTION_CAPABILITY_MAP[event.type]
 
@@ -114,6 +127,24 @@ export class ChatFrontendRegistry {
         log.warn(`发送事件失败 frontend=${frontend.id}: ${err}`)
       }
     }
+  }
+
+  /**
+   * 维护 sub→parent 映射并返回某事件对应的父会话；非子会话事件返回 null。
+   * register 自带 parentSessionId → 记下映射；end → 返回父会话并清理映射；
+   * 其余事件（流式 delta / 工具 / 步骤等只带 subSessionId）经映射回溯父会话。
+   */
+  private resolveSubSessionParent(event: ChatEvent): string | null {
+    if (event.type === 'sub_session_register') {
+      this.subToParent.set(event.sessionId, event.parentSessionId)
+      return event.parentSessionId
+    }
+    if (event.type === 'sub_session_end') {
+      const parent = event.parentSessionId
+      this.subToParent.delete(event.sessionId)
+      return parent
+    }
+    return this.subToParent.get(event.sessionId) ?? null
   }
 
   /** 清理已断开的前端（从默认列表 + 所有会话绑定中移除） */

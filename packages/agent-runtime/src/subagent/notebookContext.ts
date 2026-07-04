@@ -1,23 +1,15 @@
-import type { AgentMessage } from '@earendil-works/pi-agent-core'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { inlineTokensToPlainText } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { SubAgentManager } from './manager'
 import type { SubAgentModelConfig } from './types'
 
 /**
- * 笔记本会话：在用户 prompt 之前注入一条 user message，仅告知当前笔记本文件的路径，
- * 并提示「如需正文先用 read 工具读取」——不再把笔记正文直接塞进上下文。两端共用以保证措辞一致。
- * filePath 为该 markdown 文件路径（相对工作目录，供 read/write/edit 直接操作）。
+ * 笔记本会话：当前笔记本文件路径 + 「如需正文先用 read 工具读取」的说明文本。
+ * 并入子代理 system prompt（而非单独一条 user 上下文消息）——它属于平台操作上下文、应作系统指令而非
+ * 对话里的用户消息出现。两端共用以保证措辞一致。filePath 为该 md 文件相对工作目录的路径。
  */
-export function buildNotebookContextMessage(filePath: string): AgentMessage {
-  return {
-    role: 'user',
-    content: [
-      {
-        type: 'text',
-        text: `The user is currently viewing the notebook at \`${filePath}\` (a markdown file in the working directory). If the task needs the notebook's content, use the read tool to read that file first before acting; edit or write the same file when changes are required.`
-      }
-    ],
-    timestamp: Date.now()
-  } as AgentMessage
+export function buildNotebookContextText(filePath: string): string {
+  return `The user is currently viewing the notebook at \`${filePath}\` (a markdown file in the working directory). If the task needs the notebook's content, use the read tool to read that file first before acting; edit or write the same file when changes are required.`
 }
 
 /**
@@ -32,8 +24,10 @@ export function notebookTaskName(text: string): string {
 /** 笔记本一次性子智能体的发送入参（数据来源端特定，组装与派发逻辑两端共用） */
 export interface NotebookTaskInputs {
   sessionId: string
-  /** 用户 prompt 原文（既作派发名来源，也作子代理 prompt） */
+  /** 用户 prompt 展示文本（既作派发名来源，也作子代理 prompt；含内联 Token 标记时由内核解析） */
   text: string
+  /** 前端展开的内联 Token（slash 命令 / skill）；内核解析为发给子代理的真实指令并随 register 广播 */
+  inlineTokens?: Record<string, InlineToken>
   /** 子代理系统提示（端各自装配） */
   systemPrompt: string
   /** 模型配置（provider/model/capabilities） */
@@ -54,7 +48,12 @@ export function runNotebookTask(
   inputs: NotebookTaskInputs,
   onError: (message: string) => void
 ): void {
-  const taskName = notebookTaskName(inputs.text)
+  // 展示名取人读文本：把 slash 命令标记还原为 "/cmd" 标签，避免标题出现 {{shuvixInlineToken:…}} 原始标记
+  const taskName = notebookTaskName(inlineTokensToPlainText(inputs.text, inputs.inlineTokens))
+  // 笔记本上下文（路径 + read 提示）并入 system prompt，而非单独 user 上下文消息
+  const systemPrompt = [inputs.systemPrompt, buildNotebookContextText(inputs.notebookPath)]
+    .filter(Boolean)
+    .join('\n\n')
   void manager
     .runTask({
       parentSessionId: inputs.sessionId,
@@ -64,12 +63,12 @@ export function runNotebookTask(
         description: taskName,
         tools: inputs.tools,
         maxTurns: 0,
-        systemPrompt: inputs.systemPrompt
+        systemPrompt
       },
       prompt: inputs.text,
+      promptInlineTokens: inputs.inlineTokens,
       description: taskName,
-      modelConfig: inputs.modelConfig,
-      contextMessages: [buildNotebookContextMessage(inputs.notebookPath)]
+      modelConfig: inputs.modelConfig
     })
     .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
 }

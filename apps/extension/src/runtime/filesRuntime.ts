@@ -93,7 +93,9 @@ const RICH_BINARY_EXTS = new Set([
  * 临时会话=隔离的 OPFS 目录（getTempWorkspaceHandle，镜像桌面 temp_workspace）。
  * 故扩展每个会话都有工作目录，文件树/预览对两类一视同仁。
  */
-async function handleForSession(sessionId: string): Promise<FileSystemDirectoryHandle | undefined> {
+export async function handleForSession(
+  sessionId: string
+): Promise<FileSystemDirectoryHandle | undefined> {
   const s = await sessionStore.getById(sessionId)
   if (s?.projectId) return projectStore.getHandle(s.projectId)
   return getTempWorkspaceHandle(sessionId)

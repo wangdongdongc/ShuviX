@@ -1,23 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Settings,
-  FolderPlus,
-  FolderClosed,
-  RotateCcw,
-  Trash2,
-  Archive,
-  ChevronUp
-} from 'lucide-react'
+import { Settings, FolderPlus } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
-import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
-import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { useFocusDim } from './useFocusDim'
 import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
-import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import type { ProjectRef } from './useProjects'
-
-const ARCHIVED_GROUP_KEY = '__archived_projects__'
 
 export interface SidebarCaps {
   /** Electron 标题栏拖拽区 + macOS 顶部交通灯留白 */
@@ -30,9 +17,8 @@ export interface SidebarCaps {
 
 export interface SidebarProps {
   caps?: SidebarCaps
-  /** 项目列表（活动 + 归档）——由宿主经 useProjects() 提供，侧栏与日历视图共用同一份 */
+  /** 项目列表——由宿主经 useProjects() 提供，侧栏与日历视图共用同一份 */
   projects: ProjectRef[]
-  archivedProjects: ProjectRef[]
   /** 打开文件夹（宿主：选目录 → 建项目 → 新建会话；桌面 dialog，扩展 FSA）。建项目后经
    *  events 'project.changed' 自动刷新项目列表 */
   onOpenFolder: () => void | Promise<void>
@@ -45,8 +31,6 @@ export interface SidebarProps {
   onConfigureSession?: (id: string) => void
   /** 编辑项目（宿主经 overlays 自渲染对话框） */
   onEditProject?: (projectId: string) => void
-  /** 删除归档项目（宿主自处理确认 + 级联）；缺省隐藏删除按钮 */
-  onDeleteProject?: (projectId: string, name: string) => void
   /** 已悬浮会话集合（caps.pin 时用于徽标 / 选中行为） */
   pinnedSessionIds?: Set<string>
   /** 标题行右侧额外按钮（桌面：视图切换） */
@@ -71,14 +55,12 @@ export interface SidebarProps {
 export function Sidebar({
   caps = {},
   projects,
-  archivedProjects,
   onOpenFolder,
   onOpenSettings,
   onSelectSession,
   onDeleteSession,
   onConfigureSession,
   onEditProject,
-  onDeleteProject,
   pinnedSessionIds,
   titleActions,
   footerActions,
@@ -88,7 +70,6 @@ export function Sidebar({
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
-  const showContextMenu = useContextMenu()
   const sessions = useChatStore((s) => s.sessions)
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
@@ -102,11 +83,10 @@ export function Sidebar({
     initialCollapseApplied.current = true
     const initial = new Set<string>(projects.map((p) => p.id))
     initial.add(TEMP_GROUP_KEY)
-    if (archivedProjects.length > 0) initial.add(ARCHIVED_GROUP_KEY)
     // 项目首次异步加载后只跑一次（initialCollapseApplied 守卫），非每渲染同步级联
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsedGroups(initial)
-  }, [projects, archivedProjects])
+  }, [projects])
 
   // 在指定项目下新建会话（统一经 getChatApi），并自动展开所在组
   const handleNewChat = async (projectId: string | null): Promise<void> => {
@@ -144,26 +124,8 @@ export function Sidebar({
       return next
     })
 
-  const handleRestoreProject = async (id: string): Promise<void> => {
-    // 项目列表经 useProjects() 订阅 'project.changed' 自动刷新
-    await getChatApi().project.update({ id, archived: false })
-  }
-
-  // 归档项目右键菜单：恢复 /（如可删）删除
-  const openArchivedMenu = (id: string, name: string, e: React.MouseEvent): void => {
-    const items: ContextMenuItem[] = [{ id: 'restore-project', label: t('sidebar.restoreProject') }]
-    if (onDeleteProject) {
-      items.push({ type: 'separator' })
-      items.push({ id: 'delete-project', label: t('sidebar.deleteProject') })
-    }
-    void showContextMenu(e, items, (action) => {
-      if (action === 'restore-project') void handleRestoreProject(id)
-      if (action === 'delete-project') onDeleteProject?.(id, name)
-    })
-  }
-
   const projectNamesEmpty = projects.length === 0
-  const isEmpty = sessions.length === 0 && projectNamesEmpty && archivedProjects.length === 0
+  const isEmpty = sessions.length === 0 && projectNamesEmpty
   const platform = getChatApi().app.platform
   const drag = caps.windowDrag ? 'titlebar-drag' : ''
   const noDrag = caps.windowDrag ? 'titlebar-no-drag' : ''
@@ -213,63 +175,6 @@ export function Sidebar({
           />
         )}
       </div>
-
-      {/* 归档项目（恢复 / 删除）：固定底部，列表在上、标题在下 → 自下而上展开 */}
-      {!bodyOverride && archivedProjects.length > 0 && (
-        <div
-          className={`flex-shrink-0 border-t border-border-secondary/30 px-2 pt-1 transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
-        >
-          <AnimatedCollapse open={!collapsedGroups.has(ARCHIVED_GROUP_KEY)}>
-            <div className="ml-1.5 pl-0.5 max-h-48 overflow-y-auto no-scrollbar">
-              {archivedProjects.map((p) => (
-                <div
-                  key={p.id}
-                  className="group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 text-text-secondary"
-                  onContextMenu={(e) => openArchivedMenu(p.id, p.name, e)}
-                >
-                  <FolderClosed size={11} className="flex-shrink-0" />
-                  <span className="flex-1 min-w-0 truncate text-[13px] group-hover:pr-12">
-                    {p.name}
-                  </span>
-                  <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => void handleRestoreProject(p.id)}
-                      className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-text-secondary"
-                      title={t('sidebar.restoreProject')}
-                    >
-                      <RotateCcw size={11} className="text-green-400/70" />
-                    </button>
-                    {onDeleteProject && (
-                      <button
-                        onClick={() => onDeleteProject(p.id, p.name)}
-                        className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/60 hover:text-red-400"
-                        title={t('sidebar.deleteProject')}
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </AnimatedCollapse>
-          <div className="flex items-center w-full px-1.5 py-0.5 text-[12px]">
-            <button
-              onClick={() => toggleGroup(ARCHIVED_GROUP_KEY)}
-              className="flex items-center gap-1.5 flex-1 min-w-0 text-text-secondary hover:text-text-primary transition-colors"
-            >
-              <Archive size={11} className="flex-shrink-0" />
-              <span className="truncate font-medium uppercase tracking-wider">
-                {t('sidebar.archivedProjects')}
-              </span>
-              <ChevronUp
-                size={11}
-                className={`ml-auto flex-shrink-0 text-text-tertiary/60 transition-transform ${collapsedGroups.has(ARCHIVED_GROUP_KEY) ? '' : 'rotate-180'}`}
-              />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 底部设置栏 + 宿主额外按钮（桌面更新提示） */}
       <div

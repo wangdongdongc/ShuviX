@@ -1,64 +1,30 @@
 /**
- * 扩展侧栏布局状态 —— chrome.storage.local 持久化（宽度 + 展开）。
+ * 扩展侧栏 —— store 已抽到共享 useSidebarStore（@shuvix/app-shell），各组件直接用它。
+ * 本文件只剩扩展专属的「持久化接线 + 边界常量」：chrome.storage 启动水合 + 变化回存。
  *
- * 与桌面 sidebarStore 对应：宽度供共享 SidebarResizeHandle 拖拽，展开供 ChatHeader 折叠按钮。
- * Side Panel 较窄，折叠会话列表可把对话区让到满宽。
+ * 宽度供共享 SidebarResizeHandle 拖拽，展开供 ChatHeader 折叠按钮。Side Panel 较窄，折叠会话列表可让满宽。
  */
-import { useSyncExternalStore } from 'react'
+import { useSidebarStore } from '@shuvix/app-shell'
 
 export const SIDEBAR_MIN_WIDTH = 160
 export const SIDEBAR_MAX_WIDTH = 360
 const DEFAULT_WIDTH = 220
-
-export interface SidebarState {
-  isOpen: boolean
-  width: number
-}
-
-const DEFAULT: SidebarState = { isOpen: true, width: DEFAULT_WIDTH }
-
 const KEY = 'sidebarLayout'
-let state: SidebarState = { ...DEFAULT }
-const listeners = new Set<() => void>()
 
-function emit(): void {
-  for (const l of listeners) l()
-}
-
-function persist(): void {
-  void chrome.storage.local.set({ [KEY]: state }).catch(() => {})
-}
-
-/** 从 chrome.storage 载入（在首屏渲染前调用，让同步读取生效） */
+/** 从 chrome.storage 载入（首屏渲染前调用）+ 订阅共享 store 变化回存 */
 export async function initSidebar(): Promise<void> {
+  let saved: { isOpen?: boolean; width?: number } | undefined
   try {
     const obj = await chrome.storage.local.get(KEY)
-    if (obj[KEY]) state = { ...DEFAULT, ...(obj[KEY] as Partial<SidebarState>) }
+    saved = obj[KEY]
   } catch {
     /* 用默认 */
   }
-  emit()
-}
-
-export function toggleSidebar(): void {
-  state = { ...state, isOpen: !state.isOpen }
-  emit()
-  persist()
-}
-
-export function setSidebarWidth(width: number): void {
-  const clamped = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width))
-  state = { ...state, width: clamped }
-  emit()
-  persist()
-}
-
-export function useSidebar(): SidebarState {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb)
-      return () => listeners.delete(cb)
-    },
-    () => state
-  )
+  useSidebarStore.setState({
+    isOpen: saved?.isOpen ?? true,
+    width: saved?.width ?? DEFAULT_WIDTH
+  })
+  useSidebarStore.subscribe((s) => {
+    void chrome.storage.local.set({ [KEY]: { isOpen: s.isOpen, width: s.width } }).catch(() => {})
+  })
 }

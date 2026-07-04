@@ -203,15 +203,13 @@
   font-weight: inherit;
 }
 
-/* 已完成任务行：淡化整列文字 + 删除线，向 Obsidian 的「安静」靠拢。
-   行内文字被语法高亮 span 包裹、自带颜色，故需用后代选择器一并覆盖，
-   否则只有行级的删除线变淡、文字不变。 */
+/* 已完成任务行：整行文字（含语法高亮 span）淡化为 --nb-list-muted、去掉删除线，
+   与 bullet / 有序号标记严格同色，向 Obsidian 的「安静」靠拢。
+   行内文字被语法高亮 span 包裹、自带颜色，故需用后代选择器一并覆盖。 */
 .atomic-panel .cm-line.cm-atomic-task-done,
 .atomic-panel .cm-line.cm-atomic-task-done span {
-  color: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
-}
-.atomic-panel .cm-line.cm-atomic-task-done {
-  text-decoration-color: color-mix(in srgb, var(--color-text-secondary) 40%, transparent);
+  color: var(--nb-list-muted);
+  text-decoration: none;
 }
 
 /* ============ 笔记本主题：Things ============
@@ -366,4 +364,157 @@ button.cm-atomic-search-btn:hover {
 button.cm-atomic-search-btn svg {
   width: 15px !important;
   height: 15px !important;
+}
+
+/* —— [[双链]] 自动补全弹窗 ——
+   面板容器（.cm-tooltip）已由 atomic-theme 上了主题色；这里补全 CM 默认的朴素列表样式，
+   对齐笔记本观感：系统字体、行内间距、强调色选中态、路径灰显非斜体、匹配高亮改用强调色。
+   弹层 portal 到 <body>，故选择器不加 .atomic-panel 前缀（变量在 :root 可继承）。 */
+.cm-tooltip-autocomplete {
+  border-radius: 8px !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+.cm-tooltip-autocomplete > ul {
+  max-height: 16rem;
+  font-size: 0.8125rem;
+}
+.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 5px 10px !important;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  border-radius: 5px;
+  cursor: pointer;
+}
+/* 鼠标悬停：轻提示 */
+.cm-tooltip-autocomplete > ul > li:hover {
+  background: var(--color-bg-hover);
+}
+/* 键盘选中项：必须清晰可见 —— 不能用 15% 透明度的 --color-accent-muted，
+   否则上下键移动时几乎看不出高亮在动，会被误判成「选不动」。 */
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent) !important;
+  color: var(--color-text-primary) !important;
+}
+/* 主文案（文件名）占主导，撑开剩余宽度 */
+.cm-tooltip-autocomplete .cm-completionLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 匹配到的子串：改用强调色着色，去掉默认下划线 */
+.cm-tooltip-autocomplete .cm-completionMatchedText {
+  text-decoration: none;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText {
+  color: var(--color-accent);
+}
+/* 副文案（目录路径）：灰显、非斜体、右对齐、次要字号 */
+.cm-tooltip-autocomplete .cm-completionDetail {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* —— Obsidian 风格列表 / 任务标记 ——
+   标记（bullet、有序号）淡灰、常规字重，让正文主导；任务复选框改成圆角柔和方框，
+   完成项淡出而非硬删除线。仅笔记本作用域（.atomic-panel 前缀），不动共享库默认外观与 demo。 */
+
+/* bullet「•」与有序号「1.」：淡灰。关键——重置 text-indent：
+   行上有 -1.2em 悬挂缩进（把标记盒拉进左侧 gutter），但 text-indent 会被 marker 的
+   inline-block 继承、再把 marker 内字形二次左移。bullet 走 replace widget、有序号走 mark span，
+   两条渲染路径对这个继承的处理不一致 → 两种列表标记错位、正文不齐。置 text-indent:0 后，
+   字形在各自定宽 gutter（1.2em）内确定性右对齐，两种列表落到同一列、正文对齐。 */
+/* bullet 圆点、有序号数字+点、todo 完成文本三者统一用同一柔和灰 --nb-list-muted（单一来源，
+   保证严格同色）。有序号 `1.` 是真实文本，被 markdown 高亮内层 span 上了
+   t.list(--atomic-editor-fg) / processingInstruction(--atomic-editor-fg-faint) 等色；这些高亮规则
+   读的是 CSS 变量，故在 marker 作用域内把这几个变量重定向到 --nb-list-muted，高亮结果自然等于该色
+   （靠变量继承，与选择器优先级无关）。bullet 是 widget 纯文本，直接吃下面的 color。 */
+.atomic-panel {
+  --nb-list-muted: color-mix(in srgb, var(--color-text-secondary) 55%, transparent);
+}
+.atomic-panel .cm-atomic-list-marker {
+  --atomic-editor-fg: var(--nb-list-muted);
+  --atomic-editor-fg-faint: var(--nb-list-muted);
+  --atomic-editor-fg-muted: var(--nb-list-muted);
+  color: var(--nb-list-muted);
+  text-indent: 0;
+}
+/* bullet 圆点：用绝对定位的 ::before 画固定尺寸实心圆，替代放大 • 字形（transform:scale 会
+   放大元素可视矩形、把光标撑高）。• 字形 color:transparent 仅保留占位；圆点画在流外，不撑高行盒。
+   关键——bullet 是 replace widget，CM 用它的 inline-block 盒高度画光标；该盒默认继承 1.6 行距 →
+   光标被拉到 1.6em（比有序号那种真实文本的光标高）。故显式 line-height:1.2 把盒高压到接近文字度量，
+   光标高度回归正常。left:0 使圆点左缘与数字/复选框同列。 */
+.atomic-panel .cm-atomic-bullet {
+  position: relative;
+  color: transparent;
+  line-height: 1.2;
+  /* 把标记→正文的间距放进 widget 盒子内部（padding 而非共享的 margin-right）：
+     CM 测量 replace widget 后方光标用的是 border-box 右缘（含 padding、不含 margin）。
+     用 margin 时光标落在圆点盒右缘、紧贴圆点，正文却在 margin 之后；改用 padding 后
+     盒子右缘 = 正文位置，光标正确落在实际输入处。视觉间距不变。 */
+  margin-right: 0;
+  padding-right: 0.4em;
+}
+.atomic-panel .cm-atomic-bullet::before {
+  content: '';
+  position: absolute;
+  /* 圆点前留一点点间隔：• 无左侧字身间隙、贴左缘会比数字（1 有天然左 bearing）更靠左，
+     加约 0.2em 左偏移，既留出间隔又与数字视觉对齐。 */
+  left: 0.2em;
+  top: 50%;
+  width: 0.28em;
+  height: 0.28em;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--nb-list-muted);
+}
+
+/* 任务复选框：关掉原生外观，自绘圆角方框。1em 方框；标记→正文的间距由「保留的真实空格
+   + 这里的小 margin」组成（≈0.4em，与 bullet 一致）——方框是原生 input，间距不能用 padding
+   （会把圆角方框拉长变形），而 margin 在 CM 测光标的 border-box 之外，故靠真实空格把光标推到
+   正文实际位置（见 inline-preview.ts 的 TaskMarker 分支）。
+   垂直方向：middle 会把方框中点对到「基线 + x-height/2」(≈基线上方 0.25em)，而 1em 方框比字高，
+   结果中点落在文字视觉中心偏下、看起来贴底。改用负 vertical-align 把方框上提到文字视觉中心
+   （中点 ≈ 基线上方 0.34em，对齐大写字高中心）。未选透明描边，选中填「淡一档」强调色 + 饱满白勾。 */
+.atomic-panel .cm-atomic-task-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.15em;
+  vertical-align: -0.16em;
+  border: 1.5px solid color-mix(in srgb, var(--color-text-secondary) 50%, transparent);
+  border-radius: 30%;
+  background-color: transparent;
+  text-indent: 0;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.atomic-panel .cm-atomic-task-checkbox:hover {
+  border-color: var(--color-accent);
+}
+.atomic-panel .cm-atomic-task-checkbox:checked {
+  /* 比 --color-accent 淡一档的柔和蓝（贴合 Obsidian 完成态） */
+  border-color: color-mix(in srgb, var(--color-accent) 68%, white 32%);
+  background-color: color-mix(in srgb, var(--color-accent) 68%, white 32%);
+  /* 更饱满的白色对勾：占位放大到 82% + 稍粗描边 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 82%;
 }

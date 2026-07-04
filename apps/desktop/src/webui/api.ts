@@ -83,14 +83,13 @@ function createEventSource(): {
 
 const eventSource = createEventSource()
 
-const ok = (): Promise<{ success: boolean }> => Promise.resolve({ success: false })
 const voidAsync = (): Promise<void> => Promise.resolve()
 const unsub = (): (() => void) => () => {}
 
 /**
  * 创建 WebUI 的 SessionChannelApi 实现。
- * 已有服务端路由的接 HTTP/WS；渠道暂不支持的（steer/notebook/子代理发送/语音/归档分页/
- * 斜杠命令/工具展示）给类型正确的空实现——它们不在「看 + 发」最小集的关键路径上。
+ * 发送类（主会话 prompt / 笔记本 / 子代理 / steer）与会话/消息/文件/运行时均接服务端 HTTP/WS 路由；
+ * 渠道暂不支持的（语音/归档分页/斜杠命令/工具展示/内部事件总线）给类型正确的空实现。
  */
 export function createWebSessionChannelApi(): SessionChannelApi {
   return {
@@ -109,10 +108,37 @@ export function createWebSessionChannelApi(): SessionChannelApi {
           method: 'POST',
           body: JSON.stringify({ text: p.text, images: p.images })
         }),
-      // 以下发送变体暂无服务端路由（渠道核心为主会话 prompt），占位满足契约
-      notebookPrompt: ok,
-      subAgentPrompt: ok,
-      steer: ok,
+      // 笔记本会话发送：接服务端 /notebook-prompt 路由（每次开独立子代理，进展走 WS 事件流）
+      notebookPrompt: (p) =>
+        api(`/sessions/${p.sessionId}/notebook-prompt`, {
+          method: 'POST',
+          body: JSON.stringify({ text: p.text, images: p.images, inlineTokens: p.inlineTokens })
+        }),
+      // 子代理：继续对话 / 销毁 / 中断 —— 接服务端 /subagent/* 路由（子会话进展走 WS 事件流）
+      subAgentPrompt: (p) =>
+        api(`/sessions/${SESSION_ID}/subagent/prompt`, {
+          method: 'POST',
+          body: JSON.stringify({
+            subSessionId: p.subSessionId,
+            text: p.text,
+            inlineTokens: p.inlineTokens
+          })
+        }),
+      subSessionDestroy: (subSessionId) =>
+        api(`/sessions/${SESSION_ID}/subagent/destroy`, {
+          method: 'POST',
+          body: JSON.stringify({ subSessionId })
+        }),
+      subSessionInterrupt: (subSessionId) =>
+        api(`/sessions/${SESSION_ID}/subagent/interrupt`, {
+          method: 'POST',
+          body: JSON.stringify({ subSessionId })
+        }),
+      steer: (p) =>
+        api(`/sessions/${p.sessionId}/steer`, {
+          method: 'POST',
+          body: JSON.stringify({ text: p.text })
+        }),
       abort: (sid) => api(`/sessions/${sid}/abort`, { method: 'POST', body: '{}' }),
       respondToInput: (p) =>
         api(`/sessions/${p.sessionId}/respond-input`, {
@@ -139,7 +165,8 @@ export function createWebSessionChannelApi(): SessionChannelApi {
 
     tools: {
       list: () => api('/tools'),
-      presentations: () => Promise.resolve({})
+      presentations: () => Promise.resolve({}),
+      definitions: () => api('/tools/definitions')
     },
 
     // 斜杠命令源未经服务端暴露：渠道返回空列表

@@ -1,16 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Terminal,
-  Loader2,
-  Plus,
-  Trash2,
-  Pencil,
-  TriangleAlert,
-  Database,
-  Bot,
-  Globe
-} from 'lucide-react'
+import { Loader2, Plus, Trash2, Pencil, TriangleAlert, Globe } from 'lucide-react'
+import { BuiltinToolsView } from '@shuvix/app-shell'
 import { SubAgentPanel } from './SubAgentPanel'
 import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
 import {
@@ -23,9 +14,6 @@ import {
   type DbCredentialDialogData,
   type DbCredentialDialogInitial
 } from './DbCredentialDialog'
-
-/** 子分类标识 */
-type ToolSubTab = 'ssh' | 'database' | 'browser' | 'subagent'
 
 /** SSH 凭据信息（来自 IPC） */
 interface SshCredentialInfo {
@@ -43,81 +31,32 @@ interface SshCredentialInfo {
   updatedAt: number
 }
 
-/** 子分类导航按钮（与 ProviderSettings / SkillSettings 保持视觉一致） */
-function SubTabButton({
-  icon,
-  label,
-  active,
-  onClick
-}: {
-  icon: React.ReactNode
-  label: string
-  active: boolean
-  onClick: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
-        active
-          ? 'bg-accent/10 text-accent'
-          : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
-      }`}
-    >
-      {/* 18px 高度槽位 — 与 Provider/Skill 行末 Toggle 同高，保证内容行高一致（按钮总高 30px） */}
-      <span className="shrink-0 inline-flex items-center h-[18px]">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium truncate">{label}</div>
-      </div>
-    </button>
-  )
-}
-
-/** 工具配置页（含子分类侧边栏） */
+/**
+ * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
+ * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、子代理管理），
+ * 以及无对应 LLM 工具的功能页（Browser 数据/证书设置）。
+ */
 export function ToolSettings(): React.JSX.Element {
-  const [subTab, setSubTab] = useState<ToolSubTab>('ssh')
   const { t } = useTranslation()
 
   return (
-    <div className="flex flex-1 min-h-0 h-full">
-      {/* 左侧子分类导航 */}
-      <div className="w-[220px] flex-shrink-0 border-r border-border-secondary flex flex-col">
-        <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          <SubTabButton
-            icon={<Terminal size={14} className="shrink-0 text-text-tertiary" />}
-            label={t('tool.sshLabel')}
-            active={subTab === 'ssh'}
-            onClick={() => setSubTab('ssh')}
-          />
-          <SubTabButton
-            icon={<Database size={14} className="shrink-0 text-text-tertiary" />}
-            label={t('tool.remoteDbLabel')}
-            active={subTab === 'database'}
-            onClick={() => setSubTab('database')}
-          />
-          <SubTabButton
-            icon={<Globe size={14} className="shrink-0 text-text-tertiary" />}
-            label={t('tool.browserLabel')}
-            active={subTab === 'browser'}
-            onClick={() => setSubTab('browser')}
-          />
-          <SubTabButton
-            icon={<Bot size={14} className="shrink-0 text-text-tertiary" />}
-            label={t('tool.subAgentTab')}
-            active={subTab === 'subagent'}
-            onClick={() => setSubTab('subagent')}
-          />
-        </div>
-      </div>
-
-      {/* 右侧内容区 */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
-        {subTab === 'ssh' && <SshToolPanel />}
-        {subTab === 'database' && <DatabaseToolPanel />}
-        {subTab === 'browser' && <BrowserToolPanel />}
-        {subTab === 'subagent' && <SubAgentPanel />}
-      </div>
-    </div>
+    <BuiltinToolsView
+      loadDefinitions={() => window.api.tools.definitions()}
+      renderToolExtra={(name) => {
+        if (name === 'ssh') return <SshToolPanel />
+        if (name === 'database') return <DatabaseToolPanel />
+        if (name === 'Agent') return <SubAgentPanel />
+        return null
+      }}
+      extraTabs={[
+        {
+          id: 'browser',
+          label: t('tool.browserLabel'),
+          icon: <Globe size={14} className="shrink-0 text-text-tertiary" />,
+          content: <BrowserToolPanel />
+        }
+      ]}
+    />
   )
 }
 

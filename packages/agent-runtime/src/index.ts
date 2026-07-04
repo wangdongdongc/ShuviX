@@ -25,6 +25,7 @@ export {
   type ResolveModelProviderInfo
 } from './modelResolver'
 export { buildCustomProviderCompat } from './providerCompat'
+export { resolveInitialThinkingLevel } from './thinkingLevel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 export {
   McpManager,
@@ -32,7 +33,14 @@ export {
   type McpManagerOptions,
   type McpDiscoveredTool
 } from './mcpManager'
-export { createAskTool, AskParamsSchema, type CreateAskToolOptions } from './askTool'
+export {
+  createAskTool,
+  AskParamsSchema,
+  ASK_DESCRIPTION,
+  type CreateAskToolOptions
+} from './askTool'
+// 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
+export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）
 export type { FileSystemPort, FileStat, DirEntry, FileGuards } from './fileTools/port'
 export { readTextContent, readDirContent, type ReadTextParams } from './fileTools/read'
@@ -61,6 +69,9 @@ export {
 export { BaseTool } from './tools/baseTool'
 export {
   createFileToolSuite,
+  ReadParamsSchema,
+  WriteParamsSchema,
+  EditParamsSchema,
   type FileToolDeps,
   type FileToolSuite,
   type ReadDecoders
@@ -131,6 +142,8 @@ export {
 export {
   createDispatchAgentTool,
   DispatchAgentTool,
+  AgentParamsSchema,
+  buildDescription as buildDispatchDescription,
   type DispatchAgentToolDeps
 } from './subagent/dispatchTool'
 export type {
@@ -140,7 +153,7 @@ export type {
   SubAgentRegistry
 } from './subagent/types'
 export {
-  buildNotebookContextMessage,
+  buildNotebookContextText,
   notebookTaskName,
   runNotebookTask,
   type NotebookTaskInputs

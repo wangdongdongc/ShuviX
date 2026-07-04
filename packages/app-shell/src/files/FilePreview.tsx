@@ -2,7 +2,7 @@
  * FilePreview — 覆盖在 FilesTree 上的二级视图
  *
  * 各 kind 渲染策略：
- *  - text + .md/.mdx/.markdown   → MarkdownView（react-markdown + rehype-highlight）
+ *  - text + .md/.mdx/.markdown   → MarkdownView（只读 Atomic live-preview，可切源码模式）
  *  - text + 其它扩展             → CodeView（CodeMirror 6 read-only viewer）
  *  - image                       → <img> + data: URL
  *  - pdf / media                 → 通过 shuvix-preview 协议喂给 Chromium 原生 PDFium / <video>/<audio>
@@ -11,12 +11,9 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeRaw from 'rehype-raw'
 import {
   AlertCircle,
+  Code2,
   FileText,
   FileX,
   ListOrdered,
@@ -26,7 +23,8 @@ import {
   WrapText,
   X
 } from 'lucide-react'
-import { CodeBlock, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import { LivePreviewEditor, type NotebookCaps } from '../notebook/LivePreviewEditor'
 import { CodeView } from './CodeView'
 import { HexView } from './HexView'
 import { useMediaUrl } from './mediaUrl'
@@ -39,6 +37,8 @@ interface FilePreviewProps {
   onClose: () => void
   /** 提供则在预览顶栏下方显示「创建笔记本」横幅按钮（仅 markdown 预览时由 FilesPanel 传入） */
   onCreateNotebook?: () => void
+  /** 宿主能力注入（笔记本主题 / 外链）；markdown 走只读 live-preview 渲染时透传给编辑器 */
+  caps?: NotebookCaps
 }
 
 const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
@@ -47,15 +47,19 @@ export function FilePreview({
   path,
   sessionId,
   onClose,
-  onCreateNotebook
+  onCreateNotebook,
+  caps
 }: FilePreviewProps): React.JSX.Element {
   const { t } = useTranslation()
   const [result, setResult] = useState<FileReadResult | null>(null)
   /** 单行 minified / 长 JSON 等长行场景下让 CodeView 自动换行；切换文件不复位（视为面板偏好）。
-   *  只对非 markdown 的文本生效；markdown 自带段落换行无需此开关。 */
+   *  对非 markdown 文本，以及 markdown 切到「源码模式」时生效。 */
   const [wrapText, setWrapText] = useState(false)
   /** 文本代码视图是否显示行号；默认开，与主流编辑器一致 */
   const [showLineNumbers, setShowLineNumbers] = useState(true)
+  /** markdown 预览模式：false=笔记本只读 live-preview（默认）；true=源码视图（同其它纯文本）。
+   *  作为面板偏好，切换文件不复位。 */
+  const [mdSourceMode, setMdSourceMode] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -93,8 +97,10 @@ export function FilePreview({
   })
 
   const { fileName, parentDir } = splitPath(path)
-  // 只在非 markdown 文本预览下显示 wrap 开关 —— 图像 / hex / PDF / 媒体都用不上
-  const showWrapToggle = result?.kind === 'text' && !MARKDOWN_EXTS.has(result.ext)
+  // 当前预览是否为 markdown 文本 —— 决定是否显示「渲染/源码」模式切换
+  const isMarkdownText = result?.kind === 'text' && MARKDOWN_EXTS.has(result.ext)
+  // wrap / 行号开关：非 markdown 文本，或 markdown 切到源码模式时显示（即落到 CodeView 时）
+  const showWrapToggle = result?.kind === 'text' && (!isMarkdownText || mdSourceMode)
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
@@ -111,6 +117,20 @@ export function FilePreview({
           )}
         </div>
         <div className="flex items-center gap-0.5 flex-shrink-0">
+          {isMarkdownText && (
+            <button
+              onClick={() => setMdSourceMode((v) => !v)}
+              className={[
+                'p-1 rounded hover:bg-bg-hover/40 transition-colors',
+                mdSourceMode
+                  ? 'text-accent bg-bg-hover/30'
+                  : 'text-text-tertiary hover:text-text-secondary'
+              ].join(' ')}
+              title={t('panel.preview.markdownSourceToggle')}
+            >
+              <Code2 size={11} />
+            </button>
+          )}
           {showWrapToggle && (
             <>
               <button
@@ -161,23 +181,37 @@ export function FilePreview({
         </button>
       )}
 
-      {/* 内容区不带 overflow —— CodeView 内部的 .cm-scroller / HexView 内部虚拟化 /
-        PdfView iframe / 媒体元素 都管理自己的滚动；只有 MarkdownView 是普通文档流，
-        在它内部单独加 overflow-auto 即可，避免和 CM6 的 .cm-scroller 形成双滚动条 */}
+      {/* 内容区不带 overflow —— CodeView / MarkdownView 的 .cm-scroller、HexView 虚拟化、
+        PdfView iframe、媒体元素 都各自管理滚动，避免双滚动条 */}
       <div className="flex-1 min-h-0">
-        {renderBody(result, t, sessionId, wrapText, showLineNumbers)}
+        {renderBody(result, {
+          t,
+          path,
+          sessionId,
+          wrapText,
+          showLineNumbers,
+          mdSourceMode,
+          caps
+        })}
       </div>
     </div>
   )
 }
 
-function renderBody(
-  r: FileReadResult | null,
-  t: (key: string, options?: Record<string, unknown>) => string,
-  sessionId: string,
-  wrapText: boolean,
+interface RenderBodyOpts {
+  t: (key: string, options?: Record<string, unknown>) => string
+  /** 当前预览文件绝对路径（markdown live-preview 的 documentId） */
+  path: string
+  sessionId: string
+  wrapText: boolean
   showLineNumbers: boolean
-): React.ReactNode {
+  /** markdown 是否走源码视图（CodeView）而非只读 live-preview */
+  mdSourceMode: boolean
+  caps?: NotebookCaps
+}
+
+function renderBody(r: FileReadResult | null, opts: RenderBodyOpts): React.ReactNode {
+  const { t, path, sessionId, wrapText, showLineNumbers, mdSourceMode, caps } = opts
   if (!r) {
     // 文件加载中：纯居中 spinner，不写文案 —— 加载语义靠动画即可
     // （之前借用 panel.filesLoading 文案"正在扫描工作区"在文件加载语境下词不达意）
@@ -199,7 +233,10 @@ function renderBody(
         </div>
       )
     case 'text':
-      if (MARKDOWN_EXTS.has(r.ext)) return <MarkdownView content={r.content} />
+      // markdown 默认走只读 live-preview（笔记本同款渲染）；切到源码模式则落 CodeView
+      if (MARKDOWN_EXTS.has(r.ext) && !mdSourceMode) {
+        return <MarkdownView path={path} content={r.content} sessionId={sessionId} caps={caps} />
+      }
       return (
         <CodeView content={r.content} ext={r.ext} wrap={wrapText} lineNumbers={showLineNumbers} />
       )
@@ -368,20 +405,38 @@ function PdfView({ path, sessionId }: { path: string; sessionId: string }): Reac
   )
 }
 
-function MarkdownView({ content }: { content: string }): React.JSX.Element {
+/**
+ * MarkdownView —— markdown 文件的只读渲染：复用笔记本的 Atomic live-preview（CM6 Obsidian
+ * 风格行内渲染），相比旧的 react-markdown 静态渲染特殊样式（表格 / 任务列表 / 双链 / 内嵌图片）
+ * 效果更佳。readOnly 模式不可编辑、不聚焦，故全文渲染（无光标行源码揭示）。
+ *
+ * fileContext 启用双链：[[file]] 点击在本 Files 面板打开目标预览、![[image]] 行内预览，
+ * 均按文件名在该会话工作目录内解析。
+ *
+ * key={content} —— 外部写回（files.changed 触发重读）后内容变化时重挂载编辑器载入新内容
+ * （CM6 state 不可原地替换）；只读预览无光标/草稿，重挂载无损。
+ */
+function MarkdownView({
+  path,
+  content,
+  sessionId,
+  caps
+}: {
+  path: string
+  content: string
+  sessionId: string
+  caps?: NotebookCaps
+}): React.JSX.Element {
   return (
-    <div className="h-full overflow-auto">
-      <div className="markdown-body text-sm p-3">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight, rehypeRaw]}
-          components={{
-            pre: CodeBlock as never
-          }}
-        >
-          {content}
-        </ReactMarkdown>
-      </div>
+    <div className="h-full flex flex-col">
+      <LivePreviewEditor
+        key={content}
+        documentId={path}
+        initialContent={content}
+        readOnly
+        fileContext={{ sessionId }}
+        caps={caps}
+      />
     </div>
   )
 }

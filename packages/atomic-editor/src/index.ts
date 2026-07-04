@@ -12,6 +12,7 @@ export type {
 export { inlinePreview } from './inline-preview';
 export type { InlinePreviewConfig } from './inline-preview';
 export { imageBlocks } from './image-blocks';
+export { mermaidBlocks } from './mermaid-blocks';
 export { tables, tableContextMenu } from './table-widget';
 export type {
   TablesConfig,

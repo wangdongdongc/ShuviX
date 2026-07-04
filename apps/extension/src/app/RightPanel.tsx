@@ -13,14 +13,17 @@ import {
   SubAgentPanel,
   MediaUrlProvider,
   useCreateNotebook,
-  type ResolveMediaUrl
+  PanelTabBar,
+  usePanelStore,
+  type ResolveMediaUrl,
+  type PanelTabItem
 } from '@shuvix/app-shell'
 import {
   resolveMediaObjectUrl,
   workingDirPermission,
   requestWorkingDirPermission
 } from '../runtime/filesRuntime'
-import { usePanel, setPanelTab, type PanelTab } from './panelStore'
+import { type PanelTab } from './panelStore'
 
 /** 浏览器媒体/PDF：读字节生成 blob: object URL（用完 revoke）。中间区 NotebookView 也复用 */
 export const extMediaResolver: ResolveMediaUrl = ({ sessionId, path }) =>
@@ -87,41 +90,33 @@ const TABS: { key: PanelTab; labelKey: string; Icon: typeof FolderTree }[] = [
 
 export function RightPanel(): React.JSX.Element {
   const { t } = useTranslation()
-  const { activeTab } = usePanel()
+  const activeTab = usePanelStore((s) => s.activeTab)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   // Sub-agent tab 仅在当前主会话有子会话时显示（共享 useSubAgentCount，与桌面同口径）
   const subAgentCount = useSubAgentCount(activeSessionId)
-  const visibleTabs = TABS.filter((tab) => (tab.key === 'subagent' ? subAgentCount > 0 : true))
+  const tabItems: PanelTabItem[] = TABS.filter((tab) =>
+    tab.key === 'subagent' ? subAgentCount > 0 : true
+  ).map(({ key, labelKey, Icon }) => ({
+    key,
+    label: t(labelKey),
+    Icon,
+    badge: key === 'subagent' ? subAgentCount : undefined
+  }))
 
   // 当前 tab 被隐藏（子会话清空后停在 subagent）→ 自动切回 files
   useEffect(() => {
-    if (activeTab === 'subagent' && subAgentCount === 0) setPanelTab('files')
+    if (activeTab === 'subagent' && subAgentCount === 0)
+      usePanelStore.getState().setActiveTab('files')
   }, [activeTab, subAgentCount])
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
-      {/* 标签栏 */}
-      <div className="flex-shrink-0 flex items-center gap-0.5 px-1.5 h-8 border-b border-border-secondary/30">
-        {visibleTabs.map(({ key, labelKey, Icon }) => (
-          <button
-            key={key}
-            onClick={() => setPanelTab(key)}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-[12px] transition-colors ${
-              activeTab === key
-                ? 'text-text-primary bg-bg-hover/40'
-                : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/20'
-            }`}
-          >
-            <Icon size={13} />
-            <span>{t(labelKey)}</span>
-            {key === 'subagent' && subAgentCount > 0 && (
-              <span className="ml-0.5 text-[10px] text-text-tertiary/60 tabular-nums">
-                {subAgentCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* 标签栏（共享 PanelTabBar，与桌面统一外观） */}
+      <PanelTabBar
+        tabs={tabItems}
+        activeKey={activeTab}
+        onSelect={(key) => usePanelStore.getState().setActiveTab(key)}
+      />
 
       {/* 内容区 —— 两个面板始终挂载，visibility 切换（避免 pierre 文件树重建） */}
       <div className="flex-1 min-h-0 relative">

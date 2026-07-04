@@ -2,10 +2,10 @@
  * Edit 工具（桌面注册）—— 整条执行流程复用共享 createFileToolSuite，
  * 仅注入桌面端适配（Node fs / fileTime / 绝对路径 / SQLite SandboxPolicy，见 fileToolDeps）。
  */
-import { createFileToolSuite } from '@shuvix/agent-runtime'
+import { createFileToolSuite, EditParamsSchema } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { ToolContext } from '../services/toolContext'
-import { makeDesktopFileToolDeps } from './fileToolDeps'
+import { makeDesktopFileToolDeps, EDIT_DESCRIPTION } from './fileToolDeps'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import { t } from '../i18n'
 
@@ -20,5 +20,6 @@ registerBuiltinTool({
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.edit.labelKey),
   getHint: () => t('tool.editHint'),
   factory: (ctx) => makeEditTool(ctx),
-  presentation: BUILTIN_TOOL_PRESENTATIONS.edit.presentation
+  presentation: BUILTIN_TOOL_PRESENTATIONS.edit.presentation,
+  describe: () => ({ description: EDIT_DESCRIPTION, parameters: EditParamsSchema })
 })

@@ -52,7 +52,6 @@ import type {
   DbCredentialAddParams,
   DbCredentialUpdateParams,
   DbCredentialTestParams,
-  ShareMode,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
   TelegramBotInfo,
@@ -393,6 +392,8 @@ declare global {
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
       notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
       subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
+      subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
+      subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
@@ -566,9 +567,6 @@ declare global {
       }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
     }
-    subSession: {
-      destroy: (subSessionId: string) => Promise<{ success: boolean }>
-    }
     tools: {
       list: (sessionId?: string) => Promise<
         Array<{
@@ -595,6 +593,21 @@ declare global {
             }>
           }
         >
+      >
+      definitions: () => Promise<
+        Array<{
+          name: string
+          label: string
+          group: string
+          icon?: string
+          iconColor?: string
+          description: string
+          parameters: {
+            type?: string
+            properties?: Record<string, Record<string, unknown>>
+            required?: string[]
+          }
+        }>
       >
     }
     mcpServer: {
@@ -646,18 +659,12 @@ declare global {
       getTools: (id: string) => Promise<McpToolInfo[]>
     }
     webui: {
-      /** 切换指定 session 的分享状态 */
-      setShared: (params: {
-        sessionId: string
-        shared: boolean
-        mode?: ShareMode
-      }) => Promise<{ success: boolean }>
+      /** 切换指定 session 的分享状态（仅查看） */
+      setShared: (params: { sessionId: string; shared: boolean }) => Promise<{ success: boolean }>
       /** 查询单个 session 是否已分享 */
       isShared: (sessionId: string) => Promise<boolean>
-      /** 获取指定 session 的分享模式 */
-      getShareMode: (sessionId: string) => Promise<ShareMode | null>
-      /** 获取所有已分享的 session 列表（含模式） */
-      listShared: () => Promise<Array<{ sessionId: string; mode: ShareMode }>>
+      /** 获取所有已分享的 session id 列表 */
+      listShared: () => Promise<string[]>
       /** 获取 WebUI 服务器状态 */
       serverStatus: () => Promise<{
         running: boolean

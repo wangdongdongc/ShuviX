@@ -5,7 +5,7 @@
  * 零外部依赖，作为前后端通信的唯一契约。
  */
 
-import type { ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ToolResultDetails, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 
 // ─── 基础 ──────────────────────────────────────────────
@@ -179,8 +179,10 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   description: string
   /** 子智能体的系统提示词（UI 以卡片形式展示） */
   systemPrompt: string
-  /** 父 Agent 发给子智能体的初始 user prompt（UI 以卡片形式展示） */
+  /** 父 Agent 发给子智能体的初始 user prompt（UI 以卡片形式展示；含 inlineTokens 标记时渲染命令标签） */
   prompt: string
+  /** prompt 中内联 Token（slash 命令 / skill）的字典；面板据此把 prompt 渲染为命令标签 + 文本 */
+  inlineTokens?: Record<string, InlineToken>
   /** 额外注入子智能体上下文的人读文本（如笔记本会话的当前 md 内容）；UI 以折叠用户消息卡展示 */
   contextNote?: string
 }

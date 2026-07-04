@@ -3,11 +3,19 @@ import { useTranslation } from 'react-i18next'
 import { Globe, MessageCircle, TriangleAlert, X, icons } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 
-interface StatusBannerProps {
+export interface StatusBannerProps {
   sessionId: string
 }
 
-/** 运行时资源 / 分享 / 审批状态横幅 — 紧贴 titlebar 下方 */
+/**
+ * 运行时资源 / 分享 / 审批状态横幅（桌面/扩展共用）—— 紧贴顶栏下方，作为 ChatBody 的 banner 插槽。
+ *
+ * 各分项按宿主能力自动显隐，无需宿主传 caps：
+ *   - 运行时资源：宿主未填充 chatStore.sessionResources 即不渲染（扩展当前无）；
+ *   - 免审批：autoApprove 开时显示，点击经 getHostApi() 关闭（渠道端无 HostApi 时不可关）；
+ *   - 局域网共享 / Telegram：据 getChannelBindingApi() 探测，扩展无渠道即不渲染。
+ * 四类全空时整条横幅返回 null。
+ */
 export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Element | null {
   const { t } = useTranslation()
   const runtimes = useChatStore((s) => s.sessionResources[sessionId]?.runtimes)
@@ -17,15 +25,15 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
   )
   const autoApprove = sessionSettings?.autoApprove === true
 
-  // 分享状态
-  const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
+  // 分享状态（一律「仅查看」，仅 on/off）
+  const lanShared = useChatStore((s) => s.sharedSessionIds.has(sessionId))
   const telegramBinding = useChatStore((s) => s.telegramBindings.get(sessionId) ?? null)
 
   const runtimeEntries = runtimes ? Object.entries(runtimes) : []
 
-  if (runtimeEntries.length === 0 && !autoApprove && !lanShareMode && !telegramBinding) return null
+  if (runtimeEntries.length === 0 && !autoApprove && !lanShared && !telegramBinding) return null
 
-  /** 点击关闭命令免审批（宿主能力；渠道端无此操作） */
+  /** 点击关闭免审批（宿主能力；渠道端无此操作） */
   const handleDisableAutoApprove = async (): Promise<void> => {
     const host = getHostApi()
     if (!host) return
@@ -39,7 +47,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
     if (!webui) return
     await webui.setShared({ sessionId, shared: false })
     const shared = await webui.listShared()
-    useChatStore.getState().setSharedSessionIds(new Map(shared.map((s) => [s.sessionId, s.mode])))
+    useChatStore.getState().setSharedSessionIds(new Set(shared))
   }
 
   /** 点击取消 Telegram 绑定 */
@@ -94,7 +102,7 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
           <X size={10} className="ml-0.5 opacity-60" />
         </button>
       )}
-      {lanShareMode && (
+      {lanShared && (
         <button
           onClick={handleDisableLanShare}
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
@@ -102,13 +110,6 @@ export function StatusBanner({ sessionId }: StatusBannerProps): React.JSX.Elemen
         >
           <Globe size={11} />
           {t('chat.lanShareLabel')}
-          <span className="opacity-60">
-            (
-            {t(
-              `sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}`
-            )}
-            )
-          </span>
           <X size={10} className="ml-0.5 opacity-60" />
         </button>
       )}

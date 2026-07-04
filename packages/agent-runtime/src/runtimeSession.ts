@@ -182,12 +182,15 @@ export class RuntimeSession {
     return this.persistStreamBuffer()
   }
 
-  /** 应用已解析的模型对象 + 思考深度（宿主负责 provider/模型 查找与 resolveModel） */
-  applyModel(model: Model<Api>, thinkingLevel: ThinkingLevel): void {
+  /**
+   * 应用已解析的模型对象（宿主负责 provider/模型 查找与 resolveModel）。
+   * thinkingLevel 省略时保留当前思考深度——切模型不重置（思考与能力点解绑）。
+   */
+  applyModel(model: Model<Api>, thinkingLevel?: ThinkingLevel): void {
     this.agent.state.model = model
-    this.agent.state.thinkingLevel = thinkingLevel
+    if (thinkingLevel !== undefined) this.agent.state.thinkingLevel = thinkingLevel
     this.logger.info(
-      `切换模型 session=${this.sessionId} model=${model.id} thinking=${thinkingLevel}`
+      `切换模型 session=${this.sessionId} model=${model.id} thinking=${this.agent.state.thinkingLevel}`
     )
   }
 

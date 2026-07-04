@@ -1,13 +1,10 @@
 import { useEffect } from 'react'
-import { useChatStore, getSessionChannelApi, type ShareMode } from '@shuvix/chat-ui'
+import { useChatStore, getSessionChannelApi } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../renderer/src/stores/settingsStore'
 import { ChatHostProvider } from '@shuvix/chat-ui'
 import { useSettingsChatHost } from '../renderer/src/host/settingsChatHost'
 import { SessionRuntime } from '../renderer/src/host/SessionRuntime'
 import { ChatView } from '../renderer/src/components/chat/ChatView'
-import { BrowserPanel } from '../renderer/src/components/browser/BrowserPanel'
-import { BrowserResizeHandle } from '../renderer/src/components/browser/BrowserResizeHandle'
-import { useBrowserStore } from '../renderer/src/stores/browserStore'
 import { SESSION_ID, api } from './api'
 
 /**
@@ -18,19 +15,15 @@ export default function WebApp(): React.JSX.Element {
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
 
   // ─── 初始化：加载设置 + 设置当前 session ───
-  // 渠道端无 HostApi：外观/分享模式经服务端 HTTP 直取，会话经 SessionChannelApi。
+  // 渠道端无 HostApi：外观经服务端 HTTP 直取，会话经 SessionChannelApi。分享一律「仅查看」，
+  // 故直接置 viewOnly=true（只读：隐藏输入、笔记本只读、右侧面板不显示）。
   // provider 目录不加载（模型选择器属宿主能力，已自动隐藏）。
   useEffect(() => {
+    useChatStore.getState().setViewOnly(true)
     const init = async (): Promise<void> => {
       // 加载设置（主题、字体等）
       const settings = await api<Record<string, string>>('/settings')
       useSettingsStore.getState().loadSettings(settings)
-
-      // 获取分享模式（决定只读 / 可发消息）
-      const shareModeResult = await api<{ mode: ShareMode | null }>(
-        `/sessions/${SESSION_ID}/share-mode`
-      )
-      useChatStore.getState().setShareMode(shareModeResult.mode ?? null)
 
       // 获取会话信息并设为活跃
       const sessionInfo = await getSessionChannelApi().session.getById(SESSION_ID)
@@ -69,17 +62,14 @@ export default function WebApp(): React.JSX.Element {
     }
   }, [theme, darkTheme, lightTheme])
 
-  const isBrowserOpen = useBrowserStore((s) => s.isOpen)
-
   return (
     <ChatHostProvider value={chatHost}>
       <SessionRuntime sessionId={activeSessionId} />
+      {/* 仅查看：只渲染对话/笔记本只读视图，无右侧面板。min-w-0 让窄视口(手机)下内容正常换行不裁切。 */}
       <div className="h-screen flex bg-bg-primary text-text-primary">
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 min-w-0">
           <ChatView />
         </div>
-        {isBrowserOpen && <BrowserResizeHandle />}
-        {isBrowserOpen && <BrowserPanel />}
       </div>
     </ChatHostProvider>
   )

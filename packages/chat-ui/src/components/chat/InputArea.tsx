@@ -3,7 +3,11 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, Mic, X, Archive } from 'lucide-react'
 import { TokenBadge } from './InlineTokenBadge'
-import { makeTokenMarker, expandCommandTemplate } from '@shuvix/chat-protocol/utils/inlineTokens'
+import {
+  expandCommandTemplate,
+  buildCommandToken,
+  parseSlashCommandInput
+} from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   useChatStore,
@@ -202,6 +206,31 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
     [activeSessionId]
   )
 
+  /**
+   * 构造发送文本 + 内联 Token（slash 命令 / skill 展开）—— 主会话与笔记本会话共用同一逻辑。
+   * 命中 slash 命令时返回 marker 文本 + tokens（后端解析为发给 Agent 的真实指令并渲染标签），
+   * 否则原样返回。
+   */
+  const buildSlashOutgoing = useCallback(
+    (
+      raw: string,
+      sid: string | null
+    ): { contentText: string; inlineTokens?: Record<string, InlineToken> } => {
+      if (slashChip) {
+        return buildCommandToken(slashChip, raw, { sessionId: sid ?? undefined })
+      }
+      if (raw.startsWith('/')) {
+        const parsed = parseSlashCommandInput(raw, slashCommands, { sessionId: sid ?? undefined })
+        if (parsed) {
+          autoEnableRequiredTools(parsed.command.requiredTools)
+          return { contentText: parsed.contentText, inlineTokens: parsed.inlineTokens }
+        }
+      }
+      return { contentText: raw }
+    },
+    [slashChip, slashCommands, autoEnableRequiredTools]
+  )
+
   /** 发送消息（支持图片） */
   const handleSend = async (): Promise<void> => {
     // 录音中则先停止录制
@@ -213,14 +242,17 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
     // 笔记本模式：每次发送开启独立子智能体（fire-and-forget）。子代理上下文仅注入笔记本路径 + read 提示，
     // 正文由其自行读取。不走主会话流式态（笔记本无主 Agent）；进展看右侧子智能体面板。模型/工具由会话配置决定。
     if (notebook) {
-      if (!rawText || !activeSessionId) return
+      if ((!rawText && !slashChip) || !activeSessionId) return
+      // 笔记本会话同样支持 slash 命令 / skill：展开为内联 Token，后端解析为发给子代理的真实指令
+      const { contentText, inlineTokens } = buildSlashOutgoing(rawText, activeSessionId)
       const store = useChatStore.getState()
       store.setInputText('')
       store.clearPendingImages()
       setSlashChip(null)
       void getSessionChannelApi().agent.notebookPrompt({
         sessionId: activeSessionId,
-        text: rawText
+        text: contentText,
+        inlineTokens
       })
       return
     }
@@ -243,52 +275,13 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
       s.setActiveSessionId(sid)
     }
 
-    // ─── 前端斜杠命令展开 + Token 构造 ───
-    let contentText: string
-    let inlineTokens: Record<string, InlineToken> | undefined
-
-    if (slashChip) {
-      // 芯片模式：从芯片中获取模板并展开
-      const uid = 't0'
-      const expandedText = expandCommandTemplate(slashChip.template, rawText, {
-        sessionId: sid
-      })
-      const token: InlineToken = {
-        type: 'cmd',
-        id: slashChip.commandId,
-        displayText: `/${slashChip.commandId}`,
-        payload: expandedText,
-        name: slashChip.name
-      }
-      inlineTokens = { [uid]: token }
-      contentText = rawText ? `${makeTokenMarker(uid)} ${rawText}` : makeTokenMarker(uid)
-    } else if (rawText.startsWith('/')) {
-      // 直接输入模式：检测斜杠命令并展开
-      const spaceIdx = rawText.indexOf(' ')
-      const cmdId = spaceIdx === -1 ? rawText.slice(1) : rawText.slice(1, spaceIdx)
-      const args = spaceIdx === -1 ? '' : rawText.slice(spaceIdx + 1).trim()
-      const cmd = slashCommands.find((c) => c.commandId === cmdId)
-      if (cmd) {
-        autoEnableRequiredTools(cmd.requiredTools)
-        const uid = 't0'
-        const expandedText = expandCommandTemplate(cmd.template, args, {
-          sessionId: sid
-        })
-        const token: InlineToken = {
-          type: 'cmd',
-          id: cmd.commandId,
-          displayText: `/${cmd.commandId}`,
-          payload: expandedText,
-          name: cmd.name
-        }
-        inlineTokens = { [uid]: token }
-        contentText = args ? `${makeTokenMarker(uid)} ${args}` : makeTokenMarker(uid)
-      } else {
-        contentText = rawText
-      }
-    } else {
-      contentText = rawText || t('input.imageOnly')
-    }
+    // ─── 前端斜杠命令展开 + Token 构造（与笔记本会话共用 buildSlashOutgoing） ───
+    const outgoing = buildSlashOutgoing(rawText, sid)
+    const inlineTokens = outgoing.inlineTokens
+    // 纯图片消息（无文本无命令）回退占位文案
+    const contentText = inlineTokens
+      ? outgoing.contentText
+      : outgoing.contentText || t('input.imageOnly')
 
     const store = useChatStore.getState()
     store.setInputText('')

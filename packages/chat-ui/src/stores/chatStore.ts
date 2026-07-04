@@ -30,9 +30,6 @@ export type {
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 export type { ToolResultDetails }
 
-/** 分享模式类型（与后端 ShareMode 对齐） */
-export type ShareMode = 'readonly' | 'chat' | 'full'
-
 /** 工具执行实时状态（流式期间的临时状态） */
 export interface ToolExecution {
   toolCallId: string
@@ -178,6 +175,13 @@ interface ChatState {
    * 含 nonce 以便重复点击同一文件也能触发（值变化）。
    */
   filePreviewRequest: { absPath: string; nonce: number } | null
+  /**
+   * 请求显示右侧「子智能体」面板的信号（子会话 id + 单调 nonce）。
+   * useAgentEvents 收到当前会话的 sub_session_register 时设置；宿主订阅后打开自己的右侧面板并切到
+   * subagent tab（面板属宿主外壳、各端 store 不同，故「事件检测」收敛到此处，「如何显示」仍由宿主实现）。
+   * 含 nonce 以便同一会话多次起子代理也能触发（值变化）。
+   */
+  subAgentRevealRequest: { subSessionId: string; nonce: number } | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -230,12 +234,15 @@ interface ChatState {
    * 跨会话切换持久化,在 request resolved/abort 后随 draft 一起清除。
    */
   sessionOtherInputs: Record<string, Record<string, string>>
-  /** 已开启 WebUI 分享的 session ID → 分享模式 */
-  sharedSessionIds: Map<string, ShareMode>
+  /** 已开启 WebUI 分享（仅查看）的 session ID 集合 */
+  sharedSessionIds: Set<string>
   /** Telegram 绑定关系：sessionId → { botId, username } */
   telegramBindings: Map<string, { botId: string; username: string }>
-  /** 当前 WebUI 分享模式（null = Electron 本地，不受限） */
-  shareMode: ShareMode | null
+  /**
+   * 当前是否「仅查看」渠道（true = WebUI 分享端：只读、不可发送/编辑；false = 本地宿主，完整能力）。
+   * WebUI 启动时置 true；桌面/扩展保持 false。
+   */
+  viewOnly: boolean
   /** 正在压缩的会话 ID 集合 */
   compactingSessions: Set<string>
 
@@ -244,6 +251,8 @@ interface ChatState {
   setActiveSessionId: (id: string | null) => void
   /** 请求在右侧 Files 面板打开某文件预览（绝对路径）；由笔记本编辑器 [[wiki-link]] 点击触发 */
   requestFilePreview: (absPath: string) => void
+  /** 请求显示右侧「子智能体」面板（子会话 id）；由 useAgentEvents 收到当前会话 sub_session_register 时触发 */
+  requestSubAgentReveal: (subSessionId: string) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -288,8 +297,8 @@ interface ChatState {
   setSlashCommands: (
     commands: Array<{ commandId: string; name: string; description: string; template: string }>
   ) => void
-  setShareMode: (mode: ShareMode | null) => void
-  setSharedSessionIds: (ids: Map<string, ShareMode>) => void
+  setViewOnly: (v: boolean) => void
+  setSharedSessionIds: (ids: Set<string>) => void
   setTelegramBindings: (bindings: Map<string, { botId: string; username: string }>) => void
   /** 设置/删除运行时资源状态（info 为 null 时删除） */
   setRuntime: (sessionId: string, runtimeId: string, info: RuntimeInfo | null) => void
@@ -416,17 +425,17 @@ export const selectAllPendingCounts = (s: ChatState): Record<string, number> => 
 export const selectInputDraft = (s: ChatState, sessionId: string, requestId: string): unknown =>
   s.sessionInputDrafts[sessionId]?.[requestId]
 
-/** 当前模式是否允许对话（chat / full / null=本地） */
-export const selectCanChat = (s: ChatState): boolean => s.shareMode !== 'readonly'
+/** 是否允许对话（本地宿主 = 可；仅查看渠道 = 否） */
+export const selectCanChat = (s: ChatState): boolean => !s.viewOnly
 
-/** 当前模式是否允许编辑配置（full / null=本地） */
-export const selectCanEdit = (s: ChatState): boolean =>
-  s.shareMode === 'full' || s.shareMode === null
+/** 是否允许编辑会话配置（本地宿主 = 可；仅查看渠道 = 否） */
+export const selectCanEdit = (s: ChatState): boolean => !s.viewOnly
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
   filePreviewRequest: null,
+  subAgentRevealRequest: null,
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
@@ -445,9 +454,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   projectPath: null,
   slashCommands: [],
   sessionResources: {},
-  sharedSessionIds: new Map(),
+  sharedSessionIds: new Set(),
   telegramBindings: new Map(),
-  shareMode: null,
+  viewOnly: false,
   compactingSessions: new Set(),
 
   setSessions: (sessions) => set({ sessions }),
@@ -472,6 +481,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   requestFilePreview: (absPath) =>
     set((state) => ({
       filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1 }
+    })),
+  requestSubAgentReveal: (subSessionId) =>
+    set((state) => ({
+      subAgentRevealRequest: {
+        subSessionId,
+        nonce: (state.subAgentRevealRequest?.nonce ?? 0) + 1
+      }
     })),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>
@@ -665,8 +681,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 删除的是当前激活会话才清空 active
       ...(state.active?.type === 'session' && state.active.id === id ? deriveActive(null) : {})
     })),
-  setShareMode: (mode) => set({ shareMode: mode }),
-  setSharedSessionIds: (ids: Map<string, ShareMode>) => set({ sharedSessionIds: ids }),
+  setViewOnly: (v) => set({ viewOnly: v }),
+  setSharedSessionIds: (ids: Set<string>) => set({ sharedSessionIds: ids }),
   setTelegramBindings: (bindings) => set({ telegramBindings: bindings }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),

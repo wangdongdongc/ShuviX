@@ -19,6 +19,9 @@
   "sideEffects": [
     "**/*.css"
   ],
+  "dependencies": {
+    "mermaid": "^11.12.3"
+  },
   "peerDependencies": {
     "@codemirror/autocomplete": "^6.0.0",
     "@codemirror/commands": "^6.0.0",

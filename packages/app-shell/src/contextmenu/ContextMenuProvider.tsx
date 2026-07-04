@@ -1,5 +1,9 @@
-import { createContext, useCallback, useContext, useState } from 'react'
-import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import type {
+  ContextMenuItem,
+  ContextMenuRequest,
+  ContextMenuResult
+} from '@shuvix/chat-protocol/types/contextMenu'
 import { ContextMenuPopup } from './ContextMenuPopup'
 
 export interface ContextMenuPosition {
@@ -58,6 +62,37 @@ export function ContextMenuProvider({
         />
       )}
     </RendererContext.Provider>
+  )
+}
+
+/**
+ * 笔记本编辑器（共享 LivePreviewEditor）所需的 `popupContextMenu(request)` 能力适配器：
+ * 把统一渲染器（扩展端 DOM 弹层 / 桌面端原生）包装成 Promise<ContextMenuResult>。
+ *
+ * 与 useContextMenu 的差异：caps.popupContextMenu 只收到 { items } 不含坐标（桌面原生菜单按
+ * OS 光标弹出无需坐标）。DOM 渲染器需要坐标，故这里以 document 捕获阶段监听 contextmenu
+ * 记录最近右键位置 —— 该监听早于 React 的 onContextMenu（冒泡）触发，弹出时坐标已就绪。
+ *
+ * 须在 <ContextMenuProvider> 之内调用。桌面 notebook 直接注入 window.api.contextMenu.popup，
+ * 不走本适配器；扩展端用它把笔记本右键接到内置 DOM 弹层。
+ */
+export function usePopupContextMenu(): (request: ContextMenuRequest) => Promise<ContextMenuResult> {
+  const renderer = useContext(RendererContext)
+  const posRef = useRef<ContextMenuPosition>({ x: 0, y: 0 })
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent): void => {
+      posRef.current = { x: e.clientX, y: e.clientY }
+    }
+    document.addEventListener('contextmenu', onContextMenu, true)
+    return () => document.removeEventListener('contextmenu', onContextMenu, true)
+  }, [])
+  return useCallback(
+    async (request: ContextMenuRequest): Promise<ContextMenuResult> => {
+      if (!renderer) return { actionId: null }
+      const actionId = await renderer(request.items, posRef.current)
+      return { actionId }
+    },
+    [renderer]
   )
 }
 

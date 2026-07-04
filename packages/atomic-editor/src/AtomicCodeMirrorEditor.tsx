@@ -43,6 +43,7 @@ import {
 import { atomicEditorTheme, atomicMarkdownSyntax } from './atomic-theme';
 import { autoCloseCodeFence, extendEmphasisPair } from './edit-helpers';
 import { imageBlocks } from './image-blocks';
+import { mermaidBlocks } from './mermaid-blocks';
 import { inlinePreview } from './inline-preview';
 import { tables } from './table-widget';
 
@@ -196,6 +197,21 @@ export interface AtomicCodeMirrorEditorProps {
    * ```
    */
   extensions?: readonly Extension[];
+
+  /**
+   * Render the document as a non-editable live preview. Adds
+   * `EditorState.readOnly` (blocks doc mutation) plus
+   * `EditorView.editable=false` (drops contenteditable, so no IME / caret).
+   *
+   * A read-only view never takes focus, and inline-preview only reveals
+   * raw syntax on the focused line — so with `readOnly` every line stays
+   * fully rendered (no cursor-driven syntax reveal). This is what makes
+   * it a clean "rendered markdown" viewer rather than an editor at rest.
+   *
+   * Captured once at mount (keyed on `documentId ?? markdownSource`),
+   * like the other built-ins.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -219,6 +235,7 @@ export function AtomicCodeMirrorEditor({
   editorHandleRef,
   codeLanguages = EMPTY_CODE_LANGUAGES,
   extensions = EMPTY_EXTENSIONS,
+  readOnly = false,
 }: AtomicCodeMirrorEditorProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -295,6 +312,7 @@ export function AtomicCodeMirrorEditor({
             onLinkClick: (url) => onLinkClickRef.current?.(url),
           }),
           imageBlocks(),
+          mermaidBlocks(),
           inlinePreview({
             onLinkClick: (url) => onLinkClickRef.current?.(url),
           }),
@@ -303,6 +321,11 @@ export function AtomicCodeMirrorEditor({
             onMarkdownChangeRef.current?.(update.state.doc.toString());
           }),
           initialRevealField,
+          // Read-only viewer: block mutation + drop contenteditable so the
+          // view never focuses (keeps inline-preview fully rendered).
+          ...(readOnly
+            ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+            : []),
           // Consumer extensions last so they compose on top of the
           // built-ins (e.g. a custom keymap wrapped in Prec.high will
           // beat the default keymap above). Extensions intentionally

@@ -24,8 +24,8 @@ export const AskParamsSchema = Type.Object({
   )
 })
 
-const ASK_DESCRIPTION =
-  'Present a question with clickable options to the user. You MUST use this tool instead of listing options in text whenever you need the user to choose between approaches, styles, configurations, or any decision point. Do NOT list numbered options in plain text — always call this tool so the user can click to select.'
+export const ASK_DESCRIPTION =
+  'Present a question with clickable options to the user. When the user needs to choose between approaches, styles, configurations, or any decision point, use this tool so the options are clickable rather than written out as plain text.'
 
 export interface CreateAskToolOptions {
   /** 挂起并等待用户响应（桌面经 IPC，扩展经 RuntimeSession；均落到共享 chat-ui 面板） */

@@ -23,11 +23,11 @@ import {
 import { appEventBus } from '../utils/appEventBus'
 import { t } from '../i18n'
 
-const READ_DESCRIPTION =
+export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
-const WRITE_DESCRIPTION =
+export const WRITE_DESCRIPTION =
   "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
-const EDIT_DESCRIPTION =
+export const EDIT_DESCRIPTION =
   'Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.'
 
 /** 桌面 FileGuards —— 包 fileTime 的 per-session 读取时间 + 写锁 */

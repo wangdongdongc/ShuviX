@@ -4,21 +4,13 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
-import {
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  MessageSquare,
-  Send,
-  Settings,
-  X
-} from 'lucide-react'
+import { Bot, Check, ChevronDown, ChevronRight, Send, Settings, Square, X } from 'lucide-react'
 import {
   useSubSessionStore,
   selectSubSessionList,
   getSessionChannelApi,
+  TokenBadge,
+  InvalidTokenBadge,
   type SubSessionState,
   type SubSessionStatus
 } from '@shuvix/chat-ui'
@@ -26,64 +18,143 @@ import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
 import { CodeBlock } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { StepBlock } from '@shuvix/chat-ui'
+import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
-/** 状态图标 */
-function StatusIcon({ status }: { status: SubSessionStatus }): React.JSX.Element {
-  switch (status) {
-    case 'running':
-      return <Loader2 size={10} className="animate-spin text-accent" />
-    case 'done':
-      return <Check size={10} className="text-success" />
-    case 'error':
-      return <X size={10} className="text-error" />
+/**
+ * 折叠头右侧的单一状态/动作按钮 —— 合并原「状态图标 + 关闭按钮」为一个状态唯一的按钮：
+ *   进行中：主 agent 输入框同款的小号中断按钮（实心方块，error 红），点击软停止生成；
+ *   已完成/出错：静止显示状态图标（✓ 绿 / ✕ 红），hover 切换为删除 ✕，点击移除该子会话。
+ */
+function HeaderAction({
+  status,
+  onInterrupt,
+  onDelete
+}: {
+  status: SubSessionStatus
+  onInterrupt: (e: React.MouseEvent) => void
+  onDelete: (e: React.MouseEvent) => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  if (status === 'running') {
+    return (
+      <button
+        onClick={onInterrupt}
+        className="ml-0.5 p-0.5 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
+        title={t('panel.subAgentInterrupt')}
+      >
+        <Square size={10} fill="currentColor" />
+      </button>
+    )
   }
+  return (
+    <button
+      onClick={onDelete}
+      className="group/del ml-0.5 p-0.5 rounded hover:bg-bg-hover transition-colors"
+      title={t('panel.subAgentClose')}
+    >
+      {status === 'done' ? (
+        <Check size={11} className="text-success group-hover/del:hidden" />
+      ) : (
+        <X size={11} className="text-error group-hover/del:hidden" />
+      )}
+      <X size={11} className="hidden text-text-secondary group-hover/del:block" />
+    </button>
+  )
 }
 
 /**
- * 提示横幅 — 展示子智能体的 system / user 消息。扁平整宽横幅（accent 浅底 + 上下分隔线，
- * 风格同 Files 面板「新建会话」横幅），点击展开/折叠原文。
+ * 提示元信息行 — 展示子智能体的 system / user 指令。设计为「安静的元信息」而非醒目横幅：
+ * 无底色填充、中性微型标签 + 仅靠小号弱化色图标作类别提示，点击展开看全文。
+ * 既让用户清晰看到所有指令，又不喧宾夺主（让位给下方转写正文）。
  */
 function PromptCard({
   icon,
   label,
   content,
-  accent,
-  defaultExpanded = false
+  defaultExpanded = false,
+  inlineTokens
 }: {
+  /** 类别图标（自带弱化色：System 琥珀 / User 蓝，作唯一颜色提示） */
   icon: React.ReactNode
   label: string
   content: string
-  /** 横幅的 Tailwind 文本+底色类，如 'text-accent bg-accent/5 hover:bg-accent/10' */
-  accent: string
   defaultExpanded?: boolean
+  /** prompt 含内联 Token（slash 命令 / skill）时，按 segmentContent 拆分渲染命令标签 + 文本 */
+  inlineTokens?: Record<string, InlineToken>
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded)
   if (!content) return <></>
+  // 含内联 Token 时整条按 segments 渲染（标签内联）；否则走原纯文本路径
+  const segments =
+    inlineTokens && Object.keys(inlineTokens).length > 0
+      ? segmentContent(content, inlineTokens)
+      : null
+  const renderSegments = (): React.ReactNode =>
+    segments?.map((seg, i) => {
+      if (seg.type === 'text') return <span key={i}>{seg.text}</span>
+      if (seg.type === 'token') return <TokenBadge key={i} segment={seg} />
+      return <InvalidTokenBadge key={i} segment={seg} />
+    })
   return (
-    <div className="border-b border-border-secondary/30">
+    <div className="border-b border-border-secondary/20 last:border-b-0">
       <button
         onClick={() => setExpanded((v) => !v)}
-        className={`w-full flex items-center gap-1 px-2.5 h-6 text-[10px] font-medium transition-colors ${accent}`}
+        className="group w-full flex items-center gap-1.5 px-2.5 h-6 text-[10px] transition-colors hover:bg-bg-secondary/40"
       >
-        <span className="flex-shrink-0 flex items-center">{icon}</span>
-        {/* 固定宽度让 System / User 后的摘要起点对齐（须容纳较宽的 "System" 不溢出） */}
-        <span className="flex-shrink-0 w-12 whitespace-nowrap">{label}</span>
+        {/* 弱化色小图标——本行唯一的颜色，作 System/User 类别提示 */}
+        <span className="flex-shrink-0 flex items-center opacity-70">{icon}</span>
+        {/* 中性微型标签（固定宽对齐摘要起点）；不再用醒目 accent 色 */}
+        <span className="flex-shrink-0 w-10 whitespace-nowrap text-left uppercase tracking-wider text-[9px] font-medium text-text-tertiary">
+          {label}
+        </span>
         {/* 摘要常显（展开时也保留），便于折叠态/展开态都能一眼看到首行 */}
-        <span className="flex-1 min-w-0 truncate text-left font-normal text-text-tertiary/70">
-          {content.split('\n')[0]}
+        <span className="flex-1 min-w-0 truncate text-left text-text-tertiary/55 group-hover:text-text-tertiary/80 transition-colors">
+          {segments ? renderSegments() : content.split('\n')[0]}
         </span>
         {expanded ? (
-          <ChevronDown size={11} className="flex-shrink-0 opacity-50" />
+          <ChevronDown size={11} className="flex-shrink-0 text-text-tertiary/40" />
         ) : (
-          <ChevronRight size={11} className="flex-shrink-0 opacity-50" />
+          <ChevronRight size={11} className="flex-shrink-0 text-text-tertiary/40" />
         )}
       </button>
-      {expanded && (
-        <pre className="px-3 py-2 text-[11px] text-text-secondary whitespace-pre-wrap break-words overflow-auto max-h-[40vh] leading-relaxed bg-bg-secondary/30">
-          {content}
-        </pre>
-      )}
+      {expanded &&
+        (segments ? (
+          <div className="px-3 py-2 text-[11px] text-text-secondary whitespace-pre-wrap break-words overflow-auto max-h-[40vh] leading-relaxed bg-bg-secondary/30">
+            {renderSegments()}
+          </div>
+        ) : (
+          <pre className="px-3 py-2 text-[11px] text-text-secondary whitespace-pre-wrap break-words overflow-auto max-h-[40vh] leading-relaxed bg-bg-secondary/30">
+            {content}
+          </pre>
+        ))}
+    </div>
+  )
+}
+
+/**
+ * 用户消息气泡 — 右对齐 accent 浅底圆角，含内联 Token（slash/skill）标签，与主对话框用户气泡同形。
+ * 子会话的「起始指令（User）」与「后续追问」共用同一气泡，使子会话转写读起来就是一段对话。
+ */
+function UserBubble({
+  content,
+  inlineTokens
+}: {
+  content: string
+  inlineTokens?: Record<string, InlineToken>
+}): React.JSX.Element | null {
+  if (!content) return null
+  const segments = segmentContent(content, inlineTokens)
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] rounded-lg bg-accent/10 text-text-primary text-xs px-2 py-1 whitespace-pre-wrap break-words">
+        {segments.map((seg, idx) => {
+          if (seg.type === 'text') return <span key={idx}>{seg.text}</span>
+          if (seg.type === 'token') return <TokenBadge key={idx} segment={seg} />
+          return <InvalidTokenBadge key={idx} segment={seg} />
+        })}
+      </div>
     </div>
   )
 }
@@ -134,15 +205,11 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
       </div>
     )
   }
-  // 用户后续追问：右对齐的 accent 浅底气泡，区别于助手输出
+  // 用户后续追问：复用 UserBubble（与起始指令同形）
   if (msg.role === 'user' && msg.type === 'text') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-lg bg-accent/10 text-text-primary text-xs px-2 py-1 whitespace-pre-wrap break-words">
-          {msg.content}
-        </div>
-      </div>
-    )
+    const tokens = (msg.metadata as { inlineTokens?: Record<string, InlineToken> } | null)
+      ?.inlineTokens
+    return <UserBubble content={msg.content} inlineTokens={tokens} />
   }
   return null
 }
@@ -170,34 +237,17 @@ const SubSessionStream = memo(function SubSessionStream({
       ref={scrollerRef}
       className="max-h-[480px] overflow-y-auto overflow-x-hidden no-scrollbar px-3 py-1.5 space-y-1 text-text-secondary"
     >
-      {/* 上下文横幅按角色直显 System / User（整宽 accent 浅底横幅，风格同「新建会话」）。
-          整体 -mx-3 -mt-2 突破内容区内边距，做到边到边、与消息区平齐。
-          focusLast（专注模式）：System/User 同属非最新输出，一并淡化，hover 临时点亮。 */}
+      {/* System 指令：安静的元信息行（无底色，仅小号弱化色图标），点击展开看全文。
+          -mx-3 -mt-2 边到边、底部细分隔线与转写区隔开。focusLast：非最新输出，淡化、hover 点亮。 */}
       <div
-        className={`-mx-3 -mt-2 mb-1 ${
+        className={`-mx-3 -mt-2 mb-1.5 border-b border-border-secondary/30 ${
           focusLast ? 'opacity-40 transition-opacity duration-200 hover:opacity-100' : ''
         }`}
       >
         <PromptCard
-          icon={<Settings size={10} />}
+          icon={<Settings size={10} className="text-amber-500/70" />}
           label="System"
           content={sub.systemPrompt}
-          accent="text-amber-500 bg-amber-500/5 hover:bg-amber-500/10"
-        />
-        {/* 注入上下文（如笔记本当前内容）+ 用户指令，均默认折叠 */}
-        {sub.contextNote && (
-          <PromptCard
-            icon={<MessageSquare size={10} />}
-            label="User"
-            content={sub.contextNote}
-            accent="text-accent bg-accent/5 hover:bg-accent/10"
-          />
-        )}
-        <PromptCard
-          icon={<MessageSquare size={10} />}
-          label="User"
-          content={sub.prompt}
-          accent="text-accent bg-accent/5 hover:bg-accent/10"
         />
       </div>
 
@@ -212,6 +262,10 @@ const SubSessionStream = memo(function SubSessionStream({
         }`}
         style={{ zoom: 0.85 }}
       >
+        {/* 起始 User 指令（注入上下文 + 用户 prompt）：与下方追问同款用户气泡，使转写读起来就是一段对话 */}
+        {sub.contextNote && <UserBubble content={sub.contextNote} />}
+        <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
+
         {/* 已提交消息（tool_use + assistant text） */}
         {sub.messages.map((m) => (
           <SubMessageBubble key={m.id} msg={m} />
@@ -304,12 +358,22 @@ const SubSessionStream = memo(function SubSessionStream({
 function SubAgentReplyInput({ subSessionId }: { subSessionId: string }): React.JSX.Element {
   const { t } = useTranslation()
   const [text, setText] = useState('')
+  const slashCommands = useChatStore((s) => s.slashCommands)
 
   const send = (): void => {
     const v = text.trim()
     if (!v) return
     setText('')
-    void getSessionChannelApi().agent.subAgentPrompt({ subSessionId, text: v })
+
+    // 斜杠命令展开（与主输入框共用 parseSlashCommandInput）：识别 /cmd 参数 → 构造内联 Token，
+    // 发送含标记的展示文本 + tokens；后端解析为发给子 Agent 的真实指令，面板渲染命令标签。
+    const parsed = parseSlashCommandInput(v, slashCommands, { sessionId: subSessionId })
+
+    void getSessionChannelApi().agent.subAgentPrompt({
+      subSessionId,
+      text: parsed?.contentText ?? v,
+      inlineTokens: parsed?.inlineTokens
+    })
   }
 
   return (
@@ -340,13 +404,7 @@ function SubAgentReplyInput({ subSessionId }: { subSessionId: string }): React.J
 }
 
 /** 子 Tab 栏 + 当前活跃子会话内容 */
-export interface SubAgentPanelProps {
-  /** 关闭子会话时通知宿主后端销毁运行时（桌面 window.api.subSession.destroy；扩展可省略）。 */
-  onDestroySubSession?: (subSessionId: string) => void
-}
-
-export function SubAgentPanel({ onDestroySubSession }: SubAgentPanelProps = {}): React.JSX.Element {
-  const { t } = useTranslation()
+export function SubAgentPanel(): React.JSX.Element {
   const allList = useSubSessionStore(selectSubSessionList)
   const closeSub = useSubSessionStore((s) => s.close)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
@@ -381,9 +439,19 @@ export function SubAgentPanel({ onDestroySubSession }: SubAgentPanelProps = {}):
 
   const handleClose = (e: React.MouseEvent, subSessionId: string): void => {
     e.stopPropagation()
-    // 通知宿主后端销毁，再从本地 store 移除
-    onDestroySubSession?.(subSessionId)
+    // 经共享 ChatApi 通知后端销毁（基础能力，各端必实现），再从本地 store 移除
+    void getSessionChannelApi()
+      .agent.subSessionDestroy(subSessionId)
+      .catch(() => {})
     closeSub(subSessionId)
+  }
+
+  const handleInterrupt = (e: React.MouseEvent, subSessionId: string): void => {
+    e.stopPropagation()
+    // 经共享 ChatApi 软停止；状态翻转交由后续 sub_session_end 事件驱动（store.markEnded）
+    void getSessionChannelApi()
+      .agent.subSessionInterrupt(subSessionId)
+      .catch(() => {})
   }
 
   if (list.length === 0) {
@@ -420,14 +488,11 @@ export function SubAgentPanel({ onDestroySubSession }: SubAgentPanelProps = {}):
                 )}
                 <Bot size={12} className="flex-shrink-0 text-text-tertiary" />
                 <span className="flex-1 truncate">{sub.displayName}</span>
-                <StatusIcon status={sub.status} />
-                <button
-                  onClick={(e) => handleClose(e, sub.subSessionId)}
-                  className="ml-0.5 p-0.5 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
-                  title={t('panel.subAgentClose')}
-                >
-                  <X size={11} />
-                </button>
+                <HeaderAction
+                  status={sub.status}
+                  onInterrupt={(e) => handleInterrupt(e, sub.subSessionId)}
+                  onDelete={(e) => handleClose(e, sub.subSessionId)}
+                />
               </div>
 
               {/* 展开内容：该子会话的转写（含末尾追问输入框，随内容滚动） */}

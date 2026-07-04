@@ -16,7 +16,7 @@ import type {
 } from './types'
 import type { SubAgentManager } from './manager'
 
-const AgentParamsSchema = Type.Object({
+export const AgentParamsSchema = Type.Object({
   description: Type.String({ description: 'A short (3-5 word) description of the task' }),
   subagent_type: Type.Optional(
     Type.String({
@@ -43,7 +43,7 @@ function formatAgentLine(def: AgentDefinition): string {
   return `- ${def.name}: ${trimmed} (Tools: ${toolsHint})`
 }
 
-function buildDescription(
+export function buildDescription(
   registry: SubAgentRegistry,
   defaultAgentType?: InProcessAgentType
 ): string {
@@ -74,7 +74,7 @@ Usage notes:
 - The agent does NOT share your conversation history — provide complete context in \`prompt\`.
 - The agent's final result is returned only to you, not visible to the user — summarize for the user.
 - Each invocation is stateless; cannot resume a previous session.
-- Trust the agent's output — re-running rarely changes results.
+- Re-dispatching is usually unnecessary; only re-run if the result is incomplete or contradicts what you observe.
 - Launch multiple agents concurrently when possible (single message, multiple tool calls).`
 }
 

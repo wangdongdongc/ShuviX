@@ -4,15 +4,13 @@ import { chatGateway, operationContext, createWebUIContext } from '../core'
 import { sessionService } from '../../services/sessionService'
 import { providerService } from '../../services/providerService'
 import { settingsService } from '../../services/settingsService'
-import { webUIService, type ShareMode } from '../../services/webUIService'
+import { webUIService } from '../../services/webUIService'
+import { getBuiltinToolDefinitions } from '../../services/agentToolBuilder'
 import { scanSessionFiles } from '../../services/filesWatcherService'
 import { previewSessionFile } from '../../services/filePreviewService'
 import { createLogger } from '../../logger'
 
 const log = createLogger('WebUI:API')
-
-/** 模式层级（数值越大权限越高） */
-const MODE_LEVEL: Record<ShareMode, number> = { readonly: 0, chat: 1, full: 2 }
 
 /** 从路由参数中安全提取 sessionId */
 function getSessionId(req: Request): string {
@@ -20,7 +18,7 @@ function getSessionId(req: Request): string {
   return Array.isArray(id) ? id[0] : id
 }
 
-/** 校验 session 已开启分享 */
+/** 校验 session 已开启分享（仅查看）；未分享一律拒绝 */
 function shareGuard(req: Request, res: Response, next: NextFunction): void {
   const sessionId = getSessionId(req)
   if (!sessionId || !webUIService.isShared(sessionId)) {
@@ -28,23 +26,6 @@ function shareGuard(req: Request, res: Response, next: NextFunction): void {
     return
   }
   next()
-}
-
-/** 校验 session 分享模式是否满足最低要求 */
-function modeGuard(minMode: ShareMode): (req: Request, res: Response, next: NextFunction) => void {
-  return (req, res, next) => {
-    const sessionId = getSessionId(req)
-    const mode = webUIService.getShareMode(sessionId)
-    if (!mode) {
-      res.status(403).json({ error: 'Session not shared' })
-      return
-    }
-    if (MODE_LEVEL[mode] < MODE_LEVEL[minMode]) {
-      res.status(403).json({ error: `Requires '${minMode}' mode, current: '${mode}'` })
-      return
-    }
-    next()
-  }
 }
 
 /** 包裹路由 handler，自动注入 OperationContext */
@@ -63,32 +44,21 @@ function wrapRoute(
   }
 }
 
-/** 创建 WebUI REST API 路由 */
+/**
+ * 创建 WebUI REST API 路由。
+ *
+ * 局域网分享一律「仅查看」：同网设备只能查看会话现存内容。故这里只暴露**只读 GET** 路由
+ * （会话/消息/运行时/文件读取，供消息列表 + 笔记本只读预览渲染），不再有任何发送/编辑/销毁类写路由。
+ */
 export function createApiRouter(): Router {
   const router = Router()
   router.use(json())
 
-  // ─── 分享模式查询 ────────────────────────────────
-
-  router.get(
-    '/sessions/:id/share-mode',
-    shareGuard,
-    wrapRoute((req, res) => {
-      try {
-        const mode = webUIService.getShareMode(getSessionId(req))
-        res.json({ mode })
-      } catch (e) {
-        log.warn(`GET share-mode 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── Session 信息（readonly） ──────────────────
+  // ─── Session 信息（只读） ──────────────────────
 
   router.get(
     '/sessions/:id',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute((req, res) => {
       try {
         const session = sessionService.getById(getSessionId(req))
@@ -104,23 +74,20 @@ export function createApiRouter(): Router {
     })
   )
 
-  // ─── Design Preview 状态（readonly） ────────────
-
-  // Design preview status endpoint removed during plugin migration.
-  // Preview state is now managed by the design plugin via events.
+  // Design preview 状态（占位，只读）
   router.get(
     '/sessions/:id/design',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute((_req, res) => {
       res.json({ active: false, server: null })
     })
   )
 
-  // ─── 消息操作 ──────────────────────────────────
+  // ─── 消息（只读） ──────────────────────────────
 
   router.get(
     '/sessions/:id/messages',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute((req, res) => {
       try {
         res.json(chatGateway.listMessages(getSessionId(req)))
@@ -131,39 +98,11 @@ export function createApiRouter(): Router {
     })
   )
 
-  router.post(
-    '/sessions/:id/messages',
-    modeGuard('chat'),
-    wrapRoute((req, res) => {
-      try {
-        const msg = chatGateway.addMessage({ ...req.body, sessionId: getSessionId(req) })
-        res.json(msg)
-      } catch (e) {
-        log.warn(`POST message 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.post(
-    '/sessions/:id/messages/delete-from',
-    modeGuard('full'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.deleteFromMessage(getSessionId(req), req.body.messageId)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`DELETE message 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── Agent 操作（chat） ─────────────────────────
+  // ─── 会话初始化（只读：返回会话元信息供渲染） ──
 
   router.post(
     '/sessions/:id/init',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute((req, res) => {
       try {
         const result = chatGateway.startChat(getSessionId(req))
@@ -175,112 +114,11 @@ export function createApiRouter(): Router {
     })
   )
 
-  router.post(
-    '/sessions/:id/prompt',
-    modeGuard('chat'),
-    wrapRoute(async (req, res) => {
-      try {
-        await chatGateway.prompt(getSessionId(req), req.body.text, req.body.images)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`POST prompt 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.post(
-    '/sessions/:id/abort',
-    modeGuard('chat'),
-    wrapRoute((req, res) => {
-      try {
-        const result = chatGateway.abort(getSessionId(req))
-        res.json(result)
-      } catch (e) {
-        log.warn(`POST abort 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── 交互响应（chat） ──────────────────────────
-
-  /**
-   * 统一的"用户输入响应"端点。
-   * Body: { requestId: string, response: InputResponse }
-   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该端点路由。
-   */
-  router.post(
-    '/sessions/:id/respond-input',
-    modeGuard('chat'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.respondToInput(getSessionId(req), req.body.requestId, req.body.response)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`POST respond-input 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── 运行时调整（full） ─────────────────────────
-
-  router.put(
-    '/sessions/:id/model',
-    modeGuard('full'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.setModel(
-          getSessionId(req),
-          req.body.provider,
-          req.body.model,
-          req.body.baseUrl,
-          req.body.apiProtocol
-        )
-        // 同步更新 session 持久化
-        sessionService.updateModelConfig(getSessionId(req), req.body.provider, req.body.model)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`PUT model 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.put(
-    '/sessions/:id/thinking',
-    modeGuard('full'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.setThinkingLevel(getSessionId(req), req.body.level)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`PUT thinking 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  router.put(
-    '/sessions/:id/tools',
-    modeGuard('full'),
-    wrapRoute((req, res) => {
-      try {
-        chatGateway.setEnabledTools(getSessionId(req), req.body.tools)
-        res.json({ success: true })
-      } catch (e) {
-        log.warn(`PUT tools 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── 运行时资源 ──────────────────────────────────
+  // ─── 运行时资源（只读） ─────────────────────────
 
   router.get(
     '/sessions/:id/runtimes',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute((req, res) => {
       try {
         res.json(chatGateway.getRuntimeStatuses(getSessionId(req)))
@@ -291,28 +129,11 @@ export function createApiRouter(): Router {
     })
   )
 
-  router.post(
-    '/sessions/:id/runtimes/:runtimeId/destroy',
-    modeGuard('full'),
-    wrapRoute(async (req, res) => {
-      try {
-        const result = await chatGateway.destroyRuntime(
-          getSessionId(req),
-          req.params.runtimeId as string
-        )
-        res.json(result)
-      } catch (e) {
-        log.warn(`POST runtimes/destroy 失败: ${e}`)
-        res.status(500).json({ error: 'Internal error' })
-      }
-    })
-  )
-
-  // ─── 工作目录文件（只读：扫描 + 预览，供笔记本/文件面板用） ──
+  // ─── 工作目录文件（只读：扫描 + 预览，供笔记本只读预览读取内容） ──
 
   router.get(
     '/sessions/:id/files',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute(async (req, res) => {
       try {
         res.json(await scanSessionFiles(getSessionId(req)))
@@ -325,7 +146,7 @@ export function createApiRouter(): Router {
 
   router.get(
     '/sessions/:id/files/read',
-    modeGuard('readonly'),
+    shareGuard,
     wrapRoute(async (req, res) => {
       try {
         const path = Array.isArray(req.query.path) ? req.query.path[0] : req.query.path
@@ -337,7 +158,7 @@ export function createApiRouter(): Router {
     })
   )
 
-  // ─── 工具 / 提供商 / 设置 ─────────────────────
+  // ─── 工具 / 提供商 / 设置（全局只读） ──────────
 
   router.get(
     '/tools',
@@ -346,6 +167,18 @@ export function createApiRouter(): Router {
         res.json(chatGateway.listTools())
       } catch (e) {
         log.warn(`GET tools 失败: ${e}`)
+        res.status(500).json({ error: 'Internal error' })
+      }
+    })
+  )
+
+  router.get(
+    '/tools/definitions',
+    wrapRoute((_req, res) => {
+      try {
+        res.json(getBuiltinToolDefinitions())
+      } catch (e) {
+        log.warn(`GET tools/definitions 失败: ${e}`)
         res.status(500).json({ error: 'Internal error' })
       }
     })

@@ -113,7 +113,10 @@ describe('wikiLinks', () => {
 
     expect(resolve).not.toHaveBeenCalled();
 
-    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    // Move clearly outside the link (start of doc). Note: reveal is now
+    // inclusive of the link boundaries, so `doc.length` (== link end here)
+    // would still count as inside — hence anchoring at 0.
+    view.dispatch({ selection: { anchor: 0 } });
 
     expect(resolve).toHaveBeenCalledOnce();
     expect(resolve).toHaveBeenCalledWith('atom-123');

@@ -4,7 +4,7 @@
  */
 import { v4 as uuid } from 'uuid'
 import i18n from 'i18next'
-import type { Session, SessionInfo } from '@shuvix/chat-protocol/chatApi'
+import type { Session, SessionInfo, SessionSettings } from '@shuvix/chat-protocol/chatApi'
 import { idb } from './idb'
 import { messageStore } from './messageStore'
 import { deleteTempWorkspace } from './opfsWorkspace'
@@ -82,6 +82,19 @@ export const sessionStore = {
     const s = cache.get(id)
     if (!s) return
     persist({ ...s, provider, model, updatedAt: Date.now() })
+  },
+
+  /** 合并补丁到会话 settings（镜像桌面 sessionDao.updateSettings 的 JSON patch 语义） */
+  async updateSettings(id: string, patch: Partial<SessionSettings>): Promise<void> {
+    await ensureLoaded()
+    const s = cache.get(id)
+    if (!s) return
+    persist({ ...s, settings: { ...s.settings, ...patch }, updatedAt: Date.now() })
+  },
+
+  /** 同步读取会话 settings（运行时审批/注入需在工具执行链中直接取值，故走内存缓存） */
+  getSettingsSync(id: string): SessionSettings {
+    return cache.get(id)?.settings ?? {}
   },
 
   async delete(id: string): Promise<void> {

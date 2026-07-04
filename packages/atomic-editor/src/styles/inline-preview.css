@@ -306,21 +306,80 @@
   border-radius: 0.4em;
 }
 
+/* Mermaid block — the rendered diagram that replaces a ```mermaid
+ * fence when the cursor is outside it. The diagram renders on a light
+ * surface (mermaid's `default` theme is light) so it stays legible in
+ * the dark editor, matching the chat renderer. */
+.cm-atomic-mermaid {
+  padding: 0.35em 0;
+}
+
+.cm-atomic-mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+  padding: 0.75rem;
+  background: #ffffff;
+  border: 1px solid var(--atomic-editor-border, #3d3d3d);
+  border-radius: 0.4em;
+}
+
+.cm-atomic-mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Placeholder shown while mermaid loads / renders. */
+.cm-atomic-mermaid-loading {
+  display: flex;
+  justify-content: center;
+  background: transparent;
+  border-style: dashed;
+  color: var(--atomic-editor-fg-muted, #888);
+  font-size: 0.85em;
+}
+
+/* Render failure — keep the source visible so the author can fix it. */
+.cm-atomic-mermaid-error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4em;
+  justify-content: flex-start;
+  background: color-mix(in srgb, #e0833a 8%, transparent);
+  border-color: color-mix(in srgb, #e0833a 40%, transparent);
+}
+
+.cm-atomic-mermaid-error-label {
+  color: #e0833a;
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.cm-atomic-mermaid-error-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--atomic-editor-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.8em;
+  color: var(--atomic-editor-fg-muted, #888);
+}
+
 /* Bullet widget — replaces the raw `-` / `*` marker on bullet-list
  * items. Matches the visual weight of a real list marker while
  * staying in the muted-secondary color so the item text dominates. */
-/* Shared marker alcove — forces bullet, task checkbox, and
- * ordered-list number into the same fixed horizontal width so the
- * inline-preview line padding / text-indent math is stable across
- * list kinds. Width here must match ALCOVE_EM in inline-preview.ts
- * (`ListMark` branch). Without the fixed width, wrapped-line
- * indent lands in different places for each kind because the raw
- * marker widths differ per font. */
+/* Shared list marker — bullet `•`, ordered number `1.`/`10.`, and the
+ * task checkbox. Obsidian-style: the marker keeps its NATURAL width and
+ * the content follows after a fixed gap (`margin-right`), so only the
+ * line starts align — the text column is intentionally NOT tabular.
+ * `white-space: nowrap` keeps a multi-digit number (`10.`) on one line.
+ * The marker starts flush at the line's `padding-left` (set per item in
+ * inline-preview.ts), so `•`, `1.`, `10.` and the checkbox all begin at
+ * the same column. Keep the gap in sync with `.cm-atomic-task-checkbox`
+ * so all three kinds show the same marker→text spacing. */
 .cm-atomic-list-marker {
   display: inline-block;
-  width: 0.9em;
-  margin-right: 0.3em;
-  text-align: right;
+  margin-right: 0.4em;
+  white-space: nowrap;
 }
 
 /* Bullet-only visual styling on top of the shared alcove. */
@@ -329,18 +388,15 @@
   font-weight: 700;
 }
 
-/* GFM task-list checkbox widget — replaces `[ ]` / `[x]` in a task
- * item. Width matches the list-marker wrapper (0.9em); `margin-right:
- * 0.3em` adds the breathing room between the checkbox and the item
- * text. Total footprint = 1.2em, which is what ALCOVE_EM expects in
- * inline-preview.ts (bullets and checkboxes share the same alcove so
- * first-line content aligns with wrapped-line content consistently).
- * The trailing space after `[ ]` in the source is swallowed by the
- * replace decoration. */
+/* GFM task-list checkbox widget — replaces `[ ]` / `[x]` in a task item.
+ * Starts flush at the line's padding-left like the other markers. The
+ * trailing source space after `[ ]` is left REAL (not swallowed) so the
+ * caret after `- [ ] ` lands at the true text position rather than glued to
+ * the box; that space plus this small margin form the marker→text gap. */
 .cm-atomic-task-checkbox {
   width: 0.9em;
   height: 0.9em;
-  margin: 0 0.3em 0 0;
+  margin: 0 0.15em 0 0;
   vertical-align: -0.15em;
   accent-color: var(--atomic-editor-accent, #7c3aed);
   cursor: pointer;

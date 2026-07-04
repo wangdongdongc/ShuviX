@@ -10,6 +10,7 @@ import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import type { NotebookCaps } from '../notebook/LivePreviewEditor'
 import { FilePreview } from './FilePreview'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
@@ -56,9 +57,14 @@ export interface FilesPanelProps {
   /** 预览 Markdown 文件时，预览顶栏「创建笔记本」按钮的处理：提供则显示该按钮，
    *  点击创建绑定该 md 的笔记本会话。不提供则不显示（宿主无中间区编辑器时）。 */
   onCreateNotebook?: (params: { path: string; sessionId: string }) => void
+  /** 宿主能力注入（笔记本主题 / 外链）；markdown 只读 live-preview 渲染时透传给 FilePreview。 */
+  notebookCaps?: NotebookCaps
 }
 
-export function FilesPanel({ onCreateNotebook }: FilesPanelProps = {}): React.JSX.Element {
+export function FilesPanel({
+  onCreateNotebook,
+  notebookCaps
+}: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
@@ -340,6 +346,7 @@ export function FilesPanel({ onCreateNotebook }: FilesPanelProps = {}): React.JS
               path={previewAbsPath}
               sessionId={sessionId}
               onClose={closePreview}
+              caps={notebookCaps}
               onCreateNotebook={
                 previewIsMarkdown && onCreateNotebook
                   ? () => onCreateNotebook({ path: previewAbsPath, sessionId })

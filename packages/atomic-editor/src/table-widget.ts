@@ -688,8 +688,12 @@ function makeCell(
   // stays in a dedicated editable box above it.
   const source = document.createElement('div');
   source.className = 'cm-atomic-table-cell-source';
-  source.contentEditable = 'true';
-  source.spellcheck = true;
+  // Read-only viewer: render the cell but keep it non-editable. The outer
+  // editor's `editable=false` doesn't reach this widget's own DOM, so the
+  // cell would otherwise stay a live contenteditable box.
+  const readOnly = view.state.readOnly;
+  source.contentEditable = readOnly ? 'false' : 'true';
+  source.spellcheck = !readOnly;
   // Decorated DOM on mount. Delimiters (`.cm-atomic-mark`) are
   // `display: none` by default — the caret can't navigate into them,
   // the reader sees a clean rendered view. When the caret enters a
@@ -698,6 +702,14 @@ function makeCell(
   // uniformly to every inline mark inside cells.
   cell.appendChild(source);
   renderCellSourceDecorated(source);
+
+  // Read-only: the decorated cell is fully rendered above; skip every
+  // editing affordance (input/paste/IME commit, caret routing, context
+  // menu) so nothing can mutate the document via a direct dispatch.
+  if (readOnly) {
+    refreshCellPreview(cell);
+    return cell;
+  }
 
   // Commit the cell's current DOM text to `dataset.raw`, re-render its
   // decorated form (so marks the user just typed — e.g. a new `**` pair

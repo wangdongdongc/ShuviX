@@ -7,6 +7,8 @@
  */
 import {
   createDispatchAgentTool,
+  buildDispatchDescription,
+  AgentParamsSchema,
   type DispatchAgentTool,
   type SubAgentModelConfig
 } from '@shuvix/agent-runtime'
@@ -44,5 +46,10 @@ registerBuiltinTool({
   presentation: {
     icon: 'Bot',
     summaryField: 'description'
-  }
+  },
+  // 设置页定义：描述含当前可用子代理列表（动态读注册表），参数 schema 与派发工具一致
+  describe: () => ({
+    description: buildDispatchDescription(agentService),
+    parameters: AgentParamsSchema
+  })
 })

@@ -12,7 +12,7 @@ const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any too
 
 - Do NOT use any tool or function call.
 - You already have all the context you need in the conversation above.
-- Tool calls will be REJECTED and will waste your only turn — you will fail the task.
+- Tool calls will be rejected and will waste your only turn.
 - Your entire response must be plain text: an <analysis> block followed by a <summary> block.
 
 `
@@ -106,7 +106,7 @@ Please provide your summary based on the conversation so far, following this str
 const NO_TOOLS_TRAILER =
   '\n\nREMINDER: Do NOT call any tools. Respond with plain text only — ' +
   'an <analysis> block followed by a <summary> block. ' +
-  'Tool calls will be rejected and you will fail the task.'
+  'Tool calls will be rejected.'
 
 /** 组装完整的压缩提示词 */
 export function buildCompactionPrompt(): string {

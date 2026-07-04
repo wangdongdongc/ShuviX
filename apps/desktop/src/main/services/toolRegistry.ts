@@ -7,6 +7,7 @@
  * 好处：新增工具只需在工具文件末尾注册一次，无需修改 ALL_TOOL_NAMES、labelMap 等多处硬编码。
  */
 
+import type { TSchema } from 'typebox'
 import type { ToolContext } from '../services/toolContext'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 
@@ -29,6 +30,11 @@ export interface BuiltinToolMeta {
   factory?: (ctx: ToolContext) => object
   /** 工具调用的 UI 渲染声明（折叠图标、摘要字段、展开表单项） */
   presentation?: ToolPresentation
+  /**
+   * 惰性给出该工具「发给 LLM」的描述与参数 schema，供设置页只读展示（toBuiltinToolDefinitions）。
+   * 纯读、无副作用、不需运行时上下文；声明了此项的工具才会出现在「LLM 工具」设置页。
+   */
+  describe?: () => { description: string; parameters: TSchema }
 }
 
 const _entries: BuiltinToolMeta[] = []

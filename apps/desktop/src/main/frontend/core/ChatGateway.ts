@@ -1,6 +1,7 @@
 import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -31,7 +32,8 @@ export interface ChatGateway {
   notebookPrompt(
     sessionId: string,
     text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    inlineTokens?: Record<string, InlineToken>
   ): void
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */

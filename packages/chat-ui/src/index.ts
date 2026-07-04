@@ -24,6 +24,8 @@ export type {
 export { Conversation } from './components/chat/Conversation'
 export { InputArea } from './components/chat/InputArea'
 export { ModelPicker } from './components/chat/ModelPicker'
+export { ModelSelect } from './components/chat/ModelSelect'
+export type { ModelSelectProps, ModelSelectThinking } from './components/chat/ModelSelect'
 export { ToolPicker } from './components/chat/ToolPicker'
 export { MessageRenderer } from './components/chat/MessageRenderer'
 export type { VisibleItem } from './components/chat/MessageRenderer'

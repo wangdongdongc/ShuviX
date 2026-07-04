@@ -128,5 +128,6 @@ registerBuiltinTool({
     icon: 'Database',
     iconColor: '#f59e0b',
     summaryField: 'description'
-  }
+  },
+  describe: () => ({ description: getDatabaseDescription(), parameters: DatabaseParamsSchema })
 })

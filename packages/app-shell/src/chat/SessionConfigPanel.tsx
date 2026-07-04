@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, FileText, Globe, RefreshCw, TriangleAlert, X } from 'lucide-react'
 import { copyToClipboard } from '@shuvix/chat-ui'
-import { useChatStore, type ShareMode } from '@shuvix/chat-ui'
+import { useChatStore } from '@shuvix/chat-ui'
 import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
 import { SettingsSection, SettingsRow, Toggle, InlineSelect } from '../settings/SettingsPrimitives'
 import { getChannelBindingCaps } from './channelBindings'
@@ -34,7 +34,7 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
   const autoApprove = session?.settings.autoApprove === true
   const allowList = session?.settings.allowList ?? []
   const enabledInstructionFiles = session?.settings.enabledInstructionFiles ?? []
-  const lanShareMode = useChatStore((s) => s.sharedSessionIds.get(sessionId) ?? null)
+  const lanShared = useChatStore((s) => s.sharedSessionIds.has(sessionId))
   const boundBotId = useChatStore((s) => s.telegramBindings.get(sessionId)?.botId ?? null)
 
   const [instructionFiles, setInstructionFiles] = useState<InstructionFileEntry[]>([])
@@ -113,12 +113,8 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     }
   }, [sessionId, showLanShare, showTelegram])
 
-  const handleSetShareMode = async (mode: ShareMode | null): Promise<void> => {
-    await getChannelBindingApi()?.webui?.setShared({
-      sessionId,
-      shared: mode !== null,
-      mode: mode ?? undefined
-    })
+  const handleToggleShare = async (shared: boolean): Promise<void> => {
+    await getChannelBindingApi()?.webui?.setShared({ sessionId, shared })
   }
 
   const handleCopyShareUrl = (url: string): void => {
@@ -149,10 +145,6 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     const next = allowList.filter((e) => e !== entry)
     useChatStore.getState().updateSessionSettings(sessionId, { allowList: next })
   }
-
-  const shareModeDescKey = lanShareMode
-    ? `sessionConfig.shareMode${lanShareMode.charAt(0).toUpperCase() + lanShareMode.slice(1)}Desc`
-    : ''
 
   return (
     <div className="space-y-5">
@@ -204,36 +196,17 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
       {/* 会话绑定：WebUI / 局域网共享 + Telegram Bot（同属「会话绑定」，按宿主能力分别裁剪行） */}
       {(showLanShare || showTelegram) && (
         <SettingsSection title={t('sessionConfig.bindingsGroup')}>
-          {/* WebUI / 局域网共享（宿主能力：showLanShare） */}
+          {/* WebUI / 局域网共享（宿主能力：showLanShare）—— 一律「仅查看」，单一开关无模式选择 */}
           {showLanShare && (
             <>
               <SettingsRow
                 title={t('sessionConfig.lanShare')}
                 description={t('sessionConfig.lanShareDesc')}
                 control={
-                  <Toggle
-                    on={!!lanShareMode}
-                    onClick={() => void handleSetShareMode(lanShareMode ? null : 'readonly')}
-                  />
+                  <Toggle on={lanShared} onClick={() => void handleToggleShare(!lanShared)} />
                 }
               />
-              {lanShareMode && (
-                <SettingsRow
-                  title={t('sessionConfig.shareMode')}
-                  description={t(shareModeDescKey)}
-                  control={
-                    <InlineSelect
-                      value={lanShareMode}
-                      onChange={(v) => void handleSetShareMode(v as ShareMode)}
-                    >
-                      <option value="readonly">{t('sessionConfig.shareModeReadonly')}</option>
-                      <option value="chat">{t('sessionConfig.shareModeChat')}</option>
-                      <option value="full">{t('sessionConfig.shareModeFull')}</option>
-                    </InlineSelect>
-                  }
-                />
-              )}
-              {lanShareMode && shareUrls.length > 0 && (
+              {lanShared && shareUrls.length > 0 && (
                 <div className="px-4 py-3">
                   <div className="text-[11px] text-text-tertiary mb-1.5">
                     {t('sessionConfig.lanShareUrlsTitle')}

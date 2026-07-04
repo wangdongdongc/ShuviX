@@ -5,7 +5,7 @@
  * 各面板始终挂载，通过 visibility 切换，避免 xterm/iframe/WebContentsView 重建
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Bot, FolderTree, Monitor, TerminalSquare, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
@@ -16,7 +16,9 @@ import {
   SubAgentPanel,
   MediaUrlProvider,
   shuvixPreviewResolver,
-  useCreateNotebook
+  useCreateNotebook,
+  PanelTabBar,
+  type PanelTabItem
 } from '@shuvix/app-shell'
 import { WidgetPanel } from './WidgetPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
@@ -52,11 +54,18 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
   const width = useBrowserStore((s) => s.width)
   const widgetCount = useWidgetStore((s) => s.widgets.length)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const focusMode = useSettingsStore((s) => s.focusMode)
-  /** 专注模式生效条件：开关打开 + 已选中主会话 → 淡化未选中 tab */
-  const dim = focusMode && !!activeSessionId
   /** 「创建笔记本」处理器（共享逻辑：建笔记本会话 + 刷新 + 选中） */
   const createNotebook = useCreateNotebook()
+  const notebookTheme = useSettingsStore((s) => s.notebookTheme)
+  /** Files 面板 markdown 只读 live-preview 的宿主能力（主题 / 外链）—— 与笔记本会话同源。
+   *  只读预览不提供编辑右键菜单，故无需注入 popupContextMenu。 */
+  const notebookCaps = useMemo(
+    () => ({
+      notebookTheme,
+      openExternal: (url: string) => void window.api.app.openExternal(url)
+    }),
+    [notebookTheme]
+  )
 
   // 当前主会话下的子会话数（共享 useSubAgentCount）—— >0 才显示 Sub-agent tab
   const subAgentCount = useSubAgentCount(activeSessionId)
@@ -77,85 +86,24 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
     }
   }, [pinnedMode, activeTab, setActiveTab])
 
-  // 测量带文字的标签栏自然宽度，若超出容器则切换为仅图标模式
-  const tabBarRef = useRef<HTMLDivElement | null>(null)
-  const fullWidthRef = useRef<HTMLDivElement | null>(null)
-  const [compact, setCompact] = useState(false)
-
-  useLayoutEffect(() => {
-    const container = tabBarRef.current
-    const measurer = fullWidthRef.current
-    if (!container || !measurer) return
-    const update = (): void => {
-      // measurer 始终以完整文字渲染（off-screen），用其 scrollWidth 作为「展开模式」所需宽度
-      setCompact(measurer.scrollWidth > container.clientWidth)
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(container)
-    ro.observe(measurer)
-    return () => ro.disconnect()
-  }, [visibleTabs.length])
+  // tab 模型交共享 PanelTabBar 渲染（统一外观 + 自动 compact + 专注淡化）；徽标按 tab 取计数
+  const tabItems: PanelTabItem[] = visibleTabs.map(({ key, labelKey, Icon }) => ({
+    key,
+    label: t(labelKey),
+    Icon,
+    badge: key === 'widget' ? widgetCount : key === 'subagent' ? subAgentCount : undefined
+  }))
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ width, minWidth: 200 }}>
-      {/* 顶部标签栏 */}
-      <div
-        ref={tabBarRef}
-        className="titlebar-drag flex-shrink-0 flex items-center border-b border-border-secondary/30 bg-bg-primary overflow-hidden"
-      >
-        {visibleTabs.map(({ key, labelKey, Icon }) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            title={compact ? t(labelKey) : undefined}
-            className={`titlebar-no-drag flex items-center gap-1 px-3 h-8 text-[11px] font-medium transition-all duration-200 relative whitespace-nowrap flex-shrink-0 ${
-              activeTab === key
-                ? 'text-text-primary'
-                : `text-text-tertiary hover:text-text-secondary ${dim ? 'opacity-30 hover:opacity-100' : ''}`
-            }`}
-          >
-            <Icon size={12} />
-            {!compact && <span>{t(labelKey)}</span>}
-            {key === 'widget' && widgetCount > 0 && (
-              <span className="ml-0.5 text-[10px] text-text-tertiary/60 tabular-nums">
-                {widgetCount}
-              </span>
-            )}
-            {key === 'subagent' && subAgentCount > 0 && (
-              <span className="ml-0.5 text-[10px] text-text-tertiary/60 tabular-nums">
-                {subAgentCount}
-              </span>
-            )}
-            {activeTab === key && (
-              <span className="absolute bottom-0 left-2 right-2 h-[2px] bg-accent rounded-t" />
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* 隐形测量节点：永远以「图标 + 文字」渲染，用以判断容器是否容得下完整标签 */}
-      <div
-        ref={fullWidthRef}
-        aria-hidden
-        className="absolute -top-[9999px] left-0 flex items-center pointer-events-none"
-      >
-        {visibleTabs.map(({ key, labelKey, Icon }) => (
-          <span
-            key={key}
-            className="flex items-center gap-1 px-3 h-8 text-[11px] font-medium whitespace-nowrap"
-          >
-            <Icon size={12} />
-            <span>{t(labelKey)}</span>
-            {key === 'widget' && widgetCount > 0 && (
-              <span className="ml-0.5 text-[10px] tabular-nums">{widgetCount}</span>
-            )}
-            {key === 'subagent' && subAgentCount > 0 && (
-              <span className="ml-0.5 text-[10px] tabular-nums">{subAgentCount}</span>
-            )}
-          </span>
-        ))}
-      </div>
+      {/* 顶部标签栏（共享 PanelTabBar；Electron 窗口拖拽 + bg-bg-primary 背景） */}
+      <PanelTabBar
+        tabs={tabItems}
+        activeKey={activeTab}
+        onSelect={(key) => setActiveTab(key as PanelTab)}
+        windowDrag
+        className="bg-bg-primary"
+      />
 
       {/* 内容区 — 所有面板共存，visibility 切换 */}
       <div className="flex-1 min-h-0 relative">
@@ -183,7 +131,7 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
         >
           {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；.md 预览顶栏可「创建笔记本」绑定该文件 */}
           <MediaUrlProvider value={shuvixPreviewResolver}>
-            <FilesPanel onCreateNotebook={createNotebook} />
+            <FilesPanel onCreateNotebook={createNotebook} notebookCaps={notebookCaps} />
           </MediaUrlProvider>
         </div>
         <div
@@ -200,9 +148,7 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
             activeTab === 'subagent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
           }
         >
-          <SubAgentPanel
-            onDestroySubSession={(id) => window.api.subSession?.destroy(id).catch(() => {})}
-          />
+          <SubAgentPanel />
         </div>
       </div>
     </div>

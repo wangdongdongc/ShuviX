@@ -1,5 +1,5 @@
 import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Archive } from 'lucide-react'
@@ -147,6 +147,24 @@ export function Conversation({
   const isCompacting = useChatStore(selectIsCompacting)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
+  // 仅查看（WebUI 分享端）：消息「内容」限宽居中，但滚动条仍贴屏幕右缘（不随内容内移）。
+  // 故只把 Virtuoso 的内层 List 容器（含 header/items/footer）限宽居中，外层 Scroller 保持满宽。
+  const viewOnly = useChatStore((s) => s.viewOnly)
+  const CenteredList = useMemo(
+    () =>
+      viewOnly
+        ? forwardRef<HTMLDivElement, { style?: React.CSSProperties; children?: React.ReactNode }>(
+            function CenteredList({ style, children }, ref) {
+              return (
+                <div ref={ref} style={style} className="mx-auto w-full max-w-3xl">
+                  {children}
+                </div>
+              )
+            }
+          )
+        : undefined,
+    [viewOnly]
+  )
   const virtuosoRef = useRef<VirtuosoHandle>(null)
 
   const focusMode = useChatHost().appearance.focusMode
@@ -295,12 +313,13 @@ export function Conversation({
       ) : (
         <Virtuoso
           ref={virtuosoRef}
-          className="flex-1 thin-scrollbar"
+          className="flex-1 min-w-0 thin-scrollbar"
           data={visibleItems}
           itemContent={renderItem}
           components={{
             Footer: StreamingFooter,
-            ...(ArchivedBanner ? { Header: ArchivedBanner } : {})
+            ...(ArchivedBanner ? { Header: ArchivedBanner } : {}),
+            ...(CenteredList ? { List: CenteredList } : {})
           }}
           initialTopMostItemIndex={visibleItems.length - 1}
           key={sessionId}

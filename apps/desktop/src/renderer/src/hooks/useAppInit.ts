@@ -2,8 +2,7 @@ import { useEffect } from 'react'
 import i18next from 'i18next'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useSidebarStore } from '../stores/sidebarStore'
-import { useBrowserStore } from '../stores/browserStore'
+import { usePanelStore, useSidebarStore } from '@shuvix/app-shell'
 import { loadPanelLayout, isPinnedScope } from '../stores/panelLayout'
 import { useUpdateStore } from '../stores/updateStore'
 
@@ -62,9 +61,7 @@ export function useAppInit(): void {
         useChatStore.getState().setSessions(sessions)
         // 加载 WebUI 分享状态
         const sharedList = await window.api.webui.listShared()
-        useChatStore
-          .getState()
-          .setSharedSessionIds(new Map(sharedList.map((s) => [s.sessionId, s.mode])))
+        useChatStore.getState().setSharedSessionIds(new Set(sharedList))
         // 从 session settings + bot 列表构建 Telegram 绑定关系
         const telegramBindings = new Map<string, { botId: string; username: string }>()
         const botList = await window.api.telegram.listBots()
@@ -80,15 +77,16 @@ export function useAppInit(): void {
         useChatStore.getState().setTelegramBindings(telegramBindings)
       }
 
-      // 恢复面板布局（宽度 + 开关状态）
+      // 恢复面板布局（宽度 + 开关状态）—— 右面板通用三态真源在共享 usePanelStore，故水合它
       loadPanelLayout().then((layout) => {
         if (layout.sidebarWidth) useSidebarStore.setState({ width: layout.sidebarWidth })
         if (layout.sidebarOpen === false) useSidebarStore.setState({ isOpen: false })
-        if (layout.browserWidth) useBrowserStore.setState({ width: layout.browserWidth })
+        // 桌面默认宽度 480（共享 store 默认 320，宿主无关）；无持久值时回落 480
+        usePanelStore.setState({ width: layout.browserWidth ?? 480 })
         // 悬浮窗：右面板默认 'files' tab,没有 browser tab 的运行时依赖问题,可安全恢复 isOpen
         // 主窗口：browser 依赖运行时 server,重启后需用户重新打开,故不自动恢复
         if (isPinnedScope && layout.browserOpen) {
-          useBrowserStore.setState({ isOpen: true })
+          usePanelStore.setState({ isOpen: true })
         }
       })
 
@@ -144,9 +142,7 @@ export function useAppInit(): void {
           window.api.webui.listShared(),
           window.api.telegram.listBots()
         ])
-        useChatStore
-          .getState()
-          .setSharedSessionIds(new Map(sharedList.map((s) => [s.sessionId, s.mode])))
+        useChatStore.getState().setSharedSessionIds(new Set(sharedList))
         const botMap = new Map(botList.map((b) => [b.id, b.username]))
         const telegramBindings = new Map<string, { botId: string; username: string }>()
         for (const s of useChatStore.getState().sessions) {

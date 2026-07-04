@@ -6,6 +6,7 @@
  * SubAgentRegistry：定义来源的端适配接口（桌面=文件系统扫描；扩展=storage/内嵌）。
  */
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 
 /** 子代理定义（注册表条目） */
 export interface AgentDefinition {
@@ -46,6 +47,8 @@ export interface SubAgentModelConfig {
   provider: string
   model: string
   capabilities: ModelCapabilities
+  /** 思考深度；省略时子代理默认 'off'（派发型子代理如 explore 保持不变，笔记本会传入会话所选） */
+  thinkingLevel?: ThinkingLevel
 }
 
 /** 子代理定义来源（端适配：桌面 fs / 扩展 storage） */

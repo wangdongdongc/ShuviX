@@ -9,6 +9,7 @@
  */
 
 import { create } from 'zustand'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ChatMessage, ToolExecution } from './chatStore'
 
 /** 子智能体运行时状态 */
@@ -25,6 +26,8 @@ export interface SubSessionState {
   systemPrompt: string
   /** 父 Agent 发给子智能体的初始 user prompt（register 事件携带） */
   prompt: string
+  /** prompt 中内联 Token（slash 命令 / skill）字典；面板据此把 prompt 渲染为命令标签 + 文本 */
+  promptInlineTokens?: Record<string, InlineToken>
   /** 额外注入上下文的人读文本（如笔记本当前内容）；面板以折叠用户消息卡展示 */
   contextNote?: string
   status: SubSessionStatus
@@ -62,6 +65,7 @@ interface SubSessionStore {
     description: string
     systemPrompt: string
     prompt: string
+    promptInlineTokens?: Record<string, InlineToken>
     contextNote?: string
   }): void
   markEnded(params: { subSessionId: string; result: string; isError?: boolean }): void
@@ -100,6 +104,7 @@ function createEmpty(params: {
   description: string
   systemPrompt: string
   prompt: string
+  promptInlineTokens?: Record<string, InlineToken>
   contextNote?: string
 }): SubSessionState {
   return {
@@ -110,6 +115,7 @@ function createEmpty(params: {
     description: params.description,
     systemPrompt: params.systemPrompt,
     prompt: params.prompt,
+    promptInlineTokens: params.promptInlineTokens,
     contextNote: params.contextNote,
     status: 'running',
     startedAt: Date.now(),

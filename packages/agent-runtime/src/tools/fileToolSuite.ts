@@ -18,8 +18,8 @@ import { assertSandbox, type SandboxPolicy, type SandboxMode } from '../sandbox/
 
 type ReadResult = AgentToolResult<ReadToolDetails>
 
-// ─── 参数 schema（两端一致） ──────────────────────────────────────────────
-const ReadParamsSchema = Type.Object({
+// ─── 参数 schema（两端一致；导出供工具定义枚举复用，无需实例化） ──────────────
+export const ReadParamsSchema = Type.Object({
   path: Type.String({ description: 'The file path, directory path, or URL (http/https) to read' }),
   offset: Type.Optional(
     Type.Number({
@@ -30,11 +30,11 @@ const ReadParamsSchema = Type.Object({
     Type.Number({ description: 'Maximum number of lines to read, used together with offset' })
   )
 })
-const WriteParamsSchema = Type.Object({
+export const WriteParamsSchema = Type.Object({
   path: Type.String({ description: 'The file path to write to (relative or absolute)' }),
   content: Type.String({ description: 'The content to write to the file' })
 })
-const EditParamsSchema = Type.Object({
+export const EditParamsSchema = Type.Object({
   path: Type.String({ description: 'The file path to modify' }),
   oldText: Type.String({
     description: 'Exact text to find and replace (must match exactly, including whitespace)'

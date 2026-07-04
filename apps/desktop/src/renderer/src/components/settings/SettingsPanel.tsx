@@ -16,11 +16,13 @@ import {
   Share2,
   Mic,
   Brain,
-  Webhook
+  Webhook,
+  FolderClosed
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
+import { ProjectsSettings } from './ProjectsSettings'
 import { ProviderSettings } from './ProviderSettings'
 import { HttpLogSettings } from './HttpLogSettings'
 import { AboutSettings } from './AboutSettings'
@@ -34,6 +36,7 @@ import { ContextManagementSettings, getChannelBindingCaps } from '@shuvix/app-sh
 
 const VALID_TABS = new Set([
   'general',
+  'projects',
   'providers',
   'tools',
   'mcp',
@@ -73,6 +76,12 @@ export function SettingsPanel(): React.JSX.Element {
           <GeneralSettings />
         </Scroll>
       )
+    },
+    {
+      id: 'projects',
+      label: t('settings.tabProjects'),
+      icon: <FolderClosed size={14} />,
+      content: <ProjectsSettings />
     },
     {
       id: 'providers',

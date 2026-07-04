@@ -24,7 +24,7 @@ import type {
 import type { Project } from '../dao/types'
 
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { SessionManager } from '@shuvix/agent-runtime'
+import { SessionManager, resolveInitialThinkingLevel } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { AgentSession, buildSystemPrompt } from './agentSession'
 import { scanInstructionFiles } from './instruction'
@@ -93,7 +93,8 @@ export class SessionService {
 
   /**
    * 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具）。
-   * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename。
+   * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename
+   * （去后缀的标题由共享的 useCreateNotebook 显式传入 params.title）。
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
@@ -363,7 +364,16 @@ export class SessionService {
     return {
       systemPrompt: buildSystemPrompt(ctx.project, ctx.workingDirectory, sessionId),
       tools: [...builtinNames, ...mcpSkill],
-      modelConfig: { provider: ctx.provider, model: ctx.model, capabilities: ctx.capabilities },
+      modelConfig: {
+        provider: ctx.provider,
+        model: ctx.model,
+        capabilities: ctx.capabilities,
+        // 笔记本子代理继承会话所选思考深度（与主会话口径一致，经共享 helper 解析）
+        thinkingLevel: resolveInitialThinkingLevel({
+          persisted: ctx.modelMetadata.thinkingLevel,
+          reasoning: ctx.capabilities.reasoning
+        })
+      },
       notebookPath
     }
   }

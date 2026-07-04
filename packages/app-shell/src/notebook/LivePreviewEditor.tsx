@@ -25,6 +25,7 @@ import {
   isImagePath,
   lookupAbs,
   refreshEmbeds,
+  searchFileMap,
   wikiImageEmbeds
 } from './wikiEmbed'
 
@@ -73,8 +74,15 @@ export interface LivePreviewEditorProps {
   /** 文档唯一标识（atomic documentId）；切换文档应由父组件用 key 重挂载本组件 */
   documentId: string
   initialContent: string
-  /** 持久化最新 markdown（防抖触发 + 卸载时 flush）。父组件用 useCallback 包裹保持稳定 */
-  onSave: (content: string) => void
+  /** 持久化最新 markdown（防抖触发 + 卸载时 flush）。父组件用 useCallback 包裹保持稳定。
+   *  readOnly 模式下不会触发（无文档改动），可省略。 */
+  onSave?: (content: string) => void
+  /**
+   * 只读 live-preview：仅渲染、不可编辑（供 Files 面板 md 预览复用笔记本渲染）。
+   * 编辑器不可聚焦 → inline-preview 全量渲染（无光标行揭示源码）；同时关闭自动保存、
+   * 编辑右键菜单与 minimap 跳转聚焦。双链 [[file]] / 内嵌 ![[image]] 仍生效。
+   */
+  readOnly?: boolean
   /** 内容是否已下滑（非顶端）—— 父组件据此给标题栏加柔和阴影 */
   onScrolledChange?: (scrolled: boolean) => void
   /** 保存状态变化（用于标题栏「保存中…」指示） */
@@ -105,7 +113,8 @@ export function LivePreviewEditor({
   onSaveStatusChange,
   handleRef,
   fileContext,
-  caps
+  caps,
+  readOnly = false
 }: LivePreviewEditorProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
@@ -137,7 +146,7 @@ export function LivePreviewEditor({
     const pending = pendingRef.current
     if (pending === null) return
     pendingRef.current = null
-    onSaveRef.current(pending)
+    onSaveRef.current?.(pending)
     onSaveStatusChange?.('saved')
   }, [onSaveStatusChange])
 
@@ -285,18 +294,28 @@ export function LivePreviewEditor({
   )
 
   /** minimap 点击：滚动到对应标题行并聚焦（复用 findFromDOM 取 view） */
-  const onJump = useCallback((line: number): void => {
-    const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
-    const view = dom ? EditorView.findFromDOM(dom) : null
-    if (!view) return
-    const lineNo = Math.max(1, Math.min(line, view.state.doc.lines))
-    const info = view.state.doc.line(lineNo)
-    view.dispatch({
-      selection: { anchor: info.from },
-      effects: EditorView.scrollIntoView(info.from, { y: 'start', yMargin: 24 })
-    })
-    view.focus()
-  }, [])
+  const onJump = useCallback(
+    (line: number): void => {
+      const dom = panelRef.current?.querySelector<HTMLElement>('.cm-editor')
+      const view = dom ? EditorView.findFromDOM(dom) : null
+      if (!view) return
+      const lineNo = Math.max(1, Math.min(line, view.state.doc.lines))
+      const info = view.state.doc.line(lineNo)
+      // 只读：仅滚动、不移光标/聚焦（聚焦会让 inline-preview 揭示该行源码）
+      if (readOnly) {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(info.from, { y: 'start', yMargin: 24 })
+        })
+        return
+      }
+      view.dispatch({
+        selection: { anchor: info.from },
+        effects: EditorView.scrollIntoView(info.from, { y: 'start', yMargin: 24 })
+      })
+      view.focus()
+    },
+    [readOnly]
+  )
 
   // 双链文件表：扫描会话工作目录建表。建表后 dispatch refreshEmbeds 触发内嵌图片重算
   // （首扫返回前 ![[...]] 暂以原文显示）。
@@ -323,25 +342,46 @@ export function LivePreviewEditor({
     void rescanFileMap()
   })
 
+  // 确保该会话的文件表已就绪（首次解析/补全时若尚未扫描则补扫一次），返回最新表
+  const ensureFileMap = useCallback(async (): Promise<FileMap | null> => {
+    if (!sessionId) return null
+    if (!FILE_MAPS.has(sessionId)) {
+      try {
+        const r = await getSessionChannelApi().files.scan({ sessionId })
+        if (r.root) FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
+      } catch {
+        /* 忽略 */
+      }
+    }
+    return FILE_MAPS.get(sessionId) ?? null
+  }, [sessionId])
+
   // 双链解析回调（闭包只依赖 sessionId，查表读模块级 FILE_MAPS，避开 react-hooks 限制）
   const resolveWikiLink = useCallback(
     async (
       target: string
     ): Promise<{ target: string; label: string; status: 'resolved' | 'missing' }> => {
       if (!sessionId) return { target, label: target, status: 'missing' }
-      // 首次解析时若尚未扫描，补一次（atomic 期间显示 loading 态）
-      if (!FILE_MAPS.has(sessionId)) {
-        try {
-          const r = await getSessionChannelApi().files.scan({ sessionId })
-          if (r.root) FILE_MAPS.set(sessionId, buildFileMap(r.root, r.paths))
-        } catch {
-          /* 忽略 */
-        }
-      }
-      const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, target)
+      const abs = lookupAbs(await ensureFileMap(), target)
       return { target, label: target, status: abs ? 'resolved' : 'missing' }
     },
-    [sessionId]
+    [sessionId, ensureFileMap]
+  )
+
+  // [[ 自动补全：按输入在会话工作目录文件表内搜索（内存内过滤，不每次击键回后端扫盘）。
+  // 命中项按 boost 递减保持本地排序；serializeSuggestion 只写最短 token、不强制别名。
+  const suggestWikiTargets = useCallback(
+    async (query: string) => {
+      if (!sessionId) return []
+      const results = searchFileMap(await ensureFileMap(), query)
+      return results.map((r, i) => ({
+        target: r.token,
+        label: r.label,
+        detail: r.detail,
+        boost: results.length - i
+      }))
+    },
+    [sessionId, ensureFileMap]
   )
   const openWikiLink = useCallback(
     (target: string): void => {
@@ -424,27 +464,44 @@ export function LivePreviewEditor({
       markdownKeymap,
       tableMenu,
       imageLoadRemeasure,
-      wikiLinks({ openOnClick: true, resolve: resolveWikiLink, onOpen: openWikiLink }),
+      wikiLinks({
+        openOnClick: true,
+        resolve: resolveWikiLink,
+        onOpen: openWikiLink,
+        suggest: suggestWikiTargets,
+        // 只插入最短 token（[[token]]），不强制生成 |别名（默认序列化会带上）
+        serializeSuggestion: (s) => `${s.target}]]`
+      }),
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
     ]
-  }, [sessionId, renderTableMenu, resolveWikiLink, openWikiLink, resolveEmbedSrc])
+  }, [
+    sessionId,
+    renderTableMenu,
+    resolveWikiLink,
+    openWikiLink,
+    suggestWikiTargets,
+    resolveEmbedSrc
+  ])
 
   return (
-    <div className="flex-1 min-h-0 relative overflow-hidden thin-scrollbar">
+    <div className="flex-1 min-h-0 min-w-0 relative overflow-hidden thin-scrollbar">
       <div
         className="atomic-panel"
         data-notebook-theme={notebookTheme}
         ref={panelRef}
-        onContextMenu={onEditorContextMenu}
+        // 只读预览不提供编辑右键菜单 —— 交浏览器默认右键（复制/检查）
+        onContextMenu={readOnly ? undefined : onEditorContextMenu}
       >
         <AtomicCodeMirrorEditor
           documentId={documentId}
           markdownSource={initialContent}
-          onMarkdownChange={onMarkdownChange}
+          // 只读模式不接收文档变更回调，自动保存机制保持休眠
+          onMarkdownChange={readOnly ? undefined : onMarkdownChange}
           editorHandleRef={atomicRef}
           codeLanguages={ATOMIC_CODE_LANGUAGES}
           extensions={editorExtensions}
           onLinkClick={(url) => caps?.openExternal?.(url)}
+          readOnly={readOnly}
         />
       </div>
       {headings.length > 0 && <NotebookMinimap headings={headings} onJump={onJump} />}

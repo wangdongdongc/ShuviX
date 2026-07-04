@@ -49,6 +49,23 @@ const SshParamsSchema = Type.Object({
   )
 })
 
+/**
+ * 动态构建 ssh 工具描述，包含当前已保存的凭据名称（读 DAO，无副作用）。
+ * 工具实例与设置页定义枚举共用此函数，保证「发给 LLM」的描述一致。
+ */
+export function buildSshDescription(): string {
+  const savedNames = sshCredentialDao.findAllNames()
+  let desc = 'Connect to a remote server via SSH and execute commands.'
+  if (savedNames.length > 0) {
+    desc += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
+  }
+  desc +=
+    ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
+  desc +=
+    ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution. You do NOT have access to any credentials — never ask the user for passwords in chat.'
+  return desc
+}
+
 export class SshTool extends BaseTool<typeof SshParamsSchema> {
   readonly name = 'ssh'
   readonly label = t('tool.sshLabel')
@@ -57,17 +74,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
 
   constructor(private ctx: ToolContext) {
     super()
-    // 动态构建描述，包含已保存的凭据名称
-    const savedNames = sshCredentialDao.findAllNames()
-    let desc = 'Connect to a remote server via SSH and execute commands.'
-    if (savedNames.length > 0) {
-      desc += ` The user has configured saved SSH credentials: [${savedNames.join(', ')}]. To use a saved credential, call connect with the credentialName parameter, e.g. ssh({ action: "connect", credentialName: "${savedNames[0]}" }).`
-    }
-    desc +=
-      ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
-    desc +=
-      ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution. You do NOT have access to any credentials — never ask the user for passwords in chat.'
-    this.description = desc
+    this.description = buildSshDescription()
   }
 
   /** 资源初始化：使用保存凭据的 connect 场景提前建立连接 */
@@ -450,5 +457,6 @@ registerBuiltinTool({
     icon: 'Terminal',
     iconColor: '#38bdf8',
     summaryField: 'description'
-  }
+  },
+  describe: () => ({ description: buildSshDescription(), parameters: SshParamsSchema })
 })

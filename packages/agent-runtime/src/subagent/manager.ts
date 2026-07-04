@@ -16,6 +16,8 @@ import {
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { v4 as uuid } from 'uuid'
 import type { ChatEvent, ChatTokenUsage } from '@shuvix/chat-protocol/events'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { ToolResultDetails } from '../types'
@@ -97,6 +99,11 @@ export interface RunTaskParams {
   prompt: string
   description: string
   modelConfig: SubAgentModelConfig
+  /**
+   * prompt 中的内联 Token（slash 命令 / skill）字典。提供时：发给 Agent 的文本经 resolveTokensForAgent
+   * 解析为真实指令（展开模板），而 prompt 原文（含 marker）随 sub_session_register 广播供面板渲染标签。
+   */
+  promptInlineTokens?: Record<string, InlineToken>
   parentAbortSignal?: AbortSignal
   /**
    * 在 prompt 之前预置进子代理上下文的消息（如笔记本会话把当前 md 内容作为一条 user message 注入）。
@@ -113,7 +120,16 @@ export interface SubAgentManager {
    * 面板先收到 user_message（后续用户消息内联到转写），随后流式事件如常，末了再发 sub_session_end。
    * 子会话不存在或已中止时抛错。
    */
-  continueTask: (params: { subSessionId: string; text: string }) => Promise<void>
+  continueTask: (params: {
+    subSessionId: string
+    text: string
+    inlineTokens?: Record<string, InlineToken>
+  }) => Promise<void>
+  /**
+   * 用户中断一个运行中的子代理：停止当前生成但保留已产出的部分结果，按「已完成」收尾
+   * （区别于 abort/destroy 的失败/销毁语义——子会话保留在面板，用户可继续追问或显式删除）。
+   */
+  interrupt: (subSessionId: string) => void
   abortAll: (parentSessionId: string) => void
   destroyAll: (parentSessionId: string) => void
   destroy: (subSessionId: string) => void
@@ -128,6 +144,8 @@ interface SubAgentSession {
   pendingToolCalls: Map<string, string>
   finalizedToolCalls: Set<string>
   aborted: boolean
+  /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
+  interrupted: boolean
   /** 待回填用量的 LLM 日志 ID 队列（onPayload 入队、message_end 出队 → updateUsage） */
   pendingLogIds: string[]
 }
@@ -380,7 +398,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       initialState: {
         systemPrompt: agentType.systemPrompt,
         model: resolvedModel,
-        thinkingLevel: 'off',
+        // 默认 'off'；笔记本等把会话思考深度经 modelConfig 传入即生效
+        thinkingLevel: modelConfig.thinkingLevel ?? 'off',
         // 预置上下文消息（如笔记本内容）先落上下文，随后 agent.prompt(userText) 接其后
         messages: contextMessages ? [...contextMessages] : [],
         tools
@@ -411,6 +430,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       pendingToolCalls: new Map(),
       finalizedToolCalls: new Set(),
       aborted: false,
+      interrupted: false,
       pendingLogIds
     }
 
@@ -426,6 +446,17 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       `Created sub-agent subSession=${subSessionId} type=${agentType.name} parent=${parentSessionId}`
     )
     return session
+  }
+
+  function interrupt(subSessionId: string): void {
+    const s = sessions.get(subSessionId)
+    if (!s) return
+    // 软停止：标记为「用户中断」，终结在飞工具调用，停止当前生成。
+    // 不动 sessions/byParent 登记 —— runTask/continueTask 的 waitForIdle 解除后会照常广播
+    // sub_session_end（isError=false），子会话保留在面板供继续追问或显式删除。
+    s.interrupted = true
+    finalizeAbortedToolCalls(subSessionId)
+    s.agent.abort()
   }
 
   function destroy(subSessionId: string): void {
@@ -452,10 +483,16 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         description,
         modelConfig,
         parentAbortSignal,
-        contextMessages
+        contextMessages,
+        promptInlineTokens
       } = params
       // 面板「笔记本内容」卡片 = 实际注入的 context 消息文本（与发给 LLM 的 UserMessage 一致）
       const contextNote = contextMessages?.length ? agentMessagesToText(contextMessages) : undefined
+
+      // 内联 Token（slash 命令 / skill）：prompt 原文（含 marker）用于面板展示标签；
+      // 发给 Agent 的文本经解析展开为真实指令（如 skill 模板正文）。
+      const hasTokens = promptInlineTokens && Object.keys(promptInlineTokens).length > 0
+      const llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
 
       // 不限制并发子代理数量：可同时堆叠任意多个（面板纵向手风琴展示）。
       const session = createSession(parentSessionId, agentType, modelConfig, contextMessages)
@@ -477,6 +514,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         description,
         systemPrompt: agentType.systemPrompt,
         prompt,
+        inlineTokens: hasTokens ? promptInlineTokens : undefined,
         contextNote
       })
 
@@ -501,7 +539,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
       let execError: string | undefined
       try {
-        await session.agent.prompt(prompt)
+        await session.agent.prompt(llmPrompt)
         await session.agent.waitForIdle()
       } catch (err: unknown) {
         execError = err instanceof Error ? err.message : String(err)
@@ -512,10 +550,14 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         finalizeAbortedToolCalls(session.subSessionId)
       }
 
-      const result = session.aborted
-        ? abortedNote()
-        : extractResult(session.agent.state.messages, execError)
-      const isError = !!execError || session.aborted
+      // 用户中断：保留已产出的部分结果、按「已完成」收尾（isError=false）；
+      // abort（父级中断）仍按失败态返回 abortedNote。
+      const result = session.interrupted
+        ? extractResult(session.agent.state.messages)
+        : session.aborted
+          ? abortedNote()
+          : extractResult(session.agent.state.messages, execError)
+      const isError = session.interrupted ? false : !!execError || session.aborted
 
       deps.broadcast({
         type: 'sub_session_end',
@@ -528,12 +570,23 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       return { result }
     },
 
-    async continueTask(params: { subSessionId: string; text: string }): Promise<void> {
-      const { subSessionId, text } = params
+    async continueTask(params: {
+      subSessionId: string
+      text: string
+      inlineTokens?: Record<string, InlineToken>
+    }): Promise<void> {
+      const { subSessionId, text, inlineTokens } = params
       const session = sessions.get(subSessionId)
       if (!session) throw new Error(`Sub-session not found: ${subSessionId}`)
       if (session.aborted) throw new Error(`Sub-session already aborted: ${subSessionId}`)
+      // 新一轮追问：清除上一轮的「用户中断」标记
+      session.interrupted = false
       const parentSessionId = parentOf(subSessionId) ?? ''
+
+      // 内联 Token（slash 命令等）：前端已展开，后端解析为发给 Agent 的真实文本；
+      // 原始标记文本 + tokens 落入消息 metadata，供面板渲染 slash 命令标签（与主会话同形）。
+      const hasTokens = inlineTokens && Object.keys(inlineTokens).length > 0
+      const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
 
       // 后续用户消息广播到面板（与主会话 user_message 同形 → 内联进子会话转写）
       const userMsg = {
@@ -542,7 +595,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         role: 'user' as const,
         type: 'text' as const,
         content: text,
-        metadata: null,
+        metadata: hasTokens ? { inlineTokens } : null,
         model: '',
         createdAt: Date.now()
       }
@@ -554,7 +607,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
       let execError: string | undefined
       try {
-        await session.agent.prompt(text)
+        await session.agent.prompt(promptText)
         await session.agent.waitForIdle()
       } catch (err: unknown) {
         execError = err instanceof Error ? err.message : String(err)
@@ -565,10 +618,12 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         finalizeAbortedToolCalls(subSessionId)
       }
 
-      const result = session.aborted
-        ? abortedNote()
-        : extractResult(session.agent.state.messages, execError)
-      const isError = !!execError || session.aborted
+      const result = session.interrupted
+        ? extractResult(session.agent.state.messages)
+        : session.aborted
+          ? abortedNote()
+          : extractResult(session.agent.state.messages, execError)
+      const isError = session.interrupted ? false : !!execError || session.aborted
 
       deps.broadcast({
         type: 'sub_session_end',
@@ -596,6 +651,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       if (!ids) return
       for (const id of [...ids]) destroy(id)
     },
+
+    interrupt,
 
     destroy,
 

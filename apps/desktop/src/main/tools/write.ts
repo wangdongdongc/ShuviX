@@ -2,10 +2,10 @@
  * Write 工具（桌面注册）—— 整条执行流程复用共享 createFileToolSuite，
  * 仅注入桌面端适配（Node fs / fileTime / 绝对路径 / SQLite SandboxPolicy，见 fileToolDeps）。
  */
-import { createFileToolSuite } from '@shuvix/agent-runtime'
+import { createFileToolSuite, WriteParamsSchema } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { ToolContext } from '../services/toolContext'
-import { makeDesktopFileToolDeps } from './fileToolDeps'
+import { makeDesktopFileToolDeps, WRITE_DESCRIPTION } from './fileToolDeps'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import { t } from '../i18n'
 
@@ -20,5 +20,6 @@ registerBuiltinTool({
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.write.labelKey),
   getHint: () => t('tool.writeHint'),
   factory: (ctx) => makeWriteTool(ctx),
-  presentation: BUILTIN_TOOL_PRESENTATIONS.write.presentation
+  presentation: BUILTIN_TOOL_PRESENTATIONS.write.presentation,
+  describe: () => ({ description: WRITE_DESCRIPTION, parameters: WriteParamsSchema })
 })

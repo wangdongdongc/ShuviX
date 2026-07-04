@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getSessionChannelApi, getHostApi, useAppEvent } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi, useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import {
   LivePreviewEditor,
   type LivePreviewEditorHandle,
@@ -37,6 +37,8 @@ export function NotebookView({
   editorHandleRef
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
+  // 「仅查看」渠道（WebUI 分享端）：笔记本退化为只读预览（与 Files 面板 md 预览一致）
+  const viewOnly = useChatStore((s) => s.viewOnly)
 
   const [content, setContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -97,11 +99,14 @@ export function NotebookView({
 
   // 外部写回（如子智能体编辑了绑定文件）→ 自动刷新 live preview：
   // 仅在无未保存草稿（saved）、且磁盘新内容 ≠ 我们已知内容（去重自身保存）时，重读并重挂载编辑器。
-  // 注：按工作目录归属（root 前缀）筛选，不做 e.paths 精确匹配 —— 工具发布的绝对路径
-  // （node path.resolve）与本组件的 path（joinPath 拼接）字符串可能不完全一致；最终以内容比对去重，
-  // 既兼容仅带 root 的 watcher 事件，又避免误判漏刷。
+  // 注：本组件的 path 为相对工作目录的路径，而工具发布的 e.paths 为绝对路径（node path.resolve），
+  // 故按「绝对路径以本相对路径结尾」做后缀命中（分隔符归一）；缺 paths（仅 root 的 watcher 事件）时放行。
+  // 不能用 path.startsWith(e.root)：相对 path 永不以绝对 root 开头，会漏掉全部事件。最终仍以内容比对去重。
   useAppEvent('files.changed', (e) => {
-    if (e.root && !path.startsWith(e.root)) return // 非本工作目录的变更跳过
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/^\.?\//, '')
+    const target = norm(path)
+    const hit = !e.paths || e.paths.length === 0 || e.paths.some((p) => norm(p).endsWith(target))
+    if (!hit) return // 本笔记本绑定文件未被改动
     if (saveStatusRef.current !== 'saved') return // 正在编辑/保存中，避免打断光标
     void getSessionChannelApi()
       .files.read({ sessionId, path })
@@ -130,7 +135,7 @@ export function NotebookView({
   }
 
   return (
-    <div className="relative flex-1 min-h-0 flex flex-col">
+    <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
       {/* 保存状态浮层（仅保存中/失败时出现）—— 顶栏已交给 ChatHeader，故这里浮层提示 */}
       {(saveStatus === 'saving' || saveStatus === 'failed') && (
         <div
@@ -148,6 +153,7 @@ export function NotebookView({
         key={reloadNonce}
         documentId={path}
         initialContent={content}
+        readOnly={viewOnly}
         onSave={onSave}
         onSaveStatusChange={setSaveStatus}
         handleRef={editorRef}

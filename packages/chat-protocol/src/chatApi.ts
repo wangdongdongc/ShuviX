@@ -130,9 +130,6 @@ export type UpdateEvent =
   | { type: 'ready'; version: string }
   | { type: 'error'; message: string }
 
-/** Web UI 共享模式 */
-export type ShareMode = 'readonly' | 'chat' | 'full'
-
 /** Telegram Bot 信息（返回给前端，不含 token） */
 export interface TelegramBotInfo {
   id: string
@@ -183,14 +180,20 @@ export interface AgentPromptParams {
  */
 export interface AgentNotebookPromptParams {
   sessionId: string
+  /** 含内联 Token 标记的展示文本（slash 命令 / skill 展开为 {{shuvixInlineToken:uid}} 标记 + 参数） */
   text: string
   images?: ImageContentParam[]
+  /** 前端展开的内联 Token（slash 命令 / skill 等）；后端解析为发给子代理的真实指令并供面板渲染标签 */
+  inlineTokens?: Record<string, InlineToken>
 }
 
 /** 继续与已存在子代理对话：向其追加一轮用户消息（复用该子会话的 Agent 与历史） */
 export interface AgentSubAgentPromptParams {
   subSessionId: string
+  /** 含内联 Token 标记的展示文本（slash 命令展开为 {{shuvixInlineToken:uid}} 标记 + 参数） */
   text: string
+  /** 前端展开的内联 Token（slash 命令等）；后端据此解析发给 Agent 的真实文本并回填消息 metadata */
+  inlineTokens?: Record<string, InlineToken>
 }
 
 export interface AgentSteerParams {
@@ -405,6 +408,28 @@ export interface SlashCommandInfo {
   filePath: string
 }
 
+/**
+ * 单个内置工具的「发给 LLM」定义 —— name + description + 参数 schema，与 agent 实际下发给模型的一致。
+ * 供「LLM 工具」设置页只读展示工具机制（各端共享，数据由各宿主后端按自身运行时枚举）。
+ * 不含 MCP 工具（另由 mcp 契约提供）。
+ */
+export interface BuiltinToolDefinition {
+  name: string
+  label: string
+  group: string
+  /** 折叠图标名（lucide），来自工具 presentation */
+  icon?: string
+  iconColor?: string
+  /** 与发给 LLM 完全一致的工具描述 */
+  description: string
+  /** 与发给 LLM 完全一致的参数 schema（JSON Schema / TypeBox 序列化后） */
+  parameters: {
+    type?: string
+    properties?: Record<string, Record<string, unknown>>
+    required?: string[]
+  }
+}
+
 // ─────────────────────────── 契约分层 ───────────────────────────
 //
 // 三层正交契约（见 docs / 设计讨论）：
@@ -438,6 +463,10 @@ export interface SessionChannelApi {
     notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
     /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，进展走事件流） */
     subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
+    /** 销毁子会话：中止其 Agent 循环并从注册表移除（面板里彻底消失）。子代理基础能力，各端必须实现。 */
+    subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
+    /** 中断子会话：软停止当前生成、保留已产出，子会话以「已完成」收尾。子代理基础能力，各端必须实现。 */
+    subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
     respondToInput: (params: {
@@ -466,6 +495,8 @@ export interface SessionChannelApi {
   tools: {
     list: (sessionId?: string) => Promise<ToolInfo[]>
     presentations: () => Promise<Record<string, ToolPresentation>>
+    /** 所有内置工具的完整定义（name/description/参数），供设置页只读展示工具机制 */
+    definitions: () => Promise<BuiltinToolDefinition[]>
   }
   command: {
     list: (params: { sessionId: string | null }) => Promise<SlashCommandInfo[]>

@@ -79,15 +79,17 @@ export class DefaultChatGateway implements ChatGateway {
   notebookPrompt(
     sessionId: string,
     text: string,
-    _images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    _images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    inlineTokens?: Record<string, InlineToken>
   ): void {
     const params = sessionService.buildNotebookRunParams(sessionId)
     if (!params) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
-    // 信封组装 + fire-and-forget 派发由共享内核完成；此处仅供数据 + 错误落点
-    runNotebookTask(agentManager, { sessionId, text, ...params }, (error) =>
+    // 信封组装 + fire-and-forget 派发由共享内核完成；此处仅供数据 + 错误落点。
+    // inlineTokens（slash 命令 / skill）原样下传：内核解析为发给子代理的真实指令，并随 register 广播供面板渲染标签。
+    runNotebookTask(agentManager, { sessionId, text, inlineTokens, ...params }, (error) =>
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
     )
   }

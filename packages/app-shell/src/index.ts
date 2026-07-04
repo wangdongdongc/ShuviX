@@ -36,6 +36,10 @@ export { PromptSectionsEditor } from './settings/PromptSectionsEditor'
 export type { PromptSectionsEditorProps } from './settings/PromptSectionsEditor'
 export { ProjectConfigDialog } from './settings/ProjectConfigDialog'
 export type { ProjectConfigDialogProps, ProjectConfigTab } from './settings/ProjectConfigDialog'
+export { BuiltinToolsView } from './settings/BuiltinToolsView'
+export type { BuiltinToolsViewProps, BuiltinToolsExtraTab } from './settings/BuiltinToolsView'
+export { ProjectsSettings } from './settings/ProjectsSettings'
+export type { ProjectsSettingsProps } from './settings/ProjectsSettings'
 
 // 侧边栏会话列表件（prop 驱动）
 export { SessionItem } from './sidebar/SessionItem'
@@ -66,6 +70,9 @@ export type { ChatHeaderProps, ChatHeaderCaps } from './chat/ChatHeader'
 // 聊天主视图正文外壳（顶栏 + 欢迎/笔记本/对话三态 + 横幅/浮层/占位插槽）
 export { ChatBody } from './chat/ChatBody'
 export type { ChatBodyProps } from './chat/ChatBody'
+// 运行时/分享/审批状态横幅（按宿主能力自动显隐）—— 桌面/扩展共用，作为 ChatBody 的 banner 插槽
+export { StatusBanner } from './chat/StatusBanner'
+export type { StatusBannerProps } from './chat/StatusBanner'
 // 会话配置面板 + 弹窗（绑定分节据 getChannelBindingCaps() 自动显隐，无需宿主传 caps）
 export { SessionConfigPanel } from './chat/SessionConfigPanel'
 export type { SessionConfigPanelProps } from './chat/SessionConfigPanel'
@@ -76,6 +83,15 @@ export { getChannelBindingCaps } from './chat/channelBindings'
 export type { ChannelBindingCaps, ChannelId } from './chat/channelBindings'
 export { PanelToggleButton } from './chat/PanelToggleButton'
 export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
+// 右侧面板标签栏（统一标签样式；标签集合/激活态由宿主注入）—— 桌面/扩展共用
+export { PanelTabBar } from './panel/PanelTabBar'
+export type { PanelTabBarProps, PanelTabItem } from './panel/PanelTabBar'
+// 右侧面板共享视图状态（isOpen/activeTab/width）—— 持久化/边界/原生同步由各宿主在 store 外接
+export { usePanelStore } from './panel/panelStore'
+export type { PanelStoreState } from './panel/panelStore'
+// 侧边栏共享视图状态（isOpen/width）—— 持久化/边界由各宿主在 store 外接（桌面 isResizing 留宿主外层）
+export { useSidebarStore } from './sidebar/sidebarStore'
+export type { SidebarStoreState } from './sidebar/sidebarStore'
 
 // 右侧面板叶子组件（工作目录文件树 + 子代理）—— 经 getChatApi().files / chat-ui store 取后端，
 // 宿主差异走 props（markdown 打开方式、媒体 URL 解析、子会话销毁）
@@ -102,10 +118,13 @@ export type {
 } from './notebook/LivePreviewEditor'
 
 export { SubAgentPanel } from './subagent/SubAgentPanel'
-export type { SubAgentPanelProps } from './subagent/SubAgentPanel'
 
 // 右键菜单（共享配置 + 注入式渲染器：桌面原生 / 扩展 DOM）
-export { ContextMenuProvider, useContextMenu } from './contextmenu/ContextMenuProvider'
+export {
+  ContextMenuProvider,
+  useContextMenu,
+  usePopupContextMenu
+} from './contextmenu/ContextMenuProvider'
 export type {
   ContextMenuRenderer,
   ContextMenuPosition,

@@ -16,11 +16,11 @@ import { isUrl, readUrl, readImage, IMAGE_MIME_BY_EXT } from './richReaders'
 import { createExtensionSandboxPolicy } from './sandboxPolicy'
 import { appEventBus } from './appEventBus'
 
-const READ_DESCRIPTION =
+export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files in the working directory, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. For images (PNG, JPEG, GIF, WebP, BMP), returns inline image content for multimodal viewing (images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
-const WRITE_DESCRIPTION =
+export const WRITE_DESCRIPTION =
   "Write content to a file in the working directory. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
-const EDIT_DESCRIPTION =
+export const EDIT_DESCRIPTION =
   'Edit a file in the working directory by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.'
 
 export interface CreateFileToolsOptions {
