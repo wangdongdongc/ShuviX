@@ -6,6 +6,9 @@ import {
 } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
+import { sessionDao } from '../dao/sessionDao'
+import { t } from '../i18n'
+import { broadcastSessionTitleChanged } from '../utils/sessionConfigBroadcast'
 import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
@@ -147,8 +150,10 @@ export class AgentSession {
   private projectPath?: string
   private workingDirectory: string
 
-  // SessionStart hook 是否已触发（首次 prompt 时懒触发）
-  private sessionStartHookFired = false
+  // ── 标题自动生成状态（两阶段：首轮快速 + 精修一次） ──
+  private titleQuickDone = false // 首轮快速标题是否已生成
+  private titleRefined = false // 精修是否已完成
+  private lastAutoTitle: string | null = null // 最近一次自动生成的标题（用于判断用户是否手动改名）
 
   private constructor(
     sessionId: string,
@@ -232,7 +237,13 @@ export class AgentSession {
       transformToolResult: electronToolResultTransform,
       httpLog: electronHttpLog,
       logger: runtimeLogger,
-      localize
+      localize,
+      // 统一生命周期 hook：注入完整 HookService（builtin + global/project command）；
+      // SessionStart/UserPromptSubmit/Stop 由 RuntimeSession 触发（各端一致）
+      hooks: hookService,
+      getCwd: () => workingDirectory,
+      // UserPromptSubmit 通过、正式派发前触发首轮快速标题（保持与旧行为一致的并发时序）
+      onPromptAccepted: (text) => void session.maybeGenerateTitle('quick', text)
     })
 
     const session = new AgentSession(
@@ -257,7 +268,14 @@ export class AgentSession {
 
   // ─── Public API ──────────────────────────────────────
 
-  /** 向 Agent 发送消息（支持附带图片）。桌面特有：SessionStart / UserPromptSubmit hooks。 */
+  /**
+   * 向 Agent 发送消息（支持附带图片）。
+   *
+   * SessionStart / UserPromptSubmit hook 已下沉到 RuntimeSession（各端一致）：
+   * - 首轮快速标题经注入的 `onPromptAccepted` 在 UserPromptSubmit 通过后触发；
+   * - hook `deny` 时 RuntimeSession 内部广播原因并跳过派发，此处 refine 因 `titleQuickDone`
+   *   仍为 false 而自然跳过。
+   */
   async prompt(
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
@@ -266,70 +284,67 @@ export class AgentSession {
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
 
-    // ── SessionStart hook（首次 prompt 时懒触发） ──
-    if (!this.sessionStartHookFired) {
-      this.sessionStartHookFired = true
-      try {
-        const ssOutputs = await hookService.fire('SessionStart', {
-          session_id: this.sessionId,
-          hook_event_name: 'SessionStart',
-          cwd: this.workingDirectory
-        })
-        this.applyAdditionalContext(ssOutputs, 'SessionStart')
-      } catch (err) {
-        log.warn(`SessionStart hook error: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-
-    // ── UserPromptSubmit hook ──
-    try {
-      const upsOutputs = await hookService.fire('UserPromptSubmit', {
-        session_id: this.sessionId,
-        hook_event_name: 'UserPromptSubmit',
-        cwd: this.workingDirectory,
-        prompt: text
-      })
-      // deny → 丢弃本次 prompt，前端展示原因
-      const denied = upsOutputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
-      if (denied) {
-        const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
-        this.runtime.broadcast({ type: 'error', sessionId: this.sessionId, error: reason })
-        return
-      }
-      this.applyAdditionalContext(upsOutputs, 'UserPromptSubmit')
-    } catch (err) {
-      log.warn(`UserPromptSubmit hook error: ${err instanceof Error ? err.message : String(err)}`)
-    }
-
     await this.runtime.prompt(text, images)
+
+    // 精修：agent 首轮回复落库后，用更完整上下文重生成一次（不 await）
+    void this.maybeGenerateTitle('refine')
   }
 
   /**
-   * 把 hook 返回的 additionalContext 注入 agent 上下文。
-   * 走 user-role 消息并裹 <system-reminder> 标签；不写库（会话级临时上下文）。
-   * 超过 10000 字会截断。
+   * 两阶段自动生成会话标题：
+   *   - 'quick'  首轮：会话仍是默认标题时，用用户这条消息的意图快速生成一个粗标题
+   *   - 'refine' 精修：积累到足够上下文（第 2 轮回复后）时，用整段对话重生成覆盖粗标题
+   *
+   * 只在标题仍是自动生成/默认值时才动手：一旦用户手动改名（title ≠ lastAutoTitle 且 ≠ 默认），
+   * 或是笔记本会话（默认标题为文件名），都不覆盖。生成后落库并广播 AppEvent，各端统一刷新。
    */
-  private applyAdditionalContext(
-    outputs: ReadonlyArray<{ additionalContext?: string }>,
-    eventLabel: string
-  ): void {
-    const MAX_LEN = 10000
-    const messages = this.runtime.getAgent().state.messages
-    for (const out of outputs) {
-      let ctx = out.additionalContext
-      if (typeof ctx !== 'string' || !ctx) continue
-      if (ctx.length > MAX_LEN) {
-        log.warn(`${eventLabel} hook additionalContext 超过 ${MAX_LEN} 字，已截断`)
-        ctx = ctx.slice(0, MAX_LEN)
+  private async maybeGenerateTitle(phase: 'quick' | 'refine', userText?: string): Promise<void> {
+    try {
+      const session = sessionDao.pick(this.sessionId, ['title'])
+      if (!session) return
+      const defaultTitle = t('agent.defaultTitle')
+
+      if (phase === 'quick') {
+        if (this.titleQuickDone) return
+        // 仅当标题仍是通用默认值（跳过笔记本会话的文件名标题 / 用户已改名）
+        if (session.title !== defaultTitle) return
+        const text = (userText ?? '').trim()
+        if (!text) return
+        this.titleQuickDone = true
+        const title = await this.generateTitle(`User: ${text}`.slice(-1000))
+        if (title) this.applyAutoTitle(title)
+      } else {
+        // 精修一次：需先有过快速标题，且用户未手动改名（当前标题仍是我们上次自动写入的）
+        if (this.titleRefined || !this.titleQuickDone) return
+        if (this.lastAutoTitle == null || session.title !== this.lastAutoTitle) return
+        // 等积累到足够上下文再精修（第 2 轮回复后 user×2 + assistant×2 = 4 条文本消息）
+        const msgs = messageService.listBySession(this.sessionId)
+        const textMsgs = msgs.filter(
+          (m) => (m.role === 'user' || m.role === 'assistant') && (m.type === 'text' || !m.type)
+        )
+        if (textMsgs.length < 3) return
+        this.titleRefined = true
+        const conversationText = textMsgs
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n')
+          .slice(-1000)
+        if (!conversationText.trim()) return
+        const title = await this.generateTitle(conversationText)
+        if (title) this.applyAutoTitle(title)
       }
-      const wrapped = `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`
-      messages.push({
-        role: 'user',
-        content: [{ type: 'text', text: wrapped }],
-        timestamp: Date.now()
-      } as AgentMessage)
+    } catch (err) {
+      log.warn(`自动标题生成失败(${phase}): ${err instanceof Error ? err.message : String(err)}`)
     }
   }
+
+  /** 落库自动标题并广播（供各端统一刷新会话列表标题） */
+  private applyAutoTitle(title: string): void {
+    sessionDao.updateTitle(this.sessionId, title)
+    this.lastAutoTitle = title
+    broadcastSessionTitleChanged(this.sessionId, title)
+  }
+
+  // 注：hook 的 additionalContext 注入已下沉到 RuntimeSession（各端一致）。
 
   /**
    * 首次 prompt 前的指令懒注入。由调用方在写入用户消息**之前**调用，
@@ -357,9 +372,8 @@ export class AgentSession {
     this.runtime.steer(text)
   }
 
-  /** 中止生成；桌面特有：触发 Stop hook */
+  /** 中止生成；Stop hook 由 RuntimeSession.abort 统一触发 */
   abort(): ChatMessage | null {
-    this.fireStopHook('aborted')
     return this.runtime.abort()
   }
 
@@ -449,35 +463,21 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，下次 init 会重建） */
+  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 RuntimeSession 触发。 */
   invalidate(): void {
-    this.fireStopHook('invalidated')
+    this.runtime.fireStopHook('invalidated')
     this.runtime.getAgent().abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 RuntimeSession 触发。 */
   destroy(): void {
-    this.fireStopHook('destroyed')
+    this.runtime.fireStopHook('destroyed')
     this.runtime.getAgent().abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
-  }
-
-  /** Stop hook 触发：fire-and-forget，不阻塞调用方的同步路径 */
-  private fireStopHook(reason: string): void {
-    void hookService
-      .fire('Stop', {
-        session_id: this.sessionId,
-        hook_event_name: 'Stop',
-        cwd: this.workingDirectory,
-        reason
-      })
-      .catch((err) =>
-        log.warn(`Stop hook error: ${err instanceof Error ? err.message : String(err)}`)
-      )
   }
 }

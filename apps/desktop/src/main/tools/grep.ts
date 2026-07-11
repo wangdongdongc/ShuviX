@@ -4,7 +4,7 @@
  */
 
 import { stat } from 'fs/promises'
-import { resolve, relative } from 'path'
+import { resolve, relative, dirname, basename } from 'path'
 import { Type } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
 import {
@@ -34,7 +34,8 @@ const GrepParamsSchema = Type.Object({
   }),
   path: Type.Optional(
     Type.String({
-      description: 'The directory to search in (optional, defaults to current working directory)'
+      description:
+        'The directory or single file to search in (optional, defaults to current working directory)'
     })
   ),
   include: Type.Optional(
@@ -95,20 +96,23 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
 
     log.info(`grep "${params.pattern}" in ${searchPath}`)
 
-    // 验证目录存在
-    let dirStat
+    // 验证路径存在
+    let pathStat
     try {
-      dirStat = await stat(searchPath)
+      pathStat = await stat(searchPath)
     } catch {
       throw new Error(`Path not found: ${searchPath}`)
     }
-    if (!dirStat.isDirectory()) {
-      throw new Error(`${searchPath} is not a directory`)
-    }
+
+    // 兼容目录与单个文件：文件时以其父目录为 cwd、文件名为搜索目标
+    const isFile = pathStat.isFile()
+    const searchCwd = isFile ? dirname(searchPath) : searchPath
+    const target = isFile ? basename(searchPath) : undefined
 
     // 使用 ripgrep 搜索
     const { matches, truncated } = await rgSearch({
-      cwd: searchPath,
+      cwd: searchCwd,
+      target,
       pattern: params.pattern,
       include: params.include,
       limit: LIMIT,
@@ -130,7 +134,7 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     let currentFile = ''
     for (const match of matches) {
       // 转为相对于工作目录的路径
-      const absPath = resolve(searchPath, match.path)
+      const absPath = resolve(searchCwd, match.path)
       const relPath = relative(config.workingDirectory, absPath)
 
       if (currentFile !== relPath) {

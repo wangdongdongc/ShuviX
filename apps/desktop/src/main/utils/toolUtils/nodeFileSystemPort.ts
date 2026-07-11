@@ -6,7 +6,8 @@ import {
   readdir as fsReaddir,
   mkdir as fsMkdir,
   readFile as fsReadFile,
-  writeFile as fsWriteFile
+  writeFile as fsWriteFile,
+  open as fsOpen
 } from 'fs/promises'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
@@ -37,6 +38,19 @@ export const nodeFileSystemPort: FileSystemPort = {
   async readFile(p) {
     const buffer = await fsReadFile(p)
     return buffer.toString('utf-8')
+  },
+
+  async readBytes(p, offset, length) {
+    if (length <= 0) return new Uint8Array(0)
+    const fh = await fsOpen(p, 'r')
+    try {
+      const buf = Buffer.alloc(length)
+      const { bytesRead } = await fh.read(buf, 0, length, offset)
+      // Buffer 是 Uint8Array 子类；真实读到 bytesRead 字节，返回精确视图
+      return bytesRead === length ? buf : buf.subarray(0, bytesRead)
+    } finally {
+      await fh.close()
+    }
   },
 
   async writeFile(p, content) {

@@ -57,6 +57,16 @@ export function NotebookView({
   // 双链解析上下文（[[file]] / ![[image]] 按文件名在该会话工作目录内解析）
   const fileContext = useMemo(() => ({ sessionId }), [sessionId])
 
+  // 只监听「本笔记本绑定的这个 md」（父目录 kqueue，非整树）：子智能体 / 外部编辑器改盘时，
+  // 后端广播 files.changed → 下方 useAppEvent 重挂载编辑器。打开注册、切换/关闭注销。
+  useEffect(() => {
+    const api = getSessionChannelApi()
+    void api.files.watch({ sessionId, path })
+    return () => {
+      void api.files.unwatch({ sessionId, path })
+    }
+  }, [path, sessionId])
+
   // 加载文件内容。父组件用 key（path / sessionId）让本组件按文件重挂载，故无需在此重置 state；
   // 待保存 flush 由 LivePreviewEditor 卸载时负责。
   useEffect(() => {

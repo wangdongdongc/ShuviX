@@ -1,40 +1,33 @@
 /**
- * Browser 模块入口 —— 主进程持有的浏览器面板（WebContentsView）与 CDP 自动化能力。
+ * Browser 模块入口 —— 主进程持有的浏览器面板（WebContentsView）与统一浏览器自动化能力。
  *
  * 公共 API：
- * - `createBrowserView` / `destroyBrowserView` / `getBrowserView` / `getBrowserHostWindow`
- *     —— 在主窗口里嵌入/销毁 WebContentsView
- * - `browserCdpService` —— CDP 会话、A11y UID 映射、网络/控制台事件收集
- * - devtools actions —— snapshot / click / type / screenshot 等具体自动化操作
+ * - tab 生命周期 —— `initBrowserHost` / `createTab` / `closeTab` / `activateTab` /
+ *     `destroyAllTabs`；查询 `getActiveView` / `getTabView` / `listTabs`；
+ *     布局 `updateBounds` / `setPanelVisible`
+ * - `createDesktopBrowserBackend` —— 统一 browser 工具（@shuvix/agent-runtime multiplex）
+ *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理
  *
  * 消费方：
  * - src/main/index.ts —— 创建/销毁面板
  * - src/main/ipc/browserViewHandlers.ts —— 向 renderer 暴露 browserView:* IPC
- * - src/main/services/cliServer.ts —— 把 devtools actions 暴露给 `shuvix browser …` CLI
- *   （AI 通过 `bash` 调 CLI，配合 resources/skills/browser/SKILL.md）
+ * - src/main/tools/browser.ts —— 注册 agent 的 `browser` 工具（唯一自动化入口，无 CLI）
  */
 
 export {
   BROWSER_PARTITION,
-  createBrowserView,
-  destroyBrowserView,
-  getBrowserView,
+  initBrowserHost,
+  createTab,
+  closeTab,
+  activateTab,
+  getActiveView,
+  getTabView,
+  listTabs,
+  updateBounds,
+  setPanelVisible,
+  destroyAllTabs,
   getBrowserHostWindow,
   initBrowserSession
 } from './browserViewService'
-export { browserCdpService } from './browserCdpService'
-export {
-  snapshotAction,
-  screenshotAction,
-  printToPdfAction,
-  clickAction,
-  fillAction,
-  typeAction,
-  pressKeyAction,
-  scrollAction,
-  evaluateAction,
-  waitForAction,
-  navigateAction,
-  getNetworkRequestsAction,
-  getConsoleMessagesAction
-} from './browserCdpActions'
+export { browserCdpManager } from './browserCdpService'
+export { createDesktopBrowserBackend, DESKTOP_BROWSER_CAPS } from './browserBackend'

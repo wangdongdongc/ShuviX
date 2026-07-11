@@ -9,11 +9,15 @@
   },
   "sideEffects": false,
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.75.5",
-    "@earendil-works/pi-ai": "^0.75.5",
+    "@earendil-works/pi-agent-core": "^0.80.3",
+    "@earendil-works/pi-ai": "^0.80.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "diff": "^8.0.3",
+    "turndown": "^7.2.2",
     "typebox": "^1.1.37"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.5"
   },
   "peerDependencies": {
     "@shuvix/chat-protocol": "*"

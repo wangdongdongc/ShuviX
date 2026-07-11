@@ -33,12 +33,10 @@ interface SshCredentialInfo {
 
 /**
  * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
- * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、子代理管理），
- * 以及无对应 LLM 工具的功能页（Browser 数据/证书设置）。
+ * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、子代理管理、
+ * Browser 数据/证书设置——挂在统一 browser 工具的子页下）。
  */
 export function ToolSettings(): React.JSX.Element {
-  const { t } = useTranslation()
-
   return (
     <BuiltinToolsView
       loadDefinitions={() => window.api.tools.definitions()}
@@ -46,16 +44,9 @@ export function ToolSettings(): React.JSX.Element {
         if (name === 'ssh') return <SshToolPanel />
         if (name === 'database') return <DatabaseToolPanel />
         if (name === 'Agent') return <SubAgentPanel />
+        if (name === 'browser') return <BrowserToolPanel />
         return null
       }}
-      extraTabs={[
-        {
-          id: 'browser',
-          label: t('tool.browserLabel'),
-          icon: <Globe size={14} className="shrink-0 text-text-tertiary" />,
-          content: <BrowserToolPanel />
-        }
-      ]}
     />
   )
 }

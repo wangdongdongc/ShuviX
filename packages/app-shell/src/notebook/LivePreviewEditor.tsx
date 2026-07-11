@@ -4,7 +4,9 @@ import {
   AtomicCodeMirrorEditor,
   type AtomicCodeMirrorEditorHandle,
   tableContextMenu,
+  tableWikiLinks,
   type TableMenuItem,
+  type WikiLinkStatus,
   wikiLinks
 } from '@shuvix/atomic-editor'
 import { ATOMIC_CODE_LANGUAGES } from '@shuvix/atomic-editor/code-languages'
@@ -14,6 +16,7 @@ import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
+import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { useResolveMediaUrl, type MediaSource } from '../files/mediaUrl'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import { NotebookMinimap } from './NotebookMinimap'
@@ -49,6 +52,13 @@ export interface NotebookCaps {
  * react-hooks 的 refs / immutability / exhaustive-deps 限制，回调只需闭包 sessionId。
  */
 const FILE_MAPS = new Map<string, FileMap>()
+
+/**
+ * `[[file]]` 展示时隐藏 .md 后缀（类 Obsidian）。只影响显示 label，
+ * 文档原文与解析 target 不变；正文 widget 与表格单元格（displayTarget，
+ * 后缀藏进隐藏 mark 保证 textContent 往返）共用。
+ */
+const stripMdExt = (target: string): string => target.replace(/\.md$/i, '')
 
 /**
  * ![[image]] 内嵌图片 URL 缓存：sessionId → (absPath → MediaSource)。模块级（同 FILE_MAPS）以便
@@ -337,10 +347,28 @@ export function LivePreviewEditor({
     void rescanFileMap()
   }, [rescanFileMap])
 
-  // 文件变更 → 重扫双链文件表（通用 AppEvent 'files.changed'，替代旧 files.onChanged）
-  useAppEvent('files.changed', () => {
-    void rescanFileMap()
+  // 文件变更 → 重扫双链文件表（通用 AppEvent 'files.changed'，替代旧 files.onChanged）。
+  // 按 root 过滤 + 纯内容变更（edit/write 且路径均已在表中）跳过 —— 尤其是本编辑器自己
+  // 的自动保存经 watcher 发回的事件，不该触发整目录重扫；其余防抖 200ms（对齐 FilesPanel）
+  const fileMapRescanTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useAppEvent('files.changed', (e) => {
+    const map = sessionId ? FILE_MAPS.get(sessionId) : null
+    if (map) {
+      if (e.root !== map.root) return
+      if (isContentOnlyFileChange(e, (rel) => map.byRel.has(rel))) return
+    }
+    if (fileMapRescanTimer.current) clearTimeout(fileMapRescanTimer.current)
+    fileMapRescanTimer.current = setTimeout(() => {
+      fileMapRescanTimer.current = null
+      void rescanFileMap()
+    }, 200)
   })
+  useEffect(
+    () => () => {
+      if (fileMapRescanTimer.current) clearTimeout(fileMapRescanTimer.current)
+    },
+    []
+  )
 
   // 确保该会话的文件表已就绪（首次解析/补全时若尚未扫描则补扫一次），返回最新表
   const ensureFileMap = useCallback(async (): Promise<FileMap | null> => {
@@ -361,9 +389,9 @@ export function LivePreviewEditor({
     async (
       target: string
     ): Promise<{ target: string; label: string; status: 'resolved' | 'missing' }> => {
-      if (!sessionId) return { target, label: target, status: 'missing' }
+      if (!sessionId) return { target, label: stripMdExt(target), status: 'missing' }
       const abs = lookupAbs(await ensureFileMap(), target)
-      return { target, label: target, status: abs ? 'resolved' : 'missing' }
+      return { target, label: stripMdExt(target), status: abs ? 'resolved' : 'missing' }
     },
     [sessionId, ensureFileMap]
   )
@@ -388,14 +416,22 @@ export function LivePreviewEditor({
       if (!sessionId) return
       const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, target)
       if (!abs) return
-      if (/\.(md|mdx|markdown)$/i.test(abs)) {
-        // 点击 [[md]] → 在右侧 Files 面板打开该文件预览（不再在中间区打开）
-        useChatStore.getState().requestFilePreview(abs)
-      } else {
-        caps?.openExternal?.(`file://${abs}`)
-      }
+      // 点击 [[file]] → 一律在右侧 Files 面板打开该文件预览（代码/文本/媒体/二进制都可预览），
+      // 不再按扩展名分流到外部打开——保持外层编辑器与表格单元格内的 wikiLink 行为一致。
+      useChatStore.getState().requestFilePreview(abs)
     },
-    [sessionId, caps]
+    [sessionId]
+  )
+  // 表格单元格内 [[file]] 的同步着色（resolved/missing）。文件表未就绪时返回 undefined
+  // 用默认样式，避免建表时全部误显示为缺失（表格 widget 仅在文档变更时重建，不会随扫描回填）。
+  const resolveWikiStatus = useCallback(
+    (target: string): WikiLinkStatus | undefined => {
+      if (!sessionId) return undefined
+      const map = FILE_MAPS.get(sessionId)
+      if (!map) return undefined
+      return lookupAbs(map, target) ? 'resolved' : 'missing'
+    },
+    [sessionId]
   )
   // ![[image]] 内嵌图片 URL 经注入的 mediaUrl seam 解析（桌面 shuvix-preview:// 同步；
   // 扩展 blob: 异步）。resolveSrc 须同步返回，故走模块级 EMBED_SOURCES 缓存：异步来源就绪后
@@ -472,6 +508,13 @@ export function LivePreviewEditor({
         // 只插入最短 token（[[token]]），不强制生成 |别名（默认序列化会带上）
         serializeSuggestion: (s) => `${s.target}]]`
       }),
+      // 表格是整块替换 widget，外层 wikiLinks 装饰进不去单元格；这里单独让单元格内
+      // [[file]] 可点击（打开走 openWikiLink，与外层一致）+ 按文件表同步着色解析/缺失态。
+      tableWikiLinks({
+        onOpen: openWikiLink,
+        resolveStatus: resolveWikiStatus,
+        displayTarget: stripMdExt
+      }),
       wikiImageEmbeds({ resolveSrc: resolveEmbedSrc })
     ]
   }, [
@@ -479,6 +522,7 @@ export function LivePreviewEditor({
     renderTableMenu,
     resolveWikiLink,
     openWikiLink,
+    resolveWikiStatus,
     suggestWikiTargets,
     resolveEmbedSrc
   ])

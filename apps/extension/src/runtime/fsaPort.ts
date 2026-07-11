@@ -69,6 +69,18 @@ export function createFsaPort(root: FileSystemDirectoryHandle): FileSystemPort {
 
     readFile: readFileText,
 
+    async readBytes(path, offset, length) {
+      if (length <= 0) return new Uint8Array(0)
+      const segs = toSegments(path)
+      if (segs.length === 0) throw new Error(`Not a file: ${path}`)
+      const parent = await dirAt(segs, segs.length - 1, false)
+      const fh = await parent.getFileHandle(segs[segs.length - 1])
+      const file = await fh.getFile()
+      // File.slice 只切片不读盘；arrayBuffer 只解出 [offset, offset+length) 这段字节
+      const blob = file.slice(offset, offset + length)
+      return new Uint8Array(await blob.arrayBuffer())
+    },
+
     async *readTextLines(path) {
       const text = await readFileText(path)
       if (text === '') return

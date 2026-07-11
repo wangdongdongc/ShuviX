@@ -10,6 +10,7 @@ import { Folder, RefreshCw, Search, X } from 'lucide-react'
 import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import type { NotebookCaps } from '../notebook/LivePreviewEditor'
 import { FilePreview } from './FilePreview'
 import { AudioDock } from './AudioDock'
@@ -45,6 +46,8 @@ interface ScanState {
   /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
   forRoot: string
   paths: string[]
+  /** paths 的小写集合 —— 供 isContentOnlyFileChange 判断事件是否可能改变列表成员 */
+  pathSet: Set<string>
   truncated: boolean
 }
 
@@ -59,11 +62,15 @@ export interface FilesPanelProps {
   onCreateNotebook?: (params: { path: string; sessionId: string }) => void
   /** 宿主能力注入（笔记本主题 / 外链）；markdown 只读 live-preview 渲染时透传给 FilePreview。 */
   notebookCaps?: NotebookCaps
+  /** 在系统文件管理器中打开工作目录（宿主注入）；提供则在工作目录名旁显示按钮。
+   *  桌面注入 getHostApi().app.openFolder；扩展无原生文件管理器故不注入。 */
+  onOpenFolder?: (projectPath: string) => void
 }
 
 export function FilesPanel({
   onCreateNotebook,
-  notebookCaps
+  notebookCaps,
+  onOpenFolder
 }: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
@@ -108,10 +115,29 @@ export function FilesPanel({
     if (!id) return
     try {
       const r = await getSessionChannelApi().files.scan({ sessionId: id })
-      if (!r.root) return
+      const root = r.root
+      if (!root) return
       // 异步竞态：若用户已切到不同 workingDirectory，丢弃旧结果
-      if (useChatStore.getState().projectPath !== r.root) return
-      setState({ forRoot: r.root, paths: r.paths, truncated: r.truncated })
+      if (useChatStore.getState().projectPath !== root) return
+      // 排序保证跨次扫描顺序稳定 —— rg --files 并行遍历输出顺序不确定，不排序会让
+      // 下面的等值保险几乎永远失效（树的显示顺序由 pierre 内部 sort 决定，与此无关）
+      const paths = [...r.paths].sort()
+      // 等值保险：文件列表未变时返回原引用 → React 跳过 re-render，避免按需重扫（聚焦/写入）
+      // 反复重挂载文件树（path-first 树本就按路径复用状态，此处再挡掉多余渲染）。
+      setState((prev) =>
+        prev &&
+        prev.forRoot === root &&
+        prev.truncated === r.truncated &&
+        prev.paths.length === paths.length &&
+        prev.paths.every((p, i) => p === paths[i])
+          ? prev
+          : {
+              forRoot: root,
+              paths,
+              pathSet: new Set(paths.map((p) => p.toLowerCase())),
+              truncated: r.truncated
+            }
+      )
       setError(null)
     } catch (e) {
       const currentRoot = useChatStore.getState().projectPath
@@ -132,9 +158,18 @@ export function FilesPanel({
     setPlayingMedia(null)
   }, [projectPath, sessionId])
 
-  // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后重扫
+  // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后重扫。
+  // 纯内容变更（edit/write 且路径均已在列表中）不可能改变列表成员 → 跳过，
+  // 笔记本自动保存、agent 编辑已有文件不再触发整目录扫描。
   useAppEvent('files.changed', (e) => {
     if (!projectPath || e.root !== projectPath) return
+    if (
+      state &&
+      state.forRoot === projectPath &&
+      isContentOnlyFileChange(e, (rel) => state.pathSet.has(rel))
+    ) {
+      return
+    }
     if (rescanTimer.current) clearTimeout(rescanTimer.current)
     rescanTimer.current = setTimeout(() => {
       rescanTimer.current = null
@@ -148,6 +183,20 @@ export function FilesPanel({
     },
     []
   )
+
+  // 窗口重新聚焦时按需重扫一次 —— 外部进程（别的编辑器 / git / 构建）增删文件的兜底刷新。
+  // 带 1.5s 节流避免频繁 ripgrep；结果无变化时 scan 的等值保险会挡掉 re-render，不会闪。
+  const lastFocusScan = useRef(0)
+  useEffect(() => {
+    const onFocus = (): void => {
+      const now = Date.now()
+      if (now - lastFocusScan.current < 1500) return
+      lastFocusScan.current = now
+      void scan()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [scan])
 
   const handleRefresh = useCallback(() => {
     setRefreshNonce((n) => n + 1)
@@ -265,12 +314,23 @@ export function FilesPanel({
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* 顶栏：左侧工作目录名（大写）+ 右侧 truncated 提示 + 搜索 + 刷新 */}
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30">
-        <span
-          className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary truncate max-w-[50%]"
-          title={projectPath ?? ''}
-        >
-          {folderName}
-        </span>
+        <div className="flex items-center gap-0.5 min-w-0 max-w-[60%]">
+          <span
+            className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary truncate"
+            title={projectPath ?? ''}
+          >
+            {folderName}
+          </span>
+          {projectPath && onOpenFolder && (
+            <button
+              onClick={() => onOpenFolder(projectPath)}
+              className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors flex-shrink-0"
+              title={projectPath}
+            >
+              <Folder size={11} />
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-1 min-w-0">
           {freshState?.truncated && (
             <span className="text-[10px] text-text-tertiary/70 truncate">
@@ -457,14 +517,29 @@ function FilesTree({
     return unsubscribe
   }, [model])
 
-  // 首次挂载已经把 paths 传给了 useFileTree；后续 paths 变化通过 resetPaths 同步
+  // 首次挂载已经把 paths 传给了 useFileTree；后续 paths 变化通过 resetPaths 同步。
+  // resetPaths 是整树重建（选中有迁移逻辑，展开状态没有）—— 不带 initialExpandedPaths
+  // 会全部收起，因此重建前逐目录读出当前展开状态原样带过去。目录集合从新 paths 推导
+  // （已删除的目录无需保留；新增目录在旧模型里查不到句柄，自然跳过）。
   const isFirst = useRef(true)
   useEffect(() => {
     if (isFirst.current) {
       isFirst.current = false
       return
     }
-    model.resetPaths(paths)
+    const dirs = new Set<string>()
+    for (const p of paths) {
+      const segments = p.split('/')
+      for (let i = 1; i < segments.length; i++) {
+        dirs.add(`${segments.slice(0, i).join('/')}/`) // pierre 目录规范路径带尾斜杠
+      }
+    }
+    const expanded: string[] = []
+    for (const dir of dirs) {
+      const item = model.getItem(dir)
+      if (item && 'isExpanded' in item && item.isExpanded()) expanded.push(dir)
+    }
+    model.resetPaths(paths, { initialExpandedPaths: expanded })
   }, [paths, model])
 
   // 把外部搜索查询透传到 controller —— 空串视作关闭搜索

@@ -51,13 +51,9 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
     if (!res.success) {
       return { success: false, error: res.error }
     }
-    // 切到 Browser tab 并加载 widget URL
+    // 切到 Browser tab 并加载 widget URL（面板未开则打开；有激活 tab 导航之，无则新建）
     const browser = useBrowserStore.getState()
-    if (!browser.isOpen) {
-      browser.open(res.url)
-    } else {
-      browser.setUrl(res.url)
-    }
+    browser.openAndNavigate(res.url)
     browser.setActiveTab('browser')
     // 刷新卡片顺序（lastOpenedAt）
     void get().reload()

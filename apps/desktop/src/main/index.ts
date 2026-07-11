@@ -37,7 +37,7 @@ import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './servic
 // pglite / pyodide: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
 import { disposePglite } from './services/pglite'
 import { disposePyodide } from './services/pyodide'
-import { createBrowserView, destroyBrowserView, initBrowserSession } from './services/browser'
+import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/browser'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
@@ -322,7 +322,7 @@ function getSavedPanelLayout(): PanelLayout {
 /** 启动时尚未创建 webContents，需根据保存的 uiZoom 计算 zoomFactor 把 CSS 像素换算成 DIP */
 function getStartupZoomFactor(): number {
   const pct = Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1
-  return Math.max(0.5, Math.min(2.2, pct * 1.1))
+  return Math.max(0.5, Math.min(2.2, pct))
 }
 
 function getSavedWindowBounds(): { width: number; height: number; x?: number; y?: number } {
@@ -400,8 +400,8 @@ function createWindow(): void {
 
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
   initBrowserSession()
-  // 创建浏览器面板的 WebContentsView（嵌入主窗口，renderer 通过 IPC 控制 bounds）
-  createBrowserView(mainWindow)
+  // 记录浏览器面板的宿主窗口（tab 的 WebContentsView 按需创建，renderer 通过 IPC 控制）
+  initBrowserHost(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -471,10 +471,10 @@ ipcMain.handle('app:version', () => {
 // React 挂载完成后显示对应窗口（同时应用已保存的 UI 缩放）
 ipcMain.on('app:window-ready', (event) => {
   const sender = event.sender
-  // 应用 UI 缩放设置（基础倍率 1.1：100% 对应 zoomFactor 1.1）
+  // 应用 UI 缩放设置（zoomFactor 与用户设置的百分比 1:1 对应：100% → 1.0）
   const uiZoom = Math.max(
     0.5,
-    Math.min(2.2, (Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1) * 1.1)
+    Math.min(2.2, Number(settingsDao.findByKey('general.uiZoom')) / 100 || 1)
   )
   sender.setZoomFactor(uiZoom)
   if (mainWindow && sender === mainWindow.webContents) {
@@ -647,7 +647,7 @@ app.whenReady().then(async () => {
 
 // 应用退出前清理
 app.on('before-quit', () => {
-  destroyBrowserView()
+  destroyAllTabs()
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})

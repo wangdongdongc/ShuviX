@@ -4,6 +4,7 @@
  * 协议、事件、配置 schema 详见同目录 [types.ts](./types.ts)。
  */
 
+import { HookEngine } from '@shuvix/agent-runtime'
 import { createLogger } from '../../logger'
 import { matchHook } from './hookMatcher'
 import { runHookProcess } from './hookRunner'
@@ -19,6 +20,7 @@ import type {
   HookEntry,
   HookEvent,
   HookFileStatus,
+  HookFirer,
   HookInput,
   HookOutput,
   HookSource,
@@ -27,29 +29,24 @@ import type {
 
 const log = createLogger('HookService')
 
-const BUILTIN_DEFAULT_TIMEOUT_SEC = 5
 const COMMAND_DEFAULT_TIMEOUT_SEC = 30
 
-interface BuiltinRegistration {
-  event: HookEvent
-  matcher: string
-  entry: BuiltinHookEntry
-}
-
-export class HookService {
-  private builtins: BuiltinRegistration[] = []
+/**
+ * 桌面 HookService —— 组合各端共享的 {@link HookEngine}（内置 hook 引擎）并在其后
+ * 追加 global/project command 层（子进程 + 文件监听，桌面专属）。
+ *
+ * 实现 {@link HookFirer}：`fire()` 先跑内置（deny 短路），再跑 command。
+ */
+export class HookService implements HookFirer {
+  /** 内置 hook 引擎（与扩展共享同一实现）；registerBuiltin/内置执行全部委托它 */
+  private engine = new HookEngine(log)
   private currentProjectDir: string | undefined
   private watcher: ConfigWatcher | undefined
   private loaded: Map<HookSource, LoadedConfig> = new Map()
 
-  /** 注册内置 hook。由启动序列在 watcher 启动前调用。 */
+  /** 注册内置 hook（委托共享引擎）。由启动序列在 watcher 启动前调用。 */
   registerBuiltin(event: HookEvent, matcher: string, entry: Omit<BuiltinHookEntry, 'type'>): void {
-    this.builtins.push({
-      event,
-      matcher,
-      entry: { type: 'builtin', ...entry }
-    })
-    log.info(`已注册内置 hook: ${event} ${matcher} → ${entry.name}`)
+    this.engine.registerBuiltin(event, matcher, entry)
   }
 
   /** 启动文件监听。projectDir 可在运行期通过 setProjectDir 切换。 */
@@ -88,16 +85,7 @@ export class HookService {
   list(opts?: { includeBuiltin?: boolean }): ResolvedHook[] {
     const result: ResolvedHook[] = []
     if (opts?.includeBuiltin) {
-      for (const b of this.builtins) {
-        result.push({
-          event: b.event,
-          matcher: b.matcher || '*',
-          source: 'builtin',
-          description: b.entry.name,
-          descriptionKey: b.entry.descriptionKey,
-          timeout: b.entry.timeout ?? BUILTIN_DEFAULT_TIMEOUT_SEC
-        })
-      }
+      result.push(...this.engine.listBuiltins())
     }
     for (const source of ['global', 'project'] as const) {
       const cfg = this.loaded.get(source)
@@ -122,19 +110,17 @@ export class HookService {
   /**
    * 触发一个事件。按 (builtin → global → project) 顺序串行执行所有匹配 hook，
    * 任一返回 `permissionDecision: 'deny'` 立即短路。
+   * 内置层委托共享 {@link HookEngine}；command 层为桌面专属。
    */
   async fire(event: HookEvent, input: HookInput): Promise<HookOutput[]> {
-    const outputs: HookOutput[] = []
-    const target = input.tool_name ?? ''
-
-    for (const b of this.builtins) {
-      if (b.event !== event) continue
-      if (!matchHook(b.matcher, target)) continue
-      const out = await this.invokeBuiltin(b.entry, input)
-      if (out) outputs.push(out)
-      if (out?.hookSpecificOutput?.permissionDecision === 'deny') return outputs
+    // ① 内置 hook（共享引擎，内部已 deny 短路）
+    const outputs = await this.engine.fire(event, input)
+    if (outputs.some((o) => o.hookSpecificOutput?.permissionDecision === 'deny')) {
+      return outputs
     }
 
+    // ② global / project command hook（桌面专属）
+    const target = input.tool_name ?? ''
     for (const source of ['global', 'project'] as const) {
       const cfg = this.loaded.get(source)
       if (!cfg) continue
@@ -150,37 +136,6 @@ export class HookService {
     }
 
     return outputs
-  }
-
-  private async invokeBuiltin(
-    entry: BuiltinHookEntry,
-    input: HookInput
-  ): Promise<HookOutput | undefined> {
-    const timeoutMs = (entry.timeout ?? BUILTIN_DEFAULT_TIMEOUT_SEC) * 1000
-    let timer: NodeJS.Timeout | undefined
-    try {
-      const result = await Promise.race([
-        Promise.resolve(entry.handler(input)),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`builtin hook timeout: ${entry.name}`)),
-            timeoutMs
-          )
-        })
-      ])
-      return result || undefined
-    } catch (err) {
-      log.error(`内置 hook 异常 ${entry.name}: ${err instanceof Error ? err.message : String(err)}`)
-      // fail-closed: 内置 hook 出错按拒绝处理
-      return {
-        hookSpecificOutput: {
-          permissionDecision: 'deny',
-          reason: `internal hook ${entry.name} error: ${err instanceof Error ? err.message : String(err)}`
-        }
-      }
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
   }
 
   private async invokeCommand(entry: HookEntry, input: HookInput): Promise<HookOutput | undefined> {

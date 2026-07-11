@@ -35,7 +35,14 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   const toggleBrowser = useBrowserStore((s) => s.toggle)
+  const openBrowser = useBrowserStore((s) => s.open)
+  const setBrowserTab = useBrowserStore((s) => s.setActiveTab)
   const isBrowserOpen = useBrowserStore((s) => s.isOpen)
+  /** 顶栏「打开文件面板」：切到 Files tab 并展开右侧面板（open() 已开则不重复联动窗口宽度） */
+  const openFilesPanel = useCallback(() => {
+    setBrowserTab('files')
+    openBrowser()
+  }, [setBrowserTab, openBrowser])
   const toggleSidebar = useSidebarStore((s) => s.toggle)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
 
@@ -146,6 +153,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       }}
       headerHeightClassName={getSessionChannelApi().app.platform === 'darwin' ? 'h-10' : 'h-8'}
       onOpenSessionConfig={() => setShowSessionConfig(true)}
+      onOpenFiles={openFilesPanel}
       rightActions={rightActions}
       banner={
         activeSessionId && pinnedMode !== 'placeholder' ? (

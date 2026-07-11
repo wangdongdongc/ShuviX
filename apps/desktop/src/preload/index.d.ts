@@ -792,19 +792,41 @@ declare global {
       onExit: (callback: (payload: { terminalId: string; exitCode: number }) => void) => () => void
     }
     browserView: {
-      navigate: (url: string) => Promise<void>
-      goBack: () => Promise<void>
-      goForward: () => Promise<void>
-      reload: () => Promise<void>
-      stop: () => Promise<void>
-      getUrl: () => Promise<string>
+      createTab: (url?: string) => Promise<string>
+      closeTab: (tabId: string) => Promise<void>
+      activateTab: (tabId: string) => Promise<void>
+      listTabs: () => Promise<Array<{ id: string; url: string; title: string; active: boolean }>>
+      navigate: (tabId: string, url: string) => Promise<void>
+      goBack: (tabId: string) => Promise<void>
+      goForward: (tabId: string) => Promise<void>
+      reload: (tabId: string) => Promise<void>
+      stop: (tabId: string) => Promise<void>
+      getUrl: (tabId: string) => Promise<string>
       updateBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
       setVisible: (visible: boolean) => void
-      onDidStartLoading: (callback: (url: string) => void) => () => void
-      onDidNavigate: (callback: (url: string) => void) => () => void
-      onDidFinishLoad: (callback: () => void) => () => void
+      onTabCreated: (
+        callback: (payload: { tabId: string; url: string; active: boolean }) => void
+      ) => () => void
+      onTabClosed: (
+        callback: (payload: { tabId: string; activeTabId: string | null }) => void
+      ) => () => void
+      onTabActivated: (callback: (payload: { tabId: string }) => void) => () => void
+      onTabTitleUpdated: (
+        callback: (payload: { tabId: string; title: string }) => void
+      ) => () => void
+      onTabFaviconUpdated: (
+        callback: (payload: { tabId: string; favicon?: string }) => void
+      ) => () => void
+      onDidStartLoading: (callback: (payload: { tabId: string; url: string }) => void) => () => void
+      onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) => () => void
+      onDidFinishLoad: (callback: (payload: { tabId: string }) => void) => () => void
       onDidFailLoad: (
-        callback: (info: { errorCode: number; errorDescription: string; url: string }) => void
+        callback: (payload: {
+          tabId: string
+          errorCode: number
+          errorDescription: string
+          url: string
+        }) => void
       ) => () => void
     }
     browserData: {
@@ -901,6 +923,8 @@ declare global {
         truncated: boolean
         root: string | null
       }>
+      watch: (params: { sessionId: string; path: string }) => Promise<void>
+      unwatch: (params: { sessionId: string; path: string }) => Promise<void>
       read: (params: {
         sessionId: string
         path: string

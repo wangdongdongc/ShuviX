@@ -5,7 +5,8 @@
  *  - providerInfo 由宿主通过参数传入（替代 providerDao.findById）
  *  - apiKey 注入走 RuntimeEnv.setApiKey（替代直接写 process.env；浏览器宿主 no-op）
  */
-import { type Model, type Api, type KnownProvider, getModel } from '@earendil-works/pi-ai'
+import type { Model, Api, KnownProvider } from '@earendil-works/pi-ai'
+import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
 import { buildCustomProviderCompat } from './providerCompat'
@@ -118,7 +119,10 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
   }
 
   let resolvedModel: Model<Api>
-  const piModel = getModel(slug as KnownProvider, model as Parameters<typeof getModel>[1])
+  const piModel = getBuiltinModel(
+    slug as KnownProvider,
+    model as Parameters<typeof getBuiltinModel>[1]
+  )
   if (piModel) {
     // 已知模型：URL/协议/headers/能力完全采用注册表定义，不接受用户 baseUrl 覆盖
     // （内置 provider 不支持自定义 URL；要自定义请另建自定义提供商）

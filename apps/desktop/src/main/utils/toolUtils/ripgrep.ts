@@ -80,6 +80,8 @@ export interface RgMatch {
 export async function rgSearch(input: {
   cwd: string
   pattern: string
+  /** 搜索目标（相对 cwd），默认 '.' 即整个 cwd；指定文件名可只搜单个文件 */
+  target?: string
   include?: string
   limit?: number
   signal?: AbortSignal
@@ -97,8 +99,8 @@ export async function rgSearch(input: {
   if (input.include) {
     args.push('--glob', input.include)
   }
-  // 搜索当前 cwd
-  args.push('.')
+  // 搜索目标：默认整个 cwd（'.'），或指定的单个文件/子路径
+  args.push(input.target ?? '.')
 
   const lines: string[] = []
   for await (const line of spawnRgLines(args, input.cwd, input.signal)) {

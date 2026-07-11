@@ -42,19 +42,21 @@ export interface NotebookTaskInputs {
  * 笔记本会话发送：组装一次性 `notebook-task` 子智能体信封 + 注入「路径 + read 提示」上下文，
  * fire-and-forget 派发（不 await 整轮，进展走事件流）。桌面 gateway 与扩展 adapter 共用——
  * 差异仅在 manager 实例、inputs 的数据来源、onError 落点（广播 vs eventBus）。
+ * 返回整轮完成的 promise（永不 reject，错误已经 onError 消化）供宿主观察运行生命周期
+ * （如扩展端标签页租约）；调用方可忽略。
  */
 export function runNotebookTask(
   manager: SubAgentManager,
   inputs: NotebookTaskInputs,
   onError: (message: string) => void
-): void {
+): Promise<void> {
   // 展示名取人读文本：把 slash 命令标记还原为 "/cmd" 标签，避免标题出现 {{shuvixInlineToken:…}} 原始标记
   const taskName = notebookTaskName(inlineTokensToPlainText(inputs.text, inputs.inlineTokens))
   // 笔记本上下文（路径 + read 提示）并入 system prompt，而非单独 user 上下文消息
   const systemPrompt = [inputs.systemPrompt, buildNotebookContextText(inputs.notebookPath)]
     .filter(Boolean)
     .join('\n\n')
-  void manager
+  return manager
     .runTask({
       parentSessionId: inputs.sessionId,
       agentType: {
@@ -70,5 +72,6 @@ export function runNotebookTask(
       description: taskName,
       modelConfig: inputs.modelConfig
     })
+    .then(() => undefined)
     .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
 }

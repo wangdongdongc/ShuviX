@@ -61,7 +61,7 @@ function defaultOnLinkClick(url: string): void {
 // route through the OS opener as-is. Normalize to a usable URL so the host's
 // `openExternal` does the right thing (mail client / browser). Explicit
 // schemes (http:, https:, mailto:, …) and `[label](url)` destinations pass through.
-function normalizeLinkUrl(url: string): string {
+export function normalizeLinkUrl(url: string): string {
   if (/^[a-z][\w+.-]*:/i.test(url)) return url;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(url)) return `mailto:${url}`;
   if (/^www\./i.test(url)) return `https://${url}`;
@@ -89,28 +89,23 @@ const previewFrozenField = StateField.define<boolean>({
   },
 });
 
-function linkIconHitTarget(event: MouseEvent, root?: HTMLElement): HTMLElement | null {
+// Returns the `.cm-atomic-link` element under the pointer, if any. The
+// whole rendered link is the click-to-open affordance (matching wiki
+// links: `[[target]]`) — a plain click anywhere on the link text opens
+// it rather than placing a caret. There is no trailing open-icon.
+function linkHitTarget(event: MouseEvent, root?: HTMLElement): HTMLElement | null {
   const target = event.target;
   if (!(target instanceof Element)) return null;
   const linkEl = target.closest<HTMLElement>('.cm-atomic-link');
   if (!linkEl || (root && !root.contains(linkEl))) return null;
+  return linkEl;
+}
 
-  // The icon is a `::after` pseudo-element, so it doesn't have its own
-  // event target. Compute the same trailing hit-zone used by the click
-  // opener and treat pointerdown in that zone as "on the icon", not
-  // "inside editable link text".
-  const rects = Array.from(linkEl.getClientRects());
-  if (rects.length === 0) return null;
-  const lastRect = rects[rects.length - 1];
-  const emSize = parseFloat(window.getComputedStyle(linkEl).fontSize);
-  const iconZone = emSize * 1.25;
-  const onIcon =
-    event.clientX >= lastRect.right - iconZone &&
-    event.clientX <= lastRect.right &&
-    event.clientY >= lastRect.top &&
-    event.clientY <= lastRect.bottom;
-
-  return onIcon ? linkEl : null;
+// A plain (unmodified) click opens the link; a modifier-click falls
+// through to native caret placement so the raw `[label](url)` still
+// reveals for editing.
+function isPlainClick(event: MouseEvent): boolean {
+  return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 }
 
 // Tracks mouse state on the editor and drives the freeze flag. We listen
@@ -133,11 +128,12 @@ const freezeMousePlugin = ViewPlugin.fromClass(
       if (!(target instanceof Node) || !this.view.contentDOM.contains(target)) {
         return;
       }
-      if (linkIconHitTarget(event, this.view.contentDOM)) {
+      if (isPlainClick(event) && linkHitTarget(event, this.view.contentDOM)) {
         // Let the follow-up click open the link, but stop CM6 from
-        // interpreting the icon press as a text-editing click. Without
-        // this, pointerdown moves the selection into the Link node and
-        // reveals `[label](url)` before the click handler opens it.
+        // interpreting the press as a text-editing click. Without this,
+        // pointerdown moves the selection into the Link node and reveals
+        // `[label](url)` before the click handler opens it. A modifier-
+        // click is excluded so the raw source can still be revealed/edited.
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
@@ -198,8 +194,9 @@ const LINE_CLASS_BY_BLOCK: Record<string, string> = {
   ATXHeading4: 'cm-atomic-h4',
   ATXHeading5: 'cm-atomic-h5',
   ATXHeading6: 'cm-atomic-h6',
-  SetextHeading1: 'cm-atomic-h1',
-  SetextHeading2: 'cm-atomic-h2',
+  // Setext headings (SetextHeading1/2) are intentionally disabled at the
+  // parser level (see markdown({ extensions: [{ remove: ['SetextHeading'] }] })
+  // in AtomicCodeMirrorEditor), so no mapping is needed for them here.
   Blockquote: 'cm-atomic-blockquote',
   FencedCode: 'cm-atomic-fenced-code',
 };
@@ -504,8 +501,8 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         ) {
           shouldHide = false;
           // The URL is the link's sole visible content (autolink / bare email).
-          // Tag it `.cm-atomic-link` so it gets the same trailing open-icon and
-          // click-to-open affordance as a `[label](url)` link.
+          // Tag it `.cm-atomic-link` so it gets the same click-to-open
+          // affordance as a `[label](url)` link.
           ranges.push(
             Decoration.mark({ class: 'cm-atomic-link' }).range(node.from, node.to),
           );
@@ -1020,9 +1017,9 @@ function insertTightListItem(view: EditorView): boolean {
 function makeLinkClickHandler(onLinkClick: (url: string) => void): Extension {
   return EditorView.domEventHandlers({
     click: (event, view) => {
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
+      if (!isPlainClick(event)) return false;
       if (event.button !== 0) return false;
-      const linkEl = linkIconHitTarget(event, view.contentDOM);
+      const linkEl = linkHitTarget(event, view.contentDOM);
       if (!linkEl) return false;
 
       const pos = view.posAtDOM(linkEl);

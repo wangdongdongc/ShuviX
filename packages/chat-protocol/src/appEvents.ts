@@ -25,6 +25,8 @@ export type AppEvent =
   | { type: 'providers.changed' }
   | { type: 'project.changed' }
   | { type: 'session.configChanged'; sessionId: string }
+  /** 会话标题变更（AI 自动生成 / 手动重命名）—— 载荷带 title，消费者直接更新、无需回查 */
+  | { type: 'session.titleChanged'; sessionId: string; title: string }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
   | { type: 'widget.changed' }
 

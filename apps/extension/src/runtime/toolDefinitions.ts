@@ -3,7 +3,7 @@
  *
  * 各工具「自举」：定义条目从各自的真源派生，复用共享 toBuiltinToolDefinitions 输出与桌面一致的结构。
  * - 文件工具(read/write/edit)：共享参数 schema + 扩展端描述常量，无需句柄、无需实例化；
- * - 浏览器操控工具：直接读已构造的 browserTools 实例上的 description/parameters（chrome.debugger，扩展独有）；
+ * - browser 工具（multiplex）：描述/参数经共享 buildBrowserToolDescription/Schema 按扩展 caps 生成；
  * - ask：共享 schema + 描述常量。
  * 全程纯读、零实例化、无临时句柄/占位上下文。
  */
@@ -14,10 +14,13 @@ import {
   WriteParamsSchema,
   EditParamsSchema,
   AskParamsSchema,
-  ASK_DESCRIPTION
+  ASK_DESCRIPTION,
+  BROWSER_TOOL_NAME,
+  buildBrowserToolDescription,
+  buildBrowserParamsSchema
 } from '@shuvix/agent-runtime'
 import type { BuiltinToolDefinition } from '@shuvix/chat-protocol/chatApi'
-import { browserTools } from './browserTools'
+import { extensionBrowserBackend } from './browserBackend'
 import { READ_DESCRIPTION, WRITE_DESCRIPTION, EDIT_DESCRIPTION } from './fileTools'
 import { getToolPresentations } from './toolPresentations'
 
@@ -55,14 +58,17 @@ export function getBuiltinToolDefinitions(): BuiltinToolDefinition[] {
       icon: iconOf('edit'),
       describe: () => ({ description: EDIT_DESCRIPTION, parameters: EditParamsSchema })
     },
-    // 浏览器操控工具：定义直接取自已构造实例（无句柄依赖）；统一用浏览器图标
-    ...browserTools.map((t) => ({
-      name: t.name,
-      label: labelOf(t.name),
+    // 统一 browser 工具（multiplex）：描述/参数按扩展端 caps 生成，与发给 LLM 的完全一致
+    {
+      name: BROWSER_TOOL_NAME,
+      label: labelOf(BROWSER_TOOL_NAME),
       group: 'browser',
       icon: 'Globe',
-      describe: () => ({ description: t.description, parameters: t.parameters })
-    }))
+      describe: () => ({
+        description: buildBrowserToolDescription(extensionBrowserBackend.caps),
+        parameters: buildBrowserParamsSchema(extensionBrowserBackend.caps)
+      })
+    }
   ]
 
   return toBuiltinToolDefinitions(entries)

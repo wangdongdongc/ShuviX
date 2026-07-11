@@ -40,11 +40,24 @@
     "updateAvailable": "新しいバージョンがあります",
     "updateReady": "インストール準備完了",
     "deleteSession": "セッションを削除",
+    "exportSession": "セッションをエクスポート",
+    "viewAll": "すべて表示",
     "viewProjects": "プロジェクト",
     "viewCalendar": "カレンダー",
     "switchView": "ビュー切り替え",
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません"
+  },
+  "transcript": {
+    "untitled": "無題のセッション",
+    "user": "ユーザー",
+    "assistant": "アシスタント",
+    "steer": "ユーザー（誘導）",
+    "thinking": "思考",
+    "toolCall": "ツール呼び出し",
+    "toolResult": "ツール結果",
+    "systemNotice": "システム",
+    "image": "画像"
   },
   "notebook": {
     "saving": "保存中…",
@@ -755,7 +768,7 @@
     "remoteDbHint": "リモートデータベース（MySQL、PostgreSQL など）に接続して SQL クエリを実行",
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "browserLabel": "ブラウザ",
-    "browserHint": "内蔵ブラウザパネルで任意の URL を開く、またはパネルを閉じる",
+    "browserHint": "ページを開く、スナップショット、クリック/入力/スクロール、スクリーンショット/PDF、JS 実行、ネットワーク・コンソール確認 — 内蔵マルチタブブラウザを操作",
     "subAgentTab": "サブエージェント",
     "subAgentBuiltin": "組み込み",
     "subAgentCustom": "カスタム",
@@ -884,7 +897,10 @@
     }
   },
   "browser": {
-    "close": "現在のページを閉じる",
+    "close": "現在のタブを閉じる",
+    "newTab": "新しいタブ",
+    "closeTab": "タブを閉じる",
+    "untitledTab": "新しいタブ",
     "cert": {
       "title": "信頼されていない証明書：{{host}}",
       "continue": "続行",
@@ -900,7 +916,6 @@
   "command": {
     "skills": {
       "widget": "再利用可能なミニ React ツール（Widget）を作成",
-      "kami": "美しく組版された印刷用ドキュメント——履歴書・スライド・ホワイトペーパー",
       "browser": "Web ページを開いて操作——閲覧、クリック、フォーム入力、スクリーンショットや PDF 保存",
       "python": "Python で計算、データ処理、オフィス文書の操作",
       "pglite": "SQL でデータを分析——CSV の検索、テーブル作成、結果の集計"

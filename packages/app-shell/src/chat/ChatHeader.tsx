@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Folder, Settings2 } from 'lucide-react'
-import { getHostApi, useChatStore, useSessionMeta } from '@shuvix/chat-ui'
+import { FolderTree, Settings2 } from 'lucide-react'
+import { getHostApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 /**
@@ -18,7 +18,7 @@ export interface ChatHeaderCaps {
   windowDrag?: boolean
   /** 标题点击改名（web/只读宿主置 false） */
   editableTitle?: boolean
-  /** 有 projectPath 时显示「打开工作目录」按钮 */
+  /** 显示「打开文件面板」按钮（图标即 Files 面板图标） */
   folder?: boolean
   /** 显示会话设置齿轮 */
   sessionConfig?: boolean
@@ -28,6 +28,8 @@ export interface ChatHeaderProps {
   caps?: ChatHeaderCaps
   /** 点击会话设置齿轮（宿主据此打开自己的弹窗） */
   onOpenSessionConfig?: () => void
+  /** 点击「打开文件面板」按钮（宿主据此打开右侧 Files 面板）；配合 caps.folder 显示 */
+  onOpenFiles?: () => void
   /** 右侧按钮簇（宿主专属：pin/浏览器/侧栏开关 …） */
   rightActions?: React.ReactNode
   /** 顶栏整体高度类（默认 h-8；桌面 macOS 为交通灯留高传 h-10） */
@@ -37,6 +39,7 @@ export interface ChatHeaderProps {
 export function ChatHeader({
   caps = {},
   onOpenSessionConfig,
+  onOpenFiles,
   rightActions,
   heightClassName = 'h-8'
 }: ChatHeaderProps): React.JSX.Element {
@@ -44,7 +47,6 @@ export function ChatHeader({
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
   const sessionTitle = sessions.find((s) => s.id === activeSessionId)?.title || null
-  const { projectPath } = useSessionMeta()
   const { dim } = useFocusDim()
 
   const [editingTitle, setEditingTitle] = useState(false)
@@ -113,13 +115,13 @@ export function ChatHeader({
             <Settings2 size={12} />
           </button>
         )}
-        {caps.folder && projectPath && getHostApi() && (
+        {caps.folder && onOpenFiles && (
           <button
-            onClick={() => getHostApi()?.app.openFolder(projectPath)}
+            onClick={onOpenFiles}
             className={`${noDrag} p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0`}
-            title={projectPath}
+            title={t('panel.files')}
           >
-            <Folder size={12} />
+            <FolderTree size={12} />
           </button>
         )}
       </div>

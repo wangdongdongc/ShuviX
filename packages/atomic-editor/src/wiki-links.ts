@@ -28,7 +28,7 @@ export interface WikiLinksConfig {
   debounceMs?: number;
 }
 
-interface ParsedWikiLink {
+export interface ParsedWikiLink {
   from: number;
   to: number;
   target: string;
@@ -439,7 +439,12 @@ function findWikiLinksInVisibleRanges(doc: Text, ranges: readonly { from: number
   return links;
 }
 
-function findWikiLinksInLine(text: string, lineStart: number): ParsedWikiLink[] {
+// Scan one line of text for `[[target]]` / `[[target|label]]` spans,
+// skipping any inside an inline-code span. `lineStart` offsets the returned
+// positions into the document (pass 0 to scan a standalone string, e.g. a
+// table cell — see table-widget.ts, which reuses this so cells and prose
+// recognize wiki links the same way).
+export function findWikiLinksInLine(text: string, lineStart: number): ParsedWikiLink[] {
   const links: ParsedWikiLink[] = [];
   const codeSpans = inlineCodeSpans(text);
   let searchFrom = 0;

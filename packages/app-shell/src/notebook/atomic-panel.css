@@ -203,6 +203,69 @@
   font-weight: inherit;
 }
 
+/* —— 标题等级角标：标题行左外侧悬浮显示 H1~H6 ——
+   弥补相邻级别（尤其 H4~H6）字号/字重差距小、肉眼难分级的问题。
+   画在 .cm-line 左外侧（right:100%），落在 .cm-scroller 的 28px 左内边距 /
+   内容居中留白里：不占行内空间、不参与 CM 光标与点击坐标测量、不影响正文排版。
+   垂直对齐：top/bottom 撑满整行 + padding-top:inherit（继承标题行的呼吸留白，
+   inherit 取计算后的 px 值）+ flex 居中 → 角标始终对齐标题文字块的垂直中心，
+   与各级字号无关；固定 10px 小字，六级观感一致。 */
+.atomic-panel .cm-line.cm-atomic-h1,
+.atomic-panel .cm-line.cm-atomic-h2,
+.atomic-panel .cm-line.cm-atomic-h3,
+.atomic-panel .cm-line.cm-atomic-h4,
+.atomic-panel .cm-line.cm-atomic-h5,
+.atomic-panel .cm-line.cm-atomic-h6 {
+  position: relative;
+}
+.atomic-panel .cm-line.cm-atomic-h1::before,
+.atomic-panel .cm-line.cm-atomic-h2::before,
+.atomic-panel .cm-line.cm-atomic-h3::before,
+.atomic-panel .cm-line.cm-atomic-h4::before,
+.atomic-panel .cm-line.cm-atomic-h5::before,
+.atomic-panel .cm-line.cm-atomic-h6::before {
+  position: absolute;
+  right: 100%;
+  top: 0;
+  bottom: 0;
+  padding-top: inherit;
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  /* CM6 软换行给 .cm-content 上了 word-break/overflow-wrap:anywhere，会继承进来；
+     角标盒 right:100% 可用宽度≈0，收缩到最小内容宽度时会被逐字拆成竖排（H/1 两行），
+     必须显式禁止换行 */
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  /* 比列表标记（--nb-list-muted 55%）再淡一档：纯辅助信息，不与正文争抢注意力 */
+  color: color-mix(in srgb, var(--color-text-secondary) 45%, transparent);
+  pointer-events: none;
+}
+.atomic-panel .cm-line.cm-atomic-h1::before {
+  content: 'H1';
+}
+.atomic-panel .cm-line.cm-atomic-h2::before {
+  content: 'H2';
+}
+.atomic-panel .cm-line.cm-atomic-h3::before {
+  content: 'H3';
+}
+.atomic-panel .cm-line.cm-atomic-h4::before {
+  content: 'H4';
+}
+.atomic-panel .cm-line.cm-atomic-h5::before {
+  content: 'H5';
+}
+.atomic-panel .cm-line.cm-atomic-h6::before {
+  content: 'H6';
+}
+
 /* 已完成任务行：整行文字（含语法高亮 span）淡化为 --nb-list-muted、去掉删除线，
    与 bullet / 有序号标记严格同色，向 Obsidian 的「安静」靠拢。
    行内文字被语法高亮 span 包裹、自带颜色，故需用后代选择器一并覆盖。 */

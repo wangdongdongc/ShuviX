@@ -27,29 +27,10 @@ import {
   isPathWithinReadwriteReferenceDirs
 } from './toolContext'
 import { resolve as resolvePath } from 'path'
-import { chatFrontendRegistry } from '../frontend/core'
-import {
-  browserCdpService,
-  snapshotAction,
-  screenshotAction,
-  printToPdfAction,
-  clickAction,
-  fillAction,
-  typeAction,
-  pressKeyAction,
-  scrollAction,
-  evaluateAction,
-  waitForAction,
-  navigateAction,
-  getNetworkRequestsAction,
-  getConsoleMessagesAction
-} from './browser'
 import { pyodideWorkerManager, type ExecuteRequest } from './pyodide/workerManager'
 import { parseShuvixPythonArgv, splitPythonPath } from './pyodide/argvParser'
 import { pgliteWorkerManager } from './pglite/workerManager'
 import { parseShuvixPgliteArgv } from './pglite/argvParser'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { BrowserToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 
 const log = createLogger('cliServer')
 
@@ -329,83 +310,7 @@ class CliServer {
       return { stdout: result.output, stderr: '', exitCode: 0 }
     })
 
-    // ────────────────── browser.* ──────────────────
-    // 浏览器面板是全局单例（挂在主窗口上），devtools 操作直接打 CDP。
-    // open/close 走 chat event 给 renderer 显示/隐藏面板，必须有 sessionId。
-
-    this.handlers.set('browser.open', async (p, sessionId) => {
-      const url = String(p.url ?? '')
-      if (!url) throw new Error('url required')
-      if (!sessionId) throw new Error('browser.open must be invoked from a ShuviX session')
-      chatFrontendRegistry.broadcast({
-        type: 'browser_event',
-        sessionId,
-        action: 'open',
-        url
-      })
-      return `Browser panel opened at ${url}.`
-    })
-
-    this.handlers.set('browser.close', async (_p, sessionId) => {
-      if (!sessionId) throw new Error('browser.close must be invoked from a ShuviX session')
-      chatFrontendRegistry.broadcast({ type: 'browser_event', sessionId, action: 'close' })
-      browserCdpService.detach()
-      return 'Browser panel closed.'
-    })
-
-    this.handlers.set('browser.snapshot', async () => {
-      return await this.devtoolsResult(() => snapshotAction())
-    })
-
-    this.handlers.set('browser.screenshot', async (p, sessionId) => {
-      if (!sessionId) throw new Error('browser.screenshot must be invoked from a ShuviX session')
-      return await this.devtoolsResult(() => screenshotAction(p, sessionId))
-    })
-
-    this.handlers.set('browser.pdf', async (p, sessionId) => {
-      if (!sessionId) throw new Error('browser.pdf must be invoked from a ShuviX session')
-      return await this.devtoolsResult(() => printToPdfAction(p, sessionId))
-    })
-
-    this.handlers.set('browser.click', async (p) => {
-      return await this.devtoolsResult(() => clickAction(p))
-    })
-
-    this.handlers.set('browser.fill', async (p) => {
-      return await this.devtoolsResult(() => fillAction(p))
-    })
-
-    this.handlers.set('browser.type', async (p) => {
-      return await this.devtoolsResult(() => typeAction(p))
-    })
-
-    this.handlers.set('browser.press-key', async (p) => {
-      return await this.devtoolsResult(() => pressKeyAction(p))
-    })
-
-    this.handlers.set('browser.scroll', async (p) => {
-      return await this.devtoolsResult(() => scrollAction(p))
-    })
-
-    this.handlers.set('browser.evaluate', async (p) => {
-      return await this.devtoolsResult(() => evaluateAction(p))
-    })
-
-    this.handlers.set('browser.wait-for', async (p) => {
-      return await this.devtoolsResult(() => waitForAction(p))
-    })
-
-    this.handlers.set('browser.navigate', async (p) => {
-      return await this.devtoolsResult(() => navigateAction(p))
-    })
-
-    this.handlers.set('browser.network', async () => {
-      return await this.devtoolsResult(() => getNetworkRequestsAction())
-    })
-
-    this.handlers.set('browser.console', async () => {
-      return await this.devtoolsResult(() => getConsoleMessagesAction())
-    })
+    // 浏览器自动化不再走 CLI —— agent 统一用内置 `browser` 工具（services/browser 的 backend）。
 
     // ────────────────── python.* ──────────────────
     // `shuvix python` CLI 调用入口。CLI 端把 raw argv / stdin / cwd / PYTHONPATH
@@ -519,27 +424,6 @@ class CliServer {
         exitCode: resp.type === 'error' ? 1 : 0
       }
     })
-  }
-
-  /**
-   * 把 devtools action 的 AgentToolResult 压平成 CLI 友好的字符串：
-   * - 取 content 里的 text 块拼成单字符串
-   * - 若 details.error 被设置（参数错误 / 超时 / 未知 action 等），抛出 Error
-   *   让 cliServer 把它包成 { success: false } 响应，CLI 以 exit 1 退出
-   */
-  private async devtoolsResult(
-    run: () => Promise<AgentToolResult<BrowserToolDetails>>
-  ): Promise<string> {
-    const result = await run()
-    const text = result.content
-      .map((block) => (block.type === 'text' ? block.text : ''))
-      .filter((s) => s.length > 0)
-      .join('\n')
-    const details = result.details as (BrowserToolDetails & { error?: string }) | undefined
-    if (details && details.error) {
-      throw new Error(text || details.error)
-    }
-    return text
   }
 }
 

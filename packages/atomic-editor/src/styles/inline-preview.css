@@ -181,65 +181,21 @@
   text-decoration: line-through;
 }
 
+/* A rendered link is directly clickable, exactly like a wiki link:
+ * the whole underlined text opens the URL (no trailing open-icon). The
+ * pointer guard in inline-preview.ts / table-widget.ts blocks caret
+ * placement on a plain click; a modifier-click still reveals the raw
+ * `[label](url)` source for editing. */
 .cm-atomic-link {
   color: var(--atomic-editor-link, #818cf8);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.15em;
-  /* No pointer cursor on the link text — the text is editable like
-   * any other content. The pointer cursor is scoped to the trailing
-   * icon below, which is the actual open-in-new-tab affordance. */
+  cursor: pointer;
 }
 
 .cm-atomic-link:hover {
   color: var(--atomic-editor-link-hover, #a5b4fc);
-}
-
-/* External-link icon. In prose it's a `::after` pseudo-element; inside
- * table cells it's a real `.cm-atomic-link-icon` element (a pseudo can't
- * receive a click, so the in-cell icon wouldn't open the link). Both
- * share the masked-SVG visual so the color tracks the link color via
- * `background-color`. */
-.cm-atomic-link::after,
-.cm-atomic-link-icon {
-  display: inline-block;
-  width: 0.78em;
-  height: 0.78em;
-  margin-left: 0.32em;
-  vertical-align: -0.02em;
-  cursor: pointer;
-  background-color: color-mix(in srgb, var(--atomic-editor-link, #818cf8) 82%, white 18%);
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg%3E%3Cpath d='M10.0002 5H8.2002C7.08009 5 6.51962 5 6.0918 5.21799C5.71547 5.40973 5.40973 5.71547 5.21799 6.0918C5 6.51962 5 7.08009 5 8.2002V15.8002C5 16.9203 5 17.4801 5.21799 17.9079C5.40973 18.2842 5.71547 18.5905 6.0918 18.7822C6.5192 19 7.07899 19 8.19691 19H15.8031C16.921 19 17.48 19 17.9074 18.7822C18.2837 18.5905 18.5905 18.2839 18.7822 17.9076C19 17.4802 19 16.921 19 15.8031V14M20 9V4M20 4H15M20 4L13 11' stroke='%23000000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg%3E%3Cpath d='M10.0002 5H8.2002C7.08009 5 6.51962 5 6.0918 5.21799C5.71547 5.40973 5.40973 5.71547 5.21799 6.0918C5 6.51962 5 7.08009 5 8.2002V15.8002C5 16.9203 5 17.4801 5.21799 17.9079C5.40973 18.2842 5.71547 18.5905 6.0918 18.7822C6.5192 19 7.07899 19 8.19691 19H15.8031C16.921 19 17.48 19 17.9074 18.7822C18.2837 18.5905 18.5905 18.2839 18.7822 17.9076C19 17.4802 19 16.921 19 15.8031V14M20 9V4M20 4H15M20 4L13 11' stroke='%23000000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/g%3E%3C/svg%3E");
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
-  mask-size: contain;
-  opacity: 0.9;
-}
-
-.cm-atomic-link::after {
-  content: "";
-}
-
-/* The real in-cell icon must be clickable but never selectable / part
- * of caret navigation. */
-.cm-atomic-link-icon {
-  pointer-events: auto;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* In cells the icon is a real element — suppress the pseudo so the icon
- * doesn't render twice. */
-.cm-atomic-table-cell-source .cm-atomic-link::after {
-  content: none;
-}
-
-.cm-atomic-link:hover::after,
-.cm-atomic-link-icon:hover {
-  background-color: color-mix(in srgb, var(--atomic-editor-link-hover, #a5b4fc) 84%, white 16%);
-  opacity: 1;
 }
 
 .cm-atomic-wiki-link {
@@ -513,7 +469,9 @@
 .cm-atomic-table-cell-source .cm-atomic-strong-wrap.active > .cm-atomic-mark,
 .cm-atomic-table-cell-source .cm-atomic-em-wrap.active > .cm-atomic-mark,
 .cm-atomic-table-cell-source .cm-atomic-strike-wrap.active > .cm-atomic-mark,
-.cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark {
+.cm-atomic-table-cell-source .cm-atomic-link-wrap.active > .cm-atomic-mark,
+.cm-atomic-table-cell-source .cm-atomic-wiki-wrap.active > .cm-atomic-mark,
+.cm-atomic-table-cell-source .cm-atomic-code-wrap.active > .cm-atomic-mark {
   display: inline;
   color: var(--atomic-editor-fg-faint, #666);
   font-weight: normal;

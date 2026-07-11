@@ -10,6 +10,7 @@ import {
   RuntimeSession,
   SessionManager,
   createAskTool,
+  createBrowserTool,
   resolveInitialThinkingLevel,
   type RuntimeEventSink,
   type RuntimePersistence,
@@ -28,9 +29,10 @@ import { eventBus } from './eventBus'
 import { mcpManager } from './mcpRuntime'
 import { createFileTools } from './fileTools'
 import { buildInstructionPromptSection } from './instructionFilesRuntime'
-import { browserTools, gateBrowserTools } from './browserTools'
+import { extensionBrowserBackend } from './browserBackend'
 import { createSpillSink } from './opfsSpillSink'
 import { wrapToolsOutput } from './wrapToolOutput'
+import { hookEngine } from './hooks'
 import { resolveSessionModel } from './resolveSessionModel'
 import {
   registerSessionTools,
@@ -39,15 +41,13 @@ import {
   subAgentManager
 } from './subAgent'
 
-const BROWSER_PROMPT = `You can inspect and operate the user's open browser tabs. To open a web page, use
-open_tab (it opens a NEW tab and returns its id) — never use navigate to open a fresh page. Reading:
-list_tabs to enumerate open content tabs, read_page to read a tab's live rendered content (works on
-logged-in pages and SPAs). Operating a tab (this shows a "being debugged" banner on it): snapshot to get
-interactive elements with uids, then click/fill by uid, key to press a key (e.g. Enter), navigate to move
-an EXISTING tab to a different URL, screenshot to see it. Always snapshot before click/fill, and
-re-snapshot after the page changes; call release_tab when you finish operating a tab to remove the banner.
-You cannot target the ShuviX app tab itself. You can also fetch public URLs (the "read" tool with an
-http/https URL).`
+const BROWSER_PROMPT = `You can inspect and operate the user's open browser tabs via the "browser" tool. To open a web
+page use action:"open_tab" (opens a NEW tab and returns its id) — never use navigate to open a fresh page.
+Reading: action:"list_tabs" to enumerate open content tabs, action:"read_page" to read a tab's live rendered
+content (works on logged-in pages and SPAs). Operating a tab (this shows a "being debugged" banner on it):
+action:"snapshot" to get interactive elements with uids, then click/fill by uid. Always snapshot before
+click/fill, and re-snapshot after the page changes. Use action:"help" for the full manual. You cannot target
+the ShuviX app tab itself. You can also fetch public URLs (the "read" tool with an http/https URL).`
 
 // 「人设」段（identity/tone 等）由上下文管理设置装配（systemPromptStore.renderPersona，全量对齐桌面，
 // 总开关开启时完全替换默认人设）；以下是平台「操作上下文」段——与人设无关、始终追加，
@@ -169,6 +169,8 @@ export async function buildSessionTools(
   model: string
   caps: ModelCapabilities
   spillSink: SpillSink
+  /** hook 输入的 cwd（虚拟工作目录标签；OPFS/FSA 无真实路径） */
+  cwd: string
 }> {
   const session = await sessionStore.getById(sessionId)
   // 会话通常已带 provider/model（session.create 用活跃选择）；兜底取首个已启用模型而非写死
@@ -208,28 +210,37 @@ export async function buildSessionTools(
     spillSink = createSpillSink(tempHandle)
   }
 
-  // 浏览器「操作真实页面」工具的 autoApprove 门控：仅交互式会话（includeAsk）启用——
-  // 笔记本一次性子任务无审批 UI，按原行为透传。门控读会话 settings.autoApprove（默认关 → 逐次确认）。
-  const browser = opts.includeAsk
-    ? gateBrowserTools(browserTools, {
-        isAutoApprove: () => sessionStore.getSettingsSync(sessionId).autoApprove === true,
-        requestUserInput: opts.requestUserInput
-      })
-    : browserTools
+  // 统一 browser 工具（multiplex，共享 @shuvix/agent-runtime）。mutating 操作的 autoApprove
+  // 门控仅交互式会话（includeAsk）启用——笔记本一次性子任务无审批 UI，按原行为透传。
+  // 门控读会话 settings.autoApprove（默认关 → 逐次确认）。
+  const browser = createBrowserTool({
+    backend: extensionBrowserBackend,
+    approval: opts.includeAsk
+      ? {
+          isAutoApprove: () => sessionStore.getSettingsSync(sessionId).autoApprove === true,
+          requestUserInput: opts.requestUserInput
+        }
+      : undefined,
+    abortError: 'TOOL_ABORTED'
+  })
 
-  // ask（可选）+ 浏览器 + 文件 + 已连接 MCP；全部经 wrapToolsOutput 统一截断/落盘
+  // hook 输入的 cwd（虚拟标签）：项目会话用文件夹名，临时会话用 'scratch'
+  const cwd = projectHandle?.name ?? 'scratch'
+
+  // ask（可选）+ 浏览器 + 文件 + 已连接 MCP；全部经 wrapToolsOutput 统一截断/落盘 + Pre/PostToolUse hook
   const tools = wrapToolsOutput(
     [
       ...(opts.includeAsk
         ? [createAskTool({ requestUserInput: opts.requestUserInput, abortError: 'TOOL_ABORTED' })]
         : []),
-      ...browser,
+      browser,
       ...fileTools,
       ...mcpManager.getAllAgentTools()
     ],
-    spillSink
+    spillSink,
+    { sessionId, cwd }
   )
-  return { tools, systemPrompt, provider, model, caps, spillSink }
+  return { tools, systemPrompt, provider, model, caps, spillSink, cwd }
 }
 
 /** 构造某会话的 RuntimeSession（SessionManager.create 注入；已存在判断与入表由 manager 负责） */
@@ -254,7 +265,8 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
           parts.systemPrompt
         ) as unknown as AgentTool
       ],
-      parts.spillSink
+      parts.spillSink,
+      { sessionId, cwd: parts.cwd }
     )
   ]
 
@@ -279,7 +291,11 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
     eventSink,
     persistence: browserPersistence,
     shouldDeferToolDisplay: (toolName) => toolName === 'ask',
-    logger
+    logger,
+    // 统一生命周期 hook：注入扩展的 HookEngine（仅 builtin）；SessionStart/UserPromptSubmit/Stop
+    // 与桌面同源，由 RuntimeSession 触发
+    hooks: hookEngine,
+    getCwd: () => parts.cwd
   })
 
   // 恢复历史文本轮次

@@ -12,6 +12,7 @@ import { Agent, type AgentEvent, type AgentMessage } from '@earendil-works/pi-ag
 import type { TextContent, ThinkingContent, ImageContent, Model, Api } from '@earendil-works/pi-ai'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import type { HookFirer } from '@shuvix/chat-protocol/types/hook'
 import { isAssistantMessage } from './messageGuards'
 import {
   forwardAgentEvent,
@@ -53,6 +54,19 @@ export interface RuntimeSessionDeps {
   logger?: RuntimeLogger
   /** 本地化（abort 时的「工具已中止」文案）。默认返回 key */
   localize?: (key: string) => string
+  /**
+   * hook 触发器（统一的 Agent 生命周期 hook：SessionStart / UserPromptSubmit / Stop）。
+   * 不注入 → 全部 no-op。扩展注入 `HookEngine`（仅 builtin），桌面注入完整 `HookService`
+   * （builtin + global/project command）。PreToolUse / PostToolUse 由各端 wrapToolOutput 单独触发。
+   */
+  hooks?: HookFirer
+  /** hook 输入的 cwd（工作目录）。默认空串。 */
+  getCwd?: () => string
+  /**
+   * UserPromptSubmit 通过、正式派发给 Agent 之前的同步回调（宿主可挂并发副作用，
+   * 如桌面的首轮快速标题生成）。prompt 被 hook 拒绝时不调用。
+   */
+  onPromptAccepted?: (text: string) => void
 }
 
 export class RuntimeSession {
@@ -63,6 +77,11 @@ export class RuntimeSession {
   private readonly logger: RuntimeLogger
   private readonly localize: (key: string) => string
   private readonly eventDeps: RuntimeEventDeps
+  private readonly hooks?: HookFirer
+  private readonly getCwd: () => string
+  private readonly onPromptAccepted?: (text: string) => void
+  /** SessionStart hook 是否已触发（首次 prompt 时懒触发） */
+  private sessionStartHookFired = false
 
   private pendingInputs = new Map<
     string,
@@ -87,6 +106,9 @@ export class RuntimeSession {
     this.persistence = deps.persistence
     this.logger = deps.logger ?? noopLogger
     this.localize = deps.localize ?? ((k) => k)
+    this.hooks = deps.hooks
+    this.getCwd = deps.getCwd ?? (() => '')
+    this.onPromptAccepted = deps.onPromptAccepted
     const getModelId = deps.getModelId ?? (() => this.agent.state.model.id)
     this.eventDeps = {
       persistence: deps.persistence,
@@ -104,12 +126,62 @@ export class RuntimeSession {
 
   // ─── 核心 API ──────────────────────────────────────
 
-  /** 向 Agent 发送消息（宿主特定的 hooks 由 wrapper 在调用前/后处理） */
+  /**
+   * 向 Agent 发送消息。统一的生命周期 hook 在此触发（各端一致）：
+   * - SessionStart（首次 prompt 懒触发）→ additionalContext 注入
+   * - UserPromptSubmit → `deny` 丢弃本次 prompt 并广播原因；additionalContext 注入
+   *
+   * PreToolUse / PostToolUse 不在此处，由各端 wrapToolOutput 触发。
+   */
   async prompt(
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
   ): Promise<void> {
     this.logger.info(`prompt session=${this.sessionId} images=${images?.length || 0}`)
+
+    if (this.hooks) {
+      // ── SessionStart hook（首次 prompt 时懒触发） ──
+      if (!this.sessionStartHookFired) {
+        this.sessionStartHookFired = true
+        try {
+          const ssOutputs = await this.hooks.fire('SessionStart', {
+            session_id: this.sessionId,
+            hook_event_name: 'SessionStart',
+            cwd: this.getCwd()
+          })
+          this.applyAdditionalContext(ssOutputs, 'SessionStart')
+        } catch (err) {
+          this.logger.warn(
+            `SessionStart hook error: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      }
+
+      // ── UserPromptSubmit hook ──
+      try {
+        const upsOutputs = await this.hooks.fire('UserPromptSubmit', {
+          session_id: this.sessionId,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: this.getCwd(),
+          prompt: text
+        })
+        const denied = upsOutputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
+        if (denied) {
+          const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
+          this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error: reason })
+          return
+        }
+        this.applyAdditionalContext(upsOutputs, 'UserPromptSubmit')
+      } catch (err) {
+        this.logger.warn(
+          `UserPromptSubmit hook error: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+    }
+
+    // prompt 已通过 hook 校验，正式派发 —— 通知宿主挂并发副作用（如首轮快速标题）
+    this.onPromptAccepted?.(text)
+
     try {
       if (images && images.length > 0) {
         await this.agent.prompt(text, images)
@@ -120,6 +192,47 @@ export class RuntimeSession {
       const message = err instanceof Error ? err.message : String(err)
       this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error: message })
     }
+  }
+
+  /**
+   * 把 hook 返回的 additionalContext 注入 agent 上下文：走 user-role 消息并裹
+   * `<system-reminder source="hook:...">` 标签；不写库（会话级临时上下文）。超过 10000 字截断。
+   */
+  private applyAdditionalContext(
+    outputs: ReadonlyArray<{ additionalContext?: string }>,
+    eventLabel: string
+  ): void {
+    const MAX_LEN = 10000
+    const messages = this.agent.state.messages
+    for (const out of outputs) {
+      let ctx = out.additionalContext
+      if (typeof ctx !== 'string' || !ctx) continue
+      if (ctx.length > MAX_LEN) {
+        this.logger.warn(`${eventLabel} hook additionalContext 超过 ${MAX_LEN} 字，已截断`)
+        ctx = ctx.slice(0, MAX_LEN)
+      }
+      const wrapped = `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`
+      messages.push({
+        role: 'user',
+        content: [{ type: 'text', text: wrapped }],
+        timestamp: Date.now()
+      } as AgentMessage)
+    }
+  }
+
+  /** 触发 Stop hook：fire-and-forget，不阻塞调用方。宿主也可传自定义 reason（如失效/销毁）。 */
+  fireStopHook(reason: string): void {
+    if (!this.hooks) return
+    void this.hooks
+      .fire('Stop', {
+        session_id: this.sessionId,
+        hook_event_name: 'Stop',
+        cwd: this.getCwd(),
+        reason
+      })
+      .catch((err) =>
+        this.logger.warn(`Stop hook error: ${err instanceof Error ? err.message : String(err)}`)
+      )
   }
 
   /** 向运行中的 Agent 注入 steer 消息 */
@@ -134,9 +247,10 @@ export class RuntimeSession {
     this.agent.steer(msg as Parameters<typeof this.agent.steer>[0])
   }
 
-  /** 中止生成；若已有部分内容则持久化并返回 */
+  /** 中止生成；若已有部分内容则持久化并返回。触发统一的 Stop hook（fire-and-forget）。 */
   abort(): ChatMessage | null {
     this.logger.info(`中止 session=${this.sessionId}`)
+    this.fireStopHook('aborted')
     this.agent.abort()
     for (const [id, pending] of this.pendingInputs) {
       pending.resolve({ kind: 'cancel', reason: 'aborted' })

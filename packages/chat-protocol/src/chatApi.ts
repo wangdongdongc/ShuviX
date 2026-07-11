@@ -501,7 +501,7 @@ export interface SessionChannelApi {
   command: {
     list: (params: { sessionId: string | null }) => Promise<SlashCommandInfo[]>
   }
-  /** 工作目录文件浏览（只读）：扫描 + 预览读取。回写属 HostApi。 */
+  /** 工作目录文件浏览（只读）：扫描 + 预览读取 + 单文件内容监听。回写属 HostApi。 */
   files: {
     scan: (params: { sessionId: string }) => Promise<{
       paths: string[]
@@ -509,6 +509,10 @@ export interface SessionChannelApi {
       root: string | null
     }>
     read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
+    /** 监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播。
+     *  仅监听「当前打开的文件」，不监听整个工作目录。纯渠道端（如只读 WebUI 分享）可 no-op。 */
+    watch: (params: { sessionId: string; path: string }) => Promise<void>
+    unwatch: (params: { sessionId: string; path: string }) => Promise<void>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {

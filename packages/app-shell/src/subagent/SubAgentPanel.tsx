@@ -251,8 +251,7 @@ const SubSessionStream = memo(function SubSessionStream({
         />
       </div>
 
-      {/* 转写区整体再缩小并收紧行距（含共享 ToolCallBlock/StepBlock）：用 zoom 等比缩 + 更小的块间距，
-          不改共享组件、不影响主对话框。Chromium（Electron/扩展）均支持 zoom。
+      {/* 转写区收紧行距（含共享 ToolCallBlock/StepBlock），字号与主对话框一致。
           focusLast（专注模式）：直接子块除最后一块外淡化，最新输出常亮，hover 临时点亮其余。 */}
       <div
         className={`space-y-0.5 ${
@@ -260,7 +259,6 @@ const SubSessionStream = memo(function SubSessionStream({
             ? '[&>*]:opacity-40 [&>*]:transition-opacity [&>*]:duration-200 [&>*:last-child]:opacity-100 [&>*:hover]:opacity-100'
             : ''
         }`}
-        style={{ zoom: 0.85 }}
       >
         {/* 起始 User 指令（注入上下文 + 用户 prompt）：与下方追问同款用户气泡，使转写读起来就是一段对话 */}
         {sub.contextNote && <UserBubble content={sub.contextNote} />}

@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from 'uuid'
-import { getModels } from '@earendil-works/pi-ai'
+import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
 import { providerDao } from '../dao/providerDao'
 import { litellmService } from './litellmService'
@@ -189,7 +189,7 @@ export class ProviderService {
    * 已有模型不会被删除，仅新增缺失的模型并更新 capabilities
    */
   syncBuiltinModels(providerId: string, slug: string): { total: number; added: number } {
-    const piModels = getModels(slug as Parameters<typeof getModels>[0])
+    const piModels = getBuiltinModels(slug as Parameters<typeof getBuiltinModels>[0])
     if (!piModels || piModels.length === 0) return { total: 0, added: 0 }
 
     const modelIds = piModels.map((m) => m.id)

@@ -1,12 +1,24 @@
 import { describe, it, expect } from 'vitest'
 import { homedir, platform } from 'os'
-import { resolve } from 'path'
-import { isBlockedPath, pathSafetyHandler } from '../pathSafety'
+import { resolve, sep } from 'path'
+// path-safety 实现已上移到 @shuvix/agent-runtime（工厂式，注入路径环境）；桌面注入 Node os/path
+import { makePathSafety } from '@shuvix/agent-runtime'
 import type { HookInput } from '../../types'
 
 const HOME = homedir()
 const IS_WIN = platform() === 'win32'
 const IS_DARWIN = platform() === 'darwin'
+
+const pathSafetyHandler = makePathSafety({
+  homedir: HOME,
+  platform: platform(),
+  resolve,
+  sep,
+  env: process.env
+})
+
+/** 共享实现未导出 isBlockedPath（已封装为闭包）；经 handler 是否返回 deny 反推 */
+const isBlockedPath = (p: string): boolean => pathSafetyHandler(makeInput(p)) != null
 
 const makeInput = (path: string): HookInput => ({
   session_id: 'sess',

@@ -177,7 +177,10 @@ export function createWebSessionChannelApi(): SessionChannelApi {
     // 工作目录文件（只读）：接服务端 /files 路由，供笔记本 / 文件预览
     files: {
       scan: (p) => api(`/sessions/${p.sessionId}/files`),
-      read: (p) => api(`/sessions/${p.sessionId}/files/read?path=${encodeURIComponent(p.path)}`)
+      read: (p) => api(`/sessions/${p.sessionId}/files/read?path=${encodeURIComponent(p.path)}`),
+      // 只读分享端不做实时文件监听（AppEvent 未经 WS 转发）→ no-op
+      watch: () => Promise.resolve(),
+      unwatch: () => Promise.resolve()
     },
 
     // 通用内部事件（AppEvent）暂未经 WS 转发 → no-op；后续可接 eventSource

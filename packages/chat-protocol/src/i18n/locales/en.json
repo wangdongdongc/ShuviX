@@ -40,11 +40,24 @@
     "updateAvailable": "Update available",
     "updateReady": "Ready to install",
     "deleteSession": "Delete Session",
+    "exportSession": "Export Session",
+    "viewAll": "View all",
     "viewProjects": "Projects",
     "viewCalendar": "Calendar",
     "switchView": "Switch view",
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day"
+  },
+  "transcript": {
+    "untitled": "Untitled Session",
+    "user": "User",
+    "assistant": "Assistant",
+    "steer": "User (steer)",
+    "thinking": "Thinking",
+    "toolCall": "Tool call",
+    "toolResult": "Tool result",
+    "systemNotice": "System",
+    "image": "image"
   },
   "notebook": {
     "saving": "Saving…",
@@ -755,7 +768,7 @@
     "remoteDbHint": "Connect to remote databases (MySQL, PostgreSQL, etc.) and run SQL queries",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "browserLabel": "Browser",
-    "browserHint": "Open any URL in the embedded browser panel, or close it",
+    "browserHint": "Open pages, take snapshots, click/type/scroll, capture screenshots/PDFs, run JS, inspect network & console — drives the embedded multi-tab browser panel",
     "subAgentTab": "Sub-Agent",
     "subAgentBuiltin": "Built-in",
     "subAgentCustom": "Custom",
@@ -884,7 +897,10 @@
     }
   },
   "browser": {
-    "close": "Close current page",
+    "close": "Close current tab",
+    "newTab": "New tab",
+    "closeTab": "Close tab",
+    "untitledTab": "New Tab",
     "cert": {
       "title": "Untrusted certificate: {{host}}",
       "continue": "Continue anyway",
@@ -900,7 +916,6 @@
   "command": {
     "skills": {
       "widget": "Build a small reusable React utility (Widget)",
-      "kami": "Typeset polished printable documents — resumes, decks, white papers",
       "browser": "Open and interact with web pages — view, click, fill forms, capture screenshots or PDFs",
       "python": "Run Python for calculations, data processing, or office document tasks",
       "pglite": "Analyze data with SQL — query CSVs, build quick tables, summarize results"

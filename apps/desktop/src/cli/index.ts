@@ -68,23 +68,6 @@ function printUsage(): void {
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
       '',
-      '  shuvix browser open <url>',
-      '  shuvix browser close',
-      '  shuvix browser snapshot',
-      '  shuvix browser screenshot [--full-page] [--uid <id>]',
-      '  shuvix browser pdf --out <path> [--page-size <A4|A3|A5|Letter|Legal>] [--landscape]',
-      '                     [--no-print-background] [--no-prefer-css-page-size] [--scale <n>]',
-      '  shuvix browser click --uid <id>',
-      '  shuvix browser fill --uid <id> --value <text>',
-      '  shuvix browser type --text <text> [--uid <id>] [--submit-key <key>]',
-      '  shuvix browser press-key --key <combo>',
-      '  shuvix browser scroll [--direction up|down|left|right] [--amount <px>] [--uid <id>]',
-      '  shuvix browser evaluate --expression <js>',
-      '  shuvix browser wait-for --text <s> [--timeout <ms>]',
-      '  shuvix browser navigate [--url <url>] [--nav goto|back|forward|reload]',
-      '  shuvix browser network',
-      '  shuvix browser console',
-      '',
       '  shuvix python [options] [-c cmd | -m mod | script | -] [arg ...]',
       '                Pyodide WebAssembly Python — see `shuvix python --help`',
       '',
@@ -176,145 +159,10 @@ function parseWidget(rest: string[]): ParsedCommand | null {
   }
 }
 
-function parseBrowser(rest: string[]): ParsedCommand | null {
-  const action = rest[0]
-  if (!action) return null
-  const args = rest.slice(1)
-
-  switch (action) {
-    case 'open': {
-      const url = args[0]
-      if (!url) {
-        process.stderr.write('browser open: <url> is required\n')
-        process.exit(1)
-      }
-      return { command: 'browser.open', params: { url } }
-    }
-    case 'close':
-      return { command: 'browser.close', params: {} }
-    case 'snapshot':
-      return { command: 'browser.snapshot', params: {} }
-    case 'screenshot': {
-      const params: Record<string, unknown> = {}
-      if (args.includes('--full-page')) params.fullPage = true
-      const uid = flagValue(args, '--uid')
-      if (uid) params.uid = uid
-      return { command: 'browser.screenshot', params }
-    }
-    case 'pdf': {
-      const outputPath = flagValue(args, '--out')
-      if (!outputPath) {
-        process.stderr.write('browser pdf: --out <path> is required\n')
-        process.exit(1)
-      }
-      const params: Record<string, unknown> = { outputPath }
-      const pageSize = flagValue(args, '--page-size')
-      if (pageSize) params.pageSize = pageSize
-      if (args.includes('--landscape')) params.landscape = true
-      if (args.includes('--no-print-background')) params.printBackground = false
-      if (args.includes('--no-prefer-css-page-size')) params.preferCSSPageSize = false
-      const scale = flagValue(args, '--scale')
-      if (scale) {
-        const n = Number(scale)
-        if (Number.isFinite(n)) params.scale = n
-      }
-      return { command: 'browser.pdf', params }
-    }
-    case 'click': {
-      const uid = flagValue(args, '--uid')
-      if (!uid) {
-        process.stderr.write('browser click: --uid <id> is required\n')
-        process.exit(1)
-      }
-      return { command: 'browser.click', params: { uid } }
-    }
-    case 'fill': {
-      const uid = flagValue(args, '--uid')
-      const value = flagValue(args, '--value')
-      if (!uid || value === undefined) {
-        process.stderr.write('browser fill: --uid <id> and --value <text> are required\n')
-        process.exit(1)
-      }
-      return { command: 'browser.fill', params: { uid, value } }
-    }
-    case 'type': {
-      const text = flagValue(args, '--text')
-      if (text === undefined) {
-        process.stderr.write('browser type: --text <text> is required\n')
-        process.exit(1)
-      }
-      const params: Record<string, unknown> = { text }
-      const uid = flagValue(args, '--uid')
-      if (uid) params.uid = uid
-      const submitKey = flagValue(args, '--submit-key')
-      if (submitKey) params.submitKey = submitKey
-      return { command: 'browser.type', params }
-    }
-    case 'press-key': {
-      const key = flagValue(args, '--key')
-      if (!key) {
-        process.stderr.write('browser press-key: --key <combo> is required\n')
-        process.exit(1)
-      }
-      return { command: 'browser.press-key', params: { key } }
-    }
-    case 'scroll': {
-      const params: Record<string, unknown> = {}
-      const direction = flagValue(args, '--direction')
-      if (direction) params.direction = direction
-      const amount = flagValue(args, '--amount')
-      if (amount) {
-        const n = Number(amount)
-        if (Number.isFinite(n)) params.amount = n
-      }
-      const uid = flagValue(args, '--uid')
-      if (uid) params.uid = uid
-      return { command: 'browser.scroll', params }
-    }
-    case 'evaluate': {
-      const expression = flagValue(args, '--expression')
-      if (expression === undefined) {
-        process.stderr.write('browser evaluate: --expression <js> is required\n')
-        process.exit(1)
-      }
-      return { command: 'browser.evaluate', params: { expression } }
-    }
-    case 'wait-for': {
-      const text = flagValue(args, '--text')
-      if (!text) {
-        process.stderr.write('browser wait-for: --text <s> is required\n')
-        process.exit(1)
-      }
-      const params: Record<string, unknown> = { text }
-      const timeout = flagValue(args, '--timeout')
-      if (timeout) {
-        const n = Number(timeout)
-        if (Number.isFinite(n)) params.timeout = n
-      }
-      return { command: 'browser.wait-for', params }
-    }
-    case 'navigate': {
-      const nav = flagValue(args, '--nav') ?? 'goto'
-      const url = flagValue(args, '--url')
-      const params: Record<string, unknown> = { navigateAction: nav }
-      if (url) params.url = url
-      return { command: 'browser.navigate', params }
-    }
-    case 'network':
-      return { command: 'browser.network', params: {} }
-    case 'console':
-      return { command: 'browser.console', params: {} }
-    default:
-      process.stderr.write(`unknown browser action: ${action}\n`)
-      process.exit(1)
-  }
-}
-
 function parse(argv: string[]): ParsedCommand | null {
   const group = argv[0]
   const rest = argv.slice(1)
   if (group === 'widget') return parseWidget(rest)
-  if (group === 'browser') return parseBrowser(rest)
   return null
 }
 
@@ -513,7 +361,7 @@ async function main(): Promise<void> {
   }
 
   // `shuvix python ...` / `shuvix pglite ...` 都走专用分支：原始 argv 透传 + 异步 stdin
-  // 预读 + 自定义 IO 路由（区别于 widget/browser 的 JSON.stringify 输出语义）
+  // 预读 + 自定义 IO 路由（区别于 widget 的 JSON.stringify 输出语义）
   if (argv[0] === 'python') {
     await runPython(argv.slice(1))
     return

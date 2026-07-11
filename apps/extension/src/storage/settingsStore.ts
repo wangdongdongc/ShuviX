@@ -16,7 +16,8 @@ import type {
 } from '@shuvix/chat-protocol/types/provider'
 import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
-import { getModels, type KnownProvider } from '@earendil-works/pi-ai'
+import type { KnownProvider } from '@earendil-works/pi-ai'
+import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { encryptSecret, decryptSecret } from './secretCrypto'
 import { appEventBus } from '../runtime/appEventBus'
 
@@ -373,9 +374,9 @@ export const settingsStore = {
 
   /**
    * 同步模型列表。
-   * - 内置 provider：从 pi-ai 注册表 `getModels(slug)` 取（与桌面 syncBuiltinModels 一致）。
+   * - 内置 provider：从 pi-ai 注册表 `getBuiltinModels(slug)` 取（与桌面 syncBuiltinModels 一致）。
    *   这点对 anthropic 协议的内置 provider（如 kimi-coding 的 kimi-for-coding）尤为关键：
-   *   只有拿到 pi-ai 注册的精确 model id，resolveModel 的 getModel 才能解析出正确 api/路径，
+   *   只有拿到 pi-ai 注册的精确 model id，resolveModel 的 getBuiltinModel 才能解析出正确 api/路径，
    *   否则回退到 openai-completions 打错端点 → 404。
    * - 自定义 provider：HTTP 拉取 /models（复用共享 fetch）。
    */
@@ -418,7 +419,7 @@ export const settingsStore = {
     providerId: string
   ): Promise<{ providerId: string; total: number; added: number }> {
     await this.loadState()
-    const piModels = getModels(providerId as KnownProvider) ?? []
+    const piModels = getBuiltinModels(providerId as KnownProvider) ?? []
     const list = models[providerId] ?? []
     const byId = new Map(list.map((m) => [m.modelId, m]))
     let added = 0

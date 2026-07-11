@@ -13,12 +13,13 @@ export { inlinePreview } from './inline-preview';
 export type { InlinePreviewConfig } from './inline-preview';
 export { imageBlocks } from './image-blocks';
 export { mermaidBlocks } from './mermaid-blocks';
-export { tables, tableContextMenu } from './table-widget';
+export { tables, tableContextMenu, tableWikiLinks } from './table-widget';
 export type {
   TablesConfig,
   TableMenuItem,
   TableMenuItemId,
   TableMenuRenderer,
+  TableWikiLinkConfig,
 } from './table-widget';
 export { wikiLinks } from './wiki-links';
 export type {

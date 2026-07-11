@@ -141,7 +141,7 @@ export function ToolPicker(): React.JSX.Element | null {
       )}
 
       {open && (
-        <div className="picker-panel absolute left-0 bottom-8 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
+        <div className="picker-panel absolute left-0 bottom-8 z-30 w-[240px] rounded-lg border border-border-primary bg-bg-secondary shadow-2xl overflow-hidden">
           <div className="py-1 max-h-[60vh] overflow-y-auto">
             {mcpTools.length > 0 && (
               <div className="py-0.5">

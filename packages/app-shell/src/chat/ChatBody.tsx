@@ -26,6 +26,8 @@ export interface ChatBodyProps {
   headerHeightClassName?: string
   /** 点击会话设置齿轮（宿主据此打开自己的弹窗） */
   onOpenSessionConfig?: () => void
+  /** 点击顶栏「打开文件面板」按钮（宿主据此打开右侧 Files 面板）；配合 headerCaps.folder 显示 */
+  onOpenFiles?: () => void
   /** 顶栏右侧按钮簇（宿主专属：pin/悬浮/浏览器/侧栏开关 …） */
   rightActions?: ReactNode
   /** 顶栏与正文之间的横幅插槽（为空不渲染） */
@@ -48,6 +50,7 @@ export function ChatBody({
   headerCaps,
   headerHeightClassName,
   onOpenSessionConfig,
+  onOpenFiles,
   rightActions,
   banner,
   overlays,
@@ -81,6 +84,7 @@ export function ChatBody({
         caps={headerCaps}
         heightClassName={headerHeightClassName}
         onOpenSessionConfig={onOpenSessionConfig}
+        onOpenFiles={onOpenFiles}
         rightActions={rightActions}
       />
       {banner}

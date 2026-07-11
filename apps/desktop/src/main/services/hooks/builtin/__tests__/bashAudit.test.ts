@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { findDangerousPattern, bashAuditHandler } from '../bashAudit'
+// bash-audit 实现已上移到 @shuvix/agent-runtime（各端共享）；这里通过工厂构造后测试
+import { findDangerousPattern, makeBashAudit } from '@shuvix/agent-runtime'
 import type { HookInput } from '../../types'
+
+const noopLogger = { info: () => {}, warn: () => {}, error: () => {} }
+const bashAuditHandler = makeBashAudit(noopLogger)
 
 const makeInput = (command: string): HookInput => ({
   session_id: 'sess',

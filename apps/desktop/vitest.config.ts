@@ -9,8 +9,13 @@ export default defineConfig({
     }
   },
   test: {
-    // 测试 main 进程及 Node.js 共享代码
-    include: ['src/main/**/*.test.ts', 'src/shared/node/**/*.test.ts'],
+    // 测试 main 进程及 Node.js 共享代码；外加共享包 chat-protocol / agent-runtime 的单测
+    include: [
+      'src/main/**/*.test.ts',
+      'src/shared/node/**/*.test.ts',
+      '../../packages/chat-protocol/src/**/*.test.ts',
+      '../../packages/agent-runtime/src/**/*.test.ts'
+    ],
     environment: 'node'
   }
 })

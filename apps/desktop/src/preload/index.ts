@@ -55,6 +55,41 @@ import type {
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
 import type { ContextMenuRequest } from '@shuvix/chat-protocol/types/contextMenu'
+import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
+
+/**
+ * AppEvent 扇出：整页只在 'app:event' 通道挂 **一个** ipcRenderer 监听，再派发给本地订阅者集合。
+ * 否则每个 events.subscribe（= 每个 useAppEvent）都会新挂一个 ipcRenderer 监听，>10 个并存时触发
+ * MaxListenersExceededWarning，且 1:1 累积本身也是浪费。单监听在页面生命周期内常驻，无需回收。
+ */
+const appEventListeners = new Set<(event: AppEvent) => void>()
+let appEventBridged = false
+function subscribeAppEvent(callback: (event: AppEvent) => void): () => void {
+  if (!appEventBridged) {
+    appEventBridged = true
+    ipcRenderer.on('app:event', (_e, event: AppEvent) => {
+      // 复制一份再派发：回调内退订不影响本轮
+      for (const cb of [...appEventListeners]) {
+        try {
+          cb(event)
+        } catch {
+          /* 单个订阅者抛错不影响其它 */
+        }
+      }
+    })
+  }
+  appEventListeners.add(callback)
+  return () => {
+    appEventListeners.delete(callback)
+  }
+}
+
+/** browserView 事件订阅辅助：单 payload 透传 + 返回 cleanup */
+function onBrowserViewEvent<T>(channel: string, callback: (payload: T) => void): () => void {
+  const handler = (_: unknown, payload: T): void => callback(payload)
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
 
 /** 暴露给 Renderer 的 API */
 const api = {
@@ -545,46 +580,58 @@ const api = {
     }
   },
 
-  // ============ Browser WebContentsView ============
+  // ============ Browser WebContentsView（多 tab） ============
   browserView: {
-    navigate: (url: string) => ipcRenderer.invoke('browser-view:navigate', url),
-    goBack: () => ipcRenderer.invoke('browser-view:go-back'),
-    goForward: () => ipcRenderer.invoke('browser-view:go-forward'),
-    reload: () => ipcRenderer.invoke('browser-view:reload'),
-    stop: () => ipcRenderer.invoke('browser-view:stop'),
-    getUrl: () => ipcRenderer.invoke('browser-view:get-url') as Promise<string>,
+    // ---- tab 生命周期 ----
+    createTab: (url?: string) =>
+      ipcRenderer.invoke('browser-view:create-tab', url) as Promise<string>,
+    closeTab: (tabId: string) => ipcRenderer.invoke('browser-view:close-tab', tabId),
+    activateTab: (tabId: string) => ipcRenderer.invoke('browser-view:activate-tab', tabId),
+    listTabs: () =>
+      ipcRenderer.invoke('browser-view:list-tabs') as Promise<
+        Array<{ id: string; url: string; title: string; active: boolean }>
+      >,
+    // ---- 导航（按 tab） ----
+    navigate: (tabId: string, url: string) =>
+      ipcRenderer.invoke('browser-view:navigate', tabId, url),
+    goBack: (tabId: string) => ipcRenderer.invoke('browser-view:go-back', tabId),
+    goForward: (tabId: string) => ipcRenderer.invoke('browser-view:go-forward', tabId),
+    reload: (tabId: string) => ipcRenderer.invoke('browser-view:reload', tabId),
+    stop: (tabId: string) => ipcRenderer.invoke('browser-view:stop', tabId),
+    getUrl: (tabId: string) => ipcRenderer.invoke('browser-view:get-url', tabId) as Promise<string>,
+    // ---- 布局（面板级，作用于激活 tab） ----
     updateBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.send('browser-view:update-bounds', bounds),
     setVisible: (visible: boolean) => ipcRenderer.send('browser-view:set-visible', visible),
-    /** WebContentsView 开始加载 */
-    onDidStartLoading: (callback: (url: string) => void) => {
-      const handler = (_: unknown, url: string): void => callback(url)
-      ipcRenderer.on('browser-view:did-start-loading', handler)
-      return () => ipcRenderer.removeListener('browser-view:did-start-loading', handler)
-    },
-    /** WebContentsView 导航完成（URL 变化） */
-    onDidNavigate: (callback: (url: string) => void) => {
-      const handler = (_: unknown, url: string): void => callback(url)
-      ipcRenderer.on('browser-view:did-navigate', handler)
-      return () => ipcRenderer.removeListener('browser-view:did-navigate', handler)
-    },
-    /** WebContentsView 加载完成 */
-    onDidFinishLoad: (callback: () => void) => {
-      const handler = (): void => callback()
-      ipcRenderer.on('browser-view:did-finish-load', handler)
-      return () => ipcRenderer.removeListener('browser-view:did-finish-load', handler)
-    },
-    /** WebContentsView 加载失败（含证书错误、DNS 错误等） */
+    // ---- 事件（payload 均带 tabId，返回 cleanup） ----
+    onTabCreated: (callback: (payload: { tabId: string; url: string; active: boolean }) => void) =>
+      onBrowserViewEvent('browser-view:tab-created', callback),
+    onTabClosed: (callback: (payload: { tabId: string; activeTabId: string | null }) => void) =>
+      onBrowserViewEvent('browser-view:tab-closed', callback),
+    onTabActivated: (callback: (payload: { tabId: string }) => void) =>
+      onBrowserViewEvent('browser-view:tab-activated', callback),
+    onTabTitleUpdated: (callback: (payload: { tabId: string; title: string }) => void) =>
+      onBrowserViewEvent('browser-view:tab-title-updated', callback),
+    onTabFaviconUpdated: (callback: (payload: { tabId: string; favicon?: string }) => void) =>
+      onBrowserViewEvent('browser-view:tab-favicon-updated', callback),
+    /** tab 开始加载 */
+    onDidStartLoading: (callback: (payload: { tabId: string; url: string }) => void) =>
+      onBrowserViewEvent('browser-view:did-start-loading', callback),
+    /** tab 导航完成（URL 变化） */
+    onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) =>
+      onBrowserViewEvent('browser-view:did-navigate', callback),
+    /** tab 加载完成 */
+    onDidFinishLoad: (callback: (payload: { tabId: string }) => void) =>
+      onBrowserViewEvent('browser-view:did-finish-load', callback),
+    /** tab 加载失败（含证书错误、DNS 错误等） */
     onDidFailLoad: (
-      callback: (info: { errorCode: number; errorDescription: string; url: string }) => void
-    ) => {
-      const handler = (
-        _: unknown,
-        info: { errorCode: number; errorDescription: string; url: string }
-      ): void => callback(info)
-      ipcRenderer.on('browser-view:did-fail-load', handler)
-      return () => ipcRenderer.removeListener('browser-view:did-fail-load', handler)
-    }
+      callback: (payload: {
+        tabId: string
+        errorCode: number
+        errorDescription: string
+        url: string
+      }) => void
+    ) => onBrowserViewEvent('browser-view:did-fail-load', callback)
   },
 
   // ============ Browser 分区数据 ============
@@ -753,13 +800,19 @@ const api = {
 
   // ============ Files (会话工作目录文件树) ============
   files: {
-    /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore），同时启动文件监听 */
+    /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore） */
     scan: (params: { sessionId: string }) =>
       ipcRenderer.invoke('files:scan', params) as Promise<{
         paths: string[]
         truncated: boolean
         root: string | null
       }>,
+    /** 开始监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播 */
+    watch: (params: { sessionId: string; path: string }) =>
+      ipcRenderer.invoke('files:watch', params) as Promise<void>,
+    /** 停止监听某个文件 */
+    unwatch: (params: { sessionId: string; path: string }) =>
+      ipcRenderer.invoke('files:unwatch', params) as Promise<void>,
     /** 读取文件内容用于面板预览。沙箱外路径返回 not-allowed，不弹审批 */
     read: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:read', params) as Promise<
@@ -774,14 +827,8 @@ const api = {
   },
   /** 通用内部事件订阅（main 经 'app:event' 广播 AppEvent，与 agent:event 并列） */
   events: {
-    subscribe: (callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void) => {
-      const handler = (
-        _: Electron.IpcRendererEvent,
-        event: import('@shuvix/chat-protocol/appEvents').AppEvent
-      ): void => callback(event)
-      ipcRenderer.on('app:event', handler)
-      return () => ipcRenderer.removeListener('app:event', handler)
-    }
+    // 单一 ipcRenderer 监听 + 本地扇出（见上方 subscribeAppEvent），避免 app:event 监听器泄漏告警
+    subscribe: (callback: (event: AppEvent) => void) => subscribeAppEvent(callback)
   }
 }
 

@@ -1,27 +1,13 @@
 /**
- * Hook matcher 实现
- *
- * 语义见 {@link HookGroup.matcher}：
- * - `"*"` / `""` / undefined → 全部匹配
- * - 仅 `[A-Za-z0-9_|]`        → 按 `|` 拆分成精确串列表
- * - 其他                      → JS 正则
+ * Hook matcher —— 实现已上移到 @shuvix/agent-runtime（各端共享）。
+ * 此处包一层注入 electron-log 的 logger，保持 main 进程内既有 import 路径与无效正则告警行为不变。
+ * 语义见 {@link HookGroup.matcher}。
  */
-
+import { matchHook as matchHookCore } from '@shuvix/agent-runtime'
 import { createLogger } from '../../logger'
 
 const log = createLogger('HookMatcher')
 
-const SIMPLE_RE = /^[A-Za-z0-9_|]+$/
-
 export function matchHook(matcher: string | undefined, target: string): boolean {
-  if (matcher == null || matcher === '' || matcher === '*') return true
-  if (SIMPLE_RE.test(matcher)) {
-    return matcher.split('|').some((m) => m === target)
-  }
-  try {
-    return new RegExp(matcher).test(target)
-  } catch (err) {
-    log.warn(`无效正则 matcher "${matcher}": ${err instanceof Error ? err.message : String(err)}`)
-    return false
-  }
+  return matchHookCore(matcher, target, log)
 }

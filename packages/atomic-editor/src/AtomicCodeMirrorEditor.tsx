@@ -293,7 +293,19 @@ export function AtomicCodeMirrorEditor({
           // GFM via base: markdownLanguage — tables, strikethrough,
           // task lists, autolinks. Without this, the parser is pure
           // CommonMark and inline-preview never sees Task / Table.
-          markdown({ base: markdownLanguage, codeLanguages: [...codeLanguages] }),
+          //
+          // `remove: ['SetextHeading']` disables setext-style headings
+          // (a text line "underlined" by `-`/`---`/`=`). In a live editor
+          // this is a footgun: typing a `-` bullet or a `---` rule on the
+          // line right below a paragraph silently promotes that paragraph
+          // to an H1/H2. Dropping the leaf-block parser makes the `-` line
+          // parse as a list / thematic break instead, and the text above
+          // stays plain. ATX (`#`) headings are unaffected.
+          markdown({
+            base: markdownLanguage,
+            codeLanguages: [...codeLanguages],
+            extensions: [{ remove: ['SetextHeading'] }],
+          }),
           // Extend closeBrackets to markdown's symmetric delimiters.
           markdownLanguage.data.of({
             closeBrackets: { brackets: ['(', '[', '{', "'", '"', '*', '_', '`'] },

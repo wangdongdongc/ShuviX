@@ -6,7 +6,8 @@
  * CompactionDeps 注入。桌面（SQLite + chatFrontendRegistry）与扩展（IndexedDB + eventBus）
  * 各自提供适配器，共用同一编排逻辑。
  */
-import { completeSimple, type TextContent } from '@earendil-works/pi-ai'
+import type { TextContent } from '@earendil-works/pi-ai'
+import { completeSimple } from '@earendil-works/pi-ai/compat'
 import { type AgentMessage, convertToLlm } from '@earendil-works/pi-agent-core'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'

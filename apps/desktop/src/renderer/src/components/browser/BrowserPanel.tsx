@@ -10,12 +10,7 @@ import {
   X
 } from 'lucide-react'
 import { useBrowserStore } from '../../stores/browserStore'
-
-interface LoadError {
-  errorCode: number
-  errorDescription: string
-  url: string
-}
+import { BrowserTabBar } from './BrowserTabBar'
 
 /** Chromium net error code 范围：CERT_* 在 -200 ~ -211 */
 function isCertError(code: number): boolean {
@@ -24,28 +19,33 @@ function isCertError(code: number): boolean {
 
 /**
  * Browser 侧边面板 — 右侧浏览器区
- * 内容由主进程的 WebContentsView 渲染（覆盖在 placeholder 上方），
- * 本组件仅提供工具栏 + 状态栏 + bounds 同步。
+ * 内容由主进程的多 tab WebContentsView 渲染（激活 tab 的 view 覆盖在 placeholder 上方），
+ * 本组件仅提供 tab 条 + 工具栏 + 状态栏 + bounds 同步。
+ * tab 状态（url/title/isLoading/loadError）是主进程真源的镜像（useBrowserTabsBridge）。
  */
 export function BrowserPanel(): React.JSX.Element {
   const { t } = useTranslation()
-  const { url, setUrl } = useBrowserStore()
   const width = useBrowserStore((s) => s.width)
   const isOpen = useBrowserStore((s) => s.isOpen)
   const activeTab = useBrowserStore((s) => s.activeTab)
+  const tabs = useBrowserStore((s) => s.tabs)
+  const activeTabId = useBrowserStore((s) => s.activeTabId)
+  const createTab = useBrowserStore((s) => s.createTab)
+  const closeTab = useBrowserStore((s) => s.closeTab)
+  const navigateTab = useBrowserStore((s) => s.navigateTab)
 
-  /** placeholder div — WebContentsView 叠放在这个区域上方 */
+  const activeTabInfo = tabs.find((tab) => tab.id === activeTabId)
+  const url = activeTabInfo?.url ?? 'about:blank'
+  const isLoading = activeTabInfo?.isLoading ?? false
+  const loadError = activeTabInfo?.loadError ?? null
+
+  /** placeholder div — 激活 tab 的 WebContentsView 叠放在这个区域上方 */
   const placeholderRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
   // ====== 状态 ======
   const [inputUrl, setInputUrl] = useState(url)
-  const [isLoading, setIsLoading] = useState(false)
   const [contentHeight, setContentHeight] = useState(0)
-  const [loadError, setLoadError] = useState<LoadError | null>(null)
-
-  /** 跟踪当前 WebContentsView 的实际 URL，防止重复导航 */
-  const viewUrlRef = useRef('')
 
   // 检测是否有对话框覆盖层打开（WebContentsView 在原生层渲染，需要手动让位）
   const [hasDialogOverlay, setHasDialogOverlay] = useState(false)
@@ -59,47 +59,11 @@ export function BrowserPanel(): React.JSX.Element {
     return () => mo.disconnect()
   }, [])
 
-  const isBlank = url === 'about:blank'
+  const isBlank = !activeTabInfo || url === 'about:blank'
 
   // WebContentsView 是否应该可见（错误态时让 WebContentsView 让位给覆盖层）
   const shouldShowView =
     isOpen && activeTab === 'browser' && !isBlank && !hasDialogOverlay && !loadError
-
-  // ====== WebContentsView 导航 ======
-
-  // url 变化时导航 WebContentsView
-  useEffect(() => {
-    if (!url || url === 'about:blank') return
-    if (url === viewUrlRef.current) return
-    viewUrlRef.current = url
-    window.api.browserView.navigate(url)
-  }, [url])
-
-  // ====== WebContentsView 事件监听 ======
-
-  useEffect(() => {
-    const cleanups = [
-      window.api.browserView.onDidStartLoading((navUrl: string) => {
-        setIsLoading(true)
-        setLoadError(null)
-        viewUrlRef.current = navUrl
-        startTransition(() => setInputUrl(navUrl))
-      }),
-      window.api.browserView.onDidNavigate((navUrl: string) => {
-        viewUrlRef.current = navUrl
-        startTransition(() => setInputUrl(navUrl))
-      }),
-      window.api.browserView.onDidFinishLoad(() => {
-        setIsLoading(false)
-        setLoadError(null)
-      }),
-      window.api.browserView.onDidFailLoad((info) => {
-        setIsLoading(false)
-        setLoadError(info)
-      })
-    ]
-    return () => cleanups.forEach((c) => c())
-  }, [])
 
   // ====== Bounds 同步 ======
 
@@ -158,49 +122,47 @@ export function BrowserPanel(): React.JSX.Element {
     return () => ro.disconnect()
   }, [])
 
-  // 外部 url 变化时同步到输入框
+  // 激活 tab / 其 URL 变化时同步到输入框
   useEffect(() => {
     startTransition(() => setInputUrl(url))
-  }, [url])
+  }, [activeTabId, url])
 
   // ====== 操作 ======
 
-  /** 提交 URL 导航 */
+  /** 提交 URL 导航：有激活 tab 导航之，无则新建 */
   const handleNavigate = useCallback(() => {
     let target = inputUrl.trim()
     if (!target) return
     if (!/^https?:\/\//i.test(target) && target !== 'about:blank') {
       target = 'https://' + target
     }
-    setUrl(target)
-    setIsLoading(true)
-  }, [inputUrl, setUrl])
+    if (activeTabId) {
+      navigateTab(activeTabId, target)
+    } else {
+      createTab(target)
+    }
+  }, [inputUrl, activeTabId, navigateTab, createTab])
 
   const handleBack = useCallback(() => {
-    window.api.browserView.goBack()
-  }, [])
+    if (activeTabId) void window.api.browserView.goBack(activeTabId)
+  }, [activeTabId])
 
   const handleForward = useCallback(() => {
-    window.api.browserView.goForward()
-  }, [])
+    if (activeTabId) void window.api.browserView.goForward(activeTabId)
+  }, [activeTabId])
 
   const handleRefresh = useCallback(() => {
-    setIsLoading(true)
-    window.api.browserView.reload()
-  }, [])
+    if (activeTabId) void window.api.browserView.reload(activeTabId)
+  }, [activeTabId])
 
   const handleStop = useCallback(() => {
-    window.api.browserView.stop()
-    setIsLoading(false)
-  }, [])
+    if (activeTabId) void window.api.browserView.stop(activeTabId)
+  }, [activeTabId])
 
   const handleRetry = useCallback(() => {
-    if (!loadError) return
-    setLoadError(null)
-    setIsLoading(true)
-    viewUrlRef.current = ''
-    window.api.browserView.navigate(loadError.url || url)
-  }, [loadError, url])
+    if (!activeTabId || !loadError) return
+    navigateTab(activeTabId, loadError.url || url)
+  }, [activeTabId, loadError, url, navigateTab])
 
   const handleOpenExternal = useCallback(() => {
     if (url && url !== 'about:blank') {
@@ -208,21 +170,19 @@ export function BrowserPanel(): React.JSX.Element {
     }
   }, [url])
 
+  /** 关闭当前 tab */
   const handleClose = useCallback(() => {
-    window.api.browserView.stop()
-    window.api.browserView.navigate('about:blank')
-    viewUrlRef.current = 'about:blank'
-    setUrl('about:blank')
-    setInputUrl('')
-    setIsLoading(false)
-    setLoadError(null)
-  }, [setUrl])
+    if (activeTabId) closeTab(activeTabId)
+  }, [activeTabId, closeTab])
 
   const btnClass =
     'p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors'
 
   return (
     <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
+      {/* ====== tab 条 ====== */}
+      <BrowserTabBar />
+
       {/* ====== 工具栏 ====== */}
       <div className="titlebar-drag flex-shrink-0 flex items-center gap-0.5 px-1.5 min-h-8 border-b border-border-secondary/30">
         {/* 导航：后退、前进、刷新/停止加载 */}
@@ -264,12 +224,12 @@ export function BrowserPanel(): React.JSX.Element {
           </div>
         </form>
 
-        {/* 在浏览器中打开 / 关闭当前页 */}
+        {/* 在浏览器中打开 / 关闭当前 tab */}
         <div className="titlebar-no-drag flex items-center flex-shrink-0">
           <button onClick={handleOpenExternal} className={btnClass} title="Open in browser">
             <ExternalLink size={11} />
           </button>
-          {!isBlank && (
+          {activeTabInfo && (
             <button onClick={handleClose} className={btnClass} title={t('browser.close')}>
               <X size={12} />
             </button>
@@ -291,7 +251,7 @@ export function BrowserPanel(): React.JSX.Element {
                 <div className="h-full bg-accent animate-browser-loading" />
               </div>
             )}
-            {/* WebContentsView 占位区域 — 主进程的 WebContentsView 叠放在此 div 上方 */}
+            {/* WebContentsView 占位区域 — 激活 tab 的 WebContentsView 叠放在此 div 上方 */}
             <div ref={placeholderRef} className="w-full h-full" />
             {/* 加载错误覆盖层 — WebContentsView 已隐藏，覆盖在 placeholder 上 */}
             {loadError && (

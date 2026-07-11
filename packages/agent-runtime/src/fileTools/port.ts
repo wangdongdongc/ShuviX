@@ -24,6 +24,12 @@ export interface FileSystemPort {
   readTextLines(path: string): AsyncIterable<string>
   /** 整读文件为 UTF-8 文本（edit 需要原始全文做 BOM/行尾/匹配） */
   readFile(path: string): Promise<string>
+  /**
+   * 按范围读取原始字节（预览面板的 hex/嗅探/图片用）。
+   * 桌面 fh.read(pos)、扩展 File.slice —— 两端都只读请求的 length，不整读大文件。
+   * 实际读到的字节可能少于 length（文件尾），返回真实长度的视图。
+   */
+  readBytes(path: string, offset: number, length: number): Promise<Uint8Array>
   /** 写文件（自动创建父目录） */
   writeFile(path: string, content: string): Promise<void>
   /** 列目录条目 */

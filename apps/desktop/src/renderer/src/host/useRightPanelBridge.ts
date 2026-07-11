@@ -28,16 +28,29 @@ export function useRightPanelBridge(): void {
   useEffect(() => {
     const unsub = getSessionChannelApi().agent.onEvent((event) => {
       if (event.type === 'browser_event') {
-        if (event.action === 'open' && event.url) {
-          let url = event.url
-          if (getSessionChannelApi()?.app?.platform === 'web') {
-            url = `${window.location.origin}/shuvix/browser/${event.sessionId}/`
-          }
+        if (event.action === 'open') {
           const browser = useBrowserStore.getState()
-          browser.open(url)
+          if (getSessionChannelApi()?.app?.platform === 'web') {
+            // web 平台：面板是会话镜像 iframe，与主进程 tab 无关，始终重写 URL
+            browser.openAndNavigate(`${window.location.origin}/shuvix/browser/${event.sessionId}/`)
+          } else if (event.url) {
+            // 旧广播兼容（带 url）：renderer 建 tab / 导航激活 tab
+            browser.openAndNavigate(event.url)
+          } else if (!browser.isOpen) {
+            // 新链路（browser 工具 openTab）：tab 已由主进程建好并经 browser-view:tab-* 镜像，
+            // 这里只负责露出右侧面板
+            browser.open()
+          }
           browser.setActiveTab('browser')
         } else if (event.action === 'close') {
-          useBrowserStore.getState().setUrl('about:blank')
+          const { tabs, activeTabId, closeTab, close } = useBrowserStore.getState()
+          if (tabs.length === 0) {
+            // 新链路（backend 关掉最后一个 tab 后广播）：收起面板
+            close()
+          } else if (activeTabId) {
+            // 旧语义（CLI browser close）：清掉 agent 占用的页面 → 关激活 tab（面板本身不关）
+            closeTab(activeTabId)
+          }
         }
       }
     })

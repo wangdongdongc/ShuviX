@@ -5,7 +5,8 @@
  * 经三级兜底解析出干净标题。模型来源（专用标题模型 / 会话模型）与触发时机由端各自决定
  * （触发策略已在 chat-ui useAgentEvents 共享）。
  */
-import { completeSimple, type TextContent } from '@earendil-works/pi-ai'
+import type { TextContent } from '@earendil-works/pi-ai'
+import { completeSimple } from '@earendil-works/pi-ai/compat'
 
 /** completeSimple 的模型入参类型（pi-ai Model） */
 type CompleteModel = Parameters<typeof completeSimple>[0]

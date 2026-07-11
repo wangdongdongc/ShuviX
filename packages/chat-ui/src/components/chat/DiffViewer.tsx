@@ -55,16 +55,18 @@ const bgColors = {
   separator: ''
 }
 
+// light-dark(浅色主题用深色文字, 深色主题用浅色文字) —— 各主题 root 已声明 color-scheme，
+// 保证 diff 文字在浅色行底色（bg-*-500/10）上也有足够对比度。
 const gutterColors = {
-  add: 'bg-green-500/20 text-green-400',
-  remove: 'bg-red-500/20 text-red-400',
+  add: 'bg-green-500/20 text-[light-dark(#15803d,#4ade80)]',
+  remove: 'bg-red-500/20 text-[light-dark(#b91c1c,#f87171)]',
   context: 'text-text-tertiary',
   separator: 'text-text-tertiary'
 }
 
 const textColors = {
-  add: 'text-green-300',
-  remove: 'text-red-300',
+  add: 'text-[light-dark(#15803d,#86efac)]',
+  remove: 'text-[light-dark(#b91c1c,#fca5a5)]',
   context: 'text-text-secondary',
   separator: 'text-text-tertiary italic'
 }

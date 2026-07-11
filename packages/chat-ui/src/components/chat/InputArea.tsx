@@ -1,8 +1,8 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, Mic, X, Archive } from 'lucide-react'
-import { TokenBadge } from './InlineTokenBadge'
+import { TokenChip } from './TokenChip'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -21,6 +21,10 @@ import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
+import { AtMentionPopover } from './AtMentionPopover'
+import { MentionHighlighter } from './MentionHighlighter'
+import { useAtMentions } from '../../hooks/useAtMentions'
+import type { FileSuggestion } from '@shuvix/chat-protocol/utils/fileMap'
 
 /** 将 token 数格式化为紧凑显示（如 12.5k、128k） */
 function formatTokenCount(n: number): string {
@@ -100,6 +104,13 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
 
+  // @ 工作区文件引用自动补全（可在任意位置触发，可多个；胶囊仅展示文件名）
+  const at = useAtMentions(activeSessionId)
+  // 背景镜像层（画 @ 胶囊）—— 与 textarea 同步 scrollTop
+  const backdropRef = useRef<HTMLDivElement>(null)
+  // 程序化改写文本后待应用的光标位置（select / 整体退格）
+  const pendingCaretRef = useRef<number | null>(null)
+
   // 斜杠命令芯片：选中命令后以 badge 展示，输入框只显示参数
   const [slashChip, setSlashChip] = useState<{
     commandId: string
@@ -112,9 +123,9 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
     setChipWidth(node?.offsetWidth ?? 0)
   }, [])
 
-  /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片 */
+  /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片；同步 @ 引用触发态与登记表 */
   const handleInputChange = useCallback(
-    (value: string) => {
+    (value: string, caret: number) => {
       if (!slashChip && value.startsWith('/') && value.includes(' ')) {
         const spaceIdx = value.indexOf(' ')
         const cmdId = value.slice(1, spaceIdx)
@@ -131,8 +142,23 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
         }
       }
       setInputText(value)
+      at.prune(value)
+      at.refresh(value, caret)
     },
-    [slashChip, slashCommands, setInputText]
+    [slashChip, slashCommands, setInputText, at]
+  )
+
+  /** @ 引用选中：在光标处替换 @query → @token，登记引用，落回文本并置光标 */
+  const applyAtSelect = useCallback(
+    (s: FileSuggestion) => {
+      const el = textareaRef.current
+      const caret = el?.selectionStart ?? inputText.length
+      const { text, caret: newCaret } = at.select(s, inputText, caret)
+      setInputText(text)
+      pendingCaretRef.current = newCaret
+      setTimeout(() => textareaRef.current?.focus(), 0)
+    },
+    [at, inputText, setInputText]
   )
 
   // 拖拽调节的 textarea 最小高度。笔记本模式默认更矮（悬浮少遮挡）、不读持久化高度、不展示拖拽手柄。
@@ -157,6 +183,16 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
     el.style.height = 'auto'
     el.style.height = Math.min(Math.max(el.scrollHeight, minH), DRAG_MAX) + 'px'
   }, [inputText, minH])
+
+  /** 程序化改写文本（@ 选中 / 整体退格）后应用待定光标 */
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (el && pendingCaretRef.current != null) {
+      const pos = pendingCaretRef.current
+      pendingCaretRef.current = null
+      el.selectionStart = el.selectionEnd = pos
+    }
+  }, [inputText])
 
   /** 拖拽手柄：向上拖增大输入区，向下拖缩小 */
   const handleResizeStart = useCallback(
@@ -207,9 +243,9 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
   )
 
   /**
-   * 构造发送文本 + 内联 Token（slash 命令 / skill 展开）—— 主会话与笔记本会话共用同一逻辑。
-   * 命中 slash 命令时返回 marker 文本 + tokens（后端解析为发给 Agent 的真实指令并渲染标签），
-   * 否则原样返回。
+   * 构造发送文本 + 内联 Token（slash 命令 / skill 展开 + @ 文件引用）—— 主会话与笔记本会话共用。
+   * - slash 命令：payload 为整条替换，无法与 at token 混用，故先把 @ 引用就地展开为 payload 文本内联进参数。
+   * - 普通消息：@ 引用逐个替换为 {{token}} 标记 + 构造 at 类型 InlineToken（保留周围文字）。
    */
   const buildSlashOutgoing = useCallback(
     (
@@ -217,18 +253,20 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
       sid: string | null
     ): { contentText: string; inlineTokens?: Record<string, InlineToken> } => {
       if (slashChip) {
-        return buildCommandToken(slashChip, raw, { sessionId: sid ?? undefined })
+        return buildCommandToken(slashChip, at.resolveInline(raw), { sessionId: sid ?? undefined })
       }
       if (raw.startsWith('/')) {
-        const parsed = parseSlashCommandInput(raw, slashCommands, { sessionId: sid ?? undefined })
+        const parsed = parseSlashCommandInput(at.resolveInline(raw), slashCommands, {
+          sessionId: sid ?? undefined
+        })
         if (parsed) {
           autoEnableRequiredTools(parsed.command.requiredTools)
           return { contentText: parsed.contentText, inlineTokens: parsed.inlineTokens }
         }
       }
-      return { contentText: raw }
+      return at.buildOutgoing(raw)
     },
-    [slashChip, slashCommands, autoEnableRequiredTools]
+    [slashChip, slashCommands, autoEnableRequiredTools, at]
   )
 
   /** 发送消息（支持图片） */
@@ -249,6 +287,7 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
       store.setInputText('')
       store.clearPendingImages()
       setSlashChip(null)
+      at.reset()
       void getSessionChannelApi().agent.notebookPrompt({
         sessionId: activeSessionId,
         text: contentText,
@@ -287,6 +326,7 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
     store.setInputText('')
     store.clearPendingImages()
     setSlashChip(null)
+    at.reset()
     store.setIsStreaming(sid, true)
     store.clearStreamingContent(sid)
 
@@ -353,6 +393,19 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
 
   /** 键盘事件处理 */
   const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // @ 引用 popover 可见时优先处理导航（可在任意位置触发，故先于斜杠命令）
+    if (at.showPopover) {
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        const s = at.suggestions[at.selectedIndex]
+        if (s) {
+          e.preventDefault()
+          applyAtSelect(s)
+          return
+        }
+      }
+      if (at.handleKeyDown(e)) return
+    }
+
     // 斜杠命令 popover 可见时优先处理导航
     if (slash.showPopover) {
       // Enter/Tab 时选中当前项
@@ -375,6 +428,21 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
       e.preventDefault()
       voice.cancelRecording()
       return
+    }
+
+    // Backspace 光标紧邻 @ 引用尾部：整体删除该引用（一次退格删掉整颗胶囊）
+    if (e.key === 'Backspace' && !at.showPopover) {
+      const el = textareaRef.current
+      if (el && el.selectionStart === el.selectionEnd) {
+        const res = at.backspace(inputText, el.selectionStart)
+        if (res) {
+          e.preventDefault()
+          setInputText(res.text)
+          at.prune(res.text)
+          pendingCaretRef.current = res.caret
+          return
+        }
+      }
     }
 
     // Backspace 在光标位置 0 且输入为空时，移除斜杠命令芯片
@@ -540,34 +608,56 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
               />
             )}
 
+            {/* @ 工作区文件引用自动补全浮层 */}
+            {at.showPopover && (
+              <AtMentionPopover
+                suggestions={at.suggestions}
+                onSelect={applyAtSelect}
+                selectedIndex={at.selectedIndex}
+              />
+            )}
+
             {/* 斜杠命令芯片：绝对定位在 textarea 首行，text-indent 让出空间 */}
             {slashChip && (
               <span
                 ref={chipRef}
                 className="absolute left-4 top-2 z-10 pointer-events-auto text-sm"
               >
-                <TokenBadge
-                  segment={{
-                    type: 'token',
-                    uid: 'input',
-                    token: {
-                      type: 'cmd',
-                      id: slashChip.commandId,
-                      displayText: `/${slashChip.commandId}`,
-                      payload: expandCommandTemplate(slashChip.template, inputText.trim()),
-                      name: slashChip.name
-                    }
+                <TokenChip
+                  token={{
+                    type: 'cmd',
+                    id: slashChip.commandId,
+                    displayText: `/${slashChip.commandId}`,
+                    payload: expandCommandTemplate(slashChip.template, inputText.trim()),
+                    name: slashChip.name
                   }}
                 />
               </span>
             )}
 
+            {/* @ 引用镜像层：覆于 textarea 之上，仅把引用画成胶囊（非引用文字透明露出下层，逐字对齐） */}
+            <MentionHighlighter
+              ref={backdropRef}
+              text={inputText}
+              mentions={at.mentions}
+              className={`absolute inset-0 z-[2] pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-sm text-transparent px-4 pt-2 ${
+                isNotebook ? 'pb-2' : 'pb-9'
+              }`}
+              style={{
+                minHeight: `${minH}px`,
+                textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
+              }}
+            />
+
             <textarea
               ref={textareaRef}
               value={inputText}
-              onChange={(e) => handleInputChange(e.target.value)}
+              onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
+              onScroll={(e) => {
+                if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
+              }}
               placeholder={
                 isStreaming
                   ? t('input.placeholderSteer')
@@ -582,7 +672,7 @@ export function InputArea({ notebook }: InputAreaProps = {}): React.JSX.Element 
                 minHeight: `${minH}px`,
                 textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
               }}
-              className={`w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 resize-none outline-none overflow-y-auto ${
+              className={`relative z-[1] w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 resize-none outline-none overflow-y-auto ${
                 isNotebook ? 'pb-2' : 'pb-9'
               }`}
             />

@@ -27,6 +27,7 @@ import {
   buildSessionTools
 } from './agentRuntime'
 import { subAgentManager, registerSessionTools } from './subAgent'
+import { withTabLease } from './tabLease'
 import { runNotebookTask, resolveInitialThinkingLevel } from '@shuvix/agent-runtime'
 import { compactSession } from './compactionRuntime'
 import { generateTitleForSession } from './titleRuntime'
@@ -85,7 +86,8 @@ export const chatApiAdapter: ChatApi = {
       // 后端统一持久化用户消息并广播（chat-ui 通过 user_message 事件落到 store）
       const userMsg = messageStore.add({ sessionId, role: 'user', type: 'text', content: text })
       eventBus.emit({ type: 'user_message', sessionId, message: JSON.stringify(userMsg) })
-      await rt.prompt(text, images)
+      // 标签页租约：本轮结束（含中止）且无其他活跃运行时自动释放接管的标签页（见 tabLease.ts）
+      await withTabLease(() => rt.prompt(text, images))
       return ok
     },
     // 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。仅注入笔记本路径 + read 提示，
@@ -101,38 +103,43 @@ export const chatApiAdapter: ChatApi = {
       })
       // resolveTools 读 sessionTools map（笔记本无 runtime，故在此登记）；扩展按注册表解析 → tools 传 []
       registerSessionTools(sessionId, parts.tools)
-      runNotebookTask(
-        subAgentManager,
-        {
-          sessionId,
-          text,
-          systemPrompt: parts.systemPrompt,
-          modelConfig: {
-            provider: parts.provider,
-            model: parts.model,
-            capabilities: parts.caps,
-            // 笔记本子代理继承会话所选思考深度（与桌面/主会话同一 helper）
-            thinkingLevel: resolveInitialThinkingLevel({
-              persisted: session?.modelMetadata?.thinkingLevel,
-              reasoning: parts.caps.reasoning
-            })
+      // fire-and-forget，但整轮持有标签页租约（runNotebookTask 返回完成 promise、永不 reject）
+      void withTabLease(() =>
+        runNotebookTask(
+          subAgentManager,
+          {
+            sessionId,
+            text,
+            systemPrompt: parts.systemPrompt,
+            modelConfig: {
+              provider: parts.provider,
+              model: parts.model,
+              capabilities: parts.caps,
+              // 笔记本子代理继承会话所选思考深度（与桌面/主会话同一 helper）
+              thinkingLevel: resolveInitialThinkingLevel({
+                persisted: session?.modelMetadata?.thinkingLevel,
+                reasoning: parts.caps.reasoning
+              })
+            },
+            tools: [],
+            notebookPath
           },
-          tools: [],
-          notebookPath
-        },
-        (error) => eventBus.emit({ type: 'error', sessionId, error })
+          (error) => eventBus.emit({ type: 'error', sessionId, error })
+        )
       )
       return ok
     },
-    // 继续与已存在子代理对话：复用该子会话 Agent 追加一轮（fire-and-forget，进展走事件流）
+    // 继续与已存在子代理对话：复用该子会话 Agent 追加一轮（fire-and-forget，进展走事件流；整轮持有标签页租约）
     subAgentPrompt: async ({ subSessionId, text }) => {
-      void subAgentManager.continueTask({ subSessionId, text }).catch((e: unknown) => {
-        eventBus.emit({
-          type: 'error',
-          sessionId: subSessionId,
-          error: e instanceof Error ? e.message : String(e)
-        })
-      })
+      void withTabLease(() => subAgentManager.continueTask({ subSessionId, text })).catch(
+        (e: unknown) => {
+          eventBus.emit({
+            type: 'error',
+            sessionId: subSessionId,
+            error: e instanceof Error ? e.message : String(e)
+          })
+        }
+      )
       return ok
     },
     // 子会话基础能力：销毁（中止 + 移出注册表）/ 中断（软停止）——与桌面同走共享 subAgentManager
@@ -260,7 +267,7 @@ export const chatApiAdapter: ChatApi = {
     updateProject: async () => ok,
     updateThinkingLevel: async () => ok,
     updateEnabledTools: async () => ok,
-    // autoApprove 门控「操作用户真实浏览器」的 CDP 工具（见 browserTools 审批）；关时逐次确认
+    // autoApprove 门控 browser 工具的 mutating 操作（见 agent-runtime gateBrowserOp）；关时逐次确认
     updateAutoApprove: async ({ id, autoApprove }) => {
       await sessionStore.updateSettings(id, { autoApprove })
       return ok
@@ -455,7 +462,12 @@ export const chatApiAdapter: ChatApi = {
   files: {
     scan: ({ sessionId }) => filesRuntime.scan(sessionId),
     read: ({ sessionId, path }) => filesRuntime.read(sessionId, path),
-    write: ({ sessionId, path, content }) => filesRuntime.write(sessionId, path, content)
+    write: ({ sessionId, path, content }) => filesRuntime.write(sessionId, path, content),
+    // 单文件内容监听：浏览器沙箱（FSA/OPFS）无稳定的文件变更监听 API（FileSystemObserver 仍实验性）→ no-op。
+    // notebook/预览对 agent/子智能体编辑的自动刷新已由 fileTools.onFileChange 发布的 files.changed 覆盖
+    // （见 fileTools.ts）；此处仅缺「捕获外部程序改盘」，属平台能力缺失，非缺陷。
+    watch: async () => {},
+    unwatch: async () => {}
   },
 
   // 通用内部事件：进程内单例 bus，前端直接订阅（后端 publish 见 appEventBus）

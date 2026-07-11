@@ -5,7 +5,7 @@ import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
-import i18n from 'i18next'
+import { useAppEvent } from './useAppEvents'
 
 /**
  * 写入一条 error_event 消息：宿主端经 HostApi 持久化；渠道端（无 HostApi，只读）
@@ -99,6 +99,11 @@ export function useAgentEvents(): void {
   useEffect(() => {
     ttsEnabledRef.current = host.voice?.ttsEnabled
   }, [host.voice?.ttsEnabled])
+
+  // 会话标题变更（后端 AI 自动生成 → AppEvent 广播）：各端统一刷新列表标题，单一数据源
+  useAppEvent('session.titleChanged', (event) => {
+    useChatStore.getState().updateSessionTitle(event.sessionId, event.title)
+  })
 
   const handleAgentEvent = useCallback(async (event: ChatEvent): Promise<void> => {
     const sid: string = event.sessionId
@@ -390,46 +395,8 @@ export function useAgentEvents(): void {
           }
         }
 
-        // 两次标题生成策略(参考 Claude Code):
-        //   - 首轮(textMsgCount ≤ 2):快速粗生成,基于第一轮 user+assistant
-        //   - 第三轮(textMsgCount 3-4):精化重生成,基于更多上下文(最后 1000 字)
-        //   - 之后不再触发
-        // 未配置标题模型时,后端 generateTitle 直接返回 null,不浪费调用
-        if (savedMsg && sid === store.activeSessionId) {
-          const currentSession = store.sessions.find((s) => s.id === sid)
-          const defaultTitle = i18n.t('agent.defaultTitle')
-          const isUntitled = !currentSession || currentSession.title === defaultTitle
-          const sidMsgs = await getSessionChannelApi().message.list(sid)
-          const textMsgCount = sidMsgs.filter(
-            (m: ChatMessage) => m.type === 'text' || !m.type
-          ).length
-          // 首轮:isUntitled 才触发;第三轮:无条件触发(覆盖粗标题)
-          const shouldGenerate =
-            (isUntitled && textMsgCount <= 2) || (textMsgCount >= 3 && textMsgCount <= 4)
-          if (shouldGenerate) {
-            // 拼接对话最后 1000 字符作为输入
-            const MAX_CHARS = 1000
-            const conversationText = sidMsgs
-              .filter(
-                (m: ChatMessage) =>
-                  (m.role === 'user' || m.role === 'assistant') && m.type === 'text'
-              )
-              .map((m: ChatMessage) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-              .join('\n')
-              .slice(-MAX_CHARS)
-            if (conversationText.trim()) {
-              // 标题生成会持久化 → 宿主能力；渠道端跳过（由宿主负责生成并广播）
-              getHostApi()
-                ?.session.generateTitle({ sessionId: sid, conversationText })
-                .then((res) => {
-                  if (res.title) {
-                    useChatStore.getState().updateSessionTitle(sid, res.title)
-                  }
-                })
-                .catch(() => {})
-            }
-          }
-        }
+        // 标题自动生成已下沉到后端（agentSession.prompt，用户输入即触发，不等 agent 响应），
+        // 结果经 AppEvent 'session.titleChanged' 广播回来 —— 见本文件底部的 useAppEvent 订阅。
         break
       }
 

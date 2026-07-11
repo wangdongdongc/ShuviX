@@ -16,8 +16,12 @@ import {
   keymap,
   type DecorationSet,
 } from '@codemirror/view';
+import { isolateHistory, redo, undo } from '@codemirror/commands';
+import { markdownLanguage } from '@codemirror/lang-markdown';
 import type { SyntaxNode } from '@lezer/common';
+import { normalizeLinkUrl } from './inline-preview';
 import { treeGrowthEffect, treeProgressPlugin } from './tree-progress';
+import { findWikiLinksInLine, type ParsedWikiLink, type WikiLinkStatus } from './wiki-links';
 
 // GFM tables as a WYSIWYG block widget.
 //
@@ -165,135 +169,280 @@ function getCellSource(cell: HTMLElement): HTMLElement | null {
   return cell.querySelector<HTMLElement>('.cm-atomic-table-cell-source');
 }
 
+// Flatten a model into the same cell order `getAllCells` yields: the
+// header cells first, then each body row padded to the column count.
+// Used by `updateDOM` to diff the model against the live DOM cell-by-cell.
+// Exported for tests.
+export function flattenModelCells(model: TableModel): string[] {
+  const colCount = model.header.length;
+  const cells = [...model.header];
+  for (const row of model.rows) {
+    for (let c = 0; c < colCount; c++) cells.push(row[c] ?? '');
+  }
+  return cells;
+}
+
 // ---- inline-mark parsing for cell source --------------------------------
 
 // Cells render a subset of inline markdown — bold, italic, strikethrough,
-// and links. No code spans (the `|` inside a backtick would silently
-// break row parsing), no lists/blocks (cells are single-line by
-// construction), no images (handled by the separate cell-preview strip).
+// links, wiki links, and inline code spans. No lists/blocks (cells are
+// single-line by construction), no images (handled by the separate
+// cell-preview strip).
 //
-// The parser is recursive so `**[text](url)**` nests cleanly, but each
-// mark is a straightforward delimiter pair — no CommonMark flanking
-// rules. The UX inside a cell is forgiving on purpose: if a pair
-// matches, it decorates.
+// Recognition is delegated to the SAME lezer GFM grammar the outer editor
+// uses (`markdownLanguage.parser`) rather than a private set of regexes.
+// This is the whole point: a cell and the surrounding prose now agree on
+// what is bold / code / a link, down to CommonMark flanking rules — there
+// is no second, subtly-different recognizer to drift. The tree-walk below
+// turns lezer's inline nodes into the `CellToken`s the DOM renderer wants;
+// only rendering + caret interaction stay cell-specific (a widget's DOM is
+// out of reach of CM6 decorations, so it can't reuse the prose renderer).
+//
+// Two things are NOT in the grammar and stay cell-local, exactly as they
+// are in prose (where a separate extension handles them):
+//   - Wiki links `[[…]]` — carved out via sentinels before parsing (see
+//     `substituteWikiLinks`), because lezer would mangle `[[x]]`.
+//   - The GFM table rule that `\|` is a literal pipe even inside a code
+//     span — `renderCellToken`/`escapeCell` own that normalization; here
+//     a code token just carries the raw content.
 
 type CellToken =
   | { type: 'text'; text: string }
   | { type: 'strong'; delim: '**' | '__'; children: CellToken[] }
   | { type: 'em'; delim: '*' | '_'; children: CellToken[] }
   | { type: 'strike'; children: CellToken[] }
-  | { type: 'link'; textChildren: CellToken[]; url: string };
+  | { type: 'link'; textChildren: CellToken[]; url: string }
+  | { type: 'wikiLink'; target: string; label: string | null }
+  | { type: 'code'; fence: string; text: string };
+
+// The editor's GFM parser (tables, strikethrough, autolinks…). Parsing a
+// cell string with this exact grammar is what keeps cells and prose in sync.
+const CELL_PARSER = markdownLanguage.parser;
+
+// Private-use sentinels wrapping a wiki-link index. A wiki span is replaced
+// with `\uE000<index>\uE001` BEFORE lezer parses, so the grammar treats it
+// as opaque text (lezer has no wiki concept — it would split `[[x]]` into a
+// nested Link). The sentinel is resolved back to a wikiLink token when a
+// text run is emitted, so a wiki link nested in emphasis (`**[[x]]**`) still
+// works. PUA chars don't collide with real content and read as ordinary
+// letters to the grammar's flanking rules.
+const WIKI_OPEN = '\uE000';
+const WIKI_CLOSE = '\uE001';
+const WIKI_SENTINEL_RE = new RegExp(`${WIKI_OPEN}(\\d+)${WIKI_CLOSE}`, 'g');
 
 export function parseCellInline(raw: string): CellToken[] {
-  const tokens: CellToken[] = [];
-  let textBuf = '';
-  let i = 0;
-
-  const flushText = () => {
-    if (textBuf.length) {
-      tokens.push({ type: 'text', text: textBuf });
-      textBuf = '';
-    }
-  };
-
-  while (i < raw.length) {
-    // CommonMark backslash escape — the following char is emitted
-    // literally and can't open/close a mark. Pair is consumed.
-    if (raw[i] === '\\' && i + 1 < raw.length && /[!-/:-@[-`{-~]/.test(raw[i + 1])) {
-      textBuf += raw[i + 1];
-      i += 2;
-      continue;
-    }
-
-    const match = matchCellMarkAt(raw, i);
-    if (match) {
-      flushText();
-      tokens.push(match.token);
-      i = match.end;
-      continue;
-    }
-
-    textBuf += raw[i];
-    i++;
-  }
-
-  flushText();
-  return tokens;
+  if (!raw) return [];
+  // Reuse the prose wiki-link scanner (single source of truth for the
+  // `[[…]]` syntax + code-span skipping). Standalone string → lineStart 0;
+  // the extra labelFrom/labelTo it returns are unused here.
+  const wikis = findWikiLinksInLine(raw, 0);
+  const src = substituteWikiLinks(raw, wikis);
+  const out: CellToken[] = [];
+  walkInline(wikis, out, src, CELL_PARSER.parse(src).topNode, 0, src.length);
+  return out;
 }
 
-function matchCellMarkAt(
-  raw: string,
+// Walk a node's inline children over [from, to), emitting tokens into `out`
+// and filling the text gaps between children. `from`/`to` let callers scope
+// to a mark's inner content (excluding its delimiters).
+function walkInline(
+  wikis: readonly ParsedWikiLink[],
+  out: CellToken[],
+  s: string,
+  node: SyntaxNode,
   from: number,
-): { token: CellToken; end: number } | null {
-  const rest = raw.slice(from);
-
-  // Bold with `**` or `__` — greedy on the outside, lazy on the
-  // content so we catch the nearest closer.
-  let m = rest.match(/^\*\*([\s\S]+?)\*\*/);
-  if (m) {
-    return {
-      token: { type: 'strong', delim: '**', children: parseCellInline(m[1]) },
-      end: from + m[0].length,
-    };
+  to: number,
+): void {
+  let pos = from;
+  let child = node.firstChild;
+  while (child) {
+    if (child.from >= to) break;
+    if (child.to <= from) {
+      child = child.nextSibling;
+      continue;
+    }
+    if (child.from > pos) emitText(wikis, out, s.slice(pos, child.from));
+    handleInlineNode(wikis, out, s, child);
+    pos = child.to;
+    child = child.nextSibling;
   }
-  m = rest.match(/^__([\s\S]+?)__/);
-  if (m) {
-    return {
-      token: { type: 'strong', delim: '__', children: parseCellInline(m[1]) },
-      end: from + m[0].length,
-    };
-  }
+  if (pos < to) emitText(wikis, out, s.slice(pos, to));
+}
 
-  // Strikethrough.
-  m = rest.match(/^~~([\s\S]+?)~~/);
-  if (m) {
-    return {
-      token: { type: 'strike', children: parseCellInline(m[1]) },
-      end: from + m[0].length,
-    };
+function handleInlineNode(
+  wikis: readonly ParsedWikiLink[],
+  out: CellToken[],
+  s: string,
+  node: SyntaxNode,
+): void {
+  switch (node.name) {
+    case 'Document':
+    case 'Paragraph':
+      // Transparent containers — descend and keep emitting into `out`.
+      walkInline(wikis, out, s, node, node.from, node.to);
+      return;
+    case 'Escape':
+      // `\x` renders as the escaped char (backslash dropped) — same as
+      // prose. In a cell this also turns `\|` into a literal `|`.
+      emitText(wikis, out, s.slice(node.from + 1, node.to));
+      return;
+    case 'Emphasis':
+    case 'StrongEmphasis': {
+      const strong = node.name === 'StrongEmphasis';
+      const mark = firstChildNamed(node, 'EmphasisMark');
+      const delim = mark ? s.slice(mark.from, mark.to) : strong ? '**' : '*';
+      const [innerFrom, innerTo] = markInnerRange(node, 'EmphasisMark');
+      const children: CellToken[] = [];
+      walkInline(wikis, children, s, node, innerFrom, innerTo);
+      out.push(
+        strong
+          ? { type: 'strong', delim: delim === '__' ? '__' : '**', children }
+          : { type: 'em', delim: delim === '_' ? '_' : '*', children },
+      );
+      return;
+    }
+    case 'Strikethrough': {
+      const [innerFrom, innerTo] = markInnerRange(node, 'StrikethroughMark');
+      const children: CellToken[] = [];
+      walkInline(wikis, children, s, node, innerFrom, innerTo);
+      out.push({ type: 'strike', children });
+      return;
+    }
+    case 'InlineCode': {
+      const marks = childrenNamed(node, 'CodeMark');
+      const open = marks[0];
+      const close = marks[marks.length - 1];
+      const fence = open ? s.slice(open.from, open.to) : '`';
+      const text =
+        marks.length >= 2 ? s.slice(open.to, close.from) : s.slice(node.from, node.to);
+      // Store the raw content (may hold `\|`); renderCellToken unescapes it
+      // for display and escapeCell re-adds it on serialize.
+      out.push({ type: 'code', fence, text });
+      return;
+    }
+    case 'Link': {
+      const url = firstChildNamed(node, 'URL');
+      const marks = childrenNamed(node, 'LinkMark');
+      if (url && marks.length >= 2) {
+        const children: CellToken[] = [];
+        walkInline(wikis, children, s, node, marks[0].to, marks[1].from);
+        const urlText = s.slice(url.from, url.to);
+        // Only accept a link whose decorated form round-trips to the exact
+        // source (a simple `[text](url)`). Titles, reference/auto links, and
+        // escaped brackets fail this check and fall through to raw text — so
+        // editing a cell can never silently drop link syntax it can't rebuild.
+        if (`[${cellTokenText(children)}](${urlText})` === s.slice(node.from, node.to)) {
+          out.push({ type: 'link', textChildren: children, url: urlText });
+          return;
+        }
+      }
+      emitText(wikis, out, s.slice(node.from, node.to));
+      return;
+    }
+    default:
+      // Anything we don't model (images, HTML, reference links…) is emitted
+      // as its raw source, so `textContent` still round-trips.
+      emitText(wikis, out, s.slice(node.from, node.to));
+      return;
   }
+}
 
-  // Link `[text](url)`. Reject empty text / url via `+` quantifiers.
-  // `]` and `)` can't appear unescaped inside their respective fields.
-  m = rest.match(/^\[([^\]\n]+)\]\(([^\s)"'\n]+)\)/);
-  if (m) {
-    return {
-      token: {
-        type: 'link',
-        textChildren: parseCellInline(m[1]),
-        url: m[2],
-      },
-      end: from + m[0].length,
-    };
+// Emit a text slice, resolving any wiki sentinels back to wikiLink tokens
+// and coalescing adjacent plain text into one token.
+function emitText(wikis: readonly ParsedWikiLink[], out: CellToken[], text: string): void {
+  if (!text) return;
+  WIKI_SENTINEL_RE.lastIndex = 0;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WIKI_SENTINEL_RE.exec(text))) {
+    if (m.index > last) pushText(out, text.slice(last, m.index));
+    const w = wikis[Number(m[1])];
+    if (w) out.push({ type: 'wikiLink', target: w.target, label: w.label });
+    last = WIKI_SENTINEL_RE.lastIndex;
   }
+  if (last < text.length) pushText(out, text.slice(last));
+}
 
-  // Italic with `*`. Reject a leading `*` (that would have matched
-  // the bold regex above; this guards against pathological inputs
-  // like `***` that slip through).
-  m = rest.match(/^\*([^*\n]+?)\*/);
-  if (m) {
-    return {
-      token: { type: 'em', delim: '*', children: parseCellInline(m[1]) },
-      end: from + m[0].length,
-    };
-  }
+function pushText(out: CellToken[], text: string): void {
+  if (!text) return;
+  const last = out[out.length - 1];
+  if (last && last.type === 'text') last.text += text;
+  else out.push({ type: 'text', text });
+}
 
-  // Italic with `_`. Avoid triggering inside words like `snake_case`
-  // by requiring the char before `_` to not be a word character.
-  // (Fallback to true when `_` is at start-of-input.)
-  const prev = from > 0 ? raw[from - 1] : '';
-  if (!/\w/.test(prev)) {
-    m = rest.match(/^_([^_\n]+?)_/);
-    if (m) {
-      return {
-        token: { type: 'em', delim: '_', children: parseCellInline(m[1]) },
-        end: from + m[0].length,
-      };
+// The text a token tree renders to (its eventual `textContent`, including
+// hidden delimiter marks). Mirrors renderCellToken's `\|`→`|` unescape for
+// code so it is a faithful model. Used to gate links on exact round-trip.
+export function cellTokenText(tokens: readonly CellToken[]): string {
+  let s = '';
+  for (const t of tokens) {
+    switch (t.type) {
+      case 'text':
+        s += t.text;
+        break;
+      case 'strong':
+      case 'em':
+        s += t.delim + cellTokenText(t.children) + t.delim;
+        break;
+      case 'strike':
+        s += `~~${cellTokenText(t.children)}~~`;
+        break;
+      case 'code':
+        s += t.fence + t.text.replace(/\\\|/g, '|') + t.fence;
+        break;
+      case 'link':
+        s += `[${cellTokenText(t.textChildren)}](${t.url})`;
+        break;
+      case 'wikiLink':
+        s += t.label === null ? `[[${t.target}]]` : `[[${t.target}|${t.label}]]`;
+        break;
     }
   }
+  return s;
+}
 
+// ---- lezer node helpers ----
+
+function childrenNamed(node: SyntaxNode, name: string): SyntaxNode[] {
+  const out: SyntaxNode[] = [];
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (c.name === name) out.push(c);
+  }
+  return out;
+}
+
+function firstChildNamed(node: SyntaxNode, name: string): SyntaxNode | null {
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (c.name === name) return c;
+  }
   return null;
 }
+
+// The content range of a delimited mark: between its first and last
+// delimiter child. Falls back to the whole node if delimiters are absent.
+function markInnerRange(node: SyntaxNode, markName: string): [number, number] {
+  const marks = childrenNamed(node, markName);
+  return marks.length
+    ? [marks[0].to, marks[marks.length - 1].from]
+    : [node.from, node.to];
+}
+
+// ---- wiki-link pre-scan (not part of the markdown grammar) ----
+
+// Replace each wiki span with a `\uE000<index>\uE001` sentinel so lezer
+// parses around it. Non-wiki text (including code spans and their inner
+// `[[…]]`) is left untouched.
+function substituteWikiLinks(raw: string, wikis: readonly ParsedWikiLink[]): string {
+  if (!wikis.length) return raw;
+  let out = '';
+  let pos = 0;
+  wikis.forEach((w, idx) => {
+    out += raw.slice(pos, w.from) + WIKI_OPEN + idx + WIKI_CLOSE;
+    pos = w.to;
+  });
+  return out + raw.slice(pos);
+}
+
 
 // Build the decorated DOM for a cell's source. The parser strips
 // CommonMark backslash escapes inline (so `\*` emits a literal `*`
@@ -303,16 +452,82 @@ function matchCellMarkAt(
 // pre-markdown-in-cells behavior), but fully preserves every inline
 // mark delimiter because those live in `display: none` spans inside
 // the DOM rather than being derived on serialize.
-function buildCellSourceDom(raw: string): DocumentFragment {
+function buildCellSourceDom(raw: string, wiki?: TableWikiLinkConfig): DocumentFragment {
   const frag = document.createDocumentFragment();
   const tokens = parseCellInline(raw);
-  for (const tok of tokens) frag.appendChild(renderCellToken(tok));
+  for (const tok of tokens) frag.appendChild(renderCellToken(tok, wiki));
   return frag;
 }
 
-function renderCellToken(tok: CellToken): Node {
+function renderCellToken(tok: CellToken, wiki?: TableWikiLinkConfig): Node {
   if (tok.type === 'text') {
     return document.createTextNode(tok.text);
+  }
+
+  // Inline code. The fence backticks live in `display: none`
+  // `.cm-atomic-mark` spans (so `textContent` round-trips to the raw
+  // `` `…` ``), while `.cm-atomic-inline-code` shows the content. The
+  // structural `\|` escape a cell pipe carries is unescaped for display
+  // only — `escapeCell` re-adds it on serialize. Wrapped in a registered
+  // mark wrap so the caret entering it reveals the fences for editing.
+  if (tok.type === 'code') {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-atomic-code-wrap';
+    wrap.appendChild(makeCellMark(tok.fence));
+    const inner = document.createElement('span');
+    inner.className = 'cm-atomic-inline-code';
+    inner.textContent = tok.text.replace(/\\\|/g, '|');
+    wrap.appendChild(inner);
+    wrap.appendChild(makeCellMark(tok.fence));
+    return wrap;
+  }
+
+  // Wiki link `[[target|label]]`. Shape mirrors the outer editor's
+  // hidden-syntax rendering: `[[`, the target (when a separate label is
+  // present), and `]]` live in `display: none` `.cm-atomic-mark` spans
+  // (so `textContent` still round-trips to the raw `[[…]]`), while the
+  // visible `.cm-atomic-wiki-link` carries the label/target and the
+  // `data-wiki-link-target` the click handler reads to open it. Wrapping
+  // in `.cm-atomic-wiki-wrap` (a registered mark wrap) means the caret
+  // entering it reveals the delimiters for editing, same as bold/link.
+  if (tok.type === 'wikiLink') {
+    // Only decorate when wiki links are actually wired up (an opener is
+    // provided). Without support, render the raw `[[…]]` as plain text so
+    // tables in editors that don't enable wiki links don't show a dead
+    // styled link — matching how the outer editor leaves `[[…]]` raw.
+    if (!wiki?.onOpen) {
+      const raw = tok.label === null ? `[[${tok.target}]]` : `[[${tok.target}|${tok.label}]]`;
+      return document.createTextNode(raw);
+    }
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-atomic-wiki-wrap';
+    wrap.appendChild(makeCellMark('[['));
+    if (tok.label !== null) {
+      wrap.appendChild(makeCellMark(tok.target));
+      wrap.appendChild(makeCellMark('|'));
+    }
+    const link = document.createElement('span');
+    const status = wiki?.resolveStatus?.(tok.target);
+    link.className = `cm-atomic-wiki-link${status ? ` cm-atomic-wiki-link-${status}` : ''}`;
+    link.dataset.wikiLinkTarget = tok.target;
+    // Label-less links may show a shortened form of the target (via
+    // `displayTarget`); the trimmed tail goes into a `display: none` mark so
+    // `textContent` still round-trips to the raw `[[target]]`. Only a strict
+    // prefix can be shortened this way — anything else shows the full target.
+    let visible = tok.target;
+    let hiddenTail = '';
+    if (tok.label === null && wiki?.displayTarget) {
+      const display = wiki.displayTarget(tok.target);
+      if (display && display !== tok.target && tok.target.startsWith(display)) {
+        visible = display;
+        hiddenTail = tok.target.slice(display.length);
+      }
+    }
+    link.textContent = tok.label ?? visible;
+    wrap.appendChild(link);
+    if (hiddenTail) wrap.appendChild(makeCellMark(hiddenTail));
+    wrap.appendChild(makeCellMark(']]'));
+    return wrap;
   }
 
   if (tok.type === 'strong') {
@@ -321,7 +536,7 @@ function renderCellToken(tok: CellToken): Node {
     wrap.appendChild(makeCellMark(tok.delim));
     const inner = document.createElement('span');
     inner.className = 'cm-atomic-strong';
-    inner.appendChild(renderTokensTo(tok.children));
+    inner.appendChild(renderTokensTo(tok.children, wiki));
     wrap.appendChild(inner);
     wrap.appendChild(makeCellMark(tok.delim));
     return wrap;
@@ -333,7 +548,7 @@ function renderCellToken(tok: CellToken): Node {
     wrap.appendChild(makeCellMark(tok.delim));
     const inner = document.createElement('span');
     inner.className = 'cm-atomic-em';
-    inner.appendChild(renderTokensTo(tok.children));
+    inner.appendChild(renderTokensTo(tok.children, wiki));
     wrap.appendChild(inner);
     wrap.appendChild(makeCellMark(tok.delim));
     return wrap;
@@ -345,24 +560,24 @@ function renderCellToken(tok: CellToken): Node {
     wrap.appendChild(makeCellMark('~~'));
     const inner = document.createElement('span');
     inner.className = 'cm-atomic-strike';
-    inner.appendChild(renderTokensTo(tok.children));
+    inner.appendChild(renderTokensTo(tok.children, wiki));
     wrap.appendChild(inner);
     wrap.appendChild(makeCellMark('~~'));
     return wrap;
   }
 
   // Link. Shape mirrors the outer-editor markup: `.cm-atomic-link` on
-  // the visible text (picks up link color + external-link icon via
-  // `::after`), faint marks for `[`, `]`, `(`, URL, `)`. `data-url`
-  // lets the cell-source click handler open the right URL without
-  // re-parsing.
+  // the visible text (picks up link color; the whole text is the
+  // click-to-open affordance, like a wiki link — no trailing icon),
+  // faint marks for `[`, `]`, `(`, URL, `)`. `data-url` lets the
+  // cell-source click handler open the right URL without re-parsing.
   const wrap = document.createElement('span');
   wrap.className = 'cm-atomic-link-wrap';
   wrap.dataset.url = tok.url;
   wrap.appendChild(makeCellMark('['));
   const inner = document.createElement('span');
   inner.className = 'cm-atomic-link';
-  inner.appendChild(renderTokensTo(tok.textChildren));
+  inner.appendChild(renderTokensTo(tok.textChildren, wiki));
   wrap.appendChild(inner);
   wrap.appendChild(makeCellMark(']'));
   wrap.appendChild(makeCellMark('('));
@@ -370,22 +585,12 @@ function renderCellToken(tok: CellToken): Node {
   urlMark.classList.add('cm-atomic-link-url');
   wrap.appendChild(urlMark);
   wrap.appendChild(makeCellMark(')'));
-  // Real, clickable external-link icon. A CSS `::after` pseudo can't
-  // receive a click (no event target), so the icon is its own
-  // non-editable element; the source's delegated click handler opens
-  // the URL. `contenteditable=false` keeps it out of caret navigation
-  // and out of the cell's serialized text.
-  const icon = document.createElement('span');
-  icon.className = 'cm-atomic-link-icon';
-  icon.contentEditable = 'false';
-  icon.setAttribute('aria-hidden', 'true');
-  wrap.appendChild(icon);
   return wrap;
 }
 
-function renderTokensTo(tokens: CellToken[]): DocumentFragment {
+function renderTokensTo(tokens: CellToken[], wiki?: TableWikiLinkConfig): DocumentFragment {
   const frag = document.createDocumentFragment();
-  for (const tok of tokens) frag.appendChild(renderCellToken(tok));
+  for (const tok of tokens) frag.appendChild(renderCellToken(tok, wiki));
   return frag;
 }
 
@@ -404,9 +609,9 @@ function makeCellMark(text: string): HTMLElement {
 // via CSS by default. When the caret enters a mark wrap, JS adds an
 // `active` class that reveals that wrap's delimiters — mirroring the
 // outer editor's cursor-inside-link unfold for every inline mark.
-function renderCellSourceDecorated(source: HTMLElement): void {
+function renderCellSourceDecorated(source: HTMLElement, wiki?: TableWikiLinkConfig): void {
   const raw = source.parentElement?.dataset.raw ?? '';
-  source.replaceChildren(buildCellSourceDom(raw));
+  source.replaceChildren(buildCellSourceDom(raw, wiki));
 }
 
 // Caret utilities — encode positions as character offsets within the
@@ -463,6 +668,8 @@ const MARK_WRAP_CLASSES = [
   'cm-atomic-em-wrap',
   'cm-atomic-strike-wrap',
   'cm-atomic-link-wrap',
+  'cm-atomic-wiki-wrap',
+  'cm-atomic-code-wrap',
 ];
 
 function isMarkWrap(el: Element): boolean {
@@ -626,14 +833,62 @@ class TableWidget extends WidgetType {
     super();
   }
 
-  // Structure-only equality. Typing in a cell produces a new
-  // TableWidget with the same dimensions but different cell contents.
-  // Returning true here means CM6 keeps the existing DOM instead of
-  // calling `toDOM` again — which is what lets the caret survive
-  // across the per-keystroke dispatch cycle.
+  // Content-aware equality. Two widgets are equal only when they
+  // serialize to the same markdown — i.e. identical dimensions AND cell
+  // contents. Returning true means CM6 leaves the DOM untouched; false
+  // routes through `updateDOM` (in-place reconcile) or, if that bails,
+  // `toDOM` (full rebuild). Structure-only equality used to hide content
+  // changes from CM6, which meant undo/redo of a cell edit reverted the
+  // document but never refreshed the visible table.
   eq(other: TableWidget): boolean {
-    if (other.model.header.length !== this.model.header.length) return false;
-    if (other.model.rows.length !== this.model.rows.length) return false;
+    return serializeTable(this.model) === serializeTable(other.model);
+  }
+
+  // In-place reconcile. Called when `eq` is false but the widget can be
+  // patched rather than rebuilt (same dimensions). Update only the cells
+  // whose content actually changed; a dimension change returns false so
+  // CM6 does a full `toDOM` rebuild instead.
+  //
+  // Crucially this must refresh EVERY changed cell — including the one the
+  // caret is in. During typing the focused cell's content already equals
+  // the model (our own `commit` synced the DOM before dispatching), so the
+  // equality check below skips it and the caret is never disturbed. During
+  // undo/redo the focused cell's content differs from the reverted model,
+  // so it must re-render — with the caret preserved. An earlier version
+  // blanket-skipped the focused cell, which meant undoing a cell edit
+  // reverted the document but never updated the visible cell: undo looked
+  // dead until focus moved, then jumped to a stale state.
+  //
+  // Comparison is normalised through `escapeCell` so a cell the user typed
+  // a literal `|` into (`x|y` in `dataset.raw`) matches the parsed model's
+  // escaped form (`x\|y`) and isn't re-rendered on every keystroke.
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const headerCount = dom.querySelectorAll('thead th').length;
+    const bodyRowCount = dom.querySelectorAll('tbody tr').length;
+    if (headerCount !== this.model.header.length) return false;
+    if (bodyRowCount !== this.model.rows.length) return false;
+
+    const wiki = view.state.facet(tableWikiLinkFacet);
+    const wanted = flattenModelCells(this.model);
+    const cells = getAllCells(dom);
+    if (cells.length !== wanted.length) return false;
+
+    const active = dom.ownerDocument?.activeElement ?? null;
+    cells.forEach((cell, i) => {
+      const source = getCellSource(cell);
+      if (!source) return;
+      if (escapeCell((cell.dataset.raw ?? '').trim()) === escapeCell(wanted[i])) return;
+      // Preserve the caret when re-rendering the cell the user is in
+      // (matters for undo/redo landing on the focused cell).
+      const focused = !!active && source.contains(active);
+      const caret = focused ? getCaretCharOffset(source) : null;
+      cell.dataset.raw = wanted[i];
+      renderCellSourceDecorated(source, wiki);
+      refreshCellPreview(cell);
+      if (caret != null) {
+        setCaretCharOffset(source, Math.min(caret, (source.textContent ?? '').length));
+      }
+    });
     return true;
   }
 
@@ -682,6 +937,11 @@ function makeCell(
   const cell = document.createElement(tag);
   cell.dataset.raw = text;
 
+  // Wiki-link config for this view (opener + status coloring). Read once
+  // here; `renderCellSourceDecorated` needs it to decorate `[[…]]` and
+  // the click handler below to open targets.
+  const wiki = view.state.facet(tableWikiLinkFacet);
+
   // The cell itself is not contenteditable — only the inner source
   // element is. This keeps the image preview strictly visual (no
   // phantom caret positions around images) while the source text
@@ -701,13 +961,31 @@ function makeCell(
   // matching the outer-editor cursor-inside-link unfold, applied
   // uniformly to every inline mark inside cells.
   cell.appendChild(source);
-  renderCellSourceDecorated(source);
+  renderCellSourceDecorated(source, wiki);
 
   // Read-only: the decorated cell is fully rendered above; skip every
   // editing affordance (input/paste/IME commit, caret routing, context
   // menu) so nothing can mutate the document via a direct dispatch.
   if (readOnly) {
     refreshCellPreview(cell);
+    // Wiki links stay clickable even in a read-only preview — mirrors the
+    // outer editor, whose wiki-link click handler is active regardless of
+    // editability. No caret to guard here, so a plain `click` suffices.
+    if (wiki.onOpen) {
+      source.addEventListener('click', (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const el = event.target;
+        const wikiTarget =
+          el instanceof Element
+            ? el.closest<HTMLElement>('.cm-atomic-wiki-link[data-wiki-link-target]')?.dataset
+                .wikiLinkTarget
+            : undefined;
+        if (!wikiTarget) return;
+        event.preventDefault();
+        event.stopPropagation();
+        wiki.onOpen?.(wikiTarget);
+      });
+    }
     return cell;
   }
 
@@ -722,7 +1000,7 @@ function makeCell(
     const raw = (source.textContent ?? '').replace(/\s+/g, ' ').trim();
     cell.dataset.raw = raw;
     const offset = getCaretCharOffset(source);
-    renderCellSourceDecorated(source);
+    renderCellSourceDecorated(source, wiki);
     if (offset != null) setCaretCharOffset(source, offset);
     updateActiveMarkForSource(source);
     refreshCellPreview(cell);
@@ -788,6 +1066,24 @@ function makeCell(
       event.preventDefault();
       event.stopPropagation();
       moveCellFocus(view, cell, event.shiftKey ? -1 : 1);
+      return;
+    }
+
+    // Undo / redo. The cell is its own `contenteditable`, so the browser
+    // would otherwise run its NATIVE per-element undo — which only shuffles
+    // the caret/selection and never touches CM's document (the text never
+    // reverts). Intercept the shortcut, block the native undo, and drive
+    // CM's history instead so undo reverts document content as expected.
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && !event.altKey) {
+      const key = event.key.toLowerCase();
+      const isUndo = key === 'z' && !event.shiftKey;
+      const isRedo = (key === 'z' && event.shiftKey) || key === 'y';
+      if (isUndo || isRedo) {
+        event.preventDefault();
+        event.stopPropagation();
+        (isRedo ? redo : undo)(view);
+      }
     }
   });
 
@@ -797,34 +1093,65 @@ function makeCell(
     openCellMenu(view, cell, event.clientX, event.clientY);
   });
 
-  // Link-icon open. The external-link icon is rendered as a real
-  // `.cm-atomic-link-icon` element (see `renderCellToken`), not a CSS
-  // `::after` pseudo — a pseudo-element has no event target, so clicking
-  // its painted region dispatched no pointer event and the link never
-  // opened. We open on `click` (a proper popup-activation gesture, so
-  // `window.open` isn't blocked) and block the caret on `pointerdown`.
-  const linkIconFromEvent = (event: Event): HTMLElement | null => {
+  // Link open. The whole rendered link text is the click-to-open
+  // affordance (like a wiki link — no trailing icon). We open on `click`
+  // (a proper popup-activation gesture, so `window.open` isn't blocked)
+  // and block the caret on `pointerdown` for plain clicks; the
+  // `.cm-atomic-link-wrap` carries `data-url`.
+  const linkWrapFromEvent = (event: Event): HTMLElement | null => {
     const target = event.target;
     if (!(target instanceof Element)) return null;
-    return target.closest<HTMLElement>('.cm-atomic-link-icon');
+    const text = target.closest<HTMLElement>('.cm-atomic-link');
+    return text?.closest<HTMLElement>('.cm-atomic-link-wrap') ?? null;
   };
+
+  // A plain click on a rendered wiki link opens it (matching the outer
+  // editor's `openOnClick`) rather than placing a caret. The visible
+  // `.cm-atomic-wiki-link` carries `data-wiki-link-target`.
+  const wikiLinkFromEvent = (event: Event): HTMLElement | null => {
+    const target = event.target;
+    if (!(target instanceof Element)) return null;
+    return target.closest<HTMLElement>('.cm-atomic-wiki-link[data-wiki-link-target]');
+  };
+  const hasModifier = (event: MouseEvent): boolean =>
+    event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
 
   source.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
-    // Block focus / caret placement when pressing the icon; the open
-    // happens on the following `click`.
-    if (linkIconFromEvent(event)) event.preventDefault();
+    // Block focus / caret placement when pressing a rendered link; the
+    // open happens on the following `click`. Modifier-clicks fall through
+    // to native caret placement (lets the user select/edit the source).
+    if (linkWrapFromEvent(event) && !hasModifier(event)) {
+      event.preventDefault();
+      return;
+    }
+    // Same for a wiki link — suppress caret placement so the click opens
+    // instead of dropping the cursor into the target.
+    if (wikiLinkFromEvent(event) && !hasModifier(event)) event.preventDefault();
   });
 
   source.addEventListener('click', (event) => {
-    const icon = linkIconFromEvent(event);
-    if (!icon) return;
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    const url = icon.closest<HTMLElement>('.cm-atomic-link-wrap')?.dataset.url;
-    if (!url) return;
-    event.preventDefault();
-    event.stopPropagation();
-    view.state.facet(tableLinkClickFacet)(url);
+    const linkWrap = linkWrapFromEvent(event);
+    if (linkWrap) {
+      if (hasModifier(event)) return;
+      const raw = linkWrap.dataset.url;
+      if (!raw) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // Normalize the same way the prose path does — a scheme-less
+      // destination like `www.baidu.com` would otherwise reach the host's
+      // opener as an invalid URL. `normalizeLinkUrl` adds `https://` /
+      // `mailto:` as needed and passes explicit schemes through.
+      view.state.facet(tableLinkClickFacet)(normalizeLinkUrl(raw));
+      return;
+    }
+    const wiki = wikiLinkFromEvent(event);
+    const wikiTarget = wiki?.dataset.wikiLinkTarget;
+    if (wikiTarget && !hasModifier(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      view.state.facet(tableWikiLinkFacet).onOpen?.(wikiTarget);
+    }
   });
 
   // When the cell has an image and the source is visually hidden,
@@ -880,6 +1207,12 @@ function dispatchModel(
   const next = serializeTable(nextModel);
   view.dispatch({
     changes: { from: range.from, to: range.to, insert: next },
+    // Structural ops (insert/delete row/column) are discrete user
+    // actions: isolate them as their own undo step so a "delete row"
+    // never merges into adjacent cell typing (and vice-versa). Without
+    // this, the annotation-less transaction is join-eligible and CM6
+    // silently folds it into a neighbouring edit group.
+    annotations: isolateHistory.of('full'),
   });
 }
 
@@ -1057,16 +1390,46 @@ function dispatchModelFromDom(view: EditorView, cell: HTMLElement): void {
 
   const model = readModelFromDom(wrap);
   const next = serializeTable(model);
+  const prev = view.state.sliceDoc(range.from, range.to);
   // Guard against no-op dispatches.
-  if (view.state.sliceDoc(range.from, range.to) === next) return;
+  if (prev === next) return;
 
+  // Minimal-diff dispatch: replace only the changed span so a single
+  // keystroke maps to a single localised change (usually a one-char
+  // insert) instead of rewriting the whole table range every time.
+  // This lets CM6's native typing coalescing work the way it does for
+  // ordinary text — undo granularity no longer depends on 500ms timing
+  // or on stray selection transactions breaking a whole-range group.
+  // (A change that shifts column-alignment padding still produces one
+  // larger contiguous edit; that's fine — it's one transaction and far
+  // rarer than per-keystroke.)
+  const d = diffRange(prev, next);
   view.dispatch({
-    changes: { from: range.from, to: range.to, insert: next },
+    changes: { from: range.from + d.from, to: range.from + d.to, insert: d.insert },
     // Tag as typing so CM6's history coalesces consecutive cell edits
-    // into one undo group instead of one step per keystroke (each of
-    // which rewrites the whole table range).
+    // into one undo group.
     annotations: Transaction.userEvent.of('input.type'),
   });
+}
+
+// Smallest single-span replacement turning `prev` into `next`: trim the
+// common prefix and suffix and return the differing middle. Returns a
+// `{ from, to, insert }` in `prev`-relative coordinates (`to === from`
+// with empty `insert` when the strings are equal). Exported for tests.
+export function diffRange(
+  prev: string,
+  next: string,
+): { from: number; to: number; insert: string } {
+  let s = 0;
+  const maxPrefix = Math.min(prev.length, next.length);
+  while (s < maxPrefix && prev[s] === next[s]) s++;
+  let ep = prev.length;
+  let en = next.length;
+  while (ep > s && en > s && prev[ep - 1] === next[en - 1]) {
+    ep--;
+    en--;
+  }
+  return { from: s, to: ep, insert: next.slice(s, en) };
 }
 
 function moveCellFocus(view: EditorView, cell: HTMLElement, dir: 1 | -1): void {
@@ -1106,6 +1469,9 @@ function appendRow(view: EditorView, wrap: HTMLElement): void {
   const next = serializeTable(model);
   view.dispatch({
     changes: { from: range.from, to: range.to, insert: next },
+    // Appending a row (Tab past the last cell) is a discrete structural
+    // action — isolate it as its own undo step, matching dispatchModel.
+    annotations: isolateHistory.of('full'),
   });
 
   // Adding a row changes the widget's row count, so `eq` returns
@@ -1365,6 +1731,51 @@ export const tableLinkClickFacet = Facet.define<
 >({
   combine: (values) => values[0] ?? defaultLinkOpener,
 });
+
+/**
+ * Wiki links inside table cells. Cells render `[[target]]` /
+ * `[[target|label]]` as a clickable `.cm-atomic-wiki-link`; supply
+ * `onOpen` to handle activation (defaults to a no-op) and, optionally,
+ * a synchronous `resolveStatus` to color resolved vs. missing targets.
+ *
+ * Separate from the outer-editor {@link wikiLinks} extension: that one's
+ * decorations never reach a cell because the whole table is a
+ * block-replace widget, so cell wiki links are rendered/opened here.
+ */
+export interface TableWikiLinkConfig {
+  /** Open a wiki-link target (e.g. reveal the file). No-op if omitted. */
+  onOpen?: (target: string) => void;
+  /**
+   * Synchronous status for a target, used only for coloring (resolved vs.
+   * `missing`/`unresolved`). Must be synchronous — it runs during cell
+   * render. Return `undefined` to leave the link in the default
+   * (resolved-looking) style.
+   */
+  resolveStatus?: (target: string) => WikiLinkStatus | undefined;
+  /**
+   * Display form for a label-less `[[target]]` (e.g. hide a `.md`
+   * extension). Only honored when the result is a strict prefix of the
+   * target — the trimmed tail must stay in the DOM as hidden syntax so the
+   * cell still serializes back to the raw `[[target]]`.
+   */
+  displayTarget?: (target: string) => string;
+}
+
+// Per-view facet so `makeCell`'s handlers and `renderCellToken` can read
+// the wiki-link config without threading it through the widget. Mirrors
+// `tableLinkClickFacet`.
+export const tableWikiLinkFacet = Facet.define<TableWikiLinkConfig, TableWikiLinkConfig>({
+  combine: (values) => values[0] ?? {},
+});
+
+/**
+ * Standalone extension enabling wiki links inside table cells. Append
+ * alongside `tables()` (or the built-in editor's tables) — same pattern
+ * as {@link tableContextMenu}.
+ */
+export function tableWikiLinks(config: TableWikiLinkConfig): Extension {
+  return tableWikiLinkFacet.of(config);
+}
 
 export function tables(config: TablesConfig = {}): Extension {
   return [

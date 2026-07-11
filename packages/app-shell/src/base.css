@@ -436,6 +436,9 @@ body {
   padding: 2px 7px;
   border-radius: 4px;
   font-size: 0.9em;
+  /* 长 token（如文件路径）无空格无法自动换行，会撑破消息列宽产生横向滚动条 —— 强制可断行 */
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* —— 列表 —— */

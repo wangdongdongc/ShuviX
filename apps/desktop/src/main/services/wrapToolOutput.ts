@@ -125,6 +125,18 @@ export function wrapToolOutput<P extends TSchema, D>(
       if (proc.persisted) persisted = true
       newContent.push({ ...block, text: proc.text })
     }
+    // 规避 pi-ai provider 序列化的坑：工具结果若无非空文本且无图片，各 provider
+    // （openai/anthropic/google/mistral…）会把 content 兜底成 "(see attached image)"，
+    // 反而误导模型（例如 grep 无匹配、命令成功但无输出的空结果）。这里统一保证
+    // 「成功但无输出」也带一个明确的非空文本块。
+    const hasImageBlock = newContent.some((b) => b.type === 'image')
+    const hasNonEmptyText = newContent.some((b) => b.type === 'text' && b.text.trim() !== '')
+    if (!hasImageBlock && !hasNonEmptyText) {
+      const nonText = newContent.filter((b) => b.type !== 'text')
+      newContent.length = 0
+      newContent.push(...nonText, { type: 'text', text: '(no output)' })
+    }
+
     const newDetails = mergeTruncatedIntoDetails(result.details, truncated, persisted)
     const wrappedResult = { ...result, content: newContent, details: newDetails }
 

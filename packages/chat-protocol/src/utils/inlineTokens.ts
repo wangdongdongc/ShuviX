@@ -72,6 +72,32 @@ export function buildCommandToken(
   }
 }
 
+/** `@` 文件引用的最小定义（构造内联 Token 所需字段） */
+export interface AtFileLike {
+  /** 工作区相对路径（如 `src/components/Button.tsx`），作实体标识与展开正文 */
+  rel: string
+  /** 文件名（含扩展名，如 `Button.tsx`），作胶囊展示名 */
+  base: string
+}
+
+/**
+ * 用选中的工作区文件构造 `at` 类型内联 Token。
+ * - displayText/name = 文件名（胶囊仅展示文件名）
+ * - payload = 展开正文，告知 Agent 用户引用了该文件（含相对路径便于其读取）
+ *
+ * 与 cmd 类型不同：at token 由 resolveTokensForAgent 就地替换标记、保留周围文本，
+ * 故一条消息可含多个 at 引用 + 普通文字。
+ */
+export function buildAtToken(file: AtFileLike): InlineToken {
+  return {
+    type: 'at',
+    id: file.rel,
+    displayText: file.base,
+    payload: `[workspace file: ${file.rel}]`,
+    name: file.base
+  }
+}
+
 /**
  * 从原始输入识别 slash 命令（"/cmd 参数"）并构造内联 Token；非命令或未匹配返回 null。
  * 命中时一并回传匹配到的命令定义（调用方据 requiredTools 等做后续处理）。

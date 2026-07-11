@@ -9,15 +9,12 @@
  * 从而 chatStore.projectPath === scan.root，FilesPanel 的新鲜度校验成立。
  */
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
+import { previewFile } from '@shuvix/agent-runtime'
 import { sessionStore } from '../storage/sessionStore'
 import { projectStore } from '../storage/projectStore'
 import { createFsaPort, getFile, ensureRwPermission } from './fsaPort'
 import { getTempWorkspaceHandle } from '../storage/opfsWorkspace'
-import { IMAGE_MIME_BY_EXT, extOf } from './richReaders'
 
-const PREVIEW_TEXT_MAX_BYTES = 2 * 1024 * 1024
-const PREVIEW_IMAGE_MAX_BYTES = 10 * 1024 * 1024
-const PREVIEW_HEX_MAX_BYTES = 1024 * 1024
 /** 单次扫描最多收集的文件数；超过则截断（与桌面 watcher 的上限语义一致） */
 const SCAN_FILE_CAP = 5000
 
@@ -37,55 +34,6 @@ const IGNORED_DIRS = new Set([
   '__pycache__',
   '.idea',
   '.vscode'
-])
-
-const VIDEO_MIME_BY_EXT: Record<string, string> = {
-  '.mp4': 'video/mp4',
-  '.m4v': 'video/x-m4v',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.ogv': 'video/ogg'
-}
-const AUDIO_MIME_BY_EXT: Record<string, string> = {
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac',
-  '.m4a': 'audio/mp4',
-  '.aac': 'audio/aac',
-  '.opus': 'audio/opus'
-}
-/** 已知二进制扩展名 → 走 hex view（内容是字节，文本渲染会乱码） */
-const KNOWN_BINARY_EXTS = new Set([
-  '.exe',
-  '.dll',
-  '.so',
-  '.dylib',
-  '.bin',
-  '.o',
-  '.a',
-  '.class',
-  '.wasm',
-  '.ttf',
-  '.otf',
-  '.woff',
-  '.woff2',
-  '.ico'
-])
-/** Office/PDF/归档等富二进制 → binary 占位（hex 也无意义） */
-const RICH_BINARY_EXTS = new Set([
-  '.pdf',
-  '.doc',
-  '.docx',
-  '.xls',
-  '.xlsx',
-  '.ppt',
-  '.pptx',
-  '.zip',
-  '.tar',
-  '.gz',
-  '.7z',
-  '.rar'
 ])
 
 /**
@@ -186,23 +134,6 @@ async function scanHandle(
   return { paths, truncated }
 }
 
-/** Uint8Array → base64（分块，避免 fromCharCode 爆栈） */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  const chunk = 0x8000
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
-  }
-  return btoa(binary)
-}
-
-/** 前 8KB NULL 字节嗅探（与桌面 isBinaryFile 同启发式） */
-function sniffBinary(head: Uint8Array): boolean {
-  const n = Math.min(head.length, 8192)
-  for (let i = 0; i < n; i++) if (head[i] === 0) return true
-  return false
-}
-
 export const filesRuntime = {
   async scan(
     sessionId: string
@@ -221,67 +152,11 @@ export const filesRuntime = {
     const handle = await handleForSession(sessionId)
     if (!handle)
       return { kind: 'not-allowed', path, reason: 'No working directory for this session' }
-    const rel = stripRoot(path, handle.name)
-    const ext = extOf(path)
-
-    let file: File
-    try {
-      file = await getFile(handle, rel)
-    } catch (err) {
-      return { kind: 'error', path, message: err instanceof Error ? err.message : String(err) }
-    }
-    const size = file.size
-
-    if (ext === '.pdf') return { kind: 'pdf', path, size, ext }
-    if (ext in VIDEO_MIME_BY_EXT)
-      return {
-        kind: 'media',
-        mediaType: 'video',
-        path,
-        mimeType: VIDEO_MIME_BY_EXT[ext],
-        size,
-        ext
-      }
-    if (ext in AUDIO_MIME_BY_EXT)
-      return {
-        kind: 'media',
-        mediaType: 'audio',
-        path,
-        mimeType: AUDIO_MIME_BY_EXT[ext],
-        size,
-        ext
-      }
-
-    if (ext === '.svg' || ext in IMAGE_MIME_BY_EXT) {
-      if (size > PREVIEW_IMAGE_MAX_BYTES)
-        return { kind: 'too-large', path, size, cap: PREVIEW_IMAGE_MAX_BYTES }
-      const mimeType = ext === '.svg' ? 'image/svg+xml' : IMAGE_MIME_BY_EXT[ext]
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      return { kind: 'image', path, mimeType, dataBase64: bytesToBase64(bytes), size, ext }
-    }
-
-    if (RICH_BINARY_EXTS.has(ext)) return { kind: 'binary', path, size, ext }
-
-    const fullBytes = new Uint8Array(await file.arrayBuffer())
-    const isBinary = KNOWN_BINARY_EXTS.has(ext) || sniffBinary(fullBytes)
-    if (isBinary) {
-      const shown = Math.min(size, PREVIEW_HEX_MAX_BYTES)
-      return {
-        kind: 'hex',
-        path,
-        size,
-        ext,
-        data: fullBytes.subarray(0, shown),
-        bytesShown: shown,
-        truncated: size > shown
-      }
-    }
-
-    if (size > PREVIEW_TEXT_MAX_BYTES)
-      return { kind: 'too-large', path, size, cap: PREVIEW_TEXT_MAX_BYTES }
-    const content = new TextDecoder().decode(fullBytes)
-    const lines = content.length === 0 ? 0 : content.split('\n').length
-    return { kind: 'text', path, content, size, lines, ext }
+    // 分类/大小门控/hex-magic 全走共享内核（与桌面共用）。FSA port 只按范围读字节 ——
+    // 大二进制文件不再整读进内存（旧实现的 file.arrayBuffer 全载 bug 一并消除）。
+    // port 操作相对句柄根路径（rel）；结果里回填上层传入的 path（root/rel），供
+    // resolveMediaObjectUrl 再 stripRoot 还原、以及面板 previewRelPath 匹配。
+    return previewFile(createFsaPort(handle), stripRoot(path, handle.name), path)
   },
 
   async write(

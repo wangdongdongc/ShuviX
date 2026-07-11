@@ -131,7 +131,11 @@ export function RightPanel({ pinnedMode = false }: RightPanelProps = {}): React.
         >
           {/* 媒体/PDF 走桌面 shuvix-preview:// 协议；.md 预览顶栏可「创建笔记本」绑定该文件 */}
           <MediaUrlProvider value={shuvixPreviewResolver}>
-            <FilesPanel onCreateNotebook={createNotebook} notebookCaps={notebookCaps} />
+            <FilesPanel
+              onCreateNotebook={createNotebook}
+              notebookCaps={notebookCaps}
+              onOpenFolder={(p) => void window.api.app.openFolder(p)}
+            />
           </MediaUrlProvider>
         </div>
         <div

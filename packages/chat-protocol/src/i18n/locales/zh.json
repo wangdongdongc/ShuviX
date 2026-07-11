@@ -40,11 +40,24 @@
     "updateAvailable": "发现新版本",
     "updateReady": "可以安装更新",
     "deleteSession": "删除会话",
+    "exportSession": "导出会话",
+    "viewAll": "查看全部",
     "viewProjects": "项目",
     "viewCalendar": "日历",
     "switchView": "切换视图",
     "today": "今天",
     "noSessionsOnDay": "当日无会话"
+  },
+  "transcript": {
+    "untitled": "未命名会话",
+    "user": "用户",
+    "assistant": "助手",
+    "steer": "用户（引导）",
+    "thinking": "思考",
+    "toolCall": "工具调用",
+    "toolResult": "工具结果",
+    "systemNotice": "系统",
+    "image": "图片"
   },
   "notebook": {
     "saving": "保存中…",
@@ -755,7 +768,7 @@
     "remoteDbHint": "连接远程数据库（MySQL、PostgreSQL 等）并执行 SQL 查询",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "browserLabel": "浏览器",
-    "browserHint": "在内置浏览器面板中打开任意 URL，或关闭面板",
+    "browserHint": "打开网页、A11y 快照、点击/输入/滚动、截图/PDF、执行 JS、查看网络与控制台 —— 驱动内置多标签浏览器面板",
     "subAgentTab": "子智能体",
     "subAgentBuiltin": "内置",
     "subAgentCustom": "自定义",
@@ -884,7 +897,10 @@
     }
   },
   "browser": {
-    "close": "关闭当前页",
+    "close": "关闭当前标签页",
+    "newTab": "新建标签页",
+    "closeTab": "关闭标签页",
+    "untitledTab": "新标签页",
     "cert": {
       "title": "证书不受信任：{{host}}",
       "continue": "继续访问",
@@ -900,7 +916,6 @@
   "command": {
     "skills": {
       "widget": "创建并维护一个小工具/小组件（Widget）",
-      "kami": "排版精美的可打印文档——简历、幻灯片、白皮书",
       "browser": "打开和操作网页——浏览、点击、填写表单、截图或导出 PDF",
       "python": "用 Python 做计算、数据处理或办公文档相关任务",
       "pglite": "用 SQL 分析数据——查询 CSV、临时建表、汇总报表"

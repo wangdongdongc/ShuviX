@@ -10,6 +10,7 @@ import './read'
 import './write'
 import './edit'
 import './ask'
+import './browser'
 
 // 高性能检索
 import './ls'

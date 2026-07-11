@@ -57,7 +57,7 @@ print(requests.get('https://httpbin.org/get').status_code)
 
 ## 复用 skill 自带的 .py 模块（PYTHONPATH 用法）
 
-如果 skill 目录下有 `.py` 辅助库（典型场景：[`kami`](../kami/SKILL.md) 的 `templates/slides.py`），通过 **PYTHONPATH** 让它可 import，**不要**把整段源码拷进 `-c`：
+如果 skill 目录下有 `.py` 辅助库（例如某个 skill 的 `templates/slides.py`），通过 **PYTHONPATH** 让它可 import，**不要**把整段源码拷进 `-c`：
 
 ```bash
 PYTHONPATH=/absolute/path/to/skill-dir/templates shuvix python -c "

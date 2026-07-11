@@ -47,9 +47,63 @@ export { readTextContent, readDirContent, type ReadTextParams } from './fileTool
 export { applyWrite, type WriteParams } from './fileTools/write'
 export { applyEdit, type EditParams } from './fileTools/edit'
 export { buildTree } from './fileTools/ls'
+export {
+  previewFile,
+  extOfPath,
+  PREVIEW_TEXT_MAX_BYTES,
+  PREVIEW_IMAGE_MAX_BYTES,
+  PREVIEW_HEX_MAX_BYTES
+} from './fileTools/preview'
 // CDP 浏览器自动化共享内核（注入 CdpTransport；桌面 webContents.debugger / 扩展 chrome.debugger）
 export type { CdpTransport } from './cdp/transport'
 export { CdpController, type AXNode } from './cdp/controller'
+// 统一浏览器工具（multiplex）：操作目录 + 后端契约 + per-tab CDP 管理 + 审批门控 + 手册
+export {
+  BROWSER_ACTIONS,
+  BROWSER_OPS,
+  opsForCaps,
+  type BrowserAction,
+  type BrowserOpSpec,
+  type BrowserParamKey
+} from './browser/ops'
+export type {
+  BrowserBackend,
+  BrowserCaps,
+  BrowserOpOutput,
+  BrowserApprovalDeps,
+  NavKind,
+  ScrollDirection
+} from './browser/backend'
+export {
+  createBrowserTool,
+  buildBrowserParamsSchema,
+  buildBrowserToolDescription,
+  BROWSER_TOOL_NAME,
+  type CreateBrowserToolOptions
+} from './browser/tool'
+export { gateBrowserOp, describeBrowserOp } from './browser/gate'
+export { buildBrowserHelp, HELP_TOPICS, type HelpTopic } from './browser/help'
+export {
+  CdpAttachManager,
+  TabCdpSession,
+  type CdpTabTransport,
+  type CdpTabTransportFactory,
+  type NetworkEntry,
+  type ConsoleEntry,
+  type RawEventEntry
+} from './browser/attachManager'
+export * as browserCdpOps from './browser/cdpOps'
+export { type CdpSpill } from './browser/cdpOps'
+export { classifyCdpMethod, resolveUidMacros, type CdpMethodClass } from './browser/cdpPolicy'
+export { KEY_DEFS, dispatchKey, type CdpSend } from './browser/keyboard'
+export {
+  extractPage,
+  EXTRACT_PAGE_EXPR,
+  htmlToMarkdown,
+  formatReadPage,
+  MAX_PAGE_MARKDOWN_CHARS,
+  type ExtractedPage
+} from './browser/readPage'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
@@ -170,3 +224,14 @@ export {
 } from './compaction'
 // 会话标题生成：宿主无关内核（端解析模型来源 + apiKey，触发策略在 chat-ui 共享）
 export { generateSessionTitle, parseTitle, TITLE_GEN_SYSTEM_PROMPT } from './title/generateTitle'
+// 内置 hook 引擎 + 可移植 builtins（各端共享；桌面 HookService 组合本引擎追加 command 层）
+export {
+  HookEngine,
+  matchHook,
+  makeBashAudit,
+  findDangerousPattern,
+  makeSessionStart,
+  makeSessionStop,
+  makePathSafety,
+  type PathSafetyEnv
+} from './hooks'

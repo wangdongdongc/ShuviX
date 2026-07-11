@@ -84,6 +84,16 @@ export function FilePreview({
     }
   }, [path, sessionId])
 
+  // 只监听「当前预览的这个文件」（父目录 kqueue，非整树），打开时注册、切换/关闭时注销。
+  // 变更经后端 files.changed 事件广播 → 下方 useAppEvent 静默重读。也覆盖外部编辑器改盘。
+  useEffect(() => {
+    const api = getSessionChannelApi()
+    void api.files.watch({ sessionId, path })
+    return () => {
+      void api.files.unwatch({ sessionId, path })
+    }
+  }, [path, sessionId])
+
   // 内容级刷新：当前预览文件被 edit/write 改动时静默重读（不清空 → 不闪 loading）。
   // 事件 paths 与 path 同一路径空间；省略 paths 视为"未知，保守重读"。
   useAppEvent('files.changed', (e) => {

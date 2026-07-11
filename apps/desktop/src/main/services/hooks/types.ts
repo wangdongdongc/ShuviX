@@ -80,72 +80,29 @@ import type {
   HookEvent,
   HookSource,
   HookFileStatus,
-  ResolvedHook
+  ResolvedHook,
+  HookInput,
+  HookOutput,
+  HookHandler,
+  BuiltinHookEntry,
+  HookFirer
 } from '@shuvix/chat-protocol/types/hook'
-export type { HookEvent, HookSource, HookFileStatus, ResolvedHook }
-
-/**
- * 传给 hook 的 JSON 负载。所有事件共用基础字段，事件特定字段按需出现。
- */
-export interface HookInput {
-  /** 会话 ID（全局唯一） */
-  session_id: string
-  /** 触发事件名 */
-  hook_event_name: HookEvent
-  /** 当前工作目录（绝对路径） */
-  cwd: string
-
-  // ── PreToolUse / PostToolUse ────────────────────────────────────────
-  /** 工具名（PreToolUse / PostToolUse） */
-  tool_name?: string
-  /** 工具入参，schema 取决于具体工具（PreToolUse / PostToolUse） */
-  tool_input?: unknown
-  /** 工具结果（仅 PostToolUse） */
-  tool_output?: unknown
-  /** 工具是否报错（仅 PostToolUse） */
-  is_error?: boolean
-
-  // ── UserPromptSubmit ─────────────────────────────────────────────────
-  /** 用户输入文本 */
-  prompt?: string
-
-  // ── Stop ─────────────────────────────────────────────────────────────
-  /** 停止原因（user / timeout / error 等） */
-  reason?: string
+// 跨端公共类型现由 @shuvix/chat-protocol 提供（含 HookInput/Output/Handler/BuiltinHookEntry），
+// 与 @shuvix/agent-runtime 的 HookEngine 共用；此处 re-export 便于 main 进程统一从本文件 import。
+export type {
+  HookEvent,
+  HookSource,
+  HookFileStatus,
+  ResolvedHook,
+  HookInput,
+  HookOutput,
+  HookHandler,
+  BuiltinHookEntry,
+  HookFirer
 }
 
 /**
- * Hook 返回值。所有字段均为可选，未返回视为「通过」。
- */
-export interface HookOutput {
-  /** 设为 false 可（在 Stop 等场景）取消默认后续行为 */
-  continue?: boolean
-  /**
-   * 追加到上下文。
-   * - SessionStart    → 作为附加 system 消息注入
-   * - UserPromptSubmit → 追加到本次 user 消息之后
-   * - PreToolUse      → 注入到工具结果之前
-   * 超过 10000 字会被截断。
-   */
-  additionalContext?: string
-  /** 事件特定决策 */
-  hookSpecificOutput?: {
-    /**
-     * 仅 PreToolUse。
-     * - `'allow'` 显式放行（少用，等价于不返回）
-     * - `'deny'`  阻断；`reason` 回流给模型
-     * - `'ask'`   降级到用户审批界面
-     */
-    permissionDecision?: 'allow' | 'deny' | 'ask'
-    /** 仅 PreToolUse。返回新的 tool_input，替换原参数 */
-    updatedInput?: unknown
-    /** 决策原因（回流给模型或写入日志） */
-    reason?: string
-  }
-}
-
-/**
- * 配置文件中的单个 hook 入口。MVP 仅支持 `type: 'command'`（子进程）。
+ * 配置文件中的单个 hook 入口（command 层专属，桌面进程内）。MVP 仅支持 `type: 'command'`（子进程）。
  * 未来扩展：`http` / `mcp_tool` / `prompt` / `agent`。
  */
 export interface HookEntry {
@@ -176,23 +133,4 @@ export interface HookGroup {
 /** 整份 hooks.json 顶层 schema。 */
 export interface HookConfigFile {
   hooks?: Partial<Record<HookEvent, HookGroup[]>>
-}
-
-/** 内置 hook 的处理函数签名。 */
-export type HookHandler = (input: HookInput) => Promise<HookOutput | void> | HookOutput | void
-
-/** 内置 hook 的入口。由 `HookService.registerBuiltin()` 注册。 */
-export interface BuiltinHookEntry {
-  type: 'builtin'
-  /** 用于日志/UI 显示的名称（kebab-case） */
-  name: string
-  /**
-   * i18n key（在 renderer 的 settings namespace 下，由前端 t() 翻译为人类可读用途说明）。
-   * 例如 'settings.hooksBuiltinPathSafety'。
-   */
-  descriptionKey?: string
-  /** 同步或异步处理函数 */
-  handler: HookHandler
-  /** 超时秒，默认 5。内置 hook 超时按 fail-closed（直接 deny）处理。 */
-  timeout?: number
 }

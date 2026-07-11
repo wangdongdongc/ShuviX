@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -6,8 +6,12 @@ import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
+import { useSessionExport } from './useSessionExport'
 
 export const TEMP_GROUP_KEY = '__no_project__'
+
+/** 每组默认最多渲染的会话数，超出部分折叠到「查看全部」后面 */
+const GROUP_VISIBLE_LIMIT = 20
 
 export interface ProjectSessionGroupsProps {
   /** 项目骨架（id + 名称）；分组以项目为骨架、会话填入，末尾追加临时对话组 */
@@ -72,6 +76,9 @@ export function ProjectSessionGroups({
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
 
+  // 已点过「查看全部」的组（展开后渲染该组全部会话）
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set())
+
   // 项目名快查表（用于排序/标签）
   const projectNames = useMemo(() => {
     const map: Record<string, string> = {}
@@ -107,15 +114,21 @@ export function ProjectSessionGroups({
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
-  // 会话右键菜单：配置 / 删除（按提供的回调有条件出现）
-  const sessionMenuEnabled = !!(onConfigureSession || onDelete)
+  // 会话右键菜单：配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
+  const exportSession = useSessionExport()
   const openSessionMenu = (id: string, e: React.MouseEvent): void => {
+    const isNotebook = !!sessions.find((s) => s.id === id)?.settings.notebookPath
     const items: ContextMenuItem[] = []
     if (onConfigureSession) items.push({ id: 'session-config', label: t('sessionConfig.title') })
-    if (onConfigureSession && onDelete) items.push({ type: 'separator' })
-    if (onDelete) items.push({ id: 'delete-session', label: t('sidebar.deleteSession') })
+    if (!isNotebook) items.push({ id: 'export-session', label: t('sidebar.exportSession') })
+    if (onDelete) {
+      if (items.length > 0) items.push({ type: 'separator' })
+      items.push({ id: 'delete-session', label: t('sidebar.deleteSession') })
+    }
+    if (items.length === 0) return
     void showContextMenu(e, items, (action) => {
       if (action === 'session-config') onConfigureSession?.(id)
+      if (action === 'export-session') void exportSession(id)
       if (action === 'delete-session') onDelete?.(id)
     })
   }
@@ -140,6 +153,11 @@ export function ProjectSessionGroups({
           : projectNames[groupKey] || t('sidebar.unnamedProject')
         // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
         const groupDim = dim && activeGroupKey !== groupKey
+        const expanded = expandedGroups.has(groupKey)
+        const shownSessions =
+          expanded || groupSessions.length <= GROUP_VISIBLE_LIMIT
+            ? groupSessions
+            : groupSessions.slice(0, GROUP_VISIBLE_LIMIT)
         return (
           <SessionGroup
             key={groupKey}
@@ -154,7 +172,7 @@ export function ProjectSessionGroups({
             onEdit={isTemp || !onEditProject ? undefined : () => onEditProject(groupKey)}
             onHeaderContextMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
           >
-            {groupSessions.map((s) => (
+            {shownSessions.map((s) => (
               <SessionItem
                 key={s.id}
                 session={s}
@@ -169,9 +187,26 @@ export function ProjectSessionGroups({
                 onSelect={handleSelect}
                 onDelete={onDelete}
                 onConfigure={onConfigureSession}
-                onContextMenu={sessionMenuEnabled ? openSessionMenu : undefined}
+                onContextMenu={openSessionMenu}
               />
             ))}
+            {shownSessions.length < groupSessions.length && (
+              <div
+                onClick={() =>
+                  setExpandedGroups((prev) => {
+                    const next = new Set(prev)
+                    next.add(groupKey)
+                    return next
+                  })
+                }
+                className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
+                  groupDim ? 'opacity-30 hover:opacity-100' : ''
+                }`}
+              >
+                <span className="w-[11px] flex-shrink-0" />
+                <span className="text-[13px] truncate">{t('sidebar.viewAll')}</span>
+              </div>
+            )}
           </SessionGroup>
         )
       })}
