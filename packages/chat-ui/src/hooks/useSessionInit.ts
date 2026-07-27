@@ -1,4 +1,5 @@
 import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
 import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
 import { useModelCatalogStore } from '../stores/modelCatalogStore'
@@ -66,10 +67,11 @@ export function useSessionInit(activeSessionId: string | null): void {
       }
 
       // 7. 从 modelMetadata 恢复思考深度（仅同步 UI 状态，后端已在创建时初始化）
-      const restoredLevel = hasReasoning ? result.modelMetadata.thinkingLevel || 'medium' : 'off'
+      const restoredLevel =
+        result.modelMetadata.thinkingLevel || (hasReasoning ? DEFAULT_THINKING_LEVEL : 'off')
       store.setThinkingLevel(restoredLevel)
 
-      // 7. 查询运行时资源状态（SSH / DB / SQL / Python 等）
+      // 7. 查询运行时资源状态（SSH / DB 等）
       const runtimes = await getSessionChannelApi().runtime.statuses(activeSessionId)
       if (!cancelled) {
         store.setRuntimes(activeSessionId, runtimes)

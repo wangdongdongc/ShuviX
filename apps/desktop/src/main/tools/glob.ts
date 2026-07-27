@@ -10,7 +10,7 @@ import { Type } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
-  assertSandboxRead,
+  assertReadApproved,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -72,8 +72,8 @@ export class GlobTool extends BaseTool<typeof GlobParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 沙箱守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
-    await assertSandboxRead(this.ctx, config, toolCallId, 'glob', searchPath, params.path)
+    // 审批守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertReadApproved(this.ctx, config, toolCallId, 'glob', searchPath, params.path)
   }
 
   protected async executeInternal(
@@ -158,13 +158,12 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'glob',
   group: 'ripgrep',
-  defaultEnabled: false,
+  defaultEnabled: true,
   getLabel: () => t('tool.globLabel'),
   getHint: () => t('tool.globHint'),
   factory: (ctx) => new GlobTool(ctx),
   presentation: {
-    icon: 'FileSearch2',
-    summaryField: 'pattern'
+    icon: 'FileSearch2'
   },
   describe: () => ({ description: GLOB_DESCRIPTION, parameters: GlobParamsSchema })
 })

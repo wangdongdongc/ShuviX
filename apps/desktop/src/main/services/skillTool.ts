@@ -157,7 +157,6 @@ registerBuiltinTool({
   getHint: () => t('tool.skillHint'),
   presentation: {
     icon: 'BookOpen',
-    iconColor: '#34d399',
-    summaryField: 'name'
+    iconColor: '#34d399'
   }
 })

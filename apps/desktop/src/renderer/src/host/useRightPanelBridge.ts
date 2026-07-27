@@ -1,29 +1,78 @@
 import { useEffect } from 'react'
-import { getSessionChannelApi } from '@shuvix/chat-ui'
-import { useChatStore } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useAppEvent, useChatStore } from '@shuvix/chat-ui'
+import { usePreviewRequestBridge } from '@shuvix/app-shell'
+import { extractChartMermaid } from '@shuvix/chat-protocol/chartFileContract'
+import { renderMermaid } from '@shuvix/atomic-editor'
 import { useBrowserStore } from '../stores/browserStore'
+
+/** 悬浮聊天窗口（#pinned-chat）：无 app 级右侧面板，预览经 PreviewOverlay 覆盖层展示 */
+const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 
 /**
  * 宿主右侧面板桥。
  *
- * 浏览器/预览/sub-agent 右面板属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
+ * 右侧面板（app 级：浏览器/Preview/Widget）属于宿主外壳（不在可复用的对话框 @shuvix/chat-ui 内），
  * 因此把"开/切右面板"的反应留在宿主侧：
- *   - 子智能体：订阅共享信号 chatStore.subAgentRevealRequest（事件检测已统一在 useAgentEvents），
- *     收到即开面板 + 切到 subagent 页（与扩展/WebUI 同一信号源，仅"如何显示"各端实现）。
- *   - browser_event：宿主专属（浏览器面板），单独订阅 agent 事件开/关。
+ *   - browser_event 订阅 agent 事件开/关浏览器面板；
+ *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 wiki-link）经共享
+ *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
+ *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度；WebUI 只读端不承接）。
+ * （子智能体揭示信号 subAgentRevealRequest 已随 Sub-agent 移入会话面板，由 ChatView 消费。）
  *
  * 服务端项目若有自己的预览面板，会用它自己的等价桥替换本文件。
  */
 export function useRightPanelBridge(): void {
-  // 子智能体面板：响应共享 reveal 信号（单调 nonce，重复起子代理也会触发）
-  const subAgentReveal = useChatStore((s) => s.subAgentRevealRequest)
-  useEffect(() => {
-    if (!subAgentReveal) return
-    const browser = useBrowserStore.getState()
-    if (!browser.isOpen) browser.open()
-    browser.setActiveTab('subagent')
-  }, [subAgentReveal])
+  const isWeb = getSessionChannelApi().app.platform === 'web'
 
+  // 预览请求 → 目标落入共享 usePreviewPanelStore（WebUI 只读端不承接）
+  usePreviewRequestBridge(!isWeb)
+
+  // 主窗：预览目标就绪后展开右侧面板并切到 preview tab（悬浮窗覆盖层自动露出，无需动面板）
+  const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
+  useEffect(() => {
+    if (!filePreviewRequest || isWeb || isPinnedWindow) return
+    const browser = useBrowserStore.getState()
+    browser.open()
+    browser.setActiveTab('preview')
+  }, [filePreviewRequest, isWeb])
+
+  // 图表渲染验证请求（preview 工具经主进程 broker 发起）：用与 ChartView 同一管线跑
+  // mermaid，结果经 IPC 回执。不依赖面板开合/会话活跃；多窗口先到先得（broker 对号入座）。
+  // 验证只关心「能否渲染成功」，固定 default 主题（与明暗展示无关）。
+  useAppEvent('preview.validateChart', (e) => {
+    if (isWeb || !window.api?.preview) return
+    void (async () => {
+      try {
+        const r = await getSessionChannelApi().files.read({
+          sessionId: e.sessionId,
+          path: e.absPath
+        })
+        const mermaid = r.kind === 'text' ? extractChartMermaid(r.content) : null
+        if (!mermaid) {
+          await window.api.preview.reportRender({
+            validationId: e.validationId,
+            ok: false,
+            error: 'chart source is not extractable (contract violated or file unreadable)'
+          })
+          return
+        }
+        const res = await renderMermaid(mermaid, { theme: 'default' })
+        await window.api.preview.reportRender({
+          validationId: e.validationId,
+          ok: !!res.svg && !res.error,
+          error: res.error
+        })
+      } catch (err) {
+        await window.api.preview
+          .reportRender({
+            validationId: e.validationId,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err)
+          })
+          .catch(() => {})
+      }
+    })()
+  })
   // 浏览器面板：宿主专属事件
   useEffect(() => {
     const unsub = getSessionChannelApi().agent.onEvent((event) => {

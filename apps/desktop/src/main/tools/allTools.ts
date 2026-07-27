@@ -11,6 +11,13 @@ import './write'
 import './edit'
 import './ask'
 import './browser'
+// git 工具（isomorphic-git 跨端实现）：注册 defaultEnabled: false —— 主 Agent 默认无、
+// 可在工具选择器按会话开启；子代理（如 wiki curator）经白名单解析不受默认集限制
+import './git'
+// preview 工具：defaultEnabled: false —— 可视化子代理经白名单解析使用
+import './preview'
+// session 工具：defaultEnabled: false —— compact 子代理经白名单解析使用（转写读取 + 压缩归档）
+import './session'
 
 // 高性能检索
 import './ls'

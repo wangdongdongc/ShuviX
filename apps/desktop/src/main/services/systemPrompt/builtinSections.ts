@@ -9,7 +9,7 @@ import { join } from 'path'
 import { type as osType, release as osRelease, platform } from 'os'
 import { app } from 'electron'
 import i18next from 'i18next'
-import type { BuiltinRenderCtx } from '@shuvix/agent-runtime'
+import { formatLanguageDisplay, type BuiltinRenderCtx } from '@shuvix/agent-runtime'
 
 // 共享定义再导出（既有 settingsHandlers / systemPromptService 仍从本模块引用）
 export {
@@ -52,6 +52,7 @@ export function computeEnvironment(ctx: BuiltinRenderCtx): string {
     `${i18next.t('systemPromptCards.environment.shell')}: ${shellName}`,
     `${i18next.t('systemPromptCards.environment.os')}: ${osLine}`,
     `${i18next.t('systemPromptCards.environment.date')}: ${currentDate}`,
+    `${i18next.t('systemPromptCards.environment.language')}: ${formatLanguageDisplay(i18next.language)}`,
     `${i18next.t('systemPromptCards.environment.appVersion')}: ShuviX ${appVersion}`
   ]
   return items.map((line) => `- ${line}`).join('\n')

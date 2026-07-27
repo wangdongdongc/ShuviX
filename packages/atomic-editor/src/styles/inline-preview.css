@@ -157,6 +157,14 @@
   color: var(--atomic-editor-fg-muted, #888);
 }
 
+/* HTML comments while editing: visible but de-emphasized source (the
+ * read-only viewer removes them entirely — see comment-blocks.ts). */
+.cm-atomic-comment {
+  color: var(--atomic-editor-fg-muted, #888);
+  opacity: 0.65;
+  font-style: italic;
+}
+
 /* Delimiter characters for emphasis marks we supplemented manually
  * (see `supplementMidTypingEmphasis` in inline-preview.ts). Each
  * class mirrors what an `EmphasisMark` token would pick up through

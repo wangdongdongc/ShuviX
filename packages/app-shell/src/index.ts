@@ -56,6 +56,8 @@ export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
 export { ViewSwitchButton } from './sidebar/ViewSwitchButton'
 export type { ViewSwitchButtonProps, SidebarViewMode } from './sidebar/ViewSwitchButton'
+export { WikiView } from './sidebar/WikiView'
+export type { WikiViewProps } from './sidebar/WikiView'
 export { useProjects } from './sidebar/useProjects'
 export type { UseProjectsReturn, ProjectRef } from './sidebar/useProjects'
 export { useSessionDelete } from './sidebar/useSessionDelete'
@@ -89,6 +91,20 @@ export type { PanelTabBarProps, PanelTabItem } from './panel/PanelTabBar'
 // 右侧面板共享视图状态（isOpen/activeTab/width）—— 持久化/边界/原生同步由各宿主在 store 外接
 export { usePanelStore } from './panel/panelStore'
 export type { PanelStoreState } from './panel/panelStore'
+// 会话面板（聊天区内悬浮卡片：Files/Sub-agent）—— 状态按会话记忆；宽度持久化由宿主外接
+export {
+  useSessionPanelStore,
+  SESSION_PANEL_MIN_W,
+  SESSION_PANEL_MAX_W
+} from './panel/sessionPanelStore'
+export type { SessionPanelTool, SessionPanelStoreState } from './panel/sessionPanelStore'
+export {
+  SessionPanel,
+  SessionToolbar,
+  useSessionPanelTool,
+  useSessionPanelReveal
+} from './panel/SessionPanel'
+export type { SessionPanelProps } from './panel/SessionPanel'
 // 侧边栏共享视图状态（isOpen/width）—— 持久化/边界由各宿主在 store 外接（桌面 isResizing 留宿主外层）
 export { useSidebarStore } from './sidebar/sidebarStore'
 export type { SidebarStoreState } from './sidebar/sidebarStore'
@@ -99,6 +115,14 @@ export { FilesPanel } from './files/FilesPanel'
 export type { FilesPanelProps } from './files/FilesPanel'
 export { MediaUrlProvider, shuvixPreviewResolver, useResolveMediaUrl } from './files/mediaUrl'
 export type { ResolveMediaUrl, MediaSource } from './files/mediaUrl'
+
+// 独立预览面板（会话无关）：store + 桥 + 面板/覆盖层两种露出形态
+export {
+  usePreviewPanelStore,
+  usePreviewRequestBridge,
+  type PreviewTarget
+} from './preview/previewPanelStore'
+export { PreviewPanel, type PreviewPanelProps } from './preview/PreviewPanel'
 // 宿主无关路径工具（不依赖 node:path）——供宿主拼接笔记本绑定路径 / 求相对路径复用
 export { extOf, basename, joinPath, relativize } from './files/paths'
 

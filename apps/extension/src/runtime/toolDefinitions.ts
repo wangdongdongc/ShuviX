@@ -15,6 +15,8 @@ import {
   EditParamsSchema,
   AskParamsSchema,
   ASK_DESCRIPTION,
+  PreviewParamsSchema,
+  PREVIEW_DESCRIPTION,
   BROWSER_TOOL_NAME,
   buildBrowserToolDescription,
   buildBrowserParamsSchema
@@ -58,6 +60,14 @@ export function getBuiltinToolDefinitions(): BuiltinToolDefinition[] {
       icon: iconOf('edit'),
       describe: () => ({ description: EDIT_DESCRIPTION, parameters: EditParamsSchema })
     },
+    // preview：不进主 Agent 工具集（visualization 等具名子代理白名单注入），定义仅供设置页展示
+    {
+      name: 'preview',
+      label: labelOf('preview'),
+      group: 'general',
+      icon: iconOf('preview'),
+      describe: () => ({ description: PREVIEW_DESCRIPTION, parameters: PreviewParamsSchema })
+    },
     // 统一 browser 工具（multiplex）：描述/参数按扩展端 caps 生成，与发给 LLM 的完全一致
     {
       name: BROWSER_TOOL_NAME,
@@ -69,6 +79,7 @@ export function getBuiltinToolDefinitions(): BuiltinToolDefinition[] {
         parameters: buildBrowserParamsSchema(extensionBrowserBackend.caps)
       })
     }
+    // git 工具已实现（agent-runtime src/git/）但暂不进默认工具集，待后续规划启用
   ]
 
   return toBuiltinToolDefinitions(entries)

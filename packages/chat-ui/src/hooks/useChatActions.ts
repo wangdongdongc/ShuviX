@@ -2,6 +2,7 @@ import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useState } from 'react'
 import { useChatStore } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
 /** useChatActions 返回值类型 */
 export interface UseChatActionsReturn {
@@ -49,7 +50,8 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
 
     const host = getHostApi()
     if (!host) return // 渠道端只读：不可回退历史
-    const rollbackText = target.content
+    const rollbackContent = target.content
+    const rollbackTokens = target.metadata?.inlineTokens
     // 删除该用户消息及之后的所有消息
     await host.message.deleteFrom({
       sessionId: activeSessionId,
@@ -58,8 +60,10 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     const msgs = await getSessionChannelApi().message.list(activeSessionId)
     store.setMessages(msgs)
     await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
-    // 将用户消息内容回填到输入框，便于编辑后重新发送
-    store.setInputText(rollbackText)
+    // 将用户消息重建为输入框草稿（含内联 Token 恢复），便于编辑后重新发送。
+    // 直接回填裸 content 会让 {{shuvixInlineToken}} 标记失去 metadata → token 失效丢信息，
+    // 故经 draftRestoreRequest 信号交由 InputArea 重建明文并重新登记粘贴芯片/@ 引用。
+    store.requestDraftRestore(rollbackContent, rollbackTokens)
   }, [activeSessionId, pendingRollbackId])
 
   /** 取消回退 */
@@ -75,11 +79,14 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
       // 向前查找最近的 user/text 消息
       let lastUserText = ''
+      let lastUserTokens: Record<string, InlineToken> | undefined
       let userMsgId = ''
       for (let j = idx - 1; j >= 0; j--) {
-        if (store.messages[j].role === 'user' && store.messages[j].type === 'text') {
-          lastUserText = store.messages[j].content
-          userMsgId = store.messages[j].id
+        const m = store.messages[j]
+        if (m.role === 'user' && m.type === 'text') {
+          lastUserText = m.content
+          lastUserTokens = m.metadata?.inlineTokens
+          userMsgId = m.id
           break
         }
       }
@@ -92,8 +99,13 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       const msgs = await getSessionChannelApi().message.list(activeSessionId)
       store.setMessages(msgs)
       await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
-      // 重新发送（后端统一持久化用户消息）
-      await getSessionChannelApi().agent.prompt({ sessionId: activeSessionId, text: lastUserText })
+      // 重新发送（后端统一持久化用户消息）；透传原消息的内联 Token，
+      // 否则含 {{shuvixInlineToken}} 标记的消息会以裸标记发给 LLM 且新落库消息丢失 metadata
+      await getSessionChannelApi().agent.prompt({
+        sessionId: activeSessionId,
+        text: lastUserText,
+        inlineTokens: lastUserTokens
+      })
     },
     [activeSessionId]
   )
@@ -101,7 +113,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   /**
    * 统一的"用户输入响应"入口。
    * 后端按 response.kind 路由到对应工具的挂起 Promise。
-   * 副作用(如 rememberPattern → allowList)走 response.extra,由工具响应回调处理。
+   * 副作用(如 rememberPath → allowList)走 response.extra,由工具响应回调处理。
    */
   const handleInputResponse = useCallback(
     async (requestId: string, response: InputResponse) => {

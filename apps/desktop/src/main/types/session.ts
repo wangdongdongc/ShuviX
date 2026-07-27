@@ -53,14 +53,7 @@ export interface SessionUpdateAutoApproveParams {
   autoApprove: boolean
 }
 
-/** IPC: 批量添加允许列表模式(toolType 支持命令和路径两类) */
-export interface SessionAllowListAddParams {
-  id: string
-  toolType: 'bash' | 'ssh' | 'read' | 'write'
-  patterns: string[]
-}
-
-/** IPC: 移除允许列表条目 */
+/** IPC: 移除允许列表条目（仅路径条目 `Read(...)`/`Write(...)`） */
 export interface SessionAllowListRemoveParams {
   id: string
   entry: string

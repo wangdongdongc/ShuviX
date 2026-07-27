@@ -19,7 +19,7 @@
 import { connect } from 'net'
 import { readFileSync, existsSync } from 'fs'
 import { homedir, platform, userInfo } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 
 interface ParsedCommand {
   command: string
@@ -63,13 +63,11 @@ function printUsage(): void {
       'Usage:',
       '  shuvix widget init <id> --name "Display Name" [--description "..."]',
       '  shuvix widget build <id>',
-      '  shuvix widget export <id> --to <path>',
+      '  shuvix widget open <id>',
+      '  shuvix widget export <id> --to <dir|file.zip>',
       '  shuvix widget list [--archived]',
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
-      '',
-      '  shuvix python [options] [-c cmd | -m mod | script | -] [arg ...]',
-      '                Pyodide WebAssembly Python — see `shuvix python --help`',
       '',
       '  shuvix pglite [-c sql | -f path | -] [--extension name ...]',
       '                Embedded PGLite Postgres — see `shuvix pglite --help`',
@@ -112,6 +110,14 @@ function parseWidget(rest: string[]): ParsedCommand | null {
       }
       return { command: 'widget.build', params: { id } }
     }
+    case 'open': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('widget open: <id> is required\n')
+        process.exit(1)
+      }
+      return { command: 'widget.open', params: { id } }
+    }
     case 'export': {
       const id = args[0]
       const targetPath = flagValue(args, '--to')
@@ -119,7 +125,9 @@ function parseWidget(rest: string[]): ParsedCommand | null {
         process.stderr.write('widget export: <id> and --to <path> are required\n')
         process.exit(1)
       }
-      return { command: 'widget.export', params: { id, targetPath } }
+      // 相对路径在客户端归一 —— 这里的 cwd 是调用方 shell（即会话工作目录）；
+      // 交给主进程 resolve 会以 Electron 进程的 cwd 为基准，落到完全无关的地方
+      return { command: 'widget.export', params: { id, targetPath: resolve(targetPath) } }
     }
     case 'list': {
       const archived = args.includes('--archived')
@@ -166,11 +174,7 @@ function parse(argv: string[]): ParsedCommand | null {
   return null
 }
 
-// ────────────────────── python ──────────────────────
-// `shuvix python` 的 argv 在主进程侧解析（argvParser.ts），客户端只做：
-//   1. raw 透传 argv
-//   2. 按需预读 stdin（`-` 显式 / 无参且 stdin 非 TTY 隐式）
-//   3. 透传 cwd / PYTHONPATH
+// ────────────────────── stdin helpers ──────────────────────
 
 async function readAllStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -187,64 +191,14 @@ function shouldReadStdin(rest: string[]): boolean {
   return false
 }
 
-interface PythonResponseData {
+interface ExecResponseData {
   stdout: string
   stderr: string
   exitCode: number
 }
 
-async function runPython(rest: string[]): Promise<void> {
-  let stdinContent: string | undefined
-  if (shouldReadStdin(rest)) {
-    try {
-      stdinContent = await readAllStdin()
-    } catch (e) {
-      process.stderr.write(`shuvix python: failed to read stdin: ${(e as Error).message}\n`)
-      process.exit(1)
-    }
-  }
-
-  const token = readToken()
-  const sessionId = process.env.SHUVIX_SESSION_ID || undefined
-
-  let resp: CliResponse
-  try {
-    resp = await sendRequest({
-      token,
-      command: 'python.run',
-      params: {
-        argv: rest,
-        stdin: stdinContent,
-        cwd: process.cwd(),
-        pythonPath: process.env.PYTHONPATH
-      },
-      sessionId
-    })
-  } catch (e) {
-    process.stderr.write((e as Error).message + '\n')
-    process.exit(2)
-  }
-
-  if (!resp.success) {
-    process.stderr.write(`Error: ${resp.error || 'unknown error'}\n`)
-    process.exit(1)
-  }
-
-  const data = resp.data as PythonResponseData | undefined
-  if (!data) {
-    process.exit(0)
-  }
-  if (data.stdout) {
-    process.stdout.write(data.stdout.endsWith('\n') ? data.stdout : data.stdout + '\n')
-  }
-  if (data.stderr) {
-    process.stderr.write(data.stderr.endsWith('\n') ? data.stderr : data.stderr + '\n')
-  }
-  process.exit(data.exitCode ?? 0)
-}
-
 // ────────────────────── pglite ──────────────────────
-// `shuvix pglite` 与 python 类似的 raw 透传模式：
+// `shuvix pglite` 走 raw 透传模式：
 //   1. argv 整体发给主进程让 argvParser 解析
 //   2. `-` 或 (无参 + stdin pipe) 时预读 stdin 当 SQL 文本
 //   3. `-f path` 时本地 readFileSync 后把内容塞 stdin 字段（handler 协议不感知文件 IO）
@@ -299,7 +253,7 @@ async function runPglite(rest: string[]): Promise<void> {
     process.exit(1)
   }
 
-  const data = resp.data as PythonResponseData | undefined
+  const data = resp.data as ExecResponseData | undefined
   if (!data) {
     process.exit(0)
   }
@@ -360,12 +314,8 @@ async function main(): Promise<void> {
     process.exit(argv.length === 0 ? 1 : 0)
   }
 
-  // `shuvix python ...` / `shuvix pglite ...` 都走专用分支：原始 argv 透传 + 异步 stdin
+  // `shuvix pglite ...` 走专用分支：原始 argv 透传 + 异步 stdin
   // 预读 + 自定义 IO 路由（区别于 widget 的 JSON.stringify 输出语义）
-  if (argv[0] === 'python') {
-    await runPython(argv.slice(1))
-    return
-  }
   if (argv[0] === 'pglite') {
     await runPglite(argv.slice(1))
     return
@@ -394,9 +344,9 @@ async function main(): Promise<void> {
   }
 
   if (resp.success) {
-    // db-query 走 stdout/stderr/exitCode 形态（同 python/pglite），打印原文而非 JSON
+    // db-query 走 stdout/stderr/exitCode 形态（同 pglite），打印原文而非 JSON
     if (parsed.command === 'widget.db-query') {
-      const data = resp.data as PythonResponseData | undefined
+      const data = resp.data as ExecResponseData | undefined
       if (data) {
         if (data.stdout) {
           process.stdout.write(data.stdout.endsWith('\n') ? data.stdout : data.stdout + '\n')

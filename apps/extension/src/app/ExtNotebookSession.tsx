@@ -1,5 +1,5 @@
 import { NotebookSession, MediaUrlProvider, usePopupContextMenu } from '@shuvix/app-shell'
-import { extMediaResolver } from './RightPanel'
+import { extMediaResolver } from './ExtSessionPanel'
 
 /**
  * 扩展端笔记本会话正文 —— 包一层共享 NotebookSession 并注入扩展能力：

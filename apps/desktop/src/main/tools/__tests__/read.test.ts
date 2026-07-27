@@ -23,10 +23,10 @@ vi.mock('../../services/toolContext', () => ({
     return resolved === base || resolved.startsWith(base + sep)
   },
   isPathWithinReferenceDirs: () => false,
-  assertSandboxRead: () => {},
-  assertSandboxWrite: () => {},
-  // 共享 createFileToolSuite 经此 policy 走 assertSandbox；测试里恒放行（沙箱 no-op）
-  makeDesktopSandboxPolicy: () => ({
+  assertReadApproved: () => {},
+  assertWriteApproved: () => {},
+  // 共享 createFileToolSuite 经此 policy 走 assertPathApproved；测试里恒放行（审批 no-op）
+  makeDesktopApprovalPolicy: () => ({
     isAllowedWithoutPrompt: () => true,
     isAutoApprove: () => true,
     isInAllowList: () => false,

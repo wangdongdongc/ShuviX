@@ -1,7 +1,7 @@
 /**
  * 共享 edit 内核 —— 精确/模糊文本替换（BOM 保留、行尾规范化、多级回退链匹配）。
  * 从桌面 edit.ts 的 executeInternal 内层逐字搬出，fs → 注入的 FileSystemPort，
- * fileTime → 注入的 FileGuards。富文本/沙箱/abort 仍由各宿主在外层编排。
+ * fileTime → 注入的 FileGuards。富文本/审批/abort 仍由各宿主在外层编排。
  */
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'

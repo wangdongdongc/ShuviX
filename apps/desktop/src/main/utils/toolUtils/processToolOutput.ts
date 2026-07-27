@@ -27,7 +27,7 @@ export function processToolOutput(
   opts: ProcessToolOutputOptions
 ): Promise<ProcessToolOutputResult> {
   // 桌面落盘：写 userData/tool_results/{sessionId}/{toolCallId}.txt（绝对路径即 locator，
-  // read 工具的沙箱已白名单 tool_results 目录，模型可直接 read 取回全文）
+  // read 工具的准入范围已白名单 tool_results 目录，模型可直接 read 取回全文）
   const sink: SpillSink = {
     async write(toolCallId, fullText) {
       try {

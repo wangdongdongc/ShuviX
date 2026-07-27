@@ -44,6 +44,7 @@ import { atomicEditorTheme, atomicMarkdownSyntax } from './atomic-theme';
 import { autoCloseCodeFence, extendEmphasisPair } from './edit-helpers';
 import { imageBlocks } from './image-blocks';
 import { mermaidBlocks } from './mermaid-blocks';
+import { commentBlocks } from './comment-blocks';
 import { inlinePreview } from './inline-preview';
 import { tables } from './table-widget';
 
@@ -325,6 +326,7 @@ export function AtomicCodeMirrorEditor({
           }),
           imageBlocks(),
           mermaidBlocks(),
+          commentBlocks(),
           inlinePreview({
             onLinkClick: (url) => onLinkClickRef.current?.(url),
           }),

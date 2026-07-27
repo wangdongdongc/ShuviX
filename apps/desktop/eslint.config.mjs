@@ -109,7 +109,7 @@ export default defineConfig(
           pattern: ['src/main/services/toolContext.ts', 'src/main/services/toolRegistry.ts'],
           mode: 'file'
         },
-        // main-service-module：services/ 下的独立子目录模块（bundler / browser / widget / stt / tts / pglite / pyodide）
+        // main-service-module：services/ 下的独立子目录模块（bundler / browser / widget / stt / tts / pglite）
         // 强制"内聚模块"边界：模块内部禁止反向依赖 services/ 根目录的平铺上层 service
         // 必须写在 main-service（fallback）之前，让子目录命中更具体的 module 元素
         { type: 'main-service-module', pattern: 'src/main/services/*' },

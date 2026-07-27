@@ -1,14 +1,9 @@
 /**
- * 原生 CDP 方法安全分类 —— `cdp` action 的单一真源策略表。
+ * 原生 CDP 方法边界策略 —— `cdp` action 的单一真源拦截表。
  *
- * 三分类（fail-safe）：
- *   - safe：只读/无副作用（getter、enable/disable、快照类），直接执行；
- *   - mutating：改变页面/浏览器状态（输入、导航、模拟、存储写），走 autoApprove 审批门控；
- *   - blocked：越出 tab 边界或绕过用户级安全设置（会话劫持、Browser 全局、证书豁免），拒绝执行。
- * 未知方法默认 mutating（新 Chrome 版本方法可用但要审批）；未知域默认 blocked。
+ * 只拦越出 tab 边界或绕过用户级安全设置的方法（会话劫持、Browser 全局、证书豁免）；
+ * 已知域内的其余方法直接执行（无审批门控）。未知域默认 blocked（fail-safe）。
  */
-
-export type CdpMethodClass = 'safe' | 'mutating' | 'blocked'
 
 /**
  * 整域拒绝 + 原因（对 agent 可读，指向替代路径）。
@@ -73,68 +68,20 @@ const KNOWN_DOMAINS = new Set([
   'WebAuthn'
 ])
 
-/** 只读方法名模式（任何已知域下匹配即 safe） */
-const SAFE_METHOD_PATTERNS = [
-  /^get[A-Z]/, // getResponseBody / getComputedStyleForNode / getDocument …
-  /^describe[A-Z]/, // describeNode
-  /^query[A-Z]/, // querySelector / querySelectorAll
-  /^search[A-Z]/, // searchInResource
-  /^request[A-Z]/, // requestNode / requestChildNodes（DOM 检视）
-  /^resolve[A-Z]/, // resolveNode / resolveAnimation
-  /^capture[A-Z]/, // captureSnapshot / captureScreenshot
-  /^collectClassNames/,
-  /^takeCoverageDelta$/,
-  /^enable$/,
-  /^disable$/
-]
-
-/** 点名强制 mutating 的方法（模式会误判为 safe，但实际有副作用） */
-const MUTATING_METHOD_OVERRIDES = new Set([
-  // Fetch.enable 带拦截模式时会挂起所有匹配请求直到显式 continue —— 误用会让页面静默卡死
-  'Fetch.enable'
-])
-
-/** 点名 safe 的方法（不符合上述模式但确实只读） */
-const SAFE_METHODS = new Set([
-  'Page.getLayoutMetrics',
-  'Page.getNavigationHistory',
-  'Runtime.globalLexicalScopeNames',
-  'DOM.pushNodeByPathToFrontend',
-  'DOM.getBoxModel',
-  'CSS.startRuleUsageTracking',
-  'CSS.stopRuleUsageTracking',
-  'Profiler.start',
-  'Profiler.stop',
-  'Performance.getMetrics',
-  'IO.read',
-  'IO.close',
-  'Audits.checkContrast',
-  'HeapProfiler.collectGarbage'
-])
-
-/** 分类一个 CDP 方法（"Domain.method" 形式） */
-export function classifyCdpMethod(method: string): { cls: CdpMethodClass; reason?: string } {
+/** 检查一个 CDP 方法（"Domain.method" 形式）是否被拦截；返回拦截原因，可执行返回 null */
+export function blockedCdpReason(method: string): string | null {
   const dot = method.indexOf('.')
   if (dot <= 0 || dot === method.length - 1) {
-    return { cls: 'blocked', reason: 'malformed method — expected "Domain.method"' }
+    return 'malformed method — expected "Domain.method"'
   }
   const domain = method.slice(0, dot)
-  const name = method.slice(dot + 1)
 
   const domainReason = BLOCKED_DOMAINS[domain]
-  if (domainReason) return { cls: 'blocked', reason: domainReason }
+  if (domainReason) return domainReason
   if (!KNOWN_DOMAINS.has(domain)) {
-    return { cls: 'blocked', reason: `unknown CDP domain "${domain}"` }
+    return `unknown CDP domain "${domain}"`
   }
-  const methodReason = BLOCKED_METHODS[method]
-  if (methodReason) return { cls: 'blocked', reason: methodReason }
-
-  if (MUTATING_METHOD_OVERRIDES.has(method)) return { cls: 'mutating' }
-  if (SAFE_METHODS.has(method)) return { cls: 'safe' }
-  if (SAFE_METHOD_PATTERNS.some((re) => re.test(name))) return { cls: 'safe' }
-
-  // 未知/写类方法：可用但要审批（fail-safe 默认）
-  return { cls: 'mutating' }
+  return BLOCKED_METHODS[method] ?? null
 }
 
 // ====== uid 宏 ======

@@ -390,6 +390,19 @@ export const migrations: Migration[] = [
       // 旧 settings key 设为孤儿（无副作用），如需洁癖可一并清理
       db.prepare(`DELETE FROM settings WHERE key = ?`).run('subagent.builtinDisabled')
     }
+  },
+  {
+    version: 13,
+    description:
+      '废弃 widgets 表：widget 改由文件系统管理（<dir>/widget.json + <dir>/schema.sql + widgets/.config.json）',
+    up: (db) => {
+      // 不做数据迁移（明确的产品决定）。身份字段本来就有同名副本落在每个 widget 目录的
+      // widget.json 里，扫描即可恢复；仅 DB 独有的三类状态就此丢弃：
+      //   - metadata.dbSchema → 已建库的 widget 失去自愈重放，需重跑一次 db-init
+      //   - archivedAt        → 已归档的 widget 会重新出现在活跃列表里
+      //   - lastOpenedAt      → 卡片排序退回按创建时间
+      db.exec(`DROP TABLE IF EXISTS widgets`)
+    }
   }
 ]
 

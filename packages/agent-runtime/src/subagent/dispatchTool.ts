@@ -1,9 +1,14 @@
 /**
- * 子代理派发工具（跨端共享，从桌面 AgentTool 抽取）。
+ * Agent 派发工具（跨端共享）。
  *
- * LLM 只看到一个名为 `Agent` 的工具，通过 subagent_type 选择目标。可用类型由注入的
- * SubAgentRegistry 动态给出并嵌入 description。执行时校验类型 + requiredMcp，委托
- * SubAgentManager.runTask，返回最终文本结果。注册表/MCP 连接判定/模型配置经注入，宿主无关。
+ * LLM 只看到一个名为 `Agent` 的工具，经 `agent` 参数以统一 ref 选择目标：
+ *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
+ *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
+ *     （frontmatter: name/whenToUse/tools/maxTurns + 正文为 system prompt）——支持项目内
+ *     检入的定义与运行时动态生成的定义，无需注册表刷新；
+ *   - 省略 → 默认 agent（宿主提供 defaultAgentType 时）。
+ * 可用具名类型动态嵌入 description。执行时校验 ref + requiredMcp，委托
+ * SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/MCP 判定/模型配置经注入，宿主无关。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -18,10 +23,11 @@ import type { SubAgentManager } from './manager'
 
 export const AgentParamsSchema = Type.Object({
   description: Type.String({ description: 'A short (3-5 word) description of the task' }),
-  subagent_type: Type.Optional(
+  agent: Type.Optional(
     Type.String({
       description:
-        'The type of specialized agent to use. Available types are listed in this tool description. ' +
+        'Which agent to dispatch: a named agent type listed in this tool description, ' +
+        'or a path to an agent definition file (markdown with YAML frontmatter). ' +
         'Optional when a default agent is offered — omit to use the default.'
     })
   ),
@@ -32,6 +38,23 @@ export const AgentParamsSchema = Type.Object({
 })
 
 const MAX_WHEN_TO_USE_CHARS = 240
+
+/** ref 判别：含路径分隔符或 .md 后缀 → 文件路径形态 */
+export function isAgentFileRef(ref: string): boolean {
+  return ref.includes('/') || ref.includes('\\') || ref.toLowerCase().endsWith('.md')
+}
+
+/** AgentDefinition → 派发运行配置的纯投影（Agent 工具与用户直发派发共用同一口径） */
+export function toInProcessAgentType(def: AgentDefinition): InProcessAgentType {
+  return {
+    name: def.name,
+    displayName: def.displayName,
+    description: def.whenToUse,
+    tools: [...def.tools],
+    maxTurns: def.maxTurns,
+    systemPrompt: def.systemPrompt
+  }
+}
 
 function formatAgentLine(def: AgentDefinition): string {
   const firstSentence = def.whenToUse.split(/(?<=[.。!?！？])\s+/)[0] ?? def.whenToUse
@@ -45,26 +68,35 @@ function formatAgentLine(def: AgentDefinition): string {
 
 export function buildDescription(
   registry: SubAgentRegistry,
-  defaultAgentType?: InProcessAgentType
+  defaultAgentType?: InProcessAgentType,
+  supportsFileRefs?: boolean
 ): string {
   const defs = registry.listEnabled()
 
-  // 具名子代理才进「可选类型」列表；默认子代理不具名展示（否则模型会照抄 subagent_type），
-  // 仅在下方说明里提示「可省略 subagent_type 走默认」。
+  // 具名定义才进「可选类型」列表；默认 agent 不具名展示（否则模型会照抄名字），
+  // 仅在下方说明里提示「可省略 agent 走默认」。
   let typesBlock: string
   if (defs.length > 0) {
     typesBlock =
       `Available agent types and the tools they have access to:\n${defs.map(formatAgentLine).join('\n')}\n\n` +
       (defaultAgentType
-        ? 'Set `subagent_type` to one of the types above, or omit it to dispatch a default agent that inherits your current tools.'
-        : 'When using the Agent tool, you must specify a subagent_type to select which agent type to use.')
+        ? 'Set `agent` to one of the types above, or omit it to dispatch a default agent that inherits your current tools.'
+        : 'Set `agent` to one of the types above.')
   } else if (defaultAgentType) {
-    // 无具名类型：省略 subagent_type 即可，不要提任何类型名
+    // 无具名类型：省略 agent 即可，不要提任何类型名
     typesBlock =
-      'Omit `subagent_type`: the dispatched agent inherits your current tools to complete the task autonomously.'
+      'Omit `agent`: the dispatched agent inherits your current tools to complete the task autonomously.'
   } else {
     typesBlock = '(No agent types are currently available.)'
   }
+
+  const fileRefNote = supportsFileRefs
+    ? '\n- `agent` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
+      '(`name`, `whenToUse` or `description`, `tools: [...]`, optional `maxTurns`) and the body as its system prompt. ' +
+      'Relative paths resolve against the working directory; the file must live inside the working directory or the global agents directory. ' +
+      'You may write such a file first and dispatch it immediately. ' +
+      'Include `Agent` in its `tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
+    : ''
 
   return `Launch a new agent to handle complex, multi-step tasks autonomously.
 
@@ -75,7 +107,7 @@ Usage notes:
 - The agent's final result is returned only to you, not visible to the user — summarize for the user.
 - Each invocation is stateless; cannot resume a previous session.
 - Re-dispatching is usually unnecessary; only re-run if the result is incomplete or contradicts what you observe.
-- Launch multiple agents concurrently when possible (single message, multiple tool calls).`
+- Launch multiple agents concurrently when possible (single message, multiple tool calls).${fileRefNote}`
 }
 
 /** 派发工具注入依赖 */
@@ -91,17 +123,24 @@ export interface DispatchAgentToolDeps {
   /** 工具显示名（缺省 'Agent'） */
   label?: string
   /**
-   * 默认子代理 —— 提供后 subagent_type 变为可选：省略时用它派发。
-   * 注册表里的具名定义成为可选附加，而非调用前提。缺省则维持"必须指定 subagent_type"。
+   * 默认 agent —— 提供后 `agent` 参数变为可选：省略时用它派发。
+   * 注册表里的具名定义成为可选附加，而非调用前提。缺省则维持"必须指定 agent"。
    */
   defaultAgentType?: InProcessAgentType
+  /**
+   * 路径 ref 解析器（可选；桌面注入，浏览器宿主省略 → 路径形态返回明确错误）。
+   * 解析失败应 throw 带原因的 Error；文件不存在/无法解析返回 undefined。
+   */
+  resolveAgentFile?: (
+    path: string
+  ) => AgentDefinition | undefined | Promise<AgentDefinition | undefined>
 }
 
 function errorResult(text: string): AgentToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
 }
 
-/** 子代理派发工具 —— 唯一对 LLM 暴露的入口 */
+/** Agent 派发工具 —— 唯一对 LLM 暴露的派发入口 */
 export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   readonly name = 'Agent'
   readonly label: string
@@ -113,7 +152,11 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   }
 
   get description(): string {
-    return buildDescription(this.deps.registry, this.deps.defaultAgentType)
+    return buildDescription(
+      this.deps.registry,
+      this.deps.defaultAgentType,
+      !!this.deps.resolveAgentFile
+    )
   }
 
   async preExecute(): Promise<void> {
@@ -121,56 +164,68 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   }
 
   protected async securityCheck(): Promise<void> {
-    /* no-op — 子代理内部工具自带沙箱 */
+    /* no-op — 派生 agent 内部工具自带审批 */
   }
 
   protected async executeInternal(
     toolCallId: string,
-    params: { description: string; subagent_type: string; prompt: string },
+    params: { description: string; agent?: string; prompt: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
     if (signal?.aborted) throw new Error(this.deps.abortError)
 
     const description = params.description || ''
-    const subagentType = (params.subagent_type || '').trim()
+    const ref = (params.agent || '').trim()
     const prompt = params.prompt || ''
     const names = (): string[] => this.deps.registry.listEnabled().map((a) => a.name)
     const hasDefault = !!this.deps.defaultAgentType
 
-    let agentType: InProcessAgentType
-    if (subagentType) {
-      // 指定了类型：必须在注册表中（具名定义）
-      const def = this.deps.registry.getEnabled(subagentType)
-      if (!def) {
-        const tail = hasDefault ? ' (or omit subagent_type to use the default)' : ''
+    // ── ref 解析：路径 → resolveAgentFile；具名 → 注册表；省略 → 默认 agent ──
+    let def: AgentDefinition | undefined
+    if (ref && isAgentFileRef(ref)) {
+      if (!this.deps.resolveAgentFile) {
         return errorResult(
-          `Unknown subagent_type "${subagentType}". Available: [${names().join(', ')}]${tail}`
+          `Path-based agent refs are not supported on this host. Use a named agent type instead: [${names().join(', ')}]`
         )
       }
+      try {
+        def = await this.deps.resolveAgentFile(ref)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return errorResult(`Cannot load agent definition from "${ref}": ${msg}`)
+      }
+      if (!def) {
+        return errorResult(
+          `Agent definition file not found or invalid: "${ref}". Expected a markdown file with YAML frontmatter (name/whenToUse/tools) and the system prompt as body.`
+        )
+      }
+    } else if (ref) {
+      def = this.deps.registry.getEnabled(ref)
+      if (!def) {
+        const tail = hasDefault ? ' (or omit `agent` to use the default)' : ''
+        return errorResult(
+          `Unknown agent "${ref}". Available: [${names().join(', ')}]${tail}. A path to an agent definition file is also accepted.`
+        )
+      }
+    }
+
+    let agentType: InProcessAgentType
+    if (def) {
       const isConnected = this.deps.isMcpConnected ?? (() => true)
       const missingMcp = (def.requiredMcp ?? []).filter((n) => !isConnected(n))
       if (missingMcp.length > 0) {
         const list = missingMcp.map((n) => `"${n}"`).join(', ')
         return errorResult(
-          `Cannot run sub-agent "${def.name}": required MCP server(s) not connected: ${list}. ` +
+          `Cannot run agent "${def.name}": required MCP server(s) not connected: ${list}. ` +
             `Configure the missing server(s) in MCP settings, then retry.`
         )
       }
-      agentType = {
-        name: def.name,
-        displayName: def.displayName,
-        description: def.whenToUse,
-        tools: [...def.tools],
-        maxTurns: def.maxTurns,
-        systemPrompt: def.systemPrompt
-      }
+      agentType = toInProcessAgentType(def)
     } else if (this.deps.defaultAgentType) {
-      // 省略类型：用注入的默认子代理（继承调用方工具/系统提示，由宿主装配）
+      // 省略 ref：用注入的默认 agent（继承调用方工具/系统提示，由宿主装配）
       agentType = this.deps.defaultAgentType
     } else {
-      return errorResult(
-        `Missing required parameter "subagent_type". Available: [${names().join(', ')}]`
-      )
+      return errorResult(`Missing required parameter "agent". Available: [${names().join(', ')}]`)
     }
 
     try {

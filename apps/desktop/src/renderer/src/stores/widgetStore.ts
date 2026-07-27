@@ -15,19 +15,16 @@ interface WidgetState {
   archived: WidgetItem[]
   loaded: boolean
   serverStatus: ServerStatus | null
-  /** 正在启动中（loading）的 widget id 集合 */
-  startingIds: Set<string>
   reload: () => Promise<void>
-  /** 点击卡片 —— 在 Browser tab 的 WebContentsView 中打开该 widget */
+  /** 在 Browser tab 的 WebContentsView 中打开该 widget */
   openWidget: (id: string) => Promise<{ success: boolean; error?: string }>
-  /** 启动单个 widget —— 仅注册到 server，不打开浏览器 */
-  startWidget: (id: string) => Promise<{ success: boolean; error?: string }>
-  /** 停止单个 widget —— 从 server 注销 */
+  /** 点击卡片 —— 在独立窗口打开该 widget（已开则聚焦）；启动构建 / URL 由窗口内 shell 处理 */
+  openWidgetWindow: (id: string) => Promise<{ success: boolean; error?: string }>
+  /** 停止单个 widget —— 退出 app：关闭独立窗口 + 从 server 注销 */
   stopWidget: (id: string) => Promise<void>
   renameWidget: (id: string, name: string, description?: string) => Promise<void>
   archiveWidget: (id: string, archived: boolean) => Promise<void>
   deleteWidget: (id: string) => Promise<void>
-  stopServer: () => Promise<void>
 }
 
 export const useWidgetStore = create<WidgetState>((set, get) => ({
@@ -35,7 +32,6 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
   archived: [],
   loaded: false,
   serverStatus: null,
-  startingIds: new Set(),
 
   reload: async () => {
     const [list, archived, status] = await Promise.all([
@@ -60,27 +56,13 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
     return { success: true }
   },
 
-  startWidget: async (id) => {
-    // 标记为 loading
-    set((s) => {
-      const next = new Set(s.startingIds)
-      next.add(id)
-      return { startingIds: next }
-    })
-    try {
-      const res = await window.api.widget.startWidget(id)
-      if (!res.success) {
-        return { success: false, error: res.error }
-      }
-      await get().reload()
-      return { success: true }
-    } finally {
-      set((s) => {
-        const next = new Set(s.startingIds)
-        next.delete(id)
-        return { startingIds: next }
-      })
+  openWidgetWindow: async (id) => {
+    const res = await window.api.widgetWindow.open(id)
+    if (!res.success) {
+      return { success: false, error: res.error }
     }
+    // lastOpenedAt / server 状态的刷新由 shell 侧 widget.open 广播的 widget.changed 驱动
+    return { success: true }
   },
 
   stopWidget: async (id) => {
@@ -100,11 +82,6 @@ export const useWidgetStore = create<WidgetState>((set, get) => ({
 
   deleteWidget: async (id) => {
     await window.api.widget.delete(id)
-    await get().reload()
-  },
-
-  stopServer: async () => {
-    await window.api.widget.stopServer()
     await get().reload()
   }
 }))

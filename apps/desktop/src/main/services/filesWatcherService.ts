@@ -16,7 +16,7 @@ import { dirname, basename } from 'path'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
-import { isPathInSandboxRead, resolveProjectConfig } from './toolContext'
+import { isPathReadAllowed, resolveProjectConfig } from './toolContext'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
@@ -73,14 +73,14 @@ function nfc(s: string): string {
   return s.normalize('NFC')
 }
 
-/** 解析 & 沙箱校验，返回 { abs, root } 或 null（无工作目录 / 越权 / 空路径） */
+/** 解析 & 准入校验，返回 { abs, root } 或 null（无工作目录 / 越权 / 空路径） */
 function resolveWatchTarget(sessionId: string, path: string): { abs: string; root: string } | null {
   const session = sessionService.getById(sessionId)
   const workingDirectory = session?.workingDirectory
   if (!workingDirectory) return null
   const abs = resolveReadPath(path, workingDirectory)
   const config = resolveProjectConfig(sessionId)
-  if (!isPathInSandboxRead(config, abs)) return null
+  if (!isPathReadAllowed(config, abs)) return null
   return { abs, root: workingDirectory }
 }
 

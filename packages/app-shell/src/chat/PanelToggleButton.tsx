@@ -2,11 +2,11 @@
  * PanelToggleButton —— 顶栏的侧栏/右面板开关按钮（桌面/扩展共用，保证样式一致）。
  *
  * 视觉沿用桌面：灰色图标按钮，用「图标内分栏的填充」表示展开态（不是整钮变 accent）。
- * side 决定分栏在左还是右：'left'=会话列表侧栏，'right'=右侧面板。
- * 行为/状态由各端注入（桌面 sidebarStore/browserStore，扩展 sidebarStore/panelStore）。
+ * side 决定分栏方位：'left'=会话列表侧栏，'right'=右侧面板，'bottom'=底部面板（桌面终端）。
+ * 行为/状态由各端注入（桌面 sidebarStore/browserStore/bottomPanelStore，扩展 sidebarStore/panelStore）。
  */
 export interface PanelToggleButtonProps {
-  side: 'left' | 'right'
+  side: 'left' | 'right' | 'bottom'
   /** 是否展开（决定分栏是否填充） */
   open: boolean
   onClick: () => void
@@ -22,7 +22,8 @@ export function PanelToggleButton({
   title,
   noDrag = false
 }: PanelToggleButtonProps): React.JSX.Element {
-  // 左：分隔线在 x=9，填充左栏(x=3,w=6)；右：分隔线在 x=15，填充右栏(x=15,w=6)
+  // 左：分隔线在 x=9，填充左栏(x=3,w=6)；右：分隔线在 x=15，填充右栏(x=15,w=6)；
+  // 底：分隔线在 y=15，填充底栏(y=15,h=6)
   const dividerX = side === 'left' ? 9 : 15
   const fillX = side === 'left' ? 3 : 15
 
@@ -43,9 +44,28 @@ export function PanelToggleButton({
         strokeLinejoin="round"
       >
         <rect width="18" height="18" x="3" y="3" rx="2" />
-        <path d={`M${dividerX} 3v18`} />
-        {open && (
-          <rect x={fillX} y="3" width="6" height="18" rx="2" fill="currentColor" stroke="none" />
+        {side === 'bottom' ? (
+          <>
+            <path d="M3 15h18" />
+            {open && (
+              <rect x="3" y="15" width="18" height="6" rx="2" fill="currentColor" stroke="none" />
+            )}
+          </>
+        ) : (
+          <>
+            <path d={`M${dividerX} 3v18`} />
+            {open && (
+              <rect
+                x={fillX}
+                y="3"
+                width="6"
+                height="18"
+                rx="2"
+                fill="currentColor"
+                stroke="none"
+              />
+            )}
+          </>
         )}
       </svg>
     </button>

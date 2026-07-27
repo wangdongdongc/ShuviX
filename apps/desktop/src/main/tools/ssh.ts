@@ -11,8 +11,6 @@ import { sessionDao } from '../dao/sessionDao'
 import { sanitizeBinaryOutput, collapseProgressOutput } from '../utils/toolUtils/shell'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
-import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'
-import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { SshToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
@@ -330,13 +328,9 @@ async function handleExec(
     throw new Error('No active SSH connection. Use ssh({ action: "connect" }) first.')
   }
 
-  // 每条命令都需用户审批（免审批或允许列表匹配时跳过）
-  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove', 'allowList'])
-  if (
-    ctx.requestUserInput &&
-    !sess?.autoApprove &&
-    !isCommandAllowedUnified(sess?.allowList, 'ssh', command)
-  ) {
+  // 每条命令都需用户审批 —— 唯一豁免是会话级「免审批」开关（无命令模式匹配）
+  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove'])
+  if (ctx.requestUserInput && !sess?.autoApprove) {
     const response = await ctx.requestUserInput({
       id: toolCallId,
       kind: 'approval',
@@ -365,12 +359,6 @@ async function handleExec(
         (response.kind === 'approval' && response.reason) || 'User denied execution of this command'
       )
     }
-    if (response.extra?.rememberPattern) {
-      const patterns = extractPatterns(command)
-      if (patterns.length > 0) {
-        sessionService.addAllowListPatterns(ctx.sessionId, 'ssh', patterns)
-      }
-    }
   }
 
   if (signal?.aborted) throw new Error(TOOL_ABORTED)
@@ -397,7 +385,9 @@ async function handleExec(
         type: 'ssh',
         action: 'exec',
         exitCode: result.exitCode,
-        truncated: false
+        truncated: false,
+        // 终端形态详情区用它渲染提示符（远端无可跟踪的 cwd，显示主机才是 ssh 的语义）
+        host: connInfo?.host
       }
     }
   } catch (err: unknown) {
@@ -449,14 +439,15 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ssh',
   group: 'remote',
-  defaultEnabled: false,
+  defaultEnabled: true,
   getLabel: () => t('tool.sshLabel'),
   getHint: () => t('tool.sshHint'),
   factory: (ctx) => new SshTool(ctx),
   presentation: {
     icon: 'Terminal',
     iconColor: '#38bdf8',
-    summaryField: 'description'
+    // 仅 exec 会带 command，connect / disconnect 无命令可渲染，自动降级回通用表单形态
+    detailView: 'terminal'
   },
   describe: () => ({ description: buildSshDescription(), parameters: SshParamsSchema })
 })

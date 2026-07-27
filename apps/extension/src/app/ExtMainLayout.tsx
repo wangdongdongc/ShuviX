@@ -8,17 +8,18 @@ import {
   SidebarResizeHandle,
   ContextMenuProvider,
   useSessionDelete,
+  usePreviewRequestBridge,
   SessionConfigDialog,
+  SessionToolbar,
   StatusBanner,
-  usePanelStore,
+  useSessionPanelReveal,
   useSidebarStore
 } from '@shuvix/app-shell'
 import i18n from './i18n'
 import { SessionRuntime } from './SessionRuntime'
 import { ExtSidebar } from './ExtSidebar'
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from './sidebarStore'
-import { PANEL_MIN_WIDTH, PANEL_MAX_WIDTH } from './panelStore'
-import { RightPanel } from './RightPanel'
+import { ExtSessionPanel } from './ExtSessionPanel'
 import { ExtNotebookSession } from './ExtNotebookSession'
 
 type ChatHostValue = React.ComponentProps<typeof ChatHostProvider>['value']
@@ -30,8 +31,8 @@ async function refreshSessions(): Promise<void> {
 }
 
 /**
- * 扩展主界面布局 —— 对齐桌面：侧栏（ExtSidebar）+ 共享 <ChatBody> 正文 + 右侧面板（文件/子代理）。
- * 拥有会话运行时（SessionRuntime）、会话/项目装载与右面板自动切 Tab 的副作用。
+ * 扩展主界面布局 —— 对齐桌面：侧栏（ExtSidebar）+ 共享 <ChatBody> 正文（含会话面板插槽：
+ * Files/Sub-agent 悬浮卡片 + 胶囊工具栏）。拥有会话运行时（SessionRuntime）与会话/项目装载副作用。
  */
 export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Element {
   const { t } = useTranslation()
@@ -41,9 +42,6 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
   const isOpen = useSidebarStore((s) => s.isOpen)
   const width = useSidebarStore((s) => s.width)
   const [resizing, setResizing] = useState(false)
-  const panelOpen = usePanelStore((s) => s.isOpen)
-  const panelWidth = usePanelStore((s) => s.width)
-  const [panelResizing, setPanelResizing] = useState(false)
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   // 启动仅加载会话列表，不自动选中 —— 无活跃会话时显示欢迎页（与桌面一致）。
@@ -57,17 +55,11 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
     setSessionId(activeSessionId)
   }, [activeSessionId])
 
-  // 笔记本 [[wiki-link]] 点击 → 打开右侧 Files 面板（FilesPanel 自身订阅 filePreviewRequest 打开预览）
-  const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
-  useEffect(() => {
-    if (filePreviewRequest) usePanelStore.getState().showTab('files')
-  }, [filePreviewRequest])
-
-  // 子智能体启动（含笔记本每次发送）→ 自动打开右侧「子智能体」Tab（共享信号，事件检测在 useAgentEvents）
-  const subAgentRevealRequest = useChatStore((s) => s.subAgentRevealRequest)
-  useEffect(() => {
-    if (subAgentRevealRequest) usePanelStore.getState().showTab('subagent')
-  }, [subAgentRevealRequest])
+  // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；previewInPanel：文件预览切 Preview 工具页）
+  useSessionPanelReveal(true, true)
+  // 文件预览请求（preview 工具事件 / Files 面板点击 / 笔记本 wiki-link）→ 预览目标
+  // （Side Panel 无 app 级右侧栏，由会话面板的 Preview 工具页展示，见 ExtSessionPanel）
+  usePreviewRequestBridge()
 
   // 工具渲染配置（read/write/edit/ask 复用桌面定义 + 浏览器工具）；随语言切换重解析
   useEffect(() => {
@@ -141,47 +133,21 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
               ) : undefined
             }
             rightActions={
-              <>
-                {/* 折叠会话列表 + 切换右侧面板 —— 复用共享按钮，样式与桌面一致 */}
-                <PanelToggleButton
-                  side="left"
-                  open={isOpen}
-                  onClick={() => useSidebarStore.getState().toggle()}
-                  title={t('sidebar.title')}
-                />
-                <PanelToggleButton
-                  side="right"
-                  open={panelOpen}
-                  onClick={() => usePanelStore.getState().toggle()}
-                  title={t('panel.files')}
-                />
-              </>
+              // 折叠会话列表 —— 复用共享按钮，样式与桌面一致（Files/Sub-agent 入口在会话工具栏胶囊）
+              <PanelToggleButton
+                side="left"
+                open={isOpen}
+                onClick={() => useSidebarStore.getState().toggle()}
+                title={t('sidebar.title')}
+              />
             }
+            sessionToolbar={<SessionToolbar sessionId={activeSessionId} showPreview />}
+            sessionPanel={<ExtSessionPanel sessionId={activeSessionId} />}
             welcome={<WelcomeView enableConfigShare />}
             renderNotebook={(path, sid) => (
               <ExtNotebookSession key={sid} path={path} sessionId={sid} />
             )}
           />
-          {/* 右侧面板（文件 / 子代理）：手柄在左侧，向左拖变宽(invert) */}
-          {panelOpen && (
-            <SidebarResizeHandle
-              width={panelWidth}
-              min={PANEL_MIN_WIDTH}
-              max={PANEL_MAX_WIDTH}
-              invert
-              onResize={(w) => usePanelStore.getState().setWidth(w)}
-              onResizeStart={() => setPanelResizing(true)}
-              onResizeEnd={() => setPanelResizing(false)}
-            />
-          )}
-          <div
-            className={`flex-shrink-0 overflow-hidden ${panelResizing ? '' : 'transition-[width] duration-200 ease-in-out'}`}
-            style={{ width: panelOpen ? panelWidth : 0 }}
-          >
-            <div className="h-full" style={{ width: panelWidth }}>
-              <RightPanel />
-            </div>
-          </div>
         </div>
         {deleteDialog}
       </ContextMenuProvider>

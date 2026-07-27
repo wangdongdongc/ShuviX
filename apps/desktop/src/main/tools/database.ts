@@ -120,14 +120,13 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'database',
   group: 'remote',
-  defaultEnabled: false,
+  defaultEnabled: true,
   getLabel: () => t('tool.remoteDbLabel'),
   getHint: () => t('tool.remoteDbHint'),
   factory: (ctx) => new DatabaseTool(ctx),
   presentation: {
     icon: 'Database',
-    iconColor: '#f59e0b',
-    summaryField: 'description'
+    iconColor: '#f59e0b'
   },
   describe: () => ({ description: getDatabaseDescription(), parameters: DatabaseParamsSchema })
 })

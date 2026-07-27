@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { commandService } from '../services/commandService'
 import { skillService } from '../services/skillService'
+import { agentService } from '../services/agentService'
 import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
@@ -25,9 +26,25 @@ function gatherSlashCommands(projectPath: string | null): SlashCommand[] {
     .filter((c) => !taken.has(c.commandId))
   skillCommands.forEach((c) => taken.add(c.commandId))
 
-  // 3. （未来）其他内置命令源在此处追加，统一通过 taken 去重
+  // 3. 子代理派发命令（kind 'agent'）：`/<agentName> <prompt>` 由前端识别 kind 走
+  //    agent.dispatchPrompt 直接派发具名子智能体（无模板展开）。名字含空白无法按
+  //    "/name 参数" 解析，跳过；与项目/skill 命令同名时靠后让位（taken 去重）
+  const agentCommands: SlashCommand[] = agentService
+    .listEnabled()
+    .filter((a) => !/\s/.test(a.name) && !taken.has(a.name))
+    .map((a) => ({
+      commandId: a.name,
+      name: a.displayName,
+      description: a.whenToUse,
+      template: '',
+      filePath: a.basePath,
+      kind: 'agent' as const
+    }))
+  agentCommands.forEach((c) => taken.add(c.commandId))
 
-  return [...projectCommands, ...skillCommands]
+  // 4. （未来）其他内置命令源在此处追加，统一通过 taken 去重
+
+  return [...projectCommands, ...skillCommands, ...agentCommands]
 }
 
 /**

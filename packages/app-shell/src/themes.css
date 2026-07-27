@@ -1,6 +1,19 @@
 /* ShuviX 共享主题 token —— 11 套（7 深 4 浅），桌面与扩展共用。
    纯 CSS 自定义属性，靠 document data-theme 应用；@theme 映射留在各宿主入口 CSS。 */
 
+/* ========== 字族 token ==========
+   与配色无关，11 套主题共用一份；base.css 与组件都引用这里，不再各自硬编码字体栈。 */
+:root {
+  --theme-font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
+  --theme-font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', 'Ubuntu Mono', 'Fira Code', monospace;
+  /* 旁支/引述文本（思考过程等）。西文衬线在前，其后依次落到各平台的 CJK 衬线，
+     避免中英混排时西文衬线配黑体汉字的割裂感。 */
+  --theme-font-serif:
+    ui-serif, Georgia, 'Iowan Old Style', 'Times New Roman', 'Songti SC', 'Noto Serif CJK SC',
+    'Source Han Serif SC', 'Hiragino Mincho ProN', 'SimSun', serif;
+}
+
 /* ========== 深色主题 ========== */
 
 /* GitHub Dark（默认深色） */

@@ -6,7 +6,6 @@ import { Archive } from 'lucide-react'
 import {
   useChatStore,
   selectIsStreaming,
-  selectIsCompacting,
   selectCanChat,
   selectCanEdit,
   type ChatMessage,
@@ -18,6 +17,16 @@ import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
+
+/** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
+function ConversationFooter(): React.JSX.Element {
+  return (
+    <>
+      <StreamingFooter />
+      <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
+    </>
+  )
+}
 
 /** 判断消息是否为中间步骤/工具项 */
 function isStepOrToolMsg(msg: ChatMessage): boolean {
@@ -144,7 +153,6 @@ export function Conversation({
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore(selectIsStreaming)
-  const isCompacting = useChatStore(selectIsCompacting)
   const canChat = useChatStore(selectCanChat)
   const canEdit = useChatStore(selectCanEdit)
   // 仅查看（WebUI 分享端）：消息「内容」限宽居中，但滚动条仍贴屏幕右缘（不随内容内移）。
@@ -166,6 +174,12 @@ export function Conversation({
     [viewOnly]
   )
   const virtuosoRef = useRef<VirtuosoHandle>(null)
+  // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。
+  // 直接写 DOM 变量而非 state：高度随输入增长高频变化，不触发列表重渲染
+  const rootRef = useRef<HTMLDivElement>(null)
+  const handleInputHeightChange = useCallback((h: number) => {
+    rootRef.current?.style.setProperty('--chat-input-h', `${h}px`)
+  }, [])
 
   const focusMode = useChatHost().appearance.focusMode
   const dim = focusMode
@@ -295,38 +309,50 @@ export function Conversation({
 
   return (
     <>
-      {/* 压缩中冻结遮罩 */}
-      {isCompacting && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-bg-primary/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3">
-            <div className="animate-spin h-6 w-6 border-2 border-accent border-t-transparent rounded-full" />
-            <span className="text-sm text-text-secondary">{t('compact.compressing')}</span>
+      {/* 对话列 relative 锚点：悬浮输入卡片绝对贴底定位于此（与笔记本会话同构） */}
+      <div ref={rootRef} className="relative flex-1 min-h-0 flex flex-col">
+        {messages.length === 0 && !isStreaming ? (
+          // 空态同样按输入卡片高度留白，避免居中内容被悬浮卡片遮挡
+          <div
+            className="flex-1 min-h-0 flex flex-col"
+            style={{ paddingBottom: 'var(--chat-input-h, 0px)' }}
+          >
+            {emptyState ?? (
+              <div className="flex-1 flex items-center justify-center px-6">
+                <p className="text-sm text-text-tertiary">{t('chat.emptyHint')}</p>
+              </div>
+            )}
           </div>
-        </div>
-      )}
-      {messages.length === 0 && !isStreaming ? (
-        (emptyState ?? (
-          <div className="flex-1 flex items-center justify-center px-6">
-            <p className="text-sm text-text-tertiary">{t('chat.emptyHint')}</p>
+        ) : (
+          <Virtuoso
+            ref={virtuosoRef}
+            className="flex-1 min-w-0 thin-scrollbar"
+            data={visibleItems}
+            itemContent={renderItem}
+            components={{
+              Footer: ConversationFooter,
+              ...(ArchivedBanner ? { Header: ArchivedBanner } : {}),
+              ...(CenteredList ? { List: CenteredList } : {})
+            }}
+            initialTopMostItemIndex={visibleItems.length - 1}
+            key={sessionId}
+            increaseViewportBy={{ top: 200, bottom: 400 }}
+            computeItemKey={(_index, item) => item.msg.id}
+          />
+        )}
+
+        {/* 输入区（悬浮卡片）+ 待处理用户输入浮层（经 accessory 悬浮于卡片上方）— readonly 隐藏 */}
+        {canChat && (
+          <div
+            className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
+          >
+            <InputArea
+              accessory={<PendingInputsPanel onResponse={handleInputResponse} />}
+              onHeightChange={handleInputHeightChange}
+            />
           </div>
-        ))
-      ) : (
-        <Virtuoso
-          ref={virtuosoRef}
-          className="flex-1 min-w-0 thin-scrollbar"
-          data={visibleItems}
-          itemContent={renderItem}
-          components={{
-            Footer: StreamingFooter,
-            ...(ArchivedBanner ? { Header: ArchivedBanner } : {}),
-            ...(CenteredList ? { List: CenteredList } : {})
-          }}
-          initialTopMostItemIndex={visibleItems.length - 1}
-          key={sessionId}
-          increaseViewportBy={{ top: 200, bottom: 400 }}
-          computeItemKey={(_index, item) => item.msg.id}
-        />
-      )}
+        )}
+      </div>
 
       {/* 回退确认弹窗 */}
       {pendingRollbackId && (
@@ -338,15 +364,6 @@ export function Conversation({
           onConfirm={confirmRollback}
           onCancel={cancelRollback}
         />
-      )}
-      {/* 输入区 + 待处理用户输入悬浮面板 — readonly 隐藏 */}
-      {canChat && (
-        <div
-          className={`relative transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
-        >
-          <PendingInputsPanel onResponse={handleInputResponse} />
-          <InputArea />
-        </div>
       )}
     </>
   )

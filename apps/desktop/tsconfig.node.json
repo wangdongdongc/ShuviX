@@ -9,6 +9,10 @@
     "../../packages/chat-protocol/src/**/*",
     "../../packages/agent-runtime/src/**/*"
   ],
+  "exclude": [
+    "../../packages/chat-protocol/src/utils/svgSanitize.ts",
+    "../../packages/chat-protocol/src/utils/svgSanitize.test.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "types": ["electron-vite/node"],

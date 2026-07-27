@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApgv/HEBs2WVOLF6ilD/QylV6RDijjyk4eAR+HUrNXBTs9gFoW7VU2HB1BQ7+7mttqsIwlKDQphdBdkCmD6MUaUc9NTsc2KmpNUwq2pvhvBe8N+Nl0XZt5PHEJ6SYXmxKeqzmyrDiRG+QkBIFEjdSsz2Ta5O25Fg6WZp+gizqzzbsbe5i42WBdtMjohASvcsWGzCnuQErVldW6GPE2Q02b19ZFfaI7jEuSSRG6UC80u5QaiGJ0bkcBDfc1JFFL9+RerA1sZFe+6r9SRc1HGlHsiBYWAt1YkPPROHobd9VURrr2Gnj9Ji36RDWm1UNVdXOQyhP9TpfKE4bGirhBZoW8wIDAQAB",
   "name": "ShuviX",
   "version": "0.1.0",
   "description": "ShuviX — 浏览器内运行 Agent 的 AI 助手（独立整页 App）",

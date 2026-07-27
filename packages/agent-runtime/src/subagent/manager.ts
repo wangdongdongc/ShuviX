@@ -1,28 +1,36 @@
 /**
- * 子代理会话管理器（跨端共享核心，从桌面 AgentManager 抽取）。
+ * 派生 Agent 协调器（跨端共享核心）。
  *
- * 派生进程内嵌套 pi-agent-core Agent，订阅其事件翻译成 ChatEvent 广播（sessionId=subSessionId），
- * 抽取最终文本结果供父 tool_call 使用，并处理 abort 传播 / 在飞工具调用的"已中止"终结。
+ * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一个 RuntimeAgent 运行时
+ * （事件经统一的 eventHandler 管线转换/广播），唯一差异是注入内存态 ephemeral
+ * persistence —— 不产生会话记录，销毁即消失。本文件只负责 spawn 协调：
+ * 深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，父子关系唯一事实来源）、
+ * 结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
  *
  * 平台相关项全部经注入：工具解析(resolveTools)、模型构建(buildModel)、apiKey(getApiKey)、
- * 事件广播(broadcast)、可选的会话登记(onRegister/onUnregister，桌面接 transientSessionRegistry)。
+ * 事件广播(broadcast)、审批/询问通道(requestUserInput，路由到根会话前端)。
  */
-import {
-  Agent,
-  type AgentEvent,
-  type AgentMessage,
-  type AgentToolResult
-} from '@earendil-works/pi-agent-core'
+import { Agent, type AgentMessage, type AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { v4 as uuid } from 'uuid'
-import type { ChatEvent, ChatTokenUsage } from '@shuvix/chat-protocol/events'
+import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
+import { RuntimeAgent } from '../runtimeAgent'
+import { AgentRegistry, agentIdOf } from '../agentRegistry'
+import { createEphemeralPersistence } from '../ephemeralPersistence'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
-import type { ToolResultDetails } from '../types'
+import type { RuntimeLogger } from '../types'
 
 type AnyAgentTool = Agent['state']['tools'][number]
+
+/**
+ * 默认派生层级上限：根会话 depth=0，其派生 agent depth=1，再派生 depth=2。
+ * 超过上限的 spawn 被拒绝（错误文本返回给调用方 LLM）。宿主可经 deps.maxAgentDepth 覆盖。
+ */
+export const DEFAULT_MAX_AGENT_DEPTH = 2
 
 /** 提取一组 Agent 消息的纯文本（用于把注入的 context 消息原样回显到面板卡片） */
 function agentMessagesToText(messages: AgentMessage[]): string {
@@ -45,18 +53,53 @@ function agentMessagesToText(messages: AgentMessage[]): string {
     .join('\n\n')
 }
 
-/** 子代理会话登记元信息（onRegister 回调；桌面据此填充 transientSessionRegistry） */
-export interface SubAgentRegisterMeta {
-  subSessionId: string
-  parentSessionId: string
-  subAgentName: string
-  displayName: string
-  description: string
+/**
+ * spawn 上下文 —— 传给 resolveTools 的本次派生身份信息。
+ * 宿主据此把派发工具（Agent）也注入派生 agent 的工具集：parentSessionId 用 agentId
+ * （嵌套派生的子代挂在本 agent 名下），深度校验由 manager 在下一次 spawn 时统一执行。
+ */
+export interface SpawnContext {
+  /** 本次派生 agent 的事件频道 id */
+  agentId: string
+  /** 本次派生 agent 的层级（根会话的直接派生 = 1） */
+  depth: number
+  /** 所属根会话 id（工具路径审批/LLM 日志归属） */
+  rootSessionId: string
+  /** 本次派生使用的模型配置（宿主为其派发工具沿用） */
+  modelConfig: SubAgentModelConfig
+  /** 本 agent 是否还允许继续派发（depth < maxAgentDepth）；false 时宿主应省略派发工具 */
+  canSpawn: boolean
+}
+
+/**
+ * 传给 resolveTools 的运行期辅助能力（manager 按派发上下文绑定后注入）。
+ *
+ * requestUserInput：派生 agent 工具可达**根会话**的用户输入通道——审批/询问表单出现在
+ * 根会话对话流中，由用户作答后回流，与主 Agent 亲自调用 ask/路径审批完全等效。
+ * 仅当宿主向 SubAgentManagerDeps 注入了 requestUserInput 时存在。
+ */
+export interface SubAgentToolHelpers {
+  requestUserInput?: (req: InputRequest) => Promise<InputResponse>
 }
 
 export interface SubAgentManagerDeps {
-  /** 把 agentType.tools 解析为可执行工具实例（含截断/落盘包装），端特定 */
-  resolveTools: (agentType: InProcessAgentType, parentSessionId: string) => AnyAgentTool[]
+  /**
+   * 把 agentType.tools 解析为可执行工具实例（含截断/落盘包装），端特定。
+   * rootSessionId 为所属根会话（工具审批/项目上下文取此）；spawn 携带本次派生身份，
+   * 宿主应据此把派发工具注入派生 agent（全员可派发，深度由 manager 统一校验）。
+   */
+  resolveTools: (
+    agentType: InProcessAgentType,
+    rootSessionId: string,
+    helpers: SubAgentToolHelpers,
+    spawn: SpawnContext
+  ) => AnyAgentTool[]
+  /**
+   * 根会话用户输入通道（可选）。注入后 manager 在解析工具时把它绑定 rootSessionId
+   * 经 SubAgentToolHelpers 传给 resolveTools，使派生 agent 工具（ask/路径审批等）
+   * 可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
+   */
+  requestUserInput?: (rootSessionId: string, req: InputRequest) => Promise<InputResponse>
   /** 把模型配置构建为 pi-ai Model，端特定（桌面 providerDao / 扩展 providerInfo+env） */
   buildModel: (config: SubAgentModelConfig) => Model<Api>
   /** 取 provider 的 apiKey（pi-agent-core getApiKey） */
@@ -64,16 +107,15 @@ export interface SubAgentManagerDeps {
   /** 向前端广播 ChatEvent */
   broadcast: (event: ChatEvent) => void
   /** 日志（可选） */
-  logger?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }
+  logger?: RuntimeLogger
   /** abort 时工具调用展示的文案（懒解析以反映当前 i18n 语言；缺省英文） */
   getAbortedNote?: () => string
-  /** 子会话登记/注销（可选；桌面接 transientSessionRegistry 供 IPC/右侧面板发现） */
-  onRegister?: (meta: SubAgentRegisterMeta) => void
-  onUnregister?: (subSessionId: string) => void
+  /** 派生层级上限（缺省 DEFAULT_MAX_AGENT_DEPTH） */
+  maxAgentDepth?: number
   /**
    * LLM 日志（可选；桌面注入 httpLogService，扩展省略）。
-   * 子代理每次 LLM 请求经 logRequest 记入日志（sessionId 用父会话，便于在 LLM 日志里归到可见会话下），
-   * 响应到达（message_end）再 updateUsage 回填用量。
+   * 派生 agent 每次 LLM 请求经 logRequest 记入日志（sessionId 用根会话，便于在
+   * LLM 日志里归到可见会话下），响应到达（message_end）再 updateUsage 回填用量。
    */
   httpLog?: {
     logRequest: (params: {
@@ -106,7 +148,7 @@ export interface RunTaskParams {
   promptInlineTokens?: Record<string, InlineToken>
   parentAbortSignal?: AbortSignal
   /**
-   * 在 prompt 之前预置进子代理上下文的消息（如笔记本会话把当前 md 内容作为一条 user message 注入）。
+   * 在 prompt 之前预置进派生 agent 上下文的消息（如笔记本会话把当前 md 内容作为一条 user message 注入）。
    * 这些消息进 LLM 上下文。其文本会随 sub_session_register 的 contextNote 广播给面板，
    * 故面板「笔记本内容」卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
    */
@@ -116,9 +158,9 @@ export interface RunTaskParams {
 export interface SubAgentManager {
   runTask: (params: RunTaskParams) => Promise<{ result: string }>
   /**
-   * 继续与一个已存在子代理对话：复用其 Agent（保留历史）追加一轮 user prompt（fire-and-forget）。
+   * 继续与一个已存在派生 agent 对话：复用其 Agent（保留历史）追加一轮 user prompt（fire-and-forget）。
    * 面板先收到 user_message（后续用户消息内联到转写），随后流式事件如常，末了再发 sub_session_end。
-   * 子会话不存在或已中止时抛错。
+   * 派生 agent 不存在或已中止时抛错。
    */
   continueTask: (params: {
     subSessionId: string
@@ -126,49 +168,36 @@ export interface SubAgentManager {
     inlineTokens?: Record<string, InlineToken>
   }) => Promise<void>
   /**
-   * 用户中断一个运行中的子代理：停止当前生成但保留已产出的部分结果，按「已完成」收尾
-   * （区别于 abort/destroy 的失败/销毁语义——子会话保留在面板，用户可继续追问或显式删除）。
+   * 用户中断一个运行中的派生 agent：停止当前生成但保留已产出的部分结果，按「已完成」收尾
+   * （区别于 abort/destroy 的失败/销毁语义——条目保留在面板，用户可继续追问或显式删除）。
    */
   interrupt: (subSessionId: string) => void
+  /** 中止某 agent 的全部后代（级联子树） */
   abortAll: (parentSessionId: string) => void
+  /** 销毁某 agent 的全部后代（级联子树） */
   destroyAll: (parentSessionId: string) => void
   destroy: (subSessionId: string) => void
   has: (subSessionId: string) => boolean
+  /** 父子关系登记簿（层级/归属查询，只读使用） */
+  readonly registry: AgentRegistry
 }
 
-interface SubAgentSession {
-  subSessionId: string
-  type: InProcessAgentType
+interface SpawnedAgent {
+  agentId: string
+  profile: InProcessAgentType
   agent: Agent
-  abortController: AbortController
-  pendingToolCalls: Map<string, string>
-  finalizedToolCalls: Set<string>
+  runtime: RuntimeAgent
   aborted: boolean
   /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
   interrupted: boolean
-  /** 待回填用量的 LLM 日志 ID 队列（onPayload 入队、message_end 出队 → updateUsage） */
-  pendingLogIds: string[]
 }
 
-/** 创建一个子代理会话管理器（注入端适配依赖） */
+/** 创建一个派生 agent 协调器（注入端适配依赖） */
 export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManager {
   const abortedNote = (): string => deps.getAbortedNote?.() || 'Aborted by user.'
-  const byParent = new Map<string, Set<string>>()
-  const sessions = new Map<string, SubAgentSession>()
-
-  function removeSession(parentSessionId: string, subSessionId: string): void {
-    sessions.delete(subSessionId)
-    const set = byParent.get(parentSessionId)
-    if (set) {
-      set.delete(subSessionId)
-      if (set.size === 0) byParent.delete(parentSessionId)
-    }
-  }
-
-  function parentOf(subSessionId: string): string | undefined {
-    for (const [parent, set] of byParent) if (set.has(subSessionId)) return parent
-    return undefined
-  }
+  const maxDepth = deps.maxAgentDepth ?? DEFAULT_MAX_AGENT_DEPTH
+  const registry = new AgentRegistry()
+  const sessions = new Map<string, SpawnedAgent>()
 
   function extractResult(messages: AgentMessage[], execError?: string): string {
     let lastText = ''
@@ -201,7 +230,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
     const parts: string[] = []
     parts.push(
-      `Sub-agent did not produce a final text response (${assistantCount} assistant message(s), ${toolUseCount} tool call(s)).`
+      `Agent did not produce a final text response (${assistantCount} assistant message(s), ${toolUseCount} tool call(s)).`
     )
     if (lastStopReason) parts.push(`stopReason=${lastStopReason}.`)
     if (lastErrorMessage) parts.push(`Model errorMessage: ${lastErrorMessage}.`)
@@ -209,190 +238,41 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return parts.join(' ')
   }
 
-  function extractUsage(messages: AgentMessage[]): ChatTokenUsage {
-    const details: ChatTokenUsage['details'] = []
-    for (const m of messages) {
-      if (isAssistantMessage(m) && m.usage) {
-        details.push({
-          input: m.usage.input || 0,
-          output: m.usage.output || 0,
-          cacheRead: m.usage.cacheRead || 0,
-          cacheWrite: m.usage.cacheWrite || 0,
-          total: m.usage.totalTokens || 0,
-          stopReason: m.stopReason || ''
-        })
-      }
-    }
-    const totals = details.reduce(
-      (acc, d) => ({
-        input: acc.input + d.input,
-        output: acc.output + d.output,
-        cacheRead: acc.cacheRead + d.cacheRead,
-        cacheWrite: acc.cacheWrite + d.cacheWrite,
-        total: acc.total + d.total
-      }),
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
-    )
-    return { ...totals, details }
-  }
-
-  function finalizeAbortedToolCalls(subSessionId: string): void {
-    const s = sessions.get(subSessionId)
-    if (!s) return
-    for (const [toolCallId, toolName] of s.pendingToolCalls) {
-      const messageId = `${subSessionId}-tc-${toolCallId}`
-      s.finalizedToolCalls.add(toolCallId)
-      deps.broadcast({
-        type: 'tool_end',
-        sessionId: subSessionId,
-        toolCallId,
-        toolName,
-        result: abortedNote(),
-        isError: true,
-        messageId
-      })
-    }
-    s.pendingToolCalls.clear()
-  }
-
-  function forwardEvent(event: AgentEvent, subSessionId: string, agent: Agent): void {
-    if (event.type === 'agent_start') {
-      deps.broadcast({ type: 'agent_start', sessionId: subSessionId })
-      return
-    }
-
-    if (event.type === 'agent_end') {
-      const lastAssistant = [...agent.state.messages].reverse().find(isAssistantMessage)
-      let content = ''
-      if (lastAssistant) {
-        if (typeof lastAssistant.content === 'string') {
-          content = lastAssistant.content
-        } else if (Array.isArray(lastAssistant.content)) {
-          content = lastAssistant.content
-            .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-            .map((p) => p.text)
-            .join('\n')
-        }
-      }
-      const usage = extractUsage(agent.state.messages)
-      const finalMsg = {
-        id: `${subSessionId}-final-${Date.now()}`,
-        sessionId: subSessionId,
-        role: 'assistant' as const,
-        type: 'text' as const,
-        content,
-        metadata: usage.total > 0 ? { usage } : null,
-        model: lastAssistant?.model || '',
-        createdAt: Date.now()
-      }
-      deps.broadcast({
-        type: 'agent_end',
-        sessionId: subSessionId,
-        message: JSON.stringify(finalMsg),
-        usage: usage.total > 0 ? usage : undefined
-      })
-      return
-    }
-
-    if (event.type === 'message_update') {
-      const msgEvent = event.assistantMessageEvent
-      if (msgEvent.type === 'text_delta' && msgEvent.delta) {
-        deps.broadcast({ type: 'text_delta', sessionId: subSessionId, delta: msgEvent.delta })
-      } else if (msgEvent.type === 'thinking_delta' && msgEvent.delta) {
-        deps.broadcast({ type: 'thinking_delta', sessionId: subSessionId, delta: msgEvent.delta })
-      }
-      return
-    }
-
-    // 每条 assistant 消息完成 → 回填对应 LLM 请求日志的用量（与 onPayload 入队一一对应）
-    if (event.type === 'message_end') {
-      const s = sessions.get(subSessionId)
-      const msg = event.message
-      if (s && deps.httpLog && isAssistantMessage(msg)) {
-        const logId = s.pendingLogIds.shift()
-        if (logId) {
-          const usage = msg.usage
-          let responseJson: string | undefined
-          try {
-            responseJson = JSON.stringify(
-              { content: msg.content, stopReason: msg.stopReason },
-              null,
-              2
-            )
-          } catch {
-            /* 序列化失败则不存响应 */
-          }
-          deps.httpLog.updateUsage(
-            logId,
-            usage?.input ?? 0,
-            usage?.output ?? 0,
-            usage?.totalTokens ?? 0,
-            responseJson
-          )
-        }
-      }
-      return
-    }
-
-    if (event.type === 'tool_execution_start') {
-      const s = sessions.get(subSessionId)
-      if (s && !s.aborted) s.pendingToolCalls.set(event.toolCallId, event.toolName)
-      const messageId = `${subSessionId}-tc-${event.toolCallId}`
-      deps.broadcast({
-        type: 'tool_start',
-        sessionId: subSessionId,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        toolArgs: (event.args as Record<string, unknown>) ?? {},
-        messageId
-      })
-      return
-    }
-
-    if (event.type === 'tool_execution_end') {
-      const s = sessions.get(subSessionId)
-      if (s?.finalizedToolCalls.has(event.toolCallId)) {
-        s.finalizedToolCalls.delete(event.toolCallId)
-        return
-      }
-      if (s) s.pendingToolCalls.delete(event.toolCallId)
-
-      const messageId = `${subSessionId}-tc-${event.toolCallId}`
-      const result = event.result
-      const content = result?.content as Array<{ type: string; text?: string }> | undefined
-      const text =
-        content
-          ?.filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-          .map((c) => c.text)
-          .join('\n') ?? ''
-      // 转发工具结构化详情（edit diff 等），与主对话框一致 → 子代理面板也能渲染 DiffViewer
-      const details = (result as { details?: ToolResultDetails } | undefined)?.details
-      deps.broadcast({
-        type: 'tool_end',
-        sessionId: subSessionId,
-        toolCallId: event.toolCallId,
-        toolName: event.toolName ?? '',
-        result: text,
-        isError: result?.isError ?? false,
-        messageId,
-        details
-      })
-      return
-    }
-  }
-
-  function createSession(
-    parentSessionId: string,
-    agentType: InProcessAgentType,
-    modelConfig: SubAgentModelConfig,
+  function createSession(params: {
+    parentSessionId: string
+    agentType: InProcessAgentType
+    description: string
+    modelConfig: SubAgentModelConfig
     contextMessages?: AgentMessage[]
-  ): SubAgentSession {
-    const subSessionId = `sub-${uuid()}`
-    const tools = deps.resolveTools(agentType, parentSessionId)
-    const resolvedModel = deps.buildModel(modelConfig)
-    // onPayload 与 session 共享同一数组引用（session 在 agent 之后构造，故先建数组）
-    const pendingLogIds: string[] = []
+  }): SpawnedAgent {
+    const { parentSessionId, agentType, description, modelConfig, contextMessages } = params
 
+    // ── 深度校验：唯一的层级控制点（派发工具全员可用，越界在此拒绝） ──
+    const depth = registry.depthOf(parentSessionId) + 1
+    if (depth > maxDepth) {
+      throw new Error(
+        `Agent depth limit reached (max ${maxDepth}): this agent is already at depth ${depth - 1} and cannot spawn further agents. Complete the task directly instead.`
+      )
+    }
+    const rootSessionId = registry.rootSessionOf(parentSessionId)
+    const agentId = agentIdOf(uuid())
+
+    const helpers: SubAgentToolHelpers = {
+      requestUserInput: deps.requestUserInput
+        ? (req) => deps.requestUserInput!(rootSessionId, req)
+        : undefined
+    }
+    const tools = deps.resolveTools(agentType, rootSessionId, helpers, {
+      agentId,
+      depth,
+      rootSessionId,
+      modelConfig,
+      canSpawn: depth < maxDepth
+    })
+    const resolvedModel = deps.buildModel(modelConfig)
+
+    // onPayload 先于 RuntimeAgent 构造触达不到实例，经闭包引用延迟绑定
+    let runtimeRef: RuntimeAgent | null = null
     const httpLog = deps.httpLog
     const agent = new Agent({
       initialState: {
@@ -405,12 +285,12 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         tools
       },
       getApiKey: (p) => deps.getApiKey(p),
-      // LLM 日志：每次请求记一条（归到父会话），message_end 再回填用量
+      // LLM 日志：每次请求记一条（归到根会话），message_end 经统一事件管线回填用量
       onPayload: httpLog
         ? (payload, requestModel) => {
-            pendingLogIds.push(
+            runtimeRef?.addPendingLogId(
               httpLog.logRequest({
-                sessionId: parentSessionId,
+                sessionId: rootSessionId,
                 provider: requestModel.provider,
                 model: requestModel.id,
                 payload
@@ -420,64 +300,118 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         : undefined
     })
 
-    agent.subscribe((event: AgentEvent) => forwardEvent(event, subSessionId, agent))
-
-    const session: SubAgentSession = {
-      subSessionId,
-      type: agentType,
+    // 与会话根 agent 同一套运行时/事件管线；仅持久化为内存态（不产生会话记录）
+    const runtime = new RuntimeAgent({
+      sessionId: agentId,
+      parentAgentId: parentSessionId,
+      depth,
       agent,
-      abortController: new AbortController(),
-      pendingToolCalls: new Map(),
-      finalizedToolCalls: new Set(),
-      aborted: false,
-      interrupted: false,
-      pendingLogIds
-    }
+      eventSink: {
+        broadcast: (event) => deps.broadcast(event),
+        // 派生 agent 自身无输入面板；审批/询问经 helpers.requestUserInput 走根会话
+        hasUserInputCapability: () => false
+      },
+      persistence: createEphemeralPersistence(),
+      // 不做并行 batch 预展示（tool_start 统一在执行时发出，与派生 agent 面板语义一致）
+      shouldDeferToolDisplay: () => true,
+      httpLog: deps.httpLog,
+      logger: deps.logger,
+      localize: (key) => (key === 'agent.toolAborted' ? abortedNote() : key)
+    })
+    runtimeRef = runtime
 
-    sessions.set(subSessionId, session)
-    let set = byParent.get(parentSessionId)
-    if (!set) {
-      set = new Set()
-      byParent.set(parentSessionId, set)
+    const session: SpawnedAgent = {
+      agentId,
+      profile: agentType,
+      agent,
+      runtime,
+      aborted: false,
+      interrupted: false
     }
-    set.add(subSessionId)
+    sessions.set(agentId, session)
+    registry.register({
+      agentId,
+      parentAgentId: parentSessionId,
+      depth,
+      profileName: agentType.name,
+      displayName: agentType.displayName,
+      description
+    })
 
     deps.logger?.info(
-      `Created sub-agent subSession=${subSessionId} type=${agentType.name} parent=${parentSessionId}`
+      `Spawned agent=${agentId} profile=${agentType.name} parent=${parentSessionId} depth=${depth} root=${rootSessionId}`
     )
     return session
+  }
+
+  /** 跑一轮（prompt → idle），返回本轮 execError（错误已消化，不抛出） */
+  async function runTurn(session: SpawnedAgent, promptText: string): Promise<string | undefined> {
+    try {
+      await session.agent.prompt(promptText)
+      await session.agent.waitForIdle()
+      return undefined
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      deps.logger?.error(`Agent ${session.agentId} error: ${msg}`)
+      return msg
+    }
+  }
+
+  /** 一轮结束后的收尾：抽取结果 + 广播 sub_session_end */
+  function finishTurn(
+    session: SpawnedAgent,
+    parentSessionId: string,
+    execError: string | undefined
+  ): { result: string } {
+    const result = session.interrupted
+      ? extractResult(session.agent.state.messages)
+      : session.aborted
+        ? abortedNote()
+        : extractResult(session.agent.state.messages, execError)
+    const isError = session.interrupted ? false : !!execError || session.aborted
+
+    deps.broadcast({
+      type: 'sub_session_end',
+      sessionId: session.agentId,
+      parentSessionId,
+      result,
+      isError
+    })
+    return { result }
   }
 
   function interrupt(subSessionId: string): void {
     const s = sessions.get(subSessionId)
     if (!s) return
-    // 软停止：标记为「用户中断」，终结在飞工具调用，停止当前生成。
-    // 不动 sessions/byParent 登记 —— runTask/continueTask 的 waitForIdle 解除后会照常广播
-    // sub_session_end（isError=false），子会话保留在面板供继续追问或显式删除。
+    // 软停止：标记为「用户中断」，RuntimeAgent.abort 终结在飞工具调用并停止当前生成。
+    // 登记保留 —— runTask/continueTask 的 waitForIdle 解除后照常广播 sub_session_end
+    // （isError=false），条目保留在面板供继续追问或显式删除。
     s.interrupted = true
-    finalizeAbortedToolCalls(subSessionId)
-    s.agent.abort()
+    s.runtime.abort()
+  }
+
+  function abortOne(s: SpawnedAgent): void {
+    s.aborted = true
+    s.runtime.abort()
   }
 
   function destroy(subSessionId: string): void {
     const s = sessions.get(subSessionId)
     if (!s) return
-    s.agent.abort()
-    s.abortController.abort()
-    // 注：父子归属在 byParent 中查（onUnregister 仅清外部登记表，不再回查归属）
-    for (const [parent, set] of byParent) {
-      if (set.has(subSessionId)) {
-        removeSession(parent, subSessionId)
-        break
-      }
-    }
-    deps.onUnregister?.(subSessionId)
+    // 先级联销毁子树（后代挂在本 agent 名下）
+    for (const child of registry.childrenOf(subSessionId)) destroy(child.agentId)
+    s.runtime.abort()
+    sessions.delete(subSessionId)
+    registry.unregister(subSessionId)
   }
 
   return {
+    registry,
+
     async runTask(params: RunTaskParams): Promise<{ result: string }> {
       const {
         parentSessionId,
+        parentToolCallId,
         agentType,
         prompt,
         description,
@@ -494,80 +428,41 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       const hasTokens = promptInlineTokens && Object.keys(promptInlineTokens).length > 0
       const llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
 
-      // 不限制并发子代理数量：可同时堆叠任意多个（面板纵向手风琴展示）。
-      const session = createSession(parentSessionId, agentType, modelConfig, contextMessages)
-
-      deps.onRegister?.({
-        subSessionId: session.subSessionId,
+      // 不限制并发数量：可同时堆叠任意多个（面板纵向手风琴展示）；层级由深度校验约束
+      const session = createSession({
         parentSessionId,
-        subAgentName: agentType.name,
-        displayName: agentType.displayName,
-        description
+        agentType,
+        description,
+        modelConfig,
+        contextMessages
       })
 
       deps.broadcast({
         type: 'sub_session_register',
-        sessionId: session.subSessionId,
+        sessionId: session.agentId,
         parentSessionId,
+        parentToolCallId,
         subAgentName: agentType.name,
         displayName: agentType.displayName,
         description,
         systemPrompt: agentType.systemPrompt,
         prompt,
         inlineTokens: hasTokens ? promptInlineTokens : undefined,
-        contextNote
+        contextNote,
+        depth: session.runtime.depth,
+        rootSessionId: registry.rootSessionOf(session.agentId)
       })
 
       if (parentAbortSignal) {
         if (parentAbortSignal.aborted) {
-          session.aborted = true
-          finalizeAbortedToolCalls(session.subSessionId)
-          session.abortController.abort()
-          session.agent.abort()
+          abortOne(session)
         } else {
-          parentAbortSignal.addEventListener(
-            'abort',
-            () => {
-              session.aborted = true
-              finalizeAbortedToolCalls(session.subSessionId)
-              session.agent.abort()
-            },
-            { once: true }
-          )
+          parentAbortSignal.addEventListener('abort', () => abortOne(session), { once: true })
         }
       }
 
-      let execError: string | undefined
-      try {
-        await session.agent.prompt(llmPrompt)
-        await session.agent.waitForIdle()
-      } catch (err: unknown) {
-        execError = err instanceof Error ? err.message : String(err)
-        deps.logger?.error(`Sub-agent subSession=${session.subSessionId} error: ${execError}`)
-      }
-
-      if (session.aborted && session.pendingToolCalls.size > 0) {
-        finalizeAbortedToolCalls(session.subSessionId)
-      }
-
-      // 用户中断：保留已产出的部分结果、按「已完成」收尾（isError=false）；
-      // abort（父级中断）仍按失败态返回 abortedNote。
-      const result = session.interrupted
-        ? extractResult(session.agent.state.messages)
-        : session.aborted
-          ? abortedNote()
-          : extractResult(session.agent.state.messages, execError)
-      const isError = session.interrupted ? false : !!execError || session.aborted
-
-      deps.broadcast({
-        type: 'sub_session_end',
-        sessionId: session.subSessionId,
-        parentSessionId,
-        result,
-        isError
-      })
-
-      return { result }
+      const execError = await runTurn(session, llmPrompt)
+      return finishTurn(session, parentSessionId, execError)
     },
 
     async continueTask(params: {
@@ -581,7 +476,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       if (session.aborted) throw new Error(`Sub-session already aborted: ${subSessionId}`)
       // 新一轮追问：清除上一轮的「用户中断」标记
       session.interrupted = false
-      const parentSessionId = parentOf(subSessionId) ?? ''
+      const parentSessionId = registry.get(subSessionId)?.parentAgentId ?? ''
 
       // 内联 Token（slash 命令等）：前端已展开，后端解析为发给 Agent 的真实文本；
       // 原始标记文本 + tokens 落入消息 metadata，供面板渲染 slash 命令标签（与主会话同形）。
@@ -605,51 +500,19 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         message: JSON.stringify(userMsg)
       })
 
-      let execError: string | undefined
-      try {
-        await session.agent.prompt(promptText)
-        await session.agent.waitForIdle()
-      } catch (err: unknown) {
-        execError = err instanceof Error ? err.message : String(err)
-        deps.logger?.error(`Sub-agent continue subSession=${subSessionId} error: ${execError}`)
-      }
-
-      if (session.aborted && session.pendingToolCalls.size > 0) {
-        finalizeAbortedToolCalls(subSessionId)
-      }
-
-      const result = session.interrupted
-        ? extractResult(session.agent.state.messages)
-        : session.aborted
-          ? abortedNote()
-          : extractResult(session.agent.state.messages, execError)
-      const isError = session.interrupted ? false : !!execError || session.aborted
-
-      deps.broadcast({
-        type: 'sub_session_end',
-        sessionId: subSessionId,
-        parentSessionId,
-        result,
-        isError
-      })
+      const execError = await runTurn(session, promptText)
+      finishTurn(session, parentSessionId, execError)
     },
 
     abortAll(parentSessionId: string): void {
-      const ids = byParent.get(parentSessionId)
-      if (!ids) return
-      for (const id of ids) {
-        const s = sessions.get(id)
-        if (s) {
-          s.agent.abort()
-          s.abortController.abort()
-        }
+      for (const entry of registry.descendantsOf(parentSessionId)) {
+        const s = sessions.get(entry.agentId)
+        if (s) abortOne(s)
       }
     },
 
     destroyAll(parentSessionId: string): void {
-      const ids = byParent.get(parentSessionId)
-      if (!ids) return
-      for (const id of [...ids]) destroy(id)
+      for (const child of registry.childrenOf(parentSessionId)) destroy(child.agentId)
     },
 
     interrupt,

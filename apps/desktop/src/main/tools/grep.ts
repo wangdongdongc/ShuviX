@@ -9,7 +9,7 @@ import { Type } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
-  assertSandboxRead,
+  assertReadApproved,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -78,8 +78,8 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 沙箱守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
-    await assertSandboxRead(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
+    // 审批守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertReadApproved(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
   }
 
   protected async executeInternal(
@@ -173,13 +173,12 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'grep',
   group: 'ripgrep',
-  defaultEnabled: false,
+  defaultEnabled: true,
   getLabel: () => t('tool.grepLabel'),
   getHint: () => t('tool.grepHint'),
   factory: (ctx) => new GrepTool(ctx),
   presentation: {
-    icon: 'Search',
-    summaryField: 'pattern'
+    icon: 'Search'
   },
   describe: () => ({ description: GREP_DESCRIPTION, parameters: GrepParamsSchema })
 })

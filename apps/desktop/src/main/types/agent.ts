@@ -7,9 +7,12 @@
 export type {
   AgentInitParams,
   AgentInitResult,
+  AgentRuntimeInfo,
+  AgentRuntimeToolInfo,
   ImageContentParam,
   AgentPromptParams,
   AgentNotebookPromptParams,
+  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,

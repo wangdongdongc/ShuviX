@@ -2,7 +2,7 @@
  * wiki 内嵌图片（Obsidian `![[image.png]]`）—— atomic 原生不识别这个语法
  * （它的 imageBlocks 只认标准 `![](url)`），故自写一个 CM6 装饰：
  * 把「整行只有一个 ![[图片]]」且光标不在该行时，块级替换为内嵌图片，
- * 图片经主进程 shuvix-preview:// 协议加载（带沙箱校验）。光标移到该行则露出原文便于编辑。
+ * 图片经主进程 shuvix-preview:// 协议加载（带准入校验）。光标移到该行则露出原文便于编辑。
  *
  * 块级装饰必须来自 StateField（CM6 不允许 ViewPlugin 产出块级装饰），故用 StateField 实现。
  */

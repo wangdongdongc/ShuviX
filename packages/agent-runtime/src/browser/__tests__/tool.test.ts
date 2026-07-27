@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createBrowserTool, buildBrowserParamsSchema, buildBrowserToolDescription } from '../tool'
-import type { BrowserApprovalDeps, BrowserBackend, BrowserCaps } from '../backend'
+import type { BrowserBackend, BrowserCaps } from '../backend'
 
 const ALL_CAPS: BrowserCaps = {
   pdf: true,
@@ -125,97 +125,40 @@ describe('createBrowserTool 参数校验', () => {
   })
 })
 
-describe('createBrowserTool 审批门控', () => {
-  function approvalDeps(response: { kind: string; [k: string]: unknown }): BrowserApprovalDeps {
-    return {
-      isAutoApprove: () => false,
-      requestUserInput: vi.fn(async () => response as never)
-    }
-  }
-
-  it('mutating 操作被拒 → 返回 denied 且不执行 backend', async () => {
-    const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'approval', approved: false })
-    const t = createBrowserTool({ backend, approval })
-    const result = await t.execute('tc', { action: 'click', tabId: 't1', uid: 'e7' })
-    expect(backend.click).not.toHaveBeenCalled()
-    expect((result.content[0] as { text: string }).text).toContain('denied')
-  })
-
-  it('只读操作（snapshot/scroll）不触发审批', async () => {
-    const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'approval', approved: false })
-    const t = createBrowserTool({ backend, approval })
-    await t.execute('tc', { action: 'snapshot', tabId: 't1' })
-    await t.execute('tc', { action: 'scroll', tabId: 't1' })
-    expect(approval.requestUserInput).not.toHaveBeenCalled()
-    expect(backend.snapshot).toHaveBeenCalled()
-    expect(backend.scroll).toHaveBeenCalled()
-  })
-
-  it('cancel → 抛 abortError', async () => {
-    const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'cancel', reason: 'aborted' })
-    const t = createBrowserTool({ backend, approval, abortError: 'TOOL_ABORTED' })
-    await expect(
-      t.execute('tc', { action: 'fill', tabId: 't1', uid: 'e7', text: 'x' })
-    ).rejects.toThrow('TOOL_ABORTED')
-  })
-
-  it('不传 approval → mutating 直接执行（笔记本子任务路径）', async () => {
+describe('cdp 边界拦截', () => {
+  it('blocked 方法 → 直接拒绝，不执行 backend', async () => {
     const backend = fakeBackend()
     const t = createBrowserTool({ backend })
-    await t.execute('tc', { action: 'click', tabId: 't1', uid: 'e7' })
-    expect(backend.click).toHaveBeenCalled()
-  })
-})
-
-describe('cdp 动态分类门控', () => {
-  function approvalDeps(response: { kind: string; [k: string]: unknown }): BrowserApprovalDeps {
-    return { isAutoApprove: () => false, requestUserInput: vi.fn(async () => response as never) }
-  }
-
-  it('blocked 方法 → 直接拒绝，不执行 backend、不触发审批', async () => {
-    const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'approval', approved: true })
-    const t = createBrowserTool({ backend, approval })
     const result = await t.execute('tc', { action: 'cdp', tabId: 't1', method: 'Browser.close' })
     expect((result.content[0] as { text: string }).text).toContain('blocked')
     expect(backend.cdp).not.toHaveBeenCalled()
-    expect(approval.requestUserInput).not.toHaveBeenCalled()
   })
 
-  it('safe 方法 → 直接执行，不触发审批', async () => {
+  it('已知域内方法（只读与写类）→ 直接执行', async () => {
     const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'approval', approved: false })
-    const t = createBrowserTool({ backend, approval })
+    const t = createBrowserTool({ backend })
     await t.execute('tc', {
       action: 'cdp',
       tabId: 't1',
       method: 'Network.getResponseBody',
       params: { requestId: 'r1' }
     })
-    expect(approval.requestUserInput).not.toHaveBeenCalled()
     expect(backend.cdp).toHaveBeenCalledWith({
       tabId: 't1',
       method: 'Network.getResponseBody',
       params: { requestId: 'r1' }
     })
-  })
-
-  it('mutating 方法被拒 → 不执行 backend', async () => {
-    const backend = fakeBackend()
-    const approval = approvalDeps({ kind: 'approval', approved: false })
-    const t = createBrowserTool({ backend, approval })
-    const result = await t.execute('tc', {
+    await t.execute('tc', {
       action: 'cdp',
       tabId: 't1',
       method: 'Emulation.setDeviceMetricsOverride',
       params: { width: 390 }
     })
-    expect(approval.requestUserInput).toHaveBeenCalled()
-    expect(backend.cdp).not.toHaveBeenCalled()
-    expect((result.content[0] as { text: string }).text).toContain('denied')
+    expect(backend.cdp).toHaveBeenCalledWith({
+      tabId: 't1',
+      method: 'Emulation.setDeviceMetricsOverride',
+      params: { width: 390 }
+    })
   })
 
   it('缺 method → usage 错误', async () => {

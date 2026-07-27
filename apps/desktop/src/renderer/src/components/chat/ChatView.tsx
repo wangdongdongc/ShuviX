@@ -1,16 +1,28 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useBrowserStore } from '../../stores/browserStore'
 import { useSidebarStore } from '../../stores/sidebarStore'
+import { useBottomPanelStore } from '../../stores/bottomPanelStore'
+import { useTerminalStore } from '../../stores/terminalStore'
+// 会话面板真源在 @shuvix/app-shell；经桌面接线文件导入以确保宽度持久化订阅被加载
+import '../../stores/sessionPanelStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import {
   WelcomeView,
   ChatBody,
+  FilesPanel,
+  MediaUrlProvider,
   PanelToggleButton,
+  PreviewPanel,
   SessionConfigDialog,
-  StatusBanner
+  SessionPanel,
+  SessionToolbar,
+  shuvixPreviewResolver,
+  StatusBanner,
+  useSessionPanelReveal
 } from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
@@ -21,7 +33,7 @@ import { NotebookSessionView } from '../notebook/NotebookSessionView'
  *
  * pinnedMode:
  * - undefined: 默认主窗口形态
- * - 'floating': 在悬浮窗口里渲染，header 精简为标题 + 文件夹 + 关闭 X
+ * - 'floating': 在悬浮窗口里渲染，header 精简为标题 + 置顶 +（有子代理时）右面板开关 + 关闭 X
  * - 'placeholder': 当前会话已被悬浮，正文替换为占位提示（恢复 / 聚焦悬浮窗）
  */
 interface ChatViewProps {
@@ -35,18 +47,41 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
   const toggleBrowser = useBrowserStore((s) => s.toggle)
-  const openBrowser = useBrowserStore((s) => s.open)
-  const setBrowserTab = useBrowserStore((s) => s.setActiveTab)
   const isBrowserOpen = useBrowserStore((s) => s.isOpen)
-  /** 顶栏「打开文件面板」：切到 Files tab 并展开右侧面板（open() 已开则不重复联动窗口宽度） */
-  const openFilesPanel = useCallback(() => {
-    setBrowserTab('files')
-    openBrowser()
-  }, [setBrowserTab, openBrowser])
   const toggleSidebar = useSidebarStore((s) => s.toggle)
   const isSidebarOpen = useSidebarStore((s) => s.isOpen)
+  const isBottomOpen = useBottomPanelStore((s) => s.isOpen)
+  /** 顶栏「底部栏（终端）」开关：首次打开且无终端时自动新建一个 */
+  const toggleBottomPanel = useCallback(() => {
+    const bottom = useBottomPanelStore.getState()
+    if (!bottom.isOpen && useTerminalStore.getState().tabs.length === 0) {
+      useTerminalStore.getState().createTab(useChatStore.getState().projectPath || undefined)
+    }
+    bottom.toggle()
+  }, [])
 
   const isWeb = getSessionChannelApi().app.platform === 'web'
+
+  // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；共享 hook）。
+  // WebUI 仅查看、悬浮占位态不响应。文件预览：主窗由右侧面板承接（useRightPanelBridge），
+  // 悬浮窗无 app 级右面板 → 会话面板的 Preview 工具页承接（previewInPanel）。
+  const isFloating = pinnedMode === 'floating'
+  useSessionPanelReveal(!isWeb && pinnedMode !== 'placeholder', isFloating)
+
+  /** 悬浮窗 Preview 工具页的 markdown 宿主能力（主题 / 外链）—— 与右侧面板 Preview tab 同源 */
+  const notebookTheme = useSettingsStore((s) => s.notebookTheme)
+  const floatingPreviewContent = useMemo(
+    () =>
+      isFloating ? (
+        <PreviewPanel
+          notebookCaps={{
+            notebookTheme,
+            openExternal: (url: string) => void window.api.app.openExternal(url)
+          }}
+        />
+      ) : undefined,
+    [isFloating, notebookTheme]
+  )
 
   /** 悬浮窗"始终置顶"状态 —— 仅 floating 模式下使用 */
   const [alwaysOnTop, setAlwaysOnTopState] = useState(true)
@@ -87,12 +122,6 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         >
           {alwaysOnTop ? <Pin size={14} /> : <PinOff size={14} />}
         </button>
-        <PanelToggleButton
-          side="right"
-          open={isBrowserOpen}
-          onClick={toggleBrowser}
-          title={t('panel.files')}
-        />
         <button
           onClick={() => activeSessionId && void getHostApi()?.pinChat.unpin(activeSessionId)}
           className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
@@ -113,6 +142,15 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
           </button>
         )}
         {!isWeb && <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />}
+        {/* 底部栏（终端）；WebUI 为「仅查看」渠道，不提供 → 隐藏切换按钮 */}
+        {!isWeb && (
+          <PanelToggleButton
+            side="bottom"
+            open={isBottomOpen}
+            onClick={toggleBottomPanel}
+            title={t('panel.terminal')}
+          />
+        )}
         {/* 右侧面板（浏览器/文件/子代理）属宿主能力；WebUI 为「仅查看」渠道，不提供 → 隐藏切换按钮 */}
         {!isWeb && <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />}
       </>
@@ -148,13 +186,27 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       headerCaps={{
         windowDrag: true,
         editableTitle: !isWeb,
-        folder: true,
         sessionConfig: !isWeb
       }}
       headerHeightClassName={getSessionChannelApi().app.platform === 'darwin' ? 'h-10' : 'h-8'}
       onOpenSessionConfig={() => setShowSessionConfig(true)}
-      onOpenFiles={openFilesPanel}
       rightActions={rightActions}
+      // 会话面板（共享组件）：WebUI 仅查看不提供；媒体/PDF 走桌面 shuvix-preview:// 协议，
+      // Files 内容注入桌面 caps（.md 预览可「创建笔记本」/ 系统文件管理器打开目录）
+      sessionToolbar={
+        !isWeb ? <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} /> : undefined
+      }
+      sessionPanel={
+        !isWeb ? (
+          <MediaUrlProvider value={shuvixPreviewResolver}>
+            <SessionPanel
+              sessionId={activeSessionId}
+              filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
+              previewContent={floatingPreviewContent}
+            />
+          </MediaUrlProvider>
+        ) : undefined
+      }
       banner={
         activeSessionId && pinnedMode !== 'placeholder' ? (
           <StatusBanner sessionId={activeSessionId} />

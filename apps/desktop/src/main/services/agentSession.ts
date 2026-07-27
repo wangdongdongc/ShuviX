@@ -1,8 +1,9 @@
 import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
 import {
-  RuntimeSession,
+  RuntimeAgent,
   generateSessionTitle,
-  resolveInitialThinkingLevel
+  resolveInitialThinkingLevel,
+  chatMessagesToAgentMessages
 } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
@@ -18,7 +19,8 @@ import type {
   ThinkingLevel,
   ChatMessage,
   ProjectSettings,
-  ProjectPromptSection
+  ProjectPromptSection,
+  AgentRuntimeInfo
 } from '../types'
 import type { SessionModelMetadata } from '../dao/types'
 import { chatFrontendRegistry } from '../frontend/core'
@@ -29,7 +31,6 @@ import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { renderForPrompt as renderSystemPromptSections } from './systemPrompt/systemPromptService'
 import { getTempWorkspace } from '../utils/paths'
-import { dbMessagesToAgentMessages } from '../utils/agentMessageConverter'
 import { injectInstructionMessages } from './instruction'
 import { hookService } from './hooks'
 import { createLogger } from '../logger'
@@ -136,7 +137,7 @@ export function buildSystemPrompt(
  * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
  *
  * 核心循环（事件转发、流式落库、用户输入挂起、abort/steer/applyModel）委托给
- * @shuvix/agent-runtime 的 RuntimeSession；本类保留桌面特有逻辑：systemPrompt 组装、
+ * @shuvix/agent-runtime 的 RuntimeAgent；本类保留桌面特有逻辑：systemPrompt 组装、
  * 工具集（buildTools）、hooks、指令注入、generateTitle、ssh / fileTime 清理。
  *
  * 通过 AgentSession.create() 工厂方法创建。
@@ -144,7 +145,7 @@ export function buildSystemPrompt(
 export class AgentSession {
   readonly sessionId: string
 
-  private runtime: RuntimeSession
+  private runtime: RuntimeAgent
   private toolContext: ToolContext
   private subAgentCtx: SubAgentBuildContext | undefined
   private projectPath?: string
@@ -157,7 +158,7 @@ export class AgentSession {
 
   private constructor(
     sessionId: string,
-    runtime: RuntimeSession,
+    runtime: RuntimeAgent,
     toolContext: ToolContext,
     subAgentCtx: SubAgentBuildContext | undefined,
     workingDirectory: string,
@@ -186,7 +187,7 @@ export class AgentSession {
 
     // 前向引用：所有回调在 agent 执行时调用，构造期不会触发
     // eslint-disable-next-line prefer-const
-    let runtime: RuntimeSession
+    let runtime: RuntimeAgent
 
     // 构建 ToolContext（回调通过闭包引用 runtime）
     const toolContext: ToolContext = {
@@ -228,7 +229,7 @@ export class AgentSession {
       }
     })
 
-    runtime = new RuntimeSession({
+    runtime = new RuntimeAgent({
       sessionId,
       agent,
       eventSink: electronEventSink,
@@ -239,7 +240,7 @@ export class AgentSession {
       logger: runtimeLogger,
       localize,
       // 统一生命周期 hook：注入完整 HookService（builtin + global/project command）；
-      // SessionStart/UserPromptSubmit/Stop 由 RuntimeSession 触发（各端一致）
+      // SessionStart/UserPromptSubmit/Stop 由 RuntimeAgent 触发（各端一致）
       hooks: hookService,
       getCwd: () => workingDirectory,
       // UserPromptSubmit 通过、正式派发前触发首轮快速标题（保持与旧行为一致的并发时序）
@@ -255,10 +256,10 @@ export class AgentSession {
       project?.path
     )
 
-    // 恢复历史消息到 Agent 上下文
+    // 恢复历史消息到 Agent 上下文（共享投影：@shuvix/agent-runtime transcript/）
     const dbMsgs = messageService.listBySession(sessionId)
     if (dbMsgs.length > 0) {
-      for (const msg of dbMessagesToAgentMessages(dbMsgs)) {
+      for (const msg of chatMessagesToAgentMessages(dbMsgs)) {
         agent.state.messages.push(msg)
       }
     }
@@ -271,9 +272,9 @@ export class AgentSession {
   /**
    * 向 Agent 发送消息（支持附带图片）。
    *
-   * SessionStart / UserPromptSubmit hook 已下沉到 RuntimeSession（各端一致）：
+   * SessionStart / UserPromptSubmit hook 已下沉到 RuntimeAgent（各端一致）：
    * - 首轮快速标题经注入的 `onPromptAccepted` 在 UserPromptSubmit 通过后触发；
-   * - hook `deny` 时 RuntimeSession 内部广播原因并跳过派发，此处 refine 因 `titleQuickDone`
+   * - hook `deny` 时 RuntimeAgent 内部广播原因并跳过派发，此处 refine 因 `titleQuickDone`
    *   仍为 false 而自然跳过。
    */
   async prompt(
@@ -344,7 +345,7 @@ export class AgentSession {
     broadcastSessionTitleChanged(this.sessionId, title)
   }
 
-  // 注：hook 的 additionalContext 注入已下沉到 RuntimeSession（各端一致）。
+  // 注：hook 的 additionalContext 注入已下沉到 RuntimeAgent（各端一致）。
 
   /**
    * 首次 prompt 前的指令懒注入。由调用方在写入用户消息**之前**调用，
@@ -356,7 +357,7 @@ export class AgentSession {
     const inserted = injectInstructionMessages(this.sessionId, this.workingDirectory)
     if (inserted.length === 0) return
     // 同步进 agent 内存上下文
-    for (const msg of dbMessagesToAgentMessages(inserted)) {
+    for (const msg of chatMessagesToAgentMessages(inserted as unknown as ChatMessage[])) {
       agent.state.messages.push(msg)
     }
     // 通知前端追加这些消息（UI 通过 InstructionBubble 渲染）
@@ -372,7 +373,7 @@ export class AgentSession {
     this.runtime.steer(text)
   }
 
-  /** 中止生成；Stop hook 由 RuntimeSession.abort 统一触发 */
+  /** 中止生成；Stop hook 由 RuntimeAgent.abort 统一触发 */
   abort(): ChatMessage | null {
     return this.runtime.abort()
   }
@@ -388,7 +389,7 @@ export class AgentSession {
       baseUrl,
       apiProtocol
     })
-    // 切模型保留当前思考深度（省略第二参 → RuntimeSession 内保持不变，思考与能力点解绑）
+    // 切模型保留当前思考深度（省略第二参 → RuntimeAgent 内保持不变，思考与能力点解绑）
     this.runtime.applyModel(resolvedModel)
   }
 
@@ -417,6 +418,11 @@ export class AgentSession {
   /** 获取底层 Agent 实例（用于外部恢复历史消息等） */
   getAgent(): Agent {
     return this.runtime.getAgent()
+  }
+
+  /** 运行时信息快照（直接读内存 agent.state，供前端「Agent 信息」弹窗只读展示） */
+  getRuntimeInfo(): AgentRuntimeInfo {
+    return this.runtime.getRuntimeInfo()
   }
 
   /**
@@ -463,7 +469,7 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 RuntimeSession 触发。 */
+  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 RuntimeAgent 触发。 */
   invalidate(): void {
     this.runtime.fireStopHook('invalidated')
     this.runtime.getAgent().abort()
@@ -472,7 +478,7 @@ export class AgentSession {
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 RuntimeSession 触发。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 RuntimeAgent 触发。 */
   destroy(): void {
     this.runtime.fireStopHook('destroyed')
     this.runtime.getAgent().abort()

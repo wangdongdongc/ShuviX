@@ -21,6 +21,30 @@ export type FileReadResult =
       dataBase64: string
       size: number
       ext: string
+      /** 解析自文件头的像素尺寸（不解码）。渲染端据此判断解码内存开销 —— 文件字节数
+       *  与解码后大小无关（解压炸弹）。SVG 与无法识别的格式为 undefined，按「未知」放行。 */
+      pixelWidth?: number
+      pixelHeight?: number
+    }
+  | {
+      kind: 'office'
+      path: string
+      /** 渲染端渲染器路由：'docx' → docx-preview；'sheet' → SheetJS 表格（xlsx/xlsm/xls/ods） */
+      officeKind: 'docx' | 'sheet'
+      /** 完整文件字节 base64（读取前已过 PREVIEW_OFFICE_MAX_BYTES 门控） */
+      dataBase64: string
+      size: number
+      ext: string
+    }
+  | {
+      kind: 'ebook'
+      /** 绝对路径 —— 渲染端经 useMediaUrl 取字节（桌面 shuvix-preview:// / 扩展 blob:）。
+       *  刻意不带 base64：图文书动辄几十 MB，走 IPC 传字节既慢又白涨 33% 体积。 */
+      path: string
+      /** 解析器路由。三者在渲染端归一成同一个 LoadedBook（见 ebookLoaders） */
+      ebookKind: 'epub' | 'fb2' | 'cbz'
+      size: number
+      ext: string
     }
   | {
       kind: 'binary'

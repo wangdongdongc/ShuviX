@@ -5,6 +5,7 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentNotebookPromptParams,
+  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -27,7 +28,6 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
-  SessionAllowListAddParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SessionCreateParams,
@@ -103,6 +103,7 @@ const api = {
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
     /** 用系统文件管理器打开指定文件夹 */
     openFolder: (folderPath: string) => ipcRenderer.invoke('app:open-folder', folderPath),
+    revealPath: (filePath: string) => ipcRenderer.invoke('app:reveal-path', filePath),
     /** 通知主进程渲染已就绪，可以显示窗口 */
     windowReady: () => ipcRenderer.send('app:window-ready'),
     /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
@@ -135,6 +136,10 @@ const api = {
     notebookPrompt: (params: AgentNotebookPromptParams) =>
       ipcRenderer.invoke('agent:notebookPrompt', params),
 
+    /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体 */
+    dispatchPrompt: (params: AgentDispatchPromptParams) =>
+      ipcRenderer.invoke('agent:dispatchPrompt', params),
+
     /** 继续与已存在子代理对话：追加一轮用户消息 */
     subAgentPrompt: (params: AgentSubAgentPromptParams) =>
       ipcRenderer.invoke('agent:subAgentPrompt', params),
@@ -159,6 +164,9 @@ const api = {
     /** 设置思考深度 */
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
       ipcRenderer.invoke('agent:setThinkingLevel', params),
+
+    /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
+    getInfo: (sessionId: string) => ipcRenderer.invoke('agent:getInfo', sessionId),
 
     /**
      * 统一的"用户输入响应"入口。
@@ -234,13 +242,6 @@ const api = {
       ipcRenderer.invoke('session:updateEnabledTools', params),
     updateAutoApprove: (params: SessionUpdateAutoApproveParams) =>
       ipcRenderer.invoke('session:updateAutoApprove', params),
-    previewAllowPatterns: (params: {
-      command: string
-      sessionId?: string
-      toolType?: 'bash' | 'ssh' | 'read' | 'write'
-    }) => ipcRenderer.invoke('session:previewAllowPatterns', params),
-    addAllowListPatterns: (params: SessionAllowListAddParams) =>
-      ipcRenderer.invoke('session:addAllowListPatterns', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeAllowListEntry', params),
     generateTitle: (params: { sessionId: string; conversationText: string }) =>
@@ -250,8 +251,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke('session:getById', id),
     scanInstructionFiles: (sessionId: string) =>
       ipcRenderer.invoke('session:scanInstructionFiles', sessionId),
-    updateInstructionFiles: (params: { id: string; filenames: string[] }) =>
-      ipcRenderer.invoke('session:updateInstructionFiles', params)
+    updateInstructionFile: (params: { id: string; filename: string | null }) =>
+      ipcRenderer.invoke('session:updateInstructionFile', params)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
@@ -450,12 +451,6 @@ const api = {
     stopBot: (botId: string) => ipcRenderer.invoke('telegram:stopBot', botId),
     /** 获取 Bot 运行状态 */
     getBotStatus: (botId: string) => ipcRenderer.invoke('telegram:getBotStatus', botId)
-  },
-
-  // ============ 压缩归档 ============
-  compact: {
-    /** 触发 Full Compaction */
-    start: (sessionId: string) => ipcRenderer.invoke('compact:start', sessionId)
   },
 
   // ============ 斜杠命令 ============
@@ -718,7 +713,7 @@ const api = {
     list: () => ipcRenderer.invoke('widget:list'),
     /** 获取已归档 widget */
     listArchived: () => ipcRenderer.invoke('widget:listArchived'),
-    /** 打开 widget：懒启动 server + 注册 + 计数，返回 URL */
+    /** 打开 widget：懒启动 server + 注册 + 刷新最近打开时间，返回 URL */
     open: (id: string) =>
       ipcRenderer.invoke('widget:open', id) as Promise<
         | {
@@ -731,7 +726,6 @@ const api = {
               createdAt: number
               updatedAt: number
               lastOpenedAt: number
-              openCount: number
               archivedAt: number
             }
           }
@@ -743,7 +737,7 @@ const api = {
     /** 归档 / 取消归档 */
     setArchived: (params: { id: string; archived: boolean }) =>
       ipcRenderer.invoke('widget:setArchived', params),
-    /** 删除 widget（目录 + DB 记录） */
+    /** 删除 widget（目录 + 账目条目 + 其数据库 schema） */
     delete: (id: string) => ipcRenderer.invoke('widget:delete', id),
     /** 获取 widget HTTP 服务器状态 */
     getServerStatus: () =>
@@ -763,18 +757,41 @@ const api = {
     /** 停止单个 widget —— 从 server 注销，不影响其他 widget */
     stopWidget: (id: string) =>
       ipcRenderer.invoke('widget:stopWidget', id) as Promise<{ success: true }>,
-    /** 弹出文件夹选择器（返回所选路径；用户取消返回 canceled） */
-    pickExportDir: () =>
-      ipcRenderer.invoke('widget:pickExportDir') as Promise<
+    /** 弹出保存对话框选择 zip 落点（返回所选路径；用户取消返回 canceled） */
+    pickExportTarget: (params: { id: string }) =>
+      ipcRenderer.invoke('widget:pickExportTarget', params) as Promise<
         { success: true; path: string } | { success: false; reason: string }
       >,
-    /** 导出 widget 为独立 Vite 项目 */
+    /** 导出 widget 为独立 Vite 工程 zip */
     exportAsVite: (params: { id: string; targetPath: string }) =>
       ipcRenderer.invoke('widget:exportAsVite', params) as Promise<
-        | { success: true; filesWritten: string[]; targetPath: string }
+        | { success: true; zipPath: string; entryCount: number }
         | { success: false; code: string; error: string }
-      >
+      >,
+    /** 在系统文件管理器中定位导出的 zip */
+    revealExport: (zipPath: string) =>
+      ipcRenderer.invoke('widget:revealExport', zipPath) as Promise<{ success: true }>
     // widget 变更订阅已并入 events.subscribe（AppEvent 'widget.changed'）
+  },
+
+  // ============ Widget 独立窗口（widget app window） ============
+  widgetWindow: {
+    /** 在独立窗口打开 widget（已开则聚焦）；构建 / URL 获取由窗口内 shell 调 widget.open 完成 */
+    open: (id: string) =>
+      ipcRenderer.invoke('widgetWindow:open', id) as Promise<
+        { success: true } | { success: false; error: string }
+      >,
+    /** 关闭指定 widget 的独立窗口 */
+    close: (id: string) =>
+      ipcRenderer.invoke('widgetWindow:close', id) as Promise<{ success: true }>,
+    /** 切换独立窗口"始终置顶"，持久化到 per-widget 窗口状态 */
+    setAlwaysOnTop: (params: { id: string; value: boolean }) =>
+      ipcRenderer.invoke('widgetWindow:setAlwaysOnTop', params) as Promise<{
+        alwaysOnTop: boolean
+      }>,
+    /** 查询独立窗口"始终置顶"状态 */
+    getAlwaysOnTop: (id: string) =>
+      ipcRenderer.invoke('widgetWindow:getAlwaysOnTop', id) as Promise<{ alwaysOnTop: boolean }>
   },
 
   // ============ 悬浮聊天（Floating Pin Chat） ============
@@ -813,17 +830,42 @@ const api = {
     /** 停止监听某个文件 */
     unwatch: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:unwatch', params) as Promise<void>,
-    /** 读取文件内容用于面板预览。沙箱外路径返回 not-allowed，不弹审批 */
+    /** 读取文件内容用于面板预览。准入范围外路径返回 not-allowed，不弹审批 */
     read: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:read', params) as Promise<
         import('@shuvix/chat-protocol/types/filePreview').FileReadResult
       >,
-    /** 回写文件内容（中间区 Markdown 编辑器自动保存）。沙箱外路径返回 ok:false，不弹审批 */
+    /** 回写文件内容（中间区 Markdown 编辑器自动保存）。准入范围外路径返回 ok:false，不弹审批 */
     write: (params: { sessionId: string; path: string; content: string }) =>
       ipcRenderer.invoke('files:write', params) as Promise<
         { ok: true } | { ok: false; error: string }
+      >,
+    /** 二进制另存为（图表导出 PNG / SVG）：弹系统保存对话框，落点由用户当场指定 */
+    saveAs: (params: { defaultPath: string; dataBase64: string }) =>
+      ipcRenderer.invoke('files:saveAs', params) as Promise<
+        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
       >
     // 文件变动订阅已并入 events.subscribe（AppEvent 'files.changed'）
+  },
+
+  // ============ 预览验证（preview 工具 ⇆ 渲染端） ============
+  preview: {
+    /** 图表渲染验证回执 —— 响应 AppEvent 'preview.validateChart'，结果按 validationId 对号入座 */
+    reportRender: (params: { validationId: string; ok: boolean; error?: string }) =>
+      ipcRenderer.invoke('preview:reportRender', params) as Promise<{ accepted: boolean }>
+  },
+
+  // ============ Wiki (侧栏 Wiki 视图：隐藏 wiki 项目) ============
+  wiki: {
+    /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore） */
+    listFiles: () =>
+      ipcRenderer.invoke('wiki:listFiles') as Promise<{
+        paths: string[]
+        truncated: boolean
+        root: string
+      }>,
+    /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
+    openNote: (params: { path: string }) => ipcRenderer.invoke('wiki:openNote', params)
   },
   /** 通用内部事件订阅（main 经 'app:event' 广播 AppEvent，与 agent:event 并列） */
   events: {

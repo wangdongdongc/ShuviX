@@ -4,7 +4,13 @@
  */
 import { v4 as uuid } from 'uuid'
 import i18n from 'i18next'
-import type { Session, SessionInfo, SessionSettings } from '@shuvix/chat-protocol/chatApi'
+import type {
+  Session,
+  SessionInfo,
+  SessionModelMetadata,
+  SessionSettings
+} from '@shuvix/chat-protocol/chatApi'
+import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { idb } from './idb'
 import { messageStore } from './messageStore'
 import { deleteTempWorkspace } from './opfsWorkspace'
@@ -53,8 +59,11 @@ export const sessionStore = {
       provider: defaults.provider,
       model: defaults.model,
       systemPrompt: '',
-      modelMetadata: {},
-      settings: notebookPath ? { notebookPath } : {},
+      modelMetadata: { thinkingLevel: DEFAULT_THINKING_LEVEL },
+      // 指令文件不预写配置：留空即「未显式配置」，装配系统提示时按 AGENTS.md → CLAUDE.md 优先级自动选
+      settings: {
+        ...(notebookPath ? { notebookPath } : {})
+      },
       createdAt: now,
       updatedAt: now
     }
@@ -82,6 +91,18 @@ export const sessionStore = {
     const s = cache.get(id)
     if (!s) return
     persist({ ...s, provider, model, updatedAt: Date.now() })
+  },
+
+  /** 合并补丁到会话模型元数据 */
+  async updateModelMetadata(id: string, patch: Partial<SessionModelMetadata>): Promise<void> {
+    await ensureLoaded()
+    const s = cache.get(id)
+    if (!s) return
+    persist({
+      ...s,
+      modelMetadata: { ...s.modelMetadata, ...patch },
+      updatedAt: Date.now()
+    })
   },
 
   /** 合并补丁到会话 settings（镜像桌面 sessionDao.updateSettings 的 JSON patch 语义） */

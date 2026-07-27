@@ -5,12 +5,12 @@
  *
  *  - `shuvix-media://<absolutePath>`
  *      给 TTS 音频等"内部生成、路径可信"的文件做直通 <audio> 标签播放。
- *      不做沙箱校验：调用方（TTS 服务）写出文件后自己构造 URL，外部 URL 拼不出来。
+ *      不做准入校验：调用方（TTS 服务）写出文件后自己构造 URL，外部 URL 拼不出来。
  *
  *  - `shuvix-preview://load/?session=<sid>&path=<encodedAbs>`
  *      文件预览面板的 PDF / 视频 / 音频统一资源协议。
  *      与 shuvix-media 的关键差异：
- *        1. 强制沙箱归属校验（isPathInSandboxRead），renderer 拿不到工作区外的文件
+ *        1. 强制准入校验（isPathReadAllowed），renderer 拿不到工作区外的文件
  *        2. Range-aware：解析 `Range: bytes=start-end` 返回 206 Partial Content，
  *           否则 <video>/<audio> 进度条不可拖、PDFium 翻页慢
  *        3. 显式 Content-Type，否则 Chromium 媒体元素拒绝 seek
@@ -25,7 +25,7 @@ import { createReadStream } from 'fs'
 import { stat as fsStat } from 'fs/promises'
 import { extname } from 'path'
 import { Readable } from 'stream'
-import { isPathInSandboxRead, resolveProjectConfig } from './toolContext'
+import { isPathReadAllowed, resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { createLogger } from '../logger'
 
@@ -99,7 +99,7 @@ function handleMediaRequest(request: GlobalRequest): Promise<GlobalResponse> {
   return net.fetch(`file://${filePath}`)
 }
 
-/** shuvix-preview —— 沙箱 + Range 完整实现 */
+/** shuvix-preview —— 准入 + Range 完整实现 */
 async function handlePreviewRequest(request: GlobalRequest): Promise<GlobalResponse> {
   try {
     const url = new URL(request.url)
@@ -111,7 +111,7 @@ async function handlePreviewRequest(request: GlobalRequest): Promise<GlobalRespo
 
     const config = resolveProjectConfig(sessionId)
     const absolutePath = resolveReadPath(rawPath, config.workingDirectory)
-    if (!isPathInSandboxRead(config, absolutePath)) {
+    if (!isPathReadAllowed(config, absolutePath)) {
       return new Response('Forbidden', { status: 403 })
     }
 

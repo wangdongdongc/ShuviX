@@ -1,4 +1,5 @@
 import { v7 as uuidv7 } from 'uuid'
+import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
 import { projectDao } from '../dao/projectDao'
 import { appEventBus } from '../utils/appEventBus'
 import type { Project, ProjectSettings, ReferenceDir } from '../types'
@@ -71,14 +72,14 @@ function deduplicateReferenceDirs(dirs: ReferenceDir[], projectPath?: string): R
  * 项目服务 — 编排项目相关的业务逻辑
  */
 export class ProjectService {
-  /** 获取未归档项目 */
+  /** 获取未归档项目(不含隐藏的 wiki 项目;getById 不过滤,保证其会话正常解析) */
   list(): Project[] {
-    return projectDao.findAllActive()
+    return projectDao.findAllActive().filter((p) => p.id !== WIKI_PROJECT_ID)
   }
 
-  /** 获取已归档项目 */
+  /** 获取已归档项目(不含隐藏的 wiki 项目) */
   listArchived(): Project[] {
-    return projectDao.findAllArchived()
+    return projectDao.findAllArchived().filter((p) => p.id !== WIKI_PROJECT_ID)
   }
 
   /** 获取单个项目 */

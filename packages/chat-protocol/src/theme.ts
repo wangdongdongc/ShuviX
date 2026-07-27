@@ -9,16 +9,19 @@
 
 /** 前端已注册的 lucide 图标名称 */
 export type LucideIconName =
+  | 'Archive'
   | 'Bot'
   | 'BookOpen'
   | 'Code'
   | 'Container'
   | 'Database'
+  | 'Eye'
   | 'FilePen'
   | 'FileOutput'
   | 'FileSearch2'
   | 'FileText'
   | 'FolderTree'
+  | 'GitBranch'
   | 'Globe'
   | 'MessageCircleQuestion'
   | 'Monitor'

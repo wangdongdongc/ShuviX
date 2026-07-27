@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DiffViewer } from './DiffViewer'
+import { StepRow } from './StepRow'
+import { TerminalView } from './TerminalView'
 import {
   Terminal,
   FileText,
@@ -9,8 +11,6 @@ import {
   Wrench,
   Check,
   X,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   ShieldAlert,
   MessageCircleQuestion,
@@ -25,21 +25,27 @@ import {
   Clock,
   Database,
   Palette,
+  GitBranch,
   Globe,
   Code,
   SquareTerminal,
+  Eye,
+  Archive,
   type LucideIcon
 } from 'lucide-react'
-import hljs from 'highlight.js/lib/core'
-import hljsPython from 'highlight.js/lib/languages/python'
-import hljsSql from 'highlight.js/lib/languages/sql'
 import {
   useChatStore,
   type ToolResultDetails,
   type ToolPresentation,
+  type ToolUseMessage,
   type FormItemRenderer
 } from '../../stores/chatStore'
+import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
+import { CodeView } from '../code/CodeView'
+import { useSubSessionStore } from '../../stores/subSessionStore'
+import { SubAgentInlineView } from './SubAgentInlineView'
 import { copyToClipboard } from '../../utils/clipboard'
+import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
 
 /** lucide 图标名 → 组件映射（按需扩展） */
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -62,9 +68,12 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Clock,
   Database,
   Palette,
+  GitBranch,
   Globe,
   Code,
-  SquareTerminal
+  SquareTerminal,
+  Eye,
+  Archive
 }
 
 /** 根据图标名查找 lucide 组件，找不到时返回 Wrench */
@@ -73,13 +82,50 @@ function resolveLucideIcon(name?: string): LucideIcon {
   return ICON_MAP[name] ?? Wrench
 }
 
-// 静态注册已知语言，新语言在此添加
-hljs.registerLanguage('python', hljsPython)
-hljs.registerLanguage('sql', hljsSql)
+/** 按 presentation 配置渲染工具图标（模块级普通函数：图标组件不在 render 内构造） */
+function renderToolIcon(pres?: ToolPresentation): React.ReactNode {
+  const Icon = resolveLucideIcon(pres?.icon)
+  return (
+    <Icon
+      size={12}
+      className="flex-shrink-0"
+      style={pres?.iconColor ? { color: pres.iconColor } : undefined}
+    />
+  )
+}
 
-/** 检查 hljs 是否支持指定语言 */
-function isHljsLanguageRegistered(lang: string): boolean {
-  return hljs.getLanguage(lang) != null
+/** renderer.language → 文件扩展名（CodeView 的语言懒加载注册表以 ext 为键） */
+const LANG_TO_EXT: Record<string, string> = {
+  bash: '.sh',
+  shell: '.sh',
+  sh: '.sh',
+  zsh: '.sh',
+  python: '.py',
+  sql: '.sql',
+  typescript: '.ts',
+  tsx: '.tsx',
+  javascript: '.js',
+  jsx: '.jsx',
+  json: '.json',
+  yaml: '.yaml',
+  html: '.html',
+  css: '.css',
+  xml: '.xml',
+  go: '.go',
+  rust: '.rs',
+  java: '.java',
+  c: '.c',
+  cpp: '.cpp',
+  php: '.php',
+  ruby: '.rb'
+}
+
+/** 从文件路径取扩展名（含点，小写）；非字符串或无扩展名返回 '' */
+function extOfPath(p: unknown): string {
+  if (typeof p !== 'string') return ''
+  const base = p.split(/[\\/]/).pop() ?? ''
+  const i = base.lastIndexOf('.')
+  return i > 0 ? base.slice(i).toLowerCase() : ''
 }
 
 interface ToolCallBlockProps {
@@ -96,7 +142,7 @@ interface ToolCallBlockProps {
 
 /**
  * 工具调用块 — 在对话流中内联展示工具调用过程
- * 折叠/展开显示参数和结果；沙箱模式下 bash 审批内联卡片
+ * 折叠/展开显示参数和结果；需审批模式下 bash 审批内联卡片
  */
 export function ToolCallBlock({
   toolName,
@@ -125,6 +171,13 @@ export function ToolCallBlock({
   const status = liveExec?.status || propStatus
   const details = liveExec?.details || propDetails
 
+  // Agent 派发工具触发的子会话（按父 tool_call id 匹配）：展开卡片内联其转写。
+  // 仅本次运行的内存态；刷新后子会话消失，回退为普通 result 文本展示。
+  const subSession = useSubSessionStore((s) => {
+    if (!toolCallId) return null
+    return Object.values(s.subSessions).find((ss) => ss.parentToolCallId === toolCallId) ?? null
+  })
+
   // 编辑成功且有 diff
   const hasEditDiff = details?.type === 'edit' && !!details.diff && status === 'done'
 
@@ -134,127 +187,175 @@ export function ToolCallBlock({
 
     // 通用路径：使用 presentation 配置（内置 + 插件工具均一走此路径）
     if (presentation) {
-      return buildPresentationSummary(presentation, args)
+      return buildPresentationSummary(toolName, presentation, args)
     }
     return { icon: <Wrench size={12} className={ic} />, detail: '' }
   })()
 
-  const statusConfig: Record<
-    string,
-    { icon: React.ReactNode; label: string; borderColor: string }
-  > = {
-    generating: {
-      icon: <Loader2 size={12} className="animate-spin text-text-tertiary" />,
-      label: t('toolCall.generating'),
-      borderColor: 'border-border-secondary/40'
-    },
-    pending: {
-      icon: null,
-      label: '',
-      borderColor: ''
-    },
-    running: {
-      icon: <Loader2 size={12} className="animate-spin text-accent" />,
-      label: t('toolCall.running'),
-      borderColor: 'border-accent/40'
-    },
-    done: {
-      icon: <Check size={12} className="text-success" />,
-      label: t('toolCall.done'),
-      borderColor: 'border-success/40'
-    },
-    error: {
-      icon: <X size={12} className="text-error" />,
-      label: t('toolCall.error'),
-      borderColor: 'border-error/40'
-    }
+  // done 不出图标：成功是常态，一列绿勾只会盖过真正需要注意的行（运行中 / 出错 / 待审批）
+  const statusConfig: Record<string, React.ReactNode> = {
+    generating: <Loader2 size={10} className="animate-spin text-text-tertiary" />,
+    pending: null,
+    running: <Loader2 size={10} className="animate-spin text-accent" />,
+    done: null,
+    error: <X size={11} className="text-error" />
   }
 
   // 当存在挂起的用户输入时,覆盖状态展示为"等待用户响应"(优先级高于 running)
-  const config = hasPendingInput
-    ? {
-        icon: <ShieldAlert size={12} className="text-warning" />,
-        label: t('toolCall.pendingApproval'),
-        borderColor: 'border-warning/40'
-      }
-    : statusConfig[status]
+  const statusIcon = hasPendingInput ? (
+    <ShieldAlert size={11} className="text-warning" />
+  ) : (
+    statusConfig[status]
+  )
+
+  const canExpand = !!(args || result || hasEditDiff || streamingArgsText || subSession)
+  // 终端形态：presentation 声明 + 确有命令可渲染，否则降级回通用表单形态
+  const isTerminalView =
+    presentation?.detailView === 'terminal' && typeof args?.command === 'string'
+
+  // 摘要行内容：图标槽为状态（无状态时落回工具图标），其后名称 + 摘要
+  const rowProps = {
+    lead: statusIcon ?? undefined,
+    icon,
+    label: presentation?.label || toolName,
+    detail: detail ? <span className="font-mono">{detail}</span> : undefined
+  }
+
+  if (!expanded) {
+    // 单行摘要 — hover 高亮，点击展开；不带外边距，块间距由消息流统一控制
+    return (
+      <StepRow
+        {...rowProps}
+        expandable={canExpand}
+        onClick={() => canExpand && setExpanded(true)}
+      />
+    )
+  }
 
   return (
-    <div className="my-0.5">
-      {/* 单行摘要 — 可点击展开详情 */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-1.5 py-0.5 text-left text-[11px] text-text-tertiary hover:text-text-secondary transition-colors group"
-      >
-        {(args || result || hasEditDiff || streamingArgsText) &&
-          (expanded ? (
-            <ChevronDown size={10} className="flex-shrink-0 opacity-50" />
-          ) : (
-            <ChevronRight size={10} className="flex-shrink-0 opacity-50" />
-          ))}
-        {icon}
-        <span className="font-medium text-text-secondary flex-shrink-0">
-          {toolName === 'Agent' && typeof args?.subagent_type === 'string' && args.subagent_type
-            ? `${presentation?.label || 'Agent'} · ${args.subagent_type}`
-            : presentation?.label || toolName}
-        </span>
-        {detail && <span className="flex-1 truncate font-mono opacity-70">{detail}</span>}
-        {!detail && <span className="flex-1" />}
-        {(config.icon || config.label) && (
-          <span className="flex items-center gap-1 flex-shrink-0 opacity-80">
-            {config.icon}
-            <span className="text-[10px]">{config.label}</span>
-          </span>
+    <div>
+      {/* 展开态 — 摘要行原位不动，详情从下方长出（与思考 / 分组同一形态，避免展开时跳版） */}
+      <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
+      <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
+        {subSession ? (
+          /* Agent 派发的子会话：内联其转写（自带限高滚动容器） */
+          <SubAgentInlineView sub={subSession} />
+        ) : (
+          /* 外层不限高：diff / 代码 / 裸文本各自是自己那块的唯一滚动主（见 detailViewport.ts） */
+          <div className="py-1 space-y-1.5">
+            {/* 流式生成中的参数文本 */}
+            {streamingArgsText && <pre className={STREAM_PRE_CLASS}>{streamingArgsText}</pre>}
+
+            {/* 编辑成功时展示 DiffViewer */}
+            {hasEditDiff && details?.type === 'edit' && <DiffViewer diff={details.diff!} />}
+
+            {/* 展开详情 */}
+            {!hasEditDiff &&
+              !hasPendingInput &&
+              (isTerminalView ? (
+                /* shell 类工具：命令 + 输出融成一段终端会话，不拆「参数 / 结果」两块 */
+                <TerminalView
+                  command={String(args?.command ?? '')}
+                  output={result}
+                  cwd={details?.type === 'bash' ? details.cwd : undefined}
+                  host={details?.type === 'ssh' ? details.host : undefined}
+                  exitCode={
+                    details?.type === 'bash' || details?.type === 'ssh'
+                      ? details.exitCode
+                      : undefined
+                  }
+                  running={status === 'running'}
+                />
+              ) : presentation && args ? (
+                <ToolFormDetail presentation={presentation} args={args} result={result} />
+              ) : (
+                <>
+                  {args && Object.keys(args).length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-text-tertiary mb-0.5">
+                        {t('toolCall.params')}
+                      </div>
+                      <pre className={DETAIL_PRE_CLASS}>
+                        {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {result && (
+                    <div>
+                      <div className="text-[10px] text-text-tertiary mb-0.5">
+                        {t('toolCall.result')}
+                      </div>
+                      <pre className={DETAIL_PRE_CLASS}>{result}</pre>
+                    </div>
+                  )}
+                </>
+              ))}
+          </div>
         )}
-      </button>
+      </div>
+    </div>
+  )
+}
 
-      {/* 流式生成中的参数文本（手动展开查看） */}
-      {expanded && streamingArgsText && (
-        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
-          <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-40 whitespace-pre-wrap break-words">
-            {streamingArgsText}
-          </pre>
-        </div>
-      )}
+// ─── 相邻同名工具调用的合并行 ──────────────────────────
 
-      {/* 编辑成功时展示 DiffViewer */}
-      {expanded && hasEditDiff && details?.type === 'edit' && (
-        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
-          <DiffViewer diff={details.diff!} />
-        </div>
-      )}
+/**
+ * 工具调用分组块 — 一段相邻的同名成功调用折叠成单行（图标 + 名称 + 去重摘要 + 次数），
+ * 展开后逐条列出原始 ToolCallBlock。避免「浏览器 evaluate」连刷五行的重复噪音。
+ */
+export function ToolCallGroup({
+  toolName,
+  msgs
+}: {
+  toolName: string
+  msgs: ToolUseMessage[]
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const presentation = useChatStore((s) => s.toolPresentations[toolName])
+  const icon = renderToolIcon(presentation)
 
-      {/* 展开详情 */}
-      {expanded && !hasEditDiff && !hasPendingInput && (
-        <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50 space-y-1.5">
-          {presentation && args ? (
-            <ToolFormDetail presentation={presentation} args={args} result={result} />
-          ) : (
-            <>
-              {args && Object.keys(args).length > 0 && (
-                <div>
-                  <div className="text-[10px] text-text-tertiary mb-0.5">
-                    {t('toolCall.params')}
-                  </div>
-                  <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                    {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
-                  </pre>
-                </div>
-              )}
-              {result && (
-                <div>
-                  <div className="text-[10px] text-text-tertiary mb-0.5">
-                    {t('toolCall.result')}
-                  </div>
-                  <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-                    {result}
-                  </pre>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+  // 各次调用的摘要去重后拼接：同工具不同动作（evaluate / screenshot）仍能一眼看出
+  const detail = useMemo(() => {
+    const seen = new Set<string>()
+    for (const m of msgs) {
+      const first = buildToolSummary(toolName, m.metadata?.args)?.split('\n')[0]?.trim()
+      if (first) seen.add(first)
+    }
+    const joined = [...seen].join(' · ')
+    return joined.length > 60 ? joined.slice(0, 57) + '...' : joined
+  }, [msgs, toolName])
+
+  const rowProps = {
+    icon,
+    label: presentation?.label || toolName,
+    detail: detail ? <span className="font-mono">{detail}</span> : undefined,
+    trailing: (
+      <span className="flex-shrink-0 rounded-full bg-bg-tertiary/70 px-1.5 text-[10px] leading-4 tabular-nums">
+        {msgs.length}
+      </span>
+    )
+  }
+
+  if (!expanded) {
+    return <StepRow {...rowProps} expandable onClick={() => setExpanded(true)} />
+  }
+
+  return (
+    <div>
+      <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
+      <div className="ml-3 pl-2 border-l border-border-secondary/50 space-y-0.5">
+        {msgs.map((m) => (
+          <ToolCallBlock
+            key={m.id}
+            toolName={m.metadata?.toolName || toolName}
+            toolCallId={m.metadata?.toolCallId}
+            args={m.metadata?.args}
+            result={m.content || undefined}
+            details={m.metadata?.details}
+            status="done"
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -263,20 +364,19 @@ export function ToolCallBlock({
 
 /** 根据 presentation 配置生成折叠态图标 + 摘要文本 */
 function buildPresentationSummary(
+  toolName: string,
   pres: ToolPresentation,
   args?: Record<string, unknown>
 ): { icon: React.ReactNode; detail: string } {
   const Icon = resolveLucideIcon(pres.icon)
   const iconColor = pres.iconColor
 
-  // 摘要文本：取 summaryField 的首行
+  // 摘要文本：toolSummaries 注册的摘要函数生成，取首行并限长
+  const raw = buildToolSummary(toolName, args)
   let summary = ''
-  if (pres.summaryField && args) {
-    const raw = args[pres.summaryField]
-    if (typeof raw === 'string') {
-      const firstLine = raw.split('\n')[0]
-      summary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
-    }
+  if (raw) {
+    const firstLine = raw.split('\n')[0]
+    summary = firstLine.length > 60 ? firstLine.slice(0, 57) + '...' : firstLine
   }
 
   return {
@@ -307,7 +407,12 @@ function ToolFormDetail({
 
   const items = pres.formItems ?? []
   const declaredFields = new Set(items.map((fi) => fi.field))
-  const undeclaredFields = Object.keys(args).filter((k) => !declaredFields.has(k))
+  const undeclaredFields =
+    pres.showUndeclaredFields === false
+      ? []
+      : Object.keys(args).filter((k) => !declaredFields.has(k))
+  // code renderer 未指定 language 时，按 args.path 的扩展名推导语言（write/edit 等文件工具）
+  const fallbackExt = extOfPath(args.path)
 
   return (
     <>
@@ -321,6 +426,7 @@ function ToolFormDetail({
             label={fi.label}
             renderer={fi.renderer ?? { type: 'text' }}
             value={val}
+            fallbackExt={fallbackExt}
           />
         )
       })}
@@ -336,9 +442,7 @@ function ToolFormDetail({
       {result && (
         <div>
           <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
-          <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-48 whitespace-pre-wrap break-words">
-            {result}
-          </pre>
+          <pre className={DETAIL_PRE_CLASS}>{result}</pre>
         </div>
       )}
     </>
@@ -351,41 +455,55 @@ function ToolFormDetail({
 function FormItem({
   label,
   renderer,
-  value
+  value,
+  fallbackExt
 }: {
   label?: string
   renderer: NonNullable<FormItemRenderer>
   value: unknown
+  /** code renderer 未指定 language 时的扩展名兜底（从 args.path 推导） */
+  fallbackExt?: string
 }): React.JSX.Element | null {
   switch (renderer.type) {
-    case 'code':
-      return <CodeFormItem label={label} code={String(value)} language={renderer.language} />
+    case 'code': {
+      const ext = renderer.language
+        ? (LANG_TO_EXT[renderer.language.toLowerCase()] ?? '')
+        : (fallbackExt ?? '')
+      return (
+        <CodeFormItem
+          label={label}
+          code={String(value)}
+          language={renderer.language}
+          ext={ext}
+          // 对话流里的代码预览是「扫一眼」而非编辑：默认软换行，省掉一条横向滚动条
+          wrap={renderer.wrap ?? true}
+          lineNumbers={renderer.lineNumbers ?? String(value).includes('\n')}
+        />
+      )
+    }
     case 'text':
     default:
       return <TextFormItem label={label} value={value} />
   }
 }
 
-/** code 渲染器 — 语法高亮代码块 + 复制按钮 */
+/** code 渲染器 — CodeMirror 只读代码视图（与文件面板预览同款）+ 复制按钮 */
 function CodeFormItem({
   label,
   code,
-  language
+  language,
+  ext,
+  wrap,
+  lineNumbers
 }: {
   label?: string
   code: string
   language?: string
+  ext: string
+  wrap: boolean
+  lineNumbers: boolean
 }): React.JSX.Element | null {
   const [copied, setCopied] = useState(false)
-
-  const highlighted = useMemo(() => {
-    if (!code || !language || !isHljsLanguageRegistered(language)) return ''
-    try {
-      return hljs.highlight(code, { language }).value
-    } catch {
-      return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    }
-  }, [code, language])
 
   if (!code) return null
 
@@ -401,7 +519,9 @@ function CodeFormItem({
         className="flex items-center justify-between px-2 py-0.5 text-[10px] text-text-tertiary rounded-t"
         style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
       >
-        <span className="font-medium uppercase tracking-wider">{language || label || 'code'}</span>
+        <span className="font-medium uppercase tracking-wider">
+          {language || ext.replace('.', '') || label || 'code'}
+        </span>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1 hover:text-text-secondary transition-colors"
@@ -409,20 +529,16 @@ function CodeFormItem({
           {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
         </button>
       </div>
-      <pre
-        className="text-[11px] leading-relaxed rounded-b px-2 py-1.5 overflow-auto max-h-48 !m-0"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        {highlighted ? (
-          <code
-            className={`hljs language-${language}`}
-            style={{ fontSize: 'inherit' }}
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-          />
-        ) : (
-          <code style={{ fontSize: 'inherit' }}>{code}</code>
-        )}
-      </pre>
+      {/* thin-scrollbar 一并作用于内部 .cm-scroller —— CodeMirror 自己是这块的唯一滚动主 */}
+      <div className="rounded-b overflow-hidden border border-border-secondary/40 border-t-0 thin-scrollbar">
+        <CodeView
+          content={code}
+          ext={ext}
+          wrap={wrap}
+          lineNumbers={lineNumbers}
+          maxHeight={CODE_MAX_H}
+        />
+      </div>
     </div>
   )
 }
@@ -433,9 +549,7 @@ function TextFormItem({ label, value }: { label?: string; value: unknown }): Rea
   return (
     <div>
       {label && <div className="text-[10px] text-text-tertiary mb-0.5">{label}</div>}
-      <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 overflow-auto max-h-32 whitespace-pre-wrap break-words">
-        {text}
-      </pre>
+      <pre className={DETAIL_PRE_CLASS}>{text}</pre>
     </div>
   )
 }

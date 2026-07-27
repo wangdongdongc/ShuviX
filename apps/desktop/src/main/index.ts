@@ -33,10 +33,13 @@ import './tools/allTools'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
+import {
+  initWidgetWindowService,
+  closeAll as closeAllWidgetWindows
+} from './services/widgetWindowService'
 import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './services/panelLayoutState'
-// pglite / pyodide: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
+// pglite: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
 import { disposePglite } from './services/pglite'
-import { disposePyodide } from './services/pyodide'
 import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/browser'
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
@@ -398,6 +401,9 @@ function createWindow(): void {
     createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
   })
 
+  // 初始化 widget 独立窗口服务（owns widget app 窗口）
+  initWidgetWindowService({ getThemeBgColor })
+
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
   initBrowserSession()
   // 记录浏览器面板的宿主窗口（tab 的 WebContentsView 按需创建，renderer 通过 IPC 控制）
@@ -422,6 +428,7 @@ function createWindow(): void {
   mainWindow.on('close', () => {
     destroyTerminalsByWindow(mainWebContentsId)
     void unpinAllPinnedChat('window-closed')
+    closeAllWidgetWindows()
   })
   mainWindow.on('closed', () => {
     clearBrowserOffset(mainWebContentsId)
@@ -506,6 +513,13 @@ ipcMain.handle('app:open-external', async (_event, url: string) => {
 ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
   const { shell } = await import('electron')
   await shell.openPath(folderPath)
+  return { success: true }
+})
+
+// 在系统文件管理器中定位并选中指定文件（openPath 对压缩包等于直接解压/打开，故用 showItemInFolder）
+ipcMain.handle('app:reveal-path', async (_event, filePath: string) => {
+  const { shell } = await import('electron')
+  shell.showItemInFolder(filePath)
   return { success: true }
 })
 
@@ -655,7 +669,6 @@ app.on('before-quit', () => {
   widgetServer.dispose()
   cliServer.stop()
   disposePglite()
-  disposePyodide()
   closeAllWatchers()
   hookService.stop().catch(() => {})
 })

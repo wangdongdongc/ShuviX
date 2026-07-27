@@ -7,7 +7,7 @@
  *   - CDP 交互/快照/调试委托共享 browserCdpOps（与扩展同一份配方），per-tab 会话走
  *     browserCdpManager。
  *   - screenshot / pdf 走 Electron 原生 capturePage / printToPDF（CDP 在 WebContentsView
- *     上分别不稳定 / 不暴露），落盘 + 沙箱校验为桌面专属逻辑。
+ *     上分别不稳定 / 不暴露），落盘 + 准入校验为桌面专属逻辑。
  *
  * agent 可见的 tabId 是 t1/t2/… 短号（UUID 36 字符在多轮对话里浪费 token 且易抄错），
  * 模块级映射到 browserViewService 的 UUID；对用户经 UI 开的 tab 懒分配短号。
@@ -253,7 +253,7 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   /**
    * 导出 PDF 走 Electron 原生 `printToPDF()`（CDP 在 Electron debugger 里不暴露
-   * `Page.printToPDF`）。outputPath 沙箱校验：无 interactive approval 通道，越界直接拒绝。
+   * `Page.printToPDF`）。outputPath 准入校验：无 interactive approval 通道，越界直接拒绝。
    */
   async pdf(p: {
     tabId: string
@@ -264,7 +264,7 @@ class DesktopBrowserBackend implements BrowserBackend {
   }): Promise<BrowserOpOutput> {
     const { view } = resolveAndActivate(p.tabId)
 
-    // 解析为绝对路径（相对路径按 workspace 解析）+ 沙箱检查
+    // 解析为绝对路径（相对路径按 workspace 解析）+ 准入检查
     const config = resolveProjectConfig(this.sessionId)
     const absolutePath = isAbsolute(p.outputPath)
       ? p.outputPath

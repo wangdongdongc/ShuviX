@@ -19,6 +19,7 @@ import {
   Search,
   Database,
   Bot,
+  GitBranch,
   Globe,
   Wrench,
   type LucideIcon
@@ -55,6 +56,7 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   Search,
   Database,
   Bot,
+  GitBranch,
   Globe
 }
 

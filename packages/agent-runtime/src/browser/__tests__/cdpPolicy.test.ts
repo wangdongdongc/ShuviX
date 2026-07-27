@@ -1,39 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { classifyCdpMethod, resolveUidMacros } from '../cdpPolicy'
+import { blockedCdpReason, resolveUidMacros } from '../cdpPolicy'
 
-describe('classifyCdpMethod', () => {
-  it('只读方法 → safe', () => {
+describe('blockedCdpReason', () => {
+  it('已知域内方法（只读/写类/未知方法名）→ 放行', () => {
     for (const m of [
       'Network.getResponseBody',
       'DOM.describeNode',
-      'DOM.getDocument',
       'CSS.getMatchedStylesForNode',
       'Accessibility.getFullAXTree',
       'Runtime.enable',
-      'Page.getLayoutMetrics',
-      'Network.disable'
-    ]) {
-      expect(classifyCdpMethod(m).cls, m).toBe('safe')
-    }
-  })
-
-  it('写类/未知方法 → mutating（fail-safe）', () => {
-    for (const m of [
       'Input.dispatchMouseEvent',
       'Runtime.evaluate',
       'Emulation.setDeviceMetricsOverride',
-      'DOM.setAttributeValue',
       'Network.setCookie',
       'Debugger.pause',
-      'Page.handleJavaScriptDialog',
-      'Runtime.someBrandNewMethod' // 未知方法默认 mutating
+      'Fetch.enable',
+      'Runtime.someBrandNewMethod' // 已知域内的未知方法：放行
     ]) {
-      expect(classifyCdpMethod(m).cls, m).toBe('mutating')
+      expect(blockedCdpReason(m), m).toBeNull()
     }
-  })
-
-  it('Fetch.enable 覆盖为 mutating（拦截会挂起页面）', () => {
-    expect(classifyCdpMethod('Fetch.enable').cls).toBe('mutating')
   })
 
   it('越界域/危险方法 → blocked，带原因', () => {
@@ -46,15 +31,13 @@ describe('classifyCdpMethod', () => {
       'SystemInfo.getInfo',
       'Nonexistent.method' // 未知域
     ]) {
-      const r = classifyCdpMethod(m)
-      expect(r.cls, m).toBe('blocked')
-      expect(r.reason, m).toBeTruthy()
+      expect(blockedCdpReason(m), m).toBeTruthy()
     }
   })
 
   it('畸形 method → blocked', () => {
-    expect(classifyCdpMethod('nodot').cls).toBe('blocked')
-    expect(classifyCdpMethod('Trailing.').cls).toBe('blocked')
+    expect(blockedCdpReason('nodot')).toBeTruthy()
+    expect(blockedCdpReason('Trailing.')).toBeTruthy()
   })
 })
 

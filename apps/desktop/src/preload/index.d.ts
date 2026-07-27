@@ -3,8 +3,10 @@ import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type {
   AgentInitParams,
   AgentInitResult,
+  AgentRuntimeInfo,
   AgentPromptParams,
   AgentNotebookPromptParams,
+  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -29,7 +31,6 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
-  SessionAllowListAddParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SessionCreateParams,
@@ -168,6 +169,11 @@ declare global {
     url?: string
     title?: string
   }
+  interface ChatFilePreviewEvent extends ChatEventBase {
+    type: 'file_preview'
+    /** 要预览的文件绝对路径（须位于会话工作目录内） */
+    absPath: string
+  }
   interface ChatSubSessionRegisterEvent extends ChatEventBase {
     type: 'sub_session_register'
     parentSessionId: string
@@ -176,6 +182,10 @@ declare global {
     description: string
     systemPrompt: string
     prompt: string
+    /** 派生层级（直接派生=1，嵌套派生依次递增） */
+    depth?: number
+    /** 所属根会话 id（嵌套派生时 parentSessionId 是另一个派生 agent） */
+    rootSessionId?: string
   }
   interface ChatSubSessionEndEvent extends ChatEventBase {
     type: 'sub_session_end'
@@ -183,17 +193,8 @@ declare global {
     result: string
     isError?: boolean
   }
-  interface ChatCompactionStartEvent extends ChatEventBase {
-    type: 'compaction_start'
-  }
-  interface ChatCompactionEndEvent extends ChatEventBase {
-    type: 'compaction_end'
-    message: string
-    instructionMessages?: string[]
-  }
-  interface ChatCompactionErrorEvent extends ChatEventBase {
-    type: 'compaction_error'
-    error: string
+  interface ChatMessagesReloadedEvent extends ChatEventBase {
+    type: 'messages_reloaded'
   }
   interface ChatInstructionsInjectedEvent extends ChatEventBase {
     type: 'instructions_injected'
@@ -224,11 +225,10 @@ declare global {
     | ChatImageDataEvent
     | ChatRuntimeEvent
     | ChatBrowserEvent
+    | ChatFilePreviewEvent
     | ChatSubSessionRegisterEvent
     | ChatSubSessionEndEvent
-    | ChatCompactionStartEvent
-    | ChatCompactionEndEvent
-    | ChatCompactionErrorEvent
+    | ChatMessagesReloadedEvent
     | ChatInstructionsInjectedEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
@@ -296,7 +296,8 @@ declare global {
     autoApprove?: boolean
     allowList?: string[]
     telegramBotId?: string
-    enabledInstructionFiles?: string[]
+    /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
+    instructionFile?: string | null
   }
 
   /** 会话类型（对应 DB 表 sessions） */
@@ -378,6 +379,8 @@ declare global {
       openExternal: (url: string) => Promise<{ success: boolean }>
       /** 用系统文件管理器打开指定文件夹 */
       openFolder: (folderPath: string) => Promise<{ success: boolean }>
+      /** 在系统文件管理器中定位并选中该文件（与 openFolder 不同：会高亮文件本身） */
+      revealPath: (filePath: string) => Promise<{ success: boolean }>
       /** 调整主窗口宽度（delta > 0 变宽，< 0 变窄） */
       adjustWindowWidth: (delta: number) => Promise<void>
       /** 设置浏览器面板宽度偏移（保存窗口尺寸时扣除） */
@@ -391,6 +394,7 @@ declare global {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
       notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
+      dispatchPrompt: (params: AgentDispatchPromptParams) => Promise<{ success: boolean }>
       subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
       subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
@@ -398,6 +402,8 @@ declare global {
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
+      /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
+      getInfo: (sessionId: string) => Promise<AgentRuntimeInfo | null>
       /**
        * 统一的"用户输入响应"入口。命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
        */
@@ -456,12 +462,6 @@ declare global {
       ) => Promise<{ success: boolean }>
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
-      previewAllowPatterns: (params: {
-        command: string
-        sessionId?: string
-        toolType?: 'bash' | 'ssh' | 'read' | 'write'
-      }) => Promise<string[]>
-      addAllowListPatterns: (params: SessionAllowListAddParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
@@ -473,9 +473,9 @@ declare global {
       scanInstructionFiles: (
         sessionId: string
       ) => Promise<import('@shuvix/chat-protocol/types/instructionFile').InstructionFileEntry[]>
-      updateInstructionFiles: (params: {
+      updateInstructionFile: (params: {
         id: string
-        filenames: string[]
+        filename: string | null
       }) => Promise<{ success: boolean }>
     }
     message: {
@@ -585,12 +585,14 @@ declare global {
           {
             icon?: LucideIconName
             iconColor?: ThemeColor
-            summaryField?: string
             formItems?: Array<{
               field: string
               label?: string
-              renderer?: { type: 'code'; language?: string } | { type: 'text' }
+              renderer?:
+                | { type: 'code'; language?: string; wrap?: boolean; lineNumbers?: boolean }
+                | { type: 'text' }
             }>
+            showUndeclaredFields?: boolean
           }
         >
       >
@@ -700,10 +702,6 @@ declare global {
       stopBot: (botId: string) => Promise<{ success: boolean }>
       /** 获取 Bot 运行状态 */
       getBotStatus: (botId: string) => Promise<{ running: boolean }>
-    }
-    compact: {
-      /** 触发 Full Compaction */
-      start: (sessionId: string) => Promise<unknown>
     }
     command: {
       /**
@@ -906,16 +904,27 @@ declare global {
         { success: true; url: string; buildSuccess: boolean } | { success: false; error: string }
       >
       stopWidget: (id: string) => Promise<{ success: true }>
-      pickExportDir: () => Promise<
-        { success: true; path: string } | { success: false; reason: string }
-      >
+      pickExportTarget: (params: {
+        id: string
+      }) => Promise<{ success: true; path: string } | { success: false; reason: string }>
       exportAsVite: (params: {
         id: string
         targetPath: string
       }) => Promise<
-        | { success: true; filesWritten: string[]; targetPath: string }
+        | { success: true; zipPath: string; entryCount: number }
         | { success: false; code: string; error: string }
       >
+      revealExport: (zipPath: string) => Promise<{ success: true }>
+    }
+    widgetWindow: {
+      /** 在独立窗口打开 widget（已开则聚焦） */
+      open: (id: string) => Promise<{ success: true } | { success: false; error: string }>
+      /** 关闭指定 widget 的独立窗口 */
+      close: (id: string) => Promise<{ success: true }>
+      /** 切换独立窗口"始终置顶" */
+      setAlwaysOnTop: (params: { id: string; value: boolean }) => Promise<{ alwaysOnTop: boolean }>
+      /** 查询独立窗口"始终置顶"状态 */
+      getAlwaysOnTop: (id: string) => Promise<{ alwaysOnTop: boolean }>
     }
     files: {
       scan: (params: { sessionId: string }) => Promise<{
@@ -934,6 +943,27 @@ declare global {
         path: string
         content: string
       }) => Promise<{ ok: true } | { ok: false; error: string }>
+      /** 二进制另存为（图表导出 PNG / SVG）：弹系统保存对话框，落点由用户当场指定 */
+      saveAs: (params: {
+        defaultPath: string
+        dataBase64: string
+      }) => Promise<
+        { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
+      >
+    }
+    preview: {
+      /** 图表渲染验证回执（响应 AppEvent 'preview.validateChart'） */
+      reportRender: (params: {
+        validationId: string
+        ok: boolean
+        error?: string
+      }) => Promise<{ accepted: boolean }>
+    }
+    wiki: {
+      /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore） */
+      listFiles: () => Promise<{ paths: string[]; truncated: boolean; root: string }>
+      /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
+      openNote: (params: { path: string }) => Promise<Session>
     }
     events: {
       subscribe: (
@@ -966,7 +996,6 @@ declare global {
     createdAt: number
     updatedAt: number
     lastOpenedAt: number
-    openCount: number
     archivedAt: number
   }
 

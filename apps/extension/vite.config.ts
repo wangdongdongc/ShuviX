@@ -2,6 +2,7 @@ import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
@@ -14,7 +15,12 @@ const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
 //  - 输出固定文件名（manifest 引用稳定路径，不带 hash）
 //  - 复用 @shuvix/* 包源码（别名）；pi-ai/pi-agent-core 纯 ESM 由 Vite 正常 bundle
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // isomorphic-git 浏览器构建需要 Buffer 全局 —— 严格限定只注入 buffer，不引入全家桶
+    nodePolyfills({ include: ['buffer'], globals: { Buffer: true, global: false, process: false } })
+  ],
   resolve: {
     alias: {
       '@shuvix/chat-protocol': chatProtocol,

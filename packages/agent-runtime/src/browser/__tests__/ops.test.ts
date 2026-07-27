@@ -29,13 +29,6 @@ describe('BROWSER_OPS', () => {
     expect(BROWSER_OPS.map((op) => op.name).sort()).toEqual([...BROWSER_ACTIONS].sort())
   })
 
-  it('mutating 集合定案 = close_tab/navigate/click/fill/type/press_key/evaluate', () => {
-    const mutating = BROWSER_OPS.filter((op) => op.mutating).map((op) => op.name)
-    expect(mutating.sort()).toEqual(
-      ['click', 'close_tab', 'evaluate', 'fill', 'navigate', 'press_key', 'type'].sort()
-    )
-  })
-
   it('全 caps 下不过滤', () => {
     expect(opsForCaps(ALL_CAPS)).toHaveLength(BROWSER_OPS.length)
   })

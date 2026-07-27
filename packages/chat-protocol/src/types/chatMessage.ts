@@ -113,6 +113,8 @@ export interface BashToolDetails {
   truncated: boolean
   /** 完整输出是否已持久化到磁盘 */
   persisted?: boolean
+  /** 命令实际执行的工作目录 —— 终端形态详情区用它渲染提示符 */
+  cwd?: string
 }
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */
@@ -200,15 +202,6 @@ export interface SkillToolDetails {
   error?: boolean
 }
 
-/** Python 工具详情 */
-export interface PythonToolDetails {
-  type: 'python'
-  hasError: boolean
-  truncated: boolean
-  packages?: string[]
-  executionTime?: number
-}
-
 /** postgres 工具详情 */
 export interface SqlToolDetails {
   type: 'postgres'
@@ -239,6 +232,16 @@ export interface BrowserToolDetails {
   error?: string
 }
 
+/** git 工具详情 */
+export interface GitToolDetails {
+  type: 'git'
+  action: string
+  ref?: string
+  oid?: string
+  fileCount?: number
+  error?: string
+}
+
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
   | EditToolDetails
@@ -251,10 +254,10 @@ export type ToolResultDetails =
   | SshToolDetails
   | DatabaseToolDetails
   | SkillToolDetails
-  | PythonToolDetails
   | SqlToolDetails
   | McpToolDetails
   | BrowserToolDetails
+  | GitToolDetails
 
 /** 工具使用元数据 */
 export interface ToolUseMeta {

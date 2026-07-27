@@ -3,10 +3,11 @@
  *
  * 仅在两个时机调用：
  * 1. 新会话创建时（sessionService.create）
- * 2. 会话压缩完成后（compactionService.compact）
+ * 2. 会话压缩归档时（session 工具 compact 动作，tools/session.ts —— build 形态并入其原子事务）
  *
- * 流程：扫描磁盘候选 ∩ 会话配置 enabledInstructionFiles → 每个文件独立写一条
- * user 消息（metadata.isInstructionInjection），UI 通过 metadata 渲染 SystemNoticeCard。
+ * 流程：扫描磁盘候选 → 按会话配置 settings.instructionFile 单选出至多一个文件（未配置时
+ * AGENTS.md 优先、其次 CLAUDE.md）→ 写一条 user 消息（metadata.isInstructionInjection），
+ * UI 通过 metadata 渲染 SystemNoticeCard。
  */
 
 import { readFileSync } from 'fs'
@@ -16,53 +17,49 @@ import { sessionDao } from '../../dao/sessionDao'
 import { scanInstructionFiles } from './instructionFileScanner'
 import type { Message } from '../../types'
 import { createLogger } from '../../logger'
+import { resolveInstructionFile } from '@shuvix/chat-protocol/types/instructionFile'
 
 const log = createLogger('InstructionInjector')
 
 /**
  * 根据会话配置扫描候选指令文件，构造 user 消息对象（**不写库**）。
+ * 单选语义：返回 0 或 1 条消息（数组形态保留，便于调用方统一批量落库）。
  * 调用方负责持久化，便于和压缩流程合并到同一个事务里。
+ *
+ * 注：读配置走 `pick(['settings'])` 而非 `pickSettings`——后者用 json_extract，
+ * 无法区分「显式 null（不注入）」和「键缺失（走默认优先级）」。
  */
 export function buildInstructionMessages(sessionId: string, workingDir: string): Message[] {
-  const enabled = sessionDao.pickSettings(sessionId, [
-    'enabledInstructionFiles'
-  ])?.enabledInstructionFiles
-  if (!enabled || enabled.length === 0) {
-    log.info(`session=${sessionId} 未启用任何指令文件，跳过注入`)
-    return []
-  }
-  log.info(`session=${sessionId} 启用列表: [${enabled.join(', ')}]`)
-
-  const enabledSet = new Set(enabled)
-  const available = scanInstructionFiles(workingDir).filter((f) => enabledSet.has(f.filename))
-  if (available.length === 0) {
-    log.info(`session=${sessionId} 启用列表与磁盘扫描结果交集为空，跳过注入`)
-    return []
-  }
-  log.info(
-    `session=${sessionId} 待注入 ${available.length} 个文件: [${available.map((f) => f.filename).join(', ')}]`
+  const configured = sessionDao.pick(sessionId, ['settings'])?.settings?.instructionFile
+  const available = scanInstructionFiles(workingDir)
+  const selected = resolveInstructionFile(
+    configured,
+    available.map((f) => f.filename)
   )
+  if (!selected) {
+    log.info(`session=${sessionId} 未选中任何指令文件，跳过注入`)
+    return []
+  }
 
-  const messages: Message[] = []
-  // 同一批次内累加 createdAt 微小偏移，保证多文件之间也有稳定时间序
-  const baseTs = Date.now()
-  let offset = 0
-  for (const entry of available) {
-    let content: string
-    try {
-      content = readFileSync(entry.absolutePath, 'utf-8').trim()
-    } catch (err: unknown) {
-      log.warn(
-        `读取失败: ${entry.absolutePath} (${err instanceof Error ? err.message : String(err)})`
-      )
-      continue
-    }
-    if (!content) {
-      log.info(`跳过空文件 ${entry.filename}`)
-      continue
-    }
-    log.info(`构造指令消息 file=${entry.filename} bytes=${content.length}`)
-    messages.push({
+  const entry = available.find((f) => f.filename === selected)
+  if (!entry) return []
+
+  let content: string
+  try {
+    content = readFileSync(entry.absolutePath, 'utf-8').trim()
+  } catch (err: unknown) {
+    log.warn(
+      `读取失败: ${entry.absolutePath} (${err instanceof Error ? err.message : String(err)})`
+    )
+    return []
+  }
+  if (!content) {
+    log.info(`跳过空文件 ${entry.filename}`)
+    return []
+  }
+  log.info(`构造指令消息 file=${entry.filename} bytes=${content.length}`)
+  return [
+    {
       id: uuidv7(),
       sessionId,
       role: 'user',
@@ -73,10 +70,9 @@ export function buildInstructionMessages(sessionId: string, workingDir: string):
         instructionFilename: entry.filename
       },
       model: '',
-      createdAt: baseTs + offset++
-    })
-  }
-  return messages
+      createdAt: Date.now()
+    }
+  ]
 }
 
 /**

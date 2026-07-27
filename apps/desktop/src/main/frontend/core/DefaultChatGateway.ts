@@ -1,6 +1,12 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
+import type {
+  AgentInitResult,
+  AgentRuntimeInfo,
+  MessageAddParams,
+  Message,
+  ThinkingLevel
+} from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
@@ -15,7 +21,7 @@ import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { agentManager } from '../../agents/AgentManager'
-import { runNotebookTask } from '@shuvix/agent-runtime'
+import { runNotebookTask, runUserDispatchTask } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
 
 /**
@@ -94,6 +100,29 @@ export class DefaultChatGateway implements ChatGateway {
     )
   }
 
+  /**
+   * 用户直发派发（kind='agent' 斜杠命令）：不进主会话消息流，直接开启具名子智能体
+   * （fire-and-forget）。进展经 sub_session_* / 流式事件呈现在右侧 Sub-agent 面板。
+   */
+  async dispatchPrompt(
+    sessionId: string,
+    agentName: string,
+    text: string,
+    inlineTokens?: Record<string, InlineToken>
+  ): Promise<void> {
+    // 先确保主 AgentSession 存在：子代理的审批/询问经 userInputBroker 路由到它，
+    // 缺席时相关工具请求会被直接拒绝（聊天会话应能承接审批，与笔记本的只读面板不同）
+    await sessionService.ensureAgentSession(sessionId)
+    const params = sessionService.buildAgentDispatchRunParams(sessionId, agentName)
+    if ('error' in params) {
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: params.error })
+      return
+    }
+    runUserDispatchTask(agentManager, { sessionId, text, inlineTokens, ...params }, (error) =>
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
+    )
+  }
+
   steer(sessionId: string, text: string): void {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
@@ -135,6 +164,10 @@ export class DefaultChatGateway implements ChatGateway {
 
   setEnabledTools(sessionId: string, tools: string[]): void {
     sessionService.getAgentSession(sessionId)?.setEnabledTools(tools)
+  }
+
+  getAgentInfo(sessionId: string): AgentRuntimeInfo | null {
+    return sessionService.getAgentSession(sessionId)?.getRuntimeInfo() ?? null
   }
 
   // ─── 消息操作 ─────────────────────────────────

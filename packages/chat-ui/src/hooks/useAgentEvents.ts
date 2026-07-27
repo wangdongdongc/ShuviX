@@ -137,6 +137,7 @@ export function useAgentEvents(): void {
       useSubSessionStore.getState().register({
         subSessionId: event.sessionId,
         parentSessionId: event.parentSessionId,
+        parentToolCallId: event.parentToolCallId,
         subAgentName: event.subAgentName,
         displayName: event.displayName,
         description: event.description,
@@ -145,9 +146,13 @@ export function useAgentEvents(): void {
         promptInlineTokens: event.inlineTokens,
         contextNote: event.contextNote
       })
-      // 当前会话起子代理 → 发「显示子智能体面板」信号（事件检测统一在此；各宿主订阅 chatStore
-      // .subAgentRevealRequest 后打开自己的右侧面板并切到 subagent tab，面板 store 各端不同故由宿主实现）
-      if (event.parentSessionId === useChatStore.getState().activeSessionId) {
+      // 用户主动触发（无 parentToolCallId，如笔记本会话）→ 发「显示子智能体面板」信号（事件检测统一在此；
+      // 各宿主订阅 chatStore.subAgentRevealRequest 后打开自己的右侧面板并切到 subagent tab）。
+      // Agent 经派发工具自行触发的（有 parentToolCallId）内联在对话流的 ToolCallBlock 卡片中，不开右侧面板。
+      if (
+        !event.parentToolCallId &&
+        event.parentSessionId === useChatStore.getState().activeSessionId
+      ) {
         useChatStore.getState().requestSubAgentReveal(event.sessionId)
       }
       return
@@ -242,7 +247,7 @@ export function useAgentEvents(): void {
           )
           return
         }
-        // 其它事件（step_end / input_request / runtime / compaction 等）子会话不会触发；忽略。
+        // 其它事件（step_end / input_request / runtime / messages_reloaded 等）子会话不会触发；忽略。
         default:
           return
       }
@@ -371,6 +376,17 @@ export function useAgentEvents(): void {
         store.setRuntime(sid, event.runtimeId, event.status)
         break
 
+      case 'file_preview':
+        // preview 工具（可视化子智能体等）请求打开文件预览：仅当事件属于当前活跃会话时
+        // 触发 filePreviewRequest 信号 —— 宿主 useSessionPanelReveal 展开会话面板并切到
+        // Files，FilesPanel 相对化路径后打开与点击文件一致的预览。
+        // 标记 'agent'：预览面板据此亮出完整路径 —— 这是唯一由智能体（可能受提示注入影响）
+        // 发起的预览入口，用户该看见是谁打开了哪个文件。
+        if (sid === store.activeSessionId) {
+          store.requestFilePreview(event.absPath, 'agent')
+        }
+        break
+
       // 注：browser_event（右侧浏览器/预览面板）由宿主的 useRightPanelBridge 处理，对话框本身不响应
 
       case 'agent_end': {
@@ -400,32 +416,11 @@ export function useAgentEvents(): void {
         break
       }
 
-      // ─── 压缩归档事件 ───────────────────────────
-      case 'compaction_start':
-        store.setCompacting(sid, true)
-        break
-
-      case 'compaction_end':
-        store.setCompacting(sid, false)
-        // 替换整个消息列表：指令注入消息在前，摘要消息在后
-        if (sid === store.activeSessionId && event.message) {
-          const msgs: ChatMessage[] = []
-          if (event.instructionMessages?.length) {
-            for (const im of event.instructionMessages) msgs.push(JSON.parse(im))
-          }
-          msgs.push(JSON.parse(event.message))
+      // ─── 消息列表重载（后端整体改写，如 session 工具压缩归档后） ───
+      case 'messages_reloaded':
+        if (sid === store.activeSessionId) {
+          const msgs = await getSessionChannelApi().message.list(sid)
           store.setMessages(msgs)
-        }
-        // 后端在压缩结束时 invalidate 了 AgentSession，需要重建以便后续 prompt 生效
-        await getSessionChannelApi().agent.init({ sessionId: sid })
-        break
-
-      case 'compaction_error':
-        store.setCompacting(sid, false)
-        // 把压缩失败错误写为一条 error_event 消息,UI 上能看到原因
-        {
-          const errorMsg = await reportError(sid, `压缩失败: ${event.error || 'Unknown error'}`)
-          if (sid === store.activeSessionId) store.addMessage(errorMsg)
         }
         break
 

@@ -12,6 +12,26 @@
     "react-dom": "^19"
   },
   "dependencies": {
+    "@codemirror/commands": "*",
+    "@codemirror/lang-cpp": "*",
+    "@codemirror/lang-css": "*",
+    "@codemirror/lang-go": "*",
+    "@codemirror/lang-html": "*",
+    "@codemirror/lang-java": "*",
+    "@codemirror/lang-javascript": "*",
+    "@codemirror/lang-json": "*",
+    "@codemirror/lang-php": "*",
+    "@codemirror/lang-python": "*",
+    "@codemirror/lang-rust": "*",
+    "@codemirror/lang-sql": "*",
+    "@codemirror/lang-xml": "*",
+    "@codemirror/lang-yaml": "*",
+    "@codemirror/language": "*",
+    "@codemirror/legacy-modes": "*",
+    "@codemirror/search": "*",
+    "@codemirror/state": "*",
+    "@codemirror/view": "*",
+    "@lezer/highlight": "*",
     "@shuvix/chat-protocol": "*"
   }
 }

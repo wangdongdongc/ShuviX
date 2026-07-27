@@ -27,6 +27,15 @@ Keep this list current — it's what makes future merges predictable.
   localized labels in the app); otherwise the built-in DOM menu is unchanged. Exported types:
   `TableMenuItem`, `TableMenuItemId`, `TableMenuRenderer`. Good upstream PR candidate.
 
+- `src/mermaid-blocks.ts` — **ShuviX-added file** (not upstream): mermaid live preview widget +
+  the `renderMermaid` façade (lazy module load, theme-keyed SVG cache, serialized `initialize`),
+  also consumed by the app's ChartView. Rendered SVG is passed through
+  `sanitizeRenderedSvg` (`@shuvix/chat-protocol/utils/svgSanitize`) before it leaves this module —
+  consumers inject it via `innerHTML` into the privileged renderer, and mermaid's
+  `click <node> href "javascript:…"` directive otherwise carries a `javascript:` URL straight
+  into the DOM. This is the package's only `@shuvix/*` import; if upstreaming the widget, drop
+  that line (or vendor the sanitizer) to keep the package dependency-free.
+
 Prefer **isolating changes in new files** over editing upstream files in place — new files never
 conflict on pull. Edit core files only when unavoidable, and note them above.
 

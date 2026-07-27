@@ -5,11 +5,9 @@
  * 各自实现本接口；上层 multiplex `browser` 工具（tool.ts）只面向该契约分发。
  * 端差异用 BrowserCaps 表达：cap 为 false 的操作不出现在工具 schema / 手册里。
  */
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-
 /** 端能力开关：false 的 op / 参数不进 schema、description、help */
 export interface BrowserCaps {
-  /** 导出 PDF（桌面：printToPDF + 沙箱落盘；扩展无落盘语义） */
+  /** 导出 PDF（桌面：printToPDF + 准入落盘；扩展无落盘语义） */
   pdf: boolean
   /** 全页截图（视口外内容；桌面经 Emulation + capturePage） */
   fullPageScreenshot: boolean
@@ -98,12 +96,4 @@ export interface BrowserBackend {
     landscape?: boolean
     scale?: number
   }): Promise<BrowserOpOutput>
-}
-
-/** 逐操作审批依赖（gate.ts 消费；与 ask 工具同一 requestUserInput 通道） */
-export interface BrowserApprovalDeps {
-  /** 会话级自动批准开关：开 → 直接放行；关 → 每次 mutating 操作前弹审批 */
-  isAutoApprove: () => boolean
-  /** 挂起/恢复审批（桌面 IPC InputRequest / 扩展 RuntimeSession）；cancel → 中止本轮 */
-  requestUserInput: (req: InputRequest) => Promise<InputResponse>
 }

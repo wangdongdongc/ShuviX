@@ -9,7 +9,6 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
-  SessionAllowListAddParams,
   SessionAllowListRemoveParams,
   SessionUpdateTitleParams,
   SessionCreateParams
@@ -72,21 +71,7 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** 预览命令拆解后的通配符模式（过滤已在允许列表中的） */
-  ipcMain.handle(
-    'session:previewAllowPatterns',
-    (_event, params: { command: string; sessionId?: string; toolType?: 'bash' | 'ssh' }) => {
-      return sessionService.previewAllowPatterns(params.command, params.sessionId, params.toolType)
-    }
-  )
-
-  /** 批量添加模式到统一允许列表 */
-  ipcMain.handle('session:addAllowListPatterns', (_event, params: SessionAllowListAddParams) => {
-    sessionService.addAllowListPatterns(params.id, params.toolType, params.patterns)
-    return { success: true }
-  })
-
-  /** 从统一允许列表移除条目 */
+  /** 从统一允许列表（仅路径条目）移除条目 */
   ipcMain.handle('session:removeAllowListEntry', (_event, params: SessionAllowListRemoveParams) => {
     sessionService.removeAllowListEntry(params.id, params.entry)
     return { success: true }
@@ -102,11 +87,11 @@ export function registerSessionHandlers(): void {
     return sessionService.scanInstructionFiles(sessionId)
   })
 
-  /** 更新会话启用的指令文件列表 */
+  /** 更新会话注入的指令文件（单选；filename 为 null 表示不注入） */
   ipcMain.handle(
-    'session:updateInstructionFiles',
-    (_event, params: { id: string; filenames: string[] }) => {
-      sessionService.updateEnabledInstructionFiles(params.id, params.filenames)
+    'session:updateInstructionFile',
+    (_event, params: { id: string; filename: string | null }) => {
+      sessionService.updateInstructionFile(params.id, params.filename)
       return { success: true }
     }
   )

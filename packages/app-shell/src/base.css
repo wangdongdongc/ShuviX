@@ -12,8 +12,7 @@ body,
 }
 
 body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
+  font-family: var(--theme-font-sans);
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
@@ -399,18 +398,20 @@ body {
 }
 
 /* —— 链接 —— */
+/* 渲染走 chat-ui 的 LinkChip：前置来源图标 + accent 文字。
+   常态不画下划线（原来那条 border-primary 的线比正文还灰，读起来像划线笔误），hover 才出。 */
 .markdown-body a {
-  color: var(--color-text-primary);
-  text-decoration: underline;
-  text-decoration-color: var(--color-border-primary);
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-  transition: text-decoration-color 0.15s;
+  color: var(--color-accent);
+  text-decoration: none;
   overflow-wrap: break-word;
+  transition: text-decoration-color 0.15s;
 }
 
 .markdown-body a:hover {
-  text-decoration-color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
 }
 
 /* —— 代码块 —— */
@@ -425,20 +426,23 @@ body {
 }
 
 .markdown-body code {
-  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'Ubuntu Mono', 'Fira Code', monospace;
+  font-family: var(--theme-font-mono);
   font-size: calc(var(--app-font-size, 14px) - 1px);
   line-height: 1.4;
 }
 
-/* 行内代码 */
+/* 行内代码（路径已被 PathChip 接走，这里只剩标识符 / 短 token） */
 .markdown-body :not(pre) > code {
-  background: color-mix(in srgb, var(--color-bg-tertiary) 50%, transparent);
-  padding: 2px 7px;
+  background: color-mix(in srgb, var(--color-bg-tertiary) 40%, transparent);
+  padding: 2px 5px;
   border-radius: 4px;
   font-size: 0.9em;
-  /* 长 token（如文件路径）无空格无法自动换行，会撑破消息列宽产生横向滚动条 —— 强制可断行 */
+  /* 长 token 无空格无法自动换行，会撑破消息列宽产生横向滚动条 —— 强制可断行 */
   word-break: break-word;
   overflow-wrap: anywhere;
+  /* 折行后每段各自带内边距和圆角，否则断口处色块会缺角、尾部齐平切断 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* —— 列表 —— */

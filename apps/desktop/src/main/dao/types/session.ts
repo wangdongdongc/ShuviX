@@ -14,8 +14,8 @@ export interface SessionSettings {
   allowList?: string[]
   /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
   telegramBotId?: string
-  /** 启用的项目指令文件名（来自 scanInstructionFiles 返回值；缺省视为全部关闭） */
-  enabledInstructionFiles?: string[]
+  /** 注入的项目指令文件（单选）：undefined = 按 AGENTS.md → CLAUDE.md 优先级自动选，null = 不注入 */
+  instructionFile?: string | null
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
 }

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { DETAIL_MAX_H } from './detailViewport'
 
 interface DiffLine {
   type: 'add' | 'remove' | 'context' | 'separator'
@@ -73,14 +74,17 @@ const textColors = {
 
 interface DiffViewerProps {
   diff: string
+  /** 纵向限高 —— diff 是这块区域唯一的滚动主，外层不再套第二层限高 */
+  maxHeight?: string
 }
 
-export function DiffViewer({ diff }: DiffViewerProps): React.JSX.Element {
+export function DiffViewer({ diff, maxHeight = DETAIL_MAX_H }: DiffViewerProps): React.JSX.Element {
   const parsed = useMemo(() => parseDiffString(diff), [diff])
 
   return (
     <div className="rounded border border-border-secondary/50 overflow-hidden text-[11px] font-mono leading-[18px]">
-      <div className="overflow-auto max-h-[400px]">
+      {/* 纵向限高在此，横向留给长行（diff 不换行：软换行会打乱行号与 +/- 的对齐） */}
+      <div className="overflow-auto overscroll-contain thin-scrollbar" style={{ maxHeight }}>
         <table className="w-full border-collapse">
           <tbody>
             {parsed.map((line, i) => {

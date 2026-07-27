@@ -8,7 +8,7 @@ import { relative, resolve } from 'path'
 import { Type } from 'typebox'
 import {
   resolveProjectConfig,
-  assertSandboxRead,
+  assertReadApproved,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -68,8 +68,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 沙箱守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
-    await assertSandboxRead(this.ctx, config, toolCallId, 'ls', searchPath, params.path)
+    // 审批守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
+    await assertReadApproved(this.ctx, config, toolCallId, 'ls', searchPath, params.path)
   }
 
   protected async executeInternal(
@@ -141,13 +141,12 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ls',
   group: 'ripgrep',
-  defaultEnabled: false,
+  defaultEnabled: true,
   getLabel: () => t('tool.lsLabel'),
   getHint: () => t('tool.lsHint'),
   factory: (ctx) => new ListTool(ctx),
   presentation: {
-    icon: 'FolderTree',
-    summaryField: 'path'
+    icon: 'FolderTree'
   },
   describe: () => ({ description: LS_DESCRIPTION, parameters: LsParamsSchema })
 })

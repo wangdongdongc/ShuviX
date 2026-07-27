@@ -29,7 +29,8 @@ export function WelcomeView({ enableConfigShare }: WelcomeViewProps = {}): React
         </h1>
 
         <div className="w-full">
-          <InputArea />
+          {/* 内嵌模式：欢迎页居中排版，输入卡片随文档流而非悬浮贴底 */}
+          <InputArea inline />
         </div>
 
         {showConfigShare && (

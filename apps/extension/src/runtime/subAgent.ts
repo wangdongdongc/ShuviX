@@ -1,12 +1,15 @@
 /**
- * 扩展子代理框架（接入共享 @shuvix/agent-runtime 子代理内核）。
+ * 扩展派生 agent 框架（接入共享 @shuvix/agent-runtime 内核）。
  *
- * 执行/事件转发/abort 全在共享核心；这里只注入浏览器端适配：
- *   - registry：子代理定义来源。预置一个内置 **default** 子代理（继承父会话全部工具）；
- *     具名定义是可选附加，不是启用派发工具的前提（agentRuntime 始终注入 Agent 派发工具）。
+ * 执行/事件管线/abort/深度校验全在共享核心（派生 agent 与会话根 agent 共用
+ * RuntimeAgent 运行时，仅持久化为内存态）；这里只注入浏览器端适配：
+ *   - registry：具名定义来源 —— 内置 visualization（共享定义）；
  *     将来用户自定义可从 chrome.storage 读后并入。
- *   - resolveTools：直接复用「该会话已建好的全部工具」（子代理与父会话共享工作目录/沙箱，排除 Agent 防递归），
- *     不按定义白名单筛选（与桌面有意不同）。
+ *   - resolveTools：默认子代理（定义 tools 为空）复用「根会话已建好的全部工具」
+ *     （派生 agent 与根会话共享工作目录/审批范围；与桌面有意不同）；具名定义（tools 非空）
+ *     按白名单从会话工具池按名筛选（扩展缺失的名字如 ls/grep/glob 自动跳过），
+ *     preview 不在根工具池、白名单声明时就地构建注入。派发工具按 canSpawn 注入
+ *     （具名定义须显式白名单 'Agent'，与桌面一致；层级由内核 MAX_AGENT_DEPTH 校验）。
  *   - buildModel：settingsStore 取 providerInfo + browserEnv → resolveModel。
  *   - getApiKey / broadcast / getAbortedNote。
  */
@@ -14,6 +17,8 @@ import i18next from 'i18next'
 import {
   createSubAgentManager,
   createDispatchAgentTool,
+  COMPACT_AGENT,
+  VISUALIZATION_AGENT,
   type AnyAgentTool,
   type DispatchAgentTool,
   type InProcessAgentType,
@@ -22,9 +27,11 @@ import {
 } from '@shuvix/agent-runtime'
 import { settingsStore } from '../storage/settingsStore'
 import { eventBus } from './eventBus'
+import { createExtensionPreviewTool } from './previewTool'
+import { createExtensionSessionTool } from './sessionTool'
 import { resolveSessionModel } from './resolveSessionModel'
 
-/** 每会话「工具名 → 工具实例」表 —— 供 resolveTools 复用父会话已建好的工具（同一沙箱/工作目录） */
+/** 每会话「工具名 → 工具实例」表 —— 供 resolveTools 复用父会话已建好的工具（同一审批范围/工作目录） */
 const sessionTools = new Map<string, Map<string, AnyAgentTool>>()
 
 export function registerSessionTools(sessionId: string, tools: AnyAgentTool[]): void {
@@ -41,16 +48,18 @@ export function clearSessionTools(sessionId: string): void {
 }
 
 /**
- * 扩展子代理注册表 —— 仅放具名专用子代理（当前无；将来用户自定义可从 chrome.storage 并入）。
- * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，subagent_type 省略即用。
+ * 扩展子代理注册表 —— 具名专用子代理（内置 visualization / compact；将来用户自定义可从 chrome.storage 并入）。
+ * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，`agent` 省略即用。
  */
+const BUILTIN_AGENTS = [VISUALIZATION_AGENT, COMPACT_AGENT]
+
 export const extensionSubAgentRegistry: SubAgentRegistry = {
-  listEnabled: () => [],
-  getEnabled: () => undefined
+  listEnabled: () => BUILTIN_AGENTS,
+  getEnabled: (name) => BUILTIN_AGENTS.find((a) => a.name === name)
 }
 
 /**
- * 构建「默认子代理」运行配置 —— 省略 subagent_type 时派发用。
+ * 构建「默认子代理」运行配置 —— 省略 `agent` 时派发用。
  * 直接继承父会话：systemPrompt 用父会话同一份；工具由 resolveTools 复用父会话全部（排除 Agent）。
  * tools 留空 → 派发工具描述显示「inherits the caller's tools」；maxTurns 当前不强制（占位）。
  */
@@ -67,13 +76,43 @@ function buildDefaultAgentType(parentSystemPrompt: string): InProcessAgentType {
 }
 
 export const subAgentManager = createSubAgentManager({
-  resolveTools: (_agentType, parentSessionId) => {
-    // 扩展子代理直接复用父会话的「全部工具」（不按定义白名单筛选）——降低复杂度、与父 Agent
-    // 保持一致（与桌面的白名单模型有意不同）。Agent 派发工具本身排除以防递归
-    // （它在 registerSessionTools 之后才 push，故表里本就没有；这里再做一道防御性过滤）。
-    const map = sessionTools.get(parentSessionId)
+  resolveTools: (agentType, rootSessionId, _helpers, spawn) => {
+    // 默认子代理（定义 tools 为空）：直接复用根会话的「全部工具」——降低复杂度、
+    // 与根 Agent 保持一致（与桌面的白名单模型有意不同）。
+    // 具名定义（tools 非空，如 visualization）：按白名单从会话工具池按名筛选，
+    // 扩展没有的名字（ls/grep/glob，桌面 ripgrep 系）自动跳过；preview 不在根工具池，
+    // 白名单声明时就地构建注入（mcp:/skill: 前缀条目扩展暂不支持，忽略）。
+    // 两种情况都排除根会话身份的 Agent 派发工具，按需换成绑定本 agent 身份的同款：
+    // 嵌套派生的子代挂在本 agent 名下，层级越界由内核统一拒绝。
+    const map = sessionTools.get(rootSessionId)
     if (!map) return []
-    return [...map.values()].filter((t) => (t as { name?: string }).name !== 'Agent')
+    const whitelist = agentType.tools.filter(
+      (n) => !n.startsWith('mcp:') && !n.startsWith('skill:')
+    )
+    const named = whitelist.length > 0
+    const tools = [...map.values()].filter((t) => {
+      const name = (t as { name?: string }).name ?? ''
+      if (name === 'Agent') return false
+      return named ? whitelist.includes(name) : true
+    })
+    if (named && whitelist.includes('preview')) {
+      tools.push(createExtensionPreviewTool(rootSessionId) as unknown as AnyAgentTool)
+    }
+    // session 不在根工具池（压缩归档专用），白名单声明时就地构建注入（与 preview 同模式）
+    if (named && whitelist.includes('session')) {
+      tools.push(createExtensionSessionTool(rootSessionId) as unknown as AnyAgentTool)
+    }
+    // 派发工具：默认子代理全员可派发；具名定义须显式白名单 'Agent'（与桌面一致）
+    if (spawn.canSpawn && (!named || whitelist.includes('Agent'))) {
+      tools.push(
+        createExtensionDispatchTool(
+          spawn.agentId,
+          spawn.modelConfig,
+          agentType.systemPrompt
+        ) as unknown as AnyAgentTool
+      )
+    }
+    return tools
   },
   buildModel: (cfg) => resolveSessionModel(cfg.provider, cfg.model, cfg.capabilities),
   getApiKey: (p) => settingsStore.getApiKey(p) || undefined,
@@ -83,7 +122,7 @@ export const subAgentManager = createSubAgentManager({
 
 /**
  * 创建扩展派发工具（由 agentRuntime 始终注入主 Agent）。
- * 传入父会话 systemPrompt：默认子代理(省略 subagent_type 时)直接继承它 + 父会话全部工具。
+ * 传入父会话 systemPrompt：默认子代理(省略 `agent` 时)直接继承它 + 父会话全部工具。
  */
 export function createExtensionDispatchTool(
   parentSessionId: string,

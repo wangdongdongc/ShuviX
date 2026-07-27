@@ -12,7 +12,9 @@ export type {
 export { inlinePreview } from './inline-preview';
 export type { InlinePreviewConfig } from './inline-preview';
 export { imageBlocks } from './image-blocks';
-export { mermaidBlocks } from './mermaid-blocks';
+export { mermaidBlocks, renderMermaid } from './mermaid-blocks';
+export type { MermaidResult, MermaidTheme } from './mermaid-blocks';
+export { commentBlocks } from './comment-blocks';
 export { tables, tableContextMenu, tableWikiLinks } from './table-widget';
 export type {
   TablesConfig,

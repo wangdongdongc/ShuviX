@@ -3,7 +3,9 @@ import i18next from 'i18next'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../stores/settingsStore'
 import { usePanelStore, useSidebarStore } from '@shuvix/app-shell'
-import { loadPanelLayout, isPinnedScope } from '../stores/panelLayout'
+import { loadPanelLayout } from '../stores/panelLayout'
+import { useBottomPanelStore } from '../stores/bottomPanelStore'
+import { useSessionPanelStore } from '../stores/sessionPanelStore'
 import { useUpdateStore } from '../stores/updateStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
@@ -83,10 +85,15 @@ export function useAppInit(): void {
         if (layout.sidebarOpen === false) useSidebarStore.setState({ isOpen: false })
         // 桌面默认宽度 480（共享 store 默认 320，宿主无关）；无持久值时回落 480
         usePanelStore.setState({ width: layout.browserWidth ?? 480 })
-        // 悬浮窗：右面板默认 'files' tab,没有 browser tab 的运行时依赖问题,可安全恢复 isOpen
-        // 主窗口：browser 依赖运行时 server,重启后需用户重新打开,故不自动恢复
-        if (isPinnedScope && layout.browserOpen) {
-          usePanelStore.setState({ isOpen: true })
+        // 聊天区内会话面板（Files/Sub-agent）：仅恢复宽度，展开态按会话内存记忆、不跨重启
+        // （右面板 browserOpen 不自动恢复：browser 依赖运行时 server，重启后需用户重新打开；
+        //   悬浮窗已无 app 级右面板）
+        if (layout.sessionPanelWidth) {
+          useSessionPanelStore.setState({ width: layout.sessionPanelWidth })
+        }
+        // 底部栏（终端）：主窗口专属；恢复高度，开关不自动恢复（终端 tab 不跨重启持久）
+        if (layout.bottomHeight) {
+          useBottomPanelStore.setState({ height: layout.bottomHeight })
         }
       })
 

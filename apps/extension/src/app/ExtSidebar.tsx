@@ -9,7 +9,8 @@ import {
   CalendarView,
   ViewSwitchButton,
   useProjects,
-  useSidebarStore
+  useSidebarStore,
+  type SidebarViewMode
 } from '@shuvix/app-shell'
 import { projectStore } from '../storage/projectStore'
 
@@ -34,7 +35,7 @@ export function ExtSidebar({
   const { projects } = useProjects()
   const width = useSidebarStore((s) => s.width)
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'projects' | 'calendar'>('projects')
+  const [viewMode, setViewMode] = useState<SidebarViewMode>('projects')
   const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
 
   /** 打开文件夹 → 建项目 → 在该项目下新建会话（项目列表经 project.changed 自动刷新） */

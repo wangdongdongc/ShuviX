@@ -122,6 +122,8 @@ export interface UseAtMentions {
   }
   /** 斜杠命令场景：把引用就地展开为 payload 文本内联进参数（cmd payload 为整条替换，无法混用 token） */
   resolveInline: (text: string) => string
+  /** 回退草稿重建：按 at 类型 token 重新登记引用（text=`@displayText`、rel=id），配合明文回填恢复胶囊 */
+  restoreFromTokens: (tokens: InlineToken[]) => void
   /** 发送后清空引用登记与触发态 */
   reset: () => void
 }
@@ -310,6 +312,20 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     return out + text.slice(last)
   }, [])
 
+  const restoreFromTokens = useCallback((tokens: InlineToken[]): void => {
+    if (tokens.length === 0) return
+    setMentions((prev) => {
+      const next = [...prev]
+      for (const t of tokens) {
+        const text = `@${t.displayText}`
+        if (!next.some((m) => m.text === text)) {
+          next.push({ text, rel: t.id, base: t.displayText })
+        }
+      }
+      return next.length === prev.length ? prev : next
+    })
+  }, [])
+
   const reset = useCallback((): void => {
     setMentions([])
     setTrigger(null)
@@ -327,6 +343,7 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     backspace,
     buildOutgoing,
     resolveInline,
+    restoreFromTokens,
     reset
   }
 }

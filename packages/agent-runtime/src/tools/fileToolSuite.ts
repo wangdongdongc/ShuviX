@@ -1,9 +1,9 @@
 /**
  * 共享文件工具套件 —— read / write / edit 的整条执行流程（宿主无关）。
  *
- * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 沙箱审批(securityCheck)
+ * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 路径审批(securityCheck)
  * → 内核(readTextContent/readDirContent/applyWrite/applyEdit) + read 的分派(url/图片/富文档/.doc/
- * 二进制/目录/纯文本)。平台差异全部经注入:FileSystemPort / FileGuards / resolvePath / SandboxPolicy /
+ * 二进制/目录/纯文本)。平台差异全部经注入:FileSystemPort / FileGuards / resolvePath / ApprovalPolicy /
  * ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
  */
 import { Type } from 'typebox'
@@ -14,7 +14,7 @@ import type { FileSystemPort, FileGuards } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
-import { assertSandbox, type SandboxPolicy, type SandboxMode } from '../sandbox/policy'
+import { assertPathApproved, type ApprovalPolicy, type AccessMode } from '../approval/policy'
 
 type ReadResult = AgentToolResult<ReadToolDetails>
 
@@ -92,8 +92,8 @@ export interface FileToolDeps {
   port: FileSystemPort
   guards: FileGuards
   /** displayPath(params.path) → port 路径。桌面:read=resolveReadPath/write=resolveToCwd(绝对);扩展:identity */
-  resolvePath(displayPath: string, mode: SandboxMode): string
-  policy: SandboxPolicy
+  resolvePath(displayPath: string, mode: AccessMode): string
+  policy: ApprovalPolicy
   decoders?: ReadDecoders
   /** 执行前的平台访问校验(扩展 FSA 权限);默认 no-op */
   ensureAccess?(): Promise<void>
@@ -115,7 +115,7 @@ abstract class FileToolBase<
 > extends BaseTool<S> {
   constructor(
     protected deps: FileToolDeps,
-    protected mode: SandboxMode
+    protected mode: AccessMode
   ) {
     super()
   }
@@ -138,11 +138,11 @@ abstract class FileToolBase<
     signal?: AbortSignal
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
-    // read 的 URL 分支不走文件系统沙箱
+    // read 的 URL 分支不走文件系统审批
     if (this.mode === 'read' && this.isUrl(params.path)) return
     await this.deps.ensureAccess?.()
     const portPath = this.deps.resolvePath(params.path, this.mode)
-    await assertSandbox(this.deps.policy, this.mode, portPath, {
+    await assertPathApproved(this.deps.policy, this.mode, portPath, {
       toolCallId,
       toolName: this.name,
       displayPath: params.path,

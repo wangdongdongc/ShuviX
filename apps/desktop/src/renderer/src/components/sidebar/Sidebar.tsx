@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { getChatApi, useChatStore, type Session } from '@shuvix/chat-ui'
@@ -7,9 +7,11 @@ import {
   ProjectSessionGroups,
   CalendarView,
   ViewSwitchButton,
+  WikiView,
   useProjects,
   useSessionDelete,
-  SessionConfigDialog
+  SessionConfigDialog,
+  type SidebarViewMode
 } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
@@ -36,7 +38,7 @@ export function Sidebar(): React.JSX.Element {
   const sidebarResizing = useSidebarStore((s) => s.isResizing)
   const { requestDelete: handleDelete, deleteDialog } = useSessionDelete()
 
-  const [viewMode, setViewMode] = useState<'projects' | 'calendar'>('projects')
+  const [viewMode, setViewMode] = useState<SidebarViewMode>('projects')
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
   const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
@@ -63,10 +65,28 @@ export function Sidebar(): React.JSX.Element {
     if (pinnedSessionIds.has(id)) void window.api.pinChat.focus(id)
   }
 
+  const listWikiFiles = useCallback(() => window.api.wiki.listFiles(), [])
+
+  /** 打开 wiki 笔记：一文件至多一笔记本会话（main 侧去重），刷新列表并选中 */
+  const handleOpenWikiNote = useCallback(
+    async (relPath: string): Promise<void> => {
+      const session = await window.api.wiki.openNote({ path: relPath })
+      useChatStore.getState().setSessions(await getChatApi().session.list())
+      setActiveSessionId(session.id)
+    },
+    [setActiveSessionId]
+  )
+
   return (
     <SharedSidebar
       caps={{ windowDrag: true, pin: true, badges: true }}
-      title={viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
+      title={
+        viewMode === 'calendar'
+          ? t('sidebar.viewCalendar')
+          : viewMode === 'wiki'
+            ? t('sidebar.viewWiki')
+            : t('sidebar.title')
+      }
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
@@ -75,7 +95,13 @@ export function Sidebar(): React.JSX.Element {
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
-      titleActions={<ViewSwitchButton viewMode={viewMode} onChange={setViewMode} />}
+      titleActions={
+        <ViewSwitchButton
+          viewMode={viewMode}
+          onChange={setViewMode}
+          modes={['projects', 'calendar', 'wiki']}
+        />
+      }
       footerActions={
         hasUpdate ? (
           <button
@@ -92,7 +118,9 @@ export function Sidebar(): React.JSX.Element {
         ) : undefined
       }
       bodyOverride={
-        viewMode === 'calendar' ? (
+        viewMode === 'wiki' ? (
+          <WikiView listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />
+        ) : viewMode === 'calendar' ? (
           <CalendarView
             width={sidebarWidth}
             isResizing={sidebarResizing}

@@ -1,4 +1,10 @@
-import type { AgentInitResult, MessageAddParams, Message, ThinkingLevel } from '../../types'
+import type {
+  AgentInitResult,
+  AgentRuntimeInfo,
+  MessageAddParams,
+  Message,
+  ThinkingLevel
+} from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -36,6 +42,18 @@ export interface ChatGateway {
     inlineTokens?: Record<string, InlineToken>
   ): void
 
+  /**
+   * 用户直发派发（kind='agent' 斜杠命令 `/<agentName> <prompt>`）：不进主会话消息流，
+   * 直接开启具名子智能体（fire-and-forget，进右侧 Sub-agent 面板）。
+   * 返回的 promise 仅覆盖派发前的准备（确保主 AgentSession 存在以承接审批），不含子代理整轮。
+   */
+  dispatchPrompt(
+    sessionId: string,
+    agentName: string,
+    text: string,
+    inlineTokens?: Record<string, InlineToken>
+  ): Promise<void>
+
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
 
@@ -66,6 +84,9 @@ export interface ChatGateway {
 
   /** 动态更新启用工具集 */
   setEnabledTools(sessionId: string, tools: string[]): void
+
+  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
+  getAgentInfo(sessionId: string): AgentRuntimeInfo | null
 
   // ─── 消息操作 ─────────────────────────────────
 

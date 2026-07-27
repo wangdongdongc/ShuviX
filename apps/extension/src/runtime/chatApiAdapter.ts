@@ -6,6 +6,7 @@
  * 同进程直接 await，无 HTTP/WS。
  */
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
+import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
 import { scanInstructionFiles } from './instructionFilesRuntime'
@@ -26,10 +27,14 @@ import {
   setSessionModel,
   buildSessionTools
 } from './agentRuntime'
-import { subAgentManager, registerSessionTools } from './subAgent'
+import { subAgentManager, registerSessionTools, extensionSubAgentRegistry } from './subAgent'
 import { withTabLease } from './tabLease'
-import { runNotebookTask, resolveInitialThinkingLevel } from '@shuvix/agent-runtime'
-import { compactSession } from './compactionRuntime'
+import {
+  runNotebookTask,
+  runUserDispatchTask,
+  toInProcessAgentType,
+  resolveInitialThinkingLevel
+} from '@shuvix/agent-runtime'
 import { generateTitleForSession } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
 import { appEventBus } from './appEventBus'
@@ -53,6 +58,7 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     openFolder: async () => ok,
+    revealPath: async () => ok,
     adjustWindowWidth: async () => {},
     setBrowserOffset: async () => {},
     windowReady: () => {},
@@ -63,31 +69,40 @@ export const chatApiAdapter: ChatApi = {
   agent: {
     init: async ({ sessionId }) => {
       // 仅解析元信息，不创建运行时 —— Agent 延迟到首次发送消息时（prompt → ensureRuntimeSession）创建
-      const { provider, model, caps } = await resolveSessionMeta(sessionId)
+      const { provider, model, caps, modelMetadata } = await resolveSessionMeta(sessionId)
       return {
         success: true,
         created: !!getRuntimeSession(sessionId),
         provider,
         model,
         capabilities: caps,
-        modelMetadata: {},
+        modelMetadata,
         // 工作目录名(=项目根句柄名)，供 chatStore.projectPath / Files 面板新鲜度校验。无项目则空串。
         workingDirectory: await workingDirNameForSession(sessionId),
         enabledTools: ['ask']
       }
     },
-    prompt: async ({ sessionId, text, images }) => {
+    prompt: async ({ sessionId, text, images, inlineTokens }) => {
       await ensureRuntimeSession(sessionId)
       const rt = getRuntimeSession(sessionId)
       if (!rt) {
         eventBus.emit({ type: 'error', sessionId, error: 'Agent 未初始化' })
         return { success: false }
       }
-      // 后端统一持久化用户消息并广播（chat-ui 通过 user_message 事件落到 store）
-      const userMsg = messageStore.add({ sessionId, role: 'user', type: 'text', content: text })
+      // 后端统一持久化用户消息并广播（chat-ui 通过 user_message 事件落到 store）；
+      // content 存标记文本、inlineTokens 存 metadata —— 气泡按此渲染胶囊（与桌面网关一致）
+      const userMsg = messageStore.add({
+        sessionId,
+        role: 'user',
+        type: 'text',
+        content: text,
+        metadata: inlineTokens ? { inlineTokens } : undefined
+      })
       eventBus.emit({ type: 'user_message', sessionId, message: JSON.stringify(userMsg) })
       // 标签页租约：本轮结束（含中止）且无其他活跃运行时自动释放接管的标签页（见 tabLease.ts）
-      await withTabLease(() => rt.prompt(text, images))
+      // token 标记展开为真实文本（slash 模板 / @ 引用 / 粘贴原文）后再交给 Agent
+      const promptText = resolveTokensForAgent(text, inlineTokens)
+      await withTabLease(() => rt.prompt(promptText, images))
       return ok
     },
     // 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。仅注入笔记本路径 + read 提示，
@@ -123,6 +138,48 @@ export const chatApiAdapter: ChatApi = {
             },
             tools: [],
             notebookPath
+          },
+          (error) => eventBus.emit({ type: 'error', sessionId, error })
+        )
+      )
+      return ok
+    },
+    // 用户直发派发（kind='agent' 斜杠命令）：不经根 Agent 工具调用，直接开启具名子智能体
+    // （fire-and-forget，进右侧 Sub-agent 面板）。扩展 command.list 暂未列出 agent 命令
+    // （注册表仅内置 visualization），实现保持契约完整、与桌面网关对称。
+    dispatchPrompt: async ({ sessionId, agentName, text, inlineTokens }) => {
+      const def = extensionSubAgentRegistry.getEnabled(agentName)
+      if (!def) {
+        eventBus.emit({ type: 'error', sessionId, error: `Unknown agent "${agentName}"` })
+        return { success: false }
+      }
+      const { provider, model, caps, modelMetadata } = await resolveSessionMeta(sessionId)
+      // 会话尚无运行时（从未发过消息）时补建工具池供 resolveTools 按白名单筛选；
+      // 已有运行时则沿用其登记的工具池，避免覆盖
+      if (!getRuntimeSession(sessionId)) {
+        const parts = await buildSessionTools(sessionId, {
+          requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
+          includeAsk: false
+        })
+        registerSessionTools(sessionId, parts.tools)
+      }
+      void withTabLease(() =>
+        runUserDispatchTask(
+          subAgentManager,
+          {
+            sessionId,
+            agentType: toInProcessAgentType(def),
+            text,
+            inlineTokens,
+            modelConfig: {
+              provider,
+              model,
+              capabilities: caps,
+              thinkingLevel: resolveInitialThinkingLevel({
+                persisted: modelMetadata?.thinkingLevel,
+                reasoning: caps.reasoning
+              })
+            }
           },
           (error) => eventBus.emit({ type: 'error', sessionId, error })
         )
@@ -167,6 +224,8 @@ export const chatApiAdapter: ChatApi = {
       getRuntimeSession(sessionId)?.setThinkingLevel(level)
       return ok
     },
+    // 运行时 Agent 实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null
+    getInfo: async (sessionId) => getRuntimeSession(sessionId)?.getRuntimeInfo() ?? null,
     respondToInput: async ({ sessionId, requestId, response }) => {
       getRuntimeSession(sessionId)?.respondToInput(requestId, response)
       return ok
@@ -265,15 +324,16 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     updateProject: async () => ok,
-    updateThinkingLevel: async () => ok,
+    updateThinkingLevel: async ({ id, thinkingLevel }) => {
+      await sessionStore.updateModelMetadata(id, { thinkingLevel })
+      return ok
+    },
     updateEnabledTools: async () => ok,
-    // autoApprove 门控 browser 工具的 mutating 操作（见 agent-runtime gateBrowserOp）；关时逐次确认
+    // autoApprove 仅落库（browser 审批门控已移除，扩展端暂无运行时消费者）
     updateAutoApprove: async ({ id, autoApprove }) => {
       await sessionStore.updateSettings(id, { autoApprove })
       return ok
     },
-    previewAllowPatterns: async () => [],
-    addAllowListPatterns: async () => ok,
     removeAllowListEntry: async ({ id, entry }) => {
       const cur = sessionStore.getSettingsSync(id).allowList ?? []
       await sessionStore.updateSettings(id, { allowList: cur.filter((e) => e !== entry) })
@@ -291,10 +351,10 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getById: async (id) => sessionStore.getById(id),
-    // 顶层扫描 AGENTS.md/CLAUDE.md（FSA/OPFS 工作目录）；启用项注入系统提示（见 buildSessionTools）
+    // 顶层扫描 AGENTS.md/CLAUDE.md（FSA/OPFS 工作目录）；选中项注入系统提示（见 buildSessionTools）
     scanInstructionFiles: async (sessionId) => scanInstructionFiles(sessionId),
-    updateInstructionFiles: async ({ id, filenames }) => {
-      await sessionStore.updateSettings(id, { enabledInstructionFiles: filenames })
+    updateInstructionFile: async ({ id, filename }) => {
+      await sessionStore.updateSettings(id, { instructionFile: filename })
       return ok
     }
     // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
@@ -433,10 +493,6 @@ export const chatApiAdapter: ChatApi = {
     getTools: async (id) => mcpManager.getServerToolInfos(id)
   },
 
-  compact: {
-    start: async (sessionId) => compactSession(sessionId)
-  },
-
   // 注：渠道绑定（webui 局域网分享 / telegram）属 ChannelBindingApi，非 ChatApi。
   // 扩展两者皆不支持（MV3 无法监听端口、无出站 Bot 托管），故不注入 setChannelBindingApi → 相关 UI 自动隐藏。
 
@@ -467,7 +523,22 @@ export const chatApiAdapter: ChatApi = {
     // notebook/预览对 agent/子智能体编辑的自动刷新已由 fileTools.onFileChange 发布的 files.changed 覆盖
     // （见 fileTools.ts）；此处仅缺「捕获外部程序改盘」，属平台能力缺失，非缺陷。
     watch: async () => {},
-    unwatch: async () => {}
+    unwatch: async () => {},
+    // 另存为：浏览器里没有系统保存对话框，走原生下载（落点由浏览器的下载设置决定），
+    // defaultPath 只取文件名部分。返回 ok 但 path 为空 —— 调用方只用它判成败。
+    saveAs: async ({ defaultPath, dataBase64 }) => {
+      const name = defaultPath.split(/[/\\]/).pop() || 'chart'
+      const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      return { ok: true, path: name }
+    }
   },
 
   // 通用内部事件：进程内单例 bus，前端直接订阅（后端 publish 见 appEventBus）

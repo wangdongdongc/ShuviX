@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeRaw from 'rehype-raw'
 import { ChevronRight } from 'lucide-react'
-import { CodeBlock } from './CodeBlock'
+import { markdownComponents } from './markdownComponents'
 
 interface SystemNoticeCardProps {
   /** 左侧图标 */
@@ -60,7 +60,7 @@ export function SystemNoticeCard({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight, rehypeRaw]}
-              components={{ pre: CodeBlock as never }}
+              components={markdownComponents}
             >
               {content}
             </ReactMarkdown>

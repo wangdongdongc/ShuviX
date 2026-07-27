@@ -10,6 +10,7 @@ import {
   previewBuiltinSection as sharedPreviewBuiltinSection,
   renderSystemPromptSections,
   isBuiltinSectionId,
+  formatLanguageDisplay,
   type BuiltinRenderCtx,
   type BuiltinSectionId,
   type BuiltinSectionViewItem,
@@ -41,6 +42,7 @@ function renderBrowserEnvironment(): string {
   const items = [
     `${t('systemPromptCards.environment.platform')}: Chrome Extension`,
     `${t('systemPromptCards.environment.date')}: ${currentDate}`,
+    `${t('systemPromptCards.environment.language')}: ${formatLanguageDisplay(i18next.language)}`,
     `${t('systemPromptCards.environment.appVersion')}: ShuviX ${appVersion}`
   ]
   return items.map((line) => `- ${line}`).join('\n')

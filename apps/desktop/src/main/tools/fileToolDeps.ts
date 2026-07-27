@@ -1,6 +1,6 @@
 /**
  * 桌面文件工具 deps —— 给共享 createFileToolSuite 注入桌面端适配（Node fs / fileTime / 绝对路径 /
- * SQLite SandboxPolicy）。read/write/edit 三个工具共用同一份装配；read 额外注入内容解码器。
+ * SQLite ApprovalPolicy）。read/write/edit 三个工具共用同一份装配；read 额外注入内容解码器。
  *
  * 配置（workingDirectory/referenceDirs/allowList）按工具执行时机动态解析（resolveProjectConfig），
  * 故 resolvePath / policy 内部都走惰性 thunk，保证拿到最新值（对齐原 ReadTool/WriteTool 行为）。
@@ -16,7 +16,7 @@ import {
 } from '../utils/toolUtils/fileTime'
 import {
   resolveProjectConfig,
-  makeDesktopSandboxPolicy,
+  makeDesktopApprovalPolicy,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -50,7 +50,7 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
       const cwd = resolveProjectConfig(sid).workingDirectory
       return mode === 'read' ? resolveReadPath(p, cwd) : resolveToCwd(p, cwd)
     },
-    policy: makeDesktopSandboxPolicy(ctx, () => resolveProjectConfig(sid)),
+    policy: makeDesktopApprovalPolicy(ctx, () => resolveProjectConfig(sid)),
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },

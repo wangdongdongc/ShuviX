@@ -15,7 +15,7 @@ import {
   type SubSessionStatus
 } from '@shuvix/chat-ui'
 import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
-import { CodeBlock } from '@shuvix/chat-ui'
+import { markdownComponents } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { StepBlock } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
@@ -182,7 +182,7 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight, rehypeRaw]}
-          components={{ pre: CodeBlock as never }}
+          components={markdownComponents}
         >
           {msg.content}
         </ReactMarkdown>
@@ -198,7 +198,7 @@ function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | nu
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight, rehypeRaw]}
-          components={{ pre: CodeBlock as never }}
+          components={markdownComponents}
         >
           {msg.content}
         </ReactMarkdown>
@@ -292,7 +292,7 @@ const SubSessionStream = memo(function SubSessionStream({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight, rehypeRaw]}
-              components={{ pre: CodeBlock as never }}
+              components={markdownComponents}
             >
               {sub.streamingContent}
             </ReactMarkdown>
@@ -409,9 +409,13 @@ export function SubAgentPanel(): React.JSX.Element {
   // 专注模式：淡化未展开（非聚焦）的子智能体块，聚焦于当前展开的那个；hover 临时点亮
   const { dim } = useFocusDim()
 
-  // 只显示当前主会话下的子会话
+  // 只显示当前主会话下「用户主动触发」的子会话；Agent 经派发工具自行触发的（有 parentToolCallId）
+  // 内联在对话流的 ToolCallBlock 卡片中展示，不进右侧面板
   const list = useMemo(
-    () => (activeSessionId ? allList.filter((s) => s.parentSessionId === activeSessionId) : []),
+    () =>
+      activeSessionId
+        ? allList.filter((s) => s.parentSessionId === activeSessionId && !s.parentToolCallId)
+        : [],
     [allList, activeSessionId]
   )
 

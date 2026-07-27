@@ -29,6 +29,12 @@ export type AppEvent =
   | { type: 'session.titleChanged'; sessionId: string; title: string }
   | { type: 'pinChat.changed'; pinnedSessionIds: string[] }
   | { type: 'widget.changed' }
+  /**
+   * 请求渲染端验证图表源码（preview 工具发起，桌面专用；扩展工具在浏览器内就地验证）。
+   * 渲染端用与 ChartView 同一管线（renderMermaid）跑一遍，结果经宿主回执通道
+   * （preview:reportRender IPC）回给主进程 broker 对号入座；超时由 broker 诚实降级。
+   */
+  | { type: 'preview.validateChart'; validationId: string; sessionId: string; absPath: string }
 
 export type AppEventType = AppEvent['type']
 

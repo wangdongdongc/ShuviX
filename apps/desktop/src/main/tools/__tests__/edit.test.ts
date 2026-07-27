@@ -18,9 +18,9 @@ vi.mock('../../services/toolContext', () => ({
     return r === base || r.startsWith(base + sep)
   },
   isPathWithinReferenceDirs: () => false,
-  assertSandboxRead: () => {},
-  assertSandboxWrite: () => {},
-  makeDesktopSandboxPolicy: () => ({
+  assertReadApproved: () => {},
+  assertWriteApproved: () => {},
+  makeDesktopApprovalPolicy: () => ({
     isAllowedWithoutPrompt: () => true,
     isAutoApprove: () => true,
     isInAllowList: () => false,

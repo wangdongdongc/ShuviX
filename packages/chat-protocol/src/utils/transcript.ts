@@ -1,6 +1,7 @@
 /**
  * 会话 Transcript 转写引擎 —— 把任意 agent 的整段对话（ChatMessage[]）
- * 转写成"一章 Markdown"，作为会话导出 / 消息归纳 / 转发等能力的公共底座。
+ * 转写成"一章 Markdown"，作为会话导出 / 压缩归档（agent-runtime sessionTool）/
+ * 消息归纳 / 转发等能力的公共底座。
  *
  * 纯函数、零运行时依赖（保持 chat-protocol 为 leaf），四端（main/renderer/webui/extension）
  * 经 `@shuvix/chat-protocol/utils/transcript` 直接复用。

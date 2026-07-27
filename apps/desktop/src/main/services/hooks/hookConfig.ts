@@ -200,6 +200,8 @@ export interface ConfigWatcher {
   getLoaded(): Map<HookSource, LoadedConfig>
   /** 手动 reload —— UI 兜底用 */
   reload(): void
+  /** watcher 初扫完成；初扫窗口内创建的文件会被 ignoreInitial 吞掉，事件仅在此之后保证可见 */
+  ready: Promise<void>
   close(): Promise<void>
 }
 
@@ -258,8 +260,10 @@ export function watchHookFiles(
   watcher.on('error', (e) =>
     log.warn(`watcher error: ${e instanceof Error ? e.message : String(e)}`)
   )
+  const ready = new Promise<void>((resolve) => watcher.once('ready', resolve))
 
   return {
+    ready,
     getLoaded: () => loaded,
     reload: () => {
       if (timer) clearTimeout(timer)

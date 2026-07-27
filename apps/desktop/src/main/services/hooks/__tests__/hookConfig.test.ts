@@ -215,14 +215,18 @@ describe('watchHookFiles', () => {
     )
     expect(w.getLoaded().get('project')?.status).toEqual({ ok: true, count: 0 })
 
+    // 初扫窗口内创建的文件会被 ignoreInitial 吞掉（无事件）→ 必须等 ready 后再创建
+    await w.ready
+
     writeFileSync(
       f,
       JSON.stringify({
         hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'log' }] }] }
       })
     )
-    await waitForChange(() => changeCount > 0)
+    // 真实 fs 事件链（chokidar ready + fsevents + awaitWriteFinish）在全量并发下可达数秒 → 放宽预算
+    await waitForChange(() => changeCount > 0, 12000)
     expect(w.getLoaded().get('project')?.status.ok).toBe(true)
     await w.close()
-  })
+  }, 15000)
 })

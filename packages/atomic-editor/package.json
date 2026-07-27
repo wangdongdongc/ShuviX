@@ -20,6 +20,7 @@
     "**/*.css"
   ],
   "dependencies": {
+    "@shuvix/chat-protocol": "*",
     "mermaid": "^11.12.3"
   },
   "peerDependencies": {

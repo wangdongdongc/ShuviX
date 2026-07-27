@@ -114,7 +114,7 @@ The semantic actions above cover common flows. For anything else, drive the raw 
   events(tabId[, event][, sinceSeq][, limit])    — pull buffered events (see below)
 
 Conventions (this tool adds these on top of raw CDP):
-- **Safety**: read-only methods (get*/describe*/query*/enable/disable/capture*) run directly; state-changing methods (Input.*, Runtime.evaluate, Emulation.set*, DOM.set*, Network.setCookie, Debugger.*, …) require approval; out-of-scope domains (Browser/Target/Tracing/Page.close/Security.setIgnoreCertificateErrors) are blocked.
+- **Safety**: methods in known domains run directly; out-of-scope domains and methods (Browser/Target/Tracing/Page.close/Security.setIgnoreCertificateErrors) are blocked. Careful with Fetch.enable — interception pauses all matching requests until you explicitly continue them.
 - **uid macros**: anywhere in params you may write {"$uid":"e7"} → the element's backendNodeId, {"$uidX":"e7"}/{"$uidY":"e7"} → its center x/y. uids come from snapshot. This bridges snapshot to raw CDP (CSS/DOM/Input by element).
 - **Events are pull-based**: after cdp(Domain.enable), that domain's events are buffered with a monotonic seq. Pull with events(); pass sinceSeq=<last nextSeq> to get only-new. Buffer holds ~1000 entries.
 - **Large results auto-spill**: results over ~16KB (trace, big response bodies, heap snapshots) are written to a file; the path is returned — read/grep it. Network.getResponseBody base64 bodies are auto-decoded.

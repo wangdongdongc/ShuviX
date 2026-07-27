@@ -1,23 +1,29 @@
 /**
- * AgentService — 基于文件系统的 Sub-Agent 管理
+ * AgentService — Sub-Agent 管理
  *
- * 单文件约定（对齐 Claude Code / awesome-claude-agents 社区惯例）：
- * 内置 agents：<resources>/agents/<name>.md（随应用版本发布，只读）
- * 用户 agents：~/.shuvix/agents/<name>.md（用户可编辑）
- *
- * 文件名（去掉 .md）即默认 agent name；frontmatter 内 `name:` 字段可覆盖。
+ * 内置 agents：硬编码进 @shuvix/agent-runtime（builtinAgents，各端共享；wiki 经工厂注入桌面 wiki 根）。
+ * 用户 agents：~/.shuvix/agents/<name>.md（用户可编辑；单文件约定对齐 Claude Code 社区惯例，
+ *   文件名去掉 .md 即默认 agent name，frontmatter `name:` 可覆盖）。
  *
  * 启用/禁用状态写入 ~/.shuvix/agents/.config.json：
  *   { disabled: string[] }   // 仅作用于用户 agent；内置始终启用
  *
- * 命名冲突：用户优先级 > 内置（同名时用户覆盖内置）。
+ * 命名冲突：用户优先级 > 内置（同名时用户覆盖内置，可用于个性化内置政策）。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs'
-import { join } from 'path'
+import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
-import { getBuiltinAgentsDir, getDefaultAgentsDir } from '../utils/paths'
-import type { AgentDefinition } from '@shuvix/agent-runtime'
+import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils/paths'
+import {
+  COMPACT_AGENT,
+  EXPLORE_AGENT,
+  RESEARCH_AGENT,
+  VISUALIZATION_AGENT,
+  buildWidgetAgent,
+  buildWikiAgent,
+  type AgentDefinition
+} from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
@@ -195,10 +201,22 @@ class AgentService {
     return result
   }
 
+  /** 内置 agent 列表（硬编码定义 + 桌面参数注入；每次现算以反映 wiki / widget 根等宿主参数） */
+  private builtinAgents(): AgentDefinition[] {
+    return [
+      COMPACT_AGENT,
+      EXPLORE_AGENT,
+      RESEARCH_AGENT,
+      VISUALIZATION_AGENT,
+      buildWidgetAgent({ widgetsRoot: getWidgetsDir() }),
+      buildWikiAgent({ wikiRoot: getDefaultWikisDir() })
+    ]
+  }
+
   /** 列出所有 agent（含禁用状态；用户优先级 > 内置覆盖同名） */
   listAll(): AgentDefinition[] {
     const config = this.readConfig()
-    const builtins = this.scanDir(getBuiltinAgentsDir(), 'builtin', config)
+    const builtins = this.builtinAgents()
     const users = this.scanDir(this.userDir, 'user', config)
 
     // 用户覆盖内置同名
@@ -215,6 +233,38 @@ class AgentService {
   /** 按 name 查询单个已启用的 agent（执行时使用） */
   getEnabled(name: string): AgentDefinition | undefined {
     return this.listEnabled().find((a) => a.name === name)
+  }
+
+  /**
+   * 按路径 ref 即时加载 agent 定义（派发工具的路径形态；不经注册表/启用开关——
+   * 直接寻址即显式意图，且支持运行时动态生成的定义文件）。
+   *
+   * 寻址卫生：相对路径以 baseDir（根会话工作目录）为基准；最终路径必须位于
+   * baseDir 或 ~/.shuvix/agents 内（read 工具本可读任意文件，此约束只为寻址
+   * 规范而非安全边界）。失败 throw 带原因的 Error（派发工具转为 LLM 可读错误文本）。
+   */
+  loadAgentFromRef(refPath: string, baseDir?: string): AgentDefinition {
+    if (!isAbsolute(refPath) && !baseDir) {
+      throw new Error('Relative agent paths require a project working directory')
+    }
+    const abs = isAbsolute(refPath) ? resolve(refPath) : resolve(baseDir!, refPath)
+    const within = (dir: string): boolean => {
+      const base = resolve(dir)
+      return abs === base || abs.startsWith(base + sep)
+    }
+    if (!(baseDir && within(baseDir)) && !within(this.userDir)) {
+      throw new Error(
+        'Agent definition file must live inside the working directory or the global agents directory (~/.shuvix/agents)'
+      )
+    }
+    const defaultName = basename(abs).replace(/\.md$/i, '') || 'agent'
+    const def = this.loadAgentFromFile(abs, defaultName, 'user', { disabled: [] })
+    if (!def) {
+      throw new Error(
+        'file missing or invalid — expected markdown with YAML frontmatter (name / whenToUse / tools / maxTurns) and the system prompt as body'
+      )
+    }
+    return def
   }
 
   /** 切换启用状态；仅对用户 agent 生效 */
@@ -243,11 +293,6 @@ class AgentService {
   /** 获取用户目录路径 */
   getUserDir(): string {
     return this.userDir
-  }
-
-  /** 获取内置目录路径（仅供 UI 显示） */
-  getBuiltinDir(): string {
-    return getBuiltinAgentsDir()
   }
 }
 

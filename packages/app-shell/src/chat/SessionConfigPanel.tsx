@@ -4,7 +4,10 @@ import { useTranslation } from 'react-i18next'
 import { Copy, FileText, Globe, RefreshCw, TriangleAlert, X } from 'lucide-react'
 import { copyToClipboard } from '@shuvix/chat-ui'
 import { useChatStore } from '@shuvix/chat-ui'
-import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
+import {
+  resolveInstructionFile,
+  type InstructionFileEntry
+} from '@shuvix/chat-protocol/types/instructionFile'
 import { SettingsSection, SettingsRow, Toggle, InlineSelect } from '../settings/SettingsPrimitives'
 import { getChannelBindingCaps } from './channelBindings'
 
@@ -33,12 +36,16 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   const autoApprove = session?.settings.autoApprove === true
   const allowList = session?.settings.allowList ?? []
-  const enabledInstructionFiles = session?.settings.enabledInstructionFiles ?? []
   const lanShared = useChatStore((s) => s.sharedSessionIds.has(sessionId))
   const boundBotId = useChatStore((s) => s.telegramBindings.get(sessionId)?.botId ?? null)
 
   const [instructionFiles, setInstructionFiles] = useState<InstructionFileEntry[]>([])
   const [instructionScanning, setInstructionScanning] = useState(false)
+  // 单选：至多注入一个指令文件；null = 不注入（未显式配置时按 AGENTS.md → CLAUDE.md 优先级自动选）
+  const selectedInstructionFile = resolveInstructionFile(
+    session?.settings.instructionFile,
+    instructionFiles.map((f) => f.filename)
+  )
 
   const scanInstructionFiles = async (): Promise<void> => {
     setInstructionScanning(true)
@@ -55,12 +62,10 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
-  const handleToggleInstructionFile = async (filename: string): Promise<void> => {
-    const next = enabledInstructionFiles.includes(filename)
-      ? enabledInstructionFiles.filter((f) => f !== filename)
-      : [...enabledInstructionFiles, filename]
-    await getChatApi().session.updateInstructionFiles({ id: sessionId, filenames: next })
-    useChatStore.getState().updateSessionSettings(sessionId, { enabledInstructionFiles: next })
+  /** 选中注入的指令文件；null = 不注入 */
+  const handleSelectInstructionFile = async (filename: string | null): Promise<void> => {
+    await getChatApi().session.updateInstructionFile({ id: sessionId, filename })
+    useChatStore.getState().updateSessionSettings(sessionId, { instructionFile: filename })
   }
 
   const [shareUrls, setShareUrls] = useState<string[]>([])
@@ -140,6 +145,7 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     useChatStore.getState().updateSessionSettings(sessionId, { autoApprove: next })
   }
 
+  /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条审批，无模式记忆 */
   const handleRemoveAllowEntry = async (entry: string): Promise<void> => {
     await getChatApi().session.removeAllowListEntry({ id: sessionId, entry })
     const next = allowList.filter((e) => e !== entry)
@@ -282,27 +288,23 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
             {t('sessionConfig.instructionFilesEmpty')}
           </div>
         ) : (
-          instructionFiles.map((f) => {
-            const enabled = enabledInstructionFiles.includes(f.filename)
-            return (
-              <SettingsRow
-                key={f.filename}
-                icon={<FileText size={12} className="text-text-tertiary shrink-0" />}
-                title={
-                  <>
-                    <span className="font-mono">{f.filename}</span>
-                    <span className="text-[11px] text-text-tertiary font-normal">{f.size} B</span>
-                  </>
-                }
-                control={
-                  <Toggle
-                    on={enabled}
-                    onClick={() => void handleToggleInstructionFile(f.filename)}
-                  />
-                }
-              />
-            )
-          })
+          <SettingsRow
+            icon={<FileText size={12} className="text-text-tertiary shrink-0" />}
+            title={t('sessionConfig.instructionFileLabel')}
+            control={
+              <InlineSelect
+                value={selectedInstructionFile ?? ''}
+                onChange={(v) => void handleSelectInstructionFile(v || null)}
+              >
+                <option value="">{t('sessionConfig.instructionFileNone')}</option>
+                {instructionFiles.map((f) => (
+                  <option key={f.filename} value={f.filename}>
+                    {f.filename}
+                  </option>
+                ))}
+              </InlineSelect>
+            }
+          />
         )}
       </SettingsSection>
     </div>

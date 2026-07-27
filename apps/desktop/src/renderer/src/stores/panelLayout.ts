@@ -9,6 +9,8 @@
  * pinnedChatService 在创建/关闭悬浮窗时按 sessionId 维度读写。
  */
 
+import { SESSION_PANEL_MIN_W } from '@shuvix/app-shell'
+
 /** 当前 renderer window 的作用域（由 URL hash 推导，模块加载时确定一次） */
 function detectScope(): string {
   const hash = typeof window !== 'undefined' ? window.location.hash : ''
@@ -26,15 +28,16 @@ function detectScope(): string {
 const SCOPE = detectScope()
 const SETTINGS_KEY = SCOPE === 'main' ? 'window.panelLayout' : `window.panelLayout.${SCOPE}`
 
-/** 是否为悬浮窗作用域（pinned 窗口可恢复 browserOpen，主窗口由 useAppInit 自己决定） */
-export const isPinnedScope = SCOPE !== 'main'
-
 interface PanelLayout {
   sidebarWidth: number
   sidebarOpen: boolean
   chatWidth: number
   browserWidth: number
   browserOpen: boolean
+  bottomHeight: number
+  bottomOpen: boolean
+  /** 聊天区内会话面板（Files）宽度；展开态不持久化（按会话内存记忆） */
+  sessionPanelWidth: number
 }
 
 /** 合并部分布局字段并持久化（debounce 避免高频写入） */
@@ -58,7 +61,10 @@ function parseLayout(raw: string): PanelLayout {
     sidebarOpen: parsed.sidebarOpen ?? true,
     chatWidth: parsed.chatWidth ?? 720,
     browserWidth: parsed.browserWidth ?? parsed.previewWidth ?? 480,
-    browserOpen: parsed.browserOpen ?? parsed.previewOpen ?? false
+    browserOpen: parsed.browserOpen ?? parsed.previewOpen ?? false,
+    bottomHeight: parsed.bottomHeight ?? 260,
+    bottomOpen: parsed.bottomOpen ?? false,
+    sessionPanelWidth: parsed.sessionPanelWidth ?? SESSION_PANEL_MIN_W
   }
 }
 
@@ -75,7 +81,10 @@ async function flush(): Promise<void> {
           sidebarOpen: true,
           chatWidth: 720,
           browserWidth: 480,
-          browserOpen: false
+          browserOpen: false,
+          bottomHeight: 260,
+          bottomOpen: false,
+          sessionPanelWidth: SESSION_PANEL_MIN_W
         }
     const merged = { ...current, ...update }
     window.api?.settings?.set({ key: SETTINGS_KEY, value: JSON.stringify(merged) })

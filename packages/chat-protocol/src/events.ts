@@ -159,6 +159,16 @@ export interface ChatBrowserEvent extends ChatEventBase {
   title?: string
 }
 
+/**
+ * 请求前端在会话 Files 面板打开某文件的预览（preview 工具触发；轻量通知，不持久化为消息）。
+ * 前端复用 chatStore.filePreviewRequest 信号 —— 与 FilesPanel 中点击文件后的预览一致。
+ */
+export interface ChatFilePreviewEvent extends ChatEventBase {
+  type: 'file_preview'
+  /** 要预览的文件绝对路径（须位于会话工作目录内，前端按 projectPath 相对化） */
+  absPath: string
+}
+
 // ─── 子智能体 ──────────────────────────────────────────────
 
 /**
@@ -171,6 +181,11 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   type: 'sub_session_register'
   /** 父会话 sessionId */
   parentSessionId: string
+  /**
+   * 父 Agent 派发本子会话的 tool_call id。有值 = Agent 自行触发（对话内 ToolCallBlock 内联展示）；
+   * 无值 = 用户主动触发（如笔记本会话发送），进右侧 Sub-agent 面板。
+   */
+  parentToolCallId?: string
   /** 子智能体类型名（如 'explore'） */
   subAgentName: string
   /** UI 展示名 */
@@ -185,6 +200,10 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   inlineTokens?: Record<string, InlineToken>
   /** 额外注入子智能体上下文的人读文本（如笔记本会话的当前 md 内容）；UI 以折叠用户消息卡展示 */
   contextNote?: string
+  /** 派生层级（根会话=0 不发此事件；直接派生=1，嵌套派生依次递增） */
+  depth?: number
+  /** 所属根会话 id（嵌套派生时 parentSessionId 是另一个派生 agent，此字段始终指向可见会话） */
+  rootSessionId?: string
 }
 
 /** 子会话终结（在 agent_end 之后发出，携带最终结果摘要） */
@@ -197,26 +216,14 @@ export interface ChatSubSessionEndEvent extends ChatEventBase {
   isError?: boolean
 }
 
-// ─── 压缩归档 ────────────────────────────────────────────
+// ─── 消息列表重载 ────────────────────────────────────────
 
-/** 压缩开始 */
-export interface ChatCompactionStartEvent extends ChatEventBase {
-  type: 'compaction_start'
-}
-
-/** 压缩完成 */
-export interface ChatCompactionEndEvent extends ChatEventBase {
-  type: 'compaction_end'
-  /** 新摘要消息 (JSON string) */
-  message: string
-  /** 紧跟摘要的项目指令注入消息 (每个文件一条 JSON string) */
-  instructionMessages?: string[]
-}
-
-/** 压缩失败 */
-export interface ChatCompactionErrorEvent extends ChatEventBase {
-  type: 'compaction_error'
-  error: string
+/**
+ * 会话消息列表被后端整体改写（如 session 工具压缩归档后），前端应重新拉取。
+ * 通用原语：只通知「变了」，不携带内容 —— 消费方经 message.list 取最新列表。
+ */
+export interface ChatMessagesReloadedEvent extends ChatEventBase {
+  type: 'messages_reloaded'
 }
 
 /** 项目指令文件懒注入完成（首次 prompt 前由 AgentSession 触发） */
@@ -261,11 +268,10 @@ export type ChatEvent =
   | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatBrowserEvent
+  | ChatFilePreviewEvent
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
-  | ChatCompactionStartEvent
-  | ChatCompactionEndEvent
-  | ChatCompactionErrorEvent
+  | ChatMessagesReloadedEvent
   | ChatInstructionsInjectedEvent
   | ChatErrorEvent
   | ChatUserMessageEvent

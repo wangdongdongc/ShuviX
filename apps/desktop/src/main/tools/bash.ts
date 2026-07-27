@@ -15,8 +15,6 @@ import { buildSpawnEnv } from '../utils/paths'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
-import { isCommandAllowedUnified, extractPatterns } from '../utils/toolUtils/allowList'
-import { sessionService } from '../services/sessionService'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
@@ -146,10 +144,10 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
 
-    // Bash 命令始终需用户审批（免审批或允许列表匹配时跳过）
+    // Bash 命令逐条需用户审批 —— 唯一豁免是会话级「免审批」开关（无命令模式匹配）
     if (this.ctx.requestUserInput) {
-      const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove', 'allowList'])
-      if (!sess?.autoApprove && !isCommandAllowedUnified(sess?.allowList, 'bash', params.command)) {
+      const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove'])
+      if (!sess?.autoApprove) {
         const response = await this.ctx.requestUserInput({
           id: toolCallId,
           kind: 'approval',
@@ -179,13 +177,6 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
               'User denied execution of this command'
           )
         }
-        // 副作用:用户勾选"记住此模式" → 写入会话 allowList
-        if (response.extra?.rememberPattern) {
-          const patterns = extractPatterns(params.command)
-          if (patterns.length > 0) {
-            sessionService.addAllowListPatterns(this.ctx.sessionId, 'bash', patterns)
-          }
-        }
       }
     }
 
@@ -212,7 +203,8 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         details: {
           type: 'bash',
           exitCode: result.exitCode,
-          truncated: false
+          truncated: false,
+          cwd: config.workingDirectory
         }
       }
     } catch (err: unknown) {
@@ -234,8 +226,15 @@ registerBuiltinTool({
   presentation: {
     icon: 'Terminal',
     iconColor: '#eab308',
-    summaryField: 'description',
-    formItems: [{ field: 'command', renderer: { type: 'code', language: 'bash' } }]
+    // 展开态融成一段终端会话（提示符 + cwd + 命令 + 输出）；formItems 保留作降级
+    detailView: 'terminal',
+    formItems: [
+      {
+        field: 'command',
+        renderer: { type: 'code', language: 'bash', wrap: true, lineNumbers: true }
+      }
+    ],
+    showUndeclaredFields: false
   },
   describe: () => ({ description: BASH_DESCRIPTION, parameters: BashParamsSchema })
 })

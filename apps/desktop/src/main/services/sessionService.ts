@@ -11,7 +11,7 @@ import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
 import { getBuiltinToolEntries } from './toolRegistry'
-import { extractPatterns, parseAllowEntry, buildAllowEntry } from '../utils/toolUtils/allowList'
+import { buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
 import type {
   Session,
@@ -24,12 +24,20 @@ import type {
 import type { Project } from '../dao/types'
 
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { SessionManager, resolveInitialThinkingLevel } from '@shuvix/agent-runtime'
-import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
+import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
+import {
+  SessionManager,
+  resolveInitialThinkingLevel,
+  toInProcessAgentType
+} from '@shuvix/agent-runtime'
+import type { SubAgentModelConfig, InProcessAgentType } from '@shuvix/agent-runtime'
+import { agentService } from './agentService'
+import { mcpService } from './mcpService'
 import { AgentSession, buildSystemPrompt } from './agentSession'
 import { scanInstructionFiles } from './instruction'
 import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
+import { registerUserInputResolver } from './userInputBroker'
 import { createLogger } from '../logger'
 
 const log = createLogger('SessionService')
@@ -113,8 +121,11 @@ export class SessionService {
       provider: this.getDefaultProvider(),
       model: this.getDefaultModel(),
       systemPrompt: settingsDao.findByKey('general.systemPrompt') || '',
-      modelMetadata: { enabledTools },
-      settings: notebookPath ? { notebookPath } : {},
+      modelMetadata: { thinkingLevel: DEFAULT_THINKING_LEVEL, enabledTools },
+      // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
+      settings: {
+        ...(notebookPath ? { notebookPath } : {})
+      },
       createdAt: now,
       updatedAt: now
     }
@@ -135,14 +146,12 @@ export class SessionService {
     return scanInstructionFiles(info.workingDirectory)
   }
 
-  /** 更新会话启用的指令文件列表 */
-  updateEnabledInstructionFiles(sessionId: string, filenames: string[]): void {
-    log.info(`updateEnabledInstructionFiles session=${sessionId} → [${filenames.join(', ')}]`)
-    sessionDao.updateSettings(sessionId, { enabledInstructionFiles: filenames })
-    const after = sessionDao.pickSettings(sessionId, [
-      'enabledInstructionFiles'
-    ])?.enabledInstructionFiles
-    log.info(`updateEnabledInstructionFiles 写入后回读: [${(after ?? []).join(', ')}]`)
+  /** 更新会话注入的指令文件（单选；null = 不注入） */
+  updateInstructionFile(sessionId: string, filename: string | null): void {
+    log.info(`updateInstructionFile session=${sessionId} → ${filename ?? '(none)'}`)
+    sessionDao.updateSettings(sessionId, { instructionFile: filename })
+    const after = sessionDao.pick(sessionId, ['settings'])?.settings?.instructionFile
+    log.info(`updateInstructionFile 写入后回读: ${after ?? '(none)'}`)
   }
 
   /** 更新会话标题 */
@@ -175,34 +184,18 @@ export class SessionService {
     sessionDao.updateSettings(id, { autoApprove })
   }
 
-  /** 预览命令拆解后生成的通配符模式（纯函数，不写入 DB）
-   *  如果传入 sessionId + toolType，会过滤掉已在允许列表中的模式
+  /** 批量添加路径到统一允许列表（按 toolType 自动加 `Read(...)`/`Write(...)` 前缀）
    *
-   *  注:仅用于命令类(bash/ssh)的"允许并记住"模式预览。read/write 路径审批
-   *  不走该流程,直接 remember 整路径。
+   *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条审批。
    */
-  previewAllowPatterns(command: string, sessionId?: string, toolType?: 'bash' | 'ssh'): string[] {
-    const patterns = extractPatterns(command)
-    if (!sessionId || !toolType) return patterns
-    const sess = sessionDao.pickSettings(sessionId, ['allowList'])
-    const existing = new Set(
-      (sess?.allowList || [])
-        .map(parseAllowEntry)
-        .filter((e): e is NonNullable<typeof e> => e !== null && e.toolType === toolType)
-        .map((e) => e.pattern)
-    )
-    return patterns.filter((p) => !existing.has(p))
-  }
-
-  /** 批量添加通配符/路径模式到统一允许列表（按 toolType 自动加前缀） */
-  addAllowListPatterns(id: string, toolType: AllowToolType, patterns: string[]): void {
+  addAllowListPaths(id: string, toolType: AllowToolType, paths: string[]): void {
     const sess = sessionDao.pickSettings(id, ['allowList'])
     const list = sess?.allowList || []
-    const prefixed = patterns.map((p) => buildAllowEntry(toolType, p))
+    const prefixed = paths.map((p) => buildAllowEntry(toolType, p))
     const newEntries = prefixed.filter((p) => !list.includes(p))
     if (newEntries.length > 0) {
       sessionDao.updateSettings(id, { allowList: [...list, ...newEntries] })
-      log.info(`addAllowListPatterns session=${id} ${toolType} +${newEntries.length}`)
+      log.info(`addAllowListPaths session=${id} ${toolType} +${newEntries.length}`)
       broadcastSessionConfigChanged(id)
     }
   }
@@ -355,10 +348,10 @@ export class SessionService {
     const ctx = this.resolveSessionAgentContext(sessionId)
     if (!ctx) return null
     const notebookPath = sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath ?? ''
-    // 子代理工具白名单（buildSubAgentTools 按名解析）：内置工具与主 Agent 一致全量（剔除 ask，
-    // 面板只读无法应答）+ 会话启用的 mcp:/skill:（enabledTools 仅存这两类，内置默认全开不入表）。
+    // 子代理工具白名单（buildSubAgentTools 按名解析）：内置与主 Agent 同口径
+    // （注册表 defaultEnabled，剔除 ask —— 笔记本面板只读无法应答）+ 会话启用的 mcp:/skill:。
     const builtinNames = getBuiltinToolEntries()
-      .filter((e) => e.factory && e.name !== 'ask')
+      .filter((e) => e.factory && e.defaultEnabled && e.name !== 'ask')
       .map((e) => e.name)
     const mcpSkill = ctx.enabledTools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
     return {
@@ -375,6 +368,40 @@ export class SessionService {
         })
       },
       notebookPath
+    }
+  }
+
+  /**
+   * 用户直发派发（kind='agent' 斜杠命令 `/<agentName> <prompt>`）运行参数：
+   * 具名 agent 定义 → 运行配置投影 + 会话模型配置。与 Agent 工具派发同一投影/requiredMcp
+   * 校验口径；modelConfig 继承会话所选思考深度（与笔记本子代理一致）。
+   */
+  buildAgentDispatchRunParams(
+    sessionId: string,
+    agentName: string
+  ): { agentType: InProcessAgentType; modelConfig: SubAgentModelConfig } | { error: string } {
+    const ctx = this.resolveSessionAgentContext(sessionId)
+    if (!ctx) return { error: `Session not found: ${sessionId}` }
+    const def = agentService.getEnabled(agentName)
+    if (!def) return { error: `Unknown agent "${agentName}"` }
+    const missingMcp = (def.requiredMcp ?? []).filter((n) => !mcpService.isConnectedByName(n))
+    if (missingMcp.length > 0) {
+      const list = missingMcp.map((n) => `"${n}"`).join(', ')
+      return {
+        error: `Cannot run agent "${def.name}": required MCP server(s) not connected: ${list}. Configure the missing server(s) in MCP settings, then retry.`
+      }
+    }
+    return {
+      agentType: toInProcessAgentType(def),
+      modelConfig: {
+        provider: ctx.provider,
+        model: ctx.model,
+        capabilities: ctx.capabilities,
+        thinkingLevel: resolveInitialThinkingLevel({
+          persisted: ctx.modelMetadata.thinkingLevel,
+          reasoning: ctx.capabilities.reasoning
+        })
+      }
     }
   }
 
@@ -438,3 +465,13 @@ export class SessionService {
 }
 
 export const sessionService = new SessionService()
+
+// 子代理审批通道：把子代理工具的 InputRequest 转发到父会话（表单出现在父会话对话流）。
+// 经 userInputBroker 注册，避免 AgentManager 静态依赖 sessionService 形成循环。
+registerUserInputResolver((sessionId, request) => {
+  const agent = sessionService.getAgentSession(sessionId)
+  if (!agent) {
+    return Promise.reject(new Error(`Session ${sessionId} is not active`))
+  }
+  return agent.requestUserInput(request)
+})

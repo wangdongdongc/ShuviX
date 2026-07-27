@@ -53,7 +53,7 @@ export interface SubAgentModelConfig {
 
 /** 子代理定义来源（端适配：桌面 fs / 扩展 storage） */
 export interface SubAgentRegistry {
-  /** 列出全部已启用定义（供派发工具构建描述 + 校验 subagent_type） */
+  /** 列出全部已启用定义（供派发工具构建描述 + 校验具名 `agent` ref） */
   listEnabled: () => AgentDefinition[]
   /** 按名取已启用定义 */
   getEnabled: (name: string) => AgentDefinition | undefined

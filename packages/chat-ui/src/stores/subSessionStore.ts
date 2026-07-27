@@ -19,6 +19,8 @@ export type SubSessionStatus = 'running' | 'done' | 'error'
 export interface SubSessionState {
   subSessionId: string
   parentSessionId: string
+  /** 父 Agent 派发本子会话的 tool_call id；有值 = Agent 自行触发（内联展示），无值 = 用户主动触发（右侧面板） */
+  parentToolCallId?: string
   subAgentName: string
   displayName: string
   description: string
@@ -60,6 +62,7 @@ interface SubSessionStore {
   register(params: {
     subSessionId: string
     parentSessionId: string
+    parentToolCallId?: string
     subAgentName: string
     displayName: string
     description: string
@@ -99,6 +102,7 @@ interface SubSessionStore {
 function createEmpty(params: {
   subSessionId: string
   parentSessionId: string
+  parentToolCallId?: string
   subAgentName: string
   displayName: string
   description: string
@@ -110,6 +114,7 @@ function createEmpty(params: {
   return {
     subSessionId: params.subSessionId,
     parentSessionId: params.parentSessionId,
+    parentToolCallId: params.parentToolCallId,
     subAgentName: params.subAgentName,
     displayName: params.displayName,
     description: params.description,

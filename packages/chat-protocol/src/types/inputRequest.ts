@@ -4,7 +4,7 @@
  * 设计原则:
  * - **判别联合**:同一 `requestUserInput()` 方法接受所有 kind,前后端按 kind 分支
  * - **永不超时**:Promise 只能由用户响应或 abort 触发 resolve
- * - **extra 字段**:工具自定义副作用(如 `rememberPattern`),由工具响应回调消费
+ * - **extra 字段**:工具自定义副作用(如 `rememberPath`),由工具响应回调消费
  *
  * 扩展新 kind 只需:
  * 1. 加一个 `XxxInputRequest` + `XxxResponse` 接口
@@ -70,7 +70,7 @@ export type InputRequest = ApprovalInputRequest | ChoiceInputRequest | SshCreden
 // ─── 响应侧 ──────────────────────────────────────────
 
 interface InputResponseBase {
-  /** 工具自定义副作用字段(如 {rememberPattern: true}),由工具响应回调消费 */
+  /** 工具自定义副作用字段(如 {rememberPath: true}),由工具响应回调消费 */
   extra?: Record<string, unknown>
 }
 

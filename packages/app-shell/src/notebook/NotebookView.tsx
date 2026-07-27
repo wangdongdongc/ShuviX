@@ -146,10 +146,11 @@ export function NotebookView({
 
   return (
     <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
-      {/* 保存状态浮层（仅保存中/失败时出现）—— 顶栏已交给 ChatHeader，故这里浮层提示 */}
+      {/* 保存状态浮层（仅保存中/失败时出现）—— 顶栏已交给 ChatHeader，故这里浮层提示。
+          右上角右侧留给宿主的会话工具栏胶囊（ChatBody sessionToolbar，right-4 宽约 26px），故左移到 right-12 */}
       {(saveStatus === 'saving' || saveStatus === 'failed') && (
         <div
-          className={`absolute top-1.5 right-2 z-10 px-1.5 py-0.5 rounded text-[10px] pointer-events-none ${
+          className={`absolute top-2 right-12 z-10 px-1.5 py-0.5 rounded text-[10px] pointer-events-none ${
             saveStatus === 'failed'
               ? 'text-red-500/80 bg-bg-secondary/80'
               : 'text-text-tertiary bg-bg-secondary/80'

@@ -17,7 +17,6 @@ import { registerTtsHandlers } from './ttsHandlers'
 import { registerDownloadHandlers } from './downloadHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
 import { registerMcpServerHandlers } from './mcpServerHandlers'
-import { registerCompactionHandlers } from './compactionHandlers'
 import { registerSubAgentHandlers } from './subAgentHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
@@ -26,6 +25,7 @@ import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
+import { registerWikiHandlers } from './wikiHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerHookHandlers } from './hookHandlers'
 
@@ -53,7 +53,6 @@ export function registerIpcHandlers(): void {
   registerDownloadHandlers()
   registerUpdateHandlers()
   registerMcpServerHandlers()
-  registerCompactionHandlers()
   registerSubAgentHandlers()
   registerTerminalHandlers()
   registerBrowserViewHandlers()
@@ -62,6 +61,7 @@ export function registerIpcHandlers(): void {
   registerWidgetHandlers()
   registerConfigShareHandlers()
   registerFilesHandlers()
+  registerWikiHandlers()
   registerPinChatHandlers()
   registerHookHandlers()
 }

@@ -34,6 +34,7 @@ export { UserBubble } from './components/chat/UserBubble'
 export { StepBlock } from './components/chat/StepBlock'
 export { ToolCallBlock } from './components/chat/ToolCallBlock'
 export { CodeBlock } from './components/chat/CodeBlock'
+export { markdownComponents } from './components/chat/markdownComponents'
 export { DiffViewer } from './components/chat/DiffViewer'
 export { TokenBadge, InvalidTokenBadge } from './components/chat/InlineTokenBadge'
 export { TokenChip, TokenPayloadDialog } from './components/chat/TokenChip'
@@ -63,6 +64,9 @@ export { useTtsPlayback } from './hooks/useTtsPlayback'
 // 通用 UI 小工具（app 其它处也复用）
 export { useClickOutside } from './hooks/useClickOutside'
 export { useDialogClose } from './hooks/useDialogClose'
+
+// ── 代码查看器（CodeMirror 6 只读 viewer；工具卡片内嵌 + app-shell 文件预览共用） ──
+export { CodeView } from './components/code/CodeView'
 
 // ── utils ──
 export * from './utils/clipboard'

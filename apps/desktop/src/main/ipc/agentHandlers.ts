@@ -7,6 +7,7 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentNotebookPromptParams,
+  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -38,6 +39,19 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:notebookPrompt', (_event, params: AgentNotebookPromptParams) =>
     operationContext.run(createElectronContext(params.sessionId), () => {
       chatGateway.notebookPrompt(params.sessionId, params.text, params.images, params.inlineTokens)
+      return { success: true }
+    })
+  )
+
+  /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体（fire-and-forget，不 await 整轮） */
+  ipcMain.handle('agent:dispatchPrompt', (_event, params: AgentDispatchPromptParams) =>
+    operationContext.run(createElectronContext(params.sessionId), async () => {
+      await chatGateway.dispatchPrompt(
+        params.sessionId,
+        params.agentName,
+        params.text,
+        params.inlineTokens
+      )
       return { success: true }
     })
   )
@@ -103,6 +117,13 @@ export function registerAgentHandlers(): void {
       })
   )
 
+  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
+  ipcMain.handle('agent:getInfo', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () =>
+      chatGateway.getAgentInfo(sessionId)
+    )
+  )
+
   /** 动态更新指定 session 的启用工具集 */
   ipcMain.handle(
     'agent:setEnabledTools',
@@ -125,8 +146,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('tools:definitions', () => getBuiltinToolDefinitions())
 
   /**
-   * 销毁指定的临时子会话（用户点关闭按钮触发）。
-   * 中止子 Agent 并从 transientSessionRegistry 移除。
+   * 销毁指定的派生 agent（用户点关闭按钮触发）。
+   * 中止其生成并级联销毁子树，从登记簿移除。
    */
   ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
     agentManager.destroy(subSessionId)

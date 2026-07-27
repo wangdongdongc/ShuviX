@@ -1,7 +1,7 @@
 /**
  * 文件预览的「媒体/PDF 资源 URL」注入点 —— 宿主差异收敛处。
  *
- * 桌面：注册了 shuvix-preview:// 自定义协议(走主进程沙箱校验)，同步拼 URL。
+ * 桌面：注册了 shuvix-preview:// 自定义协议(走主进程准入校验)，同步拼 URL。
  * 扩展：无自定义协议 → 由 getFile 读字节生成 blob: object URL(异步，用完 revoke)。
  *
  * 组件(MediaView/PdfView/AudioDock/VideoDock)统一经 useMediaUrl 取 URL，不关心来源。

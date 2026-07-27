@@ -95,7 +95,7 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
       provider,
       baseUrl: params.baseUrl || providerInfo?.baseUrl || '',
       // 思考能力与用户配置的能力点解绑：动态模型（自定义/未知内置）一律声明可推理，
-      // 实际是否思考由会话 thinkingLevel 控制（默认 off，用户在选择器里显式开启）。
+      // 实际是否思考由会话 thinkingLevel 控制。
       // 否则 pi-ai 会因 reasoning=false 把 thinkingLevel 夹回 off，导致用户选了却发不出去。
       reasoning: true,
       input: inputModalities,

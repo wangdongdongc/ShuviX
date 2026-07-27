@@ -19,7 +19,14 @@ import { writeFileSync, unlinkSync, existsSync, chmodSync, mkdirSync, type PathL
 import { join } from 'path'
 import { homedir, platform, userInfo } from 'os'
 import { createLogger } from '../logger'
-import { widgetService, exportWidget, WidgetExportError, runWidgetDbQuery } from './widget'
+import {
+  widgetService,
+  exportWidget,
+  resolveExportZipPath,
+  WidgetExportError,
+  runWidgetDbQuery
+} from './widget'
+import * as widgetWindowService from './widgetWindowService'
 import { sessionService } from './sessionService'
 import {
   resolveProjectConfig,
@@ -27,8 +34,6 @@ import {
   isPathWithinReadwriteReferenceDirs
 } from './toolContext'
 import { resolve as resolvePath } from 'path'
-import { pyodideWorkerManager, type ExecuteRequest } from './pyodide/workerManager'
-import { parseShuvixPythonArgv, splitPythonPath } from './pyodide/argvParser'
 import { pgliteWorkerManager } from './pglite/workerManager'
 import { parseShuvixPgliteArgv } from './pglite/argvParser'
 
@@ -234,8 +239,8 @@ class CliServer {
       if (!name) throw new Error('name required')
       const result = await widgetService.init({ id, name, description, template: 'blank' })
       if (sessionId) {
-        sessionService.addAllowListPatterns(sessionId, 'read', [result.projectDir])
-        sessionService.addAllowListPatterns(sessionId, 'write', [result.projectDir])
+        sessionService.addAllowListPaths(sessionId, 'read', [result.projectDir])
+        sessionService.addAllowListPaths(sessionId, 'write', [result.projectDir])
       }
       return result
     })
@@ -245,10 +250,19 @@ class CliServer {
       if (!id) throw new Error('id required')
       const dir = widgetService.getWidgetDir(id)
       if (sessionId) {
-        sessionService.addAllowListPatterns(sessionId, 'read', [dir])
-        sessionService.addAllowListPatterns(sessionId, 'write', [dir])
+        sessionService.addAllowListPaths(sessionId, 'read', [dir])
+        sessionService.addAllowListPaths(sessionId, 'write', [dir])
       }
       return await widgetService.build(id)
+    })
+
+    // widget 的"预览"就是把它当独立小应用打开（已开则聚焦）。构建 / URL 由窗口内 shell
+    // 自行完成，这里不等待，也不走 widgetService.open —— 避免与 shell 重复计一次打开数。
+    this.handlers.set('widget.open', async (p) => {
+      const id = String(p.id ?? '')
+      if (!id) throw new Error('id required')
+      widgetWindowService.open(id)
+      return { id, opened: true }
     })
 
     this.handlers.set('widget.export', async (p, sessionId) => {
@@ -256,24 +270,22 @@ class CliServer {
       const targetPath = String(p.targetPath ?? '')
       if (!id) throw new Error('id required')
       if (!targetPath) throw new Error('targetPath required')
-      const absolutePath = resolvePath(targetPath)
-      // 沙箱：导出目标必须落在调用会话的 workingDirectory 或 readwrite 参考目录内
+      // 先归一化成最终 zip 路径再校验 —— 校验对象必须与真正写入的路径一致
+      const zipPath = resolveExportZipPath(id, resolvePath(targetPath))
+      // 准入：导出目标必须落在调用会话的 workingDirectory 或 readwrite 参考目录内
       // CLI 路径无 interactive approval 通道，越界直接拒绝
       if (sessionId) {
         const config = resolveProjectConfig(sessionId)
-        const inWorkspace = isPathWithinWorkspace(absolutePath, config.workingDirectory)
-        const inReadwriteRef = isPathWithinReadwriteReferenceDirs(
-          absolutePath,
-          config.referenceDirs
-        )
+        const inWorkspace = isPathWithinWorkspace(zipPath, config.workingDirectory)
+        const inReadwriteRef = isPathWithinReadwriteReferenceDirs(zipPath, config.referenceDirs)
         if (!inWorkspace && !inReadwriteRef) {
           throw new Error(
-            `targetPath "${absolutePath}" is outside the session sandbox (workingDirectory + readwrite referenceDirs)`
+            `target "${zipPath}" is outside the session sandbox (workingDirectory + readwrite referenceDirs)`
           )
         }
       }
       try {
-        return await exportWidget({ id, targetPath: absolutePath })
+        return await exportWidget({ id, targetPath: zipPath })
       } catch (e) {
         if (e instanceof WidgetExportError) {
           throw new Error(`[${e.code}] ${e.message}`)
@@ -283,8 +295,9 @@ class CliServer {
     })
 
     this.handlers.set('widget.list', async (p) => {
-      if (p.archived) return widgetService.listArchived()
-      return widgetService.listActive()
+      const list = p.archived ? widgetService.listArchived() : widgetService.listActive()
+      // 消费方是 agent —— 补上 projectDir，省掉一次"这个 widget 的源码在哪"的猜测
+      return list.map((w) => ({ ...w, projectDir: widgetService.getWidgetDir(w.id) }))
     })
 
     this.handlers.set('widget.db-init', async (p) => {
@@ -311,50 +324,6 @@ class CliServer {
     })
 
     // 浏览器自动化不再走 CLI —— agent 统一用内置 `browser` 工具（services/browser 的 backend）。
-
-    // ────────────────── python.* ──────────────────
-    // `shuvix python` CLI 调用入口。CLI 端把 raw argv / stdin / cwd / PYTHONPATH
-    // 一并发上来；这里翻译成 ExecuteRequest 后交给长驻 Pyodide worker 跑。
-    // 沙箱挂载来自 session 的 ProjectConfig（workerManager.buildMounts 内置）。
-
-    this.handlers.set('python.run', async (p, sessionId) => {
-      if (!sessionId) throw new Error('python.run requires SHUVIX_SESSION_ID')
-
-      const argv = Array.isArray(p.argv) ? (p.argv as string[]) : []
-      const stdinContent = typeof p.stdin === 'string' ? (p.stdin as string) : undefined
-      const cwd = typeof p.cwd === 'string' ? (p.cwd as string) : undefined
-      const pythonPathRaw = typeof p.pythonPath === 'string' ? (p.pythonPath as string) : undefined
-      const timeoutMs = typeof p.timeoutMs === 'number' ? (p.timeoutMs as number) : 60_000
-
-      const parsed = parseShuvixPythonArgv(argv, stdinContent !== undefined)
-      if (parsed.helpText !== undefined) {
-        return { stdout: parsed.helpText, stderr: '', exitCode: 0 }
-      }
-      if (parsed.error !== undefined) {
-        return { stdout: '', stderr: parsed.error, exitCode: 2 }
-      }
-      if (!parsed.request) {
-        return { stdout: '', stderr: 'shuvix python: internal parse failure', exitCode: 1 }
-      }
-
-      const request: ExecuteRequest = { ...parsed.request }
-      if (request.mode === 'stdin' && stdinContent !== undefined) {
-        request.code = stdinContent
-      }
-      if (cwd) request.cwd = cwd
-      const pathDirs = splitPythonPath(pythonPathRaw)
-      if (pathDirs.length > 0) request.pythonPathDirs = pathDirs
-
-      await pyodideWorkerManager.ensureReady(sessionId)
-      const execId = `cli-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
-      const resp = await pyodideWorkerManager.execute(sessionId, execId, request, timeoutMs)
-
-      return {
-        stdout: resp.stdout ?? '',
-        stderr: resp.stderr ?? resp.error ?? '',
-        exitCode: resp.exitCode ?? (resp.type === 'error' ? 1 : 0)
-      }
-    })
 
     // ────────────────── pglite.* ──────────────────
     // `shuvix pglite` CLI 入口。argv 由 CLI 端透传上来；-f 模式时 CLI 端已 readFileSync

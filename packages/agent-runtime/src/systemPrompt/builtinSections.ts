@@ -51,6 +51,20 @@ export function getStaticBuiltinContent(id: BuiltinSectionId, t: (key: string) =
   return t(`systemPromptCards.${id}.content`)
 }
 
+/** 支持语言的原生名（environment 卡片输出用户界面语言时用，非翻译文案故不进 locales） */
+const LANGUAGE_NATIVE_NAMES: Record<string, string> = {
+  zh: '中文',
+  en: 'English',
+  ja: '日本語'
+}
+
+/** 用户界面语言的展示形式（如 zh → 「中文 (zh)」；未知语言原样返回代码） */
+export function formatLanguageDisplay(lang: string | undefined): string {
+  const base = (lang || 'en').split('-')[0].toLowerCase()
+  const native = LANGUAGE_NATIVE_NAMES[base]
+  return native ? `${native} (${base})` : base
+}
+
 /** environment 卡片渲染上下文（仅动态卡片用） */
 export interface BuiltinRenderCtx {
   /** 当前会话工作目录（桌面用于检测 git 仓库；不直接输出） */

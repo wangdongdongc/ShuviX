@@ -130,21 +130,35 @@ export class ChatFrontendRegistry {
   }
 
   /**
-   * 维护 sub→parent 映射并返回某事件对应的父会话；非子会话事件返回 null。
-   * register 自带 parentSessionId → 记下映射；end → 返回父会话并清理映射；
-   * 其余事件（流式 delta / 工具 / 步骤等只带 subSessionId）经映射回溯父会话。
+   * 维护 sub→parent 映射并返回某事件对应的**根会话**；非派生 agent 事件返回 null。
+   * register 自带 parentSessionId → 记下映射；end → 返回根会话并清理映射；
+   * 其余事件（流式 delta / 工具 / 步骤等只带派生 agentId）经映射回溯。
+   * 嵌套派生时 parentSessionId 可能本身是派生 agent —— 沿映射链上溯到根会话
+   * （只有根会话有前端绑定）。
    */
   private resolveSubSessionParent(event: ChatEvent): string | null {
     if (event.type === 'sub_session_register') {
       this.subToParent.set(event.sessionId, event.parentSessionId)
-      return event.parentSessionId
+      return this.walkToRoot(event.parentSessionId)
     }
     if (event.type === 'sub_session_end') {
-      const parent = event.parentSessionId
+      const root = this.walkToRoot(event.parentSessionId)
       this.subToParent.delete(event.sessionId)
-      return parent
+      return root
     }
-    return this.subToParent.get(event.sessionId) ?? null
+    const parent = this.subToParent.get(event.sessionId)
+    return parent != null ? this.walkToRoot(parent) : null
+  }
+
+  /** 沿 sub→parent 映射上溯到第一个不在映射里的 id（即根会话；带环保护） */
+  private walkToRoot(sessionId: string): string {
+    let current = sessionId
+    const seen = new Set<string>()
+    while (this.subToParent.has(current) && !seen.has(current)) {
+      seen.add(current)
+      current = this.subToParent.get(current)!
+    }
+    return current
   }
 
   /** 清理已断开的前端（从默认列表 + 所有会话绑定中移除） */

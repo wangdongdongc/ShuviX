@@ -1,6 +1,7 @@
 import { create } from 'zustand'
-import type { ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
+import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 export type {
   ToolPresentation,
   ToolFormItem,
@@ -69,7 +70,8 @@ export interface SessionSettings {
   autoApprove?: boolean
   allowList?: string[]
   telegramBotId?: string
-  enabledInstructionFiles?: string[]
+  /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
+  instructionFile?: string | null
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
 }
@@ -170,11 +172,13 @@ interface ChatState {
   /** 当前活跃会话 ID —— 由 active 派生的只读镜像，勿直接 set */
   activeSessionId: string | null
   /**
-   * 请求在右侧 Files 面板打开某文件预览的信号（绝对路径 + 单调 nonce）。
-   * 笔记本编辑器内点击 [[wiki-link]] 时设置；FilesPanel 订阅并打开预览。
-   * 含 nonce 以便重复点击同一文件也能触发（值变化）。
+   * 请求打开某文件预览的信号（绝对路径 + 单调 nonce）—— 独立预览面板的唯一入口。
+   * 触发方：preview 工具事件（useAgentEvents）/ 笔记本 [[wiki-link]] / Files 面板点击文件。
+   * 消费方：宿主经 usePreviewRequestBridge 落为预览目标并揭示自己的预览面板
+   * （桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）。
+   * 含 nonce 以便重复请求同一文件也能触发（值变化）。
    */
-  filePreviewRequest: { absPath: string; nonce: number } | null
+  filePreviewRequest: { absPath: string; nonce: number; openedBy: 'agent' | 'user' } | null
   /**
    * 请求显示右侧「子智能体」面板的信号（子会话 id + 单调 nonce）。
    * useAgentEvents 收到当前会话的 sub_session_register 时设置；宿主订阅后打开自己的右侧面板并切到
@@ -182,6 +186,17 @@ interface ChatState {
    * 含 nonce 以便同一会话多次起子代理也能触发（值变化）。
    */
   subAgentRevealRequest: { subSessionId: string; nonce: number } | null
+  /**
+   * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
+   * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
+   * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
+   * 含 nonce 以便连续回退相同内容也能触发。
+   */
+  draftRestoreRequest: {
+    content: string
+    inlineTokens?: Record<string, InlineToken>
+    nonce: number
+  } | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -215,8 +230,10 @@ interface ChatState {
     description: string
     template: string
     requiredTools?: string[]
+    /** 命令来源；'agent' 为子代理派发命令（发送走 agent.dispatchPrompt，不做模板展开） */
+    kind?: 'project' | 'skill' | 'agent'
   }>
-  /** 各 session 的活跃运行时资源（SSH / DB / SQL / Python 等） */
+  /** 各 session 的活跃运行时资源（SSH / DB 等） */
   sessionResources: Record<string, SessionResourceInfo>
   /**
    * 各 session 的待处理用户输入请求列表(按 sessionId 隔离)。
@@ -243,16 +260,18 @@ interface ChatState {
    * WebUI 启动时置 true；桌面/扩展保持 false。
    */
   viewOnly: boolean
-  /** 正在压缩的会话 ID 集合 */
-  compactingSessions: Set<string>
 
   // Actions
   setSessions: (sessions: Session[]) => void
   setActiveSessionId: (id: string | null) => void
-  /** 请求在右侧 Files 面板打开某文件预览（绝对路径）；由笔记本编辑器 [[wiki-link]] 点击触发 */
-  requestFilePreview: (absPath: string) => void
+  /** 请求打开某文件预览（绝对路径）；preview 工具事件 / 笔记本 [[wiki-link]] / Files 面板点击触发。
+   *  openedBy 缺省 'user'：只有智能体事件那条路显式传 'agent'（预览面板据此亮出来源横幅）。 */
+  requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
   /** 请求显示右侧「子智能体」面板（子会话 id）；由 useAgentEvents 收到当前会话 sub_session_register 时触发 */
   requestSubAgentReveal: (subSessionId: string) => void
+  /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
+  requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
+  clearDraftRestore: () => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -295,7 +314,14 @@ interface ChatState {
   setToolPresentations: (presentations: Record<string, ToolPresentation>) => void
   setProjectPath: (path: string | null) => void
   setSlashCommands: (
-    commands: Array<{ commandId: string; name: string; description: string; template: string }>
+    commands: Array<{
+      commandId: string
+      name: string
+      description: string
+      template: string
+      requiredTools?: string[]
+      kind?: 'project' | 'skill' | 'agent'
+    }>
   ) => void
   setViewOnly: (v: boolean) => void
   setSharedSessionIds: (ids: Set<string>) => void
@@ -330,8 +356,6 @@ interface ChatState {
   ) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
-  /** 设置/解除会话的压缩中状态 */
-  setCompacting: (sessionId: string, compacting: boolean) => void
 }
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
@@ -358,9 +382,6 @@ export const selectStreamingThinking = (s: ChatState): string =>
 
 export const selectIsStreaming = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
-
-export const selectIsCompacting = (s: ChatState): boolean =>
-  s.activeSessionId ? s.compactingSessions.has(s.activeSessionId) : false
 
 /** 空图片数组常量，避免选择器每次返回新引用 */
 const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
@@ -436,6 +457,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...deriveActive(null),
   filePreviewRequest: null,
   subAgentRevealRequest: null,
+  draftRestoreRequest: null,
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
@@ -443,7 +465,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionInputDrafts: {},
   sessionOtherInputs: {},
   modelSupportsReasoning: false,
-  thinkingLevel: 'off',
+  thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
   maxContextTokens: 0,
   usedContextTokens: null,
@@ -457,7 +479,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sharedSessionIds: new Set(),
   telegramBindings: new Map(),
   viewOnly: false,
-  compactingSessions: new Set(),
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => {
@@ -478,9 +499,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingImages: draft?.pendingImages ?? []
     })
   },
-  requestFilePreview: (absPath) =>
+  requestFilePreview: (absPath, openedBy = 'user') =>
     set((state) => ({
-      filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1 }
+      filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1, openedBy }
     })),
   requestSubAgentReveal: (subSessionId) =>
     set((state) => ({
@@ -489,6 +510,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nonce: (state.subAgentRevealRequest?.nonce ?? 0) + 1
       }
     })),
+  requestDraftRestore: (content, inlineTokens) =>
+    set((state) => ({
+      draftRestoreRequest: {
+        content,
+        inlineTokens,
+        nonce: (state.draftRestoreRequest?.nonce ?? 0) + 1
+      }
+    })),
+  clearDraftRestore: () => set({ draftRestoreRequest: null }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>
     set((state) =>
@@ -938,13 +968,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionOtherInputs: restOtherInputs,
         messages: newMessages
       }
-    }),
-
-  setCompacting: (sessionId, compacting) =>
-    set((state) => {
-      const next = new Set(state.compactingSessions)
-      if (compacting) next.add(sessionId)
-      else next.delete(sessionId)
-      return { compactingSessions: next }
     })
 }))

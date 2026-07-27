@@ -16,7 +16,6 @@ const log = createLogger('InstructionFileScanner')
 /** 扫描工作目录顶层的候选指令文件 */
 export function scanInstructionFiles(workingDir: string): InstructionFileEntry[] {
   if (!workingDir) {
-    log.info(`扫描跳过：workingDir 为空`)
     return []
   }
   const result: InstructionFileEntry[] = []
@@ -31,8 +30,10 @@ export function scanInstructionFiles(workingDir: string): InstructionFileEntry[]
       log.warn(`stat 失败: ${absolutePath} (${err instanceof Error ? err.message : String(err)})`)
     }
   }
-  log.info(
-    `扫描 ${workingDir} 命中 ${result.length} 个指令文件: [${result.map((f) => f.filename).join(', ')}]`
-  )
+  if (result.length > 0) {
+    log.info(
+      `扫描 ${workingDir} 命中 ${result.length} 个指令文件: [${result.map((f) => f.filename).join(', ')}]`
+    )
+  }
   return result
 }

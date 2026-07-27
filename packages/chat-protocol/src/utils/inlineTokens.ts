@@ -38,6 +38,8 @@ export interface SlashCommandLike {
   commandId: string
   name: string
   template: string
+  /** 命令来源；'agent' 为子代理派发命令——无模板，不参与 cmd Token 构造（走独立派发链路） */
+  kind?: string
 }
 
 /** 构造内联 Token + 标记文本的结果 */
@@ -98,9 +100,38 @@ export function buildAtToken(file: AtFileLike): InlineToken {
   }
 }
 
+/** 粘贴长文的最小定义（构造内联 Token 所需字段） */
+export interface PasteLike {
+  /** 完整粘贴内容（发给 LLM 的正文） */
+  payload: string
+  /** 占位/胶囊展示文本（如 `[粘贴文本 #1 · 45 行]`，前端按 locale 构造，与 textarea 占位明文一致） */
+  displayText: string
+  /** 草稿内序号（1 起），作实体标识 */
+  seq: number
+  /** 弹窗标题（如 `粘贴文本 #1`） */
+  name?: string
+}
+
+/**
+ * 用长文粘贴构造 `paste` 类型内联 Token。
+ * 与 at 类型同属「就地替换」：resolveTokensForAgent 把标记替换为完整粘贴内容、保留周围文本；
+ * 气泡侧渲染为胶囊（点击弹窗看原文），避免超长粘贴撑爆聊天记录。
+ */
+export function buildPasteToken(p: PasteLike): InlineToken {
+  return {
+    type: 'paste',
+    id: `paste-${p.seq}`,
+    displayText: p.displayText,
+    payload: p.payload,
+    name: p.name
+  }
+}
+
 /**
  * 从原始输入识别 slash 命令（"/cmd 参数"）并构造内联 Token；非命令或未匹配返回 null。
  * 命中时一并回传匹配到的命令定义（调用方据 requiredTools 等做后续处理）。
+ * kind='agent' 的派发命令无模板、不构造 cmd Token（由调用方在此之前识别并走派发链路），
+ * 落到这里视为未匹配——未接派发链路的入口（如子代理追问框）按普通文本发送。
  */
 export function parseSlashCommandInput<C extends SlashCommandLike>(
   rawText: string,
@@ -112,14 +143,15 @@ export function parseSlashCommandInput<C extends SlashCommandLike>(
   const cmdId = spaceIdx === -1 ? rawText.slice(1) : rawText.slice(1, spaceIdx)
   const args = spaceIdx === -1 ? '' : rawText.slice(spaceIdx + 1).trim()
   const command = commands.find((c) => c.commandId === cmdId)
-  if (!command) return null
+  if (!command || command.kind === 'agent') return null
   return { ...buildCommandToken(command, args, opts), command }
 }
 
 /**
  * 将 content 中的 token 标记替换为 payload，生成发送给 Agent 的文本
- * - cmd 类型：payload 替换整条消息（因为展开的模板已包含用户参数）
- * - 其他类型（at 等）：逐个替换 token 标记处，保留周围文本
+ * - cmd 类型：payload 替换整条消息（因为展开的模板已包含用户参数）；
+ *   参数里可再嵌其他类型标记（如 paste），对 payload 追加一次就地替换
+ * - 其他类型（at / paste 等）：逐个替换 token 标记处，保留周围文本
  */
 export function resolveTokensForAgent(
   content: string,
@@ -127,14 +159,31 @@ export function resolveTokensForAgent(
 ): string {
   if (!tokens || Object.keys(tokens).length === 0) return content
 
+  const replaceMarkers = (text: string): string =>
+    text.replace(TOKEN_RE, (_, uid: string) => tokens[uid]?.payload ?? '')
+
   // cmd 类型：payload 已包含完整展开模板（含 args），直接替换整条消息
   for (const token of Object.values(tokens)) {
-    if (token.type === 'cmd') return token.payload
+    if (token.type === 'cmd') return replaceMarkers(token.payload)
   }
 
-  // 其他类型（at 等）：逐个替换 token 为 payload，保留周围文本
+  // 其他类型（at / paste 等）：逐个替换 token 为 payload，保留周围文本
+  return replaceMarkers(content)
+}
+
+/**
+ * 把 content 中的 token 标记替换为适合「复制原文」的文本：paste 类型还原完整粘贴内容（payload），
+ * 其余类型保持人读 displayText（"/review"、文件名）。供用户气泡复制按钮使用。
+ */
+export function resolveTokensForCopy(
+  content: string,
+  tokens?: Record<string, InlineToken>
+): string {
+  if (!tokens || Object.keys(tokens).length === 0) return content
   return content.replace(TOKEN_RE, (_, uid: string) => {
-    return tokens[uid]?.payload ?? ''
+    const token = tokens[uid]
+    if (!token) return ''
+    return token.type === 'paste' ? token.payload : token.displayText
   })
 }
 
@@ -148,6 +197,62 @@ export function inlineTokensToPlainText(
 ): string {
   if (!tokens || Object.keys(tokens).length === 0) return content
   return content.replace(TOKEN_RE, (_, uid: string) => tokens[uid]?.displayText ?? '')
+}
+
+// ---- 草稿重建（消息回退回填输入框） ----
+
+/** 重建结果：可编辑明文 + 需要重新登记的分类 token（供输入框恢复芯片/引用注册表） */
+export interface DraftRebuildResult {
+  /** 回填输入框的明文：paste→占位 displayText、at→`@名`、cmd→`/id` 明文（发送时重新解析） */
+  text: string
+  /** 需重新登记的 at 类型 token（按出现顺序，同 uid 去重） */
+  atTokens: InlineToken[]
+  /** 需重新登记的 paste 类型 token（按出现顺序，同 uid 去重） */
+  pasteTokens: InlineToken[]
+}
+
+/**
+ * 把持久化消息（含 {{shuvixInlineToken}} 标记的 content + metadata.inlineTokens）
+ * 重建为「可编辑草稿」——回退到输入框时使用，避免裸标记落入文本框导致 token 失效丢信息：
+ * - paste：替换为占位明文（displayText），调用方据 pasteTokens 重新登记芯片（payload 得以保留）
+ * - at：替换为 `@displayText` 明文，调用方据 atTokens 重新登记引用
+ * - cmd：替换为 displayText（如 `/review`）——发送时经 parseSlashCommandInput 按当前命令定义重新展开
+ * - 未知类型：替换为 displayText；uid 缺失的标记：丢弃
+ */
+export function rebuildDraftFromContent(
+  content: string,
+  tokens?: Record<string, InlineToken>
+): DraftRebuildResult {
+  const atTokens: InlineToken[] = []
+  const pasteTokens: InlineToken[] = []
+  const seen = new Set<string>()
+  const segments = segmentContent(content, tokens)
+  let text = ''
+  for (const seg of segments) {
+    if (seg.type === 'text') {
+      text += seg.text
+      continue
+    }
+    if (seg.type === 'invalid_token') continue
+    const token = seg.token
+    if (token.type === 'paste') {
+      if (!seen.has(seg.uid)) {
+        seen.add(seg.uid)
+        pasteTokens.push(token)
+      }
+      text += token.displayText
+    } else if (token.type === 'at') {
+      if (!seen.has(seg.uid)) {
+        seen.add(seg.uid)
+        atTokens.push(token)
+      }
+      text += `@${token.displayText}`
+    } else {
+      // cmd / 未来类型：displayText 明文（cmd 发送时重新解析展开）
+      text += token.displayText
+    }
+  }
+  return { text, atTokens, pasteTokens }
 }
 
 // ---- 前端内容分段 ----

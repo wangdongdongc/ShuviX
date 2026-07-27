@@ -1,16 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Wrench,
-  Trash2,
-  Archive,
-  Square,
-  CircleOff,
-  ChevronRight,
-  RotateCcw,
-  Play,
-  Loader2
-} from 'lucide-react'
+import { Wrench, Trash2, Archive, Square, ChevronRight, RotateCcw } from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useContextMenu } from '../../hooks/useContextMenu'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -18,7 +8,8 @@ import { AnimatedCollapse } from '../common/AnimatedCollapse'
 
 /**
  * Widget 面板 —— Right panel 的 Widget tab 内容
- * 以卡片网格方式展示所有 widget，点击跳转 Browser tab 打开该 widget
+ * 卡片 ≈ app 图标：点击即在独立窗口打开（未构建时窗口内呈现加载态），运行中显示绿点；
+ * "停止"= 退出 app（关窗 + 反注册）。server 是懒启动的实现细节，不在此展示状态
  */
 export function WidgetPanel(): React.JSX.Element {
   const { t } = useTranslation()
@@ -27,18 +18,16 @@ export function WidgetPanel(): React.JSX.Element {
   const archived = useWidgetStore((s) => s.archived)
   const loaded = useWidgetStore((s) => s.loaded)
   const serverStatus = useWidgetStore((s) => s.serverStatus)
-  const startingIds = useWidgetStore((s) => s.startingIds)
   const reload = useWidgetStore((s) => s.reload)
   const openWidget = useWidgetStore((s) => s.openWidget)
-  const startWidget = useWidgetStore((s) => s.startWidget)
+  const openWidgetWindow = useWidgetStore((s) => s.openWidgetWindow)
   const stopWidgetAction = useWidgetStore((s) => s.stopWidget)
   const archiveWidget = useWidgetStore((s) => s.archiveWidget)
   const deleteWidget = useWidgetStore((s) => s.deleteWidget)
-  const stopServer = useWidgetStore((s) => s.stopServer)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [exportResult, setExportResult] = useState<
-    | { kind: 'success'; name: string; targetPath: string }
+    | { kind: 'success'; name: string; zipPath: string }
     | { kind: 'error'; name: string; message: string }
     | null
   >(null)
@@ -53,13 +42,13 @@ export function WidgetPanel(): React.JSX.Element {
 
   const isEmpty = loaded && widgets.length === 0
 
-  /** 弹目录选择 + 执行导出，并把结果记录到本地 state 以便展示 */
+  /** 弹保存对话框 + 执行导出，并把结果记录到本地 state 以便展示 */
   const handleExport = async (w: WidgetSummary): Promise<void> => {
-    const pick = await window.api.widget.pickExportDir()
+    const pick = await window.api.widget.pickExportTarget({ id: w.id })
     if (!pick.success) return // 用户取消 — 静默
     const res = await window.api.widget.exportAsVite({ id: w.id, targetPath: pick.path })
     if (res.success) {
-      setExportResult({ kind: 'success', name: w.name, targetPath: res.targetPath })
+      setExportResult({ kind: 'success', name: w.name, zipPath: res.zipPath })
     } else {
       setExportResult({
         kind: 'error',
@@ -75,44 +64,6 @@ export function WidgetPanel(): React.JSX.Element {
 
   return (
     <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
-      {/* Header —— widget server 状态 + 停止按钮 */}
-      <div className="titlebar-drag flex-shrink-0 flex items-center gap-2 px-3 min-h-8 border-b border-border-secondary/30">
-        <Wrench size={12} className="flex-shrink-0 text-text-tertiary/70" />
-        <div className="titlebar-no-drag flex-1 min-w-0 flex items-center gap-1.5">
-          {running ? (
-            <>
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              </span>
-              <span className="text-[10px] text-emerald-500/90 tabular-nums font-mono">
-                127.0.0.1:{serverStatus?.port}
-              </span>
-              <span className="text-[10px] text-text-tertiary/50">
-                · {t('widgets.serverRegistered', { count: serverStatus?.widgetCount ?? 0 })}
-              </span>
-            </>
-          ) : (
-            <>
-              <CircleOff size={10} className="text-text-tertiary/40" />
-              <span className="text-[10px] text-text-tertiary/60">
-                {t('widgets.serverStopped')}
-              </span>
-            </>
-          )}
-        </div>
-        {running && (
-          <button
-            onClick={() => void stopServer()}
-            className="titlebar-no-drag flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
-            title={t('widgets.stopServerTooltip')}
-          >
-            <Square size={9} className="fill-current" />
-            <span>{t('widgets.stopServer')}</span>
-          </button>
-        )}
-      </div>
-
       {/* 内容区 */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {!loaded ? (
@@ -135,29 +86,30 @@ export function WidgetPanel(): React.JSX.Element {
                 {widgets.map((w) => {
                   const isRunning =
                     running && (serverStatus?.registeredIds?.includes(w.id) ?? false)
-                  const isStarting = startingIds.has(w.id)
                   return (
                     <WidgetCard
                       key={w.id}
                       widget={w}
                       isRunning={isRunning}
-                      isStarting={isStarting}
-                      onOpen={() => void openWidget(w.id)}
-                      onStart={() => void startWidget(w.id)}
+                      onOpen={() => void openWidgetWindow(w.id)}
                       onStop={() => void stopWidgetAction(w.id)}
                       onContextMenu={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
                         showContextMenu(
                           [
-                            { id: 'open', label: t('widgets.open') },
+                            { id: 'openWindow', label: t('widgets.openInWindow') },
+                            { id: 'openPanel', label: t('widgets.openInPanel') },
+                            ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
                             { id: 'export', label: t('widgets.exportAsVite') },
                             { id: 'archive', label: t('widgets.archive') },
                             { id: 'sep', label: '', type: 'separator' },
                             { id: 'delete', label: t('widgets.delete') }
                           ],
                           (actionId) => {
-                            if (actionId === 'open') void openWidget(w.id)
+                            if (actionId === 'openWindow') void openWidgetWindow(w.id)
+                            if (actionId === 'openPanel') void openWidget(w.id)
+                            if (actionId === 'stop') void stopWidgetAction(w.id)
                             if (actionId === 'export') void handleExport(w)
                             if (actionId === 'archive') void archiveWidget(w.id, true)
                             if (actionId === 'delete') setDeletingId(w.id)
@@ -232,7 +184,7 @@ export function WidgetPanel(): React.JSX.Element {
             exportResult.kind === 'success'
               ? t('widgets.exportSuccessDescription', {
                   name: exportResult.name,
-                  path: exportResult.targetPath
+                  path: exportResult.zipPath
                 })
               : t('widgets.exportFailedDescription', {
                   name: exportResult.name,
@@ -247,7 +199,7 @@ export function WidgetPanel(): React.JSX.Element {
           cancelText={t('common.close', { defaultValue: 'Close' })}
           onConfirm={async () => {
             if (exportResult.kind === 'success') {
-              await window.api.app.openFolder(exportResult.targetPath)
+              await window.api.widget.revealExport(exportResult.zipPath)
             }
             setExportResult(null)
           }}
@@ -265,14 +217,14 @@ function errorMessageForExportCode(
   t: (k: string, opts?: Record<string, unknown>) => string
 ): string {
   switch (code) {
-    case 'TARGET_NOT_EMPTY':
-      return t('widgets.exportErrorTargetNotEmpty')
+    case 'TARGET_EXISTS':
+      return t('widgets.exportErrorTargetExists')
     case 'WIDGET_NOT_FOUND':
       return t('widgets.exportErrorWidgetNotFound')
     case 'INVALID_PATH':
       return t('widgets.exportErrorInvalidPath')
-    case 'COPY_FAILED':
-      return t('widgets.exportErrorCopyFailed', { reason: fallback })
+    case 'PACK_FAILED':
+      return t('widgets.exportErrorPackFailed', { reason: fallback })
     default:
       return fallback
   }
@@ -281,9 +233,7 @@ function errorMessageForExportCode(
 interface WidgetCardProps {
   widget: WidgetSummary
   isRunning: boolean
-  isStarting: boolean
   onOpen: () => void
-  onStart: () => void
   onStop: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onArchive: () => void
@@ -294,9 +244,7 @@ interface WidgetCardProps {
 function WidgetCard({
   widget,
   isRunning,
-  isStarting,
   onOpen,
-  onStart,
   onStop,
   onContextMenu,
   onArchive,
@@ -304,52 +252,20 @@ function WidgetCard({
   t
 }: WidgetCardProps): React.JSX.Element {
   const last = widget.lastOpenedAt || widget.createdAt
-  // 卡片本体仅在 widget 运行时点击跳转浏览器；未运行时点击不做事，请用启动按钮
-  const handleCardClick = (): void => {
-    if (isRunning) onOpen()
-  }
-  const handleToggleClick = (e: React.MouseEvent): void => {
-    e.stopPropagation()
-    if (isStarting) return
-    if (isRunning) onStop()
-    else onStart()
-  }
-  const toggleTitle = isStarting
-    ? t('widgets.starting')
-    : isRunning
-      ? t('widgets.stopWidgetTooltip')
-      : t('widgets.startWidgetTooltip')
   return (
     <div
-      onClick={handleCardClick}
+      onClick={onOpen}
       onContextMenu={onContextMenu}
-      className={`group relative rounded-md border border-border-secondary/40 bg-bg-secondary/30 hover:border-border-secondary hover:bg-bg-hover/60 transition-colors p-2.5 ${
-        isRunning ? 'cursor-pointer' : 'cursor-default'
-      }`}
+      className="group relative rounded-md border border-border-secondary/40 bg-bg-secondary/30 hover:border-border-secondary hover:bg-bg-hover/60 transition-colors p-2.5 cursor-pointer"
     >
       <div className="flex items-start gap-2">
-        <button
-          type="button"
-          onClick={handleToggleClick}
-          disabled={isStarting}
-          title={toggleTitle}
-          aria-label={toggleTitle}
-          className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
-            isStarting
-              ? 'bg-bg-tertiary/60 text-text-tertiary cursor-wait'
-              : isRunning
-                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-error/15 hover:text-error'
-                : 'bg-bg-tertiary/60 text-text-tertiary hover:bg-emerald-500/15 hover:text-emerald-500'
-          }`}
-        >
-          {isStarting ? (
-            <Loader2 size={13} className="animate-spin" />
-          ) : isRunning ? (
-            <Square size={11} className="fill-current" />
-          ) : (
-            <Play size={12} className="fill-current" />
+        {/* app 图标 —— 运行中右下角亮绿点 */}
+        <div className="relative flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-violet-500/10 text-violet-500">
+          <Wrench size={13} />
+          {isRunning && (
+            <span className="absolute -right-0.5 -bottom-0.5 w-2 h-2 rounded-full bg-emerald-400 border border-bg-primary" />
           )}
-        </button>
+        </div>
         <div className="flex-1 min-w-0">
           <div className="text-[12px] font-semibold text-text-primary truncate pr-14">
             {widget.name}
@@ -368,6 +284,18 @@ function WidgetCard({
       </div>
       {/* 悬浮操作按钮 */}
       <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+        {isRunning && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onStop()
+            }}
+            className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
+            title={t('widgets.stopWidgetTooltip')}
+          >
+            <Square size={10} className="fill-current" />
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()

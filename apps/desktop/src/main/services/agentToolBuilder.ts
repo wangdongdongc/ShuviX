@@ -13,12 +13,19 @@ import type { ProcessToolOutputOverrides } from './wrapToolOutput'
 
 type AnyAgentTool = AgentState['tools'][number]
 
-/** 子智能体构建上下文（仅主 Agent 有，子智能体不传此参数以防递归） */
+/**
+ * 派发工具构建上下文（主 Agent 经会话配置注入模型；派生 agent 的派发工具
+ * 由 AgentManager.resolveTools 按 spawn 上下文注入 —— 全员可派发，层级由内核校验）
+ */
 export interface SubAgentBuildContext {
   modelConfig: SubAgentModelConfig
 }
 
-/** 构建工具集：内置工具全量；统一 Agent 工具仅主 Agent 注入；MCP / Skill 按 enabledTools 过滤 */
+/**
+ * 构建工具集：内置工具按注册表 defaultEnabled 注入（代码层编排——
+ * defaultEnabled: false 的工具不进主 Agent，但子代理白名单仍可按名解析；hidden 工具始终注入）；
+ * 统一 Agent 工具仅主 Agent 注入；MCP / Skill 按 enabledTools 过滤。
+ */
 export function buildTools(
   ctx: ToolContext,
   enabledTools: string[],
@@ -35,12 +42,12 @@ export function buildTools(
     ) as AnyAgentTool
 
   for (const entry of getBuiltinToolEntries()) {
-    if (entry.factory) {
-      tools.push(wrap(entry.factory(ctx)))
-    }
+    if (!entry.factory) continue
+    if (!entry.hidden && !entry.defaultEnabled) continue
+    tools.push(wrap(entry.factory(ctx)))
   }
 
-  // 统一 Agent 派发工具（仅主 Agent 传入 subAgentCtx，子智能体不传此参数，天然防递归）
+  // 统一 Agent 派发工具（主 Agent 在此注入；派生 agent 的由 AgentManager.resolveTools 注入）
   if (subAgentCtx) {
     tools.push(wrap(createAgentTool(ctx, { modelConfig: subAgentCtx.modelConfig })))
   }

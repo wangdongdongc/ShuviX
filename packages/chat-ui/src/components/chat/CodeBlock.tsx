@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
+import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import mermaid from 'mermaid'
 
 // 初始化 mermaid（暗色主题，禁用自动启动）
@@ -113,8 +114,13 @@ function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       try {
         const id = `mermaid_${mermaidIdCounter++}`
         const { svg } = await mermaid.render(id, code)
-        mermaidSvgCache.set(code, svg)
-        setSvgHtml(svg)
+        // 净化后再入缓存/注入 —— 图表源码来自智能体输出（可能受提示注入影响），而下方是
+        // dangerouslySetInnerHTML 直入特权渲染进程。mermaid 的 click href 指令会带出
+        // javascript: 锚点，本行是把它挡在 DOM 之外的地方。
+        const clean = sanitizeRenderedSvg(svg)
+        if (!clean) throw new Error('SVG sanitization failed') // 失败关闭，走下方 error 分支
+        mermaidSvgCache.set(code, clean)
+        setSvgHtml(clean)
       } catch (e) {
         setError(String(e))
       } finally {

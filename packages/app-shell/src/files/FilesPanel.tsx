@@ -1,21 +1,22 @@
 /**
- * FilesPanel — 右侧面板"Files"标签
+ * FilesPanel — 会话面板"Files"标签
  * 显示当前会话工作目录的文件树，并实时跟随磁盘变化
  * 基于 @pierre/trees（path-first + Shadow DOM 隔离）
+ *
+ * 文件预览不在本面板内：点击文件（音视频除外，走底部 dock）发 chatStore.requestFilePreview，
+ * 由宿主的独立预览面板（桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）承接展示。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Folder, RefreshCw, Search, X } from 'lucide-react'
-import { FileTree, useFileTree, useFileTreeSearch } from '@pierre/trees/react'
 import type { FileTree as FileTreeModel } from '@pierre/trees'
+import { FilesTree } from './FilesTree'
 import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
-import type { NotebookCaps } from '../notebook/LivePreviewEditor'
-import { FilePreview } from './FilePreview'
 import { AudioDock } from './AudioDock'
 import { VideoDock } from './VideoDock'
-import { extOf, basename, joinPath, relativize } from './paths'
+import { extOf, basename, joinPath } from './paths'
 
 /** 音频扩展名 → MIME。点击命中即走底部 dock，不进预览覆盖层。
  *  与 main 的 AUDIO_MIME_BY_EXT 同步；renderer 这里独立列表是为了在点击瞬间就分流，
@@ -39,9 +40,6 @@ const VIDEO_MIME_BY_EXT: Record<string, string> = {
   '.ogv': 'video/ogg'
 }
 
-/** Markdown 扩展名：从预览顶栏可创建绑定该文件的「笔记本会话」 */
-const MARKDOWN_EXTS = new Set(['.md', '.mdx', '.markdown'])
-
 interface ScanState {
   /** 此结果对应的工作目录（root），用于判定数据是否仍匹配当前 projectPath */
   forRoot: string
@@ -57,26 +55,15 @@ interface ScanError {
 }
 
 export interface FilesPanelProps {
-  /** 预览 Markdown 文件时，预览顶栏「创建笔记本」按钮的处理：提供则显示该按钮，
-   *  点击创建绑定该 md 的笔记本会话。不提供则不显示（宿主无中间区编辑器时）。 */
-  onCreateNotebook?: (params: { path: string; sessionId: string }) => void
-  /** 宿主能力注入（笔记本主题 / 外链）；markdown 只读 live-preview 渲染时透传给 FilePreview。 */
-  notebookCaps?: NotebookCaps
   /** 在系统文件管理器中打开工作目录（宿主注入）；提供则在工作目录名旁显示按钮。
    *  桌面注入 getHostApi().app.openFolder；扩展无原生文件管理器故不注入。 */
   onOpenFolder?: (projectPath: string) => void
 }
 
-export function FilesPanel({
-  onCreateNotebook,
-  notebookCaps,
-  onOpenFolder
-}: FilesPanelProps = {}): React.JSX.Element {
+export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const sessionId = useChatStore((s) => s.activeSessionId)
   const projectPath = useChatStore((s) => s.projectPath)
-  // 笔记本编辑器内 [[wiki-link]] 点击 → 请求在本面板打开目标文件预览
-  const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
 
   const [state, setState] = useState<ScanState | null>(null)
   const [error, setError] = useState<ScanError | null>(null)
@@ -87,11 +74,8 @@ export function FilesPanel({
   /** 搜索查询字符串。空字符串视作未触发搜索 */
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement | null>(null)
-  /** 预览状态：被选中的文件相对路径（相对当前 projectPath）；null = 未预览 */
-  const [previewRelPath, setPreviewRelPath] = useState<string | null>(null)
-  /** 媒体 dock 状态（音视频共享同一槽位）—— 与预览状态独立，让用户听/看的同时仍能浏览树。
-   *  音视频互斥：放新的会替换旧的；这与"一个文件预览面板只有一个 dock"的语义一致。
-   *  relPath 同时存一份：dock 上的"展开"按钮需要把它转回 previewRelPath 走覆盖预览。 */
+  /** 媒体 dock 状态（音视频共享同一槽位）—— 独立于文件预览，让用户听/看的同时仍能浏览树。
+   *  音视频互斥：放新的会替换旧的。absPath 供 dock 的「展开」按钮转投独立预览面板。 */
   const [playingMedia, setPlayingMedia] = useState<{
     absPath: string
     relPath: string
@@ -99,7 +83,8 @@ export function FilesPanel({
     fileName: string
     type: 'audio' | 'video'
   } | null>(null)
-  /** 暴露的 FilesTree model 句柄，关闭预览时用来取消 pierre 选中（否则再点同一文件不会触发） */
+  /** 暴露的 FilesTree model 句柄：点击文件发预览请求后立即取消 pierre 选中，
+   *  否则同一文件的再次点击不触发 onFileSelect（selection 未变化被短路） */
   const treeModelRef = useRef<FileTreeModel | null>(null)
 
   // 渲染层防抖：200ms 内的连续 onChanged 事件合并为一次重扫
@@ -152,10 +137,10 @@ export function FilesPanel({
     void scan() // eslint-disable-line react-hooks/set-state-in-effect
   }, [projectPath, refreshNonce, scan])
 
-  // 项目 / 会话切换时关闭预览 + 停止音频（避免读到旧会话工作目录里的文件）
+  // 项目 / 会话切换时停止音视频 dock（避免读到旧会话工作目录里的文件；
+  // 独立预览面板持自身 sessionId 快照，不在此关）
   useEffect(() => {
-    setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
-    setPlayingMedia(null)
+    setPlayingMedia(null) // eslint-disable-line react-hooks/set-state-in-effect
   }, [projectPath, sessionId])
 
   // 订阅文件变动事件（AppEvent 'files.changed'），按 root 过滤；防抖 200ms 后重扫。
@@ -249,14 +234,13 @@ export function FilesPanel({
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
         onFileSelect={(rel) => {
-          // 音频 / 视频：上底部 dock，文件树继续可见；
-          // 其它（含 .md，banner「创建笔记本」从预览顶栏进入）走预览覆盖层
+          if (!projectPath) return
           const ext = extOf(rel)
           const audioMime = AUDIO_MIME_BY_EXT[ext]
           const videoMime = VIDEO_MIME_BY_EXT[ext]
+          const abs = joinPath(projectPath, rel)
           if (audioMime || videoMime) {
-            if (!projectPath) return
-            const abs = joinPath(projectPath, rel)
+            // 音频 / 视频：上底部 dock，文件树继续可见
             const name = abs.split(/[/\\]/).pop() || abs
             setPlayingMedia({
               absPath: abs,
@@ -266,47 +250,17 @@ export function FilesPanel({
               type: audioMime ? 'audio' : 'video'
             })
           } else {
-            setPreviewRelPath(rel)
+            // 其它文件：发预览请求（宿主的独立预览面板承接展示）
+            useChatStore.getState().requestFilePreview(abs)
           }
+          // 立即取消 pierre 选中：不取消会卡 selectionVersion —— 再次点击同一文件
+          // #applySelection 短路（selection 未变），onFileSelect 不再触发
+          treeModelRef.current?.getItem(rel)?.deselect()
         }}
         modelOutRef={treeModelRef}
       />
     )
   }
-
-  /**
-   * 关闭预览：清掉本地状态 + 取消 pierre 树的选中。
-   * 不取消选中会卡 pierre 的 selectionVersion —— 再次点击同一文件 #applySelection
-   * 短路（selection 未变），useFileTreeSelection 不更新，预览无法重新打开。
-   */
-  const closePreview = useCallback(() => {
-    setPreviewRelPath((prev) => {
-      if (prev) treeModelRef.current?.getItem(prev)?.deselect()
-      return null
-    })
-  }, [])
-
-  // 文件被删时关闭预览（freshState.paths 已经经过 watcher 同步重扫）
-  useEffect(() => {
-    if (!previewRelPath || !freshState) return
-    if (!freshState.paths.includes(previewRelPath)) {
-      setPreviewRelPath(null) // eslint-disable-line react-hooks/set-state-in-effect
-    }
-  }, [freshState, previewRelPath])
-
-  // 笔记本 [[wiki-link]] 请求：在本面板打开目标文件预览（绝对路径在 projectPath 下才处理）。
-  // 含 nonce → 重复点击同一文件也触发；宿主负责打开右面板并切到 Files tab。
-  useEffect(() => {
-    if (!filePreviewRequest || !projectPath) return
-    const rel = relativize(projectPath, filePreviewRequest.absPath)
-    if (rel) setPreviewRelPath(rel) // eslint-disable-line react-hooks/set-state-in-effect
-  }, [filePreviewRequest, projectPath])
-
-  /** 把 pierre 树相对路径拼成宿主机绝对路径（不引 node:path，兼容 win 分隔符） */
-  const previewAbsPath =
-    previewRelPath && projectPath ? joinPath(projectPath, previewRelPath) : null
-  /** 预览的是否为 markdown —— 决定是否在预览顶栏显示「创建笔记本」按钮 */
-  const previewIsMarkdown = !!previewRelPath && MARKDOWN_EXTS.has(extOf(previewRelPath))
 
   const folderName = projectPath ? basename(projectPath) : ''
 
@@ -398,26 +352,9 @@ export function FilesPanel({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 pt-2 relative">
-        {content}
-        {previewAbsPath && sessionId && (
-          <div className="absolute inset-0 z-10 flex flex-col bg-bg-secondary">
-            <FilePreview
-              path={previewAbsPath}
-              sessionId={sessionId}
-              onClose={closePreview}
-              caps={notebookCaps}
-              onCreateNotebook={
-                previewIsMarkdown && onCreateNotebook
-                  ? () => onCreateNotebook({ path: previewAbsPath, sessionId })
-                  : undefined
-              }
-            />
-          </div>
-        )}
-      </div>
+      <div className="flex-1 min-h-0 pt-2 relative">{content}</div>
 
-      {/* 媒体 dock —— flex-shrink-0，与文件树并列垂直布局，不遮挡 */}
+      {/* 媒体 dock —— flex-shrink-0，与文件树并列垂直布局，不遮挡；「展开」转投独立预览面板 */}
       {playingMedia &&
         sessionId &&
         (playingMedia.type === 'audio' ? (
@@ -428,7 +365,7 @@ export function FilesPanel({
             sessionId={sessionId}
             onClose={() => setPlayingMedia(null)}
             onExpand={() => {
-              setPreviewRelPath(playingMedia.relPath)
+              useChatStore.getState().requestFilePreview(playingMedia.absPath)
               setPlayingMedia(null)
             }}
           />
@@ -442,139 +379,11 @@ export function FilesPanel({
             sessionId={sessionId}
             onClose={() => setPlayingMedia(null)}
             onExpand={() => {
-              setPreviewRelPath(playingMedia.relPath)
+              useChatStore.getState().requestFilePreview(playingMedia.absPath)
               setPlayingMedia(null)
             }}
           />
         ))}
     </div>
   )
-}
-
-/**
- * 树渲染容器
- * key 由父组件按 root 切换，保证不同工作目录间彻底重建模型；
- * 同一 root 下的增量更新通过 model.resetPaths 推送
- *
- * 搜索过滤完全走 controller.setSearch / closeSearch，不启用库内置的 search input UI
- */
-function FilesTree({
-  paths,
-  searchQuery,
-  onFileSelect,
-  modelOutRef
-}: {
-  paths: string[]
-  searchQuery: string
-  /** 用户点击文件行（不含目录）时回调，传相对路径 */
-  onFileSelect: (relPath: string) => void
-  /** 让父组件持有 model 引用，用于关闭预览时 deselect */
-  modelOutRef?: React.RefObject<FileTreeModel | null>
-}): React.JSX.Element {
-  // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
-  const onSelectRef = useRef(onFileSelect)
-  useEffect(() => {
-    onSelectRef.current = onFileSelect
-  }, [onFileSelect])
-
-  const { model } = useFileTree({
-    paths,
-    initialExpansion: 'closed',
-    dragAndDrop: false,
-    flattenEmptyDirectories: true,
-    // 紧凑布局，与侧边栏视觉密度对齐
-    density: 'compact',
-    itemHeight: 22
-  })
-
-  // 把 model 暴露给父组件 —— 关闭预览时父组件需要 deselect
-  useEffect(() => {
-    if (!modelOutRef) return
-    modelOutRef.current = model
-    return () => {
-      modelOutRef.current = null
-    }
-  }, [model, modelOutRef])
-
-  // 选择订阅 —— 不能用 useFileTree options 里的 onSelectionChange（pierre 只在 model
-  // 构造时消费一次）；也不用 useFileTreeSelection 包装（useSyncExternalStore 的订阅在
-  // mount 之后才挂上去，且内部 selector 每次渲染都是新函数会破坏其缓存，导致 workspace
-  // 切换后首次 click 偶发性丢失）。直接 model.subscribe 是最稳的路径：mount 即时挂载，
-  // pierre 内部已经吃掉 initial snapshot 不会回调一次空选区，关闭闭包变量 lastNotified
-  // 在 unmount 时随 cleanup 一起释放，无跨 mount 状态泄漏。
-  useEffect(() => {
-    let lastNotified: string | null = model.getSelectedPaths()[0] ?? null
-    const unsubscribe = model.subscribe(() => {
-      const p = model.getSelectedPaths()[0] ?? null
-      if (lastNotified === p) return
-      lastNotified = p
-      if (!p) return
-      const item = model.getItem(p)
-      // 目录交给树自身展开/收起，不进预览
-      if (!item || item.isDirectory()) return
-      onSelectRef.current(p)
-    })
-    return unsubscribe
-  }, [model])
-
-  // 首次挂载已经把 paths 传给了 useFileTree；后续 paths 变化通过 resetPaths 同步。
-  // resetPaths 是整树重建（选中有迁移逻辑，展开状态没有）—— 不带 initialExpandedPaths
-  // 会全部收起，因此重建前逐目录读出当前展开状态原样带过去。目录集合从新 paths 推导
-  // （已删除的目录无需保留；新增目录在旧模型里查不到句柄，自然跳过）。
-  const isFirst = useRef(true)
-  useEffect(() => {
-    if (isFirst.current) {
-      isFirst.current = false
-      return
-    }
-    const dirs = new Set<string>()
-    for (const p of paths) {
-      const segments = p.split('/')
-      for (let i = 1; i < segments.length; i++) {
-        dirs.add(`${segments.slice(0, i).join('/')}/`) // pierre 目录规范路径带尾斜杠
-      }
-    }
-    const expanded: string[] = []
-    for (const dir of dirs) {
-      const item = model.getItem(dir)
-      if (item && 'isExpanded' in item && item.isExpanded()) expanded.push(dir)
-    }
-    model.resetPaths(paths, { initialExpandedPaths: expanded })
-  }, [paths, model])
-
-  // 把外部搜索查询透传到 controller —— 空串视作关闭搜索
-  // 库内部在点击行时会强制 closeSearch（fileTreeRowClickPlan.js: closeSearch: isSearchOpen），
-  // 因此订阅 isOpen，一旦库自行关闭而我们仍有查询，立刻重新 setSearch 恢复过滤
-  const { isOpen: libraryIsOpen } = useFileTreeSearch(model)
-  useEffect(() => {
-    if (searchQuery) {
-      if (!libraryIsOpen) model.setSearch(searchQuery)
-      else if (model.getSearchValue() !== searchQuery) model.setSearch(searchQuery)
-    } else if (libraryIsOpen) {
-      model.closeSearch()
-    }
-  }, [searchQuery, libraryIsOpen, model])
-
-  // 把 ShuviX 主题 CSS 变量桥接到 @pierre/trees 的覆盖变量
-  // 字号 / 行高 / 横向内边距 进一步压缩，对齐侧边栏密度（text-[12px] + px-1.5 风格）
-  const treeStyle = {
-    height: '100%',
-    width: '100%',
-    // 颜色
-    '--trees-bg-override': 'var(--color-bg-secondary)',
-    '--trees-fg-override': 'var(--color-text-primary)',
-    '--trees-fg-muted-override': 'var(--color-text-secondary)',
-    '--trees-selected-bg-override': 'var(--color-bg-active)',
-    '--trees-border-color-override': 'var(--color-border-secondary)',
-    '--trees-accent-override': 'var(--color-accent)',
-    // 字体与字号 — 与侧边栏对齐
-    '--trees-font-size-override': '12px',
-    '--trees-font-family-override': 'inherit',
-    // 横向内边距 — 默认 16px 偏宽，压到 8px
-    '--trees-padding-inline-override': '8px',
-    // 缩进每层 12px，跟侧边栏 ml-1.5 / pl-0.5 相近
-    '--trees-level-gap-override': '12px'
-  } as React.CSSProperties
-
-  return <FileTree model={model} style={treeStyle} />
 }

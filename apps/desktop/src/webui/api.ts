@@ -114,6 +114,8 @@ export function createWebSessionChannelApi(): SessionChannelApi {
           method: 'POST',
           body: JSON.stringify({ text: p.text, images: p.images, inlineTokens: p.inlineTokens })
         }),
+      // 用户直发派发：渠道端无斜杠命令源（command.list 为空）→ 入口不可达，给类型正确的占位实现
+      dispatchPrompt: () => Promise.resolve({ success: false }),
       // 子代理：继续对话 / 销毁 / 中断 —— 接服务端 /subagent/* 路由（子会话进展走 WS 事件流）
       subAgentPrompt: (p) =>
         api(`/sessions/${SESSION_ID}/subagent/prompt`, {

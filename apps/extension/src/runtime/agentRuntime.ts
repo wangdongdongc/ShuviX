@@ -1,17 +1,18 @@
 /**
- * 浏览器 Agent 运行时 —— 用 @shuvix/agent-runtime 的 RuntimeSession 在 Side Panel 进程内
- * 驱动 pi-agent-core Agent。每个会话一个 RuntimeSession，事件经 eventBus 派发给 chat-ui。
+ * 浏览器 Agent 运行时 —— 用 @shuvix/agent-runtime 的 RuntimeAgent 在 Side Panel 进程内
+ * 驱动 pi-agent-core Agent。每个会话一个 RuntimeAgent，事件经 eventBus 派发给 chat-ui。
  *
  * 与桌面 AgentSession 的对应：这里是「扩展宿主 wrapper」，提供浏览器适配器（messageStore /
  * eventBus / chrome.storage 模型解析），并组装工具集（共享 ask + 已连接 MCP 工具）。
  */
 import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core'
 import {
-  RuntimeSession,
+  RuntimeAgent,
   SessionManager,
   createAskTool,
   createBrowserTool,
   resolveInitialThinkingLevel,
+  chatMessagesToAgentMessages,
   type RuntimeEventSink,
   type RuntimePersistence,
   type RuntimeLogger,
@@ -19,6 +20,7 @@ import {
 } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
+import type { SessionModelMetadata } from '@shuvix/chat-protocol/chatApi'
 import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
@@ -95,7 +97,7 @@ const logger: RuntimeLogger = {
  * 会话运行时生命周期由共享 SessionManager 托管（Map + 懒创建 + 失效/销毁）。
  * 构造经 buildRuntimeSession 注入（异步：FSA/OPFS + 历史恢复）；清理 dispose 销毁子代理 + 工具注册表。
  */
-const manager = new SessionManager<RuntimeSession>({
+const manager = new SessionManager<RuntimeAgent>({
   create: (sessionId) => buildRuntimeSession(sessionId),
   dispose: (sessionId) => {
     subAgentManager.destroyAll(sessionId)
@@ -103,19 +105,12 @@ const manager = new SessionManager<RuntimeSession>({
   }
 })
 
-/** 把已存历史的「文本轮次」恢复为 Agent 上下文（MVP：仅 user/assistant 文本，跳过工具/步骤） */
+/**
+ * 把已存历史恢复为 Agent 上下文 —— 共享全保真投影（@shuvix/agent-runtime transcript/，
+ * 与桌面同一实现）：文本 + thinking + 图片 + 工具轨迹；system_notify / step 不进上下文。
+ */
 export function restoreAgentMessages(msgs: ChatMessage[]): AgentMessage[] {
-  const out: AgentMessage[] = []
-  for (const m of msgs) {
-    if (m.type === 'text' && (m.role === 'user' || m.role === 'assistant') && m.content) {
-      out.push({
-        role: m.role,
-        content: [{ type: 'text', text: m.content }],
-        timestamp: m.createdAt
-      } as AgentMessage)
-    }
-  }
-  return out
+  return chatMessagesToAgentMessages(msgs)
 }
 
 export function capsFor(model: string): ModelCapabilities {
@@ -129,33 +124,39 @@ export function capsFor(model: string): ModelCapabilities {
 }
 
 /**
- * 解析会话的 provider/model/caps（**不创建 RuntimeSession**）—— 供 agent.init 同步元信息。
+ * 解析会话的 provider/model/caps（**不创建 RuntimeAgent**）—— 供 agent.init 同步元信息。
  * Agent 运行时延迟到首次发送消息（ensureRuntimeSession）才创建，故仅打开会话/笔记本不启动 Agent。
  */
 export async function resolveSessionMeta(sessionId: string): Promise<{
   provider: string
   model: string
   caps: ModelCapabilities
+  modelMetadata: SessionModelMetadata
 }> {
   const session = await sessionStore.getById(sessionId)
   await settingsStore.loadState()
   const def = settingsStore.getDefaultSelection()
   const provider = session?.provider || def.provider
   const model = session?.model || def.model
-  return { provider, model, caps: capsFor(model) }
+  return {
+    provider,
+    model,
+    caps: capsFor(model),
+    modelMetadata: session?.modelMetadata ?? {}
+  }
 }
 
-/** 取（或惰性创建）某会话的 RuntimeSession（懒创建经 SessionManager；session 异常时由 build 兜底默认模型） */
-export function ensureRuntimeSession(sessionId: string): Promise<RuntimeSession | undefined> {
+/** 取（或惰性创建）某会话的 RuntimeAgent（懒创建经 SessionManager；session 异常时由 build 兜底默认模型） */
+export function ensureRuntimeSession(sessionId: string): Promise<RuntimeAgent | undefined> {
   return manager.ensure(sessionId)
 }
 
 type RequestUserInput = (
-  req: Parameters<RuntimeSession['requestUserInput']>[0]
-) => ReturnType<RuntimeSession['requestUserInput']>
+  req: Parameters<RuntimeAgent['requestUserInput']>[0]
+) => ReturnType<RuntimeAgent['requestUserInput']>
 
 /**
- * 构建某会话的「基础工具集 + systemPrompt + 模型信息」（不含 Agent 派发工具、不建 RuntimeSession）。
+ * 构建某会话的「基础工具集 + systemPrompt + 模型信息」（不含 Agent 派发工具、不建 RuntimeAgent）。
  * 供 buildRuntimeSession（主会话）与笔记本一次性子智能体（chatApiAdapter.notebookPrompt）共用。
  * includeAsk=false 时不含 ask 工具（笔记本面板只读、无法应答交互式提问）。
  */
@@ -187,10 +188,10 @@ export async function buildSessionTools(
   let systemPrompt: string
   let spillSink: SpillSink
   const persona = await systemPromptStore.renderPersona({})
-  // 已启用的项目指令文件（AGENTS.md/CLAUDE.md）内容段，追加进系统提示（空 = 不注入，镜像桌面）
+  // 选中的项目指令文件（AGENTS.md/CLAUDE.md，至多一个）内容段，追加进系统提示（空 = 不注入，镜像桌面）
   const instructionSection = await buildInstructionPromptSection(
     sessionId,
-    session?.settings?.enabledInstructionFiles ?? []
+    session?.settings?.instructionFile
   )
   if (projectHandle) {
     fileTools = createFileTools(projectHandle, { requestUserInput: opts.requestUserInput })
@@ -210,19 +211,14 @@ export async function buildSessionTools(
     spillSink = createSpillSink(tempHandle)
   }
 
-  // 统一 browser 工具（multiplex，共享 @shuvix/agent-runtime）。mutating 操作的 autoApprove
-  // 门控仅交互式会话（includeAsk）启用——笔记本一次性子任务无审批 UI，按原行为透传。
-  // 门控读会话 settings.autoApprove（默认关 → 逐次确认）。
+  // 统一 browser 工具（multiplex，共享 @shuvix/agent-runtime）；无审批门控
   const browser = createBrowserTool({
     backend: extensionBrowserBackend,
-    approval: opts.includeAsk
-      ? {
-          isAutoApprove: () => sessionStore.getSettingsSync(sessionId).autoApprove === true,
-          requestUserInput: opts.requestUserInput
-        }
-      : undefined,
     abortError: 'TOOL_ABORTED'
   })
+
+  // git 工具（agent-runtime createGitTool + createFsaFsClient(会话根句柄), dir:'/'）已实现
+  // 但暂不进默认工具集，待后续规划启用 —— 装配写法见 git 历史。
 
   // hook 输入的 cwd（虚拟标签）：项目会话用文件夹名，临时会话用 'scratch'
   const cwd = projectHandle?.name ?? 'scratch'
@@ -243,18 +239,18 @@ export async function buildSessionTools(
   return { tools, systemPrompt, provider, model, caps, spillSink, cwd }
 }
 
-/** 构造某会话的 RuntimeSession（SessionManager.create 注入；已存在判断与入表由 manager 负责） */
-async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
+/** 构造某会话的 RuntimeAgent（SessionManager.create 注入；已存在判断与入表由 manager 负责） */
+async function buildRuntimeSession(sessionId: string): Promise<RuntimeAgent> {
   const session = await sessionStore.getById(sessionId)
   // eslint-disable-next-line prefer-const
-  let runtime: RuntimeSession
-  // 沙箱审批挂起原语（扩展夹内不弹，仅为将来越界能力预留）；runtime 后置赋值，闭包捕获
+  let runtime: RuntimeAgent
+  // 路径审批挂起原语（扩展夹内不弹，仅为将来越界能力预留）；runtime 后置赋值，闭包捕获
   const requestUserInput: RequestUserInput = (req) => runtime.requestUserInput(req)
   const parts = await buildSessionTools(sessionId, { requestUserInput, includeAsk: true })
 
-  // 注册本会话的工具（含 ask/浏览器/文件/MCP，不含 Agent 派发工具）——子代理经 resolveTools 复用
+  // 注册本会话的工具（含 ask/浏览器/文件/MCP，不含 Agent 派发工具）——派生 agent 经 resolveTools 复用
   registerSessionTools(sessionId, parts.tools)
-  // Agent 派发工具始终注入（resolveTools 已排除 Agent 防递归）+ 同一份 systemPrompt
+  // Agent 派发工具始终注入（派生 agent 在 resolveTools 里换成绑定自身身份的同款）+ 同一份 systemPrompt
   const tools = [
     ...parts.tools,
     ...wrapToolsOutput(
@@ -285,7 +281,7 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
     getApiKey: async (p) => (await settingsStore.getApiKey(p)) || undefined
   })
 
-  runtime = new RuntimeSession({
+  runtime = new RuntimeAgent({
     sessionId,
     agent,
     eventSink,
@@ -293,7 +289,7 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
     shouldDeferToolDisplay: (toolName) => toolName === 'ask',
     logger,
     // 统一生命周期 hook：注入扩展的 HookEngine（仅 builtin）；SessionStart/UserPromptSubmit/Stop
-    // 与桌面同源，由 RuntimeSession 触发
+    // 与桌面同源，由 RuntimeAgent 触发
     hooks: hookEngine,
     getCwd: () => parts.cwd
   })
@@ -308,7 +304,7 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeSession> {
   return runtime
 }
 
-export function getRuntimeSession(sessionId: string): RuntimeSession | undefined {
+export function getRuntimeSession(sessionId: string): RuntimeAgent | undefined {
   return manager.get(sessionId)
 }
 

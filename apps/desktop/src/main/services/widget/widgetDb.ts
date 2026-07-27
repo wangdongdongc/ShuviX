@@ -350,6 +350,19 @@ export async function applyWidgetSchema(widgetId: string, ddl: string): Promise<
   }
 }
 
+/**
+ * 删除 widget 时清掉它的整个 schema。
+ * 不清的话，下次有人复用同一个 id 会静默继承上一个 widget 的全部数据
+ * （schema 名由 id 推导，见 widgetIdToSchema）。失败仅记日志。
+ */
+export async function dropWidgetSchema(widgetId: string): Promise<void> {
+  const qSchema = quoteIdent(widgetIdToSchema(widgetId))
+  const { error } = await runExecute(`ROLLBACK;\nDROP SCHEMA IF EXISTS ${qSchema} CASCADE;`)
+  if (error) {
+    log.warn(`dropWidgetSchema(${widgetId}) failed: ${error}`)
+  }
+}
+
 // ────────────────────────── 调试 SQL（widget db-query） ──────────────────────────
 
 /**

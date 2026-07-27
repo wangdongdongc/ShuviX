@@ -10,16 +10,14 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BrowserToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type {
   BrowserBackend,
-  BrowserApprovalDeps,
   BrowserOpOutput,
   BrowserCaps,
   NavKind,
   ScrollDirection
 } from './backend'
 import { opsForCaps, type BrowserAction, type BrowserOpSpec, type BrowserParamKey } from './ops'
-import { gateBrowserOp } from './gate'
 import { buildBrowserHelp, helpTopicsForCaps } from './help'
-import { classifyCdpMethod } from './cdpPolicy'
+import { blockedCdpReason } from './cdpPolicy'
 
 export const BROWSER_TOOL_NAME = 'browser'
 
@@ -168,8 +166,6 @@ Rules:
 
 export interface CreateBrowserToolOptions {
   backend: BrowserBackend
-  /** 不传 = 不门控（无审批 UI 的运行路径，如笔记本一次性子任务） */
-  approval?: BrowserApprovalDeps
   /** abort 时抛出的错误文案（桌面 'Aborted'，扩展 'TOOL_ABORTED'）；默认 'Aborted' */
   abortError?: string
   /** 工具显示名（宿主可传本地化值）；默认 'Browser' */
@@ -271,7 +267,7 @@ async function dispatch(
 export function createBrowserTool(
   opts: CreateBrowserToolOptions
 ): AgentTool<TSchema, BrowserToolDetails> {
-  const { backend, approval, abortError = 'Aborted', label = 'Browser' } = opts
+  const { backend, abortError = 'Aborted', label = 'Browser' } = opts
   const specs = new Map(opsForCaps(backend.caps).map((s) => [s.name, s]))
 
   return {
@@ -279,7 +275,7 @@ export function createBrowserTool(
     label,
     description: buildBrowserToolDescription(backend.caps),
     parameters: buildBrowserParamsSchema(backend.caps),
-    async execute(toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<Result> {
+    async execute(_toolCallId: string, rawParams: unknown, signal?: AbortSignal): Promise<Result> {
       if (signal?.aborted) throw new Error(abortError)
       const params = rawParams as BrowserParams
       const action = params.action
@@ -309,32 +305,16 @@ export function createBrowserTool(
         return usageError(spec.name, '"url" is required for navigate (goto).', spec.usage)
       }
 
-      // 审批：静态 mutating 走 spec.mutating；cdp（dynamicGate）按 method 分类决定
-      let needsGate = spec.mutating
-      if (spec.dynamicGate && spec.name === 'cdp') {
-        const { cls, reason } = classifyCdpMethod(params.method!)
-        if (cls === 'blocked') {
+      // cdp 边界拦截：越出 tab 边界 / 绕过用户级安全设置的方法直接拒绝
+      if (spec.name === 'cdp') {
+        const reason = blockedCdpReason(params.method!)
+        if (reason) {
           return usageError(
             'cdp',
             `CDP method "${params.method}" is blocked: ${reason}.`,
             spec.usage
           )
         }
-        needsGate = cls === 'mutating'
-      }
-
-      if (needsGate && approval) {
-        const gated = await gateBrowserOp(
-          spec,
-          params as unknown as Record<string, unknown>,
-          approval,
-          {
-            toolCallId,
-            abortError
-          }
-        )
-        if (signal?.aborted) throw new Error(abortError)
-        if (gated) return toResult(spec.name, gated)
       }
 
       const out = await dispatch(backend, spec.name, params, signal)

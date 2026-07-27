@@ -9,6 +9,7 @@
  */
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 import type { FileSystemPort } from './port'
+import { parseImagePixelSize } from './imageSize'
 
 /** 文本整读上限：超过给 too-large 占位，不读字节 */
 export const PREVIEW_TEXT_MAX_BYTES = 2 * 1024 * 1024
@@ -16,6 +17,13 @@ export const PREVIEW_TEXT_MAX_BYTES = 2 * 1024 * 1024
 export const PREVIEW_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 /** Hex 视图只读取前 1 MiB —— 更大用户应换专门工具，预览面板只做“瞄一眼” */
 export const PREVIEW_HEX_MAX_BYTES = 1024 * 1024
+/** Office 整读 base64 上限：渲染端（docx-preview / SheetJS）同步解析，cap 防 UI 长冻结 */
+export const PREVIEW_OFFICE_MAX_BYTES = 15 * 1024 * 1024
+/**
+ * 电子书上限。比 Office 宽得多 —— 字节不经 IPC（渲染端自己按 URL 取），这里只挡住
+ * 解压后必然撑爆内存的量级；常规图文书 50–100MB 仍在范围内，超阈值的由渲染端成本门控接手。
+ */
+export const PREVIEW_EBOOK_MAX_BYTES = 200 * 1024 * 1024
 
 /** 支持作为图像返回的扩展名 → MIME 映射（含 .svg 单独处理） */
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
@@ -54,16 +62,39 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
 const HEX_VIEW_DENYLIST = new Set<string>(['.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.avi'])
 
 /**
- * Office / PDF 等富文本容器 —— 内容是二进制且 NULL 嗅探不一定识别（PDF 前 8KB 常无 NULL），
- * 显式列出走 binary 占位避免渲染成乱码。（.pdf 单独走 'pdf' kind 喂给 iframe，不在此集合。）
+ * 电子书 → 渲染端解析器路由。
+ * `.cbz` 走电子书而非归档占位 —— 它就是一包按序图片，逐页翻比 hex/占位有用得多。
+ * 刻意不含 .mobi/.azw3：它们的资源模型绕不开 blob: URL，而渲染器 CSP 不放行（见 ebookLoaders 注释）。
  */
-const RICH_BINARY_PREVIEW_EXTENSIONS = new Set<string>(['.doc', '.docx', '.xls', '.xlsx', '.pptx'])
+const EBOOK_KIND_BY_EXT: Record<string, 'epub' | 'fb2' | 'cbz'> = {
+  '.epub': 'epub',
+  '.fb2': 'fb2',
+  '.cbz': 'cbz'
+}
+
+/**
+ * Office 文档 → 浏览器端渲染库路由（'office' kind 的 officeKind 判定）：
+ * docx → docx-preview；sheet → SheetJS 自渲表格。两库均在渲染端懒加载。
+ */
+const OFFICE_KIND_BY_EXT: Record<string, 'docx' | 'sheet'> = {
+  '.docx': 'docx',
+  '.xlsx': 'sheet',
+  '.xlsm': 'sheet',
+  '.xls': 'sheet',
+  '.ods': 'sheet'
+}
+
+/**
+ * 无浏览器端渲染方案的富文档容器 —— 内容是二进制且 NULL 嗅探不一定识别，
+ * 显式列出走 binary 占位避免渲染成乱码。（.docx/.xlsx 等走 'office' kind 浏览器端渲染；
+ * .pdf 单独走 'pdf' kind 喂给 iframe，均不在此集合。）
+ */
+const RICH_BINARY_PREVIEW_EXTENSIONS = new Set<string>(['.doc', '.pptx'])
 
 /** 已知二进制扩展名 → hex view（文本渲染会乱码，但 hex 有可读价值：可执行/库/字体/数据库…） */
 const KNOWN_BINARY_EXTENSIONS = new Set<string>([
   '.ppt',
   '.odt',
-  '.ods',
   '.odp',
   '.rtf',
   '.exe',
@@ -252,7 +283,7 @@ async function readHexResult(
  * @param portPath    交给 port 的路径（桌面=绝对路径；扩展=相对句柄根）
  * @param displayPath 回填到结果里的路径（渲染端展示 / 拼媒体 URL 用；缺省同 portPath）
  *
- * 沙箱准入、工作目录解析由各宿主在调用前完成 —— 内核只做「已准入文件」的分类。
+ * 准入、工作目录解析由各宿主在调用前完成 —— 内核只做「已准入文件」的分类。
  */
 export async function previewFile(
   port: FileSystemPort,
@@ -307,10 +338,47 @@ export async function previewFile(
     const mimeType = ext === '.svg' ? 'image/svg+xml' : IMAGE_MIME_BY_EXT[ext]
     try {
       const bytes = size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, size)
+      // 像素尺寸从已读到的字节里顺带解析（只看文件头，零额外 I/O）；SVG 无固有像素尺寸，跳过
+      const pixels = ext === '.svg' ? null : parseImagePixelSize(bytes)
       return {
         kind: 'image',
         path: displayPath,
         mimeType,
+        dataBase64: bytesToBase64(bytes),
+        size,
+        ext,
+        pixelWidth: pixels?.width,
+        pixelHeight: pixels?.height
+      }
+    } catch (err) {
+      return {
+        kind: 'error',
+        path: displayPath,
+        message: err instanceof Error ? err.message : String(err)
+      }
+    }
+  }
+
+  // 电子书：只回元数据，字节由渲染端经 useMediaUrl 自取（见 'ebook' kind 注释）
+  const ebookKind = EBOOK_KIND_BY_EXT[ext]
+  if (ebookKind) {
+    if (size > PREVIEW_EBOOK_MAX_BYTES)
+      return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_EBOOK_MAX_BYTES }
+    return { kind: 'ebook', path: displayPath, ebookKind, size, ext }
+  }
+
+  // Office 文档（docx/xlsx/xlsm/xls/ods）：size cap 通过后整读 base64，
+  // 渲染端 OfficeView 懒加载 docx-preview / SheetJS 解析渲染
+  const officeKind = OFFICE_KIND_BY_EXT[ext]
+  if (officeKind) {
+    if (size > PREVIEW_OFFICE_MAX_BYTES)
+      return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_OFFICE_MAX_BYTES }
+    try {
+      const bytes = size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, size)
+      return {
+        kind: 'office',
+        path: displayPath,
+        officeKind,
         dataBase64: bytesToBase64(bytes),
         size,
         ext
@@ -324,7 +392,7 @@ export async function previewFile(
     }
   }
 
-  // Office / 归档 / 编码后媒体 —— hex 无价值，给 binary 占位
+  // 无渲染方案的富容器 / 归档 / 编码后媒体 —— hex 无价值，给 binary 占位
   if (RICH_BINARY_PREVIEW_EXTENSIONS.has(ext) || HEX_VIEW_DENYLIST.has(ext))
     return { kind: 'binary', path: displayPath, size, ext }
 

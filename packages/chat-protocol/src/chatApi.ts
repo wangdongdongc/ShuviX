@@ -52,7 +52,8 @@ export interface SessionSettings {
   autoApprove?: boolean
   allowList?: string[]
   telegramBotId?: string
-  enabledInstructionFiles?: string[]
+  /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
+  instructionFile?: string | null
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
 }
@@ -161,6 +162,40 @@ export interface AgentInitResult {
   enabledTools: string[]
 }
 
+/** Agent 运行时装载的单个工具（直接读自 agent.state.tools，与实际下发给 LLM 的一致） */
+export interface AgentRuntimeToolInfo {
+  name: string
+  label: string
+  /** 与发给 LLM 完全一致的工具描述 */
+  description: string
+  /** 参数名列表（来自参数 JSON Schema 的 properties） */
+  parameters: string[]
+}
+
+/**
+ * Agent 运行时信息快照 —— 由后端直接从**内存中的 Agent 对象**（agent.state）读取，
+ * 保证与实际请求 LLM 时使用的 systemPrompt / 工具集 / 模型零漂移。
+ * Agent 懒创建（首次发送消息时），未创建时 getInfo 返回 null。
+ */
+export interface AgentRuntimeInfo {
+  systemPrompt: string
+  model: {
+    provider: string
+    id: string
+    name: string
+    api: string
+    contextWindow: number
+    maxTokens: number
+    reasoning: boolean
+    input: string[]
+  }
+  thinkingLevel: ThinkingLevel
+  tools: AgentRuntimeToolInfo[]
+  /** Agent 内存上下文中的消息条数 */
+  messageCount: number
+  isStreaming: boolean
+}
+
 export interface ImageContentParam {
   type: 'image'
   data: string
@@ -184,6 +219,21 @@ export interface AgentNotebookPromptParams {
   text: string
   images?: ImageContentParam[]
   /** 前端展开的内联 Token（slash 命令 / skill 等）；后端解析为发给子代理的真实指令并供面板渲染标签 */
+  inlineTokens?: Record<string, InlineToken>
+}
+
+/**
+ * 用户直发派发（kind='agent' 的斜杠命令 `/<agentName> <prompt>`）：不经根 Agent 工具调用，
+ * 直接开启一个具名子智能体。不进主会话消息流（不落库）；子会话不带 parentToolCallId，
+ * 前端据此把它归入右侧 Sub-agent 面板（与笔记本会话同属「用户主动触发」语义）。
+ */
+export interface AgentDispatchPromptParams {
+  sessionId: string
+  /** 具名 agent（子代理注册表中的 name；kind='agent' 斜杠命令的 commandId 即此值） */
+  agentName: string
+  /** 派发给子智能体的任务文本（可含 at/paste 内联 Token 标记，后端解析真实文本） */
+  text: string
+  /** 前端展开的内联 Token（@ 引用 / 粘贴）；后端解析真实文本并随 register 广播供面板渲染 */
   inlineTokens?: Record<string, InlineToken>
 }
 
@@ -324,12 +374,6 @@ export interface SessionUpdateAutoApproveParams {
   autoApprove: boolean
 }
 
-export interface SessionAllowListAddParams {
-  id: string
-  toolType: 'bash' | 'ssh' | 'read' | 'write'
-  patterns: string[]
-}
-
 export interface SessionAllowListRemoveParams {
   id: string
   entry: string
@@ -392,12 +436,14 @@ export interface ToolInfo {
 export interface ToolPresentation {
   icon?: LucideIconName
   iconColor?: ThemeColor
-  summaryField?: string
   formItems?: Array<{
     field: string
     label?: string
-    renderer?: { type: 'code'; language?: string } | { type: 'text' }
+    renderer?:
+      | { type: 'code'; language?: string; wrap?: boolean; lineNumbers?: boolean }
+      | { type: 'text' }
   }>
+  showUndeclaredFields?: boolean
 }
 
 export interface SlashCommandInfo {
@@ -406,6 +452,10 @@ export interface SlashCommandInfo {
   description: string
   template: string
   filePath: string
+  /** 依赖的工具名（选中命令时自动启用这些工具） */
+  requiredTools?: string[]
+  /** 命令来源；'agent' 为子代理派发命令（前端走 agent.dispatchPrompt，不做模板展开） */
+  kind?: 'project' | 'skill' | 'agent'
 }
 
 /**
@@ -438,7 +488,7 @@ export interface BuiltinToolDefinition {
 //                         每个端（桌面 / WebUI / Telegram / 扩展）都实现。纯会话维度，
 //                         全部只读或发消息，**不含任何改配置 / 管理类能力**。
 //   HostApi            ── 应用级管理能力（provider / project / settings / mcp / pinChat /
-//                         update / config / compact，以及所有会改持久状态的方法）。
+//                         update / config，以及所有会改持久状态的方法）。
 //                         仅完整宿主（桌面）实现；渠道端取不到 → 相关 UI 自动隐藏。
 //   ChannelBindingApi  ── 宿主侧「把会话绑到哪些渠道」（见 ./channelBindingApi.ts）。桌面专属。
 //
@@ -461,6 +511,8 @@ export interface SessionChannelApi {
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
     /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，进展走事件流） */
     notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
+    /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体（fire-and-forget，进展走事件流） */
+    dispatchPrompt: (params: AgentDispatchPromptParams) => Promise<{ success: boolean }>
     /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，进展走事件流） */
     subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
     /** 销毁子会话：中止其 Agent 循环并从注册表移除（面板里彻底消失）。子代理基础能力，各端必须实现。 */
@@ -536,7 +588,7 @@ export interface SessionChannelApi {
 
 /**
  * 宿主应用级能力 —— 仅完整宿主（桌面）实现。
- * 含应用管理（provider/project/settings/mcp/pinChat/update/config/compact）
+ * 含应用管理（provider/project/settings/mcp/pinChat/update/config）
  * 以及一切会改持久状态的方法（会话配置 setter、消息写操作、文件回写、模型切换等）。
  * 渠道端取不到（getHostApi() 返回 null），对应 UI 自动隐藏。
  */
@@ -544,6 +596,8 @@ export interface HostApi {
   app: {
     openSettings: (tab?: string) => Promise<{ success: boolean }>
     openFolder: (folderPath: string) => Promise<{ success: boolean }>
+    /** 在系统文件管理器中定位并选中该文件（不同于 openFolder：会高亮文件本身） */
+    revealPath: (filePath: string) => Promise<{ success: boolean }>
     adjustWindowWidth: (delta: number) => Promise<void>
     setBrowserOffset: (offset: number) => Promise<void>
     windowReady: () => void
@@ -556,6 +610,8 @@ export interface HostApi {
     setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{
       success: boolean
     }>
+    /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
+    getInfo: (sessionId: string) => Promise<AgentRuntimeInfo | null>
   }
   provider: {
     listAll: () => Promise<ProviderInfo[]>
@@ -595,12 +651,7 @@ export interface HostApi {
     updateThinkingLevel: (params: SessionUpdateThinkingLevelParams) => Promise<{ success: boolean }>
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
     updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
-    previewAllowPatterns: (params: {
-      command: string
-      sessionId?: string
-      toolType?: 'bash' | 'ssh' | 'read' | 'write'
-    }) => Promise<string[]>
-    addAllowListPatterns: (params: SessionAllowListAddParams) => Promise<{ success: boolean }>
+    /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条审批） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
     generateTitle: (params: {
       sessionId: string
@@ -608,9 +659,10 @@ export interface HostApi {
     }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
     scanInstructionFiles: (sessionId: string) => Promise<InstructionFileEntry[]>
-    updateInstructionFiles: (params: {
+    /** 设置注入的指令文件（单选）；filename 为 null 表示不注入 */
+    updateInstructionFile: (params: {
       id: string
-      filenames: string[]
+      filename: string | null
     }) => Promise<{ success: boolean }>
   }
   message: {
@@ -664,6 +716,19 @@ export interface HostApi {
       path: string
       content: string
     }) => Promise<{ ok: true } | { ok: false; error: string }>
+    /**
+     * 二进制另存为：弹宿主的系统保存对话框（defaultPath 预填），用户确认后落盘。
+     * 落点由用户在对话框里当场指定，故不走工作目录准入 —— 与 widget 导出 zip 同一模型。
+     * 取不到 HostApi 的端（纯渠道 WebUI）由调用方退化为浏览器原生下载。
+     */
+    saveAs: (params: {
+      /** 建议保存路径（绝对路径，含文件名） */
+      defaultPath: string
+      /** 文件内容（base64） */
+      dataBase64: string
+    }) => Promise<
+      { ok: true; path: string } | { ok: false; canceled: true } | { ok: false; error: string }
+    >
   }
   /** MCP 客户端：服务器 CRUD + 连接控制 + 工具查询 */
   mcp: {
@@ -674,9 +739,6 @@ export interface HostApi {
     connect: (id: string) => Promise<{ success: boolean }>
     disconnect: (id: string) => Promise<{ success: boolean }>
     getTools: (id: string) => Promise<McpToolInfo[]>
-  }
-  compact: {
-    start: (sessionId: string) => Promise<unknown>
   }
   pinChat: {
     pin: (sessionId: string) => Promise<{ success: boolean }>

@@ -1,10 +1,9 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import { FilePen, FileText, ShieldAlert } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
-import { useChatStore } from '../../../stores/chatStore'
 import type { ApprovalInputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InputFormProps } from './types'
 import type { ApprovalDraft } from './drafts'
@@ -66,58 +65,19 @@ export function ApprovalForm({
   onSubmit
 }: InputFormProps<ApprovalInputRequest, ApprovalDraft>): React.JSX.Element {
   const { t } = useTranslation()
-  const { toolName, command, description, pathIsDirectory } = request
+  const { command, description, pathIsDirectory } = request
 
-  // 命令类(bash/ssh):显示拆解后的多个 patterns(后端拉取);
-  // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),显示单元素 [absolutePath];
-  // 简单类(浏览器操作等):command 不入 allowList,只展示文本 + Allow/Deny,无"记住"。
-  const isCommandApproval = toolName === 'bash' || toolName === 'ssh'
-  const isPathApproval = !isCommandApproval && /^(Read|Write)\(.+\)$/.test(command)
-  const isSimpleApproval = !isCommandApproval && !isPathApproval
-  // 「记住/始终允许」会持久化 allowList（宿主能力）：渠道端（无 HostApi）或简单审批一律隐藏
-  const canRemember = !!command && getHostApi() !== null && !isSimpleApproval
-
+  // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"整条路径。
+  // 命令类(bash/ssh)与简单类(浏览器操作等):不入 allowList —— 命令逐条审批,
+  //   免审批只能由会话级 autoApprove 开关整体打开(不再有命令模式记忆)。
   const pathApproval: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
-    if (!isPathApproval) return null
     const m = command.match(/^(Read|Write)\((.+)\)$/)
     if (!m) return null
     return { mode: m[1] === 'Read' ? 'read' : 'write', path: m[2] }
-  }, [isPathApproval, command])
+  }, [command])
 
-  // 待加入 allowList 的模式列表 — 渲染时即懒加载,无 Confirm 中间态
-  const [previewPatterns, setPreviewPatterns] = useState<string[] | null>(null)
-  const [loadingPatterns, setLoadingPatterns] = useState(false)
-
-  useEffect(() => {
-    if (!canRemember) return
-    // 路径类:同步派生
-    if (isPathApproval && pathApproval) {
-      setPreviewPatterns([pathApproval.path])
-      return
-    }
-    // 命令类:异步从后端拉取拆解后的 patterns
-    let cancelled = false
-    setLoadingPatterns(true)
-    void (async () => {
-      try {
-        const sessionId = useChatStore.getState().activeSessionId || undefined
-        const toolType = (toolName === 'ssh' ? 'ssh' : 'bash') as 'bash' | 'ssh'
-        const patterns =
-          (await getHostApi()?.session.previewAllowPatterns({
-            command,
-            sessionId,
-            toolType
-          })) ?? []
-        if (!cancelled) setPreviewPatterns(patterns)
-      } finally {
-        if (!cancelled) setLoadingPatterns(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canRemember, command, toolName])
+  // 「记住/始终允许」会持久化 allowList（宿主能力）：仅路径类,且需宿主提供 HostApi
+  const canRemember = pathApproval !== null && getHostApi() !== null
 
   /** 单次允许 — 立即提交,不写 allowList */
   const handleAllow = (): void => {
@@ -129,17 +89,14 @@ export function ApprovalForm({
     onSubmit({ kind: 'approval', approved: false })
   }
 
-  /** 允许并记住 — 立即提交,后端按 extra.rememberPattern 写入 allowList */
+  /** 允许并记住 — 立即提交,后端按 extra.rememberPath 写入 allowList */
   const handleAllowAndRemember = (): void => {
     onSubmit({
       kind: 'approval',
       approved: true,
-      extra: { rememberPattern: true }
+      extra: { rememberPath: true }
     })
   }
-
-  // 是否已有可记住的模式(空列表禁用"允许并记住"按钮)
-  const hasPatterns = previewPatterns !== null && previewPatterns.length > 0
 
   return (
     <div className="rounded-md border border-warning/30 bg-warning/5 overflow-hidden">
@@ -172,35 +129,10 @@ export function ApprovalForm({
         )}
       </div>
 
-      {/* 待记住的模式预览 — 当 canRemember 时始终展示,无中间确认态 */}
-      {canRemember && (
-        <div className="mx-2 mb-1.5 rounded border border-emerald-500/30 bg-emerald-500/5 p-1.5">
-          <p className="text-[10px] text-text-secondary font-medium mb-1">
-            {t('toolCall.patternsToAllow')}
-          </p>
-          {loadingPatterns ? (
-            <p className="text-[10px] text-text-tertiary italic">{t('toolCall.loadingPatterns')}</p>
-          ) : !hasPatterns ? (
-            <p className="text-[10px] text-text-tertiary italic">{t('toolCall.noPatternsLeft')}</p>
-          ) : (
-            <div className="flex flex-col gap-0.5 max-h-32 overflow-y-auto">
-              {previewPatterns!.map((pattern) => (
-                <div
-                  key={pattern}
-                  className="px-1.5 py-0.5 rounded bg-bg-primary/50 border border-border-secondary/40 text-[10px] font-mono text-text-primary break-all whitespace-pre-wrap leading-tight"
-                >
-                  {pattern}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* 操作栏 */}
       <div className="flex items-center gap-1 px-2 py-1 border-t border-border-secondary/40">
         {/* 目录路径:只显示"允许此目录" + Deny — 目录授权天然持久,不提供单次放行 */}
-        {!(isPathApproval && pathIsDirectory) && (
+        {!(pathApproval && pathIsDirectory) && (
           <button
             onClick={handleAllow}
             className="px-2.5 py-0.5 rounded text-[11px] font-medium bg-accent text-white hover:bg-accent/90 transition-colors"
@@ -211,12 +143,11 @@ export function ApprovalForm({
         {canRemember && (
           <button
             onClick={handleAllowAndRemember}
-            disabled={loadingPatterns || !hasPatterns}
-            className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
           >
-            {isPathApproval && pathIsDirectory
+            {pathIsDirectory
               ? t('toolCall.allowThisDirectory')
-              : t('toolCall.allowAndRemember')}
+              : t('toolCall.allowAndRememberPath')}
           </button>
         )}
         <button

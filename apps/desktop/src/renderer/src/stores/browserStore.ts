@@ -23,8 +23,8 @@ function syncBrowserOffset(offset: number): void {
 /** ChatView 容器的 data 属性，用于 DOM 测量 */
 export const CHAT_CONTAINER_ATTR = 'data-chat-container'
 
-/** 右侧面板激活的标签页 */
-export type PanelTab = 'browser' | 'terminal' | 'files' | 'widget' | 'subagent'
+/** 右侧面板激活的标签页（终端在底部栏，见 bottomPanelStore；Files/Sub-agent 在聊天区内的会话面板，见 sessionPanelStore） */
+export type PanelTab = 'browser' | 'preview' | 'widget'
 
 const BROWSER_MIN = 320
 const BROWSER_MAX = 960

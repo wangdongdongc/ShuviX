@@ -1,19 +1,26 @@
 /**
- * WidgetExporter —— 把 widget 目录导出成一个独立可运行的 Vite 项目。
+ * WidgetExporter —— 把 widget 目录打包成一个独立可运行的 Vite 工程 zip。
  *
- * 生成结构：
- *   <target>/
+ * 产出 <target>/<id>.zip，解压后得到：
+ *   <id>/
  *     package.json / vite.config.ts / tsconfig.json / tsconfig.node.json
- *     index.html / .gitignore / EXPORT_NOTES.md
+ *     index.html / EXPORT_NOTES.md
  *     src/index.css
- *     <widget 源文件原样拷贝，排除 widget.json>
+ *     <widget 源文件原样打包，排除 widget.json 与 .git / node_modules / 系统垃圾文件>
  *
- * 约束：目标目录必须不存在或为空；目标不能是 homedir / ~/.shuvix/ 内 / widget 源目录本身。
+ * 为什么是 zip 而不是直接铺目录：导出目标通常落在用户自己的工程里，直接铺文件会把
+ * widget 的 .git 变成嵌套仓库、并与目标目录已有文件混在一起；单文件产物边界清楚，
+ * 由用户显式解压。归档里带一层以 id 命名的顶层目录，解压不会散落到当前目录。
+ *
+ * 约束：目标 zip 不能落在 ~/.shuvix 内（widget 源目录本身也在其中）；默认不覆盖已有文件，
+ * 仅当调用方已就"这一个具体路径"取得用户确认时才允许覆盖（见 overwrite 参数）。
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, cpSync } from 'fs'
-import { dirname, join, resolve } from 'path'
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
+import { dirname, join, resolve, sep } from 'path'
 import { homedir } from 'os'
+import { zipSync, strToU8 } from 'fflate'
+import { writeFileAtomic } from '../../utils/atomicWrite'
 import { widgetService } from './widgetService'
 import { bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
@@ -23,9 +30,9 @@ const log = createLogger('WidgetExporter')
 
 export type WidgetExportErrorCode =
   | 'WIDGET_NOT_FOUND'
-  | 'TARGET_NOT_EMPTY'
+  | 'TARGET_EXISTS'
   | 'INVALID_PATH'
-  | 'COPY_FAILED'
+  | 'PACK_FAILED'
 
 export class WidgetExportError extends Error {
   constructor(
@@ -38,9 +45,16 @@ export class WidgetExportError extends Error {
 }
 
 export interface ExportWidgetResult {
-  filesWritten: string[]
-  targetPath: string
+  /** 生成的 zip 绝对路径 */
+  zipPath: string
+  /** 归档内文件条目数 */
+  entryCount: number
+  /** zip 字节数 */
+  byteSize: number
 }
+
+/** 任意层级都不进归档：版本库内部、依赖目录、系统垃圾文件 */
+const EXCLUDED_ANYWHERE = new Set(['.git', 'node_modules', '.DS_Store', 'Thumbs.db'])
 
 /** 可替换占位符集合 */
 interface Placeholders {
@@ -101,168 +115,138 @@ function getExportTemplateDir(): string {
 }
 
 /**
- * 导出 widget 为独立 Vite 项目。
- * 约定：调用方已完成 targetPath 的外部授权（UI 走 dialog、tool 走 assertSandboxWrite）
+ * 归一化导出目标为 zip 文件绝对路径：
+ *   以 .zip 结尾   → 就是该文件
+ *   其余（目录形态）→ <目录>/<id>.zip
+ *
+ * 调用方（CLI 准入校验）需要在真正导出前拿到同一个路径，故单独导出。
+ */
+export function resolveExportZipPath(widgetId: string, requestedTarget: string): string {
+  const abs = resolve(requestedTarget)
+  return /\.zip$/i.test(abs) ? abs : join(abs, `${widgetId}.zip`)
+}
+
+/**
+ * 导出 widget 为独立 Vite 工程 zip。
+ * 约定：调用方已完成目标路径的外部授权（UI 走 dialog、CLI 走准入校验）
  */
 export async function exportWidget(params: {
   id: string
   targetPath: string
+  /**
+   * 调用方已就"归一化后的这个路径"征得用户同意。UI 仅在保存对话框返回的路径就是最终
+   * 写入路径时才置 true（用户输了不带 .zip 的名字时最终路径是别的文件，对话框没问过它）；
+   * CLI 无确认通道，恒为 false。
+   */
+  overwrite?: boolean
 }): Promise<ExportWidgetResult> {
   const widget = widgetService.getById(params.id)
   if (!widget) {
     throw new WidgetExportError('WIDGET_NOT_FOUND', `Widget "${params.id}" not found.`)
   }
 
-  const targetPath = resolve(params.targetPath)
-  validateTargetPath(targetPath, widget.id)
+  const zipPath = resolveExportZipPath(widget.id, params.targetPath)
+  validateZipPath(zipPath)
 
-  const createdTarget = !existsSync(targetPath)
-  if (!createdTarget) {
-    const entries = readdirSync(targetPath)
-    if (entries.length > 0) {
-      throw new WidgetExportError(
-        'TARGET_NOT_EMPTY',
-        `Target directory is not empty: ${targetPath}. Please pick or create an empty folder.`
-      )
-    }
-  } else {
-    mkdirSync(targetPath, { recursive: true })
+  if (!params.overwrite && existsSync(zipPath)) {
+    throw new WidgetExportError(
+      'TARGET_EXISTS',
+      `A file already exists at ${zipPath}. Pick another path or remove it first.`
+    )
   }
 
-  const filesWritten: string[] = []
   try {
     const placeholders = buildPlaceholders(widget)
+    const files: Record<string, Uint8Array> = {}
+    // 归档内顶层目录 = widget id，解压即得一个完整工程目录
+    const rootDir = widget.id
 
-    // 1) 按模板目录递归写入生成文件（.tmpl 后缀 → 插值后去掉后缀）
-    writeTemplateTree(getExportTemplateDir(), targetPath, placeholders, filesWritten)
+    // 1) 模板树（.tmpl 插值后去掉后缀）
+    collectTemplateTree(getExportTemplateDir(), rootDir, placeholders, files)
+    // 2) widget 源文件叠加 —— 与模板同名时模板优先
+    collectWidgetSources(widgetService.getWidgetDir(widget.id), rootDir, files)
 
-    // 2) 拷贝 widget 源文件（排除 widget.json）—— 与模板文件若同名则模板不会被覆盖（cpSync 的 force:false）
-    const widgetDir = widgetService.getWidgetDir(widget.id)
-    copyWidgetSources(widgetDir, targetPath, filesWritten)
+    const archive = zipSync(files, { level: 6 })
+    mkdirSync(dirname(zipPath), { recursive: true })
+    // 原子写：中途失败不会在用户报告到的路径上留下一个截断的 zip
+    writeFileAtomic(zipPath, archive)
 
+    const entryCount = Object.keys(files).length
     log.info(
-      `Exported widget "${widget.id}" → ${targetPath} (${filesWritten.length} files written)`
+      `Exported widget "${widget.id}" → ${zipPath} (${entryCount} entries, ${archive.byteLength} bytes)`
     )
-    return { filesWritten, targetPath }
+    return { zipPath, entryCount, byteSize: archive.byteLength }
   } catch (err) {
     if (err instanceof WidgetExportError) throw err
-    // 本次创建的目录失败则清理；用户预先选的目录不动
-    if (createdTarget) {
-      try {
-        rmSync(targetPath, { recursive: true, force: true })
-      } catch (cleanupErr) {
-        log.warn(`Cleanup failed for ${targetPath}:`, cleanupErr)
-      }
-    }
     const msg = err instanceof Error ? err.message : String(err)
-    throw new WidgetExportError('COPY_FAILED', `Export failed: ${msg}`)
+    throw new WidgetExportError('PACK_FAILED', `Export failed: ${msg}`)
   }
 }
 
-/** 禁止 target 指向敏感目录或 widget 源目录本身 */
-function validateTargetPath(targetPath: string, widgetId: string): void {
-  const home = resolve(homedir())
+/** 禁止把归档写进 ShuviX 数据目录（widget 源目录本身也在其中） */
+function validateZipPath(zipPath: string): void {
   const shuvix = resolve(join(homedir(), '.shuvix'))
-  const widgetDir = resolve(widgetService.getWidgetDir(widgetId))
-
-  if (targetPath === home) {
-    throw new WidgetExportError('INVALID_PATH', 'Target path cannot be the home directory.')
-  }
-  if (
-    targetPath === shuvix ||
-    targetPath.startsWith(shuvix + '/') ||
-    targetPath.startsWith(shuvix + '\\')
-  ) {
+  if (zipPath === shuvix || zipPath.startsWith(shuvix + sep)) {
     throw new WidgetExportError(
       'INVALID_PATH',
       `Target path cannot be inside the ShuviX data directory (${shuvix}).`
     )
   }
-  if (
-    targetPath === widgetDir ||
-    targetPath.startsWith(widgetDir + '/') ||
-    targetPath.startsWith(widgetDir + '\\')
-  ) {
-    throw new WidgetExportError(
-      'INVALID_PATH',
-      'Target path cannot be inside the widget source directory itself.'
-    )
-  }
 }
 
 /**
- * 递归处理模板目录：
- *   foo.tmpl  → 读取内容 → 插值 → 写入 foo（去掉 .tmpl 后缀）
- *   foo       → 原样写入（二进制安全地用 Buffer 读写）
- *   子目录    → 递归
+ * 递归收集模板目录到归档条目：
+ *   foo.tmpl → 插值后以 foo 入档
+ *   foo      → 原样入档（二进制安全）
+ * zipDir 一律用 '/' 拼接 —— zip 内部路径分隔符与平台无关。
  */
-function writeTemplateTree(
+function collectTemplateTree(
   templateRoot: string,
-  targetRoot: string,
+  zipDir: string,
   placeholders: Placeholders,
-  filesWritten: string[]
+  files: Record<string, Uint8Array>
 ): void {
-  const entries = readdirSync(templateRoot, { withFileTypes: true })
-  for (const entry of entries) {
+  for (const entry of readdirSync(templateRoot, { withFileTypes: true })) {
     const srcPath = join(templateRoot, entry.name)
     if (entry.isDirectory()) {
-      const destDir = join(targetRoot, entry.name)
-      mkdirSync(destDir, { recursive: true })
-      writeTemplateTree(srcPath, destDir, placeholders, filesWritten)
+      collectTemplateTree(srcPath, `${zipDir}/${entry.name}`, placeholders, files)
       continue
     }
+    if (!entry.isFile()) continue
     const isTmpl = entry.name.endsWith('.tmpl')
     const destName = isTmpl ? entry.name.slice(0, -'.tmpl'.length) : entry.name
-    const destPath = join(targetRoot, destName)
-    mkdirSync(dirname(destPath), { recursive: true })
-    if (isTmpl) {
-      const raw = readFileSync(srcPath, 'utf-8')
-      writeFileSync(destPath, interpolate(raw, placeholders), 'utf-8')
-    } else {
-      // 非模板文件原样拷贝（支持二进制）
-      cpSync(srcPath, destPath, { force: false })
-    }
-    filesWritten.push(destName)
+    files[`${zipDir}/${destName}`] = isTmpl
+      ? strToU8(interpolate(readFileSync(srcPath, 'utf-8'), placeholders))
+      : new Uint8Array(readFileSync(srcPath))
   }
 }
 
 /**
- * 把 widget 源目录合并到 target：
- *   - 排除 widget.json
- *   - 不覆盖模板已生成的文件
- *   - 子目录递归合并（两边都有 src/ 时只补差异）
+ * 递归收集 widget 源文件到归档条目：
+ *   - 根目录的 widget.json 不入档（元数据由 ShuviX 维护，导出后无意义）
+ *   - .git / node_modules / 系统垃圾文件任意层级都不入档
+ *   - 与模板生成的同名文件冲突时模板优先
+ *   - 非普通文件/目录（符号链接等）跳过
  */
-function copyWidgetSources(widgetDir: string, targetDir: string, filesWritten: string[]): void {
-  mergeCopy(widgetDir, targetDir, filesWritten, '', (relPath) => {
-    // 根目录下的 widget.json 永不拷贝
-    return relPath === 'widget.json'
-  })
-}
-
-function mergeCopy(
-  srcRoot: string,
-  destRoot: string,
-  filesWritten: string[],
-  relDir: string,
-  skip: (relPath: string) => boolean
+function collectWidgetSources(
+  widgetDir: string,
+  rootDir: string,
+  files: Record<string, Uint8Array>
 ): void {
-  const srcDir = join(srcRoot, relDir)
-  const destDir = join(destRoot, relDir)
-  const entries = readdirSync(srcDir, { withFileTypes: true })
-  for (const entry of entries) {
-    const relPath = relDir ? join(relDir, entry.name) : entry.name
-    if (skip(relPath)) continue
-    const srcPath = join(srcDir, entry.name)
-    const destPath = join(destDir, entry.name)
-    if (entry.isDirectory()) {
-      if (!existsSync(destPath)) {
-        mkdirSync(destPath, { recursive: true })
+  const walk = (absDir: string, zipDir: string, isRoot: boolean): void => {
+    for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+      if (EXCLUDED_ANYWHERE.has(entry.name)) continue
+      if (isRoot && entry.name === 'widget.json') continue
+      const absPath = join(absDir, entry.name)
+      const key = `${zipDir}/${entry.name}`
+      if (entry.isDirectory()) {
+        walk(absPath, key, false)
+        continue
       }
-      mergeCopy(srcRoot, destRoot, filesWritten, relPath, skip)
-    } else {
-      if (existsSync(destPath)) continue // 不覆盖模板已生成的文件
-      cpSync(srcPath, destPath, { force: false })
-      filesWritten.push(relPath)
+      if (!entry.isFile()) continue
+      if (files[key] !== undefined) continue // 模板已生成，不被源文件覆盖
+      files[key] = new Uint8Array(readFileSync(absPath))
     }
   }
+  walk(widgetDir, rootDir, true)
 }

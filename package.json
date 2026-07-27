@@ -7,6 +7,9 @@
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
   "scripts": {
     "dev": "npm run dev -w shuvix",
     "build": "npm run build -w shuvix",

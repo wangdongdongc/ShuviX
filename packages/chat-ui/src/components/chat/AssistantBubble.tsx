@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -18,9 +18,10 @@ import {
 import { SystemNoticeCard } from './SystemNoticeCard'
 import { copyToClipboard } from '../../utils/clipboard'
 import { ProviderIcon } from '../settings/ProviderIcons'
-import { CodeBlock } from './CodeBlock'
+import { markdownComponents } from './markdownComponents'
 import { StepBlock } from './StepBlock'
-import { ToolCallBlock } from './ToolCallBlock'
+import { ToolCallBlock, ToolCallGroup } from './ToolCallBlock'
+import { groupConsecutiveToolCalls } from './stepGrouping'
 import {
   useChatStore,
   selectStreamingContent,
@@ -70,6 +71,12 @@ export const AssistantBubble = memo(function AssistantBubble({
   )
   const sessionModel = useChatStore(
     (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.model ?? ''
+  )
+
+  // 相邻的同名成功调用合并为一行 + 次数，其余步骤原样透传
+  const stepGroups = useMemo(
+    () => groupConsecutiveToolCalls((steps ?? []).map((s) => s.msg)),
+    [steps]
   )
 
   const displayContent = isStreaming ? storeStreamingContent : msg.content
@@ -150,67 +157,82 @@ export const AssistantBubble = memo(function AssistantBubble({
           )}
         </div>
 
-        {/* 步骤 */}
-        {steps && steps.length > 0 && (
-          <div className="mb-0.5 space-y-0.5">
-            {steps.map((step) => {
-              if (step.msg.type === 'steer') {
-                return <StepBlock key={step.msg.id} message={step.msg} />
-              }
-              if (step.msg.type === 'step_text') {
-                return (
-                  <div key={step.msg.id} className="markdown-body text-sm">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      rehypePlugins={[rehypeHighlight, rehypeRaw]}
-                      components={{ pre: CodeBlock as never }}
-                    >
-                      {step.msg.content}
-                    </ReactMarkdown>
-                  </div>
-                )
-              }
-              if (step.msg.type === 'step_thinking') {
-                return <StepBlock key={step.msg.id} message={step.msg} />
-              }
-              if (step.msg.type === 'tool_use') {
-                const meta = step.msg.metadata
-                const toolName = meta?.toolName || ''
-                const status = step.msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
-                return (
-                  <ToolCallBlock
-                    key={step.msg.id}
-                    toolName={toolName}
-                    toolCallId={meta?.toolCallId}
-                    args={meta?.args}
-                    result={step.msg.content || undefined}
-                    details={meta?.details}
-                    status={status}
-                  />
-                )
-              }
-              return null
-            })}
-          </div>
-        )}
-
-        {/* 思考过程 — 统一使用 StepBlock，默认折叠 */}
-        {thinking && (
-          <StepBlock
-            message={{
-              id: 'streaming-thinking',
-              sessionId: msg.sessionId,
-              role: 'assistant' as const,
-              type: 'step_thinking' as const,
-              content: thinking,
-              metadata: null,
-              model: msg.model,
-              createdAt: msg.createdAt
-            }}
-            isGenerating={
-              isStreaming && !!storeStreamingThinking && !displayContent && !streamingToolCall
+        {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
+            （不用左侧竖轴：那会再吃掉一列缩进） */}
+        {(stepGroups.length > 0 || thinking) && (
+          <div
+            className={
+              displayContent ? 'mb-2.5 pb-2 border-b border-border-secondary/40' : 'mb-0.5'
             }
-          />
+          >
+            {stepGroups.length > 0 && (
+              <div className="space-y-0.5">
+                {stepGroups.map((group) => {
+                  if (group.kind === 'toolGroup') {
+                    return (
+                      <ToolCallGroup key={group.key} toolName={group.toolName} msgs={group.msgs} />
+                    )
+                  }
+                  const step = group.msg
+                  if (step.type === 'steer') {
+                    return <StepBlock key={step.id} message={step} />
+                  }
+                  if (step.type === 'step_text') {
+                    return (
+                      <div key={step.id} className="markdown-body text-sm">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                          components={markdownComponents}
+                        >
+                          {step.content}
+                        </ReactMarkdown>
+                      </div>
+                    )
+                  }
+                  if (step.type === 'step_thinking') {
+                    return <StepBlock key={step.id} message={step} />
+                  }
+                  if (step.type === 'tool_use') {
+                    const meta = step.metadata
+                    const toolName = meta?.toolName || ''
+                    const status = step.content ? (meta?.isError ? 'error' : 'done') : 'running'
+                    return (
+                      <ToolCallBlock
+                        key={step.id}
+                        toolName={toolName}
+                        toolCallId={meta?.toolCallId}
+                        args={meta?.args}
+                        result={step.content || undefined}
+                        details={meta?.details}
+                        status={status}
+                      />
+                    )
+                  }
+                  return null
+                })}
+              </div>
+            )}
+
+            {/* 思考过程 — 统一使用 StepBlock，默认折叠 */}
+            {thinking && (
+              <StepBlock
+                message={{
+                  id: 'streaming-thinking',
+                  sessionId: msg.sessionId,
+                  role: 'assistant' as const,
+                  type: 'step_thinking' as const,
+                  content: thinking,
+                  metadata: null,
+                  model: msg.model,
+                  createdAt: msg.createdAt
+                }}
+                isGenerating={
+                  isStreaming && !!storeStreamingThinking && !displayContent && !streamingToolCall
+                }
+              />
+            )}
+          </div>
         )}
 
         {/* Markdown / 原始文本 */}
@@ -230,9 +252,7 @@ export const AssistantBubble = memo(function AssistantBubble({
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight, rehypeRaw]}
-                components={{
-                  pre: CodeBlock as never
-                }}
+                components={markdownComponents}
               >
                 {displayContent}
               </ReactMarkdown>

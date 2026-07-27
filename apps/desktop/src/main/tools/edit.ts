@@ -1,6 +1,6 @@
 /**
  * Edit 工具（桌面注册）—— 整条执行流程复用共享 createFileToolSuite，
- * 仅注入桌面端适配（Node fs / fileTime / 绝对路径 / SQLite SandboxPolicy，见 fileToolDeps）。
+ * 仅注入桌面端适配（Node fs / fileTime / 绝对路径 / SQLite ApprovalPolicy，见 fileToolDeps）。
  */
 import { createFileToolSuite, EditParamsSchema } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
