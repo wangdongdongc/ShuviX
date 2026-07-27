@@ -140,16 +140,32 @@ describe('loadConfigFile', () => {
 })
 
 describe('watchHookFiles', () => {
-  function waitForChange(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const start = Date.now()
-      const tick = (): void => {
-        if (predicate()) return resolve()
-        if (Date.now() - start > timeoutMs) return reject(new Error('timeout waiting for change'))
-        setTimeout(tick, 50)
+  /**
+   * 反复写入目标文件，直到 watcher 把变更报上来。
+   *
+   * 为什么要重试而不是「等久一点」：chokidar 监听**尚不存在**的文件时，会在父目录监听
+   * 真正装好之前就 emit ready（实测 ready 仅耗 0–1ms），紧随其后的首次写入约有 1/14 的
+   * 概率整个丢掉事件。而事件一旦送达恒定在 ~114ms —— 也就是说这不是「慢」，加超时预算
+   * 毫无用处（原来 12s 的预算照样挂）。重试让用例对这段装配窗口免疫，断言强度不变：
+   * 验证的仍然是「watcher 会把文件变更报上来」。
+   */
+  async function writeUntilObserved(
+    file: string,
+    content: string,
+    observed: () => boolean,
+    timeoutMs = 8000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      writeFileSync(file, content)
+      // 单轮等待要盖过 awaitWriteFinish 的 stabilityThreshold(100ms) + 去抖，留足余量
+      const until = Date.now() + 500
+      while (Date.now() < until) {
+        if (observed()) return
+        await new Promise((r) => setTimeout(r, 25))
       }
-      tick()
-    })
+    }
+    throw new Error('timeout waiting for watcher to observe the file')
   }
 
   it('reload() reflects new file contents', () => {
@@ -218,15 +234,15 @@ describe('watchHookFiles', () => {
     // 初扫窗口内创建的文件会被 ignoreInitial 吞掉（无事件）→ 必须等 ready 后再创建
     await w.ready
 
-    writeFileSync(
+    await writeUntilObserved(
       f,
       JSON.stringify({
         hooks: { Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'log' }] }] }
-      })
+      }),
+      () => changeCount > 0
     )
-    // 真实 fs 事件链（chokidar ready + fsevents + awaitWriteFinish）在全量并发下可达数秒 → 放宽预算
-    await waitForChange(() => changeCount > 0, 12000)
     expect(w.getLoaded().get('project')?.status.ok).toBe(true)
+    expect(w.getLoaded().get('project')?.groups.has('Stop')).toBe(true)
     await w.close()
   }, 15000)
 })
