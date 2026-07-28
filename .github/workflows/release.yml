@@ -45,7 +45,16 @@ jobs:
         run: node .github/scripts/check-lockfile-natives.mjs
 
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        # npm ci 拉 tarball 偶发 ECONNRESET（windows runner 尤其明显），重试 3 次。
+        # npm ci 每次都会先清空 node_modules，重试是幂等的。
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci 第 $i 次失败，10s 后重试"
+            sleep 10
+          done
+          exit 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -213,7 +222,11 @@ jobs:
 
               # npm ci 在 workspace 根安装；构建命令在 apps/desktop 跑（配置在那里）
               node .github/scripts/check-lockfile-natives.mjs
-              npm ci
+              retry npm ci
+              # 装完再验一遍 glibc：构建期工具链的预编译二进制是上游打的，
+              # 上游换构建机就可能抬高门槛（rollup 4.62.3 即从 2.14 跳到 2.34），
+              # 这里是 glibc 2.31 容器，不拦住就要等 electron-vite build 才炸。
+              node .github/scripts/check-glibc-compat.mjs
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
@@ -251,7 +264,14 @@ jobs:
         run: node .github/scripts/check-lockfile-natives.mjs
 
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci 第 $i 次失败，10s 后重试"
+            sleep 10
+          done
+          exit 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

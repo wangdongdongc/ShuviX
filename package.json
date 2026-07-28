@@ -10,7 +10,8 @@
   "overrides": {
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "eslint-plugin-react-hooks": "7.0.1",
-    "prettier": "3.8.1"
+    "prettier": "3.8.1",
+    "rollup": "4.62.2"
   },
   "devDependencies": {
     "eslint-plugin-react-hooks": "7.0.1",
