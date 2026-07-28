@@ -39,6 +39,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # npm ci 严格按 lockfile 安装，lockfile 里被剪掉的原生依赖不会被补装，
+      # 要等到 vite/electron-vite build 才炸。提前校验，报错更直白。
+      - name: Verify lockfile native deps
+        run: node .github/scripts/check-lockfile-natives.mjs
+
       - name: Install dependencies
         run: npm ci
         env:
@@ -207,6 +212,7 @@ jobs:
               apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
 
               # npm ci 在 workspace 根安装；构建命令在 apps/desktop 跑（配置在那里）
+              node .github/scripts/check-lockfile-natives.mjs
               npm ci
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
@@ -240,6 +246,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Verify lockfile native deps
+        run: node .github/scripts/check-lockfile-natives.mjs
 
       - name: Install dependencies
         run: npm ci

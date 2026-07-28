@@ -8,7 +8,13 @@
     "packages/*"
   ],
   "overrides": {
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "prettier": "3.8.1"
+  },
+  "devDependencies": {
+    "eslint-plugin-react-hooks": "7.0.1",
+    "prettier": "3.8.1"
   },
   "scripts": {
     "dev": "npm run dev -w shuvix",

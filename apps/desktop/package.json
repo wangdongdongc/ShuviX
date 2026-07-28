@@ -92,6 +92,7 @@
     "rehype-highlight": "^7.0.2",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
+    "socks": "^2.8.7",
     "ssh2": "^1.17.0",
     "typebox": "^1.1.37",
     "uuid": "^13.0.0",

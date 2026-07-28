@@ -5,7 +5,7 @@
  *  - providerInfo 由宿主通过参数传入（替代 providerDao.findById）
  *  - apiKey 注入走 RuntimeEnv.setApiKey（替代直接写 process.env；浏览器宿主 no-op）
  */
-import type { Model, Api, KnownProvider } from '@earendil-works/pi-ai'
+import type { Model, Api } from '@earendil-works/pi-ai'
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
@@ -120,7 +120,9 @@ export function resolveModel(params: ResolveModelParams): Model<Api> {
 
   let resolvedModel: Model<Api>
   const piModel = getBuiltinModel(
-    slug as KnownProvider,
+    // 不能用 KnownProvider：pi-ai 的 KnownProvider 比 getBuiltinModel 实际接受的
+    // provider 联合更宽（如 'radius'），直接取形参类型才不会漂移。
+    slug as Parameters<typeof getBuiltinModel>[0],
     model as Parameters<typeof getBuiltinModel>[1]
   )
   if (piModel) {

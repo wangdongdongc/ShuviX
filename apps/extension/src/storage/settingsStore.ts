@@ -16,7 +16,6 @@ import type {
 } from '@shuvix/chat-protocol/types/provider'
 import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
 import { fetchProviderModels } from '@shuvix/chat-protocol/utils/providerModels'
-import type { KnownProvider } from '@earendil-works/pi-ai'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { encryptSecret, decryptSecret } from './secretCrypto'
 import { appEventBus } from '../runtime/appEventBus'
@@ -419,7 +418,9 @@ export const settingsStore = {
     providerId: string
   ): Promise<{ providerId: string; total: number; added: number }> {
     await this.loadState()
-    const piModels = getBuiltinModels(providerId as KnownProvider) ?? []
+    // 不能用 KnownProvider：pi-ai 的 KnownProvider 比 getBuiltinModels 实际接受的
+    // provider 联合更宽（如 'radius'），直接取形参类型才不会漂移。
+    const piModels = getBuiltinModels(providerId as Parameters<typeof getBuiltinModels>[0]) ?? []
     const list = models[providerId] ?? []
     const byId = new Map(list.map((m) => [m.modelId, m]))
     let added = 0
