@@ -55,6 +55,17 @@ const systemTag = `2.${systemGlibc.split('.')[1]}`
 console.log(`系统 glibc: ${systemGlibc}`)
 
 // 递归收集 .node 二进制
+// 只看「从 npm 下载的预编译平台包」——包名里带 <os>-<cpu> 的那一类
+// （@rollup/rollup-linux-x64-gnu、@tailwindcss/oxide-linux-x64-gnu、lightningcss-linux-x64-gnu …）。
+// 它们由上游打好二进制直接分发，glibc 门槛不对就只能靠 overrides 钉版本，正是要拦的场景。
+//
+// 反过来，better-sqlite3 / node-pty 这类**本地编译**的原生模块必须排除：
+// npm ci 阶段 prebuild-install 拉下来的是 Node ABI 预编译件（可能是在更新的 glibc 上打的），
+// 但 electron-builder 配了 npmRebuild + buildDependenciesFromSource，打包时会在本容器里
+// 用容器自己的 glibc 从源码重编，那个临时件根本不会进产物。扫它只会误报。
+// --target 只为自测用（CI 里不传，默认就是当前平台）
+const platformToken = argOf('target', `${process.platform}-${process.arch}`)
+
 const binaries = []
 const walk = (dir, depth = 0) => {
   if (depth > 8) return
@@ -67,7 +78,9 @@ const walk = (dir, depth = 0) => {
   for (const e of entries) {
     const full = path.join(dir, e.name)
     if (e.isDirectory()) walk(full, depth + 1)
-    else if (e.isFile() && e.name.endsWith('.node')) binaries.push(full)
+    else if (e.isFile() && e.name.endsWith('.node') && full.includes(platformToken)) {
+      binaries.push(full)
+    }
   }
 }
 walk(scanRoot)
