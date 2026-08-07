@@ -42,6 +42,15 @@ export class SessionManager<T> {
     return this.sessions.has(sessionId)
   }
 
+  /**
+   * 实例已存在**或正在创建中**。
+   * 供宿主的资源钉住判定（如会话树缓存的逐出保护）—— 创建中的实例已经持有了
+   * 底层资源引用，只看 `has()` 会在创建窗口内误判为可回收。
+   */
+  tracked(sessionId: string): boolean {
+    return this.sessions.has(sessionId) || this.pending.has(sessionId)
+  }
+
   /** 取（或懒创建）运行时实例。会话不存在/创建失败返回 undefined。 */
   async ensure(sessionId: string): Promise<T | undefined> {
     const existing = this.sessions.get(sessionId)

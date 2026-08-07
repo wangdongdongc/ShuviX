@@ -52,8 +52,8 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     if (!host) return // 渠道端只读：不可回退历史
     const rollbackContent = target.content
     const rollbackTokens = target.metadata?.inlineTokens
-    // 删除该用户消息及之后的所有消息
-    await host.message.deleteFrom({
+    // 会话树回退到该用户消息之前（append-only：旧分支保留在树上）
+    await host.message.rollback({
       sessionId: activeSessionId,
       messageId: pendingRollbackId
     })
@@ -93,8 +93,8 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       if (!userMsgId) return
       const host = getHostApi()
       if (!host) return // 渠道端只读：不可重新生成（会删历史）
-      // 删除用户消息及之后的所有消息
-      await host.message.deleteFrom({ sessionId: activeSessionId, messageId: userMsgId })
+      // 会话树回退到该用户消息之前
+      await host.message.rollback({ sessionId: activeSessionId, messageId: userMsgId })
       // 重新拉取消息 + 重建 Agent
       const msgs = await getSessionChannelApi().message.list(activeSessionId)
       store.setMessages(msgs)

@@ -403,6 +403,42 @@ export const migrations: Migration[] = [
       //   - lastOpenedAt      → 卡片排序退回按创建时间
       db.exec(`DROP TABLE IF EXISTS widgets`)
     }
+  },
+  {
+    version: 14,
+    description:
+      '会话转写迁出数据库：改由 pi AgentHarness 的 JSONL 会话树承载（<userData>/data/sessions/<id>.jsonl），废弃 messages / message_steps',
+    up: (db) => {
+      // 不做数据迁移（明确的产品决定，早期无存量用户）。两张旧表整体丢弃：
+      //   - messages / message_steps 的行模型（role+type+content+metadata）是 UI 契约，
+      //     与 pi 的 AgentMessage 不同构；逐行回填会引入一层永久的兼容投影，
+      //     正是本次要消除的东西。
+      //   - archived 归档位随之消失：压缩改由 compaction entry + 构建期过滤表达。
+      //
+      // 对话内容不再进数据库：会话树是 append-only 的 entry 流，SQLite 在这里没有
+      // 查询优势（ShuviX 从不按消息内容做 SQL 查询），JSONL 反而更快（一次读进内存）
+      // 且可读可 diff。sessions 表继续存业务字段，leafId 由 JSONL 文件自身推导。
+      db.exec(`DROP TABLE IF EXISTS messages`)
+      db.exec(`DROP TABLE IF EXISTS message_steps`)
+    }
+  },
+  {
+    version: 15,
+    description:
+      '运行配置以会话树为唯一事实源：删除 sessions 的 provider / model / modelMetadata / systemPrompt 列',
+    up: (db) => {
+      // 这四列在 JSONL 会话树里都有对应表达，留着就是两份可漂移的副本：
+      //   provider + model        → model_change entry
+      //   modelMetadata           → thinking_level_change + active_tools_change entry
+      //   systemPrompt            → 本来就是死列（写入后从无读取；实际提示词由
+      //                             buildSystemPrompt() 每次现算）
+      // 读当前值走 agent.init（从树上推导），改动走 agent.setModel / setThinkingLevel /
+      // setEnabledTools（Agent 未创建时后端直接往树上追加 entry）。
+      db.exec(`ALTER TABLE sessions DROP COLUMN provider`)
+      db.exec(`ALTER TABLE sessions DROP COLUMN model`)
+      db.exec(`ALTER TABLE sessions DROP COLUMN modelMetadata`)
+      db.exec(`ALTER TABLE sessions DROP COLUMN systemPrompt`)
+    }
   }
 ]
 

@@ -3,17 +3,16 @@
  *
  * 单库 `shuvix`，object store：
  *  - sessions  (keyPath: id)
- *  - messages  (keyPath: id, index `by-session` → sessionId)
  *  - projects  (keyPath: id) —— 文件夹项目：记录含 FileSystemDirectoryHandle
  *               （chrome.storage 无法存句柄，必须用 IndexedDB 的结构化克隆）
  *
  * schema 变更走 onupgradeneeded 迁移。
  */
 const DB_NAME = 'shuvix'
-const DB_VERSION = 2
+const DB_VERSION = 4
 
 /** 业务 store 名 */
-export type IdbStore = 'sessions' | 'messages' | 'projects'
+export type IdbStore = 'sessions' | 'projects'
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -26,9 +25,14 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('sessions')) {
         db.createObjectStore('sessions', { keyPath: 'id' })
       }
-      if (!db.objectStoreNames.contains('messages')) {
-        const store = db.createObjectStore('messages', { keyPath: 'id' })
-        store.createIndex('by-session', 'sessionId', { unique: false })
+      // v3：messages 整体废弃（不做数据迁移，与桌面 v14 同一决定）
+      if (db.objectStoreNames.contains('messages')) {
+        db.deleteObjectStore('messages')
+      }
+      // v4：entries 整体废弃 —— 会话树改存 OPFS 上的 pi JSONL（sessionEntryStore），
+      // 与桌面同格式；不做数据迁移（早期项目可弃数据的既定决定）
+      if (db.objectStoreNames.contains('entries')) {
+        db.deleteObjectStore('entries')
       }
       if (!db.objectStoreNames.contains('projects')) {
         db.createObjectStore('projects', { keyPath: 'id' })
@@ -57,11 +61,6 @@ export const idb = {
     return promisify(tx(db, store, 'readonly').getAll() as IDBRequest<T[]>)
   },
 
-  async getAllByIndex<T>(store: 'messages', index: string, key: IDBValidKey): Promise<T[]> {
-    const db = await openDb()
-    return promisify(tx(db, store, 'readonly').index(index).getAll(key) as IDBRequest<T[]>)
-  },
-
   async put<T>(store: IdbStore, value: T): Promise<void> {
     const db = await openDb()
     await promisify(tx(db, store, 'readwrite').put(value as unknown as object))
@@ -77,12 +76,5 @@ export const idb = {
   async delete(store: IdbStore, key: IDBValidKey): Promise<void> {
     const db = await openDb()
     await promisify(tx(db, store, 'readwrite').delete(key))
-  },
-
-  async deleteByIndex(store: 'messages', index: string, key: IDBValidKey): Promise<void> {
-    const db = await openDb()
-    const os = tx(db, store, 'readwrite')
-    const keys = await promisify(os.index(index).getAllKeys(key))
-    await Promise.all(keys.map((k) => promisify(os.delete(k))))
   }
 }

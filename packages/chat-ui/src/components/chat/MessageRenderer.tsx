@@ -1,4 +1,3 @@
-import { getHostApi } from '@shuvix/chat-ui'
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ErrorEventMessage, UserTextMessage } from '../../stores/chatStore'
@@ -29,16 +28,10 @@ interface MessageRendererProps {
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
   const { t } = useTranslation()
   const removeMessage = useChatStore((s) => s.removeMessage)
+  // 错误块不再是可删除的持久化消息：模型侧错误是 entry 树的一部分（随回退一起消失），
+  // 前端侧错误本就只在视图里 —— 关闭按钮统一只做本地移除。
   const handleDelete = async (): Promise<void> => {
-    try {
-      // 渠道端无写权限：仅本地移除（host 缺省即跳过持久化删除）
-      await getHostApi()?.message.deleteErrorEvent({
-        sessionId: msg.sessionId,
-        messageId: msg.id
-      })
-    } finally {
-      removeMessage(msg.id)
-    }
+    removeMessage(msg.id)
   }
   return (
     <div className="group relative flex items-center gap-1.5 pl-10 pr-8 mr-4 my-1 text-[11px] text-error/90">

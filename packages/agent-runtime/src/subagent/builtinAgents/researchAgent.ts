@@ -9,7 +9,6 @@ export const RESEARCH_AGENT: AgentDefinition = {
   whenToUse:
     'Conducts in-depth multi-step web research using Tavily search/extract. Use when the user asks for a research report, market/competitive analysis, literature review, or any question requiring multiple web sources synthesized with citations. The sub-agent autonomously decomposes the brief, runs iterative searches, extracts full page content for top sources, reflects on gaps, then writes a standalone markdown report to the current working directory and returns only the report path. Not for quick fact lookups (1-2 searches) — use the main agent for those. Requires the internal "tavily-builtin" MCP server to be configured with TAVILY_API_KEY.',
   tools: ['mcp:tavily', 'read', 'write', 'ls'],
-  maxTurns: 30,
   requiredMcp: ['tavily'],
   source: 'builtin',
   basePath: '',

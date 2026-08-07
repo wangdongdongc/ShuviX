@@ -66,12 +66,10 @@ export const AssistantBubble = memo(function AssistantBubble({
   const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
-  const sessionProvider = useChatStore(
-    (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.provider ?? ''
-  )
-  const sessionModel = useChatStore(
-    (s) => s.sessions.find((sess) => sess.id === msg.sessionId)?.model ?? ''
-  )
+  // 归属信息取自消息自身（投影时从 AgentMessage 的 provider/model 带过来）：
+  // 记录的是**实际产出这条回复**的模型，中途切过模型时比"会话当前配置"准确。
+  const msgProvider = msg.provider ?? ''
+  const msgModel = msg.model ?? ''
 
   // 相邻的同名成功调用合并为一行 + 次数，其余步骤原样透传
   const stepGroups = useMemo(
@@ -96,14 +94,14 @@ export const AssistantBubble = memo(function AssistantBubble({
       <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
       {/* 提供商图标节点 */}
       <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full bg-bg-primary ring-2 ring-bg-primary text-text-secondary z-10">
-        <ProviderIcon name={sessionProvider} />
+        <ProviderIcon name={msgProvider} />
       </div>
 
       {/* 内容 */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium text-text-secondary">
-            {msg.model || sessionModel || 'Assistant'}
+            {msg.model || msgModel || 'Assistant'}
           </span>
           {/* 复制 */}
           {!isStreaming && displayContent && (
@@ -240,7 +238,9 @@ export const AssistantBubble = memo(function AssistantBubble({
           (isCompactionSummary ? (
             <SystemNoticeCard
               icon={<Archive size={14} />}
-              title={t('compact.summaryLabel')}
+              title={t(
+                msg.metadata?.autoCompacted ? 'compact.autoSummaryLabel' : 'compact.summaryLabel'
+              )}
               content={displayContent}
             />
           ) : showRaw ? (

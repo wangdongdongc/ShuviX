@@ -70,6 +70,8 @@ export interface MessageMetadata {
   turnIndex?: number
   // —— compaction ——
   isCompactionSummary?: boolean
+  /** 该压缩由阈值判定自动触发（非用户手动），UI 卡片换用「自动压缩」标题 */
+  autoCompacted?: boolean
   // —— project instruction injection (AGENTS.md / CLAUDE.md) ——
   isInstructionInjection?: boolean
   /** 注入消息对应的原始指令文件名 */
@@ -95,6 +97,8 @@ export interface AssistantTextMeta {
   thinking?: string
   usage?: UsageInfo
   isCompactionSummary?: boolean
+  /** 该压缩由阈值判定自动触发（非用户手动） */
+  autoCompacted?: boolean
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----
@@ -288,7 +292,10 @@ export interface MessageBase {
   id: string
   sessionId: string
   content: string
+  /** 实际产出这条消息的模型 id（assistant 消息取自 AgentMessage 自身，非会话当前配置） */
   model: string
+  /** 实际产出这条消息的 provider slug（同上）。合成/占位消息可省略 */
+  provider?: string
   createdAt: number
 }
 

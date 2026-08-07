@@ -15,6 +15,7 @@ import {
   type SubSessionStatus
 } from '@shuvix/chat-ui'
 import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
+import { isImeComposing } from '@shuvix/chat-ui'
 import { markdownComponents } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { StepBlock } from '@shuvix/chat-ui'
@@ -380,6 +381,8 @@ function SubAgentReplyInput({ subSessionId }: { subSessionId: string }): React.J
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
+          // 输入法组字中的回车是「确认选词」，不能当成发送
+          if (isImeComposing(e)) return
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             send()

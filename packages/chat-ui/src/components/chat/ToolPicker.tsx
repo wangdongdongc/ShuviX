@@ -80,11 +80,8 @@ export function ToolPicker(): React.JSX.Element | null {
     if (!host) return // 渠道端无权改工具集（UI 已隐藏，双保险）
     setEnabledTools(newTools)
     if (activeSessionId) {
+      // 单一写入口：落 active_tools_change entry（Agent 未创建时后端直接写树）
       await host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      await host.session.updateEnabledTools({
-        id: activeSessionId,
-        enabledTools: newTools
-      })
     }
   }
 

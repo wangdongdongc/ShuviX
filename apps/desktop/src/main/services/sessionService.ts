@@ -3,6 +3,7 @@ import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
+import { readSessionRunConfig, setSessionTreePinned } from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
@@ -51,8 +52,8 @@ export class SessionService {
    * 构造（resolveSessionAgentContext + AgentSession.create）与清理（invalidate/destroy）经此注入。
    */
   private readonly agents = new SessionManager<AgentSession>({
-    create: (sessionId) => {
-      const ctx = this.resolveSessionAgentContext(sessionId)
+    create: async (sessionId) => {
+      const ctx = await this.resolveSessionAgentContext(sessionId)
       if (!ctx) {
         log.error(`创建 Agent 失败，未找到 session=${sessionId}`)
         return undefined
@@ -77,6 +78,12 @@ export class SessionService {
     }
   })
 
+  constructor() {
+    // 会话树共享缓存的逐出保护：有 AgentSession（或创建中）的会话，
+    // 树实例与运行时共享 —— LRU 不得回收，否则读取端会另开分叉实例
+    setSessionTreePinned((sessionId) => this.agents.tracked(sessionId))
+  }
+
   // ─── DB CRUD ──────────────────────────────────
 
   /** 获取所有会话 */
@@ -84,23 +91,36 @@ export class SessionService {
     return sessionDao.findAll()
   }
 
-  /** 获取单个会话（含计算属性 workingDirectory、enabledTools） */
+  /**
+   * 获取单个会话（含计算属性 workingDirectory）。
+   *
+   * 刻意**不返回 enabledTools** —— 它属于运行配置，事实源在会话树里，读取需要异步 IO，
+   * 而本方法被工具执行链（toolContext / filesWatcher / filePreview）同步调用。
+   * 需要工具集的地方走 `agent.init`（AgentInitResult.enabledTools）。
+   */
   getById(id: string): SessionInfo | undefined {
     const session = sessionDao.findById(id)
     if (!session) return undefined
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
-    const workingDirectory = project?.path || getTempWorkspace(id)
-    const enabledTools = filterAvailableTools(
-      session.modelMetadata.enabledTools ?? [],
-      project?.path
-    )
-    return { ...session, workingDirectory, enabledTools }
+    return { ...session, workingDirectory: project?.path || getTempWorkspace(id) }
+  }
+
+  /** 会话没有显式工具配置时的默认启用集（项目声明优先，其次全局默认） */
+  private defaultEnabledTools(project: Pick<Project, 'path' | 'settings'> | undefined): string[] {
+    return project?.settings?.enabledTools
+      ? filterAvailableTools(project.settings.enabledTools, project.path)
+      : getDefaultEnabledTools(project?.path)
   }
 
   /**
-   * 创建新会话（后端自行获取默认 provider/model/systemPrompt，并持久化默认启用工具）。
+   * 创建新会话。
+   *
+   * **不预写任何运行配置** —— provider / model / thinkingLevel / enabledTools 的唯一事实源是
+   * 会话树，而新会话还没有树。首次 resolveSessionAgentContext 时按「树上没有 → 回落默认」
+   * 解析；用户第一次显式切换才在树上留下 change entry。
+   *
    * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename
    * （去后缀的标题由共享的 useCreateNotebook 显式传入 params.title）。
    */
@@ -108,20 +128,12 @@ export class SessionService {
     const id = uuidv7()
     const pid = params?.projectId ?? null
     const notebookPath = params?.notebookPath
-    const project = pid ? projectDao.pick(pid, ['path', 'settings']) : undefined
-    const enabledTools = project?.settings?.enabledTools
-      ? filterAvailableTools(project.settings.enabledTools, project.path)
-      : getDefaultEnabledTools(project?.path)
     const now = Date.now()
 
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
       projectId: pid,
-      provider: this.getDefaultProvider(),
-      model: this.getDefaultModel(),
-      systemPrompt: settingsDao.findByKey('general.systemPrompt') || '',
-      modelMetadata: { thinkingLevel: DEFAULT_THINKING_LEVEL, enabledTools },
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {})
@@ -159,24 +171,9 @@ export class SessionService {
     sessionDao.updateTitle(id, title)
   }
 
-  /** 更新会话模型配置（provider/model） */
-  updateModelConfig(id: string, provider: string, model: string): void {
-    sessionDao.updateModelConfig(id, provider, model)
-  }
-
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
     sessionDao.updateProjectId(id, projectId)
-  }
-
-  /** 更新思考深度 */
-  updateThinkingLevel(id: string, thinkingLevel: string): void {
-    sessionDao.updateModelMetadata(id, { thinkingLevel })
-  }
-
-  /** 更新会话级启用工具列表 */
-  updateEnabledTools(id: string, enabledTools: string[]): void {
-    sessionDao.updateModelMetadata(id, { enabledTools })
   }
 
   /** 更新命令免审批（bash + ssh 统一开关） */
@@ -249,7 +246,7 @@ export class SessionService {
 
   /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
    *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。 */
-  private resolveSessionAgentContext(sessionId: string): {
+  private async resolveSessionAgentContext(sessionId: string): Promise<{
     provider: string
     model: string
     capabilities: ModelCapabilities
@@ -257,11 +254,16 @@ export class SessionService {
     enabledTools: string[]
     project: Pick<Project, 'path' | 'promptSections' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
-  } | null {
-    const session = sessionDao.pick(sessionId, ['provider', 'model', 'projectId', 'modelMetadata'])
+  } | null> {
+    const session = sessionDao.pick(sessionId, ['projectId'])
     if (!session) return null
-    const provider = session.provider || ''
-    const model = session.model || ''
+
+    // 运行配置的唯一事实源是会话树；树上没有（新会话/从未显式切换过）才回落默认
+    const tree = await readSessionRunConfig(sessionId)
+    const provider = tree.provider ?? this.getDefaultProvider()
+    const model = tree.model ?? this.getDefaultModel()
+    const thinkingLevel = tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
+
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
@@ -271,7 +273,7 @@ export class SessionService {
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = filterAvailableTools(
-      session.modelMetadata.enabledTools ?? [],
+      tree.enabledTools ?? this.defaultEnabledTools(project),
       project?.path
     )
     return {
@@ -281,7 +283,7 @@ export class SessionService {
       workingDirectory,
       enabledTools,
       project,
-      modelMetadata: session.modelMetadata
+      modelMetadata: { thinkingLevel, enabledTools }
     }
   }
 
@@ -290,8 +292,8 @@ export class SessionService {
    * **不创建 AgentSession** —— Agent 延迟到用户首次发送消息时（ensureAgentSession）才创建，
    * 故仅打开会话（含笔记本会话）不会启动 Agent。
    */
-  initAgent(sessionId: string): AgentInitResult {
-    const ctx = this.resolveSessionAgentContext(sessionId)
+  async initAgent(sessionId: string): Promise<AgentInitResult> {
+    const ctx = await this.resolveSessionAgentContext(sessionId)
     if (!ctx) {
       log.error(`初始化失败，未找到 session=${sessionId}`)
       return {
@@ -337,15 +339,15 @@ export class SessionService {
    * 仅负责数据存取；信封组装与派发由 runNotebookTask（共享内核）完成。
    * 复用会话的完整工具集（剔除 ask，面板只读无法应答）+ 完整 systemPrompt + 模型。session 不存在返回 null。
    */
-  buildNotebookRunParams(sessionId: string): {
+  async buildNotebookRunParams(sessionId: string): Promise<{
     systemPrompt: string
     /** 子代理工具白名单（buildSubAgentTools 按名解析） */
     tools: string[]
     modelConfig: SubAgentModelConfig
     /** 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）；供注入上下文告知子代理 */
     notebookPath: string
-  } | null {
-    const ctx = this.resolveSessionAgentContext(sessionId)
+  } | null> {
+    const ctx = await this.resolveSessionAgentContext(sessionId)
     if (!ctx) return null
     const notebookPath = sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath ?? ''
     // 子代理工具白名单（buildSubAgentTools 按名解析）：内置与主 Agent 同口径
@@ -376,11 +378,13 @@ export class SessionService {
    * 具名 agent 定义 → 运行配置投影 + 会话模型配置。与 Agent 工具派发同一投影/requiredMcp
    * 校验口径；modelConfig 继承会话所选思考深度（与笔记本子代理一致）。
    */
-  buildAgentDispatchRunParams(
+  async buildAgentDispatchRunParams(
     sessionId: string,
     agentName: string
-  ): { agentType: InProcessAgentType; modelConfig: SubAgentModelConfig } | { error: string } {
-    const ctx = this.resolveSessionAgentContext(sessionId)
+  ): Promise<
+    { agentType: InProcessAgentType; modelConfig: SubAgentModelConfig } | { error: string }
+  > {
+    const ctx = await this.resolveSessionAgentContext(sessionId)
     if (!ctx) return { error: `Session not found: ${sessionId}` }
     const def = agentService.getEnabled(agentName)
     if (!def) return { error: `Unknown agent "${agentName}"` }
@@ -422,17 +426,16 @@ export class SessionService {
    * 调用方：sub-agent FS 变化（启用/禁用/refresh）后，让正在运行的会话立刻看到最新可用 agent 列表。
    * 实现：对每个会话用其当前 enabledTools 触发 setEnabledTools，间接重跑 buildTools。
    */
-  rebuildToolsForAllSessions(): void {
+  async rebuildToolsForAllSessions(): Promise<void> {
     for (const [sid, agentSession] of this.agents.entries()) {
-      const session = sessionDao.pick(sid, ['modelMetadata', 'projectId'])
-      const projectPath = session?.projectId
-        ? projectDao.pick(session.projectId, ['path'])?.path
+      const session = sessionDao.pick(sid, ['projectId'])
+      const project = session?.projectId
+        ? projectDao.pick(session.projectId, ['path', 'settings'])
         : undefined
-      const enabledTools = filterAvailableTools(
-        session?.modelMetadata.enabledTools ?? [],
-        projectPath
+      const { enabledTools } = await readSessionRunConfig(sid)
+      await agentSession.setEnabledTools(
+        filterAvailableTools(enabledTools ?? this.defaultEnabledTools(project), project?.path)
       )
-      agentSession.setEnabledTools(enabledTools)
     }
   }
 

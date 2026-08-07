@@ -20,6 +20,17 @@ export function getDataDir(): string {
   return ensureDir(join(app.getPath('userData'), 'data'))
 }
 
+/**
+ * 会话转写目录：<userData>/data/sessions/，每会话一个 `<sessionId>.jsonl`。
+ *
+ * 与 shuvix.db 同级 —— 二者共同构成「本地结构化数据」，备份时一起带走。
+ * 不放 ~/.shuvix/：那里是用户自己编写的配置（skills / agents / hooks / widgets），
+ * 会话转写是运行时产物。
+ */
+export function getSessionsDir(): string {
+  return ensureDir(join(getDataDir(), 'sessions'))
+}
+
 /** 用户配置目录：~/.shuvix/ */
 export function getUserConfigDir(): string {
   return ensureDir(join(homedir(), '.shuvix'))

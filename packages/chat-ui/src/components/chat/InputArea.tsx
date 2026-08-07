@@ -12,7 +12,6 @@ import {
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { useChatStore, selectIsStreaming, selectCanEdit } from '../../stores/chatStore'
-import { useSubSessionStore } from '../../stores/subSessionStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { ModelPicker } from './ModelPicker'
@@ -23,6 +22,7 @@ import { AtMentionPopover } from './AtMentionPopover'
 import { MentionHighlighter } from './MentionHighlighter'
 import { useAtMentions } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
+import { isImeComposing } from '../../utils/ime'
 import type { FileSuggestion } from '@shuvix/chat-protocol/utils/fileMap'
 
 // 输入框高度：统一紧凑单行（44px，与原笔记本模式一致），内容超出自动增高至上限；不提供拖拽调高
@@ -72,20 +72,10 @@ export function InputArea({
     slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
-  // 压缩子代理正在运行（本会话名下 status=running 的 compact 子会话）→ 隐藏压缩入口防重复派发
-  const isCompacting = useSubSessionStore(
-    useCallback(
-      (s) =>
-        activeSessionId !== null &&
-        Object.values(s.subSessions).some(
-          (sub) =>
-            sub.parentSessionId === activeSessionId &&
-            sub.subAgentName === 'compact' &&
-            sub.status === 'running'
-        ),
-      [activeSessionId]
-    )
-  )
+  // 压缩进行中 → 隐藏入口防重复触发。
+  // 迁移到 harness 后压缩不再是一个子代理（没有 sub_session 事件可观察），
+  // 只是一次同步的 harness.compact() 调用，故用本地状态跟踪。
+  const [isCompacting, setIsCompacting] = useState(false)
   const canEditSession = useChatStore(selectCanEdit)
   // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具/压缩等）
   const hasHost = getHostApi() !== null
@@ -275,7 +265,6 @@ export function InputArea({
       const newTools = [...store.enabledTools, ...missing]
       store.setEnabledTools(newTools)
       void host.agent.setEnabledTools({ sessionId: activeSessionId, tools: newTools })
-      void host.session.updateEnabledTools({ id: activeSessionId, enabledTools: newTools })
     },
     [activeSessionId]
   )
@@ -506,6 +495,10 @@ export function InputArea({
 
   /** 键盘事件处理 */
   const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // 输入法组字中：回车是「确认选词」、上下键是候选翻页、退格是删字母，全部交还输入法。
+    // 不拦截的话，中文/日文/韩文用户选词的那一下回车会把半成品文本直接发出去
+    if (isImeComposing(e)) return
+
     // @ 引用 popover 可见时优先处理导航（可在任意位置触发，故先于斜杠命令）
     if (at.showPopover) {
       if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
@@ -878,17 +871,17 @@ export function InputArea({
               </button>
             )}
 
-            {/* 压缩归档入口（接近上限时与环同步转警示色，提示「该压缩了」）——
-                派发内置 compact 子代理（与 /compact 斜杠命令同路径），进展看右侧 Sub-agent 面板 */}
+            {/* 压缩入口（接近上限时与环同步转警示色，提示「该压缩了」）——
+                直接调 harness 内建压缩：保留最近上下文，更早的历史换成结构化摘要。
+                完成后后端广播 messages_reloaded，列表自动重拉。 */}
             {!isNotebook && hasHost && assistantMsgCount >= 1 && !isStreaming && !isCompacting && (
               <button
                 onClick={() => {
                   if (!activeSessionId) return
-                  void getSessionChannelApi().agent.dispatchPrompt({
-                    sessionId: activeSessionId,
-                    agentName: 'compact',
-                    text: 'Compact this session: archive the conversation history and replace it with a structured summary.'
-                  })
+                  setIsCompacting(true)
+                  void getSessionChannelApi()
+                    .agent.compact(activeSessionId)
+                    .finally(() => setIsCompacting(false))
                 }}
                 className={`p-1 rounded transition-colors ${
                   ctxNearLimit

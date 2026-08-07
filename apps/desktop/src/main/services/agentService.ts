@@ -16,7 +16,6 @@ import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
 import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils/paths'
 import {
-  COMPACT_AGENT,
   EXPLORE_AGENT,
   RESEARCH_AGENT,
   VISUALIZATION_AGENT,
@@ -152,7 +151,6 @@ class AgentService {
           ? fields.description
           : ''
     const tools = Array.isArray(fields.tools) ? fields.tools : []
-    const maxTurns = typeof fields.maxTurns === 'number' ? fields.maxTurns : 40
     const requiredMcp = Array.isArray(fields.requiredMcp) ? fields.requiredMcp : undefined
 
     // 内置不受 disabled 列表影响；用户 agent 按列表决定启用
@@ -164,7 +162,6 @@ class AgentService {
       whenToUse,
       systemPrompt: body,
       tools,
-      maxTurns,
       source,
       requiredMcp,
       basePath: filePath,
@@ -204,7 +201,6 @@ class AgentService {
   /** 内置 agent 列表（硬编码定义 + 桌面参数注入；每次现算以反映 wiki / widget 根等宿主参数） */
   private builtinAgents(): AgentDefinition[] {
     return [
-      COMPACT_AGENT,
       EXPLORE_AGENT,
       RESEARCH_AGENT,
       VISUALIZATION_AGENT,
@@ -261,7 +257,7 @@ class AgentService {
     const def = this.loadAgentFromFile(abs, defaultName, 'user', { disabled: [] })
     if (!def) {
       throw new Error(
-        'file missing or invalid — expected markdown with YAML frontmatter (name / whenToUse / tools / maxTurns) and the system prompt as body'
+        'file missing or invalid — expected markdown with YAML frontmatter (name / whenToUse / tools) and the system prompt as body'
       )
     }
     return def

@@ -1,0 +1,513 @@
+/**
+ * HarnessSession —— 宿主无关的会话运行时，取代 RuntimeAgent。
+ *
+ * 相对 RuntimeAgent 的核心差异：
+ *  1. **不再持有 `agent.state.messages`**。上下文的真理源是 `Session` entry 树，
+ *     harness 每轮从 `session.buildContext()` 取消息；「开会话时把 DB 行重建成
+ *     AgentMessage」那条有损路径彻底消失。
+ *  2. **不再持久化**。message/toolResult entry 由 harness 自己 append，
+ *     本类只负责事件翻译、hook 触发和用户输入挂起。
+ *  3. 新增 harness 白拿的能力：`compact()` / `followUp()` / `nextTurn()` / `navigateTree()`。
+ *
+ * 审批下沉：路径/命令审批改挂 harness 的 `tool_call` 钩子（返回 `{block, reason}`），
+ * 工具实现不再需要自己调 assertReadApproved —— 见 `approvalHook`。
+ */
+import {
+  AgentHarness,
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateContextTokens,
+  prepareCompaction,
+  shouldCompact
+} from '@earendil-works/pi-agent-core'
+import type {
+  AgentTool,
+  ExecutionEnv,
+  Session,
+  SessionTreeEntry
+} from '@earendil-works/pi-agent-core'
+import type { Api, ImageContent, Model, Models } from '@earendil-works/pi-ai'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import type { HookFirer } from '@shuvix/chat-protocol/types/hook'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import {
+  AUTO_COMPACT_CUSTOM_TYPE,
+  entriesToChatMessages,
+  INSTRUCTION_CUSTOM_TYPE
+} from './projection'
+import {
+  createHarnessEventState,
+  forwardHarnessEvent,
+  type HarnessEventContext,
+  type HarnessEventState
+} from './eventHandler'
+import {
+  defaultToolResultTransform,
+  type ChatEvent,
+  type ChatMessage,
+  type RuntimeEventSink,
+  type RuntimeHttpLog,
+  type RuntimeLogger,
+  type RuntimeStatus,
+  type ToolResultTransform
+} from '../types'
+
+const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
+
+/** 工具调用拦截结果：block=true 时 harness 不执行该工具，改回一条错误 tool result */
+export type ToolCallGate = (
+  toolName: string,
+  args: Record<string, unknown>
+) => Promise<{ block?: boolean; reason?: string } | undefined>
+
+export interface HarnessSessionDeps {
+  sessionId: string
+  /** entry 树存储（桌面 = SqliteSessionStorage，扩展 = IndexedDB 实现） */
+  session: Session
+  /** 文件/命令执行环境（桌面 = NodeExecutionEnv） */
+  env: ExecutionEnv
+  models: Models
+  model: Model<Api>
+  thinkingLevel?: ThinkingLevel
+  systemPrompt: string
+  tools: AgentTool[]
+  eventSink: RuntimeEventSink
+  logger?: RuntimeLogger
+  httpLog?: RuntimeHttpLog
+  transformToolResult?: ToolResultTransform
+  shouldDeferToolDisplay: (toolName: string, args: Record<string, unknown>) => boolean
+  /** 工具执行前拦截（审批）。不注入 = 全部放行。 */
+  toolCallGate?: ToolCallGate
+  hooks?: HookFirer
+  getCwd?: () => string
+  onPromptAccepted?: (text: string) => void
+  /** onPayload 记录 HTTP 日志后回传 logId */
+  onPayload?: (payload: unknown, model: Model<Api>) => string | undefined
+  /** user 消息落盘后是否自动广播 user_message（默认 true；派生 agent 关掉，见 HarnessEventDeps） */
+  broadcastUserMessages?: boolean
+  /**
+   * 自动压缩：turn 成功结束后，若上下文超过 pi 的压缩阈值
+   * （contextWindow - reserveTokens），自动执行一次滚动压缩。
+   * 默认关（根会话开启；派生 agent 生命周期短且面板为纯事件驱动，暂不开）。
+   */
+  autoCompact?: boolean
+}
+
+export class HarnessSession {
+  readonly sessionId: string
+  readonly session: Session
+  private readonly harness: AgentHarness
+  private readonly eventSink: RuntimeEventSink
+  private readonly logger: RuntimeLogger
+  private readonly hooks?: HookFirer
+  private readonly getCwd: () => string
+  private readonly onPromptAccepted?: (text: string) => void
+  private systemPrompt: string
+  private sessionStartHookFired = false
+  private streaming = false
+  private readonly autoCompactEnabled: boolean
+  /**
+   * turn 后台维护（自动压缩）的串行栅栏：压缩期间 harness 相位为 'compaction'，
+   * 此时新 prompt 会被 pi 拒 busy —— prompt/compact 入口先等它完成。永不 reject。
+   */
+  private maintenance: Promise<void> = Promise.resolve()
+  private readonly eventState: HarnessEventState = createHarnessEventState()
+
+  private pendingInputs = new Map<
+    string,
+    { request: InputRequest; resolve: (response: InputResponse) => void }
+  >()
+
+  constructor(deps: HarnessSessionDeps) {
+    this.sessionId = deps.sessionId
+    this.session = deps.session
+    this.eventSink = deps.eventSink
+    this.logger = deps.logger ?? noopLogger
+    this.hooks = deps.hooks
+    this.getCwd = deps.getCwd ?? (() => '')
+    this.onPromptAccepted = deps.onPromptAccepted
+    this.systemPrompt = deps.systemPrompt
+    this.autoCompactEnabled = deps.autoCompact ?? false
+
+    this.harness = new AgentHarness({
+      env: deps.env,
+      session: deps.session,
+      models: deps.models,
+      model: deps.model,
+      thinkingLevel: deps.thinkingLevel,
+      systemPrompt: () => this.systemPrompt,
+      tools: deps.tools
+    })
+
+    const eventCtx: HarnessEventContext = {
+      sessionId: this.sessionId,
+      session: deps.session,
+      state: this.eventState,
+      broadcast: (e) => this.eventSink.broadcast(e),
+      deps: {
+        logger: this.logger,
+        httpLog: deps.httpLog,
+        getModelId: () => this.harness.getModel().id,
+        transformToolResult: deps.transformToolResult ?? defaultToolResultTransform,
+        shouldDeferToolDisplay: deps.shouldDeferToolDisplay,
+        broadcastUserMessages: deps.broadcastUserMessages
+      }
+    }
+
+    this.harness.subscribe(async (event) => {
+      if (event.type === 'agent_start') this.streaming = true
+      if (event.type === 'agent_end') this.streaming = false
+      await forwardHarnessEvent(eventCtx, event)
+    })
+
+    // 审批：工具执行前统一拦截。工具实现不再感知审批的存在。
+    if (deps.toolCallGate) {
+      const gate = deps.toolCallGate
+      this.harness.on('tool_call', async (event) => {
+        return await gate(event.toolName, event.input || {})
+      })
+    }
+
+    // HTTP 日志：payload 发出前记录，用量在 message_end 回填
+    if (deps.onPayload) {
+      const record = deps.onPayload
+      this.harness.on('before_provider_payload', async (event) => {
+        const logId = record(event.payload, event.model as Model<Api>)
+        if (logId) this.eventState.pendingLogIds.push(logId)
+        return { payload: event.payload }
+      })
+    }
+  }
+
+  // ─── 核心 API ──────────────────────────────────────
+
+  /**
+   * 发送一轮 prompt。生命周期 hook 顺序与旧实现一致：
+   * SessionStart（首轮懒触发）→ UserPromptSubmit（deny 则丢弃）→ 派发。
+   *
+   * 错误不抛出（已广播 error 事件），但经返回值回报 —— 派生 agent 协调器需要它
+   * 判定本轮成败；会话根调用方可忽略返回值。
+   */
+  async prompt(text: string, images?: ImageContent[]): Promise<{ error?: string }> {
+    this.logger.info(`prompt session=${this.sessionId} images=${images?.length || 0}`)
+    // 上一轮的自动压缩可能还在跑（harness 相位 'compaction' 会拒 prompt）—— 等它收尾
+    await this.maintenance
+
+    if (this.hooks) {
+      if (!this.sessionStartHookFired) {
+        this.sessionStartHookFired = true
+        try {
+          const outputs = await this.hooks.fire('SessionStart', {
+            session_id: this.sessionId,
+            hook_event_name: 'SessionStart',
+            cwd: this.getCwd()
+          })
+          await this.applyAdditionalContext(outputs, 'SessionStart')
+        } catch (err) {
+          this.logger.warn(`SessionStart hook error: ${errText(err)}`)
+        }
+      }
+      try {
+        const outputs = await this.hooks.fire('UserPromptSubmit', {
+          session_id: this.sessionId,
+          hook_event_name: 'UserPromptSubmit',
+          cwd: this.getCwd(),
+          prompt: text
+        })
+        const denied = outputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
+        if (denied) {
+          const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
+          this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error: reason })
+          return { error: reason }
+        }
+        await this.applyAdditionalContext(outputs, 'UserPromptSubmit')
+      } catch (err) {
+        this.logger.warn(`UserPromptSubmit hook error: ${errText(err)}`)
+      }
+    }
+
+    this.onPromptAccepted?.(text)
+
+    try {
+      await this.harness.prompt(text, images ? { images } : undefined)
+    } catch (err) {
+      const error = errText(err)
+      this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error })
+      return { error }
+    }
+
+    // turn 成功收尾后判定自动压缩。放在 prompt 内 await（而非 fire-and-forget）：
+    // 调用方（IPC/派生协调器）本就等待整轮完成，这里多等几秒不改变语义；
+    // 期间到达的新 prompt 由入口的 maintenance 栅栏排队。
+    if (this.autoCompactEnabled) {
+      this.maintenance = this.maybeAutoCompact()
+      await this.maintenance
+    }
+    return {}
+  }
+
+  /**
+   * 阈值判定 + 自动压缩（绝不抛出）。
+   *
+   * 判定输入：`session.buildContext()`（已应用压缩过滤 = 模型真实所见）；
+   * token 数优先取最近一条 assistant 的 provider 真实 usage（pi 的
+   * `estimateContextTokens`），其后的尾部才用字符启发式补估。
+   * 阈值即 pi 的 `shouldCompact`：tokens > contextWindow - reserveTokens(16k)。
+   *
+   * 压缩成功后追加一条 AUTO_COMPACT_CUSTOM_TYPE 的纯 custom entry（不进模型
+   * 上下文），投影层据此把摘要卡片标成「自动压缩」，再广播 messages_reloaded
+   * 让前端带着标记重拉。
+   */
+  private async maybeAutoCompact(): Promise<void> {
+    try {
+      const contextWindow = this.harness.getModel().contextWindow
+      if (!contextWindow || contextWindow <= 0) return
+      const context = await this.session.buildContext()
+      const estimate = estimateContextTokens(context.messages)
+      if (!shouldCompact(estimate.tokens, contextWindow, DEFAULT_COMPACTION_SETTINGS)) return
+
+      this.logger.info(
+        `自动压缩 session=${this.sessionId} tokens≈${estimate.tokens} window=${contextWindow}`
+      )
+      const result = await this.compactInner()
+      if (!result.compacted) return
+      await this.session.appendCustomEntry(AUTO_COMPACT_CUSTOM_TYPE, {
+        tokensBefore: result.tokensBefore
+      })
+      this.eventSink.broadcast({ type: 'messages_reloaded', sessionId: this.sessionId })
+    } catch (err) {
+      // 自动压缩失败不影响已成功的 turn：记日志，下轮阈值仍超会再试
+      this.logger.warn(`自动压缩失败 session=${this.sessionId}: ${errText(err)}`)
+    }
+  }
+
+  /**
+   * hook 返回的 additionalContext 注入上下文。
+   *
+   * 与旧实现的区别：现在**会落盘**（作为 display=false 的 custom_message entry）。
+   * harness 的上下文即 entry 树，没有「只进内存不进存储」这一层了 ——
+   * 用 display=false 保证它不出现在 UI 上，语义等价于旧的临时注入。
+   */
+  private async applyAdditionalContext(
+    outputs: ReadonlyArray<{ additionalContext?: string }>,
+    eventLabel: string
+  ): Promise<void> {
+    const MAX_LEN = 10000
+    for (const out of outputs) {
+      let ctx = out.additionalContext
+      if (typeof ctx !== 'string' || !ctx) continue
+      if (ctx.length > MAX_LEN) {
+        this.logger.warn(`${eventLabel} hook additionalContext 超过 ${MAX_LEN} 字，已截断`)
+        ctx = ctx.slice(0, MAX_LEN)
+      }
+      await this.session.appendCustomMessageEntry(
+        'hook',
+        `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`,
+        false
+      )
+    }
+  }
+
+  /** 注入项目指令文件（display=true → UI 渲染 InstructionBubble，且进入上下文） */
+  async injectInstruction(content: string, filename: string): Promise<ChatMessage | null> {
+    const entryId = await this.session.appendCustomMessageEntry(
+      INSTRUCTION_CUSTOM_TYPE,
+      content,
+      true,
+      { filename }
+    )
+    const entry = await this.session.getEntry(entryId)
+    if (!entry) return null
+    const [projected] = entriesToChatMessages([entry], this.sessionId, this.harness.getModel().id)
+    return projected ?? null
+  }
+
+  /** 运行中注入引导消息（harness 的 steer 队列） */
+  async steer(text: string): Promise<void> {
+    this.logger.info(`steer session=${this.sessionId}`)
+    await this.harness.steer(text)
+  }
+
+  /** 本轮结束前追加消息，继续同一次 run（harness 新增能力） */
+  async followUp(text: string): Promise<void> {
+    await this.harness.followUp(text)
+  }
+
+  /** 排队到下一轮 prompt 前置（harness 新增能力） */
+  async nextTurn(text: string): Promise<void> {
+    await this.harness.nextTurn(text)
+  }
+
+  /**
+   * 中止生成。
+   *
+   * 旧实现要在这里手工把 streamBuffer 落库、把未完成的 tool_use 打成「已中止」；
+   * 现在 harness 会把带 stopReason='aborted' 的部分消息正常 append 进 entry 树，
+   * 所以这里只剩「解挂起的用户输入」这一件事。
+   */
+  async abort(): Promise<void> {
+    this.logger.info(`中止 session=${this.sessionId}`)
+    this.fireStopHook('aborted')
+    for (const [id, pending] of this.pendingInputs) {
+      pending.resolve({ kind: 'cancel', reason: 'aborted' })
+      this.eventSink.broadcast({
+        type: 'input_request_resolved',
+        sessionId: this.sessionId,
+        requestId: id
+      })
+    }
+    this.pendingInputs.clear()
+    await this.harness.abort()
+  }
+
+  /**
+   * 压缩会话历史（harness 内建的滚动式部分压缩：保留最近 keepRecentTokens 的原始
+   * 消息，只把更早的历史换成摘要）。
+   *
+   * 前置判定：上下文小于保留窗口时切点落在第一条消息上、待摘要区间为空 ——
+   * pi 的 `harness.compact()` 会照样调一次 LLM 对空对话生成摘要并追加一条无意义的
+   * compaction entry（且下一次 compact 会因"最后一条已是 compaction"抛
+   * "Nothing to compact"）。这里提前用同一套 `prepareCompaction` 判定，
+   * 无实质可压缩内容时返回 `{ compacted: false }`，不触碰 LLM 也不动会话树。
+   */
+  async compact(
+    customInstructions?: string
+  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
+    await this.maintenance // 自动压缩进行中则排队（避免撞 harness busy）
+    return await this.compactInner(customInstructions)
+  }
+
+  /** compact 的实体（不等 maintenance —— maybeAutoCompact 自身经此调用） */
+  private async compactInner(
+    customInstructions?: string
+  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
+    const branch = await this.session.getBranch()
+    const prepared = prepareCompaction(branch, DEFAULT_COMPACTION_SETTINGS)
+    const preparation = prepared.ok ? prepared.value : undefined
+    if (
+      !preparation ||
+      (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0)
+    ) {
+      return { compacted: false }
+    }
+    const result = await this.harness.compact(customInstructions)
+    return { compacted: true, summary: result.summary, tokensBefore: result.tokensBefore }
+  }
+
+  fireStopHook(reason: string): void {
+    if (!this.hooks) return
+    void this.hooks
+      .fire('Stop', {
+        session_id: this.sessionId,
+        hook_event_name: 'Stop',
+        cwd: this.getCwd(),
+        reason
+      })
+      .catch((err) => this.logger.warn(`Stop hook error: ${errText(err)}`))
+  }
+
+  // ─── 运行时配置 ────────────────────────────────────
+
+  async applyModel(model: Model<Api>, thinkingLevel?: ThinkingLevel): Promise<void> {
+    await this.harness.setModel(model)
+    if (thinkingLevel !== undefined) await this.harness.setThinkingLevel(thinkingLevel)
+    this.logger.info(`切换模型 session=${this.sessionId} model=${model.id}`)
+  }
+
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    await this.harness.setThinkingLevel(level)
+  }
+
+  async applyTools(tools: AgentTool[]): Promise<void> {
+    await this.harness.setTools(tools)
+  }
+
+  setSystemPrompt(prompt: string): void {
+    this.systemPrompt = prompt
+  }
+
+  // ─── 读取 ──────────────────────────────────────────
+
+  /** 会话当前上下文对应的 UI 消息列表（替代旧的 messageService.listBySession） */
+  async listChatMessages(): Promise<ChatMessage[]> {
+    const entries = await this.session.buildContextEntries()
+    return entriesToChatMessages(entries, this.sessionId, this.harness.getModel().id)
+  }
+
+  /** 全部 entry（含被压缩掉的历史）—— 归档查看用 */
+  async listAllEntries(): Promise<SessionTreeEntry[]> {
+    return await this.session.getEntries()
+  }
+
+  async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
+    const model = this.harness.getModel()
+    const context = await this.session.buildContext()
+    return {
+      systemPrompt: this.systemPrompt,
+      model: {
+        provider: model.provider,
+        id: model.id,
+        name: model.name,
+        api: model.api,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        reasoning: model.reasoning,
+        input: [...model.input]
+      },
+      thinkingLevel: this.harness.getThinkingLevel() as ThinkingLevel,
+      tools: this.harness.getTools().map((tool) => ({
+        name: tool.name,
+        label: (tool as { label?: string }).label ?? tool.name,
+        description: tool.description,
+        parameters: Object.keys(
+          (tool.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ??
+            {}
+        )
+      })),
+      messageCount: context.messages.length,
+      isStreaming: this.streaming
+    }
+  }
+
+  // ─── 用户输入挂起 ──────────────────────────────────
+
+  requestUserInput(request: InputRequest): Promise<InputResponse> {
+    if (!this.eventSink.hasUserInputCapability(this.sessionId)) {
+      return Promise.resolve({ kind: 'cancel', reason: 'aborted' })
+    }
+    return new Promise<InputResponse>((resolve) => {
+      this.pendingInputs.set(request.id, { request, resolve })
+      this.eventSink.broadcast({ type: 'input_request', sessionId: this.sessionId, request })
+    })
+  }
+
+  respondToInput(requestId: string, response: InputResponse): boolean {
+    const pending = this.pendingInputs.get(requestId)
+    if (!pending) return false
+    this.pendingInputs.delete(requestId)
+    pending.resolve(response)
+    this.eventSink.broadcast({
+      type: 'input_request_resolved',
+      sessionId: this.sessionId,
+      requestId
+    })
+    return true
+  }
+
+  broadcast(event: ChatEvent): void {
+    this.eventSink.broadcast(event)
+  }
+
+  emitRuntimeEvent(runtimeId: string, status: RuntimeStatus | null): void {
+    this.eventSink.broadcast({
+      type: 'runtime_event',
+      sessionId: this.sessionId,
+      runtimeId,
+      status
+    })
+  }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}

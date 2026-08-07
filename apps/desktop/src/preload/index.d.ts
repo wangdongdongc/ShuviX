@@ -14,7 +14,6 @@ import type {
   HttpLog,
   HttpLogListParams,
   HttpLogSummary,
-  MessageAddParams,
   ProjectCreateParams,
   ProjectUpdateParams,
   ProjectDeleteParams,
@@ -362,7 +361,6 @@ declare global {
     whenToUse: string
     systemPrompt: string
     tools: string[]
-    maxTurns: number
     source: 'builtin' | 'user'
     requiredMcp?: string[]
     basePath: string
@@ -400,6 +398,8 @@ declare global {
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
+      /** 压缩会话历史（harness 内建滚动式部分压缩） */
+      compact: (sessionId: string) => Promise<{ success: boolean; error?: string }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
@@ -480,21 +480,9 @@ declare global {
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
-      add: (params: MessageAddParams) => Promise<ChatMessage>
-      addErrorEvent: (params: { sessionId: string; content: string }) => Promise<ErrorEventMessage>
-      /** 删除单条 error_event 消息（UI 操作，不影响 agent 上下文） */
-      deleteErrorEvent: (params: {
-        sessionId: string
-        messageId: string
-      }) => Promise<{ success: boolean }>
       clear: (sessionId: string) => Promise<{ success: boolean }>
-      /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
+      /** 回退到指定消息之前（entry 树 leaf 移到其父节点，使 Agent 失效） */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
-      /** 从指定消息开始删除（含该消息本身，使 Agent 失效） */
-      deleteFrom: (params: {
-        sessionId: string
-        messageId: string
-      }) => Promise<{ success: boolean }>
       /** 统计已归档消息数 */
       countArchived: (sessionId: string) => Promise<number>
       /** 分页加载已归档消息（含 steps） */

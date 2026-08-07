@@ -70,3 +70,4 @@ export { CodeView } from './components/code/CodeView'
 
 // ── utils ──
 export * from './utils/clipboard'
+export { isImeComposing } from './utils/ime'

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
-import { useDialogClose } from '@shuvix/chat-ui'
+import { useDialogClose, isImeComposing } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SessionConfigPanel } from './SessionConfigPanel'
 
@@ -84,6 +84,8 @@ export function SessionConfigDialog({
                 onChange={(e) => setTitle(e.target.value)}
                 onBlur={() => void handleSaveTitle()}
                 onKeyDown={(e) => {
+                  // 输入法组字中的回车是「确认选词」，不能当成提交（中文标题必踩）
+                  if (isImeComposing(e)) return
                   if (e.key === 'Enter') void handleSaveTitle()
                 }}
                 className="w-full bg-transparent border-none outline-none text-[13px] text-text-primary placeholder:text-text-tertiary"

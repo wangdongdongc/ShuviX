@@ -1,253 +1,63 @@
 /**
- * 浏览器消息存储 —— IndexedDB 持久化 + 内存缓存 + write-behind。
+ * 消息存储 —— 会话 entry 树的「UI 视角」读取端（扩展）。
  *
- * 关键约束（见 @shuvix/agent-runtime RuntimePersistence）：add* 必须**同步返回**带 id 的
- * 完整 ChatMessage（事件处理器随即 JSON.stringify 广播）。因此：同步生成 id + 构造对象 +
- * 写入内存缓存 + 异步落盘（不 await）。Side Panel 关闭即销毁，故每条消息即时落盘。
+ * 与桌面 messageService 完全同构：迁移到 AgentHarness 后写入口全部消失
+ * （add / addToolUse / completeToolUse / addStepText / addErrorEvent …），
+ * 消息由 harness 落成 entry，这里只做投影。
+ * 读取经 sessionEntryStore 的共享 registry —— 与运行时同一棵树，不重复加载。
  */
-import { v4 as uuid } from 'uuid'
-import type {
-  ChatMessage,
-  AssistantTextMessage,
-  ToolUseMessage,
-  StepTextMessage,
-  StepThinkingMessage,
-  ErrorEventMessage,
-  MessageMetadata,
-  ToolUseMeta,
-  ImageMeta,
-  ToolResultDetails
-} from '@shuvix/chat-protocol/types/chatMessage'
-import { idb } from './idb'
+import { buildContextEntries } from '@earendil-works/pi-agent-core'
+import type { SessionTreeEntry } from '@earendil-works/pi-agent-core'
+import { entriesToChatMessages } from '@shuvix/agent-runtime'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { deleteSessionFile, getSessionTree } from './sessionEntryStore'
 
-let lastTs = 0
-/** 严格递增时间戳，保证同毫秒内多条消息顺序稳定 */
-function nextTs(): number {
-  const t = Math.max(Date.now(), lastTs + 1)
-  lastTs = t
-  return t
-}
-
-/** 落库记录 = ChatMessage + 归档标记（压缩后旧消息置 archived=1，list 默认过滤） */
-type StoredMessage = ChatMessage & { archived?: 0 | 1 }
-
-const cache = new Map<string, StoredMessage[]>()
-const loaded = new Set<string>()
-
-function cacheOf(sessionId: string): StoredMessage[] {
-  let arr = cache.get(sessionId)
-  if (!arr) {
-    arr = []
-    cache.set(sessionId, arr)
-  }
-  return arr
-}
-
-/** 写入内存 + 异步落盘（write-behind，错误仅日志） */
-function insert(msg: StoredMessage): ChatMessage {
-  cacheOf(msg.sessionId).push(msg)
-  void idb.put('messages', msg).catch((e) => console.error('[shuvix] persist message failed', e))
-  return msg
+/** 被压缩掉的历史 = 完整分支 与 当前上下文 entry 的差集 */
+async function archivedEntries(sessionId: string): Promise<SessionTreeEntry[]> {
+  const session = await getSessionTree(sessionId)
+  if (!session) return []
+  const leafId = await session.getLeafId()
+  if (!leafId) return []
+  const all = await session.getBranch()
+  const kept = new Set(buildContextEntries(all).map((e) => e.id))
+  return all.filter((e) => !kept.has(e.id))
 }
 
 export const messageStore = {
-  /** 确保某会话历史已从 IDB 载入内存（含已归档，list 时再过滤） */
-  async ensureLoaded(sessionId: string): Promise<void> {
-    if (loaded.has(sessionId)) return
-    const rows = await idb.getAllByIndex<StoredMessage>('messages', 'by-session', sessionId)
-    rows.sort((a, b) => a.createdAt - b.createdAt)
-    cache.set(sessionId, rows)
-    loaded.add(sessionId)
-  },
-
-  /** 同步读取缓存中的「活跃」消息（须先 ensureLoaded；已归档消息不返回） */
-  listSync(sessionId: string): ChatMessage[] {
-    return cacheOf(sessionId).filter((m) => !m.archived)
-  },
-
+  /** 会话当前上下文对应的消息列表 */
   async list(sessionId: string): Promise<ChatMessage[]> {
-    await this.ensureLoaded(sessionId)
-    return this.listSync(sessionId)
-  },
-
-  /** 写入一条预构造好的消息（id/时间戳由调用方决定，如压缩摘要/指令消息） */
-  insertMessage(msg: ChatMessage): ChatMessage {
-    return insert(msg as StoredMessage)
-  },
-
-  /** 归档某会话当前全部活跃消息（压缩：旧消息退场，仅保留随后写入的摘要） */
-  async archiveBySessionId(sessionId: string): Promise<void> {
-    await this.ensureLoaded(sessionId)
-    const pending: Promise<void>[] = []
-    for (const m of cacheOf(sessionId)) {
-      if (!m.archived) {
-        m.archived = 1
-        pending.push(
-          idb.put('messages', m).catch((e) => console.error('[shuvix] archive failed', e))
-        )
-      }
-    }
-    await Promise.all(pending)
+    const session = await getSessionTree(sessionId)
+    if (!session) return [] // 还没发过消息 → 没有转写文件
+    const entries = await session.buildContextEntries()
+    return entriesToChatMessages(entries, sessionId)
   },
 
   async countArchived(sessionId: string): Promise<number> {
-    await this.ensureLoaded(sessionId)
-    return cacheOf(sessionId).filter((m) => m.archived).length
+    const entries = await archivedEntries(sessionId)
+    return entriesToChatMessages(entries, sessionId).length
   },
 
   async listArchived(sessionId: string): Promise<ChatMessage[]> {
-    await this.ensureLoaded(sessionId)
-    return cacheOf(sessionId).filter((m) => m.archived)
+    const entries = await archivedEntries(sessionId)
+    return entriesToChatMessages(entries, sessionId)
   },
 
-  // ─── 通用构造 ───
-  add(p: {
-    sessionId: string
-    role: 'user' | 'assistant' | 'tool' | 'system' | 'system_notify'
-    type?: 'text' | 'tool_use' | 'step_text' | 'step_thinking' | 'steer' | 'error_event'
-    content: string
-    metadata?: MessageMetadata | null
-    model?: string
-  }): ChatMessage {
-    const msg = {
-      id: uuid(),
-      sessionId: p.sessionId,
-      role: p.role,
-      type: p.type ?? 'text',
-      content: p.content,
-      metadata: p.metadata ?? null,
-      model: p.model ?? '',
-      createdAt: nextTs()
-    } as ChatMessage
-    return insert(msg)
-  },
-
-  addAssistantText(p: {
-    sessionId: string
-    content: string
-    metadata?: MessageMetadata | null
-    model: string
-  }): AssistantTextMessage {
-    return this.add({ ...p, role: 'assistant', type: 'text' }) as AssistantTextMessage
-  },
-
-  addToolUse(p: {
-    sessionId: string
-    toolCallId: string
-    toolName: string
-    args?: Record<string, unknown>
-    turnIndex?: number
-    model: string
-  }): ToolUseMessage {
-    const meta: ToolUseMeta = {
-      toolCallId: p.toolCallId,
-      toolName: p.toolName,
-      args: p.args,
-      turnIndex: p.turnIndex
-    }
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'tool_use',
-      content: '',
-      metadata: meta as MessageMetadata,
-      model: p.model
-    }) as ToolUseMessage
-  },
-
-  completeToolUse(p: {
-    messageId: string
-    content: string
-    isError?: boolean
-    details?: ToolResultDetails
-  }): void {
-    for (const arr of cache.values()) {
-      const msg = arr.find((m) => m.id === p.messageId)
-      if (msg && msg.type === 'tool_use') {
-        msg.content = p.content
-        const meta = (msg.metadata ?? { toolCallId: '', toolName: '' }) as ToolUseMeta
-        meta.isError = p.isError
-        meta.details = p.details
-        msg.metadata = meta
-        void idb.put('messages', msg).catch((e) => console.error('[shuvix] persist failed', e))
-        return
-      }
-    }
-  },
-
-  addStepThinking(p: {
-    sessionId: string
-    content: string
-    turnIndex?: number
-    model: string
-  }): StepThinkingMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'step_thinking',
-      content: p.content,
-      metadata: { turnIndex: p.turnIndex } as MessageMetadata,
-      model: p.model
-    }) as StepThinkingMessage
-  },
-
-  addStepText(p: {
-    sessionId: string
-    content: string
-    turnIndex?: number
-    images?: ImageMeta[]
-    model: string
-  }): StepTextMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'step_text',
-      content: p.content,
-      metadata: { turnIndex: p.turnIndex, images: p.images } as MessageMetadata,
-      model: p.model
-    }) as StepTextMessage
-  },
-
-  addErrorEvent(p: { sessionId: string; content: string }): ErrorEventMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'system_notify',
-      type: 'error_event',
-      content: p.content
-    }) as ErrorEventMessage
-  },
-
+  /** 清空会话（直接删掉转写文件；下次发消息会重建） */
   async clear(sessionId: string): Promise<void> {
-    cache.set(sessionId, [])
-    await idb.deleteByIndex('messages', 'by-session', sessionId)
+    await deleteSessionFile(sessionId)
   },
 
-  /** 从指定消息（含）起删除其后所有消息 */
-  async deleteFrom(sessionId: string, messageId: string): Promise<void> {
-    await this.ensureLoaded(sessionId)
-    const arr = cacheOf(sessionId)
-    const idx = arr.findIndex((m) => m.id === messageId)
-    if (idx < 0) return
-    const removed = arr.splice(idx)
-    await Promise.all(removed.map((m) => idb.delete('messages', m.id)))
-  },
-
-  /** 回退：保留该消息，删除其后的所有消息 */
-  async deleteAfter(sessionId: string, messageId: string): Promise<void> {
-    await this.ensureLoaded(sessionId)
-    const arr = cacheOf(sessionId)
-    const idx = arr.findIndex((m) => m.id === messageId)
-    if (idx < 0) return
-    const removed = arr.splice(idx + 1)
-    await Promise.all(removed.map((m) => idb.delete('messages', m.id)))
-  },
-
-  async deleteOne(sessionId: string, messageId: string): Promise<void> {
-    await this.ensureLoaded(sessionId)
-    const arr = cacheOf(sessionId)
-    const idx = arr.findIndex((m) => m.id === messageId)
-    if (idx < 0) return
-    arr.splice(idx, 1)
-    await idb.delete('messages', messageId)
+  /**
+   * 回退到指定消息之前：把 leaf 移到目标 entry 的父节点。
+   * append-only 树上，旧的 deleteFrom / deleteAfter / deleteOne 语义都收敛到这一个操作。
+   * 追加经共享实例 —— Agent 运行时与读取端同步可见。
+   */
+  async rollback(sessionId: string, messageId: string): Promise<void> {
+    const entryId = messageId.includes(':') ? messageId.slice(0, messageId.indexOf(':')) : messageId
+    const session = await getSessionTree(sessionId)
+    if (!session) return
+    const entry = await session.getEntry(entryId)
+    if (!entry) return
+    await session.moveTo(entry.parentId)
   }
 }

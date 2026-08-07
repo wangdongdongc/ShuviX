@@ -1,27 +1,34 @@
 /**
- * 浏览器 Agent 运行时 —— 用 @shuvix/agent-runtime 的 RuntimeAgent 在 Side Panel 进程内
- * 驱动 pi-agent-core Agent。每个会话一个 RuntimeAgent，事件经 eventBus 派发给 chat-ui。
+ * 浏览器 Agent 运行时 —— 用 @shuvix/agent-runtime 的 HarnessSession 在 Side Panel 进程内
+ * 驱动 pi AgentHarness。每个会话一个 HarnessSession，事件经 eventBus 派发给 chat-ui。
  *
- * 与桌面 AgentSession 的对应：这里是「扩展宿主 wrapper」，提供浏览器适配器（messageStore /
- * eventBus / chrome.storage 模型解析），并组装工具集（共享 ask + 已连接 MCP 工具）。
+ * 与桌面 AgentSession 的对应：这里是「扩展宿主 wrapper」，提供浏览器适配器
+ * （OPFS 会话树 / eventBus / chrome.storage 模型解析），并组装工具集。
+ *
+ * ExecutionEnv 用占位实现：harness 自己从不调用它，浏览器端的文件访问一律走 FSA/OPFS
+ * 的 fileTools（见 createStubExecutionEnv 的说明）。
  */
-import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core'
+import type { AgentTool } from '@earendil-works/pi-agent-core'
 import {
-  RuntimeAgent,
+  HarnessSession,
   SessionManager,
   createAskTool,
   createBrowserTool,
+  createModelsAdapter,
+  createStubExecutionEnv,
   resolveInitialThinkingLevel,
-  chatMessagesToAgentMessages,
   type RuntimeEventSink,
-  type RuntimePersistence,
   type RuntimeLogger,
   type SpillSink
 } from '@shuvix/agent-runtime'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import {
+  appendModelChange,
+  ensureSessionTree,
+  readSessionRunConfig,
+  setSessionTreePinned
+} from '../storage/sessionEntryStore'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import type { SessionModelMetadata } from '@shuvix/chat-protocol/chatApi'
-import { messageStore } from '../storage/messageStore'
 import { sessionStore } from '../storage/sessionStore'
 import { settingsStore } from '../storage/settingsStore'
 import { projectStore } from '../storage/projectStore'
@@ -35,7 +42,8 @@ import { extensionBrowserBackend } from './browserBackend'
 import { createSpillSink } from './opfsSpillSink'
 import { wrapToolsOutput } from './wrapToolOutput'
 import { hookEngine } from './hooks'
-import { resolveSessionModel } from './resolveSessionModel'
+import { capsFor, resolveSessionModel } from './resolveSessionModel'
+import { titlerFor } from './titleRuntime'
 import {
   registerSessionTools,
   clearSessionTools,
@@ -77,16 +85,6 @@ const eventSink: RuntimeEventSink = {
   hasUserInputCapability: () => eventBus.hasListeners()
 }
 
-const browserPersistence: RuntimePersistence = {
-  listMessages: (sessionId) => messageStore.list(sessionId),
-  add: (p) => messageStore.add(p),
-  addAssistantText: (p) => messageStore.addAssistantText(p),
-  addToolUse: (p) => messageStore.addToolUse(p),
-  completeToolUse: (p) => messageStore.completeToolUse(p),
-  addStepThinking: (p) => messageStore.addStepThinking(p),
-  addStepText: (p) => messageStore.addStepText(p)
-}
-
 const logger: RuntimeLogger = {
   info: (m) => console.info('[shuvix]', m),
   warn: (m) => console.warn('[shuvix]', m),
@@ -97,7 +95,7 @@ const logger: RuntimeLogger = {
  * 会话运行时生命周期由共享 SessionManager 托管（Map + 懒创建 + 失效/销毁）。
  * 构造经 buildRuntimeSession 注入（异步：FSA/OPFS + 历史恢复）；清理 dispose 销毁子代理 + 工具注册表。
  */
-const manager = new SessionManager<RuntimeAgent>({
+const manager = new SessionManager<HarnessSession>({
   create: (sessionId) => buildRuntimeSession(sessionId),
   dispose: (sessionId) => {
     subAgentManager.destroyAll(sessionId)
@@ -105,23 +103,11 @@ const manager = new SessionManager<RuntimeAgent>({
   }
 })
 
-/**
- * 把已存历史恢复为 Agent 上下文 —— 共享全保真投影（@shuvix/agent-runtime transcript/，
- * 与桌面同一实现）：文本 + thinking + 图片 + 工具轨迹；system_notify / step 不进上下文。
- */
-export function restoreAgentMessages(msgs: ChatMessage[]): AgentMessage[] {
-  return chatMessagesToAgentMessages(msgs)
-}
+// 会话树共享缓存的逐出保护：有运行时（或创建中）的会话，树实例与 harness 共享，LRU 不得回收
+setSessionTreePinned((sessionId) => manager.tracked(sessionId))
 
-export function capsFor(model: string): ModelCapabilities {
-  const row = settingsStore.listAvailableModels().find((m) => m.modelId === model)
-  if (!row?.capabilities) return {}
-  try {
-    return JSON.parse(row.capabilities) as ModelCapabilities
-  } catch {
-    return {}
-  }
-}
+// 注：restoreAgentMessages 已删除 —— entry 树就是上下文，harness 每轮直接
+// session.buildContext()，不再需要「把存储行重建成 AgentMessage」。
 
 /**
  * 解析会话的 provider/model/caps（**不创建 RuntimeAgent**）—— 供 agent.init 同步元信息。
@@ -133,27 +119,31 @@ export async function resolveSessionMeta(sessionId: string): Promise<{
   caps: ModelCapabilities
   modelMetadata: SessionModelMetadata
 }> {
-  const session = await sessionStore.getById(sessionId)
   await settingsStore.loadState()
   const def = settingsStore.getDefaultSelection()
-  const provider = session?.provider || def.provider
-  const model = session?.model || def.model
+  // 运行配置的唯一事实源是会话树；树上没有（新会话）才回落活跃选择
+  const tree = await readSessionRunConfig(sessionId)
+  const provider = tree.provider ?? def.provider
+  const model = tree.model ?? def.model
   return {
     provider,
     model,
     caps: capsFor(model),
-    modelMetadata: session?.modelMetadata ?? {}
+    modelMetadata: {
+      ...(tree.thinkingLevel ? { thinkingLevel: tree.thinkingLevel } : {}),
+      ...(tree.enabledTools ? { enabledTools: tree.enabledTools } : {})
+    }
   }
 }
 
 /** 取（或惰性创建）某会话的 RuntimeAgent（懒创建经 SessionManager；session 异常时由 build 兜底默认模型） */
-export function ensureRuntimeSession(sessionId: string): Promise<RuntimeAgent | undefined> {
+export function ensureRuntimeSession(sessionId: string): Promise<HarnessSession | undefined> {
   return manager.ensure(sessionId)
 }
 
 type RequestUserInput = (
-  req: Parameters<RuntimeAgent['requestUserInput']>[0]
-) => ReturnType<RuntimeAgent['requestUserInput']>
+  req: Parameters<HarnessSession['requestUserInput']>[0]
+) => ReturnType<HarnessSession['requestUserInput']>
 
 /**
  * 构建某会话的「基础工具集 + systemPrompt + 模型信息」（不含 Agent 派发工具、不建 RuntimeAgent）。
@@ -174,11 +164,12 @@ export async function buildSessionTools(
   cwd: string
 }> {
   const session = await sessionStore.getById(sessionId)
-  // 会话通常已带 provider/model（session.create 用活跃选择）；兜底取首个已启用模型而非写死
   await settingsStore.loadState()
   const def = settingsStore.getDefaultSelection()
-  const provider = session?.provider || def.provider
-  const model = session?.model || def.model
+  // 运行配置读会话树；树上没有则回落活跃选择
+  const tree = await readSessionRunConfig(sessionId)
+  const provider = tree.provider ?? def.provider
+  const model = tree.model ?? def.model
   const caps = capsFor(model)
 
   // 工作目录句柄：项目会话=用户 FSA 文件夹；临时会话=隔离的 OPFS 目录（镜像桌面 temp_workspace）。
@@ -239,11 +230,10 @@ export async function buildSessionTools(
   return { tools, systemPrompt, provider, model, caps, spillSink, cwd }
 }
 
-/** 构造某会话的 RuntimeAgent（SessionManager.create 注入；已存在判断与入表由 manager 负责） */
-async function buildRuntimeSession(sessionId: string): Promise<RuntimeAgent> {
-  const session = await sessionStore.getById(sessionId)
+/** 构造某会话的 HarnessSession（SessionManager.create 注入；已存在判断与入表由 manager 负责） */
+async function buildRuntimeSession(sessionId: string): Promise<HarnessSession> {
   // eslint-disable-next-line prefer-const
-  let runtime: RuntimeAgent
+  let runtime: HarnessSession
   // 路径审批挂起原语（扩展夹内不弹，仅为将来越界能力预留）；runtime 后置赋值，闭包捕获
   const requestUserInput: RequestUserInput = (req) => runtime.requestUserInput(req)
   const parts = await buildSessionTools(sessionId, { requestUserInput, includeAsk: true })
@@ -267,60 +257,64 @@ async function buildRuntimeSession(sessionId: string): Promise<RuntimeAgent> {
   ]
 
   const resolvedModel = resolveSessionModel(parts.provider, parts.model, parts.caps)
-  const agent = new Agent({
-    initialState: {
-      systemPrompt: parts.systemPrompt,
-      model: resolvedModel,
-      thinkingLevel: resolveInitialThinkingLevel({
-        persisted: session?.modelMetadata?.thinkingLevel,
-        reasoning: parts.caps.reasoning
-      }),
-      messages: [],
-      tools
-    },
-    getApiKey: async (p) => (await settingsStore.getApiKey(p)) || undefined
-  })
 
-  runtime = new RuntimeAgent({
+  runtime = new HarnessSession({
     sessionId,
-    agent,
+    // 共享会话树（OPFS 上的 JSONL）：与 messageStore 读取端同一实例
+    session: await ensureSessionTree(sessionId, parts.cwd),
+    env: createStubExecutionEnv(parts.cwd),
+    models: createModelsAdapter({
+      getApiKey: async (p) => (await settingsStore.getApiKey(p)) || undefined
+    }),
+    model: resolvedModel,
+    thinkingLevel: resolveInitialThinkingLevel({
+      persisted: (await readSessionRunConfig(sessionId)).thinkingLevel ?? undefined,
+      reasoning: parts.caps.reasoning
+    }),
+    systemPrompt: parts.systemPrompt,
+    tools,
     eventSink,
-    persistence: browserPersistence,
+    // 根会话开启自动压缩（与桌面同源：turn 结束后超阈值自动滚动压缩）
+    autoCompact: true,
     shouldDeferToolDisplay: (toolName) => toolName === 'ask',
     logger,
     // 统一生命周期 hook：注入扩展的 HookEngine（仅 builtin）；SessionStart/UserPromptSubmit/Stop
-    // 与桌面同源，由 RuntimeAgent 触发
+    // 与桌面同源，由 HarnessSession 触发
     hooks: hookEngine,
-    getCwd: () => parts.cwd
+    getCwd: () => parts.cwd,
+    // UserPromptSubmit 通过、正式派发前触发首轮快速标题（与桌面同一时序 + 同一策略内核）
+    onPromptAccepted: (text) => void titlerFor(sessionId).quick(text)
   })
 
-  // 恢复历史文本轮次
-  const history = await messageStore.list(sessionId)
-  for (const m of restoreAgentMessages(history)) {
-    agent.state.messages.push(m)
-  }
-
+  // 无需恢复历史：entry 树即上下文
   // 入表由 SessionManager 负责
   return runtime
 }
 
-export function getRuntimeSession(sessionId: string): RuntimeAgent | undefined {
+export function getRuntimeSession(sessionId: string): HarnessSession | undefined {
   return manager.get(sessionId)
 }
 
-/** 切换会话模型：持久化 + 若运行时已存在则即时 applyModel */
+/**
+ * 切换会话模型 —— 唯一写入口。
+ *
+ * Agent 已创建 → 交给 harness（它自己往会话树追加 model_change）；
+ * 未创建 → 直接往树上追加，不为了记一次配置把 Agent 拉起来。
+ */
 export async function setSessionModel(
   sessionId: string,
   provider: string,
   model: string
 ): Promise<void> {
-  await sessionStore.updateModelConfig(sessionId, provider, model)
   const runtime = manager.get(sessionId)
-  if (!runtime) return
+  if (!runtime) {
+    await appendModelChange(sessionId, provider, model)
+    return
+  }
   const caps = capsFor(model)
   const resolvedModel = resolveSessionModel(provider, model, caps)
   // 切模型保留当前思考深度（省略第二参 → 保持不变，思考与能力点解绑）
-  runtime.applyModel(resolvedModel)
+  await runtime.applyModel(resolvedModel)
 }
 
 export function removeRuntimeSession(sessionId: string): void {

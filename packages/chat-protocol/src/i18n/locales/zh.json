@@ -144,7 +144,9 @@
   },
   "compact": {
     "button": "压缩归档",
+    "nothingToCompact": "上下文还很小 —— 压缩会保留最近的上下文窗口，目前没有可归档的内容。",
     "summaryLabel": "对话摘要（压缩归档）",
+    "autoSummaryLabel": "对话摘要（自动压缩）",
     "archivedBanner": "{{count}} 条已归档消息被隐藏，点击查看",
     "archivedLoading": "加载中...",
     "archivedAllLoaded": "所有归档消息已加载"
@@ -818,7 +820,6 @@
     "subAgentFsHint": "子智能体是扁平 Markdown 文件（一个 .md 一个 agent，文件名即名称）。内置项随应用发布，只读不可编辑；自定义只需把 Claude Code 兼容的 .md 放进 ~/.shuvix/agents/ 再点击刷新。",
     "subAgentWhenToUse": "何时使用",
     "subAgentTools": "工具",
-    "subAgentMaxTurns": "最大轮次",
     "subAgentRequiredMcp": "依赖 MCP",
     "subAgentBasePath": "文件路径",
     "subAgentSystemPrompt": "系统提示词",

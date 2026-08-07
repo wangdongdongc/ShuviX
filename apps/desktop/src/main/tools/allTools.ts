@@ -16,8 +16,8 @@ import './browser'
 import './git'
 // preview 工具：defaultEnabled: false —— 可视化子代理经白名单解析使用
 import './preview'
-// session 工具：defaultEnabled: false —— compact 子代理经白名单解析使用（转写读取 + 压缩归档）
-import './session'
+// 注：session 工具已删除 —— 压缩不再经「compact 子代理 + 工具调用」，
+// 而是 harness 内建的 compact()（见 AgentSession.compact / ChatGateway.compact）。
 
 // 高性能检索
 import './ls'

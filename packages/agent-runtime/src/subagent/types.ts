@@ -2,7 +2,7 @@
  * 子代理共享类型（跨端）。
  *
  * AgentDefinition：注册表里的子代理定义（与 AGENT.md frontmatter+body 同构）。
- * InProcessAgentType：派发执行时用的运行配置（工具集 + 系统提示 + 轮次）。
+ * InProcessAgentType：派发执行时用的运行配置（工具集 + 系统提示）。
  * SubAgentRegistry：定义来源的端适配接口（桌面=文件系统扫描；扩展=storage/内嵌）。
  */
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
@@ -20,8 +20,6 @@ export interface AgentDefinition {
   systemPrompt: string
   /** 工具白名单：内置工具名 / 'mcp:serverName' / 'skill:skillName' */
   tools: readonly string[]
-  /** agent loop 最大轮次 */
-  maxTurns: number
   /** 来源（决定 UI 能否编辑/禁用） */
   source: 'builtin' | 'user'
   /** 强依赖的 MCP server 名称列表，执行前检查 */
@@ -38,7 +36,6 @@ export interface InProcessAgentType {
   displayName: string
   description: string
   tools: string[]
-  maxTurns: number
   systemPrompt: string
 }
 

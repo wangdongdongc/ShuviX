@@ -1,4 +1,4 @@
-import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
+import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect, useCallback, useRef } from 'react'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -8,12 +8,13 @@ import { ttsPlayer } from '../services/tts/ttsPlayer'
 import { useAppEvent } from './useAppEvents'
 
 /**
- * 写入一条 error_event 消息：宿主端经 HostApi 持久化；渠道端（无 HostApi，只读）
- * 本地构造仅用于展示——渠道无写权限，但仍需把错误显示给用户。
+ * 构造一条本地 error_event 消息（**不持久化**）。
+ *
+ * AgentHarness 迁移后消息只能由 harness 产生：模型侧的失败会以 stopReason='error'
+ * 的 assistant entry 落盘、并由投影渲染成 error_event；前端侧的错误（连接失败、
+ * hook 拒绝等）不再写进会话树，只在当前视图里展示。
  */
 async function reportError(sessionId: string, content: string): Promise<ErrorEventMessage> {
-  const host = getHostApi()
-  if (host) return host.message.addErrorEvent({ sessionId, content })
   return {
     id: `local-error-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
     sessionId,

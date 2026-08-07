@@ -2,8 +2,8 @@
  * 会话标题生成共享内核 —— 宿主无关。
  *
  * 输入「已解析模型 + apiKey + 对话文本」，调 completeSimple 让模型产出 {"title":"..."}，
- * 经三级兜底解析出干净标题。模型来源（专用标题模型 / 会话模型）与触发时机由端各自决定
- * （触发策略已在 chat-ui useAgentEvents 共享）。
+ * 经三级兜底解析出干净标题。模型来源（专用标题模型 / 会话模型）由端各自解析；
+ * 何时触发见同目录 sessionTitler.ts（两端共用的两阶段策略）。
  */
 import type { TextContent } from '@earendil-works/pi-ai'
 import { completeSimple } from '@earendil-works/pi-ai/compat'

@@ -77,16 +77,18 @@ export interface SessionSettings {
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
+/**
+ * 会话业务记录（与 chat-protocol 的 Session 同构）。
+ *
+ * 不含 provider / model / thinkingLevel / enabledTools —— 运行配置的唯一事实源是
+ * 会话树，前端从 `agent.init` 拿当前值并存在本 store 的顶层字段里
+ * （activeProvider / activeModel / thinkingLevel / enabledTools）。
+ */
 export interface Session {
   id: string
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
-  provider: string
-  model: string
-  systemPrompt: string
-  /** 模型相关设置（思考深度、工具列表等） */
-  modelMetadata: SessionModelMetadata
   /** 会话级配置（SSH 免审批等） */
   settings: SessionSettings
   createdAt: number

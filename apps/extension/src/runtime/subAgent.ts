@@ -2,7 +2,7 @@
  * 扩展派生 agent 框架（接入共享 @shuvix/agent-runtime 内核）。
  *
  * 执行/事件管线/abort/深度校验全在共享核心（派生 agent 与会话根 agent 共用
- * RuntimeAgent 运行时，仅持久化为内存态）；这里只注入浏览器端适配：
+ * HarnessSession 运行时，会话树为内存态 InMemorySessionStorage）；这里只注入浏览器端适配：
  *   - registry：具名定义来源 —— 内置 visualization（共享定义）；
  *     将来用户自定义可从 chrome.storage 读后并入。
  *   - resolveTools：默认子代理（定义 tools 为空）复用「根会话已建好的全部工具」
@@ -17,7 +17,6 @@ import i18next from 'i18next'
 import {
   createSubAgentManager,
   createDispatchAgentTool,
-  COMPACT_AGENT,
   VISUALIZATION_AGENT,
   type AnyAgentTool,
   type DispatchAgentTool,
@@ -28,7 +27,6 @@ import {
 import { settingsStore } from '../storage/settingsStore'
 import { eventBus } from './eventBus'
 import { createExtensionPreviewTool } from './previewTool'
-import { createExtensionSessionTool } from './sessionTool'
 import { resolveSessionModel } from './resolveSessionModel'
 
 /** 每会话「工具名 → 工具实例」表 —— 供 resolveTools 复用父会话已建好的工具（同一审批范围/工作目录） */
@@ -48,10 +46,12 @@ export function clearSessionTools(sessionId: string): void {
 }
 
 /**
- * 扩展子代理注册表 —— 具名专用子代理（内置 visualization / compact；将来用户自定义可从 chrome.storage 并入）。
+ * 扩展子代理注册表 —— 具名专用子代理（内置 visualization；将来用户自定义可从 chrome.storage 并入）。
  * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，`agent` 省略即用。
+ *
+ * compact 子代理已移除：压缩改由 harness 内建的 compact() 完成。
  */
-const BUILTIN_AGENTS = [VISUALIZATION_AGENT, COMPACT_AGENT]
+const BUILTIN_AGENTS = [VISUALIZATION_AGENT]
 
 export const extensionSubAgentRegistry: SubAgentRegistry = {
   listEnabled: () => BUILTIN_AGENTS,
@@ -61,7 +61,7 @@ export const extensionSubAgentRegistry: SubAgentRegistry = {
 /**
  * 构建「默认子代理」运行配置 —— 省略 `agent` 时派发用。
  * 直接继承父会话：systemPrompt 用父会话同一份；工具由 resolveTools 复用父会话全部（排除 Agent）。
- * tools 留空 → 派发工具描述显示「inherits the caller's tools」；maxTurns 当前不强制（占位）。
+ * tools 留空 → 派发工具描述显示「inherits the caller's tools」。
  */
 function buildDefaultAgentType(parentSystemPrompt: string): InProcessAgentType {
   return {
@@ -70,7 +70,6 @@ function buildDefaultAgentType(parentSystemPrompt: string): InProcessAgentType {
     description:
       'Default agent that inherits the current tools and system prompt to run a well-scoped subtask autonomously.',
     tools: [],
-    maxTurns: 0,
     systemPrompt: parentSystemPrompt
   }
 }
@@ -98,10 +97,7 @@ export const subAgentManager = createSubAgentManager({
     if (named && whitelist.includes('preview')) {
       tools.push(createExtensionPreviewTool(rootSessionId) as unknown as AnyAgentTool)
     }
-    // session 不在根工具池（压缩归档专用），白名单声明时就地构建注入（与 preview 同模式）
-    if (named && whitelist.includes('session')) {
-      tools.push(createExtensionSessionTool(rootSessionId) as unknown as AnyAgentTool)
-    }
+    // 注：session 工具已删除 —— 压缩不再经子代理 + 工具，而是 harness.compact()。
     // 派发工具：默认子代理全员可派发；具名定义须显式白名单 'Agent'（与桌面一致）
     if (spawn.canSpawn && (!named || whitelist.includes('Agent'))) {
       tools.push(

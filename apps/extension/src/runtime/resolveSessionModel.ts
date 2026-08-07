@@ -11,6 +11,17 @@ import { settingsStore } from '../storage/settingsStore'
 /** 浏览器 RuntimeEnv —— pi-ai 的环境变量注入在浏览器 no-op（apiKey 经 providerInfo 直传） */
 export const browserEnv: RuntimeEnv = { setApiKey: () => {} }
 
+/** 从可用模型表取某模型的能力点（未收录/解析失败 → 空能力） */
+export function capsFor(model: string): ModelCapabilities {
+  const row = settingsStore.listAvailableModels().find((m) => m.modelId === model)
+  if (!row?.capabilities) return {}
+  try {
+    return JSON.parse(row.capabilities) as ModelCapabilities
+  } catch {
+    return {}
+  }
+}
+
 export function resolveSessionModel(
   provider: string,
   model: string,

@@ -81,6 +81,11 @@ export function registerAgentHandlers(): void {
     operationContext.run(createElectronContext(sessionId), () => chatGateway.abort(sessionId))
   )
 
+  /** 压缩会话历史（harness 内建的滚动式部分压缩） */
+  ipcMain.handle('agent:compact', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), () => chatGateway.compact(sessionId))
+  )
+
   /** 切换指定 session 的模型 */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) =>
     operationContext.run(createElectronContext(params.sessionId), () => {

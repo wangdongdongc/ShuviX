@@ -11,7 +11,6 @@ import type {
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
-  MessageAddParams,
   ProjectCreateParams,
   ProjectUpdateParams,
   ProjectDeleteParams,
@@ -157,6 +156,7 @@ const api = {
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
+    compact: (sessionId: string) => ipcRenderer.invoke('agent:compact', sessionId),
 
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
@@ -259,16 +259,11 @@ const api = {
   // ============ 消息管理 ============
   message: {
     list: (sessionId: string) => ipcRenderer.invoke('message:list', sessionId),
-    add: (params: MessageAddParams) => ipcRenderer.invoke('message:add', params),
-    addErrorEvent: (params: { sessionId: string; content: string }) =>
-      ipcRenderer.invoke('message:addErrorEvent', params),
-    deleteErrorEvent: (params: { sessionId: string; messageId: string }) =>
-      ipcRenderer.invoke('message:deleteErrorEvent', params),
+
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
     rollback: (params: { sessionId: string; messageId: string }) =>
       ipcRenderer.invoke('message:rollback', params),
-    deleteFrom: (params: { sessionId: string; messageId: string }) =>
-      ipcRenderer.invoke('message:deleteFrom', params),
+
     /** 统计已归档消息数 */
     countArchived: (sessionId: string) =>
       ipcRenderer.invoke('message:countArchived', sessionId) as Promise<number>,

@@ -1,12 +1,9 @@
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
-import type { Session, SessionModelMetadata, SessionSettings } from './types'
+import type { Session, SessionSettings } from './types'
 
 /** DB 原始行类型（JSON 字段在 DB 中为字符串） */
-type SessionRow = Omit<Session, 'modelMetadata' | 'settings'> & {
-  modelMetadata: string
-  settings: string
-}
+type SessionRow = Omit<Session, 'settings'> & { settings: string }
 
 /** 安全解析 JSON，失败返回空对象 */
 function safeParse<T>(json: string | undefined | null): T {
@@ -19,11 +16,7 @@ function safeParse<T>(json: string | undefined | null): T {
 
 /** 将 DB 行的 JSON 字符串字段解析为类型化对象 */
 function parseRow(row: SessionRow): Session {
-  return {
-    ...row,
-    modelMetadata: safeParse<SessionModelMetadata>(row.modelMetadata),
-    settings: safeParse<SessionSettings>(row.settings)
-  }
+  return { ...row, settings: safeParse<SessionSettings>(row.settings) }
 }
 
 /**
@@ -50,9 +43,6 @@ export class SessionDao extends BaseDao {
       | undefined
     if (!row) return undefined
     const result = { ...row } as Record<string, unknown>
-    if ('modelMetadata' in row) {
-      result.modelMetadata = safeParse<SessionModelMetadata>(row.modelMetadata as string)
-    }
     if ('settings' in row) {
       result.settings = safeParse<SessionSettings>(row.settings as string)
     }
@@ -84,15 +74,11 @@ export class SessionDao extends BaseDao {
   /** 插入会话 */
   insert(session: Session): void {
     this.stmt(
-      'INSERT INTO sessions (id, title, projectId, provider, model, systemPrompt, modelMetadata, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO sessions (id, title, projectId, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(
       session.id,
       session.title,
       session.projectId,
-      session.provider,
-      session.model,
-      session.systemPrompt,
-      JSON.stringify(session.modelMetadata),
       JSON.stringify(session.settings),
       session.createdAt,
       session.updatedAt
@@ -103,16 +89,6 @@ export class SessionDao extends BaseDao {
   updateTitle(id: string, title: string): void {
     this.stmt('UPDATE sessions SET title = ?, updatedAt = ? WHERE id = ?').run(
       title,
-      Date.now(),
-      id
-    )
-  }
-
-  /** 更新会话模型配置（provider/model） */
-  updateModelConfig(id: string, provider: string, model: string): void {
-    this.stmt('UPDATE sessions SET provider = ?, model = ?, updatedAt = ? WHERE id = ?').run(
-      provider,
-      model,
       Date.now(),
       id
     )
@@ -138,17 +114,6 @@ export class SessionDao extends BaseDao {
       'SELECT * FROM sessions WHERE projectId = ? ORDER BY updatedAt DESC'
     ).all(projectId) as SessionRow[]
     return rows.map(parseRow)
-  }
-
-  /** 更新模型元数据（patch 语义：仅更新传入的字段，其余保留） */
-  updateModelMetadata(id: string, patch: SessionModelMetadata): void {
-    const { setClauses, values } = buildJsonPatch(patch as Record<string, unknown>)
-    if (!setClauses) return
-    this.db
-      .prepare(
-        `UPDATE sessions SET modelMetadata = json_set(COALESCE(modelMetadata, '{}'), ${setClauses}), updatedAt = ? WHERE id = ?`
-      )
-      .run(...values, Date.now(), id)
   }
 
   /** 更新会话级配置（patch 语义：仅更新传入的字段，其余保留） */

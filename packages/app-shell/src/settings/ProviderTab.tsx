@@ -28,6 +28,7 @@ import {
   type ProviderInfo,
   type ProviderModelInfo
 } from '@shuvix/chat-protocol/types/provider'
+import { isImeComposing } from '@shuvix/chat-ui'
 import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
 import { ProviderIcon } from './ProviderIcons'
@@ -703,7 +704,7 @@ function ProviderDetail({
                   type="text"
                   value={newModelId}
                   onChange={(e) => onSetNewModelId(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && onAddModel()}
+                  onKeyDown={(e) => !isImeComposing(e) && e.key === 'Enter' && onAddModel()}
                   placeholder={t('settings.addModelPlaceholder')}
                   className="zen-input flex-1 font-mono text-[11px]"
                 />

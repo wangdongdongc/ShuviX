@@ -1,17 +1,16 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type {
-  AgentInitResult,
-  AgentRuntimeInfo,
-  MessageAddParams,
-  Message,
-  ThinkingLevel
-} from '../../types'
+import type { AgentInitResult, AgentRuntimeInfo, Message, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
+import {
+  appendActiveToolsChange,
+  appendModelChange,
+  appendThinkingLevelChange
+} from '../../services/sessionStorage'
 import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
@@ -23,6 +22,7 @@ import { projectDao } from '../../dao/projectDao'
 import { agentManager } from '../../agents/AgentManager'
 import { runNotebookTask, runUserDispatchTask } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
+import { t } from '../../i18n'
 
 /**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
@@ -30,7 +30,7 @@ import { chatFrontendRegistry } from './ChatFrontendRegistry'
 export class DefaultChatGateway implements ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
-  startChat(sessionId: string): AgentInitResult {
+  startChat(sessionId: string): Promise<AgentInitResult> {
     return sessionService.initAgent(sessionId)
   }
 
@@ -50,30 +50,11 @@ export class DefaultChatGateway implements ChatGateway {
     // ─── 内联 Token 处理（由前端完成展开，后端直接使用） ───
     const promptText = inlineTokens ? resolveTokensForAgent(text, inlineTokens) : text
 
-    // 首次发言前按当前配置懒注入项目指令文件
-    // 必须发生在 addUserText 之前，确保指令消息在时间戳和广播顺序上都早于用户消息
-    session.ensureInstructionsInjected()
+    // 首次发言前按当前配置懒注入项目指令文件（落 custom_message entry，早于用户消息）
+    await session.ensureInstructionsInjected()
 
-    // 统一持久化用户消息并通知所有前端
-    const userImages =
-      images && images.length > 0
-        ? images.map((img) => ({
-            mimeType: img.mimeType,
-            preview: `data:${img.mimeType};base64,${img.data}`
-          }))
-        : undefined
-    const userMsg = messageService.addUserText({
-      sessionId,
-      content: text,
-      images: userImages,
-      inlineTokens: inlineTokens
-    })
-    chatFrontendRegistry.broadcast({
-      type: 'user_message',
-      sessionId,
-      message: JSON.stringify(userMsg)
-    })
-    // 发送展开后的 prompt 给 Agent
+    // 用户消息不再由网关落库：harness 在 message_end 把它作为 entry 追加，
+    // 并经 HarnessSession 的事件翻译广播 user_message —— 单一写入点，无重复。
     await session.prompt(promptText, images)
   }
 
@@ -82,13 +63,13 @@ export class DefaultChatGateway implements ChatGateway {
    * 当前笔记本内容作为一条独立 user message 注入子代理上下文（在 text 之前）。
    * 进展经 sub_session_* / 流式事件呈现在右侧 Sub-agent 面板。
    */
-  notebookPrompt(
+  async notebookPrompt(
     sessionId: string,
     text: string,
     _images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
-  ): void {
-    const params = sessionService.buildNotebookRunParams(sessionId)
+  ): Promise<void> {
+    const params = await sessionService.buildNotebookRunParams(sessionId)
     if (!params) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
@@ -113,7 +94,7 @@ export class DefaultChatGateway implements ChatGateway {
     // 先确保主 AgentSession 存在：子代理的审批/询问经 userInputBroker 路由到它，
     // 缺席时相关工具请求会被直接拒绝（聊天会话应能承接审批，与笔记本的只读面板不同）
     await sessionService.ensureAgentSession(sessionId)
-    const params = sessionService.buildAgentDispatchRunParams(sessionId, agentName)
+    const params = await sessionService.buildAgentDispatchRunParams(sessionId, agentName)
     if ('error' in params) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: params.error })
       return
@@ -129,14 +110,35 @@ export class DefaultChatGateway implements ChatGateway {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
-    // 只入队；持久化和广播交给 agentEventHandler 在 message_end 事件中处理，
-    // 确保 steer 消息在 event 流中的位置与 step/tool 消息自然衔接。
-    session.steer(text)
+    // 只入队；落盘与广播交给 harness 在 message_end 事件中处理。
+    void session.steer(text)
   }
 
-  abort(sessionId: string): { success: boolean; savedMessage?: Message } {
-    const savedMessage = sessionService.getAgentSession(sessionId)?.abort() || null
-    return { success: true, savedMessage: savedMessage || undefined }
+  async abort(sessionId: string): Promise<{ success: boolean; savedMessage?: Message }> {
+    // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，
+    // 不再需要网关回传「抢救出来的半条消息」。
+    await sessionService.getAgentSession(sessionId)?.abort()
+    return { success: true }
+  }
+
+  /** 压缩会话历史（harness 内建实现；完成后经 session_compact → messages_reloaded 通知前端） */
+  async compact(sessionId: string): Promise<{ success: boolean; error?: string }> {
+    const session = await sessionService.ensureAgentSession(sessionId)
+    if (!session) return { success: false, error: 'Agent 未初始化' }
+    try {
+      const result = await session.compact()
+      if (!result.compacted) {
+        // 上下文小于保留窗口（滚动压缩无实质可做）—— 提示而非报错，且未动会话树
+        const error = t('compact.nothingToCompact')
+        chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
+        return { success: false, error }
+      }
+      return { success: true }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
+      return { success: false, error }
+    }
   }
 
   // ─── 交互响应 ─────────────────────────────────
@@ -148,49 +150,55 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 运行时调整 ────────────────────────────────
 
-  setModel(
+  /**
+   * 以下三个 setter 是运行配置的**唯一写入口**（数据库已无对应列）。
+   *
+   * Agent 已创建 → 交给 harness，它自己往会话树追加 change entry；
+   * Agent 未创建（会话是懒创建的，用户可以在没发过消息的会话上先切模型）→
+   * 直接往树上追加，不为了记一次配置而把整个 Agent 拉起来。
+   */
+  async setModel(
     sessionId: string,
     provider: string,
     model: string,
     baseUrl?: string,
     apiProtocol?: string
-  ): void {
-    sessionService.getAgentSession(sessionId)?.setModel(provider, model, baseUrl, apiProtocol)
+  ): Promise<void> {
+    const agent = sessionService.getAgentSession(sessionId)
+    if (agent) await agent.setModel(provider, model, baseUrl, apiProtocol)
+    else await appendModelChange(sessionId, provider, model)
   }
 
-  setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
-    sessionService.getAgentSession(sessionId)?.setThinkingLevel(level)
+  async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
+    const agent = sessionService.getAgentSession(sessionId)
+    if (agent) await agent.setThinkingLevel(level)
+    else await appendThinkingLevelChange(sessionId, level)
   }
 
-  setEnabledTools(sessionId: string, tools: string[]): void {
-    sessionService.getAgentSession(sessionId)?.setEnabledTools(tools)
+  async setEnabledTools(sessionId: string, tools: string[]): Promise<void> {
+    const agent = sessionService.getAgentSession(sessionId)
+    if (agent) await agent.setEnabledTools(tools)
+    else await appendActiveToolsChange(sessionId, tools)
   }
 
-  getAgentInfo(sessionId: string): AgentRuntimeInfo | null {
-    return sessionService.getAgentSession(sessionId)?.getRuntimeInfo() ?? null
+  async getAgentInfo(sessionId: string): Promise<AgentRuntimeInfo | null> {
+    return (await sessionService.getAgentSession(sessionId)?.getRuntimeInfo()) ?? null
   }
 
   // ─── 消息操作 ─────────────────────────────────
 
-  listMessages(sessionId: string): Message[] {
-    return messageService.listBySession(sessionId)
-  }
-
-  addMessage(params: MessageAddParams): Message {
-    return messageService.add(params)
+  async listMessages(sessionId: string): Promise<Message[]> {
+    return (await messageService.listBySession(sessionId)) as unknown as Message[]
   }
 
   clearMessages(sessionId: string): void {
     messageService.clear(sessionId)
-  }
-
-  rollbackMessage(sessionId: string, messageId: string): void {
-    messageService.rollbackToMessage(sessionId, messageId)
     sessionService.invalidateAgent(sessionId)
   }
 
-  deleteFromMessage(sessionId: string, messageId: string): void {
-    messageService.deleteFromMessage(sessionId, messageId)
+  /** 回退到某条消息之前：entry 树上把 leaf 移到它的父节点（历史保留，可再切回） */
+  async rollbackMessage(sessionId: string, messageId: string): Promise<void> {
+    await messageService.rollbackToMessage(sessionId, messageId)
     sessionService.invalidateAgent(sessionId)
   }
 

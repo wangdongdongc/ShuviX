@@ -1,38 +1,25 @@
 /**
  * Electron 宿主适配器 —— 把 @shuvix/agent-runtime 的注入接口对接到桌面端的具体设施
- * （messageService / chatFrontendRegistry / sessionDao / httpLogService / process.env / 审批 / i18n）。
+ * （chatFrontendRegistry / sessionDao / httpLogService / process.env / i18n）。
  *
- * RuntimeSession + eventHandler（宿主无关）通过这些适配器在 Electron 主进程运行；
- * Chrome 扩展则提供另一套（IndexedDB / 内存 eventBus / no-op env）适配器。
+ * 迁移到 AgentHarness 后 **RuntimePersistence 适配器已删除**：消息落盘由 harness
+ * 自己经 SessionStorage（SqliteSessionStorage）完成，宿主不再提供 add/addToolUse/
+ * completeToolUse 那一组写入口。
  */
 import type {
-  RuntimePersistence,
   RuntimeEventSink,
   RuntimeEnv,
   RuntimeHttpLog,
   RuntimeLogger,
-  ToolResultTransform,
-  ChatMessage
+  ToolResultTransform
 } from '@shuvix/agent-runtime'
 import type { TextContent, ImageContent } from '@earendil-works/pi-ai'
-import { messageService } from './messageService'
 import { chatFrontendRegistry } from '../frontend/core'
 import { sessionDao } from '../dao/sessionDao'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import { httpLogService } from './httpLogService'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
-
-/** 持久化适配器：委托 messageService（better-sqlite3，天然同步） */
-export const electronPersistence: RuntimePersistence = {
-  listMessages: (sessionId) => messageService.listBySession(sessionId),
-  add: (p) => messageService.add(p) as unknown as ChatMessage,
-  addAssistantText: (p) => messageService.addAssistantText(p),
-  addToolUse: (p) => messageService.addToolUse(p),
-  completeToolUse: (p) => messageService.completeToolUse(p),
-  addStepThinking: (p) => messageService.addStepThinking(p),
-  addStepText: (p) => messageService.addStepText(p)
-}
 
 /** 事件广播适配器：委托 chatFrontendRegistry */
 export const electronEventSink: RuntimeEventSink = {
@@ -53,7 +40,13 @@ export const electronHttpLog: RuntimeHttpLog = {
     httpLogService.updateUsage(logId, input, output, total, responseJson)
 }
 
-/** 工具结果入库前转换：委托 stepPersistPipeline（图片 → 路径提示等瘦身） */
+/**
+ * 工具结果转换：委托 stepPersistPipeline（图片 → 路径提示等瘦身）。
+ *
+ * 语义变化：旧模型下这条管线只作用于**入库路径**，广播路径保留原始内容（双轨）。
+ * harness 的 entry 树里存的就是发给模型的原始 toolResult，没有独立的入库路径，
+ * 所以这里退化为只影响**广播**（UI 展示），落盘内容保持原样。
+ */
 export const electronToolResultTransform: ToolResultTransform = (input) =>
   transformToolResultForPersist({
     toolName: input.toolName,

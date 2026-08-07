@@ -1,16 +1,23 @@
 /**
  * 派生 Agent 协调器（跨端共享核心）。
  *
- * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一个 RuntimeAgent 运行时
- * （事件经统一的 eventHandler 管线转换/广播），唯一差异是注入内存态 ephemeral
- * persistence —— 不产生会话记录，销毁即消失。本文件只负责 spawn 协调：
- * 深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，父子关系唯一事实来源）、
+ * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一个 HarnessSession 运行时
+ * （pi AgentHarness + 统一事件翻译管线），唯一差异是会话树注入 **InMemorySessionStorage**
+ * —— 上下文只活在内存，不产生任何持久化记录，销毁即消失。本文件只负责 spawn 协调：
+ * 深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，父子关系唯一事实来源 —— pi 的
+ * SessionMetadata 刻意不含血缘字段，这层簿记是对 pi 的补充而非重复）、
  * 结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
  *
  * 平台相关项全部经注入：工具解析(resolveTools)、模型构建(buildModel)、apiKey(getApiKey)、
  * 事件广播(broadcast)、审批/询问通道(requestUserInput，路由到根会话前端)。
  */
-import { Agent, type AgentMessage, type AgentToolResult } from '@earendil-works/pi-agent-core'
+import {
+  InMemorySessionStorage,
+  Session,
+  type Agent,
+  type AgentMessage,
+  type AgentToolResult
+} from '@earendil-works/pi-agent-core'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import { v4 as uuid } from 'uuid'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
@@ -18,9 +25,10 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
-import { RuntimeAgent } from '../runtimeAgent'
 import { AgentRegistry, agentIdOf } from '../agentRegistry'
-import { createEphemeralPersistence } from '../ephemeralPersistence'
+import { HarnessSession } from '../harness/harnessSession'
+import { createModelsAdapter } from '../harness/modelsAdapter'
+import { createStubExecutionEnv } from '../harness/stubEnv'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
 
@@ -185,8 +193,9 @@ export interface SubAgentManager {
 interface SpawnedAgent {
   agentId: string
   profile: InProcessAgentType
-  agent: Agent
-  runtime: RuntimeAgent
+  /** 内存态会话树（上下文真理源；随 destroy 消失） */
+  piSession: Session
+  runtime: HarnessSession
   aborted: boolean
   /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
   interrupted: boolean
@@ -238,13 +247,13 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return parts.join(' ')
   }
 
-  function createSession(params: {
+  async function createSession(params: {
     parentSessionId: string
     agentType: InProcessAgentType
     description: string
     modelConfig: SubAgentModelConfig
     contextMessages?: AgentMessage[]
-  }): SpawnedAgent {
+  }): Promise<SpawnedAgent> {
     const { parentSessionId, agentType, description, modelConfig, contextMessages } = params
 
     // ── 深度校验：唯一的层级控制点（派发工具全员可用，越界在此拒绝） ──
@@ -271,59 +280,57 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     })
     const resolvedModel = deps.buildModel(modelConfig)
 
-    // onPayload 先于 RuntimeAgent 构造触达不到实例，经闭包引用延迟绑定
-    let runtimeRef: RuntimeAgent | null = null
-    const httpLog = deps.httpLog
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: agentType.systemPrompt,
-        model: resolvedModel,
-        // 默认 'off'；笔记本等把会话思考深度经 modelConfig 传入即生效
-        thinkingLevel: modelConfig.thinkingLevel ?? 'off',
-        // 预置上下文消息（如笔记本内容）先落上下文，随后 agent.prompt(userText) 接其后
-        messages: contextMessages ? [...contextMessages] : [],
-        tools
-      },
-      getApiKey: (p) => deps.getApiKey(p),
-      // LLM 日志：每次请求记一条（归到根会话），message_end 经统一事件管线回填用量
-      onPayload: httpLog
-        ? (payload, requestModel) => {
-            runtimeRef?.addPendingLogId(
-              httpLog.logRequest({
-                sessionId: rootSessionId,
-                provider: requestModel.provider,
-                model: requestModel.id,
-                payload
-              })
-            )
-          }
-        : undefined
-    })
+    // 内存态会话树：与根会话同一套 harness 语义，只是存储不落盘
+    const piSession = new Session(
+      new InMemorySessionStorage({
+        metadata: { id: agentId, createdAt: new Date().toISOString() }
+      })
+    )
+    // 预置上下文（如笔记本正文）直接落 entry —— 进 LLM 上下文，且不触发任何事件广播
+    if (contextMessages) {
+      for (const msg of contextMessages) await piSession.appendMessage(msg)
+    }
 
-    // 与会话根 agent 同一套运行时/事件管线；仅持久化为内存态（不产生会话记录）
-    const runtime = new RuntimeAgent({
+    const httpLog = deps.httpLog
+    const runtime = new HarnessSession({
       sessionId: agentId,
-      parentAgentId: parentSessionId,
-      depth,
-      agent,
+      session: piSession,
+      // 派生 agent 的工具都自带执行环境（resolveTools 注入），harness 的 ExecutionEnv 从不被调用
+      env: createStubExecutionEnv(),
+      models: createModelsAdapter({ getApiKey: (p) => deps.getApiKey(p) }),
+      model: resolvedModel,
+      // 默认 'off'；笔记本等把会话思考深度经 modelConfig 传入即生效
+      thinkingLevel: modelConfig.thinkingLevel ?? 'off',
+      systemPrompt: agentType.systemPrompt,
+      tools,
       eventSink: {
         broadcast: (event) => deps.broadcast(event),
         // 派生 agent 自身无输入面板；审批/询问经 helpers.requestUserInput 走根会话
         hasUserInputCapability: () => false
       },
-      persistence: createEphemeralPersistence(),
       // 不做并行 batch 预展示（tool_start 统一在执行时发出，与派生 agent 面板语义一致）
       shouldDeferToolDisplay: () => true,
+      // prompt 卡片经 sub_session_register 展示、追问由 continueTask 手工广播（带 inlineTokens）
+      // —— 自动 user_message 会造成面板重复
+      broadcastUserMessages: false,
       httpLog: deps.httpLog,
-      logger: deps.logger,
-      localize: (key) => (key === 'agent.toolAborted' ? abortedNote() : key)
+      // LLM 日志：每次请求记一条（归到根会话），用量在 message_end 经统一管线回填
+      onPayload: httpLog
+        ? (payload, requestModel) =>
+            httpLog.logRequest({
+              sessionId: rootSessionId,
+              provider: requestModel.provider,
+              model: requestModel.id,
+              payload
+            })
+        : undefined,
+      logger: deps.logger
     })
-    runtimeRef = runtime
 
     const session: SpawnedAgent = {
       agentId,
       profile: agentType,
-      agent,
+      piSession,
       runtime,
       aborted: false,
       interrupted: false
@@ -344,30 +351,26 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return session
   }
 
-  /** 跑一轮（prompt → idle），返回本轮 execError（错误已消化，不抛出） */
+  /** 跑一轮（prompt → 完成），返回本轮 execError（错误已消化并广播，不抛出） */
   async function runTurn(session: SpawnedAgent, promptText: string): Promise<string | undefined> {
-    try {
-      await session.agent.prompt(promptText)
-      await session.agent.waitForIdle()
-      return undefined
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      deps.logger?.error(`Agent ${session.agentId} error: ${msg}`)
-      return msg
-    }
+    const { error } = await session.runtime.prompt(promptText)
+    if (error) deps.logger?.error(`Agent ${session.agentId} error: ${error}`)
+    return error
   }
 
   /** 一轮结束后的收尾：抽取结果 + 广播 sub_session_end */
-  function finishTurn(
+  async function finishTurn(
     session: SpawnedAgent,
     parentSessionId: string,
     execError: string | undefined
-  ): { result: string } {
+  ): Promise<{ result: string }> {
+    // 上下文真理源是内存会话树（含 harness 落进去的失败消息）
+    const messages = (await session.piSession.buildContext()).messages
     const result = session.interrupted
-      ? extractResult(session.agent.state.messages)
+      ? extractResult(messages)
       : session.aborted
         ? abortedNote()
-        : extractResult(session.agent.state.messages, execError)
+        : extractResult(messages, execError)
     const isError = session.interrupted ? false : !!execError || session.aborted
 
     deps.broadcast({
@@ -383,16 +386,16 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   function interrupt(subSessionId: string): void {
     const s = sessions.get(subSessionId)
     if (!s) return
-    // 软停止：标记为「用户中断」，RuntimeAgent.abort 终结在飞工具调用并停止当前生成。
-    // 登记保留 —— runTask/continueTask 的 waitForIdle 解除后照常广播 sub_session_end
+    // 软停止：标记为「用户中断」，harness.abort 终结在飞工具调用并停止当前生成。
+    // 登记保留 —— runTask/continueTask 的 prompt 解除后照常广播 sub_session_end
     // （isError=false），条目保留在面板供继续追问或显式删除。
     s.interrupted = true
-    s.runtime.abort()
+    void s.runtime.abort()
   }
 
   function abortOne(s: SpawnedAgent): void {
     s.aborted = true
-    s.runtime.abort()
+    void s.runtime.abort()
   }
 
   function destroy(subSessionId: string): void {
@@ -400,7 +403,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     if (!s) return
     // 先级联销毁子树（后代挂在本 agent 名下）
     for (const child of registry.childrenOf(subSessionId)) destroy(child.agentId)
-    s.runtime.abort()
+    void s.runtime.abort()
     sessions.delete(subSessionId)
     registry.unregister(subSessionId)
   }
@@ -429,7 +432,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       const llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
 
       // 不限制并发数量：可同时堆叠任意多个（面板纵向手风琴展示）；层级由深度校验约束
-      const session = createSession({
+      const session = await createSession({
         parentSessionId,
         agentType,
         description,
@@ -449,7 +452,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         prompt,
         inlineTokens: hasTokens ? promptInlineTokens : undefined,
         contextNote,
-        depth: session.runtime.depth,
+        // 血缘由 AgentRegistry 唯一维护（HarnessSession 不再承载 depth/parent）
+        depth: registry.depthOf(session.agentId),
         rootSessionId: registry.rootSessionOf(session.agentId)
       })
 
@@ -462,7 +466,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       }
 
       const execError = await runTurn(session, llmPrompt)
-      return finishTurn(session, parentSessionId, execError)
+      return await finishTurn(session, parentSessionId, execError)
     },
 
     async continueTask(params: {
@@ -501,7 +505,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       })
 
       const execError = await runTurn(session, promptText)
-      finishTurn(session, parentSessionId, execError)
+      await finishTurn(session, parentSessionId, execError)
     },
 
     abortAll(parentSessionId: string): void {

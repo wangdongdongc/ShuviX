@@ -202,7 +202,6 @@ function ViewDialog({
         <div className="overflow-auto px-4 py-3 space-y-3 text-[11px]">
           <Field label={t('tool.subAgentWhenToUse')} value={agent.whenToUse} />
           <Field label={t('tool.subAgentTools')} value={agent.tools.join(', ') || '—'} />
-          <Field label={t('tool.subAgentMaxTurns')} value={String(agent.maxTurns)} />
           {agent.requiredMcp && agent.requiredMcp.length > 0 && (
             <Field label={t('tool.subAgentRequiredMcp')} value={agent.requiredMcp.join(', ')} />
           )}

@@ -1,288 +1,112 @@
-import { v7 as uuidv7 } from 'uuid'
-import { messageDao, messageStepDao, STEP_TYPES } from '../dao/messageDao'
-import { sessionDao } from '../dao/sessionDao'
-import { getOperationContext } from '../utils/operationContext'
-import type { Message, MessageMetadata, MessageType } from '../types'
-import type {
-  ChatMessage,
-  UserTextMessage,
-  AssistantTextMessage,
-  ToolUseMessage,
-  ToolResultDetails,
-  StepTextMessage,
-  StepThinkingMessage,
-  ErrorEventMessage,
-  ImageMeta,
-  InlineToken
-} from '../types'
-import { narrowMessage } from '../types'
+/**
+ * 消息服务 —— 会话 entry 树的「UI 视角」读取端。
+ *
+ * 迁移到 AgentHarness 之后，这个服务从「消息的写入方 + 读取方」缩成了**只读投影**：
+ * 消息的产生与落盘全部由 harness 在 `message_end` / `turn_end` 完成（写进会话的
+ * JSONL 转写文件），这里只负责把 entry 树投影成 chat-ui 认识的 ChatMessage。
+ *
+ * 随之消失的方法（旧调用方需改造）：
+ *   add / addUserText / addAssistantText / addToolUse / completeToolUse /
+ *   addStepThinking / addStepText / addErrorEvent —— 写入不再经这里。
+ *   rollbackToMessage / deleteFromMessage —— 改为树导航（moveTo），见下方新方法。
+ */
+import { buildContextEntries } from '@earendil-works/pi-agent-core'
+import type { SessionTreeEntry } from '@earendil-works/pi-agent-core'
+import { entriesToChatMessages } from '@shuvix/agent-runtime'
+import { deleteSessionFile, getSessionTree } from './sessionStorage'
+import type { ChatMessage } from '../types'
 
-/** 路由到 message_steps 的消息类型（Set 化以供快速查找） */
-const STEP_TYPE_SET = new Set(STEP_TYPES)
-
-/** 归并两个按 createdAt 升序的数组，相同时间戳用 id 字典序作 tiebreaker */
-function mergeSorted(a: Message[], b: Message[]): Message[] {
-  const result: Message[] = []
-  let i = 0
-  let j = 0
-  while (i < a.length && j < b.length) {
-    if (
-      a[i].createdAt < b[j].createdAt ||
-      (a[i].createdAt === b[j].createdAt && a[i].id <= b[j].id)
-    ) {
-      result.push(a[i++])
-    } else {
-      result.push(b[j++])
-    }
+export class MessageService {
+  /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
+  async listBySession(sessionId: string): Promise<ChatMessage[]> {
+    const session = await getSessionTree(sessionId)
+    if (!session) return [] // 还没发过消息 → 没有转写文件
+    const entries = await session.buildContextEntries()
+    return entriesToChatMessages(entries, sessionId)
   }
-  while (i < a.length) result.push(a[i++])
-  while (j < b.length) result.push(b[j++])
-  return result
+
+  /** 会话最后一条消息 */
+  async findLastBySession(sessionId: string): Promise<ChatMessage | undefined> {
+    const msgs = await this.listBySession(sessionId)
+    return msgs.length > 0 ? msgs[msgs.length - 1] : undefined
+  }
+
+  /** 清空会话（直接删掉转写文件；下次发消息会重建） */
+  clear(sessionId: string): void {
+    deleteSessionFile(sessionId)
+  }
+
+  // ─── 树导航（取代旧的「删除消息之后的所有消息」） ────────────────
+  //
+  // 旧模型靠 DELETE ... WHERE createdAt > ? 物理删除；entry 树是 append-only，
+  // 对应操作是把 leaf 移到目标 entry 的父节点 —— 历史仍在文件里，可以再切回去。
+
+  /** 回退到指定消息之前（该消息本身也不再在上下文中） */
+  async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
+    const session = await getSessionTree(sessionId)
+    if (!session) return false
+    const entry = await session.getEntry(resolveEntryId(messageId))
+    if (!entry) return false
+    await session.moveTo(entry.parentId)
+    return true
+  }
+
+  /** 回退到指定消息之后（保留该消息本身） */
+  async truncateAfterMessage(sessionId: string, messageId: string): Promise<boolean> {
+    const session = await getSessionTree(sessionId)
+    if (!session) return false
+    const entry = await session.getEntry(resolveEntryId(messageId))
+    if (!entry) return false
+    await session.moveTo(entry.id)
+    return true
+  }
+
+  // ─── 归档（被压缩掉的历史） ────────────────────────────────
+  //
+  // 旧模型用 archived 标记位；现在「归档」= 落在最后一条 compaction entry
+  // 的 firstKeptEntryId 之前的那些 entry —— 由 buildContextEntries 的差集算出。
+
+  private async archivedEntries(sessionId: string): Promise<SessionTreeEntry[]> {
+    const session = await getSessionTree(sessionId)
+    if (!session) return []
+    const leafId = await session.getLeafId()
+    if (!leafId) return []
+    const all = await session.getBranch()
+    const kept = new Set(buildContextEntries(all).map((e) => e.id))
+    return all.filter((e) => !kept.has(e.id))
+  }
+
+  async countArchived(sessionId: string): Promise<number> {
+    const entries = await this.archivedEntries(sessionId)
+    return entriesToChatMessages(entries, sessionId).length
+  }
+
+  /** 分页加载已归档消息（按时间正序） */
+  async listArchivedBySession(
+    sessionId: string,
+    limit: number,
+    offset: number
+  ): Promise<ChatMessage[]> {
+    const entries = await this.archivedEntries(sessionId)
+    const msgs = entriesToChatMessages(entries, sessionId)
+    // 与旧行为一致：从最近的往前取 limit 条，再按正序返回
+    const end = Math.max(0, msgs.length - offset)
+    const start = Math.max(0, end - limit)
+    return msgs.slice(start, end)
+  }
 }
 
 /**
- * 消息服务 — 编排消息相关的业务逻辑
- * 主消息存 messages 表，工具调用/结果存 message_steps 表
- * 对外提供统一的合并视图
+ * ChatMessage id → entry id。
+ *
+ * 投影时中间轮的 step 会派生出 `<entryId>:think` / `<entryId>:text` 这样的合成 id，
+ * 树导航只认原始 entry，所以这里剥掉后缀。tool_use 的 id 是 toolCallId，
+ * 不对应任何 entry —— 落回它所属的 assistant entry 由调用方保证（UI 只允许对
+ * 用户消息/助手终答发起回退）。
  */
-export class MessageService {
-  /** 获取会话的所有消息（合并 messages + message_steps，按时间排序） */
-  listBySession(sessionId: string): ChatMessage[] {
-    const primary = messageDao.findBySessionId(sessionId)
-    const steps = messageStepDao.findBySessionId(sessionId)
-    const merged =
-      steps.length === 0 ? primary : primary.length === 0 ? steps : mergeSorted(primary, steps)
-    return merged.map(narrowMessage)
-  }
-
-  /** 添加消息（按类型路由到对应的表，同时更新会话时间戳） */
-  add(params: {
-    sessionId: string
-    role: 'user' | 'assistant' | 'tool' | 'system' | 'system_notify'
-    type?: MessageType
-    content: string
-    metadata?: MessageMetadata | null
-    model?: string
-  }): Message {
-    // 对 user 消息，自动注入来源信息到 metadata（非 electron 来源时）
-    let metadata: MessageMetadata | null = params.metadata ?? null
-    if (params.role === 'user') {
-      const ctx = getOperationContext()
-      if (ctx && ctx.source.type !== 'electron') {
-        const existing: MessageMetadata = metadata ?? {}
-        const { type, ...rest } = ctx.source
-        existing.source = { type, ...rest }
-        metadata = existing
-      }
-    }
-
-    const message: Message = {
-      id: uuidv7(),
-      sessionId: params.sessionId,
-      role: params.role,
-      type: params.type || 'text',
-      content: params.content,
-      metadata,
-      model: params.model || '',
-      createdAt: Date.now()
-    }
-
-    // 按类型路由到对应的表
-    if (STEP_TYPE_SET.has(message.type)) {
-      messageStepDao.insert(message)
-    } else {
-      messageDao.insert(message)
-    }
-
-    sessionDao.touch(message.sessionId)
-    return message
-  }
-
-  /** 回退到指定消息：删除该消息之后的所有消息（跨两表） */
-  rollbackToMessage(sessionId: string, messageId: string): void {
-    const target = messageDao.pickAcrossTables(messageId, ['createdAt'])
-    if (!target) return
-    messageDao.deleteAfterTimestamp(sessionId, target.createdAt)
-    messageStepDao.deleteAfterTimestamp(sessionId, target.createdAt)
-  }
-
-  /** 从指定消息开始删除（含该消息本身及之后的所有消息，跨两表） */
-  deleteFromMessage(sessionId: string, messageId: string): void {
-    const target = messageDao.pickAcrossTables(messageId, ['createdAt'])
-    if (!target) return
-    messageDao.deleteFromTimestamp(sessionId, target.createdAt)
-    messageStepDao.deleteFromTimestamp(sessionId, target.createdAt)
-  }
-
-  /** 清空会话消息（两表） */
-  clear(sessionId: string): void {
-    messageDao.deleteBySessionId(sessionId)
-    messageStepDao.deleteBySessionId(sessionId)
-  }
-
-  /** 获取会话最后一条消息（跨两表比较 createdAt） */
-  findLastBySession(sessionId: string): ChatMessage | undefined {
-    const msgs = messageDao.findBySessionId(sessionId)
-    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : undefined
-    const lastStep = messageStepDao.findLastBySessionId(sessionId)
-    const last = !lastMsg
-      ? lastStep
-      : !lastStep
-        ? lastMsg
-        : lastStep.createdAt > lastMsg.createdAt
-          ? lastStep
-          : lastMsg
-    return last ? narrowMessage(last) : undefined
-  }
-
-  // ─── 归档消息查询 ──────────────────────────────────
-
-  /** 统计会话已归档消息数 */
-  countArchived(sessionId: string): number {
-    return messageDao.countArchived(sessionId)
-  }
-
-  /**
-   * 分页加载已归档消息（含关联的 steps，按时间正序）
-   * @param limit  每页加载的主消息条数
-   * @param offset 已跳过的主消息条数
-   */
-  listArchivedBySession(sessionId: string, limit: number, offset: number): ChatMessage[] {
-    const primary = messageDao.findArchivedBySessionId(sessionId, limit, offset)
-    if (primary.length === 0) return []
-    // 用主消息的时间范围查关联 steps
-    const fromTime = primary[0].createdAt
-    const toTime = primary[primary.length - 1].createdAt
-    const steps = messageStepDao.findArchivedInRange(sessionId, fromTime, toTime)
-    const merged =
-      steps.length === 0 ? primary : primary.length === 0 ? steps : mergeSorted(primary, steps)
-    return merged.map(narrowMessage)
-  }
-
-  // ─── 类型化工厂方法 ───────────────────────────────
-
-  addUserText(p: {
-    sessionId: string
-    content: string
-    images?: ImageMeta[]
-    inlineTokens?: Record<string, InlineToken>
-  }): UserTextMessage {
-    const meta: MessageMetadata | undefined =
-      p.images?.length || p.inlineTokens
-        ? {
-            ...(p.images?.length ? { images: p.images } : {}),
-            ...(p.inlineTokens ? { inlineTokens: p.inlineTokens } : {})
-          }
-        : undefined
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'user',
-      content: p.content,
-      metadata: meta
-    }) as unknown as UserTextMessage
-  }
-
-  addAssistantText(p: {
-    sessionId: string
-    content: string
-    metadata?: MessageMetadata | null
-    model: string
-  }): AssistantTextMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      content: p.content,
-      metadata: p.metadata,
-      model: p.model
-    }) as unknown as AssistantTextMessage
-  }
-
-  addToolUse(p: {
-    sessionId: string
-    toolCallId: string
-    toolName: string
-    args?: Record<string, unknown>
-    turnIndex?: number
-    model: string
-  }): ToolUseMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'tool_use',
-      content: '',
-      metadata: {
-        toolCallId: p.toolCallId,
-        toolName: p.toolName,
-        args: p.args,
-        turnIndex: p.turnIndex
-      },
-      model: p.model
-    }) as unknown as ToolUseMessage
-  }
-
-  completeToolUse(p: {
-    messageId: string
-    content: string
-    isError?: boolean
-    details?: ToolResultDetails
-  }): void {
-    messageStepDao.updateContent(p.messageId, p.content)
-    messageStepDao.patchMetadata(p.messageId, {
-      isError: p.isError || false,
-      details: p.details
-    })
-  }
-
-  addStepThinking(p: {
-    sessionId: string
-    content: string
-    turnIndex?: number
-    model: string
-  }): StepThinkingMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'step_thinking',
-      content: p.content,
-      metadata: { turnIndex: p.turnIndex },
-      model: p.model
-    }) as unknown as StepThinkingMessage
-  }
-
-  addStepText(p: {
-    sessionId: string
-    content: string
-    turnIndex?: number
-    images?: ImageMeta[]
-    model: string
-  }): StepTextMessage {
-    const metadata: MessageMetadata = { turnIndex: p.turnIndex }
-    if (p.images?.length) metadata.images = p.images
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'assistant',
-      type: 'step_text',
-      content: p.content,
-      metadata,
-      model: p.model
-    }) as unknown as StepTextMessage
-  }
-
-  addErrorEvent(p: { sessionId: string; content: string }): ErrorEventMessage {
-    return this.add({
-      sessionId: p.sessionId,
-      role: 'system_notify',
-      type: 'error_event',
-      content: p.content
-    }) as unknown as ErrorEventMessage
-  }
-
-  /** 删除单条 error_event 消息（仅限该类型，避免误删其他消息） */
-  deleteErrorEvent(sessionId: string, messageId: string): boolean {
-    const target = messageDao.pick(messageId, ['type', 'sessionId'])
-    if (!target || target.sessionId !== sessionId || target.type !== 'error_event') return false
-    return messageDao.deleteById(sessionId, messageId) > 0
-  }
+function resolveEntryId(messageId: string): string {
+  const idx = messageId.indexOf(':')
+  return idx === -1 ? messageId : messageId.slice(0, idx)
 }
 
 export const messageService = new MessageService()

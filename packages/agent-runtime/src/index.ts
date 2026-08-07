@@ -1,30 +1,30 @@
 /**
  * @shuvix/agent-runtime —— 宿主无关的 Agent 编排核心。
  *
- * 消费 @earendil-works/pi-agent-core + pi-ai，把 AgentEvent 转成 @shuvix/chat-protocol 的
- * ChatEvent，并通过注入接口（persistence / event sink / env）脱离 Node/Electron。
+ * 消费 @earendil-works/pi-agent-core + pi-ai：AgentHarness 承载会话状态（entry 树），
+ * harness/ 把 AgentHarnessEvent 转成 @shuvix/chat-protocol 的 ChatEvent，
+ * 并通过注入接口（event sink / env）脱离 Node/Electron。
  * 桌面端与 Chrome 扩展共享同一套编排逻辑。
  */
 export * from './types'
-export { RuntimeAgent, type RuntimeAgentDeps } from './runtimeAgent'
 export {
   AgentRegistry,
   agentIdOf,
   type AgentRegistryEntry,
   type AgentRegistryEntryInput
 } from './agentRegistry'
-export { createEphemeralPersistence } from './ephemeralPersistence'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
   type SessionManagerDeps,
   type SessionDisposeReason
 } from './sessionManager'
+// 进程内共享会话树缓存（单实例 + 在途去重 + LRU/钉住）—— 存储后端经 deps 注入
 export {
-  forwardAgentEvent,
-  type SessionEventState,
-  type SessionEventHandlerContext
-} from './eventHandler'
+  createSessionTreeRegistry,
+  type SessionTreeRegistry,
+  type SessionTreeRegistryDeps
+} from './sessionTreeRegistry'
 export {
   resolveModel,
   BUILTIN_ENV_MAP,
@@ -252,7 +252,6 @@ export {
 // 内置子代理定义（硬编码，各端 registry 组装；用户同名定义可覆盖）
 // （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）
 export {
-  COMPACT_AGENT,
   EXPLORE_AGENT,
   RESEARCH_AGENT,
   VISUALIZATION_AGENT,
@@ -283,31 +282,35 @@ export {
   type NotebookTaskInputs
 } from './subagent/notebookContext'
 export { runUserDispatchTask, type UserDispatchInputs } from './subagent/userDispatch'
-// transcript：ChatMessage ↔ AgentMessage 双向投影 + 面向 Agent 的转写门面
-// （正向投影 = 两端共用的上下文恢复；反向投影使 chat-protocol 能力对任意 agent 生效）
+// harness 接入层：会话状态的存储与上下文构建交给 pi AgentHarness。
+// entry 树是唯一真理源，entriesToChatMessages 是它的「UI 视角」（唯一投影方向）。
 export {
-  agentMessagesToChatMessages,
-  chatMessagesToAgentMessages,
-  extractBase64,
-  transcribeAgentMessages
-} from './transcript'
-// session 工具：压缩子代理读转写 / 原子压缩归档的共享内核（数据源 = Agent 上下文，
-// 经 transcript/ 反向投影 + chat-protocol transcribeConversation 引擎按压缩档位渲染；
-// 端只注入 ensure*Session 取数 / 落库失效广播适配）
-export {
-  createSessionTool,
-  buildSummaryContent,
-  contextFingerprint,
-  verifyContextFingerprint,
-  SessionTool,
-  SessionToolParamsSchema,
-  SESSION_TOOL_DESCRIPTION,
-  type SessionToolDeps,
-  type SessionToolParams,
-  type SessionContextFingerprint
-} from './sessionTool'
-// 会话标题生成：宿主无关内核（端解析模型来源 + apiKey，触发策略在 chat-ui 共享）
+  HarnessSession,
+  forwardHarnessEvent,
+  createHarnessEventState,
+  entriesToChatMessages,
+  createModelsAdapter,
+  createStubExecutionEnv,
+  AUTO_COMPACT_CUSTOM_TYPE,
+  INSTRUCTION_CUSTOM_TYPE,
+  type HarnessSessionDeps,
+  type HarnessEventContext,
+  type HarnessEventDeps,
+  type HarnessEventState,
+  type ModelsAdapterDeps,
+  type ToolCallGate
+} from './harness'
+// transcript：AgentMessage → ChatMessage 投影 + 面向 Agent 的转写门面
+// （子代理仍是裸 Agent，需要这条路径把它的上下文渲染成可读转写）
+export { agentMessagesToChatMessages, extractBase64, transcribeAgentMessages } from './transcript'
+// 会话标题生成：宿主无关内核（端解析模型来源 + apiKey）；
+// SessionTitler 是两端共用的两阶段触发策略（quick 首轮 + refine 精修）
 export { generateSessionTitle, parseTitle, TITLE_GEN_SYSTEM_PROMPT } from './title/generateTitle'
+export {
+  SessionTitler,
+  type SessionTitlerDeps,
+  type TitleSourceMessage
+} from './title/sessionTitler'
 // 内置 hook 引擎 + 可移植 builtins（各端共享；桌面 HookService 组合本引擎追加 command 层）
 export {
   HookEngine,

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Settings2 } from 'lucide-react'
-import { getHostApi, useChatStore } from '@shuvix/chat-ui'
+import { getHostApi, useChatStore, isImeComposing } from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 /**
@@ -83,6 +83,8 @@ export function ChatHeader({
               onChange={(e) => setDraftTitle(e.target.value)}
               onBlur={() => void commitEditTitle()}
               onKeyDown={(e) => {
+                // 输入法组字中的回车是「确认选词」，不能当成提交（中文标题必踩）
+                if (isImeComposing(e)) return
                 if (e.key === 'Enter') void commitEditTitle()
                 if (e.key === 'Escape') setEditingTitle(false)
               }}

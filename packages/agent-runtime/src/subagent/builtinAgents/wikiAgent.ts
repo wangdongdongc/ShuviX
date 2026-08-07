@@ -33,7 +33,6 @@ export function buildWikiAgent(opts: BuildWikiAgentOptions): AgentDefinition {
     displayName: 'Knowledge Base Curator',
     whenToUse: `The ONLY channel for maintaining the local knowledge base at ${wikiRoot}: creating topics/entries, revising, promoting lifecycle status, reviewing backlinks, and querying history. Never modify files under the knowledge base root directly with file tools — always dispatch this agent. In the dispatch prompt, state the topic name and what needs to be done.`,
     tools: ['read', 'grep', 'glob', 'ls', 'write', 'edit', 'git', 'ask'],
-    maxTurns: 60,
     source: 'builtin',
     basePath: '',
     isEnabled: true,

@@ -6,13 +6,15 @@
  * - 巨大的 base64 写进 SQLite 会撑爆 message_steps 行
  * - 对话历史中永久保留 base64，回读时成本极高
  *
- * 该模块在"工具结果 → DB 入库"之间插入一条可扩展的转换管线，按需对
- * tool result 做瘦身（例如把 ImageContent 替换为一句"用 read 工具重读"）。
+ * 该模块提供一条可扩展的转换管线，按需对 tool result 做瘦身
+ * （例如把 ImageContent 替换为一句"用 read 工具重读"）。
+ *
+ * ⚠️ 迁移到 AgentHarness 后语义收窄：entry 树里存的就是发给模型的原始 toolResult，
+ * 不再有独立的"DB 入库路径"可供改写。因此本管线现在**只作用于广播路径**（UI 展示），
+ * 落盘内容保持原样 —— 旧的"运行时看原始 / 库里存瘦身版"双轨已不存在。
  *
  * 设计要点：
  * - 运行时路径不变：agent 当前轮看到的仍是原始结果
- * - 广播路径（broadcastEvent）保留原始内容（UI 实时渲染需要）
- * - 仅 DB 持久化路径（messageStepDao.updateContent / patchMetadata）走本管线
  * - 注册制 + 谓词匹配，支持后续按工具/内容类型追加更多规则
  */
 

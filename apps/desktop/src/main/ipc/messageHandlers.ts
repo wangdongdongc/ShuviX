@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { messageService } from '../services/messageService'
-import type { MessageAddParams, ErrorEventAddParams } from '../types'
 
 /**
  * 消息管理 IPC 处理器
@@ -15,12 +14,8 @@ export function registerMessageHandlers(): void {
     )
   )
 
-  /** 保存消息 */
-  ipcMain.handle('message:add', (_event, params: MessageAddParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () =>
-      chatGateway.addMessage(params)
-    )
-  )
+  // 注：message:add 已移除 —— 迁移到 AgentHarness 后消息只能由 harness 产生，
+  // 外部前端不再能凭空插入一条消息进会话树。
 
   /** 清空会话消息 */
   ipcMain.handle('message:clear', (_event, sessionId: string) =>
@@ -30,37 +25,17 @@ export function registerMessageHandlers(): void {
     })
   )
 
-  /** 回退到指定消息（保留该消息，删除之后的所有消息，使 Agent 失效） */
+  /** 回退到指定消息之前（entry 树把 leaf 移到其父节点，使 Agent 失效） */
   ipcMain.handle('message:rollback', (_event, params: { sessionId: string; messageId: string }) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.rollbackMessage(params.sessionId, params.messageId)
+    operationContext.run(createElectronContext(params.sessionId), async () => {
+      await chatGateway.rollbackMessage(params.sessionId, params.messageId)
       return { success: true }
     })
   )
 
-  /** 从指定消息开始删除（含该消息，使 Agent 失效） */
-  ipcMain.handle('message:deleteFrom', (_event, params: { sessionId: string; messageId: string }) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.deleteFromMessage(params.sessionId, params.messageId)
-      return { success: true }
-    })
-  )
-
-  /** 新增 error_event 消息（类型化便捷入口） */
-  ipcMain.handle('message:addErrorEvent', (_event, params: ErrorEventAddParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () =>
-      messageService.addErrorEvent(params)
-    )
-  )
-
-  /** 删除单条 error_event 消息（UI 便捷操作，不影响 agent 上下文） */
-  ipcMain.handle(
-    'message:deleteErrorEvent',
-    (_event, params: { sessionId: string; messageId: string }) =>
-      operationContext.run(createElectronContext(params.sessionId), () => ({
-        success: messageService.deleteErrorEvent(params.sessionId, params.messageId)
-      }))
-  )
+  // 注：message:deleteFrom 已并入 message:rollback（append-only 树上二者语义重合）。
+  // message:addErrorEvent / message:deleteErrorEvent 已移除 —— 错误不再是独立可增删的
+  // 消息行，而是 stopReason='error' 的 assistant entry，由投影渲染成 error_event。
 
   /** 统计会话已归档消息数 */
   ipcMain.handle('message:countArchived', (_event, sessionId: string) =>

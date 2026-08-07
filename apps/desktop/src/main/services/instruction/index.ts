@@ -7,4 +7,4 @@
  */
 
 export { scanInstructionFiles } from './instructionFileScanner'
-export { injectInstructionMessages, buildInstructionMessages } from './instructionInjector'
+export { resolveInstructionContent, type ResolvedInstruction } from './instructionInjector'

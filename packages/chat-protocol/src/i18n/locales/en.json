@@ -144,7 +144,9 @@
   },
   "compact": {
     "button": "Compress conversation",
+    "nothingToCompact": "Context is still small — compression keeps the recent window intact, so there is nothing to compact yet.",
     "summaryLabel": "Conversation Summary (Compressed)",
+    "autoSummaryLabel": "Conversation Summary (Auto-compacted)",
     "archivedBanner": "{{count}} archived messages hidden — click to view",
     "archivedLoading": "Loading...",
     "archivedAllLoaded": "All archived messages loaded"
@@ -818,7 +820,6 @@
     "subAgentFsHint": "Sub-agents are flat Markdown files (one .md per agent, file name = agent name). Built-in ones ship with the app and are read-only. Add your own by dropping a Claude Code-compatible .md into ~/.shuvix/agents/ and clicking Refresh.",
     "subAgentWhenToUse": "When to use",
     "subAgentTools": "Tools",
-    "subAgentMaxTurns": "Max turns",
     "subAgentRequiredMcp": "Required MCP",
     "subAgentBasePath": "Base path",
     "subAgentSystemPrompt": "System prompt",

@@ -1,10 +1,4 @@
-import type {
-  AgentInitResult,
-  AgentRuntimeInfo,
-  MessageAddParams,
-  Message,
-  ThinkingLevel
-} from '../../types'
+import type { AgentInitResult, AgentRuntimeInfo, Message, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -21,8 +15,8 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 export interface ChatGateway {
   // ─── Agent 对话 ──────────────────────────────
 
-  /** 开启对话（加载历史消息、项目指令等） */
-  startChat(sessionId: string): AgentInitResult
+  /** 开启对话：返回会话元信息（运行配置从会话树推导） */
+  startChat(sessionId: string): Promise<AgentInitResult>
 
   /** 发送用户消息 */
   prompt(
@@ -40,7 +34,7 @@ export interface ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
-  ): void
+  ): Promise<void>
 
   /**
    * 用户直发派发（kind='agent' 斜杠命令 `/<agentName> <prompt>`）：不进主会话消息流，
@@ -57,8 +51,14 @@ export interface ChatGateway {
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
 
-  /** 中止当前生成 */
-  abort(sessionId: string): { success: boolean; savedMessage?: Message }
+  /** 中止当前生成（部分内容由 harness 自行落成 entry，不再回传 savedMessage） */
+  abort(sessionId: string): Promise<{ success: boolean; savedMessage?: Message }>
+
+  /**
+   * 压缩会话历史 —— harness 内建的滚动式部分压缩（保留最近 ~20k tokens 的原始消息，
+   * 更早的换成结构化摘要）。替代了原先"派发 compact 子代理 + session 工具"那条路径。
+   */
+  compact(sessionId: string): Promise<{ success: boolean; error?: string }>
 
   // ─── 交互响应 ─────────────────────────────────
 
@@ -70,40 +70,39 @@ export interface ChatGateway {
 
   // ─── 运行时调整 ────────────────────────────────
 
-  /** 切换模型 */
+  /** 切换模型（harness 把变更作为 model_change entry 落在会话树上，故为异步） */
   setModel(
     sessionId: string,
     provider: string,
     model: string,
     baseUrl?: string,
     apiProtocol?: string
-  ): void
+  ): Promise<void>
 
-  /** 设置思考深度 */
-  setThinkingLevel(sessionId: string, level: ThinkingLevel): void
+  /** 设置思考深度（同上，落 thinking_level_change entry） */
+  setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
-  /** 动态更新启用工具集 */
-  setEnabledTools(sessionId: string, tools: string[]): void
+  /** 动态更新启用工具集（同上，落 active_tools_change entry） */
+  setEnabledTools(sessionId: string, tools: string[]): Promise<void>
 
   /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-  getAgentInfo(sessionId: string): AgentRuntimeInfo | null
+  getAgentInfo(sessionId: string): Promise<AgentRuntimeInfo | null>
 
   // ─── 消息操作 ─────────────────────────────────
 
-  /** 获取会话消息列表 */
-  listMessages(sessionId: string): Message[]
+  /** 获取会话消息列表（entry 树的 UI 投影） */
+  listMessages(sessionId: string): Promise<Message[]>
 
-  /** 添加消息 */
-  addMessage(params: MessageAddParams): Message
-
-  /** 清空会话所有消息 */
+  /** 清空会话所有消息（整棵 entry 树） */
   clearMessages(sessionId: string): void
 
-  /** 回退到指定消息（保留该消息，删除之后的，使 Agent 失效） */
-  rollbackMessage(sessionId: string, messageId: string): void
-
-  /** 从指定消息开始删除（含该消息，使 Agent 失效） */
-  deleteFromMessage(sessionId: string, messageId: string): void
+  /**
+   * 回退到指定消息之前，使 Agent 失效。
+   *
+   * entry 树是 append-only：这里做的是把 leaf 移到目标 entry 的父节点，
+   * 被"删掉"的分支仍在树上。旧的 deleteFromMessage 与之语义重合，已合并掉。
+   */
+  rollbackMessage(sessionId: string, messageId: string): Promise<void>
 
   // ─── 资源操作 ──────────────────────────────────
 

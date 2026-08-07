@@ -2,7 +2,7 @@
  * 派生 Agent 协调器（桌面装配）—— 复用 @shuvix/agent-runtime 的 createSubAgentManager 内核。
  *
  * 执行/事件管线/abort/深度校验全在共享核心（派生 agent 与会话根 agent 共用
- * RuntimeAgent 运行时，仅持久化为内存态）；桌面只注入端适配：
+ * HarnessSession 运行时，会话树为内存态 InMemorySessionStorage）；桌面只注入端适配：
  *   - resolveTools：内置工具注册表 + MCP + Skill，经 wrapToolOutput 截断/落盘；
  *     定义白名单声明 'Agent' 的派生 agent 注入派发工具（opt-in；层级由内核 MAX_AGENT_DEPTH 校验）
  *   - buildModel：agentModelResolver.resolveModel（providerDao 取 baseUrl/protocol/key）

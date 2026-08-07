@@ -4,9 +4,6 @@ import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import type {
-  SessionUpdateModelConfigParams,
-  SessionUpdateThinkingLevelParams,
-  SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
   SessionAllowListRemoveParams,
@@ -36,11 +33,6 @@ export function registerSessionHandlers(): void {
   })
 
   /** 更新会话模型配置（provider/model） */
-  ipcMain.handle('session:updateModelConfig', (_event, params: SessionUpdateModelConfigParams) => {
-    sessionService.updateModelConfig(params.id, params.provider, params.model)
-    return { success: true }
-  })
-
   /** 更新会话所属项目 */
   ipcMain.handle('session:updateProject', (_event, params: SessionUpdateProjectParams) => {
     sessionService.updateProjectId(params.id, params.projectId)
@@ -48,23 +40,7 @@ export function registerSessionHandlers(): void {
   })
 
   /** 更新思考深度 */
-  ipcMain.handle(
-    'session:updateThinkingLevel',
-    (_event, params: SessionUpdateThinkingLevelParams) => {
-      sessionService.updateThinkingLevel(params.id, params.thinkingLevel)
-      return { success: true }
-    }
-  )
-
   /** 更新会话启用工具列表 */
-  ipcMain.handle(
-    'session:updateEnabledTools',
-    (_event, params: SessionUpdateEnabledToolsParams) => {
-      sessionService.updateEnabledTools(params.id, params.enabledTools)
-      return { success: true }
-    }
-  )
-
   /** 更新命令免审批（统一开关） */
   ipcMain.handle('session:updateAutoApprove', (_event, params: SessionUpdateAutoApproveParams) => {
     sessionService.updateAutoApprove(params.id, params.autoApprove)

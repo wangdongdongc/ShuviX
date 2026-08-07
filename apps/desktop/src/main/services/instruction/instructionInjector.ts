@@ -1,35 +1,42 @@
 /**
- * InstructionInjector — 项目指令文件（AGENTS.md / CLAUDE.md）注入
+ * InstructionInjector — 项目指令文件（AGENTS.md / CLAUDE.md）解析
  *
- * 仅在两个时机调用：
- * 1. 新会话创建时（sessionService.create）
- * 2. 会话压缩归档时（session 工具 compact 动作，tools/session.ts —— build 形态并入其原子事务）
+ * 迁移到 AgentHarness 后这里只剩「按会话配置选出文件 + 读出内容」这一步：
+ * 写入不再经 messageDao，而是由 HarnessSession 落一条 `custom_message` entry
+ * （customType='instruction'，display=true）。它同时满足两件事 ——
+ * 进入模型上下文（pi 的 convertToLlm 把 custom 转成 user 消息），
+ * 且被 projection 投影成带 isInstructionInjection 标记的 UI 消息。
  *
- * 流程：扫描磁盘候选 → 按会话配置 settings.instructionFile 单选出至多一个文件（未配置时
- * AGENTS.md 优先、其次 CLAUDE.md）→ 写一条 user 消息（metadata.isInstructionInjection），
- * UI 通过 metadata 渲染 SystemNoticeCard。
+ * 注入时机也随之简化：旧实现要在「新会话创建」和「压缩事务内」各注入一次，
+ * 因为压缩会把历史消息整体归档掉；harness 的滚动压缩保留最近上下文，
+ * 但被压缩掉的指令仍需重新注入 —— 见 AgentSession.ensureInstructionsInjected 的幂等判断。
  */
 
 import { readFileSync } from 'fs'
-import { v7 as uuidv7 } from 'uuid'
-import { messageDao } from '../../dao/messageDao'
 import { sessionDao } from '../../dao/sessionDao'
 import { scanInstructionFiles } from './instructionFileScanner'
-import type { Message } from '../../types'
 import { createLogger } from '../../logger'
 import { resolveInstructionFile } from '@shuvix/chat-protocol/types/instructionFile'
 
 const log = createLogger('InstructionInjector')
 
+export interface ResolvedInstruction {
+  filename: string
+  /** 已包好前缀的注入正文 */
+  content: string
+}
+
 /**
- * 根据会话配置扫描候选指令文件，构造 user 消息对象（**不写库**）。
- * 单选语义：返回 0 或 1 条消息（数组形态保留，便于调用方统一批量落库）。
- * 调用方负责持久化，便于和压缩流程合并到同一个事务里。
+ * 根据会话配置扫描候选指令文件，读出内容（**不写任何存储**）。
+ * 单选语义：返回至多一个。
  *
  * 注：读配置走 `pick(['settings'])` 而非 `pickSettings`——后者用 json_extract，
  * 无法区分「显式 null（不注入）」和「键缺失（走默认优先级）」。
  */
-export function buildInstructionMessages(sessionId: string, workingDir: string): Message[] {
+export function resolveInstructionContent(
+  sessionId: string,
+  workingDir: string
+): ResolvedInstruction | null {
   const configured = sessionDao.pick(sessionId, ['settings'])?.settings?.instructionFile
   const available = scanInstructionFiles(workingDir)
   const selected = resolveInstructionFile(
@@ -38,11 +45,11 @@ export function buildInstructionMessages(sessionId: string, workingDir: string):
   )
   if (!selected) {
     log.info(`session=${sessionId} 未选中任何指令文件，跳过注入`)
-    return []
+    return null
   }
 
   const entry = available.find((f) => f.filename === selected)
-  if (!entry) return []
+  if (!entry) return null
 
   let content: string
   try {
@@ -51,45 +58,15 @@ export function buildInstructionMessages(sessionId: string, workingDir: string):
     log.warn(
       `读取失败: ${entry.absolutePath} (${err instanceof Error ? err.message : String(err)})`
     )
-    return []
+    return null
   }
   if (!content) {
     log.info(`跳过空文件 ${entry.filename}`)
-    return []
+    return null
   }
-  log.info(`构造指令消息 file=${entry.filename} bytes=${content.length}`)
-  return [
-    {
-      id: uuidv7(),
-      sessionId,
-      role: 'user',
-      type: 'text',
-      content: `Project instruction file (${entry.filename}):\n\n${content}`,
-      metadata: {
-        isInstructionInjection: true,
-        instructionFilename: entry.filename
-      },
-      model: '',
-      createdAt: Date.now()
-    }
-  ]
-}
-
-/**
- * 根据会话配置扫描并注入指令文件，每个文件作为一条独立 user 消息。
- * 这是 build + 写库的便捷封装，用于新会话场景（不需要事务）。
- */
-export function injectInstructionMessages(sessionId: string, workingDir: string): Message[] {
-  const messages = buildInstructionMessages(sessionId, workingDir)
-  for (const msg of messages) {
-    messageDao.insert(msg)
-    log.info(
-      `已写入指令消息 session=${sessionId} file=${msg.metadata?.instructionFilename} msgId=${msg.id}`
-    )
+  log.info(`解析指令文件 file=${entry.filename} bytes=${content.length}`)
+  return {
+    filename: entry.filename,
+    content: `Project instruction file (${entry.filename}):\n\n${content}`
   }
-  if (messages.length > 0) {
-    sessionDao.touch(sessionId)
-    log.info(`session=${sessionId} 共注入 ${messages.length} 条指令消息`)
-  }
-  return messages
 }

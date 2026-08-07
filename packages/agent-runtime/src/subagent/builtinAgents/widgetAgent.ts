@@ -50,7 +50,6 @@ export function buildWidgetAgent(opts: BuildWidgetAgentOptions): AgentDefinition
     displayName: 'Widget Builder',
     whenToUse: `Creates, maintains and exports ShuviX Widgets — small persistent React mini-apps stored under ${widgetsRoot} that the user opens any time from the Widget panel, each in its own app window. Dispatch it whenever the user wants a small self-contained tool rather than a one-off answer: JSON formatter, regex tester, unit converter, color picker, time-zone helper, base64 encoder, expression playground, todo list, note pad, bookmark store, log viewer — anything they call "a small tool", "mini app", "widget", "小工具", "小组件". Also dispatch it to extend, restyle or debug an existing widget (name the widget id), or to export one as a standalone Vite project. In the dispatch prompt state what the widget must do, any UI or data requirements, and the widget id when maintaining an existing one; write it in the user's language, since the agent names the widget in whatever language your prompt uses.`,
     tools: ['read', 'write', 'edit', 'ls', 'glob', 'grep', 'bash', 'git'],
-    maxTurns: 60,
     source: 'builtin',
     basePath: '',
     isEnabled: true,

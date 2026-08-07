@@ -2,6 +2,7 @@ import { FolderOpen, KeyRound, Lock, Terminal, TriangleAlert } from 'lucide-reac
 import { useTranslation } from 'react-i18next'
 import type { SshCredentialsInputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InputFormProps } from './types'
+import { isImeComposing } from '../../../utils/ime'
 import {
   buildSshCredentialsPayload,
   isSshCredentialsDraftValid,
@@ -27,6 +28,8 @@ export function SshCredentialsForm({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // 输入法组字中的回车是「确认选词」，不能当成提交
+    if (isImeComposing(e)) return
     if (e.key === 'Enter' && canConnect && !(e.target instanceof HTMLTextAreaElement))
       handleConnect()
   }

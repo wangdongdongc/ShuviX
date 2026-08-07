@@ -1,4 +1,10 @@
-/** 模型相关元数据（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
+/**
+ * 模型相关元数据。
+ *
+ * 已不再落库（v15 删掉了 sessions.modelMetadata）——唯一事实源是会话树上的
+ * thinking_level_change / active_tools_change entry。这个类型保留是因为它仍是
+ * `agent.init` 返回给前端的形状。
+ */
 export interface SessionModelMetadata {
   /** 思考深度 */
   thinkingLevel?: string
@@ -26,11 +32,6 @@ export interface Session {
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
-  provider: string
-  model: string
-  systemPrompt: string
-  /** 模型相关设置（思考深度、工具列表等） */
-  modelMetadata: SessionModelMetadata
   /** 会话级配置（SSH 免审批等） */
   settings: SessionSettings
   createdAt: number

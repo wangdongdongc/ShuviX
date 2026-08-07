@@ -12,7 +12,7 @@
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { FileReadResult } from './types/filePreview'
-import type { ChatMessage, ErrorEventMessage, MessageMetadata } from './types/chatMessage'
+import type { ChatMessage, MessageMetadata } from './types/chatMessage'
 import type {
   ProviderInfo,
   ProviderModelInfo,
@@ -58,14 +58,18 @@ export interface SessionSettings {
   notebookPath?: string
 }
 
+/**
+ * 会话业务记录。
+ *
+ * 刻意**不含** provider / model / thinkingLevel / enabledTools / systemPrompt ——
+ * 这些是「运行配置」，唯一事实源是会话树（JSONL 的 model_change /
+ * thinking_level_change / active_tools_change entry）。想读当前值走 `agent.init`，
+ * 想改走 `agent.setModel` / `setThinkingLevel` / `setEnabledTools`。
+ */
 export interface Session {
   id: string
   title: string
   projectId: string | null
-  provider: string
-  model: string
-  systemPrompt: string
-  modelMetadata: SessionModelMetadata
   settings: SessionSettings
   createdAt: number
   updatedAt: number
@@ -348,25 +352,9 @@ export interface SessionUpdateTitleParams {
   title: string
 }
 
-export interface SessionUpdateModelConfigParams {
-  id: string
-  provider: string
-  model: string
-}
-
 export interface SessionUpdateProjectParams {
   id: string
   projectId: string | null
-}
-
-export interface SessionUpdateThinkingLevelParams {
-  id: string
-  thinkingLevel: string
-}
-
-export interface SessionUpdateEnabledToolsParams {
-  id: string
-  enabledTools: string[]
 }
 
 export interface SessionUpdateAutoApproveParams {
@@ -521,6 +509,8 @@ export interface SessionChannelApi {
     subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
+    /** 压缩会话历史（harness 内建滚动式部分压缩；完成后广播 messages_reloaded） */
+    compact: (sessionId: string) => Promise<{ success: boolean; error?: string }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -646,10 +636,7 @@ export interface HostApi {
     list: () => Promise<Session[]>
     create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
-    updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-    updateThinkingLevel: (params: SessionUpdateThinkingLevelParams) => Promise<{ success: boolean }>
-    updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
     updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
     /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条审批） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
@@ -664,17 +651,19 @@ export interface HostApi {
       id: string
       filename: string | null
     }) => Promise<{ success: boolean }>
+    // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
+    // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
+    // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。
   }
+  /**
+   * 消息写入口已全部移除（AgentHarness 迁移）：消息只能由 harness 在运行中产生并
+   * 落成 entry，外部不再能凭空 add / 删单条。剩下的两个都是**结构性**操作：
+   *  - clear    清空整棵 entry 树
+   *  - rollback 把会话树的 leaf 移到目标消息的父节点（原 deleteFrom 与之语义重合，已并入）
+   */
   message: {
-    add: (params: MessageAddParams) => Promise<ChatMessage>
-    addErrorEvent: (params: { sessionId: string; content: string }) => Promise<ErrorEventMessage>
-    deleteErrorEvent: (params: {
-      sessionId: string
-      messageId: string
-    }) => Promise<{ success: boolean }>
     clear: (sessionId: string) => Promise<{ success: boolean }>
     rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
-    deleteFrom: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
   }
   settings: {
     getAll: () => Promise<Record<string, string>>

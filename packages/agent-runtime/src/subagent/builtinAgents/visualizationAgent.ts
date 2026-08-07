@@ -28,7 +28,6 @@ export const VISUALIZATION_AGENT: AgentDefinition = {
   whenToUse:
     'Creates and maintains Mermaid chart files (*-graph.md) in the working directory. Dispatch it whenever the user wants a diagram or chart drawn or updated — flowcharts, sequence, class, state, ER, gantt, pie, journey, timeline, mindmap, etc. In the dispatch prompt state the charting requirement (and the target file when revising an existing chart); the agent picks the best chart type, writes a single-chart markdown file, and opens it in the Files panel preview. For a NEW chart the agent confirms its design with the user via one ask before drawing — so forward any design preferences the user already stated (chart type, direction, level of detail, label language), and add "no design confirmation needed" when the chart is an incidental step of a larger task or the user is not expecting a question. When an EXISTING chart is being adjusted or optimized, the agent saves the revision as a numbered copy (`…-graph-1.md`) and leaves the original in place, so the user can go back — pass "overwrite the existing file" in the dispatch prompt when the user asked for that.',
   tools: ['read', 'ls', 'glob', 'grep', 'write', 'edit', 'ask', 'preview'],
-  maxTurns: 40,
   source: 'builtin',
   basePath: '',
   isEnabled: true,

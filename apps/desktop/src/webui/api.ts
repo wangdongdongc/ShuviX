@@ -142,6 +142,8 @@ export function createWebSessionChannelApi(): SessionChannelApi {
           body: JSON.stringify({ text: p.text })
         }),
       abort: (sid) => api(`/sessions/${sid}/abort`, { method: 'POST', body: '{}' }),
+      // WebUI 是分享出去的受限客户端：压缩会改写会话历史，不开放
+      compact: async () => ({ success: false, error: 'not supported in WebUI' }),
       respondToInput: (p) =>
         api(`/sessions/${p.sessionId}/respond-input`, {
           method: 'POST',

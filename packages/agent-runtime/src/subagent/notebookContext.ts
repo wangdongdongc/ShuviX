@@ -64,7 +64,6 @@ export function runNotebookTask(
         displayName: taskName,
         description: taskName,
         tools: inputs.tools,
-        maxTurns: 0,
         systemPrompt
       },
       prompt: inputs.text,

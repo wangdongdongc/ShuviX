@@ -1,11 +1,13 @@
-import { Agent, type AgentMessage } from '@earendil-works/pi-agent-core'
+import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import {
-  RuntimeAgent,
+  HarnessSession,
+  createModelsAdapter,
   generateSessionTitle,
-  resolveInitialThinkingLevel,
-  chatMessagesToAgentMessages
+  SessionTitler,
+  resolveInitialThinkingLevel
 } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
+import { ensureSessionTree } from './sessionStorage'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { t } from '../i18n'
@@ -31,17 +33,15 @@ import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
 import { renderForPrompt as renderSystemPromptSections } from './systemPrompt/systemPromptService'
 import { getTempWorkspace } from '../utils/paths'
-import { injectInstructionMessages } from './instruction'
+import { resolveInstructionContent } from './instruction'
 import { hookService } from './hooks'
 import { createLogger } from '../logger'
 import {
-  electronPersistence,
   electronEventSink,
   electronHttpLog,
   electronToolResultTransform,
   createShouldDeferToolDisplay,
-  runtimeLogger,
-  localize
+  runtimeLogger
 } from './agentRuntimeAdapters'
 
 const log = createLogger('AgentSession')
@@ -145,20 +145,20 @@ export function buildSystemPrompt(
 export class AgentSession {
   readonly sessionId: string
 
-  private runtime: RuntimeAgent
+  private runtime: HarnessSession
   private toolContext: ToolContext
   private subAgentCtx: SubAgentBuildContext | undefined
   private projectPath?: string
   private workingDirectory: string
+  /** 指令文件是否已注入当前上下文（压缩后会重新变为 false） */
+  private instructionsInjected = false
 
-  // ── 标题自动生成状态（两阶段：首轮快速 + 精修一次） ──
-  private titleQuickDone = false // 首轮快速标题是否已生成
-  private titleRefined = false // 精修是否已完成
-  private lastAutoTitle: string | null = null // 最近一次自动生成的标题（用于判断用户是否手动改名）
+  // 标题自动生成（两阶段：首轮快速 + 精修一次）—— 策略在 @shuvix/agent-runtime 与扩展端共用
+  private readonly titler: SessionTitler
 
   private constructor(
     sessionId: string,
-    runtime: RuntimeAgent,
+    runtime: HarnessSession,
     toolContext: ToolContext,
     subAgentCtx: SubAgentBuildContext | undefined,
     workingDirectory: string,
@@ -170,10 +170,22 @@ export class AgentSession {
     this.subAgentCtx = subAgentCtx
     this.projectPath = projectPath
     this.workingDirectory = workingDirectory
+    this.titler = new SessionTitler({
+      getCurrentTitle: () => sessionDao.pick(sessionId, ['title'])?.title ?? null,
+      getDefaultTitle: () => t('agent.defaultTitle'),
+      listMessages: () => messageService.listBySession(sessionId),
+      generate: (conversationText) => this.generateTitle(conversationText),
+      // 落库 + 广播 AppEvent，各端统一刷新会话列表标题
+      applyTitle: (title) => {
+        sessionDao.updateTitle(sessionId, title)
+        broadcastSessionTitleChanged(sessionId, title)
+      },
+      warn: (message) => log.warn(message)
+    })
   }
 
-  /** 工厂方法：构建完整的 AgentSession（含 Agent、工具、历史消息恢复） */
-  static create(params: AgentSessionCreateParams): AgentSession {
+  /** 工厂方法：构建完整的 AgentSession（打开会话转写文件 → 建 harness → 装工具） */
+  static async create(params: AgentSessionCreateParams): Promise<AgentSession> {
     const {
       sessionId,
       provider,
@@ -187,7 +199,7 @@ export class AgentSession {
 
     // 前向引用：所有回调在 agent 执行时调用，构造期不会触发
     // eslint-disable-next-line prefer-const
-    let runtime: RuntimeAgent
+    let runtime: HarnessSession
 
     // 构建 ToolContext（回调通过闭包引用 runtime）
     const toolContext: ToolContext = {
@@ -205,46 +217,46 @@ export class AgentSession {
     }
     const tools = buildTools(toolContext, enabledTools, subAgentCtx, project?.path)
 
-    const agent = new Agent({
-      initialState: {
-        systemPrompt,
-        model: resolvedModel,
-        thinkingLevel: resolveInitialThinkingLevel({
-          persisted: modelMetadata?.thinkingLevel,
-          reasoning: capabilities.reasoning
-        }),
-        messages: [],
-        tools
-      },
-      getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined,
-      onPayload: (payload, requestModel) => {
-        // 用本次请求真正使用的模型对象记录日志（中途 setModel 后闭包里的 provider/model 已过期）
-        const logId = httpLogService.logRequest({
-          sessionId,
-          provider: requestModel.provider,
-          model: requestModel.id,
-          payload
-        })
-        runtime.addPendingLogId(logId)
-      }
-    })
+    // 会话树：pi 的 JSONL 转写文件 —— 这就是上下文的真理源，
+    // 不再需要「开会话时把 DB 行重建成 AgentMessage」那一步。
+    // 取的是进程内共享实例：message.list / 回滚 moveTo 等读写与 harness 同一棵树。
+    const piSession = await ensureSessionTree(sessionId, workingDirectory)
 
-    runtime = new RuntimeAgent({
+    runtime = new HarnessSession({
       sessionId,
-      agent,
+      session: piSession,
+      env: new NodeExecutionEnv({ cwd: workingDirectory }),
+      models: createModelsAdapter({
+        getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined
+      }),
+      model: resolvedModel,
+      thinkingLevel: resolveInitialThinkingLevel({
+        persisted: modelMetadata?.thinkingLevel,
+        reasoning: capabilities.reasoning
+      }),
+      systemPrompt,
+      tools,
       eventSink: electronEventSink,
-      persistence: electronPersistence,
+      // 根会话开启自动压缩：turn 结束后上下文超阈值（窗口 - 16k）时自动滚动压缩
+      autoCompact: true,
       shouldDeferToolDisplay: createShouldDeferToolDisplay(sessionId),
       transformToolResult: electronToolResultTransform,
       httpLog: electronHttpLog,
       logger: runtimeLogger,
-      localize,
+      // 用本次请求真正使用的模型对象记录日志（中途 setModel 后闭包里的 provider/model 已过期）
+      onPayload: (payload, requestModel) =>
+        httpLogService.logRequest({
+          sessionId,
+          provider: requestModel.provider,
+          model: requestModel.id,
+          payload
+        }),
       // 统一生命周期 hook：注入完整 HookService（builtin + global/project command）；
-      // SessionStart/UserPromptSubmit/Stop 由 RuntimeAgent 触发（各端一致）
+      // SessionStart/UserPromptSubmit/Stop 由 HarnessSession 触发（各端一致）
       hooks: hookService,
       getCwd: () => workingDirectory,
       // UserPromptSubmit 通过、正式派发前触发首轮快速标题（保持与旧行为一致的并发时序）
-      onPromptAccepted: (text) => void session.maybeGenerateTitle('quick', text)
+      onPromptAccepted: (text) => void session.titler.quick(text)
     })
 
     const session = new AgentSession(
@@ -256,13 +268,8 @@ export class AgentSession {
       project?.path
     )
 
-    // 恢复历史消息到 Agent 上下文（共享投影：@shuvix/agent-runtime transcript/）
-    const dbMsgs = messageService.listBySession(sessionId)
-    if (dbMsgs.length > 0) {
-      for (const msg of chatMessagesToAgentMessages(dbMsgs)) {
-        agent.state.messages.push(msg)
-      }
-    }
+    // 无需恢复历史：harness 每轮从 session.buildContext() 取上下文，
+    // entry 树本身就是 AgentMessage，不存在「重建」这一步。
 
     return session
   }
@@ -274,8 +281,8 @@ export class AgentSession {
    *
    * SessionStart / UserPromptSubmit hook 已下沉到 RuntimeAgent（各端一致）：
    * - 首轮快速标题经注入的 `onPromptAccepted` 在 UserPromptSubmit 通过后触发；
-   * - hook `deny` 时 RuntimeAgent 内部广播原因并跳过派发，此处 refine 因 `titleQuickDone`
-   *   仍为 false 而自然跳过。
+   * - hook `deny` 时 RuntimeAgent 内部广播原因并跳过派发，此处 refine 因 titler 的
+   *   quick 尚未完成而自然跳过。
    */
   async prompt(
     text: string,
@@ -288,98 +295,78 @@ export class AgentSession {
     await this.runtime.prompt(text, images)
 
     // 精修：agent 首轮回复落库后，用更完整上下文重生成一次（不 await）
-    void this.maybeGenerateTitle('refine')
+    void this.titler.refine()
   }
 
+  // 注：hook 的 additionalContext 注入已下沉到 HarnessSession（各端一致）。
+
   /**
-   * 两阶段自动生成会话标题：
-   *   - 'quick'  首轮：会话仍是默认标题时，用用户这条消息的意图快速生成一个粗标题
-   *   - 'refine' 精修：积累到足够上下文（第 2 轮回复后）时，用整段对话重生成覆盖粗标题
+   * 首次 prompt 前的指令懒注入。
    *
-   * 只在标题仍是自动生成/默认值时才动手：一旦用户手动改名（title ≠ lastAutoTitle 且 ≠ 默认），
-   * 或是笔记本会话（默认标题为文件名），都不覆盖。生成后落库并广播 AppEvent，各端统一刷新。
+   * 落一条 `custom_message` entry（display=true）：既进模型上下文，又能被投影成
+   * 带 isInstructionInjection 标记的 UI 消息。幂等判断改看当前上下文是否为空 ——
+   * 压缩把历史滚走后上下文重新变空，指令会自动再注入一次。
    */
-  private async maybeGenerateTitle(phase: 'quick' | 'refine', userText?: string): Promise<void> {
-    try {
-      const session = sessionDao.pick(this.sessionId, ['title'])
-      if (!session) return
-      const defaultTitle = t('agent.defaultTitle')
-
-      if (phase === 'quick') {
-        if (this.titleQuickDone) return
-        // 仅当标题仍是通用默认值（跳过笔记本会话的文件名标题 / 用户已改名）
-        if (session.title !== defaultTitle) return
-        const text = (userText ?? '').trim()
-        if (!text) return
-        this.titleQuickDone = true
-        const title = await this.generateTitle(`User: ${text}`.slice(-1000))
-        if (title) this.applyAutoTitle(title)
-      } else {
-        // 精修一次：需先有过快速标题，且用户未手动改名（当前标题仍是我们上次自动写入的）
-        if (this.titleRefined || !this.titleQuickDone) return
-        if (this.lastAutoTitle == null || session.title !== this.lastAutoTitle) return
-        // 等积累到足够上下文再精修（第 2 轮回复后 user×2 + assistant×2 = 4 条文本消息）
-        const msgs = messageService.listBySession(this.sessionId)
-        const textMsgs = msgs.filter(
-          (m) => (m.role === 'user' || m.role === 'assistant') && (m.type === 'text' || !m.type)
-        )
-        if (textMsgs.length < 3) return
-        this.titleRefined = true
-        const conversationText = textMsgs
-          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-          .join('\n')
-          .slice(-1000)
-        if (!conversationText.trim()) return
-        const title = await this.generateTitle(conversationText)
-        if (title) this.applyAutoTitle(title)
-      }
-    } catch (err) {
-      log.warn(`自动标题生成失败(${phase}): ${err instanceof Error ? err.message : String(err)}`)
+  async ensureInstructionsInjected(): Promise<void> {
+    if (this.instructionsInjected) return
+    const entries = await this.runtime.session.buildContextEntries()
+    if (entries.length > 0) {
+      this.instructionsInjected = true
+      return
     }
-  }
-
-  /** 落库自动标题并广播（供各端统一刷新会话列表标题） */
-  private applyAutoTitle(title: string): void {
-    sessionDao.updateTitle(this.sessionId, title)
-    this.lastAutoTitle = title
-    broadcastSessionTitleChanged(this.sessionId, title)
-  }
-
-  // 注：hook 的 additionalContext 注入已下沉到 RuntimeAgent（各端一致）。
-
-  /**
-   * 首次 prompt 前的指令懒注入。由调用方在写入用户消息**之前**调用，
-   * 确保指令消息在持久化顺序和广播顺序上都早于用户消息。
-   */
-  ensureInstructionsInjected(): void {
-    const agent = this.runtime.getAgent()
-    if (agent.state.messages.length > 0) return
-    const inserted = injectInstructionMessages(this.sessionId, this.workingDirectory)
-    if (inserted.length === 0) return
-    // 同步进 agent 内存上下文
-    for (const msg of chatMessagesToAgentMessages(inserted as unknown as ChatMessage[])) {
-      agent.state.messages.push(msg)
+    const resolved = resolveInstructionContent(this.sessionId, this.workingDirectory)
+    if (!resolved) {
+      this.instructionsInjected = true
+      return
     }
-    // 通知前端追加这些消息（UI 通过 InstructionBubble 渲染）
+    const msg = await this.runtime.injectInstruction(resolved.content, resolved.filename)
+    this.instructionsInjected = true
+    if (!msg) return
     this.runtime.broadcast({
       type: 'instructions_injected',
       sessionId: this.sessionId,
-      messages: inserted.map((m) => JSON.stringify(m))
+      messages: [JSON.stringify(msg)]
     })
   }
 
   /** 向运行中的 Agent 注入 steer 消息 */
-  steer(text: string): void {
-    this.runtime.steer(text)
+  async steer(text: string): Promise<void> {
+    await this.runtime.steer(text)
   }
 
-  /** 中止生成；Stop hook 由 RuntimeAgent.abort 统一触发 */
-  abort(): ChatMessage | null {
-    return this.runtime.abort()
+  /** 本轮结束前追加消息，继续同一次运行（harness 新增能力） */
+  async followUp(text: string): Promise<void> {
+    await this.runtime.followUp(text)
+  }
+
+  /** 中止生成；Stop hook 由 HarnessSession.abort 统一触发 */
+  async abort(): Promise<void> {
+    await this.runtime.abort()
+  }
+
+  /**
+   * 压缩会话历史 —— 直接调 harness 内建实现。
+   *
+   * 与旧的 full compaction 的差别：这是**滚动式部分压缩**，保留最近约 20k tokens 的
+   * 原始消息，只把更早的历史换成摘要；且摘要由一次独立的 completeSimple 调用产出，
+   * 不再需要一个持 `session` 工具的 compact 子代理。
+   */
+  async compact(
+    customInstructions?: string
+  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
+    const result = await this.runtime.compact(customInstructions)
+    // 压缩后上下文被换掉，指令需要重新注入（无实质压缩时不触发）
+    if (result.compacted) this.instructionsInjected = false
+    return result
   }
 
   /** 切换模型（桌面：查 provider 模型能力 → resolveModel → applyModel） */
-  setModel(provider: string, model: string, baseUrl?: string, apiProtocol?: string): void {
+  async setModel(
+    provider: string,
+    model: string,
+    baseUrl?: string,
+    apiProtocol?: string
+  ): Promise<void> {
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
     const resolvedModel = resolveModel({
@@ -389,40 +376,30 @@ export class AgentSession {
       baseUrl,
       apiProtocol
     })
-    // 切模型保留当前思考深度（省略第二参 → RuntimeAgent 内保持不变，思考与能力点解绑）
-    this.runtime.applyModel(resolvedModel)
+    // 切模型保留当前思考深度（省略第二参 → HarnessSession 内保持不变，思考与能力点解绑）
+    await this.runtime.applyModel(resolvedModel)
   }
 
   /** 设置思考深度 */
-  setThinkingLevel(level: ThinkingLevel): void {
-    this.runtime.setThinkingLevel(level)
+  async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+    await this.runtime.setThinkingLevel(level)
   }
 
   /** 动态更新启用工具集（桌面：重新 buildTools → applyTools） */
-  setEnabledTools(enabledTools: string[]): void {
+  async setEnabledTools(enabledTools: string[]): Promise<void> {
     const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx, this.projectPath)
-    this.runtime.applyTools(tools)
+    await this.runtime.applyTools(tools)
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
 
-  /** 获取消息列表 */
-  getMessages(): AgentMessage[] {
-    return this.runtime.getMessages()
+  /** 当前上下文对应的 UI 消息列表 */
+  async listChatMessages(): Promise<ChatMessage[]> {
+    return await this.runtime.listChatMessages()
   }
 
-  /** 清除消息历史 */
-  clearMessages(): void {
-    this.runtime.clearMessages()
-  }
-
-  /** 获取底层 Agent 实例（用于外部恢复历史消息等） */
-  getAgent(): Agent {
-    return this.runtime.getAgent()
-  }
-
-  /** 运行时信息快照（直接读内存 agent.state，供前端「Agent 信息」弹窗只读展示） */
-  getRuntimeInfo(): AgentRuntimeInfo {
-    return this.runtime.getRuntimeInfo()
+  /** 运行时信息快照（读 harness 状态 + session 上下文，供前端「Agent 信息」弹窗展示） */
+  async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
+    return await this.runtime.getRuntimeInfo()
   }
 
   /**
@@ -469,19 +446,19 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 RuntimeAgent 触发。 */
+  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 HarnessSession 触发。 */
   invalidate(): void {
     this.runtime.fireStopHook('invalidated')
-    this.runtime.getAgent().abort()
+    void this.runtime.abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 RuntimeAgent 触发。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 HarnessSession 触发。 */
   destroy(): void {
     this.runtime.fireStopHook('destroyed')
-    this.runtime.getAgent().abort()
+    void this.runtime.abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)

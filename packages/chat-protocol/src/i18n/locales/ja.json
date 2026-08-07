@@ -144,7 +144,9 @@
   },
   "compact": {
     "button": "会話を圧縮",
+    "nothingToCompact": "コンテキストはまだ小さいため、圧縮できる内容がありません（直近のウィンドウは保持されます）。",
     "summaryLabel": "会話の要約（圧縮済み）",
+    "autoSummaryLabel": "会話の要約（自動圧縮済み）",
     "archivedBanner": "{{count}} 件のアーカイブメッセージが非表示 — クリックして表示",
     "archivedLoading": "読み込み中...",
     "archivedAllLoaded": "すべてのアーカイブメッセージを読み込みました"
@@ -818,7 +820,6 @@
     "subAgentFsHint": "サブエージェントはフラットな Markdown ファイル（.md 1 つにつきエージェント 1 つ、ファイル名 = エージェント名）です。組み込み項目はアプリに同梱され読み取り専用。Claude Code 互換の .md を ~/.shuvix/agents/ に置いて「再読込」してください。",
     "subAgentWhenToUse": "使用シーン",
     "subAgentTools": "ツール",
-    "subAgentMaxTurns": "最大ターン数",
     "subAgentRequiredMcp": "必須 MCP",
     "subAgentBasePath": "ファイルパス",
     "subAgentSystemPrompt": "システムプロンプト",

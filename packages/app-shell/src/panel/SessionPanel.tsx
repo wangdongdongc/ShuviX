@@ -224,7 +224,8 @@ export function SessionPanel({
 
 /**
  * 占位列左缘拖拽条 —— 向左拖增宽（面板贴对话区右侧）。
- * 命中区盖住卡片左侧留白带，宽度经共享 store 钳制；持久化由宿主外接。
+ * 命中区盖住卡片左侧留白带（无可见高亮，仅 col-resize 光标提示），
+ * 宽度经共享 store 钳制；持久化由宿主外接。
  */
 function ResizeHandle(): React.JSX.Element {
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
@@ -253,11 +254,8 @@ function ResizeHandle(): React.JSX.Element {
 
   return (
     <div
-      className="absolute inset-y-2 -left-[2px] w-[8px] cursor-col-resize z-20 group"
+      className="absolute inset-y-2 -left-[2px] w-[8px] cursor-col-resize z-20"
       onMouseDown={onMouseDown}
-    >
-      {/* 可见高亮仅 1px，落在卡片左侧留白带中间，hover 时出现 */}
-      <div className="absolute inset-y-0 left-[3px] w-px group-hover:bg-accent/40 group-active:bg-accent/60 transition-colors" />
-    </div>
+    />
   )
 }

@@ -5,9 +5,11 @@
  * 进程内 RuntimeSession）；其余命名空间为 noop（扩展形态无关）。仿 webui/api.ts 结构，但
  * 同进程直接 await，无 HTTP/WS。
  */
+import i18next from 'i18next'
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
+import { readSessionRunConfig } from '../storage/sessionEntryStore'
 import { sessionStore } from '../storage/sessionStore'
 import { scanInstructionFiles } from './instructionFilesRuntime'
 import { settingsStore } from '../storage/settingsStore'
@@ -35,7 +37,7 @@ import {
   toInProcessAgentType,
   resolveInitialThinkingLevel
 } from '@shuvix/agent-runtime'
-import { generateTitleForSession } from './titleRuntime'
+import { generateTitleForSession, titlerFor, removeTitler } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
 import { appEventBus } from './appEventBus'
 
@@ -89,20 +91,16 @@ export const chatApiAdapter: ChatApi = {
         eventBus.emit({ type: 'error', sessionId, error: 'Agent 未初始化' })
         return { success: false }
       }
-      // 后端统一持久化用户消息并广播（chat-ui 通过 user_message 事件落到 store）；
-      // content 存标记文本、inlineTokens 存 metadata —— 气泡按此渲染胶囊（与桌面网关一致）
-      const userMsg = messageStore.add({
-        sessionId,
-        role: 'user',
-        type: 'text',
-        content: text,
-        metadata: inlineTokens ? { inlineTokens } : undefined
-      })
-      eventBus.emit({ type: 'user_message', sessionId, message: JSON.stringify(userMsg) })
+      // 用户消息不再由适配器落库：harness 在 message_end 把它作为 entry 追加，
+      // 并经 HarnessSession 的事件翻译广播 user_message —— 单一写入点。
+      // 代价：inlineTokens 元数据不再随消息保存（气泡显示展开后的明文，不再有命令胶囊）。
       // 标签页租约：本轮结束（含中止）且无其他活跃运行时自动释放接管的标签页（见 tabLease.ts）
       // token 标记展开为真实文本（slash 模板 / @ 引用 / 粘贴原文）后再交给 Agent
       const promptText = resolveTokensForAgent(text, inlineTokens)
       await withTabLease(() => rt.prompt(promptText, images))
+      // 自动标题（与桌面 AgentSession.prompt 同一时序）：首轮快速标题已由 HarnessSession 的
+      // onPromptAccepted 触发，这里在本轮回复落库后用更完整上下文精修一次（不 await）
+      void titlerFor(sessionId).refine()
       return ok
     },
     // 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。仅注入笔记本路径 + read 提示，
@@ -118,6 +116,8 @@ export const chatApiAdapter: ChatApi = {
       })
       // resolveTools 读 sessionTools map（笔记本无 runtime，故在此登记）；扩展按注册表解析 → tools 传 []
       registerSessionTools(sessionId, parts.tools)
+      // 会话所选思考深度（唯一事实源是会话树）
+      const treeThinkingLevel = (await readSessionRunConfig(sessionId)).thinkingLevel ?? undefined
       // fire-and-forget，但整轮持有标签页租约（runNotebookTask 返回完成 promise、永不 reject）
       void withTabLease(() =>
         runNotebookTask(
@@ -132,7 +132,7 @@ export const chatApiAdapter: ChatApi = {
               capabilities: parts.caps,
               // 笔记本子代理继承会话所选思考深度（与桌面/主会话同一 helper）
               thinkingLevel: resolveInitialThinkingLevel({
-                persisted: session?.modelMetadata?.thinkingLevel,
+                persisted: treeThinkingLevel,
                 reasoning: parts.caps.reasoning
               })
             },
@@ -209,12 +209,32 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     steer: async ({ sessionId, text }) => {
-      getRuntimeSession(sessionId)?.steer(text)
+      await getRuntimeSession(sessionId)?.steer(text)
       return ok
     },
     abort: async (sessionId) => {
-      const saved = getRuntimeSession(sessionId)?.abort() ?? null
-      return { success: true, savedMessage: saved ?? undefined }
+      // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，不再回传 savedMessage
+      await getRuntimeSession(sessionId)?.abort()
+      return { success: true }
+    },
+    compact: async (sessionId) => {
+      await ensureRuntimeSession(sessionId)
+      const rt = getRuntimeSession(sessionId)
+      if (!rt) return { success: false, error: 'Agent 未初始化' }
+      try {
+        const result = await rt.compact()
+        if (!result.compacted) {
+          // 上下文小于保留窗口（滚动压缩无实质可做）—— 提示而非报错
+          const error = i18next.t('compact.nothingToCompact')
+          eventBus.emit({ type: 'error', sessionId, error })
+          return { success: false, error }
+        }
+        return { success: true }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        eventBus.emit({ type: 'error', sessionId, error })
+        return { success: false, error }
+      }
     },
     setModel: async ({ sessionId, provider, model }) => {
       await setSessionModel(sessionId, provider, model)
@@ -319,16 +339,9 @@ export const chatApiAdapter: ChatApi = {
       await sessionStore.updateTitle(id, title)
       return ok
     },
-    updateModelConfig: async ({ id, provider, model }) => {
-      await sessionStore.updateModelConfig(id, provider, model)
-      return ok
-    },
     updateProject: async () => ok,
-    updateThinkingLevel: async ({ id, thinkingLevel }) => {
-      await sessionStore.updateModelMetadata(id, { thinkingLevel })
-      return ok
-    },
-    updateEnabledTools: async () => ok,
+    // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
+    // 运行配置只写会话树，入口是 agent.setModel / setThinkingLevel / setEnabledTools。
     // autoApprove 仅落库（browser 审批门控已移除，扩展端暂无运行时消费者）
     updateAutoApprove: async ({ id, autoApprove }) => {
       await sessionStore.updateSettings(id, { autoApprove })
@@ -339,14 +352,15 @@ export const chatApiAdapter: ChatApi = {
       await sessionStore.updateSettings(id, { allowList: cur.filter((e) => e !== entry) })
       return ok
     },
-    // LLM 标题生成（与桌面同源，见 titleRuntime）：优先专用标题模型，回退会话模型，
-    // 失败再退启发式；并落库 IndexedDB
+    // LLM 标题生成（与桌面同源，见 titleRuntime）：仅用设置中的专用标题模型，未配置则返回 null；
+    // 生成后落库 IndexedDB 并广播 session.titleChanged
     generateTitle: async ({ sessionId, conversationText }) => {
       const title = await generateTitleForSession(sessionId, conversationText)
       return { title }
     },
     delete: async (id) => {
       removeRuntimeSession(id)
+      removeTitler(id)
       await sessionStore.delete(id)
       return ok
     },
@@ -362,35 +376,15 @@ export const chatApiAdapter: ChatApi = {
 
   message: {
     list: async (sessionId) => messageStore.list(sessionId),
-    add: async (p) =>
-      messageStore.add({
-        sessionId: p.sessionId,
-        role: p.role,
-        type: p.type,
-        content: p.content,
-        metadata: p.metadata,
-        model: p.model
-      }),
-    // 仅持久化并返回；不可再 emit 'error' —— 否则与 useAgentEvents 的 'error' 处理形成反馈死循环
-    addErrorEvent: async ({ sessionId, content }) =>
-      messageStore.addErrorEvent({ sessionId, content }),
-    deleteErrorEvent: async ({ sessionId, messageId }) => {
-      await messageStore.deleteOne(sessionId, messageId)
-      return ok
-    },
     clear: async (sessionId) => {
       await messageStore.clear(sessionId)
-      return ok
-    },
-    // 回退：保留该消息、删除其后，并失效运行时（下次交互从截断后的历史重建上下文）
-    rollback: async ({ sessionId, messageId }) => {
-      await messageStore.deleteAfter(sessionId, messageId)
       removeRuntimeSession(sessionId)
       return ok
     },
-    deleteFrom: async ({ sessionId, messageId }) => {
-      await messageStore.deleteFrom(sessionId, messageId)
-      removeRuntimeSession(sessionId) // 删除消息后须失效运行时，否则上下文与持久化不一致
+    // 回退：entry 树的 leaf 移到目标消息的父节点，并失效运行时
+    rollback: async ({ sessionId, messageId }) => {
+      await messageStore.rollback(sessionId, messageId)
+      removeRuntimeSession(sessionId)
       return ok
     },
     countArchived: async (sessionId) => messageStore.countArchived(sessionId),

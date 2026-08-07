@@ -472,7 +472,10 @@ export function ChartView({
                 height: natural?.h,
                 transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`,
                 transformOrigin: '0 0',
-                visibility: natural ? 'visible' : 'hidden'
+                // 量取前隐藏防错误缩放闪帧；量好后必须「不写」而非显式 'visible' ——
+                // 显式 visible 会穿透宿主面板（RightPanel/SessionPanel）visibility:hidden
+                // 的常驻挂载切换，把图表叠画到浏览器等其它同栈面板上
+                visibility: natural ? undefined : 'hidden'
               }}
               dangerouslySetInnerHTML={{ __html: result.svg }}
             />

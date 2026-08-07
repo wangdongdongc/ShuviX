@@ -18,7 +18,7 @@ interface ModelPickerProps {
  */
 export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): React.JSX.Element {
   const { t } = useTranslation()
-  const { activeSessionId, setSessions, thinkingLevel, setThinkingLevel, setModelSupportsVision } =
+  const { activeSessionId, thinkingLevel, setThinkingLevel, setModelSupportsVision } =
     useChatStore()
 
   const providers = useModelCatalogStore((s) => s.providers)
@@ -45,7 +45,6 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
         sessionId: activeSessionId,
         level: level as ThinkingLevel
       })
-      await host.session.updateThinkingLevel({ id: activeSessionId, thinkingLevel: level })
     }
   }
 
@@ -56,16 +55,8 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     setActiveProvider(providerId)
     setActiveModel(modelId)
 
-    if (activeSessionId) {
-      await host.session.updateModelConfig({
-        id: activeSessionId,
-        provider: providerId,
-        model: modelId
-      })
-      const sessions = await host.session.list()
-      setSessions(sessions)
-    }
-
+    // 单一写入口：agent.setModel 会往会话树追加 model_change entry（Agent 未创建时
+    // 后端直接写树）。不再另外写会话表 —— 那份副本已随 v15 删除。
     const providerInfo = providers.find((p) => p.id === providerId)
     if (activeSessionId) {
       await host.agent.setModel({

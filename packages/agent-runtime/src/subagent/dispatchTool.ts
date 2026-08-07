@@ -4,7 +4,7 @@
  * LLM 只看到一个名为 `Agent` 的工具，经 `agent` 参数以统一 ref 选择目标：
  *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
  *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
- *     （frontmatter: name/whenToUse/tools/maxTurns + 正文为 system prompt）——支持项目内
+ *     （frontmatter: name/whenToUse/tools + 正文为 system prompt）——支持项目内
  *     检入的定义与运行时动态生成的定义，无需注册表刷新；
  *   - 省略 → 默认 agent（宿主提供 defaultAgentType 时）。
  * 可用具名类型动态嵌入 description。执行时校验 ref + requiredMcp，委托
@@ -51,7 +51,6 @@ export function toInProcessAgentType(def: AgentDefinition): InProcessAgentType {
     displayName: def.displayName,
     description: def.whenToUse,
     tools: [...def.tools],
-    maxTurns: def.maxTurns,
     systemPrompt: def.systemPrompt
   }
 }
@@ -92,7 +91,7 @@ export function buildDescription(
 
   const fileRefNote = supportsFileRefs
     ? '\n- `agent` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
-      '(`name`, `whenToUse` or `description`, `tools: [...]`, optional `maxTurns`) and the body as its system prompt. ' +
+      '(`name`, `whenToUse` or `description`, `tools: [...]`) and the body as its system prompt. ' +
       'Relative paths resolve against the working directory; the file must live inside the working directory or the global agents directory. ' +
       'You may write such a file first and dispatch it immediately. ' +
       'Include `Agent` in its `tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'

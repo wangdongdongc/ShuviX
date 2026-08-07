@@ -18,6 +18,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { isImeComposing } from '../../utils/ime'
 import {
   Check,
   MessageCircleQuestion,
@@ -252,6 +253,8 @@ export function PendingInputsPanel({
               value={activeOtherText}
               onChange={(e) => handleOtherChange(e.target.value)}
               onKeyDown={(e) => {
+                // 输入法组字中的回车是「确认选词」，不能当成提交
+                if (isImeComposing(e)) return
                 if (e.key === 'Enter' && activeOtherText.trim()) {
                   e.preventDefault()
                   handleSubmitOther()
