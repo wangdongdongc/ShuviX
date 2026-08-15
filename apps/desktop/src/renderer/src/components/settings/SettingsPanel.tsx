@@ -12,10 +12,10 @@ import {
   Info,
   Puzzle,
   BookOpen,
+  Bot,
   Wrench,
-  Share2,
+  Send,
   Mic,
-  Brain,
   Webhook,
   FolderClosed
 } from 'lucide-react'
@@ -30,21 +30,21 @@ import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
 import { HookSettings } from './HookSettings'
 import { ToolSettings } from './ToolSettings'
-import { BindingsSettings } from './BindingsSettings'
+import { AgentSettings } from './AgentSettings'
+import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
-import { ContextManagementSettings, getChannelBindingCaps } from '@shuvix/app-shell'
 
 const VALID_TABS = new Set([
   'general',
   'projects',
   'providers',
+  'agents',
   'tools',
   'mcp',
   'skills',
   'hooks',
   'voice',
-  'bindings',
-  'contextMgmt',
+  'telegramBots',
   'httpLogs',
   'about'
 ])
@@ -94,14 +94,10 @@ export function SettingsPanel(): React.JSX.Element {
       )
     },
     {
-      id: 'contextMgmt',
-      label: t('settings.tabContextMgmt'),
-      icon: <Brain size={14} />,
-      content: (
-        <Scroll>
-          <ContextManagementSettings />
-        </Scroll>
-      )
+      id: 'agents',
+      label: t('settings.tabAgents'),
+      icon: <Bot size={14} />,
+      content: <AgentSettings />
     },
     {
       id: 'tools',
@@ -142,14 +138,10 @@ export function SettingsPanel(): React.JSX.Element {
       )
     },
     {
-      id: 'bindings',
-      label: t('settings.tabBindings'),
-      icon: <Share2 size={14} />,
-      content: (
-        <Scroll>
-          <BindingsSettings />
-        </Scroll>
-      )
+      id: 'telegramBots',
+      label: t('settings.tabTelegramBots'),
+      icon: <Send size={14} />,
+      content: <TelegramBotsSettings />
     },
     {
       id: 'httpLogs',
@@ -173,14 +165,9 @@ export function SettingsPanel(): React.JSX.Element {
     }
   ]
 
-  // 「会话绑定」Tab 据当前宿主提供的渠道 API 自动显隐：无任何渠道则整页不出现
-  const visibleTabs = getChannelBindingCaps().any
-    ? tabs
-    : tabs.filter((tab) => tab.id !== 'bindings')
-
   return (
     <SettingsContainer
-      tabs={visibleTabs}
+      tabs={tabs}
       activeTab={activeSettingsTab}
       onTabChange={(id) => setActiveSettingsTab(id as typeof activeSettingsTab)}
       title={t('settings.title')}

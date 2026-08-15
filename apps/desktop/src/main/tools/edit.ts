@@ -16,7 +16,6 @@ export const makeEditTool = (ctx: ToolContext): ReturnType<typeof createFileTool
 registerBuiltinTool({
   name: 'edit',
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.edit.labelKey),
   getHint: () => t('tool.editHint'),
   factory: (ctx) => makeEditTool(ctx),

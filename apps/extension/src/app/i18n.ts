@@ -7,7 +7,6 @@ import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
-import { SYSTEM_PROMPT_OVERRIDES } from './systemPromptOverrides'
 
 export const SUPPORTED_LANGUAGES = ['zh', 'en', 'ja'] as const
 
@@ -17,35 +16,17 @@ function resolveLocale(locale: string): string {
   return 'en'
 }
 
-/**
- * 在共享 locales 之上叠加内置系统提示词卡片的扩展专属文案（仅覆写
- * identity / using_tools / executing_actions 的 content，title 仍用共享）。
- */
-function withSystemPromptOverrides(
-  base: Record<string, unknown>,
-  lang: 'zh' | 'en' | 'ja'
-): Record<string, unknown> {
-  const ov = SYSTEM_PROMPT_OVERRIDES[lang]
-  const spc = (base.systemPromptCards ?? {}) as Record<string, Record<string, unknown>>
-  return {
-    ...base,
-    systemPromptCards: {
-      ...spc,
-      identity: { ...spc.identity, content: ov.identity },
-      using_tools: { ...spc.using_tools, content: ov.using_tools },
-      executing_actions: { ...spc.executing_actions, content: ov.executing_actions }
-    }
-  }
-}
+// 注：扩展的 default 浏览器变体不再经 i18n 资源覆盖 —— 内置档案文案已改为 md 文件维护，
+// 扩展的整份副本在 runtime/builtinAgents/md/ 下，由 subAgent.ts 的 EXTENSION_DEFAULT_SPEC 取用。
 
 i18next.use(initReactI18next).init({
   lng: resolveLocale(navigator.language),
   fallbackLng: 'en',
   interpolation: { escapeValue: false },
   resources: {
-    zh: { translation: withSystemPromptOverrides(zh, 'zh') },
-    en: { translation: withSystemPromptOverrides(en, 'en') },
-    ja: { translation: withSystemPromptOverrides(ja, 'ja') }
+    zh: { translation: zh },
+    en: { translation: en },
+    ja: { translation: ja }
   }
 })
 

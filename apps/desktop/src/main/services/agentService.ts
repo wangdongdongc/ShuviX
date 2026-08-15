@@ -2,85 +2,35 @@
  * AgentService — Sub-Agent 管理
  *
  * 内置 agents：硬编码进 @shuvix/agent-runtime（builtinAgents，各端共享；wiki 经工厂注入桌面 wiki 根）。
- * 用户 agents：~/.shuvix/agents/<name>.md（用户可编辑；单文件约定对齐 Claude Code 社区惯例，
+ * 用户 agents：~/.shuvix/agents/<name>.md（用户可编辑；标准化单文件格式见
+ *   agentDefinitionFile.ts —— 通用 key 对齐 Claude Code，ShuviX 自有字段带 `shuvix-` 前缀；
  *   文件名去掉 .md 即默认 agent name，frontmatter `name:` 可覆盖）。
  *
- * 启用/禁用状态写入 ~/.shuvix/agents/.config.json：
- *   { disabled: string[] }   // 仅作用于用户 agent；内置始终启用
- *
+ * 纯 md 驱动：文件存在即可用，无启用开关/旁路配置。
  * 命名冲突：用户优先级 > 内置（同名时用户覆盖内置，可用于个性化内置政策）。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs'
 import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
+import i18next from 'i18next'
 import { getDefaultAgentsDir, getDefaultWikisDir, getWidgetsDir } from '../utils/paths'
 import {
-  EXPLORE_AGENT,
-  RESEARCH_AGENT,
-  VISUALIZATION_AGENT,
-  buildWidgetAgent,
-  buildWikiAgent,
-  type AgentDefinition
+  buildBuiltinProfiles,
+  parseAgentDefinitionFile,
+  serializeAgentDefinitionFile,
+  BASE_PROFILE_NAMES,
+  DEFAULT_PROFILE_NAME,
+  type AgentProfile,
+  type AgentProfileRegistry,
+  type ParsedAgentFile
 } from '@shuvix/agent-runtime'
+import type { AgentProfileSummary } from '@shuvix/chat-protocol/chatApi'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
 
-interface AgentConfig {
-  /** 用户禁用的 agent 名称集合 */
-  disabled: string[]
-}
-
-/** 解析 AGENT.md frontmatter（YAML 简化版，支持 string / number / 数组） */
-function parseAgentMarkdown(text: string): {
-  fields: Record<string, string | string[] | number>
-  body: string
-} | null {
-  const trimmed = text.trim()
-  if (!trimmed.startsWith('---')) return null
-
-  const endIndex = trimmed.indexOf('\n---', 3)
-  if (endIndex === -1) return null
-
-  const frontmatter = trimmed.slice(3, endIndex).trim()
-  const body = trimmed.slice(endIndex + 4).trim()
-
-  const fields: Record<string, string | string[] | number> = {}
-  for (const rawLine of frontmatter.split('\n')) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    const colonIdx = line.indexOf(':')
-    if (colonIdx === -1) continue
-    const key = line.slice(0, colonIdx).trim()
-    const val = line.slice(colonIdx + 1).trim()
-    if (!key) continue
-
-    // 数组：[a, b, c]
-    if (val.startsWith('[') && val.endsWith(']')) {
-      const inner = val.slice(1, -1).trim()
-      if (!inner) {
-        fields[key] = []
-        continue
-      }
-      fields[key] = inner.split(',').map((s) => s.trim().replace(/^["']|["']$/g, ''))
-      continue
-    }
-
-    // 数字
-    if (/^-?\d+$/.test(val)) {
-      fields[key] = Number(val)
-      continue
-    }
-
-    // 字符串（剥引号）
-    fields[key] = val.replace(/^["']|["']$/g, '')
-  }
-
-  return { fields, body }
-}
-
-class AgentService {
+class AgentService implements AgentProfileRegistry {
   private readonly userDir: string
 
   constructor() {
@@ -94,36 +44,12 @@ class AgentService {
     }
   }
 
-  private readConfig(): AgentConfig {
-    const configPath = join(this.userDir, '.config.json')
-    try {
-      if (existsSync(configPath)) {
-        const raw = JSON.parse(readFileSync(configPath, 'utf-8'))
-        return {
-          disabled: Array.isArray(raw.disabled)
-            ? raw.disabled.filter((x: unknown) => typeof x === 'string')
-            : []
-        }
-      }
-    } catch (e) {
-      log.warn('读取 agents .config.json 失败:', e)
-    }
-    return { disabled: [] }
-  }
-
-  private writeConfig(config: AgentConfig): void {
-    this.ensureUserDir()
-    const configPath = join(this.userDir, '.config.json')
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-  }
-
   /** 从一个 .md 文件加载 agent 定义 */
   private loadAgentFromFile(
     filePath: string,
     defaultName: string,
-    source: 'builtin' | 'user',
-    config: AgentConfig
-  ): AgentDefinition | null {
+    source: 'builtin' | 'user'
+  ): AgentProfile | null {
     let raw: string
     try {
       raw = readFileSync(filePath, 'utf-8')
@@ -132,45 +58,21 @@ class AgentService {
       return null
     }
 
-    const parsed = parseAgentMarkdown(raw)
+    const parsed = parseAgentDefinitionFile(raw, defaultName)
     if (!parsed) {
       log.warn(`agent "${defaultName}": 无法解析 frontmatter`)
       return null
     }
 
-    const { fields, body } = parsed
-    // frontmatter `name` 覆盖文件名；否则用文件 basename
-    const name = typeof fields.name === 'string' && fields.name ? fields.name : defaultName
-    const displayName =
-      typeof fields.displayName === 'string' && fields.displayName ? fields.displayName : name
-    // 兼容 Claude Code 风格的 `description` 字段（其含义即 whenToUse）
-    const whenToUse =
-      typeof fields.whenToUse === 'string'
-        ? fields.whenToUse
-        : typeof fields.description === 'string'
-          ? fields.description
-          : ''
-    const tools = Array.isArray(fields.tools) ? fields.tools : []
-    const requiredMcp = Array.isArray(fields.requiredMcp) ? fields.requiredMcp : undefined
-
-    // 内置不受 disabled 列表影响；用户 agent 按列表决定启用
-    const isEnabled = source === 'builtin' ? true : !config.disabled.includes(name)
-
     return {
-      name,
-      displayName,
-      whenToUse,
-      systemPrompt: body,
-      tools,
+      ...parsed,
       source,
-      requiredMcp,
-      basePath: filePath,
-      isEnabled
+      basePath: filePath
     }
   }
 
   /** 扫描指定目录下的所有 *.md 文件作为 agents */
-  private scanDir(dir: string, source: 'builtin' | 'user', config: AgentConfig): AgentDefinition[] {
+  private scanDir(dir: string, source: 'builtin' | 'user'): AgentProfile[] {
     if (!existsSync(dir)) return []
 
     let entries: { name: string; isFile: boolean }[]
@@ -184,7 +86,7 @@ class AgentService {
       return []
     }
 
-    const result: AgentDefinition[] = []
+    const result: AgentProfile[] = []
     for (const entry of entries) {
       if (!entry.isFile) continue
       if (entry.name.startsWith('.')) continue
@@ -192,28 +94,25 @@ class AgentService {
       // 兼容用户用 README.md 之类作为说明文档放在同目录的场景
       const basename = entry.name.slice(0, -3)
       if (!basename) continue
-      const def = this.loadAgentFromFile(join(dir, entry.name), basename, source, config)
+      const def = this.loadAgentFromFile(join(dir, entry.name), basename, source)
       if (def) result.push(def)
     }
     return result
   }
 
-  /** 内置 agent 列表（硬编码定义 + 桌面参数注入；每次现算以反映 wiki / widget 根等宿主参数） */
-  private builtinAgents(): AgentDefinition[] {
-    return [
-      EXPLORE_AGENT,
-      RESEARCH_AGENT,
-      VISUALIZATION_AGENT,
-      buildWidgetAgent({ widgetsRoot: getWidgetsDir() }),
-      buildWikiAgent({ wikiRoot: getDefaultWikisDir() })
-    ]
+  /** 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 wiki / widget 根等宿主参数） */
+  private builtinAgents(): AgentProfile[] {
+    return buildBuiltinProfiles({
+      language: i18next.language,
+      widgetsRoot: getWidgetsDir(),
+      wikiRoot: getDefaultWikisDir()
+    })
   }
 
-  /** 列出所有 agent（含禁用状态；用户优先级 > 内置覆盖同名） */
-  listAll(): AgentDefinition[] {
-    const config = this.readConfig()
+  /** 列出所有 agent（用户优先级 > 内置覆盖同名） */
+  listAll(): AgentProfile[] {
     const builtins = this.builtinAgents()
-    const users = this.scanDir(this.userDir, 'user', config)
+    const users = this.scanDir(this.userDir, 'user')
 
     // 用户覆盖内置同名
     const userNames = new Set(users.map((a) => a.name))
@@ -221,14 +120,51 @@ class AgentService {
     return merged.sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  /** 列出所有已启用 agent */
-  listEnabled(): AgentDefinition[] {
-    return this.listAll().filter((a) => a.isEnabled)
+  /**
+   * 设置页列表：合并结果 + 被同名用户档案遮蔽的内置（`overridden: true` 标记）。
+   * 遮蔽的内置仅作展示（提示"已被覆盖，不生效"），不进任何运行时路径 ——
+   * listAll/getProfile 仍以合并语义为准。
+   */
+  listForSettings(): (AgentProfile & { overridden?: boolean })[] {
+    const builtins = this.builtinAgents()
+    const users = this.scanDir(this.userDir, 'user')
+    const userNames = new Set(users.map((a) => a.name))
+    const merged = [...builtins.filter((a) => !userNames.has(a.name)), ...users]
+    const shadowed = builtins
+      .filter((a) => userNames.has(a.name))
+      .map((a) => ({ ...a, overridden: true }))
+    return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  /** 按 name 查询单个已启用的 agent（执行时使用） */
-  getEnabled(name: string): AgentDefinition | undefined {
-    return this.listEnabled().find((a) => a.name === name)
+  /**
+   * 会话档案选择器的列表：可切换的档案 + 选择器要显示的字段。
+   *
+   * 与 updateAgentProfile 的准入同源：排除 notebook（笔记本会话形态的基座，切到聊天会话上
+   * 只会得到一个指向不存在笔记的人格）与 `shuvix-dispatch-only` 档案（政策必须跑在新鲜
+   * 上下文里的执行型 agent，如 wiki-writer），保留 default（切回主会话基座的唯一入口）。
+   * 不带 systemPrompt —— 选择器不需要，见 AgentProfileSummary。
+   */
+  listSwitchable(): AgentProfileSummary[] {
+    return this.listAll()
+      .filter(
+        (a) =>
+          a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && !a.dispatchOnly)
+      )
+      .map((a) => ({
+        name: a.name,
+        displayName: a.displayName,
+        description: a.description,
+        source: a.source,
+        model: a.model
+      }))
+  }
+
+  /** 按名取档案（含 'default' 内置兜底 —— 用户 default 文件损坏时主会话仍可创建） */
+  getProfile(name: string): AgentProfile | undefined {
+    const found = this.listAll().find((a) => a.name === name)
+    if (found) return found
+    if (name !== DEFAULT_PROFILE_NAME) return undefined
+    return this.builtinAgents().find((a) => a.name === DEFAULT_PROFILE_NAME)
   }
 
   /**
@@ -239,7 +175,7 @@ class AgentService {
    * baseDir 或 ~/.shuvix/agents 内（read 工具本可读任意文件，此约束只为寻址
    * 规范而非安全边界）。失败 throw 带原因的 Error（派发工具转为 LLM 可读错误文本）。
    */
-  loadAgentFromRef(refPath: string, baseDir?: string): AgentDefinition {
+  loadAgentFromRef(refPath: string, baseDir?: string): AgentProfile {
     if (!isAbsolute(refPath) && !baseDir) {
       throw new Error('Relative agent paths require a project working directory')
     }
@@ -254,29 +190,101 @@ class AgentService {
       )
     }
     const defaultName = basename(abs).replace(/\.md$/i, '') || 'agent'
-    const def = this.loadAgentFromFile(abs, defaultName, 'user', { disabled: [] })
+    const def = this.loadAgentFromFile(abs, defaultName, 'user')
     if (!def) {
       throw new Error(
-        'file missing or invalid — expected markdown with YAML frontmatter (name / whenToUse / tools) and the system prompt as body'
+        'file missing or invalid — expected markdown with YAML frontmatter (name / description / shuvix-tools) and the system prompt as body'
       )
     }
     return def
   }
 
-  /** 切换启用状态；仅对用户 agent 生效 */
-  setEnabled(name: string, enabled: boolean): { success: boolean; error?: string } {
-    const target = this.listAll().find((a) => a.name === name)
+  /**
+   * 保存（覆写）用户 agent 定义文件 —— 设置页编辑 GUI 的写路径。
+   * `originalName` 定位现有文件（文件路径不随改名变，frontmatter `name` 为准）；
+   * 内置 agent 无文件不可编辑。
+   */
+  saveAgent(originalName: string, input: ParsedAgentFile): { success: boolean; error?: string } {
+    const users = this.scanDir(this.userDir, 'user')
+    const target = users.find((a) => a.name === originalName)
+    if (!target) return { success: false, error: `Agent "${originalName}" not found` }
+
+    const name = input.name.trim()
+    if (!name) return { success: false, error: 'Agent name is required' }
+    // 与其他用户 agent 重名 → 拒绝（同名用户文件互相遮蔽，语义不明）；覆盖内置为有意设计，放行
+    if (name !== originalName && users.some((a) => a.name === name)) {
+      return { success: false, error: `Agent "${name}" already exists` }
+    }
+
+    const content = serializeAgentDefinitionFile({ ...input, name })
+    // 序列化→解析往返自检，防御 serializer/parser 漂移导致写出不可读文件
+    if (!parseAgentDefinitionFile(content, name)) {
+      return { success: false, error: 'Internal error: serialized agent file failed to parse' }
+    }
+
+    try {
+      writeFileSync(target.basePath, content, 'utf-8')
+    } catch (e) {
+      log.warn(`保存 agent "${originalName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true }
+  }
+
+  /**
+   * 新建用户 agent 定义文件 —— 设置页「添加自定义智能体」的写路径。
+   * name / description / systemPrompt 必填；文件名由 name 净化派生（frontmatter name 为准，
+   * 文件名冲突时追加数字后缀）。与既有用户 agent 重名拒绝；覆盖内置同名为有意设计，放行。
+   */
+  createAgent(input: ParsedAgentFile): { success: boolean; name?: string; error?: string } {
+    const name = input.name.trim()
+    if (!name) return { success: false, error: 'Agent name is required' }
+    if (!input.description.trim()) return { success: false, error: 'When-to-use is required' }
+    if (!input.systemPrompt.trim()) return { success: false, error: 'System prompt is required' }
+
+    const users = this.scanDir(this.userDir, 'user')
+    if (users.some((a) => a.name === name)) {
+      return { success: false, error: `Agent "${name}" already exists` }
+    }
+
+    const content = serializeAgentDefinitionFile({ ...input, name })
+    if (!parseAgentDefinitionFile(content, name)) {
+      return { success: false, error: 'Internal error: serialized agent file failed to parse' }
+    }
+
+    // 文件名净化：路径分隔/非法字符替换为 '-'，前导点去除；frontmatter name 才是标识
+    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'agent'
+    this.ensureUserDir()
+    let filePath = join(this.userDir, `${safeBase}.md`)
+    for (let i = 1; existsSync(filePath); i++) {
+      filePath = join(this.userDir, `${safeBase}-${i}.md`)
+    }
+
+    try {
+      writeFileSync(filePath, content, 'utf-8')
+    } catch (e) {
+      log.warn(`新建 agent "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true, name }
+  }
+
+  /**
+   * 删除用户 agent 定义文件（设置页删除按钮）。仅用户档案可删（内置无文件）；
+   * 删除覆盖档案后同名内置自动恢复生效（合并语义）。
+   */
+  deleteAgent(name: string): { success: boolean; error?: string } {
+    const users = this.scanDir(this.userDir, 'user')
+    const target = users.find((a) => a.name === name)
     if (!target) return { success: false, error: `Agent "${name}" not found` }
-    if (target.source === 'builtin') {
-      return { success: false, error: 'Built-in agents cannot be disabled' }
+
+    try {
+      unlinkSync(target.basePath)
+    } catch (e) {
+      log.warn(`删除 agent "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
-    const config = this.readConfig()
-    if (enabled) {
-      config.disabled = config.disabled.filter((n) => n !== name)
-    } else if (!config.disabled.includes(name)) {
-      config.disabled.push(name)
-    }
-    this.writeConfig(config)
+    log.info(`已删除 agent "${name}" (${target.basePath})`)
     return { success: true }
   }
 

@@ -11,8 +11,6 @@ export interface SidebarCaps {
   windowDrag?: boolean
   /** 会话项置顶（悬浮）徽标 */
   pin?: boolean
-  /** 会话项分享 / Telegram 绑定徽标 */
-  badges?: boolean
 }
 
 export interface SidebarProps {
@@ -170,7 +168,7 @@ export function Sidebar({
             onDelete={onDeleteSession}
             onEditProject={onEditProject}
             onConfigureSession={onConfigureSession}
-            caps={{ pin: caps.pin, badges: caps.badges }}
+            caps={{ pin: caps.pin }}
             pinnedSessionIds={pinnedSessionIds}
           />
         )}

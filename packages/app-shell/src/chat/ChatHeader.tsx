@@ -21,6 +21,8 @@ export interface ChatHeaderCaps {
   editableTitle?: boolean
   /** 显示会话设置齿轮 */
   sessionConfig?: boolean
+  /** macOS 交通灯左侧留白 —— 无边框窗口里顶栏顶到窗口左缘时开启，避免标题被交通灯压住 */
+  macTrafficLights?: boolean
 }
 
 export interface ChatHeaderProps {
@@ -51,6 +53,9 @@ export function ChatHeader({
 
   const drag = caps.windowDrag ? 'titlebar-drag' : ''
   const noDrag = caps.windowDrag ? 'titlebar-no-drag' : ''
+  // 交通灯组自窗口左缘 16px 起、宽 52px（三个 12px 按钮 + 两处 8px 间隔）→ 右缘 68px，再留 10px 余量。
+  // 与侧边栏的展开/收起同步过渡（duration-200），标题随之平移而非瞬跳
+  const leftPad = caps.macTrafficLights ? 'pl-[78px]' : 'pl-2'
 
   const startEditTitle = (): void => {
     if (!caps.editableTitle || !sessionTitle || !activeSessionId) return
@@ -71,7 +76,7 @@ export function ChatHeader({
 
   return (
     <div
-      className={`${drag} flex-shrink-0 flex items-center px-2 transition-opacity duration-200 ${heightClassName} ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+      className={`${drag} flex-shrink-0 flex items-center ${leftPad} pr-2 transition-[opacity,padding] duration-200 ${heightClassName} ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
     >
       {/* 左侧：会话名 + 会话设置 + 工作目录（容器不加 no-drag，剩余空间可拖动窗口） */}
       <div className="flex items-center gap-0.5 min-w-0 flex-1">

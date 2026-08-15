@@ -2,15 +2,13 @@
  * @shuvix/chat-ui — 可复用聊天对话框包。
  *
  * 对外提供 <Conversation> 对话区核心 + 注入口（ChatApi / ChatHost），
- * 以及对话域 stores / hooks / 渲染组件（桌面/WebUI 宿主复用；外部项目按需使用）。
+ * 以及对话域 stores / hooks / 渲染组件（桌面/扩展宿主复用；外部项目按需使用）。
  */
 
 // ── 注入口 ──
 export { getChatApi, setChatApi } from './api/chatApi'
 export { getSessionChannelApi, setSessionChannelApi, getHostApi } from './api/chatApi'
 export type { ChatApi, SessionChannelApi, HostApi } from './api/chatApi'
-export { getChannelBindingApi, setChannelBindingApi } from './api/chatApi'
-export type { ChannelBindingApi } from './api/chatApi'
 export { ChatHostProvider } from './host/ChatHost'
 export { useChatHost } from './host/chatHostContext'
 export type {

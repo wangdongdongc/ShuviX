@@ -112,9 +112,7 @@
     "rollbackConfirm": "Rollback to here",
     "rollbackWarning": "This will delete all messages after this point. This action cannot be undone.",
     "autoApproveLabel": "Auto-Approve",
-    "autoApproveWarning": "Operations will execute automatically without approval. The AI may perform unexpected actions — use with caution.",
-    "lanShareLabel": "LAN Shared",
-    "telegramLabel": "Telegram"
+    "autoApproveWarning": "Operations will execute automatically without approval. The AI may perform unexpected actions — use with caution."
   },
   "input": {
     "searchModel": "Search models...",
@@ -142,14 +140,14 @@
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}"
   },
+  "agentProfile": {
+    "manage": "Manage agents…",
+    "missing": "Profile \"{{name}}\" no longer exists — the session runs on the default profile.",
+    "disabledWhileStreaming": "Can't switch profiles while generating",
+    "modelUnavailable": "This profile asks for model \"{{ref}}\", which is unavailable — the session keeps its current model."
+  },
   "compact": {
-    "button": "Compress conversation",
-    "nothingToCompact": "Context is still small — compression keeps the recent window intact, so there is nothing to compact yet.",
-    "summaryLabel": "Conversation Summary (Compressed)",
-    "autoSummaryLabel": "Conversation Summary (Auto-compacted)",
-    "archivedBanner": "{{count}} archived messages hidden — click to view",
-    "archivedLoading": "Loading...",
-    "archivedAllLoaded": "All archived messages loaded"
+    "summaryLabel": "Conversation Summary (Auto-compacted)"
   },
   "instruction": {
     "sender": "System",
@@ -186,10 +184,11 @@
     "nCalls": "calls"
   },
   "pendingInputs": {
-    "submitAllFilled": "Submit all filled",
-    "filledHint": "{{filled}} of {{total}} filled",
-    "otherPlaceholder": "Other — type feedback for the AI...",
-    "submitOther": "Send"
+    "submitAllFilled": "Submit filled",
+    "otherPlaceholder": "Or just type your thoughts — Enter sends them to the AI...",
+    "submitOther": "Send feedback",
+    "prev": "Previous",
+    "next": "Next"
   },
   "toolCall": {
     "generating": "Generating...",
@@ -200,6 +199,9 @@
     "pendingPathRead": "Reading external file",
     "pendingPathReadDir": "Reading external directory",
     "pendingPathWrite": "Writing external file",
+    "pendingEditPreview": "Review this edit",
+    "pendingWritePreview": "Review this write",
+    "pendingCreatePreview": "Review new file",
     "allowThisDirectory": "Allow this directory",
     "allow": "Allow once",
     "deny": "Deny",
@@ -236,14 +238,7 @@
     "autoApprove": "Auto-Approve",
     "autoApproveDesc": "Tool calls run without confirmation (use with caution)",
     "allowListTitle": "Allowed paths",
-    "lanShare": "LAN Sharing",
-    "lanShareDesc": "When enabled, others on the same network can view this session in read-only mode via browser — no sending or editing.",
-    "lanShareUrlsTitle": "Shareable URLs",
-    "telegramTitle": "Bound Bot",
-    "telegramBotDesc": "Select a Telegram bot to bind to this session. Configure bots in Settings > Bindings.",
-    "telegramNone": "None (unbound)",
     "commandGroup": "Operation Approval",
-    "bindingsGroup": "Session Bindings",
     "instructionFilesGroup": "Instruction File",
     "instructionFilesEmpty": "No AGENTS.md / CLAUDE.md found in the project directory.",
     "instructionFilesRescan": "Rescan",
@@ -276,12 +271,6 @@
     "toolsRemoteGroup": "Remote Access",
     "toolsSubAgentGroup": "Sub-Agents",
     "toolsSubAgentDesc": "Delegate tasks to autonomous sub-agents running in isolated contexts.",
-    "referenceDirs": "Additional Folders",
-    "addRefDir": "Reference more folders",
-    "refDirAccessReadonly": "Read-only",
-    "refDirAccessReadwrite": "Read-write",
-    "refDirAccessRO": "R",
-    "refDirAccessRW": "RW",
     "archiveProject": "Archive Project",
     "archiveConfirmTitle": "Archive Project",
     "archiveConfirmDesc": "This project will be moved to Archived Projects and can be restored later.",
@@ -296,57 +285,8 @@
     "extSkillDesc": "Skills are reusable prompt templates that help AI master specific workflows.",
     "extGoSettings": "Go to Settings",
     "extAvailableDesc": "Select which extensions to enable for this project.",
-    "promptSectionsTitle": "Project Prompt",
-    "addPromptSection": "Add",
-    "promptSectionTitlePlaceholder": "Title (e.g. Identity / Tool Usage Rules)",
-    "promptSectionContentPlaceholder": "Content...",
-    "deletePromptSection": "Delete",
-    "dragToReorder": "Drag to reorder"
-  },
-  "systemPromptCards": {
-    "tabTitle": "System Prompt",
-    "globalLabel": "Global prefix",
-    "globalDesc": "Free-form text concatenated before all built-in and custom cards. Leave empty to skip.",
-    "globalPlaceholder": "Optional global instructions that apply across all projects...",
-    "builtinSection": "Built-in cards",
-    "builtinSectionDesc": "Default behavior guidance shipped with ShuviX. Each card can be enabled or disabled; the content is locked.",
-    "customSection": "Custom cards",
-    "customSectionDesc": "Additional cards appended after the built-ins. Delete a card to remove it.",
-    "envPreviewButton": "Preview actual content",
-    "envPreviewTitle": "Environment preview",
-    "envPreviewClose": "Close",
-    "envPreviewError": "Failed to load preview",
-    "identity": {
-      "title": "Identity",
-      "content": "You are ShuviX, a desktop assistant. You help users complete software engineering tasks via built-in tools such as read / write / edit / glob / grep / ls / bash / ssh / database / ask / skill. For deep codebase research you may also invoke sub-agents that are registered as standalone tools (built-in: explore / research; plus any user-defined sub-agents). Tools provided by user-enabled MCP servers also appear as standalone tools. When the user's request is ambiguous, infer reasonably from the current working directory and conversation context."
-    },
-    "doing_tasks": {
-      "title": "Doing tasks",
-      "content": "Only do what the user asked. Don't refactor, add abstractions, or expand scope under the guise of \"improvements\". A simple bug fix doesn't need surrounding cleanup; a one-shot operation doesn't need a helper. Verify your work before claiming completion: run tests, execute scripts, inspect output; if you can't verify, say so explicitly rather than implying success. When something fails, diagnose the root cause before switching tactics — don't blindly retry the same action."
-    },
-    "using_tools": {
-      "title": "Using your tools",
-      "content": "Prefer dedicated tools over bash: use read instead of cat/head/tail, edit instead of sed/awk, write instead of echo/heredoc, grep/glob instead of grep/find, ls instead of the ls command. Run independent tool calls in parallel for efficiency. For broad codebase research, prefer invoking sub-agent tools (e.g. explore / research, when available) over repeated grepping; once a sub-agent has searched, don't repeat its work. When the user wants a diagram or chart (flowchart, sequence, state, ER, gantt, pie, mindmap, ...), do not hand-write Mermaid into the chat — dispatch the Agent tool with agent \"visualization\" (when available): it picks the chart type, creates or updates the single-chart *-graph.md file in the working directory, and opens its preview for the user. Pass the charting requirement (and the target file when revising) in the dispatch prompt. When the user wants a small tool they can reopen any time rather than a one-off answer (a formatter, converter, tester, playground, notepad, tracker — anything they call a widget, mini app, 小工具 or 小组件), do not hand-write a throwaway script — dispatch the Agent tool with agent \"widget\" (when available): it scaffolds, builds and opens a real ShuviX Widget that stays in the user's Widget panel. Say what the tool must do (and give the widget id when changing an existing one) in the dispatch prompt."
-    },
-    "executing_actions": {
-      "title": "Executing actions with care",
-      "content": "Weigh reversibility and blast radius. Local, reversible actions can run freely. Destructive operations (deleting files/branches, dropping tables, rm -rf, force-push, git reset --hard, CI changes), actions that affect shared state (push, PR comments, sending messages), and uploads to third-party services all require confirmation first. When you hit an obstacle, find the root cause — don't bypass checks (e.g. --no-verify) as a shortcut. Prior authorization for one scenario does not generalize to others."
-    },
-    "tone_style": {
-      "title": "Tone and style",
-      "content": "Keep responses short and direct; avoid preamble or restating the user's words. Reference code with file_path:line_number so the user can jump to the location. Don't use emoji unless the user explicitly requests it. When you've changed something, end with a brief recap — what changed and what's next; skip the recap on simple question-answering turns."
-    },
-    "environment": {
-      "title": "Environment",
-      "git": "Git repository",
-      "platform": "Platform",
-      "shell": "Shell",
-      "os": "OS",
-      "date": "Current date",
-      "model": "Current model",
-      "language": "User language",
-      "appVersion": "ShuviX version"
-    }
+    "systemPrompt": "Project prompt",
+    "systemPromptPlaceholder": "Plain-text prompt injected into every session of this project (leave empty for none)"
   },
   "settings": {
     "title": "Settings",
@@ -355,11 +295,7 @@
     "projectsSubTabArchived": "Archived",
     "projectsNoArchived": "No archived projects",
     "tabProviders": "Providers",
-    "tabSystemPrompt": "System Prompt",
     "tabContextMgmt": "Context",
-    "systemPromptMasterToggle": "Enable System Prompt",
-    "systemPromptMasterToggleDesc": "When off, the global free text and builtin/custom cards are not appended to the LLM request (project-scoped prompts still apply).",
-    "systemPromptDisabledWarning": "System prompt is disabled — newly created conversations will skip the global/builtin/custom prompt; ongoing conversations keep their original config until the app is restarted or messages are rolled back.",
     "tabHttpLogs": "LLM Logs",
     "tabAbout": "About",
     "theme": "Theme",
@@ -388,7 +324,6 @@
     "focusModeDesc": "When a session is selected, fade unselected session items, chat header, input area, settings button, and inactive right-panel tabs",
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
-    "systemPrompt": "System Prompt",
     "titleModelSection": "Title Generation Model",
     "titleModelHint": "Select a model for auto-generating session titles. If not set, titles will not be auto-generated.",
     "titleModelClear": "Clear",
@@ -407,8 +342,6 @@
     "defaultModelGroupDesc": "Provider and model used by default for new sessions",
     "sessionModelRow": "Session",
     "titleModelRow": "Title Generation",
-    "systemPromptDesc": "Default system prompt applied to all new sessions",
-    "systemPromptPlaceholder": "Define the AI assistant's role and behavior...",
     "providerSectionTitle": "Configure LLM Providers",
     "providerConfigGroup": "Configuration",
     "tokenUsageWarning": "Agent mode consumes significantly more tokens than simple chat. It is recommended to monitor your usage or set spending limits on your provider's platform to avoid unexpected charges.",
@@ -443,6 +376,9 @@
     "baseUrlPlaceholder": "Leave empty to use default URL",
     "httpLogTitle": "LLM Request Logs",
     "httpLogDesc": "Each AI request is logged for auditing and debugging.",
+    "httpLogEnabled": "Record LLM logs",
+    "httpLogEnabledHint": "Off by default. Each request stores the full payload (system prompt + whole history), which grows the database fast.",
+    "httpLogDisabledHint": "Recording is off — turn it on to log new requests.",
     "httpLogLimitHint": "Showing {{shown}}/{{limit}} latest",
     "allSessions": "All Sessions",
     "searchSession": "Search sessions...",
@@ -493,6 +429,7 @@
     "capInputCostDesc": "Cost per million input tokens",
     "capOutputCost": "Output Price",
     "capOutputCostDesc": "Cost per million output tokens",
+    "tabAgents": "Agents",
     "tabTools": "LLM Tools",
     "toolMetaTitle": "Tool Definition",
     "toolMetaParams": "Parameters",
@@ -641,7 +578,7 @@
     "mcpServerFeaturesGroup": "Capabilities",
     "mcpServerToolsGroup": "Registered Tools",
     "mcpServerConnectionGroup": "Connection",
-    "tabBindings": "Bindings",
+    "tabTelegramBots": "Telegram Bots",
     "tabSkills": "Skills",
     "tabHooks": "Hooks",
     "hooksTitle": "Hooks",
@@ -754,10 +691,11 @@
     "toolAborted": "Aborted by user."
   },
   "agentInfo": {
-    "button": "Agent info",
-    "title": "Agent Info",
+    "button": "Agent config",
+    "title": "Agent Config",
     "loading": "Loading...",
-    "notInitialized": "Agent not initialized yet (created after the first message is sent)",
+    "refresh": "Refresh",
+    "unavailable": "Agent unavailable (session missing or creation failed — check the model/provider settings)",
     "model": "Model",
     "modelId": "Model",
     "modelName": "Name",
@@ -807,6 +745,11 @@
     "browserHint": "Open pages, take snapshots, click/type/scroll, capture screenshots/PDFs, run JS, inspect network & console — drives the embedded multi-tab browser panel",
     "gitLabel": "Version Control",
     "gitHint": "Local version control — status/diff/stage/commit/branch/checkout, powered by isomorphic-git; no network operations",
+    "gitApproval": {
+      "createRepo": "This will create a new git repository in that directory",
+      "discardChanges": "This discards uncommitted local changes to those files — it cannot be undone",
+      "deleteBranch": "This deletes the branch; commits that exist only on it are lost with it"
+    },
     "previewLabel": "Preview File",
     "previewHint": "Open a file preview in the session Files panel — same view as clicking the file in the panel",
     "sessionLabel": "Session",
@@ -818,13 +761,31 @@
     "subAgentOpenFolder": "Open folder",
     "subAgentRefresh": "Refresh",
     "subAgentFsHint": "Sub-agents are flat Markdown files (one .md per agent, file name = agent name). Built-in ones ship with the app and are read-only. Add your own by dropping a Claude Code-compatible .md into ~/.shuvix/agents/ and clicking Refresh.",
-    "subAgentWhenToUse": "When to use",
     "subAgentTools": "Tools",
-    "subAgentRequiredMcp": "Required MCP",
     "subAgentBasePath": "Base path",
     "subAgentSystemPrompt": "System prompt",
     "subAgentCustomEmpty": "No custom sub-agents yet",
-    "subAgentCustomEmptyHint": "Drop a Markdown file at ~/.shuvix/agents/<name>.md, then click Refresh."
+    "subAgentCustomEmptyHint": "Drop a Markdown file at ~/.shuvix/agents/<name>.md, then click Refresh.",
+    "subAgentEditTitle": "Edit",
+    "subAgentName": "Name",
+    "subAgentDisplayName": "Display name",
+    "subAgentDescPlaceholder": "One-sentence description of this agent (shown in the agents list and slash-command hints)",
+    "subAgentDispatchLabel": "Allow dispatching further sub-agents (nested, depth-limited)",
+    "subAgentReadOnly": "Built-in agents ship with the app and are read-only.",
+    "subAgentCreateOverride": "Create override copy",
+    "subAgentOverridden": "Overridden",
+    "subAgentOverriddenHint": "Overridden by a custom agent with the same name — this builtin version is not in effect.",
+    "subAgentDeleteConfirmTitle": "Delete agent",
+    "subAgentDeleteConfirmDesc": "This deletes the definition file of \"{{name}}\" and cannot be undone.",
+    "subAgentAdd": "Add custom agent",
+    "subAgentCreateRequired": "Name, description and system prompt are required",
+    "subAgentInstructionFiles": "Inject instruction files",
+    "subAgentProjectPrompt": "Inject project prompt",
+    "subAgentDescription": "Description",
+    "subAgentBasicGroup": "Basic info",
+    "subAgentModel": "Model",
+    "subAgentModelNone": "Follow the session",
+    "subAgentModelUnavailable": "\"{{ref}}\" is not available right now (provider disabled or model removed). The file keeps this value until you pick another."
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",
@@ -862,37 +823,6 @@
     "exportErrorTargetExists": "A file already exists at that path. Pick another name or remove it first.",
     "exportErrorPackFailed": "Packaging failed: {{reason}}"
   },
-  "bindings": {
-    "title": "Session Bindings",
-    "description": "Manage bindings between frontend types and sessions. Once shared, other devices can access bound sessions via the corresponding channel.",
-    "webui": "WebUI",
-    "telegram": "Telegram Bot",
-    "websocket": "WebSocket API",
-    "comingSoon": "Coming soon",
-    "running": "Running",
-    "stopped": "Stopped",
-    "sessionCount": "{{count}} session(s)",
-    "noSessions": "No bound sessions",
-    "noSessionsHint": "Enable \"LAN Share\" in a session's config to bind it to WebUI.",
-    "serverStatus": "Server Status",
-    "port": "Port",
-    "boundSessions": "Bound Sessions",
-    "removeShare": "Remove share",
-    "telegramAddBot": "Add Bot",
-    "telegramBotToken": "Bot Token",
-    "telegramBotTokenHint": "Get a token from @BotFather on Telegram",
-    "telegramValidating": "Adding...",
-    "telegramTokenInvalid": "Invalid token",
-    "telegramAllowedUsersHint": "Telegram user IDs allowed to interact. Leave empty to allow all.",
-    "telegramStartBot": "Start",
-    "telegramStopBot": "Stop",
-    "telegramDeleteBot": "Delete",
-    "telegramDeleteConfirm": "Delete this bot? Session bindings will be removed.",
-    "telegramNoBots": "No bots registered. Click \"Add Bot\" to get started.",
-    "telegramBoundTo": "Bound: {{title}}",
-    "telegramUnbound": "Unbound",
-    "telegramEditAllowedUsers": "Allowed Users"
-  },
   "menu": {
     "file": "File",
     "edit": "Edit",
@@ -914,6 +844,7 @@
     "urlPlaceholder": "Enter a URL",
     "newTerminal": "New Terminal",
     "closeTerminal": "Close terminal",
+    "agent": "Config",
     "files": "Files",
     "filesLoading": "Scanning workspace…",
     "filesError": "Failed to scan files",
@@ -1035,5 +966,19 @@
     "restoreHere": "Restore here",
     "disableAlwaysOnTop": "Disable always-on-top",
     "enableAlwaysOnTop": "Enable always-on-top"
+  },
+  "telegramBots": {
+    "title": "Telegram Bots",
+    "description": "Registered bots. Registration only — bots are not started and are not bound to any session.",
+    "addBot": "Add Bot",
+    "botToken": "Bot Token",
+    "botTokenHint": "Get a token from @BotFather on Telegram",
+    "validating": "Adding...",
+    "tokenInvalid": "Invalid token",
+    "allowedUsersHint": "Telegram user IDs allowed to interact. Leave empty to allow all.",
+    "deleteBot": "Delete",
+    "deleteConfirm": "Delete this bot?",
+    "noBots": "No bots registered. Click \"Add Bot\" to get started.",
+    "editAllowedUsers": "Allowed Users"
   }
 }

@@ -29,11 +29,6 @@ export { McpServerDialog } from './settings/McpServerDialog'
 export type { McpServerDialogData, McpServerDialogInitial } from './settings/McpServerDialog'
 export { ProjectInfoForm } from './settings/ProjectInfoForm'
 export type { ProjectInfoFormProps } from './settings/ProjectInfoForm'
-export { ContextManagementSettings } from './settings/ContextManagementSettings'
-export { SystemPromptSettings } from './settings/SystemPromptSettings'
-export type { SystemPromptSettingsProps } from './settings/SystemPromptSettings'
-export { PromptSectionsEditor } from './settings/PromptSectionsEditor'
-export type { PromptSectionsEditorProps } from './settings/PromptSectionsEditor'
 export { ProjectConfigDialog } from './settings/ProjectConfigDialog'
 export type { ProjectConfigDialogProps, ProjectConfigTab } from './settings/ProjectConfigDialog'
 export { BuiltinToolsView } from './settings/BuiltinToolsView'
@@ -75,14 +70,12 @@ export type { ChatBodyProps } from './chat/ChatBody'
 // 运行时/分享/审批状态横幅（按宿主能力自动显隐）—— 桌面/扩展共用，作为 ChatBody 的 banner 插槽
 export { StatusBanner } from './chat/StatusBanner'
 export type { StatusBannerProps } from './chat/StatusBanner'
-// 会话配置面板 + 弹窗（绑定分节据 getChannelBindingCaps() 自动显隐，无需宿主传 caps）
+// 会话配置面板 + 弹窗
 export { SessionConfigPanel } from './chat/SessionConfigPanel'
 export type { SessionConfigPanelProps } from './chat/SessionConfigPanel'
 export { SessionConfigDialog } from './chat/SessionConfigDialog'
 export type { SessionConfigDialogProps } from './chat/SessionConfigDialog'
 // 会话渠道绑定能力探测（设置页 + 会话设置共用单一来源）
-export { getChannelBindingCaps } from './chat/channelBindings'
-export type { ChannelBindingCaps, ChannelId } from './chat/channelBindings'
 export { PanelToggleButton } from './chat/PanelToggleButton'
 export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
 // 右侧面板标签栏（统一标签样式；标签集合/激活态由宿主注入）—— 桌面/扩展共用

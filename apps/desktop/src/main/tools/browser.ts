@@ -18,7 +18,6 @@ import { createDesktopBrowserBackend, DESKTOP_BROWSER_CAPS } from '../services/b
 registerBuiltinTool({
   name: BROWSER_TOOL_NAME,
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t('tool.browserLabel'),
   getHint: () => t('tool.browserHint'),
   factory: (ctx) =>

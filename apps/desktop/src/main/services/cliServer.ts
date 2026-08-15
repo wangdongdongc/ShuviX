@@ -28,11 +28,7 @@ import {
 } from './widget'
 import * as widgetWindowService from './widgetWindowService'
 import { sessionService } from './sessionService'
-import {
-  resolveProjectConfig,
-  isPathWithinWorkspace,
-  isPathWithinReadwriteReferenceDirs
-} from './toolContext'
+import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
 import { resolve as resolvePath } from 'path'
 import { pgliteWorkerManager } from './pglite/workerManager'
 import { parseShuvixPgliteArgv } from './pglite/argvParser'
@@ -276,12 +272,8 @@ class CliServer {
       // CLI 路径无 interactive approval 通道，越界直接拒绝
       if (sessionId) {
         const config = resolveProjectConfig(sessionId)
-        const inWorkspace = isPathWithinWorkspace(zipPath, config.workingDirectory)
-        const inReadwriteRef = isPathWithinReadwriteReferenceDirs(zipPath, config.referenceDirs)
-        if (!inWorkspace && !inReadwriteRef) {
-          throw new Error(
-            `target "${zipPath}" is outside the session sandbox (workingDirectory + readwrite referenceDirs)`
-          )
+        if (!isPathWithinWorkspace(zipPath, config.workingDirectory)) {
+          throw new Error(`target "${zipPath}" is outside the session working directory`)
         }
       }
       try {

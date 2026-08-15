@@ -7,12 +7,7 @@
  * 并指出不匹配的命名空间/方法。纯类型校验，无有效运行时行为。
  */
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
-import type { ChannelBindingApi } from '@shuvix/chat-protocol/channelBindingApi'
 
 // 若 ShuviXAPI 不再可赋值给 ChatApi，此行报错（TS 会指出具体不兼容的成员）。
 const _chatApiContract: ChatApi = undefined as unknown as ShuviXAPI
 void _chatApiContract
-
-// 渠道绑定能力轴（webui / telegram）同样由 window.api 提供：保证桌面端结构满足 ChannelBindingApi。
-const _channelBindingContract: ChannelBindingApi = undefined as unknown as ShuviXAPI
-void _channelBindingContract

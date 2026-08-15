@@ -219,7 +219,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'bash',
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t('tool.bashLabel'),
   getHint: () => t('tool.bashHint'),
   factory: (ctx) => new BashTool(ctx),

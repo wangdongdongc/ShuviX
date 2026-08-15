@@ -425,13 +425,6 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'instructions_injected':
-        // 懒注入：将后端写入的指令消息追加到当前会话消息列表
-        if (sid === store.activeSessionId && event.messages?.length) {
-          for (const im of event.messages) store.addMessage(JSON.parse(im))
-        }
-        break
-
       case 'error':
         // 错误以独立提示消息形式写入会话（不再使用底部错误条/弹窗）
         store.finishStreaming(sid)

@@ -1,6 +1,5 @@
 import { ipcMain } from 'electron'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
-import { messageService } from '../services/messageService'
 
 /**
  * 消息管理 IPC 处理器
@@ -36,16 +35,4 @@ export function registerMessageHandlers(): void {
   // 注：message:deleteFrom 已并入 message:rollback（append-only 树上二者语义重合）。
   // message:addErrorEvent / message:deleteErrorEvent 已移除 —— 错误不再是独立可增删的
   // 消息行，而是 stopReason='error' 的 assistant entry，由投影渲染成 error_event。
-
-  /** 统计会话已归档消息数 */
-  ipcMain.handle('message:countArchived', (_event, sessionId: string) =>
-    messageService.countArchived(sessionId)
-  )
-
-  /** 分页加载已归档消息（含 steps） */
-  ipcMain.handle(
-    'message:listArchived',
-    (_event, params: { sessionId: string; limit: number; offset: number }) =>
-      messageService.listArchivedBySession(params.sessionId, params.limit, params.offset)
-  )
 }

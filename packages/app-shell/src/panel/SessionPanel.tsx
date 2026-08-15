@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Eye, FolderTree, X } from 'lucide-react'
-import { useChatStore, useSubAgentCount } from '@shuvix/chat-ui'
+import { Bot, Cpu, Eye, FolderTree, X } from 'lucide-react'
+import { useChatStore, useSubAgentCount, getHostApi } from '@shuvix/chat-ui'
 import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
+import { AgentInfoPanel } from './AgentInfoPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
  *   - SessionToolbar：悬浮于正文右上角的胶囊工具栏，仅面板收起时显示（展开后隐藏，
- *     切换/收起入口移交面板头部 tabs）。Files 常驻；Preview 仅在宿主注入（showPreview）
- *     **且存在预览目标**时出现（与 Sub-agent 同款「有内容才显示」语义）；Sub-agent 仅
- *     当前会话有子会话时出现（含数量徽标）。点按展开面板并切到该工具。
+ *     切换/收起入口移交面板头部 tabs）。Files 常驻；Agent 在完整宿主的非笔记本会话常驻；
+ *     Preview 仅在宿主注入（showPreview）**且存在预览目标**时出现（与 Sub-agent 同款
+ *     「有内容才显示」语义）；Sub-agent 仅当前会话有子会话时出现（含数量徽标）。
+ *     点按展开面板并切到该工具。
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
  *     对话收缩让位）。头部为工具 tabs（与工具栏同一入口列表），点按切换、X 收起。
- *     装载 Files / Preview / Sub-agent，展开期间各工具均保持挂载、visibility 切换
+ *     装载 Files / Agent / Preview / Sub-agent，展开期间各工具均保持挂载、visibility 切换
  *     （保住预览/手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
+ *     Agent 页额外按「是否激活」拉取（打开该页才懒建 Agent，见 AgentInfoPanel）。
  *
  * 宿主差异经 props / 外层注入：files 内容整体注入（filesContent —— 桌面为 FilesPanel + 桌面
  * caps，扩展为 FSA 权限门控包装）；preview 内容可选注入（previewContent —— 无 app 级右侧
@@ -26,8 +29,20 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
  */
 
 /**
+ * Agent 工具页是否可用：读运行时 Agent 状态需要 HostApi（渠道端如只读 WebUI 取不到），
+ * 且笔记本会话没有主 Agent（每次发送开一次性子智能体）→ 两种情况都不提供该页。
+ */
+function useAgentToolAvailable(sessionId: string | null): boolean {
+  const notebookPath = useChatStore(
+    (s) => s.sessions.find((x) => x.id === sessionId)?.settings.notebookPath ?? null
+  )
+  return !!sessionId && !notebookPath && getHostApi() !== null
+}
+
+/**
  * 展示工具（含兜底）：面板停在 Sub-agent 但子会话已清空（Bot 按钮随之隐藏）→ 回落到 Files；
- * 停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 同样回落到 Files。
+ * 停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 同样回落到 Files；
+ * 停在 Agent 但切到了笔记本/渠道端会话（Cpu 按钮随之隐藏）→ 同样回落到 Files。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
   const openTool = useSessionPanelStore((s) =>
@@ -35,14 +50,17 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
   )
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
+  const agentAvailable = useAgentToolAvailable(sessionId)
   if (openTool === 'subagent' && subAgentCount === 0) return 'files'
   if (openTool === 'preview' && !hasPreviewTarget) return 'files'
+  if (openTool === 'agent' && !agentAvailable) return 'files'
   return openTool
 }
 
 /**
  * 揭示信号 → 会话面板（宿主常驻组件内调用一次；面板收起时内容未挂载，故须在此消费）：
  *   - subAgentRevealRequest（当前会话注册子智能体）→ 展开并切到 Sub-agent
+ *   - agentInfoRevealRequest（用户点输入区上下文用量环）→ 展开并切到 Agent
  *   - filePreviewRequest（仅 previewInPanel=true 的宿主）→ 展开并切到 Preview ——
  *     预览目标本身由宿主经 usePreviewRequestBridge 落入共享 usePreviewPanelStore；
  *     桌面主窗预览在 app 级右侧面板（useRightPanelBridge 揭示），不传此标志。
@@ -55,6 +73,13 @@ export function useSessionPanelReveal(enabled = true, previewInPanel = false): v
     const sid = useChatStore.getState().activeSessionId
     if (sid) useSessionPanelStore.getState().show(sid, 'subagent')
   }, [subAgentReveal, enabled])
+
+  const agentInfoReveal = useChatStore((s) => s.agentInfoRevealRequest)
+  useEffect(() => {
+    if (!enabled || !agentInfoReveal) return
+    const sid = useChatStore.getState().activeSessionId
+    if (sid) useSessionPanelStore.getState().show(sid, 'agent')
+  }, [agentInfoReveal, enabled])
 
   const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
   useEffect(() => {
@@ -73,6 +98,7 @@ interface SessionPanelToolItem {
 
 /**
  * 面板工具入口列表（工具栏胶囊与面板头部 tabs 共用同一来源）：Files 常驻；
+ * Agent 在完整宿主的非笔记本会话常驻（打开即懒建 Agent，见 AgentInfoPanel）；
  * Preview 仅宿主注入且存在预览目标时出现；Sub-agent 仅有子会话时出现（含数量徽标）。
  */
 function useSessionPanelToolItems(
@@ -82,8 +108,11 @@ function useSessionPanelToolItems(
   const { t } = useTranslation()
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
+  const agentAvailable = useAgentToolAvailable(sessionId)
   return [
     { tool: 'files', Icon: FolderTree, label: t('panel.files') },
+    // 用 Cpu 而非设置页「智能体」列表的 Bot：Bot 已是本栏 Sub-agent 的图标，同栏重复会难以分辨
+    ...(agentAvailable ? [{ tool: 'agent' as const, Icon: Cpu, label: t('panel.agent') }] : []),
     ...(includePreview && hasPreviewTarget
       ? [{ tool: 'preview' as const, Icon: Eye, label: t('panel.previewTab') }]
       : []),
@@ -149,14 +178,46 @@ export function SessionPanel({
   const tool = rawTool === 'preview' && !previewContent ? 'files' : rawTool
 
   return (
-    // 外层：占位列（宽度参与 flex 布局），左/右/下留白让卡片「悬浮」；上留白略小使其贴近顶栏工具区
+    // 外层：占位列（宽度参与 flex 布局），右/下留白让卡片「悬浮」；上留白略小使其贴近顶栏工具区。
+    // 左侧刻意不留白：那道缝会把对话列的滚动条卡在「正文与面板之间」悬空一条，
+    // 卡片左缘直接贴住对话列右缘后，滚动条紧靠面板描边（与面板收起时贴窗口右缘同一观感）。
+    // 下留白 pb-2 = 8px，与输入框悬浮卡片的容器留白（InputArea 的 p-2）一致 —— 两张卡片底边齐平。
     <div
-      className="relative flex-shrink-0 min-w-[200px] max-w-[calc(100%-320px)] pl-1 pr-2.5 pt-1 pb-2.5"
+      className="relative flex-shrink-0 min-w-[200px] max-w-[calc(100%-320px)] pr-2.5 pt-1 pb-2"
       style={{ width }}
     >
       <ResizeHandle />
-      {/* 卡片本体：圆角 + 边框 + 投影；overflow-hidden 让内部内容随圆角裁切 */}
-      <div className="flex flex-col h-full rounded-xl border border-border-secondary/60 bg-bg-secondary shadow-lg overflow-hidden">
+      {/*
+        卡片本体：圆角 + 边框 + 投影；overflow-hidden 让内部内容随圆角裁切。
+
+        底色对齐对话正文：面板内**整个子树**把 bg-primary / bg-secondary 两个 token 对调 ——
+        各工具页一直用 bg-bg-secondary 当底、bg-bg-primary 当其上的凸起面（卡片/输入框/代码块），
+        这里换掉变量即可让「底 = 主窗口色（theme-bg-primary）、凸起面 = 原来的灰（theme-bg-secondary）」，
+        层级关系与透明度变体（/40、/60…经 color-mix 解析同一变量）全部自动跟随，改一处即可整体回退。
+        注意：本子树内读 bg-bg-secondary 拿到的是主窗口色，bg-bg-primary 才是凸起面。
+      */}
+      <div
+        // 底色与正文同色后，卡片边界全靠这圈描边：border-secondary/60 在 one-dark 下与底只差
+        // 4.8/255（几乎看不见），故提到 border-primary/60 —— 最弱主题也有 18/255，与浅色主题原先的观感齐平
+        // 投影与输入框悬浮卡片同款 shadow-md；向左的弥散（会糊在紧贴的滚动条上把滑块压深）
+        // 由 clipPath 在左缘一刀切干净（见 style），使滑块底色与面板收起时逐字节相同。
+        // 左描边单独降到 /40 —— 与对话列滑块同一色同一透明度（.thin-scrollbar 也是
+        // border-primary 40%），两者紧贴时合成一条粗细均匀的淡边，而不是「淡滑块 + 深描边」
+        // 叠出一条更重的线（那正是面板一开滚动条就显得变粗变深的原因）。
+        // -ml-px：左描边压在滚动条槽最右 1px 上（卡片是后序兄弟，画在对话列之上），
+        // 于是「滑块 + 描边」合起来仍是 4px —— 与面板收起时的滚动条等宽，开面板不再让它变粗
+        className="session-panel-card -ml-px flex flex-col h-full rounded-xl border border-border-primary/60 border-l-border-primary/40 bg-bg-secondary shadow-md overflow-hidden"
+        style={
+          {
+            '--color-bg-primary': 'var(--theme-bg-secondary)',
+            '--color-bg-secondary': 'var(--theme-bg-primary)',
+            // 左缘齐切、其余三边放开 40px：位移+负 spread 只能压住投影的实心部分，
+            // 高斯尾巴仍会往左扫出十几像素的 1~3/255 灰，正好落在紧贴的滚动条上把它压深。
+            // clip-path 按边框盒裁切（含 box-shadow），右/上/下的浮起感原样保留。
+            clipPath: 'inset(-40px -40px -40px 0)'
+          } as React.CSSProperties
+        }
+      >
         <div className="flex-shrink-0 flex items-center justify-between gap-1 px-1.5 h-9 border-b border-border-secondary/30">
           {/* 头部 tabs：与工具栏同一入口列表；点按切换工具（当前工具展示图标+文字，其余仅图标） */}
           <div className="flex items-center gap-0.5 min-w-0">
@@ -198,6 +259,13 @@ export function SessionPanel({
           >
             {filesContent}
           </div>
+          {/* Agent 信息：仅在激活时拉取（active），避免打开 Files 就把 Agent 懒建出来 */}
+          <div
+            className="absolute inset-0"
+            style={tool === 'agent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+          >
+            <AgentInfoPanel sessionId={sessionId} active={tool === 'agent'} />
+          </div>
           {previewContent !== undefined && (
             <div
               className="absolute inset-0"
@@ -224,7 +292,8 @@ export function SessionPanel({
 
 /**
  * 占位列左缘拖拽条 —— 向左拖增宽（面板贴对话区右侧）。
- * 命中区盖住卡片左侧留白带（无可见高亮，仅 col-resize 光标提示），
+ * 命中区贴着卡片左缘往内 6px（无可见高亮，仅 col-resize 光标提示）：
+ * 刻意不外扩到卡片之外，否则会盖住紧邻的对话列滚动条、抢走拖动。
  * 宽度经共享 store 钳制；持久化由宿主外接。
  */
 function ResizeHandle(): React.JSX.Element {
@@ -254,7 +323,7 @@ function ResizeHandle(): React.JSX.Element {
 
   return (
     <div
-      className="absolute inset-y-2 -left-[2px] w-[8px] cursor-col-resize z-20"
+      className="absolute inset-y-2 left-0 w-[6px] cursor-col-resize z-20"
       onMouseDown={onMouseDown}
     />
   )

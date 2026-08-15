@@ -6,7 +6,6 @@ import type {
   AgentRuntimeInfo,
   AgentPromptParams,
   AgentNotebookPromptParams,
-  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -31,6 +30,8 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
   SessionAllowListRemoveParams,
+  SubAgentCreateParams,
+  SubAgentSaveParams,
   SessionUpdateTitleParams,
   SessionCreateParams,
   SettingsSetParams,
@@ -55,8 +56,6 @@ import type {
   TelegramBotAddParams,
   TelegramBotUpdateParams,
   TelegramBotInfo,
-  TelegramBindSessionParams,
-  TelegramUnbindSessionParams,
   ToolResultDetails
 } from '../main/types'
 import type {
@@ -195,10 +194,6 @@ declare global {
   interface ChatMessagesReloadedEvent extends ChatEventBase {
     type: 'messages_reloaded'
   }
-  interface ChatInstructionsInjectedEvent extends ChatEventBase {
-    type: 'instructions_injected'
-    messages: string[]
-  }
   interface ChatErrorEvent extends ChatEventBase {
     type: 'error'
     error: string
@@ -228,7 +223,6 @@ declare global {
     | ChatSubSessionRegisterEvent
     | ChatSubSessionEndEvent
     | ChatMessagesReloadedEvent
-    | ChatInstructionsInjectedEvent
     | ChatErrorEvent
     | ChatUserMessageEvent
 
@@ -243,13 +237,6 @@ declare global {
     totalBytes: number
     speedBytesPerSec: number
     etaSeconds: number
-  }
-
-  /** 参考目录条目 */
-  interface ReferenceDir {
-    path: string
-    note?: string
-    access?: 'readonly' | 'readwrite'
   }
 
   /** 项目环境变量 */
@@ -268,7 +255,6 @@ declare global {
   /** 项目扩展配置 */
   interface ProjectSettings {
     enabledTools?: string[]
-    referenceDirs?: ReferenceDir[]
     tool?: ToolSettings
   }
 
@@ -277,7 +263,8 @@ declare global {
     id: string
     name: string
     path: string
-    promptSections: import('@shuvix/chat-protocol/types/promptSection').ProjectPromptSection[]
+    /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+    systemPrompt: string
     settings: ProjectSettings
     archivedAt: number
     createdAt: number
@@ -294,9 +281,10 @@ declare global {
   interface SessionSettings {
     autoApprove?: boolean
     allowList?: string[]
-    telegramBotId?: string
     /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
     instructionFile?: string | null
+    /** 会话根 Agent 采用的档案名；缺省 / 档案已不存在 → 回落 'default' */
+    agentProfile?: string
   }
 
   /** 会话类型（对应 DB 表 sessions） */
@@ -354,17 +342,25 @@ declare global {
     desc: string
   }
 
-  /** Sub-agent 元信息（文件系统驱动；与主进程 AgentDefinition 对齐） */
+  /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
   interface SubAgentInfo {
     name: string
     displayName: string
-    whenToUse: string
+    description: string
     systemPrompt: string
     tools: string[]
+    /** 指定模型（`shuvix-model`）：`<modelId>` 或 `<provider>/<modelId>`；省略 = 跟随会话 */
+    model?: string
+    /** 该内置已被同名自定义档案遮蔽（仅设置页展示,不生效） */
+    overridden?: boolean
+    /** 是否注入项目指令文件（shuvix-instruction-files） */
+    instructionFiles: boolean
+    /** 是否注入项目提示词（shuvix-project-prompt） */
+    projectPrompt: boolean
+    /** 只可派发、不可切换为会话档案（shuvix-dispatch-only）；GUI 暂不提供开关,原样透传保存 */
+    dispatchOnly: boolean
     source: 'builtin' | 'user'
-    requiredMcp?: string[]
     basePath: string
-    isEnabled: boolean
   }
 
   /** 暴露给 Renderer 的 API 类型 */
@@ -392,18 +388,19 @@ declare global {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
       notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
-      dispatchPrompt: (params: AgentDispatchPromptParams) => Promise<{ success: boolean }>
       subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
       subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
-      /** 压缩会话历史（harness 内建滚动式部分压缩） */
-      compact: (sessionId: string) => Promise<{ success: boolean; error?: string }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
-      /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-      getInfo: (sessionId: string) => Promise<AgentRuntimeInfo | null>
+      /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
+       *  传 ensure 则先懒创建（不请求 LLM）再取快照 */
+      getInfo: (
+        sessionId: string,
+        options?: { ensure?: boolean }
+      ) => Promise<AgentRuntimeInfo | null>
       /**
        * 统一的"用户输入响应"入口。命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
        */
@@ -477,20 +474,30 @@ declare global {
         id: string
         filename: string | null
       }) => Promise<{ success: boolean }>
+      /** 可切换的会话档案（含 default，不含 notebook 基座） */
+      listAgentProfiles: () => Promise<
+        import('@shuvix/chat-protocol/chatApi').AgentProfileSummary[]
+      >
+      /**
+       * 切换会话根 Agent 的档案（粘性；未知档案名返回 success:false + error）。
+       * 档案声明的模型与 mcp:/skill: 工具作为种子写进会话树并经 applied 回传
+       * （工具是替换语义；模型不可用时经 modelUnavailable 回传原始值）。
+       */
+      updateAgentProfile: (params: { id: string; name: string }) => Promise<{
+        success: boolean
+        error?: string
+        applied?: {
+          model?: { provider: string; model: string; capabilities: ModelCapabilities }
+          tools: string[]
+        }
+        modelUnavailable?: string
+      }>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
       clear: (sessionId: string) => Promise<{ success: boolean }>
       /** 回退到指定消息之前（entry 树 leaf 移到其父节点，使 Agent 失效） */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
-      /** 统计已归档消息数 */
-      countArchived: (sessionId: string) => Promise<number>
-      /** 分页加载已归档消息（含 steps） */
-      listArchived: (params: {
-        sessionId: string
-        limit: number
-        offset: number
-      }) => Promise<ChatMessage[]>
     }
     settings: {
       getAll: () => Promise<Record<string, string>>
@@ -499,27 +506,6 @@ declare global {
       /** 获取已知设置 key 的元数据（labelKey + desc） */
       getKnownKeys: () => Promise<Record<string, ConfigMeta>>
       /** 列出全部内置系统提示词卡片 */
-      listBuiltinSections: () => Promise<
-        Array<{
-          id: string
-          title: string
-          content: string | null
-          disabled: boolean
-          dynamic: boolean
-        }>
-      >
-      /** 写入被禁用的内置卡片 id 列表 */
-      setBuiltinDisabled: (ids: string[]) => Promise<{ success: boolean }>
-      /** 读取用户自定义系统提示词卡片 */
-      getCustomSections: () => Promise<
-        import('@shuvix/chat-protocol/types/promptSection').ProjectPromptSection[]
-      >
-      /** 写入用户自定义系统提示词卡片 */
-      setCustomSections: (
-        sections: import('@shuvix/chat-protocol/types/promptSection').ProjectPromptSection[]
-      ) => Promise<{ success: boolean }>
-      /** 预览内置卡片实际内容 */
-      previewBuiltinSection: (params: { id: string; sessionId?: string }) => Promise<string>
     }
     httpLog: {
       list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
@@ -548,11 +534,11 @@ declare global {
     }
     subAgent: {
       list: () => Promise<SubAgentInfo[]>
-      refresh: () => Promise<{ success: boolean }>
-      setEnabled: (params: {
-        name: string
-        enabled: boolean
-      }) => Promise<{ success: boolean; error?: string }>
+      save: (params: SubAgentSaveParams) => Promise<{ success: boolean; error?: string }>
+      create: (
+        params: SubAgentCreateParams
+      ) => Promise<{ success: boolean; name?: string; error?: string }>
+      delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
     }
     tools: {
@@ -648,22 +634,8 @@ declare global {
       disconnect: (id: string) => Promise<{ success: boolean }>
       getTools: (id: string) => Promise<McpToolInfo[]>
     }
-    webui: {
-      /** 切换指定 session 的分享状态（仅查看） */
-      setShared: (params: { sessionId: string; shared: boolean }) => Promise<{ success: boolean }>
-      /** 查询单个 session 是否已分享 */
-      isShared: (sessionId: string) => Promise<boolean>
-      /** 获取所有已分享的 session id 列表 */
-      listShared: () => Promise<string[]>
-      /** 获取 WebUI 服务器状态 */
-      serverStatus: () => Promise<{
-        running: boolean
-        port?: number
-        urls?: string[]
-      }>
-    }
     telegram: {
-      /** 列出所有注册的 Bot（含运行时状态） */
+      /** 列出所有已登记的 Bot */
       listBots: () => Promise<TelegramBotInfo[]>
       /** 添加 Bot（自动验证 token） */
       addBot: (params: TelegramBotAddParams) => Promise<TelegramBotInfo>
@@ -678,18 +650,6 @@ declare global {
         id?: number
         error?: string
       }>
-      /** 绑定 session 到 bot */
-      bindSession: (params: TelegramBindSessionParams) => Promise<{ success: boolean }>
-      /** 解绑 session */
-      unbindSession: (params: TelegramUnbindSessionParams) => Promise<{ success: boolean }>
-      /** 获取 session 绑定的 bot ID */
-      getSessionBotId: (sessionId: string) => Promise<string | null>
-      /** 启动指定 Bot */
-      startBot: (botId: string) => Promise<{ success: boolean }>
-      /** 停止指定 Bot */
-      stopBot: (botId: string) => Promise<{ success: boolean }>
-      /** 获取 Bot 运行状态 */
-      getBotStatus: (botId: string) => Promise<{ running: boolean }>
     }
     command: {
       /**

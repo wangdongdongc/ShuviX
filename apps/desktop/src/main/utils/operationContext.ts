@@ -4,7 +4,6 @@ import { v4 as uuid } from 'uuid'
 /** 操作来源 — 判别联合，新增前端只需添加新变体 */
 export type OperationSource =
   | { type: 'electron' }
-  | { type: 'webui'; ip: string; userAgent?: string; frontendId: string }
   | { type: 'telegram'; botId: string; userId: string; chatId: string }
 
 /** 操作上下文 — 每次用户操作一个实例 */
@@ -38,21 +37,6 @@ export function createTelegramContext(
   return {
     requestId: uuid(),
     source: { type: 'telegram', botId, userId, chatId },
-    sessionId,
-    timestamp: Date.now()
-  }
-}
-
-/** 工厂：WebUI HTTP/WS 上下文 */
-export function createWebUIContext(
-  ip: string,
-  frontendId: string,
-  sessionId?: string,
-  userAgent?: string
-): OperationContext {
-  return {
-    requestId: uuid(),
-    source: { type: 'webui', ip, frontendId, userAgent },
     sessionId,
     timestamp: Date.now()
   }

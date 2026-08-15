@@ -326,7 +326,9 @@ const SubSessionStream = memo(function SubSessionStream({
           sub.messages.length === 0 &&
           !sub.streamingContent &&
           sub.result && (
-            <pre className="text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 whitespace-pre-wrap break-words">
+            /* 实心 tertiary（不带 alpha）：会话面板内 bg-primary/secondary 被对调，
+               半透明 tertiary 叠在卡片上差值会腰斩到 ~5/255 */
+            <pre className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-2 py-1 whitespace-pre-wrap break-words">
               {sub.result}
             </pre>
           )}

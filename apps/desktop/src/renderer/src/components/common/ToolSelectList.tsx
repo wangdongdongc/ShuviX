@@ -44,7 +44,7 @@ function skillShortName(fullName: string): string {
 
 /**
  * 通用工具选择列表 — 支持内置工具、MCP 工具分组和 Skills 分组
- * 当前仅被 SubAgentPanel 使用，用于定义自定义 SubAgent 的工具子集。
+ * 当前被 SubAgentEditor 使用，用于定义自定义 SubAgent 的工具白名单。
  */
 export function ToolSelectList({
   tools,

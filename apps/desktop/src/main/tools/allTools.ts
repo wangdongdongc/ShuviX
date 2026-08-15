@@ -11,13 +11,13 @@ import './write'
 import './edit'
 import './ask'
 import './browser'
-// git 工具（isomorphic-git 跨端实现）：注册 defaultEnabled: false —— 主 Agent 默认无、
-// 可在工具选择器按会话开启；子代理（如 wiki curator）经白名单解析不受默认集限制
+// git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、
+// 用户可覆盖 default.md 加入；子代理（如 wiki curator）经白名单解析不受默认集限制
 import './git'
-// preview 工具：defaultEnabled: false —— 可视化子代理经白名单解析使用
+// preview 工具：不在内置 default 档案清单 —— 可视化子代理经白名单解析使用
 import './preview'
 // 注：session 工具已删除 —— 压缩不再经「compact 子代理 + 工具调用」，
-// 而是 harness 内建的 compact()（见 AgentSession.compact / ChatGateway.compact）。
+// 而是 harness 内建的自动压缩（见 HarnessSession.maybeAutoCompact）。
 
 // 高性能检索
 import './ls'

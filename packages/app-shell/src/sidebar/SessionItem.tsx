@@ -2,17 +2,9 @@
  * SessionItem —— 共享会话列表单行（prop 驱动），从桌面 Sidebar.renderSessionItem 抽出。
  *
  * 通用部分（图标/标题/流式脉冲/待输入计数/选中态/删除）两宿主共用；桌面专属能力
- * （悬浮 pin / 分享 / Telegram 徽标 / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
+ * （悬浮 pin / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
  */
-import {
-  MessageSquare,
-  FileText,
-  PictureInPicture2,
-  Globe,
-  MessageCircle,
-  Settings2,
-  Trash2
-} from 'lucide-react'
+import { MessageSquare, FileText, PictureInPicture2, Settings2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export interface SessionItemProps {
@@ -28,8 +20,6 @@ export interface SessionItemProps {
   onDelete?: (id: string) => void
   // —— 桌面专属（可选） ——
   isPinned?: boolean
-  isShared?: boolean
-  isTelegramBound?: boolean
   onConfigure?: (id: string) => void
   onContextMenu?: (id: string, e: React.MouseEvent) => void
 }
@@ -44,8 +34,6 @@ export function SessionItem({
   onSelect,
   onDelete,
   isPinned = false,
-  isShared = false,
-  isTelegramBound = false,
   onConfigure,
   onContextMenu
 }: SessionItemProps): React.JSX.Element {
@@ -87,8 +75,6 @@ export function SessionItem({
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
         <span className="truncate">{session.title}</span>
-        {isShared && <Globe size={10} className="text-accent shrink-0" />}
-        {isTelegramBound && <MessageCircle size={10} className="text-blue-500 shrink-0" />}
         {pendingCount > 0 && (
           <span className="flex items-center gap-1 ml-auto shrink-0">
             <span className="relative flex h-1.5 w-1.5">

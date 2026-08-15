@@ -141,7 +141,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ls',
   group: 'ripgrep',
-  defaultEnabled: true,
   getLabel: () => t('tool.lsLabel'),
   getHint: () => t('tool.lsHint'),
   factory: (ctx) => new ListTool(ctx),

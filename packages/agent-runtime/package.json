@@ -15,7 +15,8 @@
     "diff": "^8.0.3",
     "isomorphic-git": "^1.34.0",
     "turndown": "^7.2.2",
-    "typebox": "^1.1.37"
+    "typebox": "^1.1.37",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/turndown": "^5.0.5"

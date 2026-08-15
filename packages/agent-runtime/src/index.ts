@@ -49,7 +49,13 @@ export {
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
 export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）
-export type { FileSystemPort, FileStat, DirEntry, FileGuards } from './fileTools/port'
+export type {
+  FileSystemPort,
+  FileStat,
+  DirEntry,
+  FileGuards,
+  WriteApprovalHook
+} from './fileTools/port'
 export { readTextContent, readDirContent, type ReadTextParams } from './fileTools/read'
 export { applyWrite, type WriteParams } from './fileTools/write'
 export { applyEdit, type EditParams } from './fileTools/edit'
@@ -117,6 +123,7 @@ export {
   GIT_ACTIONS,
   GIT_OPS,
   type GitAction,
+  type GitApprovalReason,
   type GitOpSpec,
   type GitOpParams,
   type GitParamKey
@@ -192,6 +199,7 @@ export {
   fuzzyFindText,
   stripBom,
   generateDiffString,
+  capDiffString,
   type FuzzyMatchResult,
   type EditDiffResult
 } from './fileTools/editDiff'
@@ -219,25 +227,6 @@ export {
   DEFAULT_MAX_BYTES,
   MAX_LINE_LENGTH
 } from './fileTools/truncate'
-// 系统提示词卡片（内置定义 + 装配/视图）—— 内容来自共享 i18n，environment 由各端注入
-export {
-  BUILTIN_SECTION_ORDER,
-  ENVIRONMENT_SECTION_ID,
-  isBuiltinSectionId,
-  isDynamicBuiltin,
-  getBuiltinTitle,
-  getStaticBuiltinContent,
-  formatLanguageDisplay,
-  type BuiltinSectionId,
-  type BuiltinRenderCtx
-} from './systemPrompt/builtinSections'
-export {
-  listBuiltinSections,
-  previewBuiltinSection,
-  renderSystemPromptSections,
-  type SystemPromptDeps,
-  type BuiltinSectionViewItem
-} from './systemPrompt/render'
 // 派生 agent：spawn 协调器 + 派发工具（注入注册表/工具解析/模型构建/事件广播，端无关）
 export {
   createSubAgentManager,
@@ -249,17 +238,26 @@ export {
   type RunTaskParams,
   type AnyAgentTool
 } from './subagent/manager'
-// 内置子代理定义（硬编码，各端 registry 组装；用户同名定义可覆盖）
+// 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
 // （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）
 export {
-  EXPLORE_AGENT,
-  RESEARCH_AGENT,
-  VISUALIZATION_AGENT,
-  buildWidgetAgent,
-  buildWikiAgent,
+  buildBuiltinProfile,
+  buildBuiltinProfiles,
+  BUILTIN_PROFILE_SPECS,
+  BASE_PROFILE_NAMES,
+  DEFAULT_PROFILE_NAME,
+  DEFAULT_SPEC,
+  NOTEBOOK_PROFILE_NAME,
+  NOTEBOOK_SPEC,
+  EXPLORE_SPEC,
+  VISUALIZATION_SPEC,
+  WIDGET_SPEC,
+  WIKI_SPEC,
+  WIKI_WRITER_SPEC,
   WIKI_ENTRY_BANNER,
-  type BuildWidgetAgentOptions,
-  type BuildWikiAgentOptions
+  WIKI_TOPIC_BANNER,
+  type BuiltinProfileDeps,
+  type BuiltinProfileSpec
 } from './subagent/builtinAgents'
 export {
   createDispatchAgentTool,
@@ -270,18 +268,43 @@ export {
   type DispatchAgentToolDeps
 } from './subagent/dispatchTool'
 export type {
-  AgentDefinition,
+  AgentProfile,
   InProcessAgentType,
   SubAgentModelConfig,
   SubAgentRegistry
 } from './subagent/types'
+
+// ── Agent 档案体系：创建期变量表 / 注册表接口（统一创建管线的纯逻辑层） ──
 export {
-  buildNotebookContextText,
+  renderProfileSystemPrompt,
+  substitutePromptVars,
+  formatLanguageDisplay,
+  type AgentKind,
+  type PromptVars,
+  type PromptVarsCtx
+} from './agentProfile/promptVars'
+export { type AgentProfileRegistry } from './agentProfile/registry'
+// agent 定义文件（<name>.md）的格式解析/序列化 —— 内置档案与用户档案共用同一套格式
+export {
+  parseAgentDefinitionFile,
+  serializeAgentDefinitionFile,
+  AGENT_FILE_MARKER,
+  AGENT_FILE_MARKER_KEY,
+  type ParsedAgentFile
+} from './agentProfile/definitionFile'
+export {
+  createAgentFactory,
+  type AgentFactory,
+  type AgentHostAdapter,
+  type CreateAgentParams,
+  type CreatedAgent,
+  type ToolResolveRequest
+} from './agentProfile/createAgent'
+export {
   notebookTaskName,
   runNotebookTask,
   type NotebookTaskInputs
 } from './subagent/notebookContext'
-export { runUserDispatchTask, type UserDispatchInputs } from './subagent/userDispatch'
 // harness 接入层：会话状态的存储与上下文构建交给 pi AgentHarness。
 // entry 树是唯一真理源，entriesToChatMessages 是它的「UI 视角」（唯一投影方向）。
 export {
@@ -291,8 +314,9 @@ export {
   entriesToChatMessages,
   createModelsAdapter,
   createStubExecutionEnv,
-  AUTO_COMPACT_CUSTOM_TYPE,
   INSTRUCTION_CUSTOM_TYPE,
+  INLINE_TOKENS_CUSTOM_TYPE,
+  type InlineTokensSidecar,
   type HarnessSessionDeps,
   type HarnessEventContext,
   type HarnessEventDeps,
@@ -301,7 +325,7 @@ export {
   type ToolCallGate
 } from './harness'
 // transcript：AgentMessage → ChatMessage 投影 + 面向 Agent 的转写门面
-// （子代理仍是裸 Agent，需要这条路径把它的上下文渲染成可读转写）
+// （派生 agent 的内存上下文经这条路径渲染成可读转写 —— 面板/导出共用）
 export { agentMessagesToChatMessages, extractBase64, transcribeAgentMessages } from './transcript'
 // 会话标题生成：宿主无关内核（端解析模型来源 + apiKey）；
 // SessionTitler 是两端共用的两阶段触发策略（quick 首轮 + refine 精修）

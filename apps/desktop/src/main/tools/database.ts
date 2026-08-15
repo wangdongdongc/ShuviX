@@ -120,7 +120,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'database',
   group: 'remote',
-  defaultEnabled: true,
   getLabel: () => t('tool.remoteDbLabel'),
   getHint: () => t('tool.remoteDbHint'),
   factory: (ctx) => new DatabaseTool(ctx),

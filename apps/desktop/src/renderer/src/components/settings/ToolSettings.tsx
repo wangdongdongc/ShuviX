@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Plus, Trash2, Pencil, TriangleAlert, Globe } from 'lucide-react'
 import { BuiltinToolsView } from '@shuvix/app-shell'
-import { SubAgentPanel } from './SubAgentPanel'
 import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
 import {
   SshCredentialDialog,
@@ -33,8 +32,9 @@ interface SshCredentialInfo {
 
 /**
  * 工具配置页：复用共享的 <BuiltinToolsView>（每工具一个子页 + 顶部 metadata 卡片）。
- * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、子代理管理、
+ * 桌面注入：definitions 读取入口、各工具的专属配置（SSH/DB 凭据、
  * Browser 数据/证书设置——挂在统一 browser 工具的子页下）。
+ * 子智能体管理已移至顶层「智能体」tab（AgentSettings）。
  */
 export function ToolSettings(): React.JSX.Element {
   return (
@@ -43,7 +43,6 @@ export function ToolSettings(): React.JSX.Element {
       renderToolExtra={(name) => {
         if (name === 'ssh') return <SshToolPanel />
         if (name === 'database') return <DatabaseToolPanel />
-        if (name === 'Agent') return <SubAgentPanel />
         if (name === 'browser') return <BrowserToolPanel />
         return null
       }}

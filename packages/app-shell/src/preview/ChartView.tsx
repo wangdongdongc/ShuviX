@@ -415,7 +415,9 @@ export function ChartView({
   return (
     <div
       ref={containerRef}
-      className={`relative h-full overflow-hidden bg-bg-secondary select-none ${
+      // 视口底用不参与「会话面板 token 对调」的 tertiary：用 bg-secondary 时，面板内它会解析成
+      // 主窗口色，而浅色主题下图表卡片是硬编码 #ffffff —— 两者同色，铺满时（bleeds 去掉描边）画布边界会消失
+      className={`relative h-full overflow-hidden bg-bg-tertiary select-none ${
         ready ? 'cursor-grab active:cursor-grabbing' : ''
       }`}
       onDoubleClick={ready ? fitContain : undefined}
@@ -444,7 +446,7 @@ export function ChartView({
     >
       {result?.error || (result && !result.svg) ? (
         // mermaid 语法错误：错误卡片 + 原始代码（覆盖整面，自己管滚动与光标）
-        <div className="absolute inset-0 overflow-auto bg-bg-secondary p-4 cursor-auto select-text">
+        <div className="absolute inset-0 overflow-auto bg-bg-tertiary p-4 cursor-auto select-text">
           <div className="flex items-center gap-1.5 text-xs text-red-400 mb-2">
             <AlertCircle size={13} className="flex-shrink-0" />
             {t('panel.preview.chartError')}

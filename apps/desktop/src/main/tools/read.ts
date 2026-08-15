@@ -306,7 +306,6 @@ import { READ_DESCRIPTION } from './fileToolDeps'
 registerBuiltinTool({
   name: 'read',
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.read.labelKey),
   getHint: () => t('tool.readHint'),
   factory: (ctx) => makeReadTool(ctx),

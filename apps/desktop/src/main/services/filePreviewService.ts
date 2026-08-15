@@ -15,11 +15,19 @@ import { extname } from 'path'
 import { BrowserWindow, dialog } from 'electron'
 import { previewFile } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
-import { isPathReadAllowed, isPathWriteAllowed, resolveProjectConfig } from './toolContext'
+import { isPathWriteAllowed, resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 
+/**
+ * 读取预览内容 —— **不做工作目录准入判定**：预览只呈现给用户、不进模型上下文，
+ * 而用户对本机文件本来就有完全访问权，拦下工作目录外的文件（~/.shuvix 里的
+ * wiki/widget 产物等）只会挡路。
+ *
+ * 曾经按调用方分档（本地渲染进程放行、WebUI 的 HTTP 路由保留判定），WebUI 下线后
+ * 只剩本地一种调用方，分档随之取消。
+ */
 export async function previewSessionFile(sessionId: string, path: string): Promise<FileReadResult> {
   const session = sessionService.getById(sessionId)
   const workingDirectory = session?.workingDirectory
@@ -28,15 +36,6 @@ export async function previewSessionFile(sessionId: string, path: string): Promi
   }
 
   const absolutePath = resolveReadPath(path, workingDirectory)
-  const config = resolveProjectConfig(sessionId)
-
-  if (!isPathReadAllowed(config, absolutePath)) {
-    return {
-      kind: 'not-allowed',
-      path,
-      reason: 'Path is outside the workspace and reference directories'
-    }
-  }
 
   // 桌面 port 操作绝对路径；结果里的 path 也用绝对路径 —— 渲染端媒体/PDF 拼
   // shuvix-preview://...&path=<abs> 交给 customProtocols 流式播放（需要绝对路径）。

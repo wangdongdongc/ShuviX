@@ -34,7 +34,7 @@ function toProject(r: ProjectRecord): Project {
     id: r.id,
     name: r.name,
     path: r.handle.name,
-    promptSections: [],
+    systemPrompt: '',
     settings: {},
     archivedAt: r.archivedAt,
     createdAt: r.createdAt,

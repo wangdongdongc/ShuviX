@@ -10,9 +10,7 @@
  *   addStepThinking / addStepText / addErrorEvent —— 写入不再经这里。
  *   rollbackToMessage / deleteFromMessage —— 改为树导航（moveTo），见下方新方法。
  */
-import { buildContextEntries } from '@earendil-works/pi-agent-core'
-import type { SessionTreeEntry } from '@earendil-works/pi-agent-core'
-import { entriesToChatMessages } from '@shuvix/agent-runtime'
+import { INLINE_TOKENS_CUSTOM_TYPE, entriesToChatMessages } from '@shuvix/agent-runtime'
 import { deleteSessionFile, getSessionTree } from './sessionStorage'
 import type { ChatMessage } from '../types'
 
@@ -47,7 +45,15 @@ export class MessageService {
     if (!session) return false
     const entry = await session.getEntry(resolveEntryId(messageId))
     if (!entry) return false
-    await session.moveTo(entry.parentId)
+    // user 消息前若有内联 Token 显示侧车，一并越过 —— 免得叶子停在无主侧车上
+    let targetId = entry.parentId
+    if (targetId) {
+      const parent = await session.getEntry(targetId)
+      if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
+        targetId = parent.parentId
+      }
+    }
+    await session.moveTo(targetId)
     return true
   }
 
@@ -59,40 +65,6 @@ export class MessageService {
     if (!entry) return false
     await session.moveTo(entry.id)
     return true
-  }
-
-  // ─── 归档（被压缩掉的历史） ────────────────────────────────
-  //
-  // 旧模型用 archived 标记位；现在「归档」= 落在最后一条 compaction entry
-  // 的 firstKeptEntryId 之前的那些 entry —— 由 buildContextEntries 的差集算出。
-
-  private async archivedEntries(sessionId: string): Promise<SessionTreeEntry[]> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return []
-    const leafId = await session.getLeafId()
-    if (!leafId) return []
-    const all = await session.getBranch()
-    const kept = new Set(buildContextEntries(all).map((e) => e.id))
-    return all.filter((e) => !kept.has(e.id))
-  }
-
-  async countArchived(sessionId: string): Promise<number> {
-    const entries = await this.archivedEntries(sessionId)
-    return entriesToChatMessages(entries, sessionId).length
-  }
-
-  /** 分页加载已归档消息（按时间正序） */
-  async listArchivedBySession(
-    sessionId: string,
-    limit: number,
-    offset: number
-  ): Promise<ChatMessage[]> {
-    const entries = await this.archivedEntries(sessionId)
-    const msgs = entriesToChatMessages(entries, sessionId)
-    // 与旧行为一致：从最近的往前取 limit 条，再按正序返回
-    const end = Math.max(0, msgs.length - offset)
-    const start = Math.max(0, end - limit)
-    return msgs.slice(start, end)
   }
 }
 

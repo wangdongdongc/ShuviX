@@ -7,7 +7,6 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentNotebookPromptParams,
-  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -43,19 +42,6 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体（fire-and-forget，不 await 整轮） */
-  ipcMain.handle('agent:dispatchPrompt', (_event, params: AgentDispatchPromptParams) =>
-    operationContext.run(createElectronContext(params.sessionId), async () => {
-      await chatGateway.dispatchPrompt(
-        params.sessionId,
-        params.agentName,
-        params.text,
-        params.inlineTokens
-      )
-      return { success: true }
-    })
-  )
-
   /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，不 await 整轮） */
   ipcMain.handle('agent:subAgentPrompt', (_event, params: AgentSubAgentPromptParams) => {
     void agentManager
@@ -81,15 +67,16 @@ export function registerAgentHandlers(): void {
     operationContext.run(createElectronContext(sessionId), () => chatGateway.abort(sessionId))
   )
 
-  /** 压缩会话历史（harness 内建的滚动式部分压缩） */
-  ipcMain.handle('agent:compact', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () => chatGateway.compact(sessionId))
-  )
-
-  /** 切换指定 session 的模型 */
+  /**
+   * 切换指定 session 的模型。
+   *
+   * 三个 set* 必须 await 网关：运行配置的落点是会话树（有 Agent 走 harness、没有则直接
+   * 追加 entry），不等待就返回的话，调用方 `await` 完再读 `agent.init` 可能还是旧值，
+   * 网关抛的错也会变成主进程里的 unhandled rejection、前端恒收到 success。
+   */
   ipcMain.handle('agent:setModel', (_event, params: AgentSetModelParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.setModel(
+    operationContext.run(createElectronContext(params.sessionId), async () => {
+      await chatGateway.setModel(
         params.sessionId,
         params.provider,
         params.model,
@@ -100,10 +87,10 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 设置指定 session 的思考深度 */
+  /** 设置指定 session 的思考深度（同 setModel：必须 await 网关） */
   ipcMain.handle('agent:setThinkingLevel', (_event, params: AgentSetThinkingLevelParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.setThinkingLevel(params.sessionId, params.level)
+    operationContext.run(createElectronContext(params.sessionId), async () => {
+      await chatGateway.setThinkingLevel(params.sessionId, params.level)
       return { success: true }
     })
   )
@@ -122,10 +109,11 @@ export function registerAgentHandlers(): void {
       })
   )
 
-  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-  ipcMain.handle('agent:getInfo', (_event, sessionId: string) =>
+  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
+   *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */
+  ipcMain.handle('agent:getInfo', (_event, sessionId: string, options?: { ensure?: boolean }) =>
     operationContext.run(createElectronContext(sessionId), () =>
-      chatGateway.getAgentInfo(sessionId)
+      chatGateway.getAgentInfo(sessionId, options)
     )
   )
 
@@ -133,8 +121,9 @@ export function registerAgentHandlers(): void {
   ipcMain.handle(
     'agent:setEnabledTools',
     (_event, params: { sessionId: string; tools: string[] }) =>
-      operationContext.run(createElectronContext(params.sessionId), () => {
-        chatGateway.setEnabledTools(params.sessionId, params.tools)
+      operationContext.run(createElectronContext(params.sessionId), async () => {
+        // 同 setModel：必须 await，否则 await 返回时 active_tools_change 未必已落树
+        await chatGateway.setEnabledTools(params.sessionId, params.tools)
         return { success: true }
       })
   )

@@ -1,50 +1,33 @@
-import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import {
-  HarnessSession,
-  createModelsAdapter,
+  DEFAULT_PROFILE_NAME,
   generateSessionTitle,
   SessionTitler,
-  resolveInitialThinkingLevel
+  resolveInitialThinkingLevel,
+  toInProcessAgentType,
+  type CreatedAgent,
+  type HarnessSession,
+  type InlineTokensSidecar
 } from '@shuvix/agent-runtime'
 import { messageService } from './messageService'
-import { ensureSessionTree } from './sessionStorage'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { t } from '../i18n'
 import { broadcastSessionTitleChanged } from '../utils/sessionConfigBroadcast'
-import { buildTools, type SubAgentBuildContext } from './agentToolBuilder'
+import { agentService } from './agentService'
+import { agentFactory } from '../agents/agentHost'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { sshManager } from './sshManager'
-import type {
-  ModelCapabilities,
-  ThinkingLevel,
-  ChatMessage,
-  ProjectSettings,
-  ProjectPromptSection,
-  AgentRuntimeInfo
-} from '../types'
+import type { ModelCapabilities, ThinkingLevel, ChatMessage, AgentRuntimeInfo } from '../types'
 import type { SessionModelMetadata } from '../dao/types'
-import { chatFrontendRegistry } from '../frontend/core'
-import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { ToolContext } from './toolContext'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { httpLogService } from './httpLogService'
 import { settingsDao } from '../dao/settingsDao'
-import { renderForPrompt as renderSystemPromptSections } from './systemPrompt/systemPromptService'
-import { getTempWorkspace } from '../utils/paths'
-import { resolveInstructionContent } from './instruction'
-import { hookService } from './hooks'
 import { createLogger } from '../logger'
-import {
-  electronEventSink,
-  electronHttpLog,
-  electronToolResultTransform,
-  createShouldDeferToolDisplay,
-  runtimeLogger
-} from './agentRuntimeAdapters'
 
 const log = createLogger('AgentSession')
+
+// 注：原 buildSystemPrompt 已收敛到统一创建管线 —— persona/workspace/project 三个
+// 具名段 provider 见 agents/agentHost.ts；笔记本复用见 renderDefaultSystemPrompt。
 
 /** AgentSession.create 工厂参数 */
 export interface AgentSessionCreateParams {
@@ -52,124 +35,38 @@ export interface AgentSessionCreateParams {
   provider: string
   model: string
   capabilities: ModelCapabilities
-  project?: {
-    path: string
-    promptSections?: ProjectPromptSection[] | null
-    settings?: ProjectSettings | null
-  }
   workingDirectory: string
   enabledTools: string[]
   modelMetadata?: SessionModelMetadata
-}
-
-/** 合并系统提示词：全局自由文本 + 系统级卡片（内置 + 自定义）+ 项目段 + 项目卡片 */
-export function buildSystemPrompt(
-  project:
-    | {
-        path: string
-        promptSections?: ProjectPromptSection[] | null
-        settings?: ProjectSettings | null
-      }
-    | undefined,
-  workingDirectory: string,
-  sessionId: string
-): string {
-  const segments: string[] = []
-  // 系统提示词总开关 — 关闭时跳过全局自由文本 + 内置/自定义卡片；项目级提示仍生效
-  const systemPromptEnabled = settingsDao.findByKey('general.systemPromptEnabled') !== 'false'
-  if (systemPromptEnabled) {
-    const globalPrompt = (settingsDao.findByKey('general.systemPrompt') || '').trim()
-    if (globalPrompt) segments.push(globalPrompt)
-
-    // 系统级提示词卡片（内置 + 自定义），按代码顺序连续
-    const cardsBlock = renderSystemPromptSections({
-      workingDirectory: workingDirectory || project?.path
-    })
-    if (cardsBlock) segments.push(cardsBlock)
-  }
-
-  let prompt = segments.join('\n\n')
-  if (project) {
-    const workDir = workingDirectory || project.path
-    prompt += `\n\nProject working directory: ${workDir}. All file tool paths are relative to this directory. Always prioritize working within this directory to complete tasks.`
-
-    const referenceDirs = project.settings?.referenceDirs || []
-    if (referenceDirs.length > 0) {
-      const readonlyDirs = referenceDirs.filter((d) => (d.access ?? 'readonly') === 'readonly')
-      const readwriteDirs = referenceDirs.filter((d) => d.access === 'readwrite')
-      if (readonlyDirs.length > 0) {
-        const lines = readonlyDirs.map((d) => (d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`))
-        prompt += `\n\nReference directories (read-only, you can read files from these directories but CANNOT write or edit):\n${lines.join('\n')}`
-      }
-      if (readwriteDirs.length > 0) {
-        const lines = readwriteDirs.map((d) => (d.note ? `- ${d.path} — ${d.note}` : `- ${d.path}`))
-        prompt += `\n\nReference directories (read-write, you can read AND write files in these directories):\n${lines.join('\n')}`
-      }
-    }
-    const envVars = project.settings?.tool?.envVars || []
-    if (envVars.length > 0) {
-      const names = envVars
-        .filter((v) => v.key)
-        .map((v) => `- ${v.key}`)
-        .join('\n')
-      if (names) {
-        prompt += `\n\nProject environment variables (auto-injected in bash tool, do not export manually):\n${names}`
-      }
-    }
-    if (project.promptSections && project.promptSections.length > 0) {
-      for (const sec of project.promptSections) {
-        const title = sec.title.trim()
-        const content = sec.content.trim()
-        if (!title && !content) continue
-        if (title) prompt += `\n\n## ${title}\n${content}`
-        else prompt += `\n\n${content}`
-      }
-    }
-  } else {
-    prompt += `\n\nWorking directory: ${getTempWorkspace(sessionId)}. Always prioritize working within this directory to complete tasks.`
-  }
-
-  // 去掉前导空行（当 globalPrompt 为空、卡片也都禁用时拼接结果可能以 \n\n 开头）
-  return prompt.replace(/^\n+/, '')
+  /**
+   * 会话根 Agent 的档案名（settings.agentProfile 解析结果；缺省 'default'）。
+   * 档案在解析侧已确认存在，这里仍保留 getProfile 的 default 兜底。
+   */
+  profileName?: string
 }
 
 /**
  * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
  *
- * 核心循环（事件转发、流式落库、用户输入挂起、abort/steer/applyModel）委托给
- * @shuvix/agent-runtime 的 RuntimeAgent；本类保留桌面特有逻辑：systemPrompt 组装、
- * 工具集（buildTools）、hooks、指令注入、generateTitle、ssh / fileTime 清理。
+ * 创建/装配（systemPrompt 组装、工具解析、hooks、指令注入）已收敛到统一创建管线
+ * （agents/agentHost 的 agentFactory + 'default' 档案）；本类保留桌面特有的
+ * 生命周期编排：titler、generateTitle、setModel 的能力查询、ssh / fileTime 清理。
  *
  * 通过 AgentSession.create() 工厂方法创建。
  */
 export class AgentSession {
   readonly sessionId: string
 
+  private created: CreatedAgent
   private runtime: HarnessSession
-  private toolContext: ToolContext
-  private subAgentCtx: SubAgentBuildContext | undefined
-  private projectPath?: string
-  private workingDirectory: string
-  /** 指令文件是否已注入当前上下文（压缩后会重新变为 false） */
-  private instructionsInjected = false
 
   // 标题自动生成（两阶段：首轮快速 + 精修一次）—— 策略在 @shuvix/agent-runtime 与扩展端共用
   private readonly titler: SessionTitler
 
-  private constructor(
-    sessionId: string,
-    runtime: HarnessSession,
-    toolContext: ToolContext,
-    subAgentCtx: SubAgentBuildContext | undefined,
-    workingDirectory: string,
-    projectPath?: string
-  ) {
+  private constructor(sessionId: string, created: CreatedAgent) {
     this.sessionId = sessionId
-    this.runtime = runtime
-    this.toolContext = toolContext
-    this.subAgentCtx = subAgentCtx
-    this.projectPath = projectPath
-    this.workingDirectory = workingDirectory
+    this.created = created
+    this.runtime = created.runtime
     this.titler = new SessionTitler({
       getCurrentTitle: () => sessionDao.pick(sessionId, ['title'])?.title ?? null,
       getDefaultTitle: () => t('agent.defaultTitle'),
@@ -184,93 +81,47 @@ export class AgentSession {
     })
   }
 
-  /** 工厂方法：构建完整的 AgentSession（打开会话转写文件 → 建 harness → 装工具） */
+  /** 工厂方法：经统一创建管线（agentFactory + 会话档案）构建完整的 AgentSession */
   static async create(params: AgentSessionCreateParams): Promise<AgentSession> {
     const {
       sessionId,
       provider,
       model,
       capabilities,
-      project,
       workingDirectory,
       enabledTools,
-      modelMetadata
+      modelMetadata,
+      profileName
     } = params
 
-    // 前向引用：所有回调在 agent 执行时调用，构造期不会触发
+    // 会话档案（`/<agentName>` 斜杠命令切换，粘性存 settings.agentProfile）；缺省 'default'。
+    // 'default' 可被用户 ~/.shuvix/agents/default.md 覆盖（getProfile 有内置兜底，恒存在）。
+    const profile = toInProcessAgentType(
+      agentService.getProfile(profileName ?? DEFAULT_PROFILE_NAME) ??
+        agentService.getProfile(DEFAULT_PROFILE_NAME)!
+    )
+
+    // 前向引用：onPromptAccepted 在 agent 执行期才触发，构造期不会调用
     // eslint-disable-next-line prefer-const
-    let runtime: HarnessSession
+    let session: AgentSession
 
-    // 构建 ToolContext（回调通过闭包引用 runtime）
-    const toolContext: ToolContext = {
+    const created = await agentFactory.createAgent({
+      kind: 'root',
       sessionId,
-      requestUserInput: (request) => runtime.requestUserInput(request),
-      emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent)
-    }
-
-    const systemPrompt = buildSystemPrompt(project, workingDirectory, sessionId)
-    const resolvedModel = resolveModel({ provider, model, capabilities })
-
-    // 子智能体上下文（使 explore 等子智能体工具可用）
-    const subAgentCtx: SubAgentBuildContext = {
-      modelConfig: { provider, model, capabilities }
-    }
-    const tools = buildTools(toolContext, enabledTools, subAgentCtx, project?.path)
-
-    // 会话树：pi 的 JSONL 转写文件 —— 这就是上下文的真理源，
-    // 不再需要「开会话时把 DB 行重建成 AgentMessage」那一步。
-    // 取的是进程内共享实例：message.list / 回滚 moveTo 等读写与 harness 同一棵树。
-    const piSession = await ensureSessionTree(sessionId, workingDirectory)
-
-    runtime = new HarnessSession({
-      sessionId,
-      session: piSession,
-      env: new NodeExecutionEnv({ cwd: workingDirectory }),
-      models: createModelsAdapter({
-        getApiKey: (p) => providerDao.pick(p, ['apiKey'])?.apiKey || undefined
-      }),
-      model: resolvedModel,
+      profile,
+      model: { provider, model, capabilities },
       thinkingLevel: resolveInitialThinkingLevel({
         persisted: modelMetadata?.thinkingLevel,
         reasoning: capabilities.reasoning
       }),
-      systemPrompt,
-      tools,
-      eventSink: electronEventSink,
-      // 根会话开启自动压缩：turn 结束后上下文超阈值（窗口 - 16k）时自动滚动压缩
-      autoCompact: true,
-      shouldDeferToolDisplay: createShouldDeferToolDisplay(sessionId),
-      transformToolResult: electronToolResultTransform,
-      httpLog: electronHttpLog,
-      logger: runtimeLogger,
-      // 用本次请求真正使用的模型对象记录日志（中途 setModel 后闭包里的 provider/model 已过期）
-      onPayload: (payload, requestModel) =>
-        httpLogService.logRequest({
-          sessionId,
-          provider: requestModel.provider,
-          model: requestModel.id,
-          payload
-        }),
-      // 统一生命周期 hook：注入完整 HookService（builtin + global/project command）；
-      // SessionStart/UserPromptSubmit/Stop 由 HarnessSession 触发（各端一致）
-      hooks: hookService,
-      getCwd: () => workingDirectory,
+      cwd: workingDirectory,
+      // 会话勾选（mcp:/skill:）作为 overlay 叠加在档案工具白名单上
+      toolOverlay: enabledTools,
       // UserPromptSubmit 通过、正式派发前触发首轮快速标题（保持与旧行为一致的并发时序）
       onPromptAccepted: (text) => void session.titler.quick(text)
     })
 
-    const session = new AgentSession(
-      sessionId,
-      runtime,
-      toolContext,
-      subAgentCtx,
-      workingDirectory,
-      project?.path
-    )
-
-    // 无需恢复历史：harness 每轮从 session.buildContext() 取上下文，
-    // entry 树本身就是 AgentMessage，不存在「重建」这一步。
-
+    session = new AgentSession(sessionId, created)
     return session
   }
 
@@ -286,48 +137,21 @@ export class AgentSession {
    */
   async prompt(
     text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    display?: InlineTokensSidecar
   ): Promise<void> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
 
-    await this.runtime.prompt(text, images)
+    await this.runtime.prompt(text, images, display)
 
     // 精修：agent 首轮回复落库后，用更完整上下文重生成一次（不 await）
     void this.titler.refine()
   }
 
   // 注：hook 的 additionalContext 注入已下沉到 HarnessSession（各端一致）。
-
-  /**
-   * 首次 prompt 前的指令懒注入。
-   *
-   * 落一条 `custom_message` entry（display=true）：既进模型上下文，又能被投影成
-   * 带 isInstructionInjection 标记的 UI 消息。幂等判断改看当前上下文是否为空 ——
-   * 压缩把历史滚走后上下文重新变空，指令会自动再注入一次。
-   */
-  async ensureInstructionsInjected(): Promise<void> {
-    if (this.instructionsInjected) return
-    const entries = await this.runtime.session.buildContextEntries()
-    if (entries.length > 0) {
-      this.instructionsInjected = true
-      return
-    }
-    const resolved = resolveInstructionContent(this.sessionId, this.workingDirectory)
-    if (!resolved) {
-      this.instructionsInjected = true
-      return
-    }
-    const msg = await this.runtime.injectInstruction(resolved.content, resolved.filename)
-    this.instructionsInjected = true
-    if (!msg) return
-    this.runtime.broadcast({
-      type: 'instructions_injected',
-      sessionId: this.sessionId,
-      messages: [JSON.stringify(msg)]
-    })
-  }
+  // 指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
 
   /** 向运行中的 Agent 注入 steer 消息 */
   async steer(text: string): Promise<void> {
@@ -344,23 +168,7 @@ export class AgentSession {
     await this.runtime.abort()
   }
 
-  /**
-   * 压缩会话历史 —— 直接调 harness 内建实现。
-   *
-   * 与旧的 full compaction 的差别：这是**滚动式部分压缩**，保留最近约 20k tokens 的
-   * 原始消息，只把更早的历史换成摘要；且摘要由一次独立的 completeSimple 调用产出，
-   * 不再需要一个持 `session` 工具的 compact 子代理。
-   */
-  async compact(
-    customInstructions?: string
-  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
-    const result = await this.runtime.compact(customInstructions)
-    // 压缩后上下文被换掉，指令需要重新注入（无实质压缩时不触发）
-    if (result.compacted) this.instructionsInjected = false
-    return result
-  }
-
-  /** 切换模型（桌面：查 provider 模型能力 → resolveModel → applyModel） */
+  /** 切换模型（查 provider 模型能力 → 统一管线 applyModel，同步更新派发工具的模型配置） */
   async setModel(
     provider: string,
     model: string,
@@ -369,15 +177,8 @@ export class AgentSession {
   ): Promise<void> {
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const caps: ModelCapabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
-    const resolvedModel = resolveModel({
-      provider,
-      model,
-      capabilities: caps,
-      baseUrl,
-      apiProtocol
-    })
-    // 切模型保留当前思考深度（省略第二参 → HarnessSession 内保持不变，思考与能力点解绑）
-    await this.runtime.applyModel(resolvedModel)
+    // 切模型保留当前思考深度（CreatedAgent.applyModel 内省略档位 → harness 保持不变）
+    await this.created.applyModel({ provider, model, capabilities: caps }, { baseUrl, apiProtocol })
   }
 
   /** 设置思考深度 */
@@ -385,10 +186,9 @@ export class AgentSession {
     await this.runtime.setThinkingLevel(level)
   }
 
-  /** 动态更新启用工具集（桌面：重新 buildTools → applyTools） */
+  /** 动态更新会话工具 overlay（档案基座 + 新勾选重解析 → applyTools） */
   async setEnabledTools(enabledTools: string[]): Promise<void> {
-    const tools = buildTools(this.toolContext, enabledTools, this.subAgentCtx, this.projectPath)
-    await this.runtime.applyTools(tools)
+    await this.created.applyToolOverlay(enabledTools)
     log.info(`setEnabledTools session=${this.sessionId} tools=[${enabledTools.join(',')}]`)
   }
 

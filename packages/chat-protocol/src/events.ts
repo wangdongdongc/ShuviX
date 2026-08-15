@@ -226,13 +226,6 @@ export interface ChatMessagesReloadedEvent extends ChatEventBase {
   type: 'messages_reloaded'
 }
 
-/** 项目指令文件懒注入完成（首次 prompt 前由 AgentSession 触发） */
-export interface ChatInstructionsInjectedEvent extends ChatEventBase {
-  type: 'instructions_injected'
-  /** 已写入的指令消息列表（每条 JSON string） */
-  messages: string[]
-}
-
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -272,7 +265,6 @@ export type ChatEvent =
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
   | ChatMessagesReloadedEvent
-  | ChatInstructionsInjectedEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
 

@@ -1,15 +1,35 @@
 import { ipcMain } from 'electron'
 import { telegramService } from '../services/telegram'
-import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
-import type {
-  TelegramBotAddParams,
-  TelegramBotUpdateParams,
-  TelegramBindSessionParams,
-  TelegramUnbindSessionParams
-} from '../types'
+import type { TelegramBotAddParams, TelegramBotUpdateParams } from '../types'
+
+/** getMe 返回的 Bot 身份（只取登记需要的字段） */
+interface BotIdentity {
+  id: number
+  first_name: string
+  username?: string
+}
 
 /**
- * Telegram Bot 管理 IPC 处理器（多 Bot 版）
+ * 校验 token 并取回 Bot 身份 —— 直接打 Telegram 的 getMe。
+ *
+ * 这里刻意不用 Bot 框架：登记表只需要这一次 HTTPS GET，为它留一整套长轮询/中间件
+ * 运行时（grammy）没有意义，会话绑定下线后那些能力也无处可用。
+ */
+async function fetchBotIdentity(token: string): Promise<BotIdentity> {
+  const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/getMe`)
+  const body = (await res.json()) as {
+    ok: boolean
+    description?: string
+    result?: BotIdentity
+  }
+  if (!body.ok || !body.result) {
+    throw new Error(body.description || `Telegram API returned ${res.status}`)
+  }
+  return body.result
+}
+
+/**
+ * Telegram Bot 登记 IPC 处理器 —— 只有 CRUD 与 token 校验，没有会话绑定与启停。
  */
 export function registerTelegramHandlers(): void {
   // ─── Bot CRUD ────────────────────────────────
@@ -18,14 +38,12 @@ export function registerTelegramHandlers(): void {
 
   ipcMain.handle('telegram:addBot', async (_event, params: TelegramBotAddParams) => {
     // 先验证 token
-    const { Bot } = await import('grammy')
-    const tempBot = new Bot(params.token)
-    const me = await tempBot.api.getMe()
+    const me = await fetchBotIdentity(params.token)
     return telegramService.addBot({
       id: String(me.id),
       name: me.first_name,
       token: params.token,
-      username: me.username
+      username: me.username ?? ''
     })
   })
 
@@ -33,17 +51,14 @@ export function registerTelegramHandlers(): void {
     // 如果 token 变更，先验证并获取 bot info
     let username: string | undefined
     if (params.token) {
-      const { Bot } = await import('grammy')
-      const tempBot = new Bot(params.token)
-      const me = await tempBot.api.getMe()
-      username = me.username
+      username = (await fetchBotIdentity(params.token)).username
     }
-    await telegramService.updateBot({ ...params, username })
+    telegramService.updateBot({ ...params, username })
     return { success: true }
   })
 
-  ipcMain.handle('telegram:deleteBot', async (_event, id: string) => {
-    await telegramService.deleteBot(id)
+  ipcMain.handle('telegram:deleteBot', (_event, id: string) => {
+    telegramService.deleteBot(id)
     return { success: true }
   })
 
@@ -51,46 +66,10 @@ export function registerTelegramHandlers(): void {
 
   ipcMain.handle('telegram:validateToken', async (_event, token: string) => {
     try {
-      const { Bot } = await import('grammy')
-      const bot = new Bot(token)
-      const me = await bot.api.getMe()
+      const me = await fetchBotIdentity(token)
       return { valid: true, username: me.username, id: me.id }
     } catch (err: unknown) {
       return { valid: false, error: err instanceof Error ? err.message : String(err) }
     }
-  })
-
-  // ─── Session 绑定 ────────────────────────────
-
-  ipcMain.handle('telegram:bindSession', async (_event, params: TelegramBindSessionParams) => {
-    await telegramService.bindSession(params.botId, params.sessionId)
-    broadcastSessionConfigChanged(params.sessionId)
-    return { success: true }
-  })
-
-  ipcMain.handle('telegram:unbindSession', async (_event, params: TelegramUnbindSessionParams) => {
-    await telegramService.unbindSession(params.sessionId)
-    broadcastSessionConfigChanged(params.sessionId)
-    return { success: true }
-  })
-
-  ipcMain.handle('telegram:getSessionBotId', (_event, sessionId: string) => {
-    return telegramService.getSessionBotId(sessionId)
-  })
-
-  // ─── Bot 生命周期 ────────────────────────────
-
-  ipcMain.handle('telegram:startBot', async (_event, botId: string) => {
-    await telegramService.startBot(botId)
-    return { success: true }
-  })
-
-  ipcMain.handle('telegram:stopBot', async (_event, botId: string) => {
-    await telegramService.stopBot(botId)
-    return { success: true }
-  })
-
-  ipcMain.handle('telegram:getBotStatus', (_event, botId: string) => {
-    return telegramService.getBotStatus(botId)
   })
 }

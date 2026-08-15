@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron'
 import { commandService } from '../services/commandService'
 import { skillService } from '../services/skillService'
-import { agentService } from '../services/agentService'
 import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
@@ -26,25 +25,14 @@ function gatherSlashCommands(projectPath: string | null): SlashCommand[] {
     .filter((c) => !taken.has(c.commandId))
   skillCommands.forEach((c) => taken.add(c.commandId))
 
-  // 3. 子代理派发命令（kind 'agent'）：`/<agentName> <prompt>` 由前端识别 kind 走
-  //    agent.dispatchPrompt 直接派发具名子智能体（无模板展开）。名字含空白无法按
-  //    "/name 参数" 解析，跳过；与项目/skill 命令同名时靠后让位（taken 去重）
-  const agentCommands: SlashCommand[] = agentService
-    .listEnabled()
-    .filter((a) => !/\s/.test(a.name) && !taken.has(a.name))
-    .map((a) => ({
-      commandId: a.name,
-      name: a.displayName,
-      description: a.whenToUse,
-      template: '',
-      filePath: a.basePath,
-      kind: 'agent' as const
-    }))
-  agentCommands.forEach((c) => taken.add(c.commandId))
+  // 3. （未来）其他内置命令源在此处追加，统一通过 taken 去重
+  //
+  // 注：会话档案切换曾经也是一个命令源（kind 'agent'，`/<agentName> [prompt]`），已下线 ——
+  // 改由输入框的档案选择器承担。那条路径顺带甩掉了三条只为 "/name 参数" 解析而生的限制：
+  // 名字含空白的档案被丢弃、与项目/skill 命令重名的被让位、笔记本会话要单独关掉整段。
+  // 档案列表现在走 session.listAgentProfiles。
 
-  // 4. （未来）其他内置命令源在此处追加，统一通过 taken 去重
-
-  return [...projectCommands, ...skillCommands, ...agentCommands]
+  return [...projectCommands, ...skillCommands]
 }
 
 /**
@@ -59,10 +47,8 @@ export function registerCommandHandlers(): void {
   ipcMain.handle('command:list', (_event, params: { sessionId: string | null }) => {
     let projectPath: string | null = null
     if (params.sessionId) {
-      const session = sessionDao.pick(params.sessionId, ['projectId'])
-      if (session?.projectId) {
-        projectPath = projectDao.pick(session.projectId, ['path'])?.path ?? null
-      }
+      const projectId = sessionDao.pick(params.sessionId, ['projectId'])?.projectId
+      if (projectId) projectPath = projectDao.pick(projectId, ['path'])?.path ?? null
     }
     return gatherSlashCommands(projectPath)
   })

@@ -16,7 +16,6 @@ export const makeWriteTool = (ctx: ToolContext): ReturnType<typeof createFileToo
 registerBuiltinTool({
   name: 'write',
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.write.labelKey),
   getHint: () => t('tool.writeHint'),
   factory: (ctx) => makeWriteTool(ctx),

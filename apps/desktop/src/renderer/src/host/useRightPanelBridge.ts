@@ -16,7 +16,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
  *   - browser_event 订阅 agent 事件开/关浏览器面板；
  *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 wiki-link）经共享
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
- *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度；WebUI 只读端不承接）。
+ *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
  * （子智能体揭示信号 subAgentRevealRequest 已随 Sub-agent 移入会话面板，由 ChatView 消费。）
  *
  * 服务端项目若有自己的预览面板，会用它自己的等价桥替换本文件。
@@ -24,7 +24,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
 export function useRightPanelBridge(): void {
   const isWeb = getSessionChannelApi().app.platform === 'web'
 
-  // 预览请求 → 目标落入共享 usePreviewPanelStore（WebUI 只读端不承接）
+  // 预览请求 → 目标落入共享 usePreviewPanelStore
   usePreviewRequestBridge(!isWeb)
 
   // 主窗：预览目标就绪后展开右侧面板并切到 preview tab（悬浮窗覆盖层自动露出，无需动面板）

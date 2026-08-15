@@ -28,7 +28,7 @@ import { EmptySessionHint } from './WelcomeView'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 
 /**
- * 聊天主视图（桌面/WebUI 外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
+ * 聊天主视图（桌面外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
  * 桌面专属的状态横幅 / 会话配置弹窗 / 悬浮窗占位经其插槽注入。
  *
  * pinnedMode:
@@ -61,9 +61,10 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   }, [])
 
   const isWeb = getSessionChannelApi().app.platform === 'web'
+  const isMac = getSessionChannelApi().app.platform === 'darwin'
 
   // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；共享 hook）。
-  // WebUI 仅查看、悬浮占位态不响应。文件预览：主窗由右侧面板承接（useRightPanelBridge），
+  // 悬浮占位态不响应。文件预览：主窗由右侧面板承接（useRightPanelBridge），
   // 悬浮窗无 app 级右面板 → 会话面板的 Preview 工具页承接（previewInPanel）。
   const isFloating = pinnedMode === 'floating'
   useSessionPanelReveal(!isWeb && pinnedMode !== 'placeholder', isFloating)
@@ -142,7 +143,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
           </button>
         )}
         {!isWeb && <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />}
-        {/* 底部栏（终端）；WebUI 为「仅查看」渠道，不提供 → 隐藏切换按钮 */}
+        {/* 底部栏（终端）—— 宿主能力，缺省则隐藏切换按钮 */}
         {!isWeb && (
           <PanelToggleButton
             side="bottom"
@@ -151,7 +152,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
             title={t('panel.terminal')}
           />
         )}
-        {/* 右侧面板（浏览器/文件/子代理）属宿主能力；WebUI 为「仅查看」渠道，不提供 → 隐藏切换按钮 */}
+        {/* 右侧面板（浏览器/文件/子代理）属宿主能力，缺省则隐藏切换按钮 */}
         {!isWeb && <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />}
       </>
     )
@@ -186,12 +187,16 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       headerCaps={{
         windowDrag: true,
         editableTitle: !isWeb,
-        sessionConfig: !isWeb
+        sessionConfig: !isWeb,
+        // macOS 主窗为 hiddenInset：交通灯常驻窗口左上角。侧边栏展开时它落在侧边栏上（侧边栏的
+        // pt-10 已为其留白），收起后顶栏顶到窗口左缘 → 标题会被交通灯压住，故此时改由顶栏留白。
+        // 悬浮窗为 frame:false，无交通灯 → 不留。
+        macTrafficLights: isMac && !isFloating && !isSidebarOpen
       }}
-      headerHeightClassName={getSessionChannelApi().app.platform === 'darwin' ? 'h-10' : 'h-8'}
+      headerHeightClassName={isMac ? 'h-10' : 'h-8'}
       onOpenSessionConfig={() => setShowSessionConfig(true)}
       rightActions={rightActions}
-      // 会话面板（共享组件）：WebUI 仅查看不提供；媒体/PDF 走桌面 shuvix-preview:// 协议，
+      // 会话面板（共享组件）：媒体/PDF 走桌面 shuvix-preview:// 协议，
       // Files 内容注入桌面 caps（.md 预览可「创建笔记本」/ 系统文件管理器打开目录）
       sessionToolbar={
         !isWeb ? <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} /> : undefined
@@ -217,7 +222,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       renderNotebook={(path, sid) => <NotebookSessionView path={path} sessionId={sid} />}
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
       overlays={
-        // 会话配置弹窗（WebUI 中不显示）
+        // 会话配置弹窗
         getSessionChannelApi().app.platform !== 'web' && showSessionConfig && activeSessionId ? (
           <SessionConfigDialog
             sessionId={activeSessionId}

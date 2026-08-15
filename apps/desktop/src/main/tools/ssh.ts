@@ -439,7 +439,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'ssh',
   group: 'remote',
-  defaultEnabled: true,
   getLabel: () => t('tool.sshLabel'),
   getHint: () => t('tool.sshHint'),
   factory: (ctx) => new SshTool(ctx),

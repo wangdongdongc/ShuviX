@@ -16,7 +16,6 @@ import { dirname, basename } from 'path'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
-import { isPathReadAllowed, resolveProjectConfig } from './toolContext'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 
@@ -79,8 +78,8 @@ function resolveWatchTarget(sessionId: string, path: string): { abs: string; roo
   const workingDirectory = session?.workingDirectory
   if (!workingDirectory) return null
   const abs = resolveReadPath(path, workingDirectory)
-  const config = resolveProjectConfig(sessionId)
-  if (!isPathReadAllowed(config, abs)) return null
+  // 不做准入判定：与预览面板同口径 —— 用户看自己机器上的文件不设限，
+  // 否则工作目录外的预览打得开却不会随文件变更自动刷新。
   return { abs, root: workingDirectory }
 }
 

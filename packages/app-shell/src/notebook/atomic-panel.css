@@ -84,7 +84,9 @@
 
 .atomic-panel {
   height: 100%;
-  background: var(--color-bg-primary);
+  /* 钉在 --theme-bg-primary 而非 --color-bg-primary：会话面板子树把 color-bg-primary/secondary
+     对调了，跟随对调会让 markdown 预览页比同面板其它页偏一档色。面板外两者取值相同，零影响 */
+  background: var(--theme-bg-primary);
   /* 写作字体（仅编辑器）：系统字体（SF Pro / 苹方），与 Obsidian 一致，
      笔画更实、更「立」；Avenir 偏细，故改回系统字 */
   --atomic-editor-font:

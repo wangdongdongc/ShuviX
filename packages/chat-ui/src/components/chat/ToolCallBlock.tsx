@@ -178,8 +178,12 @@ export function ToolCallBlock({
     return Object.values(s.subSessions).find((ss) => ss.parentToolCallId === toolCallId) ?? null
   })
 
-  // 编辑成功且有 diff
-  const hasEditDiff = details?.type === 'edit' && !!details.diff && status === 'done'
+  // 写入/编辑成功且有 diff（write 的 diff 与 edit 同款，新建文件即全增行）
+  const editDiff =
+    status === 'done' && (details?.type === 'edit' || details?.type === 'write')
+      ? details.diff
+      : undefined
+  const hasEditDiff = !!editDiff
 
   // 根据工具 presentation 配置生成摘要（内置工具和插件工具统一走此路径）
   const { icon, detail } = (() => {
@@ -246,8 +250,8 @@ export function ToolCallBlock({
             {/* 流式生成中的参数文本 */}
             {streamingArgsText && <pre className={STREAM_PRE_CLASS}>{streamingArgsText}</pre>}
 
-            {/* 编辑成功时展示 DiffViewer */}
-            {hasEditDiff && details?.type === 'edit' && <DiffViewer diff={details.diff!} />}
+            {/* 写入/编辑成功时展示 DiffViewer */}
+            {editDiff && <DiffViewer diff={editDiff} />}
 
             {/* 展开详情 */}
             {!hasEditDiff &&

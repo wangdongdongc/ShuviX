@@ -1,5 +1,5 @@
 /**
- * Hook 设置页 —— 参照 SubAgentPanel 的"内置 + 用户自定义"两段式布局。
+ * Hook 设置页 —— "内置 + 用户自定义"两段式布局。
  *
  * 内置 hook 默认展示（只读、不可禁用），用户自定义来自 `~/.shuvix/hooks.json`
  * （点按钮打开，不存在则自动创建空占位）。文件 watcher 自动 reload，UI 自动刷新。
@@ -32,7 +32,6 @@ export function HookSettings(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load
     void load()
   }, [load])
 

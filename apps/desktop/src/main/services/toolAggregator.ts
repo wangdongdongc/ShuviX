@@ -21,7 +21,7 @@ export function getAllToolNames(projectPath?: string): string[] {
 /**
  * 计算新会话/项目的默认 enabledTools 列表（创建时调用，结果持久化）。
  *
- * Why: 内置工具由注册表 defaultEnabled 在代码层编排（buildTools 按其注入，不经用户白名单），
+ * Why: 内置工具由 default 档案的工具清单编排（统一创建管线按名解析，不经用户白名单），
  * 此处只产出 mcp:/skill: 两类条目。
  */
 export function getDefaultEnabledTools(projectPath?: string): string[] {

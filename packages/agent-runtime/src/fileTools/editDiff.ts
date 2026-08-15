@@ -108,6 +108,45 @@ export interface EditDiffResult {
   firstChangedLine: number | undefined
 }
 
+/** 传输上限：diff 既要进审批请求（IPC）又要落 JSONL，整份大文件写入不能原样带走 */
+const DIFF_MAX_LINES = 1200
+const DIFF_MAX_CHARS = 256 * 1024
+
+/**
+ * 给 diff 封顶 —— **只在算出后调用一次**，截断结果同时用于审批预览和 tool result，
+ * 两侧因此仍是同一个字符串（不能预览截断、落库不截断，那就分歧了）。
+ *
+ * 截断标记不匹配 DiffViewer 的行号/省略号文法，会走它的兜底分支按整行原样渲染。
+ */
+export function capDiffString(diff: string): string {
+  const lines = diff.split('\n')
+  let kept = lines.length > DIFF_MAX_LINES ? lines.slice(0, DIFF_MAX_LINES) : lines
+  let out = kept.join('\n')
+  let cutMidLine = false
+  if (out.length > DIFF_MAX_CHARS) {
+    out = out.slice(0, DIFF_MAX_CHARS)
+    // 砍在半行上会让最后一行错位，优先退到最后一个完整行
+    const lastBreak = out.lastIndexOf('\n')
+    if (lastBreak > 0) {
+      out = out.slice(0, lastBreak)
+    } else {
+      // 首行自己就超限（压缩过的 JS、单行 JSON）——没有行边界可退，只能从行中间砍。
+      // 这时行数没少，不能靠 omitted 来提示，否则会返回一个被腰斩且毫无标记的串。
+      cutMidLine = true
+    }
+    kept = out.split('\n')
+  }
+  const omitted = lines.length - kept.length
+  // 腰斩优先报告：首行超限时行数也可能同时少了，但只说 "N more lines" 会让人以为
+  // 留下的行都是完整的 —— 那正是最后一行被砍了一半的情形。
+  if (cutMidLine) {
+    const more = omitted > 0 ? `, ${omitted} more lines` : ''
+    return `${out}\n[diff truncated — line too long${more}]`
+  }
+  if (omitted > 0) return `${out}\n[diff truncated — ${omitted} more lines]`
+  return out
+}
+
 /**
  * 生成带行号和上下文的统一差异字符串
  */

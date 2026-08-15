@@ -38,6 +38,25 @@ interface InputRequestBase {
   createdAt: number
 }
 
+/**
+ * 「预览审批」的 diff 载荷 —— write/edit 在**写入之前**把即将发生的改动摊给用户看。
+ *
+ * ⚠️ 一致性契约:这里的 `diff` 与工具执行后 `EditToolDetails/WriteToolDetails.diff`
+ * 必须是**同一个字符串**。实现上由 applyEdit/applyWrite 在文件锁内算一次(截断也只做一次),
+ * 再分别交给审批请求与 tool result —— 不允许两侧各算一遍,那样文件在两次之间被改动就会分歧。
+ */
+export interface ApprovalDiffPreview {
+  kind: 'diff'
+  /** 展示用文件路径(与审批 command 里的路径同源) */
+  path: string
+  /** 与 tool result details.diff 同一份 */
+  diff: string
+  /** 目标文件此前不存在(整份内容都是新增) */
+  isNewFile?: boolean
+}
+
+export type ApprovalPreview = ApprovalDiffPreview
+
 export interface ApprovalInputRequest extends InputRequestBase {
   kind: 'approval'
   command: string
@@ -49,6 +68,8 @@ export interface ApprovalInputRequest extends InputRequestBase {
    * - 仅对 read 模式有意义
    */
   pathIsDirectory?: boolean
+  /** 预览审批载荷:有则前端渲染预览(如 write/edit 的 diff)而非光秃秃的路径 */
+  preview?: ApprovalPreview
 }
 
 export interface ChoiceInputRequest extends InputRequestBase {

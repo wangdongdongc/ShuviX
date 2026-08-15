@@ -20,9 +20,9 @@ import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
 import { agentManager } from '../../agents/AgentManager'
-import { runNotebookTask, runUserDispatchTask } from '@shuvix/agent-runtime'
+import { DEFAULT_PROFILE_NAME, runNotebookTask } from '@shuvix/agent-runtime'
+import { agentService } from '../../services/agentService'
 import { chatFrontendRegistry } from './ChatFrontendRegistry'
-import { t } from '../../i18n'
 
 /**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
@@ -47,15 +47,19 @@ export class DefaultChatGateway implements ChatGateway {
       return
     }
 
-    // ─── 内联 Token 处理（由前端完成展开，后端直接使用） ───
-    const promptText = inlineTokens ? resolveTokensForAgent(text, inlineTokens) : text
+    // ─── 内联 Token 处理 ───
+    // LLM 收展开后的全文（树里的 user 消息即真理源）；标记态原文 + tokens 作为
+    // 显示侧车（纯 custom entry）落在 user 消息之前，投影层据此还原芯片气泡。
+    const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
+    const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
+    const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
 
-    // 首次发言前按当前配置懒注入项目指令文件（落 custom_message entry，早于用户消息）
-    await session.ensureInstructionsInjected()
+    // 指令文件/项目提示词已在 createAgent 时 append 进系统提示词（Agent 首次发言时才创建，
+    // 所以"发送第一条消息前调整配置"的语义保持不变）。
 
     // 用户消息不再由网关落库：harness 在 message_end 把它作为 entry 追加，
     // 并经 HarnessSession 的事件翻译广播 user_message —— 单一写入点，无重复。
-    await session.prompt(promptText, images)
+    await session.prompt(promptText, images, display)
   }
 
   /**
@@ -81,29 +85,6 @@ export class DefaultChatGateway implements ChatGateway {
     )
   }
 
-  /**
-   * 用户直发派发（kind='agent' 斜杠命令）：不进主会话消息流，直接开启具名子智能体
-   * （fire-and-forget）。进展经 sub_session_* / 流式事件呈现在右侧 Sub-agent 面板。
-   */
-  async dispatchPrompt(
-    sessionId: string,
-    agentName: string,
-    text: string,
-    inlineTokens?: Record<string, InlineToken>
-  ): Promise<void> {
-    // 先确保主 AgentSession 存在：子代理的审批/询问经 userInputBroker 路由到它，
-    // 缺席时相关工具请求会被直接拒绝（聊天会话应能承接审批，与笔记本的只读面板不同）
-    await sessionService.ensureAgentSession(sessionId)
-    const params = await sessionService.buildAgentDispatchRunParams(sessionId, agentName)
-    if ('error' in params) {
-      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: params.error })
-      return
-    }
-    runUserDispatchTask(agentManager, { sessionId, text, inlineTokens, ...params }, (error) =>
-      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
-    )
-  }
-
   steer(sessionId: string, text: string): void {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
@@ -119,26 +100,6 @@ export class DefaultChatGateway implements ChatGateway {
     // 不再需要网关回传「抢救出来的半条消息」。
     await sessionService.getAgentSession(sessionId)?.abort()
     return { success: true }
-  }
-
-  /** 压缩会话历史（harness 内建实现；完成后经 session_compact → messages_reloaded 通知前端） */
-  async compact(sessionId: string): Promise<{ success: boolean; error?: string }> {
-    const session = await sessionService.ensureAgentSession(sessionId)
-    if (!session) return { success: false, error: 'Agent 未初始化' }
-    try {
-      const result = await session.compact()
-      if (!result.compacted) {
-        // 上下文小于保留窗口（滚动压缩无实质可做）—— 提示而非报错，且未动会话树
-        const error = t('compact.nothingToCompact')
-        chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
-        return { success: false, error }
-      }
-      return { success: true }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
-      return { success: false, error }
-    }
   }
 
   // ─── 交互响应 ─────────────────────────────────
@@ -181,8 +142,18 @@ export class DefaultChatGateway implements ChatGateway {
     else await appendActiveToolsChange(sessionId, tools)
   }
 
-  async getAgentInfo(sessionId: string): Promise<AgentRuntimeInfo | null> {
-    return (await sessionService.getAgentSession(sessionId)?.getRuntimeInfo()) ?? null
+  /**
+   * Agent 运行时快照。默认只读已存在的 Agent（未创建返回 null）；
+   * ensure=true 走懒创建路径（会话面板 Agent 页「打开即建」）—— 构造运行时不请求 LLM。
+   */
+  async getAgentInfo(
+    sessionId: string,
+    options?: { ensure?: boolean }
+  ): Promise<AgentRuntimeInfo | null> {
+    const agent = options?.ensure
+      ? await sessionService.ensureAgentSession(sessionId)
+      : sessionService.getAgentSession(sessionId)
+    return (await agent?.getRuntimeInfo()) ?? null
   }
 
   // ─── 消息操作 ─────────────────────────────────
@@ -272,6 +243,9 @@ export class DefaultChatGateway implements ChatGateway {
       const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
       projectPath = project?.path
     }
+    // 新会话的默认工具集 = default 档案的白名单（含用户 ~/.shuvix/agents/default.md 覆盖 ——
+    // 覆盖后新会话真的按它创建，UI 的默认勾选就该跟着走）
+    const defaultProfileTools = agentService.getProfile(DEFAULT_PROFILE_NAME)?.tools ?? []
     /** 内置工具（从注册表读取，system 分组不在 UI 中展示） */
     const builtinTools = getBuiltinToolEntries()
       .filter((e) => e.group !== 'system' && !e.hidden)
@@ -280,7 +254,8 @@ export class DefaultChatGateway implements ChatGateway {
         label: e.getLabel(),
         hint: e.getHint(),
         group: e.group,
-        defaultEnabled: e.defaultEnabled
+        // wire 契约保留：defaultEnabled 由 default 档案清单派生（注册表字段已退役）
+        defaultEnabled: defaultProfileTools.includes(e.name)
       }))
     // 过去的 "plugin 工具" (postgres / python) 已合并进 builtinTools，无需再单独拼接
     const merged = builtinTools

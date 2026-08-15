@@ -2,21 +2,21 @@
  * 浏览器 ChatApi 适配器 —— chat-ui 的后端契约在 Side Panel 进程内的本地实现。
  *
  * agent / session / message / settings / provider 为真实实现（IndexedDB + chrome.storage +
- * 进程内 RuntimeSession）；其余命名空间为 noop（扩展形态无关）。仿 webui/api.ts 结构，但
+ * 进程内 RuntimeSession）；其余命名空间为 noop（扩展形态无关）。结构对齐 window.api，但
  * 同进程直接 await，无 HTTP/WS。
  */
-import i18next from 'i18next'
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
 import { readSessionRunConfig } from '../storage/sessionEntryStore'
+import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
+import { capsFor } from './resolveSessionModel'
 import { sessionStore } from '../storage/sessionStore'
 import { scanInstructionFiles } from './instructionFilesRuntime'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
 import { configShareStore } from '../storage/configShareStore'
-import { systemPromptStore } from '../storage/systemPromptStore'
 import { mcpManager } from './mcpRuntime'
 import { eventBus } from './eventBus'
 import { getToolPresentations } from './toolPresentations'
@@ -33,9 +33,10 @@ import { subAgentManager, registerSessionTools, extensionSubAgentRegistry } from
 import { withTabLease } from './tabLease'
 import {
   runNotebookTask,
-  runUserDispatchTask,
-  toInProcessAgentType,
-  resolveInitialThinkingLevel
+  resolveInitialThinkingLevel,
+  BASE_PROFILE_NAMES,
+  DEFAULT_PROFILE_NAME,
+  NOTEBOOK_PROFILE_NAME
 } from '@shuvix/agent-runtime'
 import { generateTitleForSession, titlerFor, removeTitler } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
@@ -85,19 +86,21 @@ export const chatApiAdapter: ChatApi = {
       }
     },
     prompt: async ({ sessionId, text, images, inlineTokens }) => {
-      await ensureRuntimeSession(sessionId)
-      const rt = getRuntimeSession(sessionId)
-      if (!rt) {
+      const created = await ensureRuntimeSession(sessionId)
+      if (!created) {
         eventBus.emit({ type: 'error', sessionId, error: 'Agent 未初始化' })
         return { success: false }
       }
+      // 指令文件/项目提示词已在 createAgent 时 append 进系统提示词（统一创建管线）
       // 用户消息不再由适配器落库：harness 在 message_end 把它作为 entry 追加，
       // 并经 HarnessSession 的事件翻译广播 user_message —— 单一写入点。
-      // 代价：inlineTokens 元数据不再随消息保存（气泡显示展开后的明文，不再有命令胶囊）。
       // 标签页租约：本轮结束（含中止）且无其他活跃运行时自动释放接管的标签页（见 tabLease.ts）
-      // token 标记展开为真实文本（slash 模板 / @ 引用 / 粘贴原文）后再交给 Agent
-      const promptText = resolveTokensForAgent(text, inlineTokens)
-      await withTabLease(() => rt.prompt(promptText, images))
+      // token 标记展开为真实文本（slash 模板 / @ 引用 / 粘贴原文）后再交给 Agent；
+      // 标记态原文 + tokens 作显示侧车随行落树，投影层据此还原芯片气泡（与桌面同构）
+      const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
+      const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
+      const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+      await withTabLease(() => created.runtime.prompt(promptText, images, display))
       // 自动标题（与桌面 AgentSession.prompt 同一时序）：首轮快速标题已由 HarnessSession 的
       // onPromptAccepted 触发，这里在本轮回复落库后用更完整上下文精修一次（不 await）
       void titlerFor(sessionId).refine()
@@ -112,8 +115,10 @@ export const chatApiAdapter: ChatApi = {
       const parts = await buildSessionTools(sessionId, {
         // 面板只读、无法应答交互式提问 → ask 已剔除；file tools 的 requestUserInput 为预留项
         requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
-        includeAsk: false
+        includeAsk: false,
+        notebookPath
       })
+      const notebookProfile = extensionSubAgentRegistry.getProfile(NOTEBOOK_PROFILE_NAME)
       // resolveTools 读 sessionTools map（笔记本无 runtime，故在此登记）；扩展按注册表解析 → tools 传 []
       registerSessionTools(sessionId, parts.tools)
       // 会话所选思考深度（唯一事实源是会话树）
@@ -137,49 +142,11 @@ export const chatApiAdapter: ChatApi = {
               })
             },
             tools: [],
-            notebookPath
-          },
-          (error) => eventBus.emit({ type: 'error', sessionId, error })
-        )
-      )
-      return ok
-    },
-    // 用户直发派发（kind='agent' 斜杠命令）：不经根 Agent 工具调用，直接开启具名子智能体
-    // （fire-and-forget，进右侧 Sub-agent 面板）。扩展 command.list 暂未列出 agent 命令
-    // （注册表仅内置 visualization），实现保持契约完整、与桌面网关对称。
-    dispatchPrompt: async ({ sessionId, agentName, text, inlineTokens }) => {
-      const def = extensionSubAgentRegistry.getEnabled(agentName)
-      if (!def) {
-        eventBus.emit({ type: 'error', sessionId, error: `Unknown agent "${agentName}"` })
-        return { success: false }
-      }
-      const { provider, model, caps, modelMetadata } = await resolveSessionMeta(sessionId)
-      // 会话尚无运行时（从未发过消息）时补建工具池供 resolveTools 按白名单筛选；
-      // 已有运行时则沿用其登记的工具池，避免覆盖
-      if (!getRuntimeSession(sessionId)) {
-        const parts = await buildSessionTools(sessionId, {
-          requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
-          includeAsk: false
-        })
-        registerSessionTools(sessionId, parts.tools)
-      }
-      void withTabLease(() =>
-        runUserDispatchTask(
-          subAgentManager,
-          {
-            sessionId,
-            agentType: toInProcessAgentType(def),
-            text,
-            inlineTokens,
-            modelConfig: {
-              provider,
-              model,
-              capabilities: caps,
-              thinkingLevel: resolveInitialThinkingLevel({
-                persisted: modelMetadata?.thinkingLevel,
-                reasoning: caps.reasoning
-              })
-            }
+            // notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选
+            model: notebookProfile?.model,
+            // notebook 档案的注入开关（内置默认关；用户覆盖档案打开即经创建管线生效）
+            instructionFiles: notebookProfile?.instructionFiles,
+            projectPrompt: notebookProfile?.projectPrompt
           },
           (error) => eventBus.emit({ type: 'error', sessionId, error })
         )
@@ -209,45 +176,31 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     steer: async ({ sessionId, text }) => {
-      await getRuntimeSession(sessionId)?.steer(text)
+      await getRuntimeSession(sessionId)?.runtime.steer(text)
       return ok
     },
     abort: async (sessionId) => {
       // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，不再回传 savedMessage
-      await getRuntimeSession(sessionId)?.abort()
+      await getRuntimeSession(sessionId)?.runtime.abort()
       return { success: true }
-    },
-    compact: async (sessionId) => {
-      await ensureRuntimeSession(sessionId)
-      const rt = getRuntimeSession(sessionId)
-      if (!rt) return { success: false, error: 'Agent 未初始化' }
-      try {
-        const result = await rt.compact()
-        if (!result.compacted) {
-          // 上下文小于保留窗口（滚动压缩无实质可做）—— 提示而非报错
-          const error = i18next.t('compact.nothingToCompact')
-          eventBus.emit({ type: 'error', sessionId, error })
-          return { success: false, error }
-        }
-        return { success: true }
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err)
-        eventBus.emit({ type: 'error', sessionId, error })
-        return { success: false, error }
-      }
     },
     setModel: async ({ sessionId, provider, model }) => {
       await setSessionModel(sessionId, provider, model)
       return ok
     },
     setThinkingLevel: async ({ sessionId, level }) => {
-      getRuntimeSession(sessionId)?.setThinkingLevel(level)
+      getRuntimeSession(sessionId)?.runtime.setThinkingLevel(level)
       return ok
     },
-    // 运行时 Agent 实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null
-    getInfo: async (sessionId) => getRuntimeSession(sessionId)?.getRuntimeInfo() ?? null,
+    // 运行时 Agent 实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
+    // ensure=true 则先懒创建（会话面板 Agent 页「打开即建」，构造运行时不请求 LLM）
+    getInfo: async (sessionId, options) =>
+      (options?.ensure
+        ? await ensureRuntimeSession(sessionId)
+        : getRuntimeSession(sessionId)
+      )?.runtime.getRuntimeInfo() ?? null,
     respondToInput: async ({ sessionId, requestId, response }) => {
-      getRuntimeSession(sessionId)?.respondToInput(requestId, response)
+      getRuntimeSession(sessionId)?.runtime.respondToInput(requestId, response)
       return ok
     },
     setEnabledTools: async () => ok, // 扩展工具集固定（ask + 已连接 MCP 工具）
@@ -370,6 +323,57 @@ export const chatApiAdapter: ChatApi = {
     updateInstructionFile: async ({ id, filename }) => {
       await sessionStore.updateSettings(id, { instructionFile: filename })
       return ok
+    },
+    // 可切换的会话档案（扩展只有内置档案，无用户目录）：排除 notebook 基座与 dispatch-only
+    // 执行型档案（政策要求新鲜上下文），保留 default
+    listAgentProfiles: async () =>
+      extensionSubAgentRegistry
+        .listAll()
+        .filter(
+          (a) =>
+            a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && !a.dispatchOnly)
+        )
+        .map((a) => ({
+          name: a.name,
+          displayName: a.displayName,
+          description: a.description,
+          source: a.source,
+          model: a.model
+        })),
+    // 切换会话根 Agent 的档案：粘性写入会话设置 + 失效运行时，下一条消息按新档案重建
+    // （buildRuntimeSession 读 settings.agentProfile）。档案声明的模型与 mcp:/skill: 工具
+    // 作为种子写进会话树（口径同桌面：事实源是会话树，档案只在切换这一刻参与一次）。
+    updateAgentProfile: async ({ id, name }) => {
+      const profile = extensionSubAgentRegistry.getProfile(name)
+      if (!profile) return { success: false, error: `Unknown agent "${name}"` }
+      // dispatch-only 档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）
+      if (profile.dispatchOnly) {
+        return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }
+      }
+      await sessionStore.updateSettings(id, { agentProfile: name })
+      removeRuntimeSession(id)
+
+      const declared = profile.model
+        ? resolveModelRef(profile.model, settingsStore.listAvailableModels())
+        : undefined
+      if (declared) await setSessionModel(id, declared.providerId, declared.modelId)
+
+      return {
+        success: true,
+        applied: {
+          model: declared
+            ? {
+                provider: declared.providerId,
+                model: declared.modelId,
+                capabilities: capsFor(declared.modelId)
+              }
+            : undefined,
+          // 扩展没有会话级工具勾选（工具集固定为 ask + 已连接的 MCP，见 setEnabledTools），
+          // 故没有可播的工具种子；档案的 mcp:/skill: 声明在扩展端不参与解析
+          tools: []
+        },
+        modelUnavailable: profile.model && !declared ? profile.model : undefined
+      }
     }
     // 配置变更订阅已并入 events.subscribe（扩展暂不发布 session.configChanged）
   },
@@ -386,14 +390,6 @@ export const chatApiAdapter: ChatApi = {
       await messageStore.rollback(sessionId, messageId)
       removeRuntimeSession(sessionId)
       return ok
-    },
-    countArchived: async (sessionId) => messageStore.countArchived(sessionId),
-    listArchived: async ({ sessionId, limit, offset }) => {
-      // 对齐桌面：归档消息按时间倒序分页
-      const all = (await messageStore.listArchived(sessionId)).sort(
-        (a, b) => b.createdAt - a.createdAt
-      )
-      return all.slice(offset, offset + limit)
     }
   },
 
@@ -404,19 +400,8 @@ export const chatApiAdapter: ChatApi = {
       await settingsStore.set(key, value)
       return ok
     },
-    getKnownKeys: async () => ({}),
+    getKnownKeys: async () => ({})
     // 系统提示词卡片（上下文管理）：复用桌面同源装配，KV 落 chrome.storage
-    listBuiltinSections: async () => systemPromptStore.listBuiltinSections(),
-    setBuiltinDisabled: async (ids) => {
-      await systemPromptStore.setBuiltinDisabled(ids)
-      return ok
-    },
-    getCustomSections: async () => systemPromptStore.getCustomSections(),
-    setCustomSections: async (sections) => {
-      await systemPromptStore.setCustomSections(sections)
-      return ok
-    },
-    previewBuiltinSection: async ({ id }) => systemPromptStore.previewBuiltinSection(id)
   },
 
   // 配置分享：Provider + MCP 导出/导入（复用桌面同语义内核，见 configShareStore）
@@ -487,7 +472,7 @@ export const chatApiAdapter: ChatApi = {
     getTools: async (id) => mcpManager.getServerToolInfos(id)
   },
 
-  // 注：渠道绑定（webui 局域网分享 / telegram）属 ChannelBindingApi，非 ChatApi。
+  // 注：渠道绑定（telegram）属 ChannelBindingApi，非 ChatApi。
   // 扩展两者皆不支持（MV3 无法监听端口、无出站 Bot 托管），故不注入 setChannelBindingApi → 相关 UI 自动隐藏。
 
   pinChat: {

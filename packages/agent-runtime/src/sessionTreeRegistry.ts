@@ -3,7 +3,7 @@
  *
  * 动机：pi 的快照型存储（JsonlSessionStorage：open 即全量加载进内存，之后零 I/O）
  * 要求**单写者单实例** —— 多处各自 open 会得到互相分叉的内存快照。而一次会话切换
- * 往往有多路并发读取（message.list / agent.init / countArchived），Agent 运行时也要
+ * 往往有多路并发读取（message.list / agent.init / readSessionRunConfig），Agent 运行时也要
  * 与读取端共用同一棵树。本 registry 把它们收敛到同一次加载：
  *
  *  - 在途 Promise 去重：并发 get/ensure 共享同一次 open；

@@ -173,7 +173,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'grep',
   group: 'ripgrep',
-  defaultEnabled: true,
   getLabel: () => t('tool.grepLabel'),
   getHint: () => t('tool.grepHint'),
   factory: (ctx) => new GrepTool(ctx),

@@ -20,8 +20,6 @@
   "scripts": {
     "dev": "npm run dev -w shuvix",
     "build": "npm run build -w shuvix",
-    "dev:webui": "npm run dev:webui -w shuvix",
-    "build:webui": "npm run build:webui -w shuvix",
     "dev:ext": "npm run dev -w @shuvix/extension",
     "build:ext": "npm run build -w @shuvix/extension",
     "typecheck:ext": "npm run typecheck -w @shuvix/extension",
@@ -32,6 +30,7 @@
     "postinstall": "node -e \"process.env.CI||require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})\"",
     "build:mac": "npm run build:mac -w shuvix",
     "build:win": "npm run build:win -w shuvix",
-    "build:linux": "npm run build:linux -w shuvix"
+    "build:linux": "npm run build:linux -w shuvix",
+    "test:e2e": "npm run test:e2e -w shuvix"
   }
 }

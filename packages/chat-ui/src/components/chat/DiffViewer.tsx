@@ -13,6 +13,11 @@ function parseDiffString(diff: string): DiffLine[] {
   const lines = diff.split('\n')
   const result: DiffLine[] = []
 
+  // 上下文行在 generateDiffString() 里只印了旧侧行号（格式所限，新侧没进串），
+  // 直接两栏共用会让增删不等的 hunk 之后所有新侧行号偏移 —— 这里按 delta 复原：
+  // delta = 新行号 − 旧行号，随 + / − 累积；上下文行与 `...` 省略两侧同步推进，不改变它。
+  let delta = 0
+
   for (const line of lines) {
     if (!line) continue
 
@@ -37,12 +42,16 @@ function parseDiffString(diff: string): DiffLine[] {
     const content = match[2] ?? ''
 
     if (prefix === '+') {
+      // 只吃掉新侧一行 —— 印的就是新行号
       result.push({ type: 'add', newLineNum: lineNum, content })
+      delta++
     } else if (prefix === '-') {
+      // 只吃掉旧侧一行 —— 印的就是旧行号
       result.push({ type: 'remove', oldLineNum: lineNum, content })
+      delta--
     } else {
-      // Context line — same line number for both sides
-      result.push({ type: 'context', oldLineNum: lineNum, newLineNum: lineNum, content })
+      // Context line — 印的是旧行号，新侧按累积偏移换算
+      result.push({ type: 'context', oldLineNum: lineNum, newLineNum: lineNum + delta, content })
     }
   }
 

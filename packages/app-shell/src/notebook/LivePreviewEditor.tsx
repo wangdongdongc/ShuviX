@@ -528,7 +528,9 @@ export function LivePreviewEditor({
   ])
 
   return (
-    <div className="flex-1 min-h-0 min-w-0 relative overflow-hidden thin-scrollbar">
+    // notebook-scroller：与对话列的 conversation-scroller 同义 —— 供外壳按需微调本列滚动条
+    // （会话面板展开时内缩内部 .cm-scroller 的轨道，见 base.css）
+    <div className="flex-1 min-h-0 min-w-0 relative overflow-hidden thin-scrollbar notebook-scroller">
       <div
         className="atomic-panel"
         data-notebook-theme={notebookTheme}

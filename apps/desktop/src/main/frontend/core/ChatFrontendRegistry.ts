@@ -97,7 +97,7 @@ export class ChatFrontendRegistry {
   broadcast(event: ChatEvent): void {
     const frontends = this.getFrontends(event.sessionId)
 
-    // 子会话事件统一带 sessionId=subSessionId；会话级绑定的前端（如 WebUI 只绑父会话）据此收不到。
+    // 子会话事件统一带 sessionId=subSessionId；会话级绑定的前端（只绑父会话）据此收不到。
     // 故额外把子会话事件送达「父会话」绑定的前端：register/end 自带 parentSessionId（并维护 sub→parent
     // 映射），其余流式事件经该映射回溯。默认前端（Electron 主窗）本就收全部，去重后不重复发。
     const parentSessionId = this.resolveSubSessionParent(event)

@@ -238,9 +238,7 @@ export const AssistantBubble = memo(function AssistantBubble({
           (isCompactionSummary ? (
             <SystemNoticeCard
               icon={<Archive size={14} />}
-              title={t(
-                msg.metadata?.autoCompacted ? 'compact.autoSummaryLabel' : 'compact.summaryLabel'
-              )}
+              title={t('compact.summaryLabel')}
               content={displayContent}
             />
           ) : showRaw ? (

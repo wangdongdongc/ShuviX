@@ -11,8 +11,8 @@
  * 之后 getEntry / getPathToRoot / findEntries 全是内存 Map 操作，而不是每次回表。
  *
  * **进程内单实例（registry）**：`open()` 是全量读 + 逐行 parse，而一次会话切换会有
- * message.list / agent.init / countArchived 三路并发读取 —— 各开各的实例等于把同一个
- * 文件加载三遍。这里把「sessionId → Session」收敛成进程内共享缓存：
+ * message.list / agent.init / readSessionRunConfig 多路并发读取 —— 各开各的实例等于把同一个
+ * 文件加载多遍。这里把「sessionId → Session」收敛成进程内共享缓存：
  *   - 并发/先后到达的读取共享同一次加载（在途 Promise 去重）；
  *   - Agent（HarnessSession）拿到的也是同一个实例 —— 运行期追加直接可见，
  *     回滚 moveTo、模型切换 append 与读取端天然一致，不再依赖「重开文件」自愈；
@@ -83,7 +83,7 @@ export function setSessionTreePinned(fn: (sessionId: string) => boolean): void {
 /**
  * 取共享会话树；文件不存在时返回 null（不创建）。
  *
- * 读取路径（message.list / countArchived / readSessionRunConfig …）用这个 ——
+ * 读取路径（message.list / readSessionRunConfig …）用这个 ——
  * 打开一个从未发过消息的会话不该在磁盘上留下空文件。
  * 回滚（moveTo）也走这里：追加经共享实例，Agent 与读取端同步可见。
  */

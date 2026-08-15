@@ -1,5 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
+import { agentService } from '../services/agentService'
 import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
@@ -70,6 +71,14 @@ export function registerSessionHandlers(): void {
       sessionService.updateInstructionFile(params.id, params.filename)
       return { success: true }
     }
+  )
+
+  /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令）；未知档案名返回 success:false */
+  /** 可切换的会话档案（输入框档案选择器；纯文件系统驱动，每次现扫） */
+  ipcMain.handle('session:listAgentProfiles', () => agentService.listSwitchable())
+
+  ipcMain.handle('session:updateAgentProfile', (_event, params: { id: string; name: string }) =>
+    sessionService.updateAgentProfile(params.id, params.name)
   )
 
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */

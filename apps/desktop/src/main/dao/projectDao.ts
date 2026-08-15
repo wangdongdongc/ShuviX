@@ -1,18 +1,14 @@
 import { BaseDao } from './database'
 import type { Project, ProjectSettings } from './types'
-import {
-  parsePromptSections,
-  encodePromptSections
-} from '@shuvix/chat-protocol/utils/promptSectionCodec'
 
 /**
  * DB 原始行类型:
  * - settings 在 DB 中为 JSON 字符串
- * - systemPrompt 列在 DB 中存 `{"sections":[...]}` JSON 信封,解析后映射为应用层 `promptSections` 字段
+ * - systemPrompt 列存项目提示词纯文本（历史上曾存 `{"sections":[...]}` JSON 信封，
+ *   卡片形态已废弃：读取时识别到旧信封按空处理，不做迁移）
  */
-type ProjectRow = Omit<Project, 'settings' | 'promptSections'> & {
+type ProjectRow = Omit<Project, 'settings'> & {
   settings: string
-  systemPrompt: string
 }
 
 /** 安全解析 settings JSON,失败返回空对象 */
@@ -24,21 +20,37 @@ function safeParseSettings(json: string | undefined | null): ProjectSettings {
   }
 }
 
+/** systemPrompt 列纯文本读取：旧卡片 JSON 信封视为已废弃（断代，按空），其余原样 */
+function decodeProjectPrompt(raw: string | undefined | null): string {
+  const text = (raw ?? '').trim()
+  if (!text.startsWith('{')) return raw ?? ''
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      Array.isArray((parsed as { sections?: unknown }).sections)
+    ) {
+      return ''
+    }
+  } catch {
+    /* 非信封 JSON，按纯文本 */
+  }
+  return raw ?? ''
+}
+
 /** 将 DB 行映射为应用层 Project 对象 */
 function parseRow(row: ProjectRow): Project {
   const { settings, systemPrompt, ...rest } = row
   return {
     ...rest,
     settings: safeParseSettings(settings),
-    promptSections: parsePromptSections(systemPrompt)
+    systemPrompt: decodeProjectPrompt(systemPrompt)
   }
 }
 
 /**
  * Project DAO — 项目表的纯数据访问操作
- *
- * 注意:DB 列名仍为 `systemPrompt`(历史遗留),内容存 `{"sections":[...]}`
- * JSON 信封,DAO 内部映射为应用层 `promptSections` 字段。
  */
 export class ProjectDao extends BaseDao {
   /** 获取所有项目，按更新时间倒序 */
@@ -80,22 +92,18 @@ export class ProjectDao extends BaseDao {
   /**
    * 按需查询:只 SELECT 指定字段
    * - settings 字段会自动 JSON 解析
-   * - promptSections 字段映射为 SELECT systemPrompt 列,自动解析 JSON 信封
+   * - systemPrompt 字段自动做旧信封废弃处理
    */
   pick<K extends keyof Project>(id: string, fields: K[]): Pick<Project, K> | undefined {
-    // 字段名 → DB 列名映射(promptSections 实际存在 systemPrompt 列)
-    const columns = fields.map((f) => (f === 'promptSections' ? 'systemPrompt' : String(f)))
-    const row = this.stmt(`SELECT ${columns.join(', ')} FROM projects WHERE id = ?`).get(id) as
-      | Record<string, unknown>
-      | undefined
+    const row = this.stmt(`SELECT ${fields.map(String).join(', ')} FROM projects WHERE id = ?`).get(
+      id
+    ) as Record<string, unknown> | undefined
     if (!row) return undefined
     if ('settings' in row) {
       row.settings = safeParseSettings(row.settings as string)
     }
-    if ('systemPrompt' in row && fields.includes('promptSections' as K)) {
-      const sections = parsePromptSections(row.systemPrompt as string)
-      delete row.systemPrompt
-      ;(row as Record<string, unknown>).promptSections = sections
+    if ('systemPrompt' in row) {
+      row.systemPrompt = decodeProjectPrompt(row.systemPrompt as string)
     }
     return row as Pick<Project, K>
   }
@@ -108,7 +116,7 @@ export class ProjectDao extends BaseDao {
       project.id,
       project.name,
       project.path,
-      encodePromptSections(project.promptSections),
+      project.systemPrompt,
       JSON.stringify(project.settings),
       project.archivedAt,
       project.createdAt,
@@ -119,7 +127,7 @@ export class ProjectDao extends BaseDao {
   /** 更新项目 */
   update(
     id: string,
-    fields: Partial<Pick<Project, 'name' | 'path' | 'promptSections' | 'settings' | 'archivedAt'>>
+    fields: Partial<Pick<Project, 'name' | 'path' | 'systemPrompt' | 'settings' | 'archivedAt'>>
   ): void {
     const sets: string[] = []
     const values: (string | number)[] = []
@@ -131,9 +139,9 @@ export class ProjectDao extends BaseDao {
       sets.push('path = ?')
       values.push(fields.path)
     }
-    if (fields.promptSections !== undefined) {
+    if (fields.systemPrompt !== undefined) {
       sets.push('systemPrompt = ?')
-      values.push(encodePromptSections(fields.promptSections))
+      values.push(fields.systemPrompt)
     }
     if (fields.settings !== undefined) {
       sets.push('settings = ?')

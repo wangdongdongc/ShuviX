@@ -5,7 +5,6 @@ import type {
   AgentInitParams,
   AgentPromptParams,
   AgentNotebookPromptParams,
-  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,
@@ -28,6 +27,8 @@ import type {
   SessionUpdateProjectParams,
   SessionUpdateAutoApproveParams,
   SessionAllowListRemoveParams,
+  SubAgentCreateParams,
+  SubAgentSaveParams,
   SessionUpdateTitleParams,
   SessionCreateParams,
   SettingsSetParams,
@@ -40,9 +41,7 @@ import type {
   DbCredentialUpdateParams,
   DbCredentialTestParams,
   TelegramBotAddParams,
-  TelegramBotUpdateParams,
-  TelegramBindSessionParams,
-  TelegramUnbindSessionParams
+  TelegramBotUpdateParams
 } from '../main/types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type {
@@ -135,10 +134,6 @@ const api = {
     notebookPrompt: (params: AgentNotebookPromptParams) =>
       ipcRenderer.invoke('agent:notebookPrompt', params),
 
-    /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体 */
-    dispatchPrompt: (params: AgentDispatchPromptParams) =>
-      ipcRenderer.invoke('agent:dispatchPrompt', params),
-
     /** 继续与已存在子代理对话：追加一轮用户消息 */
     subAgentPrompt: (params: AgentSubAgentPromptParams) =>
       ipcRenderer.invoke('agent:subAgentPrompt', params),
@@ -156,7 +151,6 @@ const api = {
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
-    compact: (sessionId: string) => ipcRenderer.invoke('agent:compact', sessionId),
 
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
@@ -165,8 +159,10 @@ const api = {
     setThinkingLevel: (params: AgentSetThinkingLevelParams) =>
       ipcRenderer.invoke('agent:setThinkingLevel', params),
 
-    /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-    getInfo: (sessionId: string) => ipcRenderer.invoke('agent:getInfo', sessionId),
+    /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
+     *  传 ensure 则先懒创建（不请求 LLM）再取快照 */
+    getInfo: (sessionId: string, options?: { ensure?: boolean }) =>
+      ipcRenderer.invoke('agent:getInfo', sessionId, options),
 
     /**
      * 统一的"用户输入响应"入口。
@@ -252,7 +248,11 @@ const api = {
     scanInstructionFiles: (sessionId: string) =>
       ipcRenderer.invoke('session:scanInstructionFiles', sessionId),
     updateInstructionFile: (params: { id: string; filename: string | null }) =>
-      ipcRenderer.invoke('session:updateInstructionFile', params)
+      ipcRenderer.invoke('session:updateInstructionFile', params),
+    /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令） */
+    listAgentProfiles: () => ipcRenderer.invoke('session:listAgentProfiles'),
+    updateAgentProfile: (params: { id: string; name: string }) =>
+      ipcRenderer.invoke('session:updateAgentProfile', params)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
@@ -262,14 +262,7 @@ const api = {
 
     clear: (sessionId: string) => ipcRenderer.invoke('message:clear', sessionId),
     rollback: (params: { sessionId: string; messageId: string }) =>
-      ipcRenderer.invoke('message:rollback', params),
-
-    /** 统计已归档消息数 */
-    countArchived: (sessionId: string) =>
-      ipcRenderer.invoke('message:countArchived', sessionId) as Promise<number>,
-    /** 分页加载已归档消息（含 steps） */
-    listArchived: (params: { sessionId: string; limit: number; offset: number }) =>
-      ipcRenderer.invoke('message:listArchived', params)
+      ipcRenderer.invoke('message:rollback', params)
   },
 
   // ============ 设置管理 ============
@@ -278,19 +271,8 @@ const api = {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (params: SettingsSetParams) => ipcRenderer.invoke('settings:set', params),
     /** 获取已知设置 key 的元数据（labelKey + desc） */
-    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys'),
+    getKnownKeys: () => ipcRenderer.invoke('settings:getKnownKeys')
     /** 列出全部内置系统提示词卡片 */
-    listBuiltinSections: () => ipcRenderer.invoke('settings:listBuiltinSections'),
-    /** 写入被禁用的内置卡片 id 列表 */
-    setBuiltinDisabled: (ids: string[]) => ipcRenderer.invoke('settings:setBuiltinDisabled', ids),
-    /** 读取用户自定义系统提示词卡片 */
-    getCustomSections: () => ipcRenderer.invoke('settings:getCustomSections'),
-    /** 写入用户自定义系统提示词卡片 */
-    setCustomSections: (sections: { id: string; title: string; content: string }[]) =>
-      ipcRenderer.invoke('settings:setCustomSections', sections),
-    /** 预览内置卡片实际内容（主要给 environment 卡片用） */
-    previewBuiltinSection: (params: { id: string; sessionId?: string }) =>
-      ipcRenderer.invoke('settings:previewBuiltinSection', params)
   },
 
   // ============ HTTP 日志 ============
@@ -330,9 +312,9 @@ const api = {
   // ============ 子智能体（文件系统驱动） ============
   subAgent: {
     list: () => ipcRenderer.invoke('subAgent:list'),
-    refresh: () => ipcRenderer.invoke('subAgent:refresh'),
-    setEnabled: (params: { name: string; enabled: boolean }) =>
-      ipcRenderer.invoke('subAgent:setEnabled', params),
+    save: (params: SubAgentSaveParams) => ipcRenderer.invoke('subAgent:save', params),
+    create: (params: SubAgentCreateParams) => ipcRenderer.invoke('subAgent:create', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('subAgent:delete', params),
     openFolder: () => ipcRenderer.invoke('subAgent:openFolder')
   },
 
@@ -405,19 +387,6 @@ const api = {
     getTools: (id: string) => ipcRenderer.invoke('mcp:getTools', id)
   },
 
-  // ============ WebUI 分享（一律「仅查看」，无模式之分） ============
-  webui: {
-    /** 切换指定 session 的分享状态（仅查看） */
-    setShared: (params: { sessionId: string; shared: boolean }) =>
-      ipcRenderer.invoke('webui:setShared', params),
-    /** 查询单个 session 是否已分享 */
-    isShared: (sessionId: string) => ipcRenderer.invoke('webui:isShared', sessionId),
-    /** 获取所有已分享的 session id 列表 */
-    listShared: () => ipcRenderer.invoke('webui:listShared'),
-    /** 获取 WebUI 服务器状态 */
-    serverStatus: () => ipcRenderer.invoke('webui:serverStatus')
-  },
-
   // ============ Telegram Bot（多 Bot） ============
   telegram: {
     /** 列出所有注册的 Bot（含运行时状态） */
@@ -430,22 +399,7 @@ const api = {
     /** 删除 Bot */
     deleteBot: (id: string) => ipcRenderer.invoke('telegram:deleteBot', id),
     /** 验证 Bot Token */
-    validateToken: (token: string) => ipcRenderer.invoke('telegram:validateToken', token),
-    /** 绑定 session 到 bot */
-    bindSession: (params: TelegramBindSessionParams) =>
-      ipcRenderer.invoke('telegram:bindSession', params),
-    /** 解绑 session */
-    unbindSession: (params: TelegramUnbindSessionParams) =>
-      ipcRenderer.invoke('telegram:unbindSession', params),
-    /** 获取 session 绑定的 bot ID */
-    getSessionBotId: (sessionId: string) =>
-      ipcRenderer.invoke('telegram:getSessionBotId', sessionId),
-    /** 启动指定 Bot */
-    startBot: (botId: string) => ipcRenderer.invoke('telegram:startBot', botId),
-    /** 停止指定 Bot */
-    stopBot: (botId: string) => ipcRenderer.invoke('telegram:stopBot', botId),
-    /** 获取 Bot 运行状态 */
-    getBotStatus: (botId: string) => ipcRenderer.invoke('telegram:getBotStatus', botId)
+    validateToken: (token: string) => ipcRenderer.invoke('telegram:validateToken', token)
   },
 
   // ============ 斜杠命令 ============

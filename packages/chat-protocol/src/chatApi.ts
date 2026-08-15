@@ -2,7 +2,7 @@
  * ChatApi —— 可复用聊天前端与后端之间的唯一接口契约（宿主无关）。
  *
  * 这是前↔后端协议的单一来源，与 events.ts(ChatEvent) / types/chatMessage.ts(ChatMessage)
- * 并列。任何宿主（Electron preload 的 window.api、WebUI 的 HTTP/WS shim、Chrome 扩展的
+ * 并列。任何宿主（Electron preload 的 window.api、Chrome 扩展的
  * 进程内 adapter）都实现本接口即可驱动 chat-ui。
  *
  * 这里的数据形状（Session / Project / *Params …）是「前端 IPC 视图」，与 main/dao 的
@@ -29,7 +29,6 @@ import type {
 } from './types/mcp'
 import type { InputResponse } from './types/inputRequest'
 import type { InstructionFileEntry } from './types/instructionFile'
-import type { ProjectPromptSection } from './types/promptSection'
 import type { InlineToken } from './types/chatMessage'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
@@ -51,9 +50,14 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoApprove?: boolean
   allowList?: string[]
-  telegramBotId?: string
   /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
   instructionFile?: string | null
+  /**
+   * 会话根 Agent 采用的档案名（`~/.shuvix/agents/<name>.md` 或内置档案）。
+   * 缺省 / 档案已不存在 → 回落 'default'。经 `/<agentName>` 斜杠命令切换，粘性生效：
+   * 系统提示词与内置工具白名单随之更换（会话历史不受影响，切换即重建运行时）。
+   */
+  agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
 }
@@ -80,12 +84,6 @@ export interface SessionInfo extends Session {
   enabledTools?: string[]
 }
 
-export interface ReferenceDir {
-  path: string
-  note?: string
-  access?: 'readonly' | 'readwrite'
-}
-
 export interface ProjectEnvVar {
   key: string
   value: string
@@ -99,7 +97,6 @@ export interface ToolSettings {
 
 export interface ProjectSettings {
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
 }
 
@@ -107,7 +104,8 @@ export interface Project {
   id: string
   name: string
   path: string
-  promptSections: ProjectPromptSection[]
+  /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+  systemPrompt: string
   settings: ProjectSettings
   archivedAt: number
   createdAt: number
@@ -118,6 +116,21 @@ export interface Project {
 export interface ConfigMeta {
   labelKey: string
   desc: string
+}
+
+/**
+ * 可切换的会话档案（输入框档案选择器的列表项）——只带选择器要显示的字段。
+ *
+ * 刻意不复用桌面 preload 的 SubAgentInfo：那个带 systemPrompt 全文，内置档案每个都是
+ * 一整页提示词，打开一次选择器要把六七页文本拷进渲染进程；选择器只需要这几项。
+ */
+export interface AgentProfileSummary {
+  name: string
+  displayName: string
+  description: string
+  source: 'builtin' | 'user'
+  /** 档案声明的模型（`shuvix-model` 原样值）；选择器据此提示「选它会换模型」 */
+  model?: string
 }
 
 /** 自动更新事件判别联合 */
@@ -136,15 +149,12 @@ export type UpdateEvent =
   | { type: 'error'; message: string }
 
 /** Telegram Bot 信息（返回给前端，不含 token） */
+/** 已登记的 Telegram Bot —— 纯登记信息，无运行时状态（不轮询、不绑定会话） */
 export interface TelegramBotInfo {
   id: string
   name: string
   username: string
   allowedUsers: number[]
-  isEnabled: boolean
-  running: boolean
-  boundSessionId: string | null
-  boundSessionTitle: string | null
   createdAt: number
   updatedAt: number
 }
@@ -179,7 +189,7 @@ export interface AgentRuntimeToolInfo {
 /**
  * Agent 运行时信息快照 —— 由后端直接从**内存中的 Agent 对象**（agent.state）读取，
  * 保证与实际请求 LLM 时使用的 systemPrompt / 工具集 / 模型零漂移。
- * Agent 懒创建（首次发送消息时），未创建时 getInfo 返回 null。
+ * Agent 懒创建（首次发送消息时），未创建时 getInfo 返回 null（除非传 ensure）。
  */
 export interface AgentRuntimeInfo {
   systemPrompt: string
@@ -223,21 +233,6 @@ export interface AgentNotebookPromptParams {
   text: string
   images?: ImageContentParam[]
   /** 前端展开的内联 Token（slash 命令 / skill 等）；后端解析为发给子代理的真实指令并供面板渲染标签 */
-  inlineTokens?: Record<string, InlineToken>
-}
-
-/**
- * 用户直发派发（kind='agent' 的斜杠命令 `/<agentName> <prompt>`）：不经根 Agent 工具调用，
- * 直接开启一个具名子智能体。不进主会话消息流（不落库）；子会话不带 parentToolCallId，
- * 前端据此把它归入右侧 Sub-agent 面板（与笔记本会话同属「用户主动触发」语义）。
- */
-export interface AgentDispatchPromptParams {
-  sessionId: string
-  /** 具名 agent（子代理注册表中的 name；kind='agent' 斜杠命令的 commandId 即此值） */
-  agentName: string
-  /** 派发给子智能体的任务文本（可含 at/paste 内联 Token 标记，后端解析真实文本） */
-  text: string
-  /** 前端展开的内联 Token（@ 引用 / 粘贴）；后端解析真实文本并随 register 广播供面板渲染 */
   inlineTokens?: Record<string, InlineToken>
 }
 
@@ -316,9 +311,8 @@ export interface ProviderUpdateModelCapabilitiesParams {
 export interface ProjectCreateParams {
   name?: string
   path: string
-  promptSections?: ProjectPromptSection[]
+  systemPrompt?: string
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
   archived?: boolean
 }
@@ -327,9 +321,8 @@ export interface ProjectUpdateParams {
   id: string
   name?: string
   path?: string
-  promptSections?: ProjectPromptSection[]
+  systemPrompt?: string
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
   archived?: boolean
 }
@@ -399,16 +392,6 @@ export interface TelegramBotUpdateParams {
   name?: string
   token?: string
   allowedUsers?: number[]
-  isEnabled?: boolean
-}
-
-export interface TelegramBindSessionParams {
-  botId: string
-  sessionId: string
-}
-
-export interface TelegramUnbindSessionParams {
-  sessionId: string
 }
 
 export interface ToolInfo {
@@ -442,8 +425,8 @@ export interface SlashCommandInfo {
   filePath: string
   /** 依赖的工具名（选中命令时自动启用这些工具） */
   requiredTools?: string[]
-  /** 命令来源；'agent' 为子代理派发命令（前端走 agent.dispatchPrompt，不做模板展开） */
-  kind?: 'project' | 'skill' | 'agent'
+  /** 命令来源（'project' = .claude/commands/，'skill' = SKILL.md） */
+  kind?: 'project' | 'skill'
 }
 
 /**
@@ -473,7 +456,7 @@ export interface BuiltinToolDefinition {
 // 三层正交契约（见 docs / 设计讨论）：
 //
 //   SessionChannelApi  ── 「把单个会话同步给某个渠道」所需的最小操作集：看 + 发。
-//                         每个端（桌面 / WebUI / Telegram / 扩展）都实现。纯会话维度，
+//                         每个端（桌面 / Telegram / 扩展）都实现。纯会话维度，
 //                         全部只读或发消息，**不含任何改配置 / 管理类能力**。
 //   HostApi            ── 应用级管理能力（provider / project / settings / mcp / pinChat /
 //                         update / config，以及所有会改持久状态的方法）。
@@ -499,8 +482,6 @@ export interface SessionChannelApi {
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
     /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，进展走事件流） */
     notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
-    /** 用户直发派发（kind='agent' 斜杠命令）：直接开启具名子智能体（fire-and-forget，进展走事件流） */
-    dispatchPrompt: (params: AgentDispatchPromptParams) => Promise<{ success: boolean }>
     /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，进展走事件流） */
     subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
     /** 销毁子会话：中止其 Agent 循环并从注册表移除（面板里彻底消失）。子代理基础能力，各端必须实现。 */
@@ -509,8 +490,6 @@ export interface SessionChannelApi {
     subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
-    /** 压缩会话历史（harness 内建滚动式部分压缩；完成后广播 messages_reloaded） */
-    compact: (sessionId: string) => Promise<{ success: boolean; error?: string }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -524,12 +503,6 @@ export interface SessionChannelApi {
   }
   message: {
     list: (sessionId: string) => Promise<ChatMessage[]>
-    countArchived: (sessionId: string) => Promise<number>
-    listArchived: (params: {
-      sessionId: string
-      limit: number
-      offset: number
-    }) => Promise<ChatMessage[]>
   }
   runtime: {
     statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
@@ -552,7 +525,7 @@ export interface SessionChannelApi {
     }>
     read: (params: { sessionId: string; path: string }) => Promise<FileReadResult>
     /** 监听某个已打开文件的内容变更（笔记本 / 预览自动刷新）；变更经 events.subscribe 广播。
-     *  仅监听「当前打开的文件」，不监听整个工作目录。纯渠道端（如只读 WebUI 分享）可 no-op。 */
+     *  仅监听「当前打开的文件」，不监听整个工作目录。无文件系统的渠道端可 no-op。 */
     watch: (params: { sessionId: string; path: string }) => Promise<void>
     unwatch: (params: { sessionId: string; path: string }) => Promise<void>
   }
@@ -600,8 +573,12 @@ export interface HostApi {
     setEnabledTools: (params: { sessionId: string; tools: string[] }) => Promise<{
       success: boolean
     }>
-    /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-    getInfo: (sessionId: string) => Promise<AgentRuntimeInfo | null>
+    /**
+     * 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null。
+     * `ensure: true` 时先按会话配置懒创建 Agent 再取快照（会话面板 Agent 页「打开即建」，
+     * 无需先发一条消息）；创建本身不请求 LLM，会话不存在/创建失败仍返回 null。
+     */
+    getInfo: (sessionId: string, options?: { ensure?: boolean }) => Promise<AgentRuntimeInfo | null>
   }
   provider: {
     listAll: () => Promise<ProviderInfo[]>
@@ -651,6 +628,33 @@ export interface HostApi {
       id: string
       filename: string | null
     }) => Promise<{ success: boolean }>
+    /** 可切换的会话档案（含切回基座用的 default，不含 notebook）。纯文件系统驱动，每次现扫 */
+    listAgentProfiles: () => Promise<AgentProfileSummary[]>
+    /**
+     * 切换会话根 Agent 的档案。粘性生效：写入 settings.agentProfile 并失效当前运行时，
+     * 下一条消息按新档案的系统提示词 + 内置工具白名单重建（会话历史/会话树不变）。
+     * 未知档案名返回 `success: false` + error。
+     *
+     * 切换同时把档案声明的运行配置作为**种子**写进会话树（与手动改模型/工具同一路径），
+     * 经 `applied` 回传供调用方就地更新选择器：
+     *  - `model`：`shuvix-model` 解析成功时的模型；未声明则缺省（会话模型不变），
+     *    声明了但不可用时另经 `modelUnavailable` 回传原始值供前端提示；
+     *  - `tools`：`shuvix-tools` 里的 mcp:/skill: 条目，**替换**（不是叠加）会话勾选 ——
+     *    档案对三类工具是完整声明，切过去就是它说的那套，之后用户可在工具选择器里增删。
+     *
+     * 种子只在切换这一刻应用：之后模型/工具以会话树为准，档案不会在重建时再次覆盖。
+     */
+    updateAgentProfile: (params: { id: string; name: string }) => Promise<{
+      success: boolean
+      error?: string
+      applied?: {
+        model?: { provider: string; model: string; capabilities: ModelCapabilities }
+        /** 切换后的会话工具勾选（可能是空数组 = 档案没声明任何 mcp:/skill:） */
+        tools: string[]
+      }
+      /** 档案声明了模型但当前不可用（提供商停用 / 模型已删）时回传原始值 */
+      modelUnavailable?: string
+    }>
     // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
     // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
     // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。
@@ -670,19 +674,6 @@ export interface HostApi {
     get: (key: string) => Promise<string | undefined>
     set: (params: SettingsSetParams) => Promise<{ success: boolean }>
     getKnownKeys: () => Promise<Record<string, ConfigMeta>>
-    listBuiltinSections: () => Promise<
-      Array<{
-        id: string
-        title: string
-        content: string | null
-        disabled: boolean
-        dynamic: boolean
-      }>
-    >
-    setBuiltinDisabled: (ids: string[]) => Promise<{ success: boolean }>
-    getCustomSections: () => Promise<ProjectPromptSection[]>
-    setCustomSections: (sections: ProjectPromptSection[]) => Promise<{ success: boolean }>
-    previewBuiltinSection: (params: { id: string; sessionId?: string }) => Promise<string>
   }
   /** 配置分享：Provider + MCP 配置导出/导入为可粘贴串 */
   config: {
@@ -708,7 +699,7 @@ export interface HostApi {
     /**
      * 二进制另存为：弹宿主的系统保存对话框（defaultPath 预填），用户确认后落盘。
      * 落点由用户在对话框里当场指定，故不走工作目录准入 —— 与 widget 导出 zip 同一模型。
-     * 取不到 HostApi 的端（纯渠道 WebUI）由调用方退化为浏览器原生下载。
+     * 取不到 HostApi 的端由调用方退化为浏览器原生下载。
      */
     saveAs: (params: {
       /** 建议保存路径（绝对路径，含文件名） */

@@ -61,8 +61,7 @@ export const makePreviewTool = (ctx: ToolContext): ReturnType<typeof createPrevi
 registerBuiltinTool({
   name: 'preview',
   group: 'general',
-  // 主 Agent 默认不注入（与 git 同模式）；可视化等子代理经白名单按名解析
-  defaultEnabled: false,
+  // 不在内置 default 档案的工具清单里（与 git 同模式，可覆盖 default.md 加入）；可视化等子代理经白名单按名解析
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.preview.labelKey),
   getHint: () => t('tool.previewHint'),
   factory: (ctx) => makePreviewTool(ctx),

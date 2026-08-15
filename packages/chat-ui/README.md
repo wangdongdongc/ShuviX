@@ -1,6 +1,6 @@
 # @shuvix/chat-ui
 
-可复用的"中间对话框"前端（React）。把 ShuviX 桌面端的聊天对话区抽出，供外部服务端智能体项目的 Web 前端复用——单一源码，桌面/WebUI/服务端共用。
+可复用的"中间对话框"前端（React）。把 ShuviX 桌面端的聊天对话区抽出，供外部服务端智能体项目的 Web 前端复用——单一源码，桌面/扩展/服务端共用。
 
 ## 它包含什么
 
@@ -14,7 +14,7 @@
 
 ### 1. ChatApi —— 后端契约
 
-对话框只通过 `getChatApi()` 访问后端。Electron/WebUI 通过暴露 `window.api` 自动满足；外部项目在挂载前注入自己的 HTTP/WS 适配器：
+对话框只通过 `getChatApi()` 访问后端。Electron 通过暴露 `window.api` 自动满足；外部项目在挂载前注入自己的 HTTP/WS 适配器：
 
 ```ts
 import { setChatApi } from '@shuvix/chat-ui'
@@ -34,7 +34,7 @@ setChatApi({
       ws.onmessage = (e) => cb(JSON.parse(e.data)) // 收到的是 ChatEvent JSON
       return () => ws.close()
     }
-    // …其余 namespace 见 ChatApi 类型；可参考本仓库 src/webui/api.ts 的完整实现
+    // …其余 namespace 见 ChatApi 类型；可参考 apps/extension/src/runtime/chatApiAdapter.ts 的完整实现
   }
   // session / message / provider / settings / tools / …
 } as ChatApi)
@@ -95,4 +95,4 @@ function SessionRuntime({ sessionId }: { sessionId: string }) {
 
 ## 桌面端（本仓库）如何用
 
-`src/renderer` 的 `ChatView`（外壳）用 `useSettingsChatHost()` 把 settingsStore 适配成 ChatHost，内部渲染 `<Conversation>`；`window.api`（Electron preload）天然满足 ChatApi。WebUI 同理，`window.api` 由 `src/webui/api.ts` 的 HTTP/WS polyfill 提供。
+`src/renderer` 的 `ChatView`（外壳）用 `useSettingsChatHost()` 把 settingsStore 适配成 ChatHost，内部渲染 `<Conversation>`；`window.api`（Electron preload）天然满足 ChatApi。

@@ -14,8 +14,6 @@ import { resolve } from 'node:path'
 
 const TEST_BASE = join(tmpdir(), 'shuvix-sql-test-' + Date.now())
 const PROJECT_DIR = join(TEST_BASE, 'project')
-const REF_RW_DIR = join(TEST_BASE, 'ref-rw')
-const REF_RO_DIR = join(TEST_BASE, 'ref-ro')
 
 const SESSION_ID = 'test-sql-session'
 const SESSION_ID_2 = 'test-sql-session-2'
@@ -33,16 +31,11 @@ vi.mock('../../toolContext', async () => {
       if (sessionId === SESSION_ID_2) {
         return {
           workingDirectory: PROJECT_DIR,
-          referenceDirs: [],
           pglitePersist: false
         }
       }
       return {
         workingDirectory: PROJECT_DIR,
-        referenceDirs: [
-          { path: REF_RW_DIR, access: 'readwrite' as const },
-          { path: REF_RO_DIR, access: 'readonly' as const }
-        ],
         pglitePersist: false
       }
     },
@@ -85,16 +78,12 @@ function getOutput(r: WorkerResponse): string {
 beforeAll(async () => {
   // Create test directory structure
   mkdirSync(PROJECT_DIR, { recursive: true })
-  mkdirSync(REF_RW_DIR, { recursive: true })
-  mkdirSync(REF_RO_DIR, { recursive: true })
 
   // Create test CSV files
   writeFileSync(
     join(PROJECT_DIR, 'data.csv'),
     'id,name,score\n1,Alice,95.5\n2,Bob,87.3\n3,Carol,91.0\n'
   )
-  writeFileSync(join(REF_RW_DIR, 'rw_data.csv'), 'id,value\n10,aaa\n20,bbb\n')
-  writeFileSync(join(REF_RO_DIR, 'ro_data.csv'), 'id,label\n100,x\n200,y\n')
 
   // Initialize the PGLite worker (~3-5s)
   await workerManager.ensureReady(SESSION_ID)
@@ -267,36 +256,6 @@ describe('文件系统挂载 — 项目目录', () => {
     const content = readFileSync(outPath, 'utf-8')
     expect(content).toContain('exported')
     await exec(SESSION_ID, 'DROP TABLE csv_export')
-  })
-})
-
-describe('文件系统挂载 — 引用目录', () => {
-  it('读取 readwrite 引用目录中的 CSV', async () => {
-    const csvPath = join(REF_RW_DIR, 'rw_data.csv')
-    await exec(SESSION_ID, 'CREATE TABLE rw_import(id int, value text)')
-    const r = await exec(
-      SESSION_ID,
-      `COPY rw_import FROM '${csvPath}' WITH (FORMAT csv, HEADER true);
-       SELECT * FROM rw_import ORDER BY id`
-    )
-    expect(r.type).toBe('result')
-    expect(getOutput(r)).toContain('aaa')
-    expect(getOutput(r)).toContain('bbb')
-    await exec(SESSION_ID, 'DROP TABLE rw_import')
-  })
-
-  it('读取 readonly 引用目录中的 CSV', async () => {
-    const csvPath = join(REF_RO_DIR, 'ro_data.csv')
-    await exec(SESSION_ID, 'CREATE TABLE ro_import(id int, label text)')
-    const r = await exec(
-      SESSION_ID,
-      `COPY ro_import FROM '${csvPath}' WITH (FORMAT csv, HEADER true);
-       SELECT * FROM ro_import ORDER BY id`
-    )
-    expect(r.type).toBe('result')
-    expect(getOutput(r)).toContain('x')
-    expect(getOutput(r)).toContain('y')
-    await exec(SESSION_ID, 'DROP TABLE ro_import')
   })
 })
 

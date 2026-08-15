@@ -33,11 +33,6 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   },
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
-  'general.systemPrompt': { labelKey: 'settings.systemPrompt', desc: 'global system prompt text' },
-  'general.systemPromptEnabled': {
-    labelKey: 'settings.systemPromptMasterToggle',
-    desc: 'true | false — master switch; when false the assembled system prompt is NOT sent to the LLM'
-  },
   'tool.browser.ignoreCertificateErrors': {
     labelKey: 'settings.toolBrowserIgnoreCertificateErrors',
     desc: 'true | false — bypass HTTPS certificate validation for the embedded browser'
@@ -97,6 +92,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'mcpServer.features.ssh': {
     labelKey: 'settings.mcpServerFeatureSsh',
     desc: 'true | false — expose SSH remote execution tool via MCP'
+  },
+  'httpLog.enabled': {
+    labelKey: 'settings.httpLogEnabled',
+    desc: 'true | false — record LLM request payloads (default off; payloads are large)'
   }
 }
 

@@ -46,7 +46,7 @@ export const HELP_TEXT = [
   '  - Runs on the embedded PGLite WebAssembly Postgres — no native server required.',
   '  - Tables/data persist across calls in the same ShuviX project when persistent mode',
   '    is enabled (project setting "Persistent Data Storage").',
-  '  - COPY TO/FROM works against project + reference directories; readonly enforcement',
+  '  - COPY TO/FROM works against the project directory',
   '    follows bash-process permissions, not ShuviX fine-grained sandboxing.',
   '  - Output is psql-style aligned text. Need JSON? Use `SELECT row_to_json(t) FROM ...`.'
 ].join('\n')

@@ -36,29 +36,11 @@ export interface ChatGateway {
     inlineTokens?: Record<string, InlineToken>
   ): Promise<void>
 
-  /**
-   * 用户直发派发（kind='agent' 斜杠命令 `/<agentName> <prompt>`）：不进主会话消息流，
-   * 直接开启具名子智能体（fire-and-forget，进右侧 Sub-agent 面板）。
-   * 返回的 promise 仅覆盖派发前的准备（确保主 AgentSession 存在以承接审批），不含子代理整轮。
-   */
-  dispatchPrompt(
-    sessionId: string,
-    agentName: string,
-    text: string,
-    inlineTokens?: Record<string, InlineToken>
-  ): Promise<void>
-
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
 
   /** 中止当前生成（部分内容由 harness 自行落成 entry，不再回传 savedMessage） */
   abort(sessionId: string): Promise<{ success: boolean; savedMessage?: Message }>
-
-  /**
-   * 压缩会话历史 —— harness 内建的滚动式部分压缩（保留最近 ~20k tokens 的原始消息，
-   * 更早的换成结构化摘要）。替代了原先"派发 compact 子代理 + session 工具"那条路径。
-   */
-  compact(sessionId: string): Promise<{ success: boolean; error?: string }>
 
   // ─── 交互响应 ─────────────────────────────────
 
@@ -85,8 +67,9 @@ export interface ChatGateway {
   /** 动态更新启用工具集（同上，落 active_tools_change entry） */
   setEnabledTools(sessionId: string, tools: string[]): Promise<void>
 
-  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null */
-  getAgentInfo(sessionId: string): Promise<AgentRuntimeInfo | null>
+  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
+   *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */
+  getAgentInfo(sessionId: string, options?: { ensure?: boolean }): Promise<AgentRuntimeInfo | null>
 
   // ─── 消息操作 ─────────────────────────────────
 

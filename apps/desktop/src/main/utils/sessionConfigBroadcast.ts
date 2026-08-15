@@ -18,7 +18,7 @@ export function broadcastSessionConfigChanged(sessionId: string): void {
  * 发布"会话标题已变更"事件（AppEvent 'session.titleChanged'）。
  *
  * 触发场景: AI 自动生成标题（首轮快速 / 精修）落库后。载荷带 title，各端消费者直接更新
- * 会话列表标题，无需回查——保证桌面/webui/悬浮窗/扩展/Telegram 等所有端一致。
+ * 会话列表标题，无需回查——保证桌面/悬浮窗/扩展/Telegram 等所有端一致。
  */
 export function broadcastSessionTitleChanged(sessionId: string, title: string): void {
   appEventBus.publish({ type: 'session.titleChanged', sessionId, title })

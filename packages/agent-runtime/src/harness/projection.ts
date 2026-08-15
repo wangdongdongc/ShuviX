@@ -13,6 +13,7 @@
  *   toolResult 消息      → 回填到同 toolCallId 的 tool_use 上（不产生独立气泡）
  *   compactionSummary    → AssistantTextMessage + isCompactionSummary
  *   custom(instruction)  → UserTextMessage + isInstructionInjection
+ *   custom(inline_tokens)→ 不产出消息；把紧随其后的 user 消息还原成标记文本 + inlineTokens
  *   stopReason==='error' → ErrorEventMessage
  *
  * id 稳定性：直接派生自 entry id（`<entryId>` / `<entryId>:c<idx>` …）。entry 是 append-only 的，
@@ -24,18 +25,40 @@ import type { AssistantMessage, ImageContent, TextContent } from '@earendil-work
 import type {
   ChatMessage,
   ImageMeta,
+  InlineToken,
   ToolResultDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
 
 /** 指令注入使用的 custom_message 类型标记（与 instructionInjector 共用） */
-export const INSTRUCTION_CUSTOM_TYPE = 'instruction'
+export const INSTRUCTION_CUSTOM_TYPE = 'shuvix:instruction'
 
 /**
- * 自动压缩标记：`HarnessSession.maybeAutoCompact` 在 compaction entry 之后追加的
- * 纯 custom entry。不进模型上下文（pi 对 custom 默认零投影），只供本投影把
- * 紧邻的压缩摘要卡片标成「自动压缩」。
+ * 内联 Token 显示侧车：`HarnessSession.prompt` 在 user 消息 entry **之前**追加的
+ * 纯 custom entry，携带「带 {{shuvixInlineToken:uid}} 标记的原始文本 + tokens 字典」。
+ *
+ * 动机：harness 落盘的 user 消息是**展开后的全文**（LLM 的真理源 —— 轮次上下文、
+ * 滚动压缩、标题生成看到的都是它，无二义）；而 UI 芯片（slash 命令 / @文件 / 长文粘贴）
+ * 需要标记态原文。旧模型把标记文本存在 messages 行、只对 LLM 展开；迁移后树里只剩
+ * 展开文本，芯片信息丢失。侧车恢复显示态：不进模型上下文，仅供本投影把紧随其后的
+ * user 消息还原成「标记文本 + metadata.inlineTokens」。
  */
-export const AUTO_COMPACT_CUSTOM_TYPE = 'auto_compact'
+export const INLINE_TOKENS_CUSTOM_TYPE = 'shuvix:inline_tokens'
+
+/** 侧车 entry 的 data 形状（HarnessSession.prompt 写入 / 本投影读取） */
+export interface InlineTokensSidecar {
+  /** 带 {{shuvixInlineToken:uid}} 标记的原始展示文本 */
+  content: string
+  /** uid → InlineToken 字典 */
+  tokens: Record<string, InlineToken>
+}
+
+function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
+  if (typeof data !== 'object' || data === null) return null
+  const d = data as { content?: unknown; tokens?: unknown }
+  if (typeof d.content !== 'string') return null
+  if (typeof d.tokens !== 'object' || d.tokens === null) return null
+  return d as unknown as InlineTokensSidecar
+}
 
 /** 单次 LLM 调用的用量明细（UsageInfo.details 元素，全字段必填 —— 兼容 ChatTokenUsage） */
 export interface RoundUsageDetail {
@@ -128,6 +151,12 @@ interface ProjectionState {
    * 不在 user 消息处重置：steer 会在轮中插入 user 消息，重置会把 steer 前的消耗算丢。
    */
   roundUsage: RoundUsageDetail[]
+  /**
+   * 待消费的内联 Token 侧车（总是紧邻下一条 user 消息之前追加）。
+   * 由下一条 user 消息消费；遇到其他消息则视为陈旧丢弃（如 UserPromptSubmit hook
+   * deny 掉了随后的 prompt —— 侧车已落盘但 user 消息永远不会来）。
+   */
+  pendingInline: InlineTokensSidecar | null
 }
 
 function projectUserMessage(
@@ -137,16 +166,19 @@ function projectUserMessage(
   msg: Extract<AgentMessage, { role: 'user' }>,
   createdAt: number
 ): void {
+  // 侧车还原：内容换回标记态原文，tokens 进 metadata（气泡渲染芯片 / 复制 / 草稿重建用）
+  const inline = state.pendingInline
+  state.pendingInline = null
   state.out.push({
     id: entryId,
     sessionId,
     role: 'user',
     type: 'text',
-    content: textOf(msg.content),
+    content: inline ? inline.content : textOf(msg.content),
     model: state.model,
     provider: state.provider,
     createdAt,
-    metadata: { images: imagesOf(msg.content) }
+    metadata: { images: imagesOf(msg.content), ...(inline ? { inlineTokens: inline.tokens } : {}) }
   })
   state.turnIndex += 1
 }
@@ -299,7 +331,8 @@ export function entriesToChatMessages(
     model: fallbackModel,
     provider: '',
     turnIndex: 0,
-    roundUsage: []
+    roundUsage: [],
+    pendingInline: null
   }
 
   for (const entry of entries) {
@@ -327,19 +360,10 @@ export function entriesToChatMessages(
     }
 
     if (entry.type === 'custom') {
-      // 自动压缩标记：回溯装饰最近一条压缩摘要卡片（标记总是紧跟 compaction 追加）
-      if (entry.customType === AUTO_COMPACT_CUSTOM_TYPE) {
-        for (let i = state.out.length - 1; i >= 0; i--) {
-          const msg = state.out[i]
-          if (
-            msg.role === 'assistant' &&
-            msg.type === 'text' &&
-            msg.metadata?.isCompactionSummary
-          ) {
-            msg.metadata.autoCompacted = true
-            break
-          }
-        }
+      // 内联 Token 侧车：暂存，由紧随其后的 user 消息消费
+      if (entry.customType === INLINE_TOKENS_CUSTOM_TYPE) {
+        state.pendingInline = asInlineTokensSidecar(entry.data)
+        continue
       }
       continue
     }
@@ -367,6 +391,8 @@ export function entriesToChatMessages(
     if (entry.type !== 'message') continue
 
     const msg = entry.message
+    // 侧车只配对「紧随其后的 user 消息」；先来了别的消息说明它已陈旧（如 prompt 被 hook deny）
+    if (msg.role !== 'user') state.pendingInline = null
     switch (msg.role) {
       case 'user':
         projectUserMessage(state, entry.id, sessionId, msg, createdAt)

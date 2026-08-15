@@ -158,7 +158,6 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 registerBuiltinTool({
   name: 'glob',
   group: 'ripgrep',
-  defaultEnabled: true,
   getLabel: () => t('tool.globLabel'),
   getHint: () => t('tool.globHint'),
   factory: (ctx) => new GlobTool(ctx),

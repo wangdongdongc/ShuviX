@@ -13,15 +13,14 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "build:webui": "vite build --config vite.config.webui.ts",
-    "dev:webui": "vite --config vite.config.webui.ts",
-    "build": "npm run typecheck && electron-vite build && npm run build:webui",
+    "build": "npm run typecheck && electron-vite build",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "electron-vite build && vitest run --config vitest.config.e2e.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -59,7 +58,6 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@pierre/trees": "^1.0.0-beta.3",
     "@tailwindcss/browser": "^4.2.2",
-    "@types/express": "^5.0.6",
     "@types/ws": "^8.18.1",
     "@vscode/ripgrep": "^1.17.0",
     "@xterm/addon-fit": "^0.11.0",
@@ -72,11 +70,9 @@
     "electron-log": "^5.4.3",
     "electron-updater": "^6.3.9",
     "esbuild-wasm": "^0.27.4",
-    "express": "^5.2.1",
     "fflate": "^0.8.3",
     "foliate-js": "^1.0.1",
     "framer-motion": "^12.38.0",
-    "grammy": "^1.41.1",
     "i18next": "^25.8.13",
     "lucide-react": "^0.564.0",
     "markitdown-ts": "^0.0.10",
@@ -100,6 +96,7 @@
     "word-extractor": "^1.0.4",
     "ws": "^8.19.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yaml": "^2.9.0",
     "zustand": "^5.0.11"
   },
   "devDependencies": {

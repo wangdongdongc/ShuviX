@@ -3,7 +3,12 @@ import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
-import { readSessionRunConfig, setSessionTreePinned } from './sessionStorage'
+import {
+  readSessionRunConfig,
+  setSessionTreePinned,
+  appendModelChange,
+  appendActiveToolsChange
+} from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
@@ -11,7 +16,6 @@ import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
 import { getDefaultEnabledTools, filterAvailableTools } from './toolAggregator'
-import { getBuiltinToolEntries } from './toolRegistry'
 import { buildAllowEntry } from '../utils/toolUtils/allowList'
 import type { AllowToolType } from '../utils/toolUtils/allowList'
 import type {
@@ -27,14 +31,16 @@ import type { Project } from '../dao/types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
+  BASE_PROFILE_NAMES,
+  DEFAULT_PROFILE_NAME,
+  NOTEBOOK_PROFILE_NAME,
   SessionManager,
-  resolveInitialThinkingLevel,
-  toInProcessAgentType
+  resolveInitialThinkingLevel
 } from '@shuvix/agent-runtime'
-import type { SubAgentModelConfig, InProcessAgentType } from '@shuvix/agent-runtime'
+import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { agentService } from './agentService'
-import { mcpService } from './mcpService'
-import { AgentSession, buildSystemPrompt } from './agentSession'
+import { AgentSession } from './agentSession'
+import { renderNotebookSystemPrompt, resolveProfileModelSpec } from '../agents/agentHost'
 import { scanInstructionFiles } from './instruction'
 import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
@@ -58,16 +64,17 @@ export class SessionService {
         log.error(`创建 Agent 失败，未找到 session=${sessionId}`)
         return undefined
       }
-      log.info(`创建 Agent model=${ctx.model} session=${sessionId}`)
+      const profileName = this.resolveAgentProfileName(sessionId)
+      log.info(`创建 Agent model=${ctx.model} profile=${profileName} session=${sessionId}`)
       return AgentSession.create({
         sessionId,
         provider: ctx.provider,
         model: ctx.model,
         capabilities: ctx.capabilities,
-        project: ctx.project,
         workingDirectory: ctx.workingDirectory,
         enabledTools: ctx.enabledTools,
-        modelMetadata: ctx.modelMetadata
+        modelMetadata: ctx.modelMetadata,
+        profileName
       })
     },
     dispose: (sessionId, agent, reason) => {
@@ -164,6 +171,87 @@ export class SessionService {
     sessionDao.updateSettings(sessionId, { instructionFile: filename })
     const after = sessionDao.pick(sessionId, ['settings'])?.settings?.instructionFile
     log.info(`updateInstructionFile 写入后回读: ${after ?? '(none)'}`)
+    // 指令文件随 createAgent append 进系统提示词 —— 失效重建让选择在下一条消息生效
+    this.invalidateAgent(sessionId)
+  }
+
+  /**
+   * 解析会话根 Agent 的档案名。
+   *
+   * settings.agentProfile 缺省即 'default'；档案文件被删/改名时也回落 'default'
+   * （档案是纯 md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，
+   * 会话设置不该因此把根 Agent 卡死在一个不存在的档案上）。
+   */
+  resolveAgentProfileName(sessionId: string): string {
+    const name = sessionDao.pickSettings(sessionId, ['agentProfile'])?.agentProfile
+    if (!name || name === DEFAULT_PROFILE_NAME) return DEFAULT_PROFILE_NAME
+    if (agentService.getProfile(name)) return name
+    log.warn(`会话档案 "${name}" 已不存在，回落 default（session=${sessionId}）`)
+    return DEFAULT_PROFILE_NAME
+  }
+
+  /**
+   * 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令）。粘性：写入会话设置后一直生效。
+   *
+   * 档案决定系统提示词与内置工具白名单，两者都在 createAgent 时定型 —— 与指令文件同
+   * 一套失效重建路径：会话树/历史一概不动，下一条消息用新档案重建运行时。
+   *
+   * 切换同时把档案声明的运行配置作为**种子**写进会话树（与用户手动改模型/工具同一条
+   * 路径）：root 的事实源始终是会话树，档案只在切换这一刻参与一次，之后用户改什么就是
+   * 什么 —— 若让 createAgent 每次重建都按档案覆盖，用户手选的会被默默还原。
+   *  - 模型（`shuvix-model`）：解析成功才写；不可用则保持当前模型，把原始值经
+   *    `modelUnavailable` 回传供前端提示（后端日志之外用户也该看得见）。
+   *  - 工具（`shuvix-tools` 里的 mcp:/skill:）：**替换**会话勾选，没声明就是清空 ——
+   *    档案对三类工具是完整声明，切过去就是它说的那套；内置工具不进勾选（选择器不展示，
+   *    它们恒由档案白名单决定）。
+   * 种子结果随 `applied` 回传，调用方据此就地更新选择器（免去一次重新 init）。
+   */
+  async updateAgentProfile(
+    sessionId: string,
+    name: string
+  ): Promise<{
+    success: boolean
+    error?: string
+    applied?: { model?: SubAgentModelConfig; tools: string[] }
+    modelUnavailable?: string
+  }> {
+    const profile = agentService.getProfile(name)
+    if (!profile) return { success: false, error: `Unknown agent "${name}"` }
+    // 'notebook' 是笔记本会话形态的基座，切到聊天会话上只会得到一个指向不存在笔记的人格
+    // （命令源同样不列它）；'default' 是唯一可切的基座档案 —— 切回主会话的入口。
+    if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
+      return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
+    }
+    // dispatch-only 档案（如 wiki-writer）：政策的有效性依赖每次派发都是新鲜上下文，
+    // 切成主会话后长对话会稀释系统提示词权重，而它们违规的代价静默且不可逆。
+    if (profile.dispatchOnly) {
+      return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }
+    }
+    log.info(`updateAgentProfile session=${sessionId} → ${name}`)
+    sessionDao.updateSettings(sessionId, { agentProfile: name })
+    this.invalidateAgent(sessionId)
+
+    // 种子：运行时已在上一行失效，故直接往树上追加（没有活跃 Agent 需要同步）
+    let model: SubAgentModelConfig | undefined
+    let modelUnavailable: string | undefined
+    if (profile.model) {
+      const resolved = resolveProfileModelSpec(profile.model)
+      if (resolved) {
+        await appendModelChange(sessionId, resolved.provider, resolved.model)
+        model = resolved
+        log.info(`updateAgentProfile 应用档案模型 ${resolved.provider}/${resolved.model}`)
+      } else {
+        modelUnavailable = profile.model
+        log.warn(`档案 "${name}" 声明的模型 "${profile.model}" 当前不可用，保持会话现有模型`)
+      }
+    }
+
+    // 工具种子：档案声明的 mcp:/skill: 替换会话勾选（未声明 = 清空）
+    const tools = profile.tools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
+    await appendActiveToolsChange(sessionId, tools)
+
+    broadcastSessionConfigChanged(sessionId)
+    return { success: true, applied: { model, tools }, modelUnavailable }
   }
 
   /** 更新会话标题 */
@@ -205,14 +293,10 @@ export class SessionService {
     broadcastSessionConfigChanged(id)
   }
 
-  /** 删除会话（同时清理 AgentSession、消息、HTTP 日志、Telegram 绑定和临时工作目录） */
+  /** 删除会话（同时清理 AgentSession、消息、HTTP 日志和临时工作目录） */
   delete(id: string): void {
     // 先清理运行时 AgentSession（dispose 触发 destroy）
     this.agents.remove(id, 'destroy')
-    // 清理 Telegram 绑定（异步，不阻塞删除）
-    import('./telegram').then(({ telegramService }) => {
-      telegramService.unbindSession(id).catch(() => {})
-    })
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
@@ -252,7 +336,7 @@ export class SessionService {
     capabilities: ModelCapabilities
     workingDirectory: string
     enabledTools: string[]
-    project: Pick<Project, 'path' | 'promptSections' | 'settings'> | undefined
+    project: Pick<Project, 'path' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
   } | null> {
     const session = sessionDao.pick(sessionId, ['projectId'])
@@ -269,7 +353,7 @@ export class SessionService {
       ? JSON.parse(modelRow.capabilities)
       : {}
     const project = session.projectId
-      ? projectDao.pick(session.projectId, ['path', 'promptSections', 'settings'])
+      ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = project?.path || getTempWorkspace(sessionId)
     const enabledTools = filterAvailableTools(
@@ -335,72 +419,40 @@ export class SessionService {
   }
 
   /**
-   * 解析笔记本会话「一次性子智能体」的运行数据（systemPrompt + 工具白名单 + 模型 + 路径），不创建任何运行时。
-   * 仅负责数据存取；信封组装与派发由 runNotebookTask（共享内核）完成。
-   * 复用会话的完整工具集（剔除 ask，面板只读无法应答）+ 完整 systemPrompt + 模型。session 不存在返回 null。
+   * 解析笔记本会话「一次性子智能体」的运行数据（systemPrompt + 工具白名单 + 模型 + 注入开关），
+   * 不创建任何运行时。仅负责数据存取；信封组装与派发由 runNotebookTask（共享内核）完成。
+   *
+   * 人格与工具白名单都取 **notebook 基座档案**（用户 ~/.shuvix/agents/notebook.md 可覆盖），
+   * 笔记路径经 {{shuvix:notebookPath}} 在渲染时替换进 body。session 不存在返回 null。
    */
   async buildNotebookRunParams(sessionId: string): Promise<{
     systemPrompt: string
     /** 子代理工具白名单（buildSubAgentTools 按名解析） */
     tools: string[]
     modelConfig: SubAgentModelConfig
-    /** 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）；供注入上下文告知子代理 */
-    notebookPath: string
+    /** notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选 */
+    model?: string
+    /** notebook 档案的两个上下文注入开关（内置默认关，用户覆盖档案可打开） */
+    instructionFiles: boolean
+    projectPrompt: boolean
   } | null> {
     const ctx = await this.resolveSessionAgentContext(sessionId)
     if (!ctx) return null
     const notebookPath = sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath ?? ''
-    // 子代理工具白名单（buildSubAgentTools 按名解析）：内置与主 Agent 同口径
-    // （注册表 defaultEnabled，剔除 ask —— 笔记本面板只读无法应答）+ 会话启用的 mcp:/skill:。
-    const builtinNames = getBuiltinToolEntries()
-      .filter((e) => e.factory && e.defaultEnabled && e.name !== 'ask')
-      .map((e) => e.name)
+    const profile = agentService.getProfile(NOTEBOOK_PROFILE_NAME)!
+    // 档案白名单（内置已排除 ask —— 面板只读无法应答 —— 与 Agent）+ 会话启用的 mcp:/skill:
     const mcpSkill = ctx.enabledTools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
     return {
-      systemPrompt: buildSystemPrompt(ctx.project, ctx.workingDirectory, sessionId),
-      tools: [...builtinNames, ...mcpSkill],
+      systemPrompt: await renderNotebookSystemPrompt(sessionId, ctx.workingDirectory, notebookPath),
+      tools: [...profile.tools, ...mcpSkill],
+      model: profile.model,
+      instructionFiles: profile.instructionFiles,
+      projectPrompt: profile.projectPrompt,
       modelConfig: {
         provider: ctx.provider,
         model: ctx.model,
         capabilities: ctx.capabilities,
         // 笔记本子代理继承会话所选思考深度（与主会话口径一致，经共享 helper 解析）
-        thinkingLevel: resolveInitialThinkingLevel({
-          persisted: ctx.modelMetadata.thinkingLevel,
-          reasoning: ctx.capabilities.reasoning
-        })
-      },
-      notebookPath
-    }
-  }
-
-  /**
-   * 用户直发派发（kind='agent' 斜杠命令 `/<agentName> <prompt>`）运行参数：
-   * 具名 agent 定义 → 运行配置投影 + 会话模型配置。与 Agent 工具派发同一投影/requiredMcp
-   * 校验口径；modelConfig 继承会话所选思考深度（与笔记本子代理一致）。
-   */
-  async buildAgentDispatchRunParams(
-    sessionId: string,
-    agentName: string
-  ): Promise<
-    { agentType: InProcessAgentType; modelConfig: SubAgentModelConfig } | { error: string }
-  > {
-    const ctx = await this.resolveSessionAgentContext(sessionId)
-    if (!ctx) return { error: `Session not found: ${sessionId}` }
-    const def = agentService.getEnabled(agentName)
-    if (!def) return { error: `Unknown agent "${agentName}"` }
-    const missingMcp = (def.requiredMcp ?? []).filter((n) => !mcpService.isConnectedByName(n))
-    if (missingMcp.length > 0) {
-      const list = missingMcp.map((n) => `"${n}"`).join(', ')
-      return {
-        error: `Cannot run agent "${def.name}": required MCP server(s) not connected: ${list}. Configure the missing server(s) in MCP settings, then retry.`
-      }
-    }
-    return {
-      agentType: toInProcessAgentType(def),
-      modelConfig: {
-        provider: ctx.provider,
-        model: ctx.model,
-        capabilities: ctx.capabilities,
         thinkingLevel: resolveInitialThinkingLevel({
           persisted: ctx.modelMetadata.thinkingLevel,
           reasoning: ctx.capabilities.reasoning
@@ -418,24 +470,6 @@ export class SessionService {
   respondToInput(requestId: string, response: InputResponse): void {
     for (const session of this.agents.values()) {
       if (session.respondToInput(requestId, response)) return
-    }
-  }
-
-  /**
-   * 重建所有活跃 AgentSession 的工具集。
-   * 调用方：sub-agent FS 变化（启用/禁用/refresh）后，让正在运行的会话立刻看到最新可用 agent 列表。
-   * 实现：对每个会话用其当前 enabledTools 触发 setEnabledTools，间接重跑 buildTools。
-   */
-  async rebuildToolsForAllSessions(): Promise<void> {
-    for (const [sid, agentSession] of this.agents.entries()) {
-      const session = sessionDao.pick(sid, ['projectId'])
-      const project = session?.projectId
-        ? projectDao.pick(session.projectId, ['path', 'settings'])
-        : undefined
-      const { enabledTools } = await readSessionRunConfig(sid)
-      await agentSession.setEnabledTools(
-        filterAvailableTools(enabledTools ?? this.defaultEnabledTools(project), project?.path)
-      )
     }
   }
 

@@ -70,8 +70,6 @@ export interface MessageMetadata {
   turnIndex?: number
   // —— compaction ——
   isCompactionSummary?: boolean
-  /** 该压缩由阈值判定自动触发（非用户手动），UI 卡片换用「自动压缩」标题 */
-  autoCompacted?: boolean
   // —— project instruction injection (AGENTS.md / CLAUDE.md) ——
   isInstructionInjection?: boolean
   /** 注入消息对应的原始指令文件名 */
@@ -97,8 +95,6 @@ export interface AssistantTextMeta {
   thinking?: string
   usage?: UsageInfo
   isCompactionSummary?: boolean
-  /** 该压缩由阈值判定自动触发（非用户手动） */
-  autoCompacted?: boolean
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----
@@ -108,6 +104,19 @@ export interface EditToolDetails {
   type: 'edit'
   diff: string
   firstChangedLine?: number
+}
+
+/**
+ * write 工具详情：与 edit 同款 diff（新建文件时为全增行）。
+ *
+ * 这个 diff 与写入前审批卡片里预览的那一份**是同一个字符串**——由 applyWrite 在锁内算一次，
+ * 分别交给审批请求和这里，所以"预览所见"与"执行后所见"不可能出现分歧。
+ */
+export interface WriteToolDetails {
+  type: 'write'
+  diff: string
+  /** 目标文件此前不存在（整份内容都是新增） */
+  isNewFile?: boolean
 }
 
 /** bash 工具详情 */
@@ -249,6 +258,7 @@ export interface GitToolDetails {
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
   | EditToolDetails
+  | WriteToolDetails
   | BashToolDetails
   | ReadToolDetails
   | GlobToolDetails

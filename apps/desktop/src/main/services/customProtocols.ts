@@ -25,7 +25,7 @@ import { createReadStream } from 'fs'
 import { stat as fsStat } from 'fs/promises'
 import { extname } from 'path'
 import { Readable } from 'stream'
-import { isPathReadAllowed, resolveProjectConfig } from './toolContext'
+import { resolveProjectConfig } from './toolContext'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { createLogger } from '../logger'
 
@@ -111,9 +111,6 @@ async function handlePreviewRequest(request: GlobalRequest): Promise<GlobalRespo
 
     const config = resolveProjectConfig(sessionId)
     const absolutePath = resolveReadPath(rawPath, config.workingDirectory)
-    if (!isPathReadAllowed(config, absolutePath)) {
-      return new Response('Forbidden', { status: 403 })
-    }
 
     const stat = await fsStat(absolutePath)
     const totalSize = stat.size

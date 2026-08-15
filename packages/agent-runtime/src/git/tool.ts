@@ -9,7 +9,14 @@ import { Type, type TSchema } from 'typebox'
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GitToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { GitCache, GitEnv, GitOpOutput } from './env'
-import { GIT_OPS, type GitAction, type GitOpParams, type GitOpSpec, type GitParamKey } from './ops'
+import {
+  GIT_OPS,
+  type GitAction,
+  type GitApprovalReason,
+  type GitOpParams,
+  type GitOpSpec,
+  type GitParamKey
+} from './ops'
 import { buildGitHelp, GIT_HELP_TOPICS } from './help'
 import {
   statusOp,
@@ -113,10 +120,36 @@ export interface CreateGitToolOptions {
     requested: string,
     opts: { action: GitAction; mutates: boolean; toolCallId: string }
   ) => Promise<string>
+  /**
+   * 逐操作审批 —— 仅对 GIT_OPS 里声明了 approval 的调用触发（init / restore / checkout force /
+   * branch delete），与 dir 参数无关：这些操作即便在工作目录内也要用户点头。
+   *
+   * 未注入 = 不审批。reason 是原因码，文案由宿主本地化；command 是给用户看的命令行形态。
+   * 拒绝时约定 throw（错误文本回流给模型）。
+   */
+  approveOp?: (info: {
+    action: GitAction
+    reason: GitApprovalReason
+    command: string
+    toolCallId: string
+  }) => Promise<void>
   /** abort 时抛出的错误文案（桌面 'Aborted'，扩展 'TOOL_ABORTED'）；默认 'Aborted' */
   abortError?: string
   /** 工具显示名（宿主可传本地化值）；默认 'Git' */
   label?: string
+}
+
+/** 审批卡片里展示的命令行形态 —— 只带够判断的关键参数，不复刻全部入参 */
+function formatGitCommand(action: GitAction, params: GitOpParams): string {
+  const parts = ['git', action]
+  if (action === 'branch' && params.delete) parts.push('-d', params.name ?? '')
+  else if (action === 'checkout') parts.push(params.force ? '--force' : '', params.ref ?? '')
+  else if (action === 'restore') {
+    if (params.ref) parts.push('--source', params.ref)
+    parts.push(...(params.paths ?? []))
+  }
+  if (params.dir) parts.push(`(dir: ${params.dir})`)
+  return parts.filter(Boolean).join(' ')
 }
 
 type Result = AgentToolResult<GitToolDetails>
@@ -185,7 +218,7 @@ async function dispatch(
 }
 
 export function createGitTool(opts: CreateGitToolOptions): AgentTool<TSchema, GitToolDetails> {
-  const { getEnv, resolveDir, abortError = 'Aborted', label = 'Git' } = opts
+  const { getEnv, resolveDir, approveOp, abortError = 'Aborted', label = 'Git' } = opts
   const specs = new Map(GIT_OPS.map((s) => [s.name, s]))
   /** isomorphic-git 共享缓存：工具实例（=会话）内按仓库目录隔离复用 */
   const caches = new Map<string, GitCache>()
@@ -256,6 +289,17 @@ export function createGitTool(opts: CreateGitToolOptions): AgentTool<TSchema, Gi
           return usageError(spec.name, `Cannot access repository dir "${params.dir}": ${message}`)
         }
       }
+      // 逐操作审批：放在 dir 解析之后、执行之前 —— 此时目标仓库已确定，卡片里的路径才是真的
+      const reason = spec.approval?.(params) ?? null
+      if (reason && approveOp) {
+        await approveOp({
+          action: spec.name,
+          reason,
+          command: formatGitCommand(spec.name, params),
+          toolCallId
+        })
+      }
+
       const out = await dispatch(env, cacheFor(env.dir), spec.name, params)
       if (signal?.aborted) throw new Error(abortError)
       return toResult(spec.name, out)

@@ -31,6 +31,5 @@ export {
   operationContext,
   getOperationContext,
   createElectronContext,
-  createTelegramContext,
-  createWebUIContext
+  createTelegramContext
 } from '../../utils/operationContext'

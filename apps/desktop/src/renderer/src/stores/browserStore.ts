@@ -43,7 +43,7 @@ export interface BrowserTabInfo {
  * 桌面右侧面板 store —— 现为共享 usePanelStore（@shuvix/app-shell）之上的「浏览器面板 + 原生窗口」外层。
  *
  * 通用三态 isOpen/activeTab/width 的**真源在 usePanelStore**；这里把它们「镜像」过来（底部单向订阅），
- * 使桌面/WebUI 既有消费点继续用 useBrowserStore 不变。本 store 自有的是浏览器面板专属态（tabs/lockedChatWidth）
+ * 使桌面既有消费点继续用 useBrowserStore 不变。本 store 自有的是浏览器面板专属态（tabs/lockedChatWidth）
  * 与「开/关面板要联动原生窗口宽度 + WebContentsView 偏移」的命令式 actions（这些副作用桌面专属、无法搬进共享 store）。
  *
  * 浏览器 tab 状态同样是镜像：actions 只发 IPC，主进程 `browser-view:tab-*` 事件回填

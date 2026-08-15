@@ -5,9 +5,13 @@ import { PayloadViewer } from './PayloadViewer'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SessionPicker } from '../common/SessionPicker'
 import { ZenSelect } from '../common/ZenSelect'
+import { Toggle } from './SettingsPrimitives'
 
 /** 列表查询上限（与界面提示一致） */
 const LOG_LIST_LIMIT = 100
+
+/** 记录开关的设置 key（与主进程 httpLogService 一致；缺省即关闭） */
+const ENABLED_KEY = 'httpLog.enabled'
 
 interface LogSummary {
   id: string
@@ -43,6 +47,8 @@ export function HttpLogSettings(): React.JSX.Element {
   const [clearing, setClearing] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [providers, setProviders] = useState<Array<{ id: string; name: string }>>([])
+  // null = 尚未读到设置：此时不宣称任何一态，避免开着记录却先闪一帧「记录已关闭」
+  const [enabled, setEnabled] = useState<boolean | null>(null)
   const [filterSessionId, setFilterSessionId] = useState<string>('')
   const [filterProvider, setFilterProvider] = useState<string>('')
   const [filterModel, setFilterModel] = useState<string>('')
@@ -62,6 +68,19 @@ export function HttpLogSettings(): React.JSX.Element {
     const list = await window.api.provider.listAll()
     setProviders(list.map((p) => ({ id: p.id, name: p.name })))
   }, [])
+
+  /** 加载记录开关（缺省即关闭） */
+  const loadEnabled = useCallback(async (): Promise<void> => {
+    const value = await window.api.settings.get(ENABLED_KEY)
+    setEnabled(value === 'true')
+  }, [])
+
+  /** 切换记录开关（主进程每次请求实时读取，立即生效） */
+  const handleToggleEnabled = (): void => {
+    const next = enabled !== true
+    setEnabled(next)
+    void window.api.settings.set({ key: ENABLED_KEY, value: String(next) })
+  }
 
   /** 加载日志列表 */
   const loadLogs = useCallback(
@@ -122,7 +141,8 @@ export function HttpLogSettings(): React.JSX.Element {
 
   useEffect(() => {
     void loadProviders()
-  }, [loadProviders])
+    void loadEnabled()
+  }, [loadProviders, loadEnabled])
 
   /** 筛选条件改变时重新加载 */
   useEffect(() => {
@@ -146,6 +166,21 @@ export function HttpLogSettings(): React.JSX.Element {
     <div className="flex flex-1 min-h-0 h-full">
       {/* 左列：筛选 + 列表 + 底栏 */}
       <div className="w-[260px] flex-shrink-0 border-r border-border-secondary flex flex-col">
+        {/* 记录开关：默认关闭 —— 请求体是整段上下文快照，逐步落盘会让库快速膨胀 */}
+        <div className="px-3 py-2.5 border-b border-border-secondary flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium text-text-primary">
+              {t('settings.httpLogEnabled')}
+            </div>
+            <div className="mt-0.5 text-[10px] text-text-tertiary leading-relaxed">
+              {t('settings.httpLogEnabledHint')}
+            </div>
+          </div>
+          <div className="shrink-0 pt-0.5">
+            <Toggle on={enabled === true} onClick={handleToggleEnabled} />
+          </div>
+        </div>
+
         {/* 筛选器 */}
         <div className="px-3 py-3 border-b border-border-secondary space-y-1.5">
           <SessionPicker value={filterSessionId} onChange={setFilterSessionId} />
@@ -173,7 +208,9 @@ export function HttpLogSettings(): React.JSX.Element {
               {t('settings.loadingLog')}
             </div>
           ) : logs.length === 0 ? (
-            <div className="px-2 py-4 text-[11px] text-text-tertiary">{t('settings.noLogs')}</div>
+            <div className="px-2 py-4 text-[11px] text-text-tertiary">
+              {enabled === false ? t('settings.httpLogDisabledHint') : t('settings.noLogs')}
+            </div>
           ) : (
             logs.map((log) => {
               const active = selectedLogId === log.id

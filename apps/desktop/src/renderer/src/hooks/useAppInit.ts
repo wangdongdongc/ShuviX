@@ -61,22 +61,6 @@ export function useAppInit(): void {
       useSettingsStore.getState().setAvailableModels(availableModels)
       if (sessions) {
         useChatStore.getState().setSessions(sessions)
-        // 加载 WebUI 分享状态
-        const sharedList = await window.api.webui.listShared()
-        useChatStore.getState().setSharedSessionIds(new Set(sharedList))
-        // 从 session settings + bot 列表构建 Telegram 绑定关系
-        const telegramBindings = new Map<string, { botId: string; username: string }>()
-        const botList = await window.api.telegram.listBots()
-        const botMap = new Map(botList.map((b) => [b.id, b.username]))
-        for (const s of sessions) {
-          if (s.settings?.telegramBotId) {
-            telegramBindings.set(s.id, {
-              botId: s.settings.telegramBotId,
-              username: botMap.get(s.settings.telegramBotId) ?? ''
-            })
-          }
-        }
-        useChatStore.getState().setTelegramBindings(telegramBindings)
       }
 
       // 恢复面板布局（宽度 + 开关状态）—— 右面板通用三态真源在共享 usePanelStore，故水合它
@@ -134,7 +118,7 @@ export function useAppInit(): void {
     return removeListener
   }, [])
 
-  // 监听会话配置变更（LAN 分享 / Telegram 绑定 / 工具允许列表等），刷新派生 store —— AppEvent 'session.configChanged'
+  // 监听会话配置变更（免审批 / 工具允许列表等），刷新派生 store —— AppEvent 'session.configChanged'
   useEffect(() => {
     if (isSettingsWindow) return
     return window.api.events.subscribe((event) => {
@@ -145,26 +129,6 @@ export function useAppInit(): void {
         if (updated) {
           useChatStore.getState().updateSessionSettings(event.sessionId, updated.settings ?? {})
         }
-        const [sharedList, botList] = await Promise.all([
-          window.api.webui.listShared(),
-          window.api.telegram.listBots()
-        ])
-        useChatStore.getState().setSharedSessionIds(new Set(sharedList))
-        const botMap = new Map(botList.map((b) => [b.id, b.username]))
-        const telegramBindings = new Map<string, { botId: string; username: string }>()
-        for (const s of useChatStore.getState().sessions) {
-          const botId = s.settings?.telegramBotId
-          if (botId) {
-            telegramBindings.set(s.id, { botId, username: botMap.get(botId) ?? '' })
-          }
-        }
-        // 直接通过 bot 的 boundSessionId 反向构建（兼容 store 内 session 尚未同步的情况）
-        for (const b of botList) {
-          if (b.boundSessionId && !telegramBindings.has(b.boundSessionId)) {
-            telegramBindings.set(b.boundSessionId, { botId: b.id, username: b.username ?? '' })
-          }
-        }
-        useChatStore.getState().setTelegramBindings(telegramBindings)
       })()
     })
   }, [])

@@ -1,13 +1,10 @@
-import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
-import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useChatHost } from '@shuvix/chat-ui'
+import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Archive } from 'lucide-react'
 import {
   useChatStore,
   selectIsStreaming,
-  selectCanChat,
-  selectCanEdit,
   type ChatMessage,
   type AssistantTextMessage
 } from '../../stores/chatStore'
@@ -153,26 +150,6 @@ export function Conversation({
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore(selectIsStreaming)
-  const canChat = useChatStore(selectCanChat)
-  const canEdit = useChatStore(selectCanEdit)
-  // 仅查看（WebUI 分享端）：消息「内容」限宽居中，但滚动条仍贴屏幕右缘（不随内容内移）。
-  // 故只把 Virtuoso 的内层 List 容器（含 header/items/footer）限宽居中，外层 Scroller 保持满宽。
-  const viewOnly = useChatStore((s) => s.viewOnly)
-  const CenteredList = useMemo(
-    () =>
-      viewOnly
-        ? forwardRef<HTMLDivElement, { style?: React.CSSProperties; children?: React.ReactNode }>(
-            function CenteredList({ style, children }, ref) {
-              return (
-                <div ref={ref} style={style} className="mx-auto w-full max-w-3xl">
-                  {children}
-                </div>
-              )
-            }
-          )
-        : undefined,
-    [viewOnly]
-  )
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。
   // 直接写 DOM 变量而非 state：高度随输入增长高频变化，不触发列表重渲染
@@ -193,54 +170,12 @@ export function Conversation({
     handleInputResponse
   } = useChatActions(sessionId)
 
-  // ── 归档消息回溯 ──
-  const [archivedCount, setArchivedCount] = useState(0)
-  const [archivedItems, setArchivedItems] = useState<VisibleItem[]>([])
-  const [archivedOffset, setArchivedOffset] = useState(0)
-  const [archivedLoading, setArchivedLoading] = useState(false)
-  const hasMoreArchived = archivedOffset < archivedCount
-
-  // ── 归档消息：会话切换时重置并获取归档数 ──
-  useEffect(() => {
-    setArchivedItems([])
-    setArchivedOffset(0)
-    setArchivedCount(0)
-    if (!sessionId) return
-    getSessionChannelApi()
-      .message.countArchived(sessionId)
-      .then((cnt) => setArchivedCount(cnt))
-  }, [sessionId])
-
-  /** 加载更多归档消息（每次 5 条主消息） */
-  const loadMoreArchived = useCallback(async () => {
-    if (!sessionId || archivedLoading || !hasMoreArchived) return
-    setArchivedLoading(true)
-    try {
-      const batch = await getSessionChannelApi().message.listArchived({
-        sessionId,
-        limit: 5,
-        offset: archivedOffset
-      })
-      if (batch.length > 0) {
-        const batchItems = buildVisibleItems(batch, false).map((item) => ({
-          ...item,
-          isArchived: true
-        }))
-        // 新加载的是更早的消息，需要放在已有归档项之前
-        setArchivedItems((prev) => [...batchItems, ...prev])
-        setArchivedOffset((prev) => prev + 5)
-      }
-    } finally {
-      setArchivedLoading(false)
-    }
-  }, [sessionId, archivedLoading, hasMoreArchived, archivedOffset])
-
-  // 预构建可见消息列表，messages 不变时复用缓存
-  const liveItems = useMemo(() => buildVisibleItems(messages, isStreaming), [messages, isStreaming])
-  // 合并：归档项在前，活跃项在后
+  // 预构建可见消息列表，messages 不变时复用缓存。
+  // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
+  // 压缩点之前的消息原地换成一张摘要卡片，UI 不提供回看入口。
   const visibleItems = useMemo(
-    () => (archivedItems.length > 0 ? [...archivedItems, ...liveItems] : liveItems),
-    [archivedItems, liveItems]
+    () => buildVisibleItems(messages, isStreaming),
+    [messages, isStreaming]
   )
   // 仅当最后一条消息是助手文本消息时才允许重新生成
   const lastAssistantTextId = useMemo(() => {
@@ -250,62 +185,16 @@ export function Conversation({
 
   /** 渲染单条可见消息 */
   const renderItem = useCallback(
-    (_index: number, item: VisibleItem) => {
-      if (item.isArchived) {
-        return (
-          <div className="opacity-45">
-            <MessageRenderer
-              item={item}
-              lastAssistantTextId={null}
-              onRollback={undefined}
-              onRegenerate={undefined}
-            />
-          </div>
-        )
-      }
-      return (
-        <MessageRenderer
-          item={item}
-          lastAssistantTextId={lastAssistantTextId}
-          onRollback={canEdit ? handleRollback : undefined}
-          onRegenerate={canEdit ? handleRegenerate : undefined}
-        />
-      )
-    },
-    [lastAssistantTextId, handleRollback, handleRegenerate, canEdit]
+    (_index: number, item: VisibleItem) => (
+      <MessageRenderer
+        item={item}
+        lastAssistantTextId={lastAssistantTextId}
+        onRollback={handleRollback}
+        onRegenerate={handleRegenerate}
+      />
+    ),
+    [lastAssistantTextId, handleRollback, handleRegenerate]
   )
-
-  /** Virtuoso Header：归档消息横幅 */
-  const ArchivedBanner = useMemo(() => {
-    if (archivedCount === 0) return undefined
-    return function ArchivedBannerHeader() {
-      if (!hasMoreArchived && archivedItems.length === 0) return null
-      return (
-        <button
-          onClick={loadMoreArchived}
-          disabled={archivedLoading || !hasMoreArchived}
-          className="w-full flex items-center justify-center gap-2 py-2 px-4 text-xs text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors border-b border-border-secondary/40 disabled:opacity-50"
-        >
-          <Archive size={13} />
-          {archivedLoading ? (
-            <span>{t('compact.archivedLoading')}</span>
-          ) : hasMoreArchived ? (
-            <span>{t('compact.archivedBanner', { count: archivedCount - archivedOffset })}</span>
-          ) : (
-            <span>{t('compact.archivedAllLoaded')}</span>
-          )}
-        </button>
-      )
-    }
-  }, [
-    archivedCount,
-    archivedOffset,
-    archivedLoading,
-    hasMoreArchived,
-    archivedItems.length,
-    loadMoreArchived,
-    t
-  ])
 
   return (
     <>
@@ -326,14 +215,11 @@ export function Conversation({
         ) : (
           <Virtuoso
             ref={virtuosoRef}
-            className="flex-1 min-w-0 thin-scrollbar"
+            // conversation-scroller：供外壳按需微调本列滚动条（如会话面板展开时内缩轨道，见 base.css）
+            className="flex-1 min-w-0 thin-scrollbar conversation-scroller"
             data={visibleItems}
             itemContent={renderItem}
-            components={{
-              Footer: ConversationFooter,
-              ...(ArchivedBanner ? { Header: ArchivedBanner } : {}),
-              ...(CenteredList ? { List: CenteredList } : {})
-            }}
+            components={{ Footer: ConversationFooter }}
             initialTopMostItemIndex={visibleItems.length - 1}
             key={sessionId}
             increaseViewportBy={{ top: 200, bottom: 400 }}
@@ -341,17 +227,15 @@ export function Conversation({
           />
         )}
 
-        {/* 输入区（悬浮卡片）+ 待处理用户输入浮层（经 accessory 悬浮于卡片上方）— readonly 隐藏 */}
-        {canChat && (
-          <div
-            className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
-          >
-            <InputArea
-              accessory={<PendingInputsPanel onResponse={handleInputResponse} />}
-              onHeightChange={handleInputHeightChange}
-            />
-          </div>
-        )}
+        {/* 输入区（悬浮卡片）：待处理用户输入经 accessory 并入卡片顶格，与输入区同一张卡片 */}
+        <div
+          className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''}`}
+        >
+          <InputArea
+            accessory={<PendingInputsPanel onResponse={handleInputResponse} />}
+            onHeightChange={handleInputHeightChange}
+          />
+        </div>
       </div>
 
       {/* 回退确认弹窗 */}

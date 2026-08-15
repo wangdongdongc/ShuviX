@@ -353,6 +353,26 @@ function pushReplace(
   }
 }
 
+// Nesting level of the list item owning `mark` (a ListMark node): 0 for a
+// top-level item, 1 for one nested inside it, and so on.
+//
+// Deliberately counted from the TREE (enclosing Bullet/OrderedList nodes),
+// not from the marker's source column. Column math has to assume an indent
+// step — the old `floor(column / 2)` did — and markdown has no such rule:
+// a nested list only needs to start past its parent's content column, so
+// hand- and agent-written docs indent by 2, 3, or 4 spaces, or a tab. With
+// column math, a 4-space document rendered at DOUBLE the intended indent
+// (and a tab-indented one at zero, `floor(1/2) === 0`). The tree already
+// knows the real nesting, so every style renders at exactly one step per
+// level.
+function listNestingDepth(mark: SyntaxNode): number {
+  let depth = -1; // the item's own list is an ancestor → start below zero
+  for (let n: SyntaxNode | null = mark; n; n = n.parent) {
+    if (n.name === 'BulletList' || n.name === 'OrderedList') depth++;
+  }
+  return Math.max(0, depth);
+}
+
 function buildInlineDecorations(view: EditorView): DecorationSet {
   const { state } = view;
   const { doc } = state;
@@ -599,11 +619,16 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         // `text-indent`, so content is never pulled to a fixed column.
         // Trade-off: a wrapped line returns to the marker column rather
         // than hanging under the content — fine for short list items.
-        const rawIndent = node.from - line.from;
-        const depth = Math.max(0, Math.floor(rawIndent / 2));
+        const depth = listNestingDepth(node.node);
         const BASE_EM = 0.8;
-        const LEVEL_EM = 1.5;
-        const padding = BASE_EM + depth * LEVEL_EM;
+        // One step is a hair wider than the task checkbox (1em square, see
+        // `.cm-atomic-task-checkbox`): enough that a nested item's marker
+        // clears its parent's box, without the airy staircase a larger step
+        // produces in deep task trees.
+        const LEVEL_EM = 1.2;
+        // Round: `0.8 + 3 * 1.2` is 4.3999999999999995 in binary floating
+        // point, which would land verbatim in the inline style string.
+        const padding = Math.round((BASE_EM + depth * LEVEL_EM) * 1000) / 1000;
         ranges.push(
           Decoration.line({
             attributes: {
@@ -618,13 +643,36 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         // already covers the `- ` span up to the `[`.
         const markEnd = node.to + 1;
 
+        // The marker region for local reveal: line start through the end of
+        // `- [ ]` on a task item, through the marker text otherwise. Shared
+        // by the indent hide below and the per-kind branches so the source
+        // indent and its marker always reveal together.
+        const markerEnd = taskFrom !== undefined ? taskFrom + 3 : node.to;
+        const revealMarker = selTouches(line.from, markerEnd);
+
+        // Hide the source indent. `padding-left` above already puts the
+        // marker at its nesting column; leaving the raw spaces/tabs as text
+        // ADDS to that, so the rendered indent doubled with the author's
+        // indent width (and a tab expanded to the browser's 8-column tab
+        // stop). Walk back from the marker rather than taking the whole line
+        // prefix, so a list inside a blockquote keeps its `> ` for the
+        // QuoteMark branch instead of having it swallowed here.
+        let indentFrom = node.from;
+        while (
+          indentFrom > line.from &&
+          /[ \t]/.test(doc.sliceString(indentFrom - 1, indentFrom))
+        ) {
+          indentFrom--;
+        }
+        if (!revealMarker) pushReplace(ranges, doc, indentFrom, node.from);
+
         if (taskFrom !== undefined) {
           // Task item: the marker region is `- [ ]` (line start through
           // the 3-char `[ ]`/`[x]`). Reveal it as raw source only when the
           // cursor is on the marker (local reveal); otherwise hide the
           // `- ` (the TaskMarker branch swaps `[ ]` for the checkbox). Both
           // branches use the same region so they agree.
-          if (!selTouches(line.from, taskFrom + 3)) {
+          if (!revealMarker) {
             pushReplace(ranges, doc, node.from, taskFrom);
           }
         } else {
@@ -638,7 +686,7 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
             // space (`markEnd`): otherwise a cursor sitting right after
             // `- ` (the content start, where it lands as you finish typing)
             // would count as "on the marker" and show `-` instead of a dot.
-            if (!selTouches(line.from, node.to)) {
+            if (!revealMarker) {
               pushReplace(ranges, doc, node.from, markEnd, { widget: BULLET_WIDGET });
             }
           } else {

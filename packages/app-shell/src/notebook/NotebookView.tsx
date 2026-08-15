@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getSessionChannelApi, getHostApi, useAppEvent, useChatStore } from '@shuvix/chat-ui'
+import { getSessionChannelApi, getHostApi, useAppEvent } from '@shuvix/chat-ui'
 import {
   LivePreviewEditor,
   type LivePreviewEditorHandle,
@@ -37,8 +37,6 @@ export function NotebookView({
   editorHandleRef
 }: NotebookViewProps): React.JSX.Element {
   const { t } = useTranslation()
-  // 「仅查看」渠道（WebUI 分享端）：笔记本退化为只读预览（与 Files 面板 md 预览一致）
-  const viewOnly = useChatStore((s) => s.viewOnly)
 
   const [content, setContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -164,7 +162,6 @@ export function NotebookView({
         key={reloadNonce}
         documentId={path}
         initialContent={content}
-        readOnly={viewOnly}
         onSave={onSave}
         onSaveStatusChange={setSaveStatus}
         handleRef={editorRef}

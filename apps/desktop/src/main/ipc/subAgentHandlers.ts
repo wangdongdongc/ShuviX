@@ -1,29 +1,32 @@
 import { ipcMain } from 'electron'
 import { agentService } from '../services/agentService'
-import { sessionService } from '../services/sessionService'
-import type { AgentDefinition } from '@shuvix/agent-runtime'
+import type { SubAgentCreateParams, SubAgentSaveParams } from '../types'
 
 /**
  * Sub-Agent 文件系统管理 IPC 处理器
  *
- * 仅暴露读 / 启用切换 / 打开文件夹 / 刷新；CRUD 由用户直接编辑文件完成。
+ * 纯 md 驱动：每次 list 都现扫文件系统，派发工具执行时也按名现查 ——
+ * 保存/新建/删除后无需向活跃会话级联任何刷新（派发工具描述为静态文案）。
+ * 暴露读 / 保存、新建与删除（设置页 GUI）/ 打开文件夹。
  */
 export function registerSubAgentHandlers(): void {
-  /** 列出所有 agent（含内置 + 用户），带启用状态 */
-  ipcMain.handle('subAgent:list', (): AgentDefinition[] => agentService.listAll())
+  /** 列出所有 agent（含内置 + 用户 + 被覆盖内置的展示项，现扫文件系统） */
+  ipcMain.handle('subAgent:list', () => agentService.listForSettings())
 
-  /** 重扫文件系统并把变化级联到所有活跃 AgentSession */
-  ipcMain.handle('subAgent:refresh', () => {
-    sessionService.rebuildToolsForAllSessions()
-    return { success: true }
-  })
+  /** 保存用户 agent 定义（设置页编辑 GUI） */
+  ipcMain.handle('subAgent:save', (_e, params: SubAgentSaveParams) =>
+    agentService.saveAgent(params.originalName, params.agent)
+  )
 
-  /** 切换启用/禁用（仅用户 agent 可切；内置返回 error） */
-  ipcMain.handle('subAgent:setEnabled', (_e, params: { name: string; enabled: boolean }) => {
-    const res = agentService.setEnabled(params.name, params.enabled)
-    if (res.success) sessionService.rebuildToolsForAllSessions()
-    return res
-  })
+  /** 新建用户 agent 定义（设置页「添加自定义智能体」） */
+  ipcMain.handle('subAgent:create', (_e, params: SubAgentCreateParams) =>
+    agentService.createAgent(params.agent)
+  )
+
+  /** 删除用户 agent 定义文件（设置页确认后调用） */
+  ipcMain.handle('subAgent:delete', (_e, params: { name: string }) =>
+    agentService.deleteAgent(params.name)
+  )
 
   /** 打开用户 agents 目录（OS 文件管理器） */
   ipcMain.handle('subAgent:openFolder', async () => {

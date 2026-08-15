@@ -12,7 +12,6 @@ const { resolve } = require('node:path')
 module.exports = {
   content: [
     resolve(__dirname, 'src/renderer/src/**/*.{ts,tsx,html}'),
-    resolve(__dirname, 'src/webui/**/*.{ts,tsx,html}'),
     resolve(__dirname, '../../packages/chat-ui/src/**/*.{ts,tsx}'),
     resolve(__dirname, '../../packages/app-shell/src/**/*.{ts,tsx}')
   ]

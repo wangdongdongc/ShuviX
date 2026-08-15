@@ -32,8 +32,6 @@ export interface ProjectSessionGroupsProps {
   caps?: {
     /** 显示置顶（悬浮）徽标 */
     pin?: boolean
-    /** 显示分享 / Telegram 绑定徽标 */
-    badges?: boolean
   }
   /** 已悬浮会话集合（caps.pin 时用于徽标） */
   pinnedSessionIds?: Set<string>
@@ -46,7 +44,7 @@ export interface ProjectSessionGroupsProps {
 /**
  * 按项目分组的会话列表（桌面/扩展共用）—— 项目为骨架，会话填入，末尾临时对话组。
  * 数据读 chat-ui 的 chatStore（sessions/active/streams/pending/shared/telegram），项目列表由宿主传入。
- * 宿主差异走 caps（pin/badges）+ 注入回调（右键菜单 / 编辑项目 / 会话配置 / 选中）。
+ * 宿主差异走 caps（pin）+ 注入回调（右键菜单 / 编辑项目 / 会话配置 / 选中）。
  * 桌面日历视图按天复用本组件（sessionsOverride + hideEmptyGroups）。
  */
 export function ProjectSessionGroups({
@@ -70,8 +68,6 @@ export function ProjectSessionGroups({
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const sessionStreams = useChatStore((s) => s.sessionStreams)
-  const sharedSessionIds = useChatStore((s) => s.sharedSessionIds)
-  const telegramBindings = useChatStore((s) => s.telegramBindings)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
@@ -182,8 +178,6 @@ export function ProjectSessionGroups({
                 dim={dim && activeGroupKey === groupKey && activeSessionId !== s.id}
                 isNotebook={!!s.settings.notebookPath}
                 isPinned={caps.pin ? pinnedSessionIds?.has(s.id) : undefined}
-                isShared={caps.badges ? sharedSessionIds.has(s.id) : undefined}
-                isTelegramBound={caps.badges ? telegramBindings.has(s.id) : undefined}
                 onSelect={handleSelect}
                 onDelete={onDelete}
                 onConfigure={onConfigureSession}
@@ -199,8 +193,10 @@ export function ProjectSessionGroups({
                     return next
                   })
                 }
+                // 与同组会话项一致：活动组内逐项淡化（本行永不是选中项，故恒淡）；
+                // 非活动组由 SessionGroup 整组淡化，这里不再叠加，否则 0.3×0.3 几乎不可见
                 className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
-                  groupDim ? 'opacity-30 hover:opacity-100' : ''
+                  dim && activeGroupKey === groupKey ? 'opacity-30 hover:opacity-100' : ''
                 }`}
               >
                 <span className="w-[11px] flex-shrink-0" />

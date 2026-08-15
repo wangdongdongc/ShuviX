@@ -3,7 +3,7 @@ import type { ChatHostValue } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../stores/settingsStore'
 
 /**
- * 桌面/WebUI 宿主：把 settingsStore 适配成 chat-ui 需要的 ChatHostValue。
+ * 桌面宿主：把 settingsStore 适配成 chat-ui 需要的 ChatHostValue。
  *
  * 对话框（@shuvix/chat-ui）不直接依赖 settingsStore，而是消费这里组装出的注入值。
  * 服务端项目会用各自的实现（浏览器本地配置 + ChatApi.provider.*）替换本文件。

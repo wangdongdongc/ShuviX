@@ -1,14 +1,3 @@
-import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
-
-export type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
-
-/** 参考目录条目 */
-export interface ReferenceDir {
-  path: string
-  note?: string
-  access?: 'readonly' | 'readwrite'
-}
-
 /** 项目环境变量 */
 export interface ProjectEnvVar {
   /** 变量名 */
@@ -30,7 +19,6 @@ export interface ToolSettings {
 /** 项目扩展配置 */
 export interface ProjectSettings {
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   /** 工具扩展配置 */
   tool?: ToolSettings
 }
@@ -42,8 +30,8 @@ export interface Project {
   name: string
   /** 项目根目录绝对路径 */
   path: string
-  /** 项目级 system prompt 卡片数组(应用层视图,DAO 序列化为 JSON 信封写入 systemPrompt 列) */
-  promptSections: ProjectPromptSection[]
+  /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+  systemPrompt: string
   /** 项目扩展配置 */
   settings: ProjectSettings
   /** 归档时间戳（0 表示未归档） */

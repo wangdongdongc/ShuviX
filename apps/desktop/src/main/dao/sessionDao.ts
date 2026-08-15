@@ -127,34 +127,12 @@ export class SessionDao extends BaseDao {
       .run(...values, Date.now(), id)
   }
 
-  /** 查找绑定了指定 Telegram Bot 的会话 */
-  findByTelegramBotId(botId: string): Session | undefined {
-    const row = this.stmt(
-      "SELECT * FROM sessions WHERE json_extract(settings, '$.telegramBotId') = ? LIMIT 1"
-    ).get(botId) as SessionRow | undefined
-    return row ? parseRow(row) : undefined
-  }
-
   /** 查找项目内绑定了指定 md 文件的笔记本会话（wiki 项目：一文件至多一会话） */
   findByProjectAndNotebookPath(projectId: string, notebookPath: string): Session | undefined {
     const row = this.stmt(
       "SELECT * FROM sessions WHERE projectId = ? AND json_extract(settings, '$.notebookPath') = ? LIMIT 1"
     ).get(projectId, notebookPath) as SessionRow | undefined
     return row ? parseRow(row) : undefined
-  }
-
-  /** 清除指定 session 的 telegramBotId（设为 null） */
-  clearTelegramBotId(sessionId: string): void {
-    this.stmt(
-      `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE id = ?`
-    ).run(Date.now(), sessionId)
-  }
-
-  /** 清除所有绑定到指定 bot 的 session 的 telegramBotId */
-  clearAllTelegramBotBindings(botId: string): void {
-    this.stmt(
-      `UPDATE sessions SET settings = json_set(COALESCE(settings, '{}'), '$.telegramBotId', null), updatedAt = ? WHERE json_extract(settings, '$.telegramBotId') = ?`
-    ).run(Date.now(), botId)
   }
 
   /** 删除会话 */

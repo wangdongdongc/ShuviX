@@ -12,10 +12,10 @@ import { join } from 'path'
 import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
-import type { AssistantTextMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { AssistantTextMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
 import {
-  AUTO_COMPACT_CUSTOM_TYPE,
   entriesToChatMessages,
+  INLINE_TOKENS_CUSTOM_TYPE,
   INSTRUCTION_CUSTOM_TYPE
 } from '../projection'
 
@@ -236,6 +236,46 @@ describe('entriesToChatMessages', () => {
     expect(await project()).toHaveLength(0)
   })
 
+  it('内联 Token 侧车把紧随的 user 消息还原成标记文本 + inlineTokens', async () => {
+    const tokens = {
+      t0: { type: 'cmd', id: 'review', displayText: '/review', payload: '展开后的完整模板' }
+    }
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}} 参数',
+      tokens
+    })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '展开后的完整模板\n\n参数' }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    // 侧车自身不产出消息；user 气泡显示标记态原文，tokens 进 metadata
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({ role: 'user', content: '{{shuvixInlineToken:t0}} 参数' })
+    expect(msgs[0].metadata).toMatchObject({ inlineTokens: tokens })
+  })
+
+  it('无主侧车（prompt 被 deny）不产出消息，也不污染后续 user 消息', async () => {
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}}',
+      tokens: { t0: { type: 'cmd', id: 'x', displayText: '/x', payload: 'p' } }
+    })
+    // deny 后 user 消息没来，先来了一条 assistant（如 steer 场景的中间态）
+    await session.appendMessage(assistant([{ type: 'text', text: '回复' }]))
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '普通消息' }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1]).toMatchObject({ role: 'user', content: '普通消息' })
+    expect((msgs[1].metadata as UserTextMeta | undefined)?.inlineTokens).toBeUndefined()
+  })
+
   it('id 在重新打开会话后保持稳定', async () => {
     await session.appendMessage({
       role: 'user',
@@ -278,28 +318,5 @@ describe('entriesToChatMessages', () => {
     // 摘要 + 保留段（回复一、第二轮）；「第一轮」已被压缩掉
     expect(msgs.map((m) => m.content)).toEqual(['这是摘要', '回复一', '第二轮'])
     expect(msgs[0].metadata).toMatchObject({ isCompactionSummary: true })
-    // 手动压缩：无 auto_compact 标记 → 不带 autoCompacted
-    expect(msgs[0].metadata).not.toHaveProperty('autoCompacted')
-  })
-
-  it('auto_compact 标记 entry 装饰紧邻的压缩摘要卡片（自身不产生消息）', async () => {
-    await session.appendMessage({
-      role: 'user',
-      content: [{ type: 'text', text: '第一轮' }],
-      timestamp: Date.now()
-    } as AgentMessage)
-    const keepFrom = (await session.getLeafId()) as string
-    await session.appendMessage({
-      role: 'user',
-      content: [{ type: 'text', text: '第二轮' }],
-      timestamp: Date.now()
-    } as AgentMessage)
-    await session.appendCompaction('这是摘要', keepFrom, 1234)
-    await session.appendCustomEntry(AUTO_COMPACT_CUSTOM_TYPE, { tokensBefore: 1234 })
-
-    const msgs = await project()
-    // 标记 entry 不出现在消息列表里，只把摘要卡片标成自动压缩
-    expect(msgs.map((m) => m.content)).toEqual(['这是摘要', '第一轮', '第二轮'])
-    expect(msgs[0].metadata).toMatchObject({ isCompactionSummary: true, autoCompacted: true })
   })
 })

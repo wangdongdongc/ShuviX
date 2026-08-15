@@ -11,11 +11,15 @@
  * (复用 chat-protocol 的 ApprovalInputRequest/ApprovalResponse + chat-ui 的 ApprovalForm)。
  *
  * 平台差异全部经 ApprovalPolicy 注入:
- *   - 桌面:in-root=workspace/referenceDirs/tool_results/skills;allowList/autoApprove 读 SQLite;
+ *   - 桌面:in-root=workspace/tool_results/skills;allowList/autoApprove 读 SQLite;
  *           persistAllow 写 SQLite;isDirectory 用 statSync。
  *   - 扩展:根句柄(FSA/OPFS)是硬边界 → isAllowedWithoutPrompt 恒 true(夹内不弹,和桌面工作目录一致)。
  */
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  ApprovalPreview,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 
 export type AccessMode = 'read' | 'write'
 
@@ -45,6 +49,12 @@ export interface AssertPathApprovedOpts {
   description?: string
   /** 取消时抛出的错误文案(桌面 'Aborted' / 扩展 'TOOL_ABORTED') */
   abortError?: string
+  /**
+   * 预览载荷(write/edit 的 diff)。带上它审批卡片就渲染预览而非光秃秃的路径。
+   * 只有在**已经算出即将写入的内容**的调用点才可能提供 —— 见 fileToolSuite 里 write/edit
+   * 把审批从 securityCheck 下沉到 apply 层的原因。
+   */
+  preview?: ApprovalPreview
 }
 
 /**
@@ -79,6 +89,7 @@ export async function assertPathApproved(
     command,
     description: opts.description,
     pathIsDirectory,
+    preview: opts.preview,
     createdAt: Date.now()
   })
 

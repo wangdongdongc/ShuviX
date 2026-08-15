@@ -23,10 +23,6 @@ import { settingsDao } from './dao/settingsDao'
 import { mcpService } from './services/mcpService'
 import { mcpServerService } from './services/mcpServerService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
-import { telegramService } from './services/telegram'
-// 触发 TelegramBotServer 模块加载以注册 TelegramBotGateway 工厂
-// 服务层只持有 gateway 接口，不直接 import frontend/telegram
-import './frontend/telegram/TelegramBotServer'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
 // services / frontend 层消费注册表前必须由 main-entry 先注册
 import './tools/allTools'
@@ -375,11 +371,13 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     icon: join(__dirname, '../../resources/icon.png'),
-    // macOS 使用隐藏标题栏 + 交通灯按钮
+    // macOS 使用隐藏标题栏 + 交通灯按钮。
+    // y=14：全窗顶部为交通灯预留的是 40px 带（侧边栏 pt-10 / 聊天顶栏 h-10），12pt 的圆点
+    // 居中即 (40-12)/2=14 —— 与顶栏内 items-center 的标题文字同在 y=20 的中心线上（原 18 会低 4px）
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset',
-          trafficLightPosition: { x: 16, y: 18 }
+          trafficLightPosition: { x: 16, y: 14 }
         }
       : {}),
     backgroundColor: getThemeBgColor(),
@@ -641,11 +639,6 @@ app.whenReady().then(async () => {
 
   // MCP Server 出于安全考虑不自动启动，需用户在设置中手动开启
 
-  // 恢复有绑定 session 的 Telegram Bot
-  telegramService.autoStartBots().catch((err) => {
-    log.error(`telegram autoStartBots failed: ${err}`)
-  })
-
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
   cliServer.start().catch((err) => {
     log.error(`cliServer.start failed: ${err}`)
@@ -665,7 +658,6 @@ app.on('before-quit', () => {
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})
-  telegramService.stopAll().catch(() => {})
   widgetServer.dispose()
   cliServer.stop()
   disposePglite()

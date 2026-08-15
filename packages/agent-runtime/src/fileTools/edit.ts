@@ -5,8 +5,9 @@
  */
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import type { FileSystemPort, FileGuards } from './port'
+import type { FileSystemPort, FileGuards, WriteApprovalHook } from './port'
 import {
+  capDiffString,
   detectLineEnding,
   generateDiffString,
   normalizeToLF,
@@ -24,8 +25,12 @@ export interface EditParams {
 
 /**
  * 编辑文件：校验存在 + 读后被改守卫 → 整读 → BOM/行尾处理 → 多级回退匹配替换 →
- * 写入 → 记录读取时间 → 生成带行号上下文的 diff。
+ * 生成带行号上下文的 diff → 写入前审批 → 写入 → 记录读取时间。
  * readPath 交给 port 解释；displayPath（params.path）用于输出文案与报错。
+ *
+ * diff 在写入**之前**就算好，因为「预览审批」要拿它给用户看；同一个字符串随后原样进
+ * details，所以预览与执行后展示的必然一致。审批发生在锁内也不是巧合：这样被预览的内容
+ * 就是被写入的内容，中间没有任何窗口能让文件变化（见 approve 调用处注释）。
  *
  * 关键：整个 read-modify-write 都在 withFileLock 内完成（不只写入加锁）。否则对同一文件的并发 edit
  * 会各自在锁外读到同一初始快照、各自只把自己的改动套在该快照上，写入串行后「最后写入者」覆盖其余
@@ -36,7 +41,8 @@ export async function applyEdit(
   port: FileSystemPort,
   guards: FileGuards,
   readPath: string,
-  params: EditParams
+  params: EditParams,
+  approve?: WriteApprovalHook
 ): Promise<AgentToolResult<EditToolDetails>> {
   return guards.withFileLock(readPath, async () => {
     // 检查文件是否存在
@@ -73,17 +79,30 @@ export async function applyEdit(
       throw new Error(`No change produced: ${params.path}`)
     }
 
+    const diffResult = generateDiffString(normalizedContent, newContent)
+    // 封顶只做这一次：截断后的串同时喂给审批预览与 details
+    const diff = capDiffString(diffResult.diff)
+
+    // 写入前审批 —— 仍在锁内：本进程的并发 edit/write 在用户审阅期间进不来，
+    // 所以「批准的那份 diff」与「落盘的那次写入」严格对应；拒绝则 throw，写入不会发生。
+    if (approve) {
+      await approve({ path: params.path, diff })
+
+      // 文件锁只挡得住本进程。审批可能停留很久，期间外部编辑器照样能改这个文件 ——
+      // 变了就中止：既不能拿按旧内容算出的结果去覆盖新内容，用户批准的那份预览也已不成立。
+      await guards.assertNotModifiedSinceRead(readPath)
+    }
+
     const finalContent = bom + restoreLineEndings(newContent, originalEnding)
     await port.writeFile(readPath, finalContent)
     // 写入后更新读取时间，避免后续编辑被自己的写入触发警告
     guards.recordRead(readPath)
 
-    const diffResult = generateDiffString(normalizedContent, newContent)
     return {
       content: [{ type: 'text', text: `Successfully edited ${params.path}` }],
       details: {
         type: 'edit',
-        diff: diffResult.diff,
+        diff,
         firstChangedLine: diffResult.firstChangedLine
       }
     }

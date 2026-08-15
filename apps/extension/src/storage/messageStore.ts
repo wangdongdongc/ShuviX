@@ -6,39 +6,16 @@
  * 消息由 harness 落成 entry，这里只做投影。
  * 读取经 sessionEntryStore 的共享 registry —— 与运行时同一棵树，不重复加载。
  */
-import { buildContextEntries } from '@earendil-works/pi-agent-core'
-import type { SessionTreeEntry } from '@earendil-works/pi-agent-core'
-import { entriesToChatMessages } from '@shuvix/agent-runtime'
+import { INLINE_TOKENS_CUSTOM_TYPE, entriesToChatMessages } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { deleteSessionFile, getSessionTree } from './sessionEntryStore'
 
-/** 被压缩掉的历史 = 完整分支 与 当前上下文 entry 的差集 */
-async function archivedEntries(sessionId: string): Promise<SessionTreeEntry[]> {
-  const session = await getSessionTree(sessionId)
-  if (!session) return []
-  const leafId = await session.getLeafId()
-  if (!leafId) return []
-  const all = await session.getBranch()
-  const kept = new Set(buildContextEntries(all).map((e) => e.id))
-  return all.filter((e) => !kept.has(e.id))
-}
-
 export const messageStore = {
-  /** 会话当前上下文对应的消息列表 */
+  /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
   async list(sessionId: string): Promise<ChatMessage[]> {
     const session = await getSessionTree(sessionId)
     if (!session) return [] // 还没发过消息 → 没有转写文件
     const entries = await session.buildContextEntries()
-    return entriesToChatMessages(entries, sessionId)
-  },
-
-  async countArchived(sessionId: string): Promise<number> {
-    const entries = await archivedEntries(sessionId)
-    return entriesToChatMessages(entries, sessionId).length
-  },
-
-  async listArchived(sessionId: string): Promise<ChatMessage[]> {
-    const entries = await archivedEntries(sessionId)
     return entriesToChatMessages(entries, sessionId)
   },
 
@@ -58,6 +35,14 @@ export const messageStore = {
     if (!session) return
     const entry = await session.getEntry(entryId)
     if (!entry) return
-    await session.moveTo(entry.parentId)
+    // user 消息前若有内联 Token 显示侧车，一并越过（与桌面 messageService 同构）
+    let targetId = entry.parentId
+    if (targetId) {
+      const parent = await session.getEntry(targetId)
+      if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
+        targetId = parent.parentId
+      }
+    }
+    await session.moveTo(targetId)
   }
 }

@@ -12,7 +12,6 @@ export type {
   ImageContentParam,
   AgentPromptParams,
   AgentNotebookPromptParams,
-  AgentDispatchPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentSetModelParams,

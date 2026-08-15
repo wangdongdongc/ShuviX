@@ -64,20 +64,48 @@ body {
 }
 
 /* 细+淡的滚动条：用于对话列表与笔记本编辑器。自身滚动元素（Virtuoso 列表）+ 内部 .cm-scroller
-   （笔记本 CodeMirror）。比全局更细（4px），thumb 半透明淡化，仅 hover 时略加深。 */
+   （笔记本 CodeMirror）。比全局更细（4px），thumb 半透明淡化。
+   刻意只有一种状态（不做 hover 加深）：滚动条是背景信息，鼠标掠过就变实反而抢注意力。 */
 .thin-scrollbar::-webkit-scrollbar,
 .thin-scrollbar .cm-scroller::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
+/* :hover 变体一并列出并给同一取值 —— 既盖掉全局的 ::-webkit-scrollbar-thumb:hover（不透明），
+   也不再有「鼠标掠过就变实」的第二状态 */
 .thin-scrollbar::-webkit-scrollbar-thumb,
-.thin-scrollbar .cm-scroller::-webkit-scrollbar-thumb {
+.thin-scrollbar::-webkit-scrollbar-thumb:hover,
+.thin-scrollbar .cm-scroller::-webkit-scrollbar-thumb,
+.thin-scrollbar .cm-scroller::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
   border-radius: 3px;
 }
-.thin-scrollbar:hover::-webkit-scrollbar-thumb,
-.thin-scrollbar:hover .cm-scroller::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-border-primary) 65%, transparent);
+/* 会话面板内的滚动条一律取「细+淡」，与并排的对话列一致 —— 面板各工具页大多是普通
+   overflow 容器（Office/Hex/Ebook 预览、图表错误面、子代理展开区…），不逐个挂
+   .thin-scrollbar，直接按子树兜底。文件树在 shadow root 里、CSS 进不去，另经
+   pierre 的变量与 unsafeCSS 对齐（见 FilesTree.tsx）。 */
+.session-panel-card ::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.session-panel-card ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.session-panel-card ::-webkit-scrollbar-thumb,
+.session-panel-card ::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
+  border-radius: 3px;
+}
+
+/* 会话面板展开时：正文列的滚动条紧贴面板卡片左缘，故轨道按「卡片留白 + 圆角半径」内缩 ——
+   上 = pt-1(4) + rounded-xl(12)，下 = pb-2(8) + 12，使滑块只落在卡片左缘的直边段内，
+   不探出圆角、也不在圆角处与描边分出缝。类由 ChatBody 在面板展开时挂到正文列上。
+   两种正文各有自己的滚动主：对话是 Virtuoso 列表本身，笔记本是编辑器内部的 .cm-scroller
+   （故经 .notebook-scroller 限定，避免波及对话里工具块内嵌的 CodeMirror）。 */
+.chat-scroll-inset .conversation-scroller::-webkit-scrollbar-track,
+.chat-scroll-inset .notebook-scroller .cm-scroller::-webkit-scrollbar-track {
+  margin-top: 16px;
+  margin-bottom: 20px;
 }
 
 /* 弹窗动画 */

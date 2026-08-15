@@ -8,9 +8,13 @@
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { ReadToolDetails, EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  ReadToolDetails,
+  EditToolDetails,
+  WriteToolDetails
+} from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool } from './baseTool'
-import type { FileSystemPort, FileGuards } from '../fileTools/port'
+import type { FileSystemPort, FileGuards, WriteApprovalHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
@@ -132,6 +136,15 @@ abstract class FileToolBase<
     return (this.deps.decoders?.isUrl ?? defaultIsUrl)(path)
   }
 
+  /**
+   * 写类工具（write/edit）把路径审批推迟到 apply 层 —— 那里才算得出 diff，
+   * 审批卡片才能带预览。留在这里的话同一次写入会先弹一个光秃秃的路径审批、
+   * 再弹一次预览审批。read 不受影响（没有"即将发生的改动"可言）。
+   */
+  protected get deferApprovalToApply(): boolean {
+    return false
+  }
+
   protected async securityCheck(
     toolCallId: string,
     params: { path: string },
@@ -141,6 +154,7 @@ abstract class FileToolBase<
     // read 的 URL 分支不走文件系统审批
     if (this.mode === 'read' && this.isUrl(params.path)) return
     await this.deps.ensureAccess?.()
+    if (this.deferApprovalToApply) return
     const portPath = this.deps.resolvePath(params.path, this.mode)
     await assertPathApproved(this.deps.policy, this.mode, portPath, {
       toolCallId,
@@ -148,6 +162,24 @@ abstract class FileToolBase<
       displayPath: params.path,
       abortError: this.abortError
     })
+  }
+
+  /**
+   * 写入前审批钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
+   *
+   * 走的仍是 assertPathApproved，所以放行范围 / 会话免审批 / allowList 这几层短路
+   * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
+   */
+  protected makeApprove(toolCallId: string, portPath: string): WriteApprovalHook {
+    return async ({ path, diff, isNewFile }) => {
+      await assertPathApproved(this.deps.policy, 'write', portPath, {
+        toolCallId,
+        toolName: this.name,
+        displayPath: path,
+        abortError: this.abortError,
+        preview: { kind: 'diff', path, diff, isNewFile }
+      })
+    }
   }
 }
 
@@ -251,14 +283,24 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
     this.description = deps.descriptions.write
   }
 
+  protected get deferApprovalToApply(): boolean {
+    return true
+  }
+
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; content: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<AgentToolResult<WriteToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
-    const res = await applyWrite(this.deps.port, this.deps.guards, portPath, params)
+    const res = await applyWrite(
+      this.deps.port,
+      this.deps.guards,
+      portPath,
+      params,
+      this.makeApprove(toolCallId, portPath)
+    )
     this.deps.onFileChange?.({ portPath, kind: 'write' })
     return res
   }
@@ -276,14 +318,24 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
     this.description = deps.descriptions.edit
   }
 
+  protected get deferApprovalToApply(): boolean {
+    return true
+  }
+
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     params: { path: string; oldText: string; newText: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<EditToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
-    const res = await applyEdit(this.deps.port, this.deps.guards, portPath, params)
+    const res = await applyEdit(
+      this.deps.port,
+      this.deps.guards,
+      portPath,
+      params,
+      this.makeApprove(toolCallId, portPath)
+    )
     this.deps.onFileChange?.({ portPath, kind: 'edit' })
     return res
   }

@@ -1,28 +1,20 @@
 import { telegramBotDao } from '../../dao/telegramBotDao'
-import { sessionDao } from '../../dao/sessionDao'
 import { createLogger } from '../../logger'
 import type { TelegramBotInfo } from '../../types'
-import { createTelegramBotGateway, type TelegramBotGateway } from './telegramGateway'
 
 const log = createLogger('Telegram')
 
 /**
- * Telegram Bot 多实例管理服务
- * 管理多个 Bot 的 CRUD、生命周期、Session 绑定（1:1）
+ * Telegram Bot 登记表 —— 只有 CRUD，没有运行时。
+ *
+ * 会话流绑定那一套（长轮询、消息中继、Bot↔会话 1:1 绑定、随绑定自动启停）已整体
+ * 下线：它是很早期的设计，实际无人使用。这里保留的是「注册过哪些 Bot」这份数据与
+ * 它的管理入口，供将来重新接入时复用 —— 登记本身不产生任何网络行为。
  */
 class TelegramService {
-  /** botId (Telegram numeric ID) → Bot 运行实例（通过 gateway 接口操作，实现在 frontend/telegram） */
-  private botServers = new Map<string, TelegramBotGateway>()
-  /** botId → 进行中的 startBot Promise，用于让 stopBot 等待启动完成，避免 bind/unbind 快速切换时的竞态 */
-  private startingBots = new Map<string, Promise<void>>()
-
-  // ─── Bot CRUD ────────────────────────────────
-
-  /** 列出所有 Bot（含运行时状态和绑定信息） */
+  /** 列出所有已登记的 Bot */
   listBots(): TelegramBotInfo[] {
-    const bots = telegramBotDao.findAll()
-    return bots.map((b) => {
-      const boundSession = sessionDao.findByTelegramBotId(b.id)
+    return telegramBotDao.findAll().map((b) => {
       let allowedUsers: number[] = []
       try {
         allowedUsers = JSON.parse(b.allowedUsers)
@@ -34,10 +26,6 @@ class TelegramService {
         name: b.name,
         username: b.username,
         allowedUsers,
-        isEnabled: b.isEnabled === 1,
-        running: this.botServers.get(b.id)?.isRunning() ?? false,
-        boundSessionId: boundSession?.id ?? null,
-        boundSessionTitle: boundSession?.title ?? null,
         createdAt: b.createdAt,
         updatedAt: b.updatedAt
       }
@@ -59,200 +47,31 @@ class TelegramService {
       name: bot.name,
       username: bot.username,
       allowedUsers: [],
-      isEnabled: true,
-      running: false,
-      boundSessionId: null,
-      boundSessionTitle: null,
       createdAt: bot.createdAt,
       updatedAt: bot.updatedAt
     }
   }
 
   /** 更新 Bot 配置 */
-  async updateBot(params: {
+  updateBot(params: {
     id: string
     name?: string
     token?: string
     username?: string
     allowedUsers?: number[]
-    isEnabled?: boolean
-  }): Promise<void> {
+  }): void {
     const fields: Parameters<typeof telegramBotDao.update>[1] = {}
     if (params.name !== undefined) fields.name = params.name
     if (params.token !== undefined) fields.token = params.token
     if (params.username !== undefined) fields.username = params.username
     if (params.allowedUsers !== undefined) fields.allowedUsers = JSON.stringify(params.allowedUsers)
-    if (params.isEnabled !== undefined) fields.isEnabled = params.isEnabled ? 1 : 0
     telegramBotDao.update(params.id, fields)
-
-    // 如果 token 变更且 Bot 正在运行 → 重启
-    if (params.token && this.botServers.has(params.id)) {
-      await this.stopBot(params.id)
-      await this.startBot(params.id)
-    }
   }
 
-  /** 删除 Bot（先停止、解绑） */
-  async deleteBot(id: string): Promise<void> {
-    await this.stopBot(id)
-    sessionDao.clearAllTelegramBotBindings(id)
+  /** 删除 Bot */
+  deleteBot(id: string): void {
     telegramBotDao.deleteById(id)
     log.info(`已删除 Bot id=${id}`)
-  }
-
-  // ─── Bot 生命周期 ────────────────────────────
-
-  async startBot(botId: string): Promise<void> {
-    if (this.botServers.has(botId)) return
-    // 复用进行中的启动，防止并发重复启动
-    const inflight = this.startingBots.get(botId)
-    if (inflight) return inflight
-
-    const promise = (async (): Promise<void> => {
-      const bot = telegramBotDao.pick(botId, ['token', 'username'])
-      if (!bot || !bot.token) return
-      // 通过 gateway 工厂创建实例 —— 实现由 frontend/telegram 层在启动时注册
-      const server = createTelegramBotGateway(botId)
-      this.botServers.set(botId, server)
-      try {
-        await server.start(bot.token)
-        log.info(`Bot 已启动: ${bot.username} (id=${botId})`)
-      } catch (err) {
-        this.botServers.delete(botId)
-        log.error(`Bot 启动失败: ${err}`)
-        throw err
-      }
-    })()
-
-    this.startingBots.set(botId, promise)
-    try {
-      await promise
-    } finally {
-      this.startingBots.delete(botId)
-    }
-  }
-
-  async stopBot(botId: string): Promise<void> {
-    // 若有进行中的启动，先等其完成，避免 start 在 stop 之后才把 server 写入 map
-    const starting = this.startingBots.get(botId)
-    if (starting) {
-      await starting.catch(() => {
-        /* 启动失败时无需继续停止 */
-      })
-    }
-    const server = this.botServers.get(botId)
-    if (!server) return
-    await server.stop()
-    this.botServers.delete(botId)
-    log.info(`Bot 已停止: id=${botId}`)
-  }
-
-  /** 停止所有运行中的 Bot */
-  async stopAll(): Promise<void> {
-    for (const [id, server] of this.botServers) {
-      await server.stop().catch((err) => log.error(`停止 Bot ${id} 失败: ${err}`))
-    }
-    this.botServers.clear()
-  }
-
-  getBotStatus(botId: string): { running: boolean } {
-    return { running: this.botServers.get(botId)?.isRunning() ?? false }
-  }
-
-  // ─── Session 绑定（1:1） ─────────────────────
-
-  /** 绑定 session 到 bot（1:1，先解除已有绑定） */
-  async bindSession(botId: string, sessionId: string): Promise<void> {
-    // 解除 session 的旧绑定
-    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
-    if (session?.telegramBotId) {
-      await this.unbindSession(sessionId)
-    }
-
-    // 解除 bot 的旧绑定（1:1）
-    const existingSession = sessionDao.findByTelegramBotId(botId)
-    if (existingSession) {
-      sessionDao.clearTelegramBotId(existingSession.id)
-      this.botServers.get(botId)?.unbindSession(existingSession.id)
-    }
-
-    // 写入新绑定
-    sessionDao.updateSettings(sessionId, { telegramBotId: botId })
-    log.info(`绑定 session=${sessionId} → bot=${botId}`)
-
-    // 自动启动 bot
-    const bot = telegramBotDao.pick(botId, ['isEnabled'])
-    if (bot?.isEnabled && !this.botServers.has(botId)) {
-      this.startBot(botId).catch((err) => log.error(`Bot 自动启动失败: ${err}`))
-    }
-  }
-
-  /** 解绑 session */
-  async unbindSession(sessionId: string): Promise<void> {
-    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
-    const botId = session?.telegramBotId
-    if (!botId) return
-
-    sessionDao.clearTelegramBotId(sessionId)
-    log.info(`解绑 session=${sessionId}（bot=${botId}）`)
-
-    // 通知运行中的 server
-    this.botServers.get(botId)?.unbindSession(sessionId)
-
-    // 若该 bot 不再有绑定 session → 自动停止
-    const stillBound = sessionDao.findByTelegramBotId(botId)
-    if (!stillBound && this.botServers.has(botId)) {
-      this.stopBot(botId).catch((err) => log.error(`Bot 自动停止失败: ${err}`))
-    }
-  }
-
-  /** 获取 session 绑定的 bot ID */
-  getSessionBotId(sessionId: string): string | null {
-    const session = sessionDao.pickSettings(sessionId, ['telegramBotId'])
-    return session?.telegramBotId ?? null
-  }
-
-  /** 获取 bot 绑定的 session ID（1:1） */
-  getBoundSessionId(botId: string): string | null {
-    const session = sessionDao.findByTelegramBotId(botId)
-    return session?.id ?? null
-  }
-
-  // ─── 用户访问控制 ───────────────────────────
-
-  isAllowedUser(botId: string, userId: number): boolean {
-    const bot = telegramBotDao.pick(botId, ['allowedUsers'])
-    if (!bot) return false
-    let allowed: number[] = []
-    try {
-      allowed = JSON.parse(bot.allowedUsers)
-    } catch {
-      /* ignore */
-    }
-    if (allowed.length === 0) {
-      // 首次交互：自动将该用户绑定为 owner
-      allowed = [userId]
-      telegramBotDao.update(botId, { allowedUsers: JSON.stringify(allowed) })
-      log.info(`Bot ${botId}: 首次交互，自动绑定用户 ${userId}`)
-      return true
-    }
-    return allowed.includes(userId)
-  }
-
-  // ─── 启动恢复 ───────────────────────────────
-
-  /** 应用启动时：恢复有绑定 session 的 enabled bot */
-  async autoStartBots(): Promise<void> {
-    const enabledBots = telegramBotDao.findEnabled()
-    for (const bot of enabledBots) {
-      const boundSession = sessionDao.findByTelegramBotId(bot.id)
-      if (boundSession) {
-        log.info(`自动恢复 Bot: ${bot.username} (id=${bot.id})`)
-        this.startBot(bot.id).catch((err) => {
-          log.error(`自动恢复 Bot 失败: ${err}`)
-        })
-      }
-    }
   }
 }
 

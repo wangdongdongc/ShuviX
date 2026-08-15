@@ -151,7 +151,6 @@ import { registerBuiltinTool } from './toolRegistry'
 registerBuiltinTool({
   name: 'skill',
   group: 'general',
-  defaultEnabled: false,
   hidden: true,
   getLabel: () => t('tool.skillLabel'),
   getHint: () => t('tool.skillHint'),

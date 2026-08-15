@@ -17,8 +17,8 @@ export type BuiltinGroup = 'general' | 'ripgrep' | 'remote' | 'agent' | 'system'
 export interface BuiltinToolMeta {
   name: string
   group: BuiltinGroup
-  /** 新建会话时是否默认启用 */
-  defaultEnabled: boolean
+  // 注：原 defaultEnabled 字段已退役 —— 主会话默认工具集由 default 档案
+  // （agent-runtime DEFAULT_AGENT_PROFILE / 用户 ~/.shuvix/agents/default.md）显式列出。
   /** 隐藏工具不在工具选择器中展示，由系统自动管理 */
   hidden?: boolean
   getLabel: () => string

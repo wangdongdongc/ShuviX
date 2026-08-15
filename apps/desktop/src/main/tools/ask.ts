@@ -11,7 +11,6 @@ import { t } from '../i18n'
 registerBuiltinTool({
   name: 'ask',
   group: 'general',
-  defaultEnabled: true,
   getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.ask.labelKey),
   getHint: () => t('tool.askHint'),
   factory: (ctx: ToolContext) =>

@@ -11,11 +11,22 @@ import { useEffect, useRef, useState } from 'react'
 import { FileTree, useFileTreeSearch } from '@pierre/trees/react'
 import { FileTree as FileTreeModel } from '@pierre/trees'
 
+/**
+ * 常显滚动条补丁 —— pierre 默认把 thumb 设为 transparent、hover 才现（且色值是它自己的
+ * 25% fg 混色，与 ShuviX 的 .thin-scrollbar 明显不同）。面板/右栏里的文件树与对话列并排，
+ * 两种滚动条同框出现观感割裂，故经 unsafeCSS（注入 shadow root 的 @layer unsafe）把
+ * thumb 钉成常显；颜色另经 --trees-scrollbar-thumb-override 对齐（见 treeStyle）。
+ */
+const PERSISTENT_SCROLLBAR_CSS = `[data-file-tree-virtualized-scroll="true"] {
+  --trees-scrollbar-thumb-current: var(--trees-scrollbar-thumb);
+}`
+
 export function FilesTree({
   paths,
   searchQuery,
   onFileSelect,
-  modelOutRef
+  modelOutRef,
+  persistentScrollbar
 }: {
   paths: string[]
   searchQuery: string
@@ -23,6 +34,8 @@ export function FilesTree({
   onFileSelect: (relPath: string) => void
   /** 让父组件持有 model 引用，用于关闭预览时 deselect */
   modelOutRef?: React.RefObject<FileTreeModel | null>
+  /** 滚动条常显（与对话列的 .thin-scrollbar 同款）；缺省沿用 pierre 的 hover 才现 */
+  persistentScrollbar?: boolean
 }): React.JSX.Element {
   // 用 ref 持有最新回调，组件保留 mount 时的 model 实例
   const onSelectRef = useRef(onFileSelect)
@@ -46,7 +59,8 @@ export function FilesTree({
         flattenEmptyDirectories: true,
         // 紧凑布局，与侧边栏视觉密度对齐
         density: 'compact',
-        itemHeight: 22
+        itemHeight: 22,
+        ...(persistentScrollbar ? { unsafeCSS: PERSISTENT_SCROLLBAR_CSS } : {})
       })
   )
 
@@ -147,6 +161,10 @@ export function FilesTree({
     '--trees-selected-bg-override': 'var(--color-bg-active)',
     '--trees-border-color-override': 'var(--color-border-secondary)',
     '--trees-accent-override': 'var(--color-accent)',
+    // 滚动条 thumb 与 .thin-scrollbar 取同一色（pierre 默认是 25% fg 的不透明混色）；
+    // 宽度不用改：默认 gutter 6px 里 thumb 带 1px 透明边 + content-box 裁切，实际就是 4px
+    '--trees-scrollbar-thumb-override':
+      'color-mix(in srgb, var(--color-border-primary) 40%, transparent)',
     // 字体与字号 — 与侧边栏对齐
     '--trees-font-size-override': '12px',
     '--trees-font-family-override': 'inherit',

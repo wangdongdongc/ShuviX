@@ -112,9 +112,7 @@
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
     "autoApproveLabel": "免审批",
-    "autoApproveWarning": "相关操作将自动执行，不再逐条审批。AI 可能产生意外操作，请谨慎使用。",
-    "lanShareLabel": "局域网分享",
-    "telegramLabel": "Telegram"
+    "autoApproveWarning": "相关操作将自动执行，不再逐条审批。AI 可能产生意外操作，请谨慎使用。"
   },
   "input": {
     "searchModel": "搜索模型...",
@@ -142,14 +140,14 @@
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}"
   },
+  "agentProfile": {
+    "manage": "管理智能体…",
+    "missing": "档案 \"{{name}}\" 已不存在，本会话按默认档案运行。",
+    "disabledWhileStreaming": "生成中无法切换档案",
+    "modelUnavailable": "该档案指定的模型 \"{{ref}}\" 当前不可用，会话保持原模型。"
+  },
   "compact": {
-    "button": "压缩归档",
-    "nothingToCompact": "上下文还很小 —— 压缩会保留最近的上下文窗口，目前没有可归档的内容。",
-    "summaryLabel": "对话摘要（压缩归档）",
-    "autoSummaryLabel": "对话摘要（自动压缩）",
-    "archivedBanner": "{{count}} 条已归档消息被隐藏，点击查看",
-    "archivedLoading": "加载中...",
-    "archivedAllLoaded": "所有归档消息已加载"
+    "summaryLabel": "对话摘要（自动压缩）"
   },
   "instruction": {
     "sender": "系统",
@@ -186,10 +184,11 @@
     "nCalls": "次调用"
   },
   "pendingInputs": {
-    "submitAllFilled": "一键提交已填",
-    "filledHint": "{{filled}} / {{total}} 已填",
-    "otherPlaceholder": "其它 — 输入反馈给 AI...",
-    "submitOther": "发送"
+    "submitAllFilled": "提交已填",
+    "otherPlaceholder": "或直接输入你的想法，回车反馈给 AI...",
+    "submitOther": "反馈给 AI",
+    "prev": "上一条",
+    "next": "下一条"
   },
   "toolCall": {
     "generating": "生成中...",
@@ -200,6 +199,9 @@
     "pendingPathRead": "正在读取外部文件",
     "pendingPathReadDir": "正在读取外部目录",
     "pendingPathWrite": "正在写入外部文件",
+    "pendingEditPreview": "确认这次编辑",
+    "pendingWritePreview": "确认这次写入",
+    "pendingCreatePreview": "确认新建文件",
     "allowThisDirectory": "允许此目录",
     "allow": "允许一次",
     "deny": "拒绝",
@@ -236,14 +238,7 @@
     "autoApprove": "免审批",
     "autoApproveDesc": "AI 执行操作时无需手动批准（具有一定风险）",
     "allowListTitle": "已允许的路径",
-    "lanShare": "局域网共享",
-    "lanShareDesc": "开启后，同一局域网中的其他人可通过浏览器「仅查看」此会话（消息与笔记本只读，不能发送或操作）。",
-    "lanShareUrlsTitle": "共享地址",
-    "telegramTitle": "绑定的 Bot",
-    "telegramBotDesc": "选择一个 Telegram Bot 绑定到此会话。Bot 需在设置 > 绑定中配置。",
-    "telegramNone": "无（未绑定）",
     "commandGroup": "操作审批",
-    "bindingsGroup": "会话绑定",
     "instructionFilesGroup": "指令文件",
     "instructionFilesEmpty": "项目目录下未发现 AGENTS.md / CLAUDE.md。",
     "instructionFilesRescan": "重新扫描",
@@ -276,12 +271,6 @@
     "toolsRemoteGroup": "远程访问",
     "toolsSubAgentGroup": "子智能体",
     "toolsSubAgentDesc": "将任务委派给运行在独立上下文中的自主子智能体。",
-    "referenceDirs": "引用更多文件夹",
-    "addRefDir": "引用更多文件夹",
-    "refDirAccessReadonly": "只读",
-    "refDirAccessReadwrite": "读写",
-    "refDirAccessRO": "R",
-    "refDirAccessRW": "RW",
     "archiveProject": "归档项目",
     "archiveConfirmTitle": "归档项目",
     "archiveConfirmDesc": "该项目将被移动到“已归档项目”中，你可以稍后在侧边栏恢复。",
@@ -296,57 +285,8 @@
     "extSkillDesc": "Skills 是可复用的提示词模板，让 AI 掌握特定领域的工作流程。",
     "extGoSettings": "前往设置",
     "extAvailableDesc": "选择要在项目中启用的扩展工具。",
-    "promptSectionsTitle": "项目提示词",
-    "addPromptSection": "添加",
-    "promptSectionTitlePlaceholder": "标题（如：身份 / 工具使用规则）",
-    "promptSectionContentPlaceholder": "内容...",
-    "deletePromptSection": "删除",
-    "dragToReorder": "拖动以排序"
-  },
-  "systemPromptCards": {
-    "tabTitle": "系统提示词",
-    "globalLabel": "全局补充提示词",
-    "globalDesc": "在所有内置/自定义卡片之前拼接的自由文本。留空则跳过。",
-    "globalPlaceholder": "可在这里写跨所有项目的全局指令...",
-    "builtinSection": "内置卡片",
-    "builtinSectionDesc": "ShuviX 默认提供的行为规范，可逐项启用/禁用，内容不可编辑。",
-    "customSection": "自定义卡片",
-    "customSectionDesc": "在内置卡片之后追加的任意内容。删除即停用。",
-    "envPreviewButton": "预览实际内容",
-    "envPreviewTitle": "环境信息预览",
-    "envPreviewClose": "关闭",
-    "envPreviewError": "无法获取预览内容",
-    "identity": {
-      "title": "身份",
-      "content": "你是 ShuviX 桌面助手，通过 read / write / edit / glob / grep / ls / bash / ssh / database / ask / skill 等内置工具帮助用户完成软件工程任务。需要深度调研代码库时，可调用以独立工具形式注册的子智能体（如 explore / research，或项目自定义的子智能体）；用户启用的 MCP server 工具会以独立工具的形式出现。当用户请求模糊时，结合当前工作目录与对话上下文做出合理判断。"
-    },
-    "doing_tasks": {
-      "title": "任务处理哲学",
-      "content": "只做用户要求的事，不要擅自重构、加抽象或附带\"改进\"。简单 bug 修复不需要顺手清理周边代码；一次性操作不需要抽 helper。完成前请实际验证：跑测试、执行脚本、查看输出；无法验证就明确说明，不要冒充已完成。失败时先诊断根因再换策略，而不是机械重试。"
-    },
-    "using_tools": {
-      "title": "工具使用规范",
-      "content": "优先使用专用工具而非 bash：read 替代 cat/head/tail，edit 替代 sed/awk，write 替代 echo/heredoc，grep/glob 替代 grep/find，ls 替代 ls 命令。当多个工具调用互不依赖时尽量并行调用以提升效率。代码库的广域调研优先调用 explore/research 等子智能体工具（如果可用），而不是自己反复 grep；调用过子智能体后不要重复它已经做过的搜索。当用户需要图表/可视化内容（流程图、时序图、状态图、ER 图、甘特图、饼图、思维导图等）时，不要在对话里手写 Mermaid——应通过 Agent 工具派发 \"visualization\" 子智能体（如果可用）：它会选定图表类型、在工作目录创建或更新单图表的 *-graph.md 文件，并为用户打开预览。派发 prompt 中写明绘图需求（修订已有图表时同时给出目标文件）。当用户想要的是一个随时可以再打开的小工具，而不是一次性的回答（格式化器、转换器、测试器、演算板、便签、记录本——凡是被叫作 widget、mini app、小工具、小组件的东西），不要手写一段一次性脚本——应通过 Agent 工具派发 \"widget\" 子智能体（如果可用）：它会脚手架、构建并打开一个真正的 ShuviX Widget，常驻在用户的 Widget 面板里。派发 prompt 中写明这个工具要做什么（改造已有 widget 时同时给出 widget id）。"
-    },
-    "executing_actions": {
-      "title": "执行动作时要谨慎",
-      "content": "评估操作的可逆性和影响范围：本地、可逆操作可自由执行；破坏性操作（删除文件/分支、drop 表、rm -rf、强推、git reset --hard、修改 CI）、影响共享状态的操作（push、PR 评论、对外发消息）、上传内容到第三方服务等，都需要先与用户确认。遇到障碍时找根因，不要用 --no-verify 等绕过手段当快捷方式。用户在某个场景里授权过某动作，不代表在其他场景也授权。"
-    },
-    "tone_style": {
-      "title": "输出风格",
-      "content": "响应保持简短直接，避免铺垫和重复用户的话。引用代码使用 file_path:line_number 格式以便用户跳转。除非用户明确要求，不要使用 emoji。有改动时，用一两句收尾——干了什么、下一步是什么；纯问答的回合无需总结。"
-    },
-    "environment": {
-      "title": "环境信息",
-      "git": "Git 仓库",
-      "platform": "Platform",
-      "shell": "Shell",
-      "os": "OS",
-      "date": "当前日期",
-      "model": "当前模型",
-      "language": "用户语言",
-      "appVersion": "ShuviX 版本"
-    }
+    "systemPrompt": "项目提示词",
+    "systemPromptPlaceholder": "注入到本项目每个会话的纯文本提示词(留空则不注入)"
   },
   "settings": {
     "title": "设置",
@@ -355,11 +295,7 @@
     "projectsSubTabArchived": "已归档",
     "projectsNoArchived": "暂无已归档项目",
     "tabProviders": "提供商",
-    "tabSystemPrompt": "系统提示词",
     "tabContextMgmt": "上下文管理",
-    "systemPromptMasterToggle": "启用系统提示词",
-    "systemPromptMasterToggleDesc": "关闭后不再向 LLM 追加全局自由文本与内置/自定义卡片（项目级提示仍生效）。",
-    "systemPromptDisabledWarning": "系统提示词已关闭 — 之后新建的对话不会附加全局/内置/自定义提示词；当前进行中的对话保持原配置，重启应用或回滚消息后才会刷新。",
     "tabHttpLogs": "LLM 日志",
     "tabAbout": "关于",
     "theme": "主题",
@@ -388,7 +324,6 @@
     "focusModeDesc": "选中会话时，淡化未选中的会话项、对话顶栏、输入区、设置按钮与右侧未选中标签",
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
-    "systemPrompt": "系统提示词",
     "titleModelSection": "标题生成模型",
     "titleModelHint": "选择用于自动生成会话标题的模型。未设置时不自动生成标题。",
     "titleModelClear": "清除",
@@ -407,8 +342,6 @@
     "defaultModelGroupDesc": "新会话默认使用的提供商与模型",
     "sessionModelRow": "会话",
     "titleModelRow": "标题生成",
-    "systemPromptDesc": "应用于所有新会话的默认系统提示词",
-    "systemPromptPlaceholder": "设定 AI 助手的角色和行为...",
     "providerSectionTitle": "配置大模型提供商",
     "providerConfigGroup": "配置",
     "tokenUsageWarning": "智能体模式的 Token 用量通常远高于普通对话，建议在提供商平台关注用量或设置消费限额，避免产生意外费用。",
@@ -443,6 +376,9 @@
     "baseUrlPlaceholder": "留空使用默认地址",
     "httpLogTitle": "LLM 请求日志",
     "httpLogDesc": "每次请求 AI 时会记录请求体，便于审计和排查。",
+    "httpLogEnabled": "记录 LLM 日志",
+    "httpLogEnabledHint": "默认关闭。开启后每次请求都会保存完整请求体（系统提示词 + 全部历史），数据库增长很快。",
+    "httpLogDisabledHint": "记录已关闭 —— 开启后才会记录新的请求。",
     "httpLogLimitHint": "显示最近 {{shown}}/{{limit}} 条",
     "allSessions": "全部会话",
     "searchSession": "搜索会话...",
@@ -493,6 +429,7 @@
     "capInputCostDesc": "每百万输入 token 价格",
     "capOutputCost": "输出价格",
     "capOutputCostDesc": "每百万输出 token 价格",
+    "tabAgents": "智能体",
     "tabTools": "LLM 工具",
     "toolMetaTitle": "工具定义",
     "toolMetaParams": "参数",
@@ -641,7 +578,7 @@
     "mcpServerFeaturesGroup": "对外功能",
     "mcpServerToolsGroup": "已注册工具",
     "mcpServerConnectionGroup": "接入信息",
-    "tabBindings": "会话绑定",
+    "tabTelegramBots": "Telegram Bot",
     "tabSkills": "技能",
     "tabHooks": "钩子",
     "hooksTitle": "钩子（Hooks）",
@@ -754,10 +691,11 @@
     "toolAborted": "已被用户中止。"
   },
   "agentInfo": {
-    "button": "Agent 信息",
-    "title": "Agent 信息",
+    "button": "Agent 配置",
+    "title": "Agent 配置",
     "loading": "加载中...",
-    "notInitialized": "Agent 尚未初始化（发送首条消息后创建）",
+    "refresh": "刷新",
+    "unavailable": "Agent 不可用（会话不存在或创建失败，请检查模型/供应商配置）",
     "model": "模型",
     "modelId": "模型",
     "modelName": "名称",
@@ -807,6 +745,11 @@
     "browserHint": "打开网页、A11y 快照、点击/输入/滚动、截图/PDF、执行 JS、查看网络与控制台 —— 驱动内置多标签浏览器面板",
     "gitLabel": "版本控制",
     "gitHint": "本地版本控制 —— status/diff/暂存/提交/分支/检出，基于 isomorphic-git，不含网络操作",
+    "gitApproval": {
+      "createRepo": "将在该目录创建一个新的 git 仓库",
+      "discardChanges": "将丢弃这些文件未提交的本地改动，无法撤销",
+      "deleteBranch": "将删除该分支，只存在于它上面的提交会一并丢失"
+    },
     "previewLabel": "文件预览",
     "previewHint": "在会话 Files 面板中打开文件预览 —— 与在面板中点击该文件后的预览一致",
     "sessionLabel": "会话",
@@ -818,13 +761,31 @@
     "subAgentOpenFolder": "打开文件夹",
     "subAgentRefresh": "刷新",
     "subAgentFsHint": "子智能体是扁平 Markdown 文件（一个 .md 一个 agent，文件名即名称）。内置项随应用发布，只读不可编辑；自定义只需把 Claude Code 兼容的 .md 放进 ~/.shuvix/agents/ 再点击刷新。",
-    "subAgentWhenToUse": "何时使用",
     "subAgentTools": "工具",
-    "subAgentRequiredMcp": "依赖 MCP",
     "subAgentBasePath": "文件路径",
     "subAgentSystemPrompt": "系统提示词",
     "subAgentCustomEmpty": "暂无自定义子智能体",
-    "subAgentCustomEmptyHint": "把 Markdown 文件放到 ~/.shuvix/agents/<name>.md，然后点击刷新。"
+    "subAgentCustomEmptyHint": "把 Markdown 文件放到 ~/.shuvix/agents/<name>.md，然后点击刷新。",
+    "subAgentEditTitle": "编辑",
+    "subAgentName": "名称",
+    "subAgentDisplayName": "显示名",
+    "subAgentDescPlaceholder": "一句话描述该智能体(用于列表与斜杠命令提示)",
+    "subAgentDispatchLabel": "允许继续派发子智能体（嵌套，深度受限）",
+    "subAgentReadOnly": "内置智能体随应用发布，只读不可编辑。",
+    "subAgentCreateOverride": "创建覆盖副本",
+    "subAgentOverridden": "已覆盖",
+    "subAgentOverriddenHint": "已被同名自定义智能体覆盖，此内置版本当前不生效。",
+    "subAgentDeleteConfirmTitle": "删除智能体",
+    "subAgentDeleteConfirmDesc": "将删除 \"{{name}}\" 的定义文件，此操作不可恢复。",
+    "subAgentAdd": "添加自定义智能体",
+    "subAgentCreateRequired": "名称、描述、系统提示词为必填",
+    "subAgentInstructionFiles": "注入指令文件",
+    "subAgentProjectPrompt": "注入项目提示词",
+    "subAgentDescription": "描述",
+    "subAgentBasicGroup": "基本信息",
+    "subAgentModel": "模型",
+    "subAgentModelNone": "跟随会话",
+    "subAgentModelUnavailable": "\"{{ref}}\" 当前不可用（提供商已停用或模型已删除）。在你另选之前，文件里仍保留这个值。"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",
@@ -862,37 +823,6 @@
     "exportErrorTargetExists": "该路径下已存在同名文件。请换个名字或先删除它。",
     "exportErrorPackFailed": "打包过程中出错：{{reason}}"
   },
-  "bindings": {
-    "title": "会话绑定",
-    "description": "管理各前端类型与会话的绑定关系。开启分享后，其他设备可通过对应渠道访问已绑定的会话。",
-    "webui": "WebUI",
-    "telegram": "Telegram Bot",
-    "websocket": "WebSocket API",
-    "comingSoon": "即将推出",
-    "running": "运行中",
-    "stopped": "已停止",
-    "sessionCount": "{{count}} 个会话",
-    "noSessions": "暂无绑定会话",
-    "noSessionsHint": "在对话页面的会话配置中开启「局域网分享」即可将会话绑定到 WebUI。",
-    "serverStatus": "服务状态",
-    "port": "端口",
-    "boundSessions": "已绑定会话",
-    "removeShare": "取消分享",
-    "telegramAddBot": "添加 Bot",
-    "telegramBotToken": "Bot Token",
-    "telegramBotTokenHint": "从 Telegram @BotFather 获取",
-    "telegramValidating": "添加中...",
-    "telegramTokenInvalid": "无效 Token",
-    "telegramAllowedUsersHint": "填写 Telegram 用户 ID，留空允许所有人",
-    "telegramStartBot": "启动",
-    "telegramStopBot": "停止",
-    "telegramDeleteBot": "删除",
-    "telegramDeleteConfirm": "删除此 Bot？相关会话绑定将被移除。",
-    "telegramNoBots": "尚无已注册的 Bot。点击「添加 Bot」开始。",
-    "telegramBoundTo": "已绑定: {{title}}",
-    "telegramUnbound": "未绑定",
-    "telegramEditAllowedUsers": "允许的用户"
-  },
   "menu": {
     "file": "文件",
     "edit": "编辑",
@@ -914,6 +844,7 @@
     "urlPlaceholder": "输入 URL",
     "newTerminal": "新建终端",
     "closeTerminal": "关闭终端",
+    "agent": "配置",
     "files": "文件",
     "filesLoading": "正在扫描工作区…",
     "filesError": "扫描文件失败",
@@ -1035,5 +966,19 @@
     "restoreHere": "恢复到此处",
     "disableAlwaysOnTop": "取消始终置顶",
     "enableAlwaysOnTop": "恢复始终置顶"
+  },
+  "telegramBots": {
+    "title": "Telegram Bot",
+    "description": "已登记的 Bot。仅作登记 —— 不会启动，也不与任何会话绑定。",
+    "addBot": "添加 Bot",
+    "botToken": "Bot Token",
+    "botTokenHint": "从 Telegram @BotFather 获取",
+    "validating": "添加中...",
+    "tokenInvalid": "无效 Token",
+    "allowedUsersHint": "填写 Telegram 用户 ID，留空允许所有人",
+    "deleteBot": "删除",
+    "deleteConfirm": "删除此 Bot？",
+    "noBots": "尚无已注册的 Bot。点击「添加 Bot」开始。",
+    "editAllowedUsers": "允许的用户"
   }
 }

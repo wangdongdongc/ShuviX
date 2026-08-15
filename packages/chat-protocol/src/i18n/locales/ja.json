@@ -112,9 +112,7 @@
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。",
     "autoApproveLabel": "自動承認",
-    "autoApproveWarning": "関連する操作が承認なしで自動実行されます。AI が予期しない操作を行う可能性があります — 注意してご使用ください。",
-    "lanShareLabel": "LAN 共有",
-    "telegramLabel": "Telegram"
+    "autoApproveWarning": "関連する操作が承認なしで自動実行されます。AI が予期しない操作を行う可能性があります — 注意してご使用ください。"
   },
   "input": {
     "searchModel": "モデルを検索...",
@@ -142,14 +140,14 @@
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}"
   },
+  "agentProfile": {
+    "manage": "エージェントを管理…",
+    "missing": "プロファイル \"{{name}}\" は存在しません。セッションは既定のプロファイルで動作します。",
+    "disabledWhileStreaming": "生成中はプロファイルを切り替えられません",
+    "modelUnavailable": "このプロファイルが指定するモデル \"{{ref}}\" は現在利用できません。セッションは現在のモデルのままです。"
+  },
   "compact": {
-    "button": "会話を圧縮",
-    "nothingToCompact": "コンテキストはまだ小さいため、圧縮できる内容がありません（直近のウィンドウは保持されます）。",
-    "summaryLabel": "会話の要約（圧縮済み）",
-    "autoSummaryLabel": "会話の要約（自動圧縮済み）",
-    "archivedBanner": "{{count}} 件のアーカイブメッセージが非表示 — クリックして表示",
-    "archivedLoading": "読み込み中...",
-    "archivedAllLoaded": "すべてのアーカイブメッセージを読み込みました"
+    "summaryLabel": "会話の要約（自動圧縮済み）"
   },
   "instruction": {
     "sender": "システム",
@@ -186,10 +184,11 @@
     "nCalls": "回呼出"
   },
   "pendingInputs": {
-    "submitAllFilled": "入力済みを一括送信",
-    "filledHint": "{{filled}} / {{total}} 入力済み",
-    "otherPlaceholder": "その他 — AI へのフィードバックを入力...",
-    "submitOther": "送信"
+    "submitAllFilled": "入力済みを送信",
+    "otherPlaceholder": "そのまま考えを入力すると、Enter で AI に伝わります...",
+    "submitOther": "AI にフィードバック",
+    "prev": "前へ",
+    "next": "次へ"
   },
   "toolCall": {
     "generating": "生成中...",
@@ -200,6 +199,9 @@
     "pendingPathRead": "外部ファイルを読み取り中",
     "pendingPathReadDir": "外部ディレクトリを読み取り中",
     "pendingPathWrite": "外部ファイルを書き込み中",
+    "pendingEditPreview": "この編集を確認",
+    "pendingWritePreview": "この書き込みを確認",
+    "pendingCreatePreview": "新規ファイルを確認",
     "allowThisDirectory": "このディレクトリを許可",
     "allow": "1回だけ許可",
     "deny": "拒否",
@@ -236,14 +238,7 @@
     "autoApprove": "自動承認",
     "autoApproveDesc": "ツール呼び出しを確認なしで実行（注意して使用）",
     "allowListTitle": "許可済みのパス",
-    "lanShare": "LAN 共有",
-    "lanShareDesc": "有効にすると、同じネットワーク上の他のユーザーがブラウザからこのセッションを閲覧専用で表示できます（送信や編集は不可）。",
-    "lanShareUrlsTitle": "共有 URL",
-    "telegramTitle": "バインド済みの Bot",
-    "telegramBotDesc": "Telegram Bot を選択してこのセッションに接続します。先に設定で Bot を登録してください。",
-    "telegramNone": "なし",
     "commandGroup": "操作承認",
-    "bindingsGroup": "セッションバインド",
     "instructionFilesGroup": "指示ファイル",
     "instructionFilesEmpty": "プロジェクトディレクトリに AGENTS.md / CLAUDE.md が見つかりません。",
     "instructionFilesRescan": "再スキャン",
@@ -276,12 +271,6 @@
     "toolsRemoteGroup": "リモートアクセス",
     "toolsSubAgentGroup": "サブエージェント",
     "toolsSubAgentDesc": "独立したコンテキストで自律的に動作するサブエージェントにタスクを委譲します。",
-    "referenceDirs": "追加フォルダ",
-    "addRefDir": "他のフォルダを参照",
-    "refDirAccessReadonly": "読み取り専用",
-    "refDirAccessReadwrite": "読み書き",
-    "refDirAccessRO": "R",
-    "refDirAccessRW": "RW",
     "archiveProject": "プロジェクトをアーカイブ",
     "archiveConfirmTitle": "プロジェクトをアーカイブ",
     "archiveConfirmDesc": "このプロジェクトは「アーカイブ済みプロジェクト」に移動され、後で復元できます。",
@@ -296,57 +285,8 @@
     "extSkillDesc": "Skillsは再利用可能なプロンプトテンプレートで、AIが特定のワークフローを習得するのに役立ちます。",
     "extGoSettings": "設定へ移動",
     "extAvailableDesc": "このプロジェクトで有効にする拡張ツールを選択してください。",
-    "promptSectionsTitle": "プロジェクトプロンプト",
-    "addPromptSection": "追加",
-    "promptSectionTitlePlaceholder": "タイトル（例：アイデンティティ / ツール使用ルール）",
-    "promptSectionContentPlaceholder": "内容...",
-    "deletePromptSection": "削除",
-    "dragToReorder": "ドラッグして並べ替え"
-  },
-  "systemPromptCards": {
-    "tabTitle": "システムプロンプト",
-    "globalLabel": "グローバルプレフィックス",
-    "globalDesc": "すべての組み込み/カスタムカードの前に連結される自由記述テキスト。空欄ならスキップされます。",
-    "globalPlaceholder": "全プロジェクト共通の指示があればここに記入...",
-    "builtinSection": "組み込みカード",
-    "builtinSectionDesc": "ShuviX が提供するデフォルトの行動指針です。各カードはオン/オフ可能ですが内容は編集できません。",
-    "customSection": "カスタムカード",
-    "customSectionDesc": "組み込みカードの後ろに追加するカード。削除＝無効化です。",
-    "envPreviewButton": "実際の内容をプレビュー",
-    "envPreviewTitle": "環境情報プレビュー",
-    "envPreviewClose": "閉じる",
-    "envPreviewError": "プレビューを取得できませんでした",
-    "identity": {
-      "title": "アイデンティティ",
-      "content": "あなたは ShuviX デスクトップアシスタントです。read / write / edit / glob / grep / ls / bash / ssh / database / ask / skill などの組み込みツールでユーザーのソフトウェアエンジニアリング作業を支援します。コードベースの深掘り調査が必要な場合は、独立したツールとして登録されたサブエージェント（組み込みの explore / research、ユーザー定義のサブエージェントなど）を呼び出せます。ユーザーが有効化した MCP サーバーのツールも独立ツールとして表示されます。要望が曖昧な場合は、現在の作業ディレクトリと会話の文脈から合理的に推測してください。"
-    },
-    "doing_tasks": {
-      "title": "タスク処理方針",
-      "content": "ユーザーが依頼したことだけを実行し、勝手にリファクタリングや抽象化、付随的な「改良」をしないでください。簡単なバグ修正のついでに周辺コードを掃除する必要はなく、一度きりの操作にヘルパーを抽出する必要もありません。完了前には必ず実際に検証してください：テスト実行、スクリプト実行、出力確認。検証できない場合は完了したと装わずに明示してください。失敗時はまず根本原因を診断してから別の方法に切り替え、機械的にリトライしないでください。"
-    },
-    "using_tools": {
-      "title": "ツールの使い方",
-      "content": "bash よりも専用ツールを優先してください：read（cat/head/tail の代わり）、edit（sed/awk の代わり）、write（echo/heredoc の代わり）、grep/glob（grep/find の代わり）、ls（ls コマンドの代わり）。互いに依存しない複数のツール呼び出しは並列に実行して効率を上げてください。コードベースを広く調査する場合は、利用可能なら explore / research などのサブエージェントツールを優先して呼び出し、自分で grep を繰り返さないでください。サブエージェントを呼び出した後は、その調査内容を重複させないでください。ユーザーが図やチャート（フローチャート、シーケンス図、状態遷移図、ER 図、ガントチャート、円グラフ、マインドマップなど）を求めた場合は、チャットに Mermaid を直接書かず、利用可能なら Agent ツールで \"visualization\" サブエージェントを派遣してください。チャートの種類を選定し、作業ディレクトリに単一チャートの *-graph.md ファイルを作成・更新して、ユーザーにプレビューを開きます。派遣時の prompt には作図要件を（既存チャートの修正時は対象ファイルも）明記してください。ユーザーが一度きりの回答ではなく、いつでも開き直せる小さなツール（フォーマッタ、コンバータ、テスター、計算パッド、メモ、記録帳など、widget・ミニアプリ・小工具・小组件と呼ばれるもの）を求めた場合は、使い捨てのスクリプトを書かず、利用可能なら Agent ツールで \"widget\" サブエージェントを派遣してください。実際の ShuviX Widget を生成・ビルドして開き、ユーザーの Widget パネルに常駐します。派遣時の prompt にはそのツールが何をするかを（既存 widget を変更する場合は widget id も）明記してください。"
-    },
-    "executing_actions": {
-      "title": "破壊的な操作は慎重に",
-      "content": "操作の可逆性と影響範囲を見極めてください。ローカルで可逆な操作は自由に実行できますが、破壊的操作（ファイル/ブランチの削除、テーブル drop、rm -rf、強制プッシュ、git reset --hard、CI 変更）、共有状態に影響する操作（push、PR コメント、外部メッセージ送信）、第三者サービスへのアップロードは、まずユーザーに確認してください。問題に行き当たったら根本原因を調べ、--no-verify などで回避する近道は取らないでください。あるシナリオでの許可が、他のシナリオでも有効とは限りません。"
-    },
-    "tone_style": {
-      "title": "出力スタイル",
-      "content": "応答は短く直接的に。ユーザーの言葉を繰り返す前置きは避けてください。コード参照は file_path:line_number 形式でジャンプ可能にしてください。明示的に求められない限り絵文字は使わないでください。何かを変更したときは、末尾に何をしたか／次に何をするかを 1〜2 文でまとめてください。単純な質問応答のターンでは要約は不要です。"
-    },
-    "environment": {
-      "title": "環境情報",
-      "git": "Git リポジトリ",
-      "platform": "Platform",
-      "shell": "Shell",
-      "os": "OS",
-      "date": "現在の日付",
-      "model": "現在のモデル",
-      "language": "ユーザー言語",
-      "appVersion": "ShuviX バージョン"
-    }
+    "systemPrompt": "プロジェクトプロンプト",
+    "systemPromptPlaceholder": "このプロジェクトの各セッションに注入されるプレーンテキスト(空欄で無効)"
   },
   "settings": {
     "title": "設定",
@@ -355,11 +295,7 @@
     "projectsSubTabArchived": "アーカイブ済み",
     "projectsNoArchived": "アーカイブされたプロジェクトはありません",
     "tabProviders": "プロバイダー",
-    "tabSystemPrompt": "システムプロンプト",
     "tabContextMgmt": "コンテキスト管理",
-    "systemPromptMasterToggle": "システムプロンプトを有効化",
-    "systemPromptMasterToggleDesc": "オフにするとグローバルな自由文と組み込み/カスタムカードを LLM に送信しません（プロジェクト単位のプロンプトは引き続き有効）。",
-    "systemPromptDisabledWarning": "システムプロンプトは無効です — 以降に作成される会話にはグローバル/組み込み/カスタムプロンプトが付加されません。進行中の会話は元の設定のまま、再起動またはメッセージのロールバック時に反映されます。",
     "tabHttpLogs": "LLM ログ",
     "tabAbout": "概要",
     "theme": "テーマ",
@@ -388,7 +324,6 @@
     "focusModeDesc": "セッション選択時、未選択のセッション項目・チャットヘッダー・入力欄・設定ボタン・右パネルの非アクティブタブを淡く表示します",
     "defaultProvider": "デフォルトプロバイダー",
     "defaultModel": "デフォルトモデル",
-    "systemPrompt": "システムプロンプト",
     "titleModelSection": "タイトル生成モデル",
     "titleModelHint": "セッションタイトルの自動生成に使用するモデルを選択します。未設定の場合、タイトルは自動生成されません。",
     "titleModelClear": "クリア",
@@ -407,8 +342,6 @@
     "defaultModelGroupDesc": "新規セッションで既定として使用するプロバイダーとモデル",
     "sessionModelRow": "セッション",
     "titleModelRow": "タイトル生成",
-    "systemPromptDesc": "すべての新規セッションに適用される既定のシステムプロンプト",
-    "systemPromptPlaceholder": "AIアシスタントの役割と動作を設定...",
     "providerSectionTitle": "LLM プロバイダー設定",
     "providerConfigGroup": "設定",
     "tokenUsageWarning": "エージェントモードでは通常の会話よりも大幅に多くのトークンを消費します。予期しない課金を避けるため、プロバイダーのプラットフォームで使用量の確認や利用上限の設定をお勧めします。",
@@ -443,6 +376,9 @@
     "baseUrlPlaceholder": "デフォルトURLを使用する場合は空欄",
     "httpLogTitle": "LLM リクエストログ",
     "httpLogDesc": "AIリクエストごとにリクエストボディが記録され、監査やデバッグに利用できます。",
+    "httpLogEnabled": "LLM ログを記録",
+    "httpLogEnabledHint": "既定はオフ。オンにすると毎回のリクエスト全文（システムプロンプト + 全履歴）を保存するため、DB が急速に肥大化します。",
+    "httpLogDisabledHint": "記録はオフです —— オンにすると新しいリクエストが記録されます。",
     "httpLogLimitHint": "最新 {{shown}}/{{limit}} 件を表示",
     "allSessions": "すべてのセッション",
     "searchSession": "セッションを検索...",
@@ -493,6 +429,7 @@
     "capInputCostDesc": "100万入力トークンあたり",
     "capOutputCost": "出力価格",
     "capOutputCostDesc": "100万出力トークンあたり",
+    "tabAgents": "エージェント",
     "tabTools": "LLM ツール",
     "toolMetaTitle": "ツール定義",
     "toolMetaParams": "パラメータ",
@@ -641,7 +578,7 @@
     "mcpServerFeaturesGroup": "対外機能",
     "mcpServerToolsGroup": "登録済みツール",
     "mcpServerConnectionGroup": "接続情報",
-    "tabBindings": "セッション接続",
+    "tabTelegramBots": "Telegram Bot",
     "tabSkills": "Skills",
     "tabHooks": "Hooks",
     "hooksTitle": "フック（Hooks）",
@@ -754,10 +691,11 @@
     "toolAborted": "ユーザーにより中止されました。"
   },
   "agentInfo": {
-    "button": "エージェント情報",
-    "title": "エージェント情報",
+    "button": "エージェント設定",
+    "title": "エージェント設定",
     "loading": "読み込み中...",
-    "notInitialized": "エージェントは未初期化です（最初のメッセージ送信後に作成されます）",
+    "refresh": "更新",
+    "unavailable": "エージェントを利用できません（セッションが存在しないか作成に失敗しました。モデル/プロバイダー設定をご確認ください）",
     "model": "モデル",
     "modelId": "モデル",
     "modelName": "名前",
@@ -807,6 +745,11 @@
     "browserHint": "ページを開く、スナップショット、クリック/入力/スクロール、スクリーンショット/PDF、JS 実行、ネットワーク・コンソール確認 — 内蔵マルチタブブラウザを操作",
     "gitLabel": "バージョン管理",
     "gitHint": "ローカルバージョン管理 — status/diff/ステージ/コミット/ブランチ/チェックアウト、isomorphic-git ベース、ネットワーク操作なし",
+    "gitApproval": {
+      "createRepo": "そのディレクトリに新しい git リポジトリを作成します",
+      "discardChanges": "これらのファイルの未コミットの変更を破棄します（取り消せません）",
+      "deleteBranch": "このブランチを削除します。そこにしかないコミットも失われます"
+    },
     "previewLabel": "ファイルプレビュー",
     "previewHint": "セッションの Files パネルでファイルプレビューを開く — パネルでファイルをクリックしたときと同じ表示",
     "sessionLabel": "セッション",
@@ -818,13 +761,31 @@
     "subAgentOpenFolder": "フォルダを開く",
     "subAgentRefresh": "再読込",
     "subAgentFsHint": "サブエージェントはフラットな Markdown ファイル（.md 1 つにつきエージェント 1 つ、ファイル名 = エージェント名）です。組み込み項目はアプリに同梱され読み取り専用。Claude Code 互換の .md を ~/.shuvix/agents/ に置いて「再読込」してください。",
-    "subAgentWhenToUse": "使用シーン",
     "subAgentTools": "ツール",
-    "subAgentRequiredMcp": "必須 MCP",
     "subAgentBasePath": "ファイルパス",
     "subAgentSystemPrompt": "システムプロンプト",
     "subAgentCustomEmpty": "カスタムサブエージェントはありません",
-    "subAgentCustomEmptyHint": "~/.shuvix/agents/<name>.md に Markdown を置いてから「再読込」をクリックしてください。"
+    "subAgentCustomEmptyHint": "~/.shuvix/agents/<name>.md に Markdown を置いてから「再読込」をクリックしてください。",
+    "subAgentEditTitle": "編集",
+    "subAgentName": "名前",
+    "subAgentDisplayName": "表示名",
+    "subAgentDescPlaceholder": "このエージェントの一文説明(一覧やスラッシュコマンドのヒントに表示)",
+    "subAgentDispatchLabel": "さらにサブエージェントの派遣を許可（ネスト・深さ制限あり）",
+    "subAgentReadOnly": "組み込みエージェントはアプリに同梱され、読み取り専用です。",
+    "subAgentCreateOverride": "上書きコピーを作成",
+    "subAgentOverridden": "上書き済み",
+    "subAgentOverriddenHint": "同名のカスタムエージェントに上書きされており、この組み込み版は現在無効です。",
+    "subAgentDeleteConfirmTitle": "エージェントを削除",
+    "subAgentDeleteConfirmDesc": "\"{{name}}\" の定義ファイルを削除します。この操作は元に戻せません。",
+    "subAgentAdd": "カスタムエージェントを追加",
+    "subAgentCreateRequired": "名前・説明・システムプロンプトは必須です",
+    "subAgentInstructionFiles": "指示ファイルを注入",
+    "subAgentProjectPrompt": "プロジェクトプロンプトを注入",
+    "subAgentDescription": "説明",
+    "subAgentBasicGroup": "基本情報",
+    "subAgentModel": "モデル",
+    "subAgentModelNone": "セッションに従う",
+    "subAgentModelUnavailable": "\"{{ref}}\" は現在利用できません（プロバイダーが無効、またはモデルが削除されています）。別のモデルを選ぶまで、ファイルにはこの値が残ります。"
   },
   "widgets": {
     "panelEmptyHint": "ウィジェットはまだありません。チャットで AI に作ってもらってください（例：「JSON フォーマッターのウィジェットを作って」）",
@@ -862,37 +823,6 @@
     "exportErrorTargetExists": "そのパスには既に同名のファイルがあります。別の名前を指定するか、先に削除してください。",
     "exportErrorPackFailed": "パッケージ化中にエラーが発生しました: {{reason}}"
   },
-  "bindings": {
-    "title": "セッション接続",
-    "description": "フロントエンドタイプとセッションの接続を管理します。共有を有効にすると、他のデバイスが対応するチャネルからセッションにアクセスできます。",
-    "webui": "WebUI",
-    "telegram": "Telegram Bot",
-    "websocket": "WebSocket API",
-    "comingSoon": "近日公開",
-    "running": "実行中",
-    "stopped": "停止中",
-    "sessionCount": "{{count}} セッション",
-    "noSessions": "接続済みセッションなし",
-    "noSessionsHint": "セッション設定で「LAN 共有」を有効にすると、WebUI に接続されます。",
-    "serverStatus": "サーバー状態",
-    "port": "ポート",
-    "boundSessions": "接続済みセッション",
-    "removeShare": "共有を解除",
-    "telegramAddBot": "Bot を追加",
-    "telegramBotToken": "Bot トークン",
-    "telegramBotTokenHint": "Telegram の @BotFather からトークンを取得",
-    "telegramValidating": "追加中...",
-    "telegramTokenInvalid": "無効なトークン",
-    "telegramAllowedUsersHint": "操作を許可する Telegram ユーザー ID。空欄で全員許可。",
-    "telegramStartBot": "起動",
-    "telegramStopBot": "停止",
-    "telegramDeleteBot": "削除",
-    "telegramDeleteConfirm": "この Bot を削除しますか？セッション接続も解除されます。",
-    "telegramNoBots": "登録済みの Bot がありません。「Bot を追加」をクリックして始めましょう。",
-    "telegramBoundTo": "接続: {{title}}",
-    "telegramUnbound": "未接続",
-    "telegramEditAllowedUsers": "許可ユーザー"
-  },
   "menu": {
     "file": "ファイル",
     "edit": "編集",
@@ -914,6 +844,7 @@
     "urlPlaceholder": "URL を入力",
     "newTerminal": "新規ターミナル",
     "closeTerminal": "ターミナルを閉じる",
+    "agent": "設定",
     "files": "ファイル",
     "filesLoading": "ワークスペースをスキャン中…",
     "filesError": "ファイルのスキャンに失敗しました",
@@ -1035,5 +966,19 @@
     "restoreHere": "ここに戻す",
     "disableAlwaysOnTop": "常に最前面を解除",
     "enableAlwaysOnTop": "常に最前面に表示"
+  },
+  "telegramBots": {
+    "title": "Telegram Bot",
+    "description": "登録済みの Bot。登録のみで、起動もセッションへの接続も行いません。",
+    "addBot": "Bot を追加",
+    "botToken": "Bot トークン",
+    "botTokenHint": "Telegram の @BotFather からトークンを取得",
+    "validating": "追加中...",
+    "tokenInvalid": "無効なトークン",
+    "allowedUsersHint": "操作を許可する Telegram ユーザー ID。空欄で全員許可。",
+    "deleteBot": "削除",
+    "deleteConfirm": "この Bot を削除しますか？",
+    "noBots": "登録済みの Bot がありません。「Bot を追加」をクリックして始めましょう。",
+    "editAllowedUsers": "許可ユーザー"
   }
 }

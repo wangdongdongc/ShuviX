@@ -1,11 +1,11 @@
 import { useRef, useEffect, useMemo } from 'react'
-import { Terminal, BookOpen, Bot } from 'lucide-react'
+import { Terminal, BookOpen } from 'lucide-react'
 
 interface SlashCommandItem {
   commandId: string
   name: string
   description: string
-  kind?: 'project' | 'skill' | 'agent'
+  kind?: 'project' | 'skill'
 }
 
 interface SlashCommandPopoverProps {
@@ -67,8 +67,6 @@ export function SlashCommandPopover({
         >
           {cmd.kind === 'skill' ? (
             <BookOpen size={12} className="flex-shrink-0 text-emerald-500" />
-          ) : cmd.kind === 'agent' ? (
-            <Bot size={12} className="flex-shrink-0 text-sky-500" />
           ) : (
             <Terminal size={12} className="flex-shrink-0 text-text-tertiary" />
           )}

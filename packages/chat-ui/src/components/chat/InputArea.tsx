@@ -1,9 +1,8 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, Mic, X, Archive } from 'lucide-react'
+import { Send, Square, Mic, X } from 'lucide-react'
 import { TokenChip } from './TokenChip'
-import { AgentInfoDialog } from './AgentInfoDialog'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -11,11 +10,13 @@ import {
   rebuildDraftFromContent
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { useChatStore, selectIsStreaming, selectCanEdit } from '../../stores/chatStore'
+import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
+import { useChatStore, selectIsStreaming, selectActivePendingInput } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { ModelPicker } from './ModelPicker'
 import { ToolPicker } from './ToolPicker'
+import { AgentProfilePicker } from './AgentProfilePicker'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
@@ -39,7 +40,7 @@ export interface InputAreaProps {
   notebook?: boolean
   /** 常规流内嵌模式（欢迎页）：外观同悬浮卡片，但随文档流布局、不绝对定位贴底 */
   inline?: boolean
-  /** 卡片上方的浮层插槽（如待处理输入面板）：渲染进与卡片同宽的 relative 容器，bottom-full 即悬浮卡片上方 */
+  /** 卡片顶部插槽（待处理输入面板）：渲染进卡片内部第一格，与输入区共用同一张卡片的边框与圆角 */
   accessory?: React.ReactNode
   /** 输入区整体（卡片 + 外边距）高度变化回调，卸载时回调 0；宿主用于给消息列表留出底部空白 */
   onHeightChange?: (height: number) => void
@@ -49,8 +50,9 @@ export interface InputAreaProps {
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
  *
- * 注:不再有"pending action 时输入框走 override"的联动。
- * 反馈给 AI 的入口由 PendingInputsPanel 中的"其它"输入框承担。
+ * 有待处理输入请求（审批/选择/SSH）时，本输入框同时就是「其它」反馈入口：
+ * 卡片顶部长出 PendingInputsPanel，描边转语义色，回车/发送投递 `kind: 'other'` 给选中的那条请求
+ * （后端工具收到 other 时不执行副作用，把文本作为 tool result 返回 AI），而不是发普通消息或 steer。
  */
 export function InputArea({
   notebook,
@@ -72,44 +74,18 @@ export function InputArea({
     slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
-  // 压缩进行中 → 隐藏入口防重复触发。
-  // 迁移到 harness 后压缩不再是一个子代理（没有 sub_session 事件可观察），
-  // 只是一次同步的 harness.compact() 调用，故用本地状态跟踪。
-  const [isCompacting, setIsCompacting] = useState(false)
-  const canEditSession = useChatStore(selectCanEdit)
-  // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具/压缩等）
+  // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
+  const activePendingInput = useChatStore(selectActivePendingInput)
+  const pendingTone: 'warning' | 'accent' | null = !activePendingInput
+    ? null
+    : activePendingInput.kind === 'approval'
+      ? 'warning'
+      : 'accent'
+  // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具等）
   const hasHost = getHostApi() !== null
-  const canEdit = canEditSession && hasHost
-  const assistantMsgCount = useChatStore(
-    useCallback(
-      (s) => s.messages.filter((m) => m.role === 'assistant' && m.type === 'text').length,
-      []
-    )
-  )
+  const canEdit = hasHost
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Agent 信息按钮 —— 仅当运行时 Agent 已创建（首次发送消息后）才显示。
-  // 状态按 sessionId 记录，切会话后自然失配 → 按钮/弹窗自动消失，无需同步重置；
-  // isStreaming 翻转时重查，覆盖「本会话首条消息刚创建 Agent」的时机
-  const [agentLiveSession, setAgentLiveSession] = useState<string | null>(null)
-  const [agentInfoSession, setAgentInfoSession] = useState<string | null>(null)
-  const agentLive = agentLiveSession !== null && agentLiveSession === activeSessionId
-  const showAgentInfo = agentInfoSession !== null && agentInfoSession === activeSessionId
-  useEffect(() => {
-    if (!hasHost || !activeSessionId || isNotebook) return
-    let alive = true
-    getHostApi()
-      ?.agent.getInfo(activeSessionId)
-      .then((info) => {
-        if (alive) setAgentLiveSession(info !== null ? activeSessionId : null)
-      })
-      .catch(() => {
-        if (alive) setAgentLiveSession(null)
-      })
-    return () => {
-      alive = false
-    }
-  }, [hasHost, activeSessionId, isNotebook, isStreaming])
   const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
     useImageUpload(modelSupportsVision)
 
@@ -137,8 +113,8 @@ export function InputArea({
     name: string
     description: string
     template: string
-    /** 命令来源；'agent' 时发送走 agent.dispatchPrompt 直接派发子智能体 */
-    kind?: 'project' | 'skill' | 'agent'
+    /** 命令来源（'skill' 走 skill 徽章渲染） */
+    kind?: 'project' | 'skill'
   } | null>(null)
   const [chipWidth, setChipWidth] = useState(0)
   const chipRef = useCallback((node: HTMLSpanElement | null) => {
@@ -323,6 +299,13 @@ export function InputArea({
     if (!host) return null
     const session = await host.session.create()
     const sid = session.id
+    // 欢迎页先选了档案：会话此刻才存在，把选择落到它身上（连带档案声明的模型/工具种子）
+    const pending = useChatStore.getState().pendingAgentProfile
+    if (pending) {
+      const switched = await host.session.updateAgentProfile({ id: sid, name: pending })
+      useChatStore.getState().setPendingAgentProfile(null)
+      if (switched.success && switched.applied) applyProfileSeed(switched.applied)
+    }
     await getSessionChannelApi().agent.init({ sessionId: sid })
     const sessions = await host.session.list()
     const s = useChatStore.getState()
@@ -331,22 +314,79 @@ export function InputArea({
     return sid
   }
 
-  /** 识别「agent 派发」输入：芯片为 agent 命令，或明文 "/name 参数" 命中 kind='agent' 的命令 */
-  const resolveAgentDispatchTarget = (
-    raw: string
-  ): { agentName: string; prompt: string } | null => {
-    if (slashChip) {
-      return slashChip.kind === 'agent' ? { agentName: slashChip.commandId, prompt: raw } : null
-    }
-    if (!raw.startsWith('/')) return null
-    const spaceIdx = raw.indexOf(' ')
-    const cmdId = spaceIdx === -1 ? raw.slice(1) : raw.slice(1, spaceIdx)
-    const cmd = slashCommands.find((c) => c.commandId === cmdId && c.kind === 'agent')
-    if (!cmd) return null
-    return {
-      agentName: cmd.commandId,
-      prompt: spaceIdx === -1 ? '' : raw.slice(spaceIdx + 1).trim()
-    }
+  /**
+   * 应用切档案带来的配置种子：后端已把模型 / 工具勾选写进会话树，这里只同步前端显示 ——
+   * 不能回调 setModel / setEnabledTools，那会在树上多写一条重复的 change entry。
+   * 模型部分的落点与 ModelPicker 选中模型后的那套一致。
+   */
+  const applyProfileSeed = (applied: {
+    model?: { provider: string; model: string; capabilities: ModelCapabilities }
+    tools: string[]
+  }): void => {
+    const store = useChatStore.getState()
+    store.setEnabledTools(applied.tools)
+    if (!applied.model) return
+    chatHost.models.setActiveProvider(applied.model.provider)
+    chatHost.models.setActiveModel(applied.model.model)
+    store.setModelSupportsVision(!!applied.model.capabilities.vision)
+    store.setMaxContextTokens(applied.model.capabilities.maxInputTokens || 0)
+    store.setUsedContextTokens(null)
+  }
+
+  /** 清空输入态（正文 / 图片 / 命令芯片 / @ 引用 / 粘贴芯片），发送与纯切档案共用 */
+  const resetComposer = (): void => {
+    const store = useChatStore.getState()
+    store.setInputText('')
+    store.clearPendingImages()
+    setSlashChip(null)
+    at.reset()
+    paste.reset()
+  }
+
+  /** 把一条用户消息发给主会话 Agent：清空输入态 → 置流式态 → agent.prompt */
+  const sendToMainAgent = async (
+    sid: string,
+    outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
+    images: typeof pendingImages
+  ): Promise<void> => {
+    resetComposer()
+    const store = useChatStore.getState()
+    store.setIsStreaming(sid, true)
+    store.clearStreamingContent(sid)
+    // 后端直接使用附带的图片 + 内联 Token，不再重复查询
+    await getSessionChannelApi().agent.prompt({
+      sessionId: sid,
+      text: outgoing.contentText,
+      images:
+        images.length > 0
+          ? images.map((img) => ({
+              type: 'image' as const,
+              data: img.data,
+              mimeType: img.mimeType
+            }))
+          : undefined,
+      inlineTokens: outgoing.inlineTokens
+    })
+  }
+
+  /**
+   * 有待处理请求时：正文作为「其它」反馈投给选中的那条。
+   * 图片不随 tool result 回传，故只清文本相关输入态，留着图片给下一条普通消息。
+   */
+  const handleSubmitOther = async (): Promise<void> => {
+    if (!activePendingInput || !activeSessionId) return
+    // 该通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文
+    const text = paste.resolveInline(inputText.trim())
+    if (!text) return
+    useChatStore.getState().setInputText('')
+    at.reset()
+    paste.reset()
+    await getSessionChannelApi().agent.respondToInput({
+      sessionId: activeSessionId,
+      requestId: activePendingInput.id,
+      response: { kind: 'other', text }
+    })
+    // 后端 resolve 后广播 input_request_resolved → store 自动移除该 pending
   }
 
   /** 发送消息（支持图片） */
@@ -354,33 +394,14 @@ export function InputArea({
     // 录音中则先停止录制
     if (voice.isRecording) voice.stopRecording()
 
-    const rawText = inputText.trim()
-    const images = pendingImages
-
-    // ─── kind='agent' 的斜杠命令：不进主会话消息流，直接派发具名子智能体（进右侧 Sub-agent 面板）───
-    // 笔记本会话同样适用（显式点名 agent 优先于默认的 notebook-task）；不置主会话流式态，
-    // 面板由 sub_session_register 事件自动唤出。与笔记本发送一致：附带的图片不随派发发送。
-    const agentTarget = resolveAgentDispatchTarget(rawText)
-    if (agentTarget) {
-      if (isStreaming || !agentTarget.prompt) return
-      const sid = activeSessionId ?? (await createSessionForSend())
-      if (!sid) return
-      // @ 引用就地展开为明文；粘贴芯片保留 {{token}} 标记（面板渲染胶囊，后端解析真实文本）
-      const pasteOut = paste.buildOutgoing(at.resolveInline(agentTarget.prompt))
-      const store = useChatStore.getState()
-      store.setInputText('')
-      store.clearPendingImages()
-      setSlashChip(null)
-      at.reset()
-      paste.reset()
-      await getSessionChannelApi().agent.dispatchPrompt({
-        sessionId: sid,
-        agentName: agentTarget.agentName,
-        text: pasteOut.contentText,
-        inlineTokens: pasteOut.inlineTokens
-      })
+    // 待处理请求优先于一切发送路径（普通消息 / steer / 档案切换）：Agent 正等这条输入
+    if (activePendingInput) {
+      await handleSubmitOther()
       return
     }
+
+    const rawText = inputText.trim()
+    const images = pendingImages
 
     // 笔记本模式：每次发送开启独立子智能体（fire-and-forget）。子代理上下文仅注入笔记本路径 + read 提示，
     // 正文由其自行读取。不走主会话流式态（笔记本无主 Agent）；进展看右侧子智能体面板。模型/工具由会话配置决定。
@@ -414,36 +435,17 @@ export function InputArea({
 
     // ─── 前端斜杠命令展开 + Token 构造（与笔记本会话共用 buildSlashOutgoing） ───
     const outgoing = buildSlashOutgoing(rawText, sid)
-    const inlineTokens = outgoing.inlineTokens
-    // 纯图片消息（无文本无命令）回退占位文案
-    const contentText = inlineTokens
-      ? outgoing.contentText
-      : outgoing.contentText || t('input.imageOnly')
-
-    const store = useChatStore.getState()
-    store.setInputText('')
-    store.clearPendingImages()
-    setSlashChip(null)
-    at.reset()
-    paste.reset()
-    store.setIsStreaming(sid, true)
-    store.clearStreamingContent(sid)
-
-    // 发送给 Agent（附带图片 + 内联 Token），后端直接使用不再重复查询
-    const agentImages =
-      images.length > 0
-        ? images.map((img) => ({
-            type: 'image' as const,
-            data: img.data,
-            mimeType: img.mimeType
-          }))
-        : undefined
-    await getSessionChannelApi().agent.prompt({
-      sessionId: sid,
-      text: contentText,
-      images: agentImages,
-      inlineTokens
-    })
+    await sendToMainAgent(
+      sid,
+      {
+        // 纯图片消息（无文本无命令）回退占位文案
+        contentText: outgoing.inlineTokens
+          ? outgoing.contentText
+          : outgoing.contentText || t('input.imageOnly'),
+        inlineTokens: outgoing.inlineTokens
+      },
+      images
+    )
   }
 
   /** 中止生成（后端统一处理落库 + Agent 上下文同步） */
@@ -563,8 +565,8 @@ export function InputArea({
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      // streaming 时发送 steer 消息
-      if (isStreaming) {
+      // streaming 时发送 steer 消息（有待处理请求时除外 —— handleSend 会路由到「其它」反馈）
+      if (isStreaming && !activePendingInput) {
         if (inputText.trim()) handleSteer()
         return
       }
@@ -607,6 +609,11 @@ export function InputArea({
   // 统一布局：全部收纳进卡片底部同一行（普通会话另在右侧追加上下文用量 / Agent 信息 / 压缩入口）。
   const pickers = (
     <div className="flex-shrink-0 flex items-center gap-1.5">
+      {/* 档案选择器居首：档案决定系统提示词与内置工具白名单，是三者里最上位的一层。
+          笔记本会话没有根 Agent（每次发送都是一次性子代理），没有可切的会话档案 */}
+      {canEdit && !isNotebook && (
+        <AgentProfilePicker disabled={isStreaming} onApplied={applyProfileSeed} />
+      )}
       <ModelPicker readonly={!canEdit} />
       {canEdit && <ToolPicker />}
     </div>
@@ -642,15 +649,18 @@ export function InputArea({
 
   const sendStopButtons = isStreaming ? (
     <div className="flex items-center gap-1">
+      {/* 有待处理请求 → 投「其它」反馈（按 kind 取语义色）；否则是 steer */}
       <button
-        onClick={handleSteer}
+        onClick={activePendingInput ? handleSubmitOther : handleSteer}
         disabled={!inputText.trim()}
         className={`p-1.5 rounded-lg transition-colors ${
-          inputText.trim()
-            ? 'bg-warning text-white hover:bg-warning/80'
-            : 'text-text-tertiary cursor-not-allowed'
+          !inputText.trim()
+            ? 'text-text-tertiary cursor-not-allowed'
+            : pendingTone === 'accent'
+              ? 'bg-accent text-white hover:bg-accent-hover'
+              : 'bg-warning text-white hover:bg-warning/80'
         }`}
-        title={t('input.steer')}
+        title={activePendingInput ? t('pendingInputs.submitOther') : t('input.steer')}
       >
         <Send size={14} />
       </button>
@@ -696,10 +706,20 @@ export function InputArea({
         ref={wrapRef}
         className={`relative max-w-3xl mx-auto p-2 ${inline ? '' : 'pointer-events-auto'}`}
       >
-        {/* 浮层插槽（如待处理输入面板）：bottom-full 锚定本容器 → 悬浮于卡片上方 */}
-        {accessory}
-        {/* 卡片本体：磨砂模糊背景（悬浮时透出并虚化正文）+ 柔和阴影 */}
-        <div className="border border-border-secondary/40 rounded-2xl bg-bg-primary/80 backdrop-blur-md shadow-md">
+        {/* 卡片本体：磨砂模糊背景（悬浮时透出并虚化正文）+ 柔和阴影。
+            有待处理请求时整张卡片换语义描边 + 一圈极淡外环 —— 「你要打字的这个框在问你话」 */}
+        <div
+          className={`border rounded-2xl bg-bg-primary/80 backdrop-blur-md shadow-md transition-colors ${
+            pendingTone === 'warning'
+              ? 'border-warning/45 ring-[3px] ring-warning/10'
+              : pendingTone === 'accent'
+                ? 'border-accent/45 ring-[3px] ring-accent/10'
+                : 'border-border-secondary/40'
+          }`}
+        >
+          {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
+          {accessory}
+
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
@@ -782,13 +802,15 @@ export function InputArea({
                 if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
               }}
               placeholder={
-                isStreaming
-                  ? t('input.placeholderSteer')
-                  : slashChip
-                    ? t('input.placeholder')
-                    : modelSupportsVision
-                      ? t('input.placeholderVision')
-                      : t('input.placeholder')
+                activePendingInput
+                  ? t('pendingInputs.otherPlaceholder')
+                  : isStreaming
+                    ? t('input.placeholderSteer')
+                    : slashChip
+                      ? t('input.placeholder')
+                      : modelSupportsVision
+                        ? t('input.placeholderVision')
+                        : t('input.placeholder')
               }
               rows={1}
               style={{
@@ -814,19 +836,20 @@ export function InputArea({
             {/* 弹性空白 → 把右侧按钮簇推到最右 */}
             <span className="flex-1" />
 
-            {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字，点击查看 Agent 信息。
-                合并原「文本计数 + Agent 信息按钮」，Agent 未初始化时仅展示不可点 */}
+            {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字，
+                点击揭示会话面板的 Agent 页（信号交宿主外壳消费；Agent 未创建时该页会就地建出来）。
+                渠道端（无 HostApi，无会话面板）仅展示不可点 */}
             {!isNotebook && (maxContextTokens > 0 || usedContextTokens !== null) && (
               <button
                 type="button"
                 onClick={
-                  agentLive && activeSessionId
-                    ? () => setAgentInfoSession(activeSessionId)
+                  hasHost && activeSessionId
+                    ? () => useChatStore.getState().requestAgentInfoReveal()
                     : undefined
                 }
                 aria-label={ctxTooltip}
                 className={`relative group/token p-1 rounded flex items-center transition-colors ${
-                  agentLive ? 'hover:bg-bg-hover' : 'cursor-default'
+                  hasHost ? 'hover:bg-bg-hover' : 'cursor-default'
                 }`}
               >
                 <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
@@ -862,7 +885,7 @@ export function InputArea({
                     {ctxTooltip}
                     {ctxFraction !== null ? ` · ${Math.round(ctxFraction * 100)}%` : ''}
                   </div>
-                  {agentLive && (
+                  {hasHost && (
                     <div className="mt-0.5 text-[10px] text-text-tertiary">
                       {t('agentInfo.button')}
                     </div>
@@ -871,38 +894,10 @@ export function InputArea({
               </button>
             )}
 
-            {/* 压缩入口（接近上限时与环同步转警示色，提示「该压缩了」）——
-                直接调 harness 内建压缩：保留最近上下文，更早的历史换成结构化摘要。
-                完成后后端广播 messages_reloaded，列表自动重拉。 */}
-            {!isNotebook && hasHost && assistantMsgCount >= 1 && !isStreaming && !isCompacting && (
-              <button
-                onClick={() => {
-                  if (!activeSessionId) return
-                  setIsCompacting(true)
-                  void getSessionChannelApi()
-                    .agent.compact(activeSessionId)
-                    .finally(() => setIsCompacting(false))
-                }}
-                className={`p-1 rounded transition-colors ${
-                  ctxNearLimit
-                    ? 'text-warning hover:text-warning hover:bg-bg-hover'
-                    : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover'
-                }`}
-                title={t('compact.button')}
-              >
-                <Archive size={14} />
-              </button>
-            )}
-
             {micButton}
             {sendStopButtons}
           </div>
         </div>
-
-        {/* Agent 信息弹窗 */}
-        {showAgentInfo && activeSessionId && (
-          <AgentInfoDialog sessionId={activeSessionId} onClose={() => setAgentInfoSession(null)} />
-        )}
       </div>
     </div>
   )

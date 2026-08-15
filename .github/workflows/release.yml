@@ -65,7 +65,7 @@ jobs:
 
       - name: Build & Sign
         working-directory: apps/desktop
-        run: npx electron-vite build && npm run build:webui && npx electron-builder --${{ matrix.platform }} --publish never
+        run: npx electron-vite build && npx electron-builder --${{ matrix.platform }} --publish never
         env:
           # CSC_LINK 是 electron-builder 通用签名证书变量，不区分平台。
           # 只在 mac runner 注入 Apple Developer ID 证书；Windows 必须留空，否则
@@ -230,7 +230,6 @@ jobs:
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
-              npm run build:webui
               npx electron-builder --linux --publish never
             '
           # Docker 内创建的文件属主为 root，修正权限以便后续 upload

@@ -4,17 +4,18 @@
  * LLM 只看到一个名为 `Agent` 的工具，经 `agent` 参数以统一 ref 选择目标：
  *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
  *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
- *     （frontmatter: name/whenToUse/tools + 正文为 system prompt）——支持项目内
+ *     （frontmatter: name/description/shuvix-tools + 正文为 system prompt）——支持项目内
  *     检入的定义与运行时动态生成的定义，无需注册表刷新；
  *   - 省略 → 默认 agent（宿主提供 defaultAgentType 时）。
- * 可用具名类型动态嵌入 description。执行时校验 ref + requiredMcp，委托
- * SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/MCP 判定/模型配置经注入，宿主无关。
+ * description 为静态文案（纯 md 驱动：不罗列可用类型——要用具名 agent 由用户在系统
+ * 提示词/指令文件里自行引导；未知名的错误里才回报可用名列表）。执行时校验 ref，
+ * 委托 SubAgentManager.runTask，返回最终文本结果。注册表/文件解析/模型配置经注入，宿主无关。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { BaseTool } from '../tools/baseTool'
 import type {
-  AgentDefinition,
+  AgentProfile,
   SubAgentModelConfig,
   SubAgentRegistry,
   InProcessAgentType
@@ -26,8 +27,9 @@ export const AgentParamsSchema = Type.Object({
   agent: Type.Optional(
     Type.String({
       description:
-        'Which agent to dispatch: a named agent type listed in this tool description, ' +
+        'Which agent to dispatch: the name of a configured agent definition, ' +
         'or a path to an agent definition file (markdown with YAML frontmatter). ' +
+        'Only use names your instructions or the user provide — do not guess. ' +
         'Optional when a default agent is offered — omit to use the default.'
     })
   ),
@@ -37,64 +39,44 @@ export const AgentParamsSchema = Type.Object({
   })
 })
 
-const MAX_WHEN_TO_USE_CHARS = 240
-
 /** ref 判别：含路径分隔符或 .md 后缀 → 文件路径形态 */
 export function isAgentFileRef(ref: string): boolean {
   return ref.includes('/') || ref.includes('\\') || ref.toLowerCase().endsWith('.md')
 }
 
-/** AgentDefinition → 派发运行配置的纯投影（Agent 工具与用户直发派发共用同一口径） */
-export function toInProcessAgentType(def: AgentDefinition): InProcessAgentType {
+/** AgentProfile → 运行投影的纯口径（Agent 工具/用户直发/根会话创建共用） */
+export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
   return {
     name: def.name,
     displayName: def.displayName,
-    description: def.whenToUse,
+    description: def.description,
     tools: [...def.tools],
-    systemPrompt: def.systemPrompt
+    systemPrompt: def.systemPrompt,
+    model: def.model,
+    instructionFiles: def.instructionFiles,
+    projectPrompt: def.projectPrompt
   }
 }
 
-function formatAgentLine(def: AgentDefinition): string {
-  const firstSentence = def.whenToUse.split(/(?<=[.。!?！？])\s+/)[0] ?? def.whenToUse
-  const trimmed =
-    firstSentence.length > MAX_WHEN_TO_USE_CHARS
-      ? firstSentence.slice(0, MAX_WHEN_TO_USE_CHARS - 1) + '…'
-      : firstSentence
-  const toolsHint = def.tools.length === 0 ? 'none' : def.tools.join(', ')
-  return `- ${def.name}: ${trimmed} (Tools: ${toolsHint})`
-}
-
-export function buildDescription(
-  registry: SubAgentRegistry,
-  defaultAgentType?: InProcessAgentType,
-  supportsFileRefs?: boolean
-): string {
-  const defs = registry.listEnabled()
-
-  // 具名定义才进「可选类型」列表；默认 agent 不具名展示（否则模型会照抄名字），
-  // 仅在下方说明里提示「可省略 agent 走默认」。
-  let typesBlock: string
-  if (defs.length > 0) {
-    typesBlock =
-      `Available agent types and the tools they have access to:\n${defs.map(formatAgentLine).join('\n')}\n\n` +
-      (defaultAgentType
-        ? 'Set `agent` to one of the types above, or omit it to dispatch a default agent that inherits your current tools.'
-        : 'Set `agent` to one of the types above.')
-  } else if (defaultAgentType) {
-    // 无具名类型：省略 agent 即可，不要提任何类型名
-    typesBlock =
-      'Omit `agent`: the dispatched agent inherits your current tools to complete the task autonomously.'
-  } else {
-    typesBlock = '(No agent types are currently available.)'
-  }
+/**
+ * 静态工具描述（纯 md 驱动）：不罗列可用 agent 类型 —— 具名派发由用户在系统提示词/
+ * 指令文件中自行引导，模型不该猜名字；未知名在执行错误里回报可用名列表。
+ */
+export function buildDescription(hasDefaultAgent: boolean, supportsFileRefs?: boolean): string {
+  const typesBlock =
+    'Named agent types are defined by the host configuration (built-in and user agent definition files); ' +
+    'they are not enumerated here. Set `agent` to a name only when your instructions or the user provide one — ' +
+    'an unknown name fails with the list of valid names.' +
+    (hasDefaultAgent
+      ? ' Omit `agent` to dispatch a default agent that inherits your current tools.'
+      : '')
 
   const fileRefNote = supportsFileRefs
     ? '\n- `agent` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
-      '(`name`, `whenToUse` or `description`, `tools: [...]`) and the body as its system prompt. ' +
+      '(`name`, `description`, and `shuvix-tools` as a comma-separated list) with the body as its system prompt. ' +
       'Relative paths resolve against the working directory; the file must live inside the working directory or the global agents directory. ' +
       'You may write such a file first and dispatch it immediately. ' +
-      'Include `Agent` in its `tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
+      'Include `Agent` in its `shuvix-tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
     : ''
 
   return `Launch a new agent to handle complex, multi-step tasks autonomously.
@@ -113,12 +95,14 @@ Usage notes:
 export interface DispatchAgentToolDeps {
   registry: SubAgentRegistry
   manager: SubAgentManager
-  modelConfig: SubAgentModelConfig
+  /**
+   * 派生 agent 的模型配置。传 getter 则在每次派发时求值 ——
+   * 跟随会话当前模型/思考档位（静态值会在会话中途 setModel 后陈旧）。
+   */
+  modelConfig: SubAgentModelConfig | (() => SubAgentModelConfig)
   parentSessionId: string
   /** abort 时抛出的错误信息（与平台 TOOL_ABORTED 对齐） */
   abortError: string
-  /** MCP server 连接判定（校验 requiredMcp）；缺省视为"无 MCP 依赖检查" */
-  isMcpConnected?: (name: string) => boolean
   /** 工具显示名（缺省 'Agent'） */
   label?: string
   /**
@@ -130,9 +114,7 @@ export interface DispatchAgentToolDeps {
    * 路径 ref 解析器（可选；桌面注入，浏览器宿主省略 → 路径形态返回明确错误）。
    * 解析失败应 throw 带原因的 Error；文件不存在/无法解析返回 undefined。
    */
-  resolveAgentFile?: (
-    path: string
-  ) => AgentDefinition | undefined | Promise<AgentDefinition | undefined>
+  resolveAgentFile?: (path: string) => AgentProfile | undefined | Promise<AgentProfile | undefined>
 }
 
 function errorResult(text: string): AgentToolResult<undefined> {
@@ -151,11 +133,7 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   }
 
   get description(): string {
-    return buildDescription(
-      this.deps.registry,
-      this.deps.defaultAgentType,
-      !!this.deps.resolveAgentFile
-    )
+    return buildDescription(!!this.deps.defaultAgentType, !!this.deps.resolveAgentFile)
   }
 
   async preExecute(): Promise<void> {
@@ -176,11 +154,11 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     const description = params.description || ''
     const ref = (params.agent || '').trim()
     const prompt = params.prompt || ''
-    const names = (): string[] => this.deps.registry.listEnabled().map((a) => a.name)
+    const names = (): string[] => this.deps.registry.list().map((a) => a.name)
     const hasDefault = !!this.deps.defaultAgentType
 
     // ── ref 解析：路径 → resolveAgentFile；具名 → 注册表；省略 → 默认 agent ──
-    let def: AgentDefinition | undefined
+    let def: AgentProfile | undefined
     if (ref && isAgentFileRef(ref)) {
       if (!this.deps.resolveAgentFile) {
         return errorResult(
@@ -195,11 +173,11 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
       }
       if (!def) {
         return errorResult(
-          `Agent definition file not found or invalid: "${ref}". Expected a markdown file with YAML frontmatter (name/whenToUse/tools) and the system prompt as body.`
+          `Agent definition file not found or invalid: "${ref}". Expected a markdown file with YAML frontmatter (name/description/shuvix-tools) and the system prompt as body.`
         )
       }
     } else if (ref) {
-      def = this.deps.registry.getEnabled(ref)
+      def = this.deps.registry.get(ref)
       if (!def) {
         const tail = hasDefault ? ' (or omit `agent` to use the default)' : ''
         return errorResult(
@@ -210,15 +188,6 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
 
     let agentType: InProcessAgentType
     if (def) {
-      const isConnected = this.deps.isMcpConnected ?? (() => true)
-      const missingMcp = (def.requiredMcp ?? []).filter((n) => !isConnected(n))
-      if (missingMcp.length > 0) {
-        const list = missingMcp.map((n) => `"${n}"`).join(', ')
-        return errorResult(
-          `Cannot run agent "${def.name}": required MCP server(s) not connected: ${list}. ` +
-            `Configure the missing server(s) in MCP settings, then retry.`
-        )
-      }
       agentType = toInProcessAgentType(def)
     } else if (this.deps.defaultAgentType) {
       // 省略 ref：用注入的默认 agent（继承调用方工具/系统提示，由宿主装配）
@@ -228,13 +197,18 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     }
 
     try {
+      // getter 形态在派发时求值：跟随会话当前模型/思考档位
+      const modelConfig =
+        typeof this.deps.modelConfig === 'function'
+          ? this.deps.modelConfig()
+          : this.deps.modelConfig
       const { result } = await this.deps.manager.runTask({
         parentSessionId: this.deps.parentSessionId,
         parentToolCallId: toolCallId,
         agentType,
         prompt,
         description,
-        modelConfig: this.deps.modelConfig,
+        modelConfig,
         parentAbortSignal: signal
       })
       return { content: [{ type: 'text' as const, text: result }], details: undefined }

@@ -30,11 +30,7 @@ import {
   type TabCdpSession
 } from '@shuvix/agent-runtime'
 import { chatFrontendRegistry } from '../../frontend/core'
-import {
-  isPathWithinWorkspace,
-  isPathWithinReadwriteReferenceDirs,
-  resolveProjectConfig
-} from '../toolContext'
+import { isPathWithinWorkspace, resolveProjectConfig } from '../toolContext'
 import { getToolResultsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 import { browserCdpManager } from './browserCdpService'
@@ -270,9 +266,8 @@ class DesktopBrowserBackend implements BrowserBackend {
       ? p.outputPath
       : resolve(config.workingDirectory, p.outputPath)
     const inWorkspace = isPathWithinWorkspace(absolutePath, config.workingDirectory)
-    const inReadwriteRef = isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)
-    if (!inWorkspace && !inReadwriteRef) {
-      const error = `outputPath "${absolutePath}" is outside the session sandbox (workingDirectory + readwrite referenceDirs).`
+    if (!inWorkspace) {
+      const error = `outputPath "${absolutePath}" is outside the session working directory.`
       return { text: `Error: ${error}`, details: { error } }
     }
 

@@ -9,7 +9,6 @@ import { registerMcpHandlers } from './mcpHandlers'
 import { registerSkillHandlers } from './skillHandlers'
 import { registerSshCredentialHandlers } from './sshCredentialHandlers'
 import { registerDbCredentialHandlers } from './dbCredentialHandlers'
-import { registerWebUIHandlers } from './webUIHandlers'
 import { registerTelegramHandlers } from './telegramHandlers'
 import { registerCommandHandlers } from './commandHandlers'
 import { registerSttHandlers } from './sttHandlers'
@@ -45,7 +44,6 @@ export function registerIpcHandlers(): void {
   registerSkillHandlers()
   registerSshCredentialHandlers()
   registerDbCredentialHandlers()
-  registerWebUIHandlers()
   registerTelegramHandlers()
   registerCommandHandlers()
   registerSttHandlers()

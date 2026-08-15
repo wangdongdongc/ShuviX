@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Conversation, useChatStore } from '@shuvix/chat-ui'
+import { useSessionPanelTool } from '../panel/SessionPanel'
 import { ChatHeader, type ChatHeaderCaps } from './ChatHeader'
 
 /**
@@ -87,6 +88,10 @@ export function ChatBody({
 
   // 会话工具栏 / 会话侧栏只在「有活跃会话且正文未被替换」时出现（欢迎页 / 悬浮占位不渲染）
   const sessionUiVisible = !!activeSessionId && !contentOverride
+  // 面板展开时对话列滚动条紧贴面板左缘 → 给对话列挂 chat-scroll-inset，把滚动条轨道
+  // 按卡片的上下留白内缩（见 base.css），避免滑块滚到两端探出卡片圆角
+  const panelOpen = useSessionPanelTool(activeSessionId) !== null
+  const scrollInset = sessionUiVisible && !!sessionPanel && panelOpen
 
   return (
     <div className={className}>
@@ -100,7 +105,7 @@ export function ChatBody({
       {/* 正文行：左为正文列，右为可选会话面板（悬浮卡片）列 —— 顶栏/横幅保持整宽横贯。
           两列均不设 relative：压缩遮罩 absolute inset-0 仍锚定根容器、罩住整个正文外壳 */}
       <div className="flex flex-1 min-h-0">
-        <div className="flex flex-col flex-1 min-w-0">
+        <div className={`flex flex-col flex-1 min-w-0${scrollInset ? ' chat-scroll-inset' : ''}`}>
           {sessionUiVisible && sessionToolbar && (
             // 零高锚点：不占布局空间，工具栏悬浮于其下方正文的右上角
             <div className="relative z-30 h-0 flex-shrink-0">

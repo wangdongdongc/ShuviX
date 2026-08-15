@@ -69,9 +69,10 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoApprove?: boolean
   allowList?: string[]
-  telegramBotId?: string
   /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
   instructionFile?: string | null
+  /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
+  agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
 }
@@ -189,6 +190,12 @@ interface ChatState {
    */
   subAgentRevealRequest: { subSessionId: string; nonce: number } | null
   /**
+   * 请求显示「Agent 信息」的信号（单调 nonce）—— 由输入区的上下文用量环点击触发。
+   * 宿主（app-shell 的 useSessionPanelReveal）消费后展开会话面板并切到 Agent 页；
+   * 「哪里显示」属宿主外壳，故此处只发信号（与 subAgentRevealRequest 同款）。
+   */
+  agentInfoRevealRequest: { nonce: number } | null
+  /**
    * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
    * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
    * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
@@ -199,6 +206,11 @@ interface ChatState {
     inlineTokens?: Record<string, InlineToken>
     nonce: number
   } | null
+  /**
+   * 欢迎页（还没有会话）选好的档案：会话是发送时才懒创建的，此时无处可写会话设置，
+   * 故先记在这里，`session.create` 时一并带上并清空。有会话时一律以会话设置为准。
+   */
+  pendingAgentProfile: string | null
   /** 当前会话的消息列表 */
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
@@ -232,8 +244,8 @@ interface ChatState {
     description: string
     template: string
     requiredTools?: string[]
-    /** 命令来源；'agent' 为子代理派发命令（发送走 agent.dispatchPrompt，不做模板展开） */
-    kind?: 'project' | 'skill' | 'agent'
+    /** 命令来源（'project' = .claude/commands/，'skill' = SKILL.md） */
+    kind?: 'project' | 'skill'
   }>
   /** 各 session 的活跃运行时资源（SSH / DB 等） */
   sessionResources: Record<string, SessionResourceInfo>
@@ -248,20 +260,11 @@ interface ChatState {
    */
   sessionInputDrafts: Record<string, Record<string, unknown>>
   /**
-   * 各 session 中各 request 的"其它"输入文本(按 sessionId+requestId 隔离)。
-   * 用户在 PendingInputsPanel 的"其它"输入框里填写的文本,
-   * 跨会话切换持久化,在 request resolved/abort 后随 draft 一起清除。
+   * 各 session 当前正在处理的那条 pending 请求 id(多条 pending 时的步进器位置)。
+   * 待处理面板与输入框共用:面板据此渲染表单,输入框据此决定描边色与「其它」反馈的投递目标。
+   * 选中项被 resolve 后清除,选择器回落到列表首条。
    */
-  sessionOtherInputs: Record<string, Record<string, string>>
-  /** 已开启 WebUI 分享（仅查看）的 session ID 集合 */
-  sharedSessionIds: Set<string>
-  /** Telegram 绑定关系：sessionId → { botId, username } */
-  telegramBindings: Map<string, { botId: string; username: string }>
-  /**
-   * 当前是否「仅查看」渠道（true = WebUI 分享端：只读、不可发送/编辑；false = 本地宿主，完整能力）。
-   * WebUI 启动时置 true；桌面/扩展保持 false。
-   */
-  viewOnly: boolean
+  sessionActiveInputId: Record<string, string>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -271,9 +274,13 @@ interface ChatState {
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
   /** 请求显示右侧「子智能体」面板（子会话 id）；由 useAgentEvents 收到当前会话 sub_session_register 时触发 */
   requestSubAgentReveal: (subSessionId: string) => void
+  /** 请求显示「Agent 信息」页（会话面板 Agent tab）；由输入区上下文用量环点击触发 */
+  requestAgentInfoReveal: () => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
+  /** 欢迎页选档案（尚无会话）；null 清除 */
+  setPendingAgentProfile: (name: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   removeMessage: (id: string) => void
@@ -322,12 +329,9 @@ interface ChatState {
       description: string
       template: string
       requiredTools?: string[]
-      kind?: 'project' | 'skill' | 'agent'
+      kind?: 'project' | 'skill'
     }>
   ) => void
-  setViewOnly: (v: boolean) => void
-  setSharedSessionIds: (ids: Set<string>) => void
-  setTelegramBindings: (bindings: Map<string, { botId: string; username: string }>) => void
   /** 设置/删除运行时资源状态（info 为 null 时删除） */
   setRuntime: (sessionId: string, runtimeId: string, info: RuntimeInfo | null) => void
   /** 批量设置运行时资源状态（session 初始化时使用） */
@@ -340,8 +344,8 @@ interface ChatState {
   clearPendingInputs: (sessionId: string) => void
   /** 设置/更新某个请求的草稿 */
   setInputDraft: (sessionId: string, requestId: string, draft: unknown) => void
-  /** 设置/更新某个请求的"其它"输入文本 */
-  setOtherInput: (sessionId: string, requestId: string, text: string) => void
+  /** 选中某条 pending 请求(待处理面板的步进器) */
+  setActiveInputId: (sessionId: string, requestId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /** 原子处理 step_end：清除流式内容 + 添加 step 消息（单次 set，避免闪空） */
@@ -419,6 +423,17 @@ export const selectPendingInputs = (s: ChatState): InputRequest[] =>
     : EMPTY_INPUT_REQUESTS
 
 /**
+ * 当前会话正在处理的那条 pending 请求(步进器选中项;未选或已失效时回落到首条)。
+ * 返回的是列表内的元素引用 —— 数据不变时引用稳定,可安全用作 zustand selector。
+ */
+export const selectActivePendingInput = (s: ChatState): InputRequest | null => {
+  const list = selectPendingInputs(s)
+  if (list.length === 0) return null
+  const id = s.activeSessionId ? s.sessionActiveInputId[s.activeSessionId] : undefined
+  return list.find((r) => r.id === id) ?? list[0]
+}
+
+/**
  * 全局 pending 计数(供 Sidebar 一次读取所有会话的待处理数)。
  *
  * ⚠️ zustand + useSyncExternalStore 要求 selector 在数据未变时返回稳定引用,
@@ -448,24 +463,20 @@ export const selectAllPendingCounts = (s: ChatState): Record<string, number> => 
 export const selectInputDraft = (s: ChatState, sessionId: string, requestId: string): unknown =>
   s.sessionInputDrafts[sessionId]?.[requestId]
 
-/** 是否允许对话（本地宿主 = 可；仅查看渠道 = 否） */
-export const selectCanChat = (s: ChatState): boolean => !s.viewOnly
-
-/** 是否允许编辑会话配置（本地宿主 = 可；仅查看渠道 = 否） */
-export const selectCanEdit = (s: ChatState): boolean => !s.viewOnly
-
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
   filePreviewRequest: null,
   subAgentRevealRequest: null,
+  agentInfoRevealRequest: null,
   draftRestoreRequest: null,
+  pendingAgentProfile: null,
   messages: [],
   sessionStreams: {},
   sessionToolExecutions: {},
   sessionPendingInputs: {},
   sessionInputDrafts: {},
-  sessionOtherInputs: {},
+  sessionActiveInputId: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
@@ -478,9 +489,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   projectPath: null,
   slashCommands: [],
   sessionResources: {},
-  sharedSessionIds: new Set(),
-  telegramBindings: new Map(),
-  viewOnly: false,
 
   setSessions: (sessions) => set({ sessions }),
   setActiveSessionId: (id) => {
@@ -512,6 +520,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nonce: (state.subAgentRevealRequest?.nonce ?? 0) + 1
       }
     })),
+  requestAgentInfoReveal: () =>
+    set((state) => ({
+      agentInfoRevealRequest: { nonce: (state.agentInfoRevealRequest?.nonce ?? 0) + 1 }
+    })),
   requestDraftRestore: (content, inlineTokens) =>
     set((state) => ({
       draftRestoreRequest: {
@@ -521,6 +533,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     })),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
+  setPendingAgentProfile: (name) => set({ pendingAgentProfile: name }),
   setMessages: (messages) => set({ messages }),
   addMessage: (message) =>
     set((state) =>
@@ -713,9 +726,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 删除的是当前激活会话才清空 active
       ...(state.active?.type === 'session' && state.active.id === id ? deriveActive(null) : {})
     })),
-  setViewOnly: (v) => set({ viewOnly: v }),
-  setSharedSessionIds: (ids: Set<string>) => set({ sharedSessionIds: ids }),
-  setTelegramBindings: (bindings) => set({ telegramBindings: bindings }),
   setEnabledTools: (tools) => set({ enabledTools: tools }),
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
@@ -780,21 +790,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           nextDrafts = other
         }
       }
-      // 同时清掉"其它"输入文本
-      const sessionOthers = state.sessionOtherInputs[sessionId]
-      let nextOthers = state.sessionOtherInputs
-      if (sessionOthers && requestId in sessionOthers) {
-        const { [requestId]: _dropO, ...restO } = sessionOthers
-        nextOthers = { ...state.sessionOtherInputs, [sessionId]: restO }
-        if (Object.keys(restO).length === 0) {
-          const { [sessionId]: _drop2O, ...otherO } = nextOthers
-          nextOthers = otherO
-        }
+      // 选中的就是被解决的那条 → 清除选中,选择器回落到剩余列表首条
+      let nextActive = state.sessionActiveInputId
+      if (nextActive[sessionId] === requestId) {
+        const { [sessionId]: _dropA, ...restA } = nextActive
+        nextActive = restA
       }
       return {
         sessionPendingInputs: nextMap,
         sessionInputDrafts: nextDrafts,
-        sessionOtherInputs: nextOthers
+        sessionActiveInputId: nextActive
       }
     }),
 
@@ -804,12 +809,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       delete nextMap[sessionId]
       const nextDrafts = { ...state.sessionInputDrafts }
       delete nextDrafts[sessionId]
-      const nextOthers = { ...state.sessionOtherInputs }
-      delete nextOthers[sessionId]
+      const nextActive = { ...state.sessionActiveInputId }
+      delete nextActive[sessionId]
       return {
         sessionPendingInputs: nextMap,
         sessionInputDrafts: nextDrafts,
-        sessionOtherInputs: nextOthers
+        sessionActiveInputId: nextActive
       }
     }),
 
@@ -824,16 +829,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
-  setOtherInput: (sessionId, requestId, text) =>
-    set((state) => {
-      const sessionOthers = state.sessionOtherInputs[sessionId] || {}
-      return {
-        sessionOtherInputs: {
-          ...state.sessionOtherInputs,
-          [sessionId]: { ...sessionOthers, [requestId]: text }
-        }
-      }
-    }),
+  setActiveInputId: (sessionId, requestId) =>
+    set((state) => ({
+      sessionActiveInputId: { ...state.sessionActiveInputId, [sessionId]: requestId }
+    })),
 
   flushStreamingDeltas: (buffers) =>
     set((state) => {
@@ -948,13 +947,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restToolExecs = { ...state.sessionToolExecutions }
       delete restToolExecs[sessionId]
 
-      // 清除该 session 的待处理用户输入(以及对应草稿和"其它"文本)
+      // 清除该 session 的待处理用户输入(以及对应草稿和步进器选中项)
       const restPendingInputs = { ...state.sessionPendingInputs }
       delete restPendingInputs[sessionId]
       const restInputDrafts = { ...state.sessionInputDrafts }
       delete restInputDrafts[sessionId]
-      const restOtherInputs = { ...state.sessionOtherInputs }
-      delete restOtherInputs[sessionId]
+      const restActiveInputId = { ...state.sessionActiveInputId }
+      delete restActiveInputId[sessionId]
 
       // 添加最终消息（如有）
       const newMessages =
@@ -967,7 +966,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionToolExecutions: restToolExecs,
         sessionPendingInputs: restPendingInputs,
         sessionInputDrafts: restInputDrafts,
-        sessionOtherInputs: restOtherInputs,
+        sessionActiveInputId: restActiveInputId,
         messages: newMessages
       }
     })

@@ -45,7 +45,7 @@ export function ensureWikiProject(): Project {
     id: WIKI_PROJECT_ID,
     name: WIKI_PROJECT_NAME,
     path: root,
-    promptSections: [],
+    systemPrompt: '',
     settings: {},
     archivedAt: 0,
     createdAt: now,

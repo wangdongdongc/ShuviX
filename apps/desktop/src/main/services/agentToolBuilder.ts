@@ -1,80 +1,9 @@
-import type { AgentState, AgentTool } from '@earendil-works/pi-agent-core'
-import type { TSchema } from 'typebox'
 import { getBuiltinToolEntries } from './toolRegistry'
 import type { BuiltinToolDefinition } from '@shuvix/chat-protocol/chatApi'
-import { SkillTool } from './skillTool'
-import { createAgentTool } from '../agents/AgentTool'
 import { toBuiltinToolDefinitions, type ToolDefinitionEntry } from '@shuvix/agent-runtime'
-import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
-import { type ToolContext } from './toolContext'
-import { mcpService } from './mcpService'
-import { wrapToolOutput, getOutputStrategy } from './wrapToolOutput'
-import type { ProcessToolOutputOverrides } from './wrapToolOutput'
 
-type AnyAgentTool = AgentState['tools'][number]
-
-/**
- * 派发工具构建上下文（主 Agent 经会话配置注入模型；派生 agent 的派发工具
- * 由 AgentManager.resolveTools 按 spawn 上下文注入 —— 全员可派发，层级由内核校验）
- */
-export interface SubAgentBuildContext {
-  modelConfig: SubAgentModelConfig
-}
-
-/**
- * 构建工具集：内置工具按注册表 defaultEnabled 注入（代码层编排——
- * defaultEnabled: false 的工具不进主 Agent，但子代理白名单仍可按名解析；hidden 工具始终注入）；
- * 统一 Agent 工具仅主 Agent 注入；MCP / Skill 按 enabledTools 过滤。
- */
-export function buildTools(
-  ctx: ToolContext,
-  enabledTools: string[],
-  subAgentCtx?: SubAgentBuildContext,
-  projectPath?: string
-): AnyAgentTool[] {
-  const tools: AnyAgentTool[] = []
-  const wrap = (tool: object): AnyAgentTool =>
-    wrapToolOutput(
-      tool as AgentTool<TSchema, unknown>,
-      ctx.sessionId,
-      getOutputStrategy(tool),
-      pickOverrides(tool)
-    ) as AnyAgentTool
-
-  for (const entry of getBuiltinToolEntries()) {
-    if (!entry.factory) continue
-    if (!entry.hidden && !entry.defaultEnabled) continue
-    tools.push(wrap(entry.factory(ctx)))
-  }
-
-  // 统一 Agent 派发工具（主 Agent 在此注入；派生 agent 的由 AgentManager.resolveTools 注入）
-  if (subAgentCtx) {
-    tools.push(wrap(createAgentTool(ctx, { modelConfig: subAgentCtx.modelConfig })))
-  }
-
-  const enabledSkillNames = enabledTools
-    .filter((n) => n.startsWith('skill:'))
-    .map((n) => n.slice(6))
-  if (enabledSkillNames.length > 0 || projectPath) {
-    tools.push(wrap(new SkillTool(enabledSkillNames, projectPath)))
-  }
-
-  const enabledMcpServers = enabledTools.filter((n) => n.startsWith('mcp:')).map((n) => n.slice(4))
-  for (const name of enabledMcpServers) {
-    for (const mcpTool of mcpService.getAgentToolsByServerName(name)) {
-      tools.push(wrap(mcpTool))
-    }
-  }
-
-  return tools
-}
-
-/** 从 tool 上读取可选的 maxBytes / maxLines 覆写（仅 BaseTool 子类可声明） */
-function pickOverrides(tool: object): ProcessToolOutputOverrides | undefined {
-  const t = tool as { outputMaxBytes?: number; outputMaxLines?: number }
-  if (t.outputMaxBytes == null && t.outputMaxLines == null) return undefined
-  return { maxBytes: t.outputMaxBytes, maxLines: t.outputMaxLines }
-}
+// 注：工具装配（原 buildTools）已收敛到统一创建管线 —— 见 agents/agentHost.ts 的
+// resolveTools（root 与派生统一按名解析，名单来自 agent 档案 + 会话 overlay）。
 
 // ────────────────────────────────────────────────────────────────
 // 内置工具定义枚举 —— 供「LLM 工具」设置页展示

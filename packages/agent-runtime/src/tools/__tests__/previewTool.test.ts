@@ -4,11 +4,12 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
-import { CHART_FILE_MARKER_LINE } from '@shuvix/chat-protocol/chartFileContract'
+import { CHART_FILE_MARKER_KEY, CHART_FILE_MARKER } from '@shuvix/chat-protocol/chartFileContract'
 import { createPreviewTool, type ChartValidation, type PreviewToolDeps } from '../previewTool'
 
-const CHART_OK = `${CHART_FILE_MARKER_LINE}\n-->\n\n\`\`\`mermaid\nflowchart TD\n  A --> B\n\`\`\`\n`
-const CHART_BROKEN_CONTRACT = `${CHART_FILE_MARKER_LINE}\n-->\n\n没有代码块\n`
+const CHART_FRONTMATTER = `---\n${CHART_FILE_MARKER_KEY}: ${CHART_FILE_MARKER}\n---\n`
+const CHART_OK = `${CHART_FRONTMATTER}\n\`\`\`mermaid\nflowchart TD\n  A --> B\n\`\`\`\n`
+const CHART_BROKEN_CONTRACT = `${CHART_FRONTMATTER}\n没有代码块\n`
 
 function makeTool(opts: {
   read: FileReadResult

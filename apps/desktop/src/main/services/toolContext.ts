@@ -17,7 +17,7 @@ import {
 import { skillService } from './skillService'
 import { buildAllowEntry, isPathAllowedUnified } from '../utils/toolUtils/allowList'
 import { assertPathApproved, type ApprovalPolicy } from '@shuvix/agent-runtime'
-import type { ReferenceDir, ProjectEnvVar } from '../types'
+import type { ProjectEnvVar } from '../types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -47,8 +47,6 @@ export const TOOL_ABORTED = 'Aborted'
 export interface ProjectConfig {
   /** 项目工作目录（宿主机路径） */
   workingDirectory: string
-  /** 参考目录列表（按 access 属性控制读写权限） */
-  referenceDirs: ReferenceDir[]
   /** PGLite 持久化存储开关 */
   pglitePersist?: boolean
   /** 项目 ID（持久化模式下用作 worker 共享 key） */
@@ -84,33 +82,8 @@ export function isPathWithinWorkspace(absolutePath: string, workingDirectory: st
   return resolved === base || resolved.startsWith(base + sep)
 }
 
-/** 检查路径是否在任一参考目录内 */
-export function isPathWithinReferenceDirs(
-  absolutePath: string,
-  referenceDirs: ReferenceDir[]
-): boolean {
-  const resolved = resolve(absolutePath)
-  return referenceDirs.some((dir) => {
-    const base = resolve(dir.path)
-    return resolved === base || resolved.startsWith(base + sep)
-  })
-}
-
-/** 检查路径是否在某个 readwrite 参考目录内 */
-export function isPathWithinReadwriteReferenceDirs(
-  absolutePath: string,
-  referenceDirs: ReferenceDir[]
-): boolean {
-  const resolved = resolve(absolutePath)
-  return referenceDirs.some((dir) => {
-    if ((dir.access ?? 'readonly') !== 'readwrite') return false
-    const base = resolve(dir.path)
-    return resolved === base || resolved.startsWith(base + sep)
-  })
-}
-
 /**
- * 审批守卫：只读访问（workspace + referenceDirs 均允许）
+ * 审批守卫：只读访问（workspace 内放行）
  * 用于 read、ls、grep、glob 等只读工具
  */
 export async function assertReadApproved(
@@ -141,7 +114,7 @@ export async function assertReadApproved(
  * 不能像 assertReadApproved 那样在准入范围外触发 requestUserInput 弹窗。
  *
  * 允许清单与 assertReadApproved 的"无审批通行"分支一致：
- *   - workspace + referenceDirs
+ *   - workspace
  *   - tool_results 持久化目录
  *   - 默认 / 内置 / 用户外接 skills 目录
  *
@@ -149,7 +122,6 @@ export async function assertReadApproved(
  */
 export function isPathReadAllowed(config: ProjectConfig, absolutePath: string): boolean {
   if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return true
-  if (isPathWithinReferenceDirs(absolutePath, config.referenceDirs)) return true
   if (absolutePath.startsWith(getToolResultsBase() + sep)) return true
   if (absolutePath.startsWith(getDefaultSkillsDir() + sep)) return true
   if (absolutePath.startsWith(getBuiltinSkillsDir() + sep)) return true
@@ -161,16 +133,14 @@ export function isPathReadAllowed(config: ProjectConfig, absolutePath: string): 
 /**
  * 同步写入准入判定（不弹审批）—— 被动 UI 专用，对应 isPathReadAllowed 的写侧。
  * 笔记本式「打开项目里的 .md 直接编辑 + 自动保存」属于被动 UI，不应每次落盘弹审批；
- * 仅允许 workspace 与可读写参考目录，落在只读位置（只读参考目录/skills/tool_results）一律拒绝。
+ * 仅允许 workspace，落在只读位置（skills/tool_results）一律拒绝。
  */
 export function isPathWriteAllowed(config: ProjectConfig, absolutePath: string): boolean {
-  if (isPathWithinWorkspace(absolutePath, config.workingDirectory)) return true
-  if (isPathWithinReadwriteReferenceDirs(absolutePath, config.referenceDirs)) return true
-  return false
+  return isPathWithinWorkspace(absolutePath, config.workingDirectory)
 }
 
 /**
- * 审批守卫：写入访问（workspace + readwrite 参考目录允许）
+ * 审批守卫：写入访问（workspace 内放行）
  * 用于 write、edit 等写入工具
  */
 export async function assertWriteApproved(
@@ -181,8 +151,6 @@ export async function assertWriteApproved(
   absolutePath: string,
   displayPath?: string
 ): Promise<void> {
-  // 在只读参考目录内时,审批描述显式说明"批准会授予写权限"
-  const isInsideReadonlyRef = isPathWithinReferenceDirs(absolutePath, config.referenceDirs)
   await assertPathApproved(
     makeDesktopApprovalPolicy(ctx, () => config),
     'write',
@@ -191,10 +159,7 @@ export async function assertWriteApproved(
       toolCallId,
       toolName,
       displayPath,
-      abortError: TOOL_ABORTED,
-      description: isInsideReadonlyRef
-        ? 'This path is inside a read-only reference directory. Approving will grant write access.'
-        : undefined
+      abortError: TOOL_ABORTED
     }
   )
 }
@@ -219,17 +184,19 @@ export function makeDesktopApprovalPolicy(
   return {
     isAllowedWithoutPrompt(mode, p) {
       const config = getConfig()
-      if (isPathWithinWorkspace(p, config.workingDirectory)) return true
+      // 工作目录 = 只读放行。写入即便在工作目录内也要过审批 —— 落到下面的
+      // autoApprove / allowList / 弹窗链上，弹窗里带 diff 预览（见 fileToolSuite.makeApprove）。
+      // 想回到「目录内随便写」的旧行为：开会话级免审批，或对具体路径「允许并记住」。
+      if (isPathWithinWorkspace(p, config.workingDirectory)) return mode === 'read'
       if (mode === 'read') {
-        if (isPathWithinReferenceDirs(p, config.referenceDirs)) return true
         if (p.startsWith(getToolResultsBase() + sep)) return true
         if (p.startsWith(getDefaultSkillsDir() + sep)) return true
         if (p.startsWith(getBuiltinSkillsDir() + sep)) return true
         if (skillService.listExternalDirs().some((d) => p.startsWith(d.path + sep))) return true
         return false
       }
-      // write：仅工作目录 + 可读写参考目录
-      return isPathWithinReadwriteReferenceDirs(p, config.referenceDirs)
+      // write：一律审批
+      return false
     },
     isAutoApprove: () => !!getSettings()?.autoApprove,
     isInAllowList: (mode, p) => isPathAllowedUnified(getSettings()?.allowList, mode, p),
@@ -267,7 +234,6 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
     // 有项目 → 使用项目配置
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
-      referenceDirs: project.settings?.referenceDirs || [],
       pglitePersist: project.settings?.tool?.pglitePersist,
       projectId: project.id,
       projectPath: project.path,
@@ -277,7 +243,6 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
 
   // 无项目（临时会话） → 使用 temp workspace
   return {
-    workingDirectory: getTempWorkspace(sessionId),
-    referenceDirs: []
+    workingDirectory: getTempWorkspace(sessionId)
   }
 }

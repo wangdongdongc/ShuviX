@@ -11,9 +11,8 @@
  * 结构满足该契约（见 apps/desktop/src/preload/chatApiContract.ts），零漂移。
  */
 import type { ChatApi, SessionChannelApi, HostApi } from '@shuvix/chat-protocol/chatApi'
-import type { ChannelBindingApi } from '@shuvix/chat-protocol/channelBindingApi'
 
-export type { ChatApi, SessionChannelApi, HostApi, ChannelBindingApi }
+export type { ChatApi, SessionChannelApi, HostApi }
 
 let injected: ChatApi | null = null
 let injectedSessionChannel: SessionChannelApi | null = null
@@ -70,27 +69,4 @@ export function getSessionChannelApi(): SessionChannelApi {
 export function getHostApi(): HostApi | null {
   if (injected) return injected
   return windowApi() ?? null
-}
-
-// ── 会话渠道绑定（webui / telegram）—— 与 ChatApi 正交的可选能力轴 ──
-
-let injectedBindings: ChannelBindingApi | null = null
-
-/**
- * 由宿主注入「渠道绑定」实现（可选能力轴）。
- * 桌面 / WebUI 的 window.api 已结构化满足 ChannelBindingApi，无需显式注入；
- * 扩展等宿主可注入仅含其支持渠道（如只 telegram）的部分实现。
- */
-export function setChannelBindingApi(api: ChannelBindingApi): void {
-  injectedBindings = api
-}
-
-/**
- * 取「渠道绑定」实现 —— 返回 null 表示当前宿主不支持任何渠道绑定。
- * 消费方须做能力降级：`getChannelBindingApi()?.webui?.setShared(...)`。
- */
-export function getChannelBindingApi(): ChannelBindingApi | null {
-  if (injectedBindings) return injectedBindings
-  const w = (globalThis as { window?: { api?: ChannelBindingApi } }).window
-  return w?.api ?? null
 }

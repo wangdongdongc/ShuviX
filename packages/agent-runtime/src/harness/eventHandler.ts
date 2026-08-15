@@ -15,7 +15,12 @@
  */
 import type { AgentHarnessEvent, Session, SessionTreeEntry } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
-import { aggregateUsage, entriesToChatMessages, usageDetailOf } from './projection'
+import {
+  INLINE_TOKENS_CUSTOM_TYPE,
+  aggregateUsage,
+  entriesToChatMessages,
+  usageDetailOf
+} from './projection'
 import type { RoundUsageDetail } from './projection'
 import type {
   ChatEvent,
@@ -137,7 +142,15 @@ async function handleMessageEnd(
     // 用户消息（含 steer / followUp 注入）：广播供其他前端同步
     const entry = await lastEntry(ctx)
     if (entry) {
-      const [projected] = entriesToChatMessages([entry], ctx.sessionId, ctx.deps.getModelId())
+      // 父节点若是内联 Token 侧车，一并投影 —— 广播出的气泡与重载后一致（芯片态）
+      let slice: SessionTreeEntry[] = [entry]
+      if (entry.parentId) {
+        const parent = await ctx.session.getEntry(entry.parentId)
+        if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
+          slice = [parent, entry]
+        }
+      }
+      const [projected] = entriesToChatMessages(slice, ctx.sessionId, ctx.deps.getModelId())
       if (projected) {
         ctx.broadcast({
           type: 'user_message',

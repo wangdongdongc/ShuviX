@@ -5,14 +5,11 @@ import { ProjectConfigDialog, ProjectInfoForm, type ProjectConfigTab } from '@sh
 import {
   ProjectFileSystem,
   ExtensionsPanel,
-  ProjectPromptSectionsGroup,
+  ProjectSystemPromptGroup,
   ProjectPgLiteSection,
   ProjectEnvVarsSection,
   type EnvVar
 } from './ProjectFormSections'
-
-import type { ReferenceDir } from '../../../../main/types/project'
-import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 
 interface ProjectEditDialogProps {
   projectId: string
@@ -39,12 +36,11 @@ export function ProjectEditDialog({
   // 项目字段
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
-  const [promptSections, setPromptSections] = useState<ProjectPromptSection[]>([])
+  const [systemPrompt, setSystemPrompt] = useState('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [allTools, setAllTools] = useState<ToolItem[]>([])
   const [enabledTools, setEnabledTools] = useState<string[]>([])
-  const [referenceDirs, setReferenceDirs] = useState<ReferenceDir[]>([])
   const [pglitePersist, setPglitePersist] = useState(false)
   const [envVars, setEnvVars] = useState<EnvVar[]>([])
 
@@ -63,15 +59,12 @@ export function ProjectEditDialog({
         if (project) {
           setName(project.name)
           setPath(project.path)
-          setPromptSections(project.promptSections ?? [])
+          setSystemPrompt(project.systemPrompt ?? '')
           const settings = project.settings || {}
           if (Array.isArray(settings.enabledTools)) {
             setEnabledTools(settings.enabledTools)
           } else {
             setEnabledTools(defaultExtensions())
-          }
-          if (Array.isArray(settings.referenceDirs)) {
-            setReferenceDirs(settings.referenceDirs)
           }
           if (settings.tool?.pglitePersist) {
             setPglitePersist(true)
@@ -123,9 +116,8 @@ export function ProjectEditDialog({
         id: projectId,
         name: name.trim() || undefined,
         path: path || undefined,
-        promptSections,
+        systemPrompt,
         enabledTools,
-        referenceDirs,
         tool: {
           pglitePersist,
           envVars: envVars.filter((v) => v.key.trim()).length
@@ -147,13 +139,8 @@ export function ProjectEditDialog({
       label: t('projectForm.wizardStepProject'),
       content: (
         <ProjectInfoForm name={name} onNameChange={setName}>
-          <ProjectFileSystem
-            path={path}
-            onSelectFolder={handleSelectFolder}
-            referenceDirs={referenceDirs}
-            onReferenceDirsChange={setReferenceDirs}
-          />
-          <ProjectPromptSectionsGroup sections={promptSections} onChange={setPromptSections} />
+          <ProjectFileSystem path={path} onSelectFolder={handleSelectFolder} />
+          <ProjectSystemPromptGroup value={systemPrompt} onChange={setSystemPrompt} />
         </ProjectInfoForm>
       )
     },

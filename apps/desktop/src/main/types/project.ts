@@ -1,22 +1,13 @@
-import type { ReferenceDir, ToolSettings } from '../dao/types'
-import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
+import type { ToolSettings } from '../dao/types'
 
-export type {
-  Project,
-  ProjectEnvVar,
-  ProjectSettings,
-  ReferenceDir,
-  ToolSettings,
-  ProjectPromptSection
-} from '../dao/types'
+export type { Project, ProjectEnvVar, ProjectSettings, ToolSettings } from '../dao/types'
 
 /** IPC: 创建项目参数 */
 export interface ProjectCreateParams {
   name?: string
   path: string
-  promptSections?: ProjectPromptSection[]
+  systemPrompt?: string
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
   archived?: boolean
 }
@@ -26,9 +17,8 @@ export interface ProjectUpdateParams {
   id: string
   name?: string
   path?: string
-  promptSections?: ProjectPromptSection[]
+  systemPrompt?: string
   enabledTools?: string[]
-  referenceDirs?: ReferenceDir[]
   tool?: ToolSettings
   archived?: boolean
 }

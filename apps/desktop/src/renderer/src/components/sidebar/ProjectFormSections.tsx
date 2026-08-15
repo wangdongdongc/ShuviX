@@ -11,10 +11,7 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react'
-import type { ReferenceDir } from '../../../../main/types/project'
-import type { ProjectPromptSection } from '@shuvix/chat-protocol/types/promptSection'
 import type { ToolItem } from '../common/ToolSelectList'
-import { PromptSectionsEditor } from '@shuvix/app-shell'
 import { SettingsSection, SettingsRow, Toggle, InlineInput } from '../settings/SettingsPrimitives'
 
 // ─── 基本信息：项目名称 ────────────────────────────────
@@ -43,21 +40,29 @@ export function ProjectBasicInfo({ name, onNameChange }: ProjectBasicInfoProps):
   )
 }
 
-// ─── 项目提示词 ─────────────────────────────────────────
+// ─── 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） ───
 
-interface ProjectPromptSectionsGroupProps {
-  sections: ProjectPromptSection[]
-  onChange: (sections: ProjectPromptSection[]) => void
+interface ProjectSystemPromptGroupProps {
+  value: string
+  onChange: (value: string) => void
 }
 
-export function ProjectPromptSectionsGroup({
-  sections,
+export function ProjectSystemPromptGroup({
+  value,
   onChange
-}: ProjectPromptSectionsGroupProps): React.JSX.Element {
+}: ProjectSystemPromptGroupProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <SettingsSection title={t('projectForm.promptSectionsTitle')}>
-      <PromptSectionsEditor sections={sections} onChange={onChange} />
+    <SettingsSection title={t('projectForm.systemPrompt')}>
+      {/* 外框由 SettingsSection 卡片承担 —— textarea 自身透明无边框,只留内边距 */}
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={t('projectForm.systemPromptPlaceholder')}
+        rows={4}
+        spellCheck={false}
+        className="block w-full px-3.5 py-3 text-xs bg-transparent text-text-primary placeholder:text-text-tertiary focus:outline-none leading-relaxed resize-none [field-sizing:content] min-h-[88px]"
+      />
     </SettingsSection>
   )
 }
@@ -67,41 +72,18 @@ export function ProjectPromptSectionsGroup({
 interface ProjectFileSystemProps {
   path: string
   onSelectFolder: () => void
-  referenceDirs: ReferenceDir[]
-  onReferenceDirsChange: (dirs: ReferenceDir[]) => void
 }
 
 export function ProjectFileSystem({
   path,
-  onSelectFolder,
-  referenceDirs,
-  onReferenceDirsChange
+  onSelectFolder
 }: ProjectFileSystemProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <SettingsSection
-      title={t('projectForm.folders')}
-      headerAction={
-        <button
-          onClick={async () => {
-            const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
-            if (result && !referenceDirs.some((d) => d.path === result)) {
-              onReferenceDirsChange([...referenceDirs, { path: result }])
-            }
-          }}
-          className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
-        >
-          <Plus size={11} />
-          {t('projectForm.addRefDir')}
-        </button>
-      }
-    >
+    <SettingsSection title={t('projectForm.folders')}>
       {/* 项目文件夹 */}
       {path ? (
         <div className="group/row flex items-center gap-2 px-4 py-2.5 hover:bg-bg-hover/40 transition-colors">
-          <span className="shrink-0 w-7 text-center rounded text-[9px] font-medium border bg-amber-500/10 text-amber-500 border-amber-500/30 py-0.5">
-            {t('projectForm.refDirAccessRW')}
-          </span>
           <FolderOpen size={11} className="text-text-tertiary shrink-0" />
           <span className="text-[12px] font-mono text-text-primary truncate flex-1" title={path}>
             {path.split('/').pop() || path}
@@ -124,50 +106,6 @@ export function ProjectFileSystem({
           </button>
         </div>
       )}
-
-      {/* 引用文件夹 */}
-      {referenceDirs.map((dir, idx) => (
-        <div
-          key={idx}
-          className="group/row flex items-center gap-2 px-4 py-2.5 hover:bg-bg-hover/40 transition-colors"
-        >
-          <button
-            onClick={() => {
-              const next = [...referenceDirs]
-              const current = dir.access ?? 'readonly'
-              next[idx] = { ...dir, access: current === 'readonly' ? 'readwrite' : 'readonly' }
-              onReferenceDirsChange(next)
-            }}
-            className={`shrink-0 w-7 text-center rounded text-[9px] font-medium border transition-colors py-0.5 ${
-              (dir.access ?? 'readonly') === 'readwrite'
-                ? 'bg-amber-500/10 text-amber-500 border-amber-500/30 hover:bg-amber-500/20'
-                : 'bg-bg-tertiary/40 text-text-tertiary border-border-secondary hover:bg-bg-hover'
-            }`}
-            title={
-              (dir.access ?? 'readonly') === 'readwrite'
-                ? t('projectForm.refDirAccessReadwrite')
-                : t('projectForm.refDirAccessReadonly')
-            }
-          >
-            {(dir.access ?? 'readonly') === 'readwrite'
-              ? t('projectForm.refDirAccessRW')
-              : t('projectForm.refDirAccessRO')}
-          </button>
-          <FolderOpen size={11} className="text-text-tertiary shrink-0" />
-          <span
-            className="text-[12px] font-mono text-text-primary truncate flex-1"
-            title={dir.path}
-          >
-            {dir.path.split('/').pop() || dir.path}
-          </span>
-          <button
-            onClick={() => onReferenceDirsChange(referenceDirs.filter((_, i) => i !== idx))}
-            className="p-1 rounded text-text-tertiary opacity-0 group-hover/row:opacity-100 hover:!text-error transition-all shrink-0"
-          >
-            <Trash2 size={11} />
-          </button>
-        </div>
-      ))}
     </SettingsSection>
   )
 }

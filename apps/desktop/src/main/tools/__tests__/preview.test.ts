@@ -77,10 +77,11 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
     .join('\n')
 }
 
-const CHART = `<!-- shuvix:chart v1
-banner
-requirement: 测试
--->
+const CHART = `---
+shuvix: chart v1
+description: banner
+shuvix-chart-requirement: 测试
+---
 
 \`\`\`mermaid
 flowchart TD

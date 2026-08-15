@@ -26,10 +26,6 @@ interface SettingsState {
   activeProvider: string
   /** 当前选择的模型 ID */
   activeModel: string
-  /** 系统提示词 */
-  systemPrompt: string
-  /** 系统提示词总开关 — 关闭后不向 LLM 追加自由文本 + 内置/自定义卡片 */
-  systemPromptEnabled: boolean
   /** 主题模式 */
   theme: 'dark' | 'light' | 'system'
   /** 深色模式使用的具体主题 */
@@ -73,13 +69,13 @@ interface SettingsState {
     | 'general'
     | 'projects'
     | 'providers'
+    | 'agents'
     | 'tools'
     | 'mcp'
     | 'skills'
     | 'hooks'
     | 'voice'
     | 'bindings'
-    | 'contextMgmt'
     | 'httpLogs'
     | 'about'
   /** 标题生成模型 provider ID(空 = 不自动生成标题) */
@@ -100,8 +96,6 @@ interface SettingsState {
   setAvailableModels: (models: AvailableModel[]) => void
   setActiveProvider: (provider: string) => void
   setActiveModel: (model: string) => void
-  setSystemPrompt: (prompt: string) => void
-  setSystemPromptEnabled: (enabled: boolean) => void
   setTitleProvider: (provider: string) => void
   setTitleModel: (model: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
@@ -117,13 +111,13 @@ interface SettingsState {
       | 'general'
       | 'projects'
       | 'providers'
+      | 'agents'
       | 'tools'
       | 'mcp'
       | 'skills'
       | 'hooks'
       | 'voice'
       | 'bindings'
-      | 'contextMgmt'
       | 'httpLogs'
       | 'about'
   ) => void
@@ -140,8 +134,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   availableModels: [],
   activeProvider: '',
   activeModel: '',
-  systemPrompt: 'You are a helpful assistant.',
-  systemPromptEnabled: true,
   theme: 'dark',
   darkTheme: 'github-dark',
   lightTheme: 'github-light',
@@ -173,8 +165,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setAvailableModels: (models) => set({ availableModels: models }),
   setActiveProvider: (provider) => set({ activeProvider: provider }),
   setActiveModel: (model) => set({ activeModel: model }),
-  setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
-  setSystemPromptEnabled: (enabled) => set({ systemPromptEnabled: enabled }),
   setTitleProvider: (provider) => set({ titleProvider: provider }),
   setTitleModel: (model) => set({ titleModel: model }),
   setTheme: (theme) => set({ theme }),
@@ -196,8 +186,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     const rawLight = settings['general.lightTheme'] || 'github-light'
     const lightTheme = (rawLight === 'light' ? 'github-light' : rawLight) as LightThemeId
     set({
-      systemPrompt: settings['general.systemPrompt'] || 'You are a helpful assistant.',
-      systemPromptEnabled: settings['general.systemPromptEnabled'] !== 'false',
       theme: (settings['general.theme'] as 'dark' | 'light' | 'system') || 'dark',
       darkTheme,
       lightTheme,

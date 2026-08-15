@@ -16,8 +16,9 @@ export {
 } from './eventHandler'
 export {
   entriesToChatMessages,
-  AUTO_COMPACT_CUSTOM_TYPE,
-  INSTRUCTION_CUSTOM_TYPE
+  INSTRUCTION_CUSTOM_TYPE,
+  INLINE_TOKENS_CUSTOM_TYPE,
+  type InlineTokensSidecar
 } from './projection'
 export { createModelsAdapter, type ModelsAdapterDeps } from './modelsAdapter'
 export { createStubExecutionEnv } from './stubEnv'

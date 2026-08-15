@@ -1,27 +1,25 @@
 /**
  * HarnessSession 集成测试 —— 假流式后端驱动真 AgentHarness + JsonlSessionStorage，
- * 覆盖「对话落盘 → 压缩 → 自动压缩」整条链路。
+ * 覆盖「对话落盘 → 自动压缩」整条链路。压缩只剩自动这一条路径（手动入口已移除），
+ * 所以下面全部经 `prompt()` 驱动。
  *
- * 重点一（手动 compact 前置判定）：pi 的滚动压缩保留最近 keepRecentTokens(20k) 的原始
- * 消息，小会话的切点落在第一条消息上、待摘要区间为空 —— 若直接调 harness.compact() 会对
- * 空对话生成一条无意义摘要，且再次 compact 抛 "Nothing to compact"。
- * HarnessSession.compact 需要把这种情况归一成 { compacted: false }（不触碰 LLM / 会话树）。
+ * 判定：turn 成功结束后按 pi 的 shouldCompact 判定（tokens > contextWindow - 16k，
+ * token 数优先取最近 assistant 的真实 usage），超阈值则压缩并广播 messages_reloaded。
  *
- * 重点二（自动压缩）：turn 成功结束后按 pi 的 shouldCompact 判定
- * （tokens > contextWindow - 16k，token 数优先取最近 assistant 的真实 usage），
- * 超阈值自动压缩并追加 auto_compact 标记 entry。
+ * 前置短路：pi 的滚动压缩保留最近 keepRecentTokens(20k) 的原始消息，小会话的切点落在
+ * 第一条消息上、待摘要区间为空 —— 直接调 harness.compact() 会对空对话生成一条无意义摘要，
+ * 且下一次压缩抛 "Nothing to compact"。HarnessSession 用同一套 prepareCompaction 提前
+ * 判定并静默跳过（见「usage 超阈值但无实质可摘要内容」一例）。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
-import type { CustomEntry } from '@earendil-works/pi-agent-core'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import type { AssistantMessage, Models, Model, Api } from '@earendil-works/pi-ai'
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/compat'
 import { HarnessSession } from '../harnessSession'
-import { AUTO_COMPACT_CUSTOM_TYPE } from '../projection'
 import { createStubExecutionEnv } from '../stubEnv'
 
 /** 假 assistant 的 usage token 数（自动压缩阈值判定取自这里 —— 模拟 provider 真实计量） */
@@ -132,46 +130,16 @@ describe('HarnessSession', () => {
     expect(events).toContain('agent_end')
   })
 
-  it('小会话 compact 返回 compacted:false，不调 LLM、不动会话树', async () => {
-    await hs.prompt('你好')
-    const before = (await piSession.getBranch()).length
+  // ─── 自动压缩 ────────────────────────────────────────
 
-    const result = await hs.compact()
-    expect(result.compacted).toBe(false)
-    expect(completeSimpleCalls).toBe(0)
-    expect((await piSession.getBranch()).length).toBe(before)
-
-    // 再来一次也一样（不会因残留 compaction entry 抛 "Nothing to compact"）
-    const again = await hs.compact()
-    expect(again.compacted).toBe(false)
-  })
-
-  it('超过保留窗口的会话 compact 生成摘要并追加 compaction entry', async () => {
+  it('自动压缩：turn 结束后 usage 超阈值 → 生成摘要 + compaction entry + messages_reloaded', async () => {
     // 结构：一条旧的超大消息（~30k tokens）+ 足够撑满保留窗口（20k）的近期消息 ——
     // 切点会落在近期消息的起点，旧消息进入待摘要区间。
     // （注意：从尾部累加时"跨越 20k 的那条"本身会被保留，所以近期尾部必须自己 ≥ 20k）
+    const auto = makeHarness(true)
     await piSession.appendMessage(big(120_000)) // 旧历史 ~30k tokens
     await piSession.appendMessage(big(48_000)) // 近期 ~12k tokens
     await piSession.appendMessage(big(48_000)) // 近期 ~12k tokens
-    await hs.prompt('继续')
-
-    const result = await hs.compact()
-    expect(result.compacted).toBe(true)
-    expect(result.summary).toBe('这是压缩摘要')
-    expect(completeSimpleCalls).toBeGreaterThan(0)
-    const types = (await piSession.getBranch()).map((e) => e.type)
-    expect(types[types.length - 1]).toBe('compaction')
-    // 压缩提交后广播 messages_reloaded 供前端重拉
-    expect(events).toContain('messages_reloaded')
-  })
-
-  // ─── 自动压缩 ────────────────────────────────────────
-
-  it('自动压缩：turn 结束后 usage 超阈值 → 生成摘要 + auto_compact 标记 + messages_reloaded', async () => {
-    const auto = makeHarness(true)
-    await piSession.appendMessage(big(120_000))
-    await piSession.appendMessage(big(48_000))
-    await piSession.appendMessage(big(48_000))
     // 本轮 provider 真实 usage 超阈值：128k 窗口 - 16k 预留 = 111616
     fakeUsageTokens = 120_000
 
@@ -179,12 +147,9 @@ describe('HarnessSession', () => {
     expect(error).toBeUndefined()
     expect(completeSimpleCalls).toBeGreaterThan(0)
 
-    const branch = await piSession.getBranch()
-    const types = branch.map((e) => e.type)
-    expect(types[types.length - 2]).toBe('compaction')
-    expect(types[types.length - 1]).toBe('custom')
-    const marker = branch[branch.length - 1] as CustomEntry
-    expect(marker.customType).toBe(AUTO_COMPACT_CUSTOM_TYPE)
+    const types = (await piSession.getBranch()).map((e) => e.type)
+    expect(types[types.length - 1]).toBe('compaction')
+    // 压缩提交后广播 messages_reloaded 供前端重拉
     expect(events).toContain('messages_reloaded')
 
     // 压缩后上下文回落，下一轮不会再触发（幂等收敛）

@@ -62,6 +62,17 @@ export interface GitOpParams {
   topic?: string
 }
 
+/**
+ * 需要用户确认的 git 操作及其原因码（宿主据此本地化审批文案）。
+ *
+ * 挑选标准不是"是否修改仓库"（那样 add/commit 这种高频且可逆的操作会把审批淹没），
+ * 而是**是否改变仓库身份或吞掉用户没提交的工作**：
+ *   - createRepo    建出一个新仓库（凭空多一棵 .git，且往往不是用户本意）
+ *   - discardChanges 丢弃工作区改动（restore / checkout force）—— 未提交的东西找不回来
+ *   - deleteBranch  删分支（可能带走仅存于该分支的提交）
+ */
+export type GitApprovalReason = 'createRepo' | 'discardChanges' | 'deleteBranch'
+
 export interface GitOpSpec {
   name: GitAction
   /** 一行英文描述（token 预算 ~1 行/op） */
@@ -70,6 +81,11 @@ export interface GitOpSpec {
   optional: readonly GitParamKey[]
   /** 是否修改仓库/工作树（供宿主 resolveDir 按读/写语义做权限判定） */
   mutates: boolean
+  /**
+   * 该次调用是否需要用户确认 —— 返回原因码，null = 不需要。
+   * 要看参数而不能只看 action：checkout 只有 force、branch 只有 delete 才具破坏性。
+   */
+  approval?: (params: GitOpParams) => GitApprovalReason | null
   /** 预留：将来引入 GitCaps（如 network）时启用；undefined = 恒可用 */
   cap?: string
   /** 参数错误时回显的 usage 行 */
@@ -147,6 +163,8 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'branch',
     mutates: true,
+    // 建分支/列分支无害，删分支要确认
+    approval: (p) => (p.delete ? 'deleteBranch' : null),
     description:
       'No name: list branches (current marked *). With name: create AND switch to it; delete:true deletes it instead.',
     required: [],
@@ -156,6 +174,8 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'checkout',
     mutates: true,
+    // 非 force 时若会覆盖本地改动，op 自己就拒了；只有 force 才真的吞改动
+    approval: (p) => (p.force ? 'discardChanges' : null),
     description:
       'Switch to a branch or commit. Refuses if local changes would be overwritten unless force:true (which DISCARDS them).',
     required: ['ref'],
@@ -165,6 +185,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'restore',
     mutates: true,
+    approval: () => 'discardChanges',
     description:
       'Restore files from a commit (default HEAD) — DISCARDS the local changes of those files.',
     required: ['paths'],
@@ -174,6 +195,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'init',
     mutates: true,
+    approval: () => 'createRepo',
     description: 'Initialize a new repository (default branch "main") in the working directory.',
     required: [],
     optional: [],

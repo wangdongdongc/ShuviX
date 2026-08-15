@@ -1,15 +1,11 @@
 /**
  * InstructionInjector — 项目指令文件（AGENTS.md / CLAUDE.md）解析
  *
- * 迁移到 AgentHarness 后这里只剩「按会话配置选出文件 + 读出内容」这一步：
- * 写入不再经 messageDao，而是由 HarnessSession 落一条 `custom_message` entry
- * （customType='instruction'，display=true）。它同时满足两件事 ——
- * 进入模型上下文（pi 的 convertToLlm 把 custom 转成 user 消息），
- * 且被 projection 投影成带 isInstructionInjection 标记的 UI 消息。
- *
- * 注入时机也随之简化：旧实现要在「新会话创建」和「压缩事务内」各注入一次，
- * 因为压缩会把历史消息整体归档掉；harness 的滚动压缩保留最近上下文，
- * 但被压缩掉的指令仍需重新注入 —— 见 AgentSession.ensureInstructionsInjected 的幂等判断。
+ * 只负责「按会话配置选出文件 + 读出内容」：内容由统一创建管线（createAgent）
+ * 直接 append 到系统提示词（先指令文件、后项目提示词），不落任何消息。
+ * 系统提示词不参与滚动压缩，无需重注入；Agent 在首条消息时才创建，
+ * 「发送第一条消息前调整配置」语义保持；中途切换指令文件经 invalidateAgent 重建生效。
+ * （历史会话树中旧机制留下的 custom_message(instruction) 条目仍由 projection 正常渲染。）
  */
 
 import { readFileSync } from 'fs'
@@ -22,7 +18,7 @@ const log = createLogger('InstructionInjector')
 
 export interface ResolvedInstruction {
   filename: string
-  /** 已包好前缀的注入正文 */
+  /** 指令文件原文（不含任何前缀/围栏——注入侧 createAgent 统一加 `<project_instructions>`） */
   content: string
 }
 
@@ -65,8 +61,5 @@ export function resolveInstructionContent(
     return null
   }
   log.info(`解析指令文件 file=${entry.filename} bytes=${content.length}`)
-  return {
-    filename: entry.filename,
-    content: `Project instruction file (${entry.filename}):\n\n${content}`
-  }
+  return { filename: entry.filename, content }
 }

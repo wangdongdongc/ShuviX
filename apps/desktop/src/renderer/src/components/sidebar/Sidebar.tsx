@@ -79,7 +79,7 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <SharedSidebar
-      caps={{ windowDrag: true, pin: true, badges: true }}
+      caps={{ windowDrag: true, pin: true }}
       title={
         viewMode === 'calendar'
           ? t('sidebar.viewCalendar')
@@ -142,7 +142,7 @@ export function Sidebar(): React.JSX.Element {
                 onSelect={handleSelectSession}
                 onDelete={handleDelete}
                 onConfigureSession={setConfiguringSessionId}
-                caps={{ pin: true, badges: true }}
+                caps={{ pin: true }}
                 pinnedSessionIds={pinnedSessionIds}
               />
             )}

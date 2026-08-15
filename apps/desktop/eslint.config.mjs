@@ -71,7 +71,6 @@ export default defineConfig(
       // 先写的、更具体的 pattern 优先匹配；fallback 的 shared 放最后
       'boundaries/elements': [
         { type: 'renderer', pattern: 'src/renderer' },
-        { type: 'webui', pattern: 'src/webui' },
         { type: 'preload', pattern: 'src/preload' },
         // CLI 进程：通过 ELECTRON_RUN_AS_NODE 在 Electron 内以 node 模式运行；
         // 与主进程通过 Unix socket / named pipe 通信，不直接依赖任何 src/ 模块
@@ -122,15 +121,10 @@ export default defineConfig(
         {
           default: 'disallow',
           rules: [
-            // 进程隔离：renderer / webui 只能消费共享层与 main-types（类型层）
-            // webui 是浏览器端视图，复用 renderer 的组件/stores/hooks —— 允许 webui → renderer
+            // 进程隔离：renderer 只能消费共享层与 main-types（类型层）
             {
               from: { type: 'renderer' },
               allow: { to: { type: ['renderer', 'shared', 'main-types'] } }
-            },
-            {
-              from: { type: 'webui' },
-              allow: { to: { type: ['webui', 'renderer', 'shared', 'main-types'] } }
             },
             // preload：桥层，类型可见但不入主程序运行时
             {

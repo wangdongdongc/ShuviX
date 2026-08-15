@@ -1,24 +1,16 @@
 /**
  * 派生 Agent 协调器（跨端共享核心）。
  *
- * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一个 HarnessSession 运行时
- * （pi AgentHarness + 统一事件翻译管线），唯一差异是会话树注入 **InMemorySessionStorage**
- * —— 上下文只活在内存，不产生任何持久化记录，销毁即消失。本文件只负责 spawn 协调：
- * 深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，父子关系唯一事实来源 —— pi 的
- * SessionMetadata 刻意不含血缘字段，这层簿记是对 pi 的补充而非重复）、
- * 结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
+ * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一条统一创建管线
+ * （agentProfile/createAgent 的 factory，kind='spawned' → 内存会话树，销毁即消失）。
+ * 本文件只负责 spawn 协调：深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，
+ * 父子关系唯一事实来源 —— pi 的 SessionMetadata 刻意不含血缘字段，这层簿记是对 pi
+ * 的补充而非重复）、结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
  *
- * 平台相关项全部经注入：工具解析(resolveTools)、模型构建(buildModel)、apiKey(getApiKey)、
- * 事件广播(broadcast)、审批/询问通道(requestUserInput，路由到根会话前端)。
+ * 平台相关项全部经注入：agent 创建(createAgent，宿主 factory)、事件广播(broadcast)、
+ * 审批/询问通道(requestUserInput，路由到根会话前端)。
  */
-import {
-  InMemorySessionStorage,
-  Session,
-  type Agent,
-  type AgentMessage,
-  type AgentToolResult
-} from '@earendil-works/pi-agent-core'
-import type { Api, Model } from '@earendil-works/pi-ai'
+import type { Agent, AgentMessage, AgentToolResult, Session } from '@earendil-works/pi-agent-core'
 import { v4 as uuid } from 'uuid'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -26,9 +18,8 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { isAssistantMessage } from '../messageGuards'
 import { AgentRegistry, agentIdOf } from '../agentRegistry'
-import { HarnessSession } from '../harness/harnessSession'
-import { createModelsAdapter } from '../harness/modelsAdapter'
-import { createStubExecutionEnv } from '../harness/stubEnv'
+import type { HarnessSession } from '../harness/harnessSession'
+import type { AgentFactory } from '../agentProfile/createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
 
@@ -92,26 +83,16 @@ export interface SubAgentToolHelpers {
 
 export interface SubAgentManagerDeps {
   /**
-   * 把 agentType.tools 解析为可执行工具实例（含截断/落盘包装），端特定。
-   * rootSessionId 为所属根会话（工具审批/项目上下文取此）；spawn 携带本次派生身份，
-   * 宿主应据此把派发工具注入派生 agent（全员可派发，深度由 manager 统一校验）。
+   * 统一创建管线（宿主 agentFactory.createAgent）。manager 以 kind='spawned' 调用：
+   * 工具解析/模型构建/apiKey/LLM 日志/内存会话树全部收敛在 factory 与宿主 HostAdapter 内。
    */
-  resolveTools: (
-    agentType: InProcessAgentType,
-    rootSessionId: string,
-    helpers: SubAgentToolHelpers,
-    spawn: SpawnContext
-  ) => AnyAgentTool[]
+  createAgent: AgentFactory['createAgent']
   /**
-   * 根会话用户输入通道（可选）。注入后 manager 在解析工具时把它绑定 rootSessionId
-   * 经 SubAgentToolHelpers 传给 resolveTools，使派生 agent 工具（ask/路径审批等）
-   * 可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
+   * 根会话用户输入通道（可选）。注入后 manager 把它绑定 rootSessionId 经
+   * SubAgentToolHelpers 传给 createAgent（→ 宿主 resolveTools），使派生 agent 工具
+   * （ask/路径审批等）可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
    */
   requestUserInput?: (rootSessionId: string, req: InputRequest) => Promise<InputResponse>
-  /** 把模型配置构建为 pi-ai Model，端特定（桌面 providerDao / 扩展 providerInfo+env） */
-  buildModel: (config: SubAgentModelConfig) => Model<Api>
-  /** 取 provider 的 apiKey（pi-agent-core getApiKey） */
-  getApiKey: (provider: string) => string | undefined | Promise<string | undefined>
   /** 向前端广播 ChatEvent */
   broadcast: (event: ChatEvent) => void
   /** 日志（可选） */
@@ -120,26 +101,6 @@ export interface SubAgentManagerDeps {
   getAbortedNote?: () => string
   /** 派生层级上限（缺省 DEFAULT_MAX_AGENT_DEPTH） */
   maxAgentDepth?: number
-  /**
-   * LLM 日志（可选；桌面注入 httpLogService，扩展省略）。
-   * 派生 agent 每次 LLM 请求经 logRequest 记入日志（sessionId 用根会话，便于在
-   * LLM 日志里归到可见会话下），响应到达（message_end）再 updateUsage 回填用量。
-   */
-  httpLog?: {
-    logRequest: (params: {
-      sessionId: string
-      provider: string
-      model: string
-      payload: unknown
-    }) => string
-    updateUsage: (
-      logId: string,
-      input: number,
-      output: number,
-      total: number,
-      responseJson?: string
-    ) => void
-  }
 }
 
 export interface RunTaskParams {
@@ -271,61 +232,35 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         ? (req) => deps.requestUserInput!(rootSessionId, req)
         : undefined
     }
-    const tools = deps.resolveTools(agentType, rootSessionId, helpers, {
+    const spawn: SpawnContext = {
       agentId,
       depth,
       rootSessionId,
       modelConfig,
       canSpawn: depth < maxDepth
-    })
-    const resolvedModel = deps.buildModel(modelConfig)
+    }
 
-    // 内存态会话树：与根会话同一套 harness 语义，只是存储不落盘
-    const piSession = new Session(
-      new InMemorySessionStorage({
-        metadata: { id: agentId, createdAt: new Date().toISOString() }
-      })
-    )
-    // 预置上下文（如笔记本正文）直接落 entry —— 进 LLM 上下文，且不触发任何事件广播
+    // 统一创建管线：kind='spawned' → 内存会话树 / stub env / 事件汇包装 /
+    // LLM 日志归根会话等差异全部由 factory 决策表落定（见 agentProfile/createAgent）
+    const created = await deps.createAgent({
+      kind: 'spawned',
+      sessionId: agentId,
+      profile: agentType,
+      model: modelConfig,
+      // 默认 'off'；笔记本/用户直发把会话思考深度经 modelConfig 传入即生效
+      thinkingLevel: modelConfig.thinkingLevel ?? 'off',
+      cwd: '',
+      spawn,
+      spawnHelpers: helpers
+    })
+    const runtime = created.runtime
+    const piSession = runtime.session
+
+    // 预置上下文（如笔记本正文）直接落 entry —— 进 LLM 上下文，且不触发任何事件广播。
+    // （构造后追加与旧「构造前追加」时序等价：harness 每轮 prompt 时才 buildContext 读树）
     if (contextMessages) {
       for (const msg of contextMessages) await piSession.appendMessage(msg)
     }
-
-    const httpLog = deps.httpLog
-    const runtime = new HarnessSession({
-      sessionId: agentId,
-      session: piSession,
-      // 派生 agent 的工具都自带执行环境（resolveTools 注入），harness 的 ExecutionEnv 从不被调用
-      env: createStubExecutionEnv(),
-      models: createModelsAdapter({ getApiKey: (p) => deps.getApiKey(p) }),
-      model: resolvedModel,
-      // 默认 'off'；笔记本等把会话思考深度经 modelConfig 传入即生效
-      thinkingLevel: modelConfig.thinkingLevel ?? 'off',
-      systemPrompt: agentType.systemPrompt,
-      tools,
-      eventSink: {
-        broadcast: (event) => deps.broadcast(event),
-        // 派生 agent 自身无输入面板；审批/询问经 helpers.requestUserInput 走根会话
-        hasUserInputCapability: () => false
-      },
-      // 不做并行 batch 预展示（tool_start 统一在执行时发出，与派生 agent 面板语义一致）
-      shouldDeferToolDisplay: () => true,
-      // prompt 卡片经 sub_session_register 展示、追问由 continueTask 手工广播（带 inlineTokens）
-      // —— 自动 user_message 会造成面板重复
-      broadcastUserMessages: false,
-      httpLog: deps.httpLog,
-      // LLM 日志：每次请求记一条（归到根会话），用量在 message_end 经统一管线回填
-      onPayload: httpLog
-        ? (payload, requestModel) =>
-            httpLog.logRequest({
-              sessionId: rootSessionId,
-              provider: requestModel.provider,
-              model: requestModel.id,
-              payload
-            })
-        : undefined,
-      logger: deps.logger
-    })
 
     const session: SpawnedAgent = {
       agentId,

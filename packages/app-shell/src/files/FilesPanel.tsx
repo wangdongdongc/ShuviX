@@ -233,6 +233,8 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
         key={freshState.forRoot}
         paths={freshState.paths}
         searchQuery={searchOpen ? searchQuery : ''}
+        // 与并排的对话列滚动条同款（常显 + 同色）；侧栏 WikiView 不传，沿用 pierre 的 hover 才现
+        persistentScrollbar
         onFileSelect={(rel) => {
           if (!projectPath) return
           const ext = extOf(rel)

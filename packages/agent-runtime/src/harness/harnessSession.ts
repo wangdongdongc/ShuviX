@@ -7,7 +7,7 @@
  *     AgentMessage」那条有损路径彻底消失。
  *  2. **不再持久化**。message/toolResult entry 由 harness 自己 append，
  *     本类只负责事件翻译、hook 触发和用户输入挂起。
- *  3. 新增 harness 白拿的能力：`compact()` / `followUp()` / `nextTurn()` / `navigateTree()`。
+ *  3. 新增 harness 白拿的能力：自动压缩 / `followUp()` / `nextTurn()` / `navigateTree()`。
  *
  * 审批下沉：路径/命令审批改挂 harness 的 `tool_call` 钩子（返回 `{block, reason}`），
  * 工具实现不再需要自己调 assertReadApproved —— 见 `approvalHook`。
@@ -31,9 +31,9 @@ import type { HookFirer } from '@shuvix/chat-protocol/types/hook'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
-  AUTO_COMPACT_CUSTOM_TYPE,
+  INLINE_TOKENS_CUSTOM_TYPE,
   entriesToChatMessages,
-  INSTRUCTION_CUSTOM_TYPE
+  type InlineTokensSidecar
 } from './projection'
 import {
   createHarnessEventState,
@@ -108,7 +108,7 @@ export class HarnessSession {
   private readonly autoCompactEnabled: boolean
   /**
    * turn 后台维护（自动压缩）的串行栅栏：压缩期间 harness 相位为 'compaction'，
-   * 此时新 prompt 会被 pi 拒 busy —— prompt/compact 入口先等它完成。永不 reject。
+   * 此时新 prompt 会被 pi 拒 busy —— prompt 入口先等它完成。永不 reject。
    */
   private maintenance: Promise<void> = Promise.resolve()
   private readonly eventState: HarnessEventState = createHarnessEventState()
@@ -185,10 +185,18 @@ export class HarnessSession {
    * 发送一轮 prompt。生命周期 hook 顺序与旧实现一致：
    * SessionStart（首轮懒触发）→ UserPromptSubmit（deny 则丢弃）→ 派发。
    *
+   * `display`：内联 Token 显示侧车（标记态原文 + tokens 字典）。harness 落盘的
+   * user 消息是展开后的全文（LLM 真理源）；侧车以纯 custom entry 落在它之前，
+   * 只供投影层把气泡还原成芯片形态 —— 见 INLINE_TOKENS_CUSTOM_TYPE。
+   *
    * 错误不抛出（已广播 error 事件），但经返回值回报 —— 派生 agent 协调器需要它
    * 判定本轮成败；会话根调用方可忽略返回值。
    */
-  async prompt(text: string, images?: ImageContent[]): Promise<{ error?: string }> {
+  async prompt(
+    text: string,
+    images?: ImageContent[],
+    display?: InlineTokensSidecar
+  ): Promise<{ error?: string }> {
     this.logger.info(`prompt session=${this.sessionId} images=${images?.length || 0}`)
     // 上一轮的自动压缩可能还在跑（harness 相位 'compaction' 会拒 prompt）—— 等它收尾
     await this.maintenance
@@ -229,6 +237,10 @@ export class HarnessSession {
     this.onPromptAccepted?.(text)
 
     try {
+      // 显示侧车先于 user 消息落盘（deny 已在上方拦截，不会留下无主侧车）
+      if (display) {
+        await this.session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, display)
+      }
       await this.harness.prompt(text, images ? { images } : undefined)
     } catch (err) {
       const error = errText(err)
@@ -254,9 +266,8 @@ export class HarnessSession {
    * `estimateContextTokens`），其后的尾部才用字符启发式补估。
    * 阈值即 pi 的 `shouldCompact`：tokens > contextWindow - reserveTokens(16k)。
    *
-   * 压缩成功后追加一条 AUTO_COMPACT_CUSTOM_TYPE 的纯 custom entry（不进模型
-   * 上下文），投影层据此把摘要卡片标成「自动压缩」，再广播 messages_reloaded
-   * 让前端带着标记重拉。
+   * 压缩成功后广播 messages_reloaded 让前端重拉 —— 被压缩掉的历史随之从
+   * 消息列表消失（`buildContextEntries` 自带压缩过滤），原地换成摘要卡片。
    */
   private async maybeAutoCompact(): Promise<void> {
     try {
@@ -269,11 +280,7 @@ export class HarnessSession {
       this.logger.info(
         `自动压缩 session=${this.sessionId} tokens≈${estimate.tokens} window=${contextWindow}`
       )
-      const result = await this.compactInner()
-      if (!result.compacted) return
-      await this.session.appendCustomEntry(AUTO_COMPACT_CUSTOM_TYPE, {
-        tokensBefore: result.tokensBefore
-      })
+      if (!(await this.compact())) return
       this.eventSink.broadcast({ type: 'messages_reloaded', sessionId: this.sessionId })
     } catch (err) {
       // 自动压缩失败不影响已成功的 turn：记日志，下轮阈值仍超会再试
@@ -306,20 +313,6 @@ export class HarnessSession {
         false
       )
     }
-  }
-
-  /** 注入项目指令文件（display=true → UI 渲染 InstructionBubble，且进入上下文） */
-  async injectInstruction(content: string, filename: string): Promise<ChatMessage | null> {
-    const entryId = await this.session.appendCustomMessageEntry(
-      INSTRUCTION_CUSTOM_TYPE,
-      content,
-      true,
-      { filename }
-    )
-    const entry = await this.session.getEntry(entryId)
-    if (!entry) return null
-    const [projected] = entriesToChatMessages([entry], this.sessionId, this.harness.getModel().id)
-    return projected ?? null
   }
 
   /** 运行中注入引导消息（harness 的 steer 队列） */
@@ -362,25 +355,15 @@ export class HarnessSession {
 
   /**
    * 压缩会话历史（harness 内建的滚动式部分压缩：保留最近 keepRecentTokens 的原始
-   * 消息，只把更早的历史换成摘要）。
+   * 消息，只把更早的历史换成摘要）。仅 `maybeAutoCompact` 调用 —— 手动压缩入口已移除。
    *
    * 前置判定：上下文小于保留窗口时切点落在第一条消息上、待摘要区间为空 ——
    * pi 的 `harness.compact()` 会照样调一次 LLM 对空对话生成摘要并追加一条无意义的
    * compaction entry（且下一次 compact 会因"最后一条已是 compaction"抛
    * "Nothing to compact"）。这里提前用同一套 `prepareCompaction` 判定，
-   * 无实质可压缩内容时返回 `{ compacted: false }`，不触碰 LLM 也不动会话树。
+   * 无实质可压缩内容时返回 false，不触碰 LLM 也不动会话树。
    */
-  async compact(
-    customInstructions?: string
-  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
-    await this.maintenance // 自动压缩进行中则排队（避免撞 harness busy）
-    return await this.compactInner(customInstructions)
-  }
-
-  /** compact 的实体（不等 maintenance —— maybeAutoCompact 自身经此调用） */
-  private async compactInner(
-    customInstructions?: string
-  ): Promise<{ compacted: boolean; summary?: string; tokensBefore?: number }> {
+  private async compact(): Promise<boolean> {
     const branch = await this.session.getBranch()
     const prepared = prepareCompaction(branch, DEFAULT_COMPACTION_SETTINGS)
     const preparation = prepared.ok ? prepared.value : undefined
@@ -388,10 +371,10 @@ export class HarnessSession {
       !preparation ||
       (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0)
     ) {
-      return { compacted: false }
+      return false
     }
-    const result = await this.harness.compact(customInstructions)
-    return { compacted: true, summary: result.summary, tokensBefore: result.tokensBefore }
+    await this.harness.compact()
+    return true
   }
 
   fireStopHook(reason: string): void {
@@ -412,6 +395,11 @@ export class HarnessSession {
     await this.harness.setModel(model)
     if (thinkingLevel !== undefined) await this.harness.setThinkingLevel(thinkingLevel)
     this.logger.info(`切换模型 session=${this.sessionId} model=${model.id}`)
+  }
+
+  /** 当前思考深度（派发工具的惰性模型配置读取用） */
+  getThinkingLevel(): ThinkingLevel {
+    return this.harness.getThinkingLevel() as ThinkingLevel
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<void> {

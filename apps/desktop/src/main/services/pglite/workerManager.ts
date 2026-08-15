@@ -81,7 +81,6 @@ export class PgliteWorkerManager {
       workerKey,
       sessionId,
       config.workingDirectory,
-      config.referenceDirs,
       persist,
       onReady
     )
@@ -97,7 +96,6 @@ export class PgliteWorkerManager {
     workerKey: string,
     sessionId: string,
     workingDirectory: string,
-    referenceDirs: { path: string; access?: 'readonly' | 'readwrite' }[],
     persist: boolean,
     onReady?: () => void
   ): Promise<void> {
@@ -116,9 +114,6 @@ export class PgliteWorkerManager {
 
     // 构建挂载配置
     const mounts: MountConfig[] = [{ hostPath: workingDirectory, access: 'readwrite' }]
-    for (const ref of referenceDirs) {
-      mounts.push({ hostPath: ref.path, access: ref.access ?? 'readonly' })
-    }
 
     const worker = new Worker(workerPath)
     const entry: WorkerEntry = {

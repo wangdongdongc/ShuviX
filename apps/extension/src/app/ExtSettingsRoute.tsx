@@ -1,20 +1,10 @@
 import { useTranslation } from 'react-i18next'
-import {
-  Settings,
-  ArrowLeft,
-  Layers,
-  Puzzle,
-  Info,
-  Brain,
-  Wrench,
-  FolderClosed
-} from 'lucide-react'
+import { Settings, ArrowLeft, Layers, Puzzle, Info, Wrench, FolderClosed } from 'lucide-react'
 import { ChatHostProvider, getChatApi, useChatStore } from '@shuvix/chat-ui'
 import {
   SettingsContainer,
   AboutTab,
   McpClientPanel,
-  ContextManagementSettings,
   BuiltinToolsView,
   ProjectsSettings,
   type SettingsTab
@@ -66,13 +56,6 @@ export function ExtSettingsRoute({
       label: t('settings.tabProviders'),
       icon: <Layers size={14} />,
       content: <ExtProviderTab />
-    },
-    {
-      id: 'contextMgmt',
-      label: t('settings.tabContextMgmt'),
-      icon: <Brain size={14} />,
-      // 复用共享上下文管理（系统提示词卡片）；后端经 chatApiAdapter.settings → systemPromptStore
-      content: <ContextManagementSettings />
     },
     {
       id: 'tools',

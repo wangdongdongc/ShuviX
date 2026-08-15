@@ -3,7 +3,7 @@
  * 转写成"一章 Markdown"，作为会话导出 / 压缩归档（agent-runtime sessionTool）/
  * 消息归纳 / 转发等能力的公共底座。
  *
- * 纯函数、零运行时依赖（保持 chat-protocol 为 leaf），四端（main/renderer/webui/extension）
+ * 纯函数、零运行时依赖（保持 chat-protocol 为 leaf），三端（main/renderer/extension）
  * 经 `@shuvix/chat-protocol/utils/transcript` 直接复用。
  *
  * - **默认精简**：只保留用户消息 + 助手最终输出，忽略工具调用 / 思考 / 中间步骤。
