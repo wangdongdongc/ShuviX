@@ -24,8 +24,8 @@ vi.mock('../../services/toolContext', () => ({
     const base = resolve(workingDirectory)
     return r === base || r.startsWith(base + sep)
   },
-  assertReadApproved: () => {},
-  assertWriteApproved: () => {},
+  assertReadAllowed: () => {},
+  assertWriteAllowed: () => {},
   TOOL_ABORTED: 'Aborted'
 }))
 

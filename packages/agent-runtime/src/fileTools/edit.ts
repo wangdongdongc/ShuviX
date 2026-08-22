@@ -1,11 +1,11 @@
 /**
  * 共享 edit 内核 —— 精确/模糊文本替换（BOM 保留、行尾规范化、多级回退链匹配）。
  * 从桌面 edit.ts 的 executeInternal 内层逐字搬出，fs → 注入的 FileSystemPort，
- * fileTime → 注入的 FileGuards。富文本/审批/abort 仍由各宿主在外层编排。
+ * fileTime → 注入的 FileGuards。富文本/询问/abort 仍由各宿主在外层编排。
  */
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { EditToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import type { FileSystemPort, FileGuards, WriteApprovalHook } from './port'
+import type { FileSystemPort, FileGuards, WriteAskHook } from './port'
 import {
   capDiffString,
   detectLineEnding,
@@ -25,12 +25,12 @@ export interface EditParams {
 
 /**
  * 编辑文件：校验存在 + 读后被改守卫 → 整读 → BOM/行尾处理 → 多级回退匹配替换 →
- * 生成带行号上下文的 diff → 写入前审批 → 写入 → 记录读取时间。
+ * 生成带行号上下文的 diff → 写入前询问 → 写入 → 记录读取时间。
  * readPath 交给 port 解释；displayPath（params.path）用于输出文案与报错。
  *
- * diff 在写入**之前**就算好，因为「预览审批」要拿它给用户看；同一个字符串随后原样进
- * details，所以预览与执行后展示的必然一致。审批发生在锁内也不是巧合：这样被预览的内容
- * 就是被写入的内容，中间没有任何窗口能让文件变化（见 approve 调用处注释）。
+ * diff 在写入**之前**就算好，因为「预览询问」要拿它给用户看；同一个字符串随后原样进
+ * details，所以预览与执行后展示的必然一致。询问发生在锁内也不是巧合：这样被预览的内容
+ * 就是被写入的内容，中间没有任何窗口能让文件变化（见 ask 调用处注释）。
  *
  * 关键：整个 read-modify-write 都在 withFileLock 内完成（不只写入加锁）。否则对同一文件的并发 edit
  * 会各自在锁外读到同一初始快照、各自只把自己的改动套在该快照上，写入串行后「最后写入者」覆盖其余
@@ -42,7 +42,7 @@ export async function applyEdit(
   guards: FileGuards,
   readPath: string,
   params: EditParams,
-  approve?: WriteApprovalHook
+  ask?: WriteAskHook
 ): Promise<AgentToolResult<EditToolDetails>> {
   return guards.withFileLock(readPath, async () => {
     // 检查文件是否存在
@@ -80,16 +80,16 @@ export async function applyEdit(
     }
 
     const diffResult = generateDiffString(normalizedContent, newContent)
-    // 封顶只做这一次：截断后的串同时喂给审批预览与 details
+    // 封顶只做这一次：截断后的串同时喂给询问预览与 details
     const diff = capDiffString(diffResult.diff)
 
-    // 写入前审批 —— 仍在锁内：本进程的并发 edit/write 在用户审阅期间进不来，
-    // 所以「批准的那份 diff」与「落盘的那次写入」严格对应；拒绝则 throw，写入不会发生。
-    if (approve) {
-      await approve({ path: params.path, diff })
+    // 写入前询问 —— 仍在锁内：本进程的并发 edit/write 在用户审阅期间进不来，
+    // 所以「允许的那份 diff」与「落盘的那次写入」严格对应；拒绝则 throw，写入不会发生。
+    if (ask) {
+      await ask({ path: params.path, diff })
 
-      // 文件锁只挡得住本进程。审批可能停留很久，期间外部编辑器照样能改这个文件 ——
-      // 变了就中止：既不能拿按旧内容算出的结果去覆盖新内容，用户批准的那份预览也已不成立。
+      // 文件锁只挡得住本进程。询问可能停留很久，期间外部编辑器照样能改这个文件 ——
+      // 变了就中止：既不能拿按旧内容算出的结果去覆盖新内容，用户允许的那份预览也已不成立。
       await guards.assertNotModifiedSinceRead(readPath)
     }
 

@@ -1,7 +1,7 @@
 /**
  * browser 工具（桌面注册壳）—— 统一 multiplex 浏览器工具，实现共享自 @shuvix/agent-runtime。
  *
- * backend 操作主窗口内嵌浏览器面板（services/browser），无审批门控（面板可见即监督）。
+ * backend 操作主窗口内嵌浏览器面板（services/browser），无询问门控（面板可见即监督）。
  * 深度用法文档在内置 skill `browser`（SKILL.md）与工具自身的 action:"help"。
  */
 import {

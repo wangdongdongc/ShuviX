@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeRaw from 'rehype-raw'
 import { ChevronRight } from 'lucide-react'
-import { markdownComponents } from './markdownComponents'
+import {
+  markdownComponents,
+  markdownRemarkPlugins,
+  markdownRehypePlugins
+} from './markdownComponents'
 
 interface SystemNoticeCardProps {
   /** 左侧图标 */
@@ -58,8 +59,8 @@ export function SystemNoticeCard({
         <div className="px-3 pb-3 border-t border-border-secondary/40">
           <div className="markdown-body text-sm pt-2">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight, rehypeRaw]}
+              remarkPlugins={markdownRemarkPlugins}
+              rehypePlugins={markdownRehypePlugins}
               components={markdownComponents}
             >
               {content}

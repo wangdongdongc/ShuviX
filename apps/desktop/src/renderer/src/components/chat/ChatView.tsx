@@ -198,9 +198,6 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       rightActions={rightActions}
       // 会话面板（共享组件）：媒体/PDF 走桌面 shuvix-preview:// 协议，
       // Files 内容注入桌面 caps（.md 预览可「创建笔记本」/ 系统文件管理器打开目录）
-      sessionToolbar={
-        !isWeb ? <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} /> : undefined
-      }
       sessionPanel={
         !isWeb ? (
           <MediaUrlProvider value={shuvixPreviewResolver}>
@@ -213,8 +210,16 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         ) : undefined
       }
       banner={
+        // 会话工具栏靠右并入这条横幅：它原先悬浮在正文右上角，会压住右对齐的用户气泡
         activeSessionId && pinnedMode !== 'placeholder' ? (
-          <StatusBanner sessionId={activeSessionId} />
+          <StatusBanner
+            sessionId={activeSessionId}
+            trailing={
+              !isWeb ? (
+                <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} />
+              ) : undefined
+            }
+          />
         ) : undefined
       }
       contentOverride={placeholder}

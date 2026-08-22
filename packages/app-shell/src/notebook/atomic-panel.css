@@ -23,7 +23,9 @@
   --atomic-editor-bg-panel: var(--color-bg-secondary);
   --atomic-editor-border: var(--color-border-secondary);
 
-  /* —— 代码块：对齐消息气泡 .markdown-body pre —— */
+  /* —— 代码块：曾对齐消息气泡 .markdown-body pre，现已分道扬镳 ——
+     对话流那份为了不抢正文重心降到了 40%；笔记本是文档面，代码块本就该是
+     独立的块，保留 60%。两边不必再同步。 */
   --atomic-editor-code-bg: color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent);
   --atomic-editor-code-rail: transparent; /* 去掉左侧紫色 rail，消息气泡没有 */
 
@@ -582,4 +584,45 @@ button.cm-atomic-search-btn svg {
   background-repeat: no-repeat;
   background-position: center;
   background-size: 82%;
+}
+
+/* —— 填充模式（data-layout="fill"）——
+   编辑器嵌在设置页这类**已有自己边距的容器**里时，笔记本那套「写作页」装饰全是负担：
+   28px 侧边距 + 700px 限宽居中 + 128px 底部留白（那是给笔记本底部悬浮输入框让位的，
+   设置页根本没有），叠加外层容器的内边距后正文被挤成窄条。此模式下一律铺满，
+   并移除落在边缘留白里的标题角标 —— 没有那条留白，角标会压到正文上。 */
+.atomic-panel[data-layout='fill'] .cm-scroller {
+  padding: 4px 10px 16px;
+}
+.atomic-panel[data-layout='fill'] .cm-content {
+  max-width: none;
+  margin: 0;
+}
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h1::before,
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h2::before,
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h3::before,
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h4::before,
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h5::before,
+.atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h6::before {
+  display: none;
+}
+/* 属性卡在填充模式下贴着容器上沿，去掉笔记本里的上外边距 */
+.atomic-panel[data-layout='fill'] .cm-shuvix-fmcard {
+  margin-top: 0;
+}
+
+/* —— shuvix 契约 md 的 frontmatter 属性卡（notebook/frontmatterCard.ts）——
+   卡片视觉直接复用设置页的 Tailwind 类名（见 frontmatterCard.ts 的 CARD_BOX/ROW/…），
+   这里只留 CM6 语境特有、Tailwind 表达不了的两条。 */
+
+/* 揭示态：给 frontmatter 源码行一层极淡的强调底色，标出元数据边界 */
+.cm-shuvix-fm-srcline {
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+
+/* 卡片是块级 widget，内部不继承编辑器的等宽正文排版 */
+.cm-shuvix-fmcard {
+  font-family: var(--theme-font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  line-height: 1.5;
+  user-select: none;
 }

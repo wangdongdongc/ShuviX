@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage } from '../types/chatMessage'
+import type { AssistantBlock, ChatMessage } from '../types/chatMessage'
 import { transcribeConversation } from './transcript'
 
 let seq = 0
@@ -18,30 +18,41 @@ function base(over: Record<string, unknown>): ChatMessage {
 function userText(content: string, over: Record<string, unknown> = {}): ChatMessage {
   return base({ role: 'user', type: 'text', content, metadata: null, ...over })
 }
+/** 一条 assistant 卡：blocks 原序，content = 各 text 块拼接（与投影层一致） */
+function assistantCard(blocks: AssistantBlock[], over: Record<string, unknown> = {}): ChatMessage {
+  const content = blocks
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+  return base({ role: 'assistant', type: 'message', blocks, content, metadata: null, ...over })
+}
 function assistantText(content: string, over: Record<string, unknown> = {}): ChatMessage {
-  return base({ role: 'assistant', type: 'text', content, metadata: null, ...over })
+  return assistantCard([{ type: 'text', text: content }], over)
 }
 function toolUse(toolName: string, result: string, args?: Record<string, unknown>): ChatMessage {
-  return base({
-    role: 'assistant',
-    type: 'tool_use',
-    content: result,
-    metadata: { toolCallId: 'c1', toolName, args }
-  })
+  return assistantCard([{ type: 'tool', toolCallId: 'c1', toolName, args, result }])
 }
 
 describe('transcribeConversation', () => {
   it('精简默认：只含 user + assistant final，忽略工具/思考/step', () => {
     const msgs: ChatMessage[] = [
       userText('Hello there'),
-      base({
-        role: 'assistant',
-        type: 'step_thinking',
-        content: 'let me think hard about this'
-      }),
-      toolUse('bash', 'command output here', { command: 'ls' }),
-      base({ role: 'assistant', type: 'step_text', content: 'intermediate note' }),
-      assistantText('The final answer is 42', { metadata: { thinking: 'secret reasoning' } })
+      // 过程卡：思考 + 边做边说的正文 + 工具调用同处一条消息
+      assistantCard([
+        { type: 'thinking', text: 'let me think hard about this' },
+        { type: 'text', text: 'intermediate note' },
+        {
+          type: 'tool',
+          toolCallId: 'c1',
+          toolName: 'bash',
+          args: { command: 'ls' },
+          result: 'command output here'
+        }
+      ]),
+      assistantCard([
+        { type: 'thinking', text: 'secret reasoning' },
+        { type: 'text', text: 'The final answer is 42' }
+      ])
     ]
     const md = transcribeConversation(msgs)
     expect(md).toContain('Hello there')
@@ -67,11 +78,17 @@ describe('transcribeConversation', () => {
     expect(results).toContain('done')
   })
 
-  it('includeThinking 纳入 assistant.thinking 与 step_thinking', () => {
+  it('includeThinking 纳入各条消息的 thinking 块', () => {
     const msgs: ChatMessage[] = [
       userText('q'),
-      base({ role: 'assistant', type: 'step_thinking', content: 'mid thought' }),
-      assistantText('answer', { metadata: { thinking: 'final thought' } })
+      assistantCard([
+        { type: 'thinking', text: 'mid thought' },
+        { type: 'tool', toolCallId: 'c1', toolName: 'bash', result: 'x' }
+      ]),
+      assistantCard([
+        { type: 'thinking', text: 'final thought' },
+        { type: 'text', text: 'answer' }
+      ])
     ]
     const md = transcribeConversation(msgs, { includeThinking: true })
     expect(md).toContain('mid thought')

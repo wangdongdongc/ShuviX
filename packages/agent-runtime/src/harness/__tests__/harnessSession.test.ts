@@ -97,7 +97,6 @@ function makeHarness(autoCompact = false): HarnessSession {
     systemPrompt: 'test',
     tools: [],
     eventSink: { broadcast: (e) => events.push(e.type), hasUserInputCapability: () => false },
-    shouldDeferToolDisplay: () => false,
     autoCompact
   })
 }

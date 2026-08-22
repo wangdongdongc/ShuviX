@@ -268,8 +268,8 @@ class CliServer {
       if (!targetPath) throw new Error('targetPath required')
       // 先归一化成最终 zip 路径再校验 —— 校验对象必须与真正写入的路径一致
       const zipPath = resolveExportZipPath(id, resolvePath(targetPath))
-      // 准入：导出目标必须落在调用会话的 workingDirectory 或 readwrite 参考目录内
-      // CLI 路径无 interactive approval 通道，越界直接拒绝
+      // 准入：导出目标必须落在调用会话的 workingDirectory 内
+      // CLI 路径无交互询问通道，弹不出询问卡，越界只能直接拒绝
       if (sessionId) {
         const config = resolveProjectConfig(sessionId)
         if (!isPathWithinWorkspace(zipPath, config.workingDirectory)) {

@@ -8,7 +8,7 @@
  * 的补充而非重复）、结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
  *
  * 平台相关项全部经注入：agent 创建(createAgent，宿主 factory)、事件广播(broadcast)、
- * 审批/询问通道(requestUserInput，路由到根会话前端)。
+ * 询问/询问通道(requestUserInput，路由到根会话前端)。
  */
 import type { Agent, AgentMessage, AgentToolResult, Session } from '@earendil-works/pi-agent-core'
 import { v4 as uuid } from 'uuid'
@@ -62,7 +62,7 @@ export interface SpawnContext {
   agentId: string
   /** 本次派生 agent 的层级（根会话的直接派生 = 1） */
   depth: number
-  /** 所属根会话 id（工具路径审批/LLM 日志归属） */
+  /** 所属根会话 id（工具路径询问/LLM 日志归属） */
   rootSessionId: string
   /** 本次派生使用的模型配置（宿主为其派发工具沿用） */
   modelConfig: SubAgentModelConfig
@@ -73,8 +73,8 @@ export interface SpawnContext {
 /**
  * 传给 resolveTools 的运行期辅助能力（manager 按派发上下文绑定后注入）。
  *
- * requestUserInput：派生 agent 工具可达**根会话**的用户输入通道——审批/询问表单出现在
- * 根会话对话流中，由用户作答后回流，与主 Agent 亲自调用 ask/路径审批完全等效。
+ * requestUserInput：派生 agent 工具可达**根会话**的用户输入通道——询问/询问表单出现在
+ * 根会话对话流中，由用户作答后回流，与主 Agent 亲自调用 ask/路径询问完全等效。
  * 仅当宿主向 SubAgentManagerDeps 注入了 requestUserInput 时存在。
  */
 export interface SubAgentToolHelpers {
@@ -90,7 +90,7 @@ export interface SubAgentManagerDeps {
   /**
    * 根会话用户输入通道（可选）。注入后 manager 把它绑定 rootSessionId 经
    * SubAgentToolHelpers 传给 createAgent（→ 宿主 resolveTools），使派生 agent 工具
-   * （ask/路径审批等）可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
+   * （ask/路径询问等）可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
    */
   requestUserInput?: (rootSessionId: string, req: InputRequest) => Promise<InputResponse>
   /** 向前端广播 ChatEvent */

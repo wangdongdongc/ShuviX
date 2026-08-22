@@ -6,11 +6,11 @@
  *     harness 每轮从 `session.buildContext()` 取消息；「开会话时把 DB 行重建成
  *     AgentMessage」那条有损路径彻底消失。
  *  2. **不再持久化**。message/toolResult entry 由 harness 自己 append，
- *     本类只负责事件翻译、hook 触发和用户输入挂起。
+ *     本类只负责事件翻译和用户输入挂起。
  *  3. 新增 harness 白拿的能力：自动压缩 / `followUp()` / `nextTurn()` / `navigateTree()`。
  *
- * 审批下沉：路径/命令审批改挂 harness 的 `tool_call` 钩子（返回 `{block, reason}`），
- * 工具实现不再需要自己调 assertReadApproved —— 见 `approvalHook`。
+ * 询问下沉：路径/命令询问改挂 harness 的 `tool_call` 钩子（返回 `{block, reason}`），
+ * 工具实现不再需要自己调 assertReadAllowed —— 见 `askHook`。
  */
 import {
   AgentHarness,
@@ -27,7 +27,6 @@ import type {
 } from '@earendil-works/pi-agent-core'
 import type { Api, ImageContent, Model, Models } from '@earendil-works/pi-ai'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
-import type { HookFirer } from '@shuvix/chat-protocol/types/hook'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import {
@@ -75,11 +74,8 @@ export interface HarnessSessionDeps {
   logger?: RuntimeLogger
   httpLog?: RuntimeHttpLog
   transformToolResult?: ToolResultTransform
-  shouldDeferToolDisplay: (toolName: string, args: Record<string, unknown>) => boolean
-  /** 工具执行前拦截（审批）。不注入 = 全部放行。 */
+  /** 工具执行前拦截（询问）。不注入 = 全部放行。 */
   toolCallGate?: ToolCallGate
-  hooks?: HookFirer
-  getCwd?: () => string
   onPromptAccepted?: (text: string) => void
   /** onPayload 记录 HTTP 日志后回传 logId */
   onPayload?: (payload: unknown, model: Model<Api>) => string | undefined
@@ -99,11 +95,8 @@ export class HarnessSession {
   private readonly harness: AgentHarness
   private readonly eventSink: RuntimeEventSink
   private readonly logger: RuntimeLogger
-  private readonly hooks?: HookFirer
-  private readonly getCwd: () => string
   private readonly onPromptAccepted?: (text: string) => void
   private systemPrompt: string
-  private sessionStartHookFired = false
   private streaming = false
   private readonly autoCompactEnabled: boolean
   /**
@@ -123,8 +116,6 @@ export class HarnessSession {
     this.session = deps.session
     this.eventSink = deps.eventSink
     this.logger = deps.logger ?? noopLogger
-    this.hooks = deps.hooks
-    this.getCwd = deps.getCwd ?? (() => '')
     this.onPromptAccepted = deps.onPromptAccepted
     this.systemPrompt = deps.systemPrompt
     this.autoCompactEnabled = deps.autoCompact ?? false
@@ -149,7 +140,6 @@ export class HarnessSession {
         httpLog: deps.httpLog,
         getModelId: () => this.harness.getModel().id,
         transformToolResult: deps.transformToolResult ?? defaultToolResultTransform,
-        shouldDeferToolDisplay: deps.shouldDeferToolDisplay,
         broadcastUserMessages: deps.broadcastUserMessages
       }
     }
@@ -160,7 +150,7 @@ export class HarnessSession {
       await forwardHarnessEvent(eventCtx, event)
     })
 
-    // 审批：工具执行前统一拦截。工具实现不再感知审批的存在。
+    // 询问：工具执行前统一拦截。工具实现不再感知询问的存在。
     if (deps.toolCallGate) {
       const gate = deps.toolCallGate
       this.harness.on('tool_call', async (event) => {
@@ -182,8 +172,7 @@ export class HarnessSession {
   // ─── 核心 API ──────────────────────────────────────
 
   /**
-   * 发送一轮 prompt。生命周期 hook 顺序与旧实现一致：
-   * SessionStart（首轮懒触发）→ UserPromptSubmit（deny 则丢弃）→ 派发。
+   * 发送一轮 prompt。
    *
    * `display`：内联 Token 显示侧车（标记态原文 + tokens 字典）。harness 落盘的
    * user 消息是展开后的全文（LLM 真理源）；侧车以纯 custom entry 落在它之前，
@@ -201,43 +190,10 @@ export class HarnessSession {
     // 上一轮的自动压缩可能还在跑（harness 相位 'compaction' 会拒 prompt）—— 等它收尾
     await this.maintenance
 
-    if (this.hooks) {
-      if (!this.sessionStartHookFired) {
-        this.sessionStartHookFired = true
-        try {
-          const outputs = await this.hooks.fire('SessionStart', {
-            session_id: this.sessionId,
-            hook_event_name: 'SessionStart',
-            cwd: this.getCwd()
-          })
-          await this.applyAdditionalContext(outputs, 'SessionStart')
-        } catch (err) {
-          this.logger.warn(`SessionStart hook error: ${errText(err)}`)
-        }
-      }
-      try {
-        const outputs = await this.hooks.fire('UserPromptSubmit', {
-          session_id: this.sessionId,
-          hook_event_name: 'UserPromptSubmit',
-          cwd: this.getCwd(),
-          prompt: text
-        })
-        const denied = outputs.find((o) => o.hookSpecificOutput?.permissionDecision === 'deny')
-        if (denied) {
-          const reason = denied.hookSpecificOutput?.reason ?? 'prompt blocked by hook'
-          this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error: reason })
-          return { error: reason }
-        }
-        await this.applyAdditionalContext(outputs, 'UserPromptSubmit')
-      } catch (err) {
-        this.logger.warn(`UserPromptSubmit hook error: ${errText(err)}`)
-      }
-    }
-
     this.onPromptAccepted?.(text)
 
     try {
-      // 显示侧车先于 user 消息落盘（deny 已在上方拦截，不会留下无主侧车）
+      // 显示侧车先于 user 消息落盘
       if (display) {
         await this.session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, display)
       }
@@ -288,33 +244,6 @@ export class HarnessSession {
     }
   }
 
-  /**
-   * hook 返回的 additionalContext 注入上下文。
-   *
-   * 与旧实现的区别：现在**会落盘**（作为 display=false 的 custom_message entry）。
-   * harness 的上下文即 entry 树，没有「只进内存不进存储」这一层了 ——
-   * 用 display=false 保证它不出现在 UI 上，语义等价于旧的临时注入。
-   */
-  private async applyAdditionalContext(
-    outputs: ReadonlyArray<{ additionalContext?: string }>,
-    eventLabel: string
-  ): Promise<void> {
-    const MAX_LEN = 10000
-    for (const out of outputs) {
-      let ctx = out.additionalContext
-      if (typeof ctx !== 'string' || !ctx) continue
-      if (ctx.length > MAX_LEN) {
-        this.logger.warn(`${eventLabel} hook additionalContext 超过 ${MAX_LEN} 字，已截断`)
-        ctx = ctx.slice(0, MAX_LEN)
-      }
-      await this.session.appendCustomMessageEntry(
-        'hook',
-        `<system-reminder source="hook:${eventLabel}">\n${ctx}\n</system-reminder>`,
-        false
-      )
-    }
-  }
-
   /** 运行中注入引导消息（harness 的 steer 队列） */
   async steer(text: string): Promise<void> {
     this.logger.info(`steer session=${this.sessionId}`)
@@ -340,7 +269,6 @@ export class HarnessSession {
    */
   async abort(): Promise<void> {
     this.logger.info(`中止 session=${this.sessionId}`)
-    this.fireStopHook('aborted')
     for (const [id, pending] of this.pendingInputs) {
       pending.resolve({ kind: 'cancel', reason: 'aborted' })
       this.eventSink.broadcast({
@@ -375,18 +303,6 @@ export class HarnessSession {
     }
     await this.harness.compact()
     return true
-  }
-
-  fireStopHook(reason: string): void {
-    if (!this.hooks) return
-    void this.hooks
-      .fire('Stop', {
-        session_id: this.sessionId,
-        hook_event_name: 'Stop',
-        cwd: this.getCwd(),
-        reason
-      })
-      .catch((err) => this.logger.warn(`Stop hook error: ${errText(err)}`))
   }
 
   // ─── 运行时配置 ────────────────────────────────────

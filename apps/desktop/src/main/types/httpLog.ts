@@ -11,6 +11,8 @@ export interface HttpLogSummary {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+  /** 请求体字节数（列表直出，不必拉 payload）—— token 是模型口径，体积是「库为什么胀」的口径 */
+  payloadBytes: number
   createdAt: number
 }
 

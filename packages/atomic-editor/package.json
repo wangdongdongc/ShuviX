@@ -21,6 +21,7 @@
   ],
   "dependencies": {
     "@shuvix/chat-protocol": "*",
+    "katex": "^0.16.45",
     "mermaid": "^11.12.3"
   },
   "peerDependencies": {

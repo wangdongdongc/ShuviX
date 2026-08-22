@@ -37,7 +37,7 @@ import {
   useChatStore,
   type ToolResultDetails,
   type ToolPresentation,
-  type ToolUseMessage,
+  type AssistantToolBlock,
   type FormItemRenderer
 } from '../../stores/chatStore'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
@@ -142,7 +142,7 @@ interface ToolCallBlockProps {
 
 /**
  * 工具调用块 — 在对话流中内联展示工具调用过程
- * 折叠/展开显示参数和结果；需审批模式下 bash 审批内联卡片
+ * 折叠/展开显示参数和结果；需询问模式下 bash 询问内联卡片
  */
 export function ToolCallBlock({
   toolName,
@@ -163,7 +163,7 @@ export function ToolCallBlock({
     const execs = s.sessionToolExecutions[s.activeSessionId]
     return execs?.find((te) => te.toolCallId === toolCallId)
   })
-  // 该工具是否有挂起的用户输入请求(命令审批 / SSH 凭证 / ...)
+  // 该工具是否有挂起的用户输入请求(命令询问 / SSH 凭证 / ...)
   const hasPendingInput = useChatStore((s) => {
     if (!toolCallId || !s.activeSessionId) return false
     return (s.sessionPendingInputs[s.activeSessionId] || []).some((r) => r.id === toolCallId)
@@ -196,7 +196,7 @@ export function ToolCallBlock({
     return { icon: <Wrench size={12} className={ic} />, detail: '' }
   })()
 
-  // done 不出图标：成功是常态，一列绿勾只会盖过真正需要注意的行（运行中 / 出错 / 待审批）
+  // done 不出图标：成功是常态，一列绿勾只会盖过真正需要注意的行（运行中 / 出错 / 待询问）
   const statusConfig: Record<string, React.ReactNode> = {
     generating: <Loader2 size={10} className="animate-spin text-text-tertiary" />,
     pending: null,
@@ -225,19 +225,25 @@ export function ToolCallBlock({
     detail: detail ? <span className="font-mono">{detail}</span> : undefined
   }
 
+  // `data-tool-name` / `data-tool-status`：工具行在 DOM 上唯一的语义锚点
+  // （折叠态只有图标 + i18n 标签，按图标/类名认会随主题与图标表腐化），e2e 据此断言
+  const rowData = { 'data-tool-name': toolName, 'data-tool-status': status }
+
   if (!expanded) {
     // 单行摘要 — hover 高亮，点击展开；不带外边距，块间距由消息流统一控制
     return (
-      <StepRow
-        {...rowProps}
-        expandable={canExpand}
-        onClick={() => canExpand && setExpanded(true)}
-      />
+      <div {...rowData}>
+        <StepRow
+          {...rowProps}
+          expandable={canExpand}
+          onClick={() => canExpand && setExpanded(true)}
+        />
+      </div>
     )
   }
 
   return (
-    <div>
+    <div {...rowData}>
       {/* 展开态 — 摘要行原位不动，详情从下方长出（与思考 / 分组同一形态，避免展开时跳版） */}
       <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
       <div className="mt-0.5 mb-1 ml-3 pl-2 border-l border-border-secondary/50">
@@ -309,10 +315,10 @@ export function ToolCallBlock({
  */
 export function ToolCallGroup({
   toolName,
-  msgs
+  blocks
 }: {
   toolName: string
-  msgs: ToolUseMessage[]
+  blocks: AssistantToolBlock[]
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const presentation = useChatStore((s) => s.toolPresentations[toolName])
@@ -321,13 +327,13 @@ export function ToolCallGroup({
   // 各次调用的摘要去重后拼接：同工具不同动作（evaluate / screenshot）仍能一眼看出
   const detail = useMemo(() => {
     const seen = new Set<string>()
-    for (const m of msgs) {
-      const first = buildToolSummary(toolName, m.metadata?.args)?.split('\n')[0]?.trim()
+    for (const b of blocks) {
+      const first = buildToolSummary(toolName, b.args)?.split('\n')[0]?.trim()
       if (first) seen.add(first)
     }
     const joined = [...seen].join(' · ')
     return joined.length > 60 ? joined.slice(0, 57) + '...' : joined
-  }, [msgs, toolName])
+  }, [blocks, toolName])
 
   const rowProps = {
     icon,
@@ -335,7 +341,7 @@ export function ToolCallGroup({
     detail: detail ? <span className="font-mono">{detail}</span> : undefined,
     trailing: (
       <span className="flex-shrink-0 rounded-full bg-bg-tertiary/70 px-1.5 text-[10px] leading-4 tabular-nums">
-        {msgs.length}
+        {blocks.length}
       </span>
     )
   }
@@ -348,14 +354,14 @@ export function ToolCallGroup({
     <div>
       <StepRow {...rowProps} expandable onClick={() => setExpanded(false)} />
       <div className="ml-3 pl-2 border-l border-border-secondary/50 space-y-0.5">
-        {msgs.map((m) => (
+        {blocks.map((b) => (
           <ToolCallBlock
-            key={m.id}
-            toolName={m.metadata?.toolName || toolName}
-            toolCallId={m.metadata?.toolCallId}
-            args={m.metadata?.args}
-            result={m.content || undefined}
-            details={m.metadata?.details}
+            key={b.toolCallId}
+            toolName={b.toolName || toolName}
+            toolCallId={b.toolCallId}
+            args={b.args}
+            result={b.result}
+            details={b.details}
             status="done"
           />
         ))}

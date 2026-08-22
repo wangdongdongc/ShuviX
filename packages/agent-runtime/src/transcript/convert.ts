@@ -19,22 +19,12 @@ import type {
   UserMessage
 } from '@earendil-works/pi-ai'
 import type {
+  AssistantMessage as ChatAssistantMessage,
+  AssistantBlock,
+  AssistantToolBlock,
   ChatMessage,
-  ImageMeta,
-  MessageMetadata
+  ImageMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
-
-/** 扁平行视角（规避 ChatMessage 判别联合在逐字段访问时的收窄噪音；字段与 DAO 行一致） */
-interface FlatRow {
-  id: string
-  sessionId: string
-  role: string
-  type: string
-  content: string
-  metadata: MessageMetadata | null
-  model: string
-  createdAt: number
-}
 
 /** 从图片对象中提取 raw base64：处理 data URL 格式和纯 base64 */
 export function extractBase64(img: ImageMeta): string {
@@ -56,19 +46,20 @@ export function extractBase64(img: ImageMeta): string {
 // 直接取出，零转换零损耗。这里只保留反向投影（供仍是裸 Agent 的子代理转写用）。
 
 /**
- * 将 Agent 上下文消息反向投影为 ChatMessage 行（合成 id：ctx-N；createdAt 取消息自带 timestamp）。
- * toolCall 与后续 toolResult 按 toolCallId 配对合并为 tool_use 行；孤儿 toolResult 兜底为独立行。
+ * 将 Agent 上下文消息反向投影为 ChatMessage（合成 id：ctx-N；createdAt 取消息自带 timestamp）。
+ * 与 harness/projection 同构：一条 AgentMessage = 一条 ChatMessage，thinking/text/toolCall
+ * 成为它的 blocks；toolResult 按 toolCallId 回填到工具块上，孤儿结果兜底为独立消息。
  */
 export function agentMessagesToChatMessages(
   messages: AgentMessage[],
   opts?: { sessionId?: string }
 ): ChatMessage[] {
   const sessionId = opts?.sessionId ?? ''
-  const out: FlatRow[] = []
+  const out: ChatMessage[] = []
   let seq = 0
   const nextId = (): string => `ctx-${++seq}`
-  /** 已产出的 tool_use 行，等待 toolResult 回填内容（按 toolCallId） */
-  const pendingTools = new Map<string, FlatRow>()
+  /** 已产出的工具块，等待 toolResult 回填结果（按 toolCallId） */
+  const pendingTools = new Map<string, AssistantToolBlock>()
 
   for (const msg of messages) {
     if (msg.role === 'user') {
@@ -102,55 +93,43 @@ export function agentMessagesToChatMessages(
 
     if (msg.role === 'assistant') {
       const a = msg as AssistantMessage
-      const blocks: (TextContent | ThinkingContent | ToolCall)[] =
+      const content: (TextContent | ThinkingContent | ToolCall)[] =
         typeof a.content === 'string' ? [{ type: 'text', text: a.content }] : a.content
+      const blocks: AssistantBlock[] = []
       const texts: string[] = []
-      let thinking = ''
       let images: ImageMeta[] | undefined
-      const toolRows: FlatRow[] = []
-      for (const block of blocks) {
+      for (const block of content) {
         if (block.type === 'text') {
+          blocks.push({ type: 'text', text: block.text })
           texts.push(block.text)
         } else if (block.type === 'thinking') {
-          thinking += (thinking ? '\n' : '') + block.thinking
+          blocks.push({ type: 'thinking', text: block.thinking })
         } else if (block.type === 'toolCall') {
-          const row: FlatRow = {
-            id: nextId(),
-            sessionId,
-            role: 'assistant',
-            type: 'tool_use',
-            content: '',
-            metadata: {
-              toolCallId: block.id,
-              toolName: block.name,
-              args: (block.arguments as Record<string, unknown>) || {}
-            },
-            model: '',
-            createdAt: a.timestamp ?? 0
+          const tool: AssistantToolBlock = {
+            type: 'tool',
+            toolCallId: block.id,
+            toolName: block.name,
+            args: (block.arguments as Record<string, unknown>) || {}
           }
-          toolRows.push(row)
-          if (block.id) pendingTools.set(block.id, row)
+          blocks.push(tool)
+          if (block.id) pendingTools.set(block.id, tool)
         } else if ((block as { type: string }).type === 'image') {
           const img = block as unknown as { mimeType?: string }
           ;(images ??= []).push({ mimeType: img.mimeType ?? 'image/png' } as ImageMeta)
         }
       }
-      if (texts.length > 0 || thinking || images) {
-        const meta: MessageMetadata = {}
-        if (thinking) meta.thinking = thinking
-        if (images) meta.images = images
-        out.push({
-          id: nextId(),
-          sessionId,
-          role: 'assistant',
-          type: 'text',
-          content: texts.join('\n'),
-          metadata: thinking || images ? meta : null,
-          model: a.model || '',
-          createdAt: a.timestamp ?? 0
-        })
-      }
-      out.push(...toolRows)
+      if (blocks.length === 0 && !images) continue
+      out.push({
+        id: nextId(),
+        sessionId,
+        role: 'assistant',
+        type: 'message',
+        blocks,
+        content: texts.join('\n'),
+        metadata: images ? { images } : null,
+        model: a.model || '',
+        createdAt: a.timestamp ?? 0
+      })
       continue
     }
 
@@ -159,27 +138,33 @@ export function agentMessagesToChatMessages(
       const text = t.content
         .map((block) => (block.type === 'image' ? '[image]' : block.text))
         .join('\n')
-      const row = t.toolCallId ? pendingTools.get(t.toolCallId) : undefined
-      if (row) {
-        row.content = text
-        if (t.isError) (row.metadata as MessageMetadata).isError = true
+      const tool = t.toolCallId ? pendingTools.get(t.toolCallId) : undefined
+      if (tool) {
+        tool.result = text
+        if (t.isError) tool.isError = true
         pendingTools.delete(t.toolCallId)
       } else {
-        // 孤儿结果（上下文被裁剪等）：兜底为独立 tool_use 行，不丢内容
-        out.push({
+        // 孤儿结果（上下文被裁剪等）：兜底为一条只含该工具块的助手消息，不丢内容
+        const orphan: ChatAssistantMessage = {
           id: nextId(),
           sessionId,
           role: 'assistant',
-          type: 'tool_use',
-          content: text,
-          metadata: {
-            toolCallId: t.toolCallId || '',
-            toolName: t.toolName || '',
-            isError: t.isError
-          },
+          type: 'message',
+          blocks: [
+            {
+              type: 'tool',
+              toolCallId: t.toolCallId || '',
+              toolName: t.toolName || '',
+              result: text,
+              isError: t.isError
+            }
+          ],
+          content: '',
+          metadata: null,
           model: '',
           createdAt: t.timestamp ?? 0
-        })
+        }
+        out.push(orphan)
       }
       continue
     }
@@ -187,5 +172,5 @@ export function agentMessagesToChatMessages(
     // 未知角色跳过
   }
 
-  return out as unknown as ChatMessage[]
+  return out
 }

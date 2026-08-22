@@ -11,6 +11,7 @@
 import { create } from 'zustand'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ChatMessage, ToolExecution } from './chatStore'
+import { fillToolResult, upsertMessage } from './messageOps'
 
 /** 子智能体运行时状态 */
 export type SubSessionStatus = 'running' | 'done' | 'error'
@@ -88,13 +89,14 @@ interface SubSessionStore {
   ): void
   appendStreamingToolCallDelta(subSessionId: string, delta: string): void
   finalizeStreamingToolCall(subSessionId: string): void
-  handleToolStart(subSessionId: string, exec: ToolExecution, toolMessage: ChatMessage | null): void
+  /** 一条 assistant 卡已落盘：清流式缓冲 + 按 id upsert（与主会话同语义） */
+  handleAssistantMessage(subSessionId: string, message: ChatMessage): void
+  handleToolStart(subSessionId: string, exec: ToolExecution): void
   handleToolEnd(
     subSessionId: string,
     toolCallId: string,
     execUpdates: Partial<ToolExecution>,
-    messageId: string | undefined,
-    updatedMessage: ChatMessage | null
+    messageId?: string
   ): void
   handleAgentEnd(subSessionId: string, finalMessage?: ChatMessage): void
 }
@@ -295,67 +297,50 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
       }
     }),
 
-  handleToolStart: (subSessionId, exec, toolMessage) =>
+  handleAssistantMessage: (subSessionId, message) =>
     set((state) => {
       const prev = state.subSessions[subSessionId]
       if (!prev) return {}
-      // 工具开始前，把累积的 thinking / text 冻结为 step 消息（对应主对话框的 step_end 语义）
-      // 否则下一个工具调用到来时，中间的文字会被 streamingContent='' 直接丢掉
-      const newMessages: ChatMessage[] = [...prev.messages]
-      const now = Date.now()
-      if (prev.streamingThinking) {
-        newMessages.push({
-          id: `${subSessionId}-step-thinking-${newMessages.length}`,
-          sessionId: subSessionId,
-          role: 'assistant',
-          type: 'step_thinking',
-          content: prev.streamingThinking,
-          metadata: null,
-          model: '',
-          createdAt: now
-        } as ChatMessage)
-      }
-      if (prev.streamingContent) {
-        newMessages.push({
-          id: `${subSessionId}-step-text-${newMessages.length}`,
-          sessionId: subSessionId,
-          role: 'assistant',
-          type: 'step_text',
-          content: prev.streamingContent,
-          metadata: null,
-          model: '',
-          createdAt: now
-        } as ChatMessage)
-      }
-      if (toolMessage) newMessages.push(toolMessage)
-
+      // 正文已经落进这张卡，流式缓冲清空（下一次调用重新累积）
       const updated: SubSessionState = {
         ...prev,
-        streamingToolCall: null,
-        completedStreamingToolCalls: [],
         streamingContent: '',
         streamingThinking: '',
-        toolExecutions: [...prev.toolExecutions, exec],
-        messages: newMessages
+        messages: upsertMessage(prev.messages, message)
       }
       return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
     }),
 
-  handleToolEnd: (subSessionId, toolCallId, execUpdates, messageId, updatedMessage) =>
+  handleToolStart: (subSessionId, exec) =>
+    set((state) => {
+      const prev = state.subSessions[subSessionId]
+      if (!prev) return {}
+      // 工具块已随 assistant 卡到达，这里只记执行状态 + 清流式工具调用占位
+      const updated: SubSessionState = {
+        ...prev,
+        streamingToolCall: null,
+        completedStreamingToolCalls: [],
+        toolExecutions: [...prev.toolExecutions, exec]
+      }
+      return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
+    }),
+
+  handleToolEnd: (subSessionId, toolCallId, execUpdates, messageId) =>
     set((state) => {
       const prev = state.subSessions[subSessionId]
       if (!prev) return {}
       const newExecs = prev.toolExecutions.map((t) =>
         t.toolCallId === toolCallId ? { ...t, ...execUpdates } : t
       )
-      const newMessages =
-        updatedMessage && messageId
-          ? prev.messages.map((m) => (m.id === messageId ? updatedMessage : m))
-          : prev.messages
+      const messages = fillToolResult(prev.messages, toolCallId, messageId, {
+        result: execUpdates.result ?? '',
+        isError: execUpdates.status === 'error' || undefined,
+        details: execUpdates.details
+      })
       return {
         subSessions: {
           ...state.subSessions,
-          [subSessionId]: { ...prev, toolExecutions: newExecs, messages: newMessages }
+          [subSessionId]: { ...prev, toolExecutions: newExecs, messages }
         }
       }
     }),
@@ -364,23 +349,7 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
     set((state) => {
       const prev = state.subSessions[subSessionId]
       if (!prev) return {}
-      const newMessages: ChatMessage[] = [...prev.messages]
-      const now = Date.now()
-      // 冻结仍在缓冲中的 thinking（text 已包含在 finalMessage 中，不重复落位）
-      if (prev.streamingThinking) {
-        newMessages.push({
-          id: `${subSessionId}-step-thinking-${newMessages.length}`,
-          sessionId: subSessionId,
-          role: 'assistant',
-          type: 'step_thinking',
-          content: prev.streamingThinking,
-          metadata: null,
-          model: '',
-          createdAt: now
-        } as ChatMessage)
-      }
-      if (finalMessage) newMessages.push(finalMessage)
-
+      // 终答卡在 message_end 时已 upsert 过，这里同 id 覆盖兜底
       const updated: SubSessionState = {
         ...prev,
         isStreaming: false,
@@ -389,7 +358,7 @@ export const useSubSessionStore = create<SubSessionStore>((set) => ({
         streamingToolCall: null,
         completedStreamingToolCalls: [],
         toolExecutions: [],
-        messages: newMessages
+        messages: finalMessage ? upsertMessage(prev.messages, finalMessage) : prev.messages
       }
       return { subSessions: { ...state.subSessions, [subSessionId]: updated } }
     })

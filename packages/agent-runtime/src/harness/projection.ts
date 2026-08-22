@@ -1,33 +1,36 @@
 /**
  * SessionTreeEntry[] → ChatMessage[] 投影 —— harness 会话树的「UI 视角」。
  *
- * 这是替换 transcript/convert.ts 正向投影（ChatMessage → AgentMessage）之后留下的唯一方向：
- * entry 树是真理，UI 看到的是它的投影。旧模型里 DB 行本身就是 UI 契约，
- * 现在需要一次结构变换 —— 主要是「一条 assistant 消息内部的内容块」摊平成
- * chat-ui 期待的多条 ChatMessage。
+ * **一条 entry = 一条 ChatMessage = UI 上一项**。这是投影层唯一的结构规则：
+ * 会话树里没有「一次 agent 循环」这种东西，所以 UI 也不再有 —— 一次 LLM 调用
+ * （一条 assistant entry）投影成一条带 blocks 的助手消息，卡内按模型输出顺序
+ * 渲染思考 / 正文 / 工具调用；轮中插入的 steer 就是它本来的样子：一条用户消息。
  *
- * 映射规则（刻意贴住 chat-ui 现有渲染，避免改前端）：
+ * 映射规则：
  *   user 消息            → UserTextMessage
- *   assistant 无 toolCall → 终答：AssistantTextMessage（thinking / usage 收进 metadata）
- *   assistant 有 toolCall → 中间轮：thinking→step_thinking，text→step_text，toolCall→tool_use
- *   toolResult 消息      → 回填到同 toolCallId 的 tool_use 上（不产生独立气泡）
- *   compactionSummary    → AssistantTextMessage + isCompactionSummary
+ *   assistant 消息       → AssistantMessage（thinking/text/toolCall → blocks，usage 记本次调用）
+ *   toolResult 消息      → 回填到同 toolCallId 的 tool 块上（不产生独立消息）
+ *   compactionSummary    → AssistantMessage + isCompactionSummary
  *   custom(instruction)  → UserTextMessage + isInstructionInjection
  *   custom(inline_tokens)→ 不产出消息；把紧随其后的 user 消息还原成标记文本 + inlineTokens
  *   stopReason==='error' → ErrorEventMessage
  *
- * id 稳定性：直接派生自 entry id（`<entryId>` / `<entryId>:c<idx>` …）。entry 是 append-only 的，
- * 所以同一条消息在任何一次重新投影里 id 都不变 —— React key、messages_reloaded、
- * 流式增量更新都依赖这一点。
+ * id 稳定性：消息 id **就是** entry id（不再有 `:think` / `:text` 派生后缀，工具块也不
+ * 单独占 id）。entry 是 append-only 的，所以同一条消息在任何一次重新投影里 id 都不变 ——
+ * React key、messages_reloaded、流式增量更新、回退定位都依赖这一点。
  */
 import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
 import type {
+  AssistantBlock,
+  AssistantToolBlock,
   ChatMessage,
   ImageMeta,
   InlineToken,
-  ToolResultDetails
+  ToolResultDetails,
+  UsageInfo
 } from '@shuvix/chat-protocol/types/chatMessage'
+import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 
 /** 指令注入使用的 custom_message 类型标记（与 instructionInjector 共用） */
 export const INSTRUCTION_CUSTOM_TYPE = 'shuvix:instruction'
@@ -58,6 +61,22 @@ function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
   if (typeof d.content !== 'string') return null
   if (typeof d.tokens !== 'object' || d.tokens === null) return null
   return d as unknown as InlineTokensSidecar
+}
+
+/**
+ * 单条 assistant 消息的用量 —— 一条 entry = 一次 LLM 调用，所以这就是它自己的账。
+ * 整轮聚合（跨工具轮、跨 steer）只存在于 agent_end 事件里，不进消息元数据。
+ */
+export function usageOf(msg: AssistantMessage): UsageInfo | undefined {
+  const usage = msg.usage
+  if (!usage) return undefined
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    total: usage.totalTokens || usage.input + usage.output
+  }
 }
 
 /** 单次 LLM 调用的用量明细（UsageInfo.details 元素，全字段必填 —— 兼容 ChatTokenUsage） */
@@ -133,28 +152,21 @@ function imagesOf(content: string | Array<TextContent | ImageContent>): ImageMet
 
 interface ProjectionState {
   out: ChatMessage[]
-  /** toolCallId → 已产出的 tool_use 消息（等待 toolResult 回填） */
-  pendingToolUse: Map<string, ChatMessage & { type: 'tool_use' }>
+  /** toolCallId → 已产出的工具块（等待 toolResult 回填） */
+  pendingToolBlocks: Map<string, AssistantToolBlock>
   /**
    * 当前生效的模型 / provider（由 model_change entry 推进）。
    *
    * assistant 消息不用这两个值 —— pi 的 AssistantMessage 自带 `provider` / `model`，
    * 记录的是**实际产出该消息**的模型，比"会话当前配置"更准（中途切过模型时尤其）。
-   * 这里的值只给 user / step / tool_use 这些没有自身归属的消息兜底。
+   * 这里的值只给 user 消息这些没有自身归属的消息兜底。
    */
   model: string
   provider: string
-  turnIndex: number
-  /**
-   * 自上一个终答以来各次 LLM 调用的用量明细。终答时聚合挂载并清空 ——
-   * 中间工具轮的 usage 不随 step_* 消息丢失，而是累进最终气泡的统计里。
-   * 不在 user 消息处重置：steer 会在轮中插入 user 消息，重置会把 steer 前的消耗算丢。
-   */
-  roundUsage: RoundUsageDetail[]
   /**
    * 待消费的内联 Token 侧车（总是紧邻下一条 user 消息之前追加）。
-   * 由下一条 user 消息消费；遇到其他消息则视为陈旧丢弃（如 UserPromptSubmit hook
-   * deny 掉了随后的 prompt —— 侧车已落盘但 user 消息永远不会来）。
+   * 由下一条 user 消息消费；遇到其他消息则视为陈旧丢弃
+   * （随后的 prompt 未能派发 —— 侧车已落盘但 user 消息永远不会来）。
    */
   pendingInline: InlineTokensSidecar | null
 }
@@ -180,7 +192,6 @@ function projectUserMessage(
     createdAt,
     metadata: { images: imagesOf(msg.content), ...(inline ? { inlineTokens: inline.tokens } : {}) }
   })
-  state.turnIndex += 1
 }
 
 function projectAssistantMessage(
@@ -194,11 +205,7 @@ function projectAssistantMessage(
   const model = msg.model || state.model
   const provider = msg.provider || state.provider
 
-  // 每条 assistant 消息 = 一次 LLM 调用，无论中间轮/终答/失败轮都计入本轮用量
-  const detail = usageDetailOf(msg)
-  if (detail) state.roundUsage.push(detail)
-
-  // 失败轮：整条消息塌成一条 error_event（旧模型里由 eventHandler 单独落库）
+  // 失败轮：整条消息塌成一条 error_event（模型侧错误，随回退一起消失）
   if (msg.stopReason === 'error' && msg.errorMessage) {
     state.out.push({
       id: entryId,
@@ -214,88 +221,48 @@ function projectAssistantMessage(
     return
   }
 
-  const toolCalls = msg.content.filter((c) => c.type === 'toolCall')
-  const isFinalAnswer = toolCalls.length === 0
-  const thinking = msg.content
-    .filter((c): c is Extract<typeof c, { type: 'thinking' }> => c.type === 'thinking')
-    .map((c) => c.thinking)
-    .join('\n')
-  const text = msg.content
-    .filter((c): c is TextContent => c.type === 'text')
-    .map((c) => c.text)
-    .join('')
-  const images = (msg as AssistantMessage & { _images?: ImageMeta[] })._images
-
-  if (isFinalAnswer) {
-    state.out.push({
-      id: entryId,
-      sessionId,
-      role: 'assistant',
-      type: 'text',
-      content: text,
-      model,
-      provider,
-      createdAt,
-      metadata: {
-        thinking: thinking || undefined,
-        usage: aggregateUsage(state.roundUsage),
-        images
-      }
-    })
-    state.roundUsage = []
-    return
-  }
-
-  // 中间轮：thinking / text 作为 step 呈现，toolCall 各自成一条 tool_use
-  if (thinking) {
-    state.out.push({
-      id: `${entryId}:think`,
-      sessionId,
-      role: 'assistant',
-      type: 'step_thinking',
-      content: thinking,
-      model,
-      provider,
-      createdAt,
-      metadata: { turnIndex: state.turnIndex }
-    })
-  }
-  if (text) {
-    state.out.push({
-      id: `${entryId}:text`,
-      sessionId,
-      role: 'assistant',
-      type: 'step_text',
-      content: text,
-      model,
-      provider,
-      createdAt,
-      metadata: { turnIndex: state.turnIndex, images }
-    })
-  }
-  msg.content.forEach((block) => {
-    if (block.type !== 'toolCall') return
-    const toolUse: ChatMessage & { type: 'tool_use' } = {
-      // 用 toolCallId 而不是 entry id 派生：工具事件（tool_start/tool_end）在
-      // assistant entry 落盘之前就要广播 messageId，而 toolCallId 此时已经有了。
-      id: block.id,
-      sessionId,
-      role: 'assistant',
-      type: 'tool_use',
-      // content 是工具结果文本，toolResult 到达时回填；未回填 = 仍在执行
-      content: '',
-      model,
-      provider,
-      createdAt,
-      metadata: {
+  // 内容块按原序转成 UI 块 —— 顺序即模型输出顺序，不做「过程 / 终答」的再分类
+  const blocks: AssistantBlock[] = []
+  const texts: string[] = []
+  for (const block of msg.content) {
+    if (block.type === 'thinking') {
+      // 只有空白的思考段（实测见过整块一个 "\n"）丢掉：留着只会渲染出一片空的可点区域
+      if (hasThinkingContent(block.thinking))
+        blocks.push({ type: 'thinking', text: block.thinking })
+    } else if (block.type === 'text') {
+      blocks.push({ type: 'text', text: block.text })
+      texts.push(block.text)
+    } else if (block.type === 'toolCall') {
+      const tool: AssistantToolBlock = {
+        type: 'tool',
         toolCallId: block.id,
         toolName: block.name,
-        args: block.arguments as Record<string, unknown>,
-        turnIndex: state.turnIndex
+        args: block.arguments as Record<string, unknown>
       }
+      blocks.push(tool)
+      state.pendingToolBlocks.set(block.id, tool)
     }
-    state.out.push(toolUse)
-    state.pendingToolUse.set(block.id, toolUse)
+  }
+
+  const images = (msg as AssistantMessage & { _images?: ImageMeta[] })._images
+  // 什么都没产出（如首 token 前被中止）：不留空卡片
+  if (blocks.length === 0 && !images) return
+
+  state.out.push({
+    id: entryId,
+    sessionId,
+    role: 'assistant',
+    type: 'message',
+    blocks,
+    content: texts.join(''),
+    model,
+    provider,
+    createdAt,
+    metadata: {
+      // 一条 entry = 一次 LLM 调用，用量各归各，不跨消息累加
+      usage: usageOf(msg),
+      images
+    }
   })
 }
 
@@ -303,14 +270,12 @@ function projectToolResult(
   state: ProjectionState,
   msg: Extract<AgentMessage, { role: 'toolResult' }>
 ): void {
-  const target = state.pendingToolUse.get(msg.toolCallId)
+  const target = state.pendingToolBlocks.get(msg.toolCallId)
   if (!target) return // 孤儿结果（历史被压缩截断）——静默丢弃，UI 无处挂载
-  target.content = textOf(msg.content)
-  if (target.metadata) {
-    target.metadata.isError = msg.isError || undefined
-    target.metadata.details = (msg as { details?: ToolResultDetails }).details
-  }
-  state.pendingToolUse.delete(msg.toolCallId)
+  target.result = textOf(msg.content)
+  target.isError = msg.isError || undefined
+  target.details = (msg as { details?: ToolResultDetails }).details
+  state.pendingToolBlocks.delete(msg.toolCallId)
 }
 
 /**
@@ -327,11 +292,9 @@ export function entriesToChatMessages(
 ): ChatMessage[] {
   const state: ProjectionState = {
     out: [],
-    pendingToolUse: new Map(),
+    pendingToolBlocks: new Map(),
     model: fallbackModel,
     provider: '',
-    turnIndex: 0,
-    roundUsage: [],
     pendingInline: null
   }
 
@@ -349,7 +312,8 @@ export function entriesToChatMessages(
         id: entry.id,
         sessionId,
         role: 'assistant',
-        type: 'text',
+        type: 'message',
+        blocks: [{ type: 'text', text: entry.summary }],
         content: entry.summary,
         model: state.model,
         provider: state.provider,
@@ -391,7 +355,7 @@ export function entriesToChatMessages(
     if (entry.type !== 'message') continue
 
     const msg = entry.message
-    // 侧车只配对「紧随其后的 user 消息」；先来了别的消息说明它已陈旧（如 prompt 被 hook deny）
+    // 侧车只配对「紧随其后的 user 消息」；先来了别的消息说明它已陈旧（如 prompt 未派发）
     if (msg.role !== 'user') state.pendingInline = null
     switch (msg.role) {
       case 'user':

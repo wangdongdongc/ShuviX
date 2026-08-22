@@ -17,7 +17,7 @@ export interface ProjectFieldMeta {
 
 /**
  * 所有已知的项目可修改字段元数据注册表
- * 新增字段时在此追加一行，工具参数描述、AI prompt、审批弹窗标签自动同步
+ * 新增字段时在此追加一行，工具参数描述、AI prompt、询问弹窗标签自动同步
  */
 export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   name: { labelKey: 'projectForm.name', desc: 'Project display name' },

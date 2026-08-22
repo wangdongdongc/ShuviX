@@ -1,9 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeRaw from 'rehype-raw'
 import { Bot, Check, ChevronDown, ChevronRight, Send, Settings, Square, X } from 'lucide-react'
 import {
   useSubSessionStore,
@@ -16,10 +13,11 @@ import {
 } from '@shuvix/chat-ui'
 import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
 import { isImeComposing } from '@shuvix/chat-ui'
-import { markdownComponents } from '@shuvix/chat-ui'
+import { markdownComponents, markdownRemarkPlugins, markdownRehypePlugins } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
-import { StepBlock } from '@shuvix/chat-ui'
+import { ThinkingBlock } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
@@ -160,59 +158,52 @@ function UserBubble({
   )
 }
 
-/** 单条子会话消息渲染 — 复用主对话框中使用的 ToolCallBlock / StepBlock + 相同的 markdown 规则 */
+/** 单条子会话消息渲染 —— 一条 entry 一项；assistant 卡内按 blocks 顺序展开 */
 function SubMessageBubble({ msg }: { msg: ChatMessage }): React.JSX.Element | null {
-  if (msg.type === 'tool_use') {
-    const meta = msg.metadata
-    const toolName = meta?.toolName || ''
-    const status = msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
-    return (
-      <ToolCallBlock
-        toolName={toolName}
-        toolCallId={meta?.toolCallId}
-        args={meta?.args}
-        result={msg.content || undefined}
-        details={meta?.details}
-        status={status}
-      />
-    )
-  }
-  if (msg.type === 'step_text') {
-    return (
-      <div className="markdown-body text-xs">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight, rehypeRaw]}
-          components={markdownComponents}
-        >
-          {msg.content}
-        </ReactMarkdown>
-      </div>
-    )
-  }
-  if (msg.type === 'step_thinking') {
-    return <StepBlock message={msg} />
-  }
-  if (msg.role === 'assistant' && msg.type === 'text') {
-    return (
-      <div className="markdown-body text-xs">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight, rehypeRaw]}
-          components={markdownComponents}
-        >
-          {msg.content}
-        </ReactMarkdown>
-      </div>
-    )
-  }
   // 用户后续追问：复用 UserBubble（与起始指令同形）
   if (msg.role === 'user' && msg.type === 'text') {
     const tokens = (msg.metadata as { inlineTokens?: Record<string, InlineToken> } | null)
       ?.inlineTokens
     return <UserBubble content={msg.content} inlineTokens={tokens} />
   }
-  return null
+  if (msg.type === 'error_event') {
+    return <div className="text-[11px] text-error/90 break-words">{msg.content}</div>
+  }
+  if (msg.role !== 'assistant') return null
+
+  return (
+    <div className="space-y-1">
+      {msg.blocks.map((block, idx) => {
+        if (block.type === 'thinking') {
+          return <ThinkingBlock key={idx} content={block.text} />
+        }
+        if (block.type === 'text') {
+          return (
+            <div key={idx} className="markdown-body text-xs">
+              <ReactMarkdown
+                remarkPlugins={markdownRemarkPlugins}
+                rehypePlugins={markdownRehypePlugins}
+                components={markdownComponents}
+              >
+                {block.text}
+              </ReactMarkdown>
+            </div>
+          )
+        }
+        return (
+          <ToolCallBlock
+            key={block.toolCallId || idx}
+            toolName={block.toolName}
+            toolCallId={block.toolCallId}
+            args={block.args}
+            result={block.result}
+            details={block.details}
+            status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
+          />
+        )
+      })}
+    </div>
+  )
 }
 
 /** 子会话流式内容视图（消息列表 + 当前流式 text/thinking/tool 调用） */
@@ -252,7 +243,7 @@ const SubSessionStream = memo(function SubSessionStream({
         />
       </div>
 
-      {/* 转写区收紧行距（含共享 ToolCallBlock/StepBlock），字号与主对话框一致。
+      {/* 转写区收紧行距（含共享 ToolCallBlock/ThinkingBlock），字号与主对话框一致。
           focusLast（专注模式）：直接子块除最后一块外淡化，最新输出常亮，hover 临时点亮其余。 */}
       <div
         className={`space-y-0.5 ${
@@ -265,24 +256,15 @@ const SubSessionStream = memo(function SubSessionStream({
         {sub.contextNote && <UserBubble content={sub.contextNote} />}
         <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
 
-        {/* 已提交消息（tool_use + assistant text） */}
+        {/* 已落盘的消息（每条卡内自行按块展开） */}
         {sub.messages.map((m) => (
           <SubMessageBubble key={m.id} msg={m} />
         ))}
 
         {/* 流式 thinking */}
-        {sub.streamingThinking && (
-          <StepBlock
-            message={{
-              id: `${sub.subSessionId}-streaming-thinking`,
-              sessionId: sub.subSessionId,
-              role: 'assistant' as const,
-              type: 'step_thinking' as const,
-              content: sub.streamingThinking,
-              metadata: null,
-              model: '',
-              createdAt: sub.startedAt
-            }}
+        {hasThinkingContent(sub.streamingThinking) && (
+          <ThinkingBlock
+            content={sub.streamingThinking}
             isGenerating={sub.isStreaming && !sub.streamingContent}
           />
         )}
@@ -291,8 +273,8 @@ const SubSessionStream = memo(function SubSessionStream({
         {sub.streamingContent && (
           <div className="markdown-body text-xs">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight, rehypeRaw]}
+              remarkPlugins={markdownRemarkPlugins}
+              rehypePlugins={markdownRehypePlugins}
               components={markdownComponents}
             >
               {sub.streamingContent}

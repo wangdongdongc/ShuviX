@@ -9,7 +9,7 @@ import { Type } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
-  assertReadApproved,
+  assertReadAllowed,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -78,8 +78,9 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
       ? resolve(config.workingDirectory, resolveToCwd(params.path, config.workingDirectory))
       : config.workingDirectory
 
-    // 审批守卫:工作目录 + 参考目录 + allowList 内直接通过,否则挂起等待审批
-    await assertReadApproved(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
+    // 询问守卫：走统一评估 —— 内置 ask-on-read 豁免工作区与应用只读目录，
+    // 会话授权过的路径由 consent 层放行；都不命中则挂起等待用户询问
+    await assertReadAllowed(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
   }
 
   protected async executeInternal(

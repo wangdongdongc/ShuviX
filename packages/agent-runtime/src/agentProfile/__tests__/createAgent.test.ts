@@ -43,7 +43,7 @@ const PROFILE: InProcessAgentType = {
   name: 'default',
   displayName: 'Default',
   description: '',
-  tools: ['read', 'grep', 'Agent'],
+  tools: ['read', 'grep', 'agent'],
   systemPrompt: 'BASE {{shuvix:persona}}',
   instructionFiles: true
 }
@@ -71,7 +71,6 @@ interface HostBundle {
     error: ReturnType<typeof vi.fn>
   }
   fakeEnv: object
-  hooks: object
   transform: object
 }
 
@@ -86,7 +85,6 @@ function makeHost(): HostBundle {
   const resolveProfileModel = vi.fn().mockResolvedValue(null)
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
   const fakeEnv = { marker: 'node-env' }
-  const hooks = { marker: 'hooks' }
   const transform = { marker: 'transform' }
   const host: AgentHostAdapter = {
     resolveTools,
@@ -99,9 +97,7 @@ function makeHost(): HostBundle {
     openSessionTree: vi.fn().mockResolvedValue(treeSession as unknown as Session),
     createExecutionEnv: vi.fn().mockReturnValue(fakeEnv),
     eventSink,
-    shouldDeferToolDisplay: vi.fn().mockReturnValue(() => false),
     transformToolResult: transform as never,
-    hooks: hooks as never,
     httpLog: { logRequest, updateUsage: vi.fn() },
     logger,
     resolveInstruction,
@@ -118,7 +114,6 @@ function makeHost(): HostBundle {
     resolveProfileModel,
     logger,
     fakeEnv,
-    hooks,
     transform
   }
 }
@@ -128,7 +123,7 @@ beforeEach(() => {
 })
 
 describe('createAgentFactory — root 决策列', () => {
-  it('root:落盘树/宿主 env/原样 eventSink/autoCompact/hook/transform/getCwd/onPayload 归自身', async () => {
+  it('root:落盘树/宿主 env/原样 eventSink/autoCompact/transform/onPayload 归自身', async () => {
     const b = makeHost()
     const onPromptAccepted = vi.fn()
     const created = await createAgentFactory(b.host).createAgent({
@@ -149,11 +144,9 @@ describe('createAgentFactory — root 决策列', () => {
     expect(deps.eventSink).toBe(b.eventSink)
     expect(deps.autoCompact).toBe(true)
     expect(deps.broadcastUserMessages).toBeUndefined()
-    expect(deps.hooks).toBe(b.hooks)
     expect(deps.transformToolResult).toBe(b.transform)
     expect(deps.onPromptAccepted).toBe(onPromptAccepted)
     expect(deps.thinkingLevel).toBe('medium')
-    expect((deps.getCwd as () => string)()).toBe('/w')
     // instructionFiles=true → 指令文件带围栏 append 在基座后（项目提示词开关未开不追加）
     const fencedIns = '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>'
     expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${fencedIns}`)
@@ -169,8 +162,6 @@ describe('createAgentFactory — root 决策列', () => {
       model: 'm1',
       payload: { x: 1 }
     })
-    // shouldDeferToolDisplay 经宿主按会话构造
-    expect(b.host.shouldDeferToolDisplay).toHaveBeenCalledWith('s1')
   })
 
   it('resolveTools 请求:归一名单保序去重、root 身份、requestUserInput 达自身运行时', async () => {
@@ -187,7 +178,7 @@ describe('createAgentFactory — root 决策列', () => {
     expect(req.kind).toBe('root')
     expect(req.rootSessionId).toBe('s1')
     expect(req.selfSessionId).toBe('s1')
-    expect(req.names).toEqual(['read', 'grep', 'Agent', 'mcp:ctx', 'skill:pdf'])
+    expect(req.names).toEqual(['read', 'grep', 'agent', 'mcp:ctx', 'skill:pdf'])
     expect(req.spawn).toBeUndefined()
     // root 的 requestUserInput 前向引用运行时
     await req.requestUserInput!({ kind: 'ask' } as never)
@@ -214,7 +205,7 @@ describe('createAgentFactory — spawned 决策列', () => {
     return { created, helper }
   }
 
-  it('spawned:内存树/stub env/包装 eventSink/无 hook/无 transform/onPayload 归根会话', async () => {
+  it('spawned:内存树/stub env/包装 eventSink/无 transform/onPayload 归根会话', async () => {
     const b = makeHost()
     await createSpawned(b)
     const deps = constructed[0].deps
@@ -224,11 +215,8 @@ describe('createAgentFactory — spawned 决策列', () => {
     expect(deps.env).not.toBe(b.fakeEnv)
     expect(deps.autoCompact).toBe(false)
     expect(deps.broadcastUserMessages).toBe(false)
-    expect(deps.hooks).toBeUndefined()
     expect(deps.transformToolResult).toBeUndefined()
     expect(deps.onPromptAccepted).toBeUndefined()
-    expect(deps.getCwd).toBeUndefined()
-    expect((deps.shouldDeferToolDisplay as () => boolean)()).toBe(true)
     // eventSink 包装:转发 broadcast、hasUserInputCapability 恒 false
     const sink = deps.eventSink as {
       broadcast: (e: unknown) => void
@@ -435,7 +423,7 @@ describe('CreatedAgent 运行期操作', () => {
     b.resolveTools.mockResolvedValueOnce([{ name: 't2' }])
     await created.applyToolOverlay(['mcp:b'])
     const req = b.resolveTools.mock.calls[1][0] as ToolResolveRequest
-    expect(req.names).toEqual(['read', 'grep', 'Agent', 'mcp:b'])
+    expect(req.names).toEqual(['read', 'grep', 'agent', 'mcp:b'])
     expect(constructed[0].applyTools).toHaveBeenCalledWith([{ name: 't2' }])
   })
 

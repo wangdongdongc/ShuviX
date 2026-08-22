@@ -21,26 +21,26 @@ export function buildChoiceResponse(draft: ChoiceDraft): InputResponse | null {
   return { kind: 'choice', selections: draft.selected }
 }
 
-// ─── Approval ──────────────────────────────────────────
+// ─── Ask ──────────────────────────────────────────
 
 /**
- * Approval 表单的草稿状态
+ * Ask 表单的草稿状态
  *
- * 与 Choice/Ssh 不同,Approval 是"按一个按钮就提交"的语义。stagedResponse
+ * 与 Choice/Ssh 不同,Ask 是"按一个按钮就提交"的语义。stagedResponse
  * 字段表达"用户已点选了某个动作但尚未真正提交"(用于多 tab 场景的批量提交)。
  */
-export interface ApprovalDraft {
+export interface AskDraft {
   /** 用户已点选的动作 — 一旦设置,该 tab 就被视为"已填" */
   stagedResponse?: InputResponse
   /** "允许并记住"模式预览面板:null = 未进入,[] = 进入但被清空,string[] = 待保存的模式 */
   previewPatterns?: string[] | null
 }
 
-export function emptyApprovalDraft(): ApprovalDraft {
+export function emptyAskDraft(): AskDraft {
   return {}
 }
 
-export function buildApprovalResponse(draft: ApprovalDraft): InputResponse | null {
+export function buildAskResponse(draft: AskDraft): InputResponse | null {
   return draft.stagedResponse ?? null
 }
 

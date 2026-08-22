@@ -37,13 +37,13 @@ export interface FileSystemPort {
 }
 
 /**
- * 写入前审批钩子（注入）—— 在文件锁内、`port.writeFile` 之前调用，参数就是即将发生的改动。
+ * 写入前询问钩子（注入）—— 在文件锁内、`port.writeFile` 之前调用，参数就是即将发生的改动。
  *
  * 不通过时约定 **throw**（工具中止，AI 收到 tool error）；通过则原样 return。
- * 之所以要把 diff 传进来而不是让审批侧自己算：审批卡片展示的和事后 details 里的必须是
- * 同一个字符串（见 ApprovalDiffPreview 的一致性契约），所以只能由算出它的人来传。
+ * 之所以要把 diff 传进来而不是让询问侧自己算：询问卡片展示的和事后 details 里的必须是
+ * 同一个字符串（见 AskDiffPreview 的一致性契约），所以只能由算出它的人来传。
  */
-export type WriteApprovalHook = (change: {
+export type WriteAskHook = (change: {
   /** 展示用路径 */
   path: string
   /** 即将写入产生的 diff —— 与 tool result details.diff 同一份 */

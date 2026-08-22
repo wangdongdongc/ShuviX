@@ -17,7 +17,7 @@ A browser-native AI assistant that lives in the side panel and works alongside w
 ## Scope
 
 ShuviX is a **self-hosted, local-first** AI assistant. It runs on your own
-machine and acts through tools you can inspect and approve, bringing your
+machine and acts through tools you can inspect and allow, bringing your
 choice of LLM to your files, terminal, and everyday tools. You own the
 instance; the data lives on your machines — not ours.
 
@@ -35,8 +35,8 @@ What ShuviX deliberately does **not** try to be:
 - **An enterprise product.** Not chasing the compliance, audit trails, and
   org-admin machinery that enterprise procurement demands.
 - **A fully autonomous agent.** Human-in-the-loop is the point. System-touching
-  actions pass through sandbox boundaries and approval gates.
+  actions pass through sandbox boundaries and ask you first.
 - **An IDE.** It can read and edit code, but it won't grow into an editor with
   debugging, refactoring, and language servers. Use it alongside your editor.
-- **A closed plugin ecosystem.** Extensibility rides on open standards — MCP,
-  Skills, and Claude Code–style hooks. No proprietary marketplace.
+- **A closed plugin ecosystem.** Extensibility rides on open standards — MCP and
+  Skills. No proprietary marketplace.

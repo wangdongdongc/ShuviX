@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: notebook
 description: 笔记本会话的基座档案 —— 每次发送都对当前笔记开一个全新的一次性子代理。用同名自定义 agent「notebook」覆盖它即可定制笔记本行为。
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser

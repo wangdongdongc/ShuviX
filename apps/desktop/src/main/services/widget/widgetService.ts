@@ -7,9 +7,10 @@
  * 身份在 <dir>/widget.json，DB schema 在 <dir>/schema.sql，
  * 宿主账目（时间戳 / 归档位）在 ~/.shuvix/widgets/.config.json。
  *
- * 注意：widget 目录的会话 allowList 注入由外层调用方（CLI handler / ipc handler）
- * 在拿到 projectDir 后自行调用 sessionService.addAllowListPaths 完成，
- * 模块内部不再反向依赖 sessionService。
+ * 注意：widget 目录的会话 allowList 注入由外层调用方在拿到 projectDir 后自行调用
+ * sessionService.addAllowListPaths 完成，模块内部不反向依赖 sessionService。
+ * 当前只有 cliServer 的 widget.init / widget.build 两个 handler 这么做（智能体经
+ * shuvix CLI 自举时给自己开目录权限）；没有走 ipc 的注入路径。
  */
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'fs'

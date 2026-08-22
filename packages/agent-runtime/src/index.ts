@@ -49,13 +49,7 @@ export {
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
 export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）
-export type {
-  FileSystemPort,
-  FileStat,
-  DirEntry,
-  FileGuards,
-  WriteApprovalHook
-} from './fileTools/port'
+export type { FileSystemPort, FileStat, DirEntry, FileGuards, WriteAskHook } from './fileTools/port'
 export { readTextContent, readDirContent, type ReadTextParams } from './fileTools/read'
 export { applyWrite, type WriteParams } from './fileTools/write'
 export { applyEdit, type EditParams } from './fileTools/edit'
@@ -123,7 +117,7 @@ export {
   GIT_ACTIONS,
   GIT_OPS,
   type GitAction,
-  type GitApprovalReason,
+  type GitAskReason,
   type GitOpSpec,
   type GitOpParams,
   type GitParamKey
@@ -154,7 +148,7 @@ export {
 export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
 export { resolveAuthor, AUTHOR_MISSING_MESSAGE } from './git/author'
 // 单 op 直用入口 —— 宿主自身的自动提交（如 widget 目录自举）复用同一套实现，不经工具壳，
-// 因而也不经路径审批：调用方必须自己确保目标目录是它有权写的
+// 因而也不经路径询问：调用方必须自己确保目标目录是它有权写的
 export { initOp, addOp, commitOp, statusOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
@@ -164,13 +158,58 @@ export {
   type ProcessToolOutputOptions,
   type ProcessToolOutputResult
 } from './toolOutput/spill'
-// 路径审批后端共享核心（注入 ApprovalPolicy；复用已共享的 requestUserInput + 审批 UI）
+// 智能体安全模块 —— 统一评估函数（allow/ask/deny）+ 内置策略 md + PEP 门面。
+// 请求按 主体/操作/客体/环境 建模；宿主经 SecurityHostProvider 注入平台细节。
 export {
-  assertPathApproved,
-  type ApprovalPolicy,
+  createSecurityContext,
+  evaluate as evaluateSecurity,
+  assembleRules,
+  mergePolicyFiles,
+  executeDecision,
+  parsePolicyDefinitionFile,
+  serializePolicyDefinitionFile,
+  POLICY_FILE_MARKER,
+  POLICY_FILE_MARKER_KEY,
+  buildBuiltinPolicies,
+  BUILTIN_POLICY_SPECS,
+  type BuiltinPolicySpec,
+  recordDecision,
+  getSessionDecisions,
+  clearSessionDecisions,
+  parseAllowEntry,
+  buildAllowEntry,
+  matchesPathEntry,
+  isPathAllowedUnified,
+  compileMatch,
+  evaluateMatch,
+  evaluateLet,
+  type AllowToolType,
+  type SecurityEffect,
   type AccessMode,
-  type AssertPathApprovedOpts
-} from './approval/policy'
+  type RuleTier,
+  type SecuritySubject,
+  type SecurityEnvironment,
+  type SecurityObject,
+  type AttrValue,
+  type MatchContext,
+  type SecurityRequest,
+  type CommandObjectInput,
+  type GitObjectInput,
+  type SecurityRule,
+  type SecurityDecision,
+  type PolicyRuleSpec,
+  type ParsedPolicyFile,
+  type SecurityHostProvider,
+  type EnforceOpts,
+  type EnforceOutcome,
+  type SecurityContext,
+  type SecurityDecisionRecord,
+  // bash 命令解析层（宿主注入 wasm 字节后同步解析；见 security/shell）
+  initShellParser,
+  isShellParserReady,
+  analyzeShellCommand,
+  type ShellFacts
+} from './security'
 // 工具基类 + 共享文件工具套件（read/write/edit 整条流程，注入端适配 API）
 export { BaseTool } from './tools/baseTool'
 export {
@@ -249,6 +288,7 @@ export {
   DEFAULT_SPEC,
   NOTEBOOK_PROFILE_NAME,
   NOTEBOOK_SPEC,
+  CODING_SPEC,
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
   WIDGET_SPEC,
@@ -262,6 +302,7 @@ export {
 export {
   createDispatchAgentTool,
   DispatchAgentTool,
+  DISPATCH_TOOL_NAME,
   AgentParamsSchema,
   buildDescription as buildDispatchDescription,
   toInProcessAgentType,
@@ -335,14 +376,5 @@ export {
   type SessionTitlerDeps,
   type TitleSourceMessage
 } from './title/sessionTitler'
-// 内置 hook 引擎 + 可移植 builtins（各端共享；桌面 HookService 组合本引擎追加 command 层）
-export {
-  HookEngine,
-  matchHook,
-  makeBashAudit,
-  findDangerousPattern,
-  makeSessionStart,
-  makeSessionStop,
-  makePathSafety,
-  type PathSafetyEnv
-} from './hooks'
+// shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
+export { validateShuvixMdText } from './shuvixMdValidate'

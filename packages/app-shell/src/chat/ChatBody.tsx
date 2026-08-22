@@ -13,9 +13,8 @@ import { ChatHeader, type ChatHeaderCaps } from './ChatHeader'
  *
  * 宿主差异全部走 props / 插槽：
  *   - headerCaps / rightActions / onOpenSessionConfig —— 顶栏能力与右侧按钮簇
- *   - banner —— 顶栏与正文间横幅（桌面 StatusBanner；为空不渲染）
- *   - sessionToolbar —— 会话工具栏（悬浮于正文右上角；有活跃会话且未被 contentOverride 替换时渲染）
- *   - sessionPanel —— 会话面板（正文区右侧悬浮卡片列，顶栏/横幅之下；渲染条件同 sessionToolbar）
+ *   - banner —— 顶栏与正文间横幅（桌面/扩展均传 StatusBanner，会话工具栏挂在它的 trailing 上；为空不渲染）
+ *   - sessionPanel —— 会话面板（正文区右侧悬浮卡片列，顶栏/横幅之下；有活跃会话且未被 contentOverride 替换时渲染）
  *   - overlays —— 正文之后的浮层（桌面 SessionConfigDialog 等）
  *   - contentOverride —— 整体替换正文（桌面悬浮窗 placeholder 占位）
  *   - welcome —— 无活跃会话时的欢迎视图
@@ -33,11 +32,9 @@ export interface ChatBodyProps {
   rightActions?: ReactNode
   /** 顶栏与正文之间的横幅插槽（为空不渲染） */
   banner?: ReactNode
-  /** 会话工具栏 —— 与当前会话绑定的工具入口，悬浮于正文右上角（横幅之下）。
-   *  仅在有活跃会话且正文未被 contentOverride 替换时渲染 */
-  sessionToolbar?: ReactNode
   /** 会话面板 —— 正文区右侧的悬浮卡片列（顶栏/横幅之下，与对话并排、对话收缩让位），
-   *  如桌面会话 Files 面板。渲染条件同 sessionToolbar；开关/宽度状态由宿主拥有 */
+   *  如桌面会话 Files 面板。仅在有活跃会话且正文未被 contentOverride 替换时渲染；
+   *  开关/宽度状态由宿主拥有。（会话工具栏不在这里 —— 它由宿主放进 banner 的 trailing） */
   sessionPanel?: ReactNode
   /** 正文之后的浮层插槽（宿主弹窗，如会话配置对话框） */
   overlays?: ReactNode
@@ -59,7 +56,6 @@ export function ChatBody({
   onOpenSessionConfig,
   rightActions,
   banner,
-  sessionToolbar,
   sessionPanel,
   overlays,
   contentOverride,
@@ -86,7 +82,7 @@ export function ChatBody({
       />
     ))
 
-  // 会话工具栏 / 会话侧栏只在「有活跃会话且正文未被替换」时出现（欢迎页 / 悬浮占位不渲染）
+  // 会话侧栏只在「有活跃会话且正文未被替换」时出现（欢迎页 / 悬浮占位不渲染）
   const sessionUiVisible = !!activeSessionId && !contentOverride
   // 面板展开时对话列滚动条紧贴面板左缘 → 给对话列挂 chat-scroll-inset，把滚动条轨道
   // 按卡片的上下留白内缩（见 base.css），避免滑块滚到两端探出卡片圆角
@@ -106,12 +102,6 @@ export function ChatBody({
           两列均不设 relative：压缩遮罩 absolute inset-0 仍锚定根容器、罩住整个正文外壳 */}
       <div className="flex flex-1 min-h-0">
         <div className={`flex flex-col flex-1 min-w-0${scrollInset ? ' chat-scroll-inset' : ''}`}>
-          {sessionUiVisible && sessionToolbar && (
-            // 零高锚点：不占布局空间，工具栏悬浮于其下方正文的右上角
-            <div className="relative z-30 h-0 flex-shrink-0">
-              <div className="absolute right-4 top-2">{sessionToolbar}</div>
-            </div>
-          )}
           {content}
         </div>
         {sessionUiVisible ? sessionPanel : null}

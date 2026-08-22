@@ -13,6 +13,9 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # web-tree-sitter 整包 4.4MB，其中 debug 构建 2.7MB + source map 1.2MB 从不使用
+  - '!node_modules/web-tree-sitter/debug/**'
+  - '!node_modules/web-tree-sitter/**/*.map'
 extraResources:
   - from: resources/bundler
     to: bundler
@@ -25,6 +28,12 @@ extraResources:
   # workspace hoist 后 esbuild-wasm 在仓库根 node_modules
   - from: ../../node_modules/esbuild-wasm/esbuild.wasm
     to: esbuild/esbuild.wasm
+  # tree-sitter 的两份 wasm（bash 命令解析）。语法包 tree-sitter-bash 是 devDependency，
+  # 只在打包时取它的 wasm —— 那 6 个平台的原生预编译不进包
+  - from: ../../node_modules/web-tree-sitter/web-tree-sitter.wasm
+    to: tree-sitter/web-tree-sitter.wasm
+  - from: ../../node_modules/tree-sitter-bash/tree-sitter-bash.wasm
+    to: tree-sitter/tree-sitter-bash.wasm
 asarUnpack:
   - resources/**
   - out/main/sqlWorker.js

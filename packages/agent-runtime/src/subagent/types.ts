@@ -19,7 +19,7 @@ export interface AgentProfile {
   description: string
   /** md 正文 = 系统提示基座 */
   systemPrompt: string
-  /** 工具白名单：内置工具名 / 'Agent'（嵌套派发）/ 'mcp:serverName' / 'skill:skillName' */
+  /** 工具白名单：内置工具名 / 'agent'（嵌套派发）/ 'mcp:serverName' / 'skill:skillName' */
   tools: readonly string[]
   /**
    * `shuvix-model`：该档案指定的模型，`<modelId>` 或 `<provider>/<modelId>`

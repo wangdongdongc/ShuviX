@@ -1,7 +1,7 @@
 import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
-import { useChatStore, type AssistantTextMessage } from '../stores/chatStore'
+import { useChatStore, type AssistantMessage } from '../stores/chatStore'
 import { useModelCatalogStore } from '../stores/modelCatalogStore'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
@@ -48,19 +48,16 @@ export function useSessionInit(activeSessionId: string | null): void {
       store.setEnabledTools(result.enabledTools || [])
 
       // 5. 从最后一条 assistant 消息的 metadata 恢复已占用上下文 token 数
+      // 最后一次调用的用量就是当时的上下文占用（一条消息 = 一次调用）
       const lastAssistant = [...msgs]
         .reverse()
         .find(
-          (m): m is AssistantTextMessage =>
-            m.role === 'assistant' && m.type === 'text' && !!m.metadata
+          (m): m is AssistantMessage =>
+            m.role === 'assistant' && m.type === 'message' && !!m.metadata
         )
       const lastUsage = lastAssistant?.metadata?.usage ?? null
       if (lastUsage) {
-        const details = lastUsage.details
-        const last = (details?.length ?? 0) > 0 ? details![details!.length - 1] : null
-        const promptTokens = last
-          ? (last.total || 0) - (last.output || 0)
-          : (lastUsage.total || 0) - (lastUsage.output || 0)
+        const promptTokens = (lastUsage.total || 0) - (lastUsage.output || 0)
         store.setUsedContextTokens(promptTokens > 0 ? promptTokens : null)
       } else {
         store.setUsedContextTokens(null)

@@ -3,7 +3,6 @@
  * 仅包含与数据库表直接对应的行类型和列值枚举
  */
 export * from './session'
-export * from './message'
 export * from './provider'
 export * from './project'
 export * from './httpLog'

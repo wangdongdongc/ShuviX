@@ -21,23 +21,23 @@ import { useTranslation } from 'react-i18next'
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useChatStore, selectPendingInputs, selectActivePendingInput } from '../../stores/chatStore'
 import type {
-  ApprovalInputRequest,
+  AskInputRequest,
   ChoiceInputRequest,
   InputRequest,
   InputResponse,
   SshCredentialsInputRequest
 } from '@shuvix/chat-protocol/types/inputRequest'
-import { ApprovalForm } from './inputs/ApprovalForm'
+import { AskForm } from './inputs/AskForm'
 import { ChoiceForm } from './inputs/ChoiceForm'
 import { SshCredentialsForm } from './inputs/SshCredentialsForm'
 import {
-  buildApprovalResponse,
+  buildAskResponse,
   buildChoiceResponse,
   buildSshCredentialsResponse,
-  emptyApprovalDraft,
+  emptyAskDraft,
   emptyChoiceDraft,
   emptySshCredentialsDraft,
-  type ApprovalDraft,
+  type AskDraft,
   type ChoiceDraft,
   type SshCredentialsDraft
 } from './inputs/drafts'
@@ -52,7 +52,7 @@ interface PendingInputsPanelProps {
 
 /** 根据 request.kind 创建一个空白 draft */
 function createDraftFor(req: InputRequest): unknown {
-  if (req.kind === 'approval') return emptyApprovalDraft()
+  if (req.kind === 'ask') return emptyAskDraft()
   if (req.kind === 'choice') return emptyChoiceDraft()
   if (req.kind === 'sshCredentials') return emptySshCredentialsDraft(req.prefill)
   return {}
@@ -60,7 +60,7 @@ function createDraftFor(req: InputRequest): unknown {
 
 /** 校验某个 request + draft 能否构造出有效 response */
 function buildResponseFor(req: InputRequest, draft: unknown): InputResponse | null {
-  if (req.kind === 'approval') return buildApprovalResponse(draft as ApprovalDraft)
+  if (req.kind === 'ask') return buildAskResponse(draft as AskDraft)
   if (req.kind === 'choice') return buildChoiceResponse(draft as ChoiceDraft)
   if (req.kind === 'sshCredentials')
     return buildSshCredentialsResponse(draft as SshCredentialsDraft)
@@ -168,13 +168,13 @@ export function PendingInputsPanel({
     // 长选项列表 / 长命令不能把输入区顶出屏幕：上半格自身封顶滚动，下方输入区始终可见
     <div
       className={`rounded-t-2xl border-b border-border-secondary/40 px-3.5 py-2.5 max-h-[40vh] overflow-y-auto thin-scrollbar ${
-        activeRequest.kind === 'approval' ? 'bg-warning/[0.04]' : 'bg-accent/[0.04]'
+        activeRequest.kind === 'ask' ? 'bg-warning/[0.04]' : 'bg-accent/[0.04]'
       }`}
     >
-      {activeRequest.kind === 'approval' && activeDraft !== undefined && (
-        <ApprovalForm
-          request={activeRequest as ApprovalInputRequest}
-          draft={activeDraft as ApprovalDraft}
+      {activeRequest.kind === 'ask' && activeDraft !== undefined && (
+        <AskForm
+          request={activeRequest as AskInputRequest}
+          draft={activeDraft as AskDraft}
           onDraftChange={handleDraftChange}
           onSubmit={handleSubmit}
           titleAccessory={stepper}

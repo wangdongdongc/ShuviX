@@ -6,7 +6,7 @@ export interface ChatFrontendCapabilities {
   streaming?: boolean
   /**
    * 支持"用户输入请求"交互(input_request 事件)。
-   * 命令审批 / 选择题 / SSH 凭证全部归并为单一能力。
+   * 命令询问 / 选择题 / SSH 凭证全部归并为单一能力。
    * 不支持的前端在收到 input_request 时被跳过,工具收到 cancel 响应。
    */
   userInput?: boolean

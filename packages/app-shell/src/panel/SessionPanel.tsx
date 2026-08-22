@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Bot, Cpu, Eye, FolderTree, X } from 'lucide-react'
 import { useChatStore, useSubAgentCount, getHostApi } from '@shuvix/chat-ui'
+import { useFocusDim } from '../sidebar/useFocusDim'
 import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { AgentInfoPanel } from './AgentInfoPanel'
@@ -10,7 +11,7 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
- *   - SessionToolbar：悬浮于正文右上角的胶囊工具栏，仅面板收起时显示（展开后隐藏，
+ *   - SessionToolbar：状态横幅右侧的工具入口组，仅面板收起时显示（展开后隐藏，
  *     切换/收起入口移交面板头部 tabs）。Files 常驻；Agent 在完整宿主的非笔记本会话常驻；
  *     Preview 仅在宿主注入（showPreview）**且存在预览目标**时出现（与 Sub-agent 同款
  *     「有内容才显示」语义）；Sub-agent 仅当前会话有子会话时出现（含数量徽标）。
@@ -122,7 +123,12 @@ function useSessionPanelToolItems(
   ]
 }
 
-/** 会话工具栏胶囊（悬浮于正文右上角）—— 面板收起时的工具入口；展开后隐藏（切换入口移交面板头部 tabs） */
+/**
+ * 会话工具栏（状态横幅右侧）—— 面板收起与展开时**同一处**的工具入口：
+ *   - 收起：仅图标，点按展开并切到该工具；
+ *   - 展开：即面板的 tabs（当前工具带文字）+ 收起按钮 —— 面板卡片自身不再有头部，
+ *     开合面板时这排控件原地变形，而不是从卡片头部跳到横幅、或反过来。
+ */
 export function SessionToolbar({
   sessionId,
   showPreview = false
@@ -131,25 +137,57 @@ export function SessionToolbar({
   /** 是否显示 Preview 工具入口（与 SessionPanel 的 previewContent 注入配套） */
   showPreview?: boolean
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
   const openTool = useSessionPanelTool(sessionId)
   const tools = useSessionPanelToolItems(sessionId, showPreview)
-  if (!sessionId || openTool) return null
+  // 专注模式淡化：与顶栏/侧栏/面板页签同一套判定与手感（悬浮即恢复不透明）。
+  // 注意 hook 必须在下面的早退之前调用。
+  const { dim } = useFocusDim()
+  if (!sessionId) return null
+
+  // 与 SessionPanel 同款兜底：停在 Preview 但宿主没注入 previewContent → 实际显示的是 Files
+  const activeTool = openTool === 'preview' && !showPreview ? 'files' : openTool
 
   return (
-    <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-border-secondary/60 bg-bg-primary/75 backdrop-blur-md shadow-sm">
-      {tools.map(({ tool, Icon, label, badge }) => (
+    <div
+      className={`flex items-center gap-0.5 transition-opacity duration-200 ${
+        dim ? 'opacity-30 hover:opacity-100' : ''
+      }`}
+    >
+      {tools.map(({ tool, Icon, label, badge }) => {
+        const active = tool === activeTool
+        return (
+          <button
+            key={tool}
+            onClick={() =>
+              openTool
+                ? useSessionPanelStore.getState().show(sessionId, tool)
+                : useSessionPanelStore.getState().toggle(sessionId, tool)
+            }
+            className={`flex items-center gap-1 min-w-0 px-1 h-6 rounded-md text-xs font-medium transition-colors ${
+              active
+                ? 'text-accent bg-accent/10'
+                : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'
+            }`}
+            title={label}
+          >
+            <Icon size={14} className="flex-shrink-0" />
+            {active && <span className="truncate">{label}</span>}
+            {badge !== undefined && badge > 0 && (
+              <span className="text-[10px] tabular-nums">{badge}</span>
+            )}
+          </button>
+        )
+      })}
+      {openTool && (
         <button
-          key={tool}
-          onClick={() => useSessionPanelStore.getState().toggle(sessionId, tool)}
-          className="flex items-center p-1 rounded-md transition-colors text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50"
-          title={label}
+          onClick={() => useSessionPanelStore.getState().close(sessionId)}
+          className="flex items-center p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
+          title={t('common.close')}
         >
-          <Icon size={14} />
-          {badge !== undefined && badge > 0 && (
-            <span className="ml-0.5 text-[10px] tabular-nums">{badge}</span>
-          )}
+          <X size={13} />
         </button>
-      ))}
+      )}
     </div>
   )
 }
@@ -168,10 +206,8 @@ export function SessionPanel({
   filesContent,
   previewContent
 }: SessionPanelProps): React.JSX.Element | null {
-  const { t } = useTranslation()
   const rawTool = useSessionPanelTool(sessionId)
   const width = useSessionPanelStore((s) => s.width)
-  const toolItems = useSessionPanelToolItems(sessionId, previewContent !== undefined)
   if (!sessionId || !rawTool) return null
 
   // 兜底：面板停在 Preview 但宿主未注入 previewContent（不该发生）→ 回落到 Files
@@ -218,40 +254,7 @@ export function SessionPanel({
           } as React.CSSProperties
         }
       >
-        <div className="flex-shrink-0 flex items-center justify-between gap-1 px-1.5 h-9 border-b border-border-secondary/30">
-          {/* 头部 tabs：与工具栏同一入口列表；点按切换工具（当前工具展示图标+文字，其余仅图标） */}
-          <div className="flex items-center gap-0.5 min-w-0">
-            {toolItems.map(({ tool: itemTool, Icon, label, badge }) => {
-              const active = itemTool === tool
-              return (
-                <button
-                  key={itemTool}
-                  onClick={() => useSessionPanelStore.getState().show(sessionId, itemTool)}
-                  className={`flex items-center gap-1 px-1.5 h-6 rounded-md text-xs font-medium transition-colors min-w-0 ${
-                    active
-                      ? 'text-accent bg-accent/10'
-                      : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50'
-                  }`}
-                  title={label}
-                >
-                  <Icon size={13} className="flex-shrink-0" />
-                  {active && <span className="truncate">{label}</span>}
-                  {badge !== undefined && badge > 0 && (
-                    <span className="text-[10px] tabular-nums">{badge}</span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-          <button
-            onClick={() => useSessionPanelStore.getState().close(sessionId)}
-            className="p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors flex-shrink-0"
-            title={t('common.close')}
-          >
-            <X size={13} />
-          </button>
-        </div>
-        {/* 内容区 —— 各工具共存，visibility 切换 */}
+        {/* 内容区 —— 各工具共存，visibility 切换（tabs / 收起在状态横幅右侧，卡片自身无头部） */}
         <div className="flex-1 min-h-0 relative">
           <div
             className="absolute inset-0"

@@ -6,7 +6,7 @@
  *
  * 实例的**构造**（拼 system prompt / build tools / resolve model / 恢复历史）与**清理**因端而异，
  * 经 `create` / `dispose` 注入：
- *   - 桌面：实例为 `AgentSession`（含 hooks/ssh 清理），create 同步，dispose → invalidate/destroy。
+ *   - 桌面：实例为 `AgentSession`（含 ssh 清理），create 同步，dispose → invalidate/destroy。
  *   - 扩展：实例为 `RuntimeSession`，create 异步（FSA/OPFS），dispose → 子代理/工具注册表清理。
  *
  * T 是每会话的运行时对象类型（桌面 AgentSession / 扩展 RuntimeSession），对本类不透明。

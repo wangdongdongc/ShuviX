@@ -14,9 +14,9 @@ export interface SessionModelMetadata {
 
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
 export interface SessionSettings {
-  /** 命令免审批（bash + ssh 统一开关） */
-  autoApprove?: boolean
-  /** 命令允许列表，格式 Bash(pattern) / SSH(pattern) */
+  /** 命令免询问（bash + ssh 统一开关） */
+  autoAllow?: boolean
+  /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
   /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
   /** 注入的项目指令文件（单选）：undefined = 按 AGENTS.md → CLAUDE.md 优先级自动选，null = 不注入 */
@@ -36,7 +36,7 @@ export interface Session {
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
-  /** 会话级配置（SSH 免审批等） */
+  /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number
   updatedAt: number

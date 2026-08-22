@@ -189,52 +189,21 @@ export function useAgentEvents(): void {
           subStore.finalizeStreamingToolCall(sid)
           subStore.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
           return
-        case 'tool_start': {
-          const toolMsg: ChatMessage | null = event.messageId
-            ? ({
-                id: event.messageId,
-                sessionId: sid,
-                role: 'assistant' as const,
-                type: 'tool_use' as const,
-                content: '',
-                metadata: {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  args: event.toolArgs ?? {}
-                },
-                model: '',
-                createdAt: Date.now()
-              } as ChatMessage)
-            : null
-          subStore.handleToolStart(
-            sid,
-            {
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              args: event.toolArgs ?? {},
-              turnIndex: event.turnIndex,
-              status: 'running',
-              messageId: event.messageId
-            },
-            toolMsg
-          )
+        case 'assistant_message': {
+          // 一次 LLM 调用落盘：整张卡 upsert（工具结果随后按 toolCallId 回填）
+          subStore.handleAssistantMessage(sid, JSON.parse(event.message) as ChatMessage)
           return
         }
-        case 'tool_end': {
-          const entry = useSubSessionStore.getState().subSessions[sid]
-          const existing = entry?.messages.find((m) => m.id === event.messageId)
-          let updated: ChatMessage | null = null
-          if (existing && existing.type === 'tool_use') {
-            updated = {
-              ...existing,
-              content: event.result || '',
-              metadata: {
-                ...(existing.metadata as unknown as Record<string, unknown>),
-                isError: event.isError || false,
-                details: event.details
-              }
-            } as ChatMessage
-          }
+        case 'tool_start':
+          subStore.handleToolStart(sid, {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: event.toolArgs ?? {},
+            status: 'running',
+            messageId: event.messageId
+          })
+          return
+        case 'tool_end':
           subStore.handleToolEnd(
             sid,
             event.toolCallId,
@@ -243,12 +212,10 @@ export function useAgentEvents(): void {
               result: event.result,
               details: event.details
             },
-            event.messageId,
-            updated
+            event.messageId
           )
           return
-        }
-        // 其它事件（step_end / input_request / runtime / messages_reloaded 等）子会话不会触发；忽略。
+        // 其它事件（input_request / runtime / messages_reloaded 等）子会话不会触发；忽略。
         default:
           return
       }
@@ -280,11 +247,10 @@ export function useAgentEvents(): void {
         store.setStreamingToolCall(sid, { toolName: event.toolName, argsText: '' })
         break
 
-      case 'step_end': {
-        // 原子操作：清除流式内容 + 添加 step 消息（单次 set，避免中间帧闪空）
-        const stepMsg =
-          sid === store.activeSessionId && event.message ? JSON.parse(event.message) : null
-        store.handleStepEnd(sid, stepMsg)
+      case 'assistant_message': {
+        // 一次 LLM 调用落盘：清除流式内容 + 按 id upsert 这张卡（单次 set，避免中间帧闪空）
+        const card = sid === store.activeSessionId ? JSON.parse(event.message) : null
+        store.handleAssistantMessage(sid, card)
         break
       }
 
@@ -298,44 +264,8 @@ export function useAgentEvents(): void {
         }
         break
 
-      case 'tool_start': {
-        // 原子操作：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁）
-        // 工具执行状态统一为 'running';"等待用户输入"由独立的 input_request 事件驱动
-        const toolMsg =
-          sid === store.activeSessionId && event.messageId
-            ? ({
-                id: event.messageId,
-                sessionId: sid,
-                role: 'assistant' as const,
-                type: 'tool_use' as const,
-                content: '',
-                metadata: {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  args: event.toolArgs ?? {}
-                },
-                model: '',
-                createdAt: Date.now()
-              } as ChatMessage)
-            : null
-
-        store.handleToolStart(
-          sid,
-          {
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            args: event.toolArgs ?? {},
-            turnIndex: event.turnIndex,
-            status: 'running',
-            messageId: event.messageId
-          },
-          toolMsg
-        )
-        break
-      }
-
       case 'input_request':
-        // 统一的"用户输入请求"事件 — 命令审批 / 选择题 / SSH 凭证
+        // 统一的"用户输入请求"事件 — 命令询问 / 选择题 / SSH 凭证
         store.addPendingInput(sid, event.request)
         break
 
@@ -344,34 +274,30 @@ export function useAgentEvents(): void {
         store.removePendingInput(sid, event.requestId)
         break
 
-      case 'tool_end': {
-        // 原子操作：更新执行状态 + 替换消息（单次 set，避免闪烁）
-        const execUpdates = {
-          status: (event.isError ? 'error' : 'done') as 'done' | 'error',
-          result: event.result,
-          details: event.details
-        }
-
-        // 从现有消息中找到并更新，避免 async 获取
-        let updatedToolMsg: ChatMessage | null = null
-        if (sid === store.activeSessionId && event.messageId) {
-          const existing = store.messages.find((m) => m.id === event.messageId)
-          if (existing && existing.type === 'tool_use') {
-            updatedToolMsg = {
-              ...existing,
-              content: event.result || '',
-              metadata: {
-                ...(existing.metadata as unknown as Record<string, unknown>),
-                isError: event.isError || false,
-                details: event.details
-              }
-            } as ChatMessage
-          }
-        }
-
-        store.handleToolEnd(sid, event.toolCallId, execUpdates, event.messageId, updatedToolMsg)
+      case 'tool_start':
+        // 工具块已随 assistant 卡到达（message_end 必定早于工具事件），这里只记执行状态
+        store.handleToolStart(sid, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.toolArgs ?? {},
+          status: 'running',
+          messageId: event.messageId
+        })
         break
-      }
+
+      case 'tool_end':
+        // 结果回填进对应卡片的工具块（按 toolCallId 定位）
+        store.handleToolEnd(
+          sid,
+          event.toolCallId,
+          {
+            status: event.isError ? 'error' : 'done',
+            result: event.result,
+            details: event.details
+          },
+          event.messageId
+        )
+        break
 
       case 'runtime_event':
         store.setRuntime(sid, event.runtimeId, event.status)

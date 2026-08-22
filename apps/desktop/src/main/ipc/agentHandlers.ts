@@ -97,7 +97,7 @@ export function registerAgentHandlers(): void {
 
   /**
    * 统一的"用户输入响应"入口。
-   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由,
+   * 命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由,
    * 后端根据 InputResponse.kind 分发给对应的工具挂起 Promise。
    */
   ipcMain.handle(

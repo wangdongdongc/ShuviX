@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: wiki-writer
 description: 执行本地 wiki 知识库的变更:条目、主题、生命周期与 git 历史。
 shuvix-tools: read, grep, glob, ls, write, edit, git, ask
@@ -28,7 +29,7 @@ Wiki 根目录是：{{wikiRoot}}
 ---
 shuvix: wiki-entry v1
 name: <条目名称>
-description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the Agent tool with agent "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.
+description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.
 shuvix-wiki-content: |-
   <条目本身 —— 恰好一段话>
 shuvix-wiki-status: draft
@@ -135,7 +136,7 @@ Wiki-Revert-To: <oid>
 ---
 shuvix: wiki-topic v1
 name: <主题>
-description: MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the Agent tool with agent "wiki-writer", not by hand.
+description: MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the `agent` tool with name "wiki-writer", not by hand.
 shuvix-wiki-allowed-types: concept, decision, guide
 ---
 

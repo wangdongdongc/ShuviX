@@ -109,7 +109,7 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
       for (const forbidden of ['write', 'edit', 'git']) {
         expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
-      expect(desk.tools, `wiki.${language} 需能派发`).toContain('Agent')
+      expect(desk.tools, `wiki.${language} 需能派发`).toContain('agent')
       expect(desk.dispatchOnly, `wiki.${language} 必须可切换`).toBe(false)
       expect(writer.dispatchOnly, `wiki-writer.${language} 必须只可派发`).toBe(true)
       // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
@@ -151,10 +151,11 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 七个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 八个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'default',
       'notebook',
+      'coding',
       'explore',
       'visualization',
       'widget',
@@ -164,6 +165,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'default',
       'notebook',
+      'coding',
       'explore',
       'visualization'
     ])
@@ -177,6 +179,14 @@ describe('buildBuiltinProfiles — 全集现算', () => {
         expect(built!.name, `${spec.name}.${language}`).toBe(spec.name)
         expect(built!.description.length, `${spec.name}.${language}`).toBeGreaterThan(0)
         expect(built!.systemPrompt.length, `${spec.name}.${language}`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('每份语言文件都声明 shuvix-builtin: true（新增内置 agent 漏写即红）', () => {
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const [language, source] of Object.entries(spec.sources)) {
+        expect(source, `${spec.name}.${language}`).toMatch(/^shuvix-builtin: true$/m)
       }
     }
   })
@@ -206,27 +216,16 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 })
 
 describe('default 档案钉板(主会话默认工具集/环境段的唯一事实源)', () => {
-  it('tools 按桌面注册序列出 + Agent 居末;不含 git/preview(用户可覆盖 default.md 加入)', () => {
+  it('tools 按桌面注册序列出 + Agent 居末;检索/远程/数据库类工具已随工程人格拆去 coding', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
     const built = profile(DEFAULT_PROFILE_NAME)
-    expect(built.tools).toEqual([
-      'bash',
-      'read',
-      'write',
-      'edit',
-      'ask',
-      'browser',
-      'ls',
-      'grep',
-      'glob',
-      'ssh',
-      'database',
-      'Agent'
-    ])
-    expect(built.tools).not.toContain('git')
-    expect(built.tools).not.toContain('preview')
+    expect(built.tools).toEqual(['bash', 'read', 'write', 'edit', 'ask', 'browser', 'agent'])
+    // ls/grep/glob 亦不在（通用会话里检索走 bash,成规模的调研切 /coding）
+    for (const gone of ['ls', 'grep', 'glob', 'ssh', 'database', 'git', 'preview']) {
+      expect(built.tools, `default 不应持有 ${gone}`).not.toContain(gone)
+    }
     // 环境/工作区模板已内化进 body（{{shuvix:*}} 占位符,createAgent 时替换）
     for (const v of [
       'isGitRepo',
@@ -255,11 +254,63 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
   })
 })
 
+describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
+  it('握有完整工具链 —— default 让出的 ssh/database 在这里', () => {
+    const built = profile('coding')
+    expect(built.tools).toEqual([
+      'bash',
+      'read',
+      'write',
+      'edit',
+      'ask',
+      'browser',
+      'ls',
+      'grep',
+      'glob',
+      'ssh',
+      'database',
+      'agent'
+    ])
+  })
+
+  it('是可切换的具名档案（/coding），不是基座档案也不是 dispatch-only', () => {
+    expect(BASE_PROFILE_NAMES.has('coding')).toBe(false)
+    expect(profile('coding').dispatchOnly).toBe(false)
+  })
+
+  it('三语 default 都点名 coding —— 切换入口只能从提示词被用户知晓', () => {
+    for (const language of ['en', 'zh', 'ja']) {
+      expect(profile(DEFAULT_PROFILE_NAME, language).systemPrompt, `default.${language}`).toContain(
+        '`coding`'
+      )
+    }
+  })
+
+  it('两侧派发清单各按场景裁剪（派发工具不枚举 agent 名，名字只能来自提示词）', () => {
+    for (const language of ['en', 'zh', 'ja']) {
+      const coding = profile('coding', language).systemPrompt
+      const def = profile(DEFAULT_PROFILE_NAME, language).systemPrompt
+      // coding：工程场景只要广域调研 + 作图
+      for (const named of ['explore', 'visualization']) {
+        expect(coding, `coding.${language} 需点名 ${named}`).toContain(named)
+      }
+      for (const gone of ['widget', 'wiki-writer']) {
+        expect(coding, `coding.${language} 不应点名 ${gone}`).not.toContain(gone)
+      }
+      // default：通用场景要作图/小工具/知识库，广域调研留给 /coding
+      for (const named of ['visualization', 'widget', 'wiki-writer']) {
+        expect(def, `default.${language} 需点名 ${named}`).toContain(named)
+      }
+      expect(def, `default.${language} 不应点名 explore`).not.toContain('explore')
+    }
+  })
+})
+
 describe('notebook 档案钉板(笔记本一次性子代理的基座)', () => {
-  it('工具集不含 ask / Agent —— 面板只读无法应答,且不嵌套派发', () => {
+  it('工具集不含 ask / agent —— 面板只读无法应答,且不嵌套派发', () => {
     const built = profile(NOTEBOOK_PROFILE_NAME)
     expect(built.tools).not.toContain('ask')
-    expect(built.tools).not.toContain('Agent')
+    expect(built.tools).not.toContain('agent')
     expect(built.tools).toContain('read')
     expect(built.tools).toContain('edit')
   })

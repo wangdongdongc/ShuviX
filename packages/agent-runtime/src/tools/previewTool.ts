@@ -10,9 +10,15 @@
  *      回执（broker 超时诚实降级为 verified:false）；扩展 = 工具就在浏览器里直接渲染。
  *      验证失败同样不打开面板，返回 mermaid 错误原文供 agent 当轮修正后重试。
  *
+ * **刻意不设路径准入门**：预览把文件呈现给**用户**，正文不进模型上下文 —— 与桌面
+ * previewSessionFile（用户点击 Files 面板）同一哲学：用户对本机文件本来就有完全访问权，
+ * 读取询问的存在理由（内容进上下文可能被外带）在此不适用。已知且接受的小信息面：
+ * tool result 会把存在性/分类元数据（not found / binary / size）与图表验证的 mermaid
+ * 错误碎片回给模型。想按工具设门：L1 全工具门 + 用户策略 `tool.name == 'preview'`。
+ *
  * 平台差异全部经注入：
  *   - resolvePath：输入路径 → { statPath(交给 port/内核), absPath(事件/展示用 UI 路径空间) }；
- *     越界/非法时 throw LLM 可读错误（桌面=工作目录绝对路径；扩展=root.name/rel）。
+ *     非法（'..' 逃逸出根等）时 throw LLM 可读错误（桌面=工作目录绝对路径；扩展=root.name/rel）。
  *   - port.stat：存在性与常规文件校验（桌面 Node fs；扩展 FSA）。
  *   - readPreview：预览分类内核（桌面 Node port / 扩展 FSA port 包 previewFile）。
  *   - validateChart：图表渲染验证（可选；缺省跳过，按未验证成功处理）。
@@ -28,12 +34,12 @@ import type { FileSystemPort } from '../fileTools/port'
 export const PreviewParamsSchema = Type.Object({
   path: Type.String({
     description:
-      'Absolute path of the file to preview (a relative path is resolved against the session working directory). Must be an existing file inside the working directory.'
+      'Absolute path of the file to preview (a relative path is resolved against the session working directory). Must be an existing file.'
   })
 })
 
 export const PREVIEW_DESCRIPTION =
-  'Open a file preview in the session Files panel — the same preview the user sees when clicking that file in the panel. The file must already exist and live inside the current working directory. The tool verifies the outcome before returning: unsupported formats (binary / too large / unreadable) and failed chart rendering (invalid mermaid in a shuvix:chart file) return an error WITHOUT opening the panel — fix the file and call preview again. Use this to present a finished artifact (e.g. a Markdown chart) to the user right after writing it.'
+  'Open a file preview in the session Files panel — the same preview the user sees when clicking that file in the panel. The file must already exist. The tool verifies the outcome before returning: unsupported formats (binary / too large / unreadable) and failed chart rendering (invalid mermaid in a shuvix:chart file) return an error WITHOUT opening the panel — fix the file and call preview again. Use this to present a finished artifact (e.g. a Markdown chart) to the user right after writing it.'
 
 /** 图表渲染验证结果（verified=false 表示无渲染端应答，按成功放行但注明未验证） */
 export interface ChartValidation {
@@ -47,8 +53,9 @@ export interface PreviewToolDeps {
   /** 只需 stat —— 存在性与常规文件校验 */
   port: Pick<FileSystemPort, 'stat'>
   /**
-   * 解析并校验输入路径。返回 statPath（port/内核用）与 absPath（事件/文案用）；
-   * 越界（工作目录外 / '..' 逃逸）时 throw —— 错误文本直接回给 LLM。
+   * 解析输入路径。返回 statPath（port/内核用）与 absPath（事件/文案用）；
+   * 非法（如 '..' 逃逸出根）时 throw —— 错误文本直接回给 LLM。
+   * 纯解析，不做准入（无门的理由见文件头）。
    */
   resolvePath: (
     path: string
@@ -91,7 +98,7 @@ export class PreviewTool extends BaseTool<typeof PreviewParamsSchema> {
     signal?: AbortSignal
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.deps.abortError)
-    // 边界校验在 resolvePath 内完成（越界即 throw）
+    // 仅路径合法性校验（非法即 throw）；无准入门 —— 理由见文件头
     await this.deps.resolvePath(params.path)
   }
 

@@ -23,7 +23,7 @@ export class HttpLogDao extends BaseDao {
     )
   }
 
-  /** 获取日志列表（不含 payload，按时间倒序，支持 sessionId/provider/model 筛选） */
+  /** 获取日志列表（不含 payload 本体，只带其字节数；按时间倒序，支持 sessionId/provider/model 筛选） */
   list(
     params: { sessionId?: string; provider?: string; model?: string; limit?: number } = {}
   ): HttpLogSummary[] {
@@ -51,7 +51,8 @@ export class HttpLogDao extends BaseDao {
       .prepare(
         `SELECT h.id, h.sessionId, COALESCE(s.title, '') AS sessionTitle,
                 h.provider, COALESCE(p.name, h.provider) AS providerName, h.model,
-                h.inputTokens, h.outputTokens, h.totalTokens, h.createdAt
+                h.inputTokens, h.outputTokens, h.totalTokens,
+                LENGTH(CAST(h.payload AS BLOB)) AS payloadBytes, h.createdAt
          FROM http_logs h
          LEFT JOIN sessions s ON h.sessionId = s.id
          LEFT JOIN providers p ON h.provider = p.id

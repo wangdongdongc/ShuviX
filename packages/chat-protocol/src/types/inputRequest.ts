@@ -28,7 +28,7 @@ export interface SshCredentialPayload {
 
 // ─── 请求侧 ──────────────────────────────────────────
 
-export type InputRequestKind = 'approval' | 'choice' | 'sshCredentials'
+export type InputRequestKind = 'ask' | 'choice' | 'sshCredentials'
 
 interface InputRequestBase {
   /** 与 toolCallId 一致,作为路由 key */
@@ -39,15 +39,15 @@ interface InputRequestBase {
 }
 
 /**
- * 「预览审批」的 diff 载荷 —— write/edit 在**写入之前**把即将发生的改动摊给用户看。
+ * 「预览询问」的 diff 载荷 —— write/edit 在**写入之前**把即将发生的改动摊给用户看。
  *
  * ⚠️ 一致性契约:这里的 `diff` 与工具执行后 `EditToolDetails/WriteToolDetails.diff`
  * 必须是**同一个字符串**。实现上由 applyEdit/applyWrite 在文件锁内算一次(截断也只做一次),
- * 再分别交给审批请求与 tool result —— 不允许两侧各算一遍,那样文件在两次之间被改动就会分歧。
+ * 再分别交给询问请求与 tool result —— 不允许两侧各算一遍,那样文件在两次之间被改动就会分歧。
  */
-export interface ApprovalDiffPreview {
+export interface AskDiffPreview {
   kind: 'diff'
-  /** 展示用文件路径(与审批 command 里的路径同源) */
+  /** 展示用文件路径(与询问 command 里的路径同源) */
   path: string
   /** 与 tool result details.diff 同一份 */
   diff: string
@@ -55,21 +55,36 @@ export interface ApprovalDiffPreview {
   isNewFile?: boolean
 }
 
-export type ApprovalPreview = ApprovalDiffPreview
+export type AskPreview = AskDiffPreview
 
-export interface ApprovalInputRequest extends InputRequestBase {
-  kind: 'approval'
+/**
+ * 命中的安全策略给出的提示语（策略 md 里规则的 `prompt`）。
+ *
+ * 与 `description` 刻意分开：description 是**工具自己**的说明（如 git 操作的文案），
+ * 这一条是**策略在说话** —— 卡片上单独一栏并署名，用户才知道该去改哪份策略。
+ * 询问场景下它只到这里为止，不进 agent 上下文。
+ */
+export interface AskPolicyPrompt {
+  text: string
+  /** 贡献该文本的策略显示名（去重，按装配序）；可能多份策略同时命中 */
+  policies: string[]
+}
+
+export interface AskInputRequest extends InputRequestBase {
+  kind: 'ask'
   command: string
   description?: string
+  /** 命中策略的提示语（有则卡片多渲染一栏） */
+  policyPrompt?: AskPolicyPrompt
   /**
-   * 路径审批时,提示前端"此路径是目录"。
-   * - 后端会自动把目录加入 allowList(无需用户勾选"记住")
-   * - 前端据此调整 UI(标签 / 隐藏冗余按钮)
+   * 路径询问时,提示前端"此路径是目录"。
+   * - 前端据此调整 UI:目录不提供单次放行,「允许此目录」按钮固定携带
+   *   `extra.rememberPath: true`(目录授权天然持久),后端走普通"记住"分支写入 allowList
    * - 仅对 read 模式有意义
    */
   pathIsDirectory?: boolean
-  /** 预览审批载荷:有则前端渲染预览(如 write/edit 的 diff)而非光秃秃的路径 */
-  preview?: ApprovalPreview
+  /** 预览询问载荷:有则前端渲染预览(如 write/edit 的 diff)而非光秃秃的路径 */
+  preview?: AskPreview
 }
 
 export interface ChoiceInputRequest extends InputRequestBase {
@@ -86,7 +101,7 @@ export interface SshCredentialsInputRequest extends InputRequestBase {
   prefill?: { host?: string; port?: number; username?: string }
 }
 
-export type InputRequest = ApprovalInputRequest | ChoiceInputRequest | SshCredentialsInputRequest
+export type InputRequest = AskInputRequest | ChoiceInputRequest | SshCredentialsInputRequest
 
 // ─── 响应侧 ──────────────────────────────────────────
 
@@ -95,9 +110,9 @@ interface InputResponseBase {
   extra?: Record<string, unknown>
 }
 
-export interface ApprovalResponse extends InputResponseBase {
-  kind: 'approval'
-  approved: boolean
+export interface AskResponse extends InputResponseBase {
+  kind: 'ask'
+  allowed: boolean
   reason?: string
 }
 
@@ -135,7 +150,7 @@ export interface CancelResponse extends InputResponseBase {
 }
 
 export type InputResponse =
-  | ApprovalResponse
+  | AskResponse
   | ChoiceResponse
   | SshCredentialsResponse
   | OtherResponse

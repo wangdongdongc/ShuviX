@@ -1,13 +1,15 @@
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeRaw from 'rehype-raw'
 import { segmentContent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { markdownComponents } from './markdownComponents'
-import { StepBlock } from './StepBlock'
+import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
+import {
+  markdownComponents,
+  markdownRemarkPlugins,
+  markdownRehypePlugins
+} from './markdownComponents'
+import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock, ToolCallGroup } from './ToolCallBlock'
 import { groupConsecutiveToolCalls } from './stepGrouping'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
@@ -48,8 +50,8 @@ function SubMarkdown({ content }: { content: string }): React.JSX.Element {
   return (
     <div className="markdown-body text-xs">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight, rehypeRaw]}
+        remarkPlugins={markdownRemarkPlugins}
+        rehypePlugins={markdownRehypePlugins}
         components={markdownComponents}
       >
         {content}
@@ -59,7 +61,7 @@ function SubMarkdown({ content }: { content: string }): React.JSX.Element {
 }
 
 /**
- * 单条子会话消息 — tool_use / step / assistant text / user 追问分发渲染。
+ * 单条子会话消息 —— 与主对话同构：一条 entry 一项，assistant 卡内按 blocks 顺序展开。
  * memo（默认引用比较）：流式期间历史消息引用稳定 → 跳过整段 markdown 逐帧重解析；
  * store 更新某条消息（tool_end 回填等）会替换其对象引用，memo 自动放行。
  */
@@ -68,35 +70,44 @@ const SubMessage = memo(function SubMessage({
 }: {
   msg: ChatMessage
 }): React.JSX.Element | null {
-  if (msg.type === 'tool_use') {
-    const meta = msg.metadata
-    const status = msg.content ? (meta?.isError ? 'error' : 'done') : 'running'
-    return (
-      <ToolCallBlock
-        toolName={meta?.toolName || ''}
-        toolCallId={meta?.toolCallId}
-        args={meta?.args}
-        result={msg.content || undefined}
-        details={meta?.details}
-        status={status}
-      />
-    )
-  }
-  if (msg.type === 'step_text') return <SubMarkdown content={msg.content} />
-  if (msg.type === 'step_thinking') return <StepBlock message={msg} />
-  if (msg.role === 'assistant' && msg.type === 'text') return <SubMarkdown content={msg.content} />
   if (msg.role === 'user' && msg.type === 'text') {
     const tokens = (msg.metadata as { inlineTokens?: Record<string, InlineToken> } | null)
       ?.inlineTokens
     return <PromptBubble content={msg.content} inlineTokens={tokens} />
   }
-  return null
+  if (msg.type === 'error_event') {
+    return <div className="text-[11px] text-error/90 break-words">{msg.content}</div>
+  }
+  if (msg.role !== 'assistant') return null
+
+  return (
+    <div className="space-y-1">
+      {groupConsecutiveToolCalls(msg.blocks).map((g) => {
+        if (g.kind === 'toolGroup') {
+          return <ToolCallGroup key={g.key} toolName={g.toolName} blocks={g.blocks} />
+        }
+        const block = g.block
+        if (block.type === 'thinking') return <ThinkingBlock key={g.key} content={block.text} />
+        if (block.type === 'text') return <SubMarkdown key={g.key} content={block.text} />
+        return (
+          <ToolCallBlock
+            key={g.key}
+            toolName={block.toolName}
+            toolCallId={block.toolCallId}
+            args={block.args}
+            result={block.result}
+            details={block.details}
+            status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
+          />
+        )
+      })}
+    </div>
+  )
 })
 
 export function SubAgentInlineView({ sub }: { sub: SubSessionState }): React.JSX.Element {
   const { t } = useTranslation()
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const msgGroups = useMemo(() => groupConsecutiveToolCalls(sub.messages), [sub.messages])
 
   // 运行中自动跟随最新输出；结束后不再打扰用户的滚动位置
   useEffect(() => {
@@ -114,28 +125,15 @@ export function SubAgentInlineView({ sub }: { sub: SubSessionState }): React.JSX
       {sub.contextNote && <PromptBubble content={sub.contextNote} />}
       <PromptBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
 
-      {/* 已提交消息（tool_use + step + assistant text），相邻同名工具调用合并 */}
-      {msgGroups.map((g) =>
-        g.kind === 'toolGroup' ? (
-          <ToolCallGroup key={g.key} toolName={g.toolName} msgs={g.msgs} />
-        ) : (
-          <SubMessage key={g.msg.id} msg={g.msg} />
-        )
-      )}
+      {/* 已落盘的消息（每条卡内自行按块展开，相邻同名工具调用合并） */}
+      {sub.messages.map((m) => (
+        <SubMessage key={m.id} msg={m} />
+      ))}
 
       {/* 流式 thinking */}
-      {sub.streamingThinking && (
-        <StepBlock
-          message={{
-            id: `${sub.subSessionId}-streaming-thinking`,
-            sessionId: sub.subSessionId,
-            role: 'assistant' as const,
-            type: 'step_thinking' as const,
-            content: sub.streamingThinking,
-            metadata: null,
-            model: '',
-            createdAt: sub.startedAt
-          }}
+      {hasThinkingContent(sub.streamingThinking) && (
+        <ThinkingBlock
+          content={sub.streamingThinking}
           isGenerating={sub.isStreaming && !sub.streamingContent}
         />
       )}
@@ -144,8 +142,8 @@ export function SubAgentInlineView({ sub }: { sub: SubSessionState }): React.JSX
       {sub.streamingContent && (
         <div className="markdown-body text-xs">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight, rehypeRaw]}
+            remarkPlugins={markdownRemarkPlugins}
+            rehypePlugins={markdownRehypePlugins}
             components={markdownComponents}
           >
             {sub.streamingContent}

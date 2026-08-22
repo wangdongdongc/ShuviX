@@ -45,7 +45,7 @@ export class SessionTitler {
 
   constructor(private readonly deps: SessionTitlerDeps) {}
 
-  /** 首轮快速标题：宿主在 prompt 通过 hook 校验、正式派发时调用（不 await） */
+  /** 首轮快速标题：宿主在 prompt 正式派发时调用（不 await） */
   quick(userText: string): Promise<void> {
     return this.run('quick', userText)
   }
@@ -92,8 +92,10 @@ export class SessionTitler {
 
     // 等积累到足够上下文再精修
     const msgs = await this.deps.listMessages()
+    // 只要有正文的对话消息：助手卡的 content 是其 text 块拼接，
+    // 纯工具调用那条自然是空串，不占门槛（错误提示等系统消息也不算）
     const textMsgs = msgs.filter(
-      (m) => (m.role === 'user' || m.role === 'assistant') && (m.type === 'text' || !m.type)
+      (m) => (m.role === 'user' || m.role === 'assistant') && !!m.content.trim()
     )
     if (textMsgs.length < REFINE_MIN_TEXT_MESSAGES) return null
 

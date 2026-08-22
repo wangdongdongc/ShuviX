@@ -23,16 +23,15 @@ vi.mock('../../services/toolContext', () => ({
     return resolved === base || resolved.startsWith(base + sep)
   },
   isPathWithinReferenceDirs: () => false,
-  assertReadApproved: () => {},
-  assertWriteApproved: () => {},
-  // 共享 createFileToolSuite 经此 policy 走 assertPathApproved；测试里恒放行（审批 no-op）
-  makeDesktopApprovalPolicy: () => ({
-    isAllowedWithoutPrompt: () => true,
-    isAutoApprove: () => true,
-    isInAllowList: () => false,
-    buildApprovalCommand: () => '',
-    isDirectory: () => false,
-    persistAllow: () => {}
+  assertReadAllowed: () => {},
+  assertWriteAllowed: () => {},
+  // 共享 createFileToolSuite 经此 security 门面走统一评估；测试里恒放行（询问 no-op）
+  getDesktopSecurityContext: () => ({
+    evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
+    evaluateReadOnly: () => true,
+    enforcePath: async () => {},
+    enforceCommand: async () => ({ status: 'allowed' }),
+    enforceGitOp: async () => {}
   }),
   TOOL_ABORTED: 'Aborted'
 }))

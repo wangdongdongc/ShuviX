@@ -249,7 +249,7 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   /**
    * 导出 PDF 走 Electron 原生 `printToPDF()`（CDP 在 Electron debugger 里不暴露
-   * `Page.printToPDF`）。outputPath 准入校验：无 interactive approval 通道，越界直接拒绝。
+   * `Page.printToPDF`）。outputPath 准入校验：无交互询问通道，越界直接拒绝。
    */
   async pdf(p: {
     tabId: string

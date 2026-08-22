@@ -264,14 +264,14 @@ export class SessionService {
     sessionDao.updateProjectId(id, projectId)
   }
 
-  /** 更新命令免审批（bash + ssh 统一开关） */
-  updateAutoApprove(id: string, autoApprove: boolean): void {
-    sessionDao.updateSettings(id, { autoApprove })
+  /** 更新命令免询问（bash + ssh 统一开关） */
+  updateAutoAllow(id: string, autoAllow: boolean): void {
+    sessionDao.updateSettings(id, { autoAllow })
   }
 
   /** 批量添加路径到统一允许列表（按 toolType 自动加 `Read(...)`/`Write(...)` 前缀）
    *
-   *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条审批。
+   *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条询问。
    */
   addAllowListPaths(id: string, toolType: AllowToolType, paths: string[]): void {
     const sess = sessionDao.pickSettings(id, ['allowList'])
@@ -465,7 +465,7 @@ export class SessionService {
 
   /**
    * 统一响应入口:根据 requestId 找到归属 session 并把响应送达。
-   * 所有类型的用户输入(审批 / 选择题 / SSH 凭证)都走这一个路径。
+   * 所有类型的用户输入(询问 / 选择题 / SSH 凭证)都走这一个路径。
    */
   respondToInput(requestId: string, response: InputResponse): void {
     for (const session of this.agents.values()) {
@@ -503,7 +503,7 @@ export class SessionService {
 
 export const sessionService = new SessionService()
 
-// 子代理审批通道：把子代理工具的 InputRequest 转发到父会话（表单出现在父会话对话流）。
+// 子代理询问通道：把子代理工具的 InputRequest 转发到父会话（表单出现在父会话对话流）。
 // 经 userInputBroker 注册，避免 AgentManager 静态依赖 sessionService 形成循环。
 registerUserInputResolver((sessionId, request) => {
   const agent = sessionService.getAgentSession(sessionId)

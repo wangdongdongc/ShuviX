@@ -44,6 +44,7 @@ import { atomicEditorTheme, atomicMarkdownSyntax } from './atomic-theme';
 import { autoCloseCodeFence, extendEmphasisPair } from './edit-helpers';
 import { imageBlocks } from './image-blocks';
 import { mermaidBlocks } from './mermaid-blocks';
+import { mathBlocks, mathMarkdownSyntax } from './math-blocks';
 import { commentBlocks } from './comment-blocks';
 import { inlinePreview } from './inline-preview';
 import { tables } from './table-widget';
@@ -305,7 +306,7 @@ export function AtomicCodeMirrorEditor({
           markdown({
             base: markdownLanguage,
             codeLanguages: [...codeLanguages],
-            extensions: [{ remove: ['SetextHeading'] }],
+            extensions: [{ remove: ['SetextHeading'] }, mathMarkdownSyntax],
           }),
           // Extend closeBrackets to markdown's symmetric delimiters.
           markdownLanguage.data.of({
@@ -326,6 +327,7 @@ export function AtomicCodeMirrorEditor({
           }),
           imageBlocks(),
           mermaidBlocks(),
+          mathBlocks(),
           commentBlocks(),
           inlinePreview({
             onLinkClick: (url) => onLinkClickRef.current?.(url),

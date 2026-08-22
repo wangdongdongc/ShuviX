@@ -1,6 +1,6 @@
 /**
  * Electron 宿主适配器 —— 把 @shuvix/agent-runtime 的注入接口对接到桌面端的具体设施
- * （chatFrontendRegistry / sessionDao / httpLogService / process.env / i18n）。
+ * （chatFrontendRegistry / 安全模块 / httpLogService / process.env / i18n）。
  *
  * 迁移到 AgentHarness 后 **RuntimePersistence 适配器已删除**：消息落盘由 harness
  * 自己经 SessionStorage（SqliteSessionStorage）完成，宿主不再提供 add/addToolUse/
@@ -15,7 +15,6 @@ import type {
 } from '@shuvix/agent-runtime'
 import type { TextContent, ImageContent } from '@earendil-works/pi-ai'
 import { chatFrontendRegistry } from '../frontend/core'
-import { sessionDao } from '../dao/sessionDao'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import { httpLogService } from './httpLogService'
 import { createLogger } from '../logger'
@@ -56,25 +55,6 @@ export const electronToolResultTransform: ToolResultTransform = (input) =>
     content: input.content as ReadonlyArray<TextContent | ImageContent>,
     details: input.details
   })
-
-/**
- * 创建绑定到具体 session 的预展示跳过判定（需要读取 session 的 autoApprove）。
- * 与桌面版 checkToolApproval 一致：需用户交互的工具（待审批 bash / ssh / ask / ssh 凭证）跳过。
- */
-export function createShouldDeferToolDisplay(
-  sessionId: string
-): (toolName: string, args: Record<string, unknown>) => boolean {
-  return (toolName, args) => {
-    // 命令类工具逐条审批，只有会话级「免审批」能豁免（与 bash.ts / ssh.ts 的判定保持一致）
-    const isCommandTool = toolName === 'bash' || (toolName === 'ssh' && args?.action === 'exec')
-    const approvalRequired =
-      isCommandTool && !sessionDao.pickSettings(sessionId, ['autoApprove'])?.autoApprove
-    const isUserInput = toolName === 'ask'
-    const sshCredentialRequired =
-      toolName === 'ssh' && args?.action === 'connect' && !args?.credentialName
-    return approvalRequired || isUserInput || sshCredentialRequired
-  }
-}
 
 /** 运行时日志适配器：复用 electron-log scoped logger */
 export const runtimeLogger: RuntimeLogger = createLogger('AgentRuntime')

@@ -37,6 +37,7 @@
  * 消费方：wiki 内置提示词（md/wiki*.md 的条目模板与横幅逐字引用本模块常量，守护测试钉住）、
  * 以及 ShuviX 侧栏/预览的条目渲染 —— 单一真源，提示词与 UI 不漂移。
  */
+import { detectShuvixMarker, frontmatterOf, readShuvixMarker } from './shuvixMdContract'
 
 /**
  * 文件类型标记的 frontmatter key 与两个取值 —— `shuvix: wiki-entry v1` / `shuvix: wiki-topic v1`
@@ -48,15 +49,15 @@ export const WIKI_ENTRY_MARKER = 'wiki-entry v1'
 export const WIKI_TOPIC_MARKER = 'wiki-topic v1'
 
 /**
- * 条目管理横幅 —— 写在 frontmatter 的 `description` 字段：读到原始文件的 Agent/人类
+ * 条目管理横幅 —— 写在 frontmatter 的 `description` 字段：读到原始文件的智能体/人类
  * 都会看到所有权切在哪。它必须同时说清两件事，因为这份文件是两个主体共有的。
  */
 export const WIKI_ENTRY_BANNER =
-  'MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the Agent tool with agent "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.'
+  'MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.'
 
 /** 主题章程横幅 —— 章程整份由 agent 维护，故措辞比条目横幅简单 */
 export const WIKI_TOPIC_BANNER =
-  'MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the Agent tool with agent "wiki-writer", not by hand.'
+  'MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the `agent` tool with name "wiki-writer", not by hand.'
 
 /** 条目生命周期状态（缺失/非法一律按 `draft` 处理） */
 export const WIKI_ENTRY_STATUSES = ['draft', 'reviewed', 'stable'] as const
@@ -74,33 +75,14 @@ export const WIKI_UPDATED_KEY = 'shuvix-wiki-updated'
 export const WIKI_SOURCES_KEY = 'shuvix-wiki-sources'
 export const WIKI_ALLOWED_TYPES_KEY = 'shuvix-wiki-allowed-types'
 
-/** 文件开头的 frontmatter 块（不带 m 标志：`^` 即字符串起始，故只认文件开头） */
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
-
-/** frontmatter 内的类型标记行（容忍缩进、引号与种类之后的版本号） */
-const ENTRY_MARKER_RE = /^[ \t]*shuvix[ \t]*:[ \t]*['"]?wiki-entry\b/m
-const TOPIC_MARKER_RE = /^[ \t]*shuvix[ \t]*:[ \t]*['"]?wiki-topic\b/m
-
-/** 剥 BOM 与前导空白 —— frontmatter 必须落在文件开头 */
-function head(text: string): string {
-  return text.replace(/^\uFEFF/, '').replace(/^\s+/, '')
-}
-
-function frontmatterOf(text: string): string | null {
-  const m = FRONTMATTER_RE.exec(head(text))
-  return m ? m[1] : null
-}
-
 /** 该文本是否为 wiki 条目文件 */
 export function isWikiEntryFile(text: string): boolean {
-  const fm = frontmatterOf(text)
-  return fm !== null && ENTRY_MARKER_RE.test(fm)
+  return detectShuvixMarker(text)?.type === 'wiki-entry'
 }
 
 /** 该文本是否为 wiki 主题章程（`WIKI.md`） */
 export function isWikiTopicFile(text: string): boolean {
-  const fm = frontmatterOf(text)
-  return fm !== null && TOPIC_MARKER_RE.test(fm)
+  return detectShuvixMarker(text)?.type === 'wiki-topic'
 }
 
 /** 条目的可展示头部：`name` 与条目正文。取不到的字段为 null,调用方各自兜底 */
@@ -170,7 +152,7 @@ function blockScalar(lines: string[], startIndex: number, folded: boolean): stri
  */
 export function parseWikiEntryHead(text: string): WikiEntryHead | null {
   const fm = frontmatterOf(text)
-  if (fm === null || !ENTRY_MARKER_RE.test(fm)) return null
+  if (fm === null || readShuvixMarker(fm)?.type !== 'wiki-entry') return null
 
   const nameMatch = NAME_LINE_RE.exec(fm)
   const name = nameMatch ? unquote(nameMatch[1]) || null : null

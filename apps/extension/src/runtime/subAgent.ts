@@ -28,10 +28,11 @@ import {
   type InProcessAgentType,
   type SubAgentModelConfig
 } from '@shuvix/agent-runtime'
+import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import { eventBus } from './eventBus'
 import { extensionAgentFactory } from './agentHost'
 
-/** 每会话「工具名 → 工具实例」表 —— 供派生 agent 复用父会话已建好的工具（同一审批范围/工作目录） */
+/** 每会话「工具名 → 工具实例」表 —— 供派生 agent 复用父会话已建好的工具（同一询问范围/工作目录） */
 const sessionTools = new Map<string, Map<string, AnyAgentTool>>()
 
 export function registerSessionTools(sessionId: string, tools: AnyAgentTool[]): void {
@@ -58,8 +59,8 @@ export function getSessionTools(rootSessionId: string): Map<string, AnyAgentTool
  */
 /**
  * 扩展支持的内置档案子集：两个基座档案 default（主会话）/ notebook（笔记本一次性子代理）
- * + visualization。explore 依赖 ls/grep/glob（ripgrep）扩展没有；widget/wiki 因缺根目录
- * 参数被构建器自动跳过。
+ * + visualization。explore 依赖 ls/grep/glob（ripgrep）扩展没有，coding 依赖 bash/ssh/database
+ * 更是无从谈起；widget/wiki 因缺根目录参数被构建器自动跳过。
  */
 const EXTENSION_BUILTIN_NAMES = new Set([
   DEFAULT_PROFILE_NAME,
@@ -136,6 +137,7 @@ export function createExtensionDispatchTool(
         BASE_PROFILE_NAMES.has(name) ? undefined : extensionSubAgentRegistry.getProfile(name)
     },
     manager: subAgentManager,
+    label: i18next.t(BUILTIN_TOOL_PRESENTATIONS.agent.labelKey),
     modelConfig,
     parentSessionId,
     abortError: 'TOOL_ABORTED',

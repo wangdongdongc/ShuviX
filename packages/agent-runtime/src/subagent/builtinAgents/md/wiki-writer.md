@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: wiki-writer
 description: 'Executes changes to the local wiki knowledge base: entries, topics, lifecycle and git history.'
 shuvix-tools: read, grep, glob, ls, write, edit, git, ask
@@ -28,7 +29,7 @@ If the dispatch prompt explicitly specifies a different root, use that instead. 
 ---
 shuvix: wiki-entry v1
 name: <entry name>
-description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the Agent tool with agent "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.
+description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.
 shuvix-wiki-content: |-
   <the entry itself — exactly one paragraph>
 shuvix-wiki-status: draft
@@ -135,7 +136,7 @@ Report the review either way: which entries you checked, which you updated, whic
 ---
 shuvix: wiki-topic v1
 name: <topic>
-description: MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the Agent tool with agent "wiki-writer", not by hand.
+description: MANAGED BY WIKI CURATOR. This charter is maintained by the wiki agent — change it via the `agent` tool with name "wiki-writer", not by hand.
 shuvix-wiki-allowed-types: concept, decision, guide
 ---
 

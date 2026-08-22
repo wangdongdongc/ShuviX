@@ -20,6 +20,13 @@
  * any ancestor of the editor to theme it for your app.
  */
 
+/* KaTeX stylesheet + web fonts, pulled in for the math live preview
+ * (`$…$` / `$$…$$`). Kept here rather than as a side-effect import in
+ * math-blocks.ts so this file stays the package's single style entry —
+ * consumers already import it, and the bundler resolves the bare
+ * specifier plus the font URLs it references. */
+@import 'katex/dist/katex.min.css';
+
 /* Root container — fills its parent so the CM6 scroller can take over
  * scrolling behavior. Previously relied on Tailwind `h-full w-full`
  * applied in the React layer, which only worked for consumers who had
@@ -268,6 +275,66 @@
   max-width: 100%;
   height: auto;
   border-radius: 0.4em;
+}
+
+/* TeX math — rendered by KaTeX in place of `$…$` / `$$…$$` when the
+ * cursor is elsewhere. `$$` on lines of its own becomes a centered
+ * block; everything else renders inline in the text flow. */
+.cm-atomic-math {
+  color: var(--atomic-editor-fg, #dcddde);
+  /* KaTeX ships `.katex { font-size: 1.21em }` — its fonts are cut for a
+   * 10pt body, so it scales up to meet a ~12pt one. That is also what
+   * Obsidian renders at, so 1 is the faithful default; the token exists
+   * because the ratio is against the EDITOR's body size, and a small
+   * body (the notebook runs at --app-font-size, 14px by default) makes
+   * the same 21% read as oversized next to CJK text. */
+  --katex-scale: calc(1.21 * var(--atomic-editor-math-scale, 1));
+}
+
+.cm-atomic-math .katex {
+  font-size: calc(1em * var(--katex-scale));
+}
+
+.cm-atomic-math-block {
+  display: block;
+  /* Long equations scroll inside the block instead of widening the
+   * editor — a `\begin{aligned}` derivation easily exceeds the measure. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35em 0;
+}
+
+/* KaTeX's default display margin is 1em, which stacks with the block
+ * padding above and reads as a gap in an editor. Keep a reduced version
+ * rather than zeroing it: a display formula pinned tight against the
+ * paragraphs around it is the single biggest visual difference from a
+ * dedicated markdown reader. */
+.cm-atomic-math-block .katex-display {
+  margin: 0.6em 0;
+}
+
+.cm-atomic-math-inline {
+  /* Nothing else: the widget must sit on the text baseline exactly like
+   * the source it replaces, or lines with formulas would jitter. */
+  white-space: nowrap;
+}
+
+/* Held source while KaTeX's module loads — only ever visible for the
+ * first formula of a session. */
+.cm-atomic-math-pending {
+  font-family: var(--atomic-editor-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+  color: var(--atomic-editor-fg-muted, #888);
+}
+
+/* Render failure — keep the source readable so the author can fix it.
+ * (A malformed formula normally renders in red via KaTeX itself; this
+ * covers the harder failures, e.g. the module failing to load.) */
+.cm-atomic-math-error {
+  font-family: var(--atomic-editor-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.9em;
+  color: #e0833a;
+  text-decoration: underline dotted;
 }
 
 /* Mermaid block — the rendered diagram that replaces a ```mermaid

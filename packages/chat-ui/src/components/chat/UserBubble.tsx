@@ -1,9 +1,10 @@
 import { memo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { User, Copy, Check, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react'
+import { Copy, Check, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import type { UserTextMessage } from '../../stores/chatStore'
 import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 
 interface UserBubbleProps {
@@ -16,9 +17,12 @@ const COLLAPSE_LINE_THRESHOLD = 15
 const COLLAPSE_CHAR_THRESHOLD = 1200
 /** 折叠态内容最大高度（px），需明显小于阈值行数渲染高度避免「差一点」的折叠 */
 const COLLAPSED_MAX_HEIGHT = 300
+/** 折叠态底部渐隐高度（px） */
+const COLLAPSE_FADE_HEIGHT = 40
 
 /**
- * 用户消息气泡 — 纯文本 + 内联 Token + 附图 + source badge
+ * 用户消息气泡 — 右对齐浅色气泡（与子智能体面板转写同形）：纯文本 + 内联 Token + 附图，
+ * 操作（复制/回退）与来源标识收在气泡下方一行
  * 超长内容（长粘贴无法覆盖的手打长文/渠道来源/历史消息）默认折叠：截断 + 渐隐 + 展开按钮
  */
 export const UserBubble = memo(function UserBubble({
@@ -49,74 +53,43 @@ export const UserBubble = memo(function UserBubble({
       )
     : segments
 
+  // 折叠渐隐用遮罩而非叠加渐变层：气泡有自己的底色，叠 bg-primary 渐变会露馅
+  const fadeMask = `linear-gradient(to bottom, #000 calc(100% - ${COLLAPSE_FADE_HEIGHT}px), transparent)`
+
+  const source = msg.metadata?.source
+
   return (
-    <div className="group relative flex gap-3 pl-10 pr-4 py-3">
-      {/* 时间线 */}
-      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
-      {/* 头像节点 */}
-      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-accent/20 text-accent ring-2 ring-bg-primary z-10">
-        <User size={10} />
-      </div>
-
-      {/* 内容 */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-medium text-text-secondary">{t('message.user')}</span>
-          {/* 非 Electron 来源标识 */}
-          {msg.metadata?.source && (
-            <span className="text-[10px] text-text-tertiary">
-              ·{' '}
-              <span className="text-text-tertiary/80">
-                {msg.metadata.source.type === 'webui'
-                  ? `WebUI${msg.metadata.source.ip ? ` (${msg.metadata.source.ip})` : ''}`
-                  : msg.metadata.source.type === 'telegram'
-                    ? `Telegram${msg.metadata.source.userId ? ` (${msg.metadata.source.userId})` : ''}`
-                    : msg.metadata.source.type}
-              </span>
-            </span>
-          )}
-          {/* 复制按钮 */}
-          {msg.content && (
-            <button
-              onClick={handleCopy}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={t('message.copy')}
-            >
-              {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-            </button>
-          )}
-          {/* 回退 */}
-          {onRollback && (
-            <button
-              onClick={onRollback}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={t('message.rollback')}
-            >
-              <RotateCcw size={12} />
-            </button>
-          )}
+    <div className="group flex flex-col items-end gap-1 px-4 py-2">
+      {/* 图片 */}
+      {msg.metadata?.images && msg.metadata.images.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-2">
+          {msg.metadata.images.map((img, idx) => (
+            <img
+              key={idx}
+              src={imageSrc(img)}
+              alt={t('message.attachment', { index: idx + 1 })}
+              className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain"
+            />
+          ))}
         </div>
+      )}
 
-        {/* 图片 */}
-        {msg.metadata?.images && msg.metadata.images.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {msg.metadata.images.map((img, idx) => (
-              <img
-                key={idx}
-                src={img.preview || img.data || ''}
-                alt={t('message.attachment', { index: idx + 1 })}
-                className="max-w-[240px] max-h-[180px] rounded-lg border border-border-primary object-contain"
-              />
-            ))}
-          </div>
-        )}
-        <div
-          className={collapsed ? 'relative overflow-hidden' : undefined}
-          style={collapsed ? { maxHeight: `${COLLAPSED_MAX_HEIGHT}px` } : undefined}
-        >
+      {/* 气泡 */}
+      <div className="flex w-full justify-end">
+        <div className="max-w-[85%] rounded-lg bg-accent/10 text-text-primary px-3 py-1.5">
           <div
-            className="text-text-primary whitespace-pre-wrap break-all leading-relaxed"
-            style={{ fontSize: 'var(--app-font-size, 14px)' }}
+            className="whitespace-pre-wrap break-words leading-relaxed"
+            style={{
+              fontSize: 'var(--app-font-size, 14px)',
+              ...(collapsed
+                ? {
+                    maxHeight: `${COLLAPSED_MAX_HEIGHT}px`,
+                    overflow: 'hidden',
+                    maskImage: fadeMask,
+                    WebkitMaskImage: fadeMask
+                  }
+                : {})
+            }}
           >
             {displaySegments.map((seg, idx) => {
               if (seg.type === 'text') return <span key={idx}>{seg.text}</span>
@@ -124,19 +97,49 @@ export const UserBubble = memo(function UserBubble({
               return <InvalidTokenBadge key={idx} segment={seg} />
             })}
           </div>
-          {/* 折叠态底部渐隐（提示内容被截断） */}
-          {collapsed && (
-            <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-bg-primary to-transparent pointer-events-none" />
-          )}
         </div>
+      </div>
+
+      {/* 气泡下方的操作行：展开/来源常驻，图标按钮悬浮才显形（常驻占位，避免布局跳动） */}
+      <div className="flex items-center gap-1 text-text-tertiary">
         {isLong && (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 flex items-center gap-1 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+            className="mr-1 flex items-center gap-1 text-xs hover:text-text-secondary transition-colors"
           >
             {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             {expanded ? t('message.collapseLines') : t('message.expandLines', { lines: lineCount })}
+          </button>
+        )}
+        {/* 非 Electron 来源标识 */}
+        {source && (
+          <span className="mr-1 text-[10px]">
+            {source.type === 'webui'
+              ? `WebUI${source.ip ? ` (${source.ip})` : ''}`
+              : source.type === 'telegram'
+                ? `Telegram${source.userId ? ` (${source.userId})` : ''}`
+                : source.type}
+          </span>
+        )}
+        {/* 复制 */}
+        {msg.content && (
+          <button
+            onClick={handleCopy}
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+            title={t('message.copy')}
+          >
+            {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+          </button>
+        )}
+        {/* 回退 */}
+        {onRollback && (
+          <button
+            onClick={onRollback}
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+            title={t('message.rollback')}
+          >
+            <RotateCcw size={12} />
           </button>
         )}
       </div>

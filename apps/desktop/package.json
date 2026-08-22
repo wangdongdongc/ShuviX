@@ -20,7 +20,12 @@
     "build:linux": "electron-vite build && electron-builder --linux",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "electron-vite build && vitest run --config vitest.config.e2e.ts"
+    "test:e2e": "electron-vite build && vitest run --config vitest.config.e2e.ts",
+    "test:e2e:chat": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/chat",
+    "test:e2e:agents": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/agents",
+    "test:e2e:policies": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/policies",
+    "test:e2e:settings": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/settings",
+    "test:e2e:notebook": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/notebook"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -74,6 +79,7 @@
     "foliate-js": "^1.0.1",
     "framer-motion": "^12.38.0",
     "i18next": "^25.8.13",
+    "katex": "^0.16.45",
     "lucide-react": "^0.564.0",
     "markitdown-ts": "^0.0.10",
     "mermaid": "^11.12.3",
@@ -86,12 +92,15 @@
     "react-router": "^7.13.1",
     "react-virtuoso": "^4.18.1",
     "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "socks": "^2.8.7",
     "ssh2": "^1.17.0",
     "typebox": "^1.1.37",
     "uuid": "^13.0.0",
+    "web-tree-sitter": "^0.26.12",
     "whisper-cpp-node": "^0.2.12",
     "word-extractor": "^1.0.4",
     "ws": "^8.19.0",
@@ -130,8 +139,10 @@
     "prettier": "^3.7.4",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "remark-parse": "^11.0.0",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
+    "unified": "^11.0.5",
     "vite": "^7.2.6",
     "vitest": "^4.0.18"
   }

@@ -1,9 +1,6 @@
 import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import rehypeRaw from 'rehype-raw'
 import {
   Copy,
   Check,
@@ -17,9 +14,14 @@ import {
 } from 'lucide-react'
 import { SystemNoticeCard } from './SystemNoticeCard'
 import { copyToClipboard } from '../../utils/clipboard'
-import { ProviderIcon } from '../settings/ProviderIcons'
-import { markdownComponents } from './markdownComponents'
-import { StepBlock } from './StepBlock'
+import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
+import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
+import {
+  markdownComponents,
+  markdownRemarkPlugins,
+  markdownRehypePlugins
+} from './markdownComponents'
+import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock, ToolCallGroup } from './ToolCallBlock'
 import { groupConsecutiveToolCalls } from './stepGrouping'
 import {
@@ -29,36 +31,44 @@ import {
   selectStreamingImages,
   selectStreamingToolCall,
   selectCompletedStreamingToolCalls,
-  type AssistantTextMessage
+  type AssistantBlock,
+  type AssistantMessage
 } from '../../stores/chatStore'
 import { useTtsPlayback } from '../../hooks/useTtsPlayback'
-import type { StepItem } from './types'
 
 interface AssistantBubbleProps {
-  msg: AssistantTextMessage
-  steps?: StepItem[]
+  /**
+   * 一张卡覆盖的连续 assistant 消息（= 连续的 assistant entry）。
+   * 末条若不含工具块即本轮终答，它的 text 块是「正文」，其余全部进过程区。
+   */
+  msgs: AssistantMessage[]
   isStreaming?: boolean
   /** 重新生成此消息 */
   onRegenerate?: () => void
 }
 
 /**
- * 助手消息气泡 — Markdown 渲染、步骤、思考、图片、用量
- * 流式模式下自行从 store 读取 streaming 状态，无需外部传入
+ * 助手消息卡 —— 过程（思考 / 工具 / 中间文本）在上，终答正文在下。
+ *
+ * 「一张卡 = 一次 agent 循环」是**呈现**上的分组，不是数据形状：会话树里一次循环
+ * 是若干条 assistant entry（每次 LLM 调用一条），由 Conversation.buildVisibleItems
+ * 把连续的几条合成一张卡传进来。数据侧一条 entry 一条消息，各自带 blocks。
+ *
+ * 流式模式下正文/思考/工具调用从 store 的流式状态读取（末条是占位卡）。
  */
 export const AssistantBubble = memo(function AssistantBubble({
-  msg,
-  steps,
+  msgs,
   isStreaming,
   onRegenerate
 }: AssistantBubbleProps): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
-  const isCompactionSummary = !!msg.metadata?.isCompactionSummary
+  const anchor = msgs[msgs.length - 1]
+  const isCompactionSummary = !!anchor.metadata?.isCompactionSummary
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
-  const isThisPlaying = isPlaying && playingMessageId === msg.id
-  const isThisLoading = isLoading && playingMessageId === msg.id
+  const isThisPlaying = isPlaying && playingMessageId === anchor.id
+  const isThisLoading = isLoading && playingMessageId === anchor.id
 
   // 流式模式下从 store 直接读取状态
   const storeStreamingContent = useChatStore(selectStreamingContent)
@@ -66,21 +76,36 @@ export const AssistantBubble = memo(function AssistantBubble({
   const storeStreamingImages = useChatStore(selectStreamingImages)
   const streamingToolCall = useChatStore(selectStreamingToolCall)
   const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
-  // 归属信息取自消息自身（投影时从 AgentMessage 的 provider/model 带过来）：
-  // 记录的是**实际产出这条回复**的模型，中途切过模型时比"会话当前配置"准确。
-  const msgProvider = msg.provider ?? ''
-  const msgModel = msg.model ?? ''
 
-  // 相邻的同名成功调用合并为一行 + 次数，其余步骤原样透传
-  const stepGroups = useMemo(
-    () => groupConsecutiveToolCalls((steps ?? []).map((s) => s.msg)),
-    [steps]
-  )
+  // 过程区的块 / 终答正文：末条不含工具块 = 本轮终答，它的 text 块下沉为正文；
+  // 其余（含中间轮自己的 text）按原序留在过程区
+  const { processBlocks, answerText } = useMemo(() => {
+    const last = msgs[msgs.length - 1]
+    const isFinal = !last.blocks.some((b) => b.type === 'tool')
+    const process: AssistantBlock[] = []
+    for (const m of msgs) {
+      for (const b of m.blocks) {
+        if (isFinal && m === last && b.type === 'text') continue
+        process.push(b)
+      }
+    }
+    const text = isFinal
+      ? last.blocks
+          .filter((b): b is Extract<AssistantBlock, { type: 'text' }> => b.type === 'text')
+          .map((b) => b.text)
+          .join('')
+      : ''
+    return { processBlocks: process, answerText: text }
+  }, [msgs])
 
-  const displayContent = isStreaming ? storeStreamingContent : msg.content
-  const thinking = (isStreaming ? storeStreamingThinking : null) || msg.metadata?.thinking || null
+  // 相邻的同名成功调用合并为一行 + 次数，其余块原样透传
+  const blockGroups = useMemo(() => groupConsecutiveToolCalls(processBlocks), [processBlocks])
+
+  const displayContent = isStreaming ? storeStreamingContent : answerText
+  // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
+  const liveThinking =
+    isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null
   const liveImages = isStreaming ? storeStreamingImages : []
-  const usage = msg.metadata?.usage
 
   const handleCopy = (): void => {
     copyToClipboard(displayContent)
@@ -89,145 +114,66 @@ export const AssistantBubble = memo(function AssistantBubble({
   }
 
   return (
-    <div className="group relative flex gap-3 pl-10 pr-4 py-3">
-      {/* 时间线 */}
-      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
-      {/* 提供商图标节点 */}
-      <div className="absolute left-2.5 top-3 flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full bg-bg-primary ring-2 ring-bg-primary text-text-secondary z-10">
-        <ProviderIcon name={msgProvider} />
-      </div>
-
+    <div className="group relative px-4 py-3">
       {/* 内容 */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-medium text-text-secondary">
-            {msg.model || msgModel || 'Assistant'}
-          </span>
-          {/* 复制 */}
-          {!isStreaming && displayContent && (
-            <button
-              onClick={handleCopy}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={t('message.copy')}
-            >
-              {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-            </button>
-          )}
-          {/* TTS 朗读 */}
-          {!isStreaming && displayContent && (
-            <button
-              onClick={() =>
-                isThisPlaying || isThisLoading
-                  ? stop()
-                  : speak(displayContent.slice(0, 4000), msg.id)
-              }
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
-            >
-              {isThisLoading ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : isThisPlaying ? (
-                <Square size={12} />
-              ) : (
-                <Volume2 size={12} />
-              )}
-            </button>
-          )}
-          {/* 原始/渲染 切换（压缩摘要不显示） */}
-          {!isStreaming && displayContent && !isCompactionSummary && (
-            <button
-              onClick={() => setShowRaw(!showRaw)}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={showRaw ? t('message.showRendered') : t('message.showSource')}
-            >
-              {showRaw ? <FileText size={12} /> : <Code size={12} />}
-            </button>
-          )}
-          {/* 重新生成（压缩摘要不显示） */}
-          {!isStreaming && onRegenerate && !isCompactionSummary && (
-            <button
-              onClick={onRegenerate}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-text-tertiary hover:text-text-secondary transition-opacity"
-              title={t('message.regenerate')}
-            >
-              <RefreshCw size={12} />
-            </button>
-          )}
-        </div>
-
+      <div className="min-w-0">
         {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
             （不用左侧竖轴：那会再吃掉一列缩进） */}
-        {(stepGroups.length > 0 || thinking) && (
+        {(blockGroups.length > 0 || liveThinking) && (
           <div
             className={
               displayContent ? 'mb-2.5 pb-2 border-b border-border-secondary/40' : 'mb-0.5'
             }
           >
-            {stepGroups.length > 0 && (
+            {blockGroups.length > 0 && (
               <div className="space-y-0.5">
-                {stepGroups.map((group) => {
+                {blockGroups.map((group) => {
                   if (group.kind === 'toolGroup') {
                     return (
-                      <ToolCallGroup key={group.key} toolName={group.toolName} msgs={group.msgs} />
+                      <ToolCallGroup
+                        key={group.key}
+                        toolName={group.toolName}
+                        blocks={group.blocks}
+                      />
                     )
                   }
-                  const step = group.msg
-                  if (step.type === 'steer') {
-                    return <StepBlock key={step.id} message={step} />
+                  const block = group.block
+                  if (block.type === 'thinking') {
+                    return <ThinkingBlock key={group.key} content={block.text} />
                   }
-                  if (step.type === 'step_text') {
+                  if (block.type === 'text') {
                     return (
-                      <div key={step.id} className="markdown-body text-sm">
+                      <div key={group.key} className="markdown-body text-sm">
                         <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                          remarkPlugins={markdownRemarkPlugins}
+                          rehypePlugins={markdownRehypePlugins}
                           components={markdownComponents}
                         >
-                          {step.content}
+                          {block.text}
                         </ReactMarkdown>
                       </div>
                     )
                   }
-                  if (step.type === 'step_thinking') {
-                    return <StepBlock key={step.id} message={step} />
-                  }
-                  if (step.type === 'tool_use') {
-                    const meta = step.metadata
-                    const toolName = meta?.toolName || ''
-                    const status = step.content ? (meta?.isError ? 'error' : 'done') : 'running'
-                    return (
-                      <ToolCallBlock
-                        key={step.id}
-                        toolName={toolName}
-                        toolCallId={meta?.toolCallId}
-                        args={meta?.args}
-                        result={step.content || undefined}
-                        details={meta?.details}
-                        status={status}
-                      />
-                    )
-                  }
-                  return null
+                  return (
+                    <ToolCallBlock
+                      key={group.key}
+                      toolName={block.toolName}
+                      toolCallId={block.toolCallId}
+                      args={block.args}
+                      result={block.result}
+                      details={block.details}
+                      status={block.result ? (block.isError ? 'error' : 'done') : 'running'}
+                    />
+                  )
                 })}
               </div>
             )}
 
-            {/* 思考过程 — 统一使用 StepBlock，默认折叠 */}
-            {thinking && (
-              <StepBlock
-                message={{
-                  id: 'streaming-thinking',
-                  sessionId: msg.sessionId,
-                  role: 'assistant' as const,
-                  type: 'step_thinking' as const,
-                  content: thinking,
-                  metadata: null,
-                  model: msg.model,
-                  createdAt: msg.createdAt
-                }}
-                isGenerating={
-                  isStreaming && !!storeStreamingThinking && !displayContent && !streamingToolCall
-                }
+            {/* 流式期间仍在缓冲的思考 —— 与落盘后同款折叠行，位置也一致（过程区末尾） */}
+            {liveThinking && (
+              <ThinkingBlock
+                content={liveThinking}
+                isGenerating={!displayContent && !streamingToolCall}
               />
             )}
           </div>
@@ -242,14 +188,12 @@ export const AssistantBubble = memo(function AssistantBubble({
               content={displayContent}
             />
           ) : showRaw ? (
-            <pre className="text-sm text-text-primary whitespace-pre-wrap break-words leading-relaxed font-mono bg-bg-tertiary/50 rounded-lg p-3 border border-border-primary overflow-auto">
-              {displayContent}
-            </pre>
+            <pre className="code-surface text-sm text-text-primary font-mono">{displayContent}</pre>
           ) : (
             <div className="markdown-body text-sm">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeHighlight, rehypeRaw]}
+                remarkPlugins={markdownRemarkPlugins}
+                rehypePlugins={markdownRehypePlugins}
                 components={markdownComponents}
               >
                 {displayContent}
@@ -282,14 +226,14 @@ export const AssistantBubble = memo(function AssistantBubble({
 
         {/* 图片（流式用 store，非流式用持久化 metadata） */}
         {(() => {
-          const images = isStreaming ? liveImages : msg.metadata?.images
+          const images = isStreaming ? liveImages : anchor.metadata?.images
           if (!images || images.length === 0) return null
           return (
             <div className="flex flex-wrap gap-2 mt-2">
               {images.map((img, idx) => (
                 <img
                   key={idx}
-                  src={img.data || ''}
+                  src={imageSrc(img)}
                   alt={t('message.generatedImage', {
                     index: idx + 1,
                     defaultValue: `Generated image ${idx + 1}`
@@ -301,37 +245,60 @@ export const AssistantBubble = memo(function AssistantBubble({
           )
         })()}
 
-        {/* token 用量 */}
-        {usage && !isStreaming && (
-          <div className="mt-1.5 text-[10px] text-text-tertiary">
-            {usage.details && usage.details.length > 1 ? (
-              <details>
-                <summary className="cursor-pointer select-none hover:text-text-secondary">
-                  tokens: {usage.input} in / {usage.output} out
-                  {usage.total ? ` · ${usage.total} total` : ''}
-                  {usage.cacheRead ? ` · ${usage.cacheRead} ${t('message.cacheRead')}` : ''}
-                  {usage.cacheWrite ? ` · ${usage.cacheWrite} ${t('message.cacheWrite')}` : ''}
-                  {` · ${usage.details.length} ${t('message.nCalls')}`}
-                </summary>
-                <div className="mt-1 ml-2 space-y-0.5">
-                  {usage.details.map((d, i) => (
-                    <div key={i}>
-                      #{i + 1} {d.input} in / {d.output} out
-                      {d.total ? ` · ${d.total}` : ''}
-                      {d.cacheRead ? ` · ${d.cacheRead} ${t('message.cacheRead')}` : ''}
-                      {d.cacheWrite ? ` · ${d.cacheWrite} ${t('message.cacheWrite')}` : ''}
-                      {d.stopReason ? ` (${d.stopReason})` : ''}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ) : (
-              <span>
-                tokens: {usage.input} in / {usage.output} out
-                {usage.total ? ` · ${usage.total} total` : ''}
-                {usage.cacheRead ? ` · ${usage.cacheRead} ${t('message.cacheRead')}` : ''}
-                {usage.cacheWrite ? ` · ${usage.cacheWrite} ${t('message.cacheWrite')}` : ''}
-              </span>
+        {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
+            仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，
+            渲染出来只会在每张卡底部留一条空行。 */}
+        {!isStreaming && (displayContent || onRegenerate) && (
+          <div className="flex items-center gap-1 mt-1.5 text-text-tertiary">
+            {/* 复制 */}
+            {displayContent && (
+              <button
+                onClick={handleCopy}
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                title={t('message.copy')}
+              >
+                {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+              </button>
+            )}
+            {/* TTS 朗读 */}
+            {displayContent && (
+              <button
+                onClick={() =>
+                  isThisPlaying || isThisLoading
+                    ? stop()
+                    : speak(displayContent.slice(0, 4000), anchor.id)
+                }
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
+              >
+                {isThisLoading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : isThisPlaying ? (
+                  <Square size={12} />
+                ) : (
+                  <Volume2 size={12} />
+                )}
+              </button>
+            )}
+            {/* 原始/渲染 切换（压缩摘要不显示） */}
+            {displayContent && !isCompactionSummary && (
+              <button
+                onClick={() => setShowRaw(!showRaw)}
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                title={showRaw ? t('message.showRendered') : t('message.showSource')}
+              >
+                {showRaw ? <FileText size={12} /> : <Code size={12} />}
+              </button>
+            )}
+            {/* 重新生成（压缩摘要不显示） */}
+            {onRegenerate && !isCompactionSummary && (
+              <button
+                onClick={onRegenerate}
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                title={t('message.regenerate')}
+              >
+                <RefreshCw size={12} />
+              </button>
             )}
           </div>
         )}

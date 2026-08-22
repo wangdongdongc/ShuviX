@@ -1,24 +1,38 @@
 import { AlertCircle, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { ChatMessage, ErrorEventMessage, UserTextMessage } from '../../stores/chatStore'
+import type { AssistantMessage, ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
 import { useChatStore } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { InstructionBubble } from './InstructionBubble'
-import type { StepItem, StepMessage } from './types'
 
-/** 可见消息项（由 ChatView 预处理后传入） */
+/** 流式占位卡的固定 id（Conversation 追加，AssistantBubble 据此读流式状态） */
+export const STREAMING_PLACEHOLDER_ID = 'streaming-live'
+
+/**
+ * 对话流里的一项。
+ *
+ * 助手项可覆盖**多条**连续 assistant 消息 —— 会话树里一次 agent 循环是若干条
+ * entry（每次 LLM 调用一条），呈现上仍收成一张卡（过程在上、终答在下）。
+ */
 export interface VisibleItem {
+  /**
+   * 列表项身份（React / Virtuoso 的 key）：取组内**首条**消息的 id。
+   * 与 `msg.id` 分开是有意的 —— 流式占位卡并入已有组时组首不变，
+   * 本轮结束、占位换成真实终答时这一项不会重挂载，展开着的工具卡/思考块不被折回。
+   */
+  key: string
+  /** 代表消息：决定 data-msg-* 与渲染分发（助手组取末条 = 终答） */
   msg: ChatMessage
-  /** 内嵌的中间步骤（仅 assistant text 消息携带） */
-  steps?: VisibleItem[]
-  /** 流式合成占位项（由 AssistantBubble 自行从 store 读取流式状态） */
+  /** 助手组的全部消息（msg 是其末条）；非助手项没有 */
+  msgs?: AssistantMessage[]
+  /** 该组末尾是流式占位卡 */
   isStreamingPlaceholder?: boolean
 }
 
 interface MessageRendererProps {
   item: VisibleItem
-  lastAssistantTextId: string | null
+  lastAssistantId: string | null
   onRollback?: (messageId: string) => void
   onRegenerate?: (assistantMsgId: string) => void
 }
@@ -32,8 +46,7 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
     removeMessage(msg.id)
   }
   return (
-    <div className="group relative flex items-center gap-1.5 pl-10 pr-8 mr-4 my-1 text-[11px] text-error/90">
-      <div className="absolute left-[1.35rem] top-0 bottom-0 w-px bg-border-secondary/40" />
+    <div className="group relative flex items-center gap-1.5 pl-4 pr-8 mr-4 my-1 text-[11px] text-error/90">
       <AlertCircle size={12} />
       <span className="whitespace-pre-wrap break-words">{msg.content}</span>
       <button
@@ -50,47 +63,61 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
 }
 
 /**
- * 消息渲染器 — 根据消息类型分发渲染
- * step/tool 消息已合并到 assistant text 的 AssistantBubble 内部，不再独立渲染
+ * 消息渲染器 — 根据代表消息的 role/type 分发渲染。
+ *
+ * 根节点带 `data-msg-id` / `data-msg-role` / `data-msg-type`：对话流的消息身份
+ * （投影契约里的那个 id）在 DOM 上唯一的、与配色/图标无关的锚点，e2e 据此定位条目。
+ *
+ * 也是**正文限宽**的落点（笔记本正文早就限在 .cm-content 700px，对话流一直没限）。
+ * 784 = 输入卡片的 max-w-3xl(768) − 它的 p-2(16) + 本行 px-4(32)：算下来文字列与
+ * 输入卡片**左右缘逐像素对齐**，整个对话区读起来是一列而不是两列错开。窗口再宽也
+ * 不把行拉长 —— 长行会让眼睛回扫时找不到下一行行首。
+ *
+ * 限在**每条消息**而不是整个滚动容器上：限容器会把滚动条一起推进来，滚动条就不贴
+ * 窗口右缘了。两侧空白由 mx-auto 产生。
  */
-export function MessageRenderer({
+const CONTENT_MAX_W = 'max-w-[784px] mx-auto'
+
+export function MessageRenderer(props: MessageRendererProps): React.JSX.Element {
+  const { msg } = props.item
+  return (
+    <div
+      className={CONTENT_MAX_W}
+      data-msg-id={msg.id}
+      data-msg-role={msg.role}
+      data-msg-type={msg.type}
+    >
+      <MessageBody {...props} />
+    </div>
+  )
+}
+
+function MessageBody({
   item,
-  lastAssistantTextId,
+  lastAssistantId,
   onRollback,
   onRegenerate
-}: MessageRendererProps): React.JSX.Element {
+}: MessageRendererProps): React.JSX.Element | null {
   const { msg } = item
 
-  switch (msg.type) {
-    case 'error_event':
-      return <ErrorEventBlock msg={msg} />
-  }
+  if (msg.type === 'error_event') return <ErrorEventBlock msg={msg} />
 
-  // 将 VisibleItem.steps 转换为 StepItem[]（窄化 msg 类型）
-  const steps: StepItem[] | undefined = item.steps?.map((s) => ({
-    msg: s.msg as StepMessage
-  }))
-
-  // 用户消息
-  if (msg.role === 'user' && msg.type === 'text') {
+  if (msg.role === 'user') {
     // 项目指令注入消息走专用卡片
-    if ((msg as UserTextMessage).metadata?.isInstructionInjection) {
-      return <InstructionBubble msg={msg as UserTextMessage} />
+    if (msg.metadata?.isInstructionInjection) {
+      return <InstructionBubble msg={msg} />
     }
     return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
   }
 
-  // 助手消息（含 synthetic orphan messages）
-  // switch 已排除事件类型，if 已排除 user text；剩余 step/tool 类型在实际流程中
-  // 不会走到这里（它们被收入 steps 数组），但 TS 无法静态推断，需显式断言
-  const assistantMsg = msg as import('../../stores/chatStore').AssistantTextMessage
+  if (msg.role !== 'assistant' || !item.msgs) return null
+
   return (
     <AssistantBubble
-      msg={assistantMsg}
-      steps={steps}
+      msgs={item.msgs}
       isStreaming={item.isStreamingPlaceholder}
       onRegenerate={
-        msg.id === lastAssistantTextId && onRegenerate ? () => onRegenerate(msg.id) : undefined
+        msg.id === lastAssistantId && onRegenerate ? () => onRegenerate(msg.id) : undefined
       }
     />
   )

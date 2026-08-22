@@ -1,15 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Check,
-  Copy,
-  Database,
-  Terminal,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  ScrollText
-} from 'lucide-react'
+import { Check, Copy, Database, Terminal, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import {
   SettingsSection,
   SettingsRow,
@@ -17,7 +8,6 @@ import {
   Toggle,
   InlineInput
 } from './SettingsPrimitives'
-import { McpServerLogsDialog } from './McpServerLogsDialog'
 
 interface McpHostStatus {
   running: boolean
@@ -47,7 +37,6 @@ export function McpServerPanel(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const [startError, setStartError] = useState('')
-  const [logsOpen, setLogsOpen] = useState(false)
 
   const loadSettings = useCallback(async () => {
     const [portVal, dbVal, sshVal] = await Promise.all([
@@ -307,25 +296,6 @@ export function McpServerPanel(): React.JSX.Element {
           )}
         </SettingsSection>
       )}
-
-      {/* 调用日志 */}
-      <SettingsSection title={t('settings.mcpServerLogs')}>
-        <SettingsRow
-          icon={<ScrollText size={13} className="text-text-tertiary shrink-0" />}
-          title={t('settings.mcpServerLogs')}
-          description={t('settings.mcpServerLogsDesc')}
-          control={
-            <button
-              onClick={() => setLogsOpen(true)}
-              className="px-2 py-1 rounded text-[11px] text-accent hover:bg-accent/10 transition-colors"
-            >
-              {t('settings.mcpServerLogsView')}
-            </button>
-          }
-        />
-      </SettingsSection>
-
-      {logsOpen && <McpServerLogsDialog onClose={() => setLogsOpen(false)} />}
     </div>
   )
 }

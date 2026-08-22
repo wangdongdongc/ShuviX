@@ -15,6 +15,9 @@ import { buildBuiltinProfile, type BuiltinProfileDeps, type BuiltinProfileSpec }
 import defaultEn from './md/default.md?raw'
 import defaultZh from './md/default.zh.md?raw'
 import defaultJa from './md/default.ja.md?raw'
+import codingEn from './md/coding.md?raw'
+import codingZh from './md/coding.zh.md?raw'
+import codingJa from './md/coding.ja.md?raw'
 import notebookEn from './md/notebook.md?raw'
 import notebookZh from './md/notebook.zh.md?raw'
 import notebookJa from './md/notebook.ja.md?raw'
@@ -65,6 +68,15 @@ export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
   sources: { en: notebookEn, zh: notebookZh, ja: notebookJa }
 }
 
+/**
+ * 编码智能体 —— 从 default 里拆出来的工程人格：完整工具链（含 ssh / database）+ 做事纪律。
+ * default 只留通用助手的薄壳，遇到成规模的工程活儿引导用户 `/coding` 切过来。
+ */
+export const CODING_SPEC: BuiltinProfileSpec = {
+  name: 'coding',
+  sources: { en: codingEn, zh: codingZh, ja: codingJa }
+}
+
 export const EXPLORE_SPEC: BuiltinProfileSpec = {
   name: 'explore',
   sources: { en: exploreEn, zh: exploreZh, ja: exploreJa }
@@ -106,6 +118,7 @@ export const WIKI_WRITER_SPEC: BuiltinProfileSpec = {
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   DEFAULT_SPEC,
   NOTEBOOK_SPEC,
+  CODING_SPEC,
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
   WIDGET_SPEC,

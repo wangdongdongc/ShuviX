@@ -226,7 +226,7 @@ export function SshCredentialDialog({
                           setPrivateKey('')
                           setKeyFileName('')
                         }}
-                        className="ml-auto text-text-tertiary hover:text-danger"
+                        className="ml-auto text-text-tertiary hover:text-error"
                       >
                         <X size={11} />
                       </button>
@@ -274,7 +274,7 @@ export function SshCredentialDialog({
             />
           </SettingsSection>
 
-          {error && <p className="text-[11px] text-danger px-1">{error}</p>}
+          {error && <p className="text-[11px] text-error px-1">{error}</p>}
         </div>
 
         {/* 按钮 */}

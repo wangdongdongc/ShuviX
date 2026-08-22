@@ -120,8 +120,14 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
             headerCaps={{ editableTitle: true, sessionConfig: true }}
             onOpenSessionConfig={() => setShowSessionConfig(true)}
             banner={
-              // 运行时/分享/审批状态横幅（复用 app-shell；扩展仅免审批项会出现，余项按能力自隐）
-              activeSessionId ? <StatusBanner sessionId={activeSessionId} /> : undefined
+              // 运行时/分享/询问状态横幅（复用 app-shell；扩展仅免询问项会出现，余项按能力自隐）
+              // 会话工具栏靠右并入其中 —— 悬浮在正文右上角会压住右对齐的用户气泡
+              activeSessionId ? (
+                <StatusBanner
+                  sessionId={activeSessionId}
+                  trailing={<SessionToolbar sessionId={activeSessionId} showPreview />}
+                />
+              ) : undefined
             }
             overlays={
               // 会话配置弹窗：复用 app-shell 共享组件；绑定分节据宿主能力自动显隐
@@ -141,7 +147,6 @@ export function ExtMainLayout({ host }: { host: ChatHostValue }): React.JSX.Elem
                 title={t('sidebar.title')}
               />
             }
-            sessionToolbar={<SessionToolbar sessionId={activeSessionId} showPreview />}
             sessionPanel={<ExtSessionPanel sessionId={activeSessionId} />}
             welcome={<WelcomeView enableConfigShare />}
             renderNotebook={(path, sid) => (

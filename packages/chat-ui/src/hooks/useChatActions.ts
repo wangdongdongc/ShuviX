@@ -18,7 +18,7 @@ export interface UseChatActionsReturn {
   handleRegenerate: (assistantMsgId: string) => Promise<void>
   /**
    * 统一的"用户输入响应"入口。
-   * 命令审批 / 选择题 / SSH 凭证 / 其它反馈都通过该方法路由。
+   * 命令询问 / 选择题 / SSH 凭证 / 其它反馈都通过该方法路由。
    * 副作用(如写入 allowList)由后端工具响应回调根据 response.extra 处理。
    */
   handleInputResponse: (requestId: string, response: InputResponse) => Promise<void>
@@ -27,7 +27,7 @@ export interface UseChatActionsReturn {
 }
 
 /**
- * 聊天操作 Hook — 封装消息回退、重新生成、工具审批、用户输入等业务逻辑
+ * 聊天操作 Hook — 封装消息回退、重新生成、工具询问、用户输入等业务逻辑
  * @param activeSessionId 当前活动会话ID
  */
 export function useChatActions(activeSessionId: string | null): UseChatActionsReturn {

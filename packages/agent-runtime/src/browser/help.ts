@@ -62,7 +62,8 @@ function navigationSection(): string {
 - list_tabs() — tabIds with title/URL. Start here when working with existing pages.
 - open_tab(url) — open a NEW tab, returns its tabId. The right way to open a page.
 - navigate(tabId, url) — replace the content of an EXISTING tab (or nav:"back"|"forward"|"reload"). All uids become invalid.
-- close_tab(tabId) — close a tab when done with it.`
+- close_tab(tabId) — close a tab when done with it.
+- open_tab/navigate accept any URL, including file:// — do NOT open a file:// path the user has not asked for.`
 }
 
 function captureSection(caps: BrowserCaps): string {

@@ -2,7 +2,7 @@
  * File preview 服务 —— 为 FilesPanel 的预览覆盖层提供文件内容读取
  *
  * 与 ReadTool 的关键差异：
- *  - 准入判定走 isPathReadAllowed（不弹审批）—— 被动 UI 不应在每次点击时打扰用户
+ *  - 准入判定走 isPathReadAllowed（不弹询问）—— 被动 UI 不应在每次点击时打扰用户
  *  - 返回 FileReadResult discriminated union，二进制/超大/越权状态走专门分支而非抛异常
  *  - 不做 LLM 化处理：无行号 header、无 byte-cap 截断、无 tool_results 持久化、不压缩图片
  *
@@ -10,8 +10,8 @@
  * （与扩展 FSA 后端共用一份）；本文件只做「桌面准入 + 注入 Node fs port」。
  */
 
-import { writeFile } from 'fs/promises'
-import { extname } from 'path'
+import { chmod, rename, stat, unlink, writeFile } from 'fs/promises'
+import { basename, dirname, extname, join } from 'path'
 import { BrowserWindow, dialog } from 'electron'
 import { previewFile } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
@@ -46,8 +46,9 @@ export async function previewSessionFile(sessionId: string, path: string): Promi
  * 回写文件内容 —— 给中间区的 Markdown live-preview 编辑器自动保存用。
  *
  * 与 WriteTool 的差异同 previewSessionFile：走 isPathWriteAllowed 的同步准入判定，
- * 不弹审批（被动 UI 不应每次自动保存都打断用户）。落在 workspace / 可读写参考目录之外
- * 一律拒绝（文件树只扫描 workspace，正常路径都在准入范围内）。
+ * 不弹询问（被动 UI 不应每次自动保存都打断用户）。该判定以 **user 主体**求值 ——
+ * 内置防护只作用于 agent，故这里默认放行，想约束就写 subject.kind: [user] 的策略
+ * （安全模块迁移前这里是 workspace 硬边界；用户主权原则下已放宽）。
  */
 export async function writeSessionFile(
   sessionId: string,
@@ -64,10 +65,24 @@ export async function writeSessionFile(
     return { ok: false, error: 'Path is not writable (outside workspace)' }
   }
 
+  // 原子写：同目录临时文件 + rename。直接 writeFile 是「先截断后写」，并发读取方
+  // （agent 的 read 工具、files.changed 触发的自读）存在读到空/半截文件的窗口 ——
+  // 笔记本每 200ms 防抖自动保存，这个窗口是常态而非极端情况。同目录保证同一文件系统
+  // （跨设备 rename 不是原子的），watcher 监听父目录按 basename 过滤，本就为原子保存
+  // 而设计（见 filesWatcherService 头注释）。
+  const tmpPath = join(dirname(absolutePath), `.${basename(absolutePath)}.${process.pid}.tmp`)
   try {
-    await writeFile(absolutePath, content, 'utf8')
+    await writeFile(tmpPath, content, 'utf8')
+    // 保住原文件权限（rename 会把 tmp 的默认权限一并带过去）
+    const mode = await stat(absolutePath).then(
+      (st) => st.mode,
+      () => null
+    )
+    if (mode !== null) await chmod(tmpPath, mode)
+    await rename(tmpPath, absolutePath)
     return { ok: true }
   } catch (err) {
+    await unlink(tmpPath).catch(() => undefined)
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

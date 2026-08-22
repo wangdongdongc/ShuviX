@@ -27,9 +27,19 @@ import {
   Database,
   type LucideIcon
 } from 'lucide-react'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeHighlight from 'rehype-highlight'
+import rehypeRaw from 'rehype-raw'
+import rehypeKatex from 'rehype-katex'
+// KaTeX 的字体与排版样式 —— 谁渲染公式谁带样式：放在这里，两个宿主都不必在各自的
+// 入口 CSS 里声明一遍，也就不会出现「只有一个宿主加了」的半边天。写法与
+// app-shell/notebook/LivePreviewEditor.tsx 引入 atomic-editor 样式表的那行同源。
+import 'katex/dist/katex.min.css'
 import { CodeBlock } from './CodeBlock'
 import { useChatStore } from '../../stores/chatStore'
 import { copyToClipboard } from '../../utils/clipboard'
+import { remarkMathDollarGuard } from '../../utils/remarkMathDollarGuard'
 
 // ─── 超链接 ────────────────────────────────────────────
 
@@ -328,3 +338,21 @@ export const markdownComponents = {
   a: LinkChip as never,
   code: InlineCode as never
 }
+
+// ─── 共用插件表 ────────────────────────────────────────
+//
+// 插件数组同样只此一份：过去 9 处 ReactMarkdown 各自内联 `[remarkGfm]` /
+// `[rehypeHighlight, rehypeRaw]`，加公式渲染时要改 9 遍，漏一处就只有那块不认公式。
+// 顺带定成模块级常量，react-markdown 按引用判等，内联字面量每次渲染都是新数组。
+
+/** TeX 公式：remark-math 分词 → 单 `$` 按 Pandoc 规则复核（见 remarkMathDollarGuard） */
+export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGuard]
+
+/**
+ * rehype-katex 排在 rehype-raw **之后**：raw 会把整棵树序列化再解析一遍，
+ * KaTeX 吐出的 MathML 没必要陪着走一趟。
+ */
+export const markdownRehypePlugins = [rehypeHighlight, rehypeRaw, rehypeKatex]
+
+/** 不含 rehype-raw 的一份 —— 思考/步骤正文不解析裸 HTML（StepBlock 一直如此） */
+export const markdownRehypePluginsNoRaw = [rehypeHighlight, rehypeKatex]

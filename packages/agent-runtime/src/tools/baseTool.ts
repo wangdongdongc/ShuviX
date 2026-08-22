@@ -26,7 +26,7 @@ export abstract class BaseTool<TParams extends TSchema = TSchema> {
 
   /**
    * 安全检查 —— 路径越界等确定性校验，抛异常即阻止执行。
-   * 动态/条件性审批应留在 executeInternal 中。
+   * 动态/条件性询问应留在 executeInternal 中。
    */
   protected abstract securityCheck(
     toolCallId: string,

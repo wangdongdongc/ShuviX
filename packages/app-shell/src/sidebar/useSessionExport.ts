@@ -53,7 +53,6 @@ export function useSessionExport(): (sessionId: string) => Promise<void> {
           labels: {
             user: t('transcript.user'),
             assistant: t('transcript.assistant'),
-            steer: t('transcript.steer'),
             thinking: t('transcript.thinking'),
             toolCall: t('transcript.toolCall'),
             toolResult: t('transcript.toolResult'),

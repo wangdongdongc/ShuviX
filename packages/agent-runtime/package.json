@@ -11,15 +11,18 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
+    "@marcbachmann/cel-js": "^8.0.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "diff": "^8.0.3",
     "isomorphic-git": "^1.34.0",
     "turndown": "^7.2.2",
     "typebox": "^1.1.37",
+    "web-tree-sitter": "^0.26.12",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/turndown": "^5.0.5"
+    "@types/turndown": "^5.0.5",
+    "tree-sitter-bash": "^0.25.1"
   },
   "peerDependencies": {
     "@shuvix/chat-protocol": "*"

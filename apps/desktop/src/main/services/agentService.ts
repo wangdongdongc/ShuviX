@@ -58,7 +58,7 @@ class AgentService implements AgentProfileRegistry {
       return null
     }
 
-    const parsed = parseAgentDefinitionFile(raw, defaultName)
+    const parsed = parseAgentDefinitionFile(raw, defaultName, (msg) => log.warn(msg))
     if (!parsed) {
       log.warn(`agent "${defaultName}": 无法解析 frontmatter`)
       return null
@@ -87,6 +87,7 @@ class AgentService implements AgentProfileRegistry {
     }
 
     const result: AgentProfile[] = []
+    const seen = new Set<string>()
     for (const entry of entries) {
       if (!entry.isFile) continue
       if (entry.name.startsWith('.')) continue
@@ -95,7 +96,15 @@ class AgentService implements AgentProfileRegistry {
       const basename = entry.name.slice(0, -3)
       if (!basename) continue
       const def = this.loadAgentFromFile(join(dir, entry.name), basename, source)
-      if (def) result.push(def)
+      if (!def) continue
+      // 同名文件互相遮蔽语义不明（frontmatter `name` 才是标识，文件名可以不同）：
+      // 保留先扫到的一份，其余告警跳过 —— 对齐 policyService.scanDir
+      if (seen.has(def.name)) {
+        log.warn(`agent "${def.name}": 同名文件重复（${entry.name}），已跳过`)
+        continue
+      }
+      seen.add(def.name)
+      result.push(def)
     }
     return result
   }
@@ -197,6 +206,97 @@ class AgentService implements AgentProfileRegistry {
       )
     }
     return def
+  }
+
+  /**
+   * 取 agent 的 md 原文（原文编辑器的数据源）。用户档案读文件原文（注释、键序原样）；
+   * 内置档案无文件，用 serializeAgentDefinitionFile 回写等价 md —— 即「创建覆盖副本」
+   * 的初值（与 policyService.getSource 同形）。
+   */
+  getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
+    if (source === 'user') {
+      const target = this.scanDir(this.userDir, 'user').find((a) => a.name === name)
+      if (!target?.basePath) return { error: `Agent "${name}" not found` }
+      try {
+        return { text: readFileSync(target.basePath, 'utf-8') }
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+    const builtin = this.builtinAgents().find((a) => a.name === name)
+    if (!builtin) return { error: `Builtin agent "${name}" not found` }
+    // AgentProfile.tools 是 readonly，ParsedAgentFile 要可变数组 —— 拷一份即可
+    return { text: serializeAgentDefinitionFile({ ...builtin, tools: [...builtin.tools] }) }
+  }
+
+  /**
+   * 解析并校验一份待写入的 agent 原文。**非法一律拒绝写盘**并回传解析器的人读原因
+   * （与 policyService.parseForWrite 同策：与其让一份不可解析的档案躺在磁盘上被扫描
+   * 静默跳过，不如当场说清哪里错了）。
+   */
+  private parseSourceForWrite(
+    text: string,
+    defaultName: string
+  ): { parsed: ParsedAgentFile } | { error: string } {
+    const messages: string[] = []
+    const parsed = parseAgentDefinitionFile(text, defaultName, (msg) => messages.push(msg))
+    if (!parsed) return { error: messages.join('\n') || 'Invalid agent file' }
+    return { parsed }
+  }
+
+  /**
+   * 按原文覆写用户 agent 文件（md 原文编辑器的保存路径）。`originalName` 定位现有文件
+   * （文件路径不随改名变，frontmatter `name` 为准）；内置档案无文件，须先创建覆盖副本。
+   */
+  saveAgentSource(originalName: string, text: string): { success: boolean; error?: string } {
+    const users = this.scanDir(this.userDir, 'user')
+    const target = users.find((a) => a.name === originalName)
+    if (!target?.basePath) return { success: false, error: `Agent "${originalName}" not found` }
+
+    const result = this.parseSourceForWrite(text, originalName)
+    if ('error' in result) return { success: false, error: result.error }
+    const name = result.parsed.name
+    // 与其他用户 agent 重名 → 拒绝（同名互相遮蔽语义不明）；覆盖内置为有意设计，放行
+    if (name !== originalName && users.some((a) => a.name === name)) {
+      return { success: false, error: `Agent "${name}" already exists` }
+    }
+
+    try {
+      writeFileSync(target.basePath, text, 'utf-8')
+    } catch (e) {
+      log.warn(`保存 agent 原文 "${originalName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true }
+  }
+
+  /**
+   * 按原文新建用户 agent 文件（「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
+   * `name` 净化派生（冲突追加数字后缀）；与既有用户 agent 重名拒绝，覆盖内置放行。
+   */
+  createAgentSource(text: string): { success: boolean; name?: string; error?: string } {
+    const result = this.parseSourceForWrite(text, 'agent')
+    if ('error' in result) return { success: false, error: result.error }
+    const name = result.parsed.name
+
+    if (this.scanDir(this.userDir, 'user').some((a) => a.name === name)) {
+      return { success: false, error: `Agent "${name}" already exists` }
+    }
+
+    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'agent'
+    this.ensureUserDir()
+    let filePath = join(this.userDir, `${safeBase}.md`)
+    for (let i = 1; existsSync(filePath); i++) {
+      filePath = join(this.userDir, `${safeBase}-${i}.md`)
+    }
+
+    try {
+      writeFileSync(filePath, text, 'utf-8')
+    } catch (e) {
+      log.warn(`新建 agent 原文 "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true, name }
   }
 
   /**

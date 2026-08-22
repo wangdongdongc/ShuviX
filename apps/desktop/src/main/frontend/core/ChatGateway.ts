@@ -1,7 +1,7 @@
-import type { AgentInitResult, AgentRuntimeInfo, Message, ThinkingLevel } from '../../types'
+import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -39,14 +39,14 @@ export interface ChatGateway {
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
 
-  /** 中止当前生成（部分内容由 harness 自行落成 entry，不再回传 savedMessage） */
-  abort(sessionId: string): Promise<{ success: boolean; savedMessage?: Message }>
+  /** 中止当前生成（部分内容由 harness 自行落成 entry，无需回传消息） */
+  abort(sessionId: string): Promise<{ success: boolean }>
 
   // ─── 交互响应 ─────────────────────────────────
 
   /**
    * 统一的"用户输入响应"入口。
-   * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的挂起 Promise。
+   * 命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的挂起 Promise。
    */
   respondToInput(sessionId: string, requestId: string, response: InputResponse): void
 
@@ -74,7 +74,7 @@ export interface ChatGateway {
   // ─── 消息操作 ─────────────────────────────────
 
   /** 获取会话消息列表（entry 树的 UI 投影） */
-  listMessages(sessionId: string): Promise<Message[]>
+  listMessages(sessionId: string): Promise<ChatMessage[]>
 
   /** 清空会话所有消息（整棵 entry 树） */
   clearMessages(sessionId: string): void

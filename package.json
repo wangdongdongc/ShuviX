@@ -31,6 +31,11 @@
     "build:mac": "npm run build:mac -w shuvix",
     "build:win": "npm run build:win -w shuvix",
     "build:linux": "npm run build:linux -w shuvix",
-    "test:e2e": "npm run test:e2e -w shuvix"
+    "test:e2e": "npm run test:e2e -w shuvix",
+    "test:e2e:chat": "npm run test:e2e:chat -w shuvix",
+    "test:e2e:agents": "npm run test:e2e:agents -w shuvix",
+    "test:e2e:policies": "npm run test:e2e:policies -w shuvix",
+    "test:e2e:settings": "npm run test:e2e:settings -w shuvix",
+    "test:e2e:notebook": "npm run test:e2e:notebook -w shuvix"
   }
 }

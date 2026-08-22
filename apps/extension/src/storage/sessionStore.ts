@@ -93,7 +93,7 @@ export const sessionStore = {
     persist({ ...s, settings: { ...s.settings, ...patch }, updatedAt: Date.now() })
   },
 
-  /** 同步读取会话 settings（运行时审批/注入需在工具执行链中直接取值，故走内存缓存） */
+  /** 同步读取会话 settings（运行时询问/注入需在工具执行链中直接取值，故走内存缓存） */
   getSettingsSync(id: string): SessionSettings {
     return cache.get(id)?.settings ?? {}
   },

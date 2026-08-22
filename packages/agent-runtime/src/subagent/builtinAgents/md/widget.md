@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: widget
 description: Creates, maintains and exports ShuviX Widgets — persistent mini React apps that live in the Widget panel.
 shuvix-tools: read, write, edit, ls, glob, grep, bash, git

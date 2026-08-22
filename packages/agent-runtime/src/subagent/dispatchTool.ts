@@ -1,7 +1,8 @@
 /**
  * Agent 派发工具（跨端共享）。
  *
- * LLM 只看到一个名为 `Agent` 的工具，经 `agent` 参数以统一 ref 选择目标：
+ * LLM 只看到一个名为 `agent` 的工具，经 `name` 参数以统一 ref 选择目标
+ * （参数名与输入框档案选择器/`session.updateAgentProfile` 用的字段同为 name）：
  *   - 具名 ref（如 "explore"）→ 注入的 SubAgentRegistry 按名解析（内置 + 用户全局定义）；
  *   - 路径 ref（含 "/" 或以 .md 结尾）→ 宿主注入的 resolveAgentFile 即时解析定义文件
  *     （frontmatter: name/description/shuvix-tools + 正文为 system prompt）——支持项目内
@@ -22,9 +23,15 @@ import type {
 } from './types'
 import type { SubAgentManager } from './manager'
 
+/**
+ * 派发工具名 —— 与其余内置工具同为全小写（read/write/bash…）。
+ * 它同时是 agent md `shuvix-tools` 里的嵌套派发白名单值，故各端按名判定统一引用此常量。
+ */
+export const DISPATCH_TOOL_NAME = 'agent'
+
 export const AgentParamsSchema = Type.Object({
   description: Type.String({ description: 'A short (3-5 word) description of the task' }),
-  agent: Type.Optional(
+  name: Type.Optional(
     Type.String({
       description:
         'Which agent to dispatch: the name of a configured agent definition, ' +
@@ -65,18 +72,18 @@ export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
 export function buildDescription(hasDefaultAgent: boolean, supportsFileRefs?: boolean): string {
   const typesBlock =
     'Named agent types are defined by the host configuration (built-in and user agent definition files); ' +
-    'they are not enumerated here. Set `agent` to a name only when your instructions or the user provide one — ' +
+    'they are not enumerated here. Set `name` only when your instructions or the user provide one — ' +
     'an unknown name fails with the list of valid names.' +
     (hasDefaultAgent
-      ? ' Omit `agent` to dispatch a default agent that inherits your current tools.'
+      ? ' Omit `name` to dispatch a default agent that inherits your current tools.'
       : '')
 
   const fileRefNote = supportsFileRefs
-    ? '\n- `agent` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
+    ? '\n- `name` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
       '(`name`, `description`, and `shuvix-tools` as a comma-separated list) with the body as its system prompt. ' +
       'Relative paths resolve against the working directory; the file must live inside the working directory or the global agents directory. ' +
       'You may write such a file first and dispatch it immediately. ' +
-      'Include `Agent` in its `shuvix-tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
+      'Include `agent` in its `shuvix-tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
     : ''
 
   return `Launch a new agent to handle complex, multi-step tasks autonomously.
@@ -103,10 +110,10 @@ export interface DispatchAgentToolDeps {
   parentSessionId: string
   /** abort 时抛出的错误信息（与平台 TOOL_ABORTED 对齐） */
   abortError: string
-  /** 工具显示名（缺省 'Agent'） */
+  /** 工具显示名（缺省即工具名 'agent'；宿主可注入本地化名） */
   label?: string
   /**
-   * 默认 agent —— 提供后 `agent` 参数变为可选：省略时用它派发。
+   * 默认 agent —— 提供后 `name` 参数变为可选：省略时用它派发。
    * 注册表里的具名定义成为可选附加，而非调用前提。缺省则维持"必须指定 agent"。
    */
   defaultAgentType?: InProcessAgentType
@@ -121,15 +128,15 @@ function errorResult(text: string): AgentToolResult<undefined> {
   return { content: [{ type: 'text' as const, text }], details: undefined }
 }
 
-/** Agent 派发工具 —— 唯一对 LLM 暴露的派发入口 */
+/** agent 派发工具 —— 唯一对 LLM 暴露的派发入口 */
 export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
-  readonly name = 'Agent'
+  readonly name = DISPATCH_TOOL_NAME
   readonly label: string
   readonly parameters = AgentParamsSchema
 
   constructor(private deps: DispatchAgentToolDeps) {
     super()
-    this.label = deps.label ?? 'Agent'
+    this.label = deps.label ?? DISPATCH_TOOL_NAME
   }
 
   get description(): string {
@@ -141,18 +148,18 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
   }
 
   protected async securityCheck(): Promise<void> {
-    /* no-op — 派生 agent 内部工具自带审批 */
+    /* no-op — 派生 agent 内部工具自带询问 */
   }
 
   protected async executeInternal(
     toolCallId: string,
-    params: { description: string; agent?: string; prompt: string },
+    params: { description: string; name?: string; prompt: string },
     signal?: AbortSignal
   ): Promise<AgentToolResult<undefined>> {
     if (signal?.aborted) throw new Error(this.deps.abortError)
 
     const description = params.description || ''
-    const ref = (params.agent || '').trim()
+    const ref = (params.name || '').trim()
     const prompt = params.prompt || ''
     const names = (): string[] => this.deps.registry.list().map((a) => a.name)
     const hasDefault = !!this.deps.defaultAgentType
@@ -179,7 +186,7 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
     } else if (ref) {
       def = this.deps.registry.get(ref)
       if (!def) {
-        const tail = hasDefault ? ' (or omit `agent` to use the default)' : ''
+        const tail = hasDefault ? ' (or omit `name` to use the default)' : ''
         return errorResult(
           `Unknown agent "${ref}". Available: [${names().join(', ')}]${tail}. A path to an agent definition file is also accepted.`
         )

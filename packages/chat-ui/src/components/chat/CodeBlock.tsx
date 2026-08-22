@@ -25,7 +25,7 @@ interface HastNode {
   properties?: Record<string, unknown>
 }
 
-/** 代码块容器 — 带语言标签和复制按钮 */
+/** 代码块容器 — 带复制按钮 */
 export function CodeBlock({
   node,
   children,
@@ -68,21 +68,18 @@ export function CodeBlock({
 
   return (
     <div className="relative group/code my-2">
-      {/* 右上角悬浮:语言标签 + 复制按钮(默认半透明,hover 高亮) */}
-      <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1.5 text-[9px] text-text-tertiary opacity-50 group-hover/code:opacity-100 transition-opacity">
-        {lang && (
-          <span className="font-medium uppercase tracking-wider px-1 py-px rounded bg-bg-tertiary/60">
-            {lang}
-          </span>
-        )}
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-0.5 px-1 py-px rounded bg-bg-tertiary/60 hover:text-text-secondary transition-colors"
-          title={copied ? 'Copied' : 'Copy'}
-        >
-          {copied ? <Check size={9} className="text-success" /> : <Copy size={9} />}
-        </button>
-      </div>
+      {/* 右上角悬浮:只有复制按钮,常态完全隐藏,指到代码块才出现(边框同时显形)。
+          语言标签和两枚胶囊底色随代码块改成描边一起去掉了 —— 块本身空了之后,
+          带底色的角标反而成了框里最实的东西。lang 仍用于 mermaid 判定。
+          focus-visible 也显形:opacity-0 的按钮仍可被 Tab 聚焦,不然键盘用户
+          会停在一个看不见的控件上。 */}
+      <button
+        onClick={handleCopy}
+        className="absolute top-1.5 right-1.5 z-10 p-0.5 text-text-tertiary opacity-0 hover:text-text-secondary group-hover/code:opacity-100 focus-visible:opacity-100 transition"
+        title={copied ? 'Copied' : 'Copy'}
+      >
+        {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+      </button>
       <pre {...props}>{children}</pre>
     </div>
   )

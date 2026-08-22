@@ -43,7 +43,7 @@
     - **read** - 读取常见文件、网页内容
     - **write, edit** - 文本文件编辑
     - **ls, grep, glob** - ripgrep 文件搜索
-  - _终端工具 (内置审批机制)_
+  - _终端工具 (内置询问机制)_
     - **bash** - 本地命令执行
     - **ssh** - 远程命令支持，内置凭证管理器
   - _脚本_
@@ -54,7 +54,7 @@
     - **design** - 开箱即用的交互设计和预览工具
 - 📁 **项目沙箱** — 基于项目控制 AI 可访问的文件夹
 - 💾 **本地优先** — 所有本地数据存储
-- 🤖 **扩展性** — 支持 MCP、Skills、Hooks（Claude Code 兼容）
+- 🤖 **扩展性** — 支持 MCP、Skills（Claude Code 兼容）
 - ✈️ **远程访问**
   - _会话绑定_
     - **局域网共享** - 支持局域网内的其他人可以直接通过浏览器访问你共享出来的会话
@@ -83,15 +83,6 @@ npm run build:mac    # macOS
 npm run build:win    # Windows
 npm run build:linux  # Linux
 ```
-
-## 🪝 Hooks（扩展机制）
-
-ShuviX 兼容 Claude Code 风格的 hooks：在 Agent 生命周期事件（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`）上挂载子进程脚本，通过 stdin/stdout JSON + 退出码与 ShuviX 通信。
-
-- **配置位置**：`~/.shuvix/hooks.json`（全局）+ `<project>/.shuvix/hooks.json`（项目）
-- **快速上手**：复制 [example-hooks.json](src/main/services/hooks/__tests__/fixtures/example-hooks.json) 作为起点
-- **完整 schema**（事件、输入/输出、环境变量、阻断/重写语义）：见 [types.ts](src/main/services/hooks/types.ts) 顶部 JSDoc
-- **管理 UI**：设置 → Hooks（健康状态条、已加载列表、一键打开配置文件）
 
 ## 📄 License
 

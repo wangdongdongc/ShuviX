@@ -10,12 +10,9 @@
 
 import type { TSchema } from 'typebox'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { SecurityContext } from '@shuvix/agent-runtime'
 import { processToolOutput, type TruncateStrategy } from '../utils/toolUtils/processToolOutput'
-import { hookService } from './hooks'
-import { resolveProjectConfig } from './toolContext'
-import { createLogger } from '../logger'
-
-const hookLog = createLogger('WrapToolOutput')
+import { TOOL_ABORTED } from './toolContext'
 
 /** 工具可以通过这个接口声明自己想要的截断策略；默认 'middle' */
 export interface OutputStrategyAware {
@@ -38,10 +35,11 @@ export interface ProcessToolOutputOverrides {
  * 包装一个 AgentTool —— execute 返回结果后，把 content 里的文本块过 processToolOutput。
  * 同时把 truncated / persisted OR 进 details（仅当 details 已经声明了对应字段时）。
  *
- * 也是 PreToolUse / PostToolUse hook 的挂载点：
- *   - PreToolUse：execute 之前触发；任一 hook 返回 permissionDecision: 'deny' → 工具拒绝执行；
- *     返回 hookSpecificOutput.updatedInput 会重写 params。
- *   - PostToolUse：execute 完成、processToolOutput 截断之后触发；fire-and-forget，仅观察。
+ * 也是安全模块 **L1 全工具门** 的挂载点：execute（含 preExecute）之前，以
+ * {kind:'invocation'} 客体 + 请求的工具维度（toolName/operation）过统一评估 ——
+ * MCP/browser/database 等尚无专属资源客体的入口由此可被策略设门。
+ * 无内置门（未命中规则 = 非事件，不弹窗不记日志）；deny throw、ask 挂起询问、
+ * 「其它」反馈转为正常 tool result。先于 preExecute，故 ssh 的凭据抢跑连接也被覆盖。
  *
  * 实现要点：用 Object.create(tool) 让原 tool 成为返回对象的原型，仅把 `execute`
  * 设为 own property 覆盖原方法。这样原型链上的 getter / method / class field
@@ -54,23 +52,12 @@ export function wrapToolOutput<P extends TSchema, D>(
   tool: AgentTool<P, D>,
   sessionId: string,
   strategy: TruncateStrategy,
-  overrides?: ProcessToolOutputOverrides
+  overrides?: ProcessToolOutputOverrides,
+  /** L1 全工具门的评估门面；缺省 = 不设门（测试/无会话场景） */
+  security?: SecurityContext
 ): AgentTool<P, D> {
   const originalExecute = tool.execute.bind(tool)
-  // 取工具名用于 hook matcher（默认空串，配 "*" 命中）
   const toolName = (tool as { name?: string }).name ?? ''
-
-  // 懒查并缓存 workingDirectory —— session 生命周期内不变
-  let cachedCwd: string | null = null
-  const getCwd = (): string => {
-    if (cachedCwd != null) return cachedCwd
-    try {
-      cachedCwd = resolveProjectConfig(sessionId).workingDirectory
-    } catch {
-      cachedCwd = ''
-    }
-    return cachedCwd
-  }
 
   const wrappedExecute: AgentTool<P, D>['execute'] = async (
     toolCallId,
@@ -78,33 +65,30 @@ export function wrapToolOutput<P extends TSchema, D>(
     signal,
     onUpdate
   ) => {
-    const cwd = getCwd()
-    // ── PreToolUse hook ──
-    let effectiveParams = params
-    const preOutputs = await hookService.fire('PreToolUse', {
-      session_id: sessionId,
-      hook_event_name: 'PreToolUse',
-      cwd,
-      tool_name: toolName,
-      tool_input: params as unknown
-    })
-    for (const out of preOutputs) {
-      const decision = out.hookSpecificOutput?.permissionDecision
-      if (decision === 'deny') {
-        const reason = out.hookSpecificOutput?.reason ?? 'blocked by hook'
-        hookLog.warn(`PreToolUse deny tool=${toolName} reason=${reason}`)
+    // ── L1 全工具门（安全模块）：execute（含 preExecute）之前 ──
+    if (security) {
+      const rawAction = (params as Record<string, unknown> | undefined)?.action
+      const outcome = await security.enforceInvocation({
+        toolCallId,
+        toolName,
+        operation: typeof rawAction === 'string' ? rawAction : undefined,
+        abortError: TOOL_ABORTED,
+        onOther: 'return'
+      })
+      if (outcome.status === 'feedback') {
         return {
-          content: [{ type: 'text', text: `[hook blocked] ${reason}` }],
-          details: undefined as unknown as D,
-          isError: true
+          content: [
+            {
+              type: 'text',
+              text: `Tool was not executed. User responded with feedback instead:\n${outcome.text}`
+            }
+          ],
+          details: undefined as unknown as D
         }
-      }
-      if (out.hookSpecificOutput?.updatedInput !== undefined) {
-        effectiveParams = out.hookSpecificOutput.updatedInput as typeof params
       }
     }
 
-    const result = await originalExecute(toolCallId, effectiveParams, signal, onUpdate)
+    const result = await originalExecute(toolCallId, params, signal, onUpdate)
     let truncated = false
     let persisted = false
     const newContent: typeof result.content = []
@@ -138,24 +122,7 @@ export function wrapToolOutput<P extends TSchema, D>(
     }
 
     const newDetails = mergeTruncatedIntoDetails(result.details, truncated, persisted)
-    const wrappedResult = { ...result, content: newContent, details: newDetails }
-
-    // ── PostToolUse hook（fire-and-forget：不影响返回结果） ──
-    void hookService
-      .fire('PostToolUse', {
-        session_id: sessionId,
-        hook_event_name: 'PostToolUse',
-        cwd,
-        tool_name: toolName,
-        tool_input: effectiveParams as unknown,
-        tool_output: newContent,
-        is_error: Boolean((wrappedResult as { isError?: boolean }).isError)
-      })
-      .catch((err) =>
-        hookLog.warn(`PostToolUse error: ${err instanceof Error ? err.message : String(err)}`)
-      )
-
-    return wrappedResult
+    return { ...result, content: newContent, details: newDetails }
   }
 
   // Object.create 保留原型链：name / description / label / parameters / 其它

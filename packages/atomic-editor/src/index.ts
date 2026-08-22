@@ -14,6 +14,8 @@ export type { InlinePreviewConfig } from './inline-preview';
 export { imageBlocks } from './image-blocks';
 export { mermaidBlocks, renderMermaid } from './mermaid-blocks';
 export type { MermaidResult, MermaidTheme } from './mermaid-blocks';
+export { mathBlocks, mathMarkdownSyntax, renderMath, scanMathSpans } from './math-blocks';
+export type { MathResult, MathSpan } from './math-blocks';
 export { commentBlocks } from './comment-blocks';
 export { tables, tableContextMenu, tableWikiLinks } from './table-widget';
 export type {

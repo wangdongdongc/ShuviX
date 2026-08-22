@@ -4,8 +4,6 @@ import type { SyntaxNode } from '@lezer/common';
 import {
   EditorSelection,
   Prec,
-  StateEffect,
-  StateField,
   type Extension,
   type Range,
   type Text,
@@ -19,6 +17,8 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view';
+import { previewFrozenField, setFrozen } from './editor-interaction';
+import { isMathPosition, overlapsMathSyntax } from './math-blocks';
 import { treeGrowthEffect, treeProgressPlugin } from './tree-progress';
 
 // Inline preview — the Obsidian "Live Preview" model.
@@ -76,18 +76,9 @@ export function normalizeLinkUrl(url: string): string {
 const FREEZE_TAIL_MS = 40;
 
 // ---- freeze plumbing -----------------------------------------------------
-
-const setFrozen = StateEffect.define<boolean>();
-
-const previewFrozenField = StateField.define<boolean>({
-  create: () => false,
-  update(prev, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setFrozen)) return effect.value;
-    }
-    return prev;
-  },
-});
+//
+// State lives in editor-interaction (mermaid / math read it too); this
+// module owns the pointer wiring that drives it.
 
 // Returns the `.cm-atomic-link` element under the pointer, if any. The
 // whole rendered link is the click-to-open affordance (matching wiki
@@ -456,6 +447,13 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
   // its cost scales with document size.)
   tree.iterate({
     enter: (node) => {
+      // The markdown grammar does not apply inside a `$…$` / `$$…$$`
+      // formula: `\\`, `_` and `*` are TeX there. Skip the subtree for
+      // any node that sits inside a formula OR straddles its boundary —
+      // the latter is how `$\mathfrak{T}_\Gamma$ 的… $\mathfrak{E}_\Gamma$`
+      // ends up italicizing the prose between the two formulas (lezer
+      // pairs the two `_`). A no-op when math-blocks isn't installed.
+      if (overlapsMathSyntax(state, node.from, node.to)) return false;
       if (node.name === 'FencedCode') {
         const firstLine = doc.lineAt(node.from).number;
         const lastLine = doc.lineAt(node.to).number;
@@ -777,6 +775,9 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
           );
         }
       }
+      // Descend into the children (the math skip above is the only
+      // early-out); explicit so the callback has a return on every path.
+      return true;
     },
   });
 
@@ -800,6 +801,7 @@ function buildInlineDecorations(view: EditorView): DecorationSet {
         line.from,
         head - line.from,
         ranges,
+        (pos) => isMathPosition(state, pos),
       );
     }
   }
@@ -832,6 +834,9 @@ function supplementMidTypingEmphasis(
   lineFrom: number,
   localCursor: number,
   out: Range<Decoration>[],
+  // A `_` or `*` inside a formula is TeX, not a delimiter — pairing one
+  // would italicize whatever sits between two formulas on this line.
+  isMath: (pos: number) => boolean,
 ): void {
   // Track which characters of the line are already "owned" by a
   // matched delimiter pair so a single-char delimiter doesn't
@@ -858,6 +863,13 @@ function supplementMidTypingEmphasis(
       }
       const close = indexOfUnconsumed(text, delim, open + dLen, consumed);
       if (close < 0) break;
+
+      if (isMath(lineFrom + open) || isMath(lineFrom + close)) {
+        // Leave both halves unconsumed: the other one may still pair
+        // with a real delimiter further along the line.
+        searchFrom = open + dLen;
+        continue;
+      }
 
       for (let i = open; i < close + dLen; i++) consumed[i] = 1;
 

@@ -14,18 +14,33 @@ const CHART_BROKEN_CONTRACT = `${CHART_FRONTMATTER}\n没有代码块\n`
 function makeTool(opts: {
   read: FileReadResult
   validate?: (p: { absPath: string; mermaid: string }) => Promise<ChartValidation>
-}): { tool: ReturnType<typeof createPreviewTool>; emitted: string[] } {
+  /** 设置后 resolvePath 直接 throw（首次调用即 securityCheck 阶段） */
+  resolveError?: string
+}): { tool: ReturnType<typeof createPreviewTool>; emitted: string[]; calls: string[] } {
   const emitted: string[] = []
+  const calls: string[] = []
   const deps: PreviewToolDeps = {
-    port: { stat: async () => ({ isFile: true, isDirectory: false, size: 1, mtimeMs: 0 }) },
-    resolvePath: (p) => ({ statPath: p, absPath: `/ws/${p}` }),
-    readPreview: async () => opts.read,
+    port: {
+      stat: async () => {
+        calls.push('stat')
+        return { isFile: true, isDirectory: false, size: 1, mtimeMs: 0 }
+      }
+    },
+    resolvePath: (p) => {
+      calls.push('resolvePath')
+      if (opts.resolveError) throw new Error(opts.resolveError)
+      return { statPath: p, absPath: `/ws/${p}` }
+    },
+    readPreview: async () => {
+      calls.push('readPreview')
+      return opts.read
+    },
     validateChart: opts.validate,
     emitFilePreview: (absPath) => emitted.push(absPath),
     label: 'Preview',
     abortError: 'Aborted'
   }
-  return { tool: createPreviewTool(deps), emitted }
+  return { tool: createPreviewTool(deps), emitted, calls }
 }
 
 function textOf(r: { content: Array<{ type: string; text?: string }> }): string {

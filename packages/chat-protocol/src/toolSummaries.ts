@@ -32,11 +32,6 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   glob: field('pattern'),
   grep: field('pattern'),
   skill: field('name'),
-  // Agent 派发：agent ref（新参数 `agent`；兼容历史消息的 `subagent_type`）+ 任务描述
-  Agent: (args) =>
-    [asStr(args.agent) ?? asStr(args.subagent_type), asStr(args.description)]
-      .filter(Boolean)
-      .join(' · ') || undefined,
   // ── 统一 browser 工具（桌面 + 扩展）：action + 该 action 最有信息量的参数 ──
   browser: (args) => {
     const detail = asStr(args.url) ?? asStr(args.text) ?? asStr(args.key) ?? asStr(args.uid)
@@ -50,7 +45,9 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   fill: field('text'),
   key: field('key'),
   navigate: field('url'),
-  screenshot: field('tabId')
+  screenshot: field('tabId'),
+  // ── 旧派发工具名（现为小写 `agent`，保留供历史会话展示） ──
+  Agent: (args) => BUILTIN_TOOL_PRESENTATIONS.agent.buildSummary?.(args)
 }
 
 /** 全量摘要函数注册表：共享内置定义（buildSummary 字段）+ 上方补充条目 */

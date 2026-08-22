@@ -266,10 +266,18 @@ export class McpManager {
 
   // ─── 工具调用 ───
 
+  /**
+   * 调用某 server 的工具。
+   *
+   * `signal` 必须一路透传给 SDK：它会向 server 发 `notifications/cancelled` 并**立即**
+   * reject 这次请求。不传的话中止只能等 timeout —— 而 pi 的 `harness.abort()` 会
+   * `waitForIdle()` 等工具 promise 落定，于是「中止」按钮要卡到 5～10 分钟后才生效。
+   */
   async callTool(
     serverId: string,
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<{ content: unknown[]; isError?: boolean }> {
     const conn = this.connections.get(serverId)
     if (!conn || conn.status !== 'connected') {
@@ -279,7 +287,8 @@ export class McpManager {
     const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, {
       timeout: 5 * 60 * 1000,
       resetTimeoutOnProgress: true,
-      maxTotalTimeout: 10 * 60 * 1000
+      maxTotalTimeout: 10 * 60 * 1000,
+      signal
     })
     const isError = 'isError' in result ? (result.isError as boolean | undefined) : undefined
     return { content: result.content as unknown[], isError }
@@ -297,12 +306,13 @@ export class McpManager {
       label: mcpTool.description || mcpTool.name,
       description: mcpTool.description ?? '',
       parameters: jsonSchemaToTypebox(mcpTool.inputSchema),
-      execute: async (_toolCallId, params): Promise<AgentToolResult<McpToolDetails>> => {
+      execute: async (_toolCallId, params, signal): Promise<AgentToolResult<McpToolDetails>> => {
         try {
           const result = await this.callTool(
             serverId,
             mcpTool.name,
-            params as Record<string, unknown>
+            params as Record<string, unknown>,
+            signal
           )
           const text = extractTextFromContent(result.content)
           if (result.isError) {
@@ -316,13 +326,13 @@ export class McpManager {
             details: { type: 'mcp', server: serverName, tool: mcpTool.name }
           }
         } catch (err: unknown) {
+          // 中止时 SDK 抛的是 McpError(RequestTimeout, 'AbortError: ...')，文案会误导用户，
+          // 统一按其它工具的约定报成 Aborted。
+          const text = signal?.aborted
+            ? '[MCP] Aborted'
+            : `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
           return {
-            content: [
-              {
-                type: 'text',
-                text: `[MCP Error] ${err instanceof Error ? err.message : String(err)}`
-              }
-            ],
+            content: [{ type: 'text', text }],
             details: { type: 'mcp', server: serverName, tool: mcpTool.name, isError: true }
           }
         }

@@ -1,5 +1,6 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
+import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -28,7 +29,7 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateAutoApproveParams,
+  SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
   SubAgentCreateParams,
   SubAgentSaveParams,
@@ -66,7 +67,6 @@ import type {
   ImportResult,
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
-import type { ResolvedHook, HookFileStatus } from '@shuvix/chat-protocol/types/hook'
 
 declare global {
   /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
@@ -87,10 +87,10 @@ declare global {
   interface ChatTextEndEvent extends ChatEventBase {
     type: 'text_end'
   }
-  interface ChatStepEndEvent extends ChatEventBase {
-    type: 'step_end'
+  interface ChatAssistantMessageEvent extends ChatEventBase {
+    type: 'assistant_message'
     messageId: string
-    message?: string
+    message: string
   }
   interface ChatAgentEndEvent extends ChatEventBase {
     type: 'agent_end'
@@ -126,7 +126,6 @@ declare global {
     toolName: string
     toolArgs?: Record<string, unknown>
     messageId?: string
-    turnIndex?: number
   }
   interface ChatToolEndEvent extends ChatEventBase {
     type: 'tool_end'
@@ -208,7 +207,7 @@ declare global {
     | ChatTextDeltaEvent
     | ChatThinkingDeltaEvent
     | ChatTextEndEvent
-    | ChatStepEndEvent
+    | ChatAssistantMessageEvent
     | ChatAgentEndEvent
     | ChatTokenUsageEvent
     | ChatToolCallGeneratingEvent
@@ -279,7 +278,7 @@ declare global {
 
   /** 会话级配置 */
   interface SessionSettings {
-    autoApprove?: boolean
+    autoAllow?: boolean
     allowList?: string[]
     /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
     instructionFile?: string | null
@@ -297,7 +296,7 @@ declare global {
     model: string
     systemPrompt: string
     modelMetadata: SessionModelMetadata
-    /** 会话级配置（SSH 免审批等） */
+    /** 会话级配置（SSH 免询问等） */
     settings: SessionSettings
     createdAt: number
     updatedAt: number
@@ -316,17 +315,12 @@ declare global {
   type UsageInfo = import('@shuvix/chat-protocol/types/chatMessage').UsageInfo
   type MessageMetadata = import('@shuvix/chat-protocol/types/chatMessage').MessageMetadata
   type UserTextMeta = import('@shuvix/chat-protocol/types/chatMessage').UserTextMeta
-  type AssistantTextMeta = import('@shuvix/chat-protocol/types/chatMessage').AssistantTextMeta
-  type ToolUseMeta = import('@shuvix/chat-protocol/types/chatMessage').ToolUseMeta
-  type StepTextMeta = import('@shuvix/chat-protocol/types/chatMessage').StepTextMeta
-  type StepThinkingMeta = import('@shuvix/chat-protocol/types/chatMessage').StepThinkingMeta
+  type AssistantMeta = import('@shuvix/chat-protocol/types/chatMessage').AssistantMeta
+  type AssistantBlock = import('@shuvix/chat-protocol/types/chatMessage').AssistantBlock
+  type AssistantToolBlock = import('@shuvix/chat-protocol/types/chatMessage').AssistantToolBlock
   type MessageBase = import('@shuvix/chat-protocol/types/chatMessage').MessageBase
   type UserTextMessage = import('@shuvix/chat-protocol/types/chatMessage').UserTextMessage
-  type AssistantTextMessage = import('@shuvix/chat-protocol/types/chatMessage').AssistantTextMessage
-  type ToolUseMessage = import('@shuvix/chat-protocol/types/chatMessage').ToolUseMessage
-  type StepTextMessage = import('@shuvix/chat-protocol/types/chatMessage').StepTextMessage
-  type StepThinkingMessage = import('@shuvix/chat-protocol/types/chatMessage').StepThinkingMessage
-  type SteerMessage = import('@shuvix/chat-protocol/types/chatMessage').SteerMessage
+  type AssistantMessage = import('@shuvix/chat-protocol/types/chatMessage').AssistantMessage
   type ErrorEventMessage = import('@shuvix/chat-protocol/types/chatMessage').ErrorEventMessage
   type ChatMessage = import('@shuvix/chat-protocol/types/chatMessage').ChatMessage
 
@@ -340,6 +334,52 @@ declare global {
   interface ConfigMeta {
     labelKey: string
     desc: string
+  }
+
+  /** 安全策略单条规则（与 agent-runtime security 的 PolicyRuleSpec 对齐，序列化安全） */
+  /** 结构化条件（键即 CEL 路径；列表内 OR、字段间 AND，再与 match AND） */
+  type PolicyConditionsInfo = Partial<
+    Record<'subject.kind' | 'action' | 'object.type' | 'env.host' | 'tool.name', string[]>
+  >
+
+  interface PolicyRuleInfo {
+    /** consent = allow，但结算落在 consent 层，压得过询问门 */
+    effect: 'allow' | 'consent' | 'ask' | 'deny'
+    /** 规则级结构化条件；与策略级 scope 取交后与 match AND */
+    conditions?: PolicyConditionsInfo
+    /** CEL 匹配表达式（对整份请求文档求值）；省略 = 结构化条件即全部条件 */
+    match?: string
+  }
+
+  /** 安全策略元信息（文件系统驱动；与主进程 PolicyListItem 对齐） */
+  interface PolicyInfo {
+    name: string
+    /** 显示名（shuvix-displayName；缺省 = name；内置策略按当前界面语言） */
+    displayName: string
+    /** 一句话摘要（内置策略按当前界面语言） */
+    description: string
+    /** 策略级共同条件（shuvix-policy-scope）—— AND 进本策略每条规则 */
+    scope?: PolicyConditionsInfo
+    /** 策略级 let 绑定（名字 → CEL 值表达式，装配时求值、注入规则 match 上下文） */
+    lets?: Record<string, string>
+    rules: PolicyRuleInfo[]
+    /** 正文 —— 纯人读说明（Rationale），引擎不评估 */
+    body: string
+    source: 'builtin' | 'user'
+    /** 用户策略文件路径（内置为空串） */
+    basePath: string
+    /** 该内置已被同名用户策略遮蔽（仅展示，不生效） */
+    overridden?: boolean
+  }
+
+  /**
+   * 无法解析的用户策略文件（设置页显示为可点开修复的告警项）。
+   * 身份是文件名 —— 它解析不出 name，读写走 policy.*ByFile 一组接口。
+   */
+  interface InvalidPolicyFile {
+    fileName: string
+    /** 解析器给出的人读原因（多条以换行连接） */
+    error: string
   }
 
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
@@ -392,7 +432,7 @@ declare global {
       subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
-      abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
+      abort: (sessionId: string) => Promise<{ success: boolean }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
@@ -402,7 +442,7 @@ declare global {
         options?: { ensure?: boolean }
       ) => Promise<AgentRuntimeInfo | null>
       /**
-       * 统一的"用户输入响应"入口。命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
+       * 统一的"用户输入响应"入口。命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
        */
       respondToInput: (params: {
         sessionId: string
@@ -458,7 +498,7 @@ declare global {
         params: SessionUpdateThinkingLevelParams
       ) => Promise<{ success: boolean }>
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
-      updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
+      updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
       generateTitle: (params: {
         sessionId: string
@@ -539,7 +579,50 @@ declare global {
         params: SubAgentCreateParams
       ) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      getSource: (params: {
+        name: string
+        source: 'builtin' | 'user'
+      }) => Promise<{ text: string } | { error: string }>
+      saveSource: (params: {
+        originalName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      createSource: (params: {
+        text: string
+      }) => Promise<{ success: boolean; name?: string; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
+    }
+    policy: {
+      list: () => Promise<PolicyInfo[]>
+      getSource: (params: {
+        name: string
+        source: 'builtin' | 'user'
+      }) => Promise<{ text: string } | { error: string }>
+      save: (params: {
+        originalName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      create: (params: {
+        text: string
+      }) => Promise<{ success: boolean; name?: string; error?: string }>
+      delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      listInvalid: () => Promise<Array<{ fileName: string; error: string }>>
+      getSourceByFile: (params: {
+        fileName: string
+      }) => Promise<{ text: string } | { error: string }>
+      saveByFile: (params: {
+        fileName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      openFolder: () => Promise<{ success: boolean }>
+    }
+    shuvixMd: {
+      validate: (params: {
+        type: string
+        text: string
+        name?: string
+      }) => Promise<ShuvixMdValidation>
     }
     tools: {
       list: (sessionId?: string) => Promise<
@@ -797,15 +880,6 @@ declare global {
         dirName: string
         isEnabled: boolean
       }) => Promise<{ success: boolean }>
-    }
-    hook: {
-      list: (opts?: { includeBuiltin?: boolean }) => Promise<ResolvedHook[]>
-      status: () => Promise<{ global: HookFileStatus; project: HookFileStatus }>
-      reload: () => Promise<{ success: boolean }>
-      openConfigFile: (
-        scope: 'global' | 'project',
-        projectDir?: string
-      ) => Promise<{ success: boolean; path?: string; reason?: string }>
     }
     update: {
       /** 检查更新 */

@@ -118,13 +118,13 @@ export function useAppInit(): void {
     return removeListener
   }, [])
 
-  // 监听会话配置变更（免审批 / 工具允许列表等），刷新派生 store —— AppEvent 'session.configChanged'
+  // 监听会话配置变更（免询问 / 工具允许列表等），刷新派生 store —— AppEvent 'session.configChanged'
   useEffect(() => {
     if (isSettingsWindow) return
     return window.api.events.subscribe((event) => {
       if (event.type !== 'session.configChanged') return
       void (async () => {
-        // 1. 同步该会话的 settings(allowList / autoApprove 等),保证 SessionConfigPanel 等读 store 的视图能即时刷新
+        // 1. 同步该会话的 settings(allowList / autoAllow 等),保证 SessionConfigPanel 等读 store 的视图能即时刷新
         const updated = await window.api.session.getById(event.sessionId)
         if (updated) {
           useChatStore.getState().updateSessionSettings(event.sessionId, updated.settings ?? {})

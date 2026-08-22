@@ -8,9 +8,9 @@
  * instruction 与桌面统一走 entry 懒注入（不再拼进 systemPrompt）。
  *
  * spawned（派生）：沿用扩展既有模型 —— **复用父会话已实例化的工具**（sessionTools
- * 查表；与根 Agent 同工作目录/同审批范围），names 白名单按名筛选、preview 不在根
+ * 查表；与根 Agent 同工作目录/同询问范围），names 白名单按名筛选、preview 不在根
  * 工具池、白名单声明时就地构建。派发工具注入策略与旧实现一致：默认子代理（names 空）
- * 无条件可再派发、具名定义须显式白名单 'Agent'（层级由内核 canSpawn 约束）。
+ * 无条件可再派发、具名定义须显式白名单 'agent'（层级由内核 canSpawn 约束）。
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import i18next from 'i18next'
@@ -20,6 +20,7 @@ import {
   renderProfileSystemPrompt,
   toInProcessAgentType,
   NOTEBOOK_PROFILE_NAME,
+  DISPATCH_TOOL_NAME,
   createAskTool,
   createBrowserTool,
   createStubExecutionEnv,
@@ -37,12 +38,12 @@ import { projectStore } from '../storage/projectStore'
 import { ensureSessionTree } from '../storage/sessionEntryStore'
 import { getTempWorkspaceHandle } from '../storage/opfsWorkspace'
 import { eventBus } from './eventBus'
-import { hookEngine } from './hooks'
 import { mcpManager } from './mcpRuntime'
 import { createFileTools } from './fileTools'
 import { extensionBrowserBackend } from './browserBackend'
 import { createSpillSink } from './opfsSpillSink'
 import { wrapToolsOutput } from './wrapToolOutput'
+import { createExtensionSecurityContext } from './securityProvider'
 import { resolveSessionModel, capsFor } from './resolveSessionModel'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { resolveInstructionForSession } from './instructionFilesRuntime'
@@ -127,11 +128,11 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
     fileSuite = createFileTools(tempHandle, { requiresPermission: false, requestUserInput })
     spillSink = createSpillSink(tempHandle)
   }
-  const cwd = projectHandle?.name ?? 'scratch'
 
   const built: AgentTool[] = []
   for (const name of req.names) {
-    if (name === 'Agent' || name.startsWith('mcp:') || name.startsWith('skill:')) continue
+    if (name === DISPATCH_TOOL_NAME || name.startsWith('mcp:') || name.startsWith('skill:'))
+      continue
     if (name === 'ask') {
       built.push(createAskTool({ requestUserInput, abortError: 'TOOL_ABORTED' }) as AgentTool)
       continue
@@ -152,11 +153,13 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
   // MCP：全部已连接工具（宿主策略；扩展无会话级勾选，等价旧「全量注入」）
   built.push(...(mcpManager.getAllAgentTools() as AgentTool[]))
 
-  const tools = wrapToolsOutput(built, spillSink, { sessionId, cwd })
-  // 登记工具池（不含 Agent 派发工具）—— 派生 agent 经 sessionTools 查表复用
+  // L1 全工具门（安全模块）：MCP 等无专属客体的工具由它统一获得"可设门"能力
+  const security = createExtensionSecurityContext(sessionId, requestUserInput)
+  const tools = wrapToolsOutput(built, spillSink, security)
+  // 登记工具池（不含 agent 派发工具）—— 派生 agent 经 sessionTools 查表复用
   registerSessionTools(sessionId, tools as unknown as AnyAgentTool[])
 
-  if (req.names.includes('Agent')) {
+  if (req.names.includes(DISPATCH_TOOL_NAME)) {
     tools.push(
       ...wrapToolsOutput(
         [
@@ -168,7 +171,7 @@ async function resolveRootTools(req: ToolResolveRequest): Promise<AnyAgentTool[]
           ) as unknown as AgentTool
         ],
         spillSink,
-        { sessionId, cwd }
+        security
       )
     )
   }
@@ -183,14 +186,14 @@ function resolveSpawnedTools(req: ToolResolveRequest): AnyAgentTool[] {
   const named = whitelist.length > 0
   const tools = [...map.values()].filter((t) => {
     const name = (t as { name?: string }).name ?? ''
-    if (name === 'Agent') return false
+    if (name === DISPATCH_TOOL_NAME) return false
     return named ? whitelist.includes(name) : true
   })
   if (named && whitelist.includes('preview')) {
     tools.push(createExtensionPreviewTool(req.rootSessionId) as unknown as AnyAgentTool)
   }
-  // 派发工具：默认子代理（names 空）全员可派发；具名定义须显式白名单 'Agent'
-  if (req.spawn?.canSpawn && (!named || whitelist.includes('Agent'))) {
+  // 派发工具：默认子代理（names 空）全员可派发；具名定义须显式白名单 'agent'
+  if (req.spawn?.canSpawn && (!named || whitelist.includes(DISPATCH_TOOL_NAME))) {
     tools.push(
       createExtensionDispatchTool(
         req.selfSessionId,
@@ -220,8 +223,6 @@ const extensionAgentHost: AgentHostAdapter = {
     broadcast: (event) => eventBus.emit(event),
     hasUserInputCapability: () => eventBus.hasListeners()
   },
-  shouldDeferToolDisplay: () => (toolName) => toolName === 'ask',
-  hooks: hookEngine,
   logger,
   // sessionId 恒为根会话 id（派生按根会话解析）
   resolveInstruction: (sessionId) => resolveInstructionForSession(sessionId),

@@ -20,14 +20,14 @@ export interface SessionConfigPanelProps {
  * 视觉：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
  *
  * 状态来源：
- * - autoApprove / allowList 从 chatStore 派生，
+ * - autoAllow / allowList 从 chatStore 派生，
  *   后端通过 `session.configChanged` 事件触发 store 刷新后自动重渲染。
  *   并在收到配置变更事件时重新拉取。
  */
 export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): React.JSX.Element {
   const { t } = useTranslation()
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
-  const autoApprove = session?.settings.autoApprove === true
+  const autoAllow = session?.settings.autoAllow === true
   const allowList = session?.settings.allowList ?? []
 
   const [instructionFiles, setInstructionFiles] = useState<InstructionFileEntry[]>([])
@@ -59,13 +59,13 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
     useChatStore.getState().updateSessionSettings(sessionId, { instructionFile: filename })
   }
 
-  const handleToggleAutoApprove = async (): Promise<void> => {
-    const next = !autoApprove
-    await getChatApi().session.updateAutoApprove({ id: sessionId, autoApprove: next })
-    useChatStore.getState().updateSessionSettings(sessionId, { autoApprove: next })
+  const handleToggleAutoAllow = async (): Promise<void> => {
+    const next = !autoAllow
+    await getChatApi().session.updateAutoAllow({ id: sessionId, autoAllow: next })
+    useChatStore.getState().updateSessionSettings(sessionId, { autoAllow: next })
   }
 
-  /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条审批，无模式记忆 */
+  /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条询问，无模式记忆 */
   const handleRemoveAllowEntry = async (entry: string): Promise<void> => {
     await getChatApi().session.removeAllowListEntry({ id: sessionId, entry })
     const next = allowList.filter((e) => e !== entry)
@@ -74,24 +74,24 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
 
   return (
     <div className="space-y-5">
-      {/* 命令审批 */}
+      {/* 命令询问 */}
       <SettingsSection title={t('sessionConfig.commandGroup')}>
         <SettingsRow
-          title={t('sessionConfig.autoApprove')}
-          description={t('sessionConfig.autoApproveDesc')}
+          title={t('sessionConfig.autoAllow')}
+          description={t('sessionConfig.autoAllowDesc')}
           control={
-            <Toggle on={autoApprove} color="amber" onClick={() => void handleToggleAutoApprove()} />
+            <Toggle on={autoAllow} color="amber" onClick={() => void handleToggleAutoAllow()} />
           }
         />
-        {autoApprove && (
+        {autoAllow && (
           <div className="flex items-start gap-2 px-4 py-2.5 bg-amber-500/[0.06]">
             <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
             <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
-              {t('chat.autoApproveWarning')}
+              {t('chat.autoAllowWarning')}
             </p>
           </div>
         )}
-        {!autoApprove && allowList.length > 0 && (
+        {!autoAllow && allowList.length > 0 && (
           <div className="px-4 py-3">
             <div className="text-[11px] text-text-tertiary mb-1.5">
               {t('sessionConfig.allowListTitle')}

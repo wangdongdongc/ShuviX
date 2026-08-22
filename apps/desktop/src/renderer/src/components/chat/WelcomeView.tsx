@@ -9,7 +9,7 @@ import { SessionConfigPanel } from '@shuvix/app-shell'
 /** 空会话引导 — 有活跃会话但无消息时显示，居中展示会话配置面板 */
 export function EmptySessionHint({ sessionId }: { sessionId: string }): React.JSX.Element {
   const { t } = useTranslation()
-  // 会话配置面板全是宿主管理能力（审批/指令文件/绑定）：渠道端（无 HostApi）不展示
+  // 会话配置面板全是宿主管理能力（询问/指令文件/绑定）：渠道端（无 HostApi）不展示
   const hasHost = getHostApi() !== null
   return (
     <div className="flex-1 flex items-center justify-center overflow-y-auto">

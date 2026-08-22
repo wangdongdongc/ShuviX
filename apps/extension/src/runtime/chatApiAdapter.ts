@@ -36,7 +36,8 @@ import {
   resolveInitialThinkingLevel,
   BASE_PROFILE_NAMES,
   DEFAULT_PROFILE_NAME,
-  NOTEBOOK_PROFILE_NAME
+  NOTEBOOK_PROFILE_NAME,
+  validateShuvixMdText
 } from '@shuvix/agent-runtime'
 import { generateTitleForSession, titlerFor, removeTitler } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
@@ -180,7 +181,7 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     abort: async (sessionId) => {
-      // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，不再回传 savedMessage
+      // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，无需回传消息
       await getRuntimeSession(sessionId)?.runtime.abort()
       return { success: true }
     },
@@ -295,9 +296,9 @@ export const chatApiAdapter: ChatApi = {
     updateProject: async () => ok,
     // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
     // 运行配置只写会话树，入口是 agent.setModel / setThinkingLevel / setEnabledTools。
-    // autoApprove 仅落库（browser 审批门控已移除，扩展端暂无运行时消费者）
-    updateAutoApprove: async ({ id, autoApprove }) => {
-      await sessionStore.updateSettings(id, { autoApprove })
+    // autoAllow 仅落库（browser 询问门控已移除，扩展端暂无运行时消费者）
+    updateAutoAllow: async ({ id, autoAllow }) => {
+      await sessionStore.updateSettings(id, { autoAllow })
       return ok
     },
     removeAllowListEntry: async ({ id, entry }) => {
@@ -518,6 +519,11 @@ export const chatApiAdapter: ChatApi = {
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
       return { ok: true, path: name }
     }
+  },
+
+  // shuvix 契约 md 校验：同进程直调 agent-runtime 解析器（与桌面 IPC 为同一实现）
+  shuvixMd: {
+    validate: async ({ type, text, name }) => validateShuvixMdText(type, text, name)
   },
 
   // 通用内部事件：进程内单例 bus，前端直接订阅（后端 publish 见 appEventBus）

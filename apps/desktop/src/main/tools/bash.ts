@@ -13,8 +13,12 @@ import {
 } from '../utils/toolUtils/shell'
 import { buildSpawnEnv } from '../utils/paths'
 import { BaseTool } from '@shuvix/agent-runtime'
-import { resolveProjectConfig, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
-import { sessionDao } from '../dao/sessionDao'
+import {
+  getDesktopSecurityContext,
+  resolveProjectConfig,
+  TOOL_ABORTED,
+  type ToolContext
+} from '../services/toolContext'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
@@ -131,7 +135,7 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     /* no-op */
   }
 
-  /** 安全检查 — requestApproval 为动态条件性审批，留在 executeInternal 中 */
+  /** 安全检查 — 条件性询问是动态的，留在 executeInternal 中 */
   protected async securityCheck(): Promise<void> {
     /* no-op */
   }
@@ -144,39 +148,32 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
 
-    // Bash 命令逐条需用户审批 —— 唯一豁免是会话级「免审批」开关（无命令模式匹配）
-    if (this.ctx.requestUserInput) {
-      const sess = sessionDao.pickSettings(this.ctx.sessionId, ['autoApprove'])
-      if (!sess?.autoApprove) {
-        const response = await this.ctx.requestUserInput({
-          id: toolCallId,
-          kind: 'approval',
-          toolName: 'bash',
-          command: params.command,
-          description: params.description,
-          createdAt: Date.now()
-        })
-        if (response.kind === 'cancel') {
-          throw new Error(TOOL_ABORTED)
-        }
+    // Bash 命令逐条需用户询问 —— 唯一豁免是会话级「免询问」开关（无命令模式匹配）。
+    // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 consent 层）
+    const outcome = await getDesktopSecurityContext(this.ctx).enforceCommand(
+      // cwd 供安全模块把重定向目标解析成绝对路径
+      { channel: 'bash', command: params.command, cwd: config.workingDirectory },
+      {
+        toolCallId,
+        toolName: 'bash',
+        description: params.description,
+        abortError: TOOL_ABORTED,
         // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
-        if (response.kind === 'other') {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Command was not executed. User responded with feedback instead:\n${response.text}`
-              }
-            ],
-            details: { type: 'bash', exitCode: -1, truncated: false }
+        onOther: 'return',
+        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道，
+        // 无前端时 harness 层已即时 cancel；此分支只防御未来的无通道调用方）
+        missingChannel: 'deny'
+      }
+    )
+    if (outcome.status === 'feedback') {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Command was not executed. User responded with feedback instead:\n${outcome.text}`
           }
-        }
-        if (response.kind !== 'approval' || !response.approved) {
-          throw new Error(
-            (response.kind === 'approval' && response.reason) ||
-              'User denied execution of this command'
-          )
-        }
+        ],
+        details: { type: 'bash', exitCode: -1, truncated: false }
       }
     }
 

@@ -13,22 +13,18 @@ export type {
 export type {
   ChatMessage,
   UserTextMessage,
-  AssistantTextMessage,
-  ToolUseMessage,
-  StepTextMessage,
-  StepThinkingMessage,
-  SteerMessage,
+  AssistantMessage,
+  AssistantBlock,
+  AssistantToolBlock,
   ErrorEventMessage,
   MessageMetadata,
   ImageMeta,
   UsageInfo,
   UserTextMeta,
-  AssistantTextMeta,
-  ToolUseMeta,
-  StepTextMeta,
-  StepThinkingMeta
+  AssistantMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { fillToolResult, upsertMessage } from './messageOps'
 export type { ToolResultDetails }
 
 /** 工具执行实时状态（流式期间的临时状态） */
@@ -36,8 +32,6 @@ export interface ToolExecution {
   toolCallId: string
   toolName: string
   args: Record<string, unknown>
-  /** 所属 turn 编号（用于 UI 区分同一 turn 的工具调用） */
-  turnIndex?: number
   status: 'running' | 'done' | 'error'
   result?: string
   /** 工具特定的结构化详情（edit diff 等） */
@@ -49,10 +43,10 @@ export interface ToolExecution {
 export type {
   InputRequest,
   InputResponse,
-  ApprovalInputRequest,
+  AskInputRequest,
   ChoiceInputRequest,
   SshCredentialsInputRequest,
-  ApprovalResponse,
+  AskResponse,
   ChoiceResponse,
   SshCredentialsResponse,
   CancelResponse
@@ -67,7 +61,7 @@ export interface SessionModelMetadata {
 
 /** 会话级配置 */
 export interface SessionSettings {
-  autoApprove?: boolean
+  autoAllow?: boolean
   allowList?: string[]
   /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
   instructionFile?: string | null
@@ -90,7 +84,7 @@ export interface Session {
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
-  /** 会话级配置（SSH 免审批等） */
+  /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number
   updatedAt: number
@@ -251,7 +245,7 @@ interface ChatState {
   sessionResources: Record<string, SessionResourceInfo>
   /**
    * 各 session 的待处理用户输入请求列表(按 sessionId 隔离)。
-   * 命令审批 / 选择题 / SSH 凭证全部走这一张表。
+   * 命令询问 / 选择题 / SSH 凭证全部走这一张表。
    */
   sessionPendingInputs: Record<string, InputRequest[]>
   /**
@@ -348,17 +342,22 @@ interface ChatState {
   setActiveInputId: (sessionId: string, requestId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
-  /** 原子处理 step_end：清除流式内容 + 添加 step 消息（单次 set，避免闪空） */
-  handleStepEnd: (sessionId: string, stepMessage: ChatMessage | null) => void
-  /** 原子处理 tool_start：清除流式工具调用 + 添加执行状态 + 构造临时消息（单次 set，避免闪烁） */
-  handleToolStart: (sessionId: string, exec: ToolExecution, toolMessage: ChatMessage | null) => void
-  /** 原子处理 tool_end：更新执行状态 + 替换消息（单次 set，避免闪烁） */
+  /**
+   * 原子处理 assistant_message：清除流式内容 + 按 id upsert 这张卡（单次 set，避免闪空）。
+   * upsert 而非 append —— 同一条消息会被广播两次（message_end 一次，agent_end 兜底一次）。
+   */
+  handleAssistantMessage: (sessionId: string, message: ChatMessage | null) => void
+  /** 原子处理 tool_start：清除流式工具调用 + 记录执行状态（单次 set，避免闪烁） */
+  handleToolStart: (sessionId: string, exec: ToolExecution) => void
+  /**
+   * 原子处理 tool_end：更新执行状态 + 把结果回填进对应卡片的工具块（单次 set）。
+   * 工具结果不是独立消息，回填目标由 toolCallId 决定（messageId 只用来先缩小查找范围）。
+   */
   handleToolEnd: (
     sessionId: string,
     toolCallId: string,
     execUpdates: Partial<ToolExecution>,
-    messageId: string | undefined,
-    updatedMessage: ChatMessage | null
+    messageId?: string
   ) => void
   /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
   finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
@@ -394,6 +393,24 @@ const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
 
 export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeType: string }> =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.images || EMPTY_IMAGES : EMPTY_IMAGES
+
+/**
+ * 当前流式是否已经产出了可见内容（正文 / 思考 / 工具调用 / 图片）。
+ *
+ * 用来决定「渲染一张流式占位卡」还是「只显示等待动画」：刚发出请求、首 token
+ * 未到时占位卡里什么都没有，画出来就是一张空卡。
+ */
+export const selectHasLiveStreamContent = (s: ChatState): boolean => {
+  const st = s.activeSessionId ? s.sessionStreams[s.activeSessionId] : undefined
+  if (!st) return false
+  return !!(
+    st.content ||
+    st.thinking ||
+    st.streamingToolCall ||
+    st.completedStreamingToolCalls.length > 0 ||
+    st.images.length > 0
+  )
+}
 
 export const selectStreamingToolCall = (
   s: ChatState
@@ -864,21 +881,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return { sessionStreams: newStreams }
     }),
 
-  handleStepEnd: (sessionId, stepMessage) =>
+  handleAssistantMessage: (sessionId, message) =>
     set((state) => {
+      const messages = message ? upsertMessage(state.messages, message) : state.messages
       const prev = state.sessionStreams[sessionId]
-      if (!prev) return stepMessage ? { messages: [...state.messages, stepMessage] } : {}
-      // 单次 set：清除流式内容 + 添加 step 消息
-      const updatedStream = { ...prev, content: '', thinking: '', images: [] }
+      if (!prev) return { messages }
+      // 单次 set：清除流式内容与工具占位（正文和工具块都已落进这张卡）+ upsert 卡片
+      const updatedStream = {
+        ...prev,
+        content: '',
+        thinking: '',
+        images: [],
+        streamingToolCall: null,
+        completedStreamingToolCalls: []
+      }
       return {
         sessionStreams: { ...state.sessionStreams, [sessionId]: updatedStream },
-        ...(stepMessage ? { messages: [...state.messages, stepMessage] } : {})
+        messages
       }
     }),
 
-  handleToolStart: (sessionId, exec, toolMessage) =>
+  handleToolStart: (sessionId, exec) =>
     set((state) => {
-      // 1. 清除流式工具调用状态
+      // 1. 清除流式工具调用状态（工具块已经在卡片里，不需要流式占位）
       const prevStream = state.sessionStreams[sessionId]
       const updatedStream = prevStream
         ? { ...prevStream, streamingToolCall: null, completedStreamingToolCalls: [] }
@@ -887,24 +912,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ? { ...state.sessionStreams, [sessionId]: updatedStream }
         : state.sessionStreams
 
-      // 2. 添加工具执行状态
+      // 2. 记录工具执行状态（工具面板 / 中断处理消费）
       const prevExecs = state.sessionToolExecutions[sessionId] || []
-      const newToolExecs = {
-        ...state.sessionToolExecutions,
-        [sessionId]: [...prevExecs, exec]
-      }
-
-      // 3. 添加 tool_use 消息（如有）
-      const newMessages = toolMessage ? [...state.messages, toolMessage] : state.messages
-
       return {
         sessionStreams: newStreams,
-        sessionToolExecutions: newToolExecs,
-        messages: newMessages
+        sessionToolExecutions: {
+          ...state.sessionToolExecutions,
+          [sessionId]: [...prevExecs, exec]
+        }
       }
     }),
 
-  handleToolEnd: (sessionId, toolCallId, execUpdates, messageId, updatedMessage) =>
+  handleToolEnd: (sessionId, toolCallId, execUpdates, messageId) =>
     set((state) => {
       // 1. 更新工具执行状态
       const prevExecs = state.sessionToolExecutions[sessionId] || []
@@ -912,15 +931,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         t.toolCallId === toolCallId ? { ...t, ...execUpdates } : t
       )
 
-      // 2. 替换消息（如有）
-      const newMessages =
-        messageId && updatedMessage
-          ? state.messages.map((m) => (m.id === messageId ? updatedMessage : m))
-          : state.messages
-
+      // 2. 结果回填进卡片的工具块
       return {
         sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: newExecs },
-        messages: newMessages
+        messages: fillToolResult(state.messages, toolCallId, messageId, {
+          result: execUpdates.result ?? '',
+          isError: execUpdates.status === 'error' || undefined,
+          details: execUpdates.details
+        })
       }
     }),
 
@@ -955,10 +973,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const restActiveInputId = { ...state.sessionActiveInputId }
       delete restActiveInputId[sessionId]
 
-      // 添加最终消息（如有）
+      // 终答卡在 message_end 时已经 upsert 过，这里是兜底（同 id 覆盖，不会重复）
       const newMessages =
         finalMessage && sessionId === state.activeSessionId
-          ? [...state.messages, finalMessage]
+          ? upsertMessage(state.messages, finalMessage)
           : state.messages
 
       return {

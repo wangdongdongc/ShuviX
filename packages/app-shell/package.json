@@ -36,6 +36,7 @@
     "rehype-raw": "*",
     "remark-gfm": "*",
     "uuid": "*",
-    "xlsx": "*"
+    "xlsx": "*",
+    "yaml": "*"
   }
 }

@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: explore
 description: 'Fast read-only codebase exploration: find files by pattern, search code, answer questions about the codebase.'
 shuvix-tools: read, ls, grep, glob

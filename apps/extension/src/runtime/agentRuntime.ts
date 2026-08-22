@@ -108,8 +108,6 @@ export async function buildSessionTools(
   model: string
   caps: ModelCapabilities
   spillSink: SpillSink
-  /** hook 输入的 cwd（虚拟工作目录标签；OPFS/FSA 无真实路径） */
-  cwd: string
 }> {
   const session = await sessionStore.getById(sessionId)
   await settingsStore.loadState()
@@ -137,18 +135,18 @@ export async function buildSessionTools(
     spillSink = createSpillSink(tempHandle)
   }
 
-  // 统一 browser 工具（multiplex，共享 @shuvix/agent-runtime）；无审批门控
+  // 统一 browser 工具（multiplex，共享 @shuvix/agent-runtime）；无询问门控
   const browser = createBrowserTool({
     backend: extensionBrowserBackend,
     abortError: 'TOOL_ABORTED'
   })
 
-  // hook 输入的 cwd（虚拟标签）：项目会话用文件夹名，临时会话用 'scratch'
+  // 工作目录（虚拟标签）：项目会话用文件夹名，临时会话用 'scratch'
   const cwd = projectHandle?.name ?? 'scratch'
   // notebook 基座档案 body（{{shuvix:notebookPath}} 就地替换）
   const systemPrompt = await renderNotebookSystemPrompt(sessionId, cwd, opts.notebookPath)
 
-  // ask（可选）+ 浏览器 + 文件 + 已连接 MCP；全部经 wrapToolsOutput 统一截断/落盘 + Pre/PostToolUse hook
+  // ask（可选）+ 浏览器 + 文件 + 已连接 MCP；全部经 wrapToolsOutput 统一截断/落盘
   const tools = wrapToolsOutput(
     [
       ...(opts.includeAsk
@@ -158,10 +156,9 @@ export async function buildSessionTools(
       ...fileTools,
       ...mcpManager.getAllAgentTools()
     ],
-    spillSink,
-    { sessionId, cwd }
+    spillSink
   )
-  return { tools, systemPrompt, provider, model, caps, spillSink, cwd }
+  return { tools, systemPrompt, provider, model, caps, spillSink }
 }
 
 /** 构造某会话的根运行时（SessionManager.create 注入）—— 统一创建管线 + 'default' 档案 */

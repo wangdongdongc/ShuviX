@@ -12,7 +12,7 @@ import { join } from 'path'
 import { JsonlSessionStorage, Session } from '@earendil-works/pi-agent-core'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
-import type { AssistantTextMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
+import type { AssistantMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   entriesToChatMessages,
   INLINE_TOKENS_CUSTOM_TYPE,
@@ -73,7 +73,7 @@ describe('entriesToChatMessages', () => {
     expect(msgs[0]).toMatchObject({ role: 'user', type: 'text', content: '你好' })
   })
 
-  it('无 toolCall 的 assistant 消息 = 终答，thinking/usage 收进 metadata', async () => {
+  it('assistant 消息投影成一张卡：thinking/text 按原序成为 blocks，usage 记本次调用', async () => {
     await session.appendMessage(
       assistant([
         { type: 'thinking', thinking: '想一下' },
@@ -83,20 +83,16 @@ describe('entriesToChatMessages', () => {
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
-    expect(msgs[0]).toMatchObject({ role: 'assistant', type: 'text', content: '答案是 42' })
-    expect(msgs[0].metadata).toMatchObject({
-      thinking: '想一下',
-      usage: expect.objectContaining({ total: 15 })
-    })
+    expect(msgs[0]).toMatchObject({ role: 'assistant', type: 'message', content: '答案是 42' })
+    expect((msgs[0] as AssistantMessage).blocks).toEqual([
+      { type: 'thinking', text: '想一下' },
+      { type: 'text', text: '答案是 42' }
+    ])
+    expect(msgs[0].metadata).toMatchObject({ usage: expect.objectContaining({ total: 15 }) })
   })
 
-  it('终答的 usage 聚合整轮所有 LLM 调用（中间工具轮不丢），跨轮重置', async () => {
-    // 第一轮：工具轮(20/10/30，缓存读 100) + 终答(10/5/15)
-    await session.appendMessage({
-      role: 'user',
-      content: [{ type: 'text', text: '查一下' }],
-      timestamp: Date.now()
-    } as AgentMessage)
+  it('用量各归各：每条 assistant 只带自己那次调用的账，不跨消息累加', async () => {
+    // 工具轮(20/10/30，缓存读 100) + 终答(10/5/15)
     await session.appendMessage(
       assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse', {
         input: 20,
@@ -116,37 +112,26 @@ describe('entriesToChatMessages', () => {
     } as AgentMessage)
     await session.appendMessage(assistant([{ type: 'text', text: '查到了' }]))
 
-    // 第二轮：单次调用的终答
-    await session.appendMessage({
-      role: 'user',
-      content: [{ type: 'text', text: '继续' }],
-      timestamp: Date.now()
-    } as AgentMessage)
-    await session.appendMessage(assistant([{ type: 'text', text: '好' }]))
-
-    const msgs = await project()
-    const finals = msgs.filter(
-      (m): m is AssistantTextMessage => m.role === 'assistant' && m.type === 'text'
+    const cards = (await project()).filter(
+      (m): m is AssistantMessage => m.role === 'assistant' && m.type === 'message'
     )
-    expect(finals).toHaveLength(2)
-    // 第一轮终答 = 两次调用之和，details 保留逐次明细
-    expect(finals[0].metadata?.usage).toMatchObject({
-      input: 30,
-      output: 15,
+    expect(cards).toHaveLength(2)
+    expect(cards[0].metadata?.usage).toMatchObject({
+      input: 20,
+      output: 10,
       cacheRead: 100,
-      total: 45
+      total: 30
     })
-    expect(finals[0].metadata?.usage?.details).toHaveLength(2)
-    // 第二轮不受第一轮影响
-    expect(finals[1].metadata?.usage).toMatchObject({ input: 10, output: 5, total: 15 })
-    expect(finals[1].metadata?.usage?.details).toHaveLength(1)
+    expect(cards[1].metadata?.usage).toMatchObject({ input: 10, output: 5, total: 15 })
+    // 整轮聚合只存在于 agent_end 事件里，不写进消息元数据
+    expect(cards[1].metadata?.usage?.details).toBeUndefined()
   })
 
-  it('steer 插入的 user 消息不重置本轮 usage 累计', async () => {
+  it('轮中 steer 就是一条普通 user 消息，前后各是一张独立的卡', async () => {
     await session.appendMessage(
       assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse')
     )
-    // steer：轮中插入的用户消息
+    // steer：轮中插入的用户消息（树里与新 prompt 无从区分，UI 也不再区分）
     await session.appendMessage({
       role: 'user',
       content: [{ type: 'text', text: '换个方向' }],
@@ -155,14 +140,15 @@ describe('entriesToChatMessages', () => {
     await session.appendMessage(assistant([{ type: 'text', text: '收到' }]))
 
     const msgs = await project()
-    const final = msgs.find(
-      (m): m is AssistantTextMessage => m.role === 'assistant' && m.type === 'text'
-    )
-    expect(final?.metadata?.usage).toMatchObject({ input: 20, output: 10, total: 30 })
-    expect(final?.metadata?.usage?.details).toHaveLength(2)
+    expect(msgs.map((m) => [m.role, m.type])).toEqual([
+      ['assistant', 'message'],
+      ['user', 'text'],
+      ['assistant', 'message']
+    ])
+    expect(msgs[1].content).toBe('换个方向')
   })
 
-  it('带 toolCall 的中间轮拆成 step_thinking / step_text / tool_use', async () => {
+  it('一条 entry = 一条消息：thinking/text/toolCall 同处一卡，id 就是 entry id', async () => {
     await session.appendMessage(
       assistant(
         [
@@ -174,16 +160,58 @@ describe('entriesToChatMessages', () => {
       )
     )
 
+    const entryId = (await session.getLeafId()) as string
     const msgs = await project()
-    expect(msgs.map((m) => m.type)).toEqual(['step_thinking', 'step_text', 'tool_use'])
-    // tool_use 的 id 必须是 toolCallId —— 工具事件靠它做 messageId
-    expect(msgs[2].id).toBe('call-1')
-    expect(msgs[2].metadata).toMatchObject({ toolName: 'read', args: { path: 'a.ts' } })
-    // 结果未回填时 content 为空（UI 据此显示「执行中」）
-    expect(msgs[2].content).toBe('')
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].id).toBe(entryId)
+    const card = msgs[0] as AssistantMessage
+    expect(card.blocks.map((b) => b.type)).toEqual(['thinking', 'text', 'tool'])
+    expect(card.blocks[2]).toMatchObject({
+      toolCallId: 'call-1',
+      toolName: 'read',
+      args: { path: 'a.ts' }
+    })
+    // 结果未回填 = 仍在执行（UI 据此显示「执行中」）
+    expect((card.blocks[2] as { result?: string }).result).toBeUndefined()
   })
 
-  it('toolResult 回填到同 toolCallId 的 tool_use 上，不产生独立气泡', async () => {
+  it('只有空白的 thinking 不产出思考块', async () => {
+    // 实测模型会吐出整块只有一个换行的 thinking，渲染出来是一段空的可点区域
+    await session.appendMessage(
+      assistant([
+        { type: 'thinking', thinking: '\n' },
+        { type: 'text', text: '答案是 42' }
+      ])
+    )
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect((msgs[0] as AssistantMessage).blocks.map((b) => b.type)).toEqual(['text'])
+  })
+
+  it('空白 thinking 段被剔除，同消息里的有效思考照常保留', async () => {
+    await session.appendMessage(
+      assistant(
+        [
+          { type: 'thinking', thinking: '  \n ' },
+          { type: 'thinking', thinking: '先查文件' },
+          { type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }
+        ],
+        'toolUse'
+      )
+    )
+
+    const card = (await project())[0] as AssistantMessage
+    expect(card.blocks.map((b) => b.type)).toEqual(['thinking', 'tool'])
+    expect((card.blocks[0] as { text: string }).text).toBe('先查文件')
+  })
+
+  it('什么都没产出的 assistant（首 token 前被中止）不留空卡', async () => {
+    await session.appendMessage(assistant([], 'aborted'))
+    expect(await project()).toHaveLength(0)
+  })
+
+  it('toolResult 回填到同 toolCallId 的工具块上，不产生独立消息', async () => {
     await session.appendMessage(
       assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse')
     )
@@ -198,7 +226,17 @@ describe('entriesToChatMessages', () => {
 
     const msgs = await project()
     expect(msgs).toHaveLength(1)
-    expect(msgs[0]).toMatchObject({ type: 'tool_use', content: '文件内容' })
+    expect((msgs[0] as AssistantMessage).blocks).toEqual([
+      {
+        type: 'tool',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        args: {},
+        result: '文件内容',
+        isError: undefined,
+        details: undefined
+      }
+    ])
   })
 
   it('stopReason=error 塌成 error_event', async () => {
@@ -231,8 +269,8 @@ describe('entriesToChatMessages', () => {
     })
   })
 
-  it('display=false 的 custom_message（hook 上下文）不进 UI', async () => {
-    await session.appendCustomMessageEntry('hook', '<system-reminder>x</system-reminder>', false)
+  it('display=false 的 custom_message（隐藏上下文）不进 UI', async () => {
+    await session.appendCustomMessageEntry('context', '<system-reminder>x</system-reminder>', false)
     expect(await project()).toHaveLength(0)
   })
 

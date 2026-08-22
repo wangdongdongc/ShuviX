@@ -50,7 +50,7 @@ export interface InputAreaProps {
  * 输入区域 — 消息输入框 + 发送/停止按钮
  * 支持 Shift+Enter 换行，Enter 发送
  *
- * 有待处理输入请求（审批/选择/SSH）时，本输入框同时就是「其它」反馈入口：
+ * 有待处理输入请求（询问/选择/SSH）时，本输入框同时就是「其它」反馈入口：
  * 卡片顶部长出 PendingInputsPanel，描边转语义色，回车/发送投递 `kind: 'other'` 给选中的那条请求
  * （后端工具收到 other 时不执行副作用，把文本作为 tool result 返回 AI），而不是发普通消息或 steer。
  */
@@ -78,7 +78,7 @@ export function InputArea({
   const activePendingInput = useChatStore(selectActivePendingInput)
   const pendingTone: 'warning' | 'accent' | null = !activePendingInput
     ? null
-    : activePendingInput.kind === 'approval'
+    : activePendingInput.kind === 'ask'
       ? 'warning'
       : 'accent'
   // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具等）
@@ -400,6 +400,11 @@ export function InputArea({
       return
     }
 
+    // 没选中模型不发。守卫必须落在这里而不是只挂在按钮的 disabled 上 ——
+    // 回车走的是 handleKeyDown → handleSend，根本不经过按钮，
+    // 否则会出现「按钮灰着、回车照发」（Agent 被建起来并落下一轮消息）。
+    if (!activeModel) return
+
     const rawText = inputText.trim()
     const images = pendingImages
 
@@ -453,9 +458,10 @@ export function InputArea({
     if (!activeSessionId) return
     const sid = activeSessionId
     const store = useChatStore.getState()
-    // 后端 abort 会持久化已生成的部分内容并返回已保存的消息
-    const result = await getSessionChannelApi().agent.abort(sid)
-    store.finishStreaming(sid, result.savedMessage ?? undefined)
+    // 已生成的部分内容由 harness 自己落成 entry（stopReason='aborted'），
+    // 经 assistant_message / agent_end 广播回来 —— 这里只收流式态
+    await getSessionChannelApi().agent.abort(sid)
+    store.finishStreaming(sid)
   }
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */

@@ -27,7 +27,8 @@ import type {
   ChatMessage,
   RuntimeHttpLog,
   RuntimeLogger,
-  ToolResultTransform
+  ToolResultTransform,
+  ToolResultTransformInput
 } from '../types'
 
 export interface HarnessEventDeps {
@@ -36,8 +37,6 @@ export interface HarnessEventDeps {
   getModelId: () => string
   /** 工具结果广播前的瘦身（图片 → 提示文本等）。harness 侧只影响广播，不影响落盘。 */
   transformToolResult: ToolResultTransform
-  /** batch 预展示阶段是否跳过该工具（需用户交互的工具返回 true） */
-  shouldDeferToolDisplay: (toolName: string, args: Record<string, unknown>) => boolean
   /**
    * user 消息落盘后是否广播 user_message（默认 true）。
    * 派生 agent 关掉：面板经 sub_session_register 已展示 prompt 卡片，
@@ -48,11 +47,14 @@ export interface HarnessEventDeps {
 
 export interface HarnessEventState {
   streamBuffer: { content: string; thinking: string }
-  turnCounter: number
   pendingLogIds: string[]
-  /** 已在 batch 阶段预广播过 tool_start 的 toolCallId */
-  preEmittedToolCalls: Set<string>
   generatingToolCall: { name: string; argsJson: string } | null
+  /**
+   * 最近一条已广播的 assistant 卡片 id（= entry id）。
+   * 工具事件带上它，前端就知道该把结果回填进哪张卡的哪个块 ——
+   * message_end 必定早于它自己那批工具事件，所以这里总是最新的那张。
+   */
+  assistantMessageId: string | null
 }
 
 export interface HarnessEventContext {
@@ -66,10 +68,9 @@ export interface HarnessEventContext {
 export function createHarnessEventState(): HarnessEventState {
   return {
     streamBuffer: { content: '', thinking: '' },
-    turnCounter: 0,
     pendingLogIds: [],
-    preEmittedToolCalls: new Set(),
-    generatingToolCall: null
+    generatingToolCall: null,
+    assistantMessageId: null
   }
 }
 
@@ -197,59 +198,35 @@ async function handleMessageEnd(
     ? entriesToChatMessages([entry], ctx.sessionId, ctx.deps.getModelId())
     : []
 
-  // 中间轮（含 toolCall）投影出的 step_* 逐条广播；tool_use 由工具事件负责，此处跳过
-  for (const m of projected) {
-    if (m.type === 'step_text' || m.type === 'step_thinking') {
-      ctx.broadcast({
-        type: 'step_end',
-        sessionId: ctx.sessionId,
-        messageId: m.id,
-        message: JSON.stringify(m)
-      })
-    }
+  // 这条 assistant entry 投影出的整张卡立刻广播（含最后那次终答）——
+  // 卡里的工具块此时还没有结果，随后的 tool_end 按 toolCallId 回填。
+  // 顺序上先于下面的预展示工具事件，前端拿到 tool_start 时卡片必定已存在。
+  const card = projected.find((m) => m.role === 'assistant' && m.type === 'message')
+  ctx.state.assistantMessageId = card?.id ?? null
+  if (card) {
+    ctx.broadcast({
+      type: 'assistant_message',
+      sessionId: ctx.sessionId,
+      messageId: card.id,
+      message: JSON.stringify(card)
+    })
   }
 
   ctx.state.streamBuffer = { content: '', thinking: '' }
   ctx.broadcast({ type: 'text_end', sessionId: ctx.sessionId })
-
-  // 并行 batch 预展示：≥2 个工具调用时提前铺出卡片（跳过需用户交互的工具）
-  const toolCalls = msg.content.filter(
-    (c): c is Extract<typeof c, { type: 'toolCall' }> => c.type === 'toolCall'
-  )
-  if (toolCalls.length >= 2) {
-    for (const tc of toolCalls) {
-      const args = (tc.arguments || {}) as Record<string, unknown>
-      if (ctx.deps.shouldDeferToolDisplay(tc.name, args)) continue
-      ctx.broadcast({
-        type: 'tool_start',
-        sessionId: ctx.sessionId,
-        toolCallId: tc.id,
-        toolName: tc.name,
-        toolArgs: args,
-        messageId: tc.id,
-        turnIndex: ctx.state.turnCounter
-      })
-      ctx.state.preEmittedToolCalls.add(tc.id)
-    }
-  }
 }
 
 function handleToolStart(
   ctx: HarnessEventContext,
   event: Extract<AgentHarnessEvent, { type: 'tool_execution_start' }>
 ): void {
-  if (ctx.state.preEmittedToolCalls.has(event.toolCallId)) {
-    ctx.state.preEmittedToolCalls.delete(event.toolCallId)
-    return
-  }
   ctx.broadcast({
     type: 'tool_start',
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
     toolArgs: event.args as Record<string, unknown> | undefined,
-    messageId: event.toolCallId,
-    turnIndex: ctx.state.turnCounter
+    messageId: ctx.state.assistantMessageId ?? undefined
   })
 }
 
@@ -263,19 +240,29 @@ function handleToolEnd(
         details?: import('../types').ToolResultDetails
       }
     | undefined
-  const rawContent = result?.content ?? []
-  const broadcastContent =
-    rawContent.map((c) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n') || ''
+  const isError = event.isError || false
+  // 广播前过一遍宿主注入的瘦身管线（桌面把 ImageContent 换成占位文本）——
+  // 否则 read 一张图会把整段 base64 经 IPC 灌进渲染进程再铺到工具卡片上。
+  // 只影响广播：entry 树里存的仍是发给模型的原始 toolResult。
+  // 宿主不注入时 defaultToolResultTransform 是 passthrough，与改动前逐字节相同。
+  const transformed = ctx.deps.transformToolResult({
+    toolName: event.toolName,
+    toolCallId: event.toolCallId,
+    sessionId: ctx.sessionId,
+    isError,
+    content: (result?.content ?? []) as ToolResultTransformInput['content'],
+    details: result?.details
+  })
 
   ctx.broadcast({
     type: 'tool_end',
     sessionId: ctx.sessionId,
     toolCallId: event.toolCallId,
     toolName: event.toolName,
-    result: broadcastContent,
-    isError: event.isError || false,
-    messageId: event.toolCallId,
-    details: result?.details
+    result: transformed.content,
+    isError,
+    messageId: ctx.state.assistantMessageId ?? undefined,
+    details: transformed.details
   })
 }
 
@@ -284,7 +271,6 @@ async function handleAgentEnd(
   event: Extract<AgentHarnessEvent, { type: 'agent_end' }>
 ): Promise<void> {
   ctx.deps.logger.info(`结束 session=${ctx.sessionId}`)
-  ctx.state.preEmittedToolCalls.clear()
 
   // 汇总本次运行（含所有中间工具轮，跨 steer）的 token 用量
   const details: RoundUsageDetail[] = []
@@ -299,15 +285,12 @@ async function handleAgentEnd(
   const projected = entry
     ? entriesToChatMessages([entry], ctx.sessionId, ctx.deps.getModelId())
     : []
+  // 终答卡在 message_end 时已经广播过（带它自己那次调用的用量）；这里再带一份
+  // 只为两件事：前端 TTS 朗读的素材，以及万一 message_end 丢了的兜底 upsert。
   const finalMessage = projected.find(
-    (m): m is ChatMessage & { role: 'assistant'; type: 'text' } =>
-      m.role === 'assistant' && m.type === 'text'
+    (m): m is ChatMessage & { role: 'assistant'; type: 'message' } =>
+      m.role === 'assistant' && m.type === 'message'
   )
-  // 单 entry 投影只带得上末次调用的用量，这里换成整轮聚合 ——
-  // 与重载路径（全量投影按轮累计）看到的数字一致。
-  if (finalMessage && usage) {
-    finalMessage.metadata = { ...finalMessage.metadata, usage }
-  }
 
   ctx.broadcast({
     type: 'agent_end',
@@ -326,13 +309,9 @@ export async function forwardHarnessEvent(
     case 'agent_start':
       ctx.deps.logger.info(`开始 session=${ctx.sessionId}`)
       ctx.state.streamBuffer = { content: '', thinking: '' }
-      ctx.state.turnCounter = 0
-      ctx.state.preEmittedToolCalls.clear()
+      ctx.state.assistantMessageId = null
       ctx.state.generatingToolCall = null
       ctx.broadcast({ type: 'agent_start', sessionId: ctx.sessionId })
-      break
-    case 'turn_start':
-      ctx.state.turnCounter += 1
       break
     case 'message_update':
       handleMessageUpdate(ctx, event)

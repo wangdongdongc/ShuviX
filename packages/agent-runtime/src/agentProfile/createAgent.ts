@@ -2,7 +2,7 @@
  * 统一 agent 创建管线 —— 全仓唯一的 HarnessSession 构造入口。
  *
  * `createAgentFactory(host)` 接收宿主一次性注入的端适配面（工具解析/变量表/模型构建/
- * 会话树/事件汇/hooks/指令解析…），返回 `createAgent(params)`：以 agent 档案（md 基座，
+ * 会话树/事件汇/指令解析…），返回 `createAgent(params)`：以 agent 档案（md 基座，
  * 内嵌 {{shuvix:*}} 占位符）+ 运行时选择（模型/思考档位/会话工具 overlay）派生出
  * HarnessSessionDeps 的全部参数。root（会话根 agent）与 spawned（派生 agent）的差异
  * 集中在下面一张决策表里，不散落 if-else：
@@ -16,15 +16,12 @@
  * | eventSink                | host.eventSink              | 包一层 hasUserInputCapability=false |
  * | autoCompact              | true                        | false                          |
  * | broadcastUserMessages    | 缺省(true)                  | false(面板经 sub_session_* 展示)|
- * | shouldDeferToolDisplay   | host.shouldDeferToolDisplay | () => true                     |
- * | hooks/onPromptAccepted/transformToolResult | host 注入 | 不注入(现状)                   |
+ * | onPromptAccepted/transformToolResult | host 注入          | 不注入(现状)                   |
  * | onPayload 日志归属        | 自身 sessionId              | spawn.rootSessionId            |
- * | getCwd                   | () => cwd                   | 缺省('')                       |
  */
 import { InMemorySessionStorage, Session } from '@earendil-works/pi-agent-core'
 import type { AgentTool, ExecutionEnv } from '@earendil-works/pi-agent-core'
 import type { Api, Model } from '@earendil-works/pi-ai'
-import type { HookFirer } from '@shuvix/chat-protocol/types/hook'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { HarnessSession } from '../harness/harnessSession'
@@ -43,7 +40,7 @@ import {
 /** 工具解析请求 —— 宿主 resolveTools 的唯一入参（合并旧 buildTools 与 buildSubAgentTools 两条路径） */
 export interface ToolResolveRequest {
   kind: AgentKind
-  /** 审批/项目配置/输出落盘的归属会话（root=自身；spawned=所属根会话） */
+  /** 询问/项目配置/输出落盘的归属会话（root=自身；spawned=所属根会话） */
   rootSessionId: string
   /** 本运行时 id（派发工具的 parentSessionId；root=会话 id，spawned=agentId） */
   selfSessionId: string
@@ -58,7 +55,7 @@ export interface ToolResolveRequest {
    * 静态快照会在会话中途 setModel/setThinkingLevel 后陈旧。
    */
   getModelConfig: () => SubAgentModelConfig
-  /** 本次派生身份（仅 spawned）；'Agent' 注入判定 = names 含 'Agent' && (root || spawn.canSpawn) */
+  /** 本次派生身份（仅 spawned）；'agent' 注入判定 = names 含 'agent' && (root || spawn.canSpawn) */
   spawn?: SpawnContext
   /** 工具可达的用户输入通道（root=自身运行时；spawned=经 helpers 路由到根会话） */
   requestUserInput?: (req: InputRequest) => Promise<InputResponse>
@@ -88,14 +85,8 @@ export interface AgentHostAdapter {
   /** 仅 root（桌面 NodeExecutionEnv）；缺省与 spawned 恒为 stub（工具自带执行环境） */
   createExecutionEnv?: (cwd: string) => ExecutionEnv
   eventSink: RuntimeEventSink
-  /** 仅 root（桌面按会话读 autoApprove；扩展 ask 判定）；缺省 () => false */
-  shouldDeferToolDisplay?: (
-    sessionId: string
-  ) => (toolName: string, args: Record<string, unknown>) => boolean
   /** 仅 root 应用（派生 agent 维持默认 passthrough，现状） */
   transformToolResult?: ToolResultTransform
-  /** 仅 root 注入（派生 agent 无 hooks，现状） */
-  hooks?: HookFirer
   httpLog?: {
     logRequest: (params: {
       sessionId: string
@@ -187,7 +178,7 @@ const fenceInstructionFile = (filename: string, content: string): string =>
 
 const fenceProjectPrompt = (text: string): string => `<project_prompt>\n${text}\n</project_prompt>`
 
-/** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'Agent' */
+/** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
 const isSessionScopedTool = (name: string): boolean =>
   name.startsWith('mcp:') || name.startsWith('skill:')
 
@@ -315,15 +306,12 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
           ? host.eventSink
           : {
               broadcast: (event) => host.eventSink.broadcast(event),
-              // 派生 agent 自身无输入面板；审批/询问经 requestUserInput 走根会话
+              // 派生 agent 自身无输入面板；询问/询问经 requestUserInput 走根会话
               hasUserInputCapability: () => false
             },
       autoCompact: kind === 'root',
       broadcastUserMessages: kind === 'root' ? undefined : false,
-      shouldDeferToolDisplay:
-        kind === 'root' ? (host.shouldDeferToolDisplay?.(sessionId) ?? (() => false)) : () => true,
       transformToolResult: kind === 'root' ? host.transformToolResult : undefined,
-      hooks: kind === 'root' ? host.hooks : undefined,
       httpLog,
       onPayload: httpLog
         ? (payload, requestModel) =>
@@ -336,7 +324,6 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
             })
         : undefined,
       logger: host.logger,
-      getCwd: kind === 'root' ? () => cwd : undefined,
       onPromptAccepted: kind === 'root' ? params.onPromptAccepted : undefined
     })
     const rt = runtime

@@ -29,6 +29,17 @@ export function registerSubAgentHandlers(): void {
   )
 
   /** 打开用户 agents 目录（OS 文件管理器） */
+  /** md 原文读写（属性卡 + live-preview 的原文编辑路径；非法拒绝并回传解析器原因） */
+  ipcMain.handle('subAgent:getSource', (_e, params: { name: string; source: 'builtin' | 'user' }) =>
+    agentService.getSource(params.name, params.source)
+  )
+  ipcMain.handle('subAgent:saveSource', (_e, params: { originalName: string; text: string }) =>
+    agentService.saveAgentSource(params.originalName, params.text)
+  )
+  ipcMain.handle('subAgent:createSource', (_e, params: { text: string }) =>
+    agentService.createAgentSource(params.text)
+  )
+
   ipcMain.handle('subAgent:openFolder', async () => {
     await agentService.openUserFolder()
     return { success: true }

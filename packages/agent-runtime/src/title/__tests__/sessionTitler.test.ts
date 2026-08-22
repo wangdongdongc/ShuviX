@@ -150,12 +150,13 @@ describe('SessionTitler — refine 阶段', () => {
     expect(h.generate).toHaveBeenCalledTimes(2)
   })
 
-  it('工具调用等非文本消息不计入上下文门槛', async () => {
+  it('纯工具调用 / 系统提示不计入上下文门槛', async () => {
     const h = await primed(0)
     h.state.messages = [
       { role: 'user', type: 'text', content: '问题' },
-      { role: 'assistant', type: 'tool_use', content: '工具' },
-      { role: 'assistant', type: 'step_thinking', content: '思考' }
+      // 只有工具调用的助手卡：正文为空
+      { role: 'assistant', type: 'message', content: '' },
+      { role: 'system_notify', type: 'error_event', content: '出错了' }
     ]
     await h.titler.refine()
 
@@ -171,7 +172,7 @@ describe('SessionTitler — refine 阶段', () => {
     expect(h.state.title).toBe('我自己起的名字')
   })
 
-  it('quick 未跑过（如 hook deny 了首个 prompt）时不精修', async () => {
+  it('quick 未跑过（首个 prompt 未派发）时不精修', async () => {
     const h = makeHarness({ messages: textMessages(4) })
     await h.titler.refine()
 

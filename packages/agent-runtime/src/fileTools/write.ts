@@ -4,7 +4,7 @@
  */
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { WriteToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import type { FileSystemPort, FileGuards, WriteApprovalHook } from './port'
+import type { FileSystemPort, FileGuards, WriteAskHook } from './port'
 import { capDiffString, generateDiffString, normalizeToLF } from './editDiff'
 
 export interface WriteParams {
@@ -14,21 +14,21 @@ export interface WriteParams {
 }
 
 /**
- * 写文件：仅当文件曾被读取过时校验「读后被改」（新建无需检查）→ 算 diff → 写入前审批 →
+ * 写文件：仅当文件曾被读取过时校验「读后被改」（新建无需检查）→ 算 diff → 写入前询问 →
  * 写入 → 记录读取时间。readPath 交给 port 解释；displayPath（params.path）用于输出文案。
  *
  * 守卫 + 写入 + 记录都在 withFileLock 内完成（不只写入加锁），与并发 edit/write 严格互斥：
  * 避免「锁外 assert 通过 → 他人在锁内写入 → 本次再覆盖」的竞态。
  *
  * diff 与 edit 同款（新建文件即全增行），行尾统一按 LF 比较 —— 否则 CRLF 文件会整篇标成改动。
- * 它同时是审批预览和 details 里的那一份，一次算成，两处共用。
+ * 它同时是询问预览和 details 里的那一份，一次算成，两处共用。
  */
 export async function applyWrite(
   port: FileSystemPort,
   guards: FileGuards,
   readPath: string,
   params: WriteParams,
-  approve?: WriteApprovalHook
+  ask?: WriteAskHook
 ): Promise<AgentToolResult<WriteToolDetails>> {
   return guards.withFileLock(readPath, async () => {
     if (guards.hasReadTime(readPath)) {
@@ -50,15 +50,15 @@ export async function applyWrite(
       generateDiffString(normalizeToLF(oldContent), normalizeToLF(params.content)).diff
     )
 
-    // 写入前审批 —— 同样在锁内，理由见 applyEdit
-    if (approve) {
-      await approve({ path: params.path, diff, isNewFile })
+    // 写入前询问 —— 同样在锁内，理由见 applyEdit
+    if (ask) {
+      await ask({ path: params.path, diff, isNewFile })
 
-      // 审批期间外部改动的兜底（文件锁挡不住本进程之外）：预览基于旧内容，作废重来
+      // 询问期间外部改动的兜底（文件锁挡不住本进程之外）：预览基于旧内容，作废重来
       if (guards.hasReadTime(readPath)) {
         await guards.assertNotModifiedSinceRead(readPath)
       } else {
-        // 没读过的文件（含新建）没有 mtime 基线可比，拿审批前那次 stat 当基线 —— 否则
+        // 没读过的文件（含新建）没有 mtime 基线可比，拿询问前那次 stat 当基线 —— 否则
         // 「新建、整份全增」的预览批下去之后，期间被别人建出来的内容会被静默覆盖。
         const now = await port.stat(readPath)
         const changed = isNewFile
@@ -66,7 +66,7 @@ export async function applyWrite(
           : !now || now.mtimeMs !== st?.mtimeMs || now.size !== st?.size
         if (changed) {
           throw new Error(
-            `${params.path} changed while waiting for approval; re-read it and try again`
+            `${params.path} changed while waiting for your answer; re-read it and try again`
           )
         }
       }

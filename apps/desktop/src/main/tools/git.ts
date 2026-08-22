@@ -3,7 +3,7 @@
  * （isomorphic-git 单后端，与扩展端行为一致）。仅本地操作；桌面注入 node:fs 与
  * 会话 workingDirectory，author 回退读全局 gitconfig。
  *
- * 审批：不随「工作目录内写入需审批」一起收紧（见 makeDesktopResolveDir 的理由），
+ * 询问：不随「工作目录内写入需询问」一起收紧（见 makeDesktopResolveDir 的理由），
  * 改为按 action 精确拦截 —— init / restore / checkout --force / branch -d 要用户点头。
  */
 import * as nodeFs from 'node:fs'
@@ -14,18 +14,18 @@ import {
   buildGitToolDescription,
   buildGitParamsSchema,
   GIT_TOOL_NAME,
-  type GitApprovalReason,
+  type GitAskReason,
   type GitAuthor,
   type GitEnv,
   type GitFsClient
 } from '@shuvix/agent-runtime'
 import { t } from '../i18n'
-import { sessionDao } from '../dao/sessionDao'
 import {
   TOOL_ABORTED,
+  getDesktopSecurityContext,
   resolveProjectConfig,
-  assertReadApproved,
-  assertWriteApproved,
+  assertReadAllowed,
+  assertWriteAllowed,
   isPathWithinWorkspace,
   type ToolContext
 } from '../services/toolContext'
@@ -79,7 +79,7 @@ function createDesktopGitEnv(sessionId: string): GitEnv {
 
 /**
  * "dir" 参数解析：相对工作目录归一；工作目录内直接放行，
- * 外部路径按该 action 的读/写语义走路径审批（拒绝时 throw，文本回流给模型）。
+ * 外部路径按该 action 的读/写语义走路径询问（拒绝时 throw，文本回流给模型）。
  */
 function makeDesktopResolveDir(ctx: ToolContext) {
   return async (
@@ -88,50 +88,42 @@ function makeDesktopResolveDir(ctx: ToolContext) {
   ): Promise<string> => {
     const config = resolveProjectConfig(ctx.sessionId)
     const abs = resolve(config.workingDirectory, requested)
-    // git 豁免「工作目录内写入需审批」那条规则：仓库操作不是单文件写入，套不进 diff 预览，
-    // 而 add/commit 这类高频且可逆的操作逐条弹会把审批淹没。真正该拦的按 action 精确处理
-    // （见 GIT_OPS 的 approval 与下面的 approveOp）。目录外仍按读/写语义走路径审批。
+    // git 豁免「工作目录内写入需询问」那条规则：仓库操作不是单文件写入，套不进 diff 预览，
+    // 而 add/commit 这类高频且可逆的操作逐条弹会把询问淹没。真正该拦的按 action 精确处理
+    // （见 GIT_OPS 的 askReason 与下面的 askOp）。目录外仍按读/写语义走路径询问。
     if (isPathWithinWorkspace(abs, config.workingDirectory)) return abs
-    const guard = opts.mutates ? assertWriteApproved : assertReadApproved
+    const guard = opts.mutates ? assertWriteAllowed : assertReadAllowed
     await guard(ctx, config, opts.toolCallId, GIT_TOOL_NAME, abs, requested)
     return abs
   }
 }
 
 /**
- * 逐操作审批 —— 只有 GIT_OPS 声明了 approval 的调用会走到这里
- * （init 建仓 / restore 与 checkout --force 吞改动 / branch -d 删分支）。
- * 与 bash 一致：会话级「免审批」是唯一豁免；无前端通道时放行（保持无 UI 环境可用）。
+ * 逐操作安全评估 —— 每个 git 工具操作都上报（gitAction/force/delete 是客体属性，
+ * 哪些组合要询问写在内置 git-safety 策略的 match 里；autoAllow 走 consent 层）。
+ * i18n 询问文案留在桌面 PEP（description 注入，破坏性操作才有原因码）。
  */
-function makeDesktopApproveOp(ctx: ToolContext) {
+function makeDesktopAskOp(ctx: ToolContext) {
   return async (info: {
     action: string
-    reason: GitApprovalReason
+    reason: GitAskReason | null
+    force: boolean
+    delete: boolean
     command: string
     toolCallId: string
   }): Promise<void> => {
-    if (!ctx.requestUserInput) return
-    if (sessionDao.pickSettings(ctx.sessionId, ['autoApprove'])?.autoApprove) return
-
-    const response = await ctx.requestUserInput({
-      id: info.toolCallId,
-      kind: 'approval',
-      toolName: GIT_TOOL_NAME,
-      command: info.command,
-      description: t(`tool.gitApproval.${info.reason}`),
-      createdAt: Date.now()
-    })
-    if (response.kind === 'cancel') throw new Error(TOOL_ABORTED)
-    if (response.kind === 'other') {
-      throw new Error(
-        `User declined ${info.command} and provided feedback instead: ${response.text}`
-      )
-    }
-    if (response.kind !== 'approval' || !response.approved) {
-      throw new Error(
-        (response.kind === 'approval' && response.reason) || `User denied ${info.command}`
-      )
-    }
+    await getDesktopSecurityContext(ctx).enforceGitOp(
+      { gitAction: info.action, command: info.command, force: info.force, delete: info.delete },
+      {
+        toolCallId: info.toolCallId,
+        toolName: GIT_TOOL_NAME,
+        description: info.reason ? t(`tool.gitAsk.${info.reason}`) : undefined,
+        abortError: TOOL_ABORTED,
+        // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道，
+        // 无前端时 harness 层已即时 cancel；此分支只防御未来的无通道调用方）
+        missingChannel: 'deny'
+      }
+    )
   }
 }
 
@@ -147,7 +139,7 @@ registerBuiltinTool({
       // 每次 execute 取最新 workingDirectory（会话配置可变）
       getEnv: () => createDesktopGitEnv(ctx.sessionId),
       resolveDir: makeDesktopResolveDir(ctx),
-      approveOp: makeDesktopApproveOp(ctx),
+      askOp: makeDesktopAskOp(ctx),
       abortError: TOOL_ABORTED,
       label: t('tool.gitLabel')
     }),

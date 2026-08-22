@@ -689,7 +689,7 @@ function ProviderDetail({
             <div
               className={`px-4 py-2 text-[11px] leading-relaxed ${
                 syncMessage.isError
-                  ? 'bg-red-500/5 text-danger'
+                  ? 'bg-red-500/5 text-error'
                   : 'bg-emerald-500/5 text-emerald-500'
               }`}
             >
@@ -766,7 +766,7 @@ function ProviderDetail({
                       {providerCrud && (
                         <button
                           onClick={() => onDeleteModel(m.id)}
-                          className="p-1 rounded text-text-tertiary hover:text-danger transition-colors"
+                          className="p-1 rounded text-text-tertiary hover:text-error transition-colors"
                           title={t('settings.deleteModel')}
                         >
                           <X size={12} />

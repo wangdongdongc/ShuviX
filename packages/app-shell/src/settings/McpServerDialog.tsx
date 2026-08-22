@@ -315,7 +315,7 @@ export function McpServerDialog({
                   {!isBuiltin && (
                     <button
                       onClick={() => removeEnvPair(idx)}
-                      className="p-1 rounded text-text-tertiary hover:text-danger transition-colors"
+                      className="p-1 rounded text-text-tertiary hover:text-error transition-colors"
                       title={t('common.delete')}
                     >
                       <X size={12} />

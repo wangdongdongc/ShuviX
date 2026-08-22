@@ -12,7 +12,7 @@ import { useFocusDim } from '../sidebar/useFocusDim'
  *   - 桌面把 pin/悬浮/浏览器/侧栏开关等窗口相关簇作为 rightActions 传入；
  *   - 扩展只注入「折叠会话列表」一个按钮。
  * 会话设置弹窗由宿主自渲染（桌面 SessionConfigDialog，扩展自有），本组件只发 onOpenSessionConfig。
- * （Files 面板入口在正文右上角的会话工具栏，不在顶栏 —— 见 ChatBody sessionToolbar 插槽。）
+ * （Files 面板入口在状态横幅右侧的会话工具栏，不在顶栏 —— 见 StatusBanner 的 trailing 插槽。）
  */
 export interface ChatHeaderCaps {
   /** Electron 无边框窗口拖拽区（加 titlebar-drag / titlebar-no-drag 类）。扩展/web 置 false */

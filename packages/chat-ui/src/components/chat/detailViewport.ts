@@ -19,10 +19,10 @@ export const DETAIL_MAX_H = '20rem'
 export const CODE_MAX_H = '15rem'
 
 /**
- * 审批卡片里的 diff 预览限高 —— 比展开态的 diff 更矮：
+ * 询问卡片里的 diff 预览限高 —— 比展开态的 diff 更矮：
  * 这块下面还压着操作按钮，卡片本身又贴着输入框，太高会把「允许 / 拒绝」顶出视野。
  */
-export const APPROVAL_PREVIEW_MAX_H = '14rem'
+export const ASK_PREVIEW_MAX_H = '14rem'
 
 const PRE_BASE =
   'text-[11px] text-text-secondary bg-bg-tertiary/50 rounded px-2 py-1 whitespace-pre-wrap break-words overflow-y-auto overscroll-contain thin-scrollbar'

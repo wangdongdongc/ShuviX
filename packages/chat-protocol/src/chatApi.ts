@@ -11,8 +11,9 @@
  */
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
+import type { ShuvixMdValidation } from './shuvixMdContract'
 import type { FileReadResult } from './types/filePreview'
-import type { ChatMessage, MessageMetadata } from './types/chatMessage'
+import type { ChatMessage } from './types/chatMessage'
 import type {
   ProviderInfo,
   ProviderModelInfo,
@@ -48,7 +49,7 @@ export interface SessionModelMetadata {
 }
 
 export interface SessionSettings {
-  autoApprove?: boolean
+  autoAllow?: boolean
   allowList?: string[]
   /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
   instructionFile?: string | null
@@ -350,32 +351,14 @@ export interface SessionUpdateProjectParams {
   projectId: string | null
 }
 
-export interface SessionUpdateAutoApproveParams {
+export interface SessionUpdateAutoAllowParams {
   id: string
-  autoApprove: boolean
+  autoAllow: boolean
 }
 
 export interface SessionAllowListRemoveParams {
   id: string
   entry: string
-}
-
-export type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'system_notify'
-export type MessageType =
-  | 'text'
-  | 'tool_use'
-  | 'step_text'
-  | 'step_thinking'
-  | 'steer'
-  | 'error_event'
-
-export interface MessageAddParams {
-  sessionId: string
-  role: MessageRole
-  type?: MessageType
-  content: string
-  metadata?: MessageMetadata | null
-  model?: string
 }
 
 export interface SettingsSetParams {
@@ -489,7 +472,7 @@ export interface SessionChannelApi {
     /** 中断子会话：软停止当前生成、保留已产出，子会话以「已完成」收尾。子代理基础能力，各端必须实现。 */
     subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
-    abort: (sessionId: string) => Promise<{ success: boolean; savedMessage?: ChatMessage }>
+    abort: (sessionId: string) => Promise<{ success: boolean }>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -528,6 +511,10 @@ export interface SessionChannelApi {
      *  仅监听「当前打开的文件」，不监听整个工作目录。无文件系统的渠道端可 no-op。 */
     watch: (params: { sessionId: string; path: string }) => Promise<void>
     unwatch: (params: { sessionId: string; path: string }) => Promise<void>
+  }
+  /** shuvix 契约 md 的解析器级校验（frontmatter 属性卡消费；两端实现共用 agent-runtime） */
+  shuvixMd: {
+    validate: (params: { type: string; text: string; name?: string }) => Promise<ShuvixMdValidation>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {
@@ -614,8 +601,8 @@ export interface HostApi {
     create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-    updateAutoApprove: (params: SessionUpdateAutoApproveParams) => Promise<{ success: boolean }>
-    /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条审批） */
+    updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
+    /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
     removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
     generateTitle: (params: {
       sessionId: string

@@ -108,12 +108,12 @@ export interface EditDiffResult {
   firstChangedLine: number | undefined
 }
 
-/** 传输上限：diff 既要进审批请求（IPC）又要落 JSONL，整份大文件写入不能原样带走 */
+/** 传输上限：diff 既要进询问请求（IPC）又要落 JSONL，整份大文件写入不能原样带走 */
 const DIFF_MAX_LINES = 1200
 const DIFF_MAX_CHARS = 256 * 1024
 
 /**
- * 给 diff 封顶 —— **只在算出后调用一次**，截断结果同时用于审批预览和 tool result，
+ * 给 diff 封顶 —— **只在算出后调用一次**，截断结果同时用于询问预览和 tool result，
  * 两侧因此仍是同一个字符串（不能预览截断、落库不截断，那就分歧了）。
  *
  * 截断标记不匹配 DiffViewer 的行号/省略号文法，会走它的兜底分支按整行原样渲染。

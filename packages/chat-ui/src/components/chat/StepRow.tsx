@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 const ICON_SLOT = 'w-3.5 flex-shrink-0 flex items-center justify-center'
 
 interface StepRowProps {
-  /** 状态图标 — 传入时顶替类型图标（运行中 spinner、出错标记、待审批等） */
+  /** 状态图标 — 传入时顶替类型图标（运行中 spinner、出错标记、待询问等） */
   lead?: ReactNode
   /** 类型图标 */
   icon?: ReactNode

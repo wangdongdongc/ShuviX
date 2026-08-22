@@ -2,7 +2,7 @@
  * 隔离实例生命周期 —— e2e 的唯一启动入口。
  *
  * 隔离设计（不干扰用户自己正在运行的 ShuviX）：
- *   - fake HOME（os.tmpdir 下一次性目录）→ ~/.shuvix/*（agents/skills/hooks）全部隔离；
+ *   - fake HOME（os.tmpdir 下一次性目录）→ ~/.shuvix/*（agents/skills/policies）全部隔离；
  *   - SHUVIX_VERIFY_USERDATA → userData（SQLite/JSONL 会话树）隔离（bootstrap.cjs 重定向）；
  *   - 独立 CDP 端口（默认 9223，可用 SHUVIX_E2E_PORT 覆盖）；启动前探测端口占用即报错。
  *

@@ -1,5 +1,5 @@
 /**
- * write 工具集成测试 —— 真实临时文件；mock 审批/审批/i18n/logger（P2 抽共享前补齐基线）
+ * write 工具集成测试 —— 真实临时文件；mock 询问/询问/i18n/logger（P2 抽共享前补齐基线）
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, utimesSync } from 'node:fs'
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 const TEST_DIR = join(tmpdir(), 'shuvix-write-test-' + Date.now())
 const SESSION_ID = 'test-session'
 
-// mock toolContext（审批 no-op；与 read.test 一致，覆盖 BaseTool 所需导出）
+// mock toolContext（询问 no-op；与 read.test 一致，覆盖 BaseTool 所需导出）
 vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: () => ({ workingDirectory: TEST_DIR, referenceDirs: [] }),
   isPathWithinWorkspace: (absolutePath: string, workingDirectory: string) => {
@@ -18,16 +18,15 @@ vi.mock('../../services/toolContext', () => ({
     return r === base || r.startsWith(base + sep)
   },
   isPathWithinReferenceDirs: () => false,
-  assertReadApproved: () => {},
-  assertWriteApproved: () => {},
-  // 共享 createFileToolSuite 经此 policy 走 assertPathApproved；测试里恒放行（审批 no-op）
-  makeDesktopApprovalPolicy: () => ({
-    isAllowedWithoutPrompt: () => true,
-    isAutoApprove: () => true,
-    isInAllowList: () => false,
-    buildApprovalCommand: () => '',
-    isDirectory: () => false,
-    persistAllow: () => {}
+  assertReadAllowed: () => {},
+  assertWriteAllowed: () => {},
+  // 共享 createFileToolSuite 经此 security 门面走统一评估；测试里恒放行（询问 no-op）
+  getDesktopSecurityContext: () => ({
+    evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
+    evaluateReadOnly: () => true,
+    enforcePath: async () => {},
+    enforceCommand: async () => ({ status: 'allowed' }),
+    enforceGitOp: async () => {}
   }),
   TOOL_ABORTED: 'Aborted'
 }))

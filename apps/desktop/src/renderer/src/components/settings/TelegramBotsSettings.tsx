@@ -207,7 +207,7 @@ function BotAllowedUsers({
               {id}
               <button
                 onClick={() => void handleRemoveUser(id)}
-                className="text-text-tertiary hover:text-danger"
+                className="text-text-tertiary hover:text-error"
               >
                 <X size={9} />
               </button>
@@ -286,7 +286,7 @@ function AddBotDialog({
             autoFocus
             width={400}
           />
-          {error && <p className="text-[11px] text-danger">{error}</p>}
+          {error && <p className="text-[11px] text-error">{error}</p>}
         </div>
 
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary shrink-0">

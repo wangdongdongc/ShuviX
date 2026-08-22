@@ -24,7 +24,7 @@ export function getDataDir(): string {
  * 会话转写目录：<userData>/data/sessions/，每会话一个 `<sessionId>.jsonl`。
  *
  * 与 shuvix.db 同级 —— 二者共同构成「本地结构化数据」，备份时一起带走。
- * 不放 ~/.shuvix/：那里是用户自己编写的配置（skills / agents / hooks / widgets），
+ * 不放 ~/.shuvix/：那里是用户自己编写的配置（skills / agents / policies / widgets），
  * 会话转写是运行时产物。
  */
 export function getSessionsDir(): string {
@@ -69,6 +69,11 @@ export function getBuiltinSkillsDir(): string {
 /** 全局 Agents 目录：~/.shuvix/agents/（不自动创建，由 agentService 管理；内置 agent 已硬编码进 @shuvix/agent-runtime） */
 export function getDefaultAgentsDir(): string {
   return join(homedir(), '.shuvix', 'agents')
+}
+
+/** 全局安全策略目录：~/.shuvix/policies/（不自动创建，由 policyService 管理；内置策略硬编码进 @shuvix/agent-runtime） */
+export function getDefaultPoliciesDir(): string {
+  return join(homedir(), '.shuvix', 'policies')
 }
 
 /** Wiki 根目录：~/.shuvix/wikis/（不自动创建，由 Wiki Curator 子代理按政策管理） */

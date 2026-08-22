@@ -14,11 +14,14 @@ import '@shuvix/atomic-editor/styles.css'
 import './atomic-panel.css'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
-import { useChatStore, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import { createRoot } from 'react-dom/client'
+import { useChatStore, getChatApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { useResolveMediaUrl, type MediaSource } from '../files/mediaUrl'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
+import { frontmatterCard, type FrontmatterFieldMount } from './frontmatterCard'
+import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
 import { NotebookMinimap } from './NotebookMinimap'
 import { parseHeadings, type NotebookHeading } from './notebookHeadings'
 import {
@@ -93,6 +96,12 @@ export interface LivePreviewEditorProps {
    * 编辑右键菜单与 minimap 跳转聚焦。双链 [[file]] / 内嵌 ![[image]] 仍生效。
    */
   readOnly?: boolean
+  /**
+   * 排版模式。`notebook`（缺省）= 写作页：侧边距 + 700px 限宽居中 + 标题角标 + minimap；
+   * `fill` = 嵌入模式：铺满容器、去角标与 minimap，供设置页这类**自带边距**的宿主使用
+   * （两套边距叠加会把正文挤成窄条，且 minimap 会浮在铺满的正文上）。
+   */
+  layout?: 'notebook' | 'fill'
   /** 内容是否已下滑（非顶端）—— 父组件据此给标题栏加柔和阴影 */
   onScrolledChange?: (scrolled: boolean) => void
   /** 保存状态变化（用于标题栏「保存中…」指示） */
@@ -124,7 +133,8 @@ export function LivePreviewEditor({
   handleRef,
   fileContext,
   caps,
-  readOnly = false
+  readOnly = false,
+  layout = 'notebook'
 }: LivePreviewEditorProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
@@ -491,15 +501,43 @@ export function LivePreviewEditor({
     [sessionId, resolveMedia]
   )
 
+  // 属性卡的字段槽位：把仓库既有的成熟选择器（ToolSelectList / ModelSelect）挂进去。
+  // 卡片是纯 DOM 的 CM6 widget，故用独立 React root 挂载，widget.destroy 时卸载
+  // （unmount 推到微任务：React 不允许在渲染/提交过程中同步卸载另一棵树）。
+  const mountField = useCallback((slot: HTMLElement, ctx: FrontmatterFieldMount): (() => void) => {
+    const root = createRoot(slot)
+    root.render(
+      <FrontmatterFieldPicker
+        kind={ctx.kind === 'csv' ? 'csv' : 'select'}
+        value={ctx.value}
+        onChange={ctx.onChange}
+        readOnly={ctx.readOnly}
+      />
+    )
+    return () => queueMicrotask(() => root.unmount())
+  }, [])
+
   // 双链扩展（仅在有项目上下文时启用）：[[file]] 链接 + ![[image]] 内嵌。
   // atomic 在 mount 时一次性捕获 extensions（按 documentId），父组件按文件 key 重挂载，故稳定即可。
   const editorExtensions = useMemo<readonly Extension[]>(() => {
     const tableMenu = tableContextMenu(renderTableMenu)
-    if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure]
+    // shuvix 契约 md（agent/policy/chart/wiki）的 frontmatter 属性卡：自检测标记，
+    // 无标记的普通 md 零影响。文案走 i18n.t —— 同 renderTableMenu 的取舍：extensions
+    // 在 mount 时一次性捕获，i18n 实例稳定且 t 按当前语言解析。
+    const fmCard: Extension = frontmatterCard({
+      t: (key) => i18n.t(key),
+      // 解析器级校验经 ChatApi（桌面走 IPC、扩展进程内直调）
+      validate: (params) => getChatApi().shuvixMd.validate(params),
+      // 诊断文案的 who + 校验缓存 key 的一部分（卡片内拼接）
+      name: documentId.split(/[\\/]/).pop(),
+      mountField
+    })
+    if (!sessionId) return [markdownKeymap, tableMenu, imageLoadRemeasure, fmCard]
     return [
       markdownKeymap,
       tableMenu,
       imageLoadRemeasure,
+      fmCard,
       wikiLinks({
         openOnClick: true,
         resolve: resolveWikiLink,
@@ -524,7 +562,10 @@ export function LivePreviewEditor({
     openWikiLink,
     resolveWikiStatus,
     suggestWikiTargets,
-    resolveEmbedSrc
+    resolveEmbedSrc,
+    i18n,
+    documentId,
+    mountField
   ])
 
   return (
@@ -534,6 +575,7 @@ export function LivePreviewEditor({
       <div
         className="atomic-panel"
         data-notebook-theme={notebookTheme}
+        data-layout={layout}
         ref={panelRef}
         // 只读预览不提供编辑右键菜单 —— 交浏览器默认右键（复制/检查）
         onContextMenu={readOnly ? undefined : onEditorContextMenu}
@@ -550,7 +592,9 @@ export function LivePreviewEditor({
           readOnly={readOnly}
         />
       </div>
-      {headings.length > 0 && <NotebookMinimap headings={headings} onJump={onJump} />}
+      {layout === 'notebook' && headings.length > 0 && (
+        <NotebookMinimap headings={headings} onJump={onJump} />
+      )}
     </div>
   )
 }

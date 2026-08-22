@@ -332,7 +332,7 @@ export function McpClientPanel({ api, caps = {} }: McpClientPanelProps): React.J
                       className={`p-1 transition-colors ${
                         s.isBuiltin === 1
                           ? 'text-text-tertiary/40 cursor-not-allowed'
-                          : 'text-text-tertiary hover:text-danger'
+                          : 'text-text-tertiary hover:text-error'
                       }`}
                       title={
                         s.isBuiltin === 1

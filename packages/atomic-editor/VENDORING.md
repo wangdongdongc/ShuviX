@@ -36,6 +36,16 @@ Keep this list current — it's what makes future merges predictable.
   into the DOM. This is the package's only `@shuvix/*` import; if upstreaming the widget, drop
   that line (or vendor the sanitizer) to keep the package dependency-free.
 
+- `src/comment-blocks.ts` — **ShuviX-added file** (not upstream): HTML comment (`<!-- … -->`)
+  handling for the live preview. In the read-only viewer comments are removed entirely (block
+  comments line-and-all, leaving no blank gap; inline ones hidden per line segment); editable
+  documents dim them instead of hiding, so the caret never edits invisible text. Implemented as
+  a StateField (CM6 won't take block-replace decorations from a ViewPlugin), reusing the
+  upstream `tree-progress` plugin; no `@shuvix/*` imports, so freely upstreamable. Wiring, in
+  upstream files: `src/index.ts` exports `commentBlocks`, `src/AtomicCodeMirrorEditor.tsx` adds
+  it to the default extension list, and `styles/inline-preview.css` adds the
+  `.cm-atomic-comment` dim rule.
+
 Prefer **isolating changes in new files** over editing upstream files in place — new files never
 conflict on pull. Edit core files only when unavoidable, and note them above.
 

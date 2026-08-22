@@ -13,7 +13,12 @@ export interface ImageMeta {
   thoughtSignature?: string
 }
 
-/** token 用量统计 */
+/**
+ * token 用量统计。
+ *
+ * 挂在**一条** assistant 消息上时就是那一次 LLM 调用的用量（一条 entry = 一次调用）；
+ * `details` 只在事件层的整轮聚合（agent_end 的 ChatTokenUsage）里出现。
+ */
 export interface UsageInfo {
   input: number
   output: number
@@ -47,27 +52,16 @@ export interface InlineToken {
 /** 内联 Token 标记正则：匹配 {{shuvixInlineToken:uid}} */
 export const INLINE_TOKEN_RE = /\{\{shuvixInlineToken:([a-z0-9]+)\}\}/g
 
-/** 消息元数据（扁平超集，DAO 层使用） */
+/** 消息元数据（扁平超集，跨进程传输时的松类型视角） */
 export interface MessageMetadata {
   // —— user ——
   source?: { type: string; [k: string]: unknown }
   // —— user / inline token ——
   inlineTokens?: Record<string, InlineToken>
-  // —— user / assistant text / step_text ——
+  // —— user / assistant ——
   images?: ImageMeta[]
-  // —— assistant text ——
-  thinking?: string
+  // —— assistant ——
   usage?: UsageInfo
-  // —— tool_call / tool_result ——
-  toolCallId?: string
-  toolName?: string
-  // —— tool_call ——
-  args?: Record<string, unknown>
-  // —— tool_result ——
-  isError?: boolean
-  details?: ToolResultDetails
-  // —— step / tool_call ——
-  turnIndex?: number
   // —— compaction ——
   isCompactionSummary?: boolean
   // —— project instruction injection (AGENTS.md / CLAUDE.md) ——
@@ -89,11 +83,13 @@ export interface UserTextMeta {
   instructionFilename?: string
 }
 
-/** 助手文本消息元数据（最终回复） */
-export interface AssistantTextMeta {
+/** 助手消息元数据 */
+export interface AssistantMeta {
+  /** 本条消息产出的图片（模型生成图） */
   images?: ImageMeta[]
-  thinking?: string
+  /** 本次 LLM 调用的用量 */
   usage?: UsageInfo
+  /** 这条消息是压缩摘要（compaction entry 投影而来） */
   isCompactionSummary?: boolean
 }
 
@@ -109,8 +105,8 @@ export interface EditToolDetails {
 /**
  * write 工具详情：与 edit 同款 diff（新建文件时为全增行）。
  *
- * 这个 diff 与写入前审批卡片里预览的那一份**是同一个字符串**——由 applyWrite 在锁内算一次，
- * 分别交给审批请求和这里，所以"预览所见"与"执行后所见"不可能出现分歧。
+ * 这个 diff 与写入前询问卡片里预览的那一份**是同一个字符串**——由 applyWrite 在锁内算一次，
+ * 分别交给询问请求和这里，所以"预览所见"与"执行后所见"不可能出现分歧。
  */
 export interface WriteToolDetails {
   type: 'write'
@@ -273,26 +269,34 @@ export type ToolResultDetails =
   | BrowserToolDetails
   | GitToolDetails
 
-/** 工具使用元数据 */
-export interface ToolUseMeta {
+// ---- 助手消息内容块 ----
+
+/**
+ * 工具调用块 —— `result` / `isError` / `details` 由随后的 toolResult 回填；
+ * 未回填（result === undefined）即「仍在执行」。
+ */
+export interface AssistantToolBlock {
+  type: 'tool'
   toolCallId: string
   toolName: string
   args?: Record<string, unknown>
-  turnIndex?: number
+  result?: string
   isError?: boolean
   details?: ToolResultDetails
 }
 
-/** 中间步骤文本元数据 */
-export interface StepTextMeta {
-  turnIndex?: number
-  images?: ImageMeta[]
-}
-
-/** 中间步骤思考元数据 */
-export interface StepThinkingMeta {
-  turnIndex?: number
-}
+/**
+ * 助手消息的内容块 —— 与会话树里 `AgentMessage.content` 的块一一对应，
+ * 数组顺序就是模型的输出顺序（思考 → 正文 → 工具调用，或任意交错）。
+ *
+ * 这是「一条 entry = 一条消息 = UI 一张卡」的落点：不再有 step_text /
+ * step_thinking / tool_use 这些把一次 LLM 输出拆散的伪消息类型，
+ * 工具结果也不是独立消息 —— toolResult entry 回填到同 toolCallId 的块上。
+ */
+export type AssistantBlock =
+  | { type: 'thinking'; text: string }
+  | { type: 'text'; text: string }
+  | AssistantToolBlock
 
 // error_event 无 metadata
 
@@ -317,35 +321,18 @@ export interface UserTextMessage extends MessageBase {
   metadata: UserTextMeta | null
 }
 
-export interface AssistantTextMessage extends MessageBase {
+/**
+ * 助手消息 —— 一条 assistant entry 的投影，UI 上是一张卡。
+ *
+ * `blocks` 是结构（按模型输出顺序渲染）；`content` 是所有 text 块的拼接，
+ * 供复制 / TTS / 导出 / 标题生成这些「只要正文」的消费方直接用，
+ * 不必各自遍历 blocks。
+ */
+export interface AssistantMessage extends MessageBase {
   role: 'assistant'
-  type: 'text'
-  metadata: AssistantTextMeta | null
-}
-
-export interface ToolUseMessage extends MessageBase {
-  role: 'assistant'
-  type: 'tool_use'
-  metadata: ToolUseMeta | null
-}
-
-export interface StepTextMessage extends MessageBase {
-  role: 'assistant'
-  type: 'step_text'
-  metadata: StepTextMeta | null
-}
-
-export interface StepThinkingMessage extends MessageBase {
-  role: 'assistant'
-  type: 'step_thinking'
-  metadata: StepThinkingMeta | null
-}
-
-/** 用户 steer 消息（运行中注入的引导消息） */
-export interface SteerMessage extends MessageBase {
-  role: 'user'
-  type: 'steer'
-  metadata: null
+  type: 'message'
+  blocks: AssistantBlock[]
+  metadata: AssistantMeta | null
 }
 
 export interface ErrorEventMessage extends MessageBase {
@@ -355,11 +342,4 @@ export interface ErrorEventMessage extends MessageBase {
 }
 
 /** 判别联合：所有消息类型 */
-export type ChatMessage =
-  | UserTextMessage
-  | AssistantTextMessage
-  | ToolUseMessage
-  | StepTextMessage
-  | StepThinkingMessage
-  | SteerMessage
-  | ErrorEventMessage
+export type ChatMessage = UserTextMessage | AssistantMessage | ErrorEventMessage

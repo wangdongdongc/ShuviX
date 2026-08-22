@@ -355,7 +355,7 @@ function decodeBase64Utf8(b64: string): string | null {
 export type CdpSpill = (content: string, ext: string) => Promise<string>
 
 /**
- * 发一条原生 CDP 命令。method 的安全分类/审批已由 tool 层完成，这里只：
+ * 发一条原生 CDP 命令。method 的安全分类/询问已由 tool 层完成，这里只：
  *   1. 解析 params 里的 uid 宏（{$uid}/{$uidX}/{$uidY} → backendNodeId / 坐标）
  *   2. 发送命令
  *   3. getResponseBody 的 base64 自动解码；结果过大则落盘（spill）返回摘要 + 路径

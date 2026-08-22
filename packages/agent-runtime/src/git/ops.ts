@@ -63,15 +63,15 @@ export interface GitOpParams {
 }
 
 /**
- * 需要用户确认的 git 操作及其原因码（宿主据此本地化审批文案）。
+ * 需要用户确认的 git 操作及其原因码（宿主据此本地化询问文案）。
  *
- * 挑选标准不是"是否修改仓库"（那样 add/commit 这种高频且可逆的操作会把审批淹没），
+ * 挑选标准不是"是否修改仓库"（那样 add/commit 这种高频且可逆的操作会把询问淹没），
  * 而是**是否改变仓库身份或吞掉用户没提交的工作**：
  *   - createRepo    建出一个新仓库（凭空多一棵 .git，且往往不是用户本意）
  *   - discardChanges 丢弃工作区改动（restore / checkout force）—— 未提交的东西找不回来
  *   - deleteBranch  删分支（可能带走仅存于该分支的提交）
  */
-export type GitApprovalReason = 'createRepo' | 'discardChanges' | 'deleteBranch'
+export type GitAskReason = 'createRepo' | 'discardChanges' | 'deleteBranch'
 
 export interface GitOpSpec {
   name: GitAction
@@ -82,10 +82,12 @@ export interface GitOpSpec {
   /** 是否修改仓库/工作树（供宿主 resolveDir 按读/写语义做权限判定） */
   mutates: boolean
   /**
-   * 该次调用是否需要用户确认 —— 返回原因码，null = 不需要。
-   * 要看参数而不能只看 action：checkout 只有 force、branch 只有 delete 才具破坏性。
+   * 该次调用的破坏性原因码，null = 非破坏性。要看参数而不能只看 action：
+   * checkout 只有 force、branch 只有 delete 才具破坏性。
+   * 注意：拦不拦由安全策略决定（内置 git-safety 的 match 与此处的判定对齐 ——
+   * gitAction/force/delete 作为客体属性上报）；原因码只供宿主本地化询问文案。
    */
-  approval?: (params: GitOpParams) => GitApprovalReason | null
+  askReason?: (params: GitOpParams) => GitAskReason | null
   /** 预留：将来引入 GitCaps（如 network）时启用；undefined = 恒可用 */
   cap?: string
   /** 参数错误时回显的 usage 行 */
@@ -164,7 +166,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
     name: 'branch',
     mutates: true,
     // 建分支/列分支无害，删分支要确认
-    approval: (p) => (p.delete ? 'deleteBranch' : null),
+    askReason: (p) => (p.delete ? 'deleteBranch' : null),
     description:
       'No name: list branches (current marked *). With name: create AND switch to it; delete:true deletes it instead.',
     required: [],
@@ -175,7 +177,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
     name: 'checkout',
     mutates: true,
     // 非 force 时若会覆盖本地改动，op 自己就拒了；只有 force 才真的吞改动
-    approval: (p) => (p.force ? 'discardChanges' : null),
+    askReason: (p) => (p.force ? 'discardChanges' : null),
     description:
       'Switch to a branch or commit. Refuses if local changes would be overwritten unless force:true (which DISCARDS them).',
     required: ['ref'],
@@ -185,7 +187,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'restore',
     mutates: true,
-    approval: () => 'discardChanges',
+    askReason: () => 'discardChanges',
     description:
       'Restore files from a commit (default HEAD) — DISCARDS the local changes of those files.',
     required: ['paths'],
@@ -195,7 +197,7 @@ export const GIT_OPS: readonly GitOpSpec[] = [
   {
     name: 'init',
     mutates: true,
-    approval: () => 'createRepo',
+    askReason: () => 'createRepo',
     description: 'Initialize a new repository (default branch "main") in the working directory.',
     required: [],
     optional: [],

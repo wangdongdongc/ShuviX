@@ -243,7 +243,7 @@ export function DbCredentialDialog({
 
           {testResult && (
             <p
-              className={`text-[11px] px-1 ${testResult.success ? 'text-green-400' : 'text-danger'}`}
+              className={`text-[11px] px-1 ${testResult.success ? 'text-green-400' : 'text-error'}`}
             >
               {testResult.success
                 ? t('settings.toolDbTestSuccess')
@@ -251,7 +251,7 @@ export function DbCredentialDialog({
             </p>
           )}
 
-          {error && <p className="text-[11px] text-danger px-1">{error}</p>}
+          {error && <p className="text-[11px] text-error px-1">{error}</p>}
         </div>
 
         {/* 按钮 */}

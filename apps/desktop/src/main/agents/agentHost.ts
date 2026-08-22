@@ -18,6 +18,7 @@ import {
   renderProfileSystemPrompt,
   toInProcessAgentType,
   NOTEBOOK_PROFILE_NAME,
+  DISPATCH_TOOL_NAME,
   type AgentHostAdapter,
   type AnyAgentTool,
   type PromptVars,
@@ -44,7 +45,6 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
-import { hookService } from '../services/hooks'
 import { httpLogService } from '../services/httpLogService'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
@@ -55,10 +55,13 @@ import {
 import {
   electronEventSink,
   electronToolResultTransform,
-  createShouldDeferToolDisplay,
   runtimeLogger
 } from '../services/agentRuntimeAdapters'
-import { resolveProjectConfig, type ToolContext } from '../services/toolContext'
+import {
+  getDesktopSecurityContext,
+  resolveProjectConfig,
+  type ToolContext
+} from '../services/toolContext'
 import type { Project } from '../types'
 import { NodeExecutionEnv } from '@earendil-works/pi-agent-core/node'
 import { createAgentTool } from './AgentTool'
@@ -84,18 +87,22 @@ function pickOverrides(tool: object): ProcessToolOutputOverrides | undefined {
 
 function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
   const ctx: ToolContext = {
-    // 审批/项目配置/fileTime/输出落盘归属：root=自身，spawned=根会话（与旧两路一致）
+    // 询问/项目配置/fileTime/输出落盘归属：root=自身，spawned=根会话（与旧两路一致）
     sessionId: req.rootSessionId,
     requestUserInput: req.requestUserInput,
     emitChatEvent: (event) =>
       chatFrontendRegistry.broadcast({ ...event, sessionId: req.rootSessionId } as ChatEvent)
   }
+  // L1 全工具门的评估门面（每次 evaluate 现读，实例可复用）；MCP/skill/dispatch 等
+  // 无专属客体的工具由它统一获得"可设门"能力
+  const security = getDesktopSecurityContext(ctx)
   const wrap = (tool: object): AnyAgentTool =>
     wrapToolOutput(
       tool as PiAgentTool<TSchema, unknown>,
       req.rootSessionId,
       getOutputStrategy(tool),
-      pickOverrides(tool)
+      pickOverrides(tool),
+      security
     ) as unknown as AnyAgentTool
 
   const builtinMap = new Map(
@@ -108,7 +115,7 @@ function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
   const mcpServers: string[] = []
 
   for (const name of req.names) {
-    if (name === 'Agent') continue // 统一在内置名单之后注入（见下）
+    if (name === DISPATCH_TOOL_NAME) continue // 统一在内置名单之后注入（见下）
     if (name.startsWith('mcp:')) {
       mcpServers.push(name.slice(4))
       continue
@@ -122,8 +129,8 @@ function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
     if (entry?.factory) tools.push(wrap(entry.factory(ctx)))
   }
 
-  // Agent 派发工具：白名单 opt-in；root 恒可派发，spawned 受深度上限（canSpawn）
-  if (req.names.includes('Agent') && (req.kind === 'root' || req.spawn?.canSpawn)) {
+  // agent 派发工具：白名单 opt-in；root 恒可派发，spawned 受深度上限（canSpawn）
+  if (req.names.includes(DISPATCH_TOOL_NAME) && (req.kind === 'root' || req.spawn?.canSpawn)) {
     tools.push(
       wrap(
         createAgentTool(
@@ -224,9 +231,7 @@ const desktopAgentHost: AgentHostAdapter = {
   openSessionTree: (sessionId, cwd) => ensureSessionTree(sessionId, cwd),
   createExecutionEnv: (cwd) => new NodeExecutionEnv({ cwd }),
   eventSink: electronEventSink,
-  shouldDeferToolDisplay: (sessionId) => createShouldDeferToolDisplay(sessionId),
   transformToolResult: electronToolResultTransform,
-  hooks: hookService,
   httpLog: {
     logRequest: (params) => httpLogService.logRequest(params),
     updateUsage: (logId, input, output, total, responseJson) =>

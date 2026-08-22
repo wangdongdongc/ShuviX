@@ -70,13 +70,13 @@ interface SettingsState {
     | 'projects'
     | 'providers'
     | 'agents'
+    | 'policies'
     | 'tools'
     | 'mcp'
     | 'skills'
-    | 'hooks'
     | 'voice'
-    | 'bindings'
-    | 'httpLogs'
+    | 'telegramBots'
+    | 'monitor'
     | 'about'
   /** 标题生成模型 provider ID(空 = 不自动生成标题) */
   titleProvider: string
@@ -86,9 +86,9 @@ interface SettingsState {
   autoCheckUpdate: boolean
   /** 是否已加载 */
   loaded: boolean
-  /** 系统设置 key 元数据（审批弹窗用） */
+  /** 系统设置 key 元数据（询问弹窗用） */
   settingMeta: Record<string, ConfigMeta>
-  /** 项目字段元数据（审批弹窗用） */
+  /** 项目字段元数据（询问弹窗用） */
   projectFieldMeta: Record<string, ConfigMeta>
 
   // Actions
@@ -112,13 +112,13 @@ interface SettingsState {
       | 'projects'
       | 'providers'
       | 'agents'
+      | 'policies'
       | 'tools'
       | 'mcp'
       | 'skills'
-      | 'hooks'
       | 'voice'
-      | 'bindings'
-      | 'httpLogs'
+      | 'telegramBots'
+      | 'monitor'
       | 'about'
   ) => void
   loadSettings: (settings: Record<string, string>) => void

@@ -9,11 +9,15 @@
  *   - 工具白名单用 `shuvix-tools`（逗号分隔字符串，如 `shuvix-tools: read, grep, bash`）——
  *     刻意不用通用的 `tools` key：ShuviX 工具名与其他 app 不兼容，带前缀可避免
  *     agent md 迁移到其他应用时被误读。省略 = 空白名单（无工具）；
- *     条目大小写不敏感（内置工具名归一为小写注册名），`Agent` 为嵌套派发 opt-in，
+ *     条目大小写不敏感（内置工具名归一为小写注册名），`agent` 为嵌套派发 opt-in，
  *     `mcp:<server>` / `skill:<name>` 前缀语法为 ShuviX 扩展（余部大小写保留）；
  *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`、
  *     曝光开关 `shuvix-dispatch-only`，与两个注入开关 `shuvix-instruction-files` /
  *     `shuvix-project-prompt`（布尔：是否向该 agent 注入项目指令文件 / 项目提示词）；
+ *   - `shuvix-builtin: true` 是随包发布的内置档案的**自述标记**：本解析器不读它
+ *     （builtin/user 的判定在加载方——buildBuiltinProfile 恒标 builtin，目录扫描恒标 user），
+ *     它只在 md 里声明「这份文案出自 ShuviX 内置集」。GUI 写出的用户档案不会带上它
+ *     （serialize 的键集是固定白名单），所以复制一份内置档案去改也不会自称内置；
  *   - `shuvix-dispatch-only: true` 表示该档案只能被派发、不作为 `/<agentName>` 切换目标。
  *     用于那些「政策必须跑在新鲜上下文里」的执行型 agent（如 wiki-writer）：一旦被切成
  *     主会话，长对话会稀释系统提示词的权重，而它们违反政策的代价是静默且不可逆的。
@@ -33,6 +37,7 @@
  * 宁可整体拒绝也不静默降级。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { splitFrontmatter } from '../markdownFrontmatter'
 
 /**
  * 文件类型标记的 frontmatter key 与值 —— `shuvix: agent v1`。
@@ -58,19 +63,15 @@ export interface ParsedAgentFile {
   dispatchOnly: boolean
 }
 
-/** 匹配文件头部的 frontmatter 块：`---` 行 + YAML + `---` 行（容忍 CRLF、空 frontmatter、文件结尾无换行） */
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m
-
 /**
  * 单个工具条目归一：
- *   - `Agent`（任意大小写）→ 规范名 'Agent'（嵌套派发 opt-in 白名单值）；
  *   - `mcp:` / `skill:` 前缀 → 前缀归小写，余部保留（server / skill 名大小写敏感）；
- *   - 其余 → 小写（对齐内置工具注册名，使 Claude Code 风格的 `Read, Grep` 直接可用）。
+ *   - 其余 → 小写（对齐内置工具注册名，使 Claude Code 风格的 `Read, Grep` 直接可用；
+ *     派发工具 `agent` 同为小写内置名，旧文件里的 `Agent` 由此自动归一）。
  */
 function normalizeToolName(raw: string): string {
   const entry = raw.trim()
   if (!entry) return ''
-  if (/^agent$/i.test(entry)) return 'Agent'
   const prefixed = /^(mcp|skill):(.*)$/i.exec(entry)
   if (prefixed) return `${prefixed[1].toLowerCase()}:${prefixed[2].trim()}`
   return entry.toLowerCase()
@@ -90,42 +91,66 @@ function stringField(fields: Record<string, unknown>, key: string): string | und
 }
 
 /**
- * 解析 agent 定义 markdown。格式非法（无 frontmatter / YAML 语法错误）返回 null，
- * 由调用方记日志跳过。`defaultName` 为文件 basename（frontmatter `name` 可覆盖）。
+ * 解析 agent 定义 markdown。格式非法（无 frontmatter / YAML 语法错误 / 字段类型不符）
+ * 返回 null，由调用方记日志跳过。`defaultName` 为文件 basename（frontmatter `name` 可覆盖）。
+ * `warn`（可选）：诊断出口 —— 判非法时输出人读原因。原文编辑（设置页 / 笔记本属性卡）
+ * 下用户会写出非法结构，只返回 null 说不清「哪里错了」；与 policyFile 的 warn 同形同策。
  */
-export function parseAgentDefinitionFile(raw: string, defaultName: string): ParsedAgentFile | null {
-  // 剥 BOM 与前导空白后必须以 `---` 起始
-  const text = raw.replace(/^\uFEFF/, '').replace(/^\s+/, '')
-  const match = FRONTMATTER_RE.exec(text)
-  if (!match) return null
+export function parseAgentDefinitionFile(
+  raw: string,
+  defaultName: string,
+  warn?: (msg: string) => void
+): ParsedAgentFile | null {
+  // 早期失败时 frontmatter 还没解析出 name，用文件 basename 报（原因照样要可见）
+  const rejectAs = (who: string, why: string): null => {
+    warn?.(`agent '${who}': ${why}; the whole file is rejected`)
+    return null
+  }
+
+  const split = splitFrontmatter(raw)
+  if (!split) return rejectAs(defaultName, 'no YAML frontmatter block')
 
   let fields: Record<string, unknown>
   try {
-    const parsed: unknown = parseYaml(match[1])
+    const parsed: unknown = parseYaml(split.yaml)
     if (parsed === null || parsed === undefined) {
       fields = {}
     } else if (typeof parsed === 'object' && !Array.isArray(parsed)) {
       fields = parsed as Record<string, unknown>
     } else {
-      return null
+      return rejectAs(defaultName, 'frontmatter must be a mapping')
     }
-  } catch {
-    return null
+  } catch (e) {
+    return rejectAs(defaultName, `invalid YAML (${e instanceof Error ? e.message : e})`)
   }
+
+  const name = stringField(fields, 'name') ?? defaultName
+  const reject = (why: string): null => rejectAs(name, why)
 
   // 列表字段仅接受逗号分隔字符串、布尔字段仅接受布尔；类型不符 = 文件非法
   const toolsRaw = fields['shuvix-tools'] ?? null
-  if (toolsRaw !== null && typeof toolsRaw !== 'string') return null
+  if (toolsRaw !== null && typeof toolsRaw !== 'string') {
+    return reject(
+      '\'shuvix-tools\' must be a comma-separated string (e.g. "read, bash"), not a list'
+    )
+  }
   const modelRaw = fields['shuvix-model'] ?? null
-  if (modelRaw !== null && typeof modelRaw !== 'string') return null
-  const instructionRaw = fields['shuvix-instruction-files'] ?? null
-  if (instructionRaw !== null && typeof instructionRaw !== 'boolean') return null
-  const projectPromptRaw = fields['shuvix-project-prompt'] ?? null
-  if (projectPromptRaw !== null && typeof projectPromptRaw !== 'boolean') return null
-  const dispatchOnlyRaw = fields['shuvix-dispatch-only'] ?? null
-  if (dispatchOnlyRaw !== null && typeof dispatchOnlyRaw !== 'boolean') return null
-
-  const name = stringField(fields, 'name') ?? defaultName
+  if (modelRaw !== null && typeof modelRaw !== 'string') {
+    return reject("'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)")
+  }
+  for (const key of [
+    'shuvix-instruction-files',
+    'shuvix-project-prompt',
+    'shuvix-dispatch-only'
+  ] as const) {
+    const value = fields[key] ?? null
+    if (value !== null && typeof value !== 'boolean') {
+      return reject(`'${key}' must be a boolean (true / false)`)
+    }
+  }
+  const instructionRaw = (fields['shuvix-instruction-files'] ?? null) as boolean | null
+  const projectPromptRaw = (fields['shuvix-project-prompt'] ?? null) as boolean | null
+  const dispatchOnlyRaw = (fields['shuvix-dispatch-only'] ?? null) as boolean | null
 
   // 省略 = 空白名单（无工具）；去重保序
   const tools =
@@ -137,7 +162,7 @@ export function parseAgentDefinitionFile(raw: string, defaultName: string): Pars
     name,
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
     description: stringField(fields, 'description') ?? '',
-    systemPrompt: text.slice(match[0].length).trim(),
+    systemPrompt: split.body.trim(),
     tools,
     model: stringField(fields, 'shuvix-model'),
     instructionFiles: instructionRaw ?? false,

@@ -303,7 +303,7 @@ function SttPanel(): React.JSX.Element {
                     {isDownloading ? (
                       <button
                         onClick={() => handleCancelDownload(model.id)}
-                        className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-text-tertiary hover:text-danger hover:bg-danger/10 transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
                       >
                         <Loader2 size={11} className="animate-spin" />
                         {t('settings.voiceCancelDownload')}
@@ -320,7 +320,7 @@ function SttPanel(): React.JSX.Element {
                         )}
                         <button
                           onClick={() => handleDelete(model.id)}
-                          className="p-1 text-text-tertiary hover:text-danger transition-colors"
+                          className="p-1 text-text-tertiary hover:text-error transition-colors"
                           title={t('settings.voiceDeleteModel')}
                         >
                           <Trash2 size={12} />
@@ -655,7 +655,7 @@ function TtsPanel(): React.JSX.Element {
                     setSetupMessage('')
                     setSetupPercent(-1)
                   }}
-                  className="px-2 py-0.5 rounded text-[10px] text-text-tertiary hover:text-danger hover:bg-danger/10 transition-colors"
+                  className="px-2 py-0.5 rounded text-[10px] text-text-tertiary hover:text-error hover:bg-error/10 transition-colors"
                 >
                   {t('settings.voiceCancelDownload')}
                 </button>

@@ -13,8 +13,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
 import { registerAppEventBridge } from './services/appEvents'
-import { hookService } from './services/hooks'
-import { registerAllBuiltins } from './services/hooks/builtin'
 import { sshManager } from './services/sshManager'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -606,13 +604,6 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 初始化 hook 系统：先注册内置 hook，再启动用户配置 watcher
-  // —— 保证内置安全策略不会被用户 hook 偷偷绕过（builtin → global → project 顺序执行）
-  measure('hookService.start', () => {
-    registerAllBuiltins(hookService)
-    hookService.start()
-  })
-
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
 
@@ -662,7 +653,6 @@ app.on('before-quit', () => {
   cliServer.stop()
   disposePglite()
   closeAllWatchers()
-  hookService.stop().catch(() => {})
 })
 
 // macOS 下关闭窗口不退出应用

@@ -42,12 +42,17 @@ export interface ChatTextEndEvent extends ChatEventBase {
   type: 'text_end'
 }
 
-/** 中间轮次步骤已持久化（step_thinking / step_text） */
-export interface ChatStepEndEvent extends ChatEventBase {
-  type: 'step_end'
+/**
+ * 一条 assistant 消息已落盘 —— 携带它投影出的整张卡（JSON string）。
+ *
+ * 每次 LLM 调用结束都会发一条（含最后那次终答），前端按 id upsert：
+ * 卡里的工具块此时还没有结果，随后的 tool_end 按 toolCallId 回填。
+ */
+export interface ChatAssistantMessageEvent extends ChatEventBase {
+  type: 'assistant_message'
   messageId: string
-  /** 持久化的 step 消息 (JSON string)，前端可直接解析避免异步查询 */
-  message?: string
+  /** 投影出的 assistant 消息 (JSON string)，前端可直接解析避免异步查询 */
+  message: string
 }
 
 /** Agent 完成本轮生成 */
@@ -84,10 +89,8 @@ export interface ChatToolStartEvent extends ChatEventBase {
   toolCallId: string
   toolName: string
   toolArgs?: Record<string, unknown>
-  /** 持久化的 tool_use 消息 ID */
+  /** 该工具块所属的 assistant 消息 ID（= entry id） */
   messageId?: string
-  /** 当前 turn 编号（UI 分组用） */
-  turnIndex?: number
 }
 
 /** 工具执行完成 */
@@ -99,7 +102,7 @@ export interface ChatToolEndEvent extends ChatEventBase {
   result?: string
   /** 是否为错误结果 */
   isError?: boolean
-  /** 持久化的 tool_use 消息 ID（与 tool_start 相同） */
+  /** 该工具块所属的 assistant 消息 ID（与 tool_start 相同） */
   messageId?: string
   /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
   details?: ToolResultDetails
@@ -109,7 +112,7 @@ export interface ChatToolEndEvent extends ChatEventBase {
 
 /**
  * 一个新的"用户输入请求"挂起。前端按 request.kind 渲染对应表单。
- * 命令审批 / 选择题 / SSH 凭证全部走这一个事件,扩展新 kind 不再加新事件类型。
+ * 命令询问 / 选择题 / SSH 凭证全部走这一个事件,扩展新 kind 不再加新事件类型。
  */
 export interface ChatInputRequestEvent extends ChatEventBase {
   type: 'input_request'
@@ -250,7 +253,7 @@ export type ChatEvent =
   | ChatTextDeltaEvent
   | ChatThinkingDeltaEvent
   | ChatTextEndEvent
-  | ChatStepEndEvent
+  | ChatAssistantMessageEvent
   | ChatAgentEndEvent
   | ChatTokenUsageEvent
   | ChatToolCallGeneratingEvent

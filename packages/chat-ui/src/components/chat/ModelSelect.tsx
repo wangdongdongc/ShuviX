@@ -258,7 +258,10 @@ export function ModelSelect({
         <button
           type="button"
           onClick={toggle}
-          className="min-w-0 flex-1 flex items-center gap-1.5 bg-bg-primary rounded-md pl-2.5 pr-2 py-1 text-[11px] border border-border-secondary/50 transition-colors hover:border-border-secondary cursor-pointer focus:outline-none focus:border-accent/60"
+          // 只读：禁用而非「可点但无反应」—— 后者外观仍是可交互的，与同处一行的其他
+          // 只读控件（禁用的输入框/开关）不一致
+          disabled={readonly}
+          className="min-w-0 flex-1 flex items-center gap-1.5 bg-bg-primary rounded-md pl-2.5 pr-2 py-1 text-[11px] border border-border-secondary/50 transition-colors enabled:hover:border-border-secondary enabled:cursor-pointer disabled:cursor-default focus:outline-none focus:border-accent/60"
         >
           {hasSelection ? (
             <>

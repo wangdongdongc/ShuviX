@@ -1,13 +1,14 @@
 /**
  * preview 工具（桌面装配）单元测试
  * 使用临时目录 + 真实 previewFile 分类内核，mock resolveProjectConfig / toolRegistry / i18n /
- * logger / 渲染验证 broker：验证路径解析（相对→工作目录）、工作目录准入限制、文件存在性、
- * 分类结局（binary→错误）、图表渲染验证分支（失败不发事件 / 成功注记）与 file_preview 事件发射。
+ * logger / 渲染验证 broker：验证路径解析（相对→工作目录）、无准入门（工作目录外照常预览）、
+ * 文件存在性、分类结局（binary→错误）、图表渲染验证分支（失败不发事件 / 成功注记）
+ * 与 file_preview 事件发射。
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-preview-test-' + Date.now())
@@ -20,11 +21,6 @@ vi.mock('../../services/toolContext', () => ({
     workingDirectory: TEST_DIR,
     referenceDirs: []
   }),
-  isPathWithinWorkspace: (absolutePath: string, workingDirectory: string) => {
-    const r = resolve(absolutePath)
-    const base = resolve(workingDirectory)
-    return r === base || r.startsWith(base + sep)
-  },
   TOOL_ABORTED: 'Aborted'
 }))
 
@@ -125,13 +121,14 @@ describe('PreviewTool（桌面装配）', () => {
     expect(validateMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION_ID }))
   })
 
-  it('拒绝工作目录之外的路径', async () => {
+  it('工作目录之外的路径 → 无准入门，照常预览（预览只呈现给用户，正文不进上下文）', async () => {
     const events: ChatEventPayload[] = []
     const tool = makeTool(events)
-    await expect(
-      tool.execute('call-3', { path: join(OUTSIDE_DIR, 'escape-graph.md') })
-    ).rejects.toThrow(/inside the working directory/)
-    expect(events).toEqual([])
+    const abs = join(OUTSIDE_DIR, 'escape-graph.md')
+    const result = await tool.execute('call-3', { path: abs })
+
+    expect(events).toEqual([{ type: 'file_preview', absPath: abs }])
+    expect(textOf(result)).toMatch(/Chart rendered successfully/)
   })
 
   it('文件不存在 / 目录路径 → 报错', async () => {

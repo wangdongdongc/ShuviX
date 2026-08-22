@@ -1,8 +1,8 @@
 /**
  * 浏览器文件工具 —— read / write / edit，绑定到某会话的工作目录根句柄。
  *
- * 整条执行流程(路径解析→路径审批→分派→内核)已下沉 @shuvix/agent-runtime 的 createFileToolSuite，
- * 与桌面共用一份。本文件只负责注入浏览器端适配:FSA FileSystemPort/FileGuards、扩展 ApprovalPolicy、
+ * 整条执行流程(路径解析→路径询问→分派→内核)已下沉 @shuvix/agent-runtime 的 createFileToolSuite，
+ * 与桌面共用一份。本文件只负责注入浏览器端适配:FSA FileSystemPort/FileGuards、扩展 SecurityContext、
  * 内容解码器(url=turndown / image=Canvas;富文档/.doc 缺省)、以及 FSA 权限校验(临时 OPFS 跳过)。
  *
  * 不提供 ls:桌面 ls/grep/glob 基于 ripgrep(遵循 .gitignore),浏览器无法等价实现 → 仅桌面可用;
@@ -13,7 +13,7 @@ import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/in
 import { createFileToolSuite } from '@shuvix/agent-runtime'
 import { createFsaPort, createFsaGuards, ensureRwPermission } from './fsaPort'
 import { isUrl, readUrl, readImage, IMAGE_MIME_BY_EXT } from './richReaders'
-import { createExtensionApprovalPolicy } from './approvalPolicy'
+import { createExtensionSecurityContext } from './securityProvider'
 import { appEventBus } from './appEventBus'
 
 export const READ_DESCRIPTION =
@@ -26,7 +26,7 @@ export const EDIT_DESCRIPTION =
 export interface CreateFileToolsOptions {
   /** 是否在每次操作前校验 FSA 读写权限。项目(用户 FSA 文件夹)需要;OPFS 临时目录始终可用,传 false */
   requiresPermission?: boolean
-  /** 统一审批挂起原语(当前扩展夹内不弹,仅为将来越界能力预留) */
+  /** 统一询问挂起原语(当前扩展夹内不弹,仅为将来越界能力预留) */
   requestUserInput?: (req: InputRequest) => Promise<InputResponse>
 }
 
@@ -58,7 +58,7 @@ export function createFileTools(
     port,
     guards,
     resolvePath: (p) => p, // 扩展端口是 rooted，路径即相对工作目录
-    policy: createExtensionApprovalPolicy(requestUserInput),
+    security: createExtensionSecurityContext(root.name, requestUserInput),
     ensureAccess,
     abortError: 'TOOL_ABORTED',
     // write/edit 成功 → 发布 files.changed。portPath 是 root 相对，归一成 `root.name/rel`（UI 路径空间）

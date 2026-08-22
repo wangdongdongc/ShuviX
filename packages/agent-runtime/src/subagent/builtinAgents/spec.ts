@@ -71,7 +71,10 @@ export function buildBuiltinProfile(
   }
 
   const raw = interpolateHostParams(pickLocalizedSource(spec.sources, deps.language), params)
-  const parsed = parseAgentDefinitionFile(raw, spec.name)
+  // 内置 md 解析失败属开发期错误（随包发布，用户改不到）——诊断通道现成，别静默
+  const parsed = parseAgentDefinitionFile(raw, spec.name, (msg) =>
+    console.warn(`[builtinAgents] ${msg}`)
+  )
   if (!parsed) return null
 
   return { ...parsed, source: 'builtin', basePath: '' }

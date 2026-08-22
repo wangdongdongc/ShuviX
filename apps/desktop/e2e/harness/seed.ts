@@ -10,7 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CdpClient } from './cdp'
-import { sleep } from './cdp'
+import { sleep, until } from './cdp'
 import type { E2EApp } from './launch'
 
 export interface AgentMdSeed {
@@ -91,6 +91,139 @@ export function seedSkill(app: E2EApp, name: string, description = 'e2e seeded s
   const filePath = join(dir, 'SKILL.md')
   writeFileSync(filePath, `---\nname: ${name}\ndescription: ${description}\n---\n\nSKILL BODY.\n`)
   return filePath
+}
+
+/**
+ * 把 `startFakeProvider()` 起的假提供商接进隔离实例，并设为**新会话的默认模型**
+ * （连带标题模型 —— 不设的话 `generateTitle` 早退，自动标题链路测不到）。
+ *
+ * `maxInputTokens` 给足 200k：模型 contextWindow 由它决定，而自动压缩阈值是
+ * `contextWindow - 16384`；给小了会让脚本里那几百 token 的 usage 触发压缩。
+ */
+export async function seedFakeProvider(
+  main: CdpClient,
+  opts: { baseUrl: string; modelId: string; name?: string }
+): Promise<{ providerId: string }> {
+  const args = JSON.stringify({ name: opts.name ?? 'E2E Fake', baseUrl: opts.baseUrl })
+  const modelId = JSON.stringify(opts.modelId)
+  return main.eval(
+    `(async () => {
+      const args = ${args}
+      const p = await window.api.provider.add({
+        name: args.name,
+        baseUrl: args.baseUrl,
+        apiKey: 'e2e',
+        apiProtocol: 'openai-completions'
+      })
+      await window.api.provider.addModel({ providerId: p.id, modelId: ${modelId} })
+      const row = (await window.api.provider.listModels(p.id)).find((m) => m.modelId === ${modelId})
+      if (row) {
+        await window.api.provider.updateModelCapabilities({
+          id: row.id,
+          capabilities: { maxInputTokens: 200000, maxOutputTokens: 4096, vision: true }
+        })
+      }
+      for (const [key, value] of [
+        ['general.defaultProvider', p.id],
+        ['general.defaultModel', ${modelId}],
+        ['general.titleProvider', p.id],
+        ['general.titleModel', ${modelId}]
+      ]) {
+        await window.api.settings.set({ key, value })
+      }
+      return { providerId: p.id }
+    })()`
+  )
+}
+
+/**
+ * 等 React 真正挂载（`launchApp` 只等到 preload 的 `window.api`，此后还有 ~1.5s 才上屏）。
+ *
+ * ⚠️ **不要用 `location.reload()` 让渲染端重新初始化**：主进程的 `will-navigate`
+ * 守卫（`src/main/index.ts`，防止应用变成浏览器）会 `preventDefault` 掉它，页面被卸载
+ * 后不再重建 —— 表现就是「整页再也不渲染」。要让渲染端拿到新种的模型/会话，走 UI 自己的
+ * 刷新入口（`sidebarPane.clickNewChat()` 会 `setSessions(await session.list())`）。
+ */
+export async function waitRendererReady(main: CdpClient): Promise<void> {
+  await until(() => main.eval<boolean>('!!window.api'), 'window.api ready')
+  await until(
+    () => main.eval<boolean>('document.querySelectorAll("button").length > 0'),
+    'renderer mounted'
+  )
+}
+
+/**
+ * 页内 ChatEvent 收集器 —— 断言「链路发了什么」的主接缝（优先于 DOM）。
+ *
+ * 装在渲染进程里旁挂 `window.api.agent.onEvent`，与 `useAgentEvents` 并行接收，
+ * 不干扰应用自身的处理。收集器是**全局**的（不分会话），断言前按 `sessionId` 过滤；
+ * 每个 it 开头 `clear()` 一次，免得上一条用例的事件混进序列断言。
+ */
+export interface EventRecorder {
+  install(): Promise<void>
+  clear(): Promise<void>
+  all<T = RecordedEvent>(): Promise<T[]>
+  /** 事件类型序列（去掉高频 delta 后更好读；传 true 保留 delta） */
+  types(withDeltas?: boolean): Promise<string[]>
+  count(type: string): Promise<number>
+  /** 等到某类事件出现（返回**首条**匹配事件）；超时抛错 */
+  waitFor<T = RecordedEvent>(
+    type: string,
+    opts?: { timeoutMs?: number; sessionId?: string }
+  ): Promise<T>
+}
+
+/** 收集到的事件（只声明 spec 会读的字段，其余原样保留） */
+export interface RecordedEvent {
+  type: string
+  sessionId: string
+  [key: string]: unknown
+}
+
+const RECORDER_KEY = '__shuvixE2eEvents'
+
+export function eventRecorder(main: CdpClient): EventRecorder {
+  const install = async (): Promise<void> => {
+    await main.eval(
+      `(() => {
+        if (window.${RECORDER_KEY}) return true
+        window.${RECORDER_KEY} = []
+        window.api.agent.onEvent((e) => window.${RECORDER_KEY}.push(e))
+        return true
+      })()`
+    )
+  }
+  const all = <T>(): Promise<T[]> => main.eval<T[]>(`window.${RECORDER_KEY} ?? []`)
+
+  return {
+    install,
+    clear: () => main.eval(`(window.${RECORDER_KEY} ?? []).length = 0`),
+    all,
+    types: (withDeltas = false) =>
+      main.eval<string[]>(
+        `(window.${RECORDER_KEY} ?? [])
+          .map((e) => e.type)
+          .filter((t) => ${withDeltas} || !t.endsWith('_delta'))`
+      ),
+    count: (type) =>
+      main.eval<number>(
+        `(window.${RECORDER_KEY} ?? []).filter((e) => e.type === ${JSON.stringify(type)}).length`
+      ),
+    waitFor: async <T>(
+      type: string,
+      opts: { timeoutMs?: number; sessionId?: string } = {}
+    ): Promise<T> => {
+      const cond = opts.sessionId
+        ? `e.type === ${JSON.stringify(type)} && e.sessionId === ${JSON.stringify(opts.sessionId)}`
+        : `e.type === ${JSON.stringify(type)}`
+      const found = await until(
+        () => main.eval<T | null>(`(window.${RECORDER_KEY} ?? []).find((e) => ${cond}) ?? null`),
+        `chat event ${type}`,
+        opts.timeoutMs ?? 30_000
+      )
+      return found
+    }
+  }
 }
 
 export interface ProjectSeed {

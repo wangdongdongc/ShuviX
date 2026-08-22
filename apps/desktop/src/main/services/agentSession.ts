@@ -1,5 +1,6 @@
 import {
   DEFAULT_PROFILE_NAME,
+  clearSessionDecisions,
   generateSessionTitle,
   SessionTitler,
   resolveInitialThinkingLevel,
@@ -18,7 +19,8 @@ import { agentFactory } from '../agents/agentHost'
 import { resolveModel } from './agentModelResolver'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { sshManager } from './sshManager'
-import type { ModelCapabilities, ThinkingLevel, ChatMessage, AgentRuntimeInfo } from '../types'
+import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../types'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionModelMetadata } from '../dao/types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { settingsDao } from '../dao/settingsDao'
@@ -48,7 +50,7 @@ export interface AgentSessionCreateParams {
 /**
  * AgentSession — 封装单个 session 的所有 Agent 状态和操作（桌面宿主）。
  *
- * 创建/装配（systemPrompt 组装、工具解析、hooks、指令注入）已收敛到统一创建管线
+ * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
  * （agents/agentHost 的 agentFactory + 'default' 档案）；本类保留桌面特有的
  * 生命周期编排：titler、generateTitle、setModel 的能力查询、ssh / fileTime 清理。
  *
@@ -130,10 +132,7 @@ export class AgentSession {
   /**
    * 向 Agent 发送消息（支持附带图片）。
    *
-   * SessionStart / UserPromptSubmit hook 已下沉到 RuntimeAgent（各端一致）：
-   * - 首轮快速标题经注入的 `onPromptAccepted` 在 UserPromptSubmit 通过后触发；
-   * - hook `deny` 时 RuntimeAgent 内部广播原因并跳过派发，此处 refine 因 titler 的
-   *   quick 尚未完成而自然跳过。
+   * 首轮快速标题经注入的 `onPromptAccepted` 在派发前触发（各端一致）。
    */
   async prompt(
     text: string,
@@ -150,8 +149,7 @@ export class AgentSession {
     void this.titler.refine()
   }
 
-  // 注：hook 的 additionalContext 注入已下沉到 HarnessSession（各端一致）。
-  // 指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
+  // 注：指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
 
   /** 向运行中的 Agent 注入 steer 消息 */
   async steer(text: string): Promise<void> {
@@ -163,7 +161,7 @@ export class AgentSession {
     await this.runtime.followUp(text)
   }
 
-  /** 中止生成；Stop hook 由 HarnessSession.abort 统一触发 */
+  /** 中止生成 */
   async abort(): Promise<void> {
     await this.runtime.abort()
   }
@@ -246,20 +244,19 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，下次 init 会重建）。Stop hook 经 HarnessSession 触发。 */
+  /** 使 Agent 失效（回退时使用，下次 init 会重建）。 */
   invalidate(): void {
-    this.runtime.fireStopHook('invalidated')
     void this.runtime.abort()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
   }
 
-  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。Stop hook 经 HarnessSession 触发。 */
+  /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
   destroy(): void {
-    this.runtime.fireStopHook('destroyed')
     void this.runtime.abort()
     clearFileTimeSession(this.sessionId)
+    clearSessionDecisions(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
   }

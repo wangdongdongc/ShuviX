@@ -29,10 +29,15 @@ export { MessageRenderer } from './components/chat/MessageRenderer'
 export type { VisibleItem } from './components/chat/MessageRenderer'
 export { AssistantBubble } from './components/chat/AssistantBubble'
 export { UserBubble } from './components/chat/UserBubble'
-export { StepBlock } from './components/chat/StepBlock'
+export { ThinkingBlock } from './components/chat/ThinkingBlock'
 export { ToolCallBlock } from './components/chat/ToolCallBlock'
 export { CodeBlock } from './components/chat/CodeBlock'
-export { markdownComponents } from './components/chat/markdownComponents'
+export {
+  markdownComponents,
+  markdownRemarkPlugins,
+  markdownRehypePlugins,
+  markdownRehypePluginsNoRaw
+} from './components/chat/markdownComponents'
 export { DiffViewer } from './components/chat/DiffViewer'
 export { TokenBadge, InvalidTokenBadge } from './components/chat/InlineTokenBadge'
 export { TokenChip, TokenPayloadDialog } from './components/chat/TokenChip'

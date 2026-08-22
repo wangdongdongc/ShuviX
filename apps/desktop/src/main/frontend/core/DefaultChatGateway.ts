@@ -1,6 +1,6 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { AgentInitResult, AgentRuntimeInfo, Message, ThinkingLevel } from '../../types'
+import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import '../../tools/allTools'
@@ -15,7 +15,7 @@ import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
 import { skillService } from '../../services/skillService'
-import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionDao } from '../../dao/sessionDao'
 import { projectDao } from '../../dao/projectDao'
@@ -95,7 +95,7 @@ export class DefaultChatGateway implements ChatGateway {
     void session.steer(text)
   }
 
-  async abort(sessionId: string): Promise<{ success: boolean; savedMessage?: Message }> {
+  async abort(sessionId: string): Promise<{ success: boolean }> {
     // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，
     // 不再需要网关回传「抢救出来的半条消息」。
     await sessionService.getAgentSession(sessionId)?.abort()
@@ -158,8 +158,8 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 消息操作 ─────────────────────────────────
 
-  async listMessages(sessionId: string): Promise<Message[]> {
-    return (await messageService.listBySession(sessionId)) as unknown as Message[]
+  async listMessages(sessionId: string): Promise<ChatMessage[]> {
+    return await messageService.listBySession(sessionId)
   }
 
   clearMessages(sessionId: string): void {

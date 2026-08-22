@@ -25,7 +25,7 @@ import type {
   SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateProjectParams,
-  SessionUpdateAutoApproveParams,
+  SessionUpdateAutoAllowParams,
   SessionAllowListRemoveParams,
   SubAgentCreateParams,
   SubAgentSaveParams,
@@ -166,7 +166,7 @@ const api = {
 
     /**
      * 统一的"用户输入响应"入口。
-     * 命令审批 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的工具挂起 Promise。
+     * 命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的工具挂起 Promise。
      */
     respondToInput: (params: {
       sessionId: string
@@ -236,8 +236,8 @@ const api = {
       ipcRenderer.invoke('session:updateThinkingLevel', params),
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) =>
       ipcRenderer.invoke('session:updateEnabledTools', params),
-    updateAutoApprove: (params: SessionUpdateAutoApproveParams) =>
-      ipcRenderer.invoke('session:updateAutoApprove', params),
+    updateAutoAllow: (params: SessionUpdateAutoAllowParams) =>
+      ipcRenderer.invoke('session:updateAutoAllow', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeAllowListEntry', params),
     generateTitle: (params: { sessionId: string; conversationText: string }) =>
@@ -315,7 +315,37 @@ const api = {
     save: (params: SubAgentSaveParams) => ipcRenderer.invoke('subAgent:save', params),
     create: (params: SubAgentCreateParams) => ipcRenderer.invoke('subAgent:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('subAgent:delete', params),
+    getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
+      ipcRenderer.invoke('subAgent:getSource', params),
+    saveSource: (params: { originalName: string; text: string }) =>
+      ipcRenderer.invoke('subAgent:saveSource', params),
+    createSource: (params: { text: string }) => ipcRenderer.invoke('subAgent:createSource', params),
     openFolder: () => ipcRenderer.invoke('subAgent:openFolder')
+  },
+
+  // ============ 安全策略（文件系统驱动，md 原文编辑） ============
+  policy: {
+    list: () => ipcRenderer.invoke('policy:list'),
+    getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
+      ipcRenderer.invoke('policy:getSource', params),
+    save: (params: { originalName: string; text: string }) =>
+      ipcRenderer.invoke('policy:save', params),
+    create: (params: { text: string }) => ipcRenderer.invoke('policy:create', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('policy:delete', params),
+    listInvalid: () => ipcRenderer.invoke('policy:listInvalid'),
+    getSourceByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('policy:getSourceByFile', params),
+    saveByFile: (params: { fileName: string; text: string }) =>
+      ipcRenderer.invoke('policy:saveByFile', params),
+    deleteByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('policy:deleteByFile', params),
+    openFolder: () => ipcRenderer.invoke('policy:openFolder')
+  },
+
+  // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============
+  shuvixMd: {
+    validate: (params: { type: string; text: string; name?: string }) =>
+      ipcRenderer.invoke('shuvixMd:validate', params)
   },
 
   // ============ 工具 ============
@@ -620,19 +650,6 @@ const api = {
       ipcRenderer.invoke('skill:setGroupEnabled', params)
   },
 
-  // ============ Hook 管理 ============
-  hook: {
-    /** 列出所有 hook（默认隐藏 builtin） */
-    list: (opts?: { includeBuiltin?: boolean }) => ipcRenderer.invoke('hook:list', opts),
-    /** 两份 hooks.json 的健康状态 */
-    status: () => ipcRenderer.invoke('hook:status'),
-    /** 手动 reload —— watcher 已自动 reload，仅 UI 兜底用 */
-    reload: () => ipcRenderer.invoke('hook:reload'),
-    /** 打开 hooks.json 编辑（不存在则先创建空占位） */
-    openConfigFile: (scope: 'global' | 'project', projectDir?: string) =>
-      ipcRenderer.invoke('hook:openConfigFile', scope, projectDir)
-  },
-
   // ============ 自动更新 ============
   update: {
     /** 检查更新 */
@@ -779,12 +796,12 @@ const api = {
     /** 停止监听某个文件 */
     unwatch: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:unwatch', params) as Promise<void>,
-    /** 读取文件内容用于面板预览。准入范围外路径返回 not-allowed，不弹审批 */
+    /** 读取文件内容用于面板预览。准入范围外路径返回 not-allowed，不弹询问 */
     read: (params: { sessionId: string; path: string }) =>
       ipcRenderer.invoke('files:read', params) as Promise<
         import('@shuvix/chat-protocol/types/filePreview').FileReadResult
       >,
-    /** 回写文件内容（中间区 Markdown 编辑器自动保存）。准入范围外路径返回 ok:false，不弹审批 */
+    /** 回写文件内容（中间区 Markdown 编辑器自动保存）。准入范围外路径返回 ok:false，不弹询问 */
     write: (params: { sessionId: string; path: string; content: string }) =>
       ipcRenderer.invoke('files:write', params) as Promise<
         { ok: true } | { ok: false; error: string }

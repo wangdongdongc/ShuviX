@@ -4,7 +4,6 @@
  */
 export * from './project'
 export * from './session'
-export * from './message'
 export * from './provider'
 export * from './settings'
 export * from './agent'

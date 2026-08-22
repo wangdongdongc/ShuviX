@@ -163,7 +163,7 @@ function BrowserToolPanel(): React.JSX.Element {
                   <button
                     onClick={handleClearAll}
                     disabled={clearingAll}
-                    className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
+                    className="px-1.5 py-0.5 text-[10px] text-error hover:bg-error/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
                     {clearingAll && <Loader2 size={9} className="animate-spin" />}
                     {t('common.confirm')}
@@ -179,7 +179,7 @@ function BrowserToolPanel(): React.JSX.Element {
               ) : (
                 <button
                   onClick={() => setConfirmClearAll(true)}
-                  className="text-[11px] text-text-tertiary hover:text-danger transition-colors"
+                  className="text-[11px] text-text-tertiary hover:text-error transition-colors"
                 >
                   {t('settings.toolBrowserClearAll')}
                 </button>
@@ -219,7 +219,7 @@ function BrowserToolPanel(): React.JSX.Element {
                       <button
                         onClick={() => handleClearSite(site.host)}
                         disabled={clearingHost === site.host}
-                        className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
+                        className="px-1.5 py-0.5 text-[10px] text-error hover:bg-error/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
                       >
                         {clearingHost === site.host && (
                           <Loader2 size={9} className="animate-spin" />
@@ -237,7 +237,7 @@ function BrowserToolPanel(): React.JSX.Element {
                   ) : (
                     <button
                       onClick={() => setConfirmHost(site.host)}
-                      className="p-1 text-text-tertiary hover:text-danger transition-colors"
+                      className="p-1 text-text-tertiary hover:text-error transition-colors"
                       title={t('settings.toolBrowserClearSite')}
                     >
                       <Trash2 size={11} />
@@ -377,7 +377,7 @@ function SshToolPanel(): React.JSX.Element {
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleDelete(cred.id)}
-                        className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors"
+                        className="px-1.5 py-0.5 text-[10px] text-error hover:bg-error/10 rounded transition-colors"
                       >
                         {t('common.confirm')}
                       </button>
@@ -391,7 +391,7 @@ function SshToolPanel(): React.JSX.Element {
                   ) : (
                     <button
                       onClick={() => setDeletingId(cred.id)}
-                      className="p-1 text-text-tertiary hover:text-danger transition-colors"
+                      className="p-1 text-text-tertiary hover:text-error transition-colors"
                       title="Delete"
                     >
                       <Trash2 size={12} />
@@ -546,7 +546,7 @@ function DatabaseToolPanel(): React.JSX.Element {
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleDelete(cred.id)}
-                        className="px-1.5 py-0.5 text-[10px] text-danger hover:bg-danger/10 rounded transition-colors"
+                        className="px-1.5 py-0.5 text-[10px] text-error hover:bg-error/10 rounded transition-colors"
                       >
                         {t('common.confirm')}
                       </button>
@@ -560,7 +560,7 @@ function DatabaseToolPanel(): React.JSX.Element {
                   ) : (
                     <button
                       onClick={() => setDeletingId(cred.id)}
-                      className="p-1 text-text-tertiary hover:text-danger transition-colors"
+                      className="p-1 text-text-tertiary hover:text-error transition-colors"
                       title="Delete"
                     >
                       <Trash2 size={12} />

@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: explore
 description: 高速・読み取り専用のコードベース探索:ファイル検索、コード検索、コードベースに関する質問への回答。
 shuvix-tools: read, ls, grep, glob

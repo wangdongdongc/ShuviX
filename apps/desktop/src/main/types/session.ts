@@ -47,10 +47,10 @@ export interface SessionUpdateEnabledToolsParams {
   enabledTools: string[]
 }
 
-/** IPC: 更新命令免审批参数 */
-export interface SessionUpdateAutoApproveParams {
+/** IPC: 更新命令免询问参数 */
+export interface SessionUpdateAutoAllowParams {
   id: string
-  autoApprove: boolean
+  autoAllow: boolean
 }
 
 /** IPC: 移除允许列表条目（仅路径条目 `Read(...)`/`Write(...)`） */

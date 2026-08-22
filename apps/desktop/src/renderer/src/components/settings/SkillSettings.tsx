@@ -448,7 +448,7 @@ function SkillItem({
           {isDefault && (
             <button
               onClick={onDelete}
-              className="p-1 text-text-tertiary hover:text-danger transition-colors"
+              className="p-1 text-text-tertiary hover:text-error transition-colors"
               title={t('common.delete')}
             >
               <Trash2 size={12} />
@@ -541,7 +541,7 @@ function AddDirDialog({
               monospace
               width={300}
             />
-            {error && <p className="text-[11px] text-danger mt-1.5">{error}</p>}
+            {error && <p className="text-[11px] text-error mt-1.5">{error}</p>}
           </div>
         </div>
 

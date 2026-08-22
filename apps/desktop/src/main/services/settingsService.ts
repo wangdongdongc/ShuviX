@@ -12,7 +12,7 @@ export interface SettingMeta {
 
 /**
  * 所有已知系统设置的元数据注册表
- * 新增设置时在此追加一行，工具参数描述、AI prompt、审批弹窗标签自动同步
+ * 新增设置时在此追加一行，工具参数描述、AI prompt、询问弹窗标签自动同步
  */
 export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.theme': { labelKey: 'settings.theme', desc: 'dark | light | system' },

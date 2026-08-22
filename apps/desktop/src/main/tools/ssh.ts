@@ -1,16 +1,15 @@
 /**
  * SSH 工具 — 通过 SSH 连接远程服务器并执行命令
  * connect 动作无参数，凭据由用户在 UI 弹窗中输入，不经过大模型
- * exec 动作每次都需用户审批
+ * exec 动作每次都需用户询问
  */
 
 import { Type } from 'typebox'
 import { sshManager } from '../services/sshManager'
 import { sshCredentialDao } from '../dao/sshCredentialDao'
-import { sessionDao } from '../dao/sessionDao'
 import { sanitizeBinaryOutput, collapseProgressOutput } from '../utils/toolUtils/shell'
 import { BaseTool } from '@shuvix/agent-runtime'
-import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import { getDesktopSecurityContext, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { SshToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
@@ -60,7 +59,7 @@ export function buildSshDescription(): string {
   desc +=
     ' To connect without a saved credential, use action="connect" without credentialName — the user will provide credentials via a secure UI dialog (you do NOT need to provide host, username, or password).'
   desc +=
-    ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command requires user approval before execution. You do NOT have access to any credentials — never ask the user for passwords in chat.'
+    ' Use action="exec" with a command to run it on the remote server. Use action="disconnect" to close the connection. Each exec command asks the user for confirmation before running. You do NOT have access to any credentials — never ask the user for passwords in chat.'
   return desc
 }
 
@@ -114,7 +113,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
     // 连接失败不抛异常，留给 execute 中的 handleConnect 返回明确错误消息
   }
 
-  /** 安全检查 — 审批为动作特定的动态条件性审批，留在 executeInternal 中 */
+  /** 安全检查 — 询问为动作特定的动态条件性询问，留在 executeInternal 中 */
   protected async securityCheck(): Promise<void> {
     /* no-op */
   }
@@ -328,36 +327,31 @@ async function handleExec(
     throw new Error('No active SSH connection. Use ssh({ action: "connect" }) first.')
   }
 
-  // 每条命令都需用户审批 —— 唯一豁免是会话级「免审批」开关（无命令模式匹配）
-  const sess = sessionDao.pickSettings(ctx.sessionId, ['autoApprove'])
-  if (ctx.requestUserInput && !sess?.autoApprove) {
-    const response = await ctx.requestUserInput({
-      id: toolCallId,
-      kind: 'approval',
+  // 每条命令都需用户询问 —— 唯一豁免是会话级「免询问」开关（无命令模式匹配）。
+  // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 consent 层）
+  const outcome = await getDesktopSecurityContext(ctx).enforceCommand(
+    { channel: 'ssh', command },
+    {
+      toolCallId,
       toolName: 'ssh',
-      command,
       description,
-      createdAt: Date.now()
-    })
-    if (response.kind === 'cancel') {
-      throw new Error(TOOL_ABORTED)
+      abortError: TOOL_ABORTED,
+      // 用户提交"其它"反馈,不执行命令,把文本作为正常 tool result 返回
+      onOther: 'return',
+      // fail-closed：ask 且无询问通道 → 拒绝（桌面 root/派生 agent 恒有通道，
+      // 无前端时 harness 层已即时 cancel；此分支只防御未来的无通道调用方）
+      missingChannel: 'deny'
     }
-    // 用户提交"其它"反馈,不执行命令,把文本作为正常 tool result 返回
-    if (response.kind === 'other') {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Command was not executed. User responded with feedback instead:\n${response.text}`
-          }
-        ],
-        details: { type: 'ssh', action: 'exec', cancelled: true }
-      }
-    }
-    if (response.kind !== 'approval' || !response.approved) {
-      throw new Error(
-        (response.kind === 'approval' && response.reason) || 'User denied execution of this command'
-      )
+  )
+  if (outcome.status === 'feedback') {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Command was not executed. User responded with feedback instead:\n${outcome.text}`
+        }
+      ],
+      details: { type: 'ssh', action: 'exec', cancelled: true }
     }
   }
 

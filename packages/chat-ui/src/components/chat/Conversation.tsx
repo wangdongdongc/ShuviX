@@ -5,12 +5,13 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import {
   useChatStore,
   selectIsStreaming,
+  selectPendingInputs,
   type ChatMessage,
-  type AssistantTextMessage
+  type AssistantMessage
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { MessageRenderer, type VisibleItem } from './MessageRenderer'
+import { MessageRenderer, STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
@@ -25,109 +26,76 @@ function ConversationFooter(): React.JSX.Element {
   )
 }
 
-/** 判断消息是否为中间步骤/工具项 */
-function isStepOrToolMsg(msg: ChatMessage): boolean {
-  return (
-    msg.type === 'tool_use' ||
-    msg.type === 'step_text' ||
-    msg.type === 'step_thinking' ||
-    msg.type === 'steer'
-  )
+/** 助手消息（会话树里一条 assistant entry = 一次 LLM 调用） */
+function isAssistantMessage(msg: ChatMessage): msg is AssistantMessage {
+  return msg.role === 'assistant' && msg.type === 'message'
+}
+
+/** 不含工具块 = 本轮终答，这张卡到此收口（与投影里 toolCalls.length === 0 同义） */
+function isFinalAnswer(msg: AssistantMessage): boolean {
+  return !msg.blocks.some((b) => b.type === 'tool')
+}
+
+/** 流式占位卡：正文/思考/工具调用由 AssistantBubble 自己从 store 读 */
+function streamingPlaceholder(sessionId: string): AssistantMessage {
+  return {
+    id: STREAMING_PLACEHOLDER_ID,
+    sessionId,
+    role: 'assistant',
+    type: 'message',
+    blocks: [],
+    content: '',
+    metadata: null,
+    model: '',
+    createdAt: 0
+  }
 }
 
 /**
- * 预处理消息列表：将 step/tool 消息合并到后续的 assistant text 消息中
- * 流式时在末尾追加合成占位项，由 AssistantBubble 自行从 store 读取流式状态
+ * 消息列表 → 对话流的项。
+ *
+ * 数据侧一条 entry 一条消息；呈现侧把**连续的 assistant 消息**收成一张卡
+ * （过程在上、终答在下），遇到终答、用户消息或列表结束即收口。所以轮中 steer /
+ * 中途 abort 都只是「这张卡没有终答」，不需要造合成消息去承载它们。
+ *
+ * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
+ * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
  */
 function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
   const items: VisibleItem[] = []
-  const stepBuffer: VisibleItem[] = []
+  let group: AssistantMessage[] = []
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]
+  const flush = (streamingTail = false): void => {
+    if (group.length === 0) return
+    items.push({
+      key: group[0].id,
+      msg: group[group.length - 1],
+      msgs: group,
+      ...(streamingTail ? { isStreamingPlaceholder: true } : {})
+    })
+    group = []
+  }
 
+  for (const msg of messages) {
     // 跳过 system_notify（但保留 error_event）
     if (msg.role === 'system_notify' && msg.type !== 'error_event') continue
 
-    // step/tool 消息 → 收集到 buffer
-    if (isStepOrToolMsg(msg)) {
-      stepBuffer.push({ msg })
+    if (isAssistantMessage(msg)) {
+      group.push(msg)
+      if (isFinalAnswer(msg)) flush()
       continue
     }
 
-    // 非 step/tool 消息：先 flush buffer
-    if (msg.role === 'assistant' && msg.type === 'text') {
-      // assistant text → 将 buffer 中的 steps 附加到这条消息
-      items.push({ msg, steps: stepBuffer.length > 0 ? [...stepBuffer] : undefined })
-      stepBuffer.length = 0
-      continue
-    }
-
-    // user text / error_event 等
-    // 如果有未消费的 steps（如 agent 中断），先创建一个空 assistant bubble 承载它们
-    if (stepBuffer.length > 0) {
-      const syntheticMsg: AssistantTextMessage = {
-        id: `orphan-${stepBuffer[0].msg.id}`,
-        sessionId: msg.sessionId,
-        role: 'assistant',
-        type: 'text',
-        content: '',
-        metadata: null,
-        model: stepBuffer[0].msg.model || '',
-        createdAt: stepBuffer[0].msg.createdAt
-      }
-      items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
-      stepBuffer.length = 0
-    }
-    items.push({ msg })
+    flush()
+    items.push({ key: msg.id, msg })
   }
 
-  // 尾部残留 steps
-  if (stepBuffer.length > 0) {
-    if (isStreaming) {
-      // 流式中：将残留 steps 挂载到合成流式占位项
-      const sessionId = stepBuffer[0].msg.sessionId
-      const syntheticMsg: AssistantTextMessage = {
-        id: 'streaming-live',
-        sessionId,
-        role: 'assistant',
-        type: 'text',
-        content: '',
-        metadata: null,
-        model: '',
-        createdAt: Date.now()
-      }
-      items.push({ msg: syntheticMsg, steps: [...stepBuffer], isStreamingPlaceholder: true })
-    } else {
-      // 非流式：创建 orphan bubble
-      const syntheticMsg: AssistantTextMessage = {
-        id: `orphan-${stepBuffer[0].msg.id}`,
-        sessionId: stepBuffer[0].msg.sessionId,
-        role: 'assistant',
-        type: 'text',
-        content: '',
-        metadata: null,
-        model: stepBuffer[0].msg.model || '',
-        createdAt: stepBuffer[0].msg.createdAt
-      }
-      items.push({ msg: syntheticMsg, steps: [...stepBuffer] })
-    }
-    stepBuffer.length = 0
-  } else if (isStreaming) {
-    // 流式中无残留 steps 时也追加空合成项（承载流式 content/thinking/toolCall）
-    const lastMsg = messages[messages.length - 1]
-    const sessionId = lastMsg?.sessionId || ''
-    const syntheticMsg: AssistantTextMessage = {
-      id: 'streaming-live',
-      sessionId,
-      role: 'assistant',
-      type: 'text',
-      content: '',
-      metadata: null,
-      model: '',
-      createdAt: Date.now()
-    }
-    items.push({ msg: syntheticMsg, isStreamingPlaceholder: true })
+  if (isStreaming) {
+    const sessionId = group[0]?.sessionId || messages[messages.length - 1]?.sessionId || ''
+    group.push(streamingPlaceholder(sessionId))
+    flush(true)
+  } else {
+    flush()
   }
 
   return items
@@ -159,7 +127,9 @@ export function Conversation({
   }, [])
 
   const focusMode = useChatHost().appearance.focusMode
-  const dim = focusMode
+  // 有待处理输入（ask / 审批）时不淡化：它们在等用户响应，鼠标没悬浮也必须一眼看见
+  const hasPendingInputs = useChatStore((s) => selectPendingInputs(s).length > 0)
+  const dim = focusMode && !hasPendingInputs
 
   const {
     handleRollback,
@@ -177,10 +147,10 @@ export function Conversation({
     () => buildVisibleItems(messages, isStreaming),
     [messages, isStreaming]
   )
-  // 仅当最后一条消息是助手文本消息时才允许重新生成
-  const lastAssistantTextId = useMemo(() => {
+  // 仅当最后一条消息是助手消息时才允许重新生成
+  const lastAssistantId = useMemo(() => {
     const last = messages[messages.length - 1]
-    return last?.role === 'assistant' && last?.type === 'text' ? last.id : null
+    return last && isAssistantMessage(last) ? last.id : null
   }, [messages])
 
   /** 渲染单条可见消息 */
@@ -188,12 +158,12 @@ export function Conversation({
     (_index: number, item: VisibleItem) => (
       <MessageRenderer
         item={item}
-        lastAssistantTextId={lastAssistantTextId}
+        lastAssistantId={lastAssistantId}
         onRollback={handleRollback}
         onRegenerate={handleRegenerate}
       />
     ),
-    [lastAssistantTextId, handleRollback, handleRegenerate]
+    [lastAssistantId, handleRollback, handleRegenerate]
   )
 
   return (
@@ -216,14 +186,16 @@ export function Conversation({
           <Virtuoso
             ref={virtuosoRef}
             // conversation-scroller：供外壳按需微调本列滚动条（如会话面板展开时内缩轨道，见 base.css）
-            className="flex-1 min-w-0 thin-scrollbar conversation-scroller"
+            // relative z-0：把正文自成一个层叠上下文，正文内的定位元素（时间线头像、代码块按钮…）
+            // 不再溢出到悬浮输入卡片之上——卡片在 DOM 中更靠后，始终盖住正文
+            className="relative z-0 flex-1 min-w-0 thin-scrollbar conversation-scroller"
             data={visibleItems}
             itemContent={renderItem}
             components={{ Footer: ConversationFooter }}
             initialTopMostItemIndex={visibleItems.length - 1}
             key={sessionId}
             increaseViewportBy={{ top: 200, bottom: 400 }}
-            computeItemKey={(_index, item) => item.msg.id}
+            computeItemKey={(_index, item) => item.key}
           />
         )}
 

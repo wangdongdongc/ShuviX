@@ -81,6 +81,15 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
       const dir = asStr(args.dir)
       return [action, detail, dir && `(${dir})`].filter(Boolean).join(' ')
     }
+  },
+  agent: {
+    labelKey: 'tool.agentLabel',
+    presentation: { icon: 'Bot' },
+    // 派发目标 ref（现参数 `name`；兼容历史消息的 `agent` / `subagent_type`）+ 任务描述
+    buildSummary: (args) =>
+      [asStr(args.name) ?? asStr(args.agent) ?? asStr(args.subagent_type), asStr(args.description)]
+        .filter(Boolean)
+        .join(' · ') || undefined
   }
 }
 

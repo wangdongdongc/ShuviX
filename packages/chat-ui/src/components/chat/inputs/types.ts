@@ -1,5 +1,5 @@
 /**
- * 用户输入子表单(Approval / Choice / SshCredentials)的通用 props 协议
+ * 用户输入子表单(Ask / Choice / SshCredentials)的通用 props 协议
  *
  * 设计原则:
  * - 父组件(`PendingInputsPanel`)负责持有"草稿"状态(按 sessionId+requestId 隔离)

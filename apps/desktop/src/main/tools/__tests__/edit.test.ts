@@ -18,15 +18,14 @@ vi.mock('../../services/toolContext', () => ({
     return r === base || r.startsWith(base + sep)
   },
   isPathWithinReferenceDirs: () => false,
-  assertReadApproved: () => {},
-  assertWriteApproved: () => {},
-  makeDesktopApprovalPolicy: () => ({
-    isAllowedWithoutPrompt: () => true,
-    isAutoApprove: () => true,
-    isInAllowList: () => false,
-    buildApprovalCommand: () => '',
-    isDirectory: () => false,
-    persistAllow: () => {}
+  assertReadAllowed: () => {},
+  assertWriteAllowed: () => {},
+  getDesktopSecurityContext: () => ({
+    evaluate: () => ({ effect: 'allow', matched: [], winning: 'test' }),
+    evaluateReadOnly: () => true,
+    enforcePath: async () => {},
+    enforceCommand: async () => ({ status: 'allowed' }),
+    enforceGitOp: async () => {}
   }),
   TOOL_ABORTED: 'Aborted'
 }))

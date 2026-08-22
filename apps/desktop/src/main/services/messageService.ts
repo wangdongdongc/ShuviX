@@ -12,7 +12,7 @@
  */
 import { INLINE_TOKENS_CUSTOM_TYPE, entriesToChatMessages } from '@shuvix/agent-runtime'
 import { deleteSessionFile, getSessionTree } from './sessionStorage'
-import type { ChatMessage } from '../types'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 export class MessageService {
   /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
@@ -43,7 +43,7 @@ export class MessageService {
   async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
     const session = await getSessionTree(sessionId)
     if (!session) return false
-    const entry = await session.getEntry(resolveEntryId(messageId))
+    const entry = await session.getEntry(messageId)
     if (!entry) return false
     // user 消息前若有内联 Token 显示侧车，一并越过 —— 免得叶子停在无主侧车上
     let targetId = entry.parentId
@@ -61,24 +61,11 @@ export class MessageService {
   async truncateAfterMessage(sessionId: string, messageId: string): Promise<boolean> {
     const session = await getSessionTree(sessionId)
     if (!session) return false
-    const entry = await session.getEntry(resolveEntryId(messageId))
+    const entry = await session.getEntry(messageId)
     if (!entry) return false
     await session.moveTo(entry.id)
     return true
   }
-}
-
-/**
- * ChatMessage id → entry id。
- *
- * 投影时中间轮的 step 会派生出 `<entryId>:think` / `<entryId>:text` 这样的合成 id，
- * 树导航只认原始 entry，所以这里剥掉后缀。tool_use 的 id 是 toolCallId，
- * 不对应任何 entry —— 落回它所属的 assistant entry 由调用方保证（UI 只允许对
- * 用户消息/助手终答发起回退）。
- */
-function resolveEntryId(messageId: string): string {
-  const idx = messageId.indexOf(':')
-  return idx === -1 ? messageId : messageId.slice(0, idx)
 }
 
 export const messageService = new MessageService()

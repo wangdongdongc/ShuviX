@@ -17,6 +17,8 @@ import { registerDownloadHandlers } from './downloadHandlers'
 import { registerUpdateHandlers } from './updateHandlers'
 import { registerMcpServerHandlers } from './mcpServerHandlers'
 import { registerSubAgentHandlers } from './subAgentHandlers'
+import { registerPolicyHandlers } from './policyHandlers'
+import { registerShuvixMdHandlers } from './shuvixMdHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
 import { registerBrowserDataHandlers } from './browserDataHandlers'
@@ -26,7 +28,6 @@ import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
 import { registerWikiHandlers } from './wikiHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
-import { registerHookHandlers } from './hookHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -52,6 +53,8 @@ export function registerIpcHandlers(): void {
   registerUpdateHandlers()
   registerMcpServerHandlers()
   registerSubAgentHandlers()
+  registerPolicyHandlers()
+  registerShuvixMdHandlers()
   registerTerminalHandlers()
   registerBrowserViewHandlers()
   registerBrowserDataHandlers()
@@ -61,5 +64,4 @@ export function registerIpcHandlers(): void {
   registerFilesHandlers()
   registerWikiHandlers()
   registerPinChatHandlers()
-  registerHookHandlers()
 }

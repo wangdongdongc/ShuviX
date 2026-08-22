@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-builtin: true
 name: widget
 description: 创建、维护并导出 ShuviX Widget —— 常驻 Widget 面板的迷你 React 应用。
 shuvix-tools: read, write, edit, ls, glob, grep, bash, git

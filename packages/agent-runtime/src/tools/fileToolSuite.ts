@@ -1,10 +1,10 @@
 /**
  * 共享文件工具套件 —— read / write / edit 的整条执行流程（宿主无关）。
  *
- * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 路径审批(securityCheck)
+ * 把桌面 tools/{read,write,edit}.ts 的 shell 逻辑收敛成一份:路径解析 → 路径询问(securityCheck)
  * → 内核(readTextContent/readDirContent/applyWrite/applyEdit) + read 的分派(url/图片/富文档/.doc/
- * 二进制/目录/纯文本)。平台差异全部经注入:FileSystemPort / FileGuards / resolvePath / ApprovalPolicy /
- * ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
+ * 二进制/目录/纯文本)。平台差异全部经注入:FileSystemPort / FileGuards / resolvePath / SecurityContext
+ * (安全模块 PEP 门面) / ReadDecoders(内容解码器,可选能力函数) / ensureAccess。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -14,11 +14,11 @@ import type {
   WriteToolDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool } from './baseTool'
-import type { FileSystemPort, FileGuards, WriteApprovalHook } from '../fileTools/port'
+import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
-import { assertPathApproved, type ApprovalPolicy, type AccessMode } from '../approval/policy'
+import type { AccessMode, SecurityContext } from '../security/types'
 
 type ReadResult = AgentToolResult<ReadToolDetails>
 
@@ -97,7 +97,8 @@ export interface FileToolDeps {
   guards: FileGuards
   /** displayPath(params.path) → port 路径。桌面:read=resolveReadPath/write=resolveToCwd(绝对);扩展:identity */
   resolvePath(displayPath: string, mode: AccessMode): string
-  policy: ApprovalPolicy
+  /** 安全模块 PEP 门面（统一评估 + 询问挂起；宿主经 SecurityHostProvider 注入平台细节） */
+  security: SecurityContext
   decoders?: ReadDecoders
   /** 执行前的平台访问校验(扩展 FSA 权限);默认 no-op */
   ensureAccess?(): Promise<void>
@@ -137,11 +138,11 @@ abstract class FileToolBase<
   }
 
   /**
-   * 写类工具（write/edit）把路径审批推迟到 apply 层 —— 那里才算得出 diff，
-   * 审批卡片才能带预览。留在这里的话同一次写入会先弹一个光秃秃的路径审批、
-   * 再弹一次预览审批。read 不受影响（没有"即将发生的改动"可言）。
+   * 写类工具（write/edit）把路径询问推迟到 apply 层 —— 那里才算得出 diff，
+   * 询问卡片才能带预览。留在这里的话同一次写入会先弹一个光秃秃的路径询问、
+   * 再弹一次预览询问。read 不受影响（没有"即将发生的改动"可言）。
    */
-  protected get deferApprovalToApply(): boolean {
+  protected get deferAskToApply(): boolean {
     return false
   }
 
@@ -151,12 +152,12 @@ abstract class FileToolBase<
     signal?: AbortSignal
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
-    // read 的 URL 分支不走文件系统审批
+    // read 的 URL 分支不走文件系统询问
     if (this.mode === 'read' && this.isUrl(params.path)) return
     await this.deps.ensureAccess?.()
-    if (this.deferApprovalToApply) return
+    if (this.deferAskToApply) return
     const portPath = this.deps.resolvePath(params.path, this.mode)
-    await assertPathApproved(this.deps.policy, this.mode, portPath, {
+    await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
       toolName: this.name,
       displayPath: params.path,
@@ -165,14 +166,14 @@ abstract class FileToolBase<
   }
 
   /**
-   * 写入前审批钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
+   * 写入前询问钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
    *
-   * 走的仍是 assertPathApproved，所以放行范围 / 会话免审批 / allowList 这几层短路
+   * 走的仍是统一评估链，所以内置/用户策略、会话免询问、allowList 这几层
    * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
    */
-  protected makeApprove(toolCallId: string, portPath: string): WriteApprovalHook {
+  protected makeAsk(toolCallId: string, portPath: string): WriteAskHook {
     return async ({ path, diff, isNewFile }) => {
-      await assertPathApproved(this.deps.policy, 'write', portPath, {
+      await this.deps.security.enforcePath('write', portPath, {
         toolCallId,
         toolName: this.name,
         displayPath: path,
@@ -283,7 +284,7 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
     this.description = deps.descriptions.write
   }
 
-  protected get deferApprovalToApply(): boolean {
+  protected get deferAskToApply(): boolean {
     return true
   }
 
@@ -299,7 +300,7 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeApprove(toolCallId, portPath)
+      this.makeAsk(toolCallId, portPath)
     )
     this.deps.onFileChange?.({ portPath, kind: 'write' })
     return res
@@ -318,7 +319,7 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
     this.description = deps.descriptions.edit
   }
 
-  protected get deferApprovalToApply(): boolean {
+  protected get deferAskToApply(): boolean {
     return true
   }
 
@@ -334,7 +335,7 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeApprove(toolCallId, portPath)
+      this.makeAsk(toolCallId, portPath)
     )
     this.deps.onFileChange?.({ portPath, kind: 'edit' })
     return res

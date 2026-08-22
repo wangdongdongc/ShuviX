@@ -4,17 +4,20 @@
  * 工具逻辑/静态描述全在共享核心（纯 md 驱动：描述不罗列可用类型，具名派发由用户在
  * 系统提示词里自行引导）；桌面只注入注册表(agentService 扫 ~/.shuvix/agents)、
  * 子代理管理器(agentManager)、abort 文案、父级模型配置。
- * 另保留 registerBuiltinTool 的 presentation，供 ToolCallBlock 渲染 `Agent · <type>`。
+ * 另保留 registerBuiltinTool 的 presentation，供 ToolCallBlock 渲染 `<label> · <type>`。
  */
 import {
   createDispatchAgentTool,
   buildDispatchDescription,
   AgentParamsSchema,
   BASE_PROFILE_NAMES,
+  DISPATCH_TOOL_NAME,
   type DispatchAgentTool,
   type SubAgentModelConfig,
   type SubAgentRegistry
 } from '@shuvix/agent-runtime'
+import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
+import { t } from '../i18n'
 import { TOOL_ABORTED, resolveProjectConfig, type ToolContext } from '../services/toolContext'
 import { agentService } from '../services/agentService'
 import { agentManager } from './AgentManager'
@@ -38,12 +41,13 @@ export interface AgentToolContext {
   rootSessionId?: string
 }
 
-/** 创建桌面 Agent 派发工具实例（root 与派生统一经 agentHost.resolveTools 注入） */
+/** 创建桌面 agent 派发工具实例（root 与派生统一经 agentHost.resolveTools 注入） */
 export function createAgentTool(ctx: ToolContext, agentCtx: AgentToolContext): DispatchAgentTool {
   const rootSessionId = agentCtx.rootSessionId ?? ctx.sessionId
   return createDispatchAgentTool({
     registry: dispatchRegistry,
     manager: agentManager,
+    label: t(BUILTIN_TOOL_PRESENTATIONS.agent.labelKey),
     modelConfig: agentCtx.modelConfig,
     parentSessionId: ctx.sessionId,
     abortError: TOOL_ABORTED,
@@ -55,14 +59,12 @@ export function createAgentTool(ctx: ToolContext, agentCtx: AgentToolContext): D
 
 // ─── 注册到 toolRegistry（仅 presentation/label，供 ToolCallBlock 渲染查找） ───
 registerBuiltinTool({
-  name: 'Agent',
+  name: DISPATCH_TOOL_NAME,
   group: 'agent',
   hidden: true, // 单工具不在工具选择器里出现；它的"开关"语义即"全部子代理"
-  getLabel: () => 'Agent',
-  getHint: () => 'Launch a sub-agent to handle a complex task',
-  presentation: {
-    icon: 'Bot'
-  },
+  getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS.agent.labelKey),
+  getHint: () => t('tool.agentHint'),
+  presentation: BUILTIN_TOOL_PRESENTATIONS.agent.presentation,
   // 设置页定义：静态描述（不罗列 agent 类型；桌面支持路径 ref），参数 schema 与派发工具一致
   describe: () => ({
     description: buildDispatchDescription(false, true),

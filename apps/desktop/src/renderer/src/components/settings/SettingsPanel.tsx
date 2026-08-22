@@ -1,14 +1,14 @@
 /**
  * 设置面板（桌面）—— 独立窗口（分组 Tab）。
  * 外壳复用 @shuvix/app-shell 的 SettingsContainer（注入式 tab）；桌面注入全套 tab。
- * activeTab 仍存 settingsStore，并与 `#settings/<tab>` hash 同步。
+ * activeTab 仍存 settingsStore，并与 `#settings/<tab>[/<subTab>]` hash 同步。
  */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Settings,
   Layers,
-  FileText,
+  Activity,
   Info,
   Puzzle,
   BookOpen,
@@ -16,21 +16,21 @@ import {
   Wrench,
   Send,
   Mic,
-  Webhook,
-  FolderClosed
+  FolderClosed,
+  Shield
 } from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
 import { ProjectsSettings } from './ProjectsSettings'
 import { ProviderSettings } from './ProviderSettings'
-import { HttpLogSettings } from './HttpLogSettings'
+import { MonitorSettings, MONITOR_SUB_TABS, type MonitorSubTab } from './MonitorSettings'
 import { AboutSettings } from './AboutSettings'
 import { McpSettings } from './McpSettings'
 import { SkillSettings } from './SkillSettings'
-import { HookSettings } from './HookSettings'
 import { ToolSettings } from './ToolSettings'
 import { AgentSettings } from './AgentSettings'
+import { PolicySettings } from './PolicySettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
 
@@ -39,15 +39,23 @@ const VALID_TABS = new Set([
   'projects',
   'providers',
   'agents',
+  'policies',
   'tools',
   'mcp',
   'skills',
-  'hooks',
   'voice',
   'telegramBots',
-  'httpLogs',
+  'monitor',
   'about'
 ])
+
+/** 解析 `#settings/<tab>[/<subTab>]`（子段目前只有监视器用） */
+function parseSettingsHash(): { tab?: string; sub?: string } {
+  const match = window.location.hash.match(/^#settings\/(.+)$/)
+  if (!match) return {}
+  const [tab, sub] = match[1].split('/')
+  return VALID_TABS.has(tab) ? { tab, sub } : {}
+}
 
 /** 内容滚动容器（保留原各 tab 的滚动行为） */
 function Scroll({ children }: { children: React.ReactNode }): React.JSX.Element {
@@ -57,13 +65,15 @@ function Scroll({ children }: { children: React.ReactNode }): React.JSX.Element 
 export function SettingsPanel(): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
+  // 子 tab 初值直接从 hash 取（惰性初始化，不走 effect）
+  const [monitorSubTab, setMonitorSubTab] = useState<MonitorSubTab>(() => {
+    const { sub } = parseSettingsHash()
+    return sub && MONITOR_SUB_TABS.has(sub) ? (sub as MonitorSubTab) : 'httpLogs'
+  })
 
   useEffect(() => {
-    const hash = window.location.hash
-    const match = hash.match(/^#settings\/(.+)$/)
-    if (match && VALID_TABS.has(match[1])) {
-      setActiveSettingsTab(match[1] as typeof activeSettingsTab)
-    }
+    const { tab } = parseSettingsHash()
+    if (tab) setActiveSettingsTab(tab as typeof activeSettingsTab)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const tabs: SettingsTab[] = [
@@ -100,6 +110,12 @@ export function SettingsPanel(): React.JSX.Element {
       content: <AgentSettings />
     },
     {
+      id: 'policies',
+      label: t('settings.tabPolicies'),
+      icon: <Shield size={14} />,
+      content: <PolicySettings />
+    },
+    {
       id: 'tools',
       label: t('settings.tabTools'),
       icon: <Wrench size={14} />,
@@ -122,12 +138,6 @@ export function SettingsPanel(): React.JSX.Element {
       )
     },
     {
-      id: 'hooks',
-      label: t('settings.tabHooks'),
-      icon: <Webhook size={14} />,
-      content: <HookSettings />
-    },
-    {
       id: 'voice',
       label: t('settings.tabVoice'),
       icon: <Mic size={14} />,
@@ -144,14 +154,10 @@ export function SettingsPanel(): React.JSX.Element {
       content: <TelegramBotsSettings />
     },
     {
-      id: 'httpLogs',
-      label: t('settings.tabHttpLogs'),
-      icon: <FileText size={14} />,
-      content: (
-        <Scroll>
-          <HttpLogSettings />
-        </Scroll>
-      )
+      id: 'monitor',
+      label: t('settings.tabMonitor'),
+      icon: <Activity size={14} />,
+      content: <MonitorSettings subTab={monitorSubTab} onSubTabChange={setMonitorSubTab} />
     },
     {
       id: 'about',

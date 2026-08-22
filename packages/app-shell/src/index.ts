@@ -67,7 +67,7 @@ export type { ChatHeaderProps, ChatHeaderCaps } from './chat/ChatHeader'
 // 聊天主视图正文外壳（顶栏 + 欢迎/笔记本/对话三态 + 横幅/浮层/占位插槽）
 export { ChatBody } from './chat/ChatBody'
 export type { ChatBodyProps } from './chat/ChatBody'
-// 运行时/分享/审批状态横幅（按宿主能力自动显隐）—— 桌面/扩展共用，作为 ChatBody 的 banner 插槽
+// 运行时/分享/询问状态横幅（按宿主能力自动显隐）—— 桌面/扩展共用，作为 ChatBody 的 banner 插槽
 export { StatusBanner } from './chat/StatusBanner'
 export type { StatusBannerProps } from './chat/StatusBanner'
 // 会话配置面板 + 弹窗

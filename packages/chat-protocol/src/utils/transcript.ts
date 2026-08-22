@@ -6,7 +6,8 @@
  * 纯函数、零运行时依赖（保持 chat-protocol 为 leaf），三端（main/renderer/extension）
  * 经 `@shuvix/chat-protocol/utils/transcript` 直接复用。
  *
- * - **默认精简**：只保留用户消息 + 助手最终输出，忽略工具调用 / 思考 / 中间步骤。
+ * - **默认精简**：只保留用户消息 + 助手最终输出（不带工具调用的那条消息的正文），
+ *   忽略工具调用 / 思考 / 过程正文。
  *   精简模式天然比原对话更省 token（是原始素材的子集）。
  * - **可详细**：通过 TranscribeOptions 开关逐项纳入 thinking / 工具调用 / 工具结果 /
  *   step / 时间戳 / usage 等。
@@ -19,7 +20,6 @@ import { inlineTokensToPlainText, resolveTokensForAgent } from './inlineTokens'
 export interface TranscriptLabels {
   user?: string
   assistant?: string
-  steer?: string
   thinking?: string
   toolCall?: string
   toolResult?: string
@@ -30,7 +30,6 @@ export interface TranscriptLabels {
 const DEFAULT_LABELS: Required<TranscriptLabels> = {
   user: 'User',
   assistant: 'Assistant',
-  steer: 'User (steer)',
   thinking: 'Thinking',
   toolCall: 'Tool call',
   toolResult: 'Tool result',
@@ -41,13 +40,13 @@ const DEFAULT_LABELS: Required<TranscriptLabels> = {
 /** 转写选项。所有 include* 默认 false（精简模式）。 */
 export interface TranscribeOptions {
   // —— 详细度开关 ——
-  /** 纳入思考：assistant.thinking + step_thinking */
+  /** 纳入思考：thinking 块 */
   includeThinking?: boolean
-  /** 纳入工具调用：tool_use 的 toolName + args */
+  /** 纳入工具调用：tool 块的 toolName + args */
   includeToolCalls?: boolean
-  /** 纳入工具结果：tool_use 的 content（结果文本，按 maxToolResultChars 截断） */
+  /** 纳入工具结果：tool 块回填的 result（按 maxToolResultChars 截断） */
   includeToolResults?: boolean
-  /** 纳入中间步骤文本：step_text */
+  /** 纳入过程正文：与工具调用同处一条消息的 text 块（模型边做边说的话） */
   includeStepText?: boolean
   /** 纳入系统通知：error_event + 指令注入消息 */
   includeSystemNotices?: boolean
@@ -156,87 +155,67 @@ export function transcribeConversation(
   for (const msg of messages) {
     const ts = options.includeTimestamps ? ` · ${formatTimestamp(msg.createdAt)}` : ''
 
-    switch (msg.type) {
-      case 'text': {
-        if (msg.role === 'user') {
-          const meta = msg.metadata
-          if (meta?.isInstructionInjection) {
-            if (options.includeSystemNotices) {
-              pushBody(
-                `${labels.systemNotice}${ts}`,
-                resolveContent(msg.content, meta?.inlineTokens, expand)
-              )
-            }
-            break
-          }
-          const text = resolveContent(msg.content, meta?.inlineTokens, expand)
-          const imgs = options.includeImages ? imagePlaceholders(meta?.images, labels.image) : ''
-          pushBody(`${labels.user}${ts}`, [text, imgs].filter(Boolean).join('\n\n'))
-        } else {
-          // assistant final text
-          const meta = msg.metadata
-          const parts: string[] = []
-          if (options.includeThinking && meta?.thinking) {
-            parts.push(`> **${labels.thinking}**\n>\n${quote(meta.thinking)}`)
-          }
-          parts.push(msg.content)
-          if (options.includeImages) {
-            const imgs = imagePlaceholders(meta?.images, labels.image)
-            if (imgs) parts.push(imgs)
-          }
-          if (options.includeUsage && meta?.usage) parts.push(formatUsage(meta.usage))
-          pushBody(`${labels.assistant}${ts}`, parts.filter(Boolean).join('\n\n'))
-        }
-        break
-      }
+    if (msg.type === 'error_event') {
+      if (options.includeSystemNotices) pushBody(`${labels.systemNotice}${ts}`, msg.content)
+      continue
+    }
 
-      case 'steer': {
-        pushBody(`${labels.steer}${ts}`, msg.content)
-        break
-      }
-
-      case 'tool_use': {
-        if (!options.includeToolCalls && !options.includeToolResults) break
-        const meta = msg.metadata
-        const name = meta?.toolName ?? 'tool'
-        const parts: string[] = []
-        if (options.includeToolCalls) {
-          const argsStr =
-            meta?.args && Object.keys(meta.args).length > 0
-              ? `\n\n\`\`\`json\n${truncateMiddle(JSON.stringify(meta.args, null, 2), maxToolChars)}\n\`\`\``
-              : ''
-          const errFlag = meta?.isError ? ' ⚠️' : ''
-          parts.push(`**${labels.toolCall}: ${name}${errFlag}**${argsStr}`)
-        }
-        if (options.includeToolResults && msg.content.trim()) {
-          const result = truncateMiddle(msg.content, maxToolChars)
-          parts.push(`**${labels.toolResult}**\n\n\`\`\`\n${result}\n\`\`\``)
-        }
-        pushBody(`${labels.assistant}${ts}`, parts.filter(Boolean).join('\n\n'))
-        break
-      }
-
-      case 'step_text': {
-        if (options.includeStepText) {
-          pushBody(`${labels.assistant}${ts}`, msg.content)
-        }
-        break
-      }
-
-      case 'step_thinking': {
-        if (options.includeThinking && msg.content.trim()) {
-          pushBody(`${labels.assistant}${ts}`, `> **${labels.thinking}**\n>\n${quote(msg.content)}`)
-        }
-        break
-      }
-
-      case 'error_event': {
+    if (msg.role === 'user') {
+      const meta = msg.metadata
+      if (meta?.isInstructionInjection) {
         if (options.includeSystemNotices) {
-          pushBody(`${labels.systemNotice}${ts}`, msg.content)
+          pushBody(
+            `${labels.systemNotice}${ts}`,
+            resolveContent(msg.content, meta?.inlineTokens, expand)
+          )
         }
-        break
+        continue
+      }
+      const text = resolveContent(msg.content, meta?.inlineTokens, expand)
+      const imgs = options.includeImages ? imagePlaceholders(meta?.images, labels.image) : ''
+      pushBody(`${labels.user}${ts}`, [text, imgs].filter(Boolean).join('\n\n'))
+      continue
+    }
+
+    // 助手消息：按块的原始顺序转写。
+    // 「中间步骤文本」不再是独立消息类型 —— 同一条消息里还有工具调用，说明这段正文
+    // 是模型边做边说的过程话，归 includeStepText 管；没有工具调用的才是这次的最终输出。
+    const meta = msg.metadata
+    const isProcessMessage = msg.blocks.some((b) => b.type === 'tool')
+    const parts: string[] = []
+    for (const block of msg.blocks) {
+      if (block.type === 'thinking') {
+        if (options.includeThinking && block.text.trim()) {
+          parts.push(`> **${labels.thinking}**\n>\n${quote(block.text)}`)
+        }
+        continue
+      }
+      if (block.type === 'text') {
+        if (isProcessMessage && !options.includeStepText) continue
+        if (block.text.trim()) parts.push(block.text)
+        continue
+      }
+      if (!options.includeToolCalls && !options.includeToolResults) continue
+      const name = block.toolName || 'tool'
+      if (options.includeToolCalls) {
+        const argsStr =
+          block.args && Object.keys(block.args).length > 0
+            ? `\n\n\`\`\`json\n${truncateMiddle(JSON.stringify(block.args, null, 2), maxToolChars)}\n\`\`\``
+            : ''
+        const errFlag = block.isError ? ' ⚠️' : ''
+        parts.push(`**${labels.toolCall}: ${name}${errFlag}**${argsStr}`)
+      }
+      if (options.includeToolResults && block.result?.trim()) {
+        const result = truncateMiddle(block.result, maxToolChars)
+        parts.push(`**${labels.toolResult}**\n\n\`\`\`\n${result}\n\`\`\``)
       }
     }
+    if (options.includeImages) {
+      const imgs = imagePlaceholders(meta?.images, labels.image)
+      if (imgs) parts.push(imgs)
+    }
+    if (options.includeUsage && meta?.usage) parts.push(formatUsage(meta.usage))
+    pushBody(`${labels.assistant}${ts}`, parts.filter(Boolean).join('\n\n'))
   }
 
   return blocks.join('\n\n')
