@@ -50,6 +50,7 @@ export { SlashCommandPopover } from './components/chat/SlashCommandPopover'
 // ── 对话域 stores ──
 export * from './stores/chatStore'
 export * from './stores/subSessionStore'
+export * from './stores/bgTaskStore'
 
 // ── 对话域 hooks ──
 export { useSessionInit } from './hooks/useSessionInit'
@@ -70,6 +71,13 @@ export { useDialogClose } from './hooks/useDialogClose'
 
 // ── 代码查看器（CodeMirror 6 只读 viewer；工具卡片内嵌 + app-shell 文件预览共用） ──
 export { CodeView } from './components/code/CodeView'
+export { TerminalView } from './components/chat/TerminalView'
+export {
+  BackgroundBadge,
+  BgTaskRowState,
+  useBgTaskStatus,
+  useNowTicker
+} from './components/chat/BgTaskTag'
 
 // ── utils ──
 export * from './utils/clipboard'

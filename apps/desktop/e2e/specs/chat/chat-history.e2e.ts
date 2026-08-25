@@ -192,6 +192,13 @@ describe('回退', () => {
     await chat.pressEnter()
     await events.waitFor('agent_end', { sessionId: sids.rollback })
     await chat.waitIdle()
+    // 「第二轮真的跑完了」的确定性锚点：收集器按游标推进，两轮就该有两条 agent_end。
+    // 老实现的 waitFor 按整个缓冲区 find，这里会秒回第一轮那条，本条断言即恒为 1 ——
+    // 下面几条消息断言的偶发失败正是那个陈旧命中的下游表现。
+    const ends = (await events.all()).filter(
+      (e) => e.type === 'agent_end' && e.sessionId === sids.rollback
+    )
+    expect(ends).toHaveLength(2)
     const again = await listMessages(sids.rollback)
     expect(again.map((m) => m.role)).toEqual(['user', 'assistant'])
     expect(again[1].content).toBe('second answer')

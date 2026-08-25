@@ -74,7 +74,7 @@ export function createSecurityContext(
   const evaluateInternal = (
     action: string,
     object: SecurityObject,
-    includeConsent: boolean,
+    includeForceAllow: boolean,
     tool?: { name: string; operation?: string }
   ): SecurityDecision => {
     // 一次现取，装配（lets）与求值（match）共用同一份 —— 两处各取一次会给出
@@ -85,7 +85,7 @@ export function createSecurityContext(
       rules,
       { subject, action, tool, object, environment },
       {
-        includeConsent,
+        includeForceAllow,
         // match 上下文的 vars 与 fail-safe 告警出口
         vars,
         warn: (msg) => provider.logger?.warn(msg)
@@ -113,11 +113,11 @@ export function createSecurityContext(
 
   return {
     evaluate: (action, object, opts) =>
-      evaluateInternal(action, object, opts?.includeConsent !== false),
+      evaluateInternal(action, object, opts?.includeForceAllow !== false),
 
-    // 被动 UI 判定：includeConsent 缺省 false（per-path 授权不放宽 UI 范围），不记日志
+    // 被动 UI 判定：includeForceAllow 缺省 false（per-path 授权不放宽 UI 范围），不记日志
     evaluateReadOnly: (action, object, opts) =>
-      evaluateInternal(action, object, opts?.includeConsent === true).effect === 'allow',
+      evaluateInternal(action, object, opts?.includeForceAllow === true).effect === 'allow',
 
     async enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void> {
       await enforce(
@@ -143,7 +143,7 @@ export function createSecurityContext(
       return enforce('execute', buildCommandObject(object, provider), opts)
     },
 
-    // L1 全工具门：**allow 即非事件**（默认放行 / autoAllow consent / 静态 allow 同待遇）——
+    // L1 全工具门：**allow 即非事件**（默认放行 / autoAllow force-allow / 静态 allow 同待遇）——
     // 跳过 executeDecision（不弹窗不记日志）。此门每次工具调用都过，若 allow 也记录，
     // 免询问会话会以每调用一条的速度刷爆 ring buffer；L1 的日志只留 ask/deny 的真实拦截信号
     async enforceInvocation(opts): Promise<EnforceOutcome> {

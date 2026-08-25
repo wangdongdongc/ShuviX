@@ -7,7 +7,7 @@ description: 会话的免询问开关打开期间，所有询问一律跳过。
 shuvix-policy-scope:
   subject.kind: [agent]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     match: vars.autoAllow
     prompt: 会话的免询问开关已打开，询问门被跳过。
 ---
@@ -18,6 +18,8 @@ shuvix-policy-rules:
 **它不做什么**：
 
 - 压不过 deny。凭据保护与系统保护该拦还是拦，开不开免询问都一样。
+- 跳不过 `force-ask` 规则。那个 effect 的含义就是「这道门不接受会话级同意」，
+  用它写的策略在开关开着时照样询问。
 - 只对本会话生效，不会带到新会话。
 
 **想调整**：开关的语义就由这份策略给出。覆盖它就能收窄开关的范围 —— 比如让它开着
@@ -26,7 +28,7 @@ shuvix-policy-rules:
     shuvix-policy-scope:
       subject.kind: [agent]
     shuvix-policy-rules:
-      - effect: consent
+      - effect: force-allow
         action: [read, execute]
         match: vars.autoAllow
 

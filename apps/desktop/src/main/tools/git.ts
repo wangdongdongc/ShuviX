@@ -100,7 +100,7 @@ function makeDesktopResolveDir(ctx: ToolContext) {
 
 /**
  * 逐操作安全评估 —— 每个 git 工具操作都上报（gitAction/force/delete 是客体属性，
- * 哪些组合要询问写在内置 git-safety 策略的 match 里；autoAllow 走 consent 层）。
+ * 哪些组合要询问写在内置 git-safety 策略的 match 里；autoAllow 走 force-allow 层）。
  * i18n 询问文案留在桌面 PEP（description 注入，破坏性操作才有原因码）。
  */
 function makeDesktopAskOp(ctx: ToolContext) {

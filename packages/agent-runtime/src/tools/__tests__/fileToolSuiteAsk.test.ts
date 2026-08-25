@@ -2,7 +2,7 @@
  * createFileToolSuite 的询问接线单测 —— 内存 port + 可编程 SecurityHostProvider（requestUserInput 是 spy）。
  *
  * 关注点在「工具壳怎么问」：写类工具把询问推迟到 apply 层（一次调用只弹一张带 diff 预览的卡），
- * 放行短路（工作目录读 / 免询问 / allowList，经统一评估的 consent/static-allow 层）逐层生效，
+ * 放行短路（工作目录读 / 免询问 / allowList，经统一评估的 force-allow/static-allow 层）逐层生效，
  * 以及 InputResponse 判别联合的五个分支。
  */
 
@@ -93,7 +93,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
   const onFileChange = vi.fn<(e: { portPath: string; kind: 'write' | 'edit' }) => void>()
 
   // 桌面口径的 provider：workspace={{ROOT}}（内置 workspace-boundary 策略给出目录内只读放行），
-  // 写入一律走询问链；allowList/autoAllow 进 consent 层
+  // 写入一律走询问链；allowList/autoAllow 进 force-allow 层
   const provider: SecurityHostProvider = {
     host: 'desktop',
     pathSep: '/',
@@ -101,6 +101,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       workspace: ROOT,
       toolResultsBase: '/nonexistent/tool_results',
       skillsDirs: [],
+      memoryDirs: [],
       home: '/fake-home',
       systemDirs: []
     }),

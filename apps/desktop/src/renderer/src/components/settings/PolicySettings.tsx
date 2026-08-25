@@ -21,7 +21,11 @@ import {
   AlertTriangle,
   type LucideIcon
 } from 'lucide-react'
-import { LivePreviewEditor, type LivePreviewEditorHandle } from '@shuvix/app-shell'
+import {
+  LivePreviewEditor,
+  POLICY_EFFECT_CLASS,
+  type LivePreviewEditorHandle
+} from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /**
@@ -275,6 +279,8 @@ export function PolicySettings(): React.JSX.Element {
             </>
           )}
         </div>
+
+        <EffectLadder />
 
         {/* 底部操作：新建 / 打开用户策略目录 / 重扫描 */}
         <div className="border-t border-border-secondary p-2 flex items-center gap-1.5">
@@ -547,6 +553,34 @@ function PolicyEditor({
           }}
           handleRef={editorRef}
         />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 结算梯子图例 —— 五个 effect 按强弱从左到右排开。
+ *
+ * 名字里的 `force-` 前缀负责「看到时不误解」，这条图例负责「想不起来时能查」：
+ * 用户真正需要确认谁压过谁的时刻，就是他在这一页写规则的时候。
+ * 顺序与配色都取自 POLICY_EFFECT_CLASS（属性卡同一份），不在这里另立一套。
+ */
+function EffectLadder(): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div className="border-t border-border-secondary px-2 py-1.5">
+      <div className="text-[10px] text-text-tertiary mb-1">{t('settings.policyEffectLadder')}</div>
+      {/* 220px 的列放不下一行五个徽章，必然换行 —— 因此不用 `›` 分隔：
+          换行后第二行会以分隔符开头，看着像笔误。顺序 + 配色足够表达强弱 */}
+      <div className="flex flex-wrap items-center gap-1">
+        {Object.keys(POLICY_EFFECT_CLASS).map((effect) => (
+          <span
+            key={effect}
+            className={`px-1.5 py-0.5 rounded font-semibold uppercase text-[9px] tracking-wide ${POLICY_EFFECT_CLASS[effect]}`}
+          >
+            {effect}
+          </span>
+        ))}
       </div>
     </div>
   )

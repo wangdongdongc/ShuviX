@@ -25,6 +25,17 @@ class FakeHarness {
   requestUserInput = vi.fn().mockResolvedValue({ kind: 'ok' })
   getThinkingLevel = vi.fn().mockReturnValue('high')
   broadcast = vi.fn()
+  /**
+   * pi 原生 harness 的替身 —— createAgent 会把它登记进运行时注册中心。
+   * 只需铺注册中心真正会碰的面：登记时 subscribe，取快照时那几个 getter。
+   */
+  piHarness = {
+    subscribe: vi.fn().mockReturnValue(() => {}),
+    getModel: vi.fn().mockReturnValue({ provider: 'p1', id: 'm1', contextWindow: 1000 }),
+    getThinkingLevel: vi.fn().mockReturnValue('high'),
+    getTools: vi.fn().mockReturnValue([]),
+    getActiveTools: vi.fn().mockReturnValue([])
+  }
   constructor(deps: Record<string, unknown>) {
     this.deps = deps
     this.session = deps.session
@@ -45,12 +56,13 @@ const PROFILE: InProcessAgentType = {
   description: '',
   tools: ['read', 'grep', 'agent'],
   systemPrompt: 'BASE {{shuvix:persona}}',
-  instructionFiles: true
+  instructionFiles: ['AGENTS.md', 'CLAUDE.md']
 }
 const MODEL_CFG: SubAgentModelConfig = { provider: 'p1', model: 'm1', capabilities: {} }
 const SPAWN: SpawnContext = {
   agentId: 'sub-1',
   depth: 1,
+  parentAgentId: 'root-s',
   rootSessionId: 'root-s',
   modelConfig: MODEL_CFG,
   canSpawn: true
@@ -147,7 +159,7 @@ describe('createAgentFactory — root 决策列', () => {
     expect(deps.transformToolResult).toBe(b.transform)
     expect(deps.onPromptAccepted).toBe(onPromptAccepted)
     expect(deps.thinkingLevel).toBe('medium')
-    // instructionFiles=true → 指令文件带围栏 append 在基座后（项目提示词开关未开不追加）
+    // 清单非空 → 指令文件带围栏 append 在基座后（项目提示词开关未开不追加）
     const fencedIns = '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>'
     expect(created.systemPrompt).toBe(`BASE PERSONA\n\n${fencedIns}`)
     expect(deps.systemPrompt).toBe(`BASE PERSONA\n\n${fencedIns}`)
@@ -195,7 +207,7 @@ describe('createAgentFactory — spawned 决策列', () => {
     const created = await createAgentFactory(b.host).createAgent({
       kind: 'spawned',
       sessionId: 'sub-1',
-      profile: { ...PROFILE, instructionFiles: false },
+      profile: { ...PROFILE, instructionFiles: [] },
       model: MODEL_CFG,
       thinkingLevel: 'off',
       cwd: '',
@@ -427,12 +439,12 @@ describe('CreatedAgent 运行期操作', () => {
     expect(constructed[0].applyTools).toHaveBeenCalledWith([{ name: 't2' }])
   })
 
-  it('上下文注入:开关关闭 → 不解析、系统提示词纯基座', async () => {
+  it('上下文注入:清单为空/开关关闭 → 不解析、系统提示词纯基座', async () => {
     const b = makeHost()
     const created = await createAgentFactory(b.host).createAgent({
       kind: 'root',
       sessionId: 's2',
-      profile: { ...PROFILE, instructionFiles: false },
+      profile: { ...PROFILE, instructionFiles: [] },
       model: MODEL_CFG,
       cwd: '/w'
     })
@@ -454,7 +466,8 @@ describe('CreatedAgent 运行期操作', () => {
       spawnHelpers: { requestUserInput: vi.fn() }
     })
     // 派生解析恒用根会话 id（spawn.rootSessionId），而非自身 agentId
-    expect(b.resolveInstruction).toHaveBeenCalledWith('root-s', '')
+    // 档案清单原样透传给宿主 —— 「读哪些文件」的决定权全在档案
+    expect(b.resolveInstruction).toHaveBeenCalledWith('root-s', '', ['AGENTS.md', 'CLAUDE.md'])
     expect(b.resolveProjectPrompt).toHaveBeenCalledWith('root-s')
     // 直接 append 到系统提示词,不落任何消息；两段各自被围栏包住
     const expected =
@@ -466,5 +479,71 @@ describe('CreatedAgent 运行期操作', () => {
     // resolveTools 收到的也是完整系统提示词（扩展默认子代理继承它）
     const req = b.resolveTools.mock.calls[0][0] as ToolResolveRequest
     expect(req.systemPrompt).toBe(expected)
+  })
+})
+
+describe('createAgentFactory —— 指令文件注入的接缝口径', () => {
+  /** root 创建的固定形状；profile 由各用例就地覆盖 */
+  function createRoot(
+    b: HostBundle,
+    profile: InProcessAgentType
+  ): Promise<Awaited<ReturnType<AgentFactory['createAgent']>>> {
+    return createAgentFactory(b.host).createAgent({
+      kind: 'root',
+      sessionId: 's1',
+      profile,
+      model: MODEL_CFG,
+      cwd: '/w'
+    })
+  }
+
+  it('IF-U-17 root 列同样按档案清单解析：(sessionId, cwd, 清单) 恰调一次，清单原样透传', async () => {
+    const b = makeHost()
+    await createRoot(b, PROFILE)
+
+    // 派生列早有防线（见「上下文注入:spawned 全开」），root 列这条同样要钉 ——
+    // 「读哪些文件」的决定权全在档案，两列都不得夹带宿主自己的候选名表
+    expect(b.resolveInstruction).toHaveBeenCalledTimes(1)
+    expect(b.resolveInstruction).toHaveBeenCalledWith('s1', '/w', ['AGENTS.md', 'CLAUDE.md'])
+
+    // 顺序即优先级 —— createAgent 不排序、不去重、不截断，宿主收到的就是档案里写的
+    const scrambled = ['z.md', 'a.md', 'z.md', 'docs/house.md']
+    await createRoot(b, { ...PROFILE, instructionFiles: scrambled })
+    expect(b.resolveInstruction.mock.calls[1][2]).toEqual(scrambled)
+  })
+
+  it('IF-U-18 宿主解析不出（null）→ 系统提示词逐字节等于纯基座（不留空围栏/尾随空行）', async () => {
+    const b = makeHost()
+    b.resolveInstruction.mockResolvedValue(null)
+    const created = await createRoot(b, PROFILE)
+
+    expect(created.systemPrompt).toBe('BASE PERSONA')
+    expect(constructed[0].deps.systemPrompt).toBe('BASE PERSONA')
+  })
+
+  it('IF-U-19 命中了但内容为空串 → 同样不加围栏（空围栏比不注入更糟：模型会当成"项目没规矩"）', async () => {
+    const b = makeHost()
+    b.resolveInstruction.mockResolvedValue({ filename: 'X', content: '' })
+    const created = await createRoot(b, PROFILE)
+
+    expect(created.systemPrompt).toBe('BASE PERSONA')
+    expect(created.systemPrompt).not.toContain('project_instructions')
+  })
+
+  it('IF-U-20 档案有清单但宿主没注入 resolveInstruction（可选注入）→ 不抛、纯基座', async () => {
+    const b = makeHost()
+    delete (b.host as { resolveInstruction?: unknown }).resolveInstruction
+
+    const created = await createRoot(b, PROFILE)
+    expect(created.runtime).toBeDefined()
+    expect(created.systemPrompt).toBe('BASE PERSONA')
+  })
+
+  it('IF-U-21 档案未声明清单（undefined）→ 解析器零调用、不抛', async () => {
+    const b = makeHost()
+    const created = await createRoot(b, { ...PROFILE, instructionFiles: undefined })
+
+    expect(b.resolveInstruction).not.toHaveBeenCalled()
+    expect(created.systemPrompt).toBe('BASE PERSONA')
   })
 })

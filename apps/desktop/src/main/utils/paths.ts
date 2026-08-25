@@ -81,6 +81,26 @@ export function getDefaultWikisDir(): string {
   return join(homedir(), '.shuvix', 'wikis')
 }
 
+/**
+ * 项目记忆根目录：~/.shuvix/memory/（不自动创建，由 services/memory 懒建）。
+ *
+ * 放 ~/.shuvix/ 而非 <userData>/data/：这里是**用户拥有并可直接编辑的资产** ——
+ * 自己写的配置（skills / agents / policies）与 agent 产出但归用户处置的
+ * widgets / memory 都在这层；<userData>/data/ 留给应用的结构化运行时数据
+ * （shuvix.db 与会话转写）。记忆要被用户看见、改写、删除，属于前者。
+ *
+ * 按 projectId（uuidv7）分目录而非按项目路径：仓库移动 / 改名 / 重新 clone 后
+ * projects.path 会变而 id 不变，记忆不会因此失联。
+ */
+export function getMemoryRootDir(): string {
+  return join(homedir(), '.shuvix', 'memory')
+}
+
+/** 单个项目的记忆目录：~/.shuvix/memory/<projectId>/ */
+export function getProjectMemoryDir(projectId: string): string {
+  return join(getMemoryRootDir(), projectId)
+}
+
 /** Widgets 根目录：~/.shuvix/widgets/（懒创建） */
 export function getWidgetsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'widgets'))

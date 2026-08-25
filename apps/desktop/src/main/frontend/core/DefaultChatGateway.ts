@@ -3,6 +3,7 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
+import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -86,13 +87,36 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   steer(sessionId: string, text: string): void {
+    this.enqueue(sessionId, (session) => session.steer(text))
+  }
+
+  followUp(sessionId: string, text: string): void {
+    this.enqueue(sessionId, (session) => session.followUp(text))
+  }
+
+  nextTurn(sessionId: string, text: string): void {
+    this.enqueue(sessionId, (session) => session.nextTurn(text))
+  }
+
+  /**
+   * 三条队列共用的入队骨架。
+   *
+   * 只入队：消息在 pi 队列里等着，被 drain 时才由 harness 落盘，
+   * 落盘与广播都在 message_end 事件里发生，网关不碰。
+   */
+  private enqueue(sessionId: string, push: (session: AgentSession) => Promise<void>): void {
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
       return
     }
-    // 只入队；落盘与广播交给 harness 在 message_end 事件中处理。
-    void session.steer(text)
+    void push(session).catch((error: unknown) => {
+      chatFrontendRegistry.broadcast({
+        type: 'error',
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
   }
 
   async abort(sessionId: string): Promise<{ success: boolean }> {

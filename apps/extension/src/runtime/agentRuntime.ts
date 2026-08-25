@@ -47,7 +47,9 @@ import { clearSessionTools, extensionSubAgentRegistry, subAgentManager } from '.
  */
 const manager = new SessionManager<CreatedAgent>({
   create: (sessionId) => buildRuntimeSession(sessionId),
-  dispose: (sessionId) => {
+  dispose: (sessionId, created) => {
+    // 运行时被弃用 —— 先从运行时注册中心注销，避免留下指向死 harness 的条目
+    created.dispose()
     subAgentManager.destroyAll(sessionId)
     clearSessionTools(sessionId)
   }

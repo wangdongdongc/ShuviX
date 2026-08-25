@@ -20,8 +20,9 @@ function newAgentTemplate(t: (key: string) => string): string {
     'name: my-agent',
     `description: ${t('tool.subAgentTemplateDesc')}`,
     'shuvix-tools: read, bash',
-    'shuvix-instruction-files: true',
+    'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
     'shuvix-project-prompt: true',
+    'shuvix-project-memory: true',
     '---',
     '',
     t('tool.subAgentTemplateBody'),
@@ -250,7 +251,9 @@ function CreateAgentDialog({
             <X size={16} />
           </button>
         </div>
-        <div className="flex-1 min-h-0">
+        {/* 必须是 flex 列：编辑器根节点靠 `flex-1 min-h-0 overflow-y-auto` 自滚，
+            父级是普通 block 时那两个类全失效 → 高度撑成内容高、长档案直接溢出对话框 */}
+        <div className="flex-1 min-h-0 flex flex-col">
           <SubAgentEditor
             agent={CREATE_PLACEHOLDER}
             initialText={initialText}
@@ -273,8 +276,9 @@ const CREATE_PLACEHOLDER: SubAgentInfo = {
   description: '',
   systemPrompt: '',
   tools: [],
-  instructionFiles: true,
+  instructionFiles: ['AGENTS.md', 'CLAUDE.md'],
   projectPrompt: true,
+  projectMemory: true,
   dispatchOnly: false,
   source: 'user',
   basePath: ''

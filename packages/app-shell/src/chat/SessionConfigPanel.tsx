@@ -1,13 +1,8 @@
 import { getChatApi } from '@shuvix/chat-ui'
-import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileText, RefreshCw, TriangleAlert, X } from 'lucide-react'
+import { TriangleAlert, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
-import {
-  resolveInstructionFile,
-  type InstructionFileEntry
-} from '@shuvix/chat-protocol/types/instructionFile'
-import { SettingsSection, SettingsRow, Toggle, InlineSelect } from '../settings/SettingsPrimitives'
+import { SettingsSection, SettingsRow, Toggle } from '../settings/SettingsPrimitives'
 
 export interface SessionConfigPanelProps {
   sessionId: string
@@ -15,6 +10,10 @@ export interface SessionConfigPanelProps {
 
 /**
  * 会话配置面板（除会话标题外的所有配置）。
+ *
+ * 只剩命令询问一节 —— 项目指令文件的「读哪些」已整体搬进 agent md 的
+ * `shuvix-instruction-files` 清单（那是 agent 的人格设定，不是每个会话的临时选择），
+ * 这里不再有对应开关。
  * 既可嵌入到 SessionConfigDialog 弹窗中，也可在空会话时直接居中展示。
  *
  * 视觉：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
@@ -29,35 +28,6 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
   const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
   const autoAllow = session?.settings.autoAllow === true
   const allowList = session?.settings.allowList ?? []
-
-  const [instructionFiles, setInstructionFiles] = useState<InstructionFileEntry[]>([])
-  const [instructionScanning, setInstructionScanning] = useState(false)
-  // 单选：至多注入一个指令文件；null = 不注入（未显式配置时按 AGENTS.md → CLAUDE.md 优先级自动选）
-  const selectedInstructionFile = resolveInstructionFile(
-    session?.settings.instructionFile,
-    instructionFiles.map((f) => f.filename)
-  )
-
-  const scanInstructionFiles = async (): Promise<void> => {
-    setInstructionScanning(true)
-    try {
-      const files = await getChatApi().session.scanInstructionFiles(sessionId)
-      setInstructionFiles(files)
-    } finally {
-      setInstructionScanning(false)
-    }
-  }
-
-  useEffect(() => {
-    void scanInstructionFiles()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId])
-
-  /** 选中注入的指令文件；null = 不注入 */
-  const handleSelectInstructionFile = async (filename: string | null): Promise<void> => {
-    await getChatApi().session.updateInstructionFile({ id: sessionId, filename })
-    useChatStore.getState().updateSessionSettings(sessionId, { instructionFile: filename })
-  }
 
   const handleToggleAutoAllow = async (): Promise<void> => {
     const next = !autoAllow
@@ -116,46 +86,6 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
               ))}
             </div>
           </div>
-        )}
-      </SettingsSection>
-
-      {/* 项目指令文件 */}
-      <SettingsSection
-        title={t('sessionConfig.instructionFilesGroup')}
-        headerAction={
-          <button
-            onClick={() => void scanInstructionFiles()}
-            disabled={instructionScanning}
-            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors disabled:opacity-50"
-            title={t('sessionConfig.instructionFilesRescan')}
-          >
-            <RefreshCw size={11} className={instructionScanning ? 'animate-spin' : ''} />
-          </button>
-        }
-        footer={t('sessionConfig.instructionFilesHint')}
-      >
-        {instructionFiles.length === 0 ? (
-          <div className="px-4 py-3 text-[11px] text-text-tertiary">
-            {t('sessionConfig.instructionFilesEmpty')}
-          </div>
-        ) : (
-          <SettingsRow
-            icon={<FileText size={12} className="text-text-tertiary shrink-0" />}
-            title={t('sessionConfig.instructionFileLabel')}
-            control={
-              <InlineSelect
-                value={selectedInstructionFile ?? ''}
-                onChange={(v) => void handleSelectInstructionFile(v || null)}
-              >
-                <option value="">{t('sessionConfig.instructionFileNone')}</option>
-                {instructionFiles.map((f) => (
-                  <option key={f.filename} value={f.filename}>
-                    {f.filename}
-                  </option>
-                ))}
-              </InlineSelect>
-            }
-          />
         )}
       </SettingsSection>
     </div>

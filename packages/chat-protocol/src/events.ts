@@ -6,6 +6,7 @@
  */
 
 import type { ToolResultDetails, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 
 // ─── 基础 ──────────────────────────────────────────────
@@ -219,6 +220,21 @@ export interface ChatSubSessionEndEvent extends ChatEventBase {
   isError?: boolean
 }
 
+// ─── 后台任务 ──────────────────────────────────────────
+
+/**
+ * 后台任务（bash run_in_background）生命周期变更 —— 低频，每任务 2 次（started / exited|killed）。
+ *
+ * 刻意**不**下发输出增量：子进程的 stdout/stderr 由 OS 直接写 `task.logPath`，
+ * 前端要实时输出时按字节范围轮询 `bgTask.readLog`，模型则直接 read 那个文件。
+ * 详见 docs/background-tasks-design.md。
+ */
+export interface ChatBgTaskEvent extends ChatEventBase {
+  type: 'bg_task'
+  /** 完整快照，前端按 task.toolCallId upsert */
+  task: BgTaskInfo
+}
+
 // ─── 消息列表重载 ────────────────────────────────────────
 
 /**
@@ -246,6 +262,32 @@ export interface ChatUserMessageEvent extends ChatEventBase {
   message: string
 }
 
+// ─── 消息队列 ──────────────────────────────────────────
+
+/** 队列里的一条待投递用户消息（正文 + 图片计数，面板渲染够用） */
+export interface ChatQueuedMessage {
+  text: string
+  imageCount: number
+}
+
+/**
+ * pi 三条用户消息队列的快照（harness `queue_update` 事件的直接转发）。
+ *
+ * 队列由 pi 独占持有：对外只有入队与 `abort()` 全量清空，**没有出队 / 改序 / 改档**。
+ * 所以这是一份**只读投影** —— 任一队列变动 harness 都重发全量三条，前端整体替换即可。
+ * 队列里的消息尚未进入会话树，投递（drain）时才由 harness 落盘并广播成 user_message，
+ * 因此队列面板与会话流不会重复显示同一条。
+ */
+export interface ChatQueueUpdateEvent extends ChatEventBase {
+  type: 'queue_update'
+  /** 轮次边界插入（引导） */
+  steer: ChatQueuedMessage[]
+  /** 本轮本应结束时续跑（追加） */
+  followUp: ChatQueuedMessage[]
+  /** 下一次 prompt 的前置消息（下轮）；不被 abort 清空 */
+  nextTurn: ChatQueuedMessage[]
+}
+
 // ─── 联合类型 ──────────────────────────────────────────
 
 export type ChatEvent =
@@ -267,9 +309,11 @@ export type ChatEvent =
   | ChatFilePreviewEvent
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
+  | ChatBgTaskEvent
   | ChatMessagesReloadedEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
+  | ChatQueueUpdateEvent
 
 // ─── 辅助类型 ──────────────────────────────────────────
 

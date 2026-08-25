@@ -389,12 +389,19 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
   return null
 }
 
-/** effect 徽章配色 —— 与设置页 PolicySettings 的 EFFECT_STYLE 同色系 */
-const EFFECT_CLASS: Record<string, string> = {
-  allow: 'bg-green-500/10 text-green-600 dark:text-green-400',
-  consent: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
+/**
+ * effect 徽章配色 —— **按强弱从上到下排列，颜色本身编码强度**：
+ * 越靠上越压得过下面的（deny > force-ask > force-allow > ask > allow）。
+ * 名字里的 force- 已经说明了一半，颜色让人扫一眼列表就知道谁凶。
+ * 导出给设置页的梯子图例复用 —— 两处各写一份颜色迟早漂移。
+ * 键序即强弱序：Object.keys 就是图例要展示的顺序。
+ */
+export const EFFECT_CLASS: Record<string, string> = {
+  deny: 'bg-red-500/10 text-red-600 dark:text-red-400',
+  'force-ask': 'bg-orange-500/20 text-orange-700 dark:text-orange-300',
+  'force-allow': 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
   ask: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  deny: 'bg-red-500/10 text-red-600 dark:text-red-400'
+  allow: 'bg-green-500/10 text-green-600 dark:text-green-400'
 }
 
 function unsetSpan(t: FrontmatterCardConfig['t']): HTMLElement {

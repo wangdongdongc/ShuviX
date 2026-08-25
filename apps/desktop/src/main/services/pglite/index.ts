@@ -1,8 +1,8 @@
 /**
  * Pglite 模块入口
  *
- * `postgres` 已从内置 tool 降级为 skill + `shuvix pglite` CLI 形态。
- * 模块层只暴露 worker 生命周期管理给 cliServer 用，并提供应用退出钩子。
+ * 唯一消费者是 widget 共享库（services/widget/widgetDb.ts 直接用 workerManager）。
+ * 模块层只提供应用退出钩子。
  */
 
 import { pgliteWorkerManager } from './workerManager'

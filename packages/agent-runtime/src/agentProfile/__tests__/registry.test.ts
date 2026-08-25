@@ -208,7 +208,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       for (const language of ['zh', 'ja']) {
         const loc = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!
         expect(loc.tools, `${spec.name}.${language} tools`).toEqual(en.tools)
-        expect(loc.instructionFiles, `${spec.name}.${language}`).toBe(en.instructionFiles)
+        expect(loc.instructionFiles, `${spec.name}.${language}`).toEqual(en.instructionFiles)
         expect(loc.projectPrompt, `${spec.name}.${language}`).toBe(en.projectPrompt)
       }
     }
@@ -244,12 +244,13 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
     }
   })
 
-  it('内置档案注入开关默认开启（notebook 除外 —— 维持迁移前的笔记本行为）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md、项目提示词默认开（notebook 除外 —— 维持迁移前的笔记本行为）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
-      const expected = spec.name !== NOTEBOOK_PROFILE_NAME
-      expect(built.instructionFiles, spec.name).toBe(expected)
-      expect(built.projectPrompt, spec.name).toBe(expected)
+      const on = spec.name !== NOTEBOOK_PROFILE_NAME
+      // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
+      expect(built.instructionFiles, spec.name).toEqual(on ? ['AGENTS.md', 'CLAUDE.md'] : [])
+      expect(built.projectPrompt, spec.name).toBe(on)
     }
   })
 })

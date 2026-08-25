@@ -15,11 +15,12 @@ shuvix-policy-rules:
       !inDir(object.path, vars.workspace)
       && !inDir(object.path, vars.toolResultsBase)
       && !inDir(object.path, vars.skillsDirs)
+      && !inDir(object.path, vars.memoryDirs)
     prompt: 作業ディレクトリ外のファイルを読むと、その内容はモデルのコンテキストに入り、以降の対話やツール呼び出しで外部へ渡る可能性がある。
 ---
 
 **このポリシーの役割**：エージェントは作業ディレクトリ（およびアプリの読み取り
-専用ディレクトリ：ツール結果、skills）内を自由に読める。その範囲の外にあるもの
+専用ディレクトリ：ツール結果、skills、プロジェクトメモリ）内を自由に読める。その範囲の外にあるもの
 —— 他の場所、他のプロジェクトのファイル —— を読むときは先に確認される。
 
 **カバーしないこと**：

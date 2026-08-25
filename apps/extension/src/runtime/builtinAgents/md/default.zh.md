@@ -5,8 +5,9 @@ name: default
 description: 主会话智能体——每个聊天会话都以此档案为创建基座;创建名为 "default" 的自定义智能体即可覆盖定制。
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: 默认
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
+shuvix-project-memory: true
 ---
 
 ## 身份

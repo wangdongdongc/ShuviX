@@ -5,8 +5,9 @@ name: coding
 description: The software engineering agent — the full toolchain (shell, SSH, database, browser) plus the working discipline for multi-file code work. Switch a session to it with /coding.
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: Coding
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
+shuvix-project-memory: true
 ---
 
 ## Identity

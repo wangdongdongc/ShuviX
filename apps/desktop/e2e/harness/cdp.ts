@@ -23,9 +23,18 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
   return (await res.json()) as CdpTarget[]
 }
 
-/** 主窗口页面判别（区别于设置窗口 #settings 与 devtools 目标） */
-export function isMainPage(t: CdpTarget): boolean {
-  return t.type === 'page' && t.url.includes('out/renderer') && !t.url.includes('#settings')
+/**
+ * 主窗口页面判别（区别于设置窗口 #settings 与 devtools 目标）。
+ *
+ * `appUrl` 给定时还要求 target 属于**该 checkout 的产物目录** —— 端口被别的实例占着时
+ * Chromium 不报错也不换端口，`/json` 回的是那个实例的 target，长相与自己的一模一样
+ * （见 launch.ts 的端口说明）。
+ */
+export function isMainPage(t: CdpTarget, appUrl?: string): boolean {
+  if (t.type !== 'page' || !t.url.includes('out/renderer') || t.url.includes('#settings')) {
+    return false
+  }
+  return !appUrl || t.url.startsWith(appUrl)
 }
 
 export function connect(wsUrl: string): Promise<CdpClient> {

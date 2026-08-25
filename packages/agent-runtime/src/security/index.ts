@@ -5,8 +5,8 @@
  *   celMatch.ts       CEL 匹配层（match/lets 编译与求值；唯一的匹配语义）
  *   policyFile.ts     策略 md 解析/序列化（`shuvix: policy v1`；规则 = effect + match）
  *   builtinPolicies/  内置策略（md ?raw 内联；用户可在 ~/.shuvix/policies 同名覆盖）
- *   assemble.ts       四层来源装配 + lets 求值 + tier 标定（consent 用原生谓词）
- *   evaluate.ts       统一评估纯函数（deny → consent → ask → static-allow → default）
+ *   assemble.ts       四层来源装配 + lets 求值 + tier 标定（force-allow 用原生谓词）
+ *   evaluate.ts       统一评估纯函数（deny → force-ask → force-allow → ask → static-allow → default）
  *   enforce.ts        决策执行（询问挂起 + 四分支响应收敛）+ 决策日志埋点
  *   commandFacts.ts   命令客体的结构属性投影（ShellFacts → CEL 可消费的属性）
  *   context.ts        createSecurityContext —— PEP 唯一入口

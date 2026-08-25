@@ -670,7 +670,7 @@ describe('parsePolicyDefinitionFile — 宽容分支与人读面', () => {
   })
 })
 
-describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值）', () => {
+describe('parsePolicyDefinitionFile — effect: force-allow（第四个 effect 值）', () => {
   /** 只写 effect 的最小规则（subject.kind 必填故恒带） */
   const withEffect = (effect: string): string =>
     md(
@@ -682,13 +682,13 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
       '---'
     )
 
-  it('CP-1 consent 原样保留：解析期不归一为 allow，也不产出 tier（归一是装配期的事）', () => {
+  it('CP-1 force-allow 原样保留：解析期不归一为 allow，也不产出 tier（归一是装配期的事）', () => {
     const parsed = parsePolicyDefinitionFile(
       md(
         '---',
-        'name: my-consent',
+        'name: my-force-allow',
         'shuvix-policy-rules:',
-        '  - effect: consent',
+        '  - effect: force-allow',
         '    subject.kind: [agent]',
         '    object.type: [path]',
         '    action: [read]',
@@ -701,7 +701,7 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
     )!
     expect(parsed.rules).toEqual([
       {
-        effect: 'consent',
+        effect: 'force-allow',
         conditions: {
           'subject.kind': ['agent'],
           action: ['read'],
@@ -714,18 +714,29 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
     expect('tier' in parsed.rules[0]).toBe(false)
   })
 
-  it.each(['allow', 'consent', 'ask', 'deny'])('CP-2 effect: %s 合法且原样保留', (effect) => {
-    const parsed = parsePolicyDefinitionFile(withEffect(effect), 'x')
-    expect(parsed).not.toBeNull()
-    expect(parsed!.rules[0].effect).toBe(effect)
-  })
-
-  it.each(['Consent', 'CONSENT', 'consents', 'grant', 'permit', 'allow-remember'])(
-    'CP-2b effect: %s 非法 → 整份拒绝（取值大小写敏感，近义词不接受）',
+  it.each(['allow', 'force-allow', 'ask', 'force-ask', 'deny'])(
+    'CP-2 effect: %s 合法且原样保留',
     (effect) => {
-      expect(parsePolicyDefinitionFile(withEffect(effect), 'x')).toBeNull()
+      const parsed = parsePolicyDefinitionFile(withEffect(effect), 'x')
+      expect(parsed).not.toBeNull()
+      expect(parsed!.rules[0].effect).toBe(effect)
     }
   )
+
+  // 'consent' 是改名前的旧词：必须判非法而不是被当未知取值静默吞掉 ——
+  // 老文件若还写着它，用户要立刻看到报错，而不是以为授权仍然生效
+  it.each([
+    'consent',
+    'Force-Allow',
+    'FORCE-ASK',
+    'force allow',
+    'consents',
+    'grant',
+    'permit',
+    'allow-remember'
+  ])('CP-2b effect: %s 非法 → 整份拒绝（取值大小写敏感，旧词与近义词都不接受）', (effect) => {
+    expect(parsePolicyDefinitionFile(withEffect(effect), 'x')).toBeNull()
+  })
 
   it('CP-3 同一文件混写四值：逐条 effect 与书写顺序逐字一致', () => {
     const parsed = parsePolicyDefinitionFile(
@@ -737,8 +748,8 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
         'shuvix-policy-rules:',
         '  - effect: deny',
         "    match: \"object.type == 'path' && inDir(object.path, '/deny')\"",
-        '  - effect: consent',
-        "    match: \"object.type == 'path' && inDir(object.path, '/consent')\"",
+        '  - effect: force-allow',
+        "    match: \"object.type == 'path' && inDir(object.path, '/force-allow')\"",
         '  - effect: ask',
         "    match: \"object.type == 'path' && inDir(object.path, '/ask')\"",
         '  - effect: allow',
@@ -747,25 +758,25 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
       ),
       'x'
     )!
-    expect(parsed.rules.map((r) => r.effect)).toEqual(['deny', 'consent', 'ask', 'allow'])
+    expect(parsed.rules.map((r) => r.effect)).toEqual(['deny', 'force-allow', 'ask', 'allow'])
     // 规则 id 是 '<policy>#<下标>'，顺序错位就是归因错位 —— match 逐字对上下标
     expect(parsed.rules.map((r) => r.match)).toEqual([
       "object.type == 'path' && inDir(object.path, '/deny')",
-      "object.type == 'path' && inDir(object.path, '/consent')",
+      "object.type == 'path' && inDir(object.path, '/force-allow')",
       "object.type == 'path' && inDir(object.path, '/ask')",
       "object.type == 'path' && inDir(object.path, '/allow')"
     ])
   })
 
-  it('CP-4 serialize→parse 往返保留 consent（含 conditions + match）；YAML 里是裸词', () => {
+  it('CP-4 serialize→parse 往返保留 force-allow（含 conditions + match）；YAML 里是裸词', () => {
     const data: ParsedPolicyFile = {
       name: 'trust-data',
       displayName: 'trust-data',
-      description: 'consent round trip',
+      description: 'force-allow round trip',
       scope: { 'subject.kind': ['agent'], 'object.type': ['path'] },
       rules: [
         {
-          effect: 'consent',
+          effect: 'force-allow',
           conditions: { action: ['read', 'write'] },
           match: "inDir(object.path, '/data')"
         },
@@ -776,16 +787,16 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
 
     const text = serializePolicyDefinitionFile(data)
     // 裸词（不加引号、不改写成 allow）—— 序列化产物本身要能被人读懂
-    expect(text).toContain('effect: consent')
-    expect(text).not.toContain("effect: 'consent'")
+    expect(text).toContain('effect: force-allow')
+    expect(text).not.toContain("effect: 'force-allow'")
     expect(parsePolicyDefinitionFile(text, 'other-name')).toEqual(data)
   })
 
-  it('CP-5 consent 不豁免任何校验：缺 subject.kind / 与 scope 空交集 → 整份非法；无 object.type 守卫的软告警照常', () => {
-    // ① subject.kind 必填对 consent 同样成立
+  it('CP-5 force-allow 不豁免任何校验：缺 subject.kind / 与 scope 空交集 → 整份非法；无 object.type 守卫的软告警照常', () => {
+    // ① subject.kind 必填对 force-allow 同样成立
     expect(
       parsePolicyDefinitionFile(
-        md('---', 'name: p', 'shuvix-policy-rules:', '  - effect: consent', '---'),
+        md('---', 'name: p', 'shuvix-policy-rules:', '  - effect: force-allow', '---'),
         'x'
       )
     ).toBeNull()
@@ -801,7 +812,7 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
           '  subject.kind: [agent]',
           '  action: [read]',
           'shuvix-policy-rules:',
-          '  - effect: consent',
+          '  - effect: force-allow',
           '    action: [write]',
           '---'
         ),
@@ -820,7 +831,7 @@ describe('parsePolicyDefinitionFile — effect: consent（第四个 effect 值�
         '---',
         'name: p',
         'shuvix-policy-rules:',
-        '  - effect: consent',
+        '  - effect: force-allow',
         '    subject.kind: [agent]',
         '    match: "inDir(object.path, vars.grantedRead)"',
         '---'
@@ -974,7 +985,7 @@ describe('parsePolicyDefinitionFile — 规则 prompt（人读提示语）', () 
     expect(padded).not.toHaveBeenCalled()
   })
 
-  it('PF-P7 四个 effect 都能带 prompt（allow/consent 不因「不投递」被拒）', () => {
+  it('PF-P7 四个 effect 都能带 prompt（allow/force-allow 不因「不投递」被拒）', () => {
     const warn = vi.fn()
     const parsed = parsePolicyDefinitionFile(
       md(
@@ -983,7 +994,7 @@ describe('parsePolicyDefinitionFile — 规则 prompt（人读提示语）', () 
         'shuvix-policy-scope:',
         '  subject.kind: [agent]',
         'shuvix-policy-rules:',
-        ...['allow', 'consent', 'ask', 'deny'].flatMap((effect) => [
+        ...['allow', 'force-allow', 'ask', 'deny'].flatMap((effect) => [
           `  - effect: ${effect}`,
           `    prompt: ${effect} note`
         ]),
@@ -994,7 +1005,7 @@ describe('parsePolicyDefinitionFile — 规则 prompt（人读提示语）', () 
     )!
     expect(parsed.rules.map((r) => [r.effect, r.prompt])).toEqual([
       ['allow', 'allow note'],
-      ['consent', 'consent note'],
+      ['force-allow', 'force-allow note'],
       ['ask', 'ask note'],
       ['deny', 'deny note']
     ])

@@ -62,6 +62,8 @@ export interface SpawnContext {
   agentId: string
   /** 本次派生 agent 的层级（根会话的直接派生 = 1） */
   depth: number
+  /** 派生来源 agent 的 id（可能本身也是派生 agent）—— 运行时注册中心据此还原血缘 */
+  parentAgentId: string
   /** 所属根会话 id（工具路径询问/LLM 日志归属） */
   rootSessionId: string
   /** 本次派生使用的模型配置（宿主为其派发工具沿用） */
@@ -157,6 +159,8 @@ interface SpawnedAgent {
   /** 内存态会话树（上下文真理源；随 destroy 消失） */
   piSession: Session
   runtime: HarnessSession
+  /** 从运行时注册中心注销（destroy 时调用） */
+  dispose: () => void
   aborted: boolean
   /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
   interrupted: boolean
@@ -235,6 +239,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     const spawn: SpawnContext = {
       agentId,
       depth,
+      parentAgentId: parentSessionId,
       rootSessionId,
       modelConfig,
       canSpawn: depth < maxDepth
@@ -267,6 +272,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       profile: agentType,
       piSession,
       runtime,
+      dispose: () => created.dispose(),
       aborted: false,
       interrupted: false
     }
@@ -339,6 +345,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     // 先级联销毁子树（后代挂在本 agent 名下）
     for (const child of registry.childrenOf(subSessionId)) destroy(child.agentId)
     void s.runtime.abort()
+    s.dispose()
     sessions.delete(subSessionId)
     registry.unregister(subSessionId)
   }

@@ -68,7 +68,7 @@ export function SettingsPanel(): React.JSX.Element {
   // 子 tab 初值直接从 hash 取（惰性初始化，不走 effect）
   const [monitorSubTab, setMonitorSubTab] = useState<MonitorSubTab>(() => {
     const { sub } = parseSettingsHash()
-    return sub && MONITOR_SUB_TABS.has(sub) ? (sub as MonitorSubTab) : 'httpLogs'
+    return sub && MONITOR_SUB_TABS.has(sub) ? (sub as MonitorSubTab) : 'agents'
   })
 
   useEffect(() => {

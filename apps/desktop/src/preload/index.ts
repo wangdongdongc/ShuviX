@@ -7,6 +7,8 @@ import type {
   AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
+  AgentFollowUpParams,
+  AgentNextTurnParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
@@ -44,6 +46,7 @@ import type {
   TelegramBotUpdateParams
 } from '../main/types'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type {
   ConfigSharePayload,
   ExportOptions,
@@ -148,6 +151,10 @@ const api = {
 
     /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
     steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
+    /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
+    followUp: (params: AgentFollowUpParams) => ipcRenderer.invoke('agent:followUp', params),
+    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
+    nextTurn: (params: AgentNextTurnParams) => ipcRenderer.invoke('agent:nextTurn', params),
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
@@ -163,6 +170,14 @@ const api = {
      *  传 ensure 则先懒创建（不请求 LLM）再取快照 */
     getInfo: (sessionId: string, options?: { ensure?: boolean }) =>
       ipcRenderer.invoke('agent:getInfo', sessionId, options),
+
+    /**
+     * 智能体监控：全部活跃 agent 运行时快照（含派生 agent）。
+     * 只读 pi 原生 getter + 注册中心的事件影子，不遍历会话树，可轮询。
+     */
+    monitorList: (): Promise<
+      import('@shuvix/chat-protocol/types/agentMonitor').AgentMonitorEntry[]
+    > => ipcRenderer.invoke('agentMonitor:list'),
 
     /**
      * 统一的"用户输入响应"入口。
@@ -245,10 +260,6 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
     getById: (id: string) => ipcRenderer.invoke('session:getById', id),
-    scanInstructionFiles: (sessionId: string) =>
-      ipcRenderer.invoke('session:scanInstructionFiles', sessionId),
-    updateInstructionFile: (params: { id: string; filename: string | null }) =>
-      ipcRenderer.invoke('session:updateInstructionFile', params),
     /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令） */
     listAgentProfiles: () => ipcRenderer.invoke('session:listAgentProfiles'),
     updateAgentProfile: (params: { id: string; name: string }) =>
@@ -525,6 +536,25 @@ const api = {
     },
     /** 取消下载任务 */
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId)
+  },
+
+  // ============ 后台任务 (bash run_in_background) ============
+  // 只有只读面 + 管理动作，没有输出流通道 —— 输出在日志文件里，用 readLog 按字节范围轮询。
+  bgTask: {
+    list: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('bgTask:list', params) as Promise<BgTaskInfo[]>,
+    readLog: (params: { toolCallId: string; fromByte?: number; maxBytes?: number }) =>
+      ipcRenderer.invoke('bgTask:readLog', params) as Promise<BgTaskLogChunk>,
+    stop: (params: { toolCallId: string; force?: boolean }) =>
+      ipcRenderer.invoke('bgTask:stop', params) as Promise<{ success: boolean }>,
+    write: (params: { toolCallId: string; data: string }) =>
+      ipcRenderer.invoke('bgTask:write', params) as Promise<{ success: boolean }>,
+    dismiss: (params: { toolCallId: string }) =>
+      ipcRenderer.invoke('bgTask:dismiss', params) as Promise<{ success: boolean }>,
+    clearDone: (params: { sessionId: string }) =>
+      ipcRenderer.invoke('bgTask:clearDone', params) as Promise<{ cleared: number }>,
+    setNotify: (params: { toolCallId: string; enabled: boolean }) =>
+      ipcRenderer.invoke('bgTask:setNotify', params) as Promise<{ success: boolean }>
   },
 
   // ============ Terminal (node-pty) ============

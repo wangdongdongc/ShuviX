@@ -33,6 +33,7 @@ export function createExtensionSecurityProvider(
       workspace: '',
       toolResultsBase: '',
       skillsDirs: [],
+      memoryDirs: [],
       home: '',
       systemDirs: []
     }),

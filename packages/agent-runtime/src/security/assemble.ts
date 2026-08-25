@@ -5,13 +5,13 @@
  *     ⊕ 用户 md（provider.getUserPolicies 现扫；同名覆盖内置）
  *     ⊕ 宿主派生（provider.derivedRules；仅限无法 md 化的特例）
  *
- * 会话授权曾是独立的第四层（allowList / autoAllow 在这里编译成 consent 原生谓词），
+ * 会话授权曾是独立的第四层（allowList / autoAllow 在这里编译成 force-allow 原生谓词），
  * 现已下沉为策略 md：条目经 buildPolicyVars 变成 vars.autoAllow / vars.grantedRead /
  * vars.grantedWrite，逻辑由内置 session-auto-allow 与 session-path-grants 两份策略用
- * `effect: consent` 表达 —— 于是它们也可覆盖、可移除、在策略页可见。
+ * `effect: force-allow` 表达 —— 于是它们也可覆盖、可移除、在策略页可见。
  *
- * tier 由 md 声明的 effect 唯一决定（TIER_BY_EFFECT）；consent 是 effect 的第四个取值
- * 而非正交字段，理由见 types.ts PolicyEffect。结算优先序见 evaluate.ts。
+ * tier 由 md 声明的 effect 唯一决定（TIER_BY_EFFECT）；强度编进 effect 名字（force- 前缀）
+ * 而非拆一根正交轴，理由见 types.ts PolicyEffect。结算优先序见 evaluate.ts。
  *
  * 策略规则的谓词 = **结构化条件（原生谓词）AND CEL match 表达式**（celMatch，按
  * (sep, 表达式) 缓存编译产物）。有效条件 = 策略级 scope ∩ 规则级字段（矛盾在解析期
@@ -41,14 +41,25 @@ import type {
 } from './types'
 
 /**
- * md 声明的 effect → 内部 {tier, effect}。这张表就是 consent 不需要独立 tier 字段的
- * 全部理由：tier 是 effect 的函数，反过来 TIER_EFFECT（evaluate.ts）是它的逆。
+ * md 声明的 effect → 内部 {tier, effect}。这张表就是强度不需要独立字段的全部理由：
+ * tier 是 effect 的函数，反过来 TIER_EFFECT（evaluate.ts）是它的逆。
+ * 表的书写顺序即强弱顺序（deny 最强，allow 最弱）。
  */
 const TIER_BY_EFFECT: Record<PolicyEffect, RuleTier> = {
   deny: 'deny',
-  consent: 'consent',
+  'force-ask': 'force-ask',
+  'force-allow': 'force-allow',
   ask: 'ask',
   allow: 'static-allow'
+}
+
+/** md effect → SecurityRule 的三态 effect（force- 档落回它的基础值） */
+const NORMALIZED_EFFECT: Record<PolicyEffect, SecurityRule['effect']> = {
+  deny: 'deny',
+  'force-ask': 'ask',
+  'force-allow': 'allow',
+  ask: 'ask',
+  allow: 'allow'
 }
 
 /** 合并策略文件：用户同名覆盖内置（provider 已过滤非法用户文件 —— 非法不遮蔽内置） */
@@ -128,8 +139,8 @@ export function assembleRules(
 
       rules.push({
         id: `${policy.name}#${i}`,
-        // consent 归一为 allow：SecurityRule 保持三态 effect，fail-safe 判定不受影响
-        effect: spec.effect === 'consent' ? 'allow' : spec.effect,
+        // force-* 归一为对应基础三态：SecurityRule 保持三态 effect，fail-safe 判定不受影响
+        effect: NORMALIZED_EFFECT[spec.effect],
         tier: TIER_BY_EFFECT[spec.effect],
         matchExpr,
         conditions: Object.keys(conditions).length > 0 ? conditions : undefined,

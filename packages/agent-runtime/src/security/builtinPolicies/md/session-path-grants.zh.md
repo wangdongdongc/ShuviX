@@ -8,11 +8,11 @@ shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     action: [read]
     match: inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)
     prompt: 该路径已在本会话「允许并记住」。写授权同时覆盖读取。
-  - effect: consent
+  - effect: force-allow
     action: [write]
     match: inDir(object.path, vars.grantedWrite)
     prompt: 该路径已在本会话获得写授权。

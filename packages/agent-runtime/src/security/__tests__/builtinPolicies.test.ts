@@ -35,12 +35,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 10 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 11 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies()).not.toThrow()
     const policies = buildBuiltinPolicies()
-    expect(policies).toHaveLength(10)
+    expect(policies).toHaveLength(11)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(10)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(11)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -52,7 +52,7 @@ describe('buildBuiltinPolicies', () => {
   })
 
   it('BP-2 不变式：内置策略不含静态 allow 规则（无策略即放行，无需内置豁免）', () => {
-    // consent 不在此列且**必须**不在：出厂的 session-auto-allow / session-path-grants
+    // force-allow 不在此列且**必须**不在：出厂的 session-auto-allow / session-path-grants
     // 正是用它表达会话授权。要挡的是静态 allow —— 它只会白占一层 static-allow，
     // 既压不过询问门，又让"没有策略就是放行"这条默认语义多出一个等价的替身。
     for (const policy of buildBuiltinPolicies()) {
@@ -119,6 +119,7 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).toContain('!inDir(object.path, vars.workspace)')
     expect(rule.match).toContain('!inDir(object.path, vars.toolResultsBase)')
     expect(rule.match).toContain('!inDir(object.path, vars.skillsDirs)')
+    expect(rule.match).toContain('!inDir(object.path, vars.memoryDirs)')
   })
 
   it('BP-3 ask-on-write：ask × write × path 任意路径，desktop 限定（无 match —— 条件即全部）', () => {
@@ -244,9 +245,9 @@ describe('buildBuiltinPolicies', () => {
   it('BP-T1 出厂无调用门：内置的 ask/deny 规则都不作用于 invocation 客体（否则击穿 L1 非事件快路）', () => {
     for (const policy of buildBuiltinPolicies()) {
       for (const rule of policy.rules) {
-        // allow/consent 命中 invocation 无害：L1 对 allow 一律走非事件快路（不弹窗不记日志），
+        // allow/force-allow 命中 invocation 无害：L1 对 allow 一律走非事件快路（不弹窗不记日志），
         // 与默认放行同待遇。会击穿快路的只有 ask/deny —— 那才是这条不变式要挡的。
-        if (rule.effect === 'allow' || rule.effect === 'consent') continue
+        if (rule.effect === 'allow' || rule.effect === 'force-allow') continue
         const effective = mergeConditions(policy.scope, rule.conditions)
         const objectTypes = effective?.['object.type']
         expect(objectTypes, `${policy.name} 的 ${rule.effect} 规则未限定 object.type`).toBeDefined()
@@ -421,6 +422,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     workspace: '/ws',
     toolResultsBase: '/tool-results',
     skillsDirs: ['/skills/a', '/skills/b'],
+    memoryDirs: ['/memory'],
     home: '/Users/u',
     systemDirs: []
   }
@@ -447,7 +449,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
    *
    * vars 必须走 buildPolicyVars（生产路径 context.ts 同款）：直接用 provider.getVars()
    * 会缺 autoAllow/grantedRead/grantedWrite，strict 语义下 session-* 两份策略的 match
-   * 报错走 fail-safe —— consent 规则视为不命中（方向安全），但每次评估都刷告警。
+   * 报错走 fail-safe —— force-allow 规则视为不命中（方向安全），但每次评估都刷告警。
    */
   function decide(action: string, object: SecurityObject, opts: DecideOpts = {}): SecurityDecision {
     const provider = opts.provider ?? makeProvider()
@@ -548,6 +550,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         workspace: '',
         toolResultsBase: '',
         skillsDirs: [],
+        memoryDirs: [],
         home: '',
         systemDirs: []
       }),
@@ -773,6 +776,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         workspace: '',
         toolResultsBase: '',
         skillsDirs: [],
+        memoryDirs: [],
         home: '',
         systemDirs: []
       }),

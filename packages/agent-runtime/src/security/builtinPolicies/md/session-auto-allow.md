@@ -7,7 +7,7 @@ description: While the session's auto-allow switch is on, every ask is skipped.
 shuvix-policy-scope:
   subject.kind: [agent]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     match: vars.autoAllow
     prompt: The session's auto-allow switch is on, so ask gates are skipped.
 ---
@@ -20,6 +20,9 @@ While it is on, every ask gate — file reads and writes, commands, git, databas
 
 - It cannot beat a deny. protect-credentials and protect-system still block
   what they block, auto-allow or not.
+- It does not skip a `force-ask` rule. That effect exists precisely to mean
+  "this gate does not accept session-level consent", so a policy written with
+  it still asks while the switch is on.
 - It is per session and never persists to a new one.
 
 **To adjust**: this policy is what gives the switch its meaning. Override it to
@@ -28,7 +31,7 @@ narrow the switch — for example, keep asking for writes even when it is on:
     shuvix-policy-scope:
       subject.kind: [agent]
     shuvix-policy-rules:
-      - effect: consent
+      - effect: force-allow
         action: [read, execute]
         match: vars.autoAllow
 

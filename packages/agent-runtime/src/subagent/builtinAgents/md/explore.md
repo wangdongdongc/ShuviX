@@ -5,7 +5,7 @@ name: explore
 description: 'Fast read-only codebase exploration: find files by pattern, search code, answer questions about the codebase.'
 shuvix-tools: read, ls, grep, glob
 shuvix-displayName: Explore
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

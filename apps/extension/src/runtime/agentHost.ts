@@ -224,8 +224,9 @@ const extensionAgentHost: AgentHostAdapter = {
     hasUserInputCapability: () => eventBus.hasListeners()
   },
   logger,
-  // sessionId 恒为根会话 id（派生按根会话解析）
-  resolveInstruction: (sessionId) => resolveInstructionForSession(sessionId),
+  // 候选清单来自 agent 档案；sessionId 恒为根会话 id（派生按根会话解析）
+  resolveInstruction: (sessionId, _cwd, candidates) =>
+    resolveInstructionForSession(sessionId, candidates),
   resolveProjectPrompt: async (sessionId) => {
     const session = await sessionStore.getById(sessionId)
     if (!session?.projectId) return null

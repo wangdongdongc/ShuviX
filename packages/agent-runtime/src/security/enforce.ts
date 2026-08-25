@@ -165,6 +165,7 @@ export async function executeDecision(args: {
       : undefined,
     pathIsDirectory,
     preview: opts.preview,
+    background: opts.background,
     createdAt: Date.now()
   })
 

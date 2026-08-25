@@ -11,10 +11,11 @@ export interface SubAgentPayload {
   tools: string[]
   /** `shuvix-model`：指定模型 `<providerId>/<modelId>`；省略 = 不声明（跟随会话） */
   model?: string
-  /** `shuvix-instruction-files`：是否注入项目指令文件 */
-  instructionFiles: boolean
+  /** `shuvix-instruction-files`：项目指令文件清单，顺序即优先级；空 = 不注入 */
+  instructionFiles: string[]
   /** `shuvix-project-prompt`：是否注入项目提示词 */
   projectPrompt: boolean
+  projectMemory: boolean
   /** `shuvix-dispatch-only`：只可派发、不可切换为会话档案（GUI 无开关，原样透传） */
   dispatchOnly: boolean
 }

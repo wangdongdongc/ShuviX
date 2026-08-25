@@ -508,6 +508,7 @@ export function LivePreviewEditor({
     const root = createRoot(slot)
     root.render(
       <FrontmatterFieldPicker
+        fieldKey={ctx.key}
         kind={ctx.kind === 'csv' ? 'csv' : 'select'}
         value={ctx.value}
         onChange={ctx.onChange}

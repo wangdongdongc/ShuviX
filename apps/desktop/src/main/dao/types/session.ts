@@ -18,9 +18,6 @@ export interface SessionSettings {
   autoAllow?: boolean
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
-  /** 绑定的 Telegram Bot ID（null/undefined = 未绑定） */
-  /** 注入的项目指令文件（单选）：undefined = 按 AGENTS.md → CLAUDE.md 优先级自动选，null = 不注入 */
-  instructionFile?: string | null
   /**
    * 会话根 Agent 采用的档案名（内置档案或 `~/.shuvix/agents/<name>.md`）。
    * 缺省 / 档案已不存在 → 回落 'default'（见 sessionService.resolveAgentProfileName）。

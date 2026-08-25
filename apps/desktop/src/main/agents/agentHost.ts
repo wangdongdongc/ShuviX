@@ -45,6 +45,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { projectDao } from '../dao/projectDao'
 import { ensureSessionTree } from '../services/sessionStorage'
 import { resolveInstructionContent } from '../services/instruction'
+import { resolveProjectMemoryIndex } from '../services/memory'
 import { httpLogService } from '../services/httpLogService'
 import { chatFrontendRegistry } from '../frontend/core'
 import {
@@ -238,12 +239,15 @@ const desktopAgentHost: AgentHostAdapter = {
       httpLogService.updateUsage(logId, input, output, total, responseJson)
   },
   logger: runtimeLogger,
-  // sessionId 恒为根会话 id（派生按根会话解析）；cwd 空串（派生）时按会话项目配置兜底
-  resolveInstruction: (sessionId, cwd) =>
-    resolveInstructionContent(sessionId, cwd || resolveProjectConfig(sessionId).workingDirectory),
+  // 候选清单来自 agent 档案；sessionId 恒为根会话 id（派生按根会话解析），
+  // cwd 空串（派生）时按会话项目配置兜底
+  resolveInstruction: (sessionId, cwd, candidates) =>
+    resolveInstructionContent(cwd || resolveProjectConfig(sessionId).workingDirectory, candidates),
   resolveProjectPrompt: (sessionId) => {
     return sessionProject(sessionId)?.systemPrompt?.trim() || null
-  }
+  },
+  // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
+  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId)
 }
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */

@@ -14,6 +14,8 @@ export type {
   AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
+  AgentFollowUpParams,
+  AgentNextTurnParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '@shuvix/chat-protocol/chatApi'

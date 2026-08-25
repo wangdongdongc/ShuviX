@@ -35,7 +35,7 @@ interface AgentRow {
   tools: string[]
   description: string
   model?: string
-  instructionFiles: boolean
+  instructionFiles: string[]
   projectPrompt: boolean
 }
 
@@ -52,12 +52,13 @@ describe('agent md 格式（纯 md 驱动）', () => {
     const res = await app.main.eval<{ success: boolean }>(
       `window.api.subAgent.save({ originalName: 'new-key', agent: {
         name: 'new-key', displayName: 'new-key', description: 'd2', systemPrompt: 'B2.',
-        tools: ['read'], instructionFiles: true, projectPrompt: false } })`
+        tools: ['read'], instructionFiles: ['AGENTS.md', 'docs/rules.md'],
+        projectPrompt: false } })`
     )
     expect(res.success).toBe(true)
     const text = readFileSync(join(app.agentsDir, 'new-key.md'), 'utf8')
     expect(text).toContain('shuvix-tools: read')
-    expect(text).toContain('shuvix-instruction-files: true')
+    expect(text).toContain('shuvix-instruction-files: AGENTS.md, docs/rules.md')
     expect(text).not.toContain('shuvix-project-prompt')
     expect(text).not.toMatch(/^tools:/m)
   })
@@ -68,7 +69,7 @@ describe('agent md 格式（纯 md 驱动）', () => {
         `window.api.subAgent.save({ originalName: 'unresolvable-model', agent: {
           name: 'unresolvable-model', displayName: 'unresolvable-model', description: 'd',
           systemPrompt: 'B.', tools: ['read'], model: ${JSON.stringify(model)},
-          instructionFiles: false, projectPrompt: false } })`
+          instructionFiles: [], projectPrompt: false } })`
       )
     const filePath = join(app.agentsDir, 'unresolvable-model.md')
 
@@ -120,20 +121,20 @@ describe('agent md 格式（纯 md 驱动）', () => {
   it('新建：三字段必填 + 文件落盘；同名拒绝', async () => {
     const missing = await app.main.eval<{ success: boolean; error?: string }>(
       `window.api.subAgent.create({ agent: { name: 'x', displayName: 'x', description: '',
-        systemPrompt: 'b', tools: [], instructionFiles: false, projectPrompt: false } })`
+        systemPrompt: 'b', tools: [], instructionFiles: [], projectPrompt: false } })`
     )
     expect(missing.success).toBe(false)
 
     const created = await app.main.eval<{ success: boolean; name?: string }>(
       `window.api.subAgent.create({ agent: { name: 'made-by-ipc', displayName: 'made-by-ipc',
-        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: false, projectPrompt: false } })`
+        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: [], projectPrompt: false } })`
     )
     expect(created.success).toBe(true)
     expect(existsSync(join(app.agentsDir, 'made-by-ipc.md'))).toBe(true)
 
     const dup = await app.main.eval<{ success: boolean }>(
       `window.api.subAgent.create({ agent: { name: 'made-by-ipc', displayName: 'x',
-        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: false, projectPrompt: false } })`
+        description: 'd', systemPrompt: 'b', tools: [], instructionFiles: [], projectPrompt: false } })`
     )
     expect(dup.success).toBe(false)
   })

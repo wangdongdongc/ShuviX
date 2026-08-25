@@ -28,10 +28,6 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   enabledTools: {
     labelKey: 'projectForm.wizardStepExtensions',
     desc: 'List of enabled MCP/Skill identifiers — entries must be prefixed with mcp: or skill: (string[])'
-  },
-  'tool.pglitePersist': {
-    labelKey: 'projectForm.pglitePersistLabel',
-    desc: 'Enable PGLite persistent storage — data stored in project folder .shuvix/pglite/data (boolean)'
   }
 }
 

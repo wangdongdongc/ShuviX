@@ -30,8 +30,6 @@ import * as widgetWindowService from './widgetWindowService'
 import { sessionService } from './sessionService'
 import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
 import { resolve as resolvePath } from 'path'
-import { pgliteWorkerManager } from './pglite/workerManager'
-import { parseShuvixPgliteArgv } from './pglite/argvParser'
 
 const log = createLogger('cliServer')
 
@@ -316,75 +314,6 @@ class CliServer {
     })
 
     // 浏览器自动化不再走 CLI —— agent 统一用内置 `browser` 工具（services/browser 的 backend）。
-
-    // ────────────────── pglite.* ──────────────────
-    // `shuvix pglite` CLI 入口。argv 由 CLI 端透传上来；-f 模式时 CLI 端已 readFileSync
-    // 把内容塞进 stdin 字段。worker 长驻按 session 的 pglitePersist 设置自动走 memory /
-    // persistent 模式（workerManager 内置）。
-
-    this.handlers.set('pglite.run', async (p, sessionId) => {
-      if (!sessionId) throw new Error('pglite.run requires SHUVIX_SESSION_ID')
-
-      const argv = Array.isArray(p.argv) ? (p.argv as string[]) : []
-      const stdinContent = typeof p.stdin === 'string' ? (p.stdin as string) : undefined
-      const timeoutMs = typeof p.timeoutMs === 'number' ? (p.timeoutMs as number) : 60_000
-
-      const parsed = parseShuvixPgliteArgv(argv, stdinContent !== undefined)
-      if (parsed.helpText !== undefined) {
-        return { stdout: parsed.helpText, stderr: '', exitCode: 0 }
-      }
-      if (parsed.error !== undefined) {
-        return { stdout: '', stderr: parsed.error, exitCode: 2 }
-      }
-      if (!parsed.request) {
-        return { stdout: '', stderr: 'shuvix pglite: internal parse failure', exitCode: 1 }
-      }
-
-      const req = parsed.request
-
-      // version 模式不需要起 worker，直接返回版本信息
-      if (req.mode === 'version') {
-        return {
-          stdout: 'PGLite (ShuviX embedded WebAssembly Postgres)',
-          stderr: '',
-          exitCode: 0
-        }
-      }
-
-      // 从 parsed.request 提取真正要跑的 SQL：
-      //   -c → request.sql
-      //   stdin → CLI 端预读的 stdinContent
-      //   file → CLI 端 readFileSync 后塞到 stdinContent
-      let sqlText: string
-      if (req.mode === '-c') {
-        sqlText = req.sql
-      } else {
-        if (stdinContent === undefined) {
-          return {
-            stdout: '',
-            stderr: `shuvix pglite: ${req.mode} requested but no content was forwarded by CLI`,
-            exitCode: 1
-          }
-        }
-        sqlText = stdinContent
-      }
-
-      await pgliteWorkerManager.ensureReady(sessionId)
-      const execId = `cli-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`
-      const resp = await pgliteWorkerManager.execute(
-        sessionId,
-        execId,
-        sqlText,
-        req.extensions.length > 0 ? req.extensions : undefined,
-        timeoutMs
-      )
-
-      return {
-        stdout: resp.output ?? '',
-        stderr: resp.error ?? '',
-        exitCode: resp.type === 'error' ? 1 : 0
-      }
-    })
   }
 }
 

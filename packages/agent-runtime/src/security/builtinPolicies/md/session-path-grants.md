@@ -8,11 +8,11 @@ shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     action: [read]
     match: inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)
     prompt: This path was allowed and remembered in this session. A write grant covers reading too.
-  - effect: consent
+  - effect: force-allow
     action: [write]
     match: inDir(object.path, vars.grantedWrite)
     prompt: This path was granted write access in this session.

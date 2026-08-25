@@ -26,13 +26,14 @@ import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 import './tools/allTools'
 import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
+import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
 import {
   initWidgetWindowService,
   closeAll as closeAllWidgetWindows
 } from './services/widgetWindowService'
 import { getBrowserOffset, setBrowserOffset, clearBrowserOffset } from './services/panelLayoutState'
-// pglite: 已迁为 src/main/services 内聚模块，import 触发 registerBuiltinTool 副作用
+// pglite: widget 共享库的 WASM 运行时，退出时统一回收 worker
 import { disposePglite } from './services/pglite'
 import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/browser'
 import { widgetServer } from './services/widget'
@@ -646,6 +647,7 @@ app.whenReady().then(async () => {
 // 应用退出前清理
 app.on('before-quit', () => {
   destroyAllTabs()
+  killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})
   mcpServerService.stop().catch(() => {})
   sshManager.disconnectAll().catch(() => {})

@@ -1,62 +1,55 @@
 /**
- * 扩展「项目指令文件」后端 —— 顶层扫描 AGENTS.md / CLAUDE.md，供会话配置单选 + 懒注入。
+ * 扩展「项目指令文件」后端 —— 按 agent 档案 `shuvix-instruction-files` 的清单解析。
  *
- * 镜像桌面 instructionFileScanner / instructionInjector：非递归、大小写敏感、仅收录实际存在的候选，
- * 且至多注入一个文件（未显式配置时 AGENTS.md 优先、其次 CLAUDE.md；显式 null 表示不注入）。
- * 注入方式与桌面统一（统一创建管线在 createAgent 时 append 进系统提示词）
- * （display=true，进上下文 + 渲染 InstructionBubble），压缩后自动重注入；不再拼进 systemPrompt。
- * 差异仅在底座：FSA/OPFS 工作目录句柄（无 Node fs）。
+ * 镜像桌面 instructionInjector：清单顺序即优先级，取第一个存在且非空的读出来，至多一个；
+ * 返回原文，围栏由统一创建管线（createAgent）统一加，内容 append 进系统提示词。
+ * 差异仅在底座：FSA/OPFS 目录句柄（无 Node fs），故相对路径要逐级下钻取子目录句柄。
+ *
+ * 本模块没有自己的候选名表 —— 「读哪些文件」全由档案决定（会话设置里那个单选下拉
+ * 已随之取消）。条目已由 agent md 解析器归一为工作目录内的相对路径（拒收绝对路径与
+ * `..`），这里直接按 `/` 拆段即可。
  */
-import {
-  INSTRUCTION_FILE_CANDIDATES,
-  resolveInstructionFile,
-  type InstructionFileEntry
-} from '@shuvix/chat-protocol/types/instructionFile'
-import { sessionStore } from '../storage/sessionStore'
 import { handleForSession } from './filesRuntime'
 
-/** 扫描会话工作目录顶层的指令文件候选（存在即收录，附原始大小写名 + 字节数）。 */
-export async function scanInstructionFiles(sessionId: string): Promise<InstructionFileEntry[]> {
-  const handle = await handleForSession(sessionId)
-  if (!handle) return []
-  const out: InstructionFileEntry[] = []
-  for (const name of INSTRUCTION_FILE_CANDIDATES) {
-    try {
-      const fh = await handle.getFileHandle(name)
-      const file = await fh.getFile()
-      out.push({ filename: name, absolutePath: `${handle.name}/${name}`, size: file.size })
-    } catch {
-      // 不存在 → 跳过
-    }
-  }
-  return out
-}
-
-/**
- * 解析会话选中的指令文件（统一创建管线 resolveInstruction 的扩展实现）。
- * 会话配置 settings.instructionFile：undefined = 按优先级自动选，null = 不注入。
- * 与桌面 instructionInjector 同形：返回原文，围栏由 createAgent 统一加；任何读失败/空文件返回 null。
- */
-export async function resolveInstructionForSession(
-  sessionId: string
-): Promise<{ filename: string; content: string } | null> {
-  const session = await sessionStore.getById(sessionId)
-  const configured = session?.settings?.instructionFile
-  if (configured === null) return null
-  const handle = await handleForSession(sessionId)
-  if (!handle) return null
-  const available = await scanInstructionFiles(sessionId)
-  const selected = resolveInstructionFile(
-    configured,
-    available.map((f) => f.filename)
-  )
-  if (!selected) return null
+/** 按相对路径逐级下钻取文件句柄；任一段不存在返回 null */
+async function fileHandleAt(
+  root: FileSystemDirectoryHandle,
+  relativePath: string
+): Promise<FileSystemFileHandle | null> {
+  const parts = relativePath.split('/')
+  const filename = parts.pop()
+  if (!filename) return null
+  let dir = root
   try {
-    const fh = await handle.getFileHandle(selected)
-    const content = (await (await fh.getFile()).text()).trim()
-    if (!content) return null
-    return { filename: selected, content }
+    for (const segment of parts) dir = await dir.getDirectoryHandle(segment)
+    return await dir.getFileHandle(filename)
   } catch {
     return null
   }
+}
+
+/**
+ * 解析要注入的项目指令文件（统一创建管线 resolveInstruction 的扩展实现）。
+ * 与桌面 instructionInjector 同形：清单里第一个存在且非空的胜出，任何读失败/空文件
+ * 只是「这条不算命中」，继续看下一条；全部落空返回 null。
+ */
+export async function resolveInstructionForSession(
+  sessionId: string,
+  candidates: readonly string[]
+): Promise<{ filename: string; content: string } | null> {
+  if (candidates.length === 0) return null
+  const handle = await handleForSession(sessionId)
+  if (!handle) return null
+
+  for (const name of candidates) {
+    const fh = await fileHandleAt(handle, name)
+    if (!fh) continue
+    try {
+      const content = (await (await fh.getFile()).text()).trim()
+      if (content) return { filename: name, content }
+    } catch {
+      // 读失败 → 看下一个候选
+    }
+  }
+  return null
 }

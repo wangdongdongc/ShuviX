@@ -19,8 +19,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { listTargets, isMainPage, sleep, until } from '../../harness/cdp'
 import { createProject } from '../../harness/seed'
+import { fmCardPane, type FmCardPane } from '../../harness/pages'
 
 let app: E2EApp
+let card: FmCardPane
 let projDir: string
 let cardMdPath: string
 
@@ -30,7 +32,7 @@ const CARD_MD = [
   'name: card-demo-agent',
   'description: e2e frontmatter card',
   'shuvix-tools: bash, read, write',
-  'shuvix-instruction-files: true',
+  'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
   'shuvix-builtin: true',
   '---',
   '',
@@ -135,8 +137,7 @@ async function maybeScreenshot(): Promise<void> {
   const out = process.env.SHUVIX_E2E_SHOT
   if (!out) return
   try {
-    const port = Number(process.env.SHUVIX_E2E_PORT ?? 9223)
-    const target = (await listTargets(port)).find(isMainPage)
+    const target = (await listTargets(app.port)).find((t) => isMainPage(t))
     if (!target) return
     const data = await new Promise<string>((resolve, reject) => {
       const ws = new WebSocket(target.webSocketDebuggerUrl)
@@ -165,6 +166,7 @@ async function maybeScreenshot(): Promise<void> {
 
 beforeAll(async () => {
   app = await launchApp()
+  card = fmCardPane(app.main)
   projDir = join(app.home, 'proj-fmcard')
   mkdirSync(projDir, { recursive: true })
   cardMdPath = join(projDir, 'card-demo.md')
@@ -198,34 +200,39 @@ afterAll(async () => {
 describe('frontmatter 属性卡', () => {
   it('契约 md：frontmatter 渲染为属性卡（徽章 / 字段行 / chips / 开关 / 未知键通用行）', async () => {
     await clickSessionByText('card-demo')
-    await until(
-      () => app.main.eval<boolean>(`document.querySelector('.cm-shuvix-fmcard') !== null`),
-      'frontmatter card rendered'
-    )
+    // 槽位内容是宿主异步挂的 React 子树 —— 只等 `.cm-shuvix-fmcard` 存在会读到空串
+    await card.waitReady({ slots: 3 })
 
     const badge = await app.main.eval<string>(
       `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
     )
     expect(badge).toBe('ShuviX agent · v1')
 
-    // 可编辑宿主（笔记本注入了 mountField）：model / tools 两行是**选择器槽位**，
-    // 由宿主挂载 ModelSelect / ToolSelectList，卡片自身不再渲染 chips。
+    // 可编辑宿主（笔记本注入了 mountField）：model / tools / instruction-files 三行是
+    // **选择器槽位**，由宿主挂载 ModelSelect / ToolSelectList / 清单输入框，卡片自身不再渲染 chips。
     // 只读宿主（FilePreview）走另一分支，仍是 .cm-shuvix-fmcard-chip 只读展示。
     const slots = await app.main.eval<number>(
       `document.querySelectorAll('.cm-shuvix-fmcard-slot').length`
     )
-    expect(slots).toBe(2)
+    expect(slots).toBe(3)
+    const slotText = (key: string): Promise<string> =>
+      app.main.eval<string>(
+        `(document.querySelector('.cm-shuvix-fmcard-row[data-key=${JSON.stringify(key)}] .cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
+      )
     // 工具触发器显示当前白名单（原样逗号串）
-    const toolsTrigger = await app.main.eval<string>(
-      `[...document.querySelectorAll('.cm-shuvix-fmcard-slot')].pop()?.textContent?.trim() ?? ''`
-    )
-    expect(toolsTrigger).toContain('bash, read, write')
+    expect(await slotText('shuvix-tools')).toContain('bash, read, write')
+    // 指令文件清单是普通输入框（值在 input.value 上，不是触发器文案）
+    expect(
+      await app.main.eval<string>(
+        `document.querySelector('.cm-shuvix-fmcard-row[data-key="shuvix-instruction-files"] input')?.value ?? ''`
+      )
+    ).toBe('AGENTS.md, CLAUDE.md')
 
-    // 三个布尔字段按描述符顺序：instruction-files 已写 true、其余缺省 unset
+    // 三个布尔字段按描述符顺序，均缺省 unset（instruction-files 已改为清单，不再是开关）
     const toggles = await app.main.eval<string[]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => n.dataset.state)`
     )
-    expect(toggles).toEqual(['on', 'unset', 'unset'])
+    expect(toggles).toEqual(['unset', 'unset', 'unset'])
 
     // 未知键（shuvix-builtin）落通用 key/value 行；类型标记键本身不成行
     const labels = await app.main.eval<string[]>(
@@ -253,15 +260,16 @@ describe('frontmatter 属性卡', () => {
   })
 
   it('卡上开关 → 行级写回：project-prompt 缺省态点开 → 文件闭合线前插入 true 行', async () => {
+    // 布尔行只剩三个（instruction-files 已改为清单）：project-prompt 排第一
     await app.main.eval(
-      `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[1]` +
+      `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[0]` +
         `.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`
     )
     // 卡片按新 YAML 重建，开关翻到 on
     await until(
       () =>
         app.main.eval<boolean>(
-          `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[1]?.dataset.state === 'on'`
+          `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[0]?.dataset.state === 'on'`
         ),
       'toggle flipped to on'
     )

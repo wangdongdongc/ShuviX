@@ -59,20 +59,6 @@ export function registerSessionHandlers(): void {
     return sessionService.getById(id) || null
   })
 
-  /** 扫描会话工作目录顶层的候选指令文件 */
-  ipcMain.handle('session:scanInstructionFiles', (_event, sessionId: string) => {
-    return sessionService.scanInstructionFiles(sessionId)
-  })
-
-  /** 更新会话注入的指令文件（单选；filename 为 null 表示不注入） */
-  ipcMain.handle(
-    'session:updateInstructionFile',
-    (_event, params: { id: string; filename: string | null }) => {
-      sessionService.updateInstructionFile(params.id, params.filename)
-      return { success: true }
-    }
-  )
-
   /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令）；未知档案名返回 success:false */
   /** 可切换的会话档案（输入框档案选择器；纯文件系统驱动，每次现扫） */
   ipcMain.handle('session:listAgentProfiles', () => agentService.listSwitchable())

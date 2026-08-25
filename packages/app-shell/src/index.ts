@@ -126,6 +126,7 @@ export type { NotebookViewProps } from './notebook/NotebookView'
 export { NotebookSession } from './notebook/NotebookSession'
 export type { NotebookSessionProps } from './notebook/NotebookSession'
 export { useCreateNotebook } from './notebook/useCreateNotebook'
+export { EFFECT_CLASS as POLICY_EFFECT_CLASS } from './notebook/frontmatterCard'
 export { LivePreviewEditor } from './notebook/LivePreviewEditor'
 export type {
   LivePreviewEditorHandle,

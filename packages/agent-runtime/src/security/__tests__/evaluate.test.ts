@@ -54,12 +54,19 @@ const deny = (id: string, match?: string): SecurityRule =>
     matchExpr: match,
     matches: match ? cel(match) : undefined
   })
-const consent = (id: string, match?: string): SecurityRule =>
+const forceAllow = (id: string, match?: string): SecurityRule =>
   makeRule({
     id,
     effect: 'allow',
-    tier: 'consent',
+    tier: 'force-allow',
     source: { kind: 'session' },
+    matches: match ? cel(match) : undefined
+  })
+const forceAsk = (id: string, match?: string): SecurityRule =>
+  makeRule({
+    id,
+    effect: 'ask',
+    tier: 'force-ask',
     matches: match ? cel(match) : undefined
   })
 const ask = (id: string, match?: string): SecurityRule =>
@@ -74,15 +81,44 @@ const staticAllow = (id: string, match?: string): SecurityRule =>
   makeRule({ id, effect: 'allow', tier: 'static-allow', matches: match ? cel(match) : undefined })
 
 describe('evaluate — tier 结算优先序', () => {
-  it('EV-1 deny 与 consent-allow 同命中 → deny 胜出（内置保护压得住免询问）', () => {
-    const decision = evaluate([consent('c1'), deny('d1')], makeRequest())
+  it('EV-1 deny 与 force-allow 同命中 → deny 胜出（内置保护压得住免询问）', () => {
+    const decision = evaluate([forceAllow('c1'), deny('d1')], makeRequest())
     expect(decision.effect).toBe('deny')
     expect(decision.winning).toBe('d1')
     expect(decision.reason).toBe("Denied by security policy rule 'd1'")
   })
 
-  it('EV-2 consent-allow 与 ask 同命中 → allow（免询问压过静态 ask）', () => {
-    const decision = evaluate([ask('a1'), consent('c1')], makeRequest())
+  it('EV-F1 force-ask 与 force-allow 同命中 → ask（免询问压不过「始终询问」）', () => {
+    // 需求原型：某些对象即使开着免询问也要过目一次。梯子上 force-ask 就在 force-allow 之上
+    const decision = evaluate([forceAllow('c1'), forceAsk('fa1')], makeRequest())
+    expect(decision.effect).toBe('ask')
+    expect(decision.winning).toBe('fa1')
+    // force-allow 确实命中了（是被压过，不是没匹配上）；matched 按 tier 序，force-ask 在前
+    expect(decision.matched).toEqual(['fa1', 'c1'])
+  })
+
+  it('EV-F2 deny 与 force-ask 同命中 → deny（拒绝恒在顶，没有 force-deny）', () => {
+    const decision = evaluate([forceAsk('fa1'), deny('d1')], makeRequest())
+    expect(decision.effect).toBe('deny')
+    expect(decision.winning).toBe('d1')
+    expect(decision.matched).toEqual(['d1', 'fa1'])
+  })
+
+  it('EV-F3 force-ask 胜出的路径询问不给「允许并记住」：那条授权压不过它，按钮会是假承诺', () => {
+    const request = makeRequest({ action: 'read', object: { type: 'path', path: '/p/secret' } })
+    // 普通 ask：给 rememberEntry（记住后由 force-allow 层放行）
+    expect(evaluate([ask('a1')], request).ask).toEqual({
+      command: 'Read(/p/secret)',
+      rememberEntry: 'Read(/p/secret)'
+    })
+    // force-ask 胜出：同一条目只作展示，不给记忆入口
+    expect(evaluate([ask('a1'), forceAsk('fa1')], request).ask).toEqual({
+      command: 'Read(/p/secret)'
+    })
+  })
+
+  it('EV-2 force-allow 与 ask 同命中 → allow（免询问压过静态 ask）', () => {
+    const decision = evaluate([ask('a1'), forceAllow('c1')], makeRequest())
     expect(decision.effect).toBe('allow')
     expect(decision.winning).toBe('c1')
   })
@@ -108,24 +144,26 @@ describe('evaluate — tier 结算优先序', () => {
     }
   )
 
-  it('EV-5 includeConsent:false → consent 规则被跳过（matched 不含它）；ask 门下豁免失效回到 ask', () => {
-    // 仅 consent 规则时：跳过后落 default allow
-    const decision = evaluate([consent('c1')], makeRequest(), { includeConsent: false })
+  it('EV-5 includeForceAllow:false → force-allow 规则被跳过（matched 不含它）；ask 门下豁免失效回到 ask', () => {
+    // 仅 force-allow 规则时：跳过后落 default allow
+    const decision = evaluate([forceAllow('c1')], makeRequest(), { includeForceAllow: false })
     expect(decision.effect).toBe('allow')
     expect(decision.winning).toBe('default:path')
     expect(decision.matched).toEqual([])
 
-    // consent 本可豁免 ask 门；排除 consent 后门重新生效 —— 被动 UI 判定的语义
-    const gated = evaluate([ask('a1'), consent('c1')], makeRequest(), { includeConsent: false })
+    // force-allow 本可豁免 ask 门；排除 force-allow 后门重新生效 —— 被动 UI 判定的语义
+    const gated = evaluate([ask('a1'), forceAllow('c1')], makeRequest(), {
+      includeForceAllow: false
+    })
     expect(gated.effect).toBe('ask')
     expect(gated.winning).toBe('a1')
     expect(gated.matched).toEqual(['a1'])
   })
 
   it('EV-6 matched 含全部命中 id 按 tier 序；同 tier 多条时 winning=装配顺序第一条', () => {
-    const rules = [staticAllow('s1'), ask('a1'), deny('d1'), ask('a2'), consent('c1')]
+    const rules = [staticAllow('s1'), ask('a1'), deny('d1'), ask('a2'), forceAllow('c1')]
     const decision = evaluate(rules, makeRequest())
-    // tier 序：deny → consent → ask → static-allow；同 tier 内保持装配顺序
+    // tier 序：deny → force-allow → ask → static-allow；同 tier 内保持装配顺序
     expect(decision.matched).toEqual(['d1', 'c1', 'a1', 'a2', 's1'])
     expect(decision.winning).toBe('d1')
 
@@ -493,18 +531,18 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(decision.matched).toEqual(['a1'])
   })
 
-  it('EV-N4 fail-safe × tier 交互：误写 ask 规则 fail-safe 命中 + consent 同在 → allow；fail-safe deny + consent → deny', () => {
+  it('EV-N4 fail-safe × tier 交互：误写 ask 规则 fail-safe 命中 + force-allow 同在 → allow；fail-safe deny + force-allow → deny', () => {
     const warn = vi.fn()
-    // ask 规则求值必错 → fail-safe 视为命中，但 consent 压过 ask → 结果 allow
-    const askFailSafe = evaluate([ask('a1', THROWING_MATCH), consent('c1')], makeRequest(), {
+    // ask 规则求值必错 → fail-safe 视为命中，但 force-allow 压过 ask → 结果 allow
+    const askFailSafe = evaluate([ask('a1', THROWING_MATCH), forceAllow('c1')], makeRequest(), {
       warn
     })
     expect(askFailSafe.effect).toBe('allow')
     expect(askFailSafe.winning).toBe('c1')
     expect(askFailSafe.matched).toEqual(['c1', 'a1'])
 
-    // deny 规则 fail-safe 命中 + consent 同在 → deny 压过 consent
-    const denyFailSafe = evaluate([deny('d1', THROWING_MATCH), consent('c1')], makeRequest(), {
+    // deny 规则 fail-safe 命中 + force-allow 同在 → deny 压过 force-allow
+    const denyFailSafe = evaluate([deny('d1', THROWING_MATCH), forceAllow('c1')], makeRequest(), {
       warn
     })
     expect(denyFailSafe.effect).toBe('deny')
@@ -512,12 +550,14 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(denyFailSafe.matched).toEqual(['d1', 'c1'])
   })
 
-  it('CF-1 consent 的 match 抛错 → 视为不命中（不白送放行）：[ask 恒命中, consent 抛错] → ask', () => {
+  it('CF-1 force-allow 的 match 抛错 → 视为不命中（不白送放行）：[ask 恒命中, force-allow 抛错] → ask', () => {
     const warn = vi.fn()
-    const decision = evaluate([ask('a1'), consent('c1', THROWING_MATCH)], makeRequest(), { warn })
+    const decision = evaluate([ask('a1'), forceAllow('c1', THROWING_MATCH)], makeRequest(), {
+      warn
+    })
 
-    // fail-safe 判定读的是**归一后的 rule.effect**（consent → allow）而不是 tier：
-    // 若改按 tier 判（consent 不等于 'allow' 故视为命中），一条求值失败的授权规则
+    // fail-safe 判定读的是**归一后的 rule.effect**（force-allow → allow）而不是 tier：
+    // 若改按 tier 判（force-allow 不等于 'allow' 故视为命中），一条求值失败的授权规则
     // 会把"授权失效"变成"授权白送"，方向与本模块的 fail-safe 原则相反。
     expect(decision.effect).toBe('ask')
     expect(decision.winning).toBe('a1')
@@ -529,9 +569,9 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(warn.mock.calls[0][0]).toContain('treating as not matched')
   })
 
-  it('CF-2 consent 的 match 求值为非布尔（vars.grantedRead）→ 不命中，warn 含 must evaluate to a boolean', () => {
+  it('CF-2 force-allow 的 match 求值为非布尔（vars.grantedRead）→ 不命中，warn 含 must evaluate to a boolean', () => {
     const warn = vi.fn()
-    const decision = evaluate([ask('a1'), consent('c1', 'vars.grantedRead')], makeRequest(), {
+    const decision = evaluate([ask('a1'), forceAllow('c1', 'vars.grantedRead')], makeRequest(), {
       vars: { grantedRead: ['/ws'] },
       warn
     })
@@ -542,10 +582,10 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(warn.mock.calls[0][0]).toContain('treating as not matched')
   })
 
-  it('CF-3 consent 读 object.path 但客体是 command 且无 object.type 守卫 → 不命中（strict 缺键报错走同一兜底）', () => {
+  it('CF-3 force-allow 读 object.path 但客体是 command 且无 object.type 守卫 → 不命中（strict 缺键报错走同一兜底）', () => {
     const warn = vi.fn()
     const decision = evaluate(
-      [ask('a1'), consent('c1', 'inDir(object.path, vars.grantedRead)')],
+      [ask('a1'), forceAllow('c1', 'inDir(object.path, vars.grantedRead)')],
       makeRequest({ action: 'execute', object: COMMAND_OBJECT }),
       { vars: { grantedRead: ['/ws'] }, warn }
     )
@@ -555,8 +595,8 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(warn.mock.calls[0][0]).toContain('treating as not matched')
   })
 
-  it('EV-W10 match 与 tier 正交：无 match 的 consent + match-true 的 ask 同在 → consent 胜出', () => {
-    const decision = evaluate([ask('a1', 'true'), consent('c1')], makeRequest())
+  it('EV-W10 match 与 tier 正交：无 match 的 force-allow + match-true 的 ask 同在 → force-allow 胜出', () => {
+    const decision = evaluate([ask('a1', 'true'), forceAllow('c1')], makeRequest())
     expect(decision.effect).toBe('allow')
     expect(decision.winning).toBe('c1')
     expect(decision.matched).toEqual(['c1', 'a1'])
@@ -565,7 +605,7 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
 
 /**
  * 命中提示语的汇总（collectPrompt）—— 纯人读面，不参与匹配、不改三态判决。
- * 只有 ask / deny 收集：放行的操作不带话（allow/consent 上的 prompt 只在策略页显示）。
+ * 只有 ask / deny 收集：放行的操作不带话（allow/force-allow 上的 prompt 只在策略页显示）。
  */
 describe('evaluate — 命中提示语（prompt）', () => {
   const DEFAULT_SOURCE: SecurityRule['source'] = {
@@ -611,8 +651,8 @@ describe('evaluate — 命中提示语（prompt）', () => {
     })
   })
 
-  it('EV-P2 static-allow 与 consent 命中带 prompt → 不投递（decision.prompt 缺席）', () => {
-    for (const tier of ['static-allow', 'consent'] as const) {
+  it('EV-P2 static-allow 与 force-allow 命中带 prompt → 不投递（decision.prompt 缺席）', () => {
+    for (const tier of ['static-allow', 'force-allow'] as const) {
       const decision = evaluate([promptRule('r1', tier, '放行不带话')], makeRequest())
       expect(decision.effect, tier).toBe('allow')
       expect(decision.winning, tier).toBe('r1')
@@ -763,15 +803,15 @@ describe('evaluate — 命中提示语（prompt）', () => {
     }
   })
 
-  it('EV-P11 includeConsent:false 丢弃 consent 后 ask 胜出 → 收 ask 的 prompt', () => {
+  it('EV-P11 includeForceAllow:false 丢弃 force-allow 后 ask 胜出 → 收 ask 的 prompt', () => {
     const rules = [
-      promptRule('c1', 'consent', 'consent 不带话'),
+      promptRule('c1', 'force-allow', 'force-allow 不带话'),
       promptRule('a1', 'ask', 'the gate speaks')
     ]
-    // consent 在场时判决是 allow —— 放行不带话
+    // force-allow 在场时判决是 allow —— 放行不带话
     expect(evaluate(rules, makeRequest()).prompt).toBeUndefined()
 
-    const gated = evaluate(rules, makeRequest(), { includeConsent: false })
+    const gated = evaluate(rules, makeRequest(), { includeForceAllow: false })
     expect(gated.effect).toBe('ask')
     expect(gated.prompt).toEqual({
       text: 'the gate speaks',

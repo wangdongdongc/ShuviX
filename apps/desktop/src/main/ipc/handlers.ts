@@ -20,6 +20,7 @@ import { registerSubAgentHandlers } from './subAgentHandlers'
 import { registerPolicyHandlers } from './policyHandlers'
 import { registerShuvixMdHandlers } from './shuvixMdHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
+import { registerBgTaskHandlers } from './bgTaskHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
 import { registerBrowserDataHandlers } from './browserDataHandlers'
 import { registerContextMenuHandlers } from './contextMenuHandlers'
@@ -56,6 +57,7 @@ export function registerIpcHandlers(): void {
   registerPolicyHandlers()
   registerShuvixMdHandlers()
   registerTerminalHandlers()
+  registerBgTaskHandlers()
   registerBrowserViewHandlers()
   registerBrowserDataHandlers()
   registerContextMenuHandlers()

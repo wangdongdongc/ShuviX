@@ -13,7 +13,12 @@
  * 两者都与 projection.ts 的投影规则一一对应，保证「流式看到的 id」和
  * 「重新加载后投影出的 id」是同一个。
  */
-import type { AgentHarnessEvent, Session, SessionTreeEntry } from '@earendil-works/pi-agent-core'
+import type {
+  AgentHarnessEvent,
+  AgentMessage,
+  Session,
+  SessionTreeEntry
+} from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ImageContent, TextContent } from '@earendil-works/pi-ai'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
@@ -22,6 +27,7 @@ import {
   usageDetailOf
 } from './projection'
 import type { RoundUsageDetail } from './projection'
+import type { ChatQueuedMessage } from '@shuvix/chat-protocol/events'
 import type {
   ChatEvent,
   ChatMessage,
@@ -300,6 +306,25 @@ async function handleAgentEnd(
   })
 }
 
+/**
+ * 队列消息 → 面板投影。只取正文与图片数：队列是只读回执，不需要更多。
+ *
+ * pi 的三条队列存的是完整 AgentMessage，`queue_update` 每次重发全量快照
+ * （见 harness 的 emitQueueUpdate），所以这里无状态、纯映射。
+ */
+function toQueuedMessage(message: AgentMessage): ChatQueuedMessage {
+  const content = (message as { content?: unknown }).content
+  if (typeof content === 'string') return { text: content, imageCount: 0 }
+  if (!Array.isArray(content)) return { text: '', imageCount: 0 }
+  let text = ''
+  let imageCount = 0
+  for (const part of content as Array<{ type?: string; text?: string }>) {
+    if (part?.type === 'text') text += part.text ?? ''
+    else if (part?.type === 'image') imageCount++
+  }
+  return { text, imageCount }
+}
+
 /** 分发入口：AgentHarnessEvent → ChatEvent 广播 */
 export async function forwardHarnessEvent(
   ctx: HarnessEventContext,
@@ -329,6 +354,16 @@ export async function forwardHarnessEvent(
       await handleAgentEnd(ctx, event)
       break
     // ─── harness 自有事件 ───
+    case 'queue_update':
+      // 三条用户消息队列的只读快照 —— 前端整体替换即可（pi 只重发全量）
+      ctx.broadcast({
+        type: 'queue_update',
+        sessionId: ctx.sessionId,
+        steer: event.steer.map(toQueuedMessage),
+        followUp: event.followUp.map(toQueuedMessage),
+        nextTurn: event.nextTurn.map(toQueuedMessage)
+      })
+      break
     case 'session_compact':
       // 压缩已提交，会话消息列表整体改写 —— 通知前端重拉
       ctx.broadcast({ type: 'messages_reloaded', sessionId: ctx.sessionId })

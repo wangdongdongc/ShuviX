@@ -15,10 +15,11 @@ shuvix-policy-rules:
       !inDir(object.path, vars.workspace)
       && !inDir(object.path, vars.toolResultsBase)
       && !inDir(object.path, vars.skillsDirs)
+      && !inDir(object.path, vars.memoryDirs)
     prompt: 读取工作目录之外的文件，内容会进入模型上下文，之后的对话与工具调用都可能把它带出去。
 ---
 
-**它做什么**：智能体在你的工作目录（以及应用的只读目录：工具结果、skills）内
+**它做什么**：智能体在你的工作目录（以及应用的只读目录：工具结果、skills、项目记忆）内
 自由读取；读取范围之外的任何内容 —— 其它位置、其他项目的文件 ——
 都会先问你。
 

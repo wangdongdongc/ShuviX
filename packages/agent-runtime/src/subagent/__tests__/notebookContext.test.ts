@@ -51,12 +51,12 @@ describe('runNotebookTask', () => {
     const { manager, runTask } = makeManager()
     await runNotebookTask(
       manager,
-      makeInputs({ model: 'openai/gpt-4o', instructionFiles: true, projectPrompt: true }),
+      makeInputs({ model: 'openai/gpt-4o', instructionFiles: ['AGENTS.md'], projectPrompt: true }),
       vi.fn()
     )
 
     const { agentType } = runTask.mock.calls[0][0]
-    expect(agentType.instructionFiles).toBe(true)
+    expect(agentType.instructionFiles).toEqual(['AGENTS.md'])
     expect(agentType.projectPrompt).toBe(true)
     expect(agentType.systemPrompt).toBe('NOTEBOOK BODY')
     expect(agentType.tools).toEqual(['read', 'write'])

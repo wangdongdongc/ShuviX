@@ -124,6 +124,11 @@ export interface BashToolDetails {
   persisted?: boolean
   /** 命令实际执行的工作目录 —— 终端形态详情区用它渲染提示符 */
   cwd?: string
+  /**
+   * 本次调用起的是后台任务（run_in_background）——
+   * exitCode 此时是"启动成功"而非命令结果，UI 据此渲染后台形态并按 toolCallId 取实时态。
+   */
+  background?: boolean
 }
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */

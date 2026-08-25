@@ -18,7 +18,7 @@ interface AgentRow {
   name: string
   source: 'builtin' | 'user'
   description: string
-  instructionFiles: boolean
+  instructionFiles: string[]
   projectPrompt: boolean
   overridden?: boolean
 }
@@ -26,7 +26,7 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('八个内置齐全，注入开关默认全开（notebook 除外），描述非空；无启用开关字段', async () => {
+  it('八个内置齐全，上下文注入默认全开（notebook 除外），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'coding',
@@ -39,9 +39,10 @@ describe('内置档案', () => {
       'wiki-writer'
     ])
     for (const a of builtins) {
-      // notebook 是笔记本一次性子代理的基座，两个注入开关刻意默认关（维持迁移前行为）
+      // notebook 是笔记本一次性子代理的基座，两项注入刻意默认关（维持迁移前行为）
       const expected = a.name !== 'notebook'
-      expect(a.instructionFiles, a.name).toBe(expected)
+      // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
+      expect(a.instructionFiles, a.name).toEqual(expected ? ['AGENTS.md', 'CLAUDE.md'] : [])
       expect(a.projectPrompt, a.name).toBe(expected)
       expect(a.description.length, a.name).toBeGreaterThan(0)
       expect('isEnabled' in a, a.name).toBe(false)

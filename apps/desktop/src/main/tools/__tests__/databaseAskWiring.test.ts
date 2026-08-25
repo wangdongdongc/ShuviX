@@ -44,7 +44,7 @@ vi.mock('../../services/toolContext', async () => {
   return {
     TOOL_ABORTED: 'Aborted',
     resolveProjectConfig: () => ({ workingDirectory: WORK_DIR }),
-    // 真实评估链（内置 ask-on-database + consent 层）；grants/挂起通道来自测试状态。
+    // 真实评估链（内置 ask-on-database + force-allow 层）；grants/挂起通道来自测试状态。
     // enforceDatabase 额外记录客体属性入参（DB-9 透传断言），再交给真实实现。
     getDesktopSecurityContext: (ctx: { sessionId: string }) => {
       const real = createSecurityContext(
@@ -57,6 +57,7 @@ vi.mock('../../services/toolContext', async () => {
             workspace: WORK_DIR,
             toolResultsBase: join(tmpdir(), '.nonexistent-tool-results'),
             skillsDirs: [],
+            memoryDirs: [],
             home: join(tmpdir(), '.nonexistent-home'),
             systemDirs: []
           }),

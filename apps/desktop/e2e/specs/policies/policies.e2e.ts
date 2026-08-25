@@ -73,10 +73,10 @@ const getPane = async (): Promise<PoliciesPane> => {
 }
 
 describe('policy IPC（列表与详情渲染）', () => {
-  it('内置 10 份策略齐全，规则与人读面就绪；openFolder 通道存在', async () => {
+  it('内置 11 份策略齐全，规则与人读面就绪；openFolder 通道存在', async () => {
     const list = await listPolicies()
     const builtins = list.filter((p) => p.source === 'builtin')
-    // 字母序（断言前已 sort）—— 八道防护 + 两份 consent 层的会话授权
+    // 字母序（断言前已 sort）—— 九道防护 + 两份 force-allow 层的会话授权
     expect(builtins.map((p) => p.name).sort()).toEqual([
       'ask-on-command',
       'ask-on-database',
@@ -86,6 +86,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'git-safety',
       'protect-credentials',
       'protect-system',
+      'review-memory-writes',
       'session-auto-allow',
       'session-path-grants'
     ])
@@ -101,11 +102,13 @@ describe('policy IPC（列表与详情渲染）', () => {
       'ask'
     ])
     expect(builtins.find((p) => p.name === 'ask-on-command')!.ruleEffects).toEqual(['ask'])
-    // consent 是 md 可声明的 effect，经 IPC 原样送达（UI 据此渲染第四种徽章）
-    expect(builtins.find((p) => p.name === 'session-auto-allow')!.ruleEffects).toEqual(['consent'])
+    // force-allow 是 md 可声明的 effect，经 IPC 原样送达（UI 据此渲染第四种徽章）
+    expect(builtins.find((p) => p.name === 'session-auto-allow')!.ruleEffects).toEqual([
+      'force-allow'
+    ])
     expect(builtins.find((p) => p.name === 'session-path-grants')!.ruleEffects).toEqual([
-      'consent',
-      'consent'
+      'force-allow',
+      'force-allow'
     ])
 
     const hasOpenFolder = await app.main.eval<boolean>(
@@ -176,6 +179,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'git-safety',
       'protect-credentials',
       'protect-system',
+      'review-memory-writes',
       'session-auto-allow',
       'session-path-grants'
     ])
@@ -361,33 +365,33 @@ describe('policy IPC（列表与详情渲染）', () => {
     expect((await pane.detail()).hasScope).toBe(true)
   })
 
-  it('CE-1 用户 md 写 effect: consent → 经 IPC 原样送达（source=user、effect=consent、match 原文）', async () => {
-    writePolicy('my-consent.md', [
+  it('CE-1 用户 md 写 effect: force-allow → 经 IPC 原样送达（source=user、effect=force-allow、match 原文）', async () => {
+    writePolicy('my-force-allow.md', [
       '---',
       'shuvix: policy v1',
-      'name: my-consent',
+      'name: my-force-allow',
       'description: trust one directory without asking',
       'shuvix-policy-scope:',
       '  subject.kind: [agent]',
       '  object.type: [path]',
       'shuvix-policy-rules:',
-      '  - effect: consent',
+      '  - effect: force-allow',
       '    action: [read]',
-      `    match: "inDir(object.path, '/tmp/e2e-consent')"`,
+      `    match: "inDir(object.path, '/tmp/e2e-grant')"`,
       '---',
-      'consent body'
+      'force-allow body'
     ])
 
-    const mine = (await listPolicies()).find((p) => p.name === 'my-consent')!
+    const mine = (await listPolicies()).find((p) => p.name === 'my-force-allow')!
     expect(mine.source).toBe('user')
-    // consent 是 md 的第四个 effect 值，用户策略无额外限制 —— 不被改写成 allow
-    expect(mine.ruleEffects).toEqual(['consent'])
+    // force-allow 是 md 的第四个 effect 值，用户策略无额外限制 —— 不被改写成 allow
+    expect(mine.ruleEffects).toEqual(['force-allow'])
     expect(mine.ruleConditions).toEqual([{ action: ['read'] }])
-    expect(mine.ruleMatches).toEqual(["inDir(object.path, '/tmp/e2e-consent')"])
+    expect(mine.ruleMatches).toEqual(["inDir(object.path, '/tmp/e2e-grant')"])
     expect(mine.scope).toEqual({ 'subject.kind': ['agent'], 'object.type': ['path'] })
   })
 
-  it('CE-2 effect 大小写错值（Consent）的同名覆盖整份非法 → 只剩内置一行，且仍是 consent', async () => {
+  it('CE-2 effect 大小写错值（Consent）的同名覆盖整份非法 → 只剩内置一行，且仍是 force-allow', async () => {
     writePolicy('session-auto-allow.md', [
       '---',
       'shuvix: policy v1',
@@ -405,10 +409,10 @@ describe('policy IPC（列表与详情渲染）', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].source).toBe('builtin')
     expect(rows[0].overridden).toBeFalsy()
-    expect(rows[0].ruleEffects).toEqual(['consent'])
+    expect(rows[0].ruleEffects).toEqual(['force-allow'])
   })
 
-  it('CE-3 设置页渲染 consent 效果（卡片按 md 原文展示 effect，不做本地化）', async () => {
+  it('CE-3 设置页渲染 force-allow 效果（卡片按 md 原文展示 effect，不做本地化）', async () => {
     const pane = await getPane()
     await pane.refresh()
 
@@ -420,7 +424,7 @@ describe('policy IPC（列表与详情渲染）', () => {
     const detail = await pane.detail()
     // 详情统一为 md 原文的 LivePreview 后，effect 徽章展示的是文件里的原词
     // （所见即引擎所评估）——不再经 i18n，故这里钉原值而非本地化文案。
-    // 这一条仍守着「consent 这个较新的 effect 能一路流到 UI」。
-    expect(detail.effectBadgeTexts).toEqual(['consent'])
+    // 这一条仍守着「force-allow 这个较新的 effect 能一路流到 UI」。
+    expect(detail.effectBadgeTexts).toEqual(['force-allow'])
   })
 })

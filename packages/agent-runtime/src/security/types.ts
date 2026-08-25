@@ -18,9 +18,9 @@
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
  * 会话授权（免询问开关 / "允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
  * `vars.autoAllow` / `vars.grantedRead` / `vars.grantedWrite`，由内置的 session-auto-allow
- * 与 session-path-grants 两份策略 md 用 `effect: consent` 表达（见 policyVars.ts）。
+ * 与 session-path-grants 两份策略 md 用 `effect: force-allow` 表达（见 policyVars.ts）。
  *
- * 结算优先序（tier，见 evaluate.ts）：deny → consent → ask → static-allow → default。
+ * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
 import type {
   AskPreview,
@@ -34,25 +34,37 @@ import type { ShellFacts } from './shell/types'
 export type SecurityEffect = 'allow' | 'ask' | 'deny'
 
 /**
- * 策略 md 里可声明的 effect —— 比判决多一个 `consent`：
- * 效果同 allow，但结算时落在 consent 层，压得过询问门（对应「用户明示同意」）。
+ * 策略 md 里可声明的 effect —— 三个基础值加两个 `force-` 升级档。
  *
- * 为什么是 effect 的第四个值而不是独立的 tier 字段：TIER_EFFECT（见 evaluate.ts）
- * 本就是 tier 的全函数，两者不是正交的两根轴 —— 拆成两个键既冗余，又造出
- * `deny + consent` 这类必须额外校验的非法组合。装配时归一为 {tier, effect} 两个
- * 内部字段（见 assemble.ts TIER_BY_EFFECT），SecurityRule 的形状不受影响。
+ * **强弱只有两条规则加一个特例**（新人读到名字就该知道谁压过谁）：
+ *   1. 带 `force-` 的压过不带的；
+ *   2. 同档内按基础强弱 deny > ask > allow；
+ *   3. `deny` 恒在顶 —— 拒绝没有「更强的拒绝」，所以没有 force-deny。
+ *
+ * 于是梯子是：deny > force-ask > force-allow > ask > allow > 默认放行。
+ *   - `force-allow` 效果同 allow，但压得过询问门（出厂用它表达免询问开关与
+ *     「允许并记住」这类「用户明示同意」）；
+ *   - `force-ask` 效果同 ask，但连 force-allow 都压不过它 —— 「这道门不接受
+ *     会话级同意」，用于始终要过目的少数对象。
+ *
+ * 为什么把强度编进 effect 名字而不是拆一个独立的 strength 字段：TIER_EFFECT
+ * （见 evaluate.ts）本就是 tier 的全函数，两者不是正交的两根轴 —— 拆成两个键既冗余，
+ * 又造出 `deny + strength` 这类必须额外校验的非法组合。装配时归一为 {tier, effect}
+ * 两个内部字段（见 assemble.ts TIER_BY_EFFECT），SecurityRule 的形状不受影响。
  */
-export type PolicyEffect = SecurityEffect | 'consent'
+export type PolicyEffect = SecurityEffect | 'force-allow' | 'force-ask'
 
 /** 访问模式（路径类客体的 action 取值） */
 export type AccessMode = 'read' | 'write'
 
 /**
  * 结算层级 —— 不是简单的 deny→ask→allow：
- * 用户明示同意(consent)必须压过静态 ask 规则（否则「免询问」开关失效），
- * 而任何 deny 又必须压过 consent（内置保护不被 consent 绕过）。
+ * 用户明示同意（force-allow）必须压过静态 ask 规则（否则「免询问」开关失效），
+ * force-ask 又必须压过它（「这道门不接受同意」），而任何 deny 压过全部。
+ * 名字与 md 的 effect 一一对应，只有 static-allow 例外（它对应裸 `allow`，
+ * 叫 static 是为了和「默认放行」区分开：一个是规则命中，一个是没有规则）。
  */
-export type RuleTier = 'deny' | 'consent' | 'ask' | 'static-allow'
+export type RuleTier = 'deny' | 'force-ask' | 'force-allow' | 'ask' | 'static-allow'
 
 /** 策略变量表的值类型（vars.*）—— 布尔用于 autoAllow 这类开关 */
 export type PolicyVarValue = string | string[] | boolean
@@ -152,7 +164,7 @@ export interface MatchContext {
 export interface SecurityRule {
   /** 稳定标识：'<policyName>#<n>' / 'derived:<name>' */
   id: string
-  /** 判决效果（md 的 `consent` 在装配时归一为 allow + tier consent） */
+  /** 判决效果（md 的 force-allow/force-ask 在装配时归一为 allow/ask + 对应 tier） */
   effect: SecurityEffect
   tier: RuleTier
   /**
@@ -188,7 +200,7 @@ export interface SecurityDecision {
   reason?: string
   /**
    * 命中规则声明的提示语（见 evaluate 的 collectPrompt）。**仅 ask / deny 收集**：
-   * allow（含 consent）放行的操作不带话 —— 每次工具调用都往上下文/界面塞一段是纯噪音。
+   * allow（含 force-allow）放行的操作不带话 —— 每次工具调用都往上下文/界面塞一段是纯噪音。
    * 投递面按 effect 分：deny 拼进抛出的工具错误（agent 与用户都看得到），
    * ask 只上询问卡片（不进 agent 上下文 —— 用户拒绝/反馈的文案保持原样）。
    */
@@ -247,7 +259,7 @@ export interface PolicyRuleSpec {
    *              不进 agent 上下文；
    *   - `deny` → 拼进抛出的工具错误，读者是 **agent**：写被拒的原因（必要时给出
    *              该走的替代路径），用户在工具块里看到的是同一段；
-   *   - `allow` / `consent` → 不投递，但依然合法：策略页的规则卡片会显示它，
+   *   - `allow` / `force-allow` → 不投递，但依然合法：策略页的规则卡片会显示它，
    *              那里它就是这条规则的说明文字。
    */
   prompt?: string
@@ -285,12 +297,12 @@ export interface SecurityHostProvider {
   /** 路径分隔符（Node-free：桌面注入 path.sep，扩展 '/'）—— inDir 与 allowList 匹配绑定 */
   pathSep: string
   /**
-   * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs /
+   * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs / memoryDirs /
    * home / systemDirs…。每次装配现取。宿主应为内置策略引用的变量恒供给取值
    * （无该概念时给空串/空数组 —— inDir 对空串恒不命中；缺失的键按 strict 报错走 fail-safe）。
    */
   getVars(): Record<string, PolicyVarValue>
-  /** 会话授权（consent 层来源）。每次评估现读，禁缓存。 */
+  /** 会话授权（force-allow 层来源）。每次评估现读，禁缓存。 */
   getSessionGrants(): { autoAllow: boolean; allowList: string[] }
   /**
    * 界面语言（i18next.language 形态，如 'zh' / 'zh-CN'）—— 仅影响内置策略的
@@ -339,6 +351,8 @@ export interface EnforceOpts {
   operation?: string
   /** 预览载荷（write/edit 的 diff）—— 只有 apply 层算得出，见 fileToolSuite */
   preview?: AskPreview
+  /** 命令将作为后台任务运行 —— 询问卡片据此标注（见 AskInputRequest.background） */
+  background?: boolean
   /**
    * 用户选「其它」（提交反馈文本而非允许/拒绝）时的处置：
    * 'throw'（默认，路径/git 类）或 'return'（bash/ssh：反馈作为正常 tool result 返回）。
@@ -386,7 +400,7 @@ export interface DatabaseObjectInput {
 
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
-  /** 评估（不执行、不弹窗、不记日志）。includeConsent 缺省 true。 */
+  /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
   /**
    * ⚠️ 命令客体请走 enforceCommand：它是唯一会挂上结构属性（parsed/commands/writes）的
    * 构造点。手工构造的 `{type:'command'}` 缺这些属性时，引用它们的规则按 strict 语义
@@ -395,16 +409,16 @@ export interface SecurityContext {
   evaluate(
     action: string,
     object: SecurityObject,
-    opts?: { includeConsent?: boolean }
+    opts?: { includeForceAllow?: boolean }
   ): SecurityDecision
   /**
    * 同步只读判定 —— 永不弹询问、不记日志，被动 UI（预览面板等）专用。
-   * includeConsent 缺省 **false**（工具级 per-path 授权不应静默放宽 UI 范围）。
+   * includeForceAllow 缺省 **false**（工具级 per-path 授权不应静默放宽 UI 范围）。
    */
   evaluateReadOnly(
     action: string,
     object: SecurityObject,
-    opts?: { includeConsent?: boolean }
+    opts?: { includeForceAllow?: boolean }
   ): boolean
   /** 路径守卫：allow 返回 / deny、拒绝、取消 throw / ask 挂起询问 */
   enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void>
@@ -420,7 +434,7 @@ export interface SecurityContext {
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。
-   * **allow 即非事件**：无论默认放行、consent（免询问）还是静态 allow，
+   * **allow 即非事件**：无论默认放行、force-allow（免询问）还是静态 allow，
    * 放行的调用不弹窗、不记日志 —— 每次工具调用都过此门，记录 allow 会淹没决策日志；
    * 只有 ask/deny 产生记录。
    */

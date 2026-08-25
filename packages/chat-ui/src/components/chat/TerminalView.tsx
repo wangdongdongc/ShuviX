@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 
@@ -24,6 +24,13 @@ interface TerminalViewProps {
   /** 非 0 时在提示符行右侧标出 —— 输出可能很长，退出码不该只躺在末尾等人滚 */
   exitCode?: number
   running?: boolean
+  /**
+   * 输出持续增长时自动贴底（后台任务面板用；对话里的历史命令输出是静态的，不传即维持原行为）。
+   * 用户手动上滚即脱离贴底，滚回底部自动恢复 —— 与终端一致。
+   */
+  stickToBottom?: boolean
+  /** 输出区最大高度类名覆写（默认 max-h-64） */
+  outputMaxHClass?: string
 }
 
 /**
@@ -38,9 +45,20 @@ export function TerminalView({
   cwd,
   host,
   exitCode,
-  running
+  running,
+  stickToBottom = false,
+  outputMaxHClass = 'max-h-64'
 }: TerminalViewProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const outRef = useRef<HTMLPreElement>(null)
+  // 是否处于贴底态 —— 只在 stickToBottom 模式下有意义
+  const stuckRef = useRef(true)
+
+  useEffect(() => {
+    if (!stickToBottom) return
+    const el = outRef.current
+    if (el && stuckRef.current) el.scrollTop = el.scrollHeight
+  }, [output, stickToBottom])
   const failed = typeof exitCode === 'number' && exitCode !== 0
   const location = host || (cwd ? shortCwd(cwd) : '')
 
@@ -75,7 +93,18 @@ export function TerminalView({
 
       {/* 输出：紧跟命令，无标签无分隔线 —— 终端里本来就是连着的 */}
       {output ? (
-        <pre className="px-2 pt-1 pb-1.5 max-h-64 overflow-y-auto overscroll-contain thin-scrollbar whitespace-pre-wrap break-words text-text-secondary">
+        <pre
+          ref={outRef}
+          onScroll={
+            stickToBottom
+              ? (e) => {
+                  const el = e.currentTarget
+                  stuckRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 4
+                }
+              : undefined
+          }
+          className={`px-2 pt-1 pb-1.5 ${outputMaxHClass} overflow-y-auto overscroll-contain thin-scrollbar whitespace-pre-wrap break-words text-text-secondary`}
+        >
           {output}
         </pre>
       ) : running ? (

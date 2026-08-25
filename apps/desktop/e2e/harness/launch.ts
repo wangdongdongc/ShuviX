@@ -1,21 +1,38 @@
 /**
  * 隔离实例生命周期 —— e2e 的唯一启动入口。
  *
- * 隔离设计（不干扰用户自己正在运行的 ShuviX）：
+ * 隔离设计（不干扰用户自己正在运行的 ShuviX，也不与另一份 e2e 运行串味）：
  *   - fake HOME（os.tmpdir 下一次性目录）→ ~/.shuvix/*（agents/skills/policies）全部隔离；
  *   - SHUVIX_VERIFY_USERDATA → userData（SQLite/JSONL 会话树）隔离（bootstrap.cjs 重定向）；
- *   - 独立 CDP 端口（默认 9223，可用 SHUVIX_E2E_PORT 覆盖）；启动前探测端口占用即报错。
+ *   - **每个实例现借一个空闲 CDP 端口**（SHUVIX_E2E_PORT 可钉死，调试时用）；
+ *   - 目标发现只认 URL 落在**本 checkout 产物目录**下的 target。
+ *
+ * 后两条是一件事的两面：Chromium 的 `--remote-debugging-port` 被占用时**不报错也不换端口**，
+ * 只是不监听；此时 `/json` 回的是**另一个实例**的 target，长相与自己的一模一样，连上去就是在
+ * 驱动别人的 app（表现为「provider 名称已存在」「会话行找不到」这类莫名其妙的失败）。固定端口
+ * 下这有两个现实触发点：上一实例还没死透、以及另一个 worktree 同时在跑 e2e。
  *
  * 前置条件：`electron-vite build` 产物已存在（test:e2e 脚本会先构建）。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { connect, isMainPage, listTargets, until, type CdpClient } from './cdp'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  connect,
+  isMainPage,
+  listTargets,
+  sleep,
+  until,
+  type CdpClient,
+  type CdpTarget
+} from './cdp'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+/** 本 checkout 渲染端产物的 URL 前缀 —— target 的身份判据（percent-encoding 与 CDP 一致） */
+const APP_URL = pathToFileURL(join(DESKTOP_ROOT, 'out', 'renderer')).href
 
 export interface E2EApp {
   port: number
@@ -31,10 +48,50 @@ export interface E2EApp {
   stop(): Promise<void>
 }
 
-export async function launchApp(): Promise<E2EApp> {
-  const port = Number(process.env.SHUVIX_E2E_PORT || 9223)
+/**
+ * 借一个空闲回环端口：listen(0) 拿到号后立刻归还。
+ * 归还到 Electron 真正 bind 之间有个极小窗口，真被别人抢走也不会静默驱动错实例
+ * —— 那种情况下本实例没监听，目标发现会一直找不到「自己的」target 并超时报错。
+ */
+function freePort(): Promise<number> {
+  return new Promise((resolvePort, rejectPort) => {
+    const srv = createServer()
+    srv.on('error', rejectPort)
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address()
+      const port = typeof addr === 'object' && addr ? addr.port : 0
+      srv.close(() => (port ? resolvePort(port) : rejectPort(new Error('no free port'))))
+    })
+  })
+}
 
-  // 端口占用探测：残留实例/用户调试实例都会让后续目标发现连到错误的 app
+/**
+ * 进程级兜底回收：beforeAll 中途抛错时 spec 往往来不及 `app.stop()`（afterAll 里
+ * `app` 还是 undefined），实例就会活到 worker 退出之后 —— 端口与 SQLite 都还占着。
+ */
+const alive = new Set<ChildProcess>()
+let reaperInstalled = false
+function track(child: ChildProcess): void {
+  alive.add(child)
+  child.on('exit', () => alive.delete(child))
+  if (reaperInstalled) return
+  reaperInstalled = true
+  process.on('exit', () => {
+    for (const c of alive) {
+      try {
+        c.kill('SIGKILL')
+      } catch {
+        /* 已退出 */
+      }
+    }
+  })
+}
+
+export async function launchApp(): Promise<E2EApp> {
+  const pinned = process.env.SHUVIX_E2E_PORT
+  const port = pinned ? Number(pinned) : await freePort()
+
+  // 端口占用探测：钉死端口时才可能撞上（残留实例/用户的调试实例）
   const occupied = await listTargets(port).then(
     () => true,
     () => false
@@ -42,7 +99,7 @@ export async function launchApp(): Promise<E2EApp> {
   if (occupied) {
     throw new Error(
       `CDP port ${port} already in use — another ShuviX debug instance? ` +
-        `Kill it or set SHUVIX_E2E_PORT to a free port.`
+        `Kill it${pinned ? ', or unset SHUVIX_E2E_PORT to let each instance borrow a free port' : ''}.`
     )
   }
 
@@ -64,6 +121,7 @@ export async function launchApp(): Promise<E2EApp> {
     [join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'), `--remote-debugging-port=${port}`],
     { cwd: DESKTOP_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] }
   )
+  track(child)
   let output = ''
   child.stdout?.on('data', (c: Buffer) => (output += c.toString()))
   child.stderr?.on('data', (c: Buffer) => (output += c.toString()))
@@ -73,16 +131,35 @@ export async function launchApp(): Promise<E2EApp> {
   const fail = (why: string): Error =>
     new Error(`${why}\n--- instance output (tail) ---\n${output.slice(-2000)}`)
 
+  /** 等子进程真的退出（kill 只是投递信号）；返回是否已退出 */
+  const waitExit = async (ms: number): Promise<boolean> => {
+    const t0 = Date.now()
+    while (!exited && Date.now() - t0 < ms) await sleep(50)
+    return exited
+  }
+
   try {
-    await until(
-      async () => {
-        if (exited) throw fail('instance exited during startup')
-        return (await listTargets(port).catch(() => [])).some(isMainPage)
-      },
-      'CDP main page target',
-      60_000
-    )
-    const target = (await listTargets(port)).find(isMainPage)!
+    // 目标发现自己轮询（不走 until）：until 把 fn 抛的错一律当「未就绪」，
+    // 实例启动即崩时会白等满 60s 才报一个与真因无关的超时
+    const deadline = Date.now() + 60_000
+    let seen: CdpTarget[] = []
+    let target: CdpTarget | undefined
+    for (;;) {
+      if (exited) throw fail('instance exited during startup')
+      seen = await listTargets(port).catch(() => [])
+      target = seen.find((t) => isMainPage(t, APP_URL))
+      if (target) break
+      if (Date.now() > deadline) {
+        const foreign = seen.filter((t) => t.type === 'page').map((t) => t.url)
+        throw fail(
+          `timeout waiting: CDP main page target on port ${port}` +
+            (foreign.length
+              ? `\n--- targets on that port, none of them ours (ours start with ${APP_URL}) ---\n${foreign.join('\n')}`
+              : '')
+        )
+      }
+      await sleep(200)
+    }
     const main = await connect(target.webSocketDebuggerUrl)
     await until(() => main.eval<boolean>('!!window.api'), 'window.api ready')
 
@@ -90,9 +167,12 @@ export async function launchApp(): Promise<E2EApp> {
       main.close()
       if (!exited) {
         child.kill('SIGTERM')
-        const t0 = Date.now()
-        while (!exited && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 100))
-        if (!exited) child.kill('SIGKILL')
+        if (!(await waitExit(5000))) {
+          child.kill('SIGKILL')
+          // 等它真的死透再往下走：端口与 userdata 的释放都跟着进程退出，
+          // 抢跑会把「上一实例还没死」变成下一个 spec 文件的谜之失败
+          await waitExit(5000)
+        }
       }
       rmSync(home, { recursive: true, force: true })
     }
@@ -105,7 +185,10 @@ export async function launchApp(): Promise<E2EApp> {
       async openSettings(tab = 'agents') {
         await main.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)
         const st = await until(
-          async () => (await listTargets(port)).find((t) => t.url.includes('#settings')),
+          async () =>
+            (await listTargets(port)).find(
+              (t) => t.url.startsWith(APP_URL) && t.url.includes('#settings')
+            ),
           'settings window target'
         )
         return connect(st.webSocketDebuggerUrl)
@@ -114,6 +197,7 @@ export async function launchApp(): Promise<E2EApp> {
     }
   } catch (err) {
     child.kill('SIGKILL')
+    await waitExit(5000)
     rmSync(home, { recursive: true, force: true })
     throw err
   }

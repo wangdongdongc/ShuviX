@@ -19,6 +19,8 @@
  *   - **绝不往 CodeMirror 里打字**：初值一律 writeFileSync 预置，交互一律 dispatchEvent；
  *   - 工具触发器监听 **mousedown**、ModelSelect 触发器监听 **click**（实测差异，见 pages.ts）；
  *   - 落盘走笔记本 200ms 防抖自动保存 → 文件断言先 until 轮询「已变化」再 toBe 全等；
+ *   - 卡片就绪一律走 `card.waitReady()`：槽位里的选择器是宿主异步挂的 React 子树，
+ *     光等 `.cm-shuvix-fmcard`/`.cm-shuvix-fmcard-slot` 存在就读文案会读到空串；
  *   - 写回后 widget 重建 → DOM 句柄必须重查（pages.ts 的方法每次都现查）；
  *   - 字段行按 `data-key` 定位（通用行也有），不靠 i18n 标签或描述符顺序。
  */
@@ -213,7 +215,7 @@ const E_READONLY_CARD = md(
   'shuvix: agent v1',
   'name: readonly-card-agent',
   'shuvix-tools: bash, read',
-  'shuvix-instruction-files: true',
+  'shuvix-instruction-files: AGENTS.md',
   'description: AC-22 read-only host',
   '---',
   '',
@@ -418,14 +420,16 @@ afterAll(async () => {
 })
 
 describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
-  it('AC-1 缺键的 tools/model 都开槽，触发器给占位文案', async () => {
+  it('AC-1 缺键的 tools/model/instruction-files 都开槽，触发器给占位文案', async () => {
     const seed = byFile('a1-open.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
+    // 三个可点选字段：tools（csv）/ model（select）/ instruction-files（csv 清单）
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
+    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-instruction-files'))).toBe(true)
 
     // 两个占位文案刻意不同：工具用卡片的「未设置」，模型用 ModelSelect 自己的「选择模型」
     expect(await card.triggerText('shuvix-tools')).toMatch(UNSET_RE)
@@ -436,21 +440,24 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
   it('AC-1b 空值（`key:` → YAML null）与缺键等价：照常开槽', async () => {
     const seed = byFile('a1b-empty.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
     // 空值若被判成「有值但不可编辑」，留空的字段在 GUI 里就再也改不回来了
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(true)
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
     expect(read(seed.file)).toBe(A1_EMPTY)
   })
 
-  it('AC-2 两种退回只读同处一文件（YAML 数组值 / 行尾注释）：零槽位、文件零改动', async () => {
+  it('AC-2 两种退回只读同处一文件（YAML 数组值 / 行尾注释）：两行零槽位、文件零改动', async () => {
     const seed = byFile('a2-readonly.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(0)
+    // 这两行退回只读；缺键的 instruction-files 照常开槽（同 AC-1），故总数 1
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(1)
+    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
+    expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(false)
     // 只读不等于不渲染：两行都在，只是没有可编辑槽位
     expect(await app.main.eval<boolean>(rowExists('shuvix-tools'))).toBe(true)
     expect(await app.main.eval<boolean>(rowExists('shuvix-model'))).toBe(true)
@@ -462,9 +469,10 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
   it('AC-3 逐字段判定：块标量续行的 tools 只读但仍出 2 个 chip，缺键的 model 照常开槽', async () => {
     const seed = byFile('a3-mixed.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(1)
+    // model + instruction-files 两个缺键字段开槽，折行的 tools 退回只读
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-model'))).toBe(true)
     expect(await app.main.eval<boolean>(rowHasSlot('shuvix-tools'))).toBe(false)
     // 折行值解析出来仍是逗号串 → 只读分支照常拆 chips
@@ -479,7 +487,7 @@ describe('A 组 · 槽位判定（可编辑 vs 退回只读）', () => {
   it('AC-4 YAML 语法错：错误徽章上屏、无任何字段行、文件零改动', async () => {
     const seed = byFile('a4-badyaml.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
     // 标记是正则读出的（不经 YAML）→ 卡片照常上屏，只是字段区整体缺席
     expect(await count('.cm-shuvix-fmcard-err')).toBe(1)
@@ -493,7 +501,7 @@ describe('B 组 · 工具字段（弹层 / 候选项 / 写回）', () => {
   it('AC-5 触发器显示归一后的逗号串，磁盘原文不被顺手改写', async () => {
     const seed = byFile('b-tools.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
 
     expect(await card.triggerText('shuvix-tools')).toBe('bash, read')
     // 显示归一 ≠ 写回：没交互就不许动盘
@@ -591,7 +599,7 @@ describe('B 组 · 工具字段（弹层 / 候选项 / 写回）', () => {
   it('AC-9 删到空 → 整行删除（不留 `shuvix-tools:` 空键）', async () => {
     const seed = byFile('b-empty.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
     const before = read(seed.file)
 
     await card.openTools()
@@ -605,7 +613,7 @@ describe('B 组 · 工具字段（弹层 / 候选项 / 写回）', () => {
   it('AC-10 键不存在 → 在闭合定界线前插一行（其余行原位不动）', async () => {
     const seed = byFile('b-nokey.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
     const before = read(seed.file)
 
     await card.openTools()
@@ -618,7 +626,7 @@ describe('B 组 · 工具字段（弹层 / 候选项 / 写回）', () => {
   it('AC-11 弹层里没有的条目（离线 mcp:）不被吞掉，新增保序追加在末尾', async () => {
     const seed = byFile('b-ghost.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
     const before = read(seed.file)
 
     await card.openTools()
@@ -635,7 +643,7 @@ describe('C 组 · 模型字段', () => {
   it('AC-14 面板只列已启用提供商（停用的内置提供商不成组）', async () => {
     const seed = byFile('c-model.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
 
     // 未选态没有清除入口（槽位里只有触发器一个按钮）
     expect(await card.slotButtons('shuvix-model')).toBe(1)
@@ -687,7 +695,7 @@ describe('C 组 · 模型字段', () => {
   it('AC-16 含 `: ` 的模型 id 加单引号写出，且能原值读回', async () => {
     const seed = byFile('c-danger.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
     const before = read(seed.file)
 
     await card.openModel()
@@ -706,7 +714,7 @@ describe('C 组 · 模型字段', () => {
   it('AC-18 解析不出的 ref：占位退回原始文本，且绝不静默改盘', async () => {
     const seed = byFile('c-unresolved.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
 
     // 显示「选择模型」会让人以为没设置，一选就把档案里的值静默改掉
     const text = await card.triggerText('shuvix-model')
@@ -722,7 +730,7 @@ describe('D 组 · 关闭语义与生命周期', () => {
   it('AC-19 点面板内部不关（portal 出去的节点也算内部），点外部才关', async () => {
     const seed = byFile('d-close.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
 
     await card.openTools()
     await card.mousedownInsideTools()
@@ -751,7 +759,7 @@ describe('D 组 · 关闭语义与生命周期', () => {
 
   it('AC-26 点卡片空白处不塌成源码（卡片在 contenteditable 内，默认会把光标送进 frontmatter）', async () => {
     await openNotebook(byFile('a1-open.md'))
-    await until(() => count('.cm-shuvix-fmcard'), 'card rendered')
+    await card.waitReady()
 
     // 在标签/行/卡片背景上派发完整点击：卡片必须仍在（此前会当场塌成源码，
     // 块高差一百多像素，正文随之弹跳 —— 反复编辑元数据时最晃眼的那一下）
@@ -815,7 +823,7 @@ describe('F 组 · 零副作用与行尾归一', () => {
   it('AC-25 CRLF 文件写回后整份归一为 LF，且仍是合法 agent md', async () => {
     const seed = byFile('f-crlf.md')
     await openNotebook(seed)
-    await until(() => count('.cm-shuvix-fmcard-slot'), 'slots mounted')
+    await card.waitReady()
     const before = read(seed.file)
     expect(before).toContain('\r\n')
 
@@ -891,16 +899,19 @@ describe('E 组 · 宿主差异', () => {
         ),
       'read-only preview mounted'
     )
-    await until(() => count('.cm-shuvix-fmcard'), 'read-only card rendered')
+    await card.waitReady({ slots: 3 })
 
-    // 只读宿主渲染同一套控件（model / tools 两个槽位 + 文本输入框），只是全部禁用 ——
-    // 只读不换长相，只换可否交互
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(2)
+    // 只读宿主渲染同一套控件（model / tools / instruction-files 三个槽位 + 文本输入框），
+    // 只是全部禁用 —— 只读不换长相，只换可否交互
+    expect(await count('.cm-shuvix-fmcard-slot')).toBe(3)
+    expect(await slotText('shuvix-tools')).toContain('bash, read')
+    // 指令文件清单是普通逗号串输入（刻意不挂文件选择器：档案编辑期不知道将来的工作目录）
+    expect(await slotText('shuvix-instruction-files')).toBe('')
     expect(
       await app.main.eval<string>(
-        `[...document.querySelectorAll('.cm-shuvix-fmcard-slot')].pop()?.textContent ?? ''`
+        `${rowSelector('shuvix-instruction-files')}?.querySelector('input')?.value ?? ''`
       )
-    ).toContain('bash, read')
+    ).toBe('AGENTS.md')
     expect(
       await app.main.eval<boolean>(
         `[...document.querySelectorAll('.cm-shuvix-fmcard-input')].every((i) => i.disabled)`
@@ -930,6 +941,11 @@ function rowExists(key: string): string {
 }
 function rowHasSlot(key: string): string {
   return `${rowSelector(key)}?.querySelector('.cm-shuvix-fmcard-slot') != null`
+}
+function slotText(key: string): Promise<string> {
+  return app.main.eval<string>(
+    `(${rowSelector(key)}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
+  )
 }
 function rowValueText(key: string): Promise<string> {
   return app.main.eval<string>(

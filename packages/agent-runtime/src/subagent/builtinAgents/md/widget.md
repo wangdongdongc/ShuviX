@@ -5,7 +5,7 @@ name: widget
 description: Creates, maintains and exports ShuviX Widgets — persistent mini React apps that live in the Widget panel.
 shuvix-tools: read, write, edit, ls, glob, grep, bash, git
 shuvix-displayName: Widget Builder
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

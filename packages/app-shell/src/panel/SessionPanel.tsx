@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Cpu, Eye, FolderTree, X } from 'lucide-react'
-import { useChatStore, useSubAgentCount, getHostApi } from '@shuvix/chat-ui'
+import { Bot, Cpu, Eye, FolderTree, ListTodo, X } from 'lucide-react'
+import {
+  useChatStore,
+  useSubAgentCount,
+  useBgTaskCount,
+  useBgTaskRunningCount,
+  getHostApi
+} from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { AgentInfoPanel } from './AgentInfoPanel'
+import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 
 /**
@@ -52,9 +59,11 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const agentAvailable = useAgentToolAvailable(sessionId)
+  const taskCount = useBgTaskCount(sessionId)
   if (openTool === 'subagent' && subAgentCount === 0) return 'files'
   if (openTool === 'preview' && !hasPreviewTarget) return 'files'
   if (openTool === 'agent' && !agentAvailable) return 'files'
+  if (openTool === 'tasks' && taskCount === 0) return 'files'
   return openTool
 }
 
@@ -110,6 +119,8 @@ function useSessionPanelToolItems(
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const agentAvailable = useAgentToolAvailable(sessionId)
+  const taskCount = useBgTaskCount(sessionId)
+  const runningTaskCount = useBgTaskRunningCount(sessionId)
   return [
     { tool: 'files', Icon: FolderTree, label: t('panel.files') },
     // 用 Cpu 而非设置页「智能体」列表的 Bot：Bot 已是本栏 Sub-agent 的图标，同栏重复会难以分辨
@@ -119,6 +130,18 @@ function useSessionPanelToolItems(
       : []),
     ...(subAgentCount > 0
       ? [{ tool: 'subagent' as const, Icon: Bot, label: t('panel.subAgent'), badge: subAgentCount }]
+      : []),
+    // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，Bot 是 Sub-agent 的，同栏必须一眼分得开。
+    // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
+    ...(taskCount > 0
+      ? [
+          {
+            tool: 'tasks' as const,
+            Icon: ListTodo,
+            label: t('panel.tasks'),
+            badge: runningTaskCount
+          }
+        ]
       : [])
   ]
 }
@@ -286,6 +309,12 @@ export function SessionPanel({
             }
           >
             <SubAgentPanel />
+          </div>
+          <div
+            className="absolute inset-0"
+            style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+          >
+            <BgTaskPanel sessionId={sessionId} />
           </div>
         </div>
       </div>

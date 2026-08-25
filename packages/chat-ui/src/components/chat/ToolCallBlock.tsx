@@ -46,6 +46,7 @@ import { useSubSessionStore } from '../../stores/subSessionStore'
 import { SubAgentInlineView } from './SubAgentInlineView'
 import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
+import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
 
 /** lucide 图标名 → 组件映射（按需扩展） */
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -217,12 +218,19 @@ export function ToolCallBlock({
   const isTerminalView =
     presentation?.detailView === 'terminal' && typeof args?.command === 'string'
 
+  // 后台任务（bash run_in_background）：标签紧跟图标（那是这次调用的性质，该和工具名
+  // 挨在一起），实时状态挂行尾。details 是消息树里的静态数据不会自更新，实时态按
+  // toolCallId 从 bgTaskStore 取 —— 与子智能体卡片同一套路子。
+  const isBackground = details?.type === 'bash' && details.background === true
+
   // 摘要行内容：图标槽为状态（无状态时落回工具图标），其后名称 + 摘要
   const rowProps = {
     lead: statusIcon ?? undefined,
     icon,
     label: presentation?.label || toolName,
-    detail: detail ? <span className="font-mono">{detail}</span> : undefined
+    detail: detail ? <span className="font-mono">{detail}</span> : undefined,
+    badge: isBackground ? <BackgroundBadge /> : undefined,
+    trailing: isBackground && toolCallId ? <BgTaskRowState toolCallId={toolCallId} /> : undefined
   }
 
   // `data-tool-name` / `data-tool-status`：工具行在 DOM 上唯一的语义锚点

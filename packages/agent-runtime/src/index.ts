@@ -13,6 +13,17 @@ export {
   type AgentRegistryEntry,
   type AgentRegistryEntryInput
 } from './agentRegistry'
+// 活跃 pi agent 运行时登记簿（业务无关：只存 AgentHarness/Session + 身份标签）——
+// 登记点是 createAgent 单点，供监控等消费方按 pi 原生读取面取数
+export {
+  AgentRuntimeRegistry,
+  agentRuntimeRegistry,
+  type AgentRuntimeKind,
+  type AgentRuntimePhase,
+  type AgentRuntimeIdentity,
+  type AgentRuntimeCounters,
+  type AgentRuntimeSnapshot
+} from './runtimeRegistry'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
@@ -333,6 +344,15 @@ export {
   AGENT_FILE_MARKER_KEY,
   type ParsedAgentFile
 } from './agentProfile/definitionFile'
+// 项目记忆文件（<slug>.md）的格式解析/序列化 + 注入索引渲染
+export {
+  parseMemoryFile,
+  serializeMemoryFile,
+  MEMORY_FILE_MARKER,
+  MEMORY_FILE_MARKER_KEY,
+  type ParsedMemoryFile
+} from './memory/memoryFile'
+export { renderMemoryIndex } from './memory/memoryIndex'
 export {
   createAgentFactory,
   type AgentFactory,

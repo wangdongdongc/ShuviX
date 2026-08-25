@@ -15,6 +15,7 @@ const WORKSPACE = join(tmpdir(), 'shuvix-policy-ws')
 const TOOL_RESULTS = join(tmpdir(), 'shuvix-policy-tool-results')
 const DEFAULT_SKILLS = join(tmpdir(), 'shuvix-policy-skills')
 const BUILTIN_SKILLS = join(tmpdir(), 'shuvix-policy-builtin-skills')
+const MEMORY_ROOT = join(tmpdir(), 'shuvix-policy-memory')
 const EXTERNAL_SKILLS = join(tmpdir(), 'shuvix-policy-external-skills')
 const OUTSIDE = join(tmpdir(), 'shuvix-policy-elsewhere')
 
@@ -40,7 +41,8 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: () => WORKSPACE,
   getToolResultsBase: () => TOOL_RESULTS,
   getDefaultSkillsDir: () => DEFAULT_SKILLS,
-  getBuiltinSkillsDir: () => BUILTIN_SKILLS
+  getBuiltinSkillsDir: () => BUILTIN_SKILLS,
+  getMemoryRootDir: () => MEMORY_ROOT
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
@@ -52,7 +54,7 @@ import type { SecurityContext, SecurityEffect } from '@shuvix/agent-runtime'
 const config: ProjectConfig = { workingDirectory: WORKSPACE }
 const context = (): SecurityContext => getDesktopSecurityContext({ sessionId: 's1' }, () => config)
 
-/** 完整评估链（含 consent 层）的 effect */
+/** 完整评估链（含 force-allow 层）的 effect */
 const effectOf = (ctx: SecurityContext, mode: 'read' | 'write', p: string): SecurityEffect =>
   ctx.evaluate(mode, { type: 'path', path: p }).effect
 
@@ -103,7 +105,7 @@ describe('桌面安全 provider — 默认放行 + 内置写入门（ask-on-writ
   })
 })
 
-describe('桌面安全 provider — allowList 语义（consent 层）', () => {
+describe('桌面安全 provider — allowList 语义（force-allow 层）', () => {
   const target = join(WORKSPACE, 'a.txt')
 
   it('PERM-4: Write(abs) 条目同时满足 write 与 read', () => {
@@ -141,7 +143,7 @@ describe('桌面安全 provider — allowList 语义（consent 层）', () => {
 })
 
 describe('桌面安全 provider — evaluateReadOnly（被动 UI 判定）', () => {
-  it('缺省不含 consent 层：allowList/autoAllow 不放宽 UI 范围（凭据目录 ask 门仍生效）', () => {
+  it('缺省不含 force-allow 层：allowList/autoAllow 不放宽 UI 范围（凭据目录 ask 门仍生效）', () => {
     const credential = join(homedir(), '.ssh', 'known_hosts')
     state.settings = { autoAllow: true, allowList: [`Read(${credential})`] }
     expect(context().evaluateReadOnly('read', { type: 'path', path: credential })).toBe(false)
@@ -181,7 +183,7 @@ describe('桌面安全 provider — 不缓存 settings 快照', () => {
   })
 })
 
-describe('桌面安全 provider — deny 层压制 consent（protect-credentials 策略）', () => {
+describe('桌面安全 provider — deny 层压制 force-allow（protect-credentials 策略）', () => {
   it('凭据目录写入即使开了免询问也 deny', () => {
     state.settings = { autoAllow: true }
     const sshKey = join(homedir(), '.ssh', 'id_rsa')

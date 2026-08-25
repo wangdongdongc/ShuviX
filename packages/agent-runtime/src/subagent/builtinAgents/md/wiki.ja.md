@@ -5,7 +5,7 @@ name: wiki
 description: ローカル wiki ナレッジベースの対話窓口:検索し、相談し、変更はすべてディスパッチする。
 shuvix-tools: read, grep, glob, ls, ask, agent
 shuvix-displayName: ナレッジベース
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

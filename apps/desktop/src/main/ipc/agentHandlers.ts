@@ -3,12 +3,15 @@ import { chatGateway, operationContext, createElectronContext } from '../fronten
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
 import { agentManager } from '../agents/AgentManager'
+import { listAgentRuntimes } from '../services/agentMonitorService'
 import type {
   AgentInitParams,
   AgentPromptParams,
   AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
+  AgentFollowUpParams,
+  AgentNextTurnParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
@@ -58,6 +61,22 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:steer', (_event, params: AgentSteerParams) =>
     operationContext.run(createElectronContext(params.sessionId), () => {
       chatGateway.steer(params.sessionId, params.text)
+      return { success: true }
+    })
+  )
+
+  /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
+  ipcMain.handle('agent:followUp', (_event, params: AgentFollowUpParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.followUp(params.sessionId, params.text)
+      return { success: true }
+    })
+  )
+
+  /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
+  ipcMain.handle('agent:nextTurn', (_event, params: AgentNextTurnParams) =>
+    operationContext.run(createElectronContext(params.sessionId), () => {
+      chatGateway.nextTurn(params.sessionId, params.text)
       return { success: true }
     })
   )
@@ -138,6 +157,12 @@ export function registerAgentHandlers(): void {
 
   /** 获取所有内置工具的完整定义（name + description + 参数 schema），供设置页只读展示 */
   ipcMain.handle('tools:definitions', () => getBuiltinToolDefinitions())
+
+  /**
+   * 智能体监控：全部活跃 agent 运行时的快照（只读 pi getter + 事件影子，不碰会话树）。
+   * 设置页可见时轮询，故刻意不做任何遍历。
+   */
+  ipcMain.handle('agentMonitor:list', () => listAgentRuntimes())
 
   /**
    * 销毁指定的派生 agent（用户点关闭按钮触发）。

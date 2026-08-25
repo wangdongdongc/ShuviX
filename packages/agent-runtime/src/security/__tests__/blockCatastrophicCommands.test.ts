@@ -31,6 +31,7 @@ const DESKTOP_VARS: Record<string, string | string[]> = {
   workspace: '/ws',
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
+  memoryDirs: [],
   home: '/Users/u',
   systemDirs: []
 }
@@ -75,7 +76,7 @@ function commandObject(command: string, opts: DecideOpts = {}): SecurityObject {
 
 /**
  * 仅内置策略的完整装配 + 统一评估（生产路径 context.ts 同款：vars 走 buildPolicyVars，
- * 装配与求值共用同一份 —— 否则 session-* 两份 consent 策略会缺键刷告警）。
+ * 装配与求值共用同一份 —— 否则 session-* 两份 force-allow 策略会缺键刷告警）。
  */
 function decide(command: string, opts: DecideOpts = {}): SecurityDecision {
   const provider = opts.provider ?? makeProvider()
@@ -520,9 +521,9 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
     getSessionGrants: () => ({ autoAllow: true, allowList: [] })
   })
 
-  it('BC-70 deny 压过 consent：免询问开关下毁灭命令仍被拒', () => {
+  it('BC-70 deny 压过 force-allow：免询问开关下毁灭命令仍被拒', () => {
     const decision = expectDeny('rm -rf /', 0, { provider: autoAllowProvider })
-    // matched 同时含 consent 与 ask 两条：证明是 tier 结算的结果，
+    // matched 同时含 force-allow 与 ask 两条：证明是 tier 结算的结果，
     // 而不是「免询问规则碰巧没命中」——后者会让这条用例失去意义。
     expect(decision.matched).toEqual([
       'block-catastrophic-commands#0',
@@ -573,6 +574,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
         workspace: '',
         toolResultsBase: '',
         skillsDirs: [],
+        memoryDirs: [],
         home: '',
         systemDirs: []
       })

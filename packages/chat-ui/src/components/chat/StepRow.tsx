@@ -11,6 +11,9 @@ interface StepRowProps {
   lead?: ReactNode
   /** 类型图标 */
   icon?: ReactNode
+  /** 图标与名称之间的小标记（如 bash 的「后台」标签）—— 属于这次调用的性质，
+   *  该跟工具名挨在一起，而不是被摘要挤到行尾 */
+  badge?: ReactNode
   /** 类型标签 */
   label?: ReactNode
   /** 摘要 — 占满剩余宽度并截断 */
@@ -31,6 +34,7 @@ interface StepRowProps {
 export function StepRow({
   lead,
   icon,
+  badge,
   label,
   detail,
   trailing,
@@ -49,6 +53,7 @@ export function StepRow({
       } ${className}`}
     >
       <span className={ICON_SLOT}>{lead ?? icon}</span>
+      {badge}
       {label && <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>}
       <span className="flex-1 min-w-0 truncate">{detail}</span>
       {trailing}

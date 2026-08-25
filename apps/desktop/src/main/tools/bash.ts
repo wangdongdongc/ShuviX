@@ -19,6 +19,15 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
+import {
+  startBgTask,
+  listBgTasks,
+  runningCount,
+  stopCommandFor,
+  stopCommandHint,
+  formatStartReceipt,
+  MAX_RUNNING_PER_SESSION
+} from '../services/bgTaskService'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
@@ -39,6 +48,21 @@ const BashParamsSchema = Type.Object({
   timeout: Type.Optional(
     Type.Number({
       description: `Command timeout in seconds (default: ${DEFAULT_TIMEOUT}s). Increase for long-running commands.`
+    })
+  ),
+  run_in_background: Type.Optional(
+    Type.Boolean({
+      // 用法说明留在此处（随 tools 块每次请求发一份、走 prompt cache），
+      // 不进工具结果 —— 结果会永久留在上下文并被每一步重发。见 formatStartReceipt。
+      description:
+        'Run the command as a background task bound to this session: it outlives this tool call ' +
+        'and has no timeout. Use for dev servers, watchers, and long builds. Returns a pid and a ' +
+        'log file path right away. Read that log with the read tool whenever you need the output ' +
+        `(reading it needs no approval); stop the task with \`${stopCommandHint()}\`. ` +
+        'Write the command exactly as you would run it in the foreground: do NOT append `&` and ' +
+        'do NOT redirect the output yourself — this option already detaches the process and ' +
+        'captures stdout+stderr. Doing either makes the tracked process exit immediately, which ' +
+        'loses the real pid and leaves the task untrackable and unstoppable.'
     })
   )
 })
@@ -142,14 +166,19 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
 
   protected async executeInternal(
     toolCallId: string,
-    params: { command: string; description: string; timeout?: number },
+    params: {
+      command: string
+      description: string
+      timeout?: number
+      run_in_background?: boolean
+    },
     signal?: AbortSignal
   ): Promise<AgentToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
 
     // Bash 命令逐条需用户询问 —— 唯一豁免是会话级「免询问」开关（无命令模式匹配）。
-    // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 consent 层）
+    // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 force-allow 层）
     const outcome = await getDesktopSecurityContext(this.ctx).enforceCommand(
       // cwd 供安全模块把重定向目标解析成绝对路径
       { channel: 'bash', command: params.command, cwd: config.workingDirectory },
@@ -157,6 +186,8 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
         toolCallId,
         toolName: 'bash',
         description: params.description,
+        // 后台任务的询问卡片要标出来 —— 用户批准的是个不会自动结束的进程
+        background: params.run_in_background === true,
         abortError: TOOL_ABORTED,
         // 用户选择"其它":不执行命令,把反馈文本作为正常 tool result 返回给 AI
         onOther: 'return',
@@ -177,13 +208,22 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       }
     }
 
+    // 注入 SHUVIX_SESSION_ID，让 shuvix-cli 把当前 session id 透传给主进程
+    // （主进程据此把 widget 目录加入 session 的 read/write allowList）
+    const extraEnv = { ...config.envVars, SHUVIX_SESSION_ID: this.ctx.sessionId }
+
+    if (params.run_in_background) {
+      return this.runInBackground(toolCallId, params, config.workingDirectory, extraEnv)
+    }
+
     try {
-      // 注入 SHUVIX_SESSION_ID，让 shuvix-cli 把当前 session id 透传给主进程
-      // （主进程据此把 widget 目录加入 session 的 read/write allowList）
-      const result = await defaultSpawn(params.command, config.workingDirectory, timeout, signal, {
-        ...config.envVars,
-        SHUVIX_SESSION_ID: this.ctx.sessionId
-      })
+      const result = await defaultSpawn(
+        params.command,
+        config.workingDirectory,
+        timeout,
+        signal,
+        extraEnv
+      )
       const raw = [result.stdout, result.stderr].filter(Boolean).join('\n')
       // 折叠进度输出（仅匹配进度类命令时生效）
       let text = collapseProgressOutput(raw, params.command)
@@ -208,6 +248,60 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
       const errMsg = err instanceof Error ? err.message : String(err)
       if (errMsg === TOOL_ABORTED) throw err
       throw new Error(`Command failed: ${errMsg}`)
+    }
+  }
+
+  /**
+   * 后台形态 —— 进程脱离本次工具调用存活，输出由 OS 直接写 tool_results 下的日志文件。
+   *
+   * 刻意**不传 signal**：用户点「停止生成」不该杀后台任务，这正是后台的意义。
+   * 任务只在删除会话 / 应用退出时被级联杀（见 bgTaskService）。
+   */
+  private async runInBackground(
+    toolCallId: string,
+    params: { command: string; description: string },
+    cwd: string,
+    extraEnv: Record<string, string>
+  ): Promise<AgentToolResult<BashToolDetails>> {
+    const sessionId = this.ctx.sessionId
+
+    if (runningCount(sessionId) >= MAX_RUNNING_PER_SESSION) {
+      const running = listBgTasks(sessionId).filter((task) => task.status === 'running')
+      const text = [
+        `Too many background tasks in this session (${running.length}/${MAX_RUNNING_PER_SESSION}).`,
+        'Stop one before starting another:',
+        ...running.map((task) => `  ${stopCommandFor(task)}   # ${task.description}`)
+      ].join('\n')
+      return {
+        content: [{ type: 'text', text }],
+        details: { type: 'bash', exitCode: -1, truncated: false, cwd }
+      }
+    }
+
+    const started = await startBgTask({
+      sessionId,
+      toolCallId,
+      command: params.command,
+      description: params.description,
+      cwd,
+      extraEnv
+    })
+
+    // 预热窗口内就退出了（打错命令 / 缺依赖）→ 按前台形态回话，不留后台条目
+    if (started.kind === 'settled') {
+      const exitCode = started.info.exitCode ?? 1
+      let text = collapseProgressOutput(started.output, params.command)
+      if (exitCode !== 0) text += `\n\n[Exit code: ${exitCode}]`
+      return {
+        content: [{ type: 'text' as const, text }],
+        details: { type: 'bash', exitCode, truncated: false, cwd }
+      }
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: formatStartReceipt(started.info, started.tail) }],
+      // exitCode 0 = 启动成功（非命令结果）；background 标记让 UI 走后台形态
+      details: { type: 'bash', exitCode: 0, truncated: false, cwd, background: true }
     }
   }
 }

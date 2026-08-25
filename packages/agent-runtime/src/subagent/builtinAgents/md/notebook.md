@@ -5,7 +5,6 @@ name: notebook
 description: Base profile for notebook sessions — each send runs a fresh one-shot agent over the open note. Override it with a custom agent named "notebook" to customize notebook behavior.
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser
 shuvix-displayName: Notebook
-shuvix-instruction-files: false
 shuvix-project-prompt: false
 ---
 

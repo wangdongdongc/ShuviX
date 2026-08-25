@@ -4,6 +4,7 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { useChatStore, type ChatMessage, type StreamingDeltaBuffer } from '../stores/chatStore'
 import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
+import { useBgTaskStore } from '../stores/bgTaskStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 import { useAppEvent } from './useAppEvents'
 
@@ -215,7 +216,9 @@ export function useAgentEvents(): void {
             event.messageId
           )
           return
-        // 其它事件（input_request / runtime / messages_reloaded 等）子会话不会触发；忽略。
+        // 其它事件忽略。多数（input_request / runtime / messages_reloaded）子会话根本不触发；
+        // queue_update 会（abort 时 harness 无条件重发一次全量快照），但派生 agent 没有
+        // 用户可见的队列入口，收到也无处可显。
         default:
           return
       }
@@ -264,6 +267,16 @@ export function useAgentEvents(): void {
         }
         break
 
+      case 'queue_update':
+        // pi 三条用户消息队列的只读快照（整体替换；不区分是否活跃会话，
+        // 队列面板按会话读，切回来时要能看到还排着的东西）
+        store.setSessionQueue(sid, {
+          steer: event.steer,
+          followUp: event.followUp,
+          nextTurn: event.nextTurn
+        })
+        break
+
       case 'input_request':
         // 统一的"用户输入请求"事件 — 命令询问 / 选择题 / SSH 凭证
         store.addPendingInput(sid, event.request)
@@ -301,6 +314,12 @@ export function useAgentEvents(): void {
 
       case 'runtime_event':
         store.setRuntime(sid, event.runtimeId, event.status)
+        break
+
+      // 后台任务状态变更（started / exited / killed）。输出不走事件 —— 面板展开时
+      // 按字节范围轮询日志文件自取，见 bgTaskStore 的说明。
+      case 'bg_task':
+        useBgTaskStore.getState().upsert(event.task)
         break
 
       case 'file_preview':

@@ -40,9 +40,8 @@ import {
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { agentService } from './agentService'
 import { AgentSession } from './agentSession'
+import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { renderNotebookSystemPrompt, resolveProfileModelSpec } from '../agents/agentHost'
-import { scanInstructionFiles } from './instruction'
-import type { InstructionFileEntry } from '@shuvix/chat-protocol/types/instructionFile'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
 import { registerUserInputResolver } from './userInputBroker'
 import { createLogger } from '../logger'
@@ -89,6 +88,16 @@ export class SessionService {
     // 会话树共享缓存的逐出保护：有 AgentSession（或创建中）的会话，
     // 树实例与运行时共享 —— LRU 不得回收，否则读取端会另开分叉实例
     setSessionTreePinned((sessionId) => this.agents.tracked(sessionId))
+
+    // 后台任务结束 → 告知该会话的 Agent。刻意**不懒建 Agent**：没建过 Agent 的会话
+    // 说明用户根本没在跟它对话，为一条后台通知把整个运行时拉起来不值当
+    setBgTaskNotifier((sessionId, text) => {
+      const agent = this.agents.get(sessionId)
+      if (!agent) return
+      void agent
+        .notify(text)
+        .catch((err) => log.warn(`后台任务通知失败 session=${sessionId}: ${err}`))
+    })
   }
 
   // ─── DB CRUD ──────────────────────────────────
@@ -153,26 +162,6 @@ export class SessionService {
     // （由 AgentSession.prompt 判定 agent 上下文是否为空），使得用户可以在
     // 创建会话后、发送第一条消息前任意切换配置。
     return session
-  }
-
-  /** 扫描指定会话工作目录顶层的候选指令文件 */
-  scanInstructionFiles(sessionId: string): InstructionFileEntry[] {
-    const info = this.getById(sessionId)
-    if (!info?.workingDirectory) {
-      log.info(`scanInstructionFiles: session=${sessionId} 无工作目录，返回空`)
-      return []
-    }
-    return scanInstructionFiles(info.workingDirectory)
-  }
-
-  /** 更新会话注入的指令文件（单选；null = 不注入） */
-  updateInstructionFile(sessionId: string, filename: string | null): void {
-    log.info(`updateInstructionFile session=${sessionId} → ${filename ?? '(none)'}`)
-    sessionDao.updateSettings(sessionId, { instructionFile: filename })
-    const after = sessionDao.pick(sessionId, ['settings'])?.settings?.instructionFile
-    log.info(`updateInstructionFile 写入后回读: ${after ?? '(none)'}`)
-    // 指令文件随 createAgent append 进系统提示词 —— 失效重建让选择在下一条消息生效
-    this.invalidateAgent(sessionId)
   }
 
   /**
@@ -293,10 +282,12 @@ export class SessionService {
     broadcastSessionConfigChanged(id)
   }
 
-  /** 删除会话（同时清理 AgentSession、消息、HTTP 日志和临时工作目录） */
+  /** 删除会话（同时清理 AgentSession、后台任务、消息、HTTP 日志和临时工作目录） */
   delete(id: string): void {
     // 先清理运行时 AgentSession（dispose 触发 destroy）
     this.agents.remove(id, 'destroy')
+    // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录
+    killBySession(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
@@ -432,8 +423,8 @@ export class SessionService {
     modelConfig: SubAgentModelConfig
     /** notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选 */
     model?: string
-    /** notebook 档案的两个上下文注入开关（内置默认关，用户覆盖档案可打开） */
-    instructionFiles: boolean
+    /** notebook 档案的两项上下文注入声明（内置默认都不注入，用户覆盖档案可打开） */
+    instructionFiles: readonly string[]
     projectPrompt: boolean
   } | null> {
     const ctx = await this.resolveSessionAgentContext(sessionId)

@@ -14,6 +14,7 @@ import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
 import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
+import type { BgTaskInfo, BgTaskLogChunk } from './types/bgTask'
 import type {
   ProviderInfo,
   ProviderModelInfo,
@@ -29,7 +30,6 @@ import type {
   McpToolInfo
 } from './types/mcp'
 import type { InputResponse } from './types/inputRequest'
-import type { InstructionFileEntry } from './types/instructionFile'
 import type { InlineToken } from './types/chatMessage'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
@@ -51,8 +51,6 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
-  /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
-  instructionFile?: string | null
   /**
    * 会话根 Agent 采用的档案名（`~/.shuvix/agents/<name>.md` 或内置档案）。
    * 缺省 / 档案已不存在 → 回落 'default'。经 `/<agentName>` 斜杠命令切换，粘性生效：
@@ -92,7 +90,6 @@ export interface ProjectEnvVar {
 }
 
 export interface ToolSettings {
-  pglitePersist?: boolean
   envVars?: ProjectEnvVar[]
 }
 
@@ -250,6 +247,13 @@ export interface AgentSteerParams {
   sessionId: string
   text: string
 }
+
+/**
+ * 追加 / 下轮入队参数 —— 与 steer 同形（一条纯文本用户消息）。
+ * 三者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
+ */
+export type AgentFollowUpParams = AgentSteerParams
+export type AgentNextTurnParams = AgentSteerParams
 
 export interface AgentSetModelParams {
   sessionId: string
@@ -472,6 +476,10 @@ export interface SessionChannelApi {
     /** 中断子会话：软停止当前生成、保留已产出，子会话以「已完成」收尾。子代理基础能力，各端必须实现。 */
     subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
+    /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
+    followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
+    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
+    nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     respondToInput: (params: {
       sessionId: string
@@ -489,6 +497,21 @@ export interface SessionChannelApi {
   }
   runtime: {
     statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
+  }
+  /**
+   * 后台任务（bash run_in_background）只读面。输出**不经事件总线** —— 子进程的
+   * stdout/stderr 由 OS 直接写日志文件，前端要实时输出就按字节范围轮询 readLog；
+   * 任务状态变更走 `bg_task` ChatEvent。见 docs/background-tasks-design.md。
+   */
+  bgTask: {
+    /** 会话内全部任务（含已结束）—— 挂载 / 切会话时补快照，之后靠事件增量维护 */
+    list: (params: { sessionId: string }) => Promise<BgTaskInfo[]>
+    /** 按字节范围读日志；fromByte 省略 = 取尾部窗口 */
+    readLog: (params: {
+      toolCallId: string
+      fromByte?: number
+      maxBytes?: number
+    }) => Promise<BgTaskLogChunk>
   }
   tools: {
     list: (sessionId?: string) => Promise<ToolInfo[]>
@@ -609,12 +632,6 @@ export interface HostApi {
       conversationText: string
     }) => Promise<{ title: string | null }>
     delete: (id: string) => Promise<{ success: boolean }>
-    scanInstructionFiles: (sessionId: string) => Promise<InstructionFileEntry[]>
-    /** 设置注入的指令文件（单选）；filename 为 null 表示不注入 */
-    updateInstructionFile: (params: {
-      id: string
-      filename: string | null
-    }) => Promise<{ success: boolean }>
     /** 可切换的会话档案（含切回基座用的 default，不含 notebook）。纯文件系统驱动，每次现扫 */
     listAgentProfiles: () => Promise<AgentProfileSummary[]>
     /**
@@ -675,6 +692,22 @@ export interface HostApi {
   }
   runtime: {
     destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
+  }
+  /** 后台任务的管理动作（渠道端无权）。注意 write 是**用户**往 stdin 写 —— 智能体没有这条通道 */
+  bgTask: {
+    /** 停止：先 SIGINT，3 秒未退升级 SIGKILL；force 直接 SIGKILL */
+    stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
+    /**
+     * 用户往任务 stdin 写入（干涉）。**故意不开给智能体** —— 那等于让它往一个已被
+     * ask-on-command 批准的 shell 里再喂任意命令，绕过整道门。见设计文档 §7。
+     */
+    write: (params: { toolCallId: string; data: string }) => Promise<{ success: boolean }>
+    /** 移除一条已结束的任务（连同日志文件）；运行中的不移除 */
+    dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
+    /** 清空会话内所有已结束的任务 */
+    clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
+    /** 「完成时通知 AI」开关 */
+    setNotify: (params: { toolCallId: string; enabled: boolean }) => Promise<{ success: boolean }>
   }
   /** 文件回写（属管理类，渠道端无权） */
   files: {

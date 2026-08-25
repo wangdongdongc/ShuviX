@@ -5,7 +5,7 @@ name: visualization
 description: 在工作目录中创建并维护 Mermaid 图表文件(*-graph.md)。
 shuvix-tools: read, ls, glob, grep, write, edit, ask, preview
 shuvix-displayName: 可视化
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

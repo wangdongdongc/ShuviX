@@ -27,10 +27,16 @@ export interface AgentProfile {
    * 省略 = 不声明，跟随会话 / 继承派发方。
    */
   model?: string
-  /** `shuvix-instruction-files`：是否注入项目指令文件（AGENTS.md/CLAUDE.md；派生按根会话解析） */
-  instructionFiles: boolean
+  /**
+   * `shuvix-instruction-files`：该档案认的项目指令文件清单（工作目录内的相对路径）。
+   * 顺序即优先级，注入侧取第一个存在且非空的，至多一个；空数组 = 不注入。
+   * 派生 agent 按根会话的工作目录解析。
+   */
+  instructionFiles: readonly string[]
   /** `shuvix-project-prompt`：是否注入项目提示词（项目设置的纯文本） */
   projectPrompt: boolean
+  /** `shuvix-project-memory`：是否注入项目记忆索引（派生按根会话的项目解析） */
+  projectMemory: boolean
   /**
    * `shuvix-dispatch-only`：只可被派发，不作为 `/<agentName>` 会话档案切换目标。
    * 与 BASE_PROFILE_NAMES 不同 —— 那是「两边都不进」，这里只挡切换、照常可派发。
@@ -56,10 +62,12 @@ export interface InProcessAgentType {
    * root 会话不看这里 —— 它的模型以会话树为准（切档案时把档案模型作为种子写进树）。
    */
   model?: string
-  /** 是否注入项目指令文件（缺省 false；派生按根会话的项目上下文解析） */
-  instructionFiles?: boolean
+  /** 项目指令文件清单，顺序即优先级（缺省/空 = 不注入；派生按根会话的项目上下文解析） */
+  instructionFiles?: readonly string[]
   /** 是否注入项目提示词（缺省 false） */
   projectPrompt?: boolean
+  /** 是否注入项目记忆索引（缺省 false；派生按根会话的项目上下文解析） */
+  projectMemory?: boolean
 }
 
 /** 父级注入的模型配置（纯数据，不依赖 pi-ai 类型） */

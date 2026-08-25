@@ -68,9 +68,6 @@ function printUsage(): void {
       '  shuvix widget list [--archived]',
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
-      '',
-      '  shuvix pglite [-c sql | -f path | -] [--extension name ...]',
-      '                Embedded PGLite Postgres — see `shuvix pglite --help`',
       ''
     ].join('\n')
   )
@@ -174,96 +171,10 @@ function parse(argv: string[]): ParsedCommand | null {
   return null
 }
 
-// ────────────────────── stdin helpers ──────────────────────
-
-async function readAllStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    process.stdin.on('data', (c: Buffer) => chunks.push(c))
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
-    process.stdin.on('error', reject)
-  })
-}
-
-function shouldReadStdin(rest: string[]): boolean {
-  if (rest[0] === '-') return true
-  if (rest.length === 0 && process.stdin.isTTY !== true) return true
-  return false
-}
-
 interface ExecResponseData {
   stdout: string
   stderr: string
   exitCode: number
-}
-
-// ────────────────────── pglite ──────────────────────
-// `shuvix pglite` 走 raw 透传模式：
-//   1. argv 整体发给主进程让 argvParser 解析
-//   2. `-` 或 (无参 + stdin pipe) 时预读 stdin 当 SQL 文本
-//   3. `-f path` 时本地 readFileSync 后把内容塞 stdin 字段（handler 协议不感知文件 IO）
-
-async function runPglite(rest: string[]): Promise<void> {
-  let stdinContent: string | undefined
-
-  // -f 模式：CLI 端读文件 → 作为 stdin 字段上送
-  const fIdx = rest.indexOf('-f')
-  if (fIdx !== -1) {
-    const path = rest[fIdx + 1]
-    if (!path) {
-      process.stderr.write('shuvix pglite: -f requires a path argument\n')
-      process.exit(2)
-    }
-    try {
-      stdinContent = readFileSync(path, 'utf-8')
-    } catch (e) {
-      process.stderr.write(`shuvix pglite: failed to read "${path}": ${(e as Error).message}\n`)
-      process.exit(1)
-    }
-  } else if (shouldReadStdin(rest)) {
-    try {
-      stdinContent = await readAllStdin()
-    } catch (e) {
-      process.stderr.write(`shuvix pglite: failed to read stdin: ${(e as Error).message}\n`)
-      process.exit(1)
-    }
-  }
-
-  const token = readToken()
-  const sessionId = process.env.SHUVIX_SESSION_ID || undefined
-
-  let resp: CliResponse
-  try {
-    resp = await sendRequest({
-      token,
-      command: 'pglite.run',
-      params: {
-        argv: rest,
-        stdin: stdinContent
-      },
-      sessionId
-    })
-  } catch (e) {
-    process.stderr.write((e as Error).message + '\n')
-    process.exit(2)
-  }
-
-  if (!resp.success) {
-    process.stderr.write(`Error: ${resp.error || 'unknown error'}\n`)
-    process.exit(1)
-  }
-
-  const data = resp.data as ExecResponseData | undefined
-  if (!data) {
-    process.exit(0)
-  }
-  if (data.stdout) {
-    process.stdout.write(data.stdout.endsWith('\n') ? data.stdout : data.stdout + '\n')
-  }
-  if (data.stderr) {
-    process.stderr.write(data.stderr.endsWith('\n') ? data.stderr : data.stderr + '\n')
-  }
-  process.exit(data.exitCode ?? 0)
 }
 
 // ────────────────────── transport ──────────────────────
@@ -314,13 +225,6 @@ async function main(): Promise<void> {
     process.exit(argv.length === 0 ? 1 : 0)
   }
 
-  // `shuvix pglite ...` 走专用分支：原始 argv 透传 + 异步 stdin
-  // 预读 + 自定义 IO 路由（区别于 widget 的 JSON.stringify 输出语义）
-  if (argv[0] === 'pglite') {
-    await runPglite(argv.slice(1))
-    return
-  }
-
   const parsed = parse(argv)
   if (!parsed) {
     printUsage()
@@ -344,7 +248,7 @@ async function main(): Promise<void> {
   }
 
   if (resp.success) {
-    // db-query 走 stdout/stderr/exitCode 形态（同 pglite），打印原文而非 JSON
+    // db-query 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
     if (parsed.command === 'widget.db-query') {
       const data = resp.data as ExecResponseData | undefined
       if (data) {

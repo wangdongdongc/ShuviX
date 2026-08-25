@@ -38,6 +38,10 @@ export interface ChatGateway {
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
+  /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
+  followUp(sessionId: string, text: string): void
+  /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
+  nextTurn(sessionId: string, text: string): void
 
   /** 中止当前生成（部分内容由 harness 自行落成 entry，无需回传消息） */
   abort(sessionId: string): Promise<{ success: boolean }>

@@ -27,8 +27,11 @@ export interface NotebookTaskInputs {
   model?: string
   /** 工具白名单：按名解析的内核（桌面）传内置+mcp/skill 名；按注册表解析的（扩展）传 [] */
   tools: string[]
-  /** notebook 档案的两个上下文注入开关（内置默认关；用户覆盖档案打开即经创建管线生效） */
-  instructionFiles?: boolean
+  /**
+   * notebook 档案的两项上下文注入声明（内置默认都不注入；用户覆盖档案打开即经创建管线生效）：
+   * 指令文件清单（顺序即优先级，空/省略 = 不注入）与项目提示词开关。
+   */
+  instructionFiles?: readonly string[]
   projectPrompt?: boolean
 }
 

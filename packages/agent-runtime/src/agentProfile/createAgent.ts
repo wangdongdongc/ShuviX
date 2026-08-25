@@ -25,6 +25,7 @@ import type { Api, Model } from '@earendil-works/pi-ai'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { HarnessSession } from '../harness/harnessSession'
+import { agentRuntimeRegistry } from '../runtimeRegistry'
 import { createModelsAdapter } from '../harness/modelsAdapter'
 import { createStubExecutionEnv } from '../harness/stubEnv'
 import type { RuntimeEventSink, RuntimeLogger, ToolResultTransform } from '../types'
@@ -104,20 +105,34 @@ export interface AgentHostAdapter {
   }
   logger?: RuntimeLogger
   /**
-   * 指令文件解析（profile.instructionFiles 时调用；桌面同步 / 扩展异步均可）。
+   * 指令文件解析（档案声明了非空清单时调用；桌面同步 / 扩展异步均可）。
    * sessionId 恒为根会话 id（派生 agent 按其根会话的项目上下文解析）；cwd 可为空串
    * （派生现状），宿主自行按 sessionId 兜底解析工作目录。
-   * 返回**原文**，不要自带前缀 —— 围栏由本模块的 fenceInstructionFile 统一加。
+   *
+   * `candidates` 是档案 `shuvix-instruction-files` 的清单（已归一的相对路径，
+   * **顺序即优先级**）：宿主按序找第一个存在且非空的读出来，至多一个。
+   * 「读哪些文件」的决定权全在档案，宿主不再有自己的候选名表 —— 会话设置里那个
+   * 单选下拉正是被这条取代的。返回**原文**，不要自带前缀 —— 围栏由本模块的
+   * fenceInstructionFile 统一加。
    */
   resolveInstruction?: (
     sessionId: string,
-    cwd: string
+    cwd: string,
+    candidates: readonly string[]
   ) =>
     | { filename: string; content: string }
     | null
     | Promise<{ filename: string; content: string } | null>
   /** 项目提示词解析（profile.projectPrompt 时调用）：返回原文或 null，围栏由 fenceProjectPrompt 统一加 */
   resolveProjectPrompt?: (rootSessionId: string) => string | null | Promise<string | null>
+  /**
+   * 项目记忆索引解析（profile.projectMemory 时调用）：返回**渲染好的索引正文**或 null，
+   * 围栏由本模块的 fenceProjectMemory 统一加。
+   *
+   * 只收 rootSessionId、不收 cwd —— 记忆按项目绑定（无项目会话解析为 null），
+   * 与 resolveProjectPrompt 同源，而非像指令文件那样按 cwd 扫盘。
+   */
+  resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
 }
 
 export interface CreateAgentParams {
@@ -156,6 +171,14 @@ export interface CreatedAgent {
   ): Promise<void>
   /** 派发工具惰性读取：{...当前模型配置, thinkingLevel: 当前档位} */
   getModelConfig(): SubAgentModelConfig
+  /**
+   * 从运行时注册中心注销。
+   *
+   * 调用方**必须**在弃用本运行时时调它（会话失效/销毁、派生 agent 销毁），否则注册中心
+   * 会留下一个指向已弃 harness 的死条目 —— 监控页会把它显示成"还活着"，而它恰恰是
+   * 用来发现这类滞留的。只注销登记，不动 harness 本身（中止/清理各调用方自理）。
+   */
+  dispose(): void
 }
 
 export interface AgentFactory {
@@ -177,6 +200,8 @@ const fenceInstructionFile = (filename: string, content: string): string =>
   `<project_instructions file="${filename}">\n${content}\n</project_instructions>`
 
 const fenceProjectPrompt = (text: string): string => `<project_prompt>\n${text}\n</project_prompt>`
+
+const fenceProjectMemory = (text: string): string => `<project_memory>\n${text}\n</project_memory>`
 
 /** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
 const isSessionScopedTool = (name: string): boolean =>
@@ -251,10 +276,11 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       await host.promptVars({ sessionId, kind, cwd }),
       host.logger
     )
-    // 上下文注入：直接 append 到系统提示词（先指令文件、后项目提示词），不落独立消息。
+    // 上下文注入：直接 append 到系统提示词（指令文件 → 项目提示词 → 项目记忆），不落独立消息。
+    // 顺序不声明优先级（同 fence 注释）—— 只是固定的拼接次序。
     // 系统提示词不参与滚动压缩，天然免重注入；root/spawned 同管线，派生按根会话解析。
-    if (profile.instructionFiles && host.resolveInstruction) {
-      const resolved = await host.resolveInstruction(rootSessionId, cwd)
+    if (profile.instructionFiles?.length && host.resolveInstruction) {
+      const resolved = await host.resolveInstruction(rootSessionId, cwd, profile.instructionFiles)
       if (resolved?.content) {
         systemPrompt += `\n\n${fenceInstructionFile(resolved.filename, resolved.content)}`
       }
@@ -262,6 +288,10 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     if (profile.projectPrompt && host.resolveProjectPrompt) {
       const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
       if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
+    }
+    if (profile.projectMemory && host.resolveProjectMemory) {
+      const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
+      if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
     }
 
     const buildResolveRequest = (overlay: readonly string[] | undefined): ToolResolveRequest => ({
@@ -328,10 +358,27 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
     })
     const rt = runtime
 
+    // 全仓唯一的 HarnessSession 构造点 —— 运行时注册中心在此单点接管 root/spawned 全量，
+    // 无需各宿主散点埋点。身份标签只是给监控看的字符串，注册中心不解释其语义。
+    const unregister = agentRuntimeRegistry.register(
+      {
+        agentId: sessionId,
+        kind,
+        rootSessionId,
+        parentAgentId: spawn?.parentAgentId,
+        depth: spawn?.depth ?? 0,
+        profileName: profile.name,
+        displayName: profile.displayName || profile.name
+      },
+      rt.piHarness,
+      session
+    )
+
     return {
       runtime: rt,
       profile,
       systemPrompt,
+      dispose: unregister,
 
       async applyToolOverlay(overlay: readonly string[]): Promise<void> {
         const next = await host.resolveTools(buildResolveRequest(overlay))

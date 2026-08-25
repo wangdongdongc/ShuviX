@@ -2,6 +2,11 @@
  * 属性卡字段槽位里的选择器 —— **直接复用仓库既有的成熟组件**，不另造轮子：
  *   - `shuvix-tools`（csv）→ ToolSelectList（分组勾选、MCP 连接态、skill 启停）
  *   - `shuvix-model`（select）→ ModelSelect（提供商图标、能力标记、搜索、清除）
+ *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
+ *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
+ *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
+ *     会把它伪装成受限枚举。分派按**键**而非 kind：kind 只说"是个列表"，
+ *     该配哪个控件是键的事。
  *
  * 卡片本身是纯 DOM 的 CM6 widget，故这里由 LivePreviewEditor 用独立 React root
  * 挂进槽位（widget.destroy → unmount）。独立 root 不继承应用的 Provider，但两个
@@ -16,6 +21,8 @@ import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentMode
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
 export interface FrontmatterFieldPickerProps {
+  /** frontmatter 键名 —— csv 的控件按它分派（见文件头注释） */
+  fieldKey: string
   kind: 'csv' | 'select'
   /** 当前行的原始值（csv 逗号串 / 模型 ref） */
   value: string
@@ -25,6 +32,9 @@ export interface FrontmatterFieldPickerProps {
   readOnly?: boolean
 }
 
+/** 单个控件的入参（分派由外层做完，控件本身不看 key / kind） */
+type FieldControlProps = Omit<FrontmatterFieldPickerProps, 'kind' | 'fieldKey'>
+
 /**
  * 工具白名单编辑：紧凑触发器 + ToolSelectList 弹层。
  *
@@ -32,11 +42,7 @@ export interface FrontmatterFieldPickerProps {
  * `overflow-hidden`（分隔线与圆角要它），absolute 定位的弹层会被裁掉；ModelSelect
  * 早就是这么逃逸的，这里同策。
  */
-function ToolsField({
-  value,
-  onChange,
-  readOnly = false
-}: Omit<FrontmatterFieldPickerProps, 'kind'>): React.JSX.Element {
+function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
   const { t } = useTranslation()
   const [tools, setTools] = useState<ToolItem[]>([])
   const [open, setOpen] = useState(false)
@@ -175,11 +181,7 @@ function ToolsField({
 }
 
 /** 模型选择：ModelSelect 自带 portal 下拉与清除，直接受控接进来 */
-function ModelField({
-  value,
-  onChange,
-  readOnly = false
-}: Omit<FrontmatterFieldPickerProps, 'kind'>): React.JSX.Element {
+function ModelField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
   const availableModels = useModelCatalogStore((s) => s.availableModels)
   const allProviders = useModelCatalogStore((s) => s.providers)
   // 只列**已启用**的提供商 —— 传全量会把没开启的也渲染成分组（同 ModelPicker 的过滤）
@@ -208,15 +210,59 @@ function ModelField({
   )
 }
 
+/**
+ * 通用列表输入：逗号串原样编辑（回车/失焦提交，Esc 还原，清空即删键）。
+ * 视觉与属性卡的文本行同源（同一套 bg/圆角/焦点描边），只是收窄成槽位宽度。
+ *
+ * 非受控（defaultValue + ref）：写回会改 YAML → CM6 重建 widget → 本 React root
+ * 整个卸载重挂，外部值变化天然由重挂承接，不需要 state 去追 prop。
+ */
+function TextListField({
+  value,
+  onChange,
+  readOnly = false
+}: FieldControlProps): React.JSX.Element {
+  const { t } = useTranslation()
+
+  const commit = (next: string): void => {
+    const cleaned = next.replace(/\s*\n+\s*/g, ' ').trim()
+    if (cleaned === value.trim()) return
+    onChange(cleaned === '' ? null : cleaned)
+  }
+
+  return (
+    <input
+      defaultValue={value}
+      disabled={readOnly}
+      placeholder={t('notebook.frontmatter.unset')}
+      className="cm-shuvix-fmcard-input w-[230px] max-w-full appearance-none bg-bg-primary rounded-md px-2.5 py-1 text-[11.5px] font-mono leading-relaxed text-text-primary border border-transparent transition-colors hover:border-border-secondary/60 focus:outline-none focus:border-accent/60 placeholder:text-text-tertiary disabled:opacity-60"
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => {
+        // 卡内按键不外泄给编辑器（同 ToolsField / 属性卡文本行）
+        e.stopPropagation()
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.currentTarget.blur()
+        } else if (e.key === 'Escape') {
+          e.currentTarget.value = value
+          e.currentTarget.blur()
+        }
+      }}
+    />
+  )
+}
+
 export function FrontmatterFieldPicker({
+  fieldKey,
   kind,
   value,
   onChange,
   readOnly
 }: FrontmatterFieldPickerProps): React.JSX.Element {
-  return kind === 'csv' ? (
+  if (kind === 'select') return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+  return fieldKey === 'shuvix-tools' ? (
     <ToolsField value={value} onChange={onChange} readOnly={readOnly} />
   ) : (
-    <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+    <TextListField value={value} onChange={onChange} readOnly={readOnly} />
   )
 }

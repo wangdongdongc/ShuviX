@@ -18,16 +18,20 @@
  *     **AND 进本策略每条规则**（不是独立的前置门：策略头部可见地参与每条规则的条件，
  *     没有隐藏的过滤）。多条规则共享同一批条件时用它去重；单规则策略直接写在规则上。
  *   - `shuvix-policy-rules`：规则数组 —— **引擎评估的唯一输入**。每条规则的键：
- *       effect: allow | consent | ask | deny （必填）—— consent 效果同 allow，但结算落在
- *                                             consent 层，压得过询问门（"用户明示同意"）；
- *                                             出厂用它表达免询问开关与「允许并记住」，
- *                                             用户策略同样可写（叠加式局部放宽某道门）。
+ *       effect: allow | force-allow | ask | force-ask | deny （必填）
+ *                                             强弱 = 「force- 压过不带前缀的，同档按
+ *                                             deny > ask > allow，deny 恒在顶」，即
+ *                                             deny > force-ask > force-allow > ask > allow。
+ *                                             force-allow 效果同 allow 但压得过询问门
+ *                                             （出厂用它表达免询问与「允许并记住」）；
+ *                                             force-ask 效果同 ask 且连它都压不过
+ *                                             （「这道门不接受会话级同意」）。
  *       结构化条件（可选，扁平键，键即 CEL 路径）：
  *         subject.kind / action / object.type / env.host / tool.name
  *         值为字符串或字符串列表（列表内 OR），`'*'` = 任意；语义见 conditions.ts
  *       prompt: "<一句话>"                  （可选；命中时给人看的提示语 —— 不参与匹配，
  *                                             deny 拼进工具错误、ask 上询问卡片、
- *                                             allow/consent 只在策略页显示，见 types.ts。
+ *                                             allow/force-allow 只在策略页显示，见 types.ts。
  *                                             **唯一不会让文件非法的键**：空值按没写处理，
  *                                             类型错/超长记警告后降级）
  *       match: "<CEL 表达式>"                （可选；省略 = 结构化条件即全部条件。
@@ -72,7 +76,7 @@ const RULES_KEY = POLICY_RULES_KEY
 const LETS_KEY = POLICY_LETS_KEY
 const SCOPE_KEY = POLICY_SCOPE_KEY
 
-const EFFECTS: readonly PolicyEffect[] = ['allow', 'consent', 'ask', 'deny']
+const EFFECTS: readonly PolicyEffect[] = ['allow', 'force-allow', 'ask', 'force-ask', 'deny']
 
 /** 字符串或字符串数组 → 非空字符串数组；类型不符/空条目/空列表返回 null（undefined 输入透传） */
 function stringList(value: unknown): string[] | null | undefined {

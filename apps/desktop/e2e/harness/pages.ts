@@ -3,7 +3,7 @@
  * 约定：断言优先走 IPC（window.api.*）；只有「确实在验证 UI 呈现」时才用这里。
  */
 import type { CdpClient } from './cdp'
-import { until } from './cdp'
+import { sleep, until } from './cdp'
 
 // ─────────────────────────────────────────────────────────────────────────
 // 主窗对话区 + 侧栏会话列表
@@ -47,7 +47,7 @@ export interface ChatPane {
   sendDisabled(): Promise<boolean>
   /** 流式态：`streaming-live` 合成占位项存在 ⟺ isStreaming */
   isBusy(): Promise<boolean>
-  /** 等到流式结束（上界内不落定即抛） */
+  /** 等到流式结束（上界内不落定即抛）；判据是连续两次都不在流式态，见实现处说明 */
   waitIdle(timeoutMs?: number): Promise<void>
   /** 等到条目数达到 n */
   waitItems(n: number, timeoutMs?: number): Promise<void>
@@ -85,6 +85,9 @@ export interface ChatPane {
   /** 点 ConfirmDialog 的确认（页脚第二个按钮，与 policiesPane 同款） */
   confirmAccept(): Promise<void>
 }
+
+/** 空闲确认间隔：取实测起流延迟（6~33ms）的十倍量级，满载也留得住余量 */
+const IDLE_CONFIRM_MS = 300
 
 /** 主窗对话区（会话已选中后调用） */
 export function chatPane(main: CdpClient): ChatPane {
@@ -158,8 +161,22 @@ export function chatPane(main: CdpClient): ChatPane {
     inputValue: () => main.eval<string>(`${TEXTAREA}?.value ?? ''`),
     sendDisabled: () => main.eval<boolean>(`${SEND_BTN}?.disabled ?? true`),
     isBusy,
+    /**
+     * 「不在流式态」的单次快照会在**刚发出去、还没起流**的空窗期里假空闲：实测从
+     * 回车到 `streaming-live` 上屏是 6~33ms（满载更长），而 CDP 一个来回也就几毫秒
+     * —— 两者同量级，于是 waitIdle 有时空转返回，紧随其后的断言就跑在了本轮任何
+     * 消息落库之前。判据因此改成**连续两次、隔一个确认间隔**都空闲。
+     */
     waitIdle: async (timeoutMs = 30_000) => {
-      await until(async () => !(await isBusy()), 'streaming settled', timeoutMs)
+      await until(
+        async () => {
+          if (await isBusy()) return false
+          await sleep(IDLE_CONFIRM_MS)
+          return !(await isBusy())
+        },
+        'streaming settled',
+        timeoutMs
+      )
     },
     waitItems: async (n, timeoutMs = 30_000) => {
       await until(
@@ -240,7 +257,14 @@ export function chatPane(main: CdpClient): ChatPane {
 
 export interface SidebarPane {
   titles(): Promise<string[]>
-  /** 点侧栏某个会话（按标题）；点不到返回 false */
+  /**
+   * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
+   *
+   * 「点完睡 600ms 就往下走」曾经是这里的做法：机器一慢，切换还没落定就开始断言，
+   * 读到的全是上一个会话的对话区（多半是空列表），失败点离真因十几行远。活动态判据
+   * 取 SessionItem 的 active 分支给**行本身**加的 `bg-bg-active`（非活动行是
+   * `bg-bg-hover`，不会误命中）—— 它直接映射 `activeSessionId === s.id`。
+   */
   openSession(title: string): Promise<boolean>
   /**
    * 点分组头的「新建对话」并等列表落定。
@@ -258,6 +282,13 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     .filter((d) => d.querySelector(':scope > div > span.truncate'))`
   const NEW_CHAT = `[...document.querySelectorAll('button')]
     .find((b) => b.querySelector('.lucide-message-square-plus'))`
+  /** 按标题定位会话行（标题在行内那层 span.truncate，与顶栏标题区分） */
+  const ROW = (title: string): string =>
+    `${ROWS}.find(
+      (d) =>
+        (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim() ===
+        ${JSON.stringify(title)}
+    )`
 
   return {
     clickNewChat: async () => {
@@ -272,18 +303,18 @@ export function sidebarPane(main: CdpClient): SidebarPane {
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
-          const row = ${ROWS}.find(
-            (d) =>
-              (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim() ===
-              ${JSON.stringify(title)}
-          )
+          const row = ${ROW(title)}
           if (!row) return false
           row.click()
           return true
         })()`
       )
-      if (clicked) await new Promise((r) => setTimeout(r, 600))
-      return clicked
+      if (!clicked) return false
+      await until(
+        () => main.eval<boolean>(`(${ROW(title)}?.className ?? '').includes('bg-bg-active')`),
+        `session "${title}" activated`
+      )
+      return true
     }
   }
 }
@@ -315,6 +346,50 @@ export interface AgentsPane {
     hasDeleteButton: boolean
     hasSaveButton: boolean
   }>
+  /**
+   * 打开新建对话框并等它**几何落定**：
+   *   'add'       列表底栏的「添加」（预填新建模板，正文很短）
+   *   'override'  内置详情头部的「创建覆盖副本」（预填整份内置 md，几千字，
+   *               长文档才照得出对话框的溢出问题）
+   *
+   * 就绪判据不是「元素出现」——`animate-scale-in` 期间卡片带着 transform，
+   * 这时候读 rect 得到的是动画中间态，几何断言会随机红。故还要求编辑器已填充
+   * 且卡片 rect 连续两次读数一致。
+   */
+  openCreateDialog(via: 'add' | 'override'): Promise<void>
+  /**
+   * 新建对话框的几何快照 —— 「长档案能不能在对话框里滚」这件事的全部证据。
+   * 卡片 = 对话框根的 firstElementChild（固定 85vh 的那层）；
+   * 滚动体 = 卡片内第一个 `.overflow-y-auto`（SubAgentEditor 的根）。
+   */
+  createDialogMetrics(): Promise<AgentsCreateDialogMetrics>
+  /** 把滚动体拉到底，返回落定后的 scrollTop */
+  scrollCreateDialogToBottom(): Promise<number>
+  /** 把滚动体复位到顶，返回落定后的 scrollTop */
+  scrollCreateDialogToTop(): Promise<number>
+  /** Esc 关闭并等对话框真的卸载（关闭动画结束） */
+  closeCreateDialog(): Promise<void>
+  /**
+   * 点保存并等对话框**自行**关闭 —— 那是保存成功的唯一信号（失败会留在原地并
+   * 就地显示原因）。故这里不许用 Esc 兜底：那会把失败伪装成成功。
+   * 超时抛错，消息里带上就地显示的失败原因。
+   */
+  saveCreateDialog(): Promise<void>
+}
+
+/** 新建对话框的几何快照（单位 px；bottom 取自 getBoundingClientRect） */
+export interface AgentsCreateDialogMetrics {
+  cardClientHeight: number
+  cardScrollHeight: number
+  cardBottom: number
+  scrollerClientHeight: number
+  scrollerScrollHeight: number
+  scrollerBottom: number
+  scrollerScrollTop: number
+  /** 计算后的 overflow-y —— 'visible' 说明那两个自滚类没生效 */
+  scrollerOverflowY: string
+  /** 对话框里的编辑器确实在滚动体内（认对话框内的 .cm-content，页面上还有详情那一个） */
+  scrollerHasEditor: boolean
 }
 
 export interface HttpLogPane {
@@ -362,6 +437,23 @@ export async function agentsPane(settings: CdpClient): Promise<AgentsPane> {
     return [...col.querySelectorAll('button')].filter((b) => b.querySelector('.lucide-bot'))
   })()`
 
+  // 新建对话框：唯一的全屏遮罩层（未打开时为 null）
+  const DIALOG = `document.querySelector('.fixed.inset-0.z-50')`
+  const CARD = `${DIALOG}?.firstElementChild`
+  const SCROLLER = `${CARD}?.querySelector('.overflow-y-auto')`
+  const CARD_RECT = `(() => {
+    const r = ${CARD}?.getBoundingClientRect()
+    return r ? [r.top, r.left, r.width, r.height].join(',') : ''
+  })()`
+
+  /** 滚动体挪到指定位置，返回浏览器实际落定的 scrollTop（挪不动时就是 0） */
+  const scrollTo = (top: string): Promise<number> =>
+    settings.eval<number>(`(() => {
+      const s = ${SCROLLER}
+      s.scrollTop = ${top}
+      return s.scrollTop
+    })()`)
+
   return {
     rows: () =>
       settings.eval(`${ROWS}.map((r) => ({
@@ -391,7 +483,103 @@ export async function agentsPane(settings: CdpClient): Promise<AgentsPane> {
           hasDeleteButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-trash-2')),
           hasSaveButton: [...pane.querySelectorAll('button')].some((b) => b.querySelector('.lucide-save'))
         }
-      })()`)
+      })()`),
+
+    openCreateDialog: async (via) => {
+      // 已经开着一个就早失败：再点入口只换预填文本，而 CM6 不会因此重置文档，
+      // 于是对话框里还是上一份 md —— 后面的断言会围着「看起来对但内容是别人的」打转
+      if (await settings.eval<boolean>(`${DIALOG} !== null`)) {
+        throw new Error('create dialog already open (leaked by a previous case?)')
+      }
+      const icon = via === 'add' ? '.lucide-plus' : '.lucide-copy'
+      await settings.eval(
+        `(() => {
+          const col = [...document.querySelectorAll('.w-\\\\[220px\\\\]')].pop()
+          // 「添加」在列表列底栏，「创建覆盖副本」在右侧详情头部（= 列表列的兄弟）
+          const scope = ${JSON.stringify(via)} === 'add' ? col : col.nextElementSibling
+          const btn = [...scope.querySelectorAll('button')].find((b) => b.querySelector(${JSON.stringify(icon)}))
+          if (!btn) throw new Error('create dialog entry not found: ' + ${JSON.stringify(icon)})
+          btn.click()
+          return true
+        })()`
+      )
+      // 覆盖副本预填整份内置 md（几千字）；新建模板只有十来行，故只对前者要求长度
+      const minChars = via === 'override' ? 500 : 0
+      await until(
+        () =>
+          settings.eval<boolean>(`(() => {
+            const editor = ${DIALOG}?.querySelector('.cm-content')
+            return !!editor && (editor.textContent ?? '').length > ${minChars}
+          })()`),
+        `create dialog (${via}) editor filled`
+      )
+      // animate-scale-in 期间卡片带 transform，此时读 rect 拿到的是动画中间态
+      await until(async () => {
+        const first = await settings.eval<string>(CARD_RECT)
+        await sleep(120)
+        const second = await settings.eval<string>(CARD_RECT)
+        return first && first === second ? first : null
+      }, 'create dialog geometry settled')
+    },
+
+    createDialogMetrics: () =>
+      settings.eval(`(() => {
+        const dialog = ${DIALOG}
+        const card = dialog.firstElementChild
+        const scroller = card.querySelector('.overflow-y-auto')
+        return {
+          cardClientHeight: card.clientHeight,
+          cardScrollHeight: card.scrollHeight,
+          cardBottom: card.getBoundingClientRect().bottom,
+          scrollerClientHeight: scroller.clientHeight,
+          scrollerScrollHeight: scroller.scrollHeight,
+          scrollerBottom: scroller.getBoundingClientRect().bottom,
+          scrollerScrollTop: scroller.scrollTop,
+          scrollerOverflowY: getComputedStyle(scroller).overflowY,
+          // 页面上还有详情面板那一个 .cm-content —— 必须在对话框内取，否则恒 false
+          scrollerHasEditor: scroller.contains(dialog.querySelector('.cm-content'))
+        }
+      })()`),
+
+    scrollCreateDialogToBottom: () => scrollTo(`${SCROLLER}.scrollHeight`),
+    scrollCreateDialogToTop: () => scrollTo('0'),
+
+    closeCreateDialog: async () => {
+      // 对话框自己在 window 上听 keydown（不是聚焦元素），故直接派发到 window
+      await settings.eval(
+        `(() => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return true
+        })()`
+      )
+      await until(() => settings.eval<boolean>(`${DIALOG} === null`), 'create dialog closed')
+    },
+
+    saveCreateDialog: async () => {
+      await settings.eval(
+        `(() => {
+          const btn = [...${DIALOG}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-save'))
+          if (!btn) throw new Error('create dialog save button not found')
+          btn.click()
+          return true
+        })()`
+      )
+      // 成功 = 对话框自己卸载；失败会留在原地并就地显示原因。
+      // until 把轮询期异常当「未就绪」吞掉，故失败用返回值传出去再抛
+      let reason = ''
+      const outcome = await until<boolean | 'rejected'>(
+        async () => {
+          if (await settings.eval<boolean>(`${DIALOG} === null`)) return true
+          reason = await settings.eval<string>(
+            `(${DIALOG}.querySelector('.text-red-500')?.textContent ?? '').trim()`
+          )
+          return reason ? 'rejected' : false
+        },
+        'create dialog saved & closed',
+        10_000
+      )
+      if (outcome !== true) throw new Error(`create dialog save rejected: ${reason}`)
+    }
   }
 }
 
@@ -435,7 +623,7 @@ export interface PoliciesPane {
    *   cardBadge        类型徽章（'ShuviX policy · v1'）
    *   fieldKeys        卡片各行的 frontmatter 键（data-key，locale-free）
    *   effectBadges/Texts  规则摘要里的 effect 徽章数与**原始 effect 名**
-   *                    （卡片按 md 原文展示 deny/ask/consent，不做本地化 —— 所见即引擎所评估）
+   *                    （卡片按 md 原文展示 deny/ask/force-allow，不做本地化 —— 所见即引擎所评估）
    *   hasScope         策略级 scope 行有值（非「未设置」）
    *   conditionLines   各规则行的条件/match 摘要文本
    *   rulePrompts      各规则的人读提示语行（prompt 不混进 mono 的条件串，单独散排一行；
@@ -687,6 +875,15 @@ export interface FmCardToolItem {
 }
 
 export interface FmCardPane {
+  /**
+   * 等属性卡**整张就绪**（读任何槽位内容之前都先过这一关）。
+   *
+   * 卡片进 DOM 只是第一步：`.cm-shuvix-fmcard` 与空的 `.cm-shuvix-fmcard-slot` 是
+   * CM6 widget 同步建的，槽位**里面**的选择器则由宿主用独立 React root 异步挂载
+   * （`createRoot().render()` 是调度执行的，实测滞后 5~6ms）。只等卡片/槽位存在就读
+   * 触发器文案，会踩进这段空窗期读到空串。`slots` 给定时顺带把槽位数当就绪条件。
+   */
+  waitReady(opts?: { slots?: number }): Promise<void>
   /** 字段行的触发器文案（工具：归一后的逗号串 / 模型：提供商 · 型号 或占位） */
   triggerText(key: string): Promise<string>
   /** 槽位内按钮数（模型字段：1 = 仅触发器，2 = 触发器 + 清除入口） */
@@ -734,6 +931,19 @@ export function fmCardPane(main: CdpClient): FmCardPane {
   const modelOpen = (): Promise<boolean> => main.eval<boolean>(`${MODEL_PANEL} !== null`)
 
   return {
+    waitReady: async ({ slots } = {}) => {
+      await until(
+        () =>
+          main.eval<boolean>(`(() => {
+            if (!document.querySelector('.cm-shuvix-fmcard')) return false
+            const els = [...document.querySelectorAll('.cm-shuvix-fmcard-slot')]
+            ${slots === undefined ? '' : `if (els.length !== ${slots}) return false`}
+            // 槽位里有子节点 = 宿主的 React root 已挂完（空槽位读文案只会读到空串）
+            return els.every((el) => el.childElementCount > 0)
+          })()`),
+        `frontmatter card ready${slots === undefined ? '' : ` (${slots} slots)`}`
+      )
+    },
     triggerText: (key) =>
       main.eval<string>(`(${SLOT(key)}?.querySelector('button')?.textContent ?? '').trim()`),
     slotButtons: (key) => main.eval<number>(`${SLOT(key)}?.querySelectorAll('button').length ?? 0`),

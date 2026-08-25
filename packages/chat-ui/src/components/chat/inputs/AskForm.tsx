@@ -1,6 +1,7 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import { FilePen, FileText, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useMemo } from 'react'
+import { BackgroundBadge } from '../BgTaskTag'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
@@ -115,7 +116,8 @@ export function AskForm({
   titleAccessory
 }: InputFormProps<AskInputRequest, AskDraft>): React.JSX.Element {
   const { t } = useTranslation()
-  const { command, description, pathIsDirectory, policyPrompt, preview, toolName } = request
+  const { command, description, pathIsDirectory, policyPrompt, preview, toolName, background } =
+    request
   const diffPreview = preview?.kind === 'diff' ? preview : null
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"整条路径。
@@ -177,6 +179,8 @@ export function AskForm({
                   : t('toolCall.pendingPathRead')
               : t('toolCall.pendingAsk')}
         </p>
+        {/* 后台任务标签 —— 与「跑完就完的命令」在视觉上分开：这条批准之后进程会一直活着 */}
+        {background && <BackgroundBadge />}
         <span className="flex-1" />
         {titleAccessory}
       </div>

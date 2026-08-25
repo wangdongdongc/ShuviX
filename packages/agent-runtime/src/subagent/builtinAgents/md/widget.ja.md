@@ -5,7 +5,7 @@ name: widget
 description: ShuviX Widget の作成・保守・エクスポート —— Widget パネルに常駐するミニ React アプリ。
 shuvix-tools: read, write, edit, ls, glob, grep, bash, git
 shuvix-displayName: Widget ビルダー
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

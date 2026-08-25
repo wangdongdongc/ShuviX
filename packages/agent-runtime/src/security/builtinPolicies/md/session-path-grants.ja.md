@@ -8,11 +8,11 @@ shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [path]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     action: [read]
     match: inDir(object.path, vars.grantedRead) || inDir(object.path, vars.grantedWrite)
     prompt: このパスはこのセッションで「許可して記憶」された。書き込み許可は読み取りも含む。
-  - effect: consent
+  - effect: force-allow
     action: [write]
     match: inDir(object.path, vars.grantedWrite)
     prompt: このパスはこのセッションで書き込みを許可された。

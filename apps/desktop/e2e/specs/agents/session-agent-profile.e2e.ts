@@ -290,10 +290,11 @@ describe('档案模型种子（shuvix-model）', () => {
     await setProfile(sid, 'modelprofile')
     await setModel(sid, 'openai', MODEL_B)
 
-    // 保留会话树的失效重建（message.clear 会连 model_change 一起删掉，测不到想测的东西）
-    await app.main.eval(
-      `window.api.session.updateInstructionFile({ id: ${JSON.stringify(sid)}, filename: null })`
-    )
+    // 保留会话树的失效重建（message.clear 会连 model_change 一起删掉，测不到想测的东西）：
+    // 切到一个**未声明模型**的档案 —— 它照样 invalidateAgent，但不往树上追加 model_change，
+    // 于是重建只能从树里读模型。（改制前这里借的是 updateInstructionFile，该 API 已随
+    // 「指令文件选取搬进 agent md」删除。）
+    await setProfile(sid, 'e2eprofile')
 
     expect(await treeModel(sid)).toEqual({ provider: 'openai', model: MODEL_B })
     expect((await runtimeInfo(sid)).model.id).toBe(MODEL_B)

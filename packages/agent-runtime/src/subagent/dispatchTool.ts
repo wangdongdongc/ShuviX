@@ -60,8 +60,9 @@ export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
     tools: [...def.tools],
     systemPrompt: def.systemPrompt,
     model: def.model,
-    instructionFiles: def.instructionFiles,
-    projectPrompt: def.projectPrompt
+    instructionFiles: [...def.instructionFiles],
+    projectPrompt: def.projectPrompt,
+    projectMemory: def.projectMemory
   }
 }
 

@@ -1,44 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  FolderOpen,
-  Plus,
-  Trash2,
-  Puzzle,
-  BookOpen,
-  Settings,
-  WifiOff,
-  Eye,
-  EyeOff
-} from 'lucide-react'
+import { Plus, Trash2, Puzzle, BookOpen, WifiOff, Eye, EyeOff } from 'lucide-react'
 import type { ToolItem } from '../common/ToolSelectList'
-import { SettingsSection, SettingsRow, Toggle, InlineInput } from '../settings/SettingsPrimitives'
-
-// ─── 基本信息：项目名称 ────────────────────────────────
-
-interface ProjectBasicInfoProps {
-  name: string
-  onNameChange: (name: string) => void
-}
-
-export function ProjectBasicInfo({ name, onNameChange }: ProjectBasicInfoProps): React.JSX.Element {
-  const { t } = useTranslation()
-  return (
-    <SettingsSection title={t('projectForm.basicInfoTitle')}>
-      <SettingsRow
-        title={t('projectForm.name')}
-        control={
-          <InlineInput
-            value={name}
-            onChange={onNameChange}
-            placeholder={t('projectForm.namePlaceholder')}
-            width={260}
-          />
-        }
-      />
-    </SettingsSection>
-  )
-}
+import { SettingsSection } from '../settings/SettingsPrimitives'
 
 // ─── 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） ───
 
@@ -67,255 +31,142 @@ export function ProjectSystemPromptGroup({
   )
 }
 
-// ─── 文件系统：路径 + 参考目录 ──────────────────
+// ─── 扩展能力：MCP / Skills 各一张卡 ───────────────────────
 
-interface ProjectFileSystemProps {
-  path: string
-  onSelectFolder: () => void
+interface ExtItem {
+  /** 勾选用的工具名（mcp:xxx / skill:xxx） */
+  key: string
+  /** 行内展示名（已去掉前缀） */
+  display: string
+  /** 右侧灰色描述 */
+  desc?: string
+  builtin?: boolean
+  offline?: boolean
 }
 
-export function ProjectFileSystem({
-  path,
-  onSelectFolder
-}: ProjectFileSystemProps): React.JSX.Element {
+interface ExtCardProps {
+  title: string
+  icon: React.ReactNode
+  /** 卡片标题色（MCP 紫 / Skills 绿） */
+  colorClass: string
+  items: ExtItem[]
+  enabledTools: string[]
+  onToggle: (toolName: string) => void
+}
+
+function ExtCard({
+  title,
+  icon,
+  colorClass,
+  items,
+  enabledTools,
+  onToggle
+}: ExtCardProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <SettingsSection title={t('projectForm.folders')}>
-      {/* 项目文件夹 */}
-      {path ? (
-        <div className="group/row flex items-center gap-2 px-4 py-2.5 hover:bg-bg-hover/40 transition-colors">
-          <FolderOpen size={11} className="text-text-tertiary shrink-0" />
-          <span className="text-[12px] font-mono text-text-primary truncate flex-1" title={path}>
-            {path.split('/').pop() || path}
-          </span>
-          <button
-            onClick={onSelectFolder}
-            className="text-[11px] text-text-tertiary opacity-0 group-hover/row:opacity-100 hover:!text-accent transition-all shrink-0"
-          >
-            {t('projectForm.changeFolder')}
-          </button>
-        </div>
+    <SettingsSection
+      title={
+        <span className={`inline-flex items-center gap-1.5 ${colorClass}`}>
+          {icon}
+          {title}
+        </span>
+      }
+    >
+      {items.length === 0 ? (
+        <div className="px-4 py-4 text-center text-[11px] text-text-tertiary">—</div>
       ) : (
-        <div className="px-4 py-3">
-          <button
-            onClick={onSelectFolder}
-            className="flex items-center gap-1 text-[11px] text-accent hover:bg-accent/10 transition-colors px-2 py-1 rounded"
+        items.map((it) => (
+          <label
+            key={it.key}
+            className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-bg-hover/40 transition-colors"
           >
-            <Plus size={11} />
-            {t('projectForm.selectFolder')}
-          </button>
-        </div>
+            <input
+              type="checkbox"
+              checked={enabledTools.includes(it.key)}
+              onChange={() => onToggle(it.key)}
+              className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
+            />
+            {it.builtin && (
+              <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
+                {t('input.skillBuiltinBadge')}
+              </span>
+            )}
+            <span
+              className={`text-[12px] font-mono whitespace-nowrap shrink-0 ${
+                it.offline ? 'text-error' : 'text-text-primary'
+              }`}
+            >
+              {it.display}
+            </span>
+            {it.offline && (
+              <WifiOff
+                size={10}
+                className="text-error shrink-0"
+                aria-label={t('settings.mcpStatusDisconnected')}
+              />
+            )}
+            {it.desc && (
+              <span className="text-[11px] text-text-tertiary truncate flex-1 min-w-0">
+                {it.desc}
+              </span>
+            )}
+          </label>
+        ))
       )}
     </SettingsSection>
   )
 }
 
-// ─── 扩展能力：MCP + Skills 选择面板 ────────────────────
-
-interface ExtensionsPanelProps {
+interface ProjectExtensionsSectionProps {
   mcpTools: ToolItem[]
   skillTools: ToolItem[]
   enabledTools: string[]
   onToggle: (toolName: string) => void
-  onOpenSettings: () => void
 }
 
-export function ExtensionsPanel({
+export function ProjectExtensionsSection({
   mcpTools,
   skillTools,
   enabledTools,
-  onToggle,
-  onOpenSettings
-}: ExtensionsPanelProps): React.JSX.Element {
-  const { t } = useTranslation()
-  const hasMcpOrSkills = mcpTools.length > 0 || skillTools.length > 0
-
-  if (!hasMcpOrSkills) {
-    return (
-      <div className="space-y-5">
-        <p className="text-[11px] text-text-tertiary leading-relaxed px-1">
-          {t('projectForm.extEmptyDesc')}
-        </p>
-        <SettingsSection
-          title={
-            <span className="inline-flex items-center gap-1.5">
-              <Puzzle size={12} className="text-purple-400" />
-              MCP Server
-            </span>
-          }
-        >
-          <div className="px-4 py-3 space-y-2">
-            <p className="text-[11px] text-text-tertiary leading-relaxed">
-              {t('projectForm.extMcpDesc')}
-            </p>
-            <button
-              onClick={onOpenSettings}
-              className="inline-flex items-center gap-1.5 text-[11px] text-accent hover:bg-accent/10 px-2 py-1 rounded transition-colors"
-            >
-              <Settings size={11} />
-              {t('projectForm.extGoSettings')}
-            </button>
-          </div>
-        </SettingsSection>
-        <SettingsSection
-          title={
-            <span className="inline-flex items-center gap-1.5">
-              <BookOpen size={12} className="text-emerald-400" />
-              Skills
-            </span>
-          }
-        >
-          <div className="px-4 py-3 space-y-2">
-            <p className="text-[11px] text-text-tertiary leading-relaxed">
-              {t('projectForm.extSkillDesc')}
-            </p>
-            <button
-              onClick={onOpenSettings}
-              className="inline-flex items-center gap-1.5 text-[11px] text-accent hover:bg-accent/10 px-2 py-1 rounded transition-colors"
-            >
-              <Settings size={11} />
-              {t('projectForm.extGoSettings')}
-            </button>
-          </div>
-        </SettingsSection>
-      </div>
-    )
-  }
+  onToggle
+}: ProjectExtensionsSectionProps): React.JSX.Element {
+  const mcpItems: ExtItem[] = mcpTools.map((tool) => ({
+    key: tool.name,
+    display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
+    desc: tool.label,
+    builtin: tool.isBuiltin,
+    offline: tool.serverStatus !== 'connected'
+  }))
+  const skillItems: ExtItem[] = skillTools.map((tool) => {
+    const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
+    const builtin = short.startsWith('builtin:')
+    return {
+      key: tool.name,
+      display: builtin ? short.slice('builtin:'.length) : short,
+      desc: tool.label,
+      builtin
+    }
+  })
 
   return (
-    <div className="space-y-5">
-      <p className="text-[11px] text-text-tertiary leading-relaxed px-1">
-        {t('projectForm.extAvailableDesc')}
-      </p>
-
-      {mcpTools.length > 0 && (
-        <SettingsSection
-          title={
-            <span className="inline-flex items-center gap-1.5 text-purple-400">
-              <Puzzle size={12} />
-              MCP
-            </span>
-          }
-        >
-          {mcpTools.map((tool) => {
-            const isOnline = tool.serverStatus === 'connected'
-            const serverName = tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name
-            return (
-              <label
-                key={tool.name}
-                className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-bg-hover/40 transition-colors"
-              >
-                <input
-                  type="checkbox"
-                  checked={enabledTools.includes(tool.name)}
-                  onChange={() => onToggle(tool.name)}
-                  className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
-                />
-                {tool.isBuiltin && (
-                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
-                    {t('input.skillBuiltinBadge')}
-                  </span>
-                )}
-                <span
-                  className={`text-[12px] font-mono whitespace-nowrap shrink-0 ${
-                    isOnline ? 'text-text-primary' : 'text-error'
-                  }`}
-                >
-                  {serverName}
-                </span>
-                {!isOnline && (
-                  <span
-                    className="flex items-center gap-0.5 text-[10px] text-error shrink-0"
-                    title={t('settings.mcpStatusDisconnected')}
-                  >
-                    <WifiOff size={10} />
-                  </span>
-                )}
-                {tool.label && (
-                  <span className="text-[11px] text-text-tertiary truncate flex-1 min-w-0">
-                    {tool.label}
-                  </span>
-                )}
-              </label>
-            )
-          })}
-        </SettingsSection>
-      )}
-
-      {skillTools.length > 0 && (
-        <SettingsSection
-          title={
-            <span className="inline-flex items-center gap-1.5 text-emerald-400">
-              <BookOpen size={12} />
-              Skills
-            </span>
-          }
-        >
-          {skillTools.map((tool) => {
-            const short = tool.name.startsWith('skill:') ? tool.name.slice(6) : tool.name
-            const builtin = short.startsWith('builtin:')
-            const label = builtin ? short.slice('builtin:'.length) : short
-            return (
-              <label
-                key={tool.name}
-                className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-bg-hover/40 transition-colors"
-              >
-                <input
-                  type="checkbox"
-                  checked={enabledTools.includes(tool.name)}
-                  onChange={() => onToggle(tool.name)}
-                  className="rounded border-border-primary accent-accent w-3.5 h-3.5 shrink-0"
-                />
-                {builtin && (
-                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-normal text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
-                    {t('input.skillBuiltinBadge')}
-                  </span>
-                )}
-                <span className="text-[12px] font-mono text-text-primary whitespace-nowrap shrink-0">
-                  {label}
-                </span>
-                {tool.label && (
-                  <span className="text-[11px] text-text-tertiary truncate flex-1 min-w-0">
-                    {tool.label}
-                  </span>
-                )}
-              </label>
-            )
-          })}
-        </SettingsSection>
-      )}
-
-      <button
-        onClick={onOpenSettings}
-        className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-accent transition-colors px-1"
-      >
-        <Settings size={12} />
-        {t('projectForm.extGoSettings')}
-      </button>
-    </div>
-  )
-}
-
-// ─── 高级：pglite 持久化开关 ────────────────────────────
-
-interface ProjectPgLiteSectionProps {
-  pglitePersist: boolean
-  onChange: (v: boolean) => void
-}
-
-export function ProjectPgLiteSection({
-  pglitePersist,
-  onChange
-}: ProjectPgLiteSectionProps): React.JSX.Element {
-  const { t } = useTranslation()
-  return (
-    <SettingsSection title={t('projectForm.pglitePersistSection')}>
-      <SettingsRow
-        title={t('projectForm.pglitePersistLabel')}
-        description={t('projectForm.pglitePersistDesc')}
-        control={<Toggle on={pglitePersist} onClick={() => onChange(!pglitePersist)} />}
+    <>
+      <ExtCard
+        title="MCP"
+        icon={<Puzzle size={12} />}
+        colorClass="text-purple-400"
+        items={mcpItems}
+        enabledTools={enabledTools}
+        onToggle={onToggle}
       />
-    </SettingsSection>
+      <ExtCard
+        title="Skills"
+        icon={<BookOpen size={12} />}
+        colorClass="text-emerald-400"
+        items={skillItems}
+        enabledTools={enabledTools}
+        onToggle={onToggle}
+      />
+    </>
   )
 }
 

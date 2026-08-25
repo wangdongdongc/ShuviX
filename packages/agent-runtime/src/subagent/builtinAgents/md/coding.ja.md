@@ -5,8 +5,9 @@ name: coding
 description: コーディングエージェント——フルツールチェーン（shell、SSH、データベース、ブラウザ）と複数ファイルにまたがるコード作業の作法。/coding でセッションを切り替えます。
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: コーディング
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
+shuvix-project-memory: true
 ---
 
 ## アイデンティティ

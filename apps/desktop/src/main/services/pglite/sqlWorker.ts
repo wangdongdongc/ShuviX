@@ -1,31 +1,23 @@
 /**
  * SQL Worker — 在 worker_threads 中运行 PGLite (Postgres WASM) 运行时
- * 支持多语句执行、扩展加载、NODEFS 文件系统挂载
+ *
+ * 恒持久化（dataDir 必传），不挂载宿主文件系统 —— 唯一消费者是 widget 共享库。
  */
 
 import { parentPort } from 'worker_threads'
-import { platform } from 'process'
-
-/** 将宿主机路径转换为 Emscripten POSIX 虚拟文件系统挂载点路径 */
-function toEmscriptenPath(hostPath: string): string {
-  if (platform !== 'win32') return hostPath
-  return '/' + hostPath.replace(/\\/g, '/').replace(':', '')
-}
 
 // ---- 消息协议 ----
 
 interface InitMessage {
   type: 'init'
-  mounts: MountConfig[]
-  /** 持久化存储目录（不传则使用内存模式） */
-  dataDir?: string
+  /** 持久化存储目录 */
+  dataDir: string
 }
 
 interface ExecuteMessage {
   type: 'execute'
   id: string
   sql: string
-  extensions?: string[]
 }
 
 /** 参数化结构化查询 —— 返回行数组而非 psql 文本 */
@@ -34,11 +26,6 @@ interface QueryMessage {
   id: string
   sql: string
   params?: unknown[]
-}
-
-export interface MountConfig {
-  hostPath: string
-  access: 'readonly' | 'readwrite'
 }
 
 export interface QueryField {
@@ -63,24 +50,6 @@ export interface WorkerResponse {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any = null
-
-/** 递归创建目录 */
-function mkdirRecursive(fs: { stat(p: string): void; mkdir(p: string): void }, path: string): void {
-  const parts = path.split('/').filter(Boolean)
-  let current = ''
-  for (const part of parts) {
-    current += '/' + part
-    try {
-      fs.stat(current)
-    } catch {
-      try {
-        fs.mkdir(current)
-      } catch {
-        // 已存在
-      }
-    }
-  }
-}
 
 /** 格式化单个结果集为类 psql 文本表格 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,7 +102,7 @@ function formatResultSet(result: any): string {
   return parts.join('\n')
 }
 
-async function init(mounts: MountConfig[], dataDir?: string): Promise<void> {
+async function init(dataDir: string): Promise<void> {
   // 动态导入 PGLite 及扩展
   const { PGlite } = await import('@electric-sql/pglite')
   const { vector } = await import('@electric-sql/pglite/vector')
@@ -150,7 +119,7 @@ async function init(mounts: MountConfig[], dataDir?: string): Promise<void> {
   const { unaccent } = await import('@electric-sql/pglite/contrib/unaccent')
 
   db = new PGlite({
-    ...(dataDir ? { dataDir } : {}),
+    dataDir,
     extensions: {
       vector,
       pg_trgm,
@@ -168,25 +137,6 @@ async function init(mounts: MountConfig[], dataDir?: string): Promise<void> {
   })
 
   await db.waitReady
-
-  // 挂载宿主文件系统（路径与宿主一致）
-  if (mounts.length > 0) {
-    try {
-      const FS = db.Module.FS
-      const NODEFS = FS.filesystems.NODEFS
-      for (const mount of mounts) {
-        const mountPoint = toEmscriptenPath(mount.hostPath)
-        mkdirRecursive(FS, mountPoint)
-        FS.mount(NODEFS, { root: mount.hostPath }, mountPoint)
-      }
-    } catch (err) {
-      // 挂载失败不阻塞初始化
-      parentPort!.postMessage({
-        type: 'error',
-        error: `Warning: failed to mount filesystem: ${err instanceof Error ? err.message : String(err)}`
-      } satisfies WorkerResponse)
-    }
-  }
 
   parentPort!.postMessage({ type: 'ready' } satisfies WorkerResponse)
 }
@@ -242,7 +192,7 @@ async function query(id: string, sql: string, params?: unknown[]): Promise<void>
   }
 }
 
-async function execute(id: string, sql: string, extensions?: string[]): Promise<void> {
+async function execute(id: string, sql: string): Promise<void> {
   if (!db) {
     parentPort!.postMessage({
       type: 'error',
@@ -250,22 +200,6 @@ async function execute(id: string, sql: string, extensions?: string[]): Promise<
       error: 'PGLite runtime not initialized'
     } satisfies WorkerResponse)
     return
-  }
-
-  // 加载请求的扩展
-  if (extensions && extensions.length > 0) {
-    try {
-      for (const ext of extensions) {
-        await db.exec(`CREATE EXTENSION IF NOT EXISTS "${ext}"`)
-      }
-    } catch (err: unknown) {
-      parentPort!.postMessage({
-        type: 'error',
-        id,
-        error: `Failed to load extensions: ${err instanceof Error ? err.message : String(err)}`
-      } satisfies WorkerResponse)
-      return
-    }
   }
 
   try {
@@ -312,7 +246,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage | QueryMessage) => 
   if (msg.type === 'init') {
     execQueue = execQueue.then(async () => {
       try {
-        await init(msg.mounts, msg.dataDir)
+        await init(msg.dataDir)
       } catch (err: unknown) {
         parentPort!.postMessage({
           type: 'error',
@@ -321,7 +255,7 @@ parentPort!.on('message', (msg: InitMessage | ExecuteMessage | QueryMessage) => 
       }
     })
   } else if (msg.type === 'execute') {
-    execQueue = execQueue.then(() => execute(msg.id, msg.sql, msg.extensions))
+    execQueue = execQueue.then(() => execute(msg.id, msg.sql))
   } else if (msg.type === 'query') {
     execQueue = execQueue.then(() => query(msg.id, msg.sql, msg.params))
   }

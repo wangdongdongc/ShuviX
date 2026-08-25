@@ -156,9 +156,19 @@ export class AgentSession {
     await this.runtime.steer(text)
   }
 
+  /** 送达系统侧通知（运行中即刻插话，空闲则搭下一条用户消息的便车） */
+  async notify(text: string): Promise<void> {
+    await this.runtime.notify(text)
+  }
+
   /** 本轮结束前追加消息，继续同一次运行（harness 新增能力） */
   async followUp(text: string): Promise<void> {
     await this.runtime.followUp(text)
+  }
+
+  /** 排队到下一次 prompt 之前（harness 新增能力；不被 abort 清空） */
+  async nextTurn(text: string): Promise<void> {
+    await this.runtime.nextTurn(text)
   }
 
   /** 中止生成 */
@@ -244,9 +254,16 @@ export class AgentSession {
 
   // ─── 生命周期 ──────────────────────────────────────
 
-  /** 使 Agent 失效（回退时使用，下次 init 会重建）。 */
+  /**
+   * 使 Agent 失效（回退时使用，下次 init 会重建）。
+   *
+   * 这里的运行时**被弃用**（下次 ensure 重建一个新的），故必须从运行时注册中心注销 ——
+   * 漏注销会在监控页留下一个指向死 harness 的条目。派生 agent 不受影响：它们不随
+   * 根运行时重建而失效。
+   */
   invalidate(): void {
     void this.runtime.abort()
+    this.created.dispose()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`invalidate session=${this.sessionId}`)
@@ -255,6 +272,7 @@ export class AgentSession {
   /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
   destroy(): void {
     void this.runtime.abort()
+    this.created.dispose()
     clearFileTimeSession(this.sessionId)
     clearSessionDecisions(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})

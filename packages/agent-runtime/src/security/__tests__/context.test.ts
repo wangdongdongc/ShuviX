@@ -1,5 +1,5 @@
 /**
- * createSecurityContext（PEP 门面）全链 —— evaluateReadOnly 的 consent 缺省、
+ * createSecurityContext（PEP 门面）全链 —— evaluateReadOnly 的 force-allow 缺省、
  * enforce 的 action/displayPath 转发、禁缓存红线（grants 变化即生效）、
  * L1 全工具门的 allow 即非事件。
  */
@@ -52,6 +52,7 @@ function makeProvider(
       workspace: '/ws',
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
+      memoryDirs: [],
       home: '/home/u',
       systemDirs: []
     }),
@@ -63,16 +64,16 @@ function makeProvider(
 afterEach(() => clearSessionDecisions(SID))
 
 describe('createSecurityContext', () => {
-  it('CT-1 evaluateReadOnly 缺省排除 consent；{includeConsent:true} 翻转；返回 boolean', () => {
+  it('CT-1 evaluateReadOnly 缺省排除 force-allow；{includeForceAllow:true} 翻转；返回 boolean', () => {
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
       makeProvider({ autoAllow: true, allowList: [] })
     )
-    // 凭据目录读取有内置 ask 门（protect-credentials）：consent 缺省不纳入 → 不放行
+    // 凭据目录读取有内置 ask 门（protect-credentials）：force-allow 缺省不纳入 → 不放行
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/id_rsa' }
     expect(ctx.evaluateReadOnly('read', credential)).toBe(false)
-    expect(ctx.evaluateReadOnly('read', credential, { includeConsent: true })).toBe(true)
+    expect(ctx.evaluateReadOnly('read', credential, { includeForceAllow: true })).toBe(true)
     expect(typeof ctx.evaluateReadOnly('read', credential)).toBe('boolean')
 
     // 工作区内读取自由（ask-on-read 的取反放过）；工作区外被内置读取门拦下
@@ -269,7 +270,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     expect(requestUserInput).not.toHaveBeenCalled()
   })
 
-  it('CT-T1b allow 即非事件：autoAllow=true（consent 恒命中）→ 仍 allowed 且无日志、无弹窗', async () => {
+  it('CT-T1b allow 即非事件：autoAllow=true（force-allow 恒命中）→ 仍 allowed 且无日志、无弹窗', async () => {
     const requestUserInput = rejectingChannel()
     const ctx = createSecurityContext(
       SUBJECT,
@@ -428,7 +429,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
   }
 
   it('CT-4 action/objectKind = execute/database；tool 维度取自 opts.toolName（tool.name 规则可命中）', async () => {
-    // autoAllow 抵消内置 ask-on-database 的 ask，只留用户规则的按工具 deny（deny 压过 consent）
+    // autoAllow 抵消内置 ask-on-database 的 ask，只留用户规则的按工具 deny（deny 压过 force-allow）
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
@@ -447,7 +448,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     await expect(
       ctx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS, toolCallId: 'tc-db1' })
     ).rejects.toThrow("Denied by security policy rule 'db-tool-gate#0'")
-    // 同一客体换工具名：tool 维度不再命中 → consent 放行
+    // 同一客体换工具名：tool 维度不再命中 → force-allow 放行
     await expect(
       ctx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS, toolCallId: 'tc-db2', toolName: 'bash' })
     ).resolves.toEqual({ status: 'allowed' })
@@ -520,7 +521,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     expect(requestUserInput).not.toHaveBeenCalled()
   })
 
-  it('CT-6 只读连接的 allow 是事件（与 L1 非事件相反）：放行且落一条 allow 日志、不弹窗；autoAllow 归因 consent', async () => {
+  it('CT-6 只读连接的 allow 是事件（与 L1 非事件相反）：放行且落一条 allow 日志、不弹窗；autoAllow 归因 force-allow', async () => {
     const requestUserInput = rejectingChannel()
     const ctx = createSecurityContext(
       SUBJECT,
@@ -543,7 +544,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     expect(logs[0].userResponse).toBeUndefined()
     clearSessionDecisions(SID)
 
-    // 可写连接 + 免询问：同样放行，但归因 consent
+    // 可写连接 + 免询问：同样放行，但归因 force-allow
     const autoCtx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
@@ -639,6 +640,7 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       workspace: '/ws',
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
+      memoryDirs: [],
       home: '/home/u',
       systemDirs: [],
       blocked: '/ws/a'
@@ -784,10 +786,10 @@ describe('createSecurityContext — 结构化条件 × 策略级 scope（端到�
 })
 
 /**
- * 用户策略写 `effect: consent` —— 与内置会话授权同一层：压得过询问门、输给 deny。
- * 用户来源没有额外限制（consent 不是内置专属），这几条端到端钉住那条结算偏序。
+ * 用户策略写 `effect: force-allow` —— 与内置会话授权同一层：压得过询问门、输给 deny。
+ * 用户来源没有额外限制（force-allow 不是内置专属），这几条端到端钉住那条结算偏序。
  */
-describe('createSecurityContext — 用户策略的 consent（端到端）', () => {
+describe('createSecurityContext — 用户策略的 force-allow（端到端）', () => {
   const scopedPolicy = (
     name: string,
     scope: ParsedPolicyFile['scope'],
@@ -808,18 +810,18 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
       makeProvider(grants, { getUserPolicies: () => policies })
     )
 
-  it('CU-1 旗舰：用户 consent 局部放宽读取门 —— /data 读放行归因用户规则，区外读与 /data 写照旧 ask', () => {
+  it('CU-1 旗舰：用户 force-allow 局部放宽读取门 —— /data 读放行归因用户规则，区外读与 /data 写照旧 ask', () => {
     const ctx = contextWith([
       pathPolicy('trust-data', [
         {
-          effect: 'consent',
+          effect: 'force-allow',
           conditions: { action: ['read'] },
           match: "inDir(object.path, '/data')"
         }
       ])
     ])
 
-    // /data 读：consent 压过内置 ask-on-read → allow，归因到用户规则
+    // /data 读：force-allow 压过内置 ask-on-read → allow，归因到用户规则
     const granted = ctx.evaluate('read', { type: 'path', path: '/data/x.txt' })
     expect(granted.effect).toBe('allow')
     expect(granted.winning).toBe('trust-data#0')
@@ -831,17 +833,17 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
     expect(elsewhere.effect).toBe('ask')
     expect(elsewhere.winning).toBe('ask-on-read#0')
 
-    // 放宽是按 action 的：同一目录的写入不受这条 read consent 影响
+    // 放宽是按 action 的：同一目录的写入不受这条 read force-allow 影响
     const write = ctx.evaluate('write', { type: 'path', path: '/data/x.txt' })
     expect(write.effect).toBe('ask')
     expect(write.winning).toBe('ask-on-write#0')
   })
 
-  it('CU-2 用户 consent 压不过内置 deny：~/.ssh 写入仍 deny，归因 protect-credentials#0', () => {
+  it('CU-2 用户 force-allow 压不过内置 deny：~/.ssh 写入仍 deny，归因 protect-credentials#0', () => {
     const ctx = contextWith([
       pathPolicy('trust-ssh', [
         {
-          effect: 'consent',
+          effect: 'force-allow',
           conditions: { action: ['write'] },
           match: "inDir(object.path, vars.home + '/.ssh')"
         }
@@ -851,16 +853,16 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
     const decision = ctx.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })
     expect(decision.effect).toBe('deny')
     expect(decision.winning).toBe('protect-credentials#0')
-    // consent 规则确实命中了（是被 deny 压过，而不是没匹配上）
+    // force-allow 规则确实命中了（是被 deny 压过，而不是没匹配上）
     expect(decision.matched).toContain('trust-ssh#0')
   })
 
-  it('CU-3 同文件 ask 在前、consent 在后 → 仍 allow：优先序由 tier 决定，不是书写顺序', () => {
+  it('CU-3 同文件 ask 在前、force-allow 在后 → 仍 allow：优先序由 tier 决定，不是书写顺序', () => {
     const ctx = contextWith([
       pathPolicy('order-probe', [
         { effect: 'ask', conditions: { action: ['read'] }, match: "inDir(object.path, '/data')" },
         {
-          effect: 'consent',
+          effect: 'force-allow',
           conditions: { action: ['read'] },
           match: "inDir(object.path, '/data')"
         }
@@ -870,17 +872,46 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
     const decision = ctx.evaluate('read', { type: 'path', path: '/data/x.txt' })
     expect(decision.effect).toBe('allow')
     expect(decision.winning).toBe('order-probe#1')
-    // matched 按 tier 序：consent 在前、ask 在后（与书写顺序相反）
+    // matched 按 tier 序：force-allow 在前、ask 在后（与书写顺序相反）
     expect(decision.matched.indexOf('order-probe#1')).toBeLessThan(
       decision.matched.indexOf('order-probe#0')
     )
   })
 
-  it('CU-4 evaluateReadOnly 缺省丢弃所有 consent（用户策略也不例外）；{includeConsent:true} 翻转', () => {
+  it('CU-F1 旗舰：用户 force-ask 让特定文件在免询问开着时仍然询问，且不给「允许并记住」', () => {
+    // 需求原型：某些文件始终要过目一次，免询问开关对它不生效
+    const ctx = contextWith(
+      [
+        pathPolicy('guard-prod', [
+          { effect: 'force-ask', match: "inDir(object.path, '/data/prod')" }
+        ])
+      ],
+      { autoAllow: true, allowList: ['Read(/data/prod)'] }
+    )
+
+    // 免询问开着 + 该路径还「允许并记住」过 —— 两条 force-allow 都命中，仍然 ask
+    const guarded = ctx.evaluate('read', { type: 'path', path: '/data/prod/secrets.env' })
+    expect(guarded.effect).toBe('ask')
+    expect(guarded.winning).toBe('guard-prod#0')
+    expect(guarded.matched).toContain('session-auto-allow#0')
+    expect(guarded.matched).toContain('session-path-grants#0')
+    // 记忆入口不给：那条授权落在 force-allow 层，点了也压不过这道门
+    expect(guarded.ask?.rememberEntry).toBeUndefined()
+
+    // 对照：策略没覆盖的路径照旧被免询问放行
+    const elsewhere = ctx.evaluate('read', { type: 'path', path: '/data/other/x.txt' })
+    expect(elsewhere.effect).toBe('allow')
+
+    // 对照：force-ask 压不过 deny —— 凭据目录写入仍是拒绝
+    const denied = ctx.evaluate('write', { type: 'path', path: '/home/u/.ssh/id_rsa' })
+    expect(denied.effect).toBe('deny')
+  })
+
+  it('CU-4 evaluateReadOnly 缺省丢弃所有 force-allow（用户策略也不例外）；{includeForceAllow:true} 翻转', () => {
     const ctx = contextWith([
       pathPolicy('trust-data', [
         {
-          effect: 'consent',
+          effect: 'force-allow',
           conditions: { action: ['read'] },
           match: "inDir(object.path, '/data')"
         }
@@ -888,10 +919,10 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
     ])
     const target: SecurityObject = { type: 'path', path: '/data/x.txt' }
 
-    // 按 tier 过滤而非按来源：用户 md 里写死的 consent 同样被丢弃（EvaluateOpts 的显式契约）
+    // 按 tier 过滤而非按来源：用户 md 里写死的 force-allow 同样被丢弃（EvaluateOpts 的显式契约）
     expect(ctx.evaluateReadOnly('read', target)).toBe(false)
-    expect(ctx.evaluateReadOnly('read', target, { includeConsent: true })).toBe(true)
-    // 对照：主动评估（evaluate）缺省纳入 consent
+    expect(ctx.evaluateReadOnly('read', target, { includeForceAllow: true })).toBe(true)
+    // 对照：主动评估（evaluate）缺省纳入 force-allow
     expect(ctx.evaluate('read', target).effect).toBe('allow')
   })
 
@@ -901,7 +932,7 @@ describe('createSecurityContext — 用户策略的 consent（端到端）', () 
       [
         scopedPolicy('session-auto-allow', { 'subject.kind': ['agent'] }, [
           {
-            effect: 'consent',
+            effect: 'force-allow',
             conditions: { action: ['read', 'execute'] },
             match: 'vars.autoAllow'
           }
@@ -967,6 +998,7 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       workspace: '/ws',
       toolResultsBase: '/tool-results',
       skillsDirs: ['/skills'],
+      memoryDirs: [],
       home: '/home/u',
       systemDirs: [] as string[]
     }))

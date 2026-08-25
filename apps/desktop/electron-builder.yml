@@ -19,8 +19,6 @@ files:
 extraResources:
   - from: resources/bundler
     to: bundler
-  - from: resources/skills
-    to: skills
   # CLI shim 必须以可执行文件形式落到磁盘（不能藏在 asar 里），
   # extraResources 默认就在 Resources/ 下，路径保留 +x 权限
   - from: resources/cli

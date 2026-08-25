@@ -5,7 +5,7 @@ name: visualization
 description: 作業ディレクトリに Mermaid チャートファイル(*-graph.md)を作成・維持します。
 shuvix-tools: read, ls, glob, grep, write, edit, ask, preview
 shuvix-displayName: 可視化
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

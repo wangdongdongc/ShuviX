@@ -5,7 +5,7 @@ name: wiki
 description: 'Conversational front for the local wiki knowledge base: search it, discuss it, delegate every change.'
 shuvix-tools: read, grep, glob, ls, ask, agent
 shuvix-displayName: Knowledge Base
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

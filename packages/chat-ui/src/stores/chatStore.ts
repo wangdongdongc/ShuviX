@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
+import type { ChatQueuedMessage } from '@shuvix/chat-protocol/events'
 export type {
   ToolPresentation,
   ToolFormItem,
@@ -63,8 +64,6 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
-  /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
-  instructionFile?: string | null
   /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
@@ -259,6 +258,8 @@ interface ChatState {
    * 选中项被 resolve 后清除,选择器回落到列表首条。
    */
   sessionActiveInputId: Record<string, string>
+  /** 各 session 的 pi 消息队列快照（queue_update 事件镜像；只读） */
+  sessionQueues: Record<string, SessionQueueSnapshot>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -340,6 +341,8 @@ interface ChatState {
   setInputDraft: (sessionId: string, requestId: string, draft: unknown) => void
   /** 选中某条 pending 请求(待处理面板的步进器) */
   setActiveInputId: (sessionId: string, requestId: string) => void
+  /** 整体替换某会话的队列快照（queue_update 事件唯一写入点） */
+  setSessionQueue: (sessionId: string, queue: SessionQueueSnapshot) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /**
@@ -432,6 +435,30 @@ export const selectCompletedStreamingToolCalls = (
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
+/**
+ * 某会话三条 pi 消息队列的只读快照。
+ *
+ * 队列由 pi 独占：只能入队，没有出队/改序/改档 —— 前端只镜像不操作。
+ * harness 每次变动都重发全量，所以整体替换即可。
+ */
+export interface SessionQueueSnapshot {
+  steer: ChatQueuedMessage[]
+  followUp: ChatQueuedMessage[]
+  nextTurn: ChatQueuedMessage[]
+}
+
+const EMPTY_QUEUE: SessionQueueSnapshot = { steer: [], followUp: [], nextTurn: [] }
+
+/** 当前会话的队列快照（无队列时返回稳定的空对象引用，可安全用作 selector） */
+export const selectSessionQueue = (s: ChatState): SessionQueueSnapshot =>
+  (s.activeSessionId ? s.sessionQueues[s.activeSessionId] : undefined) ?? EMPTY_QUEUE
+
+/** 队列总条数 */
+export const selectSessionQueueCount = (s: ChatState): number => {
+  const q = selectSessionQueue(s)
+  return q.steer.length + q.followUp.length + q.nextTurn.length
+}
+
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
 export const selectPendingInputs = (s: ChatState): InputRequest[] =>
@@ -494,6 +521,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionPendingInputs: {},
   sessionInputDrafts: {},
   sessionActiveInputId: {},
+  sessionQueues: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
@@ -850,6 +878,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessionActiveInputId: { ...state.sessionActiveInputId, [sessionId]: requestId }
     })),
+
+  setSessionQueue: (sessionId, queue) =>
+    set((state) => {
+      const empty = !queue.steer.length && !queue.followUp.length && !queue.nextTurn.length
+      // 三条都空时删键而不是存空对象 —— 选择器回落到稳定的 EMPTY_QUEUE 引用
+      if (empty) {
+        if (!state.sessionQueues[sessionId]) return {}
+        const rest = { ...state.sessionQueues }
+        delete rest[sessionId]
+        return { sessionQueues: rest }
+      }
+      return { sessionQueues: { ...state.sessionQueues, [sessionId]: queue } }
+    }),
 
   flushStreamingDeltas: (buffers) =>
     set((state) => {

@@ -5,8 +5,9 @@ name: default
 description: The main conversation agent — every chat session is created from this profile. Override it with a custom agent named "default" to customize the main conversation.
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: Default
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
+shuvix-project-memory: true
 ---
 
 ## Identity

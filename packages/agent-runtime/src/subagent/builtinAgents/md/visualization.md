@@ -5,7 +5,7 @@ name: visualization
 description: Creates and maintains Mermaid chart files (*-graph.md) in the working directory.
 shuvix-tools: read, ls, glob, grep, write, edit, ask, preview
 shuvix-displayName: Visualization
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

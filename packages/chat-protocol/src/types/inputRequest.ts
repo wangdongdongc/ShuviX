@@ -85,6 +85,12 @@ export interface AskInputRequest extends InputRequestBase {
   pathIsDirectory?: boolean
   /** 预览询问载荷:有则前端渲染预览(如 write/edit 的 diff)而非光秃秃的路径 */
   preview?: AskPreview
+  /**
+   * 该命令将作为**后台任务**运行（bash 的 run_in_background）。
+   * 卡片上标一个标签 —— 用户批准的是一个不会自动结束、要自己去停的进程，
+   * 这跟批准一条跑完就完的命令不是一回事，不该长得一模一样。
+   */
+  background?: boolean
 }
 
 export interface ChoiceInputRequest extends InputRequestBase {

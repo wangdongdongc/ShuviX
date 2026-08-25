@@ -5,7 +5,7 @@ name: wiki
 description: 本地 wiki 知识库的对话入口:检索、讨论,并把每一次变更派发出去。
 shuvix-tools: read, grep, glob, ls, ask, agent
 shuvix-displayName: 知识库
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

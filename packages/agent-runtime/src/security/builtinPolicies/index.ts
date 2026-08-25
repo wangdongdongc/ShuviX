@@ -6,13 +6,14 @@
  * protect-credentials（凭据写 deny + 读 ask）/ protect-system（系统目录写 deny，
  * 原 pathSafety hook 的策略化替身）/ block-catastrophic-commands（毁灭整机的
  * 少数命令写法直接 deny，原 bash-audit 内置 hook 的策略化替身）/ ask-on-read（工作区外读取门）/
- * ask-on-write（写入询问门）/ ask-on-command（命令询问门）/ git-safety
+ * ask-on-write（写入询问门）/ review-memory-writes（记忆写入 force-ask —— 免询问也照问）/
+ * ask-on-command（命令询问门）/ git-safety
  * （git 危险操作门，含 checkout&&force / branch&&delete 的参数级细化）/
  * ask-on-database（可写数据库连接的逐条查询询问）——
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门。
  *
  * 出厂内容**不只有防护**：session-auto-allow 与 session-path-grants 用
- * `effect: consent` 表达会话授权（免询问开关 / 「允许并记住」）。它们曾是引擎里写死的
+ * `effect: force-allow` 表达会话授权（免询问开关 / 「允许并记住」）。它们曾是引擎里写死的
  * 第四层规则来源，下沉成 md 后同样可见、可覆盖、可移除；授权条目本身仍是会话数据，
  * 经 vars.autoAllow / vars.grantedRead / vars.grantedWrite 进来（见 policyVars.ts）。
  *
@@ -28,9 +29,9 @@
  * 而不是静默改变安全语义）。prompt 破这个例是因为它本就是给人读的一句话，
  * 留在 en 等于让中/日用户在询问卡片上读英文。
  *
- * **书写约定**（引擎不强制，仅约束这十份范本）：规则的 `prompt` 按投递面分口吻 ——
+ * **书写约定**（引擎不强制，仅约束这十一份范本）：规则的 `prompt` 按投递面分口吻 ——
  * ask 门写给用户（这一步的风险），deny 门写给 agent（被拒的原因与替代路径），
- * consent 规则不投递、只在策略页当说明；`shuvix-policy-scope` 放
+ * force-allow 规则不投递、只在策略页当说明；`shuvix-policy-scope` 放
  * subject.kind / object.type / env.host（这份策略管什么），规则放 effect / action /
  * match（在这个范围内怎么判）。十份形状一致 —— 用户照抄时不必先挑该学哪一份。
  * （session-auto-allow 的 scope 只有 subject.kind：它本就跨所有客体类型，
@@ -46,6 +47,9 @@ import type { ParsedPolicyFile } from '../types'
 import askOnReadEn from './md/ask-on-read.md?raw'
 import askOnReadZh from './md/ask-on-read.zh.md?raw'
 import askOnReadJa from './md/ask-on-read.ja.md?raw'
+import reviewMemoryWritesEn from './md/review-memory-writes.md?raw'
+import reviewMemoryWritesZh from './md/review-memory-writes.zh.md?raw'
+import reviewMemoryWritesJa from './md/review-memory-writes.ja.md?raw'
 import askOnWriteEn from './md/ask-on-write.md?raw'
 import askOnWriteZh from './md/ask-on-write.zh.md?raw'
 import askOnWriteJa from './md/ask-on-write.ja.md?raw'
@@ -109,6 +113,10 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
     sources: { en: askOnWriteEn, zh: askOnWriteZh, ja: askOnWriteJa }
   },
   {
+    name: 'review-memory-writes',
+    sources: { en: reviewMemoryWritesEn, zh: reviewMemoryWritesZh, ja: reviewMemoryWritesJa }
+  },
+  {
     name: 'ask-on-command',
     sources: { en: askOnCommandEn, zh: askOnCommandZh, ja: askOnCommandJa }
   },
@@ -120,7 +128,7 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
     name: 'ask-on-database',
     sources: { en: askOnDatabaseEn, zh: askOnDatabaseZh, ja: askOnDatabaseJa }
   },
-  // consent 层两份放最后：它们与上面的防护不在同一 tier，装配序对结算无影响，
+  // force-allow 层两份放最后：它们与上面的防护不在同一 tier，装配序对结算无影响，
   // 但列表尾部更贴合阅读顺序（先看拦什么，再看什么情况下放行）
   {
     name: 'session-auto-allow',

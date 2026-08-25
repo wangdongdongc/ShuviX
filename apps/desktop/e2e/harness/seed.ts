@@ -21,7 +21,8 @@ export interface AgentMdSeed {
   model?: string
   body?: string
   displayName?: string
-  instructionFiles?: boolean
+  /** shuvix-instruction-files 逗号串（如 'AGENTS.md, CLAUDE.md'） */
+  instructionFiles?: string
   projectPrompt?: boolean
   /** 追加的原始 frontmatter 行（测未知/废弃 key 时用） */
   rawLines?: string[]
@@ -36,7 +37,7 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
   if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
   if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
-  if (seed.instructionFiles) lines.push('shuvix-instruction-files: true')
+  if (seed.instructionFiles) lines.push(`shuvix-instruction-files: ${seed.instructionFiles}`)
   if (seed.projectPrompt) lines.push('shuvix-project-prompt: true')
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BODY.')
@@ -158,6 +159,13 @@ export async function waitRendererReady(main: CdpClient): Promise<void> {
  * 装在渲染进程里旁挂 `window.api.agent.onEvent`，与 `useAgentEvents` 并行接收，
  * 不干扰应用自身的处理。收集器是**全局**的（不分会话），断言前按 `sessionId` 过滤；
  * 每个 it 开头 `clear()` 一次，免得上一条用例的事件混进序列断言。
+ *
+ * `waitFor` 是**流式游标**语义：每次返回该 (type, sessionId) 的**下一条**事件，
+ * 不会重复返回已经等到过的那条。一个 it 里跑两轮对话时这是唯一正确的语义 ——
+ * 老实现按整个缓冲区 `find`，第二次 `waitFor('agent_end')` 会秒回上一轮的事件，
+ * 于是紧随其后的 `chat.waitIdle()` 在「新一轮还没起流」的空窗期（实测 6~33ms）里
+ * 判定为空闲，断言就跑在了本轮任何消息落库之前（chat-history 回退用例的偶发失败）。
+ * 需要绕过游标时用 `mark()` 取当前序号，再显式传 `since`。
  */
 export interface EventRecorder {
   install(): Promise<void>
@@ -166,10 +174,12 @@ export interface EventRecorder {
   /** 事件类型序列（去掉高频 delta 后更好读；传 true 保留 delta） */
   types(withDeltas?: boolean): Promise<string[]>
   count(type: string): Promise<number>
-  /** 等到某类事件出现（返回**首条**匹配事件）；超时抛错 */
+  /** 当前事件序号（单调递增，不随 clear 归零）—— 作为 `waitFor` 的 `since` 起点 */
+  mark(): Promise<number>
+  /** 等该 (type, sessionId) 的下一条事件；`since` 显式指定起点。超时抛错 */
   waitFor<T = RecordedEvent>(
     type: string,
-    opts?: { timeoutMs?: number; sessionId?: string }
+    opts?: { timeoutMs?: number; sessionId?: string; since?: number }
   ): Promise<T>
 }
 
@@ -181,47 +191,62 @@ export interface RecordedEvent {
 }
 
 const RECORDER_KEY = '__shuvixE2eEvents'
+const SEQ_KEY = '__shuvixE2eSeq'
+/** 缓冲区里存的是 `{ seq, e }` 包装：序号单调递增且不随 clear 归零，游标才有意义 */
+const BUF = `(window.${RECORDER_KEY} ?? [])`
 
 export function eventRecorder(main: CdpClient): EventRecorder {
+  /** `${type}|${sessionId}` → 已等到的最大序号（下一次 waitFor 从它之后开始找） */
+  const cursors = new Map<string, number>()
+
   const install = async (): Promise<void> => {
     await main.eval(
       `(() => {
         if (window.${RECORDER_KEY}) return true
         window.${RECORDER_KEY} = []
-        window.api.agent.onEvent((e) => window.${RECORDER_KEY}.push(e))
+        window.${SEQ_KEY} = 0
+        window.api.agent.onEvent((e) => window.${RECORDER_KEY}.push({ seq: ++window.${SEQ_KEY}, e }))
         return true
       })()`
     )
   }
-  const all = <T>(): Promise<T[]> => main.eval<T[]>(`window.${RECORDER_KEY} ?? []`)
+  const all = <T>(): Promise<T[]> => main.eval<T[]>(`${BUF}.map((w) => w.e)`)
 
   return {
     install,
-    clear: () => main.eval(`(window.${RECORDER_KEY} ?? []).length = 0`),
+    clear: async () => {
+      cursors.clear()
+      await main.eval(`${BUF}.length = 0`)
+    },
     all,
+    mark: () => main.eval<number>(`window.${SEQ_KEY} ?? 0`),
     types: (withDeltas = false) =>
       main.eval<string[]>(
-        `(window.${RECORDER_KEY} ?? [])
-          .map((e) => e.type)
+        `${BUF}
+          .map((w) => w.e.type)
           .filter((t) => ${withDeltas} || !t.endsWith('_delta'))`
       ),
     count: (type) =>
-      main.eval<number>(
-        `(window.${RECORDER_KEY} ?? []).filter((e) => e.type === ${JSON.stringify(type)}).length`
-      ),
+      main.eval<number>(`${BUF}.filter((w) => w.e.type === ${JSON.stringify(type)}).length`),
     waitFor: async <T>(
       type: string,
-      opts: { timeoutMs?: number; sessionId?: string } = {}
+      opts: { timeoutMs?: number; sessionId?: string; since?: number } = {}
     ): Promise<T> => {
+      const key = `${type}|${opts.sessionId ?? '*'}`
+      const since = opts.since ?? cursors.get(key) ?? 0
       const cond = opts.sessionId
-        ? `e.type === ${JSON.stringify(type)} && e.sessionId === ${JSON.stringify(opts.sessionId)}`
-        : `e.type === ${JSON.stringify(type)}`
-      const found = await until(
-        () => main.eval<T | null>(`(window.${RECORDER_KEY} ?? []).find((e) => ${cond}) ?? null`),
+        ? `w.e.type === ${JSON.stringify(type)} && w.e.sessionId === ${JSON.stringify(opts.sessionId)}`
+        : `w.e.type === ${JSON.stringify(type)}`
+      const hit = await until(
+        () =>
+          main.eval<{ seq: number; e: T } | null>(
+            `${BUF}.find((w) => w.seq > ${since} && ${cond}) ?? null`
+          ),
         `chat event ${type}`,
         opts.timeoutMs ?? 30_000
       )
-      return found
+      cursors.set(key, hit.seq)
+      return hit.e
     }
   }
 }

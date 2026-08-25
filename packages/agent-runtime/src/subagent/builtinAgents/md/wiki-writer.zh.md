@@ -6,7 +6,7 @@ description: 执行本地 wiki 知识库的变更:条目、主题、生命周期
 shuvix-tools: read, grep, glob, ls, write, edit, git, ask
 shuvix-displayName: 知识库编辑
 shuvix-dispatch-only: true
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
 ---
 

@@ -328,7 +328,7 @@ async function handleExec(
   }
 
   // 每条命令都需用户询问 —— 唯一豁免是会话级「免询问」开关（无命令模式匹配）。
-  // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 consent 层）
+  // 判定与响应处理收敛到安全模块（内置 ask-on-command 策略给出 ask，autoAllow 走 force-allow 层）
   const outcome = await getDesktopSecurityContext(ctx).enforceCommand(
     { channel: 'ssh', command },
     {

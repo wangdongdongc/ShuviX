@@ -145,7 +145,7 @@ function ExtProjectDialog({
       tabs={[
         {
           key: 'project',
-          label: t('projectForm.wizardStepProject'),
+          label: t('projectForm.configTab'),
           content: <ProjectInfoForm name={name} onNameChange={setName} path={path} />
         }
       ]}

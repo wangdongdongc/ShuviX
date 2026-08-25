@@ -12,7 +12,6 @@ import { readSessionRunConfig } from '../storage/sessionEntryStore'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { capsFor } from './resolveSessionModel'
 import { sessionStore } from '../storage/sessionStore'
-import { scanInstructionFiles } from './instructionFilesRuntime'
 import { settingsStore } from '../storage/settingsStore'
 import { mcpStore } from '../storage/mcpStore'
 import { projectStore } from '../storage/projectStore'
@@ -145,7 +144,7 @@ export const chatApiAdapter: ChatApi = {
             tools: [],
             // notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选
             model: notebookProfile?.model,
-            // notebook 档案的注入开关（内置默认关；用户覆盖档案打开即经创建管线生效）
+            // notebook 档案的指令文件清单（内置为空；用户覆盖档案列出即经创建管线生效）
             instructionFiles: notebookProfile?.instructionFiles,
             projectPrompt: notebookProfile?.projectPrompt
           },
@@ -178,6 +177,14 @@ export const chatApiAdapter: ChatApi = {
     },
     steer: async ({ sessionId, text }) => {
       await getRuntimeSession(sessionId)?.runtime.steer(text)
+      return ok
+    },
+    followUp: async ({ sessionId, text }) => {
+      await getRuntimeSession(sessionId)?.runtime.followUp(text)
+      return ok
+    },
+    nextTurn: async ({ sessionId, text }) => {
+      await getRuntimeSession(sessionId)?.runtime.nextTurn(text)
       return ok
     },
     abort: async (sessionId) => {
@@ -319,12 +326,6 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getById: async (id) => sessionStore.getById(id),
-    // 顶层扫描 AGENTS.md/CLAUDE.md（FSA/OPFS 工作目录）；选中项注入系统提示（见 buildSessionTools）
-    scanInstructionFiles: async (sessionId) => scanInstructionFiles(sessionId),
-    updateInstructionFile: async ({ id, filename }) => {
-      await sessionStore.updateSettings(id, { instructionFile: filename })
-      return ok
-    },
     // 可切换的会话档案（扩展只有内置档案，无用户目录）：排除 notebook 基座与 dispatch-only
     // 执行型档案（政策要求新鲜上下文），保留 default
     listAgentProfiles: async () =>
@@ -411,6 +412,18 @@ export const chatApiAdapter: ChatApi = {
   runtime: {
     statuses: async () => ({}),
     destroy: async () => ok
+  },
+
+  // 后台任务是桌面 bash 工具的能力，扩展端没有 bash → 整组 no-op。
+  // 面板 tab 按「有任务才显示」渲染，list 恒空即等于该功能在此宿主不存在。
+  bgTask: {
+    list: async () => [],
+    readLog: async () => ({ exists: false, text: '', fromByte: 0, nextByte: 0, size: 0 }),
+    stop: async () => ({ success: false }),
+    write: async () => ({ success: false }),
+    dismiss: async () => ({ success: false }),
+    clearDone: async () => ({ cleared: 0 }),
+    setNotify: async () => ({ success: false })
   },
 
   tools: {

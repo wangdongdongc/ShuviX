@@ -12,8 +12,14 @@
  *     条目大小写不敏感（内置工具名归一为小写注册名），`agent` 为嵌套派发 opt-in，
  *     `mcp:<server>` / `skill:<name>` 前缀语法为 ShuviX 扩展（余部大小写保留）；
  *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`、
- *     曝光开关 `shuvix-dispatch-only`，与两个注入开关 `shuvix-instruction-files` /
- *     `shuvix-project-prompt`（布尔：是否向该 agent 注入项目指令文件 / 项目提示词）；
+ *     曝光开关 `shuvix-dispatch-only`，与三个上下文注入声明：
+ *     `shuvix-instruction-files`（**逗号分隔的文件清单**，如
+ *     `shuvix-instruction-files: AGENTS.md, CLAUDE.md`：该 agent 认哪些项目指令文件，
+ *     按列出顺序取**第一个存在且非空**的注入，至多一个；省略 = 不注入），
+ *     与两个布尔开关 `shuvix-project-prompt` / `shuvix-project-memory`
+ *     （是否向该 agent 注入项目提示词 / 项目记忆索引）；
+ *     指令文件的「选哪个」曾是会话设置里的单选下拉，现已整体收进本文件 ——
+ *     一个 agent 该吃哪份项目文档，是它的人格设定，不是每个会话各自的临时选择；
  *   - `shuvix-builtin: true` 是随包发布的内置档案的**自述标记**：本解析器不读它
  *     （builtin/user 的判定在加载方——buildBuiltinProfile 恒标 builtin，目录扫描恒标 user），
  *     它只在 md 里声明「这份文案出自 ShuviX 内置集」。GUI 写出的用户档案不会带上它
@@ -32,9 +38,11 @@
  *
  * 无历史兼容：旧方言 key（`whenToUse` / `displayName`）、已废弃的 requiredMcp 系 key、
  * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）与通用 `tools` key
- * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` / `shuvix-model`
- * 仅接受字符串、注入开关仅接受布尔，类型不符视为文件非法（跳过并记警告），
- * 宁可整体拒绝也不静默降级。
+ * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
+ * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、两个注入开关仅接受布尔，
+ * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
+ * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
+ * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { splitFrontmatter } from '../markdownFrontmatter'
@@ -55,10 +63,16 @@ export interface ParsedAgentFile {
   tools: string[]
   /** `shuvix-model` 原样字符串（`<modelId>` 或 `<provider>/<modelId>`）；省略 = 不声明 */
   model?: string
-  /** `shuvix-instruction-files`；缺省 false */
-  instructionFiles: boolean
+  /**
+   * `shuvix-instruction-files`：该 agent 认的项目指令文件清单（工作目录内的相对路径，
+   * 已归一去重保序）。**顺序即优先级** —— 注入侧取第一个存在且非空的，至多一个。
+   * 缺省 = 空数组（不注入）。
+   */
+  instructionFiles: string[]
   /** `shuvix-project-prompt`；缺省 false */
   projectPrompt: boolean
+  /** `shuvix-project-memory`：是否注入项目记忆索引；缺省 false */
+  projectMemory: boolean
   /** `shuvix-dispatch-only`：只可派发、不可切换为会话档案；缺省 false */
   dispatchOnly: boolean
 }
@@ -75,6 +89,24 @@ function normalizeToolName(raw: string): string {
   const prefixed = /^(mcp|skill):(.*)$/i.exec(entry)
   if (prefixed) return `${prefixed[1].toLowerCase()}:${prefixed[2].trim()}`
   return entry.toLowerCase()
+}
+
+/**
+ * 单个指令文件条目归一：分隔符统一为 `/`，剥掉 `./` 与空段。
+ *
+ * 只接受**工作目录内的相对路径** —— 绝对路径与含 `..` 的越界段返回 null（判文件非法）。
+ * 清单是用户自己写的，本不是攻击面；拦它是因为两端的解析底座不同（桌面 join+读盘、
+ * 扩展按目录句柄逐级下钻），越界路径在扩展端根本无从表达，与其一端能一端不能，
+ * 不如在契约层就把可写的形状收敛成两端都成立的那一种。
+ */
+function normalizeInstructionEntry(raw: string): string | null {
+  const entry = raw.trim().replace(/\\/g, '/')
+  if (!entry) return null
+  // 绝对路径：POSIX 的 /x、Windows 的 C:/x 与 UNC 的 //host/share
+  if (entry.startsWith('/') || /^[a-zA-Z]:\//.test(entry)) return null
+  const parts = entry.split('/').filter((s) => s && s !== '.')
+  if (parts.length === 0 || parts.includes('..')) return null
+  return parts.join('/')
 }
 
 /** 拆分逗号分隔的列表字段（唯一合法写法，对齐 Claude Code） */
@@ -139,8 +171,8 @@ export function parseAgentDefinitionFile(
     return reject("'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)")
   }
   for (const key of [
-    'shuvix-instruction-files',
     'shuvix-project-prompt',
+    'shuvix-project-memory',
     'shuvix-dispatch-only'
   ] as const) {
     const value = fields[key] ?? null
@@ -148,8 +180,15 @@ export function parseAgentDefinitionFile(
       return reject(`'${key}' must be a boolean (true / false)`)
     }
   }
-  const instructionRaw = (fields['shuvix-instruction-files'] ?? null) as boolean | null
+  const instructionRaw = fields['shuvix-instruction-files'] ?? null
+  if (instructionRaw !== null && typeof instructionRaw !== 'string') {
+    return reject(
+      "'shuvix-instruction-files' must be a comma-separated file list " +
+        '(e.g. "AGENTS.md, CLAUDE.md"); the boolean form is gone — list the file names instead'
+    )
+  }
   const projectPromptRaw = (fields['shuvix-project-prompt'] ?? null) as boolean | null
+  const projectMemoryRaw = (fields['shuvix-project-memory'] ?? null) as boolean | null
   const dispatchOnlyRaw = (fields['shuvix-dispatch-only'] ?? null) as boolean | null
 
   // 省略 = 空白名单（无工具）；去重保序
@@ -158,6 +197,18 @@ export function parseAgentDefinitionFile(
       ? []
       : [...new Set(splitList(toolsRaw).map(normalizeToolName))].filter(Boolean)
 
+  // 指令文件清单：逐条归一，越界条目判整份文件非法（同 tools 之外的其他类型错误）
+  const instructionFiles: string[] = []
+  for (const entry of instructionRaw === null ? [] : splitList(instructionRaw)) {
+    const normalized = normalizeInstructionEntry(entry)
+    if (!normalized) {
+      return reject(
+        `'shuvix-instruction-files' entry '${entry}' must be a relative path inside the working directory`
+      )
+    }
+    if (!instructionFiles.includes(normalized)) instructionFiles.push(normalized)
+  }
+
   return {
     name,
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
@@ -165,8 +216,9 @@ export function parseAgentDefinitionFile(
     systemPrompt: split.body.trim(),
     tools,
     model: stringField(fields, 'shuvix-model'),
-    instructionFiles: instructionRaw ?? false,
+    instructionFiles,
     projectPrompt: projectPromptRaw ?? false,
+    projectMemory: projectMemoryRaw ?? false,
     dispatchOnly: dispatchOnlyRaw ?? false
   }
 }
@@ -189,8 +241,11 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
     fields['shuvix-displayName'] = data.displayName.trim()
   }
   if (data.dispatchOnly) fields['shuvix-dispatch-only'] = true
-  if (data.instructionFiles) fields['shuvix-instruction-files'] = true
+  if (data.instructionFiles.length > 0) {
+    fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
+  }
   if (data.projectPrompt) fields['shuvix-project-prompt'] = true
+  if (data.projectMemory) fields['shuvix-project-memory'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.systemPrompt.trim()

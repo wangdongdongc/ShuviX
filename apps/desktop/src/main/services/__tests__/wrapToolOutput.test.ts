@@ -169,6 +169,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
           workspace: '/ws',
           toolResultsBase: '/tool-results',
           skillsDirs: ['/skills'],
+          memoryDirs: [],
           home: '/home/u',
           systemDirs: []
         }),

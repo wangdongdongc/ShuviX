@@ -127,7 +127,11 @@ export class HarnessSession {
       model: deps.model,
       thinkingLevel: deps.thinkingLevel,
       systemPrompt: () => this.systemPrompt,
-      tools: deps.tools
+      tools: deps.tools,
+      // 队列对用户可见（输入框里的队列面板），看到几条就该一起走。
+      // pi 默认的 'one-at-a-time' 会一个轮次边界只放一条，面板看着像卡住了。
+      steeringMode: 'all',
+      followUpMode: 'all'
     })
 
     const eventCtx: HarnessEventContext = {
@@ -244,6 +248,27 @@ export class HarnessSession {
     }
   }
 
+  /**
+   * 送达一条系统侧通知（后台任务完成等）——「运行中就即刻插话，空闲就搭下一条消息的便车」。
+   *
+   * pi 的两条队列刚好覆盖这两种情形，无需自建队列：
+   *   - `steer`：运行中把消息注入当前 run；**空闲时抛 `invalid_state`**。
+   *   - `nextTurn`：无 idle 守卫，排队等下一轮 —— `executeTurn` 会把它前置到用户消息之前。
+   *
+   * harness 的 phase 是私有的，判不了状态，所以只能先试 steer、失败再退到 nextTurn。
+   */
+  async notify(text: string): Promise<void> {
+    try {
+      await this.harness.steer(text)
+      this.logger.info(`notify(steer) session=${this.sessionId}`)
+    } catch {
+      // 空闲（invalid_state）—— 也可能是 steer 的 hook 出错；两种都退到下一轮送达，
+      // 通知丢了比把它硬塞进一个不接受插话的状态要好
+      await this.harness.nextTurn(text)
+      this.logger.info(`notify(nextTurn) session=${this.sessionId}`)
+    }
+  }
+
   /** 运行中注入引导消息（harness 的 steer 队列） */
   async steer(text: string): Promise<void> {
     this.logger.info(`steer session=${this.sessionId}`)
@@ -331,6 +356,18 @@ export class HarnessSession {
   }
 
   // ─── 读取 ──────────────────────────────────────────
+
+  /**
+   * pi 原生的 `AgentHarness`。
+   *
+   * 给运行时注册中心（`runtimeRegistry.ts`）用 —— 监控数据一律从 pi 自己的读取面与
+   * 事件流取，本类不再为监控增设手工快照字段。命名点出"这是 pi 的对象"，提醒调用方
+   * 它是**可变**的：读可以，改运行时配置请走本类的 applyModel/applyTools 等入口，
+   * 否则绕过日志与事件翻译。
+   */
+  get piHarness(): AgentHarness {
+    return this.harness
+  }
 
   /** 会话当前上下文对应的 UI 消息列表（替代旧的 messageService.listBySession） */
   async listChatMessages(): Promise<ChatMessage[]> {

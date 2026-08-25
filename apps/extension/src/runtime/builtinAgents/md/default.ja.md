@@ -5,8 +5,9 @@ name: default
 description: メイン会話エージェント——各チャットセッションはこのプロファイルから作成されます。"default" という名前のカスタムエージェントで上書きできます。
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: デフォルト
-shuvix-instruction-files: true
+shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-prompt: true
+shuvix-project-memory: true
 ---
 
 ## アイデンティティ

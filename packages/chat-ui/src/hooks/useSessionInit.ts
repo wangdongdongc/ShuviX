@@ -1,6 +1,7 @@
 import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
+import { useBgTaskStore } from '../stores/bgTaskStore'
 import { useChatStore, type AssistantMessage } from '../stores/chatStore'
 import { useModelCatalogStore } from '../stores/modelCatalogStore'
 
@@ -72,6 +73,13 @@ export function useSessionInit(activeSessionId: string | null): void {
       const runtimes = await getSessionChannelApi().runtime.statuses(activeSessionId)
       if (!cancelled) {
         store.setRuntimes(activeSessionId, runtimes)
+      }
+
+      // 8. 补后台任务快照 —— bg_task 事件只覆盖「本次前端在线期间」的变更，
+      //    刷新/切会话后要靠这一次拉取才知道有哪些任务还在跑（面板 tab 的显隐也依赖它）
+      const bgTasks = await getSessionChannelApi().bgTask.list({ sessionId: activeSessionId })
+      if (!cancelled) {
+        useBgTaskStore.getState().replaceSession(activeSessionId, bgTasks)
       }
     }
     loadSession()

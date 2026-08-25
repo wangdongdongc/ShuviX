@@ -7,7 +7,7 @@ description: セッションの自動許可スイッチが入っている間、�
 shuvix-policy-scope:
   subject.kind: [agent]
 shuvix-policy-rules:
-  - effect: consent
+  - effect: force-allow
     match: vars.autoAllow
     prompt: セッションの自動許可スイッチがオンのため、確認ゲートはスキップされる。
 ---
@@ -20,6 +20,8 @@ shuvix-policy-rules:
 
 - deny には勝てない。資格情報の保護とシステム保護は、自動許可の有無にかかわらず
   遮断し続ける。
+- `force-ask` ルールはスキップしない。この effect は「このゲートはセッション単位の
+  同意を受け付けない」という意味であり、スイッチがオンでも確認は出る。
 - セッション単位であり、新しいセッションには引き継がれない。
 
 **調整するには**：スイッチの意味はこのポリシーが与えている。上書きすれば範囲を狭め
@@ -28,7 +30,7 @@ shuvix-policy-rules:
     shuvix-policy-scope:
       subject.kind: [agent]
     shuvix-policy-rules:
-      - effect: consent
+      - effect: force-allow
         action: [read, execute]
         match: vars.autoAllow
 

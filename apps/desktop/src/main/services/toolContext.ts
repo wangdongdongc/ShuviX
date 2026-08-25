@@ -13,6 +13,7 @@ import {
   getTempWorkspace,
   getToolResultsBase,
   getDefaultSkillsDir,
+  getMemoryRootDir,
   getBuiltinSkillsDir
 } from '../utils/paths'
 import { skillService } from './skillService'
@@ -55,12 +56,6 @@ export const TOOL_ABORTED = 'Aborted'
 export interface ProjectConfig {
   /** 项目工作目录（宿主机路径） */
   workingDirectory: string
-  /** PGLite 持久化存储开关 */
-  pglitePersist?: boolean
-  /** 项目 ID（持久化模式下用作 worker 共享 key） */
-  projectId?: string
-  /** 项目根目录路径（用于计算 PGLite dataDir） */
-  projectPath?: string
   /** 项目环境变量（注入 bash 进程） */
   envVars?: Record<string, string>
 }
@@ -208,6 +203,7 @@ export function makeDesktopSecurityProvider(
         getBuiltinSkillsDir(),
         ...skillService.listExternalDirs().map((d) => d.path)
       ],
+      memoryDirs: [getMemoryRootDir()],
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),
@@ -297,9 +293,6 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
     // 有项目 → 使用项目配置
     return {
       workingDirectory: session?.workingDirectory ?? project.path,
-      pglitePersist: project.settings?.tool?.pglitePersist,
-      projectId: project.id,
-      projectPath: project.path,
       envVars: envVarsToRecord(project.settings?.tool?.envVars)
     }
   }

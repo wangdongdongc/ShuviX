@@ -5,7 +5,6 @@ name: notebook
 description: ノートブックセッションのベースプロファイル —— 送信のたびに開いているノートに対して新しい単発エージェントを起動します。"notebook" という名前のカスタムエージェントで上書きして挙動をカスタマイズできます。
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser
 shuvix-displayName: ノートブック
-shuvix-instruction-files: false
 shuvix-project-prompt: false
 ---
 

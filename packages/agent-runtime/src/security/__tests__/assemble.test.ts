@@ -23,6 +23,7 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   workspace: '/ws',
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
+  memoryDirs: [],
   home: '/home/u',
   systemDirs: []
 }
@@ -151,7 +152,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decide(provider, 'read', '/outside/x.txt').effect).toBe('ask')
   })
 
-  it('AS-3 autoAllow:true → 全域 consent 放行（含命令）；false → 照常询问', () => {
+  it('AS-3 autoAllow:true → 全域 force-allow 放行（含命令）；false → 照常询问', () => {
     const on = makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
     expect(buildPolicyVars(on).autoAllow).toBe(true)
     const decision = decide(on, 'write', '/anywhere/x.txt')
@@ -161,7 +162,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decide(makeProvider(), 'write', '/anywhere/x.txt').effect).toBe('ask')
   })
 
-  it('AS-3b deny 压过 consent：免询问开着也拦不住内置 deny', () => {
+  it('AS-3b deny 压过 force-allow：免询问开着也拦不住内置 deny', () => {
     const on = makeProvider({
       getVars: () => ({ ...BUILTIN_VARS, systemDirs: ['/sysroot'] }),
       getSessionGrants: () => ({ autoAllow: true, allowList: ['Write(/sysroot)'] })
@@ -171,12 +172,15 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decision.winning).toMatch(/^protect-system#/)
   })
 
-  it('CA-4 内置 consent 与用户 consent 同时命中 → winning 取先装配的内置，matched 两条都在', () => {
+  it('CA-4 内置 force-allow 与用户 force-allow 同时命中 → winning 取先装配的内置，matched 两条都在', () => {
     const provider = makeProvider({
       getSessionGrants: () => ({ autoAllow: true, allowList: [] }),
       getUserPolicies: () => [
         userPolicy('trust-anywhere', [
-          { effect: 'consent', match: "object.type == 'path' && inDir(object.path, '/anywhere')" }
+          {
+            effect: 'force-allow',
+            match: "object.type == 'path' && inDir(object.path, '/anywhere')"
+          }
         ])
       ]
     })
@@ -204,7 +208,7 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
 /**
  * 授权变量的失效模式守护 —— 装配（lets）与求值（match）必须共用同一份
  * buildPolicyVars 产物。只在一处注入授权变量，另一处就缺键，strict 语义下报错走
- * fail-safe：consent 归一后的 effect 是 allow → **视为不命中**，授权静默失效。
+ * fail-safe：force-allow 归一后的 effect 是 allow → **视为不命中**，授权静默失效。
  * 方向偏安全（多问一次），但用户会觉得免询问开关坏了 —— 这几条就是让它响。
  */
 describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () => {
@@ -256,7 +260,7 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
       expect(decision.effect, `无 vars × ${action} ${path}`).toBe('ask')
     }
 
-    // 对照：两侧共用同一份完整 vars 时，三格都是 consent 放行（上面测的确实是失效而非无授权）
+    // 对照：两侧共用同一份完整 vars 时，三格都是 force-allow 放行（上面测的确实是失效而非无授权）
     const vars = buildPolicyVars(provider)
     for (const [action, path] of GRID) {
       const decision = evaluate(
@@ -281,7 +285,7 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
     const messages = warn.mock.calls.map((c) => String(c[0]))
     const notMatched = messages.filter((m) => m.includes('treating as not matched'))
     expect(notMatched.length).toBeGreaterThan(0)
-    // 免询问与路径授权两份策略都该报（consent 归一为 allow → fail-safe 不命中）
+    // 免询问与路径授权两份策略都该报（force-allow 归一为 allow → fail-safe 不命中）
     expect(notMatched.some((m) => m.includes("'session-auto-allow#0'"))).toBe(true)
     expect(notMatched.some((m) => m.includes('session-path-grants#'))).toBe(true)
 
@@ -355,7 +359,7 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     })
   })
 
-  it('AS-5 tier 标定：user/builtin 的 allow → static-allow（绝非 consent）；deny → deny；ask → ask', () => {
+  it('AS-5 tier 标定：user/builtin 的 allow → static-allow（绝非 force-allow）；deny → deny；ask → ask', () => {
     const rules = assembleRules(
       makeProvider({
         getUserPolicies: () => [
@@ -378,25 +382,25 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     expect(builtinGate!.tier).toBe('ask')
   })
 
-  it('CA-1 用户 md 的 consent → {tier:consent, effect:allow, source:user}；同文件 allow 仍 static-allow', () => {
+  it('CA-1 用户 md 的 force-allow → {tier:force-allow, effect:allow, source:user}；同文件 allow 仍 static-allow', () => {
     const rules = assembleRules(
       makeProvider({
         getUserPolicies: () => [
           userPolicy('trust-data', [
-            { effect: 'consent', match: "inDir(object.path, '/data')" },
+            { effect: 'force-allow', match: "inDir(object.path, '/data')" },
             { effect: 'allow', match: "inDir(object.path, '/data')" }
           ])
         ]
       })
     )
 
-    // consent 归一为 allow 效果 + consent tier（用户策略与内置同一条通路，无来源特权）
+    // force-allow 归一为 allow 效果 + force-allow tier（用户策略与内置同一条通路，无来源特权）
     expect(rules.find((r) => r.id === 'trust-data#0')).toMatchObject({
       effect: 'allow',
-      tier: 'consent',
+      tier: 'force-allow',
       source: { kind: 'user', policy: 'trust-data' }
     })
-    // 同文件里的 allow 不因邻居是 consent 而被抬举
+    // 同文件里的 allow 不因邻居是 force-allow 而被抬举
     expect(rules.find((r) => r.id === 'trust-data#1')).toMatchObject({
       effect: 'allow',
       tier: 'static-allow',
@@ -404,10 +408,10 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     })
   })
 
-  it('CA-2 四值各一份恒命中策略 → 决策 allow/allow/ask/deny 且归因各自 id；装配产物里不存在 effect==="consent"', () => {
+  it('CA-2 四值各一份恒命中策略 → 决策 allow/allow/ask/deny 且归因各自 id；装配产物里不存在 effect==="force-allow"', () => {
     const expected = [
       ['allow', 'allow'],
-      ['consent', 'allow'],
+      ['force-allow', 'allow'],
       ['ask', 'ask'],
       ['deny', 'deny']
     ] as const
@@ -416,10 +420,10 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
       const rules = assembleRules(
         makeProvider({ getUserPolicies: () => [userPolicy('p', [{ effect }])] })
       )
-      // SecurityRule.effect 恒三态 —— consent 只活在 md 与 tier 里
+      // SecurityRule.effect 恒三态 —— force-allow 只活在 md 与 tier 里
       expect(
-        rules.filter((r) => (r.effect as string) === 'consent'),
-        `${effect}: 装配产物出现 effect consent`
+        rules.filter((r) => (r.effect as string) === 'force-allow'),
+        `${effect}: 装配产物出现 effect force-allow`
       ).toEqual([])
 
       const own = rules.filter((r) => r.source.policy === 'p')
@@ -429,18 +433,20 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     }
   })
 
-  it('CA-3 完整内置装配：tier consent 的规则当且仅当来自两份会话授权策略，且 effect 恒 allow', () => {
+  it('CA-3 完整内置装配：tier force-allow 的规则当且仅当来自两份会话授权策略，且 effect 恒 allow', () => {
     const rules = assembleRules(makeProvider())
     const SESSION_POLICIES = ['session-auto-allow', 'session-path-grants']
 
-    const consentRules = rules.filter((r) => r.tier === 'consent')
-    expect([...new Set(consentRules.map((r) => r.source.policy))].sort()).toEqual(SESSION_POLICIES)
-    expect(consentRules.every((r) => r.effect === 'allow')).toBe(true)
+    const forceAllowRules = rules.filter((r) => r.tier === 'force-allow')
+    expect([...new Set(forceAllowRules.map((r) => r.source.policy))].sort()).toEqual(
+      SESSION_POLICIES
+    )
+    expect(forceAllowRules.every((r) => r.effect === 'allow')).toBe(true)
 
-    // 反向：两份会话授权策略的每条规则都在 consent 层（没有半截落回 static-allow 的）
+    // 反向：两份会话授权策略的每条规则都在 force-allow 层（没有半截落回 static-allow 的）
     const sessionRules = rules.filter((r) => SESSION_POLICIES.includes(r.source.policy ?? ''))
     expect(sessionRules.length).toBeGreaterThanOrEqual(3) // auto-allow 1 条 + path-grants 2 条
-    expect(sessionRules.every((r) => r.tier === 'consent')).toBe(true)
+    expect(sessionRules.every((r) => r.tier === 'force-allow')).toBe(true)
   })
 
   it('AS-5b matchExpr 原样保留（展示/日志回链）；无 match 的规则两者皆缺省', () => {
@@ -790,7 +796,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（含 consent 两份）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（含 force-allow 两份）', () => {
     const rules = assembleRules(
       makeProvider({ getSessionGrants: () => ({ autoAllow: true, allowList: [] }) })
     )
@@ -820,6 +826,21 @@ describe('mergePolicyFiles', () => {
  * 判决语义与 prompt 无关，故各语言之间只有它可以不同。
  */
 describe('assembleRules — 规则 prompt 透传', () => {
+  it('AS-F1 force-ask 归一：tier=force-ask，effect 落回三态的 ask（SecurityRule 形状不变）', () => {
+    const rules = assembleRules(
+      makeProvider({
+        getUserPolicies: () => [
+          userPolicy('guard-secrets', [
+            { effect: 'force-ask', conditions: { 'subject.kind': ['agent'] } }
+          ])
+        ]
+      })
+    )
+    const rule = rules.find((r) => r.id === 'guard-secrets#0')!
+    expect(rule.tier).toBe('force-ask')
+    expect(rule.effect).toBe('ask')
+  })
+
   it('AS-P1 PolicyRuleSpec.prompt 原样透传为 SecurityRule.prompt；无 prompt 的规则该字段无取值', () => {
     const rules = assembleRules(
       makeProvider({

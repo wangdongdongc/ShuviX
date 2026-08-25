@@ -1,8 +1,9 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, Mic, X } from 'lucide-react'
+import { Send, Square, Mic, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
 import { TokenChip } from './TokenChip'
+import { QueuePanel } from './QueuePanel'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -25,6 +26,20 @@ import { useAtMentions } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
 import { isImeComposing } from '../../utils/ime'
 import type { FileSuggestion } from '@shuvix/chat-protocol/utils/fileMap'
+
+/**
+ * streaming 时的三个发送出口，顺序即急迫度从高到低：
+ * 立即（pi steer，下个轮次边界插入）/ 追加（followUp，本轮本应结束时续跑）/
+ * 下轮（nextTurn，等下一次 prompt 前置，不被中止清空）。
+ *
+ * Enter 仍绑第一个，与改造前的行为一致。三者落地的消息数据完全相同，
+ * 差别只在 pi 把它插进 agent loop 的时机。
+ */
+const QUEUE_TIERS = [
+  { tier: 'steer' as const, Icon: Zap, primary: true },
+  { tier: 'followUp' as const, Icon: CornerDownLeft, primary: false },
+  { tier: 'nextTurn' as const, Icon: CornerRightDown, primary: false }
+]
 
 // 输入框高度：统一紧凑单行（44px，与原笔记本模式一致），内容超出自动增高至上限；不提供拖拽调高
 const MIN_H = 44
@@ -464,23 +479,29 @@ export function InputArea({
     store.finishStreaming(sid)
   }
 
-  /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
-  const handleSteer = async (): Promise<void> => {
-    // steer 通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文
+  /**
+   * 把当前输入投进 pi 的某条用户消息队列（立即 / 追加 / 下轮）。
+   *
+   * 队列通道不携带 inlineTokens（harness 在 drain 那一刻才写 user 消息，
+   * 显示侧车没法紧邻它落盘）→ 粘贴芯片就地展开为完整原文。
+   */
+  const handleQueueSend = async (tier: 'steer' | 'followUp' | 'nextTurn'): Promise<void> => {
     const text = paste.resolveInline(inputText.trim())
     if (!text || !activeSessionId) return
     const store = useChatStore.getState()
     store.setInputText('')
     paste.reset()
-    // 竞态保护：agent 可能刚好结束，检查 isStreaming 决定走 steer 还是 prompt
+    const api = getSessionChannelApi().agent
+    // 竞态保护：agent 可能刚好结束。steer/followUp 在 idle 相位会被 pi 拒（invalid_state），
+    // 退回普通 prompt；nextTurn 任何相位都能入队，保持它「等下次发送」的原语义。
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
-    if (stillStreaming) {
-      await getSessionChannelApi().agent.steer({ sessionId: activeSessionId, text })
-    } else {
+    if (!stillStreaming && tier !== 'nextTurn') {
       store.setIsStreaming(activeSessionId, true)
       store.clearStreamingContent(activeSessionId)
-      await getSessionChannelApi().agent.prompt({ sessionId: activeSessionId, text })
+      await api.prompt({ sessionId: activeSessionId, text })
+      return
     }
+    await api[tier]({ sessionId: activeSessionId, text })
   }
 
   /** 斜杠命令选中回调：设置芯片，输入框只保留参数；自动启用依赖工具 */
@@ -573,7 +594,7 @@ export function InputArea({
       e.preventDefault()
       // streaming 时发送 steer 消息（有待处理请求时除外 —— handleSend 会路由到「其它」反馈）
       if (isStreaming && !activePendingInput) {
-        if (inputText.trim()) handleSteer()
+        if (inputText.trim()) handleQueueSend('steer')
         return
       }
       handleSend()
@@ -653,23 +674,51 @@ export function InputArea({
       </button>
     ) : null
 
+  const queueDisabled = !inputText.trim()
   const sendStopButtons = isStreaming ? (
     <div className="flex items-center gap-1">
-      {/* 有待处理请求 → 投「其它」反馈（按 kind 取语义色）；否则是 steer */}
-      <button
-        onClick={activePendingInput ? handleSubmitOther : handleSteer}
-        disabled={!inputText.trim()}
-        className={`p-1.5 rounded-lg transition-colors ${
-          !inputText.trim()
-            ? 'text-text-tertiary cursor-not-allowed'
-            : pendingTone === 'accent'
-              ? 'bg-accent text-white hover:bg-accent-hover'
-              : 'bg-warning text-white hover:bg-warning/80'
-        }`}
-        title={activePendingInput ? t('pendingInputs.submitOther') : t('input.steer')}
-      >
-        <Send size={14} />
-      </button>
+      {activePendingInput ? (
+        // 待处理请求优先：这个按钮投「其它」反馈，不进队列
+        <button
+          onClick={handleSubmitOther}
+          disabled={queueDisabled}
+          className={`p-1.5 rounded-lg transition-colors ${
+            queueDisabled
+              ? 'text-text-tertiary cursor-not-allowed'
+              : pendingTone === 'accent'
+                ? 'bg-accent text-white hover:bg-accent-hover'
+                : 'bg-warning text-white hover:bg-warning/80'
+          }`}
+          title={t('pendingInputs.submitOther')}
+        >
+          <Send size={14} />
+        </button>
+      ) : (
+        // 三个发送出口 = pi 的三条队列。分段成一组：读作「一个发送控件的三个出口」，
+        // 而不是三个各自独立的按钮
+        <div className="flex items-center rounded-lg border border-border-secondary/60 overflow-hidden">
+          {QUEUE_TIERS.map(({ tier, Icon, primary }, i) => (
+            <button
+              key={tier}
+              onClick={() => handleQueueSend(tier)}
+              disabled={queueDisabled}
+              title={t(`queue.${tier}Hint`)}
+              className={`flex items-center gap-1 px-2 py-1 text-[11px] transition-colors ${
+                i > 0 ? 'border-l border-border-secondary/60' : ''
+              } ${
+                queueDisabled
+                  ? 'text-text-tertiary cursor-not-allowed'
+                  : primary
+                    ? 'bg-warning text-white hover:bg-warning/80'
+                    : 'text-text-secondary hover:bg-bg-hover'
+              }`}
+            >
+              <Icon size={12} />
+              {t(`queue.${tier}`)}
+            </button>
+          ))}
+        </div>
+      )}
       <button
         onClick={handleAbort}
         className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
@@ -725,6 +774,9 @@ export function InputArea({
         >
           {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
           {accessory}
+
+          {/* 待投递队列（只读回执）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
+          <QueuePanel />
 
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (

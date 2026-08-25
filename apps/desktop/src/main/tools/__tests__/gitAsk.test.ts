@@ -45,7 +45,7 @@ vi.mock('../../services/toolContext', async () => {
       const base = resolve(workingDirectory)
       return r === base || r.startsWith(base + sep)
     },
-    // 真实评估链（内置 git-safety 策略 + consent 层）；grants/挂起通道来自测试状态。
+    // 真实评估链（内置 git-safety 策略 + force-allow 层）；grants/挂起通道来自测试状态。
     // enforceGitOp 额外记录客体属性入参（GIT-12 透传断言），再交给真实实现。
     getDesktopSecurityContext: (ctx: {
       sessionId: string
@@ -61,6 +61,7 @@ vi.mock('../../services/toolContext', async () => {
             workspace: state.workingDirectory,
             toolResultsBase: join(tmpdir(), '.nonexistent-tool-results'),
             skillsDirs: [],
+            memoryDirs: [],
             home: join(tmpdir(), '.nonexistent-home'),
             systemDirs: []
           }),

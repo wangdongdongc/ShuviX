@@ -225,8 +225,14 @@ class AgentService implements AgentProfileRegistry {
     }
     const builtin = this.builtinAgents().find((a) => a.name === name)
     if (!builtin) return { error: `Builtin agent "${name}" not found` }
-    // AgentProfile.tools 是 readonly，ParsedAgentFile 要可变数组 —— 拷一份即可
-    return { text: serializeAgentDefinitionFile({ ...builtin, tools: [...builtin.tools] }) }
+    // AgentProfile 的 tools / instructionFiles 是 readonly，ParsedAgentFile 要可变数组 —— 拷一份即可
+    return {
+      text: serializeAgentDefinitionFile({
+        ...builtin,
+        tools: [...builtin.tools],
+        instructionFiles: [...builtin.instructionFiles]
+      })
+    }
   }
 
   /**

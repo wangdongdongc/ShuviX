@@ -12,8 +12,9 @@ const PROFILE: AgentProfile = {
   description: 'explores the codebase',
   systemPrompt: 'BODY',
   tools: ['read', 'grep'],
-  instructionFiles: false,
+  instructionFiles: [],
   projectPrompt: false,
+  projectMemory: false,
   dispatchOnly: false,
   source: 'builtin',
   basePath: ''
@@ -24,11 +25,11 @@ describe('toInProcessAgentType', () => {
     const projected = toInProcessAgentType({
       ...PROFILE,
       model: 'openai/gpt-4o',
-      instructionFiles: true,
+      instructionFiles: ['AGENTS.md'],
       projectPrompt: true
     })
     expect(projected.model).toBe('openai/gpt-4o')
-    expect(projected.instructionFiles).toBe(true)
+    expect(projected.instructionFiles).toEqual(['AGENTS.md'])
     expect(projected.projectPrompt).toBe(true)
   })
 
@@ -45,8 +46,9 @@ describe('toInProcessAgentType', () => {
       tools: ['read', 'grep'],
       systemPrompt: 'BODY',
       model: undefined,
-      instructionFiles: false,
-      projectPrompt: false
+      instructionFiles: [],
+      projectPrompt: false,
+      projectMemory: false
     })
     expect(projected.tools).not.toBe(PROFILE.tools)
   })

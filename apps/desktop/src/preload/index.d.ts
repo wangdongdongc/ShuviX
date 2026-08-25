@@ -1,6 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
+import type { BgTaskInfo, BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -9,6 +10,8 @@ import type {
   AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
+  AgentFollowUpParams,
+  AgentNextTurnParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLog,
@@ -247,7 +250,6 @@ declare global {
 
   /** 工具扩展配置 */
   interface ToolSettings {
-    pglitePersist?: boolean
     envVars?: ProjectEnvVar[]
   }
 
@@ -280,8 +282,6 @@ declare global {
   interface SessionSettings {
     autoAllow?: boolean
     allowList?: string[]
-    /** 注入的项目指令文件（单选）：undefined = 按优先级自动选，null = 不注入 */
-    instructionFile?: string | null
     /** 会话根 Agent 采用的档案名；缺省 / 档案已不存在 → 回落 'default' */
     agentProfile?: string
   }
@@ -343,8 +343,8 @@ declare global {
   >
 
   interface PolicyRuleInfo {
-    /** consent = allow，但结算落在 consent 层，压得过询问门 */
-    effect: 'allow' | 'consent' | 'ask' | 'deny'
+    /** 强弱 deny > force-ask > force-allow > ask > allow（force- 压过不带前缀的同名档） */
+    effect: 'allow' | 'force-allow' | 'ask' | 'force-ask' | 'deny'
     /** 规则级结构化条件；与策略级 scope 取交后与 match AND */
     conditions?: PolicyConditionsInfo
     /** CEL 匹配表达式（对整份请求文档求值）；省略 = 结构化条件即全部条件 */
@@ -393,10 +393,11 @@ declare global {
     model?: string
     /** 该内置已被同名自定义档案遮蔽（仅设置页展示,不生效） */
     overridden?: boolean
-    /** 是否注入项目指令文件（shuvix-instruction-files） */
-    instructionFiles: boolean
+    /** 项目指令文件清单（shuvix-instruction-files），顺序即优先级；空 = 不注入 */
+    instructionFiles: string[]
     /** 是否注入项目提示词（shuvix-project-prompt） */
     projectPrompt: boolean
+    projectMemory: boolean
     /** 只可派发、不可切换为会话档案（shuvix-dispatch-only）；GUI 暂不提供开关,原样透传保存 */
     dispatchOnly: boolean
     source: 'builtin' | 'user'
@@ -432,6 +433,8 @@ declare global {
       subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
+      followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
+      nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
@@ -441,6 +444,10 @@ declare global {
         sessionId: string,
         options?: { ensure?: boolean }
       ) => Promise<AgentRuntimeInfo | null>
+      /** 智能体监控：全部活跃 agent 运行时快照（含派生 agent）。不遍历会话树，可轮询 */
+      monitorList: () => Promise<
+        import('@shuvix/chat-protocol/types/agentMonitor').AgentMonitorEntry[]
+      >
       /**
        * 统一的"用户输入响应"入口。命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
        */
@@ -507,13 +514,6 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
-      scanInstructionFiles: (
-        sessionId: string
-      ) => Promise<import('@shuvix/chat-protocol/types/instructionFile').InstructionFileEntry[]>
-      updateInstructionFile: (params: {
-        id: string
-        filename: string | null
-      }) => Promise<{ success: boolean }>
       /** 可切换的会话档案（含 default，不含 notebook 基座） */
       listAgentProfiles: () => Promise<
         import('@shuvix/chat-protocol/chatApi').AgentProfileSummary[]
@@ -807,6 +807,19 @@ declare global {
       onProgress: (callback: (progress: DownloadProgress) => void) => () => void
       /** 取消下载任务 */
       cancel: (taskId: string) => Promise<{ success: boolean }>
+    }
+    bgTask: {
+      list: (params: { sessionId: string }) => Promise<BgTaskInfo[]>
+      readLog: (params: {
+        toolCallId: string
+        fromByte?: number
+        maxBytes?: number
+      }) => Promise<BgTaskLogChunk>
+      stop: (params: { toolCallId: string; force?: boolean }) => Promise<{ success: boolean }>
+      write: (params: { toolCallId: string; data: string }) => Promise<{ success: boolean }>
+      dismiss: (params: { toolCallId: string }) => Promise<{ success: boolean }>
+      clearDone: (params: { sessionId: string }) => Promise<{ cleared: number }>
+      setNotify: (params: { toolCallId: string; enabled: boolean }) => Promise<{ success: boolean }>
     }
     terminal: {
       create: (params: {

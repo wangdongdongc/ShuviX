@@ -27,6 +27,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import type { ParsedAgentFile } from '@shuvix/agent-runtime'
 
 const state = vi.hoisted(() => ({ dir: '', wikis: '', widgets: '' }))
 
@@ -375,5 +376,53 @@ describe('agentService —— 读时投影与文件名边界', () => {
       expect(agentService.getSource(name, 'user')).toEqual({ text: agentMd(name) })
     }
     expect(files()).toEqual(['代码审查.md', '🔎-explorer.md'].sort())
+  })
+})
+
+describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent / createAgent）', () => {
+  /** ParsedAgentFile 的最小合法形状；各用例只覆盖它关心的字段 */
+  const parsed = (name: string, extra: Partial<ParsedAgentFile> = {}): ParsedAgentFile => ({
+    name,
+    displayName: name,
+    description: 'structured write fixture',
+    systemPrompt: `Body of ${name}.`,
+    tools: ['read'],
+    instructionFiles: [],
+    projectPrompt: false,
+    projectMemory: false,
+    dispatchOnly: false,
+    ...extra
+  })
+
+  it('IF-U-22 越界的指令文件条目一律拒绝：save 磁盘逐字节不变、create 目录零新增', () => {
+    // 结构化写路径的自检是「序列化 → 回读」：`..` 在解析侧判整份非法，于是写盘被挡在门外。
+    // 这里只钉「不写出不可读文件」这一条 —— 拒绝的**原因文案**当前把用户输入错误报成了
+    // 内部错误（serializer/parser 漂移与用户输错共用一句话），那是实现待修的账，
+    // 钉住文案只会把这笔账焊死在测试里。
+    const outside = { instructionFiles: ['../outside.md'] }
+
+    // save 路径：先有一份合法档案，非法覆写后磁盘必须一个字节都没动
+    expect(agentService.createAgentSource(agentMd('gui-target')).success).toBe(true)
+    const before = readAgentFile('gui-target.md')
+    expect(agentService.saveAgent('gui-target', parsed('gui-target', outside)).success).toBe(false)
+    expect(readAgentFile('gui-target.md')).toBe(before)
+    expect(files()).toEqual(['gui-target.md'])
+
+    // create 路径：目录里不该多出任何文件（半截的坏档案会被扫描静默跳过，最难排查）
+    expect(agentService.createAgent(parsed('gui-created', outside)).success).toBe(false)
+    expect(files()).toEqual(['gui-target.md'])
+  })
+
+  it('IF-U-23 合法子路径照常落盘：`docs/house.md` 写进 shuvix-instruction-files（正斜杠原样）', () => {
+    const result = agentService.createAgent(
+      parsed('gui-subpath', { instructionFiles: ['docs/house.md'] })
+    )
+    expect(result).toEqual({ success: true, name: 'gui-subpath' })
+    expect(readAgentFile('gui-subpath.md')).toContain('shuvix-instruction-files: docs/house.md')
+
+    // 落盘后读得回来 —— 「写出去的是可读文件」才是这条写路径的合同
+    expect(agentService.listAll().find((a) => a.name === 'gui-subpath')!.instructionFiles).toEqual([
+      'docs/house.md'
+    ])
   })
 })
