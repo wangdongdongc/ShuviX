@@ -146,7 +146,7 @@ export class SshTool extends BaseTool<typeof SshParamsSchema> {
       case 'disconnect':
         return handleDisconnect(this.ctx)
       default:
-        throw new Error(`Unknown action: ${params.action}`)
+        throw new Error(`Unknown action "${params.action}". Available: connect, exec, disconnect.`)
     }
   }
 }

@@ -76,7 +76,9 @@ export async function applyEdit(
 
     // 验证替换是否有效
     if (normalizedContent === newContent) {
-      throw new Error(`No change produced: ${params.path}`)
+      throw new Error(
+        `No change produced: ${params.path} — newText is identical to oldText; provide a newText that differs.`
+      )
     }
 
     const diffResult = generateDiffString(normalizedContent, newContent)

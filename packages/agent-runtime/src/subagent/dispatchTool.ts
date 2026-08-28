@@ -201,7 +201,9 @@ export class DispatchAgentTool extends BaseTool<typeof AgentParamsSchema> {
       // 省略 ref：用注入的默认 agent（继承调用方工具/系统提示，由宿主装配）
       agentType = this.deps.defaultAgentType
     } else {
-      return errorResult(`Missing required parameter "agent". Available: [${names().join(', ')}]`)
+      return errorResult(
+        `Missing "name": this host offers no default agent, so \`name\` must select one. Available: [${names().join(', ')}]`
+      )
     }
 
     try {
