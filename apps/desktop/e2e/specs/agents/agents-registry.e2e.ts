@@ -26,9 +26,10 @@ interface AgentRow {
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('八个内置齐全，上下文注入默认全开（notebook 除外），描述非空；无启用开关字段', async () => {
+  it('九个内置齐全，上下文注入默认全开（notebook 除外），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     expect(builtins.map((a) => a.name).sort()).toEqual([
+      'browser',
       'coding',
       'default',
       'explore',

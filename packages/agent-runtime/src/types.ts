@@ -57,7 +57,7 @@ export interface ToolResultTransformOutput {
   details?: ToolResultDetails
 }
 
-/** 工具结果入库前的瘦身转换（如图片 → 路径提示）。浏览器宿主可用 defaultToolResultTransform。 */
+/** 工具结果**广播前**的瘦身转换（如图片 → 占位文本）；不影响落盘与发给模型的内容。浏览器宿主可用 defaultToolResultTransform。 */
 export type ToolResultTransform = (input: ToolResultTransformInput) => ToolResultTransformOutput
 
 /** 默认 passthrough：拼接文本内容，非文本块 JSON 序列化。 */

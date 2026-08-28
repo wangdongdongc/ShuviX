@@ -45,6 +45,7 @@ export type BrowserParamKey =
   | 'timeout'
   | 'submitKey'
   | 'fullPage'
+  | 'full'
   | 'outputPath'
   | 'pageSize'
   | 'landscape'
@@ -109,21 +110,28 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
   {
     name: 'snapshot',
     description:
-      'Accessibility snapshot of a tab: interactive elements each with a uid. REQUIRED before click/fill/type.',
+      'Accessibility snapshot of a tab: interactive elements each with a uid. REQUIRED before ' +
+      'click/fill/type. Repeat calls on the same tab return only what changed (marked +/~) with ' +
+      'unchanged runs collapsed; pass full:true if you no longer have the earlier snapshot.',
     required: ['tabId'],
-    optional: [],
-    usage: 'snapshot(tabId)'
+    optional: ['full'],
+    usage: 'snapshot(tabId[, full])'
   },
   {
     name: 'read_page',
-    description: "Read the tab's rendered content (after JavaScript) converted to Markdown.",
+    description:
+      "Read the tab's whole rendered content (after JavaScript) as Markdown — thousands of " +
+      'tokens on a real page. Use when you need to READ the content; for one specific value ' +
+      '(a cell, a label, a style) use evaluate instead.',
     required: ['tabId'],
     optional: [],
     usage: 'read_page(tabId)'
   },
   {
     name: 'screenshot',
-    description: 'Capture the tab viewport as an image.',
+    description:
+      'Capture the tab viewport as an image (~900 tokens, more with fullPage). Visual questions ' +
+      'only — layout, spacing, overlap, visual regressions. For facts about the page use evaluate.',
     required: ['tabId'],
     optional: ['fullPage', 'uid'],
     usage: 'screenshot(tabId[, fullPage][, uid])'
@@ -166,7 +174,9 @@ export const BROWSER_OPS: readonly BrowserOpSpec[] = [
   },
   {
     name: 'evaluate',
-    description: 'Run a JavaScript expression in the page and return its JSON value.',
+    description:
+      'Run a JavaScript expression in the page and return its JSON value (~20 tokens). The cheap ' +
+      'way to check any fact: text content, attribute, computed style, element count, visibility.',
     required: ['tabId', 'expression'],
     optional: [],
     cap: 'evaluate',

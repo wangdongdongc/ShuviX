@@ -1,0 +1,1137 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/dense.html",
+  "title": "dense.html",
+  "nodes": [
+    {
+      "nodeId": "243",
+      "childIds": ["244"],
+      "backendDOMNodeId": 243,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "244",
+      "ignored": true,
+      "childIds": ["248"],
+      "backendDOMNodeId": 244,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "248",
+      "ignored": true,
+      "childIds": ["249", "250"],
+      "backendDOMNodeId": 248,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "249",
+      "childIds": ["185"],
+      "backendDOMNodeId": 249,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "250",
+      "ignored": true,
+      "childIds": ["251", "261"],
+      "backendDOMNodeId": 250,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "251",
+      "ignored": true,
+      "childIds": ["252", "253", "254", "255", "256", "257", "258", "259", "260"],
+      "backendDOMNodeId": 251,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "252",
+      "childIds": ["186"],
+      "backendDOMNodeId": 252,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "253",
+      "childIds": ["187"],
+      "backendDOMNodeId": 253,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "254",
+      "childIds": ["188"],
+      "backendDOMNodeId": 254,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "255",
+      "childIds": ["189"],
+      "backendDOMNodeId": 255,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "256",
+      "childIds": ["190"],
+      "backendDOMNodeId": 256,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "257",
+      "childIds": ["191"],
+      "backendDOMNodeId": 257,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "258",
+      "childIds": ["192"],
+      "backendDOMNodeId": 258,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "259",
+      "childIds": ["193"],
+      "backendDOMNodeId": 259,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "260",
+      "childIds": ["194"],
+      "backendDOMNodeId": 260,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "261",
+      "childIds": ["262", "263", "264", "266", "267", "269", "270", "272", "314"],
+      "backendDOMNodeId": 261,
+      "role": { "value": "main" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "185",
+      "childIds": ["-1000000206"],
+      "backendDOMNodeId": 185,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ShuviX — Settings › Providers" }
+    },
+    {
+      "nodeId": "186",
+      "childIds": ["-1000000149"],
+      "backendDOMNodeId": 186,
+      "role": { "value": "StaticText" },
+      "name": { "value": "General" }
+    },
+    {
+      "nodeId": "187",
+      "childIds": ["-1000000150"],
+      "backendDOMNodeId": 187,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Providers" }
+    },
+    {
+      "nodeId": "188",
+      "childIds": ["-1000000151"],
+      "backendDOMNodeId": 188,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Agents" }
+    },
+    {
+      "nodeId": "189",
+      "childIds": ["-1000000152"],
+      "backendDOMNodeId": 189,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Skills" }
+    },
+    {
+      "nodeId": "190",
+      "childIds": ["-1000000153"],
+      "backendDOMNodeId": 190,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MCP Servers" }
+    },
+    {
+      "nodeId": "191",
+      "childIds": ["-1000000154"],
+      "backendDOMNodeId": 191,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Security Policies" }
+    },
+    {
+      "nodeId": "192",
+      "childIds": ["-1000000155"],
+      "backendDOMNodeId": 192,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Telegram Bots" }
+    },
+    {
+      "nodeId": "193",
+      "childIds": ["-1000000156"],
+      "backendDOMNodeId": 193,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Monitor" }
+    },
+    {
+      "nodeId": "194",
+      "childIds": ["-1000000157"],
+      "backendDOMNodeId": 194,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Appearance" }
+    },
+    {
+      "nodeId": "262",
+      "childIds": ["195"],
+      "backendDOMNodeId": 262,
+      "role": { "value": "heading" },
+      "name": { "value": "Anthropic" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "263",
+      "childIds": ["196"],
+      "backendDOMNodeId": 263,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "264",
+      "childIds": ["265"],
+      "backendDOMNodeId": 264,
+      "role": { "value": "textbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "266",
+      "childIds": ["198"],
+      "backendDOMNodeId": 266,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "267",
+      "childIds": ["268"],
+      "backendDOMNodeId": 267,
+      "role": { "value": "textbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "269",
+      "childIds": ["200"],
+      "backendDOMNodeId": 269,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "270",
+      "childIds": ["271"],
+      "backendDOMNodeId": 270,
+      "role": { "value": "textbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "272",
+      "childIds": ["273"],
+      "backendDOMNodeId": 272,
+      "role": { "value": "table" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "314",
+      "childIds": ["237", "315", "239", "316", "241", "317"],
+      "backendDOMNodeId": 314,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "-1000000206",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "ShuviX — Settings › Providers" }
+    },
+    {
+      "nodeId": "-1000000149",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "General" }
+    },
+    {
+      "nodeId": "-1000000150",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Providers" }
+    },
+    {
+      "nodeId": "-1000000151",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Agents" }
+    },
+    {
+      "nodeId": "-1000000152",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Skills" }
+    },
+    {
+      "nodeId": "-1000000153",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MCP Servers" }
+    },
+    {
+      "nodeId": "-1000000154",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Security Policies" }
+    },
+    {
+      "nodeId": "-1000000155",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Telegram Bots" }
+    },
+    {
+      "nodeId": "-1000000156",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Monitor" }
+    },
+    {
+      "nodeId": "-1000000157",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Appearance" }
+    },
+    {
+      "nodeId": "195",
+      "childIds": ["-1000000207"],
+      "backendDOMNodeId": 195,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Anthropic" }
+    },
+    {
+      "nodeId": "196",
+      "childIds": ["-1000000208"],
+      "backendDOMNodeId": 196,
+      "role": { "value": "StaticText" },
+      "name": { "value": "API Base URL" }
+    },
+    {
+      "nodeId": "265",
+      "childIds": ["197"],
+      "backendDOMNodeId": 265,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "198",
+      "childIds": ["-1000000209"],
+      "backendDOMNodeId": 198,
+      "role": { "value": "StaticText" },
+      "name": { "value": "API Key" }
+    },
+    {
+      "nodeId": "268",
+      "childIds": ["199"],
+      "backendDOMNodeId": 268,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "200",
+      "childIds": ["-1000000210"],
+      "backendDOMNodeId": 200,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Request timeout (ms)" }
+    },
+    {
+      "nodeId": "271",
+      "childIds": ["201"],
+      "backendDOMNodeId": 271,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "273",
+      "ignored": true,
+      "childIds": ["274", "282", "290", "298", "306"],
+      "backendDOMNodeId": 273,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "274",
+      "childIds": ["275", "276", "277", "278", "279", "280", "281"],
+      "backendDOMNodeId": 274,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "282",
+      "childIds": ["283", "284", "285", "286", "287", "288", "289"],
+      "backendDOMNodeId": 282,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "290",
+      "childIds": ["291", "292", "293", "294", "295", "296", "297"],
+      "backendDOMNodeId": 290,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "298",
+      "childIds": ["299", "300", "301", "302", "303", "304", "305"],
+      "backendDOMNodeId": 298,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "306",
+      "childIds": ["307", "308", "309", "310", "311", "312", "313"],
+      "backendDOMNodeId": 306,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "237",
+      "childIds": ["-1000000211"],
+      "backendDOMNodeId": 237,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Cache hit rate " }
+    },
+    {
+      "nodeId": "315",
+      "childIds": ["238"],
+      "backendDOMNodeId": 315,
+      "role": { "value": "code" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "239",
+      "childIds": ["-1000000213"],
+      "backendDOMNodeId": 239,
+      "role": { "value": "StaticText" },
+      "name": { "value": " on read, " }
+    },
+    {
+      "nodeId": "316",
+      "childIds": ["240"],
+      "backendDOMNodeId": 316,
+      "role": { "value": "code" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "241",
+      "childIds": ["-1000000215"],
+      "backendDOMNodeId": 241,
+      "role": { "value": "StaticText" },
+      "name": { "value": " on write. Last sync 2026-08-26 21:07:43 UTC · rev " }
+    },
+    {
+      "nodeId": "317",
+      "childIds": ["242"],
+      "backendDOMNodeId": 317,
+      "role": { "value": "code" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "-1000000207",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Anthropic" }
+    },
+    {
+      "nodeId": "-1000000208",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "API Base URL" }
+    },
+    {
+      "nodeId": "197",
+      "childIds": ["-1000000160"],
+      "backendDOMNodeId": 197,
+      "role": { "value": "StaticText" },
+      "name": { "value": "https://api.anthropic.com/v1" }
+    },
+    {
+      "nodeId": "-1000000209",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "API Key" }
+    },
+    {
+      "nodeId": "199",
+      "childIds": ["-1000000162"],
+      "backendDOMNodeId": 199,
+      "role": { "value": "StaticText" },
+      "name": { "value": "sk-ant-api03-7fQ2x••••••••••••••••9dK1" }
+    },
+    {
+      "nodeId": "-1000000210",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Request timeout (ms)" }
+    },
+    {
+      "nodeId": "201",
+      "childIds": ["-1000000164"],
+      "backendDOMNodeId": 201,
+      "role": { "value": "StaticText" },
+      "name": { "value": "120000" }
+    },
+    {
+      "nodeId": "275",
+      "childIds": ["202"],
+      "backendDOMNodeId": 275,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Model ID" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "276",
+      "childIds": ["203"],
+      "backendDOMNodeId": 276,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Ctx" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "277",
+      "childIds": ["204"],
+      "backendDOMNodeId": 277,
+      "role": { "value": "columnheader" },
+      "name": { "value": "In $/M" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "278",
+      "childIds": ["205"],
+      "backendDOMNodeId": 278,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Out $/M" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "279",
+      "childIds": ["206"],
+      "backendDOMNodeId": 279,
+      "role": { "value": "columnheader" },
+      "name": { "value": "p50 ms" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "280",
+      "childIds": ["207"],
+      "backendDOMNodeId": 280,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Calls" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "281",
+      "childIds": ["208"],
+      "backendDOMNodeId": 281,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Tokens" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "283",
+      "childIds": ["209"],
+      "backendDOMNodeId": 283,
+      "role": { "value": "cell" },
+      "name": { "value": "claude-opus-5" }
+    },
+    {
+      "nodeId": "284",
+      "childIds": ["210"],
+      "backendDOMNodeId": 284,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "285",
+      "childIds": ["211"],
+      "backendDOMNodeId": 285,
+      "role": { "value": "cell" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "286",
+      "childIds": ["212"],
+      "backendDOMNodeId": 286,
+      "role": { "value": "cell" },
+      "name": { "value": "75.00" }
+    },
+    {
+      "nodeId": "287",
+      "childIds": ["213"],
+      "backendDOMNodeId": 287,
+      "role": { "value": "cell" },
+      "name": { "value": "1847" }
+    },
+    {
+      "nodeId": "288",
+      "childIds": ["214"],
+      "backendDOMNodeId": 288,
+      "role": { "value": "cell" },
+      "name": { "value": "3921" }
+    },
+    {
+      "nodeId": "289",
+      "childIds": ["215"],
+      "backendDOMNodeId": 289,
+      "role": { "value": "cell" },
+      "name": { "value": "48213904" }
+    },
+    {
+      "nodeId": "291",
+      "childIds": ["216"],
+      "backendDOMNodeId": 291,
+      "role": { "value": "cell" },
+      "name": { "value": "claude-sonnet-5" }
+    },
+    {
+      "nodeId": "292",
+      "childIds": ["217"],
+      "backendDOMNodeId": 292,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "293",
+      "childIds": ["218"],
+      "backendDOMNodeId": 293,
+      "role": { "value": "cell" },
+      "name": { "value": "3.00" }
+    },
+    {
+      "nodeId": "294",
+      "childIds": ["219"],
+      "backendDOMNodeId": 294,
+      "role": { "value": "cell" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "295",
+      "childIds": ["220"],
+      "backendDOMNodeId": 295,
+      "role": { "value": "cell" },
+      "name": { "value": "913" }
+    },
+    {
+      "nodeId": "296",
+      "childIds": ["221"],
+      "backendDOMNodeId": 296,
+      "role": { "value": "cell" },
+      "name": { "value": "18402" }
+    },
+    {
+      "nodeId": "297",
+      "childIds": ["222"],
+      "backendDOMNodeId": 297,
+      "role": { "value": "cell" },
+      "name": { "value": "203417882" }
+    },
+    {
+      "nodeId": "299",
+      "childIds": ["223"],
+      "backendDOMNodeId": 299,
+      "role": { "value": "cell" },
+      "name": { "value": "claude-haiku-4-5" }
+    },
+    {
+      "nodeId": "300",
+      "childIds": ["224"],
+      "backendDOMNodeId": 300,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "301",
+      "childIds": ["225"],
+      "backendDOMNodeId": 301,
+      "role": { "value": "cell" },
+      "name": { "value": "0.80" }
+    },
+    {
+      "nodeId": "302",
+      "childIds": ["226"],
+      "backendDOMNodeId": 302,
+      "role": { "value": "cell" },
+      "name": { "value": "4.00" }
+    },
+    {
+      "nodeId": "303",
+      "childIds": ["227"],
+      "backendDOMNodeId": 303,
+      "role": { "value": "cell" },
+      "name": { "value": "412" }
+    },
+    {
+      "nodeId": "304",
+      "childIds": ["228"],
+      "backendDOMNodeId": 304,
+      "role": { "value": "cell" },
+      "name": { "value": "90137" }
+    },
+    {
+      "nodeId": "305",
+      "childIds": ["229"],
+      "backendDOMNodeId": 305,
+      "role": { "value": "cell" },
+      "name": { "value": "771290043" }
+    },
+    {
+      "nodeId": "307",
+      "childIds": ["230"],
+      "backendDOMNodeId": 307,
+      "role": { "value": "cell" },
+      "name": { "value": "claude-fable-5" }
+    },
+    {
+      "nodeId": "308",
+      "childIds": ["231"],
+      "backendDOMNodeId": 308,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "309",
+      "childIds": ["232"],
+      "backendDOMNodeId": 309,
+      "role": { "value": "cell" },
+      "name": { "value": "1.25" }
+    },
+    {
+      "nodeId": "310",
+      "childIds": ["233"],
+      "backendDOMNodeId": 310,
+      "role": { "value": "cell" },
+      "name": { "value": "6.25" }
+    },
+    {
+      "nodeId": "311",
+      "childIds": ["234"],
+      "backendDOMNodeId": 311,
+      "role": { "value": "cell" },
+      "name": { "value": "688" }
+    },
+    {
+      "nodeId": "312",
+      "childIds": ["235"],
+      "backendDOMNodeId": 312,
+      "role": { "value": "cell" },
+      "name": { "value": "7734" }
+    },
+    {
+      "nodeId": "313",
+      "childIds": ["236"],
+      "backendDOMNodeId": 313,
+      "role": { "value": "cell" },
+      "name": { "value": "19884271" }
+    },
+    {
+      "nodeId": "-1000000211",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Cache hit rate " }
+    },
+    {
+      "nodeId": "238",
+      "childIds": ["-1000000212"],
+      "backendDOMNodeId": 238,
+      "role": { "value": "StaticText" },
+      "name": { "value": "0.1×" }
+    },
+    {
+      "nodeId": "-1000000213",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " on read, " }
+    },
+    {
+      "nodeId": "240",
+      "childIds": ["-1000000214"],
+      "backendDOMNodeId": 240,
+      "role": { "value": "StaticText" },
+      "name": { "value": "1.25×" }
+    },
+    {
+      "nodeId": "-1000000215",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " on write. Last sync 2026-08-26 21:07:43 UTC · rev " }
+    },
+    {
+      "nodeId": "242",
+      "childIds": ["-1000000216"],
+      "backendDOMNodeId": 242,
+      "role": { "value": "StaticText" },
+      "name": { "value": "9a316650" }
+    },
+    {
+      "nodeId": "-1000000160",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "https://api.anthropic.com/v1" }
+    },
+    {
+      "nodeId": "-1000000162",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "sk-ant-api03-7fQ2x••••••••••••••••9dK1" }
+    },
+    {
+      "nodeId": "-1000000164",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "120000" }
+    },
+    {
+      "nodeId": "202",
+      "childIds": ["-1000000165"],
+      "backendDOMNodeId": 202,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Model ID" }
+    },
+    {
+      "nodeId": "203",
+      "childIds": ["-1000000166"],
+      "backendDOMNodeId": 203,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Ctx" }
+    },
+    {
+      "nodeId": "204",
+      "childIds": ["-1000000167"],
+      "backendDOMNodeId": 204,
+      "role": { "value": "StaticText" },
+      "name": { "value": "In $/M" }
+    },
+    {
+      "nodeId": "205",
+      "childIds": ["-1000000168"],
+      "backendDOMNodeId": 205,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Out $/M" }
+    },
+    {
+      "nodeId": "206",
+      "childIds": ["-1000000169"],
+      "backendDOMNodeId": 206,
+      "role": { "value": "StaticText" },
+      "name": { "value": "p50 ms" }
+    },
+    {
+      "nodeId": "207",
+      "childIds": ["-1000000170"],
+      "backendDOMNodeId": 207,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Calls" }
+    },
+    {
+      "nodeId": "208",
+      "childIds": ["-1000000171"],
+      "backendDOMNodeId": 208,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Tokens" }
+    },
+    {
+      "nodeId": "209",
+      "childIds": ["-1000000172"],
+      "backendDOMNodeId": 209,
+      "role": { "value": "StaticText" },
+      "name": { "value": "claude-opus-5" }
+    },
+    {
+      "nodeId": "210",
+      "childIds": ["-1000000173"],
+      "backendDOMNodeId": 210,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "211",
+      "childIds": ["-1000000174"],
+      "backendDOMNodeId": 211,
+      "role": { "value": "StaticText" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "212",
+      "childIds": ["-1000000175"],
+      "backendDOMNodeId": 212,
+      "role": { "value": "StaticText" },
+      "name": { "value": "75.00" }
+    },
+    {
+      "nodeId": "213",
+      "childIds": ["-1000000176"],
+      "backendDOMNodeId": 213,
+      "role": { "value": "StaticText" },
+      "name": { "value": "1847" }
+    },
+    {
+      "nodeId": "214",
+      "childIds": ["-1000000177"],
+      "backendDOMNodeId": 214,
+      "role": { "value": "StaticText" },
+      "name": { "value": "3921" }
+    },
+    {
+      "nodeId": "215",
+      "childIds": ["-1000000178"],
+      "backendDOMNodeId": 215,
+      "role": { "value": "StaticText" },
+      "name": { "value": "48213904" }
+    },
+    {
+      "nodeId": "216",
+      "childIds": ["-1000000179"],
+      "backendDOMNodeId": 216,
+      "role": { "value": "StaticText" },
+      "name": { "value": "claude-sonnet-5" }
+    },
+    {
+      "nodeId": "217",
+      "childIds": ["-1000000180"],
+      "backendDOMNodeId": 217,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "218",
+      "childIds": ["-1000000181"],
+      "backendDOMNodeId": 218,
+      "role": { "value": "StaticText" },
+      "name": { "value": "3.00" }
+    },
+    {
+      "nodeId": "219",
+      "childIds": ["-1000000182"],
+      "backendDOMNodeId": 219,
+      "role": { "value": "StaticText" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "220",
+      "childIds": ["-1000000183"],
+      "backendDOMNodeId": 220,
+      "role": { "value": "StaticText" },
+      "name": { "value": "913" }
+    },
+    {
+      "nodeId": "221",
+      "childIds": ["-1000000184"],
+      "backendDOMNodeId": 221,
+      "role": { "value": "StaticText" },
+      "name": { "value": "18402" }
+    },
+    {
+      "nodeId": "222",
+      "childIds": ["-1000000185"],
+      "backendDOMNodeId": 222,
+      "role": { "value": "StaticText" },
+      "name": { "value": "203417882" }
+    },
+    {
+      "nodeId": "223",
+      "childIds": ["-1000000186"],
+      "backendDOMNodeId": 223,
+      "role": { "value": "StaticText" },
+      "name": { "value": "claude-haiku-4-5" }
+    },
+    {
+      "nodeId": "224",
+      "childIds": ["-1000000187"],
+      "backendDOMNodeId": 224,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "225",
+      "childIds": ["-1000000188"],
+      "backendDOMNodeId": 225,
+      "role": { "value": "StaticText" },
+      "name": { "value": "0.80" }
+    },
+    {
+      "nodeId": "226",
+      "childIds": ["-1000000189"],
+      "backendDOMNodeId": 226,
+      "role": { "value": "StaticText" },
+      "name": { "value": "4.00" }
+    },
+    {
+      "nodeId": "227",
+      "childIds": ["-1000000190"],
+      "backendDOMNodeId": 227,
+      "role": { "value": "StaticText" },
+      "name": { "value": "412" }
+    },
+    {
+      "nodeId": "228",
+      "childIds": ["-1000000191"],
+      "backendDOMNodeId": 228,
+      "role": { "value": "StaticText" },
+      "name": { "value": "90137" }
+    },
+    {
+      "nodeId": "229",
+      "childIds": ["-1000000192"],
+      "backendDOMNodeId": 229,
+      "role": { "value": "StaticText" },
+      "name": { "value": "771290043" }
+    },
+    {
+      "nodeId": "230",
+      "childIds": ["-1000000193"],
+      "backendDOMNodeId": 230,
+      "role": { "value": "StaticText" },
+      "name": { "value": "claude-fable-5" }
+    },
+    {
+      "nodeId": "231",
+      "childIds": ["-1000000194"],
+      "backendDOMNodeId": 231,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "232",
+      "childIds": ["-1000000195"],
+      "backendDOMNodeId": 232,
+      "role": { "value": "StaticText" },
+      "name": { "value": "1.25" }
+    },
+    {
+      "nodeId": "233",
+      "childIds": ["-1000000196"],
+      "backendDOMNodeId": 233,
+      "role": { "value": "StaticText" },
+      "name": { "value": "6.25" }
+    },
+    {
+      "nodeId": "234",
+      "childIds": ["-1000000197"],
+      "backendDOMNodeId": 234,
+      "role": { "value": "StaticText" },
+      "name": { "value": "688" }
+    },
+    {
+      "nodeId": "235",
+      "childIds": ["-1000000198"],
+      "backendDOMNodeId": 235,
+      "role": { "value": "StaticText" },
+      "name": { "value": "7734" }
+    },
+    {
+      "nodeId": "236",
+      "childIds": ["-1000000199"],
+      "backendDOMNodeId": 236,
+      "role": { "value": "StaticText" },
+      "name": { "value": "19884271" }
+    },
+    { "nodeId": "-1000000212", "role": { "value": "InlineTextBox" }, "name": { "value": "0.1×" } },
+    { "nodeId": "-1000000214", "role": { "value": "InlineTextBox" }, "name": { "value": "1.25×" } },
+    {
+      "nodeId": "-1000000216",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "9a316650" }
+    },
+    {
+      "nodeId": "-1000000165",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Model ID" }
+    },
+    { "nodeId": "-1000000166", "role": { "value": "InlineTextBox" }, "name": { "value": "Ctx" } },
+    {
+      "nodeId": "-1000000167",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "In $/M" }
+    },
+    {
+      "nodeId": "-1000000168",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Out $/M" }
+    },
+    {
+      "nodeId": "-1000000169",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "p50 ms" }
+    },
+    { "nodeId": "-1000000170", "role": { "value": "InlineTextBox" }, "name": { "value": "Calls" } },
+    {
+      "nodeId": "-1000000171",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Tokens" }
+    },
+    {
+      "nodeId": "-1000000172",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "claude-opus-5" }
+    },
+    {
+      "nodeId": "-1000000173",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000174", "role": { "value": "InlineTextBox" }, "name": { "value": "15.00" } },
+    { "nodeId": "-1000000175", "role": { "value": "InlineTextBox" }, "name": { "value": "75.00" } },
+    { "nodeId": "-1000000176", "role": { "value": "InlineTextBox" }, "name": { "value": "1847" } },
+    { "nodeId": "-1000000177", "role": { "value": "InlineTextBox" }, "name": { "value": "3921" } },
+    {
+      "nodeId": "-1000000178",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "48213904" }
+    },
+    {
+      "nodeId": "-1000000179",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "claude-sonnet-5" }
+    },
+    {
+      "nodeId": "-1000000180",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000181", "role": { "value": "InlineTextBox" }, "name": { "value": "3.00" } },
+    { "nodeId": "-1000000182", "role": { "value": "InlineTextBox" }, "name": { "value": "15.00" } },
+    { "nodeId": "-1000000183", "role": { "value": "InlineTextBox" }, "name": { "value": "913" } },
+    { "nodeId": "-1000000184", "role": { "value": "InlineTextBox" }, "name": { "value": "18402" } },
+    {
+      "nodeId": "-1000000185",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "203417882" }
+    },
+    {
+      "nodeId": "-1000000186",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "claude-haiku-4-5" }
+    },
+    {
+      "nodeId": "-1000000187",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000188", "role": { "value": "InlineTextBox" }, "name": { "value": "0.80" } },
+    { "nodeId": "-1000000189", "role": { "value": "InlineTextBox" }, "name": { "value": "4.00" } },
+    { "nodeId": "-1000000190", "role": { "value": "InlineTextBox" }, "name": { "value": "412" } },
+    { "nodeId": "-1000000191", "role": { "value": "InlineTextBox" }, "name": { "value": "90137" } },
+    {
+      "nodeId": "-1000000192",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "771290043" }
+    },
+    {
+      "nodeId": "-1000000193",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "claude-fable-5" }
+    },
+    {
+      "nodeId": "-1000000194",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000195", "role": { "value": "InlineTextBox" }, "name": { "value": "1.25" } },
+    { "nodeId": "-1000000196", "role": { "value": "InlineTextBox" }, "name": { "value": "6.25" } },
+    { "nodeId": "-1000000197", "role": { "value": "InlineTextBox" }, "name": { "value": "688" } },
+    { "nodeId": "-1000000198", "role": { "value": "InlineTextBox" }, "name": { "value": "7734" } },
+    {
+      "nodeId": "-1000000199",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "19884271" }
+    }
+  ]
+}

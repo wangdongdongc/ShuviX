@@ -205,7 +205,7 @@ export class AgentSession {
     return await this.runtime.listChatMessages()
   }
 
-  /** 运行时信息快照（读 harness 状态 + session 上下文，供前端「Agent 信息」弹窗展示） */
+  /** 运行时信息快照（读 harness 状态 + session 上下文，供设置页「监视器 → 智能体」展开时展示） */
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
     return await this.runtime.getRuntimeInfo()
   }
@@ -260,9 +260,14 @@ export class AgentSession {
    * 这里的运行时**被弃用**（下次 ensure 重建一个新的），故必须从运行时注册中心注销 ——
    * 漏注销会在监控页留下一个指向死 harness 的条目。派生 agent 不受影响：它们不随
    * 根运行时重建而失效。
+   *
+   * **必须 await**：`abort()` 内部要等当前 run 真正跑完（pi 的 waitForIdle）。以前这里是
+   * fire-and-forget，运行时被立刻解绑，下一条消息就会造出第二个运行时 —— 两个 run 往同一棵
+   * 会话树上交叉写，`tool_use`/`tool_result` 配对作废，之后每一发请求都被 provider 打回。
+   * 关不掉就一直等（会话呈现「正在停止」），绝不让第二个运行时出生。
    */
-  invalidate(): void {
-    void this.runtime.abort()
+  async invalidate(): Promise<void> {
+    await this.abortQuietly()
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
@@ -270,12 +275,24 @@ export class AgentSession {
   }
 
   /** 完全销毁（删除会话时调用）。不 cascade 到子智能体。 */
-  destroy(): void {
-    void this.runtime.abort()
+  async destroy(): Promise<void> {
+    await this.abortQuietly()
     this.created.dispose()
     clearFileTimeSession(this.sessionId)
     clearSessionDecisions(this.sessionId)
     sshManager.disconnect(this.sessionId).catch(() => {})
     log.info(`destroy session=${this.sessionId}`)
+  }
+
+  /**
+   * 关停当前 run。abort 抛错只记日志：清理链路的其余步骤仍要走完，
+   * 而「run 已停」这个保证由 abort 自身的 waitForIdle 提供，抛错时它已经不在跑了。
+   */
+  private async abortQuietly(): Promise<void> {
+    try {
+      await this.runtime.abort()
+    } catch (err) {
+      log.warn(`中止运行时失败 session=${this.sessionId}: ${err}`)
+    }
   }
 }

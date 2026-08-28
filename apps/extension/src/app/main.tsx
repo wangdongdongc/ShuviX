@@ -14,10 +14,14 @@ import { mcpManager } from '../runtime/mcpRuntime'
 import { initAppearance } from './appearanceStore'
 import { initSidebar } from './sidebarStore'
 import { initPanel } from './panelStore'
+import { initNotifications } from './notifications'
 import { App } from './App'
 
 // ④ 注入本地 ChatApi 实现（进程内，直接 await）
 setChatApi(chatApiAdapter)
+
+// ④' 通知：旁听事件流，标签页不在前台时弹系统通知（点击回到对应会话）
+initNotifications()
 
 // ⑤ 启动前载入外观 + 模型启停状态 + MCP server 列表（让同步读取生效），再渲染
 void Promise.all([

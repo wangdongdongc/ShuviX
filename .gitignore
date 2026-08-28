@@ -4,6 +4,7 @@ out
 .DS_Store
 .eslintcache
 *.log*
+tmp/
 
 # AI/IDE 本地配置
 .claude/

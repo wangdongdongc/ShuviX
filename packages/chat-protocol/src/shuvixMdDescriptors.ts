@@ -96,9 +96,28 @@ const POLICY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/**
+ * 项目记忆文件（agent-runtime memory/memoryFile.ts 的键集）。侧栏「项目记忆」点开的就是它，
+ * 所以卡片是用户改记忆元数据的主要入口：`name` 是人话标题（**不参与路径**，路径只认文件名，
+ * 故用 text 而非 agent 那种标识符 mono），`shuvix-memory-recall` 是唯一进注入索引的描述字段。
+ */
+const MEMORY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'memory',
+  badge: 'ShuviX memory',
+  fields: [
+    { key: 'name', labelKey: 'tool.subAgentName', kind: 'text' },
+    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
+    { key: 'shuvix-memory-recall', labelKey: 'memory.recall', kind: 'text' },
+    { key: 'shuvix-memory-pinned', labelKey: 'memory.pinned', kind: 'boolean' },
+    { key: 'shuvix-memory-updated', labelKey: 'memory.updated', kind: 'text' },
+    { key: 'shuvix-memory-session', labelKey: 'memory.session', kind: 'mono' }
+  ]
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   AGENT_DESCRIPTOR,
-  POLICY_DESCRIPTOR
+  POLICY_DESCRIPTOR,
+  MEMORY_DESCRIPTOR
 ]
 
 /** 按标记 type 查描述符；无 → null（属性卡降级为通用 key/value 卡） */

@@ -56,6 +56,7 @@ import type {
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
 import type { ContextMenuRequest } from '@shuvix/chat-protocol/types/contextMenu'
+import type { ProjectMemoryEntry } from '@shuvix/chat-protocol/types/memory'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
 /**
@@ -178,6 +179,15 @@ const api = {
     monitorList: (): Promise<
       import('@shuvix/chat-protocol/types/agentMonitor').AgentMonitorEntry[]
     > => ipcRenderer.invoke('agentMonitor:list'),
+
+    /**
+     * 智能体监控：单条 agent 的完整运行时快照（系统提示词 / 工具定义 / 上下文消息数）。
+     * 展开某条时拉一次 —— 要重建上下文，不进轮询列表。已销毁的 agentId 返回 null。
+     */
+    monitorDetail: (
+      agentId: string
+    ): Promise<import('@shuvix/chat-protocol/chatApi').AgentRuntimeInfo | null> =>
+      ipcRenderer.invoke('agentMonitor:detail', agentId),
 
     /**
      * 统一的"用户输入响应"入口。
@@ -603,9 +613,17 @@ const api = {
     reload: (tabId: string) => ipcRenderer.invoke('browser-view:reload', tabId),
     stop: (tabId: string) => ipcRenderer.invoke('browser-view:stop', tabId),
     getUrl: (tabId: string) => ipcRenderer.invoke('browser-view:get-url', tabId) as Promise<string>,
-    // ---- 布局（面板级，作用于激活 tab） ----
-    updateBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
-      ipcRenderer.send('browser-view:update-bounds', bounds),
+    // ---- 布局（一次提交全部同屏 tab；未列出的 tab 会被隐藏） ----
+    setLayout: (
+      entries: Array<{
+        tabId: string
+        bounds: { x: number; y: number; width: number; height: number }
+        zoom?: number
+      }>
+    ) => ipcRenderer.send('browser-view:set-layout', entries),
+    /** 抓 tab 当前画面（dataURL；平铺墙滚动时的占位图） */
+    capture: (tabId: string) =>
+      ipcRenderer.invoke('browser-view:capture', tabId) as Promise<string>,
     setVisible: (visible: boolean) => ipcRenderer.send('browser-view:set-visible', visible),
     // ---- 事件（payload 均带 tabId，返回 cleanup） ----
     onTabCreated: (callback: (payload: { tabId: string; url: string; active: boolean }) => void) =>
@@ -618,15 +636,15 @@ const api = {
       onBrowserViewEvent('browser-view:tab-title-updated', callback),
     onTabFaviconUpdated: (callback: (payload: { tabId: string; favicon?: string }) => void) =>
       onBrowserViewEvent('browser-view:tab-favicon-updated', callback),
-    /** tab 开始加载 */
-    onDidStartLoading: (callback: (payload: { tabId: string; url: string }) => void) =>
+    /** tab spinner 开始转（Chromium 加载位置真） */
+    onDidStartLoading: (callback: (payload: { tabId: string }) => void) =>
       onBrowserViewEvent('browser-view:did-start-loading', callback),
-    /** tab 导航完成（URL 变化） */
+    /** tab URL 变化（导航开始 / 提交 / 页内跳转） */
     onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) =>
       onBrowserViewEvent('browser-view:did-navigate', callback),
-    /** tab 加载完成 */
-    onDidFinishLoad: (callback: (payload: { tabId: string }) => void) =>
-      onBrowserViewEvent('browser-view:did-finish-load', callback),
+    /** tab spinner 停转（成功/失败/中止/崩溃都会到） */
+    onDidStopLoading: (callback: (payload: { tabId: string }) => void) =>
+      onBrowserViewEvent('browser-view:did-stop-loading', callback),
     /** tab 加载失败（含证书错误、DNS 错误等） */
     onDidFailLoad: (
       callback: (payload: {
@@ -811,6 +829,25 @@ const api = {
     // 悬浮状态变更订阅已并入 events.subscribe（AppEvent 'pinChat.changed'）
   },
 
+  // ============ 通知（系统通知 ↔ 会话定位） ============
+  notification: {
+    /**
+     * 上报本窗口当前展示的会话 —— 主进程据此 + 窗口焦点判断「用户是否已经看着它了」，
+     * 看着就不弹通知。null = 当前无会话。
+     */
+    reportActiveSession: (sessionId: string | null) =>
+      ipcRenderer.invoke('notification:reportActiveSession', sessionId),
+    /** 取走「通知点击时主窗尚未就绪」暂存的跳转目标（取后即清） */
+    consumePendingOpenSession: () =>
+      ipcRenderer.invoke('notification:consumePendingOpenSession') as Promise<string | null>,
+    /** 监听通知点击要求打开的会话 */
+    onOpenSession: (callback: (sessionId: string) => void) => {
+      const handler = (_e: unknown, sessionId: string): void => callback(sessionId)
+      ipcRenderer.on('notification:open-session', handler)
+      return () => ipcRenderer.removeListener('notification:open-session', handler)
+    }
+  },
+
   // ============ Files (会话工作目录文件树) ============
   files: {
     /** 扫描当前会话工作目录下的所有文件路径（遵循 .gitignore） */
@@ -862,6 +899,16 @@ const api = {
       }>,
     /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
     openNote: (params: { path: string }) => ipcRenderer.invoke('wiki:openNote', params)
+  },
+
+  // ============ 项目记忆（侧栏项目组下的「项目记忆」子文件夹） ============
+  memory: {
+    /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */
+    list: (params: { projectId: string }) =>
+      ipcRenderer.invoke('memory:list', params) as Promise<ProjectMemoryEntry[]>,
+    /** 打开一条记忆：一条至多一个笔记本会话，已存在则复用；文件已不在返回 null */
+    openNote: (params: { projectId: string; slug: string }) =>
+      ipcRenderer.invoke('memory:openNote', params)
   },
   /** 通用内部事件订阅（main 经 'app:event' 广播 AppEvent，与 agent:event 并列） */
   events: {

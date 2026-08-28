@@ -21,7 +21,16 @@ export const MEMORY_FILE_MARKER_KEY = 'shuvix'
 export const MEMORY_FILE_MARKER = 'memory v1'
 
 export interface ParsedMemoryFile {
-  /** slug，= 文件名 = `[[链接]]` 锚点 */
+  /**
+   * 文件名（不含 .md）—— **路径的唯一真源**，恒等于磁盘上的 basename。
+   *
+   * 与 `name` 分开是因为它们会漂：`name` 取自 frontmatter，模型写记忆时很自然会填
+   * 一句人话（`name: 认证流程的坑`），而文件叫 `auth-flow.md`。旧实现只保留 name 并
+   * 让索引渲染它，模型于是无从知道 slug —— 实测 20/20 次召回全部拼出
+   * `<root>/认证流程的坑.md` 这种不存在的路径，路径正确率 0%。
+   */
+  slug: string
+  /** frontmatter 的 `name`：人话标题，给 GUI 看；**不参与路径** */
   name: string
   /** 给人看的一句话摘要；不进注入 */
   description: string
@@ -95,6 +104,7 @@ export function parseMemoryFile(
   if (!body) return reject('the body is empty — a memory with no content records nothing')
 
   return {
+    slug: defaultName,
     name,
     description: stringField(fields, 'description') ?? '',
     recall: stringField(fields, 'shuvix-memory-recall') ?? '',

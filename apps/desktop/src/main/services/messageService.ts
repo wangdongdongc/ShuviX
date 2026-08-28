@@ -39,12 +39,22 @@ export class MessageService {
   // 旧模型靠 DELETE ... WHERE createdAt > ? 物理删除；entry 树是 append-only，
   // 对应操作是把 leaf 移到目标 entry 的父节点 —— 历史仍在文件里，可以再切回去。
 
-  /** 回退到指定消息之前（该消息本身也不再在上下文中） */
-  async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
+  /**
+   * 解析回退目标：把 leaf 应该移到哪个 entry（**只读，不写树**）。
+   * 消息不在树上返回 undefined；`{ targetId: null }` 表示回退到树根之前。
+   *
+   * 和 `applyRollback` 分成两步，是为了让调用方能在**动叶子之前**先把旧运行时关停 ——
+   * 顺序反过来就是在一个还在写的 run 脚下抽走叶子（见 DefaultChatGateway.rollbackMessage）；
+   * 同时也免得为一个根本不存在的目标白白把正在跑的 Agent 停掉。
+   */
+  async resolveRollbackTarget(
+    sessionId: string,
+    messageId: string
+  ): Promise<{ targetId: string | null } | undefined> {
     const session = await getSessionTree(sessionId)
-    if (!session) return false
+    if (!session) return undefined
     const entry = await session.getEntry(messageId)
-    if (!entry) return false
+    if (!entry) return undefined
     // user 消息前若有内联 Token 显示侧车，一并越过 —— 免得叶子停在无主侧车上
     let targetId = entry.parentId
     if (targetId) {
@@ -53,8 +63,22 @@ export class MessageService {
         targetId = parent.parentId
       }
     }
+    return { targetId }
+  }
+
+  /** 执行回退：把 leaf 移到 `resolveRollbackTarget` 给出的 entry 上 */
+  async applyRollback(sessionId: string, targetId: string | null): Promise<boolean> {
+    const session = await getSessionTree(sessionId)
+    if (!session) return false
     await session.moveTo(targetId)
     return true
+  }
+
+  /** 回退到指定消息之前（该消息本身也不再在上下文中）。调用方须自行保证此刻没有活跃 run。 */
+  async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
+    const target = await this.resolveRollbackTarget(sessionId, messageId)
+    if (!target) return false
+    return await this.applyRollback(sessionId, target.targetId)
   }
 
   /** 回退到指定消息之后（保留该消息本身） */

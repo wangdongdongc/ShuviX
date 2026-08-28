@@ -28,7 +28,9 @@ import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
 import { registerWikiHandlers } from './wikiHandlers'
+import { registerMemoryHandlers } from './memoryHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
+import { registerNotificationHandlers } from './notificationHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -65,5 +67,7 @@ export function registerIpcHandlers(): void {
   registerConfigShareHandlers()
   registerFilesHandlers()
   registerWikiHandlers()
+  registerMemoryHandlers()
   registerPinChatHandlers()
+  registerNotificationHandlers()
 }

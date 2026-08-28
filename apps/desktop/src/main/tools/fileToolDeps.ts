@@ -51,6 +51,8 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
       return mode === 'read' ? resolveReadPath(p, cwd) : resolveToCwd(p, cwd)
     },
     security: getDesktopSecurityContext(ctx, () => resolveProjectConfig(sid)),
+    // 契约 md 写后盖章的溯源字段用它（派生 agent 的 ctx.sessionId 即根会话 id）
+    sessionId: sid,
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },

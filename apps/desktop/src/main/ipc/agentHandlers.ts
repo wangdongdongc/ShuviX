@@ -3,7 +3,7 @@ import { chatGateway, operationContext, createElectronContext } from '../fronten
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
 import { agentManager } from '../agents/AgentManager'
-import { listAgentRuntimes } from '../services/agentMonitorService'
+import { getAgentRuntimeDetail, listAgentRuntimes } from '../services/agentMonitorService'
 import type {
   AgentInitParams,
   AgentPromptParams,
@@ -163,6 +163,12 @@ export function registerAgentHandlers(): void {
    * 设置页可见时轮询，故刻意不做任何遍历。
    */
   ipcMain.handle('agentMonitor:list', () => listAgentRuntimes())
+
+  /**
+   * 智能体监控：单个 agent 的完整运行时快照（系统提示词 / 工具定义 / 上下文消息数）。
+   * 只在用户展开某条时调用一次 —— 它要重建上下文，不能进每秒轮询的列表。
+   */
+  ipcMain.handle('agentMonitor:detail', (_event, agentId: string) => getAgentRuntimeDetail(agentId))
 
   /**
    * 销毁指定的派生 agent（用户点关闭按钮触发）。

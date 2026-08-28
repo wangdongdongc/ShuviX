@@ -5,12 +5,12 @@ export const SESSION_PANEL_MIN_W = 240
 export const SESSION_PANEL_MAX_W = 600
 
 /** 会话面板可装载的工具（会话工具栏按钮与之一一对应；preview 仅注入了 previewContent 的宿主有，
- *  agent 仅完整宿主（有 HostApi）的非笔记本会话有，tasks 仅本会话有后台任务时有） */
-export type SessionPanelTool = 'files' | 'agent' | 'preview' | 'subagent' | 'tasks'
+ *  tasks 仅本会话有后台任务时有） */
+export type SessionPanelTool = 'files' | 'preview' | 'subagent' | 'tasks'
 
 /**
  * 共享会话面板视图状态（桌面 / 扩展共用）—— 聊天区内部右侧的「会话工具栏」悬浮卡片
- * （装载 Files / Agent / Preview / Sub-agent，见 SessionPanel / SessionToolbar）。
+ * （装载 Files / Preview / Sub-agent / 后台任务，见 SessionPanel / SessionToolbar）。
  *
  * 与 usePanelStore（app 级右侧面板）的定位区分：本面板挂在对话列内部、与会话绑定 ——
  * 展开态+激活工具按 sessionId 记忆（内存态不持久化，重启默认收起）；宽度全局共享。

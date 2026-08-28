@@ -9,7 +9,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Maximize2, Music, X } from 'lucide-react'
-import { useMediaUrl } from './mediaUrl'
+import { useMediaUrl } from '@shuvix/chat-ui'
 
 interface AudioDockProps {
   /** 绝对路径 */

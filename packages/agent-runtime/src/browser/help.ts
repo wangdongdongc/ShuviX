@@ -36,9 +36,22 @@ Typical flow:
 2. browser(action:"snapshot", tabId)                        → elements with uids
 3. browser(action:"click", tabId, uid:"e7")
 4. browser(action:"wait_for", tabId, text:"Welcome")
-5. browser(action:"screenshot", tabId)${caps.pdf ? '\n6. browser(action:"pdf", tabId, outputPath:"page.pdf")   — export when asked for a PDF' : ''}
+5. verify — pick by the KIND of question:${
+    caps.evaluate
+      ? `
+   - a fact (did the text change? is it enabled? what colour is it? how many rows?)
+     → browser(action:"evaluate", tabId, expression:"…")   ~20 tokens, and a precise answer
+   - genuinely visual (layout, spacing, overlap, "does this look right")
+     → browser(action:"screenshot", tabId)                 ~900 tokens`
+      : `
+   - browser(action:"screenshot", tabId)`
+  }${caps.pdf ? '\n6. browser(action:"pdf", tabId, outputPath:"page.pdf")   — export when asked for a PDF' : ''}
 
-If a page is slow, use wait_for instead of guessing; if an element is off-screen, scroll then re-snapshot.`
+If a page is slow, use wait_for instead of guessing; if an element is off-screen, scroll then re-snapshot.
+
+Screenshots are the most expensive thing this tool can produce, and they accumulate: a dozen of them
+will crowd out the code you are actually working on. Reading a computed style beats squinting at pixels
+for correctness too — read the value, don't judge the colour by eye.`
 }
 
 function interactionSection(): string {

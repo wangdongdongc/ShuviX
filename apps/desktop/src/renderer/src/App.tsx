@@ -16,7 +16,7 @@ import { useBottomPanelStore } from './stores/bottomPanelStore'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
 import { usePinChatSync } from './hooks/usePinChatSync'
-import { ChatHostProvider } from '@shuvix/chat-ui'
+import { ChatHostProvider, MediaUrlProvider, shuvixPreviewResolver } from '@shuvix/chat-ui'
 import { ContextMenuProvider, type ContextMenuRenderer } from '@shuvix/app-shell'
 import { useSettingsChatHost } from './host/settingsChatHost'
 import { SessionRuntime } from './host/SessionRuntime'
@@ -142,10 +142,14 @@ function MainOrSettings(): React.JSX.Element {
   )
 
   // 会话级初始化 + Agent 事件分发需在 ChatHostProvider 之下运行（useSessionInit/useAgentEvents 读注入值）
+  // MediaUrlProvider 提到这一层：工具卡片里「模型收到的那张图」也要解析本地文件 URL，
+  // 它在对话流内，够不着 ChatView 里那个只包会话面板的 provider
   return (
     <ChatHostProvider value={chatHost}>
-      <SessionRuntime sessionId={activeSessionId} />
-      <ContextMenuProvider render={nativeContextMenu}>{content}</ContextMenuProvider>
+      <MediaUrlProvider value={shuvixPreviewResolver}>
+        <SessionRuntime sessionId={activeSessionId} />
+        <ContextMenuProvider render={nativeContextMenu}>{content}</ContextMenuProvider>
+      </MediaUrlProvider>
     </ChatHostProvider>
   )
 }

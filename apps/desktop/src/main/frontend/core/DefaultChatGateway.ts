@@ -168,7 +168,7 @@ export class DefaultChatGateway implements ChatGateway {
 
   /**
    * Agent 运行时快照。默认只读已存在的 Agent（未创建返回 null）；
-   * ensure=true 走懒创建路径（会话面板 Agent 页「打开即建」）—— 构造运行时不请求 LLM。
+   * ensure=true 走懒创建路径（没发过消息也要看到真实配置的调用方用）—— 构造运行时不请求 LLM。
    */
   async getAgentInfo(
     sessionId: string,
@@ -186,15 +186,25 @@ export class DefaultChatGateway implements ChatGateway {
     return await messageService.listBySession(sessionId)
   }
 
-  clearMessages(sessionId: string): void {
+  async clearMessages(sessionId: string): Promise<void> {
+    // 先关停运行时再删文件：还在跑的 run 会往刚删掉的会话树里接着写
+    await sessionService.invalidateAgent(sessionId)
     messageService.clear(sessionId)
-    sessionService.invalidateAgent(sessionId)
   }
 
-  /** 回退到某条消息之前：entry 树上把 leaf 移到它的父节点（历史保留，可再切回） */
+  /**
+   * 回退到某条消息之前：entry 树上把 leaf 移到它的父节点（历史保留，可再切回）。
+   *
+   * **顺序是关键**：先把旧运行时彻底关停并解绑，再动叶子。反过来（旧实现）等于在一个
+   * 还在写的 run 脚下抽走叶子 —— 它接下来的消息会挂到回退后的分支上，和新 run 交叉，
+   * 把 tool_use/tool_result 的配对写坏，之后每一发请求都被 provider 打回。
+   */
   async rollbackMessage(sessionId: string, messageId: string): Promise<void> {
-    await messageService.rollbackToMessage(sessionId, messageId)
-    sessionService.invalidateAgent(sessionId)
+    // 先只读地解析目标：目标不存在就什么都不做 —— 不值得为一次无效回退把正在跑的 Agent 停掉
+    const target = await messageService.resolveRollbackTarget(sessionId, messageId)
+    if (!target) return
+    await sessionService.invalidateAgent(sessionId)
+    await messageService.applyRollback(sessionId, target.targetId)
   }
 
   // ─── 运行时资源 ──────────────────────────────────

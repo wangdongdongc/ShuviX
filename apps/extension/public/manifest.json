@@ -12,6 +12,13 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "scripting", "debugger", "declarativeNetRequest"],
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "debugger",
+    "declarativeNetRequest",
+    "notifications"
+  ],
   "host_permissions": ["<all_urls>"]
 }

@@ -45,6 +45,8 @@ export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
 export type { ProjectSessionGroupsProps } from './sidebar/ProjectSessionGroups'
+export { ProjectMemoryFolder } from './sidebar/ProjectMemoryFolder'
+export type { ProjectMemoryFolderProps, ProjectMemoryAdapter } from './sidebar/ProjectMemoryFolder'
 export { Sidebar } from './sidebar/Sidebar'
 export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
 export { CalendarView } from './sidebar/CalendarView'
@@ -106,8 +108,9 @@ export type { SidebarStoreState } from './sidebar/sidebarStore'
 // 宿主差异走 props（markdown 打开方式、媒体 URL 解析、子会话销毁）
 export { FilesPanel } from './files/FilesPanel'
 export type { FilesPanelProps } from './files/FilesPanel'
-export { MediaUrlProvider, shuvixPreviewResolver, useResolveMediaUrl } from './files/mediaUrl'
-export type { ResolveMediaUrl, MediaSource } from './files/mediaUrl'
+// mediaUrl seam 已下沉到 chat-ui（工具卡片也要用，而 chat-ui 是下层包）；这里透传，宿主 import 点不变
+export { MediaUrlProvider, shuvixPreviewResolver, useResolveMediaUrl } from '@shuvix/chat-ui'
+export type { ResolveMediaUrl, MediaSource } from '@shuvix/chat-ui'
 
 // 独立预览面板（会话无关）：store + 桥 + 面板/覆盖层两种露出形态
 export {

@@ -66,6 +66,14 @@ export { useImageUpload } from './hooks/useImageUpload'
 export { useVoiceInput } from './hooks/useVoiceInput'
 export { useTtsPlayback } from './hooks/useTtsPlayback'
 // 通用 UI 小工具（app 其它处也复用）
+export {
+  MediaUrlProvider,
+  shuvixPreviewResolver,
+  useMediaUrl,
+  useResolveMediaUrl
+} from './host/mediaUrl'
+export type { ResolveMediaUrl, MediaSource } from './host/mediaUrl'
+
 export { useClickOutside } from './hooks/useClickOutside'
 export { useDialogClose } from './hooks/useDialogClose'
 

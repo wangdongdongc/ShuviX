@@ -4,7 +4,7 @@
  * 公共 API：
  * - tab 生命周期 —— `initBrowserHost` / `createTab` / `closeTab` / `activateTab` /
  *     `destroyAllTabs`；查询 `getActiveView` / `getTabView` / `listTabs`；
- *     布局 `updateBounds` / `setPanelVisible`
+ *     布局 `setLayout` / `setPanelVisible`
  * - `createDesktopBrowserBackend` —— 统一 browser 工具（@shuvix/agent-runtime multiplex）
  *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理
  *
@@ -23,7 +23,8 @@ export {
   getActiveView,
   getTabView,
   listTabs,
-  updateBounds,
+  setLayout,
+  captureTab,
   setPanelVisible,
   destroyAllTabs,
   getBrowserHostWindow,

@@ -9,6 +9,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { deflateSync } from 'node:zlib'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
 import type { E2EApp } from './launch'
@@ -91,6 +92,67 @@ export function seedSkill(app: E2EApp, name: string, description = 'e2e seeded s
   mkdirSync(dir, { recursive: true })
   const filePath = join(dir, 'SKILL.md')
   writeFileSync(filePath, `---\nname: ${name}\ndescription: ${description}\n---\n\nSKILL BODY.\n`)
+  return filePath
+}
+
+// ── 最小 PNG 编码器（图片种子现造，不往仓库里塞二进制夹具） ──
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c
+  }
+  return t
+})()
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4)
+  len.writeUInt32BE(data.length, 0)
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
+  let c = 0xffffffff
+  for (const b of body) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8)
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE((c ^ 0xffffffff) >>> 0, 0)
+  return Buffer.concat([len, body, crc])
+}
+
+/**
+ * 写一张 PNG 图片种子，返回文件路径。
+ *
+ * `incompressible: true` → 噪声像素 + deflate level 0，几乎压不动：这是造 **>1MB** 样本
+ * （走 read 的「缩放重编码 + 派生图落盘」分支）唯一便宜的办法 —— 纯色图哪怕几千像素宽，
+ * 压完也只有几百字节，永远够不着 1MB 阈值。默认（纯色 + 最高压缩）则是「未超限直出」的样本。
+ */
+export function writePng(
+  filePath: string,
+  opts: { width: number; height: number; incompressible?: boolean }
+): string {
+  const { width: w, height: h, incompressible = false } = opts
+  const stride = w * 3 + 1
+  const raw = Buffer.alloc(stride * h)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = y * stride + 1 + x * 3
+      raw[o] = incompressible ? (x * 2654435761 + y * 40503) & 0xff : 200
+      raw[o + 1] = incompressible ? (x * 97 + y * 31337) & 0xff : 40
+      raw[o + 2] = incompressible ? (x * 1103515245 + y * 12345) & 0xff : 40
+    }
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(w, 0)
+  ihdr.writeUInt32BE(h, 4)
+  ihdr[8] = 8 // bit depth
+  ihdr[9] = 2 // color type: truecolor
+  writeFileSync(
+    filePath,
+    Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      pngChunk('IHDR', ihdr),
+      pngChunk('IDAT', deflateSync(raw, { level: incompressible ? 0 : 9 })),
+      pngChunk('IEND', Buffer.alloc(0))
+    ])
+  )
   return filePath
 }
 

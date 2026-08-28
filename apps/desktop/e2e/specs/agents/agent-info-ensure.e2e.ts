@@ -1,5 +1,5 @@
 /**
- * agent.getInfo 的懒创建开关（会话面板 Agent 页「打开即建」的后端契约）：
+ * agent.getInfo 的懒创建开关（e2e「建 Agent 而不触发 LLM」这条惯用法的后端契约）：
  * 默认只读已存在的 Agent（未发过消息 → null），传 { ensure: true } 就地建出运行时并返回快照，
  * 且该运行时留存下来（此后不带 ensure 也读得到）。整个过程不请求 LLM（隔离实例无 API key）。
  */

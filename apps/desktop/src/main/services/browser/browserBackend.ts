@@ -18,13 +18,9 @@ import { dirname, isAbsolute, join, resolve } from 'path'
 import type { WebContentsView } from 'electron'
 import {
   browserCdpOps,
-  EXTRACT_PAGE_EXPR,
-  formatReadPage,
-  htmlToMarkdown,
   type BrowserBackend,
   type BrowserCaps,
   type BrowserOpOutput,
-  type ExtractedPage,
   type NavKind,
   type ScrollDirection,
   type TabCdpSession
@@ -144,17 +140,19 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   // ── 读取 / 捕获 ──
 
+  /**
+   * 抽取走 CDP（browserCdpOps.readPageOp），不走 webContents.executeJavaScript ——
+   * 后者会挂在「等页面停止加载」上，遇到永远加载不完的站点就无限期不返回（详见 readPageOp）。
+   */
   async readPage(p: { tabId: string }): Promise<BrowserOpOutput> {
-    const { view } = resolveAndActivate(p.tabId)
-    const extracted = (await view.webContents.executeJavaScript(EXTRACT_PAGE_EXPR)) as ExtractedPage
-    const md = await htmlToMarkdown(extracted.html)
-    return { text: formatReadPage(extracted, md) }
+    const { session } = await this.session(p.tabId)
+    return browserCdpOps.readPageOp(session)
   }
 
-  async snapshot(p: { tabId: string }): Promise<BrowserOpOutput> {
+  async snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput> {
     const { session, uuid } = await this.session(p.tabId)
     const pageUrl = getTabView(uuid)?.webContents.getURL() ?? ''
-    return browserCdpOps.snapshotOp(session, pageUrl)
+    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full })
   }
 
   /**

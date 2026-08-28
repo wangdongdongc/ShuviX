@@ -1,10 +1,13 @@
 /**
- * 文件预览的「媒体/PDF 资源 URL」注入点 —— 宿主差异收敛处。
+ * 「本地文件 → 可喂给 <img>/<video> 的 URL」注入点 —— 宿主差异收敛处。
  *
- * 桌面：注册了 shuvix-preview:// 自定义协议(走主进程准入校验)，同步拼 URL。
+ * 桌面：注册了 shuvix-preview:// 自定义协议(主进程流式读盘)，同步拼 URL。
  * 扩展：无自定义协议 → 由 getFile 读字节生成 blob: object URL(异步，用完 revoke)。
  *
- * 组件(MediaView/PdfView/AudioDock/VideoDock)统一经 useMediaUrl 取 URL，不关心来源。
+ * 消费方统一经 useMediaUrl 取 URL，不关心来源：app-shell 的 Files 预览
+ * (MediaView/PdfView/AudioDock/VideoDock/笔记本内嵌图)，以及 chat-ui 工具卡片里
+ * 「模型收到的那张图」的内联展示。后者是这个 seam 从 app-shell 下沉到 chat-ui 的
+ * 原因 —— 依赖方向是 app-shell → chat-ui，工具卡片够不着上层包。
  */
 import { createContext, useContext, useEffect, useState } from 'react'
 

@@ -223,6 +223,10 @@ describe('用量', () => {
     expect(end.usage).toMatchObject({ input: 220, output: 18, total: 238 })
     expect((end.usage as { details: unknown[] }).details).toHaveLength(2)
 
+    // 本轮结局：通知层按它分「完成 / 失败」文案，正常跑完必须是 'ok'
+    // （跨进程字段，改动只会在这里露出来）
+    expect(end.reason).toBe('ok')
+
     // 用量不再上屏（ebff5581「助手消息去模型名与用量行」把它从卡片上撤了），
     // 故本用例只断数据：呈现与否是产品决定。
 

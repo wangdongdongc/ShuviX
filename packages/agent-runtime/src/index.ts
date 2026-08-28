@@ -398,3 +398,18 @@ export {
 } from './title/sessionTitler'
 // shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
 export { validateShuvixMdText } from './shuvixMdValidate'
+// 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）
+export {
+  reviewShuvixMdWrite,
+  type ShuvixMdWriteContext,
+  type ShuvixMdWriteOutcome
+} from './shuvixMdWrite'
+// 通知决策器：订阅一端的 ChatEvent 流，判定何时打扰用户（询问挂起 / 一轮跑完 / 一轮出错），
+// 宿主只提供「怎么弹 + 用户在看哪」的端口。两端共用同一份策略。
+export {
+  createNotificationCenter,
+  type NotificationCenter,
+  type NotificationCenterDeps,
+  type NotifierPort,
+  type NotificationTranslate
+} from './notification/notificationCenter'

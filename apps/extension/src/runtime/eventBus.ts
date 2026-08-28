@@ -7,11 +7,12 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 type Listener = (event: ChatEvent) => void
 
 const listeners = new Set<Listener>()
+const observers = new Set<Listener>()
 
 export const eventBus = {
   /** RuntimeSession.eventSink.broadcast 调用 */
   emit(event: ChatEvent): void {
-    for (const l of listeners) {
+    for (const l of [...listeners, ...observers]) {
       try {
         l(event)
       } catch (e) {
@@ -24,6 +25,17 @@ export const eventBus = {
   subscribe(listener: Listener): () => void {
     listeners.add(listener)
     return () => listeners.delete(listener)
+  },
+
+  /**
+   * 旁听同一条事件流，但**不计入 hasListeners()**。
+   *
+   * 通知决策器这类消费者收事件却不是「能展示输入面板的 UI」—— 混进 listeners 会让
+   * hasUserInputCapability 恒真，harnessSession 就再也不会把无人应答的询问及时取消。
+   */
+  subscribeObserver(listener: Listener): () => void {
+    observers.add(listener)
+    return () => observers.delete(listener)
   },
 
   /** 是否有 UI 在监听（可展示用户输入面板） */

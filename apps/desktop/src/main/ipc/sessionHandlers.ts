@@ -77,7 +77,7 @@ export function registerSessionHandlers(): void {
     // 注：同项目的多个会话共享 workingDirectory，此时不应误关 —— closeWatcherIfWorkingDirectory
     // 只做"路径相同则关"的窄判断；项目目录被多个会话共用时不影响其它会话的后续 scan
     const wd = sessionService.getById(id)?.workingDirectory
-    sessionService.delete(id)
+    await sessionService.delete(id)
     if (wd) closeWatcherIfWorkingDirectory(wd)
     return { success: true }
   })

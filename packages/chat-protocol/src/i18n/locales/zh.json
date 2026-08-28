@@ -46,6 +46,9 @@
     "viewCalendar": "日历",
     "viewWiki": "知识库",
     "wikiEmpty": "暂无知识库条目",
+    "projectMemory": "项目记忆",
+    "projectMemoryHint": "该项目的记忆：agent 记下的项目经验，随会话注入模型上下文",
+    "memoryPinned": "常驻记忆（正文每次注入）",
     "switchView": "切换视图",
     "today": "今天",
     "noSessionsOnDay": "当日无会话"
@@ -113,6 +116,12 @@
       }
     }
   },
+  "memory": {
+    "recall": "召回条件",
+    "pinned": "常驻（正文每次注入）",
+    "updated": "更新日期",
+    "session": "来源会话"
+  },
   "chat": {
     "welcomePrompt": "我们今天聊点什么？",
     "welcomeCreateProject": "创建项目",
@@ -144,6 +153,7 @@
     "stopGen": "停止生成",
     "steer": "发送引导消息",
     "placeholderSteer": "输入消息引导智能体...",
+    "placeholderClosing": "正在停止上一个智能体…",
     "send": "发送",
     "imageOnly": "(图片)",
     "selectModel": "选择模型",
@@ -234,7 +244,10 @@
     "result": "结果",
     "confirmSelection": "确认选择",
     "multiSelectHint": "可多选",
-    "backgroundTag": "后台"
+    "backgroundTag": "后台",
+    "image": "模型看到的图",
+    "imageZoomHint": "点击查看原图",
+    "imageMissing": "该图片文件已不可用"
   },
   "ssh": {
     "credentialTitle": "SSH 远程连接 — 请输入服务器凭据",
@@ -318,7 +331,6 @@
     "agentMonitorPhase_turn": "运行中",
     "agentMonitorPhase_compaction": "压缩中",
     "agentMonitorPhase_branch_summary": "分支摘要中",
-    "agentMonitorThinking": "思考 {{level}}",
     "agentMonitorCounters": "{{turns}} 轮 · {{tools}} 次工具 · {{requests}} 次请求",
     "agentMonitorFieldSession": "所属会话",
     "agentMonitorFieldProfile": "档案",
@@ -332,6 +344,17 @@
     "agentMonitorContext": "{{tokens}} / {{window}}（{{percent}}%）",
     "agentMonitorContextNone": "尚未产出助手消息",
     "agentMonitorFieldStarted": "创建于",
+    "agentMonitorFieldThinking": "思考深度",
+    "agentMonitorFieldMaxTokens": "最大输出",
+    "agentMonitorFieldInput": "输入模态",
+    "agentMonitorFieldMessages": "上下文消息数",
+    "agentMonitorToolsSection": "已装载工具（{{count}}）",
+    "agentMonitorToolParams": "参数：",
+    "agentMonitorNoTools": "未装载任何工具",
+    "agentMonitorSystemPrompt": "系统提示词",
+    "agentMonitorSystemPromptChars": "{{count}} 字符",
+    "agentMonitorEmptySystemPrompt": "（空）",
+    "agentMonitorDetailUnavailable": "取不到运行时详情（该智能体可能刚被销毁）",
     "monitorSubTabLlm": "LLM 请求",
     "monitorSubTabMcp": "MCP 调用",
     "tabAbout": "关于",
@@ -742,34 +765,6 @@
     "defaultTitle": "新对话",
     "toolAborted": "已被用户中止。"
   },
-  "agentInfo": {
-    "button": "Agent 配置",
-    "title": "Agent 配置",
-    "loading": "加载中...",
-    "refresh": "刷新",
-    "unavailable": "Agent 不可用（会话不存在或创建失败，请检查模型/供应商配置）",
-    "model": "模型",
-    "modelId": "模型",
-    "modelName": "名称",
-    "api": "API 协议",
-    "contextWindow": "上下文窗口",
-    "maxTokens": "最大输出",
-    "inputModes": "输入模态",
-    "runtime": "运行状态",
-    "status": "状态",
-    "streaming": "生成中",
-    "idle": "空闲",
-    "thinkingLevel": "思考深度",
-    "reasoningUnsupported": "模型不支持推理",
-    "messageCount": "上下文消息数",
-    "systemPrompt": "系统提示词",
-    "charCount": "{{count}} 字符",
-    "emptySystemPrompt": "（空）",
-    "tools": "已装载工具",
-    "toolCount": "{{count}} 个",
-    "noTools": "未装载任何工具",
-    "params": "参数："
-  },
   "tool": {
     "bashLabel": "执行命令",
     "readLabel": "阅读",
@@ -903,7 +898,6 @@
     "urlPlaceholder": "输入 URL",
     "newTerminal": "新建终端",
     "closeTerminal": "关闭终端",
-    "agent": "配置",
     "files": "文件",
     "filesLoading": "正在扫描工作区…",
     "filesError": "扫描文件失败",
@@ -970,7 +964,13 @@
     "tasksStatusEnded": "已结束"
   },
   "browser": {
-    "close": "关闭当前标签页",
+    "back": "后退",
+    "forward": "前进",
+    "refresh": "刷新",
+    "stop": "停止加载",
+    "openExternal": "在系统浏览器中打开",
+    "gridCount": "同屏 {{shown}}/{{total}}",
+    "zoomHint": "缩放 {{pct}}% —— 页面按 {{width}}px 宽排版后缩到卡片大小",
     "newTab": "新建标签页",
     "closeTab": "关闭标签页",
     "untitledTab": "新标签页",
@@ -1052,5 +1052,12 @@
     "deleteConfirm": "删除此 Bot？",
     "noBots": "尚无已注册的 Bot。点击「添加 Bot」开始。",
     "editAllowedUsers": "允许的用户"
+  },
+  "notification": {
+    "untitledSession": "未命名会话",
+    "askBody": "等待确认：{{detail}}",
+    "askSshDetail": "SSH 凭证",
+    "doneBody": "已完成",
+    "failedBody": "运行出错：{{error}}"
   }
 }

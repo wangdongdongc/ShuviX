@@ -132,6 +132,27 @@ export interface BashToolDetails {
 }
 
 /** read 工具详情（目录 / 富文本转换 / 纯文本 / URL 四种场景的扁平超集） */
+/**
+ * 工具结果里「模型实际收到的那张图」在磁盘上的落点 —— 供 UI 内联展示。
+ *
+ * 为什么给路径而不是字节：图片以 base64 进 tool result 是给模型看的；同一份 base64
+ * 若经 IPC 灌进渲染进程会把 UI 拖垮（广播路径专门有条管线把它换成占位文本）。UI 拿
+ * 路径自己去取（桌面走 shuvix-preview:// 流式读盘），零 base64、零 IPC 负担。
+ *
+ * **path 必须指向模型收到的那一份**：read 对超限图片会缩放重编码后才交给模型，那份
+ * 派生图要落盘并写在这里 —— 指回原图的话，用户点开看到的会比模型看到的更清楚，
+ * 「所见即模型所见」就成了假的。
+ */
+export interface ToolResultImage {
+  /** 绝对路径（宿主 UI 路径空间） */
+  path: string
+  /** 像素尺寸（解析文件头得来，未解码）—— 供 UI 预留版位；缺失则不预留 */
+  width?: number
+  height?: number
+  /** 模型收到的那一份的字节数 */
+  bytes?: number
+}
+
 export interface ReadToolDetails {
   type: 'read'
   totalLines?: number
@@ -144,6 +165,8 @@ export interface ReadToolDetails {
   url?: string
   /** 完整输出是否已持久化到磁盘 */
   persisted?: boolean
+  /** 读到的是图片时：模型收到的那一份在磁盘上的落点（供 UI 内联展示） */
+  image?: ToolResultImage
 }
 
 /** glob 工具详情 */
@@ -273,6 +296,17 @@ export type ToolResultDetails =
   | McpToolDetails
   | BrowserToolDetails
   | GitToolDetails
+
+/**
+ * 从工具详情里取「模型收到的那张图」；该工具没有这个语义、或这次没读到图 → undefined。
+ *
+ * 收在这里而不是让 UI 各自 `details.type === 'read' && details.image`：以后别的工具
+ * 也开始交图时，只改这一处的判别列表。
+ */
+export function toolResultImage(details?: ToolResultDetails): ToolResultImage | undefined {
+  if (!details) return undefined
+  return details.type === 'read' ? details.image : undefined
+}
 
 // ---- 助手消息内容块 ----
 

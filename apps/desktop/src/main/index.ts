@@ -28,6 +28,7 @@ import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
+import { initNotificationService } from './services/notificationService'
 import {
   initWidgetWindowService,
   closeAll as closeAllWidgetWindows
@@ -396,6 +397,14 @@ function createWindow(): void {
     mainWindow,
     getThemeBgColor,
     createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
+  })
+
+  // 初始化通知服务（决策在 agent-runtime，这里只提供窗口句柄：聚焦 / 关窗后重建）
+  initNotificationService({
+    getMainWindow: () => mainWindow,
+    ensureMainWindow: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+    }
   })
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）

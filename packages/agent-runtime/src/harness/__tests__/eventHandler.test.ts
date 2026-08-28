@@ -126,3 +126,47 @@ describe('工具结果广播', () => {
     expect(events[0]).toMatchObject({ type: 'tool_end', result: '' })
   })
 })
+
+/**
+ * `agent_end.reason` —— 事件流原本只说「结束了」：出错另发一条 error，用户中止连事件
+ * 都没有，消费方只能去 usage.details 里翻最后一个 stopReason 反推。通知层要按结局分
+ * 文案，判定就收在了产事件的地方；这里钉住那张归一表。
+ */
+function agentEnd(stopReasons: string[]): AgentHarnessEvent {
+  return {
+    type: 'agent_end',
+    messages: stopReasons.map((stopReason) => ({
+      role: 'assistant',
+      content: [],
+      stopReason,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }
+    }))
+  } as unknown as AgentHarnessEvent
+}
+
+/** agent_end 会去读会话树取终答；这条路径与 reason 无关，给个空树即可 */
+function makeEndCtx(): { ctx: HarnessEventContext; events: ChatEvent[] } {
+  const { ctx, events } = makeCtx(defaultToolResultTransform)
+  ctx.session = { getLeafId: async () => undefined } as unknown as Session
+  return { ctx, events }
+}
+
+describe('agent_end 的结局归一', () => {
+  it.each([
+    [['stop'], 'ok'],
+    [['toolUse', 'stop'], 'ok'],
+    [['length'], 'ok'],
+    [['stop', 'aborted'], 'aborted'],
+    [['toolUse', 'error'], 'error']
+  ])('%j → %s', async (stopReasons, expected) => {
+    const { ctx, events } = makeEndCtx()
+    await forwardHarnessEvent(ctx, agentEnd(stopReasons as string[]))
+    expect(events.at(-1)).toMatchObject({ type: 'agent_end', reason: expected })
+  })
+
+  it('一条 assistant 消息都没有时按正常结束处理', async () => {
+    const { ctx, events } = makeEndCtx()
+    await forwardHarnessEvent(ctx, agentEnd([]))
+    expect(events.at(-1)).toMatchObject({ type: 'agent_end', reason: 'ok' })
+  })
+})

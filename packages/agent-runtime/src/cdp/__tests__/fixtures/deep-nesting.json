@@ -1,0 +1,135 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/deep-nesting.html",
+  "title": "Deep nesting",
+  "nodes": [
+    {
+      "nodeId": "43",
+      "childIds": ["44"],
+      "backendDOMNodeId": 43,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Deep nesting" }
+    },
+    {
+      "nodeId": "44",
+      "ignored": true,
+      "childIds": ["48"],
+      "backendDOMNodeId": 44,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "48",
+      "ignored": true,
+      "childIds": ["49"],
+      "backendDOMNodeId": 48,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "49",
+      "ignored": true,
+      "childIds": ["50"],
+      "backendDOMNodeId": 49,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "50",
+      "ignored": true,
+      "childIds": ["51"],
+      "backendDOMNodeId": 50,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "51",
+      "ignored": true,
+      "childIds": ["52"],
+      "backendDOMNodeId": 51,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "52",
+      "ignored": true,
+      "childIds": ["53"],
+      "backendDOMNodeId": 52,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "53",
+      "ignored": true,
+      "childIds": ["54"],
+      "backendDOMNodeId": 53,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "54",
+      "ignored": true,
+      "childIds": ["55"],
+      "backendDOMNodeId": 54,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "55",
+      "ignored": true,
+      "childIds": ["56"],
+      "backendDOMNodeId": 55,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "56",
+      "ignored": true,
+      "childIds": ["57"],
+      "backendDOMNodeId": 56,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "57",
+      "ignored": true,
+      "childIds": ["58"],
+      "backendDOMNodeId": 57,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "58",
+      "ignored": true,
+      "childIds": ["59", "60"],
+      "backendDOMNodeId": 58,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "59",
+      "childIds": ["41"],
+      "backendDOMNodeId": 59,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "60",
+      "childIds": ["42"],
+      "backendDOMNodeId": 60,
+      "role": { "value": "button" },
+      "name": { "value": "埋很深的按钮" }
+    },
+    {
+      "nodeId": "41",
+      "childIds": ["-1000000019"],
+      "backendDOMNodeId": 41,
+      "role": { "value": "StaticText" },
+      "name": { "value": "埋很深的一段文字" }
+    },
+    {
+      "nodeId": "42",
+      "childIds": ["-1000000018"],
+      "backendDOMNodeId": 42,
+      "role": { "value": "StaticText" },
+      "name": { "value": "埋很深的按钮" }
+    },
+    {
+      "nodeId": "-1000000019",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "埋很深的一段文字" }
+    },
+    {
+      "nodeId": "-1000000018",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "埋很深的按钮" }
+    }
+  ]
+}

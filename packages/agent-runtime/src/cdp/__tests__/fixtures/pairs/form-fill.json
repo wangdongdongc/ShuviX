@@ -1,0 +1,566 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/form-states.html",
+  "action": "document.querySelector(\"input\").value=\"bob\";document.querySelector(\"input\").dispatchEvent(new Event(\"input\",{bubbles:true}))",
+  "before": [
+    {
+      "nodeId": "164",
+      "childIds": ["165"],
+      "backendDOMNodeId": 164,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Form states" }
+    },
+    {
+      "nodeId": "165",
+      "ignored": true,
+      "childIds": ["169"],
+      "backendDOMNodeId": 165,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "169",
+      "ignored": true,
+      "childIds": [
+        "170",
+        "173",
+        "176",
+        "156",
+        "177",
+        "157",
+        "178",
+        "158",
+        "179",
+        "192",
+        "193",
+        "196",
+        "198"
+      ],
+      "backendDOMNodeId": 169,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "170",
+      "childIds": ["152", "171"],
+      "backendDOMNodeId": 170,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "173",
+      "childIds": ["154", "174"],
+      "backendDOMNodeId": 173,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "176",
+      "backendDOMNodeId": 176,
+      "role": { "value": "checkbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "true" } }]
+    },
+    {
+      "nodeId": "156",
+      "childIds": ["-1000000147"],
+      "backendDOMNodeId": 156,
+      "role": { "value": "StaticText" },
+      "name": { "value": " 记住我 " }
+    },
+    {
+      "nodeId": "177",
+      "backendDOMNodeId": 177,
+      "role": { "value": "radio" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "true" } }]
+    },
+    {
+      "nodeId": "157",
+      "childIds": ["-1000000148"],
+      "backendDOMNodeId": 157,
+      "role": { "value": "StaticText" },
+      "name": { "value": " A " }
+    },
+    {
+      "nodeId": "178",
+      "backendDOMNodeId": 178,
+      "role": { "value": "radio" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "false" } }]
+    },
+    {
+      "nodeId": "158",
+      "childIds": ["-1000000149"],
+      "backendDOMNodeId": 158,
+      "role": { "value": "StaticText" },
+      "name": { "value": " B " }
+    },
+    {
+      "nodeId": "179",
+      "childIds": ["182"],
+      "backendDOMNodeId": 179,
+      "role": { "value": "combobox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "192",
+      "childIds": ["149"],
+      "backendDOMNodeId": 192,
+      "role": { "value": "button" },
+      "name": { "value": "提交" },
+      "properties": [{ "name": "disabled", "value": { "value": true } }]
+    },
+    {
+      "nodeId": "193",
+      "childIds": ["194", "195"],
+      "backendDOMNodeId": 193,
+      "role": { "value": "textbox" },
+      "name": { "value": "必填" },
+      "properties": [{ "name": "required", "value": { "value": true } }]
+    },
+    {
+      "nodeId": "196",
+      "childIds": ["197"],
+      "backendDOMNodeId": 196,
+      "role": { "value": "textbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "198",
+      "childIds": ["199", "201"],
+      "backendDOMNodeId": 198,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "152",
+      "childIds": ["-1000000145"],
+      "backendDOMNodeId": 152,
+      "role": { "value": "StaticText" },
+      "name": { "value": "账号 " }
+    },
+    {
+      "nodeId": "171",
+      "childIds": ["172"],
+      "backendDOMNodeId": 171,
+      "role": { "value": "textbox" },
+      "name": { "value": "账号 " },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "154",
+      "childIds": ["-1000000146"],
+      "backendDOMNodeId": 154,
+      "role": { "value": "StaticText" },
+      "name": { "value": "密码 " }
+    },
+    {
+      "nodeId": "174",
+      "childIds": ["175"],
+      "backendDOMNodeId": 174,
+      "role": { "value": "textbox" },
+      "name": { "value": "密码 " },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "-1000000147",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " 记住我 " }
+    },
+    { "nodeId": "-1000000148", "role": { "value": "InlineTextBox" }, "name": { "value": " A " } },
+    { "nodeId": "-1000000149", "role": { "value": "InlineTextBox" }, "name": { "value": " B " } },
+    {
+      "nodeId": "182",
+      "childIds": ["186", "189"],
+      "backendDOMNodeId": 182,
+      "role": { "value": "MenuListPopup" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "149",
+      "childIds": ["-1000000137"],
+      "backendDOMNodeId": 149,
+      "role": { "value": "StaticText" },
+      "name": { "value": "提交" }
+    },
+    { "nodeId": "194", "ignored": true, "backendDOMNodeId": 194, "role": { "value": "none" } },
+    {
+      "nodeId": "195",
+      "backendDOMNodeId": 195,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "197",
+      "childIds": ["151"],
+      "backendDOMNodeId": 197,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "199",
+      "ignored": true,
+      "childIds": ["203"],
+      "backendDOMNodeId": 199,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "203",
+      "childIds": ["162", "163"],
+      "backendDOMNodeId": 203,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "展开我" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "201", "ignored": true, "backendDOMNodeId": 201, "role": { "value": "none" } },
+    { "nodeId": "-1000000145", "role": { "value": "InlineTextBox" }, "name": { "value": "账号 " } },
+    {
+      "nodeId": "172",
+      "childIds": ["147"],
+      "backendDOMNodeId": 172,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "-1000000146", "role": { "value": "InlineTextBox" }, "name": { "value": "密码 " } },
+    {
+      "nodeId": "175",
+      "backendDOMNodeId": 175,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "186",
+      "backendDOMNodeId": 186,
+      "role": { "value": "option" },
+      "name": { "value": "甲" }
+    },
+    {
+      "nodeId": "189",
+      "backendDOMNodeId": 189,
+      "role": { "value": "option" },
+      "name": { "value": "乙" }
+    },
+    { "nodeId": "-1000000137", "role": { "value": "InlineTextBox" }, "name": { "value": "提交" } },
+    {
+      "nodeId": "151",
+      "childIds": ["-1000000138"],
+      "backendDOMNodeId": 151,
+      "role": { "value": "StaticText" },
+      "name": { "value": "一段很长的文本" }
+    },
+    {
+      "nodeId": "162",
+      "ignored": true,
+      "childIds": ["-1000000134"],
+      "backendDOMNodeId": 162,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "-1000000134", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "163",
+      "childIds": ["-1000000150"],
+      "backendDOMNodeId": 163,
+      "role": { "value": "StaticText" },
+      "name": { "value": "展开我" }
+    },
+    {
+      "nodeId": "147",
+      "childIds": ["-1000000136"],
+      "backendDOMNodeId": 147,
+      "role": { "value": "StaticText" },
+      "name": { "value": "alice" }
+    },
+    {
+      "nodeId": "-1000000138",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "一段很长的文本" }
+    },
+    {
+      "nodeId": "-1000000150",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "展开我" }
+    },
+    { "nodeId": "-1000000136", "role": { "value": "InlineTextBox" }, "name": { "value": "alice" } }
+  ],
+  "after": [
+    {
+      "nodeId": "164",
+      "childIds": ["165"],
+      "backendDOMNodeId": 164,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Form states" }
+    },
+    {
+      "nodeId": "165",
+      "ignored": true,
+      "childIds": ["169"],
+      "backendDOMNodeId": 165,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "169",
+      "ignored": true,
+      "childIds": [
+        "170",
+        "173",
+        "176",
+        "156",
+        "177",
+        "157",
+        "178",
+        "158",
+        "179",
+        "192",
+        "193",
+        "196",
+        "198"
+      ],
+      "backendDOMNodeId": 169,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "170",
+      "childIds": ["152", "171"],
+      "backendDOMNodeId": 170,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "173",
+      "childIds": ["154", "174"],
+      "backendDOMNodeId": 173,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "176",
+      "backendDOMNodeId": 176,
+      "role": { "value": "checkbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "true" } }]
+    },
+    {
+      "nodeId": "156",
+      "childIds": ["-1000000155"],
+      "backendDOMNodeId": 156,
+      "role": { "value": "StaticText" },
+      "name": { "value": " 记住我 " }
+    },
+    {
+      "nodeId": "177",
+      "backendDOMNodeId": 177,
+      "role": { "value": "radio" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "true" } }]
+    },
+    {
+      "nodeId": "157",
+      "childIds": ["-1000000156"],
+      "backendDOMNodeId": 157,
+      "role": { "value": "StaticText" },
+      "name": { "value": " A " }
+    },
+    {
+      "nodeId": "178",
+      "backendDOMNodeId": 178,
+      "role": { "value": "radio" },
+      "name": { "value": "" },
+      "properties": [{ "name": "checked", "value": { "value": "false" } }]
+    },
+    {
+      "nodeId": "158",
+      "childIds": ["-1000000157"],
+      "backendDOMNodeId": 158,
+      "role": { "value": "StaticText" },
+      "name": { "value": " B " }
+    },
+    {
+      "nodeId": "179",
+      "childIds": ["182"],
+      "backendDOMNodeId": 179,
+      "role": { "value": "combobox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "192",
+      "childIds": ["149"],
+      "backendDOMNodeId": 192,
+      "role": { "value": "button" },
+      "name": { "value": "提交" },
+      "properties": [{ "name": "disabled", "value": { "value": true } }]
+    },
+    {
+      "nodeId": "193",
+      "childIds": ["194", "195"],
+      "backendDOMNodeId": 193,
+      "role": { "value": "textbox" },
+      "name": { "value": "必填" },
+      "properties": [{ "name": "required", "value": { "value": true } }]
+    },
+    {
+      "nodeId": "196",
+      "childIds": ["197"],
+      "backendDOMNodeId": 196,
+      "role": { "value": "textbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "198",
+      "childIds": ["199", "201"],
+      "backendDOMNodeId": 198,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "152",
+      "childIds": ["-1000000153"],
+      "backendDOMNodeId": 152,
+      "role": { "value": "StaticText" },
+      "name": { "value": "账号 " }
+    },
+    {
+      "nodeId": "171",
+      "childIds": ["172"],
+      "backendDOMNodeId": 171,
+      "role": { "value": "textbox" },
+      "name": { "value": "账号 " },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "154",
+      "childIds": ["-1000000154"],
+      "backendDOMNodeId": 154,
+      "role": { "value": "StaticText" },
+      "name": { "value": "密码 " }
+    },
+    {
+      "nodeId": "174",
+      "childIds": ["175"],
+      "backendDOMNodeId": 174,
+      "role": { "value": "textbox" },
+      "name": { "value": "密码 " },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "-1000000155",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " 记住我 " }
+    },
+    { "nodeId": "-1000000156", "role": { "value": "InlineTextBox" }, "name": { "value": " A " } },
+    { "nodeId": "-1000000157", "role": { "value": "InlineTextBox" }, "name": { "value": " B " } },
+    {
+      "nodeId": "182",
+      "childIds": ["186", "189"],
+      "backendDOMNodeId": 182,
+      "role": { "value": "MenuListPopup" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "149",
+      "childIds": ["-1000000137"],
+      "backendDOMNodeId": 149,
+      "role": { "value": "StaticText" },
+      "name": { "value": "提交" }
+    },
+    { "nodeId": "194", "ignored": true, "backendDOMNodeId": 194, "role": { "value": "none" } },
+    {
+      "nodeId": "195",
+      "backendDOMNodeId": 195,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "197",
+      "childIds": ["151"],
+      "backendDOMNodeId": 197,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "199",
+      "ignored": true,
+      "childIds": ["203"],
+      "backendDOMNodeId": 199,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "203",
+      "childIds": ["162", "163"],
+      "backendDOMNodeId": 203,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "展开我" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "201", "ignored": true, "backendDOMNodeId": 201, "role": { "value": "none" } },
+    { "nodeId": "-1000000153", "role": { "value": "InlineTextBox" }, "name": { "value": "账号 " } },
+    {
+      "nodeId": "172",
+      "childIds": ["205"],
+      "backendDOMNodeId": 172,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "-1000000154", "role": { "value": "InlineTextBox" }, "name": { "value": "密码 " } },
+    {
+      "nodeId": "175",
+      "backendDOMNodeId": 175,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "186",
+      "backendDOMNodeId": 186,
+      "role": { "value": "option" },
+      "name": { "value": "甲" }
+    },
+    {
+      "nodeId": "189",
+      "backendDOMNodeId": 189,
+      "role": { "value": "option" },
+      "name": { "value": "乙" }
+    },
+    { "nodeId": "-1000000137", "role": { "value": "InlineTextBox" }, "name": { "value": "提交" } },
+    {
+      "nodeId": "151",
+      "childIds": ["-1000000138"],
+      "backendDOMNodeId": 151,
+      "role": { "value": "StaticText" },
+      "name": { "value": "一段很长的文本" }
+    },
+    {
+      "nodeId": "162",
+      "ignored": true,
+      "childIds": ["-1000000134"],
+      "backendDOMNodeId": 162,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "-1000000134", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "163",
+      "childIds": ["-1000000150"],
+      "backendDOMNodeId": 163,
+      "role": { "value": "StaticText" },
+      "name": { "value": "展开我" }
+    },
+    {
+      "nodeId": "205",
+      "childIds": ["-1000000152"],
+      "backendDOMNodeId": 205,
+      "role": { "value": "StaticText" },
+      "name": { "value": "bob" }
+    },
+    {
+      "nodeId": "-1000000138",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "一段很长的文本" }
+    },
+    {
+      "nodeId": "-1000000150",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "展开我" }
+    },
+    { "nodeId": "-1000000152", "role": { "value": "InlineTextBox" }, "name": { "value": "bob" } }
+  ]
+}

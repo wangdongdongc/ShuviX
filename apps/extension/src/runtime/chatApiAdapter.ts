@@ -201,7 +201,7 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     // 运行时 Agent 实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
-    // ensure=true 则先懒创建（会话面板 Agent 页「打开即建」，构造运行时不请求 LLM）
+    // ensure=true 则先按会话配置懒创建再取快照（构造运行时不请求 LLM）
     getInfo: async (sessionId, options) =>
       (options?.ensure
         ? await ensureRuntimeSession(sessionId)
@@ -274,7 +274,7 @@ export const chatApiAdapter: ChatApi = {
       // 级联删除该项目下的会话
       for (const s of await sessionStore.list()) {
         if (s.projectId === id) {
-          removeRuntimeSession(s.id)
+          await removeRuntimeSession(s.id)
           await sessionStore.delete(s.id)
         }
       }
@@ -320,7 +320,7 @@ export const chatApiAdapter: ChatApi = {
       return { title }
     },
     delete: async (id) => {
-      removeRuntimeSession(id)
+      await removeRuntimeSession(id)
       removeTitler(id)
       await sessionStore.delete(id)
       return ok
@@ -353,7 +353,8 @@ export const chatApiAdapter: ChatApi = {
         return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }
       }
       await sessionStore.updateSettings(id, { agentProfile: name })
-      removeRuntimeSession(id)
+      // await：旧运行时彻底停下才算解绑，之后再写模型种子才不会和它抢叶子
+      await removeRuntimeSession(id)
 
       const declared = profile.model
         ? resolveModelRef(profile.model, settingsStore.listAvailableModels())
@@ -383,14 +384,17 @@ export const chatApiAdapter: ChatApi = {
   message: {
     list: async (sessionId) => messageStore.list(sessionId),
     clear: async (sessionId) => {
+      // 先关停运行时再删：还在跑的 run 会往刚清空的会话树里接着写
+      await removeRuntimeSession(sessionId)
       await messageStore.clear(sessionId)
-      removeRuntimeSession(sessionId)
       return ok
     },
-    // 回退：entry 树的 leaf 移到目标消息的父节点，并失效运行时
+    // 回退：先把旧运行时彻底关停并解绑，再把 entry 树的 leaf 移到目标消息的父节点。
+    // 顺序反过来等于在一个还在写的 run 脚下抽走叶子 —— 两个 run 交叉写同一条分支，
+    // tool_use/tool_result 配对当场作废（见 SessionManager 顶部注释）
     rollback: async ({ sessionId, messageId }) => {
+      await removeRuntimeSession(sessionId)
       await messageStore.rollback(sessionId, messageId)
-      removeRuntimeSession(sessionId)
       return ok
     }
   },

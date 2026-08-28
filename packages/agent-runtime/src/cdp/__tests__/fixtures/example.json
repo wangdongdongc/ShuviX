@@ -1,0 +1,103 @@
+{
+  "url": "https://example.com/",
+  "title": "Example Domain",
+  "nodes": [
+    {
+      "nodeId": "1",
+      "childIds": ["2"],
+      "backendDOMNodeId": 1,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Example Domain" }
+    },
+    {
+      "nodeId": "2",
+      "ignored": true,
+      "childIds": ["8"],
+      "backendDOMNodeId": 2,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "8",
+      "ignored": true,
+      "childIds": ["9"],
+      "backendDOMNodeId": 8,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "9",
+      "ignored": true,
+      "childIds": ["10", "11", "12"],
+      "backendDOMNodeId": 9,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "10",
+      "childIds": ["14"],
+      "backendDOMNodeId": 10,
+      "role": { "value": "heading" },
+      "name": { "value": "Example Domain" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "11",
+      "childIds": ["15"],
+      "backendDOMNodeId": 11,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "12",
+      "childIds": ["13"],
+      "backendDOMNodeId": 12,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "14",
+      "childIds": ["-1000000002"],
+      "backendDOMNodeId": 14,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Example Domain" }
+    },
+    {
+      "nodeId": "15",
+      "childIds": ["-1000000003"],
+      "backendDOMNodeId": 15,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This domain is for use in documentation examples without needing permission. Avoid use in operations."
+      }
+    },
+    {
+      "nodeId": "13",
+      "childIds": ["16"],
+      "backendDOMNodeId": 13,
+      "role": { "value": "link" },
+      "name": { "value": "Learn more" }
+    },
+    {
+      "nodeId": "-1000000002",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Example Domain" }
+    },
+    {
+      "nodeId": "-1000000003",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This domain is for use in documentation examples without needing permission. Avoid use in operations."
+      }
+    },
+    {
+      "nodeId": "16",
+      "childIds": ["-1000000004"],
+      "backendDOMNodeId": 16,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Learn more" }
+    },
+    {
+      "nodeId": "-1000000004",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Learn more" }
+    }
+  ]
+}

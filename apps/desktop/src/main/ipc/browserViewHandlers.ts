@@ -13,7 +13,8 @@ import {
   activateTab,
   listTabs,
   getTabView,
-  updateBounds,
+  setLayout,
+  captureTab,
   setPanelVisible
 } from '../services/browser'
 
@@ -65,6 +66,9 @@ export function registerBrowserViewHandlers(): void {
     if (view) view.webContents.stop()
   })
 
+  /** 抓 tab 画面（平铺墙滚动时的占位图） */
+  ipcMain.handle('browser-view:capture', (_event, tabId: string) => captureTab(tabId))
+
   ipcMain.handle('browser-view:get-url', (_event, tabId: string) => {
     const view = getTabView(tabId)
     return view ? view.webContents.getURL() : ''
@@ -72,11 +76,18 @@ export function registerBrowserViewHandlers(): void {
 
   // ====== 布局（面板级） ======
 
-  /** 更新面板内容区 bounds（renderer 传 CSS 像素，service 侧 apply 时乘 zoom） */
+  /** 更新面板布局（renderer 传 CSS 像素，service 侧 apply 时乘 zoom）；一次提交全部同屏 tab */
   ipcMain.on(
-    'browser-view:update-bounds',
-    (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-      updateBounds(bounds)
+    'browser-view:set-layout',
+    (
+      _event,
+      entries: Array<{
+        tabId: string
+        bounds: { x: number; y: number; width: number; height: number }
+        zoom?: number
+      }>
+    ) => {
+      setLayout(entries)
     }
   )
 

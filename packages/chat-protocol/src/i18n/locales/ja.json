@@ -46,6 +46,9 @@
     "viewCalendar": "カレンダー",
     "viewWiki": "ナレッジベース",
     "wikiEmpty": "ナレッジベース項目はまだありません",
+    "projectMemory": "プロジェクトメモリ",
+    "projectMemoryHint": "エージェントが記録したプロジェクトの知見。各セッションに注入されます",
+    "memoryPinned": "常駐メモリ（本文を毎回注入）",
     "switchView": "ビュー切り替え",
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません"
@@ -113,6 +116,12 @@
       }
     }
   },
+  "memory": {
+    "recall": "参照する条件",
+    "pinned": "常駐（本文を毎回注入）",
+    "updated": "最終更新",
+    "session": "記録したセッション"
+  },
   "chat": {
     "welcomePrompt": "今日は何をしましょうか？",
     "welcomeCreateProject": "プロジェクト作成",
@@ -144,6 +153,7 @@
     "stopGen": "生成を停止",
     "steer": "ガイドメッセージを送信",
     "placeholderSteer": "エージェントをガイドするメッセージを入力...",
+    "placeholderClosing": "前のエージェントを停止しています...",
     "send": "送信",
     "imageOnly": "(画像)",
     "selectModel": "モデルを選択",
@@ -234,7 +244,10 @@
     "result": "結果",
     "confirmSelection": "確認",
     "multiSelectHint": "複数選択可",
-    "backgroundTag": "バックグラウンド"
+    "backgroundTag": "バックグラウンド",
+    "image": "モデルが見た画像",
+    "imageZoomHint": "クリックで原寸表示",
+    "imageMissing": "この画像ファイルは利用できません"
   },
   "ssh": {
     "credentialTitle": "SSH リモート接続 — サーバーの認証情報を入力",
@@ -318,7 +331,6 @@
     "agentMonitorPhase_turn": "実行中",
     "agentMonitorPhase_compaction": "圧縮中",
     "agentMonitorPhase_branch_summary": "ブランチ要約中",
-    "agentMonitorThinking": "思考 {{level}}",
     "agentMonitorCounters": "{{turns}} ターン · ツール {{tools}} 回 · リクエスト {{requests}} 回",
     "agentMonitorFieldSession": "所属セッション",
     "agentMonitorFieldProfile": "プロファイル",
@@ -332,6 +344,17 @@
     "agentMonitorContext": "{{tokens}} / {{window}}（{{percent}}%）",
     "agentMonitorContextNone": "アシスタントメッセージ未生成",
     "agentMonitorFieldStarted": "作成日時",
+    "agentMonitorFieldThinking": "思考の深さ",
+    "agentMonitorFieldMaxTokens": "最大出力",
+    "agentMonitorFieldInput": "入力モード",
+    "agentMonitorFieldMessages": "コンテキストのメッセージ数",
+    "agentMonitorToolsSection": "装備ツール（{{count}}）",
+    "agentMonitorToolParams": "パラメータ：",
+    "agentMonitorNoTools": "ツールは装備されていません",
+    "agentMonitorSystemPrompt": "システムプロンプト",
+    "agentMonitorSystemPromptChars": "{{count}} 文字",
+    "agentMonitorEmptySystemPrompt": "（空）",
+    "agentMonitorDetailUnavailable": "ランタイム詳細を取得できません（このエージェントは破棄された可能性があります）",
     "monitorSubTabLlm": "LLM リクエスト",
     "monitorSubTabMcp": "MCP 呼び出し",
     "tabAbout": "概要",
@@ -742,34 +765,6 @@
     "defaultTitle": "新規チャット",
     "toolAborted": "ユーザーにより中止されました。"
   },
-  "agentInfo": {
-    "button": "エージェント設定",
-    "title": "エージェント設定",
-    "loading": "読み込み中...",
-    "refresh": "更新",
-    "unavailable": "エージェントを利用できません（セッションが存在しないか作成に失敗しました。モデル/プロバイダー設定をご確認ください）",
-    "model": "モデル",
-    "modelId": "モデル",
-    "modelName": "名前",
-    "api": "API プロトコル",
-    "contextWindow": "コンテキストウィンドウ",
-    "maxTokens": "最大出力",
-    "inputModes": "入力モード",
-    "runtime": "実行状態",
-    "status": "ステータス",
-    "streaming": "生成中",
-    "idle": "アイドル",
-    "thinkingLevel": "思考深度",
-    "reasoningUnsupported": "モデルは推論に非対応",
-    "messageCount": "コンテキストメッセージ数",
-    "systemPrompt": "システムプロンプト",
-    "charCount": "{{count}} 文字",
-    "emptySystemPrompt": "（空）",
-    "tools": "搭載ツール",
-    "toolCount": "{{count}} 個",
-    "noTools": "ツールは搭載されていません",
-    "params": "パラメータ："
-  },
   "tool": {
     "bashLabel": "コマンド実行",
     "readLabel": "読む",
@@ -903,7 +898,6 @@
     "urlPlaceholder": "URL を入力",
     "newTerminal": "新規ターミナル",
     "closeTerminal": "ターミナルを閉じる",
-    "agent": "設定",
     "files": "ファイル",
     "filesLoading": "ワークスペースをスキャン中…",
     "filesError": "ファイルのスキャンに失敗しました",
@@ -970,7 +964,13 @@
     "tasksStatusEnded": "終了"
   },
   "browser": {
-    "close": "現在のタブを閉じる",
+    "back": "戻る",
+    "forward": "進む",
+    "refresh": "再読み込み",
+    "stop": "読み込みを停止",
+    "openExternal": "システムブラウザーで開く",
+    "gridCount": "表示中 {{shown}}/{{total}}",
+    "zoomHint": "ズーム {{pct}}% —— ページを {{width}}px 幅でレイアウトしてからカードに合わせて縮小",
     "newTab": "新しいタブ",
     "closeTab": "タブを閉じる",
     "untitledTab": "新しいタブ",
@@ -1052,5 +1052,12 @@
     "deleteConfirm": "この Bot を削除しますか？",
     "noBots": "登録済みの Bot がありません。「Bot を追加」をクリックして始めましょう。",
     "editAllowedUsers": "許可ユーザー"
+  },
+  "notification": {
+    "untitledSession": "無題のセッション",
+    "askBody": "確認待ち：{{detail}}",
+    "askSshDetail": "SSH 認証情報",
+    "doneBody": "完了しました",
+    "failedBody": "実行エラー：{{error}}"
   }
 }

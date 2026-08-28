@@ -151,11 +151,12 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 八个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 九个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'default',
       'notebook',
       'coding',
+      'browser',
       'explore',
       'visualization',
       'widget',
@@ -166,6 +167,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'default',
       'notebook',
       'coding',
+      'browser',
       'explore',
       'visualization'
     ])

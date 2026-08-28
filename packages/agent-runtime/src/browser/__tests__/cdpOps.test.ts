@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
-import { clickOp, fillOp, typeOp, navigateOp, waitForOp, cdpOp, eventsOp } from '../cdpOps'
+import {
+  clickOp,
+  fillOp,
+  typeOp,
+  navigateOp,
+  waitForOp,
+  cdpOp,
+  eventsOp,
+  readPageOp
+} from '../cdpOps'
 import type { TabCdpSession } from '../attachManager'
 
 interface FakeSession {
@@ -222,5 +231,44 @@ describe('eventsOp', () => {
     const out = await eventsOp(session, { event: 'Network.responseReceived' })
     expect(out.text).toContain('#5 Network.responseReceived')
     expect(out.details?.nextSeq).toBe(5)
+  })
+})
+
+describe('readPageOp', () => {
+  it('走 CDP Runtime.evaluate 抽取（而非宿主的 executeJavaScript），returnByValue', async () => {
+    const { session } = fakeSession({
+      send: vi.fn(async (method: string) => {
+        if (method === 'Runtime.evaluate') {
+          return {
+            result: {
+              value: { title: 'Doc', url: 'https://a.com/x', html: '<h1>Hi</h1><p>body</p>' }
+            }
+          }
+        }
+        return {}
+      })
+    })
+    const out = await readPageOp(session)
+    const evals = (session.send as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(
+      (c) => c[0] === 'Runtime.evaluate'
+    )
+    expect(evals).toHaveLength(1)
+    expect(evals[0][1]).toMatchObject({ returnByValue: true })
+    expect(String((evals[0][1] as { expression: string }).expression)).toContain('cloneNode')
+    expect(out.text).toContain('Page: Doc')
+    expect(out.text).toContain('URL: https://a.com/x')
+    expect(out.text).toContain('# Hi')
+  })
+
+  it('页面抛异常 → 回错误文本 + details.error，不抛', async () => {
+    const { session } = fakeSession({
+      send: vi.fn(async () => ({
+        result: {},
+        exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: boom' } }
+      }))
+    })
+    const out = await readPageOp(session)
+    expect(out.text).toContain('TypeError: boom')
+    expect(out.details?.error).toBe('TypeError: boom')
   })
 })

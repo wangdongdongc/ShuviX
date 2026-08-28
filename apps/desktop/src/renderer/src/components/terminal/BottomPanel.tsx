@@ -2,7 +2,7 @@
  * BottomPanel — 底部面板（终端容器）
  * 位于聊天区 + 右侧面板之下（不含左侧边栏），顶部可拖拽调整高度。
  *
- * 终端以「浏览器式 tab 条」组织（样式对齐 BrowserTabBar）：一次只显示激活终端，
+ * 终端以「浏览器式 tab 条」组织：一次只显示激活终端，
  * 占满整个内容区；所有 Terminal 常驻挂载，经 visibility 切换避免 xterm 重建。
  */
 
@@ -72,7 +72,7 @@ export function BottomPanel(): React.JSX.Element {
         <div className="absolute inset-x-0 top-0 h-px group-hover:bg-accent/40 group-active:bg-accent/60 transition-colors" />
       </div>
 
-      {/* tab 条（样式对齐 BrowserTabBar；激活 tab 与内容区同底色形成连接感） */}
+      {/* tab 条（激活 tab 与内容区同底色形成连接感） */}
       <div className="flex-shrink-0 flex items-end gap-0.5 px-1.5 pt-1 border-b border-border-secondary/30 select-none">
         <TerminalSquare size={13} className="flex-shrink-0 text-text-tertiary mx-1 mb-1.5" />
         <div className="flex items-end gap-0.5 min-w-0 overflow-x-auto">

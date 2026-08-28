@@ -4,6 +4,7 @@ import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
+import { ProjectMemoryFolder, type ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
@@ -39,6 +40,12 @@ export interface ProjectSessionGroupsProps {
   sessionsOverride?: Session[]
   /** 过滤掉无会话的项目组（日历视图用） */
   hideEmptyGroups?: boolean
+  /**
+   * 项目记忆能力（宿主注入；桌面 window.api.memory，扩展无）。注入后每个项目组内多一层
+   * 「项目记忆」子文件夹，绑定记忆的笔记本会话也随之从会话列表里移出去（避免同一条记忆
+   * 在同一个组里出现两次）。未注入则两者都不发生 —— 那些会话仍按普通笔记本会话列出。
+   */
+  memory?: ProjectMemoryAdapter
 }
 
 /**
@@ -59,7 +66,8 @@ export function ProjectSessionGroups({
   caps = {},
   pinnedSessionIds,
   sessionsOverride,
-  hideEmptyGroups
+  hideEmptyGroups,
+  memory
 }: ProjectSessionGroupsProps): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
@@ -89,12 +97,21 @@ export function ProjectSessionGroups({
     return s?.projectId || TEMP_GROUP_KEY
   }, [activeSessionId, storeSessions])
 
+  // 当前活动会话若绑定的是一条项目记忆 —— 记忆子文件夹据此高亮那一行
+  const activeMemory = useMemo(() => {
+    const s = storeSessions.find((x) => x.id === activeSessionId)
+    const slug = s?.settings.memorySlug
+    return slug ? { projectId: s.projectId, slug } : null
+  }, [activeSessionId, storeSessions])
+
   // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
+  // 绑定项目记忆的笔记本会话不进列表 —— 它们由组内的「项目记忆」子文件夹按磁盘条目呈现
   const groups = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const p of projects) map.set(p.id, [])
     const temp: Session[] = []
     for (const s of sessions) {
+      if (memory && s.settings.memorySlug) continue
       if (s.projectId && map.has(s.projectId)) map.get(s.projectId)!.push(s)
       else if (!s.projectId) temp.push(s)
     }
@@ -106,7 +123,7 @@ export function ProjectSessionGroups({
     const out: Array<[string, Session[]]> = sorted
     if (temp.length > 0) out.push([TEMP_GROUP_KEY, temp])
     return out
-  }, [projects, sessions, projectNames])
+  }, [projects, sessions, projectNames, memory])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
@@ -168,6 +185,16 @@ export function ProjectSessionGroups({
             onEdit={isTemp || !onEditProject ? undefined : () => onEditProject(groupKey)}
             onHeaderContextMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
           >
+            {memory && !isTemp && (
+              <ProjectMemoryFolder
+                projectId={groupKey}
+                adapter={memory}
+                // 折叠的项目组不扫盘（侧栏可能有几十个项目）
+                enabled={!collapsed.has(groupKey)}
+                activeSlug={activeMemory?.projectId === groupKey ? activeMemory.slug : null}
+                dim={dim && activeGroupKey === groupKey}
+              />
+            )}
             {shownSessions.map((s) => (
               <SessionItem
                 key={s.id}

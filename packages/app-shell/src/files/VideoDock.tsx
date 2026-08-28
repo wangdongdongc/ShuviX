@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Film, Maximize2, X } from 'lucide-react'
-import { useMediaUrl } from './mediaUrl'
+import { useMediaUrl } from '@shuvix/chat-ui'
 
 /** 视频区高度上下限；MAX 防止竖屏吃掉文件树，MIN 保证原生控件不被压扁 */
 const MAX_VIDEO_HEIGHT = 360

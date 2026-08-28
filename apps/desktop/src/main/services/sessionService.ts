@@ -43,10 +43,16 @@ import { AgentSession } from './agentSession'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { renderNotebookSystemPrompt, resolveProfileModelSpec } from '../agents/agentHost'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { registerUserInputResolver } from './userInputBroker'
 import { createLogger } from '../logger'
 
 const log = createLogger('SessionService')
+
+/** 广播「运行时正在关停 / 已关停」——前端据此显示「正在停止」并拦住发送 */
+function broadcastAgentClosing(sessionId: string, closing: boolean): void {
+  chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing })
+}
 
 /**
  * 会话服务 — 管理会话 CRUD 与 AgentSession 运行时生命周期
@@ -76,12 +82,15 @@ export class SessionService {
         profileName
       })
     },
-    dispose: (sessionId, agent, reason) => {
-      // invalidate=回退重建（下次 ensure 重建），destroy/remove=删除会话
-      if (reason === 'invalidate') agent.invalidate()
-      else agent.destroy()
+    dispose: async (sessionId, agent, reason) => {
+      // invalidate=回退重建（下次 ensure 重建），destroy/remove=删除会话。
+      // **await**：解绑必须发生在关停之后 —— 见 SessionManager 顶部注释
+      if (reason === 'invalidate') await agent.invalidate()
+      else await agent.destroy()
       log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
-    }
+    },
+    // 关停可能很久（工具卡住不返回时会一直等），期间会话呈现「正在停止」并拦住发送
+    onClosingChange: (sessionId, closing) => broadcastAgentClosing(sessionId, closing)
   })
 
   constructor() {
@@ -152,7 +161,8 @@ export class SessionService {
       projectId: pid,
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
-        ...(notebookPath ? { notebookPath } : {})
+        ...(notebookPath ? { notebookPath } : {}),
+        ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {})
       },
       createdAt: now,
       updatedAt: now
@@ -218,7 +228,8 @@ export class SessionService {
     }
     log.info(`updateAgentProfile session=${sessionId} → ${name}`)
     sessionDao.updateSettings(sessionId, { agentProfile: name })
-    this.invalidateAgent(sessionId)
+    // await：旧运行时彻底停下才算解绑，之后往树上追加种子才不会和它抢叶子
+    await this.invalidateAgent(sessionId)
 
     // 种子：运行时已在上一行失效，故直接往树上追加（没有活跃 Agent 需要同步）
     let model: SubAgentModelConfig | undefined
@@ -283,11 +294,13 @@ export class SessionService {
   }
 
   /** 删除会话（同时清理 AgentSession、后台任务、消息、HTTP 日志和临时工作目录） */
-  delete(id: string): void {
-    // 先清理运行时 AgentSession（dispose 触发 destroy）
-    this.agents.remove(id, 'destroy')
-    // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录
+  async delete(id: string): Promise<void> {
+    // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
+    // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着
     killBySession(id)
+    // 再清理运行时 AgentSession（dispose 触发 destroy）。等它彻底停下才继续删数据 ——
+    // 否则一个还在跑的 run 会往刚被删掉的会话文件/结果目录里继续写
+    await this.agents.remove(id, 'destroy')
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
@@ -399,14 +412,25 @@ export class SessionService {
    * 懒创建并返回指定 session 的 AgentSession（已存在直接返回）。
    * 首次发送消息 / 压缩 / 其它需要运行时 Agent 的操作调用；session 不存在返回 undefined。
    * 构造逻辑见 SessionManager 的 create 注入（resolveSessionAgentContext + AgentSession.create）。
+   *
+   * 上一个运行时尚未关停完时**会等**（一个会话只允许一个运行时），期间前端显示「正在停止」。
    */
   ensureAgentSession(sessionId: string): Promise<AgentSession | undefined> {
     return this.agents.ensure(sessionId)
   }
 
-  /** 使指定 session 的 Agent 失效（回退时使用，下次 ensure 会重建） */
-  invalidateAgent(sessionId: string): void {
-    this.agents.remove(sessionId, 'invalidate')
+  /** 该会话的运行时是否正在关停（前端「正在停止」态的权威来源） */
+  isAgentClosing(sessionId: string): boolean {
+    return this.agents.isClosing(sessionId)
+  }
+
+  /**
+   * 关停并解绑指定 session 的 Agent（回退/切档案时使用，下次 ensure 会重建）。
+   * **返回的 Promise 落定时旧运行时保证不会再写会话树** —— 调用方必须 await 之后
+   * 再动会话树（moveTo / append），否则就会退回「两个 run 抢同一个叶子」的老问题。
+   */
+  invalidateAgent(sessionId: string): Promise<void> {
+    return this.agents.remove(sessionId, 'invalidate')
   }
 
   /**

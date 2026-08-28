@@ -30,6 +30,23 @@ export interface ChatToolRow {
   status: string
 }
 
+/**
+ * 屏幕上一张图的快照 —— 「它显示的是哪一份文件」是这组断言的核心。
+ *
+ * 工具卡片里的模型图走 `shuvix-preview://`（主进程流式读盘，零 base64 进渲染进程），
+ * 路径在 URL 的 query 里；右侧预览面板的图片走 data: URL（另一条既有实现），路径只能
+ * 从 `alt` 取 —— 故 `path` 两种来源都认。`src` 只留头部：data: URL 可能有几 MB，
+ * 整串搬过 CDP 没有意义，够看出协议即可。
+ */
+export interface ToolImageShot {
+  /** src 的前 120 字符（够辨认协议） */
+  src: string
+  path: string
+  naturalWidth: number
+  naturalHeight: number
+  complete: boolean
+}
+
 export interface ChatPane {
   /** 输入框就绪（会话已选中、ChatView 已挂载） */
   ready(): Promise<void>
@@ -66,8 +83,22 @@ export interface ChatPane {
   /** 错误行数量（error_event 条目） */
   errorRows(): Promise<number>
   toolRows(): Promise<ChatToolRow[]>
-  /** 展开第 i 个工具行并回其详情区文本 */
+  /** 展开第 i 个工具行并回其详情区文本（**切换**语义 —— 已展开时会折叠回去） */
   expandToolRow(index: number): Promise<string>
+  /** 第 i 个工具行是否展开（展开态在摘要行下方多长出一个详情容器） */
+  toolRowExpanded(index: number): Promise<boolean>
+  /** 把第 i 个工具行设成指定展开态（幂等，供不关心当前状态的用例用） */
+  setToolRowExpanded(index: number, expanded: boolean): Promise<void>
+  /** 工具子树内的模型图快照（未展开时为空 —— 缩略图只在展开态挂载） */
+  toolImages(): Promise<ToolImageShot[]>
+  /** 等工具子树内出现 n 张**已解码**的模型图（挂载与解码都是异步的） */
+  waitToolImages(count: number, timeoutMs?: number): Promise<ToolImageShot[]>
+  /** 工具子树内的图片降级文案（文件没了时 ToolImageThumb 不留破图，改说一句） */
+  toolImageFallbacks(): Promise<string[]>
+  /** 点第 i 张工具内联图（走 requestFilePreview，与 Files 面板点文件同一条信号） */
+  clickToolImage(index: number): Promise<void>
+  /** 工具子树**之外**的图片（右侧预览面板/覆盖层；那里的图走 data: URL，path 取自 alt） */
+  previewPanelImages(): Promise<ToolImageShot[]>
   /** 相邻同名调用合并行的计数徽章文本 */
   groupBadges(): Promise<string[]>
   /** 展开所有合并行 */
@@ -98,6 +129,27 @@ export function chatPane(main: CdpClient): ChatPane {
   // 合并行的计数徽章：对话列内唯一的 tabular-nums（侧栏待处理计数不在这棵子树里）
   const GROUP_BADGES = `[...(${SCROLLER}?.querySelectorAll('span.tabular-nums') ?? [])]`
   const SEND_BTN = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-send'))`
+  // 工具卡片里的模型图：**必须**是 shuvix-preview:// —— 若哪天退回 data: URL（base64
+  // 又灌进渲染进程），这里会认不到，用例即红，这正是想要的
+  const TOOL_IMGS = `[...document.querySelectorAll('[data-tool-name] img')]
+    .filter((i) => (i.getAttribute('src') || '').startsWith('shuvix-preview://'))`
+  // 工具子树之外的图（右侧预览面板走 data: URL）：不限协议，路径从 alt 取
+  const OUTSIDE_IMGS = `[...document.querySelectorAll('img')]
+    .filter((i) => i.closest('[data-tool-name]') === null)`
+  // path 用正则解而非 new URL：自定义 scheme 不是 special scheme，各引擎对其
+  // searchParams 的支持不必赌
+  const IMG_SHOT = (list: string): string =>
+    `${list}.map((i) => {
+      const src = i.getAttribute('src') || ''
+      const m = /[?&]path=([^&]*)/.exec(src)
+      return {
+        src: src.slice(0, 120),
+        path: m ? decodeURIComponent(m[1]) : (i.getAttribute('alt') || ''),
+        naturalWidth: i.naturalWidth,
+        naturalHeight: i.naturalHeight,
+        complete: i.complete
+      }
+    })`
   const DIALOG = `document.querySelector('.dialog-panel')`
   const MSG = (id: string): string =>
     `document.querySelector('[data-msg-id=${JSON.stringify(id)}]')`
@@ -218,6 +270,42 @@ export function chatPane(main: CdpClient): ChatPane {
       await new Promise((r) => setTimeout(r, 250))
       return main.eval<string>(`(${TOOLS}[${index}]?.textContent ?? '').trim()`)
     },
+    // 展开态 = 摘要行原位不动 + 下方长出详情容器（见 ToolCallBlock 的两个返回分支）
+    toolRowExpanded: (index) =>
+      main.eval<boolean>(`(${TOOLS}[${index}]?.childElementCount ?? 0) > 1`),
+    setToolRowExpanded: async (index, expanded) => {
+      const now = await main.eval<boolean>(`(${TOOLS}[${index}]?.childElementCount ?? 0) > 1`)
+      if (now === expanded) return
+      await main.eval(`${TOOLS}[${index}]?.querySelector('button')?.click()`)
+      await new Promise((r) => setTimeout(r, 250))
+    },
+    toolImages: () => main.eval<ToolImageShot[]>(IMG_SHOT(TOOL_IMGS)),
+    waitToolImages: (count, timeoutMs = 20_000) =>
+      until(
+        async () => {
+          const shots = await main.eval<ToolImageShot[]>(IMG_SHOT(TOOL_IMGS))
+          const ready =
+            shots.length === count && shots.every((s) => s.complete && s.naturalWidth > 0)
+          return ready ? shots : null
+        },
+        `${count} decoded tool image(s)`,
+        timeoutMs
+      ),
+    // 降级文案随渲染端语言（navigator.language）变，故按三语兜底认 —— 与列表页
+    // 「已覆盖」徽标同款做法；返回原文，spec 只断言「有没有」不钉具体一句
+    toolImageFallbacks: () =>
+      main.eval<string[]>(
+        `${TOOLS}
+          .flatMap((el) => [...el.querySelectorAll('div')])
+          .filter((d) => d.childElementCount === 0)
+          .map((d) => (d.textContent ?? '').trim())
+          .filter((s) => /no longer available|已不可用|利用できません/.test(s))`
+      ),
+    clickToolImage: async (index) => {
+      await main.eval(`${TOOL_IMGS}[${index}]?.click()`)
+      await new Promise((r) => setTimeout(r, 300))
+    },
+    previewPanelImages: () => main.eval<ToolImageShot[]>(IMG_SHOT(OUTSIDE_IMGS)),
     groupBadges: () =>
       main.eval<string[]>(`${GROUP_BADGES}.map((s) => (s.textContent ?? '').trim())`),
     expandGroups: async () => {

@@ -23,8 +23,13 @@ export interface SessionSettings {
    * 缺省 / 档案已不存在 → 回落 'default'（见 sessionService.resolveAgentProfileName）。
    */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
+  /**
+   * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
+   * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表。
+   */
+  memorySlug?: string
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

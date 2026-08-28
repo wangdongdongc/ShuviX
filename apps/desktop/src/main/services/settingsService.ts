@@ -27,6 +27,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.language': { labelKey: 'settings.language', desc: 'zh | en | ja' },
   'general.fontSize': { labelKey: 'settings.fontSize', desc: 'number as string, 12-20' },
   'general.uiZoom': { labelKey: 'settings.uiZoom', desc: 'number as string, 50-200 (percent)' },
+  'notification.enabled': {
+    labelKey: 'settings.notificationEnabled',
+    desc: 'true | false — system notifications when the agent asks for approval, finishes a run, or fails (only while the session is not in the foreground); default true'
+  },
   'appearance.focusMode': {
     labelKey: 'settings.focusMode',
     desc: 'true | false — fade unselected sidebar items, chat header, input area, settings button, and inactive right-panel tabs when a session is selected'

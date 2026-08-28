@@ -59,6 +59,15 @@ export interface ChatAssistantMessageEvent extends ChatEventBase {
 /** Agent 完成本轮生成 */
 export interface ChatAgentEndEvent extends ChatEventBase {
   type: 'agent_end'
+  /**
+   * 本轮**怎么**结束的 —— 由最后一条 assistant 消息的 stopReason 归一而来。
+   *
+   * 事件流原本只说「结束了」：出错另发一条 `error`，用户中止则连事件都没有，
+   * 消费方只能去 `usage.details` 里翻最后一个 stopReason 反推。通知层要按结局
+   * 分文案（完成 / 失败），所以把这个判定收在产事件的地方做一次。
+   * 省略 = 老事件或无 assistant 消息，按 'ok' 处理。
+   */
+  reason?: 'ok' | 'aborted' | 'error'
   /** 持久化的 assistant 消息 (JSON string) */
   message?: string
   /** Token 用量统计 */
@@ -245,6 +254,22 @@ export interface ChatMessagesReloadedEvent extends ChatEventBase {
   type: 'messages_reloaded'
 }
 
+// ─── 运行时关停 ─────────────────────────────────────────
+
+/**
+ * 会话的 Agent 运行时正在关停（`closing:true`）/ 已关停完毕（`closing:false`）。
+ *
+ * 一个会话同一时刻只允许有一个运行时：回退、切档案、删除会话都要先把旧运行时**彻底**停下
+ * （等当前 run 跑完）才解绑，否则两个 run 会交叉写同一棵会话树，把 tool_use/tool_result
+ * 的配对写坏。关停期间发消息没有意义（新运行时还没出生），前端据此显示「正在停止」并拦住发送。
+ *
+ * 关停通常瞬间完成；工具卡住不返回时可能持续很久 —— 这正是需要把它显式呈现给用户的原因。
+ */
+export interface ChatAgentClosingEvent extends ChatEventBase {
+  type: 'agent_closing'
+  closing: boolean
+}
+
 // ─── 错误 ──────────────────────────────────────────────
 
 /** 错误事件 */
@@ -311,6 +336,7 @@ export type ChatEvent =
   | ChatSubSessionEndEvent
   | ChatBgTaskEvent
   | ChatMessagesReloadedEvent
+  | ChatAgentClosingEvent
   | ChatErrorEvent
   | ChatUserMessageEvent
   | ChatQueueUpdateEvent

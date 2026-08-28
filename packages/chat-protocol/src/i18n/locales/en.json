@@ -46,6 +46,9 @@
     "viewCalendar": "Calendar",
     "viewWiki": "Knowledge Base",
     "wikiEmpty": "No knowledge base entries yet",
+    "projectMemory": "Project Memory",
+    "projectMemoryHint": "What the agent learned about this project — injected into every session",
+    "memoryPinned": "Always applies (full text injected every session)",
     "switchView": "Switch view",
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day"
@@ -113,6 +116,12 @@
       }
     }
   },
+  "memory": {
+    "recall": "When to open it",
+    "pinned": "Always applies (full text injected)",
+    "updated": "Last updated",
+    "session": "Recorded in session"
+  },
   "chat": {
     "welcomePrompt": "What should we work on today?",
     "welcomeCreateProject": "Create Project",
@@ -144,6 +153,7 @@
     "stopGen": "Stop generation",
     "steer": "Send steering message",
     "placeholderSteer": "Type a message to guide the agent...",
+    "placeholderClosing": "Stopping the previous agent...",
     "send": "Send",
     "imageOnly": "(image)",
     "selectModel": "Select a model",
@@ -234,7 +244,10 @@
     "result": "Result",
     "confirmSelection": "Confirm",
     "multiSelectHint": "Multiple selection allowed",
-    "backgroundTag": "Background"
+    "backgroundTag": "Background",
+    "image": "Image the model saw",
+    "imageZoomHint": "Click to open at full size",
+    "imageMissing": "This image file is no longer available"
   },
   "ssh": {
     "credentialTitle": "SSH Remote Connection — Enter server credentials",
@@ -318,7 +331,6 @@
     "agentMonitorPhase_turn": "running",
     "agentMonitorPhase_compaction": "compacting",
     "agentMonitorPhase_branch_summary": "summarizing branch",
-    "agentMonitorThinking": "thinking {{level}}",
     "agentMonitorCounters": "{{turns}} turns · {{tools}} tool calls · {{requests}} requests",
     "agentMonitorFieldSession": "Session",
     "agentMonitorFieldProfile": "Profile",
@@ -332,6 +344,17 @@
     "agentMonitorContext": "{{tokens}} / {{window}} ({{percent}}%)",
     "agentMonitorContextNone": "no assistant message yet",
     "agentMonitorFieldStarted": "Started",
+    "agentMonitorFieldThinking": "Thinking",
+    "agentMonitorFieldMaxTokens": "Max output",
+    "agentMonitorFieldInput": "Input modes",
+    "agentMonitorFieldMessages": "Context messages",
+    "agentMonitorToolsSection": "Loaded tools ({{count}})",
+    "agentMonitorToolParams": "Params:",
+    "agentMonitorNoTools": "No tools loaded",
+    "agentMonitorSystemPrompt": "System prompt",
+    "agentMonitorSystemPromptChars": "{{count}} chars",
+    "agentMonitorEmptySystemPrompt": "(empty)",
+    "agentMonitorDetailUnavailable": "Runtime details unavailable — this agent was just destroyed",
     "monitorSubTabLlm": "LLM requests",
     "monitorSubTabMcp": "MCP calls",
     "tabAbout": "About",
@@ -742,34 +765,6 @@
     "defaultTitle": "New Chat",
     "toolAborted": "Aborted by user."
   },
-  "agentInfo": {
-    "button": "Agent config",
-    "title": "Agent Config",
-    "loading": "Loading...",
-    "refresh": "Refresh",
-    "unavailable": "Agent unavailable (session missing or creation failed — check the model/provider settings)",
-    "model": "Model",
-    "modelId": "Model",
-    "modelName": "Name",
-    "api": "API protocol",
-    "contextWindow": "Context window",
-    "maxTokens": "Max output",
-    "inputModes": "Input modes",
-    "runtime": "Runtime",
-    "status": "Status",
-    "streaming": "Generating",
-    "idle": "Idle",
-    "thinkingLevel": "Thinking level",
-    "reasoningUnsupported": "model does not support reasoning",
-    "messageCount": "Context messages",
-    "systemPrompt": "System Prompt",
-    "charCount": "{{count}} chars",
-    "emptySystemPrompt": "(empty)",
-    "tools": "Loaded Tools",
-    "toolCount": "{{count}}",
-    "noTools": "No tools loaded",
-    "params": "Params:"
-  },
   "tool": {
     "bashLabel": "Run Command",
     "readLabel": "Read",
@@ -903,7 +898,6 @@
     "urlPlaceholder": "Enter a URL",
     "newTerminal": "New Terminal",
     "closeTerminal": "Close terminal",
-    "agent": "Config",
     "files": "Files",
     "filesLoading": "Scanning workspace…",
     "filesError": "Failed to scan files",
@@ -970,7 +964,13 @@
     "tasksStatusEnded": "Finished"
   },
   "browser": {
-    "close": "Close current tab",
+    "back": "Back",
+    "forward": "Forward",
+    "refresh": "Refresh",
+    "stop": "Stop loading",
+    "openExternal": "Open in system browser",
+    "gridCount": "{{shown}} of {{total}} on screen",
+    "zoomHint": "Zoom {{pct}}% — the page is laid out at {{width}}px wide, then scaled to fit the card",
     "newTab": "New tab",
     "closeTab": "Close tab",
     "untitledTab": "New Tab",
@@ -1052,5 +1052,12 @@
     "deleteConfirm": "Delete this bot?",
     "noBots": "No bots registered. Click \"Add Bot\" to get started.",
     "editAllowedUsers": "Allowed Users"
+  },
+  "notification": {
+    "untitledSession": "Untitled session",
+    "askBody": "Waiting for approval: {{detail}}",
+    "askSshDetail": "SSH credentials",
+    "doneBody": "Finished",
+    "failedBody": "Run failed: {{error}}"
   }
 }

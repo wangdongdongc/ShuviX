@@ -1,0 +1,251 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/aria-widgets.html",
+  "title": "ARIA widgets",
+  "nodes": [
+    {
+      "nodeId": "1",
+      "childIds": ["2"],
+      "backendDOMNodeId": 1,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "ARIA widgets" }
+    },
+    {
+      "nodeId": "2",
+      "ignored": true,
+      "childIds": ["6"],
+      "backendDOMNodeId": 2,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "6",
+      "ignored": true,
+      "childIds": ["7", "10", "13", "14", "15", "16", "17", "20", "40"],
+      "backendDOMNodeId": 6,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "7",
+      "childIds": ["8", "9"],
+      "backendDOMNodeId": 7,
+      "role": { "value": "tablist" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "10",
+      "childIds": ["11", "12"],
+      "backendDOMNodeId": 10,
+      "role": { "value": "listbox" },
+      "name": { "value": "" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "13",
+      "childIds": ["32"],
+      "backendDOMNodeId": 13,
+      "role": { "value": "button" },
+      "name": { "value": "折叠面板" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "14",
+      "childIds": ["33"],
+      "backendDOMNodeId": 14,
+      "role": { "value": "heading" },
+      "name": { "value": "标题一" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "15",
+      "childIds": ["34"],
+      "backendDOMNodeId": 15,
+      "role": { "value": "heading" },
+      "name": { "value": "标题二" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "16",
+      "childIds": ["35"],
+      "backendDOMNodeId": 16,
+      "role": { "value": "heading" },
+      "name": { "value": "标题三" },
+      "properties": [{ "name": "level", "value": { "value": 3 } }]
+    },
+    {
+      "nodeId": "17",
+      "childIds": ["18", "19"],
+      "backendDOMNodeId": 17,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "20",
+      "backendDOMNodeId": 20,
+      "role": { "value": "image" },
+      "name": { "value": "有替换文字" }
+    },
+    {
+      "nodeId": "40",
+      "childIds": ["-1000000014"],
+      "backendDOMNodeId": 40,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "8",
+      "childIds": ["28"],
+      "backendDOMNodeId": 8,
+      "role": { "value": "tab" },
+      "name": { "value": "一" }
+    },
+    {
+      "nodeId": "9",
+      "childIds": ["29"],
+      "backendDOMNodeId": 9,
+      "role": { "value": "tab" },
+      "name": { "value": "二" }
+    },
+    {
+      "nodeId": "11",
+      "childIds": ["30"],
+      "backendDOMNodeId": 11,
+      "role": { "value": "option" },
+      "name": { "value": "甲" }
+    },
+    {
+      "nodeId": "12",
+      "childIds": ["31"],
+      "backendDOMNodeId": 12,
+      "role": { "value": "option" },
+      "name": { "value": "乙" }
+    },
+    {
+      "nodeId": "32",
+      "childIds": ["-1000000006"],
+      "backendDOMNodeId": 32,
+      "role": { "value": "StaticText" },
+      "name": { "value": "折叠面板" }
+    },
+    {
+      "nodeId": "33",
+      "childIds": ["-1000000007"],
+      "backendDOMNodeId": 33,
+      "role": { "value": "StaticText" },
+      "name": { "value": "标题一" }
+    },
+    {
+      "nodeId": "34",
+      "childIds": ["-1000000008"],
+      "backendDOMNodeId": 34,
+      "role": { "value": "StaticText" },
+      "name": { "value": "标题二" }
+    },
+    {
+      "nodeId": "35",
+      "childIds": ["-1000000009"],
+      "backendDOMNodeId": 35,
+      "role": { "value": "StaticText" },
+      "name": { "value": "标题三" }
+    },
+    {
+      "nodeId": "18",
+      "childIds": ["36", "37"],
+      "backendDOMNodeId": 18,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "19",
+      "childIds": ["38", "39"],
+      "backendDOMNodeId": 19,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    { "nodeId": "-1000000014", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "28",
+      "childIds": ["-1000000002"],
+      "backendDOMNodeId": 28,
+      "role": { "value": "StaticText" },
+      "name": { "value": "一" }
+    },
+    {
+      "nodeId": "29",
+      "childIds": ["-1000000003"],
+      "backendDOMNodeId": 29,
+      "role": { "value": "StaticText" },
+      "name": { "value": "二" }
+    },
+    {
+      "nodeId": "30",
+      "childIds": ["-1000000004"],
+      "backendDOMNodeId": 30,
+      "role": { "value": "StaticText" },
+      "name": { "value": "甲" }
+    },
+    {
+      "nodeId": "31",
+      "childIds": ["-1000000005"],
+      "backendDOMNodeId": 31,
+      "role": { "value": "StaticText" },
+      "name": { "value": "乙" }
+    },
+    {
+      "nodeId": "-1000000006",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "折叠面板" }
+    },
+    {
+      "nodeId": "-1000000007",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "标题一" }
+    },
+    {
+      "nodeId": "-1000000008",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "标题二" }
+    },
+    {
+      "nodeId": "-1000000009",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "标题三" }
+    },
+    {
+      "nodeId": "36",
+      "childIds": ["-1000000010"],
+      "backendDOMNodeId": 36,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "37",
+      "childIds": ["-1000000011"],
+      "backendDOMNodeId": 37,
+      "role": { "value": "StaticText" },
+      "name": { "value": "项一" }
+    },
+    {
+      "nodeId": "38",
+      "childIds": ["-1000000012"],
+      "backendDOMNodeId": 38,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "39",
+      "childIds": ["-1000000013"],
+      "backendDOMNodeId": 39,
+      "role": { "value": "StaticText" },
+      "name": { "value": "项二" }
+    },
+    { "nodeId": "-1000000002", "role": { "value": "InlineTextBox" }, "name": { "value": "一" } },
+    { "nodeId": "-1000000003", "role": { "value": "InlineTextBox" }, "name": { "value": "二" } },
+    { "nodeId": "-1000000004", "role": { "value": "InlineTextBox" }, "name": { "value": "甲" } },
+    { "nodeId": "-1000000005", "role": { "value": "InlineTextBox" }, "name": { "value": "乙" } },
+    { "nodeId": "-1000000010", "ignored": true, "role": { "value": "none" } },
+    { "nodeId": "-1000000011", "role": { "value": "InlineTextBox" }, "name": { "value": "项一" } },
+    { "nodeId": "-1000000012", "ignored": true, "role": { "value": "none" } },
+    { "nodeId": "-1000000013", "role": { "value": "InlineTextBox" }, "name": { "value": "项二" } }
+  ]
+}

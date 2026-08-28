@@ -1,0 +1,137 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/text-nesting.html",
+  "title": "Text nesting",
+  "nodes": [
+    {
+      "nodeId": "171",
+      "childIds": ["172"],
+      "backendDOMNodeId": 171,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Text nesting" }
+    },
+    {
+      "nodeId": "172",
+      "ignored": true,
+      "childIds": ["176"],
+      "backendDOMNodeId": 172,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "176",
+      "ignored": true,
+      "childIds": ["177", "178", "181", "167", "168", "183"],
+      "backendDOMNodeId": 176,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "177",
+      "childIds": ["164"],
+      "backendDOMNodeId": 177,
+      "role": { "value": "link" },
+      "name": { "value": "立即登录" }
+    },
+    {
+      "nodeId": "178",
+      "childIds": ["179", "163"],
+      "backendDOMNodeId": 178,
+      "role": { "value": "button" },
+      "name": { "value": "简体中文" }
+    },
+    {
+      "nodeId": "181",
+      "childIds": ["166"],
+      "backendDOMNodeId": 181,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "167",
+      "childIds": ["-1000000086"],
+      "backendDOMNodeId": 167,
+      "role": { "value": "StaticText" },
+      "name": { "value": "金山软件test" }
+    },
+    {
+      "nodeId": "168",
+      "childIds": ["-1000000087"],
+      "backendDOMNodeId": 168,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "183",
+      "childIds": ["169", "170"],
+      "backendDOMNodeId": 183,
+      "role": { "value": "link" },
+      "name": { "value": "图标带子元素的链接" }
+    },
+    {
+      "nodeId": "164",
+      "childIds": ["-1000000084"],
+      "backendDOMNodeId": 164,
+      "role": { "value": "StaticText" },
+      "name": { "value": "立即登录" }
+    },
+    {
+      "nodeId": "179",
+      "backendDOMNodeId": 179,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "163",
+      "childIds": ["-1000000077"],
+      "backendDOMNodeId": 163,
+      "role": { "value": "StaticText" },
+      "name": { "value": "简体中文" }
+    },
+    {
+      "nodeId": "166",
+      "childIds": ["-1000000085"],
+      "backendDOMNodeId": 166,
+      "role": { "value": "StaticText" },
+      "name": { "value": "账号登录" }
+    },
+    {
+      "nodeId": "-1000000086",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "金山软件test" }
+    },
+    { "nodeId": "-1000000087", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "169",
+      "childIds": ["-1000000088"],
+      "backendDOMNodeId": 169,
+      "role": { "value": "StaticText" },
+      "name": { "value": "图标" }
+    },
+    {
+      "nodeId": "170",
+      "childIds": ["-1000000089"],
+      "backendDOMNodeId": 170,
+      "role": { "value": "StaticText" },
+      "name": { "value": "带子元素的链接" }
+    },
+    {
+      "nodeId": "-1000000084",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "立即登录" }
+    },
+    {
+      "nodeId": "-1000000077",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "简体中文" }
+    },
+    {
+      "nodeId": "-1000000085",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "账号登录" }
+    },
+    { "nodeId": "-1000000088", "role": { "value": "InlineTextBox" }, "name": { "value": "图标" } },
+    {
+      "nodeId": "-1000000089",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "带子元素的链接" }
+    }
+  ]
+}

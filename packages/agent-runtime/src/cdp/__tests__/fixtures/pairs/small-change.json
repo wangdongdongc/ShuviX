@@ -1,0 +1,709 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/small-change.html",
+  "action": "document.getElementById(\"btn\").click()",
+  "before": [
+    {
+      "nodeId": "130",
+      "childIds": ["131"],
+      "backendDOMNodeId": 130,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Small change" }
+    },
+    {
+      "nodeId": "131",
+      "ignored": true,
+      "childIds": ["135"],
+      "backendDOMNodeId": 131,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "135",
+      "ignored": true,
+      "childIds": ["136", "137"],
+      "backendDOMNodeId": 135,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "136",
+      "childIds": ["91", "92"],
+      "backendDOMNodeId": 136,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "137",
+      "childIds": ["129"],
+      "backendDOMNodeId": 137,
+      "role": { "value": "button" },
+      "name": { "value": "添加" }
+    },
+    {
+      "nodeId": "91",
+      "childIds": ["108"],
+      "backendDOMNodeId": 91,
+      "role": { "value": "heading" },
+      "name": { "value": "用户列表" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "92",
+      "childIds": ["93", "96", "99", "102", "105"],
+      "backendDOMNodeId": 92,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "129",
+      "childIds": ["-1000000102"],
+      "backendDOMNodeId": 129,
+      "role": { "value": "StaticText" },
+      "name": { "value": "添加" }
+    },
+    {
+      "nodeId": "108",
+      "childIds": ["-1000000103"],
+      "backendDOMNodeId": 108,
+      "role": { "value": "StaticText" },
+      "name": { "value": "用户列表" }
+    },
+    {
+      "nodeId": "93",
+      "childIds": ["109", "94", "111", "112"],
+      "backendDOMNodeId": 93,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "96",
+      "childIds": ["113", "97", "115", "116"],
+      "backendDOMNodeId": 96,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "99",
+      "childIds": ["117", "100", "119", "120"],
+      "backendDOMNodeId": 99,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "102",
+      "childIds": ["121", "103", "123", "124"],
+      "backendDOMNodeId": 102,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "105",
+      "childIds": ["125", "106", "127", "128"],
+      "backendDOMNodeId": 105,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    { "nodeId": "-1000000102", "role": { "value": "InlineTextBox" }, "name": { "value": "添加" } },
+    {
+      "nodeId": "-1000000103",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "用户列表" }
+    },
+    {
+      "nodeId": "109",
+      "childIds": ["-1000000065"],
+      "backendDOMNodeId": 109,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "94",
+      "childIds": ["110"],
+      "backendDOMNodeId": 94,
+      "role": { "value": "link" },
+      "name": { "value": "张三" }
+    },
+    {
+      "nodeId": "111",
+      "childIds": ["-1000000105"],
+      "backendDOMNodeId": 111,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "112",
+      "childIds": ["-1000000106"],
+      "backendDOMNodeId": 112,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "113",
+      "childIds": ["-1000000069"],
+      "backendDOMNodeId": 113,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "97",
+      "childIds": ["114"],
+      "backendDOMNodeId": 97,
+      "role": { "value": "link" },
+      "name": { "value": "李四" }
+    },
+    {
+      "nodeId": "115",
+      "childIds": ["-1000000108"],
+      "backendDOMNodeId": 115,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "116",
+      "childIds": ["-1000000109"],
+      "backendDOMNodeId": 116,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "117",
+      "childIds": ["-1000000073"],
+      "backendDOMNodeId": 117,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "100",
+      "childIds": ["118"],
+      "backendDOMNodeId": 100,
+      "role": { "value": "link" },
+      "name": { "value": "王五" }
+    },
+    {
+      "nodeId": "119",
+      "childIds": ["-1000000111"],
+      "backendDOMNodeId": 119,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "120",
+      "childIds": ["-1000000112"],
+      "backendDOMNodeId": 120,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "121",
+      "childIds": ["-1000000077"],
+      "backendDOMNodeId": 121,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "103",
+      "childIds": ["122"],
+      "backendDOMNodeId": 103,
+      "role": { "value": "link" },
+      "name": { "value": "赵六" }
+    },
+    {
+      "nodeId": "123",
+      "childIds": ["-1000000114"],
+      "backendDOMNodeId": 123,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "124",
+      "childIds": ["-1000000115"],
+      "backendDOMNodeId": 124,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "125",
+      "childIds": ["-1000000081"],
+      "backendDOMNodeId": 125,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "106",
+      "childIds": ["126"],
+      "backendDOMNodeId": 106,
+      "role": { "value": "link" },
+      "name": { "value": "钱七" }
+    },
+    {
+      "nodeId": "127",
+      "childIds": ["-1000000117"],
+      "backendDOMNodeId": 127,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "128",
+      "childIds": ["-1000000118"],
+      "backendDOMNodeId": 128,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000065", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "110",
+      "childIds": ["-1000000104"],
+      "backendDOMNodeId": 110,
+      "role": { "value": "StaticText" },
+      "name": { "value": "张三" }
+    },
+    { "nodeId": "-1000000105", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000106",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000069", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "114",
+      "childIds": ["-1000000107"],
+      "backendDOMNodeId": 114,
+      "role": { "value": "StaticText" },
+      "name": { "value": "李四" }
+    },
+    { "nodeId": "-1000000108", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000109",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000073", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "118",
+      "childIds": ["-1000000110"],
+      "backendDOMNodeId": 118,
+      "role": { "value": "StaticText" },
+      "name": { "value": "王五" }
+    },
+    { "nodeId": "-1000000111", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000112",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000077", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "122",
+      "childIds": ["-1000000113"],
+      "backendDOMNodeId": 122,
+      "role": { "value": "StaticText" },
+      "name": { "value": "赵六" }
+    },
+    { "nodeId": "-1000000114", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000115",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000081", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "126",
+      "childIds": ["-1000000116"],
+      "backendDOMNodeId": 126,
+      "role": { "value": "StaticText" },
+      "name": { "value": "钱七" }
+    },
+    { "nodeId": "-1000000117", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000118",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000104", "role": { "value": "InlineTextBox" }, "name": { "value": "张三" } },
+    { "nodeId": "-1000000107", "role": { "value": "InlineTextBox" }, "name": { "value": "李四" } },
+    { "nodeId": "-1000000110", "role": { "value": "InlineTextBox" }, "name": { "value": "王五" } },
+    { "nodeId": "-1000000113", "role": { "value": "InlineTextBox" }, "name": { "value": "赵六" } },
+    { "nodeId": "-1000000116", "role": { "value": "InlineTextBox" }, "name": { "value": "钱七" } }
+  ],
+  "after": [
+    {
+      "nodeId": "130",
+      "childIds": ["131"],
+      "backendDOMNodeId": 130,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Small change" }
+    },
+    {
+      "nodeId": "131",
+      "ignored": true,
+      "childIds": ["135"],
+      "backendDOMNodeId": 131,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "135",
+      "ignored": true,
+      "childIds": ["136", "137"],
+      "backendDOMNodeId": 135,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "136",
+      "childIds": ["91", "92"],
+      "backendDOMNodeId": 136,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "137",
+      "childIds": ["129"],
+      "backendDOMNodeId": 137,
+      "role": { "value": "button" },
+      "name": { "value": "添加" }
+    },
+    {
+      "nodeId": "91",
+      "childIds": ["108"],
+      "backendDOMNodeId": 91,
+      "role": { "value": "heading" },
+      "name": { "value": "用户列表" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "92",
+      "childIds": ["93", "96", "99", "102", "105", "141"],
+      "backendDOMNodeId": 92,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "129",
+      "childIds": ["-1000000102"],
+      "backendDOMNodeId": 129,
+      "role": { "value": "StaticText" },
+      "name": { "value": "添加" }
+    },
+    {
+      "nodeId": "108",
+      "childIds": ["-1000000103"],
+      "backendDOMNodeId": 108,
+      "role": { "value": "StaticText" },
+      "name": { "value": "用户列表" }
+    },
+    {
+      "nodeId": "93",
+      "childIds": ["109", "94", "111", "112"],
+      "backendDOMNodeId": 93,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "96",
+      "childIds": ["113", "97", "115", "116"],
+      "backendDOMNodeId": 96,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "99",
+      "childIds": ["117", "100", "119", "120"],
+      "backendDOMNodeId": 99,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "102",
+      "childIds": ["121", "103", "123", "124"],
+      "backendDOMNodeId": 102,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "105",
+      "childIds": ["125", "106", "127", "128"],
+      "backendDOMNodeId": 105,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "141",
+      "childIds": ["142", "139", "144", "145"],
+      "backendDOMNodeId": 141,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    { "nodeId": "-1000000102", "role": { "value": "InlineTextBox" }, "name": { "value": "添加" } },
+    {
+      "nodeId": "-1000000103",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "用户列表" }
+    },
+    {
+      "nodeId": "109",
+      "childIds": ["-1000000065"],
+      "backendDOMNodeId": 109,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "94",
+      "childIds": ["110"],
+      "backendDOMNodeId": 94,
+      "role": { "value": "link" },
+      "name": { "value": "张三" }
+    },
+    {
+      "nodeId": "111",
+      "childIds": ["-1000000105"],
+      "backendDOMNodeId": 111,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "112",
+      "childIds": ["-1000000106"],
+      "backendDOMNodeId": 112,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "113",
+      "childIds": ["-1000000069"],
+      "backendDOMNodeId": 113,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "97",
+      "childIds": ["114"],
+      "backendDOMNodeId": 97,
+      "role": { "value": "link" },
+      "name": { "value": "李四" }
+    },
+    {
+      "nodeId": "115",
+      "childIds": ["-1000000108"],
+      "backendDOMNodeId": 115,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "116",
+      "childIds": ["-1000000109"],
+      "backendDOMNodeId": 116,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "117",
+      "childIds": ["-1000000073"],
+      "backendDOMNodeId": 117,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "100",
+      "childIds": ["118"],
+      "backendDOMNodeId": 100,
+      "role": { "value": "link" },
+      "name": { "value": "王五" }
+    },
+    {
+      "nodeId": "119",
+      "childIds": ["-1000000111"],
+      "backendDOMNodeId": 119,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "120",
+      "childIds": ["-1000000112"],
+      "backendDOMNodeId": 120,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "121",
+      "childIds": ["-1000000077"],
+      "backendDOMNodeId": 121,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "103",
+      "childIds": ["122"],
+      "backendDOMNodeId": 103,
+      "role": { "value": "link" },
+      "name": { "value": "赵六" }
+    },
+    {
+      "nodeId": "123",
+      "childIds": ["-1000000114"],
+      "backendDOMNodeId": 123,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "124",
+      "childIds": ["-1000000115"],
+      "backendDOMNodeId": 124,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "125",
+      "childIds": ["-1000000081"],
+      "backendDOMNodeId": 125,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "106",
+      "childIds": ["126"],
+      "backendDOMNodeId": 106,
+      "role": { "value": "link" },
+      "name": { "value": "钱七" }
+    },
+    {
+      "nodeId": "127",
+      "childIds": ["-1000000117"],
+      "backendDOMNodeId": 127,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "128",
+      "childIds": ["-1000000118"],
+      "backendDOMNodeId": 128,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：在线" }
+    },
+    {
+      "nodeId": "142",
+      "childIds": ["-1000000119"],
+      "backendDOMNodeId": 142,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "139",
+      "childIds": ["143"],
+      "backendDOMNodeId": 139,
+      "role": { "value": "link" },
+      "name": { "value": "孙八" }
+    },
+    {
+      "nodeId": "144",
+      "childIds": ["-1000000124"],
+      "backendDOMNodeId": 144,
+      "role": { "value": "StaticText" },
+      "name": { "value": " " }
+    },
+    {
+      "nodeId": "145",
+      "childIds": ["-1000000125"],
+      "backendDOMNodeId": 145,
+      "role": { "value": "StaticText" },
+      "name": { "value": "状态：离线" }
+    },
+    { "nodeId": "-1000000065", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "110",
+      "childIds": ["-1000000104"],
+      "backendDOMNodeId": 110,
+      "role": { "value": "StaticText" },
+      "name": { "value": "张三" }
+    },
+    { "nodeId": "-1000000105", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000106",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000069", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "114",
+      "childIds": ["-1000000107"],
+      "backendDOMNodeId": 114,
+      "role": { "value": "StaticText" },
+      "name": { "value": "李四" }
+    },
+    { "nodeId": "-1000000108", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000109",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000073", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "118",
+      "childIds": ["-1000000110"],
+      "backendDOMNodeId": 118,
+      "role": { "value": "StaticText" },
+      "name": { "value": "王五" }
+    },
+    { "nodeId": "-1000000111", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000112",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000077", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "122",
+      "childIds": ["-1000000113"],
+      "backendDOMNodeId": 122,
+      "role": { "value": "StaticText" },
+      "name": { "value": "赵六" }
+    },
+    { "nodeId": "-1000000114", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000115",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000081", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "126",
+      "childIds": ["-1000000116"],
+      "backendDOMNodeId": 126,
+      "role": { "value": "StaticText" },
+      "name": { "value": "钱七" }
+    },
+    { "nodeId": "-1000000117", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000118",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：在线" }
+    },
+    { "nodeId": "-1000000119", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "143",
+      "childIds": ["-1000000123"],
+      "backendDOMNodeId": 143,
+      "role": { "value": "StaticText" },
+      "name": { "value": "孙八" }
+    },
+    { "nodeId": "-1000000124", "role": { "value": "InlineTextBox" }, "name": { "value": " " } },
+    {
+      "nodeId": "-1000000125",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "状态：离线" }
+    },
+    { "nodeId": "-1000000104", "role": { "value": "InlineTextBox" }, "name": { "value": "张三" } },
+    { "nodeId": "-1000000107", "role": { "value": "InlineTextBox" }, "name": { "value": "李四" } },
+    { "nodeId": "-1000000110", "role": { "value": "InlineTextBox" }, "name": { "value": "王五" } },
+    { "nodeId": "-1000000113", "role": { "value": "InlineTextBox" }, "name": { "value": "赵六" } },
+    { "nodeId": "-1000000116", "role": { "value": "InlineTextBox" }, "name": { "value": "钱七" } },
+    { "nodeId": "-1000000123", "role": { "value": "InlineTextBox" }, "name": { "value": "孙八" } }
+  ]
+}

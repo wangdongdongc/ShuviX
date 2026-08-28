@@ -21,6 +21,9 @@ import codingJa from './md/coding.ja.md?raw'
 import notebookEn from './md/notebook.md?raw'
 import notebookZh from './md/notebook.zh.md?raw'
 import notebookJa from './md/notebook.ja.md?raw'
+import browserEn from './md/browser.md?raw'
+import browserZh from './md/browser.zh.md?raw'
+import browserJa from './md/browser.ja.md?raw'
 import exploreEn from './md/explore.md?raw'
 import exploreZh from './md/explore.zh.md?raw'
 import exploreJa from './md/explore.ja.md?raw'
@@ -77,6 +80,25 @@ export const CODING_SPEC: BuiltinProfileSpec = {
   sources: { en: codingEn, zh: codingZh, ja: codingJa }
 }
 
+/**
+ * 浏览器智能体 —— 把 snapshot/截图这类大块产物挡在调用方上下文之外。
+ *
+ * 实测依据（真实会话重放 + Kimi API 上的 A/B，见 cdp/SNAPSHOT-ENCODING.md 与提交历史）：
+ * 一个浏览器密集会话里 210/315 次工具调用是浏览器操作，外包后主 agent 的重发加权
+ * 下降 83%（轮次 297 → 98）—— 省的不只是结果本身，还有其余所有内容的重发次数。
+ *
+ * 但成败系于**回报形态**：同样的事实，结构化断言式报告让主 agent 的重验率为 0%，
+ * 散文式摘要则是 40%~50%——后者直接吃掉一半收益。所以 md 里那套 assertions 模板
+ * 不是装饰，是这个 agent 存在的前提。另一条反直觉的实测：报告里明确罗列「没查什么」
+ * 会把重验率推到 30%，因为那读起来像是在邀请对方补查。
+ *
+ * 用 `shuvix-model` 可以把它钉到便宜模型上（档案声明优先，不可用时回落派发方模型）。
+ */
+export const BROWSER_SPEC: BuiltinProfileSpec = {
+  name: 'browser',
+  sources: { en: browserEn, zh: browserZh, ja: browserJa }
+}
+
 export const EXPLORE_SPEC: BuiltinProfileSpec = {
   name: 'explore',
   sources: { en: exploreEn, zh: exploreZh, ja: exploreJa }
@@ -119,6 +141,7 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   DEFAULT_SPEC,
   NOTEBOOK_SPEC,
   CODING_SPEC,
+  BROWSER_SPEC,
   EXPLORE_SPEC,
   VISUALIZATION_SPEC,
   WIDGET_SPEC,

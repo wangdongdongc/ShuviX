@@ -80,8 +80,8 @@ export interface ChatGateway {
   /** 获取会话消息列表（entry 树的 UI 投影） */
   listMessages(sessionId: string): Promise<ChatMessage[]>
 
-  /** 清空会话所有消息（整棵 entry 树） */
-  clearMessages(sessionId: string): void
+  /** 清空会话所有消息（整棵 entry 树）；先关停运行时再删，故为异步 */
+  clearMessages(sessionId: string): Promise<void>
 
   /**
    * 回退到指定消息之前，使 Agent 失效。

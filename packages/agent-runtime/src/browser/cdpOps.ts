@@ -8,6 +8,7 @@ import type { TabCdpSession } from './attachManager'
 import type { BrowserOpOutput, NavKind, ScrollDirection } from './backend'
 import { dispatchKey } from './keyboard'
 import { resolveUidMacros } from './cdpPolicy'
+import { EXTRACT_PAGE_EXPR, formatReadPage, htmlToMarkdown, type ExtractedPage } from './readPage'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -27,12 +28,48 @@ function formatBytes(bytes: number): string {
 
 export async function snapshotOp(
   session: TabCdpSession,
-  pageUrl: string
+  pageUrl: string,
+  opts: { full?: boolean } = {}
 ): Promise<BrowserOpOutput> {
   // 扩展端（chrome.debugger）需要先 enable Accessibility 域；Electron 下幂等无害
   await session.send('Accessibility.enable').catch(() => {})
-  const { text, elementCount } = await session.controller.buildSnapshot(pageUrl)
+  const { text, elementCount } = await session.controller.buildSnapshot(pageUrl, opts)
   return { text, details: { elementCount } }
+}
+
+// ====== Read Page ======
+
+/**
+ * 读整页正文（渲染后 DOM → Markdown）。
+ *
+ * 走 CDP `Runtime.evaluate`，而**不是** Electron 的 `webContents.executeJavaScript` ——
+ * 后者的文档白纸黑字写着「Code execution will be suspended until web page stop loading」，
+ * 内部会先 await 一次 `did-stop-loading`。碰上**永远加载不完**的页面（某个子资源/iframe
+ * 挂着不返回，面板 spinner 一直转）那个 await 永不兑现，read_page 就无限期挂住；而挂住的
+ * 工具 promise 又会让 harness 的 abort（要 waitForIdle）跟着卡死 —— 会话既跑不动也停不下来。
+ * CDP 的 evaluate 不看加载状态：只要文档已提交、JS 上下文还在就立即返回。
+ *
+ * 实测（Electron 39，页面挂一个不返回的 iframe，isLoadingMainFrame=true）：
+ * webContents.executeJavaScript 4s 内不兑现，mainFrame.executeJavaScript 与
+ * Runtime.evaluate 都立即拿到结果。选 CDP 而非 mainFrame 是为了和本文件其余操作同源。
+ */
+export async function readPageOp(session: TabCdpSession): Promise<BrowserOpOutput> {
+  const { result, exceptionDetails } = await session.send<{
+    result: { value?: ExtractedPage }
+    exceptionDetails?: { text: string; exception?: { description?: string } }
+  }>('Runtime.evaluate', {
+    expression: EXTRACT_PAGE_EXPR,
+    returnByValue: true
+  })
+
+  const extracted = result?.value
+  if (exceptionDetails || !extracted) {
+    const err = exceptionDetails?.exception?.description || exceptionDetails?.text || 'no result'
+    return { text: `Error: failed to read page — ${err}`, details: { error: err } }
+  }
+
+  const md = await htmlToMarkdown(extracted.html)
+  return { text: formatReadPage(extracted, md) }
 }
 
 // ====== Click ======

@@ -80,6 +80,24 @@ body {
   background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
   border-radius: 3px;
 }
+/* 浏览器面板平铺墙的滚动条：**故意比别处宽**（10px）。
+   墙上大部分面积被原生 WebContentsView 盖住，滚轮事件被页面吃掉，
+   换页主要靠拖这根条 —— 它是主要交互控件，不是背景信息。 */
+.wall-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+.wall-scrollbar::-webkit-scrollbar-thumb,
+.wall-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-border-primary) 80%, transparent);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.wall-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+  background-clip: content-box;
+}
+
 /* 会话面板内的滚动条一律取「细+淡」，与并排的对话列一致 —— 面板各工具页大多是普通
    overflow 容器（Office/Hex/Ebook 预览、图表错误面、子代理展开区…），不逐个挂
    .thin-scrollbar，直接按子树兜底。文件树在 shadow root 里、CSS 进不去，另经

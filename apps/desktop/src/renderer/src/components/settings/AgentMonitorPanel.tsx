@@ -7,15 +7,21 @@
  * 「孤儿」徽章标出根会话都没了的、上下文占用条回答"它占着多大一块"。刻意不显示 token
  * 花费与跨 agent 合计 —— 那是成本视角，这页只看单个 agent 占着什么。
  *
- * 取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
+ * 列表取数**不含任何遍历**：注册中心的快照全是字段读与事件影子，上下文占用直接来自 pi 判定
  * 自动压缩的那个数。所以每秒轮询的代价与 agent 的历史长度无关。
+ *
+ * 展开一条才拉「详情」（`AgentDetail`）—— 系统提示词全文、工具定义、模型细节，
+ * 全部读自内存里的运行时对象，与实际下发给 LLM 的零漂移（这半边原先住在会话面板的
+ * Agent 页，那页已撤；此处是它唯一的去处，故连派生 agent 也一并覆盖）。它要重建一次
+ * 上下文，绝不能并进每秒轮询的列表。
  *
  * 沿用 MCP 调用日志的单列流 + 就地展开（手风琴），没有第二个可滚动区。
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw, Loader2, CornerDownRight } from 'lucide-react'
+import { RefreshCw, Loader2, CornerDownRight, ChevronRight } from 'lucide-react'
 import type { AgentMonitorEntry, AgentMonitorPhase } from '@shuvix/chat-protocol/types/agentMonitor'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 
 /** 轮询间隔：相位/活动时间要看着是活的，又不值得铺跨窗口事件推送（设置页是独立窗口） */
 const POLL_MS = 1000
@@ -48,6 +54,8 @@ export function AgentMonitorPanel(): React.JSX.Element {
   const [agents, setAgents] = useState<AgentMonitorEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // 详情不参与轮询（贵），故手动刷新时用它把展开中的那条也重新拉一次
+  const [detailNonce, setDetailNonce] = useState(0)
 
   /**
    * 轮询。取数与定时器都收在 effect 内，并自持一个取消位 —— 拉取是异步 IPC，
@@ -70,8 +78,9 @@ export function AgentMonitorPanel(): React.JSX.Element {
     }
   }, [])
 
-  /** 手动刷新（与轮询同源，只是立刻取一次） */
+  /** 手动刷新（与轮询同源，只是立刻取一次；展开中的详情一并重拉） */
   const refresh = useCallback(async () => {
+    setDetailNonce((n) => n + 1)
     setAgents(await window.api.agent.monitorList())
   }, [])
 
@@ -147,70 +156,7 @@ export function AgentMonitorPanel(): React.JSX.Element {
                   </span>
                 </button>
 
-                {expandedId === a.agentId && (
-                  <div className="px-4 py-3 bg-bg-tertiary/15 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[10px]">
-                    <Field label={t('settings.agentMonitorFieldSession')}>
-                      {a.rootSessionExists ? (
-                        a.rootSessionTitle || a.rootSessionId
-                      ) : (
-                        <span className="text-error">{t('settings.agentMonitorOrphanHint')}</span>
-                      )}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldProfile')}>
-                      <span className="font-mono">{a.profileName}</span>
-                      <span className="text-text-tertiary ml-1">
-                        {a.kind === 'root'
-                          ? t('settings.agentMonitorKindRoot')
-                          : t('settings.agentMonitorKindSpawned', { depth: a.depth })}
-                      </span>
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldPhase')}>
-                      {t(`settings.agentMonitorPhase_${a.phase}`)}
-                      {a.activeToolName && (
-                        <span className="font-mono text-accent ml-1">{a.activeToolName}</span>
-                      )}
-                    </Field>
-                    {/* 模型与提供商分开列：两者都可能被用户命名成相似的串（自定义提供商叫
-                        "kimi-coding"、模型叫 "kimi-for-coding-highspeed"），挤在一个
-                        「模型」标签下会读成自相矛盾。模型 id 与行内显示的保持同一个值。 */}
-                    <Field label={t('settings.agentMonitorFieldModel')}>
-                      <span className="font-mono">{a.model.id || '—'}</span> ·{' '}
-                      {t('settings.agentMonitorThinking', { level: a.thinkingLevel })}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldProvider')}>
-                      {a.model.provider || '—'}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldTools')}>
-                      {a.activeToolCount} / {a.toolCount}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldQueue')}>
-                      {a.queue.steer} / {a.queue.followUp} / {a.queue.nextTurn}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldCounters')}>
-                      {t('settings.agentMonitorCounters', {
-                        turns: a.counters.turns,
-                        tools: a.counters.toolCalls,
-                        requests: a.counters.providerRequests
-                      })}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldStarted')}>
-                      {new Date(a.startedAt).toLocaleString()}
-                    </Field>
-                    <Field label={t('settings.agentMonitorFieldContext')}>
-                      {a.contextTokens > 0
-                        ? t('settings.agentMonitorContext', {
-                            tokens: formatCount(a.contextTokens),
-                            window: formatCount(a.model.contextWindow),
-                            percent: Math.round((a.contextTokens / a.model.contextWindow) * 100)
-                          })
-                        : t('settings.agentMonitorContextNone')}
-                    </Field>
-                    <div className="col-span-2 pt-1 font-mono text-[9px] text-text-tertiary/70 break-all">
-                      {a.agentId}
-                      {a.kind === 'spawned' && ` ← ${a.rootSessionId}`}
-                    </div>
-                  </div>
-                )}
+                {expandedId === a.agentId && <AgentDetail entry={a} nonce={detailNonce} />}
               </div>
             ))}
           </div>
@@ -260,6 +206,220 @@ function Field({
     <div className="flex gap-2 min-w-0">
       <span className="text-text-tertiary shrink-0">{label}</span>
       <span className="text-text-secondary truncate">{children}</span>
+    </div>
+  )
+}
+
+/**
+ * 展开的条目：列表侧的廉价快照 + 一次性拉来的运行时详情（系统提示词 / 工具定义 / 模型细节）。
+ *
+ * 详情只在展开时挂载才拉取，收起即卸载 —— 它要重建一次上下文，进不了每秒轮询的列表。
+ * `nonce` 由工具栏刷新按钮驱动（展开期间不自动更新：系统提示词本就不常变）。
+ *
+ * 字段刻意不与折叠行重复：行里已有相位灯、会话标题、模型 id、上下文占用条，所以这里
+ * 只补它们说不出的那部分（相位名 + 在跑的工具、模型全名/协议、精确占用与窗口…），
+ * 「所属会话」也只对派生 agent 出现 —— 根 agent 的行标题本就是会话标题。
+ */
+function AgentDetail({
+  entry: a,
+  nonce
+}: {
+  entry: AgentMonitorEntry
+  nonce: number
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [promptOpen, setPromptOpen] = useState(false)
+  // 本次请求的身份。快照连同它一起存 —— 键不匹配即「本次请求尚未返回」，
+  // 无需在 effect 里同步 setState 清空（那会触发级联渲染，也被 lint 拦）
+  const requestKey = `${a.agentId}#${nonce}`
+  const [snapshot, setSnapshot] = useState<{ key: string; info: AgentRuntimeInfo | null } | null>(
+    null
+  )
+  // undefined = 加载中；null = 取不到（轮询与点击之间 agent 恰好被销毁）
+  const info = snapshot?.key === requestKey ? snapshot.info : undefined
+
+  useEffect(() => {
+    let cancelled = false
+    window.api.agent
+      .monitorDetail(a.agentId)
+      .then((res) => {
+        if (!cancelled) setSnapshot({ key: requestKey, info: res })
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshot({ key: requestKey, info: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [a.agentId, requestKey])
+
+  /** 详情未到位的占位（详情字段照常占格，避免数据落地时整块跳动） */
+  const pending = info === undefined ? '…' : '—'
+
+  return (
+    <div className="px-4 py-3 bg-bg-tertiary/15 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[10px]">
+      <Field label={t('settings.agentMonitorFieldProfile')}>
+        <span className="font-mono">{a.profileName}</span>
+        <span className="text-text-tertiary ml-1">
+          {a.kind === 'root'
+            ? t('settings.agentMonitorKindRoot')
+            : t('settings.agentMonitorKindSpawned', { depth: a.depth })}
+        </span>
+      </Field>
+      <Field label={t('settings.agentMonitorFieldPhase')}>
+        {t(`settings.agentMonitorPhase_${a.phase}`)}
+        {a.activeToolName && <span className="font-mono text-accent ml-1">{a.activeToolName}</span>}
+      </Field>
+      {/* 模型与提供商分开列：两者都可能被用户命名成相似的串（自定义提供商叫
+          "kimi-coding"、模型叫 "kimi-for-coding-highspeed"），挤在一个
+          「模型」标签下会读成自相矛盾。模型 id 与行内显示的保持同一个值，
+          人类可读名只在与 id 不同时补在括号里（多数模型两者相同，另起一行是纯噪音）。 */}
+      <Field label={t('settings.agentMonitorFieldModel')}>
+        <span className="font-mono">{a.model.id || '—'}</span>
+        {info && info.model.name !== info.model.id && (
+          <span className="text-text-tertiary ml-1">（{info.model.name}）</span>
+        )}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldProvider')}>
+        {a.model.provider || '—'}
+        <span className="text-text-tertiary ml-1">· {info ? info.model.api : pending}</span>
+      </Field>
+      <Field label={t('settings.agentMonitorFieldThinking')}>{a.thinkingLevel}</Field>
+      <Field label={t('settings.agentMonitorFieldMaxTokens')}>
+        {info ? formatCount(info.model.maxTokens) : pending}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldInput')}>
+        {info ? info.model.input.join(' + ') : pending}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldTools')}>
+        {a.activeToolCount} / {a.toolCount}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldContext')}>
+        {a.contextTokens > 0
+          ? t('settings.agentMonitorContext', {
+              tokens: formatCount(a.contextTokens),
+              window: formatCount(a.model.contextWindow),
+              percent: Math.round((a.contextTokens / a.model.contextWindow) * 100)
+            })
+          : t('settings.agentMonitorContextNone')}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldMessages')}>
+        {info ? info.messageCount : pending}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldQueue')}>
+        {a.queue.steer} / {a.queue.followUp} / {a.queue.nextTurn}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldCounters')}>
+        {t('settings.agentMonitorCounters', {
+          turns: a.counters.turns,
+          tools: a.counters.toolCalls,
+          requests: a.counters.providerRequests
+        })}
+      </Field>
+      <Field label={t('settings.agentMonitorFieldStarted')}>
+        {new Date(a.startedAt).toLocaleString()}
+      </Field>
+      {/* 所属会话只对派生 agent 有信息量：根 agent 的行标题就是会话标题，孤儿也已由行内徽章说明 */}
+      {a.kind === 'spawned' && (
+        <Field label={t('settings.agentMonitorFieldSession')}>
+          {a.rootSessionExists ? (
+            a.rootSessionTitle || a.rootSessionId
+          ) : (
+            <span className="text-error">{t('settings.agentMonitorOrphanHint')}</span>
+          )}
+        </Field>
+      )}
+
+      {info === null ? (
+        <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40 text-text-tertiary">
+          {t('settings.agentMonitorDetailUnavailable')}
+        </div>
+      ) : (
+        <>
+          {/* 已装载工具 —— 展开一条即看到与实际发给 LLM 一致的 description + 参数名 */}
+          <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40">
+            <div className="pb-1 font-semibold text-text-secondary">
+              {t('settings.agentMonitorToolsSection', { count: info?.tools.length ?? a.toolCount })}
+            </div>
+            {!info ? (
+              <div className="flex items-center gap-1.5 text-text-tertiary">
+                <Loader2 size={11} className="animate-spin" />
+                {t('common.loading')}
+              </div>
+            ) : info.tools.length === 0 ? (
+              <div className="text-text-tertiary">{t('settings.agentMonitorNoTools')}</div>
+            ) : (
+              info.tools.map((tool) => <ToolRow key={tool.name} tool={tool} />)
+            )}
+          </div>
+
+          {/* 系统提示词 —— 默认折叠：它常有上万字符，展开的条目在单列流里会把后面的条目推到天边 */}
+          <div className="col-span-2 mt-2 pt-2 border-t border-border-secondary/40">
+            <button
+              disabled={!info}
+              onClick={() => setPromptOpen((v) => !v)}
+              className="flex items-center gap-1 w-full py-0.5 text-left hover:text-text-primary transition-colors"
+            >
+              <ChevronRight
+                size={11}
+                className={`shrink-0 text-text-tertiary transition-transform ${promptOpen ? 'rotate-90' : ''}`}
+              />
+              <span className="font-semibold text-text-secondary">
+                {t('settings.agentMonitorSystemPrompt')}
+              </span>
+              <span className="ml-auto text-text-tertiary tabular-nums">
+                {info
+                  ? t('settings.agentMonitorSystemPromptChars', { count: info.systemPrompt.length })
+                  : pending}
+              </span>
+            </button>
+            {promptOpen && info && (
+              <pre className="mt-1 ml-[9px] pl-2 border-l border-border-secondary/60 whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-text-secondary">
+                {info.systemPrompt || t('settings.agentMonitorEmptySystemPrompt')}
+              </pre>
+            )}
+          </div>
+        </>
+      )}
+
+      <div className="col-span-2 pt-2 font-mono text-[9px] text-text-tertiary/70 break-all">
+        {a.agentId}
+        {a.kind === 'spawned' && ` ← ${a.rootSessionId}`}
+      </div>
+    </div>
+  )
+}
+
+/** 单个工具行 —— 点击展开与发给 LLM 一致的 description + 参数名（靠左侧竖线归属，不套盒） */
+function ToolRow({ tool }: { tool: AgentRuntimeInfo['tools'][number] }): React.JSX.Element {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-1 py-0.5 rounded text-left hover:bg-bg-hover/50 transition-colors"
+      >
+        <ChevronRight
+          size={11}
+          className={`shrink-0 text-text-tertiary transition-transform ${expanded ? 'rotate-90' : ''}`}
+        />
+        <span className="font-mono text-text-primary">{tool.name}</span>
+        <span className="min-w-0 truncate text-text-tertiary">{tool.label}</span>
+      </button>
+      {expanded && (
+        <div className="ml-[9px] pl-2 border-l border-border-secondary/60 space-y-1 pb-1">
+          <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-text-secondary">
+            {tool.description}
+          </pre>
+          {tool.parameters.length > 0 && (
+            <div className="text-text-tertiary">
+              {t('settings.agentMonitorToolParams')}{' '}
+              <span className="font-mono text-text-secondary">{tool.parameters.join(', ')}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

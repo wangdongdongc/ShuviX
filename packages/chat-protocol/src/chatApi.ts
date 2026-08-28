@@ -57,8 +57,14 @@ export interface SessionSettings {
    * 系统提示词与内置工具白名单随之更换（会话历史不受影响，切换即重建运行时）。
    */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
+  /**
+   * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
+   * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表
+   * （同一条记忆在同一处出现两次，比少一处入口更糟）。
+   */
+  memorySlug?: string
 }
 
 /**
@@ -585,8 +591,9 @@ export interface HostApi {
     }>
     /**
      * 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null。
-     * `ensure: true` 时先按会话配置懒创建 Agent 再取快照（会话面板 Agent 页「打开即建」，
-     * 无需先发一条消息）；创建本身不请求 LLM，会话不存在/创建失败仍返回 null。
+     * `ensure: true` 时先按会话配置懒创建 Agent 再取快照 —— 给「没发过消息也要看到 Agent
+     * 真实配置」的调用方（如 e2e 的「建 Agent 而不触发 LLM」）用；创建本身不请求 LLM，
+     * 会话不存在/创建失败仍返回 null。
      */
     getInfo: (sessionId: string, options?: { ensure?: boolean }) => Promise<AgentRuntimeInfo | null>
   }

@@ -4,6 +4,7 @@ import { Settings, FolderPlus } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
 import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
+import type { ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import type { ProjectRef } from './useProjects'
 
 export interface SidebarCaps {
@@ -41,6 +42,8 @@ export interface SidebarProps {
   overlays?: React.ReactNode
   /** 标题文案（默认 sidebar.title；桌面日历模式可传 sidebar.viewCalendar） */
   title?: string
+  /** 项目记忆能力（桌面注入；见 ProjectSessionGroupsProps.memory） */
+  memory?: ProjectMemoryAdapter
 }
 
 /**
@@ -64,7 +67,8 @@ export function Sidebar({
   footerActions,
   bodyOverride,
   overlays,
-  title
+  title,
+  memory
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -170,6 +174,7 @@ export function Sidebar({
             onConfigureSession={onConfigureSession}
             caps={{ pin: caps.pin }}
             pinnedSessionIds={pinnedSessionIds}
+            memory={memory}
           />
         )}
       </div>

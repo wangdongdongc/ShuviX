@@ -41,6 +41,8 @@ import {
   type FormItemRenderer
 } from '../../stores/chatStore'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
+import { toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
+import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
 import { useSubSessionStore } from '../../stores/subSessionStore'
 import { SubAgentInlineView } from './SubAgentInlineView'
@@ -179,6 +181,9 @@ export function ToolCallBlock({
     return Object.values(s.subSessions).find((ss) => ss.parentToolCallId === toolCallId) ?? null
   })
 
+  // 模型收到的那张图（read 到图片时）——details 走的是磁盘路径，不是 base64
+  const modelImage = toolResultImage(details)
+
   // 写入/编辑成功且有 diff（write 的 diff 与 edit 同款，新建文件即全增行）
   const editDiff =
     status === 'done' && (details?.type === 'edit' || details?.type === 'write')
@@ -213,7 +218,14 @@ export function ToolCallBlock({
     statusConfig[status]
   )
 
-  const canExpand = !!(args || result || hasEditDiff || streamingArgsText || subSession)
+  const canExpand = !!(
+    args ||
+    result ||
+    hasEditDiff ||
+    streamingArgsText ||
+    subSession ||
+    modelImage
+  )
   // 终端形态：presentation 声明 + 确有命令可渲染，否则降级回通用表单形态
   const isTerminalView =
     presentation?.detailView === 'terminal' && typeof args?.command === 'string'
@@ -308,6 +320,9 @@ export function ToolCallBlock({
                   )}
                 </>
               ))}
+
+            {/* 模型收到的那张图：跟在结果之后。只在展开态挂载 —— 见 ToolImageThumb 注释 */}
+            {modelImage && <ToolImageThumb image={modelImage} />}
           </div>
         )}
       </div>

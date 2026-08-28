@@ -18,6 +18,8 @@
  */
 import { parse as parseYaml } from 'yaml'
 import {
+  EditorSelection,
+  Prec,
   RangeSetBuilder,
   StateEffect,
   StateField,
@@ -30,6 +32,8 @@ import {
   EditorView,
   ViewPlugin,
   WidgetType,
+  keymap,
+  type Command,
   type DecorationSet,
   type ViewUpdate
 } from '@codemirror/view'
@@ -657,7 +661,12 @@ class FrontmatterCardWidget extends WidgetType {
   toDOM(view: EditorView): HTMLElement {
     const { t } = this.config
     const readOnly = view.state.readOnly
-    const wrap = el('div', 'cm-shuvix-fmcard my-3')
+    // 上下留白用 **padding 而不是 margin** —— 同 wikiEmbed 内嵌图片那条规则：CM6 量块级
+    // widget 的高度走 getBoundingClientRect，外边距永远统计不进高度图。my-3 时实测高度图
+    // 比真实布局少 24px（= 上下各 12px），卡片以下每一行的 top 都偏这 24px，于是
+    // 「点击落点比点的位置低一行」，且 moveVertically 找不到更靠上的位置，ArrowUp 从正文
+    // 任意一行都直接跳到文档第 1 行。改 padding 后 DOM 布局逐像素不变、偏移归零。
+    const wrap = el('div', 'cm-shuvix-fmcard py-3')
     wrap.setAttribute('contenteditable', 'false')
 
     // 点卡片空白处（标签、行间、卡片背景）不得把光标送进 frontmatter —— 卡片位于
@@ -848,6 +857,39 @@ function buildDecos(state: EditorState, config: FrontmatterCardConfig): Decorati
   ])
 }
 
+/** 当前是否处于「卡片折叠」态（有卡可撞）——揭示态下卡片不存在，方向键该走默认逐行 */
+function cardCollapsed(state: EditorState): FmRange | null {
+  const fm = findFrontmatter(state)
+  if (!fm || !readShuvixMarker(fm.yaml)) return null
+  if (state.field(fmFocusedField) && selectionTouches(state, fm.from, fm.to)) return null
+  return fm
+}
+
+/**
+ * ArrowUp 从正文撞进折叠卡片时，落在 **frontmatter 末行**（闭合 `---`）而不是文件第 1 行。
+ *
+ * 卡片是整块替换装饰，CM 把落进被替换区间的位置一律归到块首，于是「往上一行」变成
+ * 「跳到文件开头」—— 视觉上是突然上移一大段。落点改成 fm.to 后：该位置触及区间
+ * （selectionTouches 含边界）即触发揭示，源码展开时光标正好停在紧贴正文上方的那一行。
+ *
+ * 只接管「默认动作会落进折叠区间」这一步（用 moveVertically 先问一遍默认落点），其余
+ * 一律 return false 交还默认键位；选区（Shift-Up）不接管 —— 那是另一种意图，替用户
+ * 缩短选区比跳一下更糟。
+ */
+const cardArrowUp: Command = (view) => {
+  const fm = cardCollapsed(view.state)
+  if (!fm) return false
+  const sel = view.state.selection.main
+  if (!sel.empty || sel.head <= fm.to) return false
+  if (view.moveVertically(sel, false).head > fm.to) return false // 默认落点不进卡片
+  view.dispatch({
+    selection: EditorSelection.cursor(fm.to),
+    scrollIntoView: true,
+    userEvent: 'select'
+  })
+  return true
+}
+
 /**
  * shuvix 契约 md 的 frontmatter 属性卡扩展。自检测 `shuvix: <type>` 标记 ——
  * 普通 markdown 零装饰、零开销（首行非 `---` 即返回）。
@@ -867,5 +909,11 @@ export function frontmatterCard(config: FrontmatterCardConfig): Extension {
     },
     provide: (f) => EditorView.decorations.from(f)
   })
-  return [fmFocusedField, cardField, fmFocusWatcher]
+  // Prec.high：要排在默认 keymap 的 ArrowUp（cursorLineUp）之前
+  return [
+    fmFocusedField,
+    cardField,
+    fmFocusWatcher,
+    Prec.high(keymap.of([{ key: 'ArrowUp', run: cardArrowUp }]))
+  ]
 }

@@ -35,6 +35,7 @@ interface BrowserParams {
   expression?: string
   timeout?: number
   submitKey?: string
+  full?: boolean
   fullPage?: boolean
   outputPath?: string
   pageSize?: string
@@ -65,6 +66,12 @@ export function buildBrowserParamsSchema(caps: BrowserCaps): TSchema {
     url: Type.Optional(Type.String({ description: 'URL — for open_tab and navigate (goto)' })),
     uid: Type.Optional(
       Type.String({ description: 'Element uid from the LATEST snapshot of this tab' })
+    ),
+    full: Type.Optional(
+      Type.Boolean({
+        description:
+          'snapshot: force a complete snapshot instead of a diff — use when you no longer have the earlier snapshot of this tab'
+      })
     ),
     text: Type.Optional(
       Type.String({ description: 'Text — fill/type input, or wait_for target text' })
@@ -158,6 +165,10 @@ Rules:
 - ALWAYS take a snapshot before click/fill/type; uids are only valid for the latest snapshot of that tab.
 - After navigate or a page-changing click, snapshot again before further interaction.
 - Every action except help/list_tabs/open_tab requires tabId (from list_tabs or open_tab).${
+    caps.evaluate
+      ? '\n- Verify by asking, not looking: for a specific fact use evaluate (~20 tokens) rather than read_page (whole page) or screenshot (~900).'
+      : ''
+  }${
     caps.rawCdp
       ? '\n- Prefer the semantic actions above; for anything they do not cover (response bodies, viewport emulation, CSS inspection, performance, storage) use cdp/events — read help(topic:"devtools") first.'
       : ''
@@ -207,10 +218,43 @@ function missingParams(spec: BrowserOpSpec, params: BrowserParams): BrowserParam
   return spec.required.filter((k) => record[k] == null || record[k] === '')
 }
 
+/**
+ * 距上次快照隔多少次操作之内还允许回差异。
+ *
+ * 这是工具**自己能做的确定性判断**：差异依赖模型上下文里还留着上一份快照，而自动
+ * 压缩可能把它删掉、工具无从知道。隔得越久越危险，所以设一道上限。它只能数到本工具
+ * 自己的调用（别的工具穿插其间是看不见的），所以是个近似 —— 真正的兜底是输出自证 +
+ * full:true 这两条，见 cdp/snapshotDiff.ts 的说明。
+ */
+const MAX_OPS_FOR_DIFF = 8
+
+/**
+ * 让一次 backend 操作与中止信号赛跑 —— 信号一响就抛，不等底层 promise 兑现。
+ *
+ * 为什么必须赛跑而不是「跑完再查一次 signal.aborted」：pi 的 `harness.abort()` 在拉响
+ * signal 之后要 `waitForIdle()`，即**等当前工具调用兑现**。所以只要某个 backend 操作
+ * 卡住不返回，工具的 execute 就不兑现 → harness 永远不 idle → abort 自己也卡住，
+ * 用户看到日志里「中止 session=…」却什么都停不下来（会话按一会话一 agent 的约定会一直
+ * 等关停完成）。赛跑把「工具卡住」和「会话能不能停」解耦：底层 promise 继续悬着（浏览器
+ * 里没有可靠的取消口），但 execute 立刻结束，harness 回到 idle，用户拿回控制权。
+ *
+ * 只有 wait_for 自己会看 signal（轮询间隙），其余操作一律靠这层。
+ */
+function raceAbort<T>(work: Promise<T>, signal: AbortSignal, abortError: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error(abortError))
+    signal.addEventListener('abort', onAbort, { once: true })
+    // work 若在 abort 之后才兑现/失败，这里的 resolve/reject 是空操作（promise 已 settle），
+    // 不会产生未处理拒绝。
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 async function dispatch(
   backend: BrowserBackend,
   action: BrowserAction,
   p: BrowserParams,
+  opsSinceSnapshot: Map<string, number>,
   signal?: AbortSignal
 ): Promise<BrowserOpOutput> {
   const tabId = p.tabId!
@@ -223,8 +267,14 @@ async function dispatch(
       return backend.closeTab({ tabId })
     case 'navigate':
       return backend.navigate({ tabId, nav: p.nav ?? 'goto', url: p.url })
-    case 'snapshot':
-      return backend.snapshot({ tabId })
+    case 'snapshot': {
+      // 只在「距上次快照没隔几次操作」时才试差异 —— 这是工具自己能做的确定性判断，
+      // 不依赖模型对自身上下文的自省。隔得久了、或模型明确要全量，就回全量。
+      const since = opsSinceSnapshot.get(tabId) ?? Infinity
+      const full = p.full === true || since > MAX_OPS_FOR_DIFF
+      opsSinceSnapshot.set(tabId, 0)
+      return backend.snapshot({ tabId, full })
+    }
     case 'read_page':
       return backend.readPage({ tabId })
     case 'screenshot':
@@ -267,6 +317,9 @@ async function dispatch(
 export function createBrowserTool(
   opts: CreateBrowserToolOptions
 ): AgentTool<TSchema, BrowserToolDetails> {
+  /** 每个 tab 距上次 snapshot 的操作数；决定这次 snapshot 能否回差异 */
+  const opsSinceSnapshot = new Map<string, number>()
+
   const { backend, abortError = 'Aborted', label = 'Browser' } = opts
   const specs = new Map(opsForCaps(backend.caps).map((s) => [s.name, s]))
 
@@ -317,7 +370,12 @@ export function createBrowserTool(
         }
       }
 
-      const out = await dispatch(backend, spec.name, params, signal)
+      // 每次带 tabId 的操作都记一笔 —— snapshot 用它判断「距上次快照隔了多久」
+      if (params.tabId && spec.name !== 'snapshot') {
+        opsSinceSnapshot.set(params.tabId, (opsSinceSnapshot.get(params.tabId) ?? 0) + 1)
+      }
+      const work = dispatch(backend, spec.name, params, opsSinceSnapshot, signal)
+      const out = signal ? await raceAbort(work, signal, abortError) : await work
       if (signal?.aborted) throw new Error(abortError)
       return toResult(spec.name, out)
     }

@@ -20,6 +20,7 @@ import {
   shouldCompact
 } from '@earendil-works/pi-agent-core'
 import type {
+  AgentMessage,
   AgentTool,
   ExecutionEnv,
   Session,
@@ -29,6 +30,7 @@ import type { Api, ImageContent, Model, Models } from '@earendil-works/pi-ai'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import { elideHistoricalThinking, type ThinkingElisionState } from './thinkingElision'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
   entriesToChatMessages,
@@ -52,6 +54,43 @@ import {
 } from '../types'
 
 const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
+
+/**
+ * 一轮上下文净增的经验余量（按窗口比例）。
+ *
+ * pi 的 `reserveTokens` 默认 16k，恰好等于我们给模型的默认 maxTokens（见 modelResolver）——
+ * 也就是阈值只够模型把自己那条回复写完，**留给本轮工具结果的余量是 0**。实测一轮
+ * browser/bash 结果净增 24k，于是出现「判定时没超阈值，这一轮却在轮内冲破窗口」。
+ * 轮内补救不了（pi 的 `compact()` 要求 harness 空闲），所以阈值必须提前把这部分让出来。
+ * 取比例而非定值：小窗口模型不至于被一刀切掉四分之一的可用上下文。
+ */
+const TURN_GROWTH_RESERVE_RATIO = 0.1
+
+/**
+ * 「零内容 assistant 消息」—— provider 偶发返回的空回复（`text: ''`，output 只有 1 个 token）。
+ *
+ * 它有两重危害，这里只处理第二重：
+ *  1. agent-loop 看它没有 toolCall，判定为终答并静默结束整轮（"continue 只跑一轮"）；
+ *  2. 它带回来的 usage **不可信** —— 实测 `cacheRead` 归零、`prompt_tokens` 比真实少约 24k
+ *     （系统提示词 + 工具 schema 没计进去）。而 pi 的 `estimateContextTokens` 锚定
+ *     「最后一条有效 assistant 的 usage」，`stopReason` 又恰好是 'stop'（pi 只排除
+ *     error/aborted），于是这条坏数据会把估算硬拽回阈值以下，压缩永不触发。
+ *
+ * 估算前把它剔掉，锚点自然回落到前一条真实调用上。它本身内容为空，不参与估算也不丢信息。
+ */
+function isZeroContentAssistant(message: AgentMessage): boolean {
+  if ((message as { role?: string }).role !== 'assistant') return false
+  const content = (message as { content?: unknown }).content
+  if (typeof content === 'string') return content.trim() === ''
+  if (!Array.isArray(content)) return false
+  return content.every((block) => {
+    const b = block as { type?: string; text?: string; thinking?: string }
+    if (b.type === 'text') return !b.text?.trim()
+    if (b.type === 'thinking') return !b.thinking?.trim()
+    // toolCall / image / 其它任何块都算「有内容」
+    return false
+  })
+}
 
 /** 工具调用拦截结果：block=true 时 harness 不执行该工具，改回一条错误 tool result */
 export type ToolCallGate = (
@@ -82,8 +121,8 @@ export interface HarnessSessionDeps {
   /** user 消息落盘后是否自动广播 user_message（默认 true；派生 agent 关掉，见 HarnessEventDeps） */
   broadcastUserMessages?: boolean
   /**
-   * 自动压缩：turn 成功结束后，若上下文超过 pi 的压缩阈值
-   * （contextWindow - reserveTokens），自动执行一次滚动压缩。
+   * 自动压缩：**每次 prompt 发送前 + turn 结束后**各判定一次，超过阈值
+   * （contextWindow - reserveTokens，见 thresholdSettings）就执行一次滚动压缩。
    * 默认关（根会话开启；派生 agent 生命周期短且面板为纯事件驱动，暂不开）。
    */
   autoCompact?: boolean
@@ -105,11 +144,22 @@ export class HarnessSession {
    */
   private maintenance: Promise<void> = Promise.resolve()
   private readonly eventState: HarnessEventState = createHarnessEventState()
+  /** thinking 剥离边界：只增不减（压缩后由 elide 内部夹回），见 thinkingElision.ts */
+  private readonly thinkingElision: ThinkingElisionState = { boundary: 0 }
 
   private pendingInputs = new Map<
     string,
     { request: InputRequest; resolve: (response: InputResponse) => void }
   >()
+  /**
+   * 中止后是否拒收新的用户输入请求（下一次 prompt 复位）。
+   *
+   * `abort()` 只能解掉**它看到的那一批**挂起。若某个工具恰好在这之后才发起询问，
+   * 那条挂起就没人会应答了 —— 宿主的输入路由是按「当前绑定的运行时」找的，而
+   * 正在关停的运行时已经不在绑定表里（见 SessionManager）。`abort()` 又要等 run 跑完，
+   * 于是双方互等，会话永远停在「正在停止」。中止后直接把新请求当作已取消，堵住这个窗口。
+   */
+  private inputsClosed = false
 
   constructor(deps: HarnessSessionDeps) {
     this.sessionId = deps.sessionId
@@ -162,14 +212,48 @@ export class HarnessSession {
       })
     }
 
-    // HTTP 日志：payload 发出前记录，用量在 message_end 回填
-    if (deps.onPayload) {
-      const record = deps.onPayload
-      this.harness.on('before_provider_payload', async (event) => {
-        const logId = record(event.payload, event.model as Model<Api>)
+    // payload 发出前：先剥历史 thinking，再记 HTTP 日志。
+    //
+    // 顺序是有意的 —— 日志该反映**实际发出去的那一份**，否则排查时会对着一份
+    // 并不存在的请求找问题；顺带日志本身也小了（它按整份快照写，本来就是 O(N²)）。
+    //
+    // 钩子无条件注册（不再挂在 onPayload 上）：剥离与是否开日志无关。pi 的
+    // emitBeforeProviderPayload 是变换链，返回值会替换 payload，这是它支持的用法。
+    const record = deps.onPayload
+    this.harness.on('before_provider_payload', async (event) => {
+      const payload = this.applyThinkingElision(event.payload)
+      if (record) {
+        const logId = record(payload, event.model as Model<Api>)
         if (logId) this.eventState.pendingLogIds.push(logId)
-        return { payload: event.payload }
-      })
+      }
+      return { payload }
+    })
+  }
+
+  /**
+   * 剥掉已完成轮次的 thinking（见 thinkingElision.ts）。
+   *
+   * 边界跨调用持有在 this.thinkingElision 上，只在累计 thinking 越过上沿时跳一次；
+   * 两次跳跃之间输出逐字节稳定，缓存前缀不受影响。形状对不上就原样放行 —— 这是
+   * 省钱的优化，不该有能力让一个请求发不出去。
+   */
+  private applyThinkingElision(payload: unknown): unknown {
+    const p = payload as { messages?: unknown } | null
+    if (!p || !Array.isArray(p.messages)) return payload
+    try {
+      const r = elideHistoricalThinking(p.messages, this.thinkingElision)
+      this.thinkingElision.boundary = r.boundary
+      if (!r.advanced && r.elidedBlocks === 0) return payload
+      this.logger.info(
+        `thinkingElision session=${this.sessionId} boundary=${r.boundary} ` +
+          `elided=${r.elidedBlocks} blocks ~${r.elidedTokens} tok`
+      )
+      return { ...p, messages: r.messages }
+    } catch (err) {
+      this.logger.warn(
+        `thinkingElision skipped — ${err instanceof Error ? err.message : String(err)}`
+      )
+      return payload
     }
   }
 
@@ -195,6 +279,18 @@ export class HarnessSession {
     await this.maintenance
 
     this.onPromptAccepted?.(text)
+    // 新一轮开始：恢复受理用户输入（上一次 abort 关掉的）
+    this.inputsClosed = false
+
+    // 发送前判定。轮后那次判定救不了两种情况：
+    //  a. 上一轮在**轮内**就把上下文顶爆了（轮内无法压缩，pi 的 compact() 要求 harness 空闲），
+    //     而轮末那条消息未必反映真实体量；
+    //  b. 重启/重新打开恢复出的会话，第一发请求从未过秤。
+    // 两种都会让这一发请求直接撞窗口，所以出门前必须再称一次。
+    if (this.autoCompactEnabled) {
+      this.maintenance = this.maybeAutoCompact('发送前')
+      await this.maintenance
+    }
 
     try {
       // 显示侧车先于 user 消息落盘
@@ -212,33 +308,55 @@ export class HarnessSession {
     // 调用方（IPC/派生协调器）本就等待整轮完成，这里多等几秒不改变语义；
     // 期间到达的新 prompt 由入口的 maintenance 栅栏排队。
     if (this.autoCompactEnabled) {
-      this.maintenance = this.maybeAutoCompact()
+      this.maintenance = this.maybeAutoCompact('轮结束')
       await this.maintenance
     }
     return {}
   }
 
   /**
+   * 本次判定用的阈值设置：在 pi 默认值之上，把「模型输出 + 一轮工具结果」的余量让出来。
+   *
+   * **只影响「何时压」，不影响「怎么压」** —— `harness.compact()` 内部写死用 pi 的
+   * `DEFAULT_COMPACTION_SETTINGS`（保留最近 keepRecentTokens=20k），我们改不了，
+   * 所以 `compact()` 里的前置判定也必须继续用 pi 的默认值，否则两边会不一致。
+   */
+  private thresholdSettings(contextWindow: number): typeof DEFAULT_COMPACTION_SETTINGS {
+    const maxTokens = this.harness.getModel().maxTokens || 0
+    return {
+      ...DEFAULT_COMPACTION_SETTINGS,
+      reserveTokens: Math.max(
+        DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+        maxTokens + Math.round(contextWindow * TURN_GROWTH_RESERVE_RATIO)
+      )
+    }
+  }
+
+  /**
    * 阈值判定 + 自动压缩（绝不抛出）。
    *
-   * 判定输入：`session.buildContext()`（已应用压缩过滤 = 模型真实所见）；
-   * token 数优先取最近一条 assistant 的 provider 真实 usage（pi 的
-   * `estimateContextTokens`），其后的尾部才用字符启发式补估。
-   * 阈值即 pi 的 `shouldCompact`：tokens > contextWindow - reserveTokens(16k)。
+   * 判定输入：`session.buildContext()`（已应用压缩过滤 = 模型真实所见），**剔除零内容
+   * assistant 消息**后交给 pi 的 `estimateContextTokens` —— 它锚定最近一条 assistant 的
+   * provider 真实 usage、其后的尾部才用字符启发式补估，而空回复带回来的 usage 是坏数据
+   * （见 isZeroContentAssistant）。阈值是 pi 的 `shouldCompact`，reserve 见 thresholdSettings。
    *
    * 压缩成功后广播 messages_reloaded 让前端重拉 —— 被压缩掉的历史随之从
    * 消息列表消失（`buildContextEntries` 自带压缩过滤），原地换成摘要卡片。
    */
-  private async maybeAutoCompact(): Promise<void> {
+  private async maybeAutoCompact(stage: '发送前' | '轮结束'): Promise<void> {
     try {
       const contextWindow = this.harness.getModel().contextWindow
       if (!contextWindow || contextWindow <= 0) return
       const context = await this.session.buildContext()
-      const estimate = estimateContextTokens(context.messages)
-      if (!shouldCompact(estimate.tokens, contextWindow, DEFAULT_COMPACTION_SETTINGS)) return
+      const estimate = estimateContextTokens(
+        context.messages.filter((m) => !isZeroContentAssistant(m))
+      )
+      const settings = this.thresholdSettings(contextWindow)
+      if (!shouldCompact(estimate.tokens, contextWindow, settings)) return
 
       this.logger.info(
-        `自动压缩 session=${this.sessionId} tokens≈${estimate.tokens} window=${contextWindow}`
+        `自动压缩(${stage}) session=${this.sessionId} tokens≈${estimate.tokens} ` +
+          `window=${contextWindow} reserve=${settings.reserveTokens}`
       )
       if (!(await this.compact())) return
       this.eventSink.broadcast({ type: 'messages_reloaded', sessionId: this.sessionId })
@@ -294,6 +412,7 @@ export class HarnessSession {
    */
   async abort(): Promise<void> {
     this.logger.info(`中止 session=${this.sessionId}`)
+    this.inputsClosed = true
     for (const [id, pending] of this.pendingInputs) {
       pending.resolve({ kind: 'cancel', reason: 'aborted' })
       this.eventSink.broadcast({
@@ -413,7 +532,8 @@ export class HarnessSession {
   // ─── 用户输入挂起 ──────────────────────────────────
 
   requestUserInput(request: InputRequest): Promise<InputResponse> {
-    if (!this.eventSink.hasUserInputCapability(this.sessionId)) {
+    // 中止之后到下一次 prompt 之前：不再受理新的询问（见 inputsClosed）
+    if (this.inputsClosed || !this.eventSink.hasUserInputCapability(this.sessionId)) {
       return Promise.resolve({ kind: 'cancel', reason: 'aborted' })
     }
     return new Promise<InputResponse>((resolve) => {

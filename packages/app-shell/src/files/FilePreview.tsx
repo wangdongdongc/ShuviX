@@ -45,7 +45,7 @@ import { ChartView } from '../preview/ChartView'
 import { HexView } from './HexView'
 import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
-import { useMediaUrl } from './mediaUrl'
+import { useMediaUrl } from '@shuvix/chat-ui'
 import { basename } from './paths'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 

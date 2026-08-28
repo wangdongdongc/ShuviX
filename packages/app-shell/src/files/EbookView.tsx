@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, ChevronLeft, ChevronRight, List, Loader2 } from 'lucide-react'
-import { useMediaUrl } from './mediaUrl'
+import { useMediaUrl } from '@shuvix/chat-ui'
 import { loadBook, type LoadedBook } from './ebookLoaders'
 
 interface EbookViewProps {

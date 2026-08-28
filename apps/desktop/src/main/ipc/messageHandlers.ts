@@ -18,8 +18,8 @@ export function registerMessageHandlers(): void {
 
   /** 清空会话消息 */
   ipcMain.handle('message:clear', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () => {
-      chatGateway.clearMessages(sessionId)
+    operationContext.run(createElectronContext(sessionId), async () => {
+      await chatGateway.clearMessages(sessionId)
       return { success: true }
     })
   )

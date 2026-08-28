@@ -66,8 +66,14 @@ export interface SessionSettings {
   allowList?: string[]
   /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（纯预览，无对话/Agent） */
   notebookPath?: string
+  /**
+   * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
+   * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表
+   * （同一条记忆在同一处出现两次，比少一处入口更糟）。
+   */
+  memorySlug?: string
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -183,12 +189,6 @@ interface ChatState {
    */
   subAgentRevealRequest: { subSessionId: string; nonce: number } | null
   /**
-   * 请求显示「Agent 信息」的信号（单调 nonce）—— 由输入区的上下文用量环点击触发。
-   * 宿主（app-shell 的 useSessionPanelReveal）消费后展开会话面板并切到 Agent 页；
-   * 「哪里显示」属宿主外壳，故此处只发信号（与 subAgentRevealRequest 同款）。
-   */
-  agentInfoRevealRequest: { nonce: number } | null
-  /**
    * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
    * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
    * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
@@ -208,6 +208,14 @@ interface ChatState {
   messages: ChatMessage[]
   /** 各 session 的流式状态（按 sessionId 隔离） */
   sessionStreams: Record<string, SessionStreamState>
+  /**
+   * 各 session 的运行时关停状态（按 sessionId 隔离）。
+   *
+   * 一个会话同一时刻只允许有一个 Agent 运行时：回退/切档案/清空都要先把旧运行时**彻底**
+   * 停下才解绑，新的要等它停完才出生。这段时间发消息没有意义，UI 呈现「正在停止」并禁用发送。
+   * 通常一瞬间；工具卡住不返回时会明显可见 —— 这正是要显式呈现它的原因。
+   */
+  sessionClosing: Record<string, boolean>
   /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
   sessionToolExecutions: Record<string, ToolExecution[]>
   /** 当前模型是否支持深度思考 */
@@ -269,8 +277,6 @@ interface ChatState {
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
   /** 请求显示右侧「子智能体」面板（子会话 id）；由 useAgentEvents 收到当前会话 sub_session_register 时触发 */
   requestSubAgentReveal: (subSessionId: string) => void
-  /** 请求显示「Agent 信息」页（会话面板 Agent tab）；由输入区上下文用量环点击触发 */
-  requestAgentInfoReveal: () => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
@@ -285,6 +291,8 @@ interface ChatState {
   appendStreamingImage: (sessionId: string, image: { data: string; mimeType: string }) => void
   clearStreamingContent: (sessionId: string) => void
   setIsStreaming: (sessionId: string, streaming: boolean) => void
+  /** 标记某会话的运行时正在关停 / 关停完毕（后端 agent_closing 事件驱动） */
+  setAgentClosing: (sessionId: string, closing: boolean) => void
   getSessionStreamContent: (sessionId: string) => string
   getSessionStreamThinking: (sessionId: string) => string
   setStreamingToolCall: (
@@ -390,6 +398,10 @@ export const selectStreamingThinking = (s: ChatState): string =>
 
 export const selectIsStreaming = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.isStreaming || false : false
+
+/** 当前会话的运行时是否正在关停（关停期间不能发送，见 sessionClosing） */
+export const selectIsAgentClosing = (s: ChatState): boolean =>
+  s.activeSessionId ? s.sessionClosing[s.activeSessionId] || false : false
 
 /** 空图片数组常量，避免选择器每次返回新引用 */
 const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
@@ -512,11 +524,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...deriveActive(null),
   filePreviewRequest: null,
   subAgentRevealRequest: null,
-  agentInfoRevealRequest: null,
   draftRestoreRequest: null,
   pendingAgentProfile: null,
   messages: [],
   sessionStreams: {},
+  sessionClosing: {},
   sessionToolExecutions: {},
   sessionPendingInputs: {},
   sessionInputDrafts: {},
@@ -564,10 +576,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         subSessionId,
         nonce: (state.subAgentRevealRequest?.nonce ?? 0) + 1
       }
-    })),
-  requestAgentInfoReveal: () =>
-    set((state) => ({
-      agentInfoRevealRequest: { nonce: (state.agentInfoRevealRequest?.nonce ?? 0) + 1 }
     })),
   requestDraftRestore: (content, inlineTokens) =>
     set((state) => ({
@@ -655,6 +663,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       const updated = { ...prev, isStreaming: streaming }
       return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+    }),
+
+  setAgentClosing: (sessionId, closing) =>
+    set((state) => {
+      if (!!state.sessionClosing[sessionId] === closing) return {}
+      const next = { ...state.sessionClosing }
+      if (closing) next[sessionId] = true
+      else delete next[sessionId]
+      return { sessionClosing: next }
     }),
 
   getSessionStreamContent: (sessionId) => {

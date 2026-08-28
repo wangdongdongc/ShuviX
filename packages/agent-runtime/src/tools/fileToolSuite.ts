@@ -18,6 +18,7 @@ import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { applyWrite } from '../fileTools/write'
 import { applyEdit } from '../fileTools/edit'
+import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 import type { AccessMode, SecurityContext } from '../security/types'
 
 type ReadResult = AgentToolResult<ReadToolDetails>
@@ -54,6 +55,23 @@ function extOf(path: string): string {
 }
 
 const defaultIsUrl = (p: string): boolean => /^https?:\/\//i.test(p)
+
+/** 取文件名（诊断文案里的 who，同解析器的 defaultName） */
+function fileNameOf(path: string): string {
+  const name = path.replace(/\\/g, '/').split('/').pop() ?? path
+  return name.replace(/\.(md|markdown|mdx)$/i, '')
+}
+
+/** 把写后处理的回执并进工具结果的文本块（模型面）；结果的 details 不受影响 */
+function withNote<T>(res: AgentToolResult<T>, note: string | null): AgentToolResult<T> {
+  if (!note) return res
+  const content = [...res.content]
+  const i = content.findIndex((c) => c.type === 'text')
+  if (i < 0) return { ...res, content: [...content, { type: 'text', text: note }] }
+  const hit = content[i] as { type: 'text'; text: string }
+  content[i] = { ...hit, text: `${hit.text}\n\n${note}` }
+  return { ...res, content }
+}
 
 /**
  * 内容解码器(可选能力函数)—— read 的非纯文本分支由各端注入实现。
@@ -111,6 +129,11 @@ export interface FileToolDeps {
    * portPath 为该端 port 路径；端闭包负责归一到 UI 路径空间并 publish。见 docs/internal-events.md。
    */
   onFileChange?(e: { portPath: string; kind: 'write' | 'edit' }): void
+  /**
+   * 写入方（根）会话 id —— 只用于契约 md 的溯源字段（`shuvix-memory-session`）。
+   * 不注入则该字段不写，写后校验与其余盖章照常。
+   */
+  sessionId?: string
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -171,6 +194,36 @@ abstract class FileToolBase<
    * 走的仍是统一评估链，所以内置/用户策略、会话免询问、allowList 这几层
    * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
    */
+  /**
+   * 写后处理（write/edit 共用）—— 契约 md 落盘之后：校验不通过就把原因带回给模型，
+   * 通过则补上缺省字段并回写。**工具本身仍算成功**，文件已经写进去了。
+   *
+   * 回写与读取都在文件锁内做（与并发 write/edit 互斥），写完补一次 recordRead ——
+   * 否则宿主自己盖的这一章会让 agent 的下一次 edit 撞上「读后被改」。
+   * 整段 try/catch：这一步出任何问题都不该把一次成功的写入变成失败。
+   */
+  protected async reviewWrittenMd(portPath: string): Promise<string | null> {
+    if (!/\.(md|markdown|mdx)$/i.test(portPath)) return null
+    const { port, guards } = this.deps
+    try {
+      return await guards.withFileLock(portPath, async () => {
+        const text = await port.readFile(portPath)
+        const outcome = reviewShuvixMdWrite(text, fileNameOf(portPath), {
+          sessionId: this.deps.sessionId,
+          today: new Date().toISOString().slice(0, 10)
+        })
+        if (!outcome) return null
+        if (outcome.content !== null) {
+          await port.writeFile(portPath, outcome.content)
+          guards.recordRead(portPath)
+        }
+        return outcome.note
+      })
+    } catch {
+      return null
+    }
+  }
+
   protected makeAsk(toolCallId: string, portPath: string): WriteAskHook {
     return async ({ path, diff, isNewFile }) => {
       await this.deps.security.enforcePath('write', portPath, {
@@ -302,8 +355,10 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       params,
       this.makeAsk(toolCallId, portPath)
     )
+    // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
+    const note = await this.reviewWrittenMd(portPath)
     this.deps.onFileChange?.({ portPath, kind: 'write' })
-    return res
+    return withNote(res, note)
   }
 }
 
@@ -337,8 +392,9 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       params,
       this.makeAsk(toolCallId, portPath)
     )
+    const note = await this.reviewWrittenMd(portPath)
     this.deps.onFileChange?.({ portPath, kind: 'edit' })
-    return res
+    return withNote(res, note)
   }
 }
 

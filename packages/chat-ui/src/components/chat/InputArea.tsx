@@ -12,7 +12,12 @@ import {
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import { useChatStore, selectIsStreaming, selectActivePendingInput } from '../../stores/chatStore'
+import {
+  useChatStore,
+  selectIsStreaming,
+  selectIsAgentClosing,
+  selectActivePendingInput
+} from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { ModelPicker } from './ModelPicker'
@@ -89,6 +94,11 @@ export function InputArea({
     slashCommands
   } = useChatStore()
   const isStreaming = useChatStore(selectIsStreaming)
+  /**
+   * 运行时正在关停（回退/切档案/清空触发）。一个会话只允许一个 Agent，新的要等旧的
+   * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
+   */
+  const isAgentClosing = useChatStore(selectIsAgentClosing)
   // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
   const activePendingInput = useChatStore(selectActivePendingInput)
   const pendingTone: 'warning' | 'accent' | null = !activePendingInput
@@ -444,7 +454,7 @@ export function InputArea({
     }
 
     // 有芯片时即使参数为空也允许发送（纯命令）
-    if ((!rawText && !slashChip && images.length === 0) || isStreaming) return
+    if ((!rawText && !slashChip && images.length === 0) || isStreaming || isAgentClosing) return
 
     // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）。
     let sid = activeSessionId
@@ -494,6 +504,7 @@ export function InputArea({
     const api = getSessionChannelApi().agent
     // 竞态保护：agent 可能刚好结束。steer/followUp 在 idle 相位会被 pi 拒（invalid_state），
     // 退回普通 prompt；nextTurn 任何相位都能入队，保持它「等下次发送」的原语义。
+    if (useChatStore.getState().sessionClosing[activeSessionId]) return
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
     if (!stillStreaming && tier !== 'nextTurn') {
       store.setIsStreaming(activeSessionId, true)
@@ -604,6 +615,7 @@ export function InputArea({
   const canSend =
     (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
     !isStreaming &&
+    !isAgentClosing &&
     !!activeModel
 
   // ─── 上下文用量环形指示器（普通会话）──
@@ -860,15 +872,17 @@ export function InputArea({
                 if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
               }}
               placeholder={
-                activePendingInput
-                  ? t('pendingInputs.otherPlaceholder')
-                  : isStreaming
-                    ? t('input.placeholderSteer')
-                    : slashChip
-                      ? t('input.placeholder')
-                      : modelSupportsVision
-                        ? t('input.placeholderVision')
-                        : t('input.placeholder')
+                isAgentClosing
+                  ? t('input.placeholderClosing')
+                  : activePendingInput
+                    ? t('pendingInputs.otherPlaceholder')
+                    : isStreaming
+                      ? t('input.placeholderSteer')
+                      : slashChip
+                        ? t('input.placeholder')
+                        : modelSupportsVision
+                          ? t('input.placeholderVision')
+                          : t('input.placeholder')
               }
               rows={1}
               style={{
@@ -894,21 +908,12 @@ export function InputArea({
             {/* 弹性空白 → 把右侧按钮簇推到最右 */}
             <span className="flex-1" />
 
-            {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字，
-                点击揭示会话面板的 Agent 页（信号交宿主外壳消费；Agent 未创建时该页会就地建出来）。
-                渠道端（无 HostApi，无会话面板）仅展示不可点 */}
+            {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
+                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口 */}
             {!isNotebook && (maxContextTokens > 0 || usedContextTokens !== null) && (
-              <button
-                type="button"
-                onClick={
-                  hasHost && activeSessionId
-                    ? () => useChatStore.getState().requestAgentInfoReveal()
-                    : undefined
-                }
+              <span
                 aria-label={ctxTooltip}
-                className={`relative group/token p-1 rounded flex items-center transition-colors ${
-                  hasHost ? 'hover:bg-bg-hover' : 'cursor-default'
-                }`}
+                className="relative group/token p-1 rounded flex items-center"
               >
                 <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
                   {/* 轨道 */}
@@ -937,19 +942,14 @@ export function InputArea({
                     />
                   )}
                 </svg>
-                {/* 悬浮 tooltip：精确用量 + 占比；可点击时提示 Agent 信息入口 */}
+                {/* 悬浮 tooltip：精确用量 + 占比 */}
                 <div className="pointer-events-none absolute right-0 bottom-7 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap text-left">
                   <div className="text-[11px] text-text-primary">
                     {ctxTooltip}
                     {ctxFraction !== null ? ` · ${Math.round(ctxFraction * 100)}%` : ''}
                   </div>
-                  {hasHost && (
-                    <div className="mt-0.5 text-[10px] text-text-tertiary">
-                      {t('agentInfo.button')}
-                    </div>
-                  )}
                 </div>
-              </button>
+              </span>
             )}
 
             {micButton}

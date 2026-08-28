@@ -12,6 +12,7 @@
  */
 import type { Agent, AgentMessage, AgentToolResult, Session } from '@earendil-works/pi-agent-core'
 import { v4 as uuid } from 'uuid'
+import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
@@ -149,6 +150,12 @@ export interface SubAgentManager {
   destroyAll: (parentSessionId: string) => void
   destroy: (subSessionId: string) => void
   has: (subSessionId: string) => boolean
+  /**
+   * 派生 agent 的运行时快照（systemPrompt / 模型 / 已装载工具）—— 智能体监控页展开某条
+   * 派生 agent 时按需拉取。root agent 的同名信息由各宿主的会话服务给出；这里补上派生这一半，
+   * 因为派生运行时只活在本协调器的 map 里（没有会话行，宿主够不到）。不存在时返回 null。
+   */
+  getRuntimeInfo: (subSessionId: string) => Promise<AgentRuntimeInfo | null>
   /** 父子关系登记簿（层级/归属查询，只读使用） */
   readonly registry: AgentRegistry
 }
@@ -467,6 +474,11 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
     has(subSessionId: string): boolean {
       return sessions.has(subSessionId)
+    },
+
+    async getRuntimeInfo(subSessionId: string): Promise<AgentRuntimeInfo | null> {
+      const session = sessions.get(subSessionId)
+      return session ? await session.runtime.getRuntimeInfo() : null
     }
   }
 }

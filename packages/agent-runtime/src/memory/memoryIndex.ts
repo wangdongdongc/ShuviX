@@ -13,6 +13,19 @@
  * 一起来一起走，否则关掉开关后写入指令还在，会指向一个不注入的目录。**零条记忆时也要
  * 输出这一段** —— 否则记忆库永远无法从空启动。
  *
+ * 两条措辞是实测定下来的，别当成随手写的散文（Kimi API，N=20，任务明显该召回时看
+ * 模型是否 read 记忆、路径对不对）：
+ *
+ *   条目标识用 frontmatter 的 name（旧）   召回 65%   路径正确  0%
+ *   条目标识用 `<slug>.md`                 召回 95%   路径正确 95%
+ *   每条再给绝对路径                       召回 90%   —— 不值得那份开销
+ *
+ *   表头只说「read one at <root>/<file>」   直接命中 15/20 召回
+ *   表头加「动手前先对一遍索引」            直接命中 20/20，无关任务仍 19/20 不召回
+ *
+ * 路径正确率 0% 不是概率问题：旧实现只把 name 交给模型，而 name 取自 frontmatter、
+ * 与文件名会漂（模型写记忆时很自然填一句人话），它于是无从知道 slug。
+ *
  * 文案刻意压到最短：它每个会话必付。写入格式用一行键名列举而非缩进模板 —— 解析器只硬性
  * 要求 frontmatter 存在，键写漏了只会得到空字段而非整份判废，不值得为它铺八行样例。
  * 英文：模型面文本，与内置策略的 en 基准同源；用户可见的中日文案不走这里。
@@ -21,7 +34,8 @@ import type { ParsedMemoryFile } from './memoryFile'
 
 const WRITING = `## Writing
 
-Worth carrying into later sessions? Write <root>/<slug>.md — YAML frontmatter with
+Worth carrying into later sessions? Write <root>/<slug>.md — the file name IS how the
+memory is addressed later, so make it a short kebab-case slug. YAML frontmatter with
 \`shuvix: memory v1\`, \`name\`, \`description\`, and \`shuvix-memory-recall\` (one line: when
 this is worth opening), then the memory itself and why it holds.
 
@@ -52,19 +66,24 @@ export function renderMemoryIndex(
 
   sections.push(
     memories.length > 0
-      ? `Things learned earlier on this project. Each records what was true when written —\nverify any code detail against the current code before relying on it. The index gives\nonly when a memory is worth opening; read one with \`read\` at ${root}/<slug>.md.`
+      ? `Things learned earlier on this project. Each records what was true when written —\nverify any code detail against the current code before relying on it. The index gives\nthe file name and when it is worth opening. Before you start work, check whether any\nentry matches what you are about to touch — an entry you skipped is a mistake you are\nabout to repeat. Read one with \`read\` at ${root}/<file>.`
       : `No memories recorded for this project yet. Root: ${root}`
   )
 
   if (pinned.length > 0) {
-    const blocks = pinned.map((m) => `### ${m.name}${stamp(m)}\n${m.body}`)
+    // 带上文件名：常驻记忆一样可能需要更正，而更正要先知道文件叫什么
+    const blocks = pinned.map((m) => `### \`${m.slug}.md\`${stamp(m)}\n${m.body}`)
     sections.push(`## Always applies\n\n${blocks.join('\n\n')}`)
   }
 
   if (indexed.length > 0) {
+    // 条目标识用**文件名**而不是 frontmatter 的 name：name 会跟文件名漂（模型写记忆时
+    // 很自然填一句人话），而模型拿到的唯一标识若不是文件名，它就拼不出路径。
+    // 实测（N=20，任务明显该召回）：只给 name 时召回 65% / 路径正确 0%；
+    // 给 `<slug>.md` 时 95% / 95%。每条再给绝对路径并不更好（90%），不值得那份开销。
     const lines = indexed.map(
       (m) =>
-        `- ${m.name}${stamp(m)} — ${m.recall.trim() || m.description.trim() || '(no recall condition recorded)'}`
+        `- \`${m.slug}.md\`${stamp(m)} — ${m.recall.trim() || m.description.trim() || '(no recall condition recorded)'}`
     )
     sections.push(`## Index\n\n${lines.join('\n')}`)
   }

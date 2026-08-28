@@ -1,0 +1,268 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/table.html",
+  "title": "Table",
+  "nodes": [
+    {
+      "nodeId": "139",
+      "childIds": ["140"],
+      "backendDOMNodeId": 139,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Table" }
+    },
+    {
+      "nodeId": "140",
+      "ignored": true,
+      "childIds": ["144"],
+      "backendDOMNodeId": 140,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "144",
+      "ignored": true,
+      "childIds": ["145"],
+      "backendDOMNodeId": 144,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "145",
+      "childIds": ["146"],
+      "backendDOMNodeId": 145,
+      "role": { "value": "table" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "146",
+      "ignored": true,
+      "childIds": ["147", "151", "155", "159"],
+      "backendDOMNodeId": 146,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "147",
+      "childIds": ["148", "149", "150"],
+      "backendDOMNodeId": 147,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "151",
+      "childIds": ["152", "153", "154"],
+      "backendDOMNodeId": 151,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "155",
+      "childIds": ["156", "157", "158"],
+      "backendDOMNodeId": 155,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "159",
+      "childIds": ["160", "161", "162"],
+      "backendDOMNodeId": 159,
+      "role": { "value": "row" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "148",
+      "childIds": ["127"],
+      "backendDOMNodeId": 148,
+      "role": { "value": "columnheader" },
+      "name": { "value": "模型" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "149",
+      "childIds": ["128"],
+      "backendDOMNodeId": 149,
+      "role": { "value": "columnheader" },
+      "name": { "value": "Ctx" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "150",
+      "childIds": ["129"],
+      "backendDOMNodeId": 150,
+      "role": { "value": "columnheader" },
+      "name": { "value": "价格" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "152",
+      "childIds": ["130"],
+      "backendDOMNodeId": 152,
+      "role": { "value": "cell" },
+      "name": { "value": "opus" }
+    },
+    {
+      "nodeId": "153",
+      "childIds": ["131"],
+      "backendDOMNodeId": 153,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "154",
+      "childIds": ["132"],
+      "backendDOMNodeId": 154,
+      "role": { "value": "cell" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "156",
+      "childIds": ["133"],
+      "backendDOMNodeId": 156,
+      "role": { "value": "cell" },
+      "name": { "value": "sonnet" }
+    },
+    {
+      "nodeId": "157",
+      "childIds": ["134"],
+      "backendDOMNodeId": 157,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "158",
+      "childIds": ["135"],
+      "backendDOMNodeId": 158,
+      "role": { "value": "cell" },
+      "name": { "value": "3.00" }
+    },
+    {
+      "nodeId": "160",
+      "childIds": ["136"],
+      "backendDOMNodeId": 160,
+      "role": { "value": "cell" },
+      "name": { "value": "haiku" }
+    },
+    {
+      "nodeId": "161",
+      "childIds": ["137"],
+      "backendDOMNodeId": 161,
+      "role": { "value": "cell" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "162",
+      "childIds": ["138"],
+      "backendDOMNodeId": 162,
+      "role": { "value": "cell" },
+      "name": { "value": "0.80" }
+    },
+    {
+      "nodeId": "127",
+      "childIds": ["-1000000057"],
+      "backendDOMNodeId": 127,
+      "role": { "value": "StaticText" },
+      "name": { "value": "模型" }
+    },
+    {
+      "nodeId": "128",
+      "childIds": ["-1000000069"],
+      "backendDOMNodeId": 128,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Ctx" }
+    },
+    {
+      "nodeId": "129",
+      "childIds": ["-1000000059"],
+      "backendDOMNodeId": 129,
+      "role": { "value": "StaticText" },
+      "name": { "value": "价格" }
+    },
+    {
+      "nodeId": "130",
+      "childIds": ["-1000000060"],
+      "backendDOMNodeId": 130,
+      "role": { "value": "StaticText" },
+      "name": { "value": "opus" }
+    },
+    {
+      "nodeId": "131",
+      "childIds": ["-1000000061"],
+      "backendDOMNodeId": 131,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "132",
+      "childIds": ["-1000000062"],
+      "backendDOMNodeId": 132,
+      "role": { "value": "StaticText" },
+      "name": { "value": "15.00" }
+    },
+    {
+      "nodeId": "133",
+      "childIds": ["-1000000063"],
+      "backendDOMNodeId": 133,
+      "role": { "value": "StaticText" },
+      "name": { "value": "sonnet" }
+    },
+    {
+      "nodeId": "134",
+      "childIds": ["-1000000064"],
+      "backendDOMNodeId": 134,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "135",
+      "childIds": ["-1000000065"],
+      "backendDOMNodeId": 135,
+      "role": { "value": "StaticText" },
+      "name": { "value": "3.00" }
+    },
+    {
+      "nodeId": "136",
+      "childIds": ["-1000000066"],
+      "backendDOMNodeId": 136,
+      "role": { "value": "StaticText" },
+      "name": { "value": "haiku" }
+    },
+    {
+      "nodeId": "137",
+      "childIds": ["-1000000067"],
+      "backendDOMNodeId": 137,
+      "role": { "value": "StaticText" },
+      "name": { "value": "200000" }
+    },
+    {
+      "nodeId": "138",
+      "childIds": ["-1000000068"],
+      "backendDOMNodeId": 138,
+      "role": { "value": "StaticText" },
+      "name": { "value": "0.80" }
+    },
+    { "nodeId": "-1000000057", "role": { "value": "InlineTextBox" }, "name": { "value": "模型" } },
+    { "nodeId": "-1000000069", "role": { "value": "InlineTextBox" }, "name": { "value": "Ctx" } },
+    { "nodeId": "-1000000059", "role": { "value": "InlineTextBox" }, "name": { "value": "价格" } },
+    { "nodeId": "-1000000060", "role": { "value": "InlineTextBox" }, "name": { "value": "opus" } },
+    {
+      "nodeId": "-1000000061",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000062", "role": { "value": "InlineTextBox" }, "name": { "value": "15.00" } },
+    {
+      "nodeId": "-1000000063",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "sonnet" }
+    },
+    {
+      "nodeId": "-1000000064",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000065", "role": { "value": "InlineTextBox" }, "name": { "value": "3.00" } },
+    { "nodeId": "-1000000066", "role": { "value": "InlineTextBox" }, "name": { "value": "haiku" } },
+    {
+      "nodeId": "-1000000067",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "200000" }
+    },
+    { "nodeId": "-1000000068", "role": { "value": "InlineTextBox" }, "name": { "value": "0.80" } }
+  ]
+}

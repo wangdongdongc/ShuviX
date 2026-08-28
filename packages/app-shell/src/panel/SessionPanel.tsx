@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Cpu, Eye, FolderTree, ListTodo, X } from 'lucide-react'
+import { Bot, Eye, FolderTree, ListTodo, X } from 'lucide-react'
 import {
   useChatStore,
   useSubAgentCount,
   useBgTaskCount,
-  useBgTaskRunningCount,
-  getHostApi
+  useBgTaskRunningCount
 } from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 import { SubAgentPanel } from '../subagent/SubAgentPanel'
 import { usePreviewPanelStore } from '../preview/previewPanelStore'
-import { AgentInfoPanel } from './AgentInfoPanel'
 import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 
@@ -19,15 +17,16 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
  *   - SessionToolbar：状态横幅右侧的工具入口组，仅面板收起时显示（展开后隐藏，
- *     切换/收起入口移交面板头部 tabs）。Files 常驻；Agent 在完整宿主的非笔记本会话常驻；
- *     Preview 仅在宿主注入（showPreview）**且存在预览目标**时出现（与 Sub-agent 同款
- *     「有内容才显示」语义）；Sub-agent 仅当前会话有子会话时出现（含数量徽标）。
- *     点按展开面板并切到该工具。
+ *     切换/收起入口移交面板头部 tabs）。Files 常驻；Preview 仅在宿主注入（showPreview）
+ *     **且存在预览目标**时出现（与 Sub-agent 同款「有内容才显示」语义）；Sub-agent 仅当前
+ *     会话有子会话时出现（含数量徽标）。点按展开面板并切到该工具。
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
  *     对话收缩让位）。头部为工具 tabs（与工具栏同一入口列表），点按切换、X 收起。
- *     装载 Files / Agent / Preview / Sub-agent，展开期间各工具均保持挂载、visibility 切换
+ *     装载 Files / Preview / Sub-agent / 后台任务，展开期间各工具均保持挂载、visibility 切换
  *     （保住预览/手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
- *     Agent 页额外按「是否激活」拉取（打开该页才懒建 Agent，见 AgentInfoPanel）。
+ *
+ * 注：运行时 Agent 快照（系统提示词 / 已装载工具 / 模型细节）不在这里 —— 它归桌面设置页的
+ * 「监视器 → 智能体」，那页覆盖进程内**全部** agent（含派生），而不只是当前会话这一个。
  *
  * 宿主差异经 props / 外层注入：files 内容整体注入（filesContent —— 桌面为 FilesPanel + 桌面
  * caps，扩展为 FSA 权限门控包装）；preview 内容可选注入（previewContent —— 无 app 级右侧
@@ -37,20 +36,9 @@ import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore
  */
 
 /**
- * Agent 工具页是否可用：读运行时 Agent 状态需要 HostApi（渠道端如只读 WebUI 取不到），
- * 且笔记本会话没有主 Agent（每次发送开一次性子智能体）→ 两种情况都不提供该页。
- */
-function useAgentToolAvailable(sessionId: string | null): boolean {
-  const notebookPath = useChatStore(
-    (s) => s.sessions.find((x) => x.id === sessionId)?.settings.notebookPath ?? null
-  )
-  return !!sessionId && !notebookPath && getHostApi() !== null
-}
-
-/**
  * 展示工具（含兜底）：面板停在 Sub-agent 但子会话已清空（Bot 按钮随之隐藏）→ 回落到 Files；
  * 停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 同样回落到 Files；
- * 停在 Agent 但切到了笔记本/渠道端会话（Cpu 按钮随之隐藏）→ 同样回落到 Files。
+ * 停在后台任务但任务已清空（ListTodo 按钮随之隐藏）→ 同样回落到 Files。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
   const openTool = useSessionPanelStore((s) =>
@@ -58,11 +46,9 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
   )
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
-  const agentAvailable = useAgentToolAvailable(sessionId)
   const taskCount = useBgTaskCount(sessionId)
   if (openTool === 'subagent' && subAgentCount === 0) return 'files'
   if (openTool === 'preview' && !hasPreviewTarget) return 'files'
-  if (openTool === 'agent' && !agentAvailable) return 'files'
   if (openTool === 'tasks' && taskCount === 0) return 'files'
   return openTool
 }
@@ -70,7 +56,6 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
 /**
  * 揭示信号 → 会话面板（宿主常驻组件内调用一次；面板收起时内容未挂载，故须在此消费）：
  *   - subAgentRevealRequest（当前会话注册子智能体）→ 展开并切到 Sub-agent
- *   - agentInfoRevealRequest（用户点输入区上下文用量环）→ 展开并切到 Agent
  *   - filePreviewRequest（仅 previewInPanel=true 的宿主）→ 展开并切到 Preview ——
  *     预览目标本身由宿主经 usePreviewRequestBridge 落入共享 usePreviewPanelStore；
  *     桌面主窗预览在 app 级右侧面板（useRightPanelBridge 揭示），不传此标志。
@@ -83,13 +68,6 @@ export function useSessionPanelReveal(enabled = true, previewInPanel = false): v
     const sid = useChatStore.getState().activeSessionId
     if (sid) useSessionPanelStore.getState().show(sid, 'subagent')
   }, [subAgentReveal, enabled])
-
-  const agentInfoReveal = useChatStore((s) => s.agentInfoRevealRequest)
-  useEffect(() => {
-    if (!enabled || !agentInfoReveal) return
-    const sid = useChatStore.getState().activeSessionId
-    if (sid) useSessionPanelStore.getState().show(sid, 'agent')
-  }, [agentInfoReveal, enabled])
 
   const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
   useEffect(() => {
@@ -108,7 +86,6 @@ interface SessionPanelToolItem {
 
 /**
  * 面板工具入口列表（工具栏胶囊与面板头部 tabs 共用同一来源）：Files 常驻；
- * Agent 在完整宿主的非笔记本会话常驻（打开即懒建 Agent，见 AgentInfoPanel）；
  * Preview 仅宿主注入且存在预览目标时出现；Sub-agent 仅有子会话时出现（含数量徽标）。
  */
 function useSessionPanelToolItems(
@@ -118,13 +95,10 @@ function useSessionPanelToolItems(
   const { t } = useTranslation()
   const subAgentCount = useSubAgentCount(sessionId)
   const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
-  const agentAvailable = useAgentToolAvailable(sessionId)
   const taskCount = useBgTaskCount(sessionId)
   const runningTaskCount = useBgTaskRunningCount(sessionId)
   return [
     { tool: 'files', Icon: FolderTree, label: t('panel.files') },
-    // 用 Cpu 而非设置页「智能体」列表的 Bot：Bot 已是本栏 Sub-agent 的图标，同栏重复会难以分辨
-    ...(agentAvailable ? [{ tool: 'agent' as const, Icon: Cpu, label: t('panel.agent') }] : []),
     ...(includePreview && hasPreviewTarget
       ? [{ tool: 'preview' as const, Icon: Eye, label: t('panel.previewTab') }]
       : []),
@@ -284,13 +258,6 @@ export function SessionPanel({
             style={tool === 'files' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
           >
             {filesContent}
-          </div>
-          {/* Agent 信息：仅在激活时拉取（active），避免打开 Files 就把 Agent 懒建出来 */}
-          <div
-            className="absolute inset-0"
-            style={tool === 'agent' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
-          >
-            <AgentInfoPanel sessionId={sessionId} active={tool === 'agent'} />
           </div>
           {previewContent !== undefined && (
             <div

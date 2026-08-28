@@ -606,9 +606,10 @@ button.cm-atomic-search-btn svg {
 .atomic-panel[data-layout='fill'] .cm-line.cm-atomic-h6::before {
   display: none;
 }
-/* 属性卡在填充模式下贴着容器上沿，去掉笔记本里的上外边距 */
+/* 属性卡在填充模式下贴着容器上沿，去掉笔记本里的上留白
+   （留白是 padding 而非 margin —— 见 frontmatterCard.ts 里 wrap 的注释） */
 .atomic-panel[data-layout='fill'] .cm-shuvix-fmcard {
-  margin-top: 0;
+  padding-top: 0;
 }
 
 /* —— shuvix 契约 md 的 frontmatter 属性卡（notebook/frontmatterCard.ts）——

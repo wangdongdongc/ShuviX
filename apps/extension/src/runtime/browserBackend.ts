@@ -119,11 +119,11 @@ class ExtensionBrowserBackend implements BrowserBackend {
 
   // ── 交互 / 快照 / 调试（chrome.debugger CDP，挂横幅；实现委托共享 cdpOps） ──
 
-  async snapshot(p: { tabId: string }): Promise<BrowserOpOutput> {
+  async snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput> {
     const id = await resolveTab(p.tabId)
     const session = await this.session(p.tabId)
     const pageUrl = (await chrome.tabs.get(id)).url ?? ''
-    return browserCdpOps.snapshotOp(session, pageUrl)
+    return browserCdpOps.snapshotOp(session, pageUrl, { full: p.full })
   }
 
   async screenshot(p: { tabId: string }): Promise<BrowserOpOutput> {

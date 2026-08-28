@@ -115,8 +115,53 @@ describe('createBrowserTool 参数校验', () => {
     const backend = fakeBackend()
     const t = createBrowserTool({ backend })
     const result = await t.execute('tc', { action: 'snapshot', tabId: 't1' })
-    expect(backend.snapshot).toHaveBeenCalledWith({ tabId: 't1' })
+    // 该 tab 的第一次快照没有可比对象，必须全量
+    expect(backend.snapshot).toHaveBeenCalledWith({ tabId: 't1', full: true })
     expect(result.details).toMatchObject({ type: 'browser', action: 'snapshot', elementCount: 3 })
+  })
+
+  describe('snapshot 的差异/全量判定', () => {
+    // 差异依赖模型上下文里还留着上一份快照，而工具无从知道自动压缩有没有把它删掉。
+    // 这里钉的是工具**自己能做的确定性判断**：距上次快照隔了几次操作。
+    it('紧邻上一次快照（中间只有少量操作）→ 请求差异', async () => {
+      const backend = fakeBackend()
+      const t = createBrowserTool({ backend })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      await t.execute('tc', { action: 'click', tabId: 't1', uid: 'e1' })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      expect(backend.snapshot).toHaveBeenLastCalledWith({ tabId: 't1', full: false })
+    })
+
+    it('隔了太多次操作 → 退回全量（隔得越久越可能已被压缩掉）', async () => {
+      const backend = fakeBackend()
+      const t = createBrowserTool({ backend })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      for (let i = 0; i < 9; i++) {
+        await t.execute('tc', { action: 'click', tabId: 't1', uid: 'e1' })
+      }
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      expect(backend.snapshot).toHaveBeenLastCalledWith({ tabId: 't1', full: true })
+    })
+
+    it('full:true 无条件回全量，即便紧邻', async () => {
+      const backend = fakeBackend()
+      const t = createBrowserTool({ backend })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      await t.execute('tc', { action: 'click', tabId: 't1', uid: 'e1' })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1', full: true })
+      expect(backend.snapshot).toHaveBeenLastCalledWith({ tabId: 't1', full: true })
+    })
+
+    it('计数按 tab 分开 —— 另一个 tab 的操作不该影响本 tab', async () => {
+      const backend = fakeBackend()
+      const t = createBrowserTool({ backend })
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      for (let i = 0; i < 9; i++) {
+        await t.execute('tc', { action: 'click', tabId: 't2', uid: 'e1' })
+      }
+      await t.execute('tc', { action: 'snapshot', tabId: 't1' })
+      expect(backend.snapshot).toHaveBeenLastCalledWith({ tabId: 't1', full: false })
+    })
   })
 
   it('图片内容进 content（screenshot）', async () => {
@@ -220,5 +265,37 @@ describe('help devtools topic', () => {
     expect(text).toContain('uid macros')
     const topic = await t.execute('tc', { action: 'help', topic: 'devtools' })
     expect((topic.content[0] as { text: string }).text).toContain('Inspect a request/response body')
+  })
+})
+
+describe('中止：卡死的操作不该拖住会话', () => {
+  it('操作永不兑现 + 中途 abort → execute 立刻抛中止错，不等底层 promise', async () => {
+    const backend = fakeBackend()
+    // 永不兑现的 readPage —— 复刻「页面一直加载中，抽取调用挂住」的现场
+    backend.readPage = vi.fn(() => new Promise<never>(() => {}))
+    const t = createBrowserTool({ backend, abortError: 'TOOL_ABORTED' })
+    const ctrl = new AbortController()
+    const running = t.execute('tc', { action: 'read_page', tabId: 't1' }, ctrl.signal)
+    ctrl.abort()
+    await expect(running).rejects.toThrow('TOOL_ABORTED')
+  })
+
+  it('未中止时照常返回结果（赛跑不影响正常路径）', async () => {
+    const backend = fakeBackend()
+    const t = createBrowserTool({ backend, abortError: 'TOOL_ABORTED' })
+    const ctrl = new AbortController()
+    const out = await t.execute('tc', { action: 'read_page', tabId: 't1' }, ctrl.signal)
+    expect((out.content[0] as { text: string }).text).toBe('page md')
+  })
+
+  it('操作自己抛错 → 原错误照抛，不被中止错覆盖', async () => {
+    const backend = fakeBackend()
+    backend.readPage = vi.fn(async () => {
+      throw new Error('no such tab')
+    })
+    const t = createBrowserTool({ backend, abortError: 'TOOL_ABORTED' })
+    await expect(
+      t.execute('tc', { action: 'read_page', tabId: 't9' }, new AbortController().signal)
+    ).rejects.toThrow('no such tab')
   })
 })

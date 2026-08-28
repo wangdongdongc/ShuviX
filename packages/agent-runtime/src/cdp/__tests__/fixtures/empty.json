@@ -1,0 +1,28 @@
+{
+  "url": "file:///private/tmp/claude-501/-Volumes-My-Shared-Files-AIGC-ShuviX/18e2d3e7-3605-4d44-8424-ea9fc9ce7ce0/scratchpad/pages/empty.html",
+  "title": "Empty",
+  "nodes": [
+    {
+      "nodeId": "61",
+      "childIds": ["62"],
+      "backendDOMNodeId": 61,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Empty" }
+    },
+    {
+      "nodeId": "62",
+      "ignored": true,
+      "childIds": ["66"],
+      "backendDOMNodeId": 62,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "66",
+      "ignored": true,
+      "childIds": ["67"],
+      "backendDOMNodeId": 66,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "67", "ignored": true, "backendDOMNodeId": 67, "role": { "value": "none" } }
+  ]
+}

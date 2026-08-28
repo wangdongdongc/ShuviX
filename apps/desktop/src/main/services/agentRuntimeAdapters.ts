@@ -15,14 +15,25 @@ import type {
 } from '@shuvix/agent-runtime'
 import type { TextContent, ImageContent } from '@earendil-works/pi-ai'
 import { chatFrontendRegistry } from '../frontend/core'
+import { notifyOnChatEvent } from './notificationService'
 import { transformToolResultForPersist } from './stepPersistPipeline'
 import { httpLogService } from './httpLogService'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
 
-/** 事件广播适配器：委托 chatFrontendRegistry */
+/**
+ * 事件广播适配器：委托 chatFrontendRegistry，并旁路一份给通知决策器。
+ *
+ * 通知**不走 ChatFrontend**：registry 按能力过滤，`input_request` 只发给
+ * `userInput: true` 的前端 —— 而询问恰恰是最该弹通知的一类事件。与其为通知造一个
+ * 声明了输入能力却答不了的假前端（那会让 `hasUserInputCapability` 在关窗后也返回 true，
+ * 反过来改变 harnessSession 的询问语义），不如在这里明着分一路旁听。
+ */
 export const electronEventSink: RuntimeEventSink = {
-  broadcast: (event) => chatFrontendRegistry.broadcast(event),
+  broadcast: (event) => {
+    chatFrontendRegistry.broadcast(event)
+    notifyOnChatEvent(event)
+  },
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
 }
 

@@ -90,6 +90,19 @@ function isAssistant(msg: unknown): msg is AssistantMessage {
   return typeof msg === 'object' && msg !== null && (msg as { role?: string }).role === 'assistant'
 }
 
+/**
+ * 本轮结局 —— 取最后一条 assistant 消息的 stopReason。
+ *
+ * pi 的 stopReason 有五种，但对消费方（通知文案、后续可能的重试提示）只有三种结局：
+ * 'stop' / 'length' / 'toolUse' 都是**正常走完**（toolUse 结尾说明后面还有工具轮，
+ * 整轮仍是正常收束），'aborted' 是用户按了停止，'error' 是这轮没跑成。
+ */
+function endReason(last: AssistantMessage | undefined): 'ok' | 'aborted' | 'error' {
+  if (last?.stopReason === 'aborted') return 'aborted'
+  if (last?.stopReason === 'error') return 'error'
+  return 'ok'
+}
+
 /** message_update：流式增量广播（唯一还需要 streamBuffer 的地方） */
 function handleMessageUpdate(
   ctx: HarnessEventContext,
@@ -280,8 +293,10 @@ async function handleAgentEnd(
 
   // 汇总本次运行（含所有中间工具轮，跨 steer）的 token 用量
   const details: RoundUsageDetail[] = []
+  let lastAssistant: AssistantMessage | undefined
   for (const m of event.messages) {
     if (!isAssistant(m)) continue
+    lastAssistant = m
     const d = usageDetailOf(m)
     if (d) details.push(d)
   }
@@ -301,6 +316,7 @@ async function handleAgentEnd(
   ctx.broadcast({
     type: 'agent_end',
     sessionId: ctx.sessionId,
+    reason: endReason(lastAssistant),
     message: finalMessage ? JSON.stringify(finalMessage) : undefined,
     usage: usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, details: [] }
   })

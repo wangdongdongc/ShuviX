@@ -13,6 +13,8 @@ export interface SessionInfo extends Session {
 export interface SessionCreateParams {
   projectId?: string | null
   notebookPath?: string
+  /** 项目记忆笔记本的 slug（由 services/memory 传入；见 SessionSettings.memorySlug） */
+  memorySlug?: string
   title?: string
 }
 

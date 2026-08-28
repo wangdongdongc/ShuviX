@@ -1,0 +1,5553 @@
+{
+  "url": "https://developer.mozilla.org/en-US/docs/Web/Accessibility",
+  "title": "Accessibility | MDN",
+  "nodes": [
+    {
+      "nodeId": "5",
+      "childIds": ["100"],
+      "backendDOMNodeId": 5,
+      "role": { "value": "RootWebArea" },
+      "name": { "value": "Accessibility | MDN" }
+    },
+    {
+      "nodeId": "100",
+      "ignored": true,
+      "childIds": ["149"],
+      "backendDOMNodeId": 100,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "149",
+      "ignored": true,
+      "childIds": ["150", "155", "167", "610", "1323"],
+      "backendDOMNodeId": 149,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "150",
+      "childIds": ["151", "153"],
+      "backendDOMNodeId": 150,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "155",
+      "ignored": true,
+      "childIds": ["156"],
+      "backendDOMNodeId": 155,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "156",
+      "ignored": true,
+      "childIds": ["157"],
+      "backendDOMNodeId": 156,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "157",
+      "ignored": true,
+      "childIds": ["158"],
+      "backendDOMNodeId": 157,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "158",
+      "childIds": ["160", "163", "165"],
+      "backendDOMNodeId": 158,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "167",
+      "childIds": ["168", "509", "527"],
+      "backendDOMNodeId": 167,
+      "role": { "value": "banner" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "610",
+      "ignored": true,
+      "childIds": ["611"],
+      "backendDOMNodeId": 610,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "611",
+      "ignored": true,
+      "childIds": ["612", "802"],
+      "backendDOMNodeId": 611,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "612",
+      "childIds": ["613", "624", "45"],
+      "backendDOMNodeId": 612,
+      "role": { "value": "main" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "802",
+      "childIds": ["803"],
+      "backendDOMNodeId": 802,
+      "role": { "value": "complementary" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1323",
+      "ignored": true,
+      "childIds": ["1325", "1331"],
+      "backendDOMNodeId": 1323,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1325",
+      "ignored": true,
+      "childIds": ["1326"],
+      "backendDOMNodeId": 1325,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1326",
+      "childIds": ["1327", "1329"],
+      "backendDOMNodeId": 1326,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1331",
+      "childIds": ["1332", "1396"],
+      "backendDOMNodeId": 1331,
+      "role": { "value": "contentinfo" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "151",
+      "childIds": ["152"],
+      "backendDOMNodeId": 151,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "153",
+      "childIds": ["154"],
+      "backendDOMNodeId": 153,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "160",
+      "childIds": ["161", "66"],
+      "backendDOMNodeId": 160,
+      "role": { "value": "link" },
+      "name": {
+        "value": "Google Cloud Start your AI journey with free access to leading cloud products and services. Start Free"
+      }
+    },
+    {
+      "nodeId": "163",
+      "ignored": true,
+      "childIds": ["164"],
+      "backendDOMNodeId": 163,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "164",
+      "childIds": ["1416"],
+      "backendDOMNodeId": 164,
+      "role": { "value": "link" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "165",
+      "childIds": ["166"],
+      "backendDOMNodeId": 165,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "168",
+      "childIds": ["169", "179", "184"],
+      "backendDOMNodeId": 168,
+      "role": { "value": "navigation" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "509",
+      "childIds": ["510"],
+      "backendDOMNodeId": 509,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "527",
+      "ignored": true,
+      "childIds": ["530", "539", "548", "31", "564"],
+      "backendDOMNodeId": 527,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "530",
+      "ignored": true,
+      "childIds": ["532"],
+      "backendDOMNodeId": 530,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "532",
+      "ignored": true,
+      "childIds": ["537"],
+      "backendDOMNodeId": 532,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "537",
+      "ignored": true,
+      "childIds": ["538"],
+      "backendDOMNodeId": 537,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "538",
+      "ignored": true,
+      "childIds": ["1527"],
+      "backendDOMNodeId": 538,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "1527", "ignored": true, "backendDOMNodeId": 1527, "role": { "value": "none" } },
+    {
+      "nodeId": "539",
+      "childIds": ["540", "544"],
+      "backendDOMNodeId": 539,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "548", "ignored": true, "backendDOMNodeId": 548, "role": { "value": "none" } },
+    {
+      "nodeId": "31",
+      "ignored": true,
+      "childIds": ["32"],
+      "backendDOMNodeId": 31,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "32",
+      "childIds": ["552", "553"],
+      "backendDOMNodeId": 32,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "564",
+      "ignored": true,
+      "childIds": ["566"],
+      "backendDOMNodeId": 564,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "566",
+      "childIds": ["569", "570"],
+      "backendDOMNodeId": 566,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "613",
+      "ignored": true,
+      "childIds": ["614", "615", "616"],
+      "backendDOMNodeId": 613,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "614", "ignored": true, "backendDOMNodeId": 614, "role": { "value": "none" } },
+    {
+      "nodeId": "615",
+      "childIds": ["1546"],
+      "backendDOMNodeId": 615,
+      "role": { "value": "heading" },
+      "name": { "value": "Accessibility" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "616",
+      "childIds": ["617", "7", "38"],
+      "backendDOMNodeId": 616,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "624",
+      "childIds": ["625", "636"],
+      "backendDOMNodeId": 624,
+      "role": { "value": "complementary" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "45",
+      "ignored": true,
+      "childIds": ["649", "681", "734", "742", "750"],
+      "backendDOMNodeId": 45,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "649",
+      "childIds": ["650", "8", "652"],
+      "backendDOMNodeId": 649,
+      "role": { "value": "region" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "681",
+      "childIds": ["682", "684", "686"],
+      "backendDOMNodeId": 681,
+      "role": { "value": "region" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "734",
+      "childIds": ["735", "737"],
+      "backendDOMNodeId": 734,
+      "role": { "value": "region" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "742",
+      "childIds": ["743", "745"],
+      "backendDOMNodeId": 742,
+      "role": { "value": "region" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "750",
+      "childIds": ["751"],
+      "backendDOMNodeId": 750,
+      "role": { "value": "region" },
+      "name": { "value": "Help improve MDN" }
+    },
+    {
+      "nodeId": "803",
+      "childIds": ["804", "820"],
+      "backendDOMNodeId": 803,
+      "role": { "value": "navigation" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1327",
+      "childIds": ["1328"],
+      "backendDOMNodeId": 1327,
+      "role": { "value": "link" },
+      "name": { "value": "MongoDB" }
+    },
+    {
+      "nodeId": "1329",
+      "ignored": true,
+      "childIds": ["1330"],
+      "backendDOMNodeId": 1329,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1330",
+      "childIds": ["1651"],
+      "backendDOMNodeId": 1330,
+      "role": { "value": "link" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "1332",
+      "ignored": true,
+      "childIds": ["1333", "1339", "1350", "1366", "1380"],
+      "backendDOMNodeId": 1332,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1333",
+      "ignored": true,
+      "childIds": ["1334", "1338"],
+      "backendDOMNodeId": 1333,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1334",
+      "childIds": ["1335"],
+      "backendDOMNodeId": 1334,
+      "role": { "value": "link" },
+      "name": { "value": "MDN logo" }
+    },
+    {
+      "nodeId": "1338",
+      "childIds": ["1653"],
+      "backendDOMNodeId": 1338,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1339",
+      "childIds": ["1340", "1342", "1344", "1346", "1348"],
+      "backendDOMNodeId": 1339,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1350",
+      "childIds": ["1351", "1352"],
+      "backendDOMNodeId": 1350,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1366",
+      "childIds": ["1367", "1368"],
+      "backendDOMNodeId": 1366,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1380",
+      "childIds": ["1381", "1382"],
+      "backendDOMNodeId": 1380,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1396",
+      "ignored": true,
+      "childIds": ["1397", "1401", "1410"],
+      "backendDOMNodeId": 1396,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1397",
+      "childIds": ["1398"],
+      "backendDOMNodeId": 1397,
+      "role": { "value": "link" },
+      "name": { "value": "Mozilla logo" }
+    },
+    {
+      "nodeId": "1401",
+      "childIds": ["1402", "1404", "1406", "1408"],
+      "backendDOMNodeId": 1401,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1410",
+      "childIds": ["1693", "1411", "1695"],
+      "backendDOMNodeId": 1410,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "152",
+      "childIds": ["1412"],
+      "backendDOMNodeId": 152,
+      "role": { "value": "link" },
+      "name": { "value": "Skip to main content" }
+    },
+    {
+      "nodeId": "154",
+      "childIds": ["1413"],
+      "backendDOMNodeId": 154,
+      "role": { "value": "link" },
+      "name": { "value": "Skip to search" }
+    },
+    {
+      "nodeId": "161",
+      "ignored": true,
+      "childIds": ["162", "65"],
+      "backendDOMNodeId": 161,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "162",
+      "backendDOMNodeId": 162,
+      "role": { "value": "image" },
+      "name": { "value": "Google Cloud" }
+    },
+    {
+      "nodeId": "65",
+      "ignored": true,
+      "childIds": ["1414"],
+      "backendDOMNodeId": 65,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1414",
+      "childIds": ["-1000000004"],
+      "backendDOMNodeId": 1414,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Start your AI journey with free access to leading cloud products and services."
+      }
+    },
+    {
+      "nodeId": "66",
+      "ignored": true,
+      "childIds": ["1415"],
+      "backendDOMNodeId": 66,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1415",
+      "childIds": ["-1000000005"],
+      "backendDOMNodeId": 1415,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Start Free" }
+    },
+    {
+      "nodeId": "1416",
+      "childIds": ["-1000000006"],
+      "backendDOMNodeId": 1416,
+      "role": { "value": "StaticText" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "166",
+      "childIds": ["1417"],
+      "backendDOMNodeId": 166,
+      "role": { "value": "link" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    {
+      "nodeId": "169",
+      "ignored": true,
+      "childIds": ["170"],
+      "backendDOMNodeId": 169,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "170",
+      "childIds": ["171"],
+      "backendDOMNodeId": 170,
+      "role": { "value": "link" },
+      "name": { "value": "MDN" }
+    },
+    { "nodeId": "179", "ignored": true, "backendDOMNodeId": 179, "role": { "value": "none" } },
+    {
+      "nodeId": "184",
+      "childIds": ["9", "494", "501"],
+      "backendDOMNodeId": 184,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "510",
+      "ignored": true,
+      "childIds": ["514", "515", "520"],
+      "backendDOMNodeId": 510,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "514", "ignored": true, "backendDOMNodeId": 514, "role": { "value": "none" } },
+    { "nodeId": "515", "ignored": true, "backendDOMNodeId": 515, "role": { "value": "none" } },
+    {
+      "nodeId": "520",
+      "ignored": true,
+      "childIds": ["524"],
+      "backendDOMNodeId": 520,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "524",
+      "ignored": true,
+      "childIds": ["525"],
+      "backendDOMNodeId": 524,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "525",
+      "ignored": true,
+      "childIds": ["1526"],
+      "backendDOMNodeId": 525,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "1526", "ignored": true, "backendDOMNodeId": 1526, "role": { "value": "none" } },
+    {
+      "nodeId": "540",
+      "childIds": ["541"],
+      "backendDOMNodeId": 540,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "544",
+      "childIds": ["545"],
+      "backendDOMNodeId": 544,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "552",
+      "childIds": ["554"],
+      "backendDOMNodeId": 552,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "553",
+      "ignored": true,
+      "childIds": ["556"],
+      "backendDOMNodeId": 553,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "556", "ignored": true, "backendDOMNodeId": 556, "role": { "value": "none" } },
+    {
+      "nodeId": "569",
+      "childIds": ["571"],
+      "backendDOMNodeId": 569,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "570",
+      "ignored": true,
+      "childIds": ["573"],
+      "backendDOMNodeId": 570,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "573",
+      "ignored": true,
+      "childIds": ["577", "582"],
+      "backendDOMNodeId": 573,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "577",
+      "ignored": true,
+      "childIds": ["578", "579"],
+      "backendDOMNodeId": 577,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "578", "ignored": true, "backendDOMNodeId": 578, "role": { "value": "none" } },
+    {
+      "nodeId": "579",
+      "ignored": true,
+      "childIds": ["1534"],
+      "backendDOMNodeId": 579,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "1534", "ignored": true, "backendDOMNodeId": 1534, "role": { "value": "none" } },
+    {
+      "nodeId": "582",
+      "ignored": true,
+      "childIds": ["587"],
+      "backendDOMNodeId": 582,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "587",
+      "ignored": true,
+      "childIds": ["588"],
+      "backendDOMNodeId": 587,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "588",
+      "ignored": true,
+      "childIds": ["1535"],
+      "backendDOMNodeId": 588,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "1535", "ignored": true, "backendDOMNodeId": 1535, "role": { "value": "none" } },
+    {
+      "nodeId": "1546",
+      "childIds": ["-1000000026"],
+      "backendDOMNodeId": 1546,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "617",
+      "childIds": ["618", "35", "619", "37"],
+      "backendDOMNodeId": 617,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "7",
+      "childIds": ["1548"],
+      "backendDOMNodeId": 7,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "38",
+      "childIds": ["620"],
+      "backendDOMNodeId": 38,
+      "role": { "value": "blockquote" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "625",
+      "childIds": ["626", "627"],
+      "backendDOMNodeId": 625,
+      "role": { "value": "navigation" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "636",
+      "ignored": true,
+      "childIds": ["637"],
+      "backendDOMNodeId": 636,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "637",
+      "childIds": ["638", "647"],
+      "backendDOMNodeId": 637,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "650",
+      "childIds": ["651"],
+      "backendDOMNodeId": 650,
+      "role": { "value": "heading" },
+      "name": { "value": "Beginner's tutorials" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "8",
+      "childIds": ["47", "67", "49"],
+      "backendDOMNodeId": 8,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "652",
+      "childIds": [
+        "653",
+        "655",
+        "657",
+        "659",
+        "661",
+        "663",
+        "665",
+        "667",
+        "669",
+        "671",
+        "673",
+        "675",
+        "677",
+        "679"
+      ],
+      "backendDOMNodeId": 652,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "682",
+      "childIds": ["683"],
+      "backendDOMNodeId": 682,
+      "role": { "value": "heading" },
+      "name": { "value": "Accessibility guides" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "684",
+      "childIds": ["1575", "685", "1577"],
+      "backendDOMNodeId": 684,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "686",
+      "childIds": [
+        "687",
+        "689",
+        "691",
+        "693",
+        "695",
+        "697",
+        "699",
+        "701",
+        "706",
+        "708",
+        "710",
+        "712",
+        "714",
+        "716",
+        "718",
+        "720",
+        "722",
+        "724",
+        "726",
+        "728",
+        "730",
+        "732"
+      ],
+      "backendDOMNodeId": 686,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "735",
+      "childIds": ["736"],
+      "backendDOMNodeId": 735,
+      "role": { "value": "heading" },
+      "name": { "value": "References" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "737",
+      "childIds": ["738", "740"],
+      "backendDOMNodeId": 737,
+      "role": { "value": "DescriptionList" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "743",
+      "childIds": ["744"],
+      "backendDOMNodeId": 743,
+      "role": { "value": "heading" },
+      "name": { "value": "See also" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "745",
+      "childIds": ["746", "748"],
+      "backendDOMNodeId": 745,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "751",
+      "ignored": true,
+      "childIds": ["752", "773", "776", "795", "796", "799"],
+      "backendDOMNodeId": 751,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "752",
+      "childIds": ["753"],
+      "backendDOMNodeId": 752,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "773",
+      "childIds": ["1617"],
+      "backendDOMNodeId": 773,
+      "role": { "value": "heading" },
+      "name": { "value": "Help improve MDN" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "776",
+      "childIds": ["777", "778"],
+      "backendDOMNodeId": 776,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "795",
+      "childIds": ["1621"],
+      "backendDOMNodeId": 795,
+      "role": { "value": "link" },
+      "name": { "value": "Learn how to contribute" }
+    },
+    {
+      "nodeId": "796",
+      "childIds": ["1622", "797", "1624", "798", "1626"],
+      "backendDOMNodeId": 796,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "799",
+      "childIds": ["800", "1629", "801"],
+      "backendDOMNodeId": 799,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "804",
+      "childIds": ["805"],
+      "backendDOMNodeId": 804,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "820",
+      "ignored": true,
+      "childIds": ["821"],
+      "backendDOMNodeId": 820,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "821",
+      "childIds": [
+        "822",
+        "825",
+        "827",
+        "829",
+        "831",
+        "833",
+        "835",
+        "837",
+        "838",
+        "840",
+        "842",
+        "844",
+        "864",
+        "866",
+        "882",
+        "884",
+        "1053"
+      ],
+      "backendDOMNodeId": 821,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1328",
+      "backendDOMNodeId": 1328,
+      "role": { "value": "image" },
+      "name": { "value": "MongoDB" }
+    },
+    {
+      "nodeId": "1651",
+      "childIds": ["-1000000203"],
+      "backendDOMNodeId": 1651,
+      "role": { "value": "StaticText" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "1335",
+      "backendDOMNodeId": 1335,
+      "role": { "value": "image" },
+      "name": { "value": "MDN" }
+    },
+    {
+      "nodeId": "1653",
+      "childIds": ["-1000000204"],
+      "backendDOMNodeId": 1653,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Your blueprint for a better internet." }
+    },
+    {
+      "nodeId": "1340",
+      "childIds": ["1341"],
+      "backendDOMNodeId": 1340,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1342",
+      "childIds": ["1343"],
+      "backendDOMNodeId": 1342,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1344",
+      "childIds": ["1345"],
+      "backendDOMNodeId": 1344,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1346",
+      "childIds": ["1347"],
+      "backendDOMNodeId": 1346,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1348",
+      "childIds": ["1349"],
+      "backendDOMNodeId": 1348,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1351",
+      "childIds": ["1659"],
+      "backendDOMNodeId": 1351,
+      "role": { "value": "term" },
+      "name": { "value": "MDN" }
+    },
+    {
+      "nodeId": "1352",
+      "childIds": ["1353"],
+      "backendDOMNodeId": 1352,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1367",
+      "childIds": ["1668"],
+      "backendDOMNodeId": 1367,
+      "role": { "value": "term" },
+      "name": { "value": "Contribute" }
+    },
+    {
+      "nodeId": "1368",
+      "childIds": ["1369"],
+      "backendDOMNodeId": 1368,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1381",
+      "childIds": ["1676"],
+      "backendDOMNodeId": 1381,
+      "role": { "value": "term" },
+      "name": { "value": "Developers" }
+    },
+    {
+      "nodeId": "1382",
+      "childIds": ["1383"],
+      "backendDOMNodeId": 1382,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1398",
+      "backendDOMNodeId": 1398,
+      "role": { "value": "image" },
+      "name": { "value": "Mozilla" }
+    },
+    {
+      "nodeId": "1402",
+      "childIds": ["1403"],
+      "backendDOMNodeId": 1402,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1404",
+      "childIds": ["1405"],
+      "backendDOMNodeId": 1404,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1406",
+      "childIds": ["1407"],
+      "backendDOMNodeId": 1406,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1408",
+      "childIds": ["1409"],
+      "backendDOMNodeId": 1408,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1693",
+      "childIds": ["-1000000229"],
+      "backendDOMNodeId": 1693,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Portions of this content are ©1998–2026 by individual mozilla.org contributors. Content available under "
+      }
+    },
+    {
+      "nodeId": "1411",
+      "childIds": ["1694"],
+      "backendDOMNodeId": 1411,
+      "role": { "value": "link" },
+      "name": { "value": "a Creative Commons license" }
+    },
+    {
+      "nodeId": "1695",
+      "childIds": ["-1000000231"],
+      "backendDOMNodeId": 1695,
+      "role": { "value": "StaticText" },
+      "name": { "value": "." }
+    },
+    {
+      "nodeId": "1412",
+      "childIds": ["-1000000002"],
+      "backendDOMNodeId": 1412,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Skip to main content" }
+    },
+    {
+      "nodeId": "1413",
+      "childIds": ["-1000000003"],
+      "backendDOMNodeId": 1413,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Skip to search" }
+    },
+    {
+      "nodeId": "-1000000004",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Start your AI journey with free access to leading cloud products and services."
+      }
+    },
+    {
+      "nodeId": "-1000000005",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Start Free" }
+    },
+    { "nodeId": "-1000000006", "role": { "value": "InlineTextBox" }, "name": { "value": "AD" } },
+    {
+      "nodeId": "1417",
+      "childIds": ["-1000000007"],
+      "backendDOMNodeId": 1417,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    {
+      "nodeId": "171",
+      "backendDOMNodeId": 171,
+      "role": { "value": "image" },
+      "name": { "value": "MDN" }
+    },
+    {
+      "nodeId": "9",
+      "ignored": true,
+      "childIds": ["10"],
+      "backendDOMNodeId": 9,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "10",
+      "childIds": ["185", "13", "16", "19", "361", "404", "22", "26", "29"],
+      "backendDOMNodeId": 10,
+      "role": { "value": "navigation" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "494",
+      "childIds": ["497"],
+      "backendDOMNodeId": 494,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "501",
+      "childIds": ["502"],
+      "backendDOMNodeId": 501,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "541",
+      "childIds": ["1528"],
+      "backendDOMNodeId": 541,
+      "role": { "value": "link" },
+      "name": { "value": "Web" }
+    },
+    {
+      "nodeId": "545",
+      "childIds": ["1529"],
+      "backendDOMNodeId": 545,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "554",
+      "childIds": ["555"],
+      "backendDOMNodeId": 554,
+      "role": { "value": "button" },
+      "name": { "value": "Switch color theme" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "571",
+      "childIds": ["572"],
+      "backendDOMNodeId": 571,
+      "role": { "value": "button" },
+      "name": { "value": "English (US)" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "-1000000026",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "618",
+      "childIds": ["1547"],
+      "backendDOMNodeId": 618,
+      "role": { "value": "strong" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "35",
+      "childIds": ["-1000000028"],
+      "backendDOMNodeId": 35,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (often abbreviated to " }
+    },
+    {
+      "nodeId": "619",
+      "childIds": ["36"],
+      "backendDOMNodeId": 619,
+      "role": { "value": "strong" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "37",
+      "childIds": ["-1000000030", "-1000000031", "-1000000032"],
+      "backendDOMNodeId": 37,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": " — as in, \"a\", then 11 characters, and then \"y\") in web development means enabling as many people as possible to use websites, even when those people's abilities are limited in some way."
+      }
+    },
+    {
+      "nodeId": "1548",
+      "childIds": ["-1000000033", "-1000000034", "-1000000035", "-1000000036"],
+      "backendDOMNodeId": 1548,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "For many people, technology makes things easier. For people with disabilities, technology makes things possible. Accessibility means developing content to be as accessible as possible, no matter an individual's physical and cognitive abilities and how they access the web."
+      }
+    },
+    {
+      "nodeId": "620",
+      "childIds": ["621", "40", "622", "41", "623", "44"],
+      "backendDOMNodeId": 620,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "626",
+      "childIds": ["1549"],
+      "backendDOMNodeId": 626,
+      "role": { "value": "heading" },
+      "name": { "value": "In this article" },
+      "properties": [{ "name": "level", "value": { "value": 2 } }]
+    },
+    {
+      "nodeId": "627",
+      "childIds": ["628", "630", "632", "634"],
+      "backendDOMNodeId": 627,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "638",
+      "childIds": ["639", "645"],
+      "backendDOMNodeId": 638,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "647",
+      "childIds": ["648"],
+      "backendDOMNodeId": 647,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "651",
+      "childIds": ["1560", "46"],
+      "backendDOMNodeId": 651,
+      "role": { "value": "link" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "47",
+      "childIds": ["-1000000061"],
+      "backendDOMNodeId": 47,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Our learn web development " }
+    },
+    {
+      "nodeId": "67",
+      "childIds": ["48"],
+      "backendDOMNodeId": 67,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility module" }
+    },
+    {
+      "nodeId": "49",
+      "childIds": ["-1000000063", "-1000000064"],
+      "backendDOMNodeId": 49,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": " contains modern, up-to-date tutorials covering accessibility fundamentals."
+      }
+    },
+    {
+      "nodeId": "653",
+      "childIds": ["654"],
+      "backendDOMNodeId": 653,
+      "role": { "value": "term" },
+      "name": { "value": "What is accessibility?" }
+    },
+    {
+      "nodeId": "655",
+      "childIds": ["656"],
+      "backendDOMNodeId": 655,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "657",
+      "childIds": ["658"],
+      "backendDOMNodeId": 657,
+      "role": { "value": "term" },
+      "name": { "value": "Accessibility tooling and assistive technology" }
+    },
+    {
+      "nodeId": "659",
+      "childIds": ["660"],
+      "backendDOMNodeId": 659,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "661",
+      "childIds": ["662"],
+      "backendDOMNodeId": 661,
+      "role": { "value": "term" },
+      "name": { "value": "HTML: A good basis for accessibility" }
+    },
+    {
+      "nodeId": "663",
+      "childIds": ["664"],
+      "backendDOMNodeId": 663,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "665",
+      "childIds": ["666"],
+      "backendDOMNodeId": 665,
+      "role": { "value": "term" },
+      "name": { "value": "CSS and JavaScript accessibility best practices" }
+    },
+    {
+      "nodeId": "667",
+      "childIds": ["668"],
+      "backendDOMNodeId": 667,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "669",
+      "childIds": ["670"],
+      "backendDOMNodeId": 669,
+      "role": { "value": "term" },
+      "name": { "value": "WAI-ARIA basics" }
+    },
+    {
+      "nodeId": "671",
+      "childIds": ["672"],
+      "backendDOMNodeId": 671,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "673",
+      "childIds": ["674"],
+      "backendDOMNodeId": 673,
+      "role": { "value": "term" },
+      "name": { "value": "Accessible multimedia" }
+    },
+    {
+      "nodeId": "675",
+      "childIds": ["676"],
+      "backendDOMNodeId": 675,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "677",
+      "childIds": ["678"],
+      "backendDOMNodeId": 677,
+      "role": { "value": "term" },
+      "name": { "value": "Mobile accessibility" }
+    },
+    {
+      "nodeId": "679",
+      "childIds": ["680"],
+      "backendDOMNodeId": 679,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "683",
+      "childIds": ["1573", "1574"],
+      "backendDOMNodeId": 683,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "1575",
+      "childIds": ["-1000000101"],
+      "backendDOMNodeId": 1575,
+      "role": { "value": "StaticText" },
+      "name": { "value": "The " }
+    },
+    {
+      "nodeId": "685",
+      "childIds": ["1576"],
+      "backendDOMNodeId": 685,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "1577",
+      "childIds": ["-1000000103", "-1000000104", "-1000000105"],
+      "backendDOMNodeId": 1577,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": " cover authoring principles, WCAG compliance, accessible widgets and navigation, mobile accessibility, and other key topics that will help you understand why accessibility is crucial for the web and how to improve it in your projects."
+      }
+    },
+    {
+      "nodeId": "687",
+      "childIds": ["688"],
+      "backendDOMNodeId": 687,
+      "role": { "value": "term" },
+      "name": { "value": "Accessibility information for web authors" }
+    },
+    {
+      "nodeId": "689",
+      "childIds": ["690"],
+      "backendDOMNodeId": 689,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "691",
+      "childIds": ["692"],
+      "backendDOMNodeId": 691,
+      "role": { "value": "term" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "693",
+      "childIds": ["694"],
+      "backendDOMNodeId": 693,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "695",
+      "childIds": ["696"],
+      "backendDOMNodeId": 695,
+      "role": { "value": "term" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "697",
+      "childIds": ["698"],
+      "backendDOMNodeId": 697,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "699",
+      "childIds": ["700"],
+      "backendDOMNodeId": 699,
+      "role": { "value": "term" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "701",
+      "childIds": ["702"],
+      "backendDOMNodeId": 701,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "706",
+      "childIds": ["707"],
+      "backendDOMNodeId": 706,
+      "role": { "value": "term" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "708",
+      "childIds": ["709"],
+      "backendDOMNodeId": 708,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "710",
+      "childIds": ["711"],
+      "backendDOMNodeId": 710,
+      "role": { "value": "term" },
+      "name": { "value": "Understanding the Web Content Accessibility Guidelines (WCAG)" }
+    },
+    {
+      "nodeId": "712",
+      "childIds": ["713"],
+      "backendDOMNodeId": 712,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "714",
+      "childIds": ["715"],
+      "backendDOMNodeId": 714,
+      "role": { "value": "term" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "716",
+      "childIds": ["717"],
+      "backendDOMNodeId": 716,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "718",
+      "childIds": ["719"],
+      "backendDOMNodeId": 718,
+      "role": { "value": "term" },
+      "name": { "value": "Accessibility and spatial patterns" }
+    },
+    {
+      "nodeId": "720",
+      "childIds": ["721"],
+      "backendDOMNodeId": 720,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "722",
+      "childIds": ["723"],
+      "backendDOMNodeId": 722,
+      "role": { "value": "term" },
+      "name": { "value": "Web Accessibility: Understanding Colors and Luminance" }
+    },
+    {
+      "nodeId": "724",
+      "childIds": ["725"],
+      "backendDOMNodeId": 724,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "726",
+      "childIds": ["727"],
+      "backendDOMNodeId": 726,
+      "role": { "value": "term" },
+      "name": { "value": "Web accessibility for seizures and physical reactions" }
+    },
+    {
+      "nodeId": "728",
+      "childIds": ["729"],
+      "backendDOMNodeId": 728,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "730",
+      "childIds": ["731"],
+      "backendDOMNodeId": 730,
+      "role": { "value": "term" },
+      "name": { "value": "ARIA" }
+    },
+    {
+      "nodeId": "732",
+      "childIds": ["733"],
+      "backendDOMNodeId": 732,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "736",
+      "childIds": ["1606", "1607"],
+      "backendDOMNodeId": 736,
+      "role": { "value": "link" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "738",
+      "childIds": ["739"],
+      "backendDOMNodeId": 738,
+      "role": { "value": "term" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "740",
+      "childIds": ["741"],
+      "backendDOMNodeId": 740,
+      "role": { "value": "definition" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "744",
+      "childIds": ["1610", "1611"],
+      "backendDOMNodeId": 744,
+      "role": { "value": "link" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "746",
+      "childIds": ["1612", "747"],
+      "backendDOMNodeId": 746,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "748",
+      "childIds": ["1614", "749"],
+      "backendDOMNodeId": 748,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "753",
+      "backendDOMNodeId": 753,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1617",
+      "childIds": ["-1000000166"],
+      "backendDOMNodeId": 1617,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Help improve MDN" }
+    },
+    {
+      "nodeId": "777",
+      "childIds": ["1618"],
+      "backendDOMNodeId": 777,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "778",
+      "childIds": ["779", "787"],
+      "backendDOMNodeId": 778,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1621",
+      "childIds": ["-1000000170"],
+      "backendDOMNodeId": 1621,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Learn how to contribute" }
+    },
+    {
+      "nodeId": "1622",
+      "childIds": ["-1000000171"],
+      "backendDOMNodeId": 1622,
+      "role": { "value": "StaticText" },
+      "name": { "value": "This page was last modified on " }
+    },
+    {
+      "nodeId": "797",
+      "childIds": ["1623"],
+      "backendDOMNodeId": 797,
+      "role": { "value": "time" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1624",
+      "childIds": ["-1000000173"],
+      "backendDOMNodeId": 1624,
+      "role": { "value": "StaticText" },
+      "name": { "value": " by " }
+    },
+    {
+      "nodeId": "798",
+      "childIds": ["1625"],
+      "backendDOMNodeId": 798,
+      "role": { "value": "link" },
+      "name": { "value": "MDN contributors" }
+    },
+    {
+      "nodeId": "1626",
+      "childIds": ["-1000000175"],
+      "backendDOMNodeId": 1626,
+      "role": { "value": "StaticText" },
+      "name": { "value": "." }
+    },
+    {
+      "nodeId": "800",
+      "childIds": ["1627", "1628"],
+      "backendDOMNodeId": 800,
+      "role": { "value": "link" },
+      "name": { "value": "View this page on GitHub (external)" }
+    },
+    {
+      "nodeId": "1629",
+      "childIds": ["-1000000177"],
+      "backendDOMNodeId": 1629,
+      "role": { "value": "StaticText" },
+      "name": { "value": " • " }
+    },
+    {
+      "nodeId": "801",
+      "childIds": ["1630", "1631"],
+      "backendDOMNodeId": 801,
+      "role": { "value": "link" },
+      "name": { "value": "Report a problem with this content (external)" }
+    },
+    {
+      "nodeId": "805",
+      "ignored": true,
+      "childIds": ["807", "809", "812"],
+      "backendDOMNodeId": 805,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "807",
+      "childIds": ["808"],
+      "backendDOMNodeId": 807,
+      "role": { "value": "LabelText" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "809",
+      "childIds": ["810", "811"],
+      "backendDOMNodeId": 809,
+      "role": { "value": "textbox" },
+      "name": { "value": "Filter sidebar" },
+      "properties": [{ "name": "required", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "812",
+      "ignored": true,
+      "childIds": ["814"],
+      "backendDOMNodeId": 812,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "814",
+      "ignored": true,
+      "childIds": ["818"],
+      "backendDOMNodeId": 814,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "818",
+      "ignored": true,
+      "childIds": ["819"],
+      "backendDOMNodeId": 818,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "819",
+      "ignored": true,
+      "childIds": ["1633"],
+      "backendDOMNodeId": 819,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "1633", "ignored": true, "backendDOMNodeId": 1633, "role": { "value": "none" } },
+    {
+      "nodeId": "822",
+      "childIds": ["823"],
+      "backendDOMNodeId": 822,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "825",
+      "childIds": ["826"],
+      "backendDOMNodeId": 825,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "827",
+      "childIds": ["828"],
+      "backendDOMNodeId": 827,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "829",
+      "childIds": ["830"],
+      "backendDOMNodeId": 829,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "831",
+      "childIds": ["832"],
+      "backendDOMNodeId": 831,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "833",
+      "childIds": ["834"],
+      "backendDOMNodeId": 833,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "835",
+      "childIds": ["836"],
+      "backendDOMNodeId": 835,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "837",
+      "childIds": ["6"],
+      "backendDOMNodeId": 837,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "838",
+      "childIds": ["839"],
+      "backendDOMNodeId": 838,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "840",
+      "childIds": ["841"],
+      "backendDOMNodeId": 840,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "842",
+      "childIds": ["843"],
+      "backendDOMNodeId": 842,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "844",
+      "childIds": ["845"],
+      "backendDOMNodeId": 844,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "864",
+      "childIds": ["865"],
+      "backendDOMNodeId": 864,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "866",
+      "childIds": ["867"],
+      "backendDOMNodeId": 866,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "882",
+      "childIds": ["883"],
+      "backendDOMNodeId": 882,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "884",
+      "childIds": ["885"],
+      "backendDOMNodeId": 884,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1053",
+      "childIds": ["1054"],
+      "backendDOMNodeId": 1053,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    { "nodeId": "-1000000203", "role": { "value": "InlineTextBox" }, "name": { "value": "AD" } },
+    {
+      "nodeId": "-1000000204",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Your blueprint for a better internet." }
+    },
+    {
+      "nodeId": "1341",
+      "childIds": ["1654"],
+      "backendDOMNodeId": 1341,
+      "role": { "value": "link" },
+      "name": { "value": "MDN on GitHub" }
+    },
+    {
+      "nodeId": "1343",
+      "childIds": ["1655"],
+      "backendDOMNodeId": 1343,
+      "role": { "value": "link" },
+      "name": { "value": "MDN on Bluesky" }
+    },
+    {
+      "nodeId": "1345",
+      "childIds": ["1656"],
+      "backendDOMNodeId": 1345,
+      "role": { "value": "link" },
+      "name": { "value": "MDN on X" }
+    },
+    {
+      "nodeId": "1347",
+      "childIds": ["1657"],
+      "backendDOMNodeId": 1347,
+      "role": { "value": "link" },
+      "name": { "value": "MDN on Mastodon" }
+    },
+    {
+      "nodeId": "1349",
+      "childIds": ["1658"],
+      "backendDOMNodeId": 1349,
+      "role": { "value": "link" },
+      "name": { "value": "MDN blog RSS feed" }
+    },
+    {
+      "nodeId": "1659",
+      "childIds": ["-1000000205"],
+      "backendDOMNodeId": 1659,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN" }
+    },
+    {
+      "nodeId": "1353",
+      "childIds": ["1354", "1356", "1358", "1360", "1362", "1364"],
+      "backendDOMNodeId": 1353,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1668",
+      "childIds": ["-1000000212"],
+      "backendDOMNodeId": 1668,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Contribute" }
+    },
+    {
+      "nodeId": "1369",
+      "childIds": ["1370", "1372", "1374", "1376", "1378"],
+      "backendDOMNodeId": 1369,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1676",
+      "childIds": ["-1000000218"],
+      "backendDOMNodeId": 1676,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Developers" }
+    },
+    {
+      "nodeId": "1383",
+      "childIds": ["1384", "1386", "1388", "1390", "1392", "1394"],
+      "backendDOMNodeId": 1383,
+      "role": { "value": "list" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1403",
+      "childIds": ["1685", "1686"],
+      "backendDOMNodeId": 1403,
+      "role": { "value": "link" },
+      "name": { "value": "Website Privacy Notice (external)" }
+    },
+    {
+      "nodeId": "1405",
+      "childIds": ["1687", "1688"],
+      "backendDOMNodeId": 1405,
+      "role": { "value": "link" },
+      "name": { "value": "Telemetry Settings (external)" }
+    },
+    {
+      "nodeId": "1407",
+      "childIds": ["1689", "1690"],
+      "backendDOMNodeId": 1407,
+      "role": { "value": "link" },
+      "name": { "value": "Legal (external)" }
+    },
+    {
+      "nodeId": "1409",
+      "childIds": ["1691", "1692"],
+      "backendDOMNodeId": 1409,
+      "role": { "value": "link" },
+      "name": { "value": "Community Participation Guidelines (external)" }
+    },
+    {
+      "nodeId": "-1000000229",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Portions of this content are ©1998–2026 by individual mozilla.org contributors. Content available under "
+      }
+    },
+    {
+      "nodeId": "1694",
+      "childIds": ["-1000000230"],
+      "backendDOMNodeId": 1694,
+      "role": { "value": "StaticText" },
+      "name": { "value": "a Creative Commons license" }
+    },
+    { "nodeId": "-1000000231", "role": { "value": "InlineTextBox" }, "name": { "value": "." } },
+    {
+      "nodeId": "-1000000002",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Skip to main content" }
+    },
+    {
+      "nodeId": "-1000000003",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Skip to search" }
+    },
+    {
+      "nodeId": "-1000000007",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    {
+      "nodeId": "185",
+      "ignored": true,
+      "childIds": ["188", "189"],
+      "backendDOMNodeId": 185,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "188",
+      "childIds": ["190"],
+      "backendDOMNodeId": 188,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "189",
+      "ignored": true,
+      "childIds": ["192"],
+      "backendDOMNodeId": 189,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "192", "ignored": true, "backendDOMNodeId": 192, "role": { "value": "none" } },
+    {
+      "nodeId": "13",
+      "ignored": true,
+      "childIds": ["232", "233"],
+      "backendDOMNodeId": 13,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "232",
+      "childIds": ["234"],
+      "backendDOMNodeId": 232,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "233",
+      "ignored": true,
+      "childIds": ["236"],
+      "backendDOMNodeId": 233,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "236", "ignored": true, "backendDOMNodeId": 236, "role": { "value": "none" } },
+    {
+      "nodeId": "16",
+      "ignored": true,
+      "childIds": ["282", "283"],
+      "backendDOMNodeId": 16,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "282",
+      "childIds": ["284"],
+      "backendDOMNodeId": 282,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "283",
+      "ignored": true,
+      "childIds": ["287"],
+      "backendDOMNodeId": 283,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "287", "ignored": true, "backendDOMNodeId": 287, "role": { "value": "none" } },
+    {
+      "nodeId": "19",
+      "ignored": true,
+      "childIds": ["321", "322"],
+      "backendDOMNodeId": 19,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "321",
+      "childIds": ["323"],
+      "backendDOMNodeId": 321,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "322",
+      "ignored": true,
+      "childIds": ["325"],
+      "backendDOMNodeId": 322,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "325", "ignored": true, "backendDOMNodeId": 325, "role": { "value": "none" } },
+    {
+      "nodeId": "361",
+      "ignored": true,
+      "childIds": ["364", "365"],
+      "backendDOMNodeId": 361,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "364",
+      "childIds": ["366"],
+      "backendDOMNodeId": 364,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "365",
+      "ignored": true,
+      "childIds": ["368"],
+      "backendDOMNodeId": 365,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "368", "ignored": true, "backendDOMNodeId": 368, "role": { "value": "none" } },
+    {
+      "nodeId": "404",
+      "ignored": true,
+      "childIds": ["407", "408"],
+      "backendDOMNodeId": 404,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "407",
+      "childIds": ["409"],
+      "backendDOMNodeId": 407,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "408",
+      "ignored": true,
+      "childIds": ["411"],
+      "backendDOMNodeId": 408,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "411", "ignored": true, "backendDOMNodeId": 411, "role": { "value": "none" } },
+    {
+      "nodeId": "22",
+      "ignored": true,
+      "childIds": ["449", "450"],
+      "backendDOMNodeId": 22,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "449",
+      "childIds": ["451"],
+      "backendDOMNodeId": 449,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "450",
+      "ignored": true,
+      "childIds": ["453"],
+      "backendDOMNodeId": 450,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "453", "ignored": true, "backendDOMNodeId": 453, "role": { "value": "none" } },
+    {
+      "nodeId": "26",
+      "ignored": true,
+      "childIds": ["476", "477"],
+      "backendDOMNodeId": 26,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "476",
+      "childIds": ["478"],
+      "backendDOMNodeId": 476,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "477",
+      "ignored": true,
+      "childIds": ["480"],
+      "backendDOMNodeId": 477,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "480", "ignored": true, "backendDOMNodeId": 480, "role": { "value": "none" } },
+    {
+      "nodeId": "29",
+      "childIds": ["493"],
+      "backendDOMNodeId": 29,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "497",
+      "childIds": ["498"],
+      "backendDOMNodeId": 497,
+      "role": { "value": "button" },
+      "name": { "value": "Search the site" }
+    },
+    {
+      "nodeId": "502",
+      "childIds": ["503"],
+      "backendDOMNodeId": 502,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1528",
+      "childIds": ["-1000000022"],
+      "backendDOMNodeId": 1528,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Web" }
+    },
+    {
+      "nodeId": "1529",
+      "childIds": ["-1000000023"],
+      "backendDOMNodeId": 1529,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "555",
+      "ignored": true,
+      "childIds": ["34"],
+      "backendDOMNodeId": 555,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "34",
+      "childIds": ["-1000000024"],
+      "backendDOMNodeId": 34,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Theme" }
+    },
+    {
+      "nodeId": "572",
+      "ignored": true,
+      "childIds": ["1533"],
+      "backendDOMNodeId": 572,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1533",
+      "childIds": ["-1000000025"],
+      "backendDOMNodeId": 1533,
+      "role": { "value": "StaticText" },
+      "name": { "value": "English (US)" }
+    },
+    {
+      "nodeId": "1547",
+      "childIds": ["-1000000027"],
+      "backendDOMNodeId": 1547,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "-1000000028",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " (often abbreviated to " }
+    },
+    {
+      "nodeId": "36",
+      "childIds": ["-1000000029"],
+      "backendDOMNodeId": 36,
+      "role": { "value": "StaticText" },
+      "name": { "value": "A11y" }
+    },
+    {
+      "nodeId": "-1000000030",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " — as in, \"a\", then 11 characters, and then \"y\") in " }
+    },
+    {
+      "nodeId": "-1000000031",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "web development means enabling as many people as possible to use websites, even when "
+      }
+    },
+    {
+      "nodeId": "-1000000032",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "those people's abilities are limited in some way." }
+    },
+    {
+      "nodeId": "-1000000033",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "For many people, technology makes things easier. For people with disabilities, technology "
+      }
+    },
+    {
+      "nodeId": "-1000000034",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "makes things possible. Accessibility means developing content to be as accessible as "
+      }
+    },
+    {
+      "nodeId": "-1000000035",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "possible, no matter an individual's physical and cognitive abilities and how they access the "
+      }
+    },
+    { "nodeId": "-1000000036", "role": { "value": "InlineTextBox" }, "name": { "value": "web." } },
+    {
+      "nodeId": "621",
+      "childIds": ["39"],
+      "backendDOMNodeId": 621,
+      "role": { "value": "strong" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "40",
+      "childIds": ["-1000000038", "-1000000039", "-1000000040", "-1000000041"],
+      "backendDOMNodeId": 40,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": ", whatever their hardware, software, language, location, or ability. When the Web meets this goal, it is accessible to people with a diverse range of hearing, movement, sight, and cognitive ability."
+      }
+    },
+    {
+      "nodeId": "622",
+      "childIds": ["-1000000042"],
+      "backendDOMNodeId": 622,
+      "role": { "value": "LineBreak" },
+      "name": { "value": "\n" }
+    },
+    {
+      "nodeId": "41",
+      "childIds": ["-1000000043"],
+      "backendDOMNodeId": 41,
+      "role": { "value": "StaticText" },
+      "name": { "value": "– (" }
+    },
+    {
+      "nodeId": "623",
+      "childIds": ["42", "43"],
+      "backendDOMNodeId": 623,
+      "role": { "value": "link" },
+      "name": { "value": "W3C - Accessibility (external)" }
+    },
+    {
+      "nodeId": "44",
+      "childIds": ["-1000000045"],
+      "backendDOMNodeId": 44,
+      "role": { "value": "StaticText" },
+      "name": { "value": ")" }
+    },
+    {
+      "nodeId": "1549",
+      "childIds": ["-1000000046"],
+      "backendDOMNodeId": 1549,
+      "role": { "value": "StaticText" },
+      "name": { "value": "In this article" }
+    },
+    {
+      "nodeId": "628",
+      "childIds": ["629"],
+      "backendDOMNodeId": 628,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "630",
+      "childIds": ["631"],
+      "backendDOMNodeId": 630,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "632",
+      "childIds": ["633"],
+      "backendDOMNodeId": 632,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "634",
+      "childIds": ["635"],
+      "backendDOMNodeId": 634,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "639",
+      "childIds": ["640", "641"],
+      "backendDOMNodeId": 639,
+      "role": { "value": "link" },
+      "name": {
+        "value": "Google Cloud Run Websites Without Overhead Try Cloud Run for free, deploy your app in seconds. Start Free"
+      }
+    },
+    {
+      "nodeId": "645",
+      "childIds": ["646"],
+      "backendDOMNodeId": 645,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "648",
+      "childIds": ["1559"],
+      "backendDOMNodeId": 648,
+      "role": { "value": "link" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    { "nodeId": "1560", "ignored": true, "backendDOMNodeId": 1560, "role": { "value": "none" } },
+    {
+      "nodeId": "46",
+      "childIds": ["-1000000060"],
+      "backendDOMNodeId": 46,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "-1000000061",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Our learn web development " }
+    },
+    {
+      "nodeId": "48",
+      "childIds": ["-1000000062"],
+      "backendDOMNodeId": 48,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility module" }
+    },
+    {
+      "nodeId": "-1000000063",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " contains modern, up-to-date tutorials " }
+    },
+    {
+      "nodeId": "-1000000064",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "covering accessibility fundamentals." }
+    },
+    {
+      "nodeId": "654",
+      "childIds": ["50"],
+      "backendDOMNodeId": 654,
+      "role": { "value": "link" },
+      "name": { "value": "What is accessibility?" }
+    },
+    {
+      "nodeId": "656",
+      "childIds": ["51"],
+      "backendDOMNodeId": 656,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "658",
+      "childIds": ["1561"],
+      "backendDOMNodeId": 658,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility tooling and assistive technology" }
+    },
+    {
+      "nodeId": "660",
+      "childIds": ["1562"],
+      "backendDOMNodeId": 660,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "662",
+      "childIds": ["1563"],
+      "backendDOMNodeId": 662,
+      "role": { "value": "link" },
+      "name": { "value": "HTML: A good basis for accessibility" }
+    },
+    {
+      "nodeId": "664",
+      "childIds": ["1564"],
+      "backendDOMNodeId": 664,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "666",
+      "childIds": ["1565"],
+      "backendDOMNodeId": 666,
+      "role": { "value": "link" },
+      "name": { "value": "CSS and JavaScript accessibility best practices" }
+    },
+    {
+      "nodeId": "668",
+      "childIds": ["1566"],
+      "backendDOMNodeId": 668,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "670",
+      "childIds": ["1567"],
+      "backendDOMNodeId": 670,
+      "role": { "value": "link" },
+      "name": { "value": "WAI-ARIA basics" }
+    },
+    {
+      "nodeId": "672",
+      "childIds": ["1568"],
+      "backendDOMNodeId": 672,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "674",
+      "childIds": ["1569"],
+      "backendDOMNodeId": 674,
+      "role": { "value": "link" },
+      "name": { "value": "Accessible multimedia" }
+    },
+    {
+      "nodeId": "676",
+      "childIds": ["1570"],
+      "backendDOMNodeId": 676,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "678",
+      "childIds": ["1571"],
+      "backendDOMNodeId": 678,
+      "role": { "value": "link" },
+      "name": { "value": "Mobile accessibility" }
+    },
+    {
+      "nodeId": "680",
+      "childIds": ["1572"],
+      "backendDOMNodeId": 680,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "1573", "ignored": true, "backendDOMNodeId": 1573, "role": { "value": "none" } },
+    {
+      "nodeId": "1574",
+      "childIds": ["-1000000100"],
+      "backendDOMNodeId": 1574,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility guides" }
+    },
+    { "nodeId": "-1000000101", "role": { "value": "InlineTextBox" }, "name": { "value": "The " } },
+    {
+      "nodeId": "1576",
+      "childIds": ["-1000000102"],
+      "backendDOMNodeId": 1576,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "-1000000103",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " cover authoring principles, WCAG compliance, accessible widgets " }
+    },
+    {
+      "nodeId": "-1000000104",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "and navigation, mobile accessibility, and other key topics that will help you understand why "
+      }
+    },
+    {
+      "nodeId": "-1000000105",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "accessibility is crucial for the web and how to improve it in your projects."
+      }
+    },
+    {
+      "nodeId": "688",
+      "childIds": ["1578"],
+      "backendDOMNodeId": 688,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility information for web authors" }
+    },
+    {
+      "nodeId": "690",
+      "childIds": ["1579"],
+      "backendDOMNodeId": 690,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "692",
+      "childIds": ["1580"],
+      "backendDOMNodeId": 692,
+      "role": { "value": "link" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "694",
+      "childIds": ["1581"],
+      "backendDOMNodeId": 694,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "696",
+      "childIds": ["1582"],
+      "backendDOMNodeId": 696,
+      "role": { "value": "link" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "698",
+      "childIds": ["1583"],
+      "backendDOMNodeId": 698,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "700",
+      "childIds": ["1584"],
+      "backendDOMNodeId": 700,
+      "role": { "value": "link" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "702",
+      "childIds": ["1585", "703", "1587", "704", "1589", "705", "1591"],
+      "backendDOMNodeId": 702,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "707",
+      "childIds": ["1592"],
+      "backendDOMNodeId": 707,
+      "role": { "value": "link" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "709",
+      "childIds": ["1593"],
+      "backendDOMNodeId": 709,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "711",
+      "childIds": ["1594"],
+      "backendDOMNodeId": 711,
+      "role": { "value": "link" },
+      "name": { "value": "Understanding the Web Content Accessibility Guidelines (WCAG)" }
+    },
+    {
+      "nodeId": "713",
+      "childIds": ["1595"],
+      "backendDOMNodeId": 713,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "715",
+      "childIds": ["1596"],
+      "backendDOMNodeId": 715,
+      "role": { "value": "link" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "717",
+      "childIds": ["1597"],
+      "backendDOMNodeId": 717,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "719",
+      "childIds": ["1598"],
+      "backendDOMNodeId": 719,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility and spatial patterns" }
+    },
+    {
+      "nodeId": "721",
+      "childIds": ["1599"],
+      "backendDOMNodeId": 721,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "723",
+      "childIds": ["1600"],
+      "backendDOMNodeId": 723,
+      "role": { "value": "link" },
+      "name": { "value": "Web Accessibility: Understanding Colors and Luminance" }
+    },
+    {
+      "nodeId": "725",
+      "childIds": ["1601"],
+      "backendDOMNodeId": 725,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "727",
+      "childIds": ["1602"],
+      "backendDOMNodeId": 727,
+      "role": { "value": "link" },
+      "name": { "value": "Web accessibility for seizures and physical reactions" }
+    },
+    {
+      "nodeId": "729",
+      "childIds": ["1603"],
+      "backendDOMNodeId": 729,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "731",
+      "childIds": ["1604"],
+      "backendDOMNodeId": 731,
+      "role": { "value": "link" },
+      "name": { "value": "ARIA" }
+    },
+    {
+      "nodeId": "733",
+      "childIds": ["1605"],
+      "backendDOMNodeId": 733,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "1606", "ignored": true, "backendDOMNodeId": 1606, "role": { "value": "none" } },
+    {
+      "nodeId": "1607",
+      "childIds": ["-1000000157"],
+      "backendDOMNodeId": 1607,
+      "role": { "value": "StaticText" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "739",
+      "childIds": ["1608"],
+      "backendDOMNodeId": 739,
+      "role": { "value": "link" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "741",
+      "childIds": ["1609"],
+      "backendDOMNodeId": 741,
+      "role": { "value": "paragraph" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "1610", "ignored": true, "backendDOMNodeId": 1610, "role": { "value": "none" } },
+    {
+      "nodeId": "1611",
+      "childIds": ["-1000000161"],
+      "backendDOMNodeId": 1611,
+      "role": { "value": "StaticText" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "1612",
+      "childIds": ["-1000000162"],
+      "backendDOMNodeId": 1612,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "747",
+      "childIds": ["1613"],
+      "backendDOMNodeId": 747,
+      "role": { "value": "link" },
+      "name": { "value": "Developer guides" }
+    },
+    {
+      "nodeId": "1614",
+      "childIds": ["-1000000164"],
+      "backendDOMNodeId": 1614,
+      "role": { "value": "ListMarker" },
+      "name": { "value": "• " }
+    },
+    {
+      "nodeId": "749",
+      "childIds": ["1615", "1616"],
+      "backendDOMNodeId": 749,
+      "role": { "value": "link" },
+      "name": { "value": "WAI Interest Group (external)" }
+    },
+    {
+      "nodeId": "-1000000166",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Help improve MDN" }
+    },
+    {
+      "nodeId": "1618",
+      "childIds": ["-1000000167"],
+      "backendDOMNodeId": 1618,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Was this page helpful to you?" }
+    },
+    {
+      "nodeId": "779",
+      "childIds": ["781"],
+      "backendDOMNodeId": 779,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "787",
+      "childIds": ["789"],
+      "backendDOMNodeId": 787,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "-1000000170",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Learn how to contribute" }
+    },
+    {
+      "nodeId": "-1000000171",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "This page was last modified on " }
+    },
+    {
+      "nodeId": "1623",
+      "childIds": ["-1000000172"],
+      "backendDOMNodeId": 1623,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Oct 2, 2025" }
+    },
+    { "nodeId": "-1000000173", "role": { "value": "InlineTextBox" }, "name": { "value": " by " } },
+    {
+      "nodeId": "1625",
+      "childIds": ["-1000000174"],
+      "backendDOMNodeId": 1625,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN contributors" }
+    },
+    { "nodeId": "-1000000175", "role": { "value": "InlineTextBox" }, "name": { "value": "." } },
+    {
+      "nodeId": "1627",
+      "childIds": ["-1000000176"],
+      "backendDOMNodeId": 1627,
+      "role": { "value": "StaticText" },
+      "name": { "value": "View this page on GitHub" }
+    },
+    {
+      "nodeId": "1628",
+      "backendDOMNodeId": 1628,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    { "nodeId": "-1000000177", "role": { "value": "InlineTextBox" }, "name": { "value": " • " } },
+    {
+      "nodeId": "1630",
+      "childIds": ["-1000000178"],
+      "backendDOMNodeId": 1630,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Report a problem with this content" }
+    },
+    {
+      "nodeId": "1631",
+      "backendDOMNodeId": 1631,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "808",
+      "ignored": true,
+      "childIds": ["1632"],
+      "backendDOMNodeId": 808,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1632",
+      "childIds": ["-1000000179"],
+      "backendDOMNodeId": 1632,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Filter sidebar" }
+    },
+    { "nodeId": "810", "ignored": true, "backendDOMNodeId": 810, "role": { "value": "none" } },
+    {
+      "nodeId": "811",
+      "backendDOMNodeId": 811,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "823",
+      "childIds": ["824"],
+      "backendDOMNodeId": 823,
+      "role": { "value": "emphasis" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "826",
+      "childIds": ["1635"],
+      "backendDOMNodeId": 826,
+      "role": { "value": "link" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "828",
+      "childIds": ["1636"],
+      "backendDOMNodeId": 828,
+      "role": { "value": "link" },
+      "name": { "value": "Information for web authors" }
+    },
+    {
+      "nodeId": "830",
+      "childIds": ["1637"],
+      "backendDOMNodeId": 830,
+      "role": { "value": "link" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "832",
+      "childIds": ["1638"],
+      "backendDOMNodeId": 832,
+      "role": { "value": "link" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "834",
+      "childIds": ["1639"],
+      "backendDOMNodeId": 834,
+      "role": { "value": "link" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "836",
+      "childIds": ["1640"],
+      "backendDOMNodeId": 836,
+      "role": { "value": "link" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "6",
+      "childIds": ["1641"],
+      "backendDOMNodeId": 6,
+      "role": { "value": "link" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "839",
+      "childIds": ["1642"],
+      "backendDOMNodeId": 839,
+      "role": { "value": "link" },
+      "name": { "value": "Spatial patterns" }
+    },
+    {
+      "nodeId": "841",
+      "childIds": ["1643"],
+      "backendDOMNodeId": 841,
+      "role": { "value": "link" },
+      "name": { "value": "Colors and Luminance" }
+    },
+    {
+      "nodeId": "843",
+      "childIds": ["1644"],
+      "backendDOMNodeId": 843,
+      "role": { "value": "link" },
+      "name": { "value": "Preventing seizures and physical reactions" }
+    },
+    {
+      "nodeId": "845",
+      "childIds": ["846", "848"],
+      "backendDOMNodeId": 845,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "865",
+      "childIds": ["1646"],
+      "backendDOMNodeId": 865,
+      "role": { "value": "link" },
+      "name": { "value": "ARIA" }
+    },
+    {
+      "nodeId": "867",
+      "childIds": ["868", "870"],
+      "backendDOMNodeId": 867,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "883",
+      "childIds": ["1648"],
+      "backendDOMNodeId": 883,
+      "role": { "value": "link" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "885",
+      "childIds": ["886", "888"],
+      "backendDOMNodeId": 885,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1054",
+      "childIds": ["1055", "1057"],
+      "backendDOMNodeId": 1054,
+      "role": { "value": "group" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1654",
+      "backendDOMNodeId": 1654,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1655",
+      "backendDOMNodeId": 1655,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1656",
+      "backendDOMNodeId": 1656,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1657",
+      "backendDOMNodeId": 1657,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1658",
+      "backendDOMNodeId": 1658,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    { "nodeId": "-1000000205", "role": { "value": "InlineTextBox" }, "name": { "value": "MDN" } },
+    {
+      "nodeId": "1354",
+      "childIds": ["1355"],
+      "backendDOMNodeId": 1354,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1356",
+      "childIds": ["1357"],
+      "backendDOMNodeId": 1356,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1358",
+      "childIds": ["1359"],
+      "backendDOMNodeId": 1358,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1360",
+      "childIds": ["1361"],
+      "backendDOMNodeId": 1360,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1362",
+      "childIds": ["1363"],
+      "backendDOMNodeId": 1362,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1364",
+      "childIds": ["1365"],
+      "backendDOMNodeId": 1364,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "-1000000212",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Contribute" }
+    },
+    {
+      "nodeId": "1370",
+      "childIds": ["1371"],
+      "backendDOMNodeId": 1370,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1372",
+      "childIds": ["1373"],
+      "backendDOMNodeId": 1372,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1374",
+      "childIds": ["1375"],
+      "backendDOMNodeId": 1374,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1376",
+      "childIds": ["1377"],
+      "backendDOMNodeId": 1376,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1378",
+      "childIds": ["1379"],
+      "backendDOMNodeId": 1378,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "-1000000218",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Developers" }
+    },
+    {
+      "nodeId": "1384",
+      "childIds": ["1385"],
+      "backendDOMNodeId": 1384,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1386",
+      "childIds": ["1387"],
+      "backendDOMNodeId": 1386,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1388",
+      "childIds": ["1389"],
+      "backendDOMNodeId": 1388,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1390",
+      "childIds": ["1391"],
+      "backendDOMNodeId": 1390,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1392",
+      "childIds": ["1393"],
+      "backendDOMNodeId": 1392,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1394",
+      "childIds": ["1395"],
+      "backendDOMNodeId": 1394,
+      "role": { "value": "listitem" },
+      "name": { "value": "" },
+      "properties": [{ "name": "level", "value": { "value": 1 } }]
+    },
+    {
+      "nodeId": "1685",
+      "childIds": ["-1000000225"],
+      "backendDOMNodeId": 1685,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Website Privacy Notice" }
+    },
+    {
+      "nodeId": "1686",
+      "backendDOMNodeId": 1686,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1687",
+      "childIds": ["-1000000226"],
+      "backendDOMNodeId": 1687,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Telemetry Settings" }
+    },
+    {
+      "nodeId": "1688",
+      "backendDOMNodeId": 1688,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1689",
+      "childIds": ["-1000000227"],
+      "backendDOMNodeId": 1689,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Legal" }
+    },
+    {
+      "nodeId": "1690",
+      "backendDOMNodeId": 1690,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1691",
+      "childIds": ["-1000000228"],
+      "backendDOMNodeId": 1691,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Community Participation Guidelines" }
+    },
+    {
+      "nodeId": "1692",
+      "backendDOMNodeId": 1692,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "-1000000230",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "a Creative Commons license" }
+    },
+    {
+      "nodeId": "190",
+      "childIds": ["191"],
+      "backendDOMNodeId": 190,
+      "role": { "value": "button" },
+      "name": { "value": "HTML" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "234",
+      "childIds": ["235"],
+      "backendDOMNodeId": 234,
+      "role": { "value": "button" },
+      "name": { "value": "CSS" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "284",
+      "childIds": ["285"],
+      "backendDOMNodeId": 284,
+      "role": { "value": "button" },
+      "name": { "value": "JavaScript" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "323",
+      "childIds": ["324"],
+      "backendDOMNodeId": 323,
+      "role": { "value": "button" },
+      "name": { "value": "Web APIs" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "366",
+      "childIds": ["367"],
+      "backendDOMNodeId": 366,
+      "role": { "value": "button" },
+      "name": { "value": "All" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "409",
+      "childIds": ["410"],
+      "backendDOMNodeId": 409,
+      "role": { "value": "button" },
+      "name": { "value": "Learn" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "451",
+      "childIds": ["452"],
+      "backendDOMNodeId": 451,
+      "role": { "value": "button" },
+      "name": { "value": "Tools" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "478",
+      "childIds": ["479"],
+      "backendDOMNodeId": 478,
+      "role": { "value": "button" },
+      "name": { "value": "About" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    {
+      "nodeId": "493",
+      "childIds": ["30"],
+      "backendDOMNodeId": 493,
+      "role": { "value": "link" },
+      "name": { "value": "Blog" }
+    },
+    {
+      "nodeId": "498",
+      "backendDOMNodeId": 498,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "503",
+      "childIds": ["504", "507"],
+      "backendDOMNodeId": 503,
+      "role": { "value": "link" },
+      "name": { "value": "Log in" }
+    },
+    { "nodeId": "-1000000022", "role": { "value": "InlineTextBox" }, "name": { "value": "Web" } },
+    {
+      "nodeId": "-1000000023",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility" }
+    },
+    { "nodeId": "-1000000024", "role": { "value": "InlineTextBox" }, "name": { "value": "Theme" } },
+    {
+      "nodeId": "-1000000025",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "English (US)" }
+    },
+    {
+      "nodeId": "-1000000027",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility" }
+    },
+    { "nodeId": "-1000000029", "role": { "value": "InlineTextBox" }, "name": { "value": "A11y" } },
+    {
+      "nodeId": "39",
+      "childIds": ["-1000000037"],
+      "backendDOMNodeId": 39,
+      "role": { "value": "StaticText" },
+      "name": { "value": "The Web is fundamentally designed to work for all people" }
+    },
+    {
+      "nodeId": "-1000000038",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": ", whatever their " }
+    },
+    {
+      "nodeId": "-1000000039",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "hardware, software, language, location, or ability. When the Web meets this goal, it "
+      }
+    },
+    {
+      "nodeId": "-1000000040",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "is accessible to people with a diverse range of hearing, movement, sight, and "
+      }
+    },
+    {
+      "nodeId": "-1000000041",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "cognitive ability." }
+    },
+    { "nodeId": "-1000000042", "role": { "value": "InlineTextBox" }, "name": { "value": "\n" } },
+    { "nodeId": "-1000000043", "role": { "value": "InlineTextBox" }, "name": { "value": "– (" } },
+    {
+      "nodeId": "42",
+      "childIds": ["-1000000044"],
+      "backendDOMNodeId": 42,
+      "role": { "value": "StaticText" },
+      "name": { "value": "W3C - Accessibility" }
+    },
+    {
+      "nodeId": "43",
+      "backendDOMNodeId": 43,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    { "nodeId": "-1000000045", "role": { "value": "InlineTextBox" }, "name": { "value": ")" } },
+    {
+      "nodeId": "-1000000046",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "In this article" }
+    },
+    {
+      "nodeId": "629",
+      "childIds": ["1550"],
+      "backendDOMNodeId": 629,
+      "role": { "value": "link" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "631",
+      "childIds": ["1551"],
+      "backendDOMNodeId": 631,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "633",
+      "childIds": ["1552"],
+      "backendDOMNodeId": 633,
+      "role": { "value": "link" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "635",
+      "childIds": ["1553"],
+      "backendDOMNodeId": 635,
+      "role": { "value": "link" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "640",
+      "backendDOMNodeId": 640,
+      "role": { "value": "image" },
+      "name": { "value": "Google Cloud" }
+    },
+    {
+      "nodeId": "641",
+      "childIds": ["642", "643", "644"],
+      "backendDOMNodeId": 641,
+      "role": { "value": "generic" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "646",
+      "childIds": ["1558"],
+      "backendDOMNodeId": 646,
+      "role": { "value": "link" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "1559",
+      "childIds": ["-1000000059"],
+      "backendDOMNodeId": 1559,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    {
+      "nodeId": "-1000000060",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "-1000000062",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility module" }
+    },
+    {
+      "nodeId": "50",
+      "childIds": ["-1000000065"],
+      "backendDOMNodeId": 50,
+      "role": { "value": "StaticText" },
+      "name": { "value": "What is accessibility?" }
+    },
+    {
+      "nodeId": "51",
+      "childIds": ["-1000000066", "-1000000067", "-1000000068", "-1000000069"],
+      "backendDOMNodeId": 51,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This article starts off the module with a good look at what accessibility is — this includes what groups of people we need to consider and why, what tools different people use to interact with the web, and how we can make accessibility part of our web development workflow."
+      }
+    },
+    {
+      "nodeId": "1561",
+      "childIds": ["-1000000070"],
+      "backendDOMNodeId": 1561,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility tooling and assistive technology" }
+    },
+    {
+      "nodeId": "1562",
+      "childIds": ["-1000000071", "-1000000072", "-1000000073", "-1000000074"],
+      "backendDOMNodeId": 1562,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Next we turn our attention to accessibility tooling, providing information on the kinds of tools you can use to help solve accessibility issues, and the assistive technologies used by people with disabilities as they browse the web. You'll be using these tools throughout subsequent articles."
+      }
+    },
+    {
+      "nodeId": "1563",
+      "childIds": ["-1000000075"],
+      "backendDOMNodeId": 1563,
+      "role": { "value": "StaticText" },
+      "name": { "value": "HTML: A good basis for accessibility" }
+    },
+    {
+      "nodeId": "1564",
+      "childIds": ["-1000000076", "-1000000077", "-1000000078"],
+      "backendDOMNodeId": 1564,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "A great deal of web content can be made accessible just by making sure the correct HTML elements are always used for the correct purpose. This article looks in detail at how HTML can be used to ensure maximum accessibility."
+      }
+    },
+    {
+      "nodeId": "1565",
+      "childIds": ["-1000000079"],
+      "backendDOMNodeId": 1565,
+      "role": { "value": "StaticText" },
+      "name": { "value": "CSS and JavaScript accessibility best practices" }
+    },
+    {
+      "nodeId": "1566",
+      "childIds": ["-1000000080", "-1000000081", "-1000000082", "-1000000083"],
+      "backendDOMNodeId": 1566,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "CSS and JavaScript, when used properly, also have the potential to allow for accessible web experiences, but if misused they can significantly harm accessibility. This article outlines some CSS and JavaScript best practices that should be considered to ensure that even complex content is as accessible as possible."
+      }
+    },
+    {
+      "nodeId": "1567",
+      "childIds": ["-1000000084"],
+      "backendDOMNodeId": 1567,
+      "role": { "value": "StaticText" },
+      "name": { "value": "WAI-ARIA basics" }
+    },
+    {
+      "nodeId": "1568",
+      "childIds": [
+        "-1000000085",
+        "-1000000086",
+        "-1000000087",
+        "-1000000088",
+        "-1000000089",
+        "-1000000090"
+      ],
+      "backendDOMNodeId": 1568,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Following on from the previous article, sometimes making complex UI controls that involve unsemantic HTML and dynamic JavaScript-updated content can be difficult. WAI-ARIA is a technology that can help with such problems by adding in further semantics that browsers and assistive technologies can recognize and use to let users know what is going on. Here we'll show how to use it at a basic level to improve accessibility."
+      }
+    },
+    {
+      "nodeId": "1569",
+      "childIds": ["-1000000091"],
+      "backendDOMNodeId": 1569,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessible multimedia" }
+    },
+    {
+      "nodeId": "1570",
+      "childIds": ["-1000000092", "-1000000093", "-1000000094"],
+      "backendDOMNodeId": 1570,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Another category of content that can create accessibility problems is multimedia — video, audio, and image content need to be given proper textual alternatives, so they can be understood by assistive technologies and their users. This article shows how."
+      }
+    },
+    {
+      "nodeId": "1571",
+      "childIds": ["-1000000095"],
+      "backendDOMNodeId": 1571,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Mobile accessibility" }
+    },
+    {
+      "nodeId": "1572",
+      "childIds": ["-1000000096", "-1000000097", "-1000000098", "-1000000099"],
+      "backendDOMNodeId": 1572,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "With web access on mobile devices being so popular, and popular platforms such as iOS and Android having fully-fledged accessibility tools, it is important to consider the accessibility of your web content on these platforms. This article looks at mobile-specific accessibility considerations."
+      }
+    },
+    {
+      "nodeId": "-1000000100",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "-1000000102",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "1578",
+      "childIds": ["-1000000106"],
+      "backendDOMNodeId": 1578,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility information for web authors" }
+    },
+    {
+      "nodeId": "1579",
+      "childIds": ["-1000000107", "-1000000108"],
+      "backendDOMNodeId": 1579,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This document lists guidelines and regulations, how-to's, and tools for checking and repairing accessibility problems with websites."
+      }
+    },
+    {
+      "nodeId": "1580",
+      "childIds": ["-1000000109"],
+      "backendDOMNodeId": 1580,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "1581",
+      "childIds": ["-1000000110", "-1000000111", "-1000000112"],
+      "backendDOMNodeId": 1581,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This article discusses making web content accessible for those with vestibular disorders, and those who support them, by taking advantage of personalization and accessibility settings built into the operating systems."
+      }
+    },
+    {
+      "nodeId": "1582",
+      "childIds": ["-1000000113"],
+      "backendDOMNodeId": 1582,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "1583",
+      "childIds": ["-1000000114", "-1000000115", "-1000000116", "-1000000117", "-1000000118"],
+      "backendDOMNodeId": 1583,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Most JavaScript libraries offer a library of client-side widgets that mimic the behavior of familiar desktop interfaces. While this results in a widget that looks like its desktop counterpart, there usually isn't enough semantic information in the markup to be usable by an assistive technology. This document describes techniques to improve accessibility of such widgets."
+      }
+    },
+    {
+      "nodeId": "1584",
+      "childIds": ["-1000000119"],
+      "backendDOMNodeId": 1584,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "1585",
+      "childIds": ["-1000000120"],
+      "backendDOMNodeId": 1585,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Until now, web developers who wanted to make their styled " }
+    },
+    {
+      "nodeId": "703",
+      "childIds": ["1586"],
+      "backendDOMNodeId": 703,
+      "role": { "value": "code" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1587",
+      "childIds": ["-1000000122"],
+      "backendDOMNodeId": 1587,
+      "role": { "value": "StaticText" },
+      "name": { "value": " and " }
+    },
+    {
+      "nodeId": "704",
+      "childIds": ["1588"],
+      "backendDOMNodeId": 704,
+      "role": { "value": "code" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1589",
+      "childIds": ["-1000000124", "-1000000125"],
+      "backendDOMNodeId": 1589,
+      "role": { "value": "StaticText" },
+      "name": { "value": " based widgets accessible have lacked proper techniques. " }
+    },
+    {
+      "nodeId": "705",
+      "childIds": ["1590"],
+      "backendDOMNodeId": 705,
+      "role": { "value": "strong" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "1591",
+      "childIds": ["-1000000127", "-1000000128", "-1000000129", "-1000000130"],
+      "backendDOMNodeId": 1591,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": " is part of the minimum accessibility requirements, which a developer should be aware of. This document describes techniques to make JavaScript widgets accessible with the keyboard."
+      }
+    },
+    {
+      "nodeId": "1592",
+      "childIds": ["-1000000131"],
+      "backendDOMNodeId": 1592,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "1593",
+      "childIds": ["-1000000132", "-1000000133"],
+      "backendDOMNodeId": 1593,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This document provides a concise checklist of accessibility requirements for mobile app developers."
+      }
+    },
+    {
+      "nodeId": "1594",
+      "childIds": ["-1000000134"],
+      "backendDOMNodeId": 1594,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Understanding the Web Content Accessibility Guidelines (WCAG)" }
+    },
+    {
+      "nodeId": "1595",
+      "childIds": ["-1000000135", "-1000000136", "-1000000137"],
+      "backendDOMNodeId": 1595,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "A set of articles that provide quick explanations to help you understand the steps that need to be taken to conform to the recommendations outlined in the Web Content Accessibility Guidelines (WCAG)."
+      }
+    },
+    {
+      "nodeId": "1596",
+      "childIds": ["-1000000138"],
+      "backendDOMNodeId": 1596,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "1597",
+      "childIds": ["-1000000139", "-1000000140", "-1000000141"],
+      "backendDOMNodeId": 1597,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Cognitive accessibility covers accessibility considerations for people with cognition and learning disabilities. This document introduces cognitive accessibility and improving accessibility of the web for people with cognitive and learning differences."
+      }
+    },
+    {
+      "nodeId": "1598",
+      "childIds": ["-1000000142"],
+      "backendDOMNodeId": 1598,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility and spatial patterns" }
+    },
+    {
+      "nodeId": "1599",
+      "childIds": ["-1000000143", "-1000000144"],
+      "backendDOMNodeId": 1599,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This document describes visual patterns that can induce physical symptoms in people who have photosensitive epilepsy, vestibular disorders, or other perceptual issues."
+      }
+    },
+    {
+      "nodeId": "1600",
+      "childIds": ["-1000000145"],
+      "backendDOMNodeId": 1600,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Web Accessibility: Understanding Colors and Luminance" }
+    },
+    {
+      "nodeId": "1601",
+      "childIds": ["-1000000146", "-1000000147", "-1000000148", "-1000000149"],
+      "backendDOMNodeId": 1601,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "While understanding color, luminance, and saturation is important for design and readability for all sighted users, they are essential for those with reduced vision and color-deficient vision and those with specific neurological, cognitive, and other impairments."
+      }
+    },
+    {
+      "nodeId": "1602",
+      "childIds": ["-1000000150"],
+      "backendDOMNodeId": 1602,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Web accessibility for seizures and physical reactions" }
+    },
+    {
+      "nodeId": "1603",
+      "childIds": ["-1000000151", "-1000000152", "-1000000153"],
+      "backendDOMNodeId": 1603,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Some types of visual web content can induce seizures in people with certain brain disorders. This article helps you understand the types of content that can be problematic and find tools and strategies to help you avoid them."
+      }
+    },
+    {
+      "nodeId": "1604",
+      "childIds": ["-1000000154"],
+      "backendDOMNodeId": 1604,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ARIA" }
+    },
+    {
+      "nodeId": "1605",
+      "childIds": ["-1000000155", "-1000000156"],
+      "backendDOMNodeId": 1605,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "This is a collection of articles to learn how to use Accessible Rich Internet Applications (ARIA) to make your HTML documents more accessible."
+      }
+    },
+    {
+      "nodeId": "-1000000157",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "1608",
+      "childIds": ["-1000000158"],
+      "backendDOMNodeId": 1608,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "1609",
+      "childIds": ["-1000000159", "-1000000160"],
+      "backendDOMNodeId": 1609,
+      "role": { "value": "StaticText" },
+      "name": {
+        "value": "Reference documentation for Accessible Rich Internet Applications (ARIA) attributes and roles."
+      }
+    },
+    {
+      "nodeId": "-1000000161",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "See also" }
+    },
+    { "nodeId": "-1000000162", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "1613",
+      "childIds": ["-1000000163"],
+      "backendDOMNodeId": 1613,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Developer guides" }
+    },
+    { "nodeId": "-1000000164", "ignored": true, "role": { "value": "none" } },
+    {
+      "nodeId": "1615",
+      "childIds": ["-1000000165"],
+      "backendDOMNodeId": 1615,
+      "role": { "value": "StaticText" },
+      "name": { "value": "WAI Interest Group" }
+    },
+    {
+      "nodeId": "1616",
+      "backendDOMNodeId": 1616,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "-1000000167",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Was this page helpful to you?" }
+    },
+    {
+      "nodeId": "781",
+      "childIds": ["782", "785"],
+      "backendDOMNodeId": 781,
+      "role": { "value": "button" },
+      "name": { "value": "Yes" }
+    },
+    {
+      "nodeId": "789",
+      "childIds": ["790", "793"],
+      "backendDOMNodeId": 789,
+      "role": { "value": "button" },
+      "name": { "value": "No" }
+    },
+    {
+      "nodeId": "-1000000172",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Oct 2, 2025" }
+    },
+    {
+      "nodeId": "-1000000174",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MDN contributors" }
+    },
+    {
+      "nodeId": "-1000000176",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "View this page on GitHub" }
+    },
+    {
+      "nodeId": "-1000000178",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Report a problem with this content" }
+    },
+    {
+      "nodeId": "-1000000179",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Filter sidebar" }
+    },
+    {
+      "nodeId": "824",
+      "childIds": ["1634"],
+      "backendDOMNodeId": 824,
+      "role": { "value": "link" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "1635",
+      "childIds": ["-1000000181"],
+      "backendDOMNodeId": 1635,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "1636",
+      "childIds": ["-1000000182", "-1000000183"],
+      "backendDOMNodeId": 1636,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Information for web authors" }
+    },
+    {
+      "nodeId": "1637",
+      "childIds": ["-1000000184", "-1000000185"],
+      "backendDOMNodeId": 1637,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "1638",
+      "childIds": ["-1000000186", "-1000000187"],
+      "backendDOMNodeId": 1638,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "1639",
+      "childIds": ["-1000000188", "-1000000189"],
+      "backendDOMNodeId": 1639,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "1640",
+      "childIds": ["-1000000190", "-1000000191"],
+      "backendDOMNodeId": 1640,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "1641",
+      "childIds": ["-1000000192"],
+      "backendDOMNodeId": 1641,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "1642",
+      "childIds": ["-1000000193"],
+      "backendDOMNodeId": 1642,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Spatial patterns" }
+    },
+    {
+      "nodeId": "1643",
+      "childIds": ["-1000000194"],
+      "backendDOMNodeId": 1643,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Colors and Luminance" }
+    },
+    {
+      "nodeId": "1644",
+      "childIds": ["-1000000195", "-1000000196"],
+      "backendDOMNodeId": 1644,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Preventing seizures and physical reactions" }
+    },
+    {
+      "nodeId": "846",
+      "ignored": true,
+      "childIds": ["850"],
+      "backendDOMNodeId": 846,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "850",
+      "childIds": ["1"],
+      "backendDOMNodeId": 850,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "Understanding WCAG" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "848", "ignored": true, "backendDOMNodeId": 848, "role": { "value": "none" } },
+    {
+      "nodeId": "1646",
+      "childIds": ["-1000000198"],
+      "backendDOMNodeId": 1646,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ARIA" }
+    },
+    {
+      "nodeId": "868",
+      "ignored": true,
+      "childIds": ["872"],
+      "backendDOMNodeId": 868,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "872",
+      "childIds": ["2"],
+      "backendDOMNodeId": 872,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "ARIA guides" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "870", "ignored": true, "backendDOMNodeId": 870, "role": { "value": "none" } },
+    {
+      "nodeId": "1648",
+      "childIds": ["-1000000200"],
+      "backendDOMNodeId": 1648,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "886",
+      "ignored": true,
+      "childIds": ["890"],
+      "backendDOMNodeId": 886,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "890",
+      "childIds": ["3"],
+      "backendDOMNodeId": 890,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "Attributes" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "888", "ignored": true, "backendDOMNodeId": 888, "role": { "value": "none" } },
+    {
+      "nodeId": "1055",
+      "ignored": true,
+      "childIds": ["1059"],
+      "backendDOMNodeId": 1055,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1059",
+      "childIds": ["4"],
+      "backendDOMNodeId": 1059,
+      "role": { "value": "DisclosureTriangle" },
+      "name": { "value": "Roles" },
+      "properties": [{ "name": "expanded", "value": { "value": false } }]
+    },
+    { "nodeId": "1057", "ignored": true, "backendDOMNodeId": 1057, "role": { "value": "none" } },
+    {
+      "nodeId": "1355",
+      "childIds": ["1660"],
+      "backendDOMNodeId": 1355,
+      "role": { "value": "link" },
+      "name": { "value": "About" }
+    },
+    {
+      "nodeId": "1357",
+      "childIds": ["1661"],
+      "backendDOMNodeId": 1357,
+      "role": { "value": "link" },
+      "name": { "value": "Blog" }
+    },
+    {
+      "nodeId": "1359",
+      "childIds": ["1662", "1663"],
+      "backendDOMNodeId": 1359,
+      "role": { "value": "link" },
+      "name": { "value": "Mozilla careers (external)" }
+    },
+    {
+      "nodeId": "1361",
+      "childIds": ["1664"],
+      "backendDOMNodeId": 1361,
+      "role": { "value": "link" },
+      "name": { "value": "Advertise with us" }
+    },
+    {
+      "nodeId": "1363",
+      "childIds": ["1665"],
+      "backendDOMNodeId": 1363,
+      "role": { "value": "link" },
+      "name": { "value": "MDN Plus" }
+    },
+    {
+      "nodeId": "1365",
+      "childIds": ["1666", "1667"],
+      "backendDOMNodeId": 1365,
+      "role": { "value": "link" },
+      "name": { "value": "Product help (external)" }
+    },
+    {
+      "nodeId": "1371",
+      "childIds": ["1669"],
+      "backendDOMNodeId": 1371,
+      "role": { "value": "link" },
+      "name": { "value": "MDN Community" }
+    },
+    {
+      "nodeId": "1373",
+      "childIds": ["1670"],
+      "backendDOMNodeId": 1373,
+      "role": { "value": "link" },
+      "name": { "value": "Community resources" }
+    },
+    {
+      "nodeId": "1375",
+      "childIds": ["1671"],
+      "backendDOMNodeId": 1375,
+      "role": { "value": "link" },
+      "name": { "value": "Writing guidelines" }
+    },
+    {
+      "nodeId": "1377",
+      "childIds": ["1672", "1673"],
+      "backendDOMNodeId": 1377,
+      "role": { "value": "link" },
+      "name": { "value": "MDN Discord (external)" }
+    },
+    {
+      "nodeId": "1379",
+      "childIds": ["1674", "1675"],
+      "backendDOMNodeId": 1379,
+      "role": { "value": "link" },
+      "name": { "value": "MDN on GitHub (external)" }
+    },
+    {
+      "nodeId": "1385",
+      "childIds": ["1677"],
+      "backendDOMNodeId": 1385,
+      "role": { "value": "link" },
+      "name": { "value": "Web technologies" }
+    },
+    {
+      "nodeId": "1387",
+      "childIds": ["1678"],
+      "backendDOMNodeId": 1387,
+      "role": { "value": "link" },
+      "name": { "value": "Learn web development" }
+    },
+    {
+      "nodeId": "1389",
+      "childIds": ["1679"],
+      "backendDOMNodeId": 1389,
+      "role": { "value": "link" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "1391",
+      "childIds": ["1680"],
+      "backendDOMNodeId": 1391,
+      "role": { "value": "link" },
+      "name": { "value": "Tutorials" }
+    },
+    {
+      "nodeId": "1393",
+      "childIds": ["1681"],
+      "backendDOMNodeId": 1393,
+      "role": { "value": "link" },
+      "name": { "value": "Glossary" }
+    },
+    {
+      "nodeId": "1395",
+      "childIds": ["1682", "1683"],
+      "backendDOMNodeId": 1395,
+      "role": { "value": "link" },
+      "name": { "value": "Hacks blog (external)" }
+    },
+    {
+      "nodeId": "-1000000225",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Website Privacy Notice" }
+    },
+    {
+      "nodeId": "-1000000226",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Telemetry Settings" }
+    },
+    { "nodeId": "-1000000227", "role": { "value": "InlineTextBox" }, "name": { "value": "Legal" } },
+    {
+      "nodeId": "-1000000228",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Community Participation Guidelines" }
+    },
+    {
+      "nodeId": "191",
+      "ignored": true,
+      "childIds": ["11"],
+      "backendDOMNodeId": 191,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "11",
+      "childIds": ["-1000000008"],
+      "backendDOMNodeId": 11,
+      "role": { "value": "StaticText" },
+      "name": { "value": "HTML" }
+    },
+    {
+      "nodeId": "235",
+      "ignored": true,
+      "childIds": ["14"],
+      "backendDOMNodeId": 235,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "14",
+      "childIds": ["-1000000009"],
+      "backendDOMNodeId": 14,
+      "role": { "value": "StaticText" },
+      "name": { "value": "CSS" }
+    },
+    {
+      "nodeId": "285",
+      "ignored": true,
+      "childIds": ["17"],
+      "backendDOMNodeId": 285,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "17",
+      "childIds": ["-1000000010"],
+      "backendDOMNodeId": 17,
+      "role": { "value": "StaticText" },
+      "name": { "value": "JavaScript" }
+    },
+    {
+      "nodeId": "324",
+      "ignored": true,
+      "childIds": ["20"],
+      "backendDOMNodeId": 324,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "20",
+      "childIds": ["-1000000011"],
+      "backendDOMNodeId": 20,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Web APIs" }
+    },
+    {
+      "nodeId": "367",
+      "ignored": true,
+      "childIds": ["1481"],
+      "backendDOMNodeId": 367,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1481",
+      "childIds": ["-1000000012"],
+      "backendDOMNodeId": 1481,
+      "role": { "value": "StaticText" },
+      "name": { "value": "All" }
+    },
+    {
+      "nodeId": "410",
+      "ignored": true,
+      "childIds": ["1497"],
+      "backendDOMNodeId": 410,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1497",
+      "childIds": ["-1000000013"],
+      "backendDOMNodeId": 1497,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Learn" }
+    },
+    {
+      "nodeId": "452",
+      "ignored": true,
+      "childIds": ["24"],
+      "backendDOMNodeId": 452,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "24",
+      "childIds": ["-1000000014"],
+      "backendDOMNodeId": 24,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Tools" }
+    },
+    {
+      "nodeId": "479",
+      "ignored": true,
+      "childIds": ["27"],
+      "backendDOMNodeId": 479,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "27",
+      "childIds": ["-1000000015"],
+      "backendDOMNodeId": 27,
+      "role": { "value": "StaticText" },
+      "name": { "value": "About" }
+    },
+    {
+      "nodeId": "30",
+      "childIds": ["-1000000016"],
+      "backendDOMNodeId": 30,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Blog" }
+    },
+    {
+      "nodeId": "504",
+      "ignored": true,
+      "childIds": ["505"],
+      "backendDOMNodeId": 504,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "505",
+      "backendDOMNodeId": 505,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "507",
+      "ignored": true,
+      "childIds": ["508"],
+      "backendDOMNodeId": 507,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "508",
+      "ignored": true,
+      "childIds": ["1525"],
+      "backendDOMNodeId": 508,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1525",
+      "childIds": ["-1000000017", "-1000000018", "-1000000019", "-1000000020", "-1000000021"],
+      "backendDOMNodeId": 1525,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Log in" }
+    },
+    {
+      "nodeId": "-1000000037",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "The Web is fundamentally designed to work for all people" }
+    },
+    {
+      "nodeId": "-1000000044",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "W3C - Accessibility" }
+    },
+    {
+      "nodeId": "1550",
+      "childIds": ["-1000000047"],
+      "backendDOMNodeId": 1550,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "1551",
+      "childIds": ["-1000000048"],
+      "backendDOMNodeId": 1551,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "1552",
+      "childIds": ["-1000000049"],
+      "backendDOMNodeId": 1552,
+      "role": { "value": "StaticText" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "1553",
+      "childIds": ["-1000000050"],
+      "backendDOMNodeId": 1553,
+      "role": { "value": "StaticText" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "642",
+      "childIds": ["1554"],
+      "backendDOMNodeId": 642,
+      "role": { "value": "strong" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "643",
+      "ignored": true,
+      "childIds": ["1555"],
+      "backendDOMNodeId": 643,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1555",
+      "childIds": ["-1000000053", "-1000000054", "-1000000055"],
+      "backendDOMNodeId": 1555,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Try Cloud Run for free, deploy your app in seconds." }
+    },
+    {
+      "nodeId": "644",
+      "ignored": true,
+      "childIds": ["1556", "1557"],
+      "backendDOMNodeId": 644,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1556",
+      "childIds": ["-1000000056"],
+      "backendDOMNodeId": 1556,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Start Free" }
+    },
+    {
+      "nodeId": "1557",
+      "ignored": true,
+      "childIds": ["-1000000057"],
+      "backendDOMNodeId": 1557,
+      "role": { "value": "none" }
+    },
+    { "nodeId": "-1000000057", "role": { "value": "generic" }, "name": { "value": "" } },
+    {
+      "nodeId": "1558",
+      "childIds": ["-1000000058"],
+      "backendDOMNodeId": 1558,
+      "role": { "value": "StaticText" },
+      "name": { "value": "AD" }
+    },
+    {
+      "nodeId": "-1000000059",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Don't want to see ads?" }
+    },
+    {
+      "nodeId": "-1000000065",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "What is accessibility?" }
+    },
+    {
+      "nodeId": "-1000000066",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This article starts off the module with a good look at what accessibility is — this includes "
+      }
+    },
+    {
+      "nodeId": "-1000000067",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "what groups of people we need to consider and why, what tools different people use to "
+      }
+    },
+    {
+      "nodeId": "-1000000068",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "interact with the web, and how we can make accessibility part of our web development "
+      }
+    },
+    {
+      "nodeId": "-1000000069",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "workflow." }
+    },
+    {
+      "nodeId": "-1000000070",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility tooling and assistive technology" }
+    },
+    {
+      "nodeId": "-1000000071",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Next we turn our attention to accessibility tooling, providing information on the kinds of "
+      }
+    },
+    {
+      "nodeId": "-1000000072",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "tools you can use to help solve accessibility issues, and the assistive technologies used "
+      }
+    },
+    {
+      "nodeId": "-1000000073",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "by people with disabilities as they browse the web. You'll be using these tools throughout "
+      }
+    },
+    {
+      "nodeId": "-1000000074",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "subsequent articles." }
+    },
+    {
+      "nodeId": "-1000000075",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "HTML: A good basis for accessibility" }
+    },
+    {
+      "nodeId": "-1000000076",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "A great deal of web content can be made accessible just by making sure the correct "
+      }
+    },
+    {
+      "nodeId": "-1000000077",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "HTML elements are always used for the correct purpose. This article looks in detail at "
+      }
+    },
+    {
+      "nodeId": "-1000000078",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "how HTML can be used to ensure maximum accessibility." }
+    },
+    {
+      "nodeId": "-1000000079",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "CSS and JavaScript accessibility best practices" }
+    },
+    {
+      "nodeId": "-1000000080",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "CSS and JavaScript, when used properly, also have the potential to allow for accessible "
+      }
+    },
+    {
+      "nodeId": "-1000000081",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "web experiences, but if misused they can significantly harm accessibility. This article "
+      }
+    },
+    {
+      "nodeId": "-1000000082",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "outlines some CSS and JavaScript best practices that should be considered to ensure "
+      }
+    },
+    {
+      "nodeId": "-1000000083",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "that even complex content is as accessible as possible." }
+    },
+    {
+      "nodeId": "-1000000084",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "WAI-ARIA basics" }
+    },
+    {
+      "nodeId": "-1000000085",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Following on from the previous article, sometimes making complex UI controls that "
+      }
+    },
+    {
+      "nodeId": "-1000000086",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "involve unsemantic HTML and dynamic JavaScript-updated content can be difficult. "
+      }
+    },
+    {
+      "nodeId": "-1000000087",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "WAI-ARIA is a technology that can help with such problems by adding in further "
+      }
+    },
+    {
+      "nodeId": "-1000000088",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "semantics that browsers and assistive technologies can recognize and use to let users "
+      }
+    },
+    {
+      "nodeId": "-1000000089",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "know what is going on. Here we'll show how to use it at a basic level to improve "
+      }
+    },
+    {
+      "nodeId": "-1000000090",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "accessibility." }
+    },
+    {
+      "nodeId": "-1000000091",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessible multimedia" }
+    },
+    {
+      "nodeId": "-1000000092",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Another category of content that can create accessibility problems is multimedia — "
+      }
+    },
+    {
+      "nodeId": "-1000000093",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "video, audio, and image content need to be given proper textual alternatives, so they can "
+      }
+    },
+    {
+      "nodeId": "-1000000094",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "be understood by assistive technologies and their users. This article shows how."
+      }
+    },
+    {
+      "nodeId": "-1000000095",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Mobile accessibility" }
+    },
+    {
+      "nodeId": "-1000000096",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "With web access on mobile devices being so popular, and popular platforms such as iOS "
+      }
+    },
+    {
+      "nodeId": "-1000000097",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "and Android having fully-fledged accessibility tools, it is important to consider the "
+      }
+    },
+    {
+      "nodeId": "-1000000098",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "accessibility of your web content on these platforms. This article looks at mobile-specific "
+      }
+    },
+    {
+      "nodeId": "-1000000099",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "accessibility considerations." }
+    },
+    {
+      "nodeId": "-1000000106",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility information for web authors" }
+    },
+    {
+      "nodeId": "-1000000107",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This document lists guidelines and regulations, how-to's, and tools for checking and "
+      }
+    },
+    {
+      "nodeId": "-1000000108",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "repairing accessibility problems with websites." }
+    },
+    {
+      "nodeId": "-1000000109",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Personalization to help browse safely" }
+    },
+    {
+      "nodeId": "-1000000110",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This article discusses making web content accessible for those with vestibular disorders, "
+      }
+    },
+    {
+      "nodeId": "-1000000111",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "and those who support them, by taking advantage of personalization and accessibility "
+      }
+    },
+    {
+      "nodeId": "-1000000112",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "settings built into the operating systems." }
+    },
+    {
+      "nodeId": "-1000000113",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessible web applications and widgets" }
+    },
+    {
+      "nodeId": "-1000000114",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Most JavaScript libraries offer a library of client-side widgets that mimic the behavior of "
+      }
+    },
+    {
+      "nodeId": "-1000000115",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "familiar desktop interfaces. While this results in a widget that looks like its desktop "
+      }
+    },
+    {
+      "nodeId": "-1000000116",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "counterpart, there usually isn't enough semantic information in the markup to be usable "
+      }
+    },
+    {
+      "nodeId": "-1000000117",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "by an assistive technology. This document describes techniques to improve accessibility "
+      }
+    },
+    {
+      "nodeId": "-1000000118",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "of such widgets." }
+    },
+    {
+      "nodeId": "-1000000119",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Keyboard-navigable JavaScript widgets" }
+    },
+    {
+      "nodeId": "-1000000120",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Until now, web developers who wanted to make their styled " }
+    },
+    {
+      "nodeId": "1586",
+      "childIds": ["-1000000121"],
+      "backendDOMNodeId": 1586,
+      "role": { "value": "StaticText" },
+      "name": { "value": "<div>" }
+    },
+    { "nodeId": "-1000000122", "role": { "value": "InlineTextBox" }, "name": { "value": " and " } },
+    {
+      "nodeId": "1588",
+      "childIds": ["-1000000123"],
+      "backendDOMNodeId": 1588,
+      "role": { "value": "StaticText" },
+      "name": { "value": "<span>" }
+    },
+    {
+      "nodeId": "-1000000124",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " based " }
+    },
+    {
+      "nodeId": "-1000000125",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "widgets accessible have lacked proper techniques. " }
+    },
+    {
+      "nodeId": "1590",
+      "childIds": ["-1000000126"],
+      "backendDOMNodeId": 1590,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Keyboard accessibility" }
+    },
+    {
+      "nodeId": "-1000000127",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": " is part of the " }
+    },
+    {
+      "nodeId": "-1000000128",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "minimum accessibility requirements, which a developer should be aware of. This "
+      }
+    },
+    {
+      "nodeId": "-1000000129",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "document describes techniques to make JavaScript widgets accessible with the "
+      }
+    },
+    {
+      "nodeId": "-1000000130",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "keyboard." }
+    },
+    {
+      "nodeId": "-1000000131",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Mobile accessibility checklist" }
+    },
+    {
+      "nodeId": "-1000000132",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This document provides a concise checklist of accessibility requirements for mobile app "
+      }
+    },
+    {
+      "nodeId": "-1000000133",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "developers." }
+    },
+    {
+      "nodeId": "-1000000134",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Understanding the Web Content Accessibility Guidelines (WCAG)" }
+    },
+    {
+      "nodeId": "-1000000135",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "A set of articles that provide quick explanations to help you understand the steps that "
+      }
+    },
+    {
+      "nodeId": "-1000000136",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "need to be taken to conform to the recommendations outlined in the Web Content "
+      }
+    },
+    {
+      "nodeId": "-1000000137",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility Guidelines (WCAG)." }
+    },
+    {
+      "nodeId": "-1000000138",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "-1000000139",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Cognitive accessibility covers accessibility considerations for people with cognition and "
+      }
+    },
+    {
+      "nodeId": "-1000000140",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "learning disabilities. This document introduces cognitive accessibility and improving "
+      }
+    },
+    {
+      "nodeId": "-1000000141",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "accessibility of the web for people with cognitive and learning differences."
+      }
+    },
+    {
+      "nodeId": "-1000000142",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility and spatial patterns" }
+    },
+    {
+      "nodeId": "-1000000143",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This document describes visual patterns that can induce physical symptoms in people "
+      }
+    },
+    {
+      "nodeId": "-1000000144",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "who have photosensitive epilepsy, vestibular disorders, or other perceptual issues."
+      }
+    },
+    {
+      "nodeId": "-1000000145",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Web Accessibility: Understanding Colors and Luminance" }
+    },
+    {
+      "nodeId": "-1000000146",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "While understanding color, luminance, and saturation is important for design and "
+      }
+    },
+    {
+      "nodeId": "-1000000147",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "readability for all sighted users, they are essential for those with reduced vision and "
+      }
+    },
+    {
+      "nodeId": "-1000000148",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "color-deficient vision and those with specific neurological, cognitive, and other "
+      }
+    },
+    {
+      "nodeId": "-1000000149",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "impairments." }
+    },
+    {
+      "nodeId": "-1000000150",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Web accessibility for seizures and physical reactions" }
+    },
+    {
+      "nodeId": "-1000000151",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Some types of visual web content can induce seizures in people with certain brain "
+      }
+    },
+    {
+      "nodeId": "-1000000152",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "disorders. This article helps you understand the types of content that can be problematic "
+      }
+    },
+    {
+      "nodeId": "-1000000153",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "and find tools and strategies to help you avoid them." }
+    },
+    { "nodeId": "-1000000154", "role": { "value": "InlineTextBox" }, "name": { "value": "ARIA" } },
+    {
+      "nodeId": "-1000000155",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "This is a collection of articles to learn how to use Accessible Rich Internet Applications "
+      }
+    },
+    {
+      "nodeId": "-1000000156",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "(ARIA) to make your HTML documents more accessible." }
+    },
+    {
+      "nodeId": "-1000000158",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "-1000000159",
+      "role": { "value": "InlineTextBox" },
+      "name": {
+        "value": "Reference documentation for Accessible Rich Internet Applications (ARIA) attributes and "
+      }
+    },
+    {
+      "nodeId": "-1000000160",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "roles." }
+    },
+    {
+      "nodeId": "-1000000163",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Developer guides" }
+    },
+    {
+      "nodeId": "-1000000165",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "WAI Interest Group" }
+    },
+    {
+      "nodeId": "782",
+      "ignored": true,
+      "childIds": ["783"],
+      "backendDOMNodeId": 782,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "783",
+      "backendDOMNodeId": 783,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "785",
+      "ignored": true,
+      "childIds": ["786"],
+      "backendDOMNodeId": 785,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "786",
+      "ignored": true,
+      "childIds": ["1619"],
+      "backendDOMNodeId": 786,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1619",
+      "childIds": ["-1000000168"],
+      "backendDOMNodeId": 1619,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Yes" }
+    },
+    {
+      "nodeId": "790",
+      "ignored": true,
+      "childIds": ["791"],
+      "backendDOMNodeId": 790,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "791",
+      "backendDOMNodeId": 791,
+      "role": { "value": "image" },
+      "name": { "value": "" }
+    },
+    {
+      "nodeId": "793",
+      "ignored": true,
+      "childIds": ["794"],
+      "backendDOMNodeId": 793,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "794",
+      "ignored": true,
+      "childIds": ["1620"],
+      "backendDOMNodeId": 794,
+      "role": { "value": "none" }
+    },
+    {
+      "nodeId": "1620",
+      "childIds": ["-1000000169"],
+      "backendDOMNodeId": 1620,
+      "role": { "value": "StaticText" },
+      "name": { "value": "No" }
+    },
+    {
+      "nodeId": "1634",
+      "childIds": ["-1000000180"],
+      "backendDOMNodeId": 1634,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "-1000000181",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "-1000000182",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Information for web " }
+    },
+    {
+      "nodeId": "-1000000183",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "authors" }
+    },
+    {
+      "nodeId": "-1000000184",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Personalization to help " }
+    },
+    {
+      "nodeId": "-1000000185",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "browse safely" }
+    },
+    {
+      "nodeId": "-1000000186",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessible web " }
+    },
+    {
+      "nodeId": "-1000000187",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "applications and widgets" }
+    },
+    {
+      "nodeId": "-1000000188",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Keyboard-navigable " }
+    },
+    {
+      "nodeId": "-1000000189",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "JavaScript widgets" }
+    },
+    {
+      "nodeId": "-1000000190",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Mobile accessibility " }
+    },
+    {
+      "nodeId": "-1000000191",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "checklist" }
+    },
+    {
+      "nodeId": "-1000000192",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Cognitive accessibility" }
+    },
+    {
+      "nodeId": "-1000000193",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Spatial patterns" }
+    },
+    {
+      "nodeId": "-1000000194",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Colors and Luminance" }
+    },
+    {
+      "nodeId": "-1000000195",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Preventing seizures and " }
+    },
+    {
+      "nodeId": "-1000000196",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "physical reactions" }
+    },
+    {
+      "nodeId": "1",
+      "childIds": ["1645"],
+      "backendDOMNodeId": 1,
+      "role": { "value": "link" },
+      "name": { "value": "Understanding WCAG" }
+    },
+    { "nodeId": "-1000000198", "role": { "value": "InlineTextBox" }, "name": { "value": "ARIA" } },
+    {
+      "nodeId": "2",
+      "childIds": ["1647"],
+      "backendDOMNodeId": 2,
+      "role": { "value": "link" },
+      "name": { "value": "ARIA guides" }
+    },
+    {
+      "nodeId": "-1000000200",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "ARIA reference" }
+    },
+    {
+      "nodeId": "3",
+      "childIds": ["1649"],
+      "backendDOMNodeId": 3,
+      "role": { "value": "link" },
+      "name": { "value": "Attributes" }
+    },
+    {
+      "nodeId": "4",
+      "childIds": ["1650"],
+      "backendDOMNodeId": 4,
+      "role": { "value": "link" },
+      "name": { "value": "Roles" }
+    },
+    {
+      "nodeId": "1660",
+      "childIds": ["-1000000206"],
+      "backendDOMNodeId": 1660,
+      "role": { "value": "StaticText" },
+      "name": { "value": "About" }
+    },
+    {
+      "nodeId": "1661",
+      "childIds": ["-1000000207"],
+      "backendDOMNodeId": 1661,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Blog" }
+    },
+    {
+      "nodeId": "1662",
+      "childIds": ["-1000000208"],
+      "backendDOMNodeId": 1662,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Mozilla careers" }
+    },
+    {
+      "nodeId": "1663",
+      "backendDOMNodeId": 1663,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1664",
+      "childIds": ["-1000000209"],
+      "backendDOMNodeId": 1664,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Advertise with us" }
+    },
+    {
+      "nodeId": "1665",
+      "childIds": ["-1000000210"],
+      "backendDOMNodeId": 1665,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN Plus" }
+    },
+    {
+      "nodeId": "1666",
+      "childIds": ["-1000000211"],
+      "backendDOMNodeId": 1666,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Product help" }
+    },
+    {
+      "nodeId": "1667",
+      "backendDOMNodeId": 1667,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1669",
+      "childIds": ["-1000000213"],
+      "backendDOMNodeId": 1669,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN Community" }
+    },
+    {
+      "nodeId": "1670",
+      "childIds": ["-1000000214"],
+      "backendDOMNodeId": 1670,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Community resources" }
+    },
+    {
+      "nodeId": "1671",
+      "childIds": ["-1000000215"],
+      "backendDOMNodeId": 1671,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Writing guidelines" }
+    },
+    {
+      "nodeId": "1672",
+      "childIds": ["-1000000216"],
+      "backendDOMNodeId": 1672,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN Discord" }
+    },
+    {
+      "nodeId": "1673",
+      "backendDOMNodeId": 1673,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1674",
+      "childIds": ["-1000000217"],
+      "backendDOMNodeId": 1674,
+      "role": { "value": "StaticText" },
+      "name": { "value": "MDN on GitHub" }
+    },
+    {
+      "nodeId": "1675",
+      "backendDOMNodeId": 1675,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    {
+      "nodeId": "1677",
+      "childIds": ["-1000000219"],
+      "backendDOMNodeId": 1677,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Web technologies" }
+    },
+    {
+      "nodeId": "1678",
+      "childIds": ["-1000000220"],
+      "backendDOMNodeId": 1678,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Learn web development" }
+    },
+    {
+      "nodeId": "1679",
+      "childIds": ["-1000000221"],
+      "backendDOMNodeId": 1679,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "1680",
+      "childIds": ["-1000000222"],
+      "backendDOMNodeId": 1680,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Tutorials" }
+    },
+    {
+      "nodeId": "1681",
+      "childIds": ["-1000000223"],
+      "backendDOMNodeId": 1681,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Glossary" }
+    },
+    {
+      "nodeId": "1682",
+      "childIds": ["-1000000224"],
+      "backendDOMNodeId": 1682,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Hacks blog" }
+    },
+    {
+      "nodeId": "1683",
+      "backendDOMNodeId": 1683,
+      "role": { "value": "StaticText" },
+      "name": { "value": " (external)" }
+    },
+    { "nodeId": "-1000000008", "role": { "value": "InlineTextBox" }, "name": { "value": "HTML" } },
+    { "nodeId": "-1000000009", "role": { "value": "InlineTextBox" }, "name": { "value": "CSS" } },
+    {
+      "nodeId": "-1000000010",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "JavaScript" }
+    },
+    {
+      "nodeId": "-1000000011",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Web APIs" }
+    },
+    { "nodeId": "-1000000012", "role": { "value": "InlineTextBox" }, "name": { "value": "All" } },
+    { "nodeId": "-1000000013", "role": { "value": "InlineTextBox" }, "name": { "value": "Learn" } },
+    { "nodeId": "-1000000014", "role": { "value": "InlineTextBox" }, "name": { "value": "Tools" } },
+    { "nodeId": "-1000000015", "role": { "value": "InlineTextBox" }, "name": { "value": "About" } },
+    { "nodeId": "-1000000016", "role": { "value": "InlineTextBox" }, "name": { "value": "Blog" } },
+    { "nodeId": "-1000000017", "role": { "value": "InlineTextBox" }, "name": { "value": "L" } },
+    { "nodeId": "-1000000018", "role": { "value": "InlineTextBox" }, "name": { "value": "o" } },
+    { "nodeId": "-1000000019", "role": { "value": "InlineTextBox" }, "name": { "value": "g " } },
+    { "nodeId": "-1000000020", "role": { "value": "InlineTextBox" }, "name": { "value": "i" } },
+    { "nodeId": "-1000000021", "role": { "value": "InlineTextBox" }, "name": { "value": "n" } },
+    {
+      "nodeId": "-1000000047",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Beginner's tutorials" }
+    },
+    {
+      "nodeId": "-1000000048",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility guides" }
+    },
+    {
+      "nodeId": "-1000000049",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "References" }
+    },
+    {
+      "nodeId": "-1000000050",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "See also" }
+    },
+    {
+      "nodeId": "1554",
+      "childIds": ["-1000000051", "-1000000052"],
+      "backendDOMNodeId": 1554,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Run Websites Without Overhead" }
+    },
+    {
+      "nodeId": "-1000000053",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Try Cloud Run for free, " }
+    },
+    {
+      "nodeId": "-1000000054",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "deploy your app in " }
+    },
+    {
+      "nodeId": "-1000000055",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "seconds." }
+    },
+    {
+      "nodeId": "-1000000056",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Start Free" }
+    },
+    { "nodeId": "-1000000058", "role": { "value": "InlineTextBox" }, "name": { "value": "AD" } },
+    { "nodeId": "-1000000121", "role": { "value": "InlineTextBox" }, "name": { "value": "<div>" } },
+    {
+      "nodeId": "-1000000123",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "<span>" }
+    },
+    {
+      "nodeId": "-1000000126",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Keyboard accessibility" }
+    },
+    { "nodeId": "-1000000168", "role": { "value": "InlineTextBox" }, "name": { "value": "Yes" } },
+    { "nodeId": "-1000000169", "role": { "value": "InlineTextBox" }, "name": { "value": "No" } },
+    {
+      "nodeId": "-1000000180",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Accessibility" }
+    },
+    {
+      "nodeId": "1645",
+      "childIds": ["-1000000197"],
+      "backendDOMNodeId": 1645,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Understanding WCAG" }
+    },
+    {
+      "nodeId": "1647",
+      "childIds": ["-1000000199"],
+      "backendDOMNodeId": 1647,
+      "role": { "value": "StaticText" },
+      "name": { "value": "ARIA guides" }
+    },
+    {
+      "nodeId": "1649",
+      "childIds": ["-1000000201"],
+      "backendDOMNodeId": 1649,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Attributes" }
+    },
+    {
+      "nodeId": "1650",
+      "childIds": ["-1000000202"],
+      "backendDOMNodeId": 1650,
+      "role": { "value": "StaticText" },
+      "name": { "value": "Roles" }
+    },
+    { "nodeId": "-1000000206", "role": { "value": "InlineTextBox" }, "name": { "value": "About" } },
+    { "nodeId": "-1000000207", "role": { "value": "InlineTextBox" }, "name": { "value": "Blog" } },
+    {
+      "nodeId": "-1000000208",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Mozilla careers" }
+    },
+    {
+      "nodeId": "-1000000209",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Advertise with us" }
+    },
+    {
+      "nodeId": "-1000000210",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MDN Plus" }
+    },
+    {
+      "nodeId": "-1000000211",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Product help" }
+    },
+    {
+      "nodeId": "-1000000213",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MDN Community" }
+    },
+    {
+      "nodeId": "-1000000214",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Community resources" }
+    },
+    {
+      "nodeId": "-1000000215",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Writing guidelines" }
+    },
+    {
+      "nodeId": "-1000000216",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MDN Discord" }
+    },
+    {
+      "nodeId": "-1000000217",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "MDN on GitHub" }
+    },
+    {
+      "nodeId": "-1000000219",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Web technologies" }
+    },
+    {
+      "nodeId": "-1000000220",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Learn web development" }
+    },
+    {
+      "nodeId": "-1000000221",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Guides" }
+    },
+    {
+      "nodeId": "-1000000222",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Tutorials" }
+    },
+    {
+      "nodeId": "-1000000223",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Glossary" }
+    },
+    {
+      "nodeId": "-1000000224",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Hacks blog" }
+    },
+    {
+      "nodeId": "-1000000051",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Run Websites " }
+    },
+    {
+      "nodeId": "-1000000052",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Without Overhead" }
+    },
+    {
+      "nodeId": "-1000000197",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Understanding WCAG" }
+    },
+    {
+      "nodeId": "-1000000199",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "ARIA guides" }
+    },
+    {
+      "nodeId": "-1000000201",
+      "role": { "value": "InlineTextBox" },
+      "name": { "value": "Attributes" }
+    },
+    { "nodeId": "-1000000202", "role": { "value": "InlineTextBox" }, "name": { "value": "Roles" } }
+  ]
+}

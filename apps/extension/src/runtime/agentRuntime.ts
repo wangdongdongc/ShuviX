@@ -40,6 +40,7 @@ import { capsFor } from './resolveSessionModel'
 import { titlerFor } from './titleRuntime'
 import { extensionAgentFactory, renderNotebookSystemPrompt } from './agentHost'
 import { clearSessionTools, extensionSubAgentRegistry, subAgentManager } from './subAgent'
+import { eventBus } from './eventBus'
 
 /**
  * 会话运行时生命周期由共享 SessionManager 托管（Map + 懒创建 + 失效/销毁）。
@@ -47,12 +48,21 @@ import { clearSessionTools, extensionSubAgentRegistry, subAgentManager } from '.
  */
 const manager = new SessionManager<CreatedAgent>({
   create: (sessionId) => buildRuntimeSession(sessionId),
-  dispose: (sessionId, created) => {
-    // 运行时被弃用 —— 先从运行时注册中心注销，避免留下指向死 harness 的条目
+  dispose: async (sessionId, created) => {
+    // 先把当前 run 停下并**等它停住**：解绑必须发生在关停之后，否则旧 run 还会继续
+    // 往同一棵会话树上写，和新运行时交叉（见 SessionManager 顶部注释）
+    try {
+      await created.runtime.abort()
+    } catch {
+      /* 中止失败不影响后续清理：abort 返回时它已经不在跑了 */
+    }
+    // 运行时被弃用 —— 从运行时注册中心注销，避免留下指向死 harness 的条目
     created.dispose()
     subAgentManager.destroyAll(sessionId)
     clearSessionTools(sessionId)
-  }
+  },
+  onClosingChange: (sessionId, closing) =>
+    eventBus.emit({ type: 'agent_closing', sessionId, closing })
 })
 
 // 会话树共享缓存的逐出保护：有运行时（或创建中）的会话，树实例与 harness 共享，LRU 不得回收
@@ -218,7 +228,11 @@ export async function setSessionModel(
   await created.applyModel({ provider, model, capabilities: capsFor(model) })
 }
 
-export function removeRuntimeSession(sessionId: string): void {
+/**
+ * 关停并解绑某会话的运行时。**返回的 Promise 落定时旧 run 保证已停** ——
+ * 调用方要动会话树（回退 / 清空 / 删除）必须先 await 它。
+ */
+export function removeRuntimeSession(sessionId: string): Promise<void> {
   // 销毁子代理 + 清理工具注册表由 SessionManager 的 dispose 处理
-  manager.remove(sessionId, 'remove')
+  return manager.remove(sessionId, 'remove')
 }

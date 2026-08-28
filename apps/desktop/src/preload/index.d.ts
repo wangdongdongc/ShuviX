@@ -448,6 +448,9 @@ declare global {
       monitorList: () => Promise<
         import('@shuvix/chat-protocol/types/agentMonitor').AgentMonitorEntry[]
       >
+      /** 智能体监控：单条 agent 的完整运行时快照（系统提示词/工具定义/上下文消息数）。
+       *  展开某条时拉一次（要重建上下文，不进轮询）；已销毁的 agentId 返回 null */
+      monitorDetail: (agentId: string) => Promise<AgentRuntimeInfo | null>
       /**
        * 统一的"用户输入响应"入口。命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由。
        */
@@ -844,7 +847,14 @@ declare global {
       reload: (tabId: string) => Promise<void>
       stop: (tabId: string) => Promise<void>
       getUrl: (tabId: string) => Promise<string>
-      updateBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
+      setLayout: (
+        entries: Array<{
+          tabId: string
+          bounds: { x: number; y: number; width: number; height: number }
+          zoom?: number
+        }>
+      ) => void
+      capture: (tabId: string) => Promise<string>
       setVisible: (visible: boolean) => void
       onTabCreated: (
         callback: (payload: { tabId: string; url: string; active: boolean }) => void
@@ -859,9 +869,9 @@ declare global {
       onTabFaviconUpdated: (
         callback: (payload: { tabId: string; favicon?: string }) => void
       ) => () => void
-      onDidStartLoading: (callback: (payload: { tabId: string; url: string }) => void) => () => void
+      onDidStartLoading: (callback: (payload: { tabId: string }) => void) => () => void
       onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) => () => void
-      onDidFinishLoad: (callback: (payload: { tabId: string }) => void) => () => void
+      onDidStopLoading: (callback: (payload: { tabId: string }) => void) => () => void
       onDidFailLoad: (
         callback: (payload: {
           tabId: string
@@ -1000,6 +1010,14 @@ declare global {
       /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
       openNote: (params: { path: string }) => Promise<Session>
     }
+    memory: {
+      /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */
+      list: (params: {
+        projectId: string
+      }) => Promise<import('@shuvix/chat-protocol/types/memory').ProjectMemoryEntry[]>
+      /** 打开一条记忆：一条至多一个笔记本会话，已存在则复用；文件已不在返回 null */
+      openNote: (params: { projectId: string; slug: string }) => Promise<Session | null>
+    }
     events: {
       subscribe: (
         callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void
@@ -1021,6 +1039,15 @@ declare global {
       }) => Promise<{ alwaysOnTop: boolean }>
       /** 查询当前悬浮窗的"始终置顶"状态 */
       getAlwaysOnTop: (sessionId: string) => Promise<{ alwaysOnTop: boolean }>
+    }
+
+    notification: {
+      /** 上报本窗口当前展示的会话（null = 无）；主进程据此判断是否该弹通知 */
+      reportActiveSession: (sessionId: string | null) => Promise<{ success: boolean }>
+      /** 取走「通知点击时主窗尚未就绪」暂存的跳转目标（取后即清） */
+      consumePendingOpenSession: () => Promise<string | null>
+      /** 监听通知点击要求打开的会话；返回取消订阅函数 */
+      onOpenSession: (callback: (sessionId: string) => void) => () => void
     }
   }
 

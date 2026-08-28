@@ -47,7 +47,8 @@ export interface BrowserBackend {
   openTab(p: { url: string }): Promise<BrowserOpOutput>
   closeTab(p: { tabId: string }): Promise<BrowserOpOutput>
   navigate(p: { tabId: string; nav: NavKind; url?: string }): Promise<BrowserOpOutput>
-  snapshot(p: { tabId: string }): Promise<BrowserOpOutput>
+  /** full=true 时强制回全量；否则由 backend 决定是否回差异（见 cdp/snapshotDiff.ts） */
+  snapshot(p: { tabId: string; full?: boolean }): Promise<BrowserOpOutput>
   readPage(p: { tabId: string }): Promise<BrowserOpOutput>
   screenshot(p: { tabId: string; fullPage?: boolean; uid?: string }): Promise<BrowserOpOutput>
   click(p: { tabId: string; uid: string }): Promise<BrowserOpOutput>

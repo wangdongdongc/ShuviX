@@ -49,14 +49,15 @@ export function useBrowserTabsBridge(): void {
       api.onTabFaviconUpdated(({ tabId, favicon }) => {
         updateTab(tabId, { favicon })
       }),
-      api.onDidStartLoading(({ tabId, url }) => {
-        updateTab(tabId, { isLoading: true, loadError: null, url })
+      api.onDidStartLoading(({ tabId }) => {
+        updateTab(tabId, { isLoading: true, loadError: null })
       }),
       api.onDidNavigate(({ tabId, url }) => {
         updateTab(tabId, { url })
       }),
-      api.onDidFinishLoad(({ tabId }) => {
-        updateTab(tabId, { isLoading: false, loadError: null })
+      // 只熄灭 spinner，不碰 loadError：加载失败时 did-fail-load 先到，错误页要留住
+      api.onDidStopLoading(({ tabId }) => {
+        updateTab(tabId, { isLoading: false })
       }),
       api.onDidFailLoad(({ tabId, errorCode, errorDescription, url }) => {
         updateTab(tabId, { isLoading: false, loadError: { errorCode, errorDescription, url } })
