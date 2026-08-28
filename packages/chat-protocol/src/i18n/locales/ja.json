@@ -74,7 +74,13 @@
       "add": "追加",
       "remove": "削除",
       "clear": "クリア",
-      "noOptions": "選択肢がありません"
+      "noOptions": "選択肢がありません",
+      "wikiContent": "エントリ内容",
+      "wikiStatus": "ステータス",
+      "wikiEntryType": "エントリ種別",
+      "wikiUpdated": "更新日",
+      "wikiSources": "出典",
+      "wikiAllowedTypes": "許可されるエントリ種別"
     },
     "saving": "保存中…",
     "saved": "保存済み",

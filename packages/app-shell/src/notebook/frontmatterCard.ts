@@ -323,8 +323,29 @@ function csvEntries(value: unknown): string[] {
     : []
 }
 
-/** 只读结构摘要（conditions / exprMap / policyRules）；形状不符返回 null → 退回标量渲染 */
+/** 只读结构摘要（prose / list / conditions / exprMap / policyRules）；形状不符返回 null → 退回标量渲染 */
 function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElement | null {
+  // 长文段落（wiki 条目正文）：整宽左对齐阅读排版 —— 通用行的右对齐截断读不了一段话
+  if (kind === 'prose') {
+    if (typeof value !== 'string') return null
+    return el(
+      'div',
+      'cm-shuvix-fmcard-value cm-shuvix-fmcard-prose text-[13px] leading-relaxed text-text-primary whitespace-pre-wrap break-words',
+      value
+    )
+  }
+  // 标量数组（wiki 来源定位符）：逐行等宽 —— 通用行会把数组折成 "[3]"
+  if (kind === 'list') {
+    if (!Array.isArray(value)) return null
+    const box = el(
+      'div',
+      'cm-shuvix-fmcard-value font-mono text-[11px] text-text-secondary space-y-0.5'
+    )
+    for (const item of value) {
+      box.appendChild(el('div', 'cm-shuvix-fmcard-list-item break-all', scalarText(item)))
+    }
+    return box
+  }
   if (kind === 'conditions') {
     if (!isPlainObject(value)) return null
     return el(
@@ -812,6 +833,8 @@ class FrontmatterCardWidget extends WidgetType {
       const known = descriptor?.fields ?? []
       const seen = new Set<string>([SHUVIX_MARKER_KEY, ...known.map((f) => f.key)])
       for (const f of known) {
+        // hidden：已知但不渲染（wiki 的横幅 description）—— 留在 seen 里防落通用行
+        if (f.kind === 'hidden') continue
         box.appendChild(buildFieldRow(view, this.config, f, fields[f.key], readOnly, this.cleanups))
       }
       for (const [key, value] of Object.entries(fields)) {

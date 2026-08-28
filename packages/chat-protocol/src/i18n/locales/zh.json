@@ -74,7 +74,13 @@
       "add": "添加",
       "remove": "移除",
       "clear": "清除",
-      "noOptions": "没有可选项"
+      "noOptions": "没有可选项",
+      "wikiContent": "条目内容",
+      "wikiStatus": "状态",
+      "wikiEntryType": "条目类型",
+      "wikiUpdated": "更新于",
+      "wikiSources": "来源",
+      "wikiAllowedTypes": "允许的条目类型"
     },
     "saving": "保存中…",
     "saved": "已保存",

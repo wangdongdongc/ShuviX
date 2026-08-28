@@ -37,10 +37,30 @@ describe('reviewShuvixMdWrite — 展示型契约的 YAML 语法兜底', () => {
     expect(out!.content).toBeNull()
   })
 
-  it('合法 wiki 条目 → null（无话可说，不打扰）', () => {
-    expect(
-      reviewShuvixMdWrite(wikiEntry('plain banner without yaml hazards'), 'entry.md', CTX)
-    ).toBeNull()
+  it('合法 wiki 条目：updated 由宿主盖章（带引号 —— 裸日期会被 YAML 读成时间戳）', () => {
+    const out = reviewShuvixMdWrite(wikiEntry('plain banner without yaml hazards'), 'entry.md', CTX)
+    expect(out!.note).toContain('Filled in for you: shuvix-wiki-updated: 2026-08-28')
+    expect(out!.content).toContain("shuvix-wiki-updated: '2026-08-28'")
+    // 盖章不越界：frontmatter 之下的用户笔记原样保留
+    expect(out!.content).toContain('正文笔记')
+  })
+
+  it('updated 已是今天（带引号）→ null，不产生无意义改写', () => {
+    const withToday = wikiEntry('plain banner').replace(
+      'shuvix-wiki-status: draft',
+      "shuvix-wiki-status: draft\nshuvix-wiki-updated: '2026-08-28'"
+    )
+    expect(reviewShuvixMdWrite(withToday, 'entry.md', CTX)).toBeNull()
+  })
+
+  it('updated 过期（或裸写）→ 刷新为今天并规范成带引号', () => {
+    const stale = wikiEntry('plain banner').replace(
+      'shuvix-wiki-status: draft',
+      'shuvix-wiki-status: draft\nshuvix-wiki-updated: 2024-01-01'
+    )
+    const out = reviewShuvixMdWrite(stale, 'entry.md', CTX)
+    expect(out!.content).toContain("shuvix-wiki-updated: '2026-08-28'")
+    expect(out!.content).not.toContain('2024-01-01')
   })
 
   it('chart 等其它 unknown 类型同样兜底', () => {

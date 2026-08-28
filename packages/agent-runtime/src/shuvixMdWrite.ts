@@ -15,6 +15,7 @@
  */
 import { parse as parseYaml } from 'yaml'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
+import { WIKI_UPDATED_KEY } from '@shuvix/chat-protocol/wikiFileContract'
 import { validateShuvixMdText } from './shuvixMdValidate'
 
 /** 写入方上下文（宿主注入的事实：谁写的、今天几号） */
@@ -41,6 +42,8 @@ export interface ShuvixMdWriteOutcome {
 interface FieldFiller {
   key: string
   refresh: boolean
+  /** 恒加单引号 —— wiki 契约要求日期带引号（裸日期会被 YAML 读者转成时间戳） */
+  quote?: boolean
   value: (ctx: ShuvixMdWriteContext) => string | undefined
 }
 
@@ -48,7 +51,8 @@ const FIELD_FILLERS: Record<string, readonly FieldFiller[]> = {
   memory: [
     { key: 'shuvix-memory-updated', refresh: true, value: (c) => c.today },
     { key: 'shuvix-memory-session', refresh: false, value: (c) => c.sessionId }
-  ]
+  ],
+  'wiki-entry': [{ key: WIKI_UPDATED_KEY, refresh: true, quote: true, value: (c) => c.today }]
 }
 
 /** 标记文案：`shuvix memory v1` / 无版本号时 `shuvix memory` */
@@ -96,8 +100,9 @@ function bounds(text: string): Bounds | null {
  * frontmatter 里补/改一个键（行级）。已是目标值则不动，返回是否发生改动。
  * 键名来自本模块的常量表，正则里直接用即可（无正则元字符）。
  */
-function upsert(b: Bounds, key: string, value: string, refresh: boolean): boolean {
-  const line = `${key}: ${scalar(value)}${b.cr}`
+function upsert(b: Bounds, key: string, value: string, refresh: boolean, quote = false): boolean {
+  const rendered = quote ? `'${value.replace(/'/g, "''")}'` : scalar(value)
+  const line = `${key}: ${rendered}${b.cr}`
   const re = new RegExp(`^[ \\t]*${key}[ \\t]*:`)
   for (let i = b.open + 1; i < b.close; i++) {
     if (!re.test(b.lines[i])) continue
@@ -176,7 +181,9 @@ export function reviewShuvixMdWrite(
   if (b) {
     for (const f of fillers) {
       const value = f.value(ctx)
-      if (value && upsert(b, f.key, value, f.refresh)) filled.push(`${f.key}: ${value}`)
+      if (value && upsert(b, f.key, value, f.refresh, f.quote === true)) {
+        filled.push(`${f.key}: ${value}`)
+      }
     }
   }
   if (filled.length > 0) notes.push(`[${label}] Filled in for you: ${filled.join(', ')}`)

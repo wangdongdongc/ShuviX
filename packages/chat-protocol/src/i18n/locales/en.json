@@ -74,7 +74,13 @@
       "add": "Add",
       "remove": "Remove",
       "clear": "Clear",
-      "noOptions": "Nothing to choose from"
+      "noOptions": "Nothing to choose from",
+      "wikiContent": "Entry",
+      "wikiStatus": "Status",
+      "wikiEntryType": "Type",
+      "wikiUpdated": "Updated",
+      "wikiSources": "Sources",
+      "wikiAllowedTypes": "Allowed types"
     },
     "saving": "Saving…",
     "saved": "Saved",

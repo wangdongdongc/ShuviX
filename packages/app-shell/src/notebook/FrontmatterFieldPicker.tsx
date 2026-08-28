@@ -2,6 +2,9 @@
  * 属性卡字段槽位里的选择器 —— **直接复用仓库既有的成熟组件**，不另造轮子：
  *   - `shuvix-tools`（csv）→ ToolSelectList（分组勾选、MCP 连接态、skill 启停）
  *   - `shuvix-model`（select）→ ModelSelect（提供商图标、能力标记、搜索、清除）
+ *   - wiki 的 status / entry-type（select）→ EnumField（契约封闭枚举的原生下拉；
+ *     状态带生命周期圆点）。候选项直接引 wikiFileContract 常量 —— 它们是静态契约，
+ *     不像工具/模型那样依赖运行时目录。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
  *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
  *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
@@ -18,6 +21,12 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 import { ModelSelect, useModelCatalogStore, getChatApi } from '@shuvix/chat-ui'
 import { formatModelRef, resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
+import {
+  WIKI_ENTRY_STATUSES,
+  WIKI_ENTRY_TYPES,
+  WIKI_ENTRY_TYPE_KEY,
+  WIKI_STATUS_KEY
+} from '@shuvix/chat-protocol/wikiFileContract'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
 export interface FrontmatterFieldPickerProps {
@@ -252,6 +261,62 @@ function TextListField({
   )
 }
 
+/** wiki 状态的生命周期圆点（draft 灰 / reviewed 琥珀 / stable 绿）—— 一眼可辨，色彩不承载唯一信息 */
+const STATUS_DOT: Record<string, string> = {
+  draft: 'bg-text-tertiary/50',
+  reviewed: 'bg-amber-400',
+  stable: 'bg-green-500'
+}
+
+/**
+ * 契约封闭枚举的下拉（原生 select + 自绘箭头，样式对齐卡片输入框）。
+ * 空值 = 删除该键（同其它控件的 onChange(null) 约定，wiki 读者对缺失自有缺省）；
+ * 枚举外的手改值如实并入候选（不静默吞掉 —— 保存前它仍是文件里的事实）。
+ */
+function EnumField({
+  options,
+  dotByValue,
+  value,
+  onChange,
+  readOnly = false
+}: FieldControlProps & {
+  options: readonly string[]
+  dotByValue?: Record<string, string>
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const current = value.trim()
+  const opts = current && !options.includes(current) ? [current, ...options] : [...options]
+  return (
+    <span className="cm-shuvix-fmcard-enum flex items-center gap-1.5">
+      {dotByValue && current !== '' && (
+        <span
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotByValue[current] ?? 'bg-text-tertiary/50'}`}
+        />
+      )}
+      <span className="relative">
+        <select
+          value={current}
+          disabled={readOnly}
+          className="cm-shuvix-fmcard-input appearance-none bg-bg-primary rounded-md pl-2.5 pr-6 py-1 text-[11.5px] font-mono leading-relaxed text-text-primary border border-transparent transition-colors hover:border-border-secondary/60 focus:outline-none focus:border-accent/60 disabled:opacity-60 cursor-pointer"
+          onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <option value="">{t('notebook.frontmatter.unset')}</option>
+          {opts.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={11}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-text-tertiary"
+        />
+      </span>
+    </span>
+  )
+}
+
 export function FrontmatterFieldPicker({
   fieldKey,
   kind,
@@ -259,7 +324,30 @@ export function FrontmatterFieldPicker({
   onChange,
   readOnly
 }: FrontmatterFieldPickerProps): React.JSX.Element {
-  if (kind === 'select') return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+  if (kind === 'select') {
+    if (fieldKey === WIKI_STATUS_KEY) {
+      return (
+        <EnumField
+          options={WIKI_ENTRY_STATUSES}
+          dotByValue={STATUS_DOT}
+          value={value}
+          onChange={onChange}
+          readOnly={readOnly}
+        />
+      )
+    }
+    if (fieldKey === WIKI_ENTRY_TYPE_KEY) {
+      return (
+        <EnumField
+          options={WIKI_ENTRY_TYPES}
+          value={value}
+          onChange={onChange}
+          readOnly={readOnly}
+        />
+      )
+    }
+    return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+  }
   return fieldKey === 'shuvix-tools' ? (
     <ToolsField value={value} onChange={onChange} readOnly={readOnly} />
   ) : (
