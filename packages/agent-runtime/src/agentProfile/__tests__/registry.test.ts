@@ -35,6 +35,7 @@ import {
   WIKI_TOPIC_MARKER,
   WIKI_UPDATED_KEY
 } from '@shuvix/chat-protocol/wikiFileContract'
+import { parse as parseYaml } from 'yaml'
 import type { AgentProfile } from '../../subagent/types'
 
 const ALL_PARAMS = { widgetsRoot: '/w', wikiRoot: '/k' }
@@ -114,6 +115,11 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
       expect(writer.dispatchOnly, `wiki-writer.${language} 必须只可派发`).toBe(true)
       // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
       expect(desk.systemPrompt, `wiki.${language} 需点名 wiki-writer`).toContain('wiki-writer')
+      // 派发调用形状与确认通道必须写明 —— 弱模型曾靠猜参数名连番失败、把批准确认写成纯文本
+      expect(desk.systemPrompt, `wiki.${language} 需给出派发参数形状`).toContain(
+        'name: "wiki-writer"'
+      )
+      expect(desk.systemPrompt, `wiki.${language} 确认须走 ask 工具`).toContain('`ask`')
     }
   })
 
@@ -126,6 +132,22 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
       expect(isWikiEntryFile(sample), `wiki.${language}`).toBe(true)
       // 样例的占位正文必须能被取出 —— 取不到说明块标量写法与解析器不一致
       expect(parseWikiEntryHead(sample)?.content, `wiki.${language}`).toBeTruthy()
+    }
+  })
+
+  it('模板 frontmatter 必须是合法 YAML（宽容解析器放得过，预览/校验的真 YAML 放不过）', () => {
+    // 上一条走 wikiFileContract 的零依赖宽容解析器 —— 它按规范形态取值,不做 YAML 合法性
+    // 判定,曾放过条目横幅里的 ": "（裸标量禁止冒号+空格）,LLM 逐字照抄后每个生成条目
+    // 都被 frontmatter 卡判为 YAML 语法错。这里用真 YAML 解析器把每个模板样例钉死,并
+    // round-trip 断言横幅逐字还原（防引号/特殊字符被解析改写）。
+    for (const language of ['en', 'zh', 'ja']) {
+      for (const sample of markdownSamples(wikiPrompt(language))) {
+        const fm = /^---\n([\s\S]*?)\n---/.exec(sample)?.[1]
+        expect(fm, `wiki.${language} 样例缺 frontmatter`).toBeTruthy()
+        const doc = parseYaml(fm!) as Record<string, unknown>
+        const banner = sample.includes(WIKI_ENTRY_MARKER) ? WIKI_ENTRY_BANNER : WIKI_TOPIC_BANNER
+        expect(doc.description, `wiki.${language} banner round-trip`).toBe(banner)
+      }
     }
   })
 })

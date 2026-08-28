@@ -38,6 +38,8 @@ export interface SidebarProps {
   footerActions?: React.ReactNode
   /** 正文整体替换（桌面日历视图）；非空时不渲染分组列表与归档区 */
   bodyOverride?: React.ReactNode
+  /** 分组列表前置插槽（桌面：知识库置顶分组 WikiGroup）；仅默认正文渲染，空态时也保留（功能入口） */
+  groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
   /** 标题文案（默认 sidebar.title；桌面日历模式可传 sidebar.viewCalendar） */
@@ -66,6 +68,7 @@ export function Sidebar({
   titleActions,
   footerActions,
   bodyOverride,
+  groupsPrepend,
   overlays,
   title,
   memory
@@ -158,24 +161,29 @@ export function Sidebar({
       <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
         {bodyOverride ? (
           bodyOverride
-        ) : isEmpty ? (
-          <div className="px-3 py-8 text-center text-text-tertiary text-xs">
-            {t('sidebar.emptyHint')}
-          </div>
         ) : (
-          <ProjectSessionGroups
-            projects={projects}
-            collapsed={collapsedGroups}
-            onToggleGroup={toggleGroup}
-            onNewChat={(pid) => void handleNewChat(pid)}
-            onSelect={onSelectSession}
-            onDelete={onDeleteSession}
-            onEditProject={onEditProject}
-            onConfigureSession={onConfigureSession}
-            caps={{ pin: caps.pin }}
-            pinnedSessionIds={pinnedSessionIds}
-            memory={memory}
-          />
+          <>
+            {groupsPrepend}
+            {isEmpty ? (
+              <div className="px-3 py-8 text-center text-text-tertiary text-xs">
+                {t('sidebar.emptyHint')}
+              </div>
+            ) : (
+              <ProjectSessionGroups
+                projects={projects}
+                collapsed={collapsedGroups}
+                onToggleGroup={toggleGroup}
+                onNewChat={(pid) => void handleNewChat(pid)}
+                onSelect={onSelectSession}
+                onDelete={onDeleteSession}
+                onEditProject={onEditProject}
+                onConfigureSession={onConfigureSession}
+                caps={{ pin: caps.pin }}
+                pinnedSessionIds={pinnedSessionIds}
+                memory={memory}
+              />
+            )}
+          </>
         )}
       </div>
 

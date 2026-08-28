@@ -1,20 +1,29 @@
 /**
  * SessionGroup —— 共享会话分组（可折叠），从桌面 Sidebar.renderGroupedSessions 抽出。
  *
- * 一个分组 = 标题行（图标 + 大写标签 + hover 操作按钮）+ 可折叠的会话列表（children 为 SessionItem 列表）。
- * 两种形态：`temp`（临时对话，MessageCircle 图标）/ `project`（项目，文件夹图标，可带编辑按钮）。
- * 桌面与扩展共用——扩展只用单个 temp 分组，桌面对每个项目组 + 临时组各渲染一个。
+ * 一个分组 = 标题行（图标 + 大写标签 + hover 操作按钮）+ 可折叠的正文（通常为 SessionItem 列表）。
+ * 三种形态：`temp`（临时对话，MessageCircle 图标）/ `project`（项目，文件夹图标，可带编辑按钮）
+ * / `wiki`（知识库置顶特殊分组，BookOpen 图标，正文为条目列表）。
+ * 桌面与扩展共用——扩展只用单个 temp 分组，桌面对每个项目组 + 临时组 + 知识库组各渲染一个。
  */
-import { MessageCircle, FolderClosed, FolderOpen, MessageSquarePlus, Settings2 } from 'lucide-react'
+import {
+  BookOpen,
+  MessageCircle,
+  FolderClosed,
+  FolderOpen,
+  MessageSquarePlus,
+  Settings2
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 
 export interface SessionGroupProps {
   label: string
-  variant: 'temp' | 'project'
+  variant: 'temp' | 'project' | 'wiki'
   collapsed: boolean
   onToggle: () => void
-  onNewChat: () => void
+  /** 「新建对话」悬停按钮；缺省不渲染（wiki 组无新建入口） */
+  onNewChat?: () => void
   /** 活动组高亮（当前会话所属组） */
   active?: boolean
   /** 专注模式下整组淡化 */
@@ -25,6 +34,8 @@ export interface SessionGroupProps {
   onEdit?: () => void
   /** 标题行右键菜单 */
   onHeaderContextMenu?: (e: React.MouseEvent) => void
+  /** 悬停操作区额外按钮（wiki 组的刷新），渲染在新建/编辑按钮之前 */
+  headerActions?: React.ReactNode
   /** 分组内的会话项（SessionItem 列表） */
   children: React.ReactNode
 }
@@ -40,10 +51,18 @@ export function SessionGroup({
   showDividerAbove = false,
   onEdit,
   onHeaderContextMenu,
+  headerActions,
   children
 }: SessionGroupProps): React.JSX.Element {
   const { t } = useTranslation()
-  const Icon = variant === 'temp' ? MessageCircle : collapsed ? FolderClosed : FolderOpen
+  const Icon =
+    variant === 'temp'
+      ? MessageCircle
+      : variant === 'wiki'
+        ? BookOpen
+        : collapsed
+          ? FolderClosed
+          : FolderOpen
   return (
     <div className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}>
       {showDividerAbove && <div className="mx-4 my-2 border-t border-border-secondary/30" />}
@@ -62,16 +81,19 @@ export function SessionGroup({
             <span className="truncate font-medium uppercase tracking-wider">{label}</span>
           </button>
           <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/header:opacity-100 transition-opacity duration-100">
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onNewChat()
-              }}
-              className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-              title={t('sidebar.newChat')}
-            >
-              <MessageSquarePlus size={11} />
-            </button>
+            {headerActions}
+            {onNewChat && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onNewChat()
+                }}
+                className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                title={t('sidebar.newChat')}
+              >
+                <MessageSquarePlus size={11} />
+              </button>
+            )}
             {onEdit && (
               <button
                 onClick={onEdit}

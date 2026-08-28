@@ -1005,8 +1005,12 @@ declare global {
       }) => Promise<{ accepted: boolean }>
     }
     wiki: {
-      /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore） */
-      listFiles: () => Promise<{ paths: string[]; truncated: boolean; root: string }>
+      /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore），含条目显示名 */
+      listFiles: () => Promise<{
+        files: Array<{ path: string; name: string | null }>
+        truncated: boolean
+        root: string
+      }>
       /** 打开 wiki 笔记：一文件至多一笔记本会话，已存在则复用返回 */
       openNote: (params: { path: string }) => Promise<Session>
     }

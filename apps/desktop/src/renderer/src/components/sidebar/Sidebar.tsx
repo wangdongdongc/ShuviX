@@ -7,7 +7,7 @@ import {
   ProjectSessionGroups,
   CalendarView,
   ViewSwitchButton,
-  WikiView,
+  WikiGroup,
   useProjects,
   useSessionDelete,
   SessionConfigDialog,
@@ -24,6 +24,7 @@ import { ProjectEditDialog } from './ProjectEditDialog'
  *   - 打开文件夹走 Electron 目录对话框；置顶会话选中时聚焦悬浮窗
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
  *   - 会话配置弹窗、项目编辑弹窗；标题行视图切换（项目 / 日历，原生菜单）
+ *   - 知识库置顶分组（WikiGroup 经 groupsPrepend 注入，接 window.api.wiki.*）
  *   - 底部更新提示；日历视图经 bodyOverride 复用 ProjectSessionGroups
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
@@ -98,13 +99,7 @@ export function Sidebar(): React.JSX.Element {
     <SharedSidebar
       caps={{ windowDrag: true, pin: true }}
       memory={memoryAdapter}
-      title={
-        viewMode === 'calendar'
-          ? t('sidebar.viewCalendar')
-          : viewMode === 'wiki'
-            ? t('sidebar.viewWiki')
-            : t('sidebar.title')
-      }
+      title={viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
@@ -113,13 +108,7 @@ export function Sidebar(): React.JSX.Element {
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
-      titleActions={
-        <ViewSwitchButton
-          viewMode={viewMode}
-          onChange={setViewMode}
-          modes={['projects', 'calendar', 'wiki']}
-        />
-      }
+      titleActions={<ViewSwitchButton viewMode={viewMode} onChange={setViewMode} />}
       footerActions={
         hasUpdate ? (
           <button
@@ -135,10 +124,9 @@ export function Sidebar(): React.JSX.Element {
           </button>
         ) : undefined
       }
+      groupsPrepend={<WikiGroup listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />}
       bodyOverride={
-        viewMode === 'wiki' ? (
-          <WikiView listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />
-        ) : viewMode === 'calendar' ? (
+        viewMode === 'calendar' ? (
           <CalendarView
             width={sidebarWidth}
             isResizing={sidebarResizing}

@@ -44,7 +44,7 @@
     "viewAll": "すべて表示",
     "viewProjects": "プロジェクト",
     "viewCalendar": "カレンダー",
-    "viewWiki": "ナレッジベース",
+    "wikiGroup": "ナレッジベース",
     "wikiEmpty": "ナレッジベース項目はまだありません",
     "projectMemory": "プロジェクトメモリ",
     "projectMemoryHint": "エージェントが記録したプロジェクトの知見。各セッションに注入されます",

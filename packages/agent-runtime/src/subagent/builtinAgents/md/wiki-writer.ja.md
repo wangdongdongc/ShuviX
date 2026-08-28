@@ -29,7 +29,7 @@ Wiki ルートは：{{wikiRoot}}
 ---
 shuvix: wiki-entry v1
 name: <エントリ名>
-description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.
+description: MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes — the agent reads them but never edits them.
 shuvix-wiki-content: |-
   <エントリ本体 —— ちょうど一段落>
 shuvix-wiki-status: draft

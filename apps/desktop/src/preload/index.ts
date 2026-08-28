@@ -888,12 +888,12 @@ const api = {
       ipcRenderer.invoke('preview:reportRender', params) as Promise<{ accepted: boolean }>
   },
 
-  // ============ Wiki (侧栏 Wiki 视图：隐藏 wiki 项目) ============
+  // ============ Wiki (侧栏知识库分组：隐藏 wiki 项目) ============
   wiki: {
-    /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore） */
+    /** 扫描 wiki 根目录下全部 markdown 文件（相对路径，遵循 .gitignore），含条目显示名 */
     listFiles: () =>
       ipcRenderer.invoke('wiki:listFiles') as Promise<{
-        paths: string[]
+        files: Array<{ path: string; name: string | null }>
         truncated: boolean
         root: string
       }>,

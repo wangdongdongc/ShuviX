@@ -53,7 +53,7 @@ export const WIKI_TOPIC_MARKER = 'wiki-topic v1'
  * 都会看到所有权切在哪。它必须同时说清两件事，因为这份文件是两个主体共有的。
  */
 export const WIKI_ENTRY_BANNER =
-  'MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes: the agent reads them but never edits them.'
+  'MANAGED BY WIKI CURATOR. This frontmatter is the entry itself — generated and maintained by the wiki agent; change it via the `agent` tool with name "wiki-writer", not by hand. Everything below the frontmatter is your own notes — the agent reads them but never edits them.'
 
 /** 主题章程横幅 —— 章程整份由 agent 维护，故措辞比条目横幅简单 */
 export const WIKI_TOPIC_BANNER =

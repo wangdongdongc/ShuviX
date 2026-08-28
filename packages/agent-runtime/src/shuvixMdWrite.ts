@@ -13,6 +13,7 @@
  * 补字段刻意做成**行级 upsert**，不整体重序列化 frontmatter —— 注释、键序、未知键都得
  * 原样留着（同属性卡的编辑模型）。
  */
+import { parse as parseYaml } from 'yaml'
 import { detectShuvixMarker, type ShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { validateShuvixMdText } from './shuvixMdValidate'
 
@@ -109,6 +110,18 @@ function upsert(b: Bounds, key: string, value: string, refresh: boolean): boolea
   return true
 }
 
+/** 展示型契约（chart/wiki-*，validate 回 unknown）的兜底：frontmatter 过不了真 YAML 就报语法错首行 */
+function frontmatterSyntaxError(text: string): string | null {
+  const b = bounds(text)
+  if (!b) return null
+  try {
+    parseYaml(b.lines.slice(b.open + 1, b.close).join('\n'))
+    return null
+  } catch (e) {
+    return String(e instanceof Error ? e.message : e).split('\n')[0]
+  }
+}
+
 /**
  * 写后审阅一份刚落盘的 md。
  *
@@ -133,6 +146,20 @@ export function reviewShuvixMdWrite(
     return {
       note: `[${label}] The file was written, but it is INVALID and will be ignored until fixed:\n${why}`,
       content: null
+    }
+  }
+
+  // 展示型契约没有「整份拒绝」的解析器（status 'unknown'），但 frontmatter 仍要过预览/
+  // 属性卡的**真 YAML** 解析 —— 语法错在此回执，agent 当场能修。宽容读取只保证文件不从
+  // 视图消失，救不了展示：wiki 条目横幅曾因裸标量里的「冒号+空格」让每个生成文件都亮
+  // 「YAML 语法错误」、字段卡全空，而写它的 agent 毫无所觉。
+  if (validation.status === 'unknown') {
+    const yamlError = frontmatterSyntaxError(text)
+    if (yamlError) {
+      return {
+        note: `[${label}] The file was written, but its frontmatter is not valid YAML — ShuviX previews will show a syntax error instead of the fields until fixed:\n- ${yamlError}`,
+        content: null
+      }
     }
   }
 

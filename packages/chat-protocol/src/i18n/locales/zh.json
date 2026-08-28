@@ -44,7 +44,7 @@
     "viewAll": "查看全部",
     "viewProjects": "项目",
     "viewCalendar": "日历",
-    "viewWiki": "知识库",
+    "wikiGroup": "知识库",
     "wikiEmpty": "暂无知识库条目",
     "projectMemory": "项目记忆",
     "projectMemoryHint": "该项目的记忆：agent 记下的项目经验，随会话注入模型上下文",

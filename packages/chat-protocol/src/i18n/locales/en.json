@@ -44,7 +44,7 @@
     "viewAll": "View all",
     "viewProjects": "Projects",
     "viewCalendar": "Calendar",
-    "viewWiki": "Knowledge Base",
+    "wikiGroup": "Knowledge Base",
     "wikiEmpty": "No knowledge base entries yet",
     "projectMemory": "Project Memory",
     "projectMemoryHint": "What the agent learned about this project — injected into every session",
