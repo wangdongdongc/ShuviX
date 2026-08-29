@@ -47,6 +47,8 @@ interface WikiFileRow {
 
 interface WikiDirNode {
   name: string
+  /** 显示名：主题章程（WIKI.md）frontmatter 的 name，缺省即目录名 */
+  label: string
   path: string
   dirs: WikiDirNode[]
   files: WikiFileRow[]
@@ -54,19 +56,15 @@ interface WikiDirNode {
 
 /** 相对路径清单 → 目录树（约定：根下一层主题目录 + 条目；更深层递归兜底） */
 function buildTree(files: WikiFileInfo[]): WikiDirNode {
-  const root: WikiDirNode = { name: '', path: '', dirs: [], files: [] }
+  const root: WikiDirNode = { name: '', label: '', path: '', dirs: [], files: [] }
   const dirIndex = new Map<string, WikiDirNode>([['', root]])
   const ensureDir = (dirPath: string): WikiDirNode => {
     const existing = dirIndex.get(dirPath)
     if (existing) return existing
     const cut = dirPath.lastIndexOf('/')
     const parent = ensureDir(cut === -1 ? '' : dirPath.slice(0, cut))
-    const node: WikiDirNode = {
-      name: cut === -1 ? dirPath : dirPath.slice(cut + 1),
-      path: dirPath,
-      dirs: [],
-      files: []
-    }
+    const seg = cut === -1 ? dirPath : dirPath.slice(cut + 1)
+    const node: WikiDirNode = { name: seg, label: seg, path: dirPath, dirs: [], files: [] }
     parent.dirs.push(node)
     dirIndex.set(dirPath, node)
     return node
@@ -76,14 +74,18 @@ function buildTree(files: WikiFileInfo[]): WikiDirNode {
     const cut = rel.lastIndexOf('/')
     const dir = ensureDir(cut === -1 ? '' : rel.slice(0, cut))
     const stem = (cut === -1 ? rel : rel.slice(cut + 1)).replace(MD_EXT_RE, '')
+    const charter = stem.toLowerCase() === 'wiki'
+    // 章程的 frontmatter name 是**主题**的显示名：提升为目录行标签（目录名兜底），
+    // 章程行自身固定显示 stem（"WIKI"）—— 目录行正上方再重复一遍主题名毫无信息量
+    if (charter && f.name?.trim() && dir.path !== '') dir.label = f.name.trim()
     dir.files.push({
       path: rel,
-      label: f.name?.trim() || stem,
-      charter: stem.toLowerCase() === 'wiki'
+      label: charter ? stem : f.name?.trim() || stem,
+      charter
     })
   }
   const sortNode = (n: WikiDirNode): void => {
-    n.dirs.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase(), 'zh-CN'))
+    n.dirs.sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase(), 'zh-CN'))
     n.files.sort((a, b) =>
       a.charter !== b.charter
         ? a.charter
@@ -111,7 +113,8 @@ export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JS
 
   const [collapsed, setCollapsed] = useState(true)
   const [files, setFiles] = useState<WikiFileInfo[] | null>(null)
-  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => new Set())
+  // 展开集而非折叠集：主题默认折叠，重扫新增的主题天然保持折叠，无需与扫描结果对账
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set())
   // 是否扫过（聚焦重扫只在首次展开后生效，未展开不建 wiki 根目录）
   const scannedOnce = useRef(false)
   // 递增序号丢弃过期回包（快速聚焦/手动刷新并发时只认最后一次）
@@ -143,7 +146,7 @@ export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JS
   }
 
   const toggleDir = (path: string): void =>
-    setCollapsedDirs((prev) => {
+    setExpandedDirs((prev) => {
       const next = new Set(prev)
       if (next.has(path)) next.delete(path)
       else next.add(path)
@@ -178,7 +181,7 @@ export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JS
   }
 
   const renderDir = (node: WikiDirNode, depth: number): React.ReactNode => {
-    const dirCollapsed = collapsedDirs.has(node.path)
+    const dirCollapsed = !expandedDirs.has(node.path)
     return (
       <div key={node.path}>
         <div
@@ -193,7 +196,7 @@ export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JS
           ) : (
             <FolderOpen size={11} className="flex-shrink-0 text-text-tertiary/40" />
           )}
-          <span className="flex-1 min-w-0 text-[13px] truncate">{node.name}</span>
+          <span className="flex-1 min-w-0 text-[13px] truncate">{node.label}</span>
         </div>
         <AnimatedCollapse open={!dirCollapsed}>
           {node.files.map((f) => renderFile(f, depth + 1))}

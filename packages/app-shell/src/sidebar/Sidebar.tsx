@@ -77,17 +77,14 @@ export function Sidebar({
   const { dim } = useFocusDim()
   const sessions = useChatStore((s) => s.sessions)
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
-    () => new Set([TEMP_GROUP_KEY])
-  )
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const initialCollapseApplied = useRef(false)
 
-  // 首次加载项目后默认折叠所有项目组（与桌面一致）
+  // 首次加载项目后默认折叠所有项目组；临时对话组保持展开 —— 它是最常用的落点
   useEffect(() => {
     if (initialCollapseApplied.current || projects.length === 0) return
     initialCollapseApplied.current = true
     const initial = new Set<string>(projects.map((p) => p.id))
-    initial.add(TEMP_GROUP_KEY)
     // 项目首次异步加载后只跑一次（initialCollapseApplied 守卫），非每渲染同步级联
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsedGroups(initial)

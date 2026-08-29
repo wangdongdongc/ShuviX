@@ -150,6 +150,18 @@ function blockScalar(lines: string[], startIndex: number, folded: boolean): stri
  * 或单行纯标量。带 YAML 转义的双引号长串、锚点/别名等一律取不到值（content 为 null），
  * 这是刻意的：与其在零依赖包里复刻半个 YAML 解析器，不如让调用方显示原文。
  */
+/**
+ * 解析主题章程（`WIKI.md`）的显示名 —— frontmatter `name` 的单行标量。
+ * 非章程文件 / 未写 name 返回 null，调用方回退目录名（永远有兜底显示）。
+ * 与条目头同一宽容口径：不复刻 YAML，只认规范形态。
+ */
+export function parseWikiTopicName(text: string): string | null {
+  const fm = frontmatterOf(text)
+  if (fm === null || readShuvixMarker(fm)?.type !== 'wiki-topic') return null
+  const m = NAME_LINE_RE.exec(fm)
+  return m ? unquote(m[1]) || null : null
+}
+
 export function parseWikiEntryHead(text: string): WikiEntryHead | null {
   const fm = frontmatterOf(text)
   if (fm === null || readShuvixMarker(fm)?.type !== 'wiki-entry') return null

@@ -9,7 +9,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { basename, join } from 'path'
 import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
-import { parseWikiEntryHead } from '@shuvix/chat-protocol/wikiFileContract'
+import { parseWikiEntryHead, parseWikiTopicName } from '@shuvix/chat-protocol/wikiFileContract'
 import { projectDao } from '../dao/projectDao'
 import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from './sessionService'
@@ -62,7 +62,7 @@ export function ensureWikiProject(): Project {
 export interface WikiFileEntry {
   /** wiki 根下相对路径 */
   path: string
-  /** frontmatter `name`(非条目文件/解析失败/超出解析上限为 null,调用方回退文件名 stem) */
+  /** frontmatter `name`(条目名或章程的主题名;非契约文件/解析失败/超出解析上限为 null,调用方回退文件名 stem/目录名) */
   name: string | null
 }
 
@@ -83,7 +83,8 @@ export async function listWikiFiles(): Promise<{
       if (i >= NAME_PARSE_LIMIT) return { path: rel, name: null }
       try {
         const text = await readFile(join(root, rel), 'utf-8')
-        return { path: rel, name: parseWikiEntryHead(text)?.name ?? null }
+        // 标记判别:条目取条目名,章程(WIKI.md)取主题显示名 —— 侧栏目录行用它,目录名只兜底
+        return { path: rel, name: parseWikiEntryHead(text)?.name ?? parseWikiTopicName(text) }
       } catch {
         return { path: rel, name: null }
       }

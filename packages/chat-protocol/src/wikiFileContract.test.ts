@@ -8,6 +8,7 @@ import {
   isWikiEntryFile,
   isWikiTopicFile,
   parseWikiEntryHead,
+  parseWikiTopicName,
   WIKI_ENTRY_BANNER,
   WIKI_ENTRY_MARKER,
   WIKI_TOPIC_MARKER
@@ -115,6 +116,26 @@ describe('parseWikiEntryHead —— 条目正文', () => {
   it('CRLF 文件的块标量不残留 \\r', () => {
     const e = entry(`name: x\n${CONTENT_BLOCK}`).replace(/\n/g, '\r\n')
     expect(parseWikiEntryHead(e)?.content).not.toContain('\r')
+  })
+})
+
+describe('parseWikiTopicName —— 主题显示名', () => {
+  const topic = (fields: string): string =>
+    `---\nshuvix: ${WIKI_TOPIC_MARKER}\n${fields}\n---\n\n# 章程正文\n`
+
+  it('章程 name（含引号形态）→ 显示名；侧栏目录行用它，目录名兜底', () => {
+    expect(parseWikiTopicName(topic('name: 爱潜水的乌贼'))).toBe('爱潜水的乌贼')
+    expect(parseWikiTopicName(topic("name: 'acme-auth'"))).toBe('acme-auth')
+  })
+
+  it('未写 name / 空值 → null（调用方回退目录名）', () => {
+    expect(parseWikiTopicName(topic('description: x'))).toBeNull()
+    expect(parseWikiTopicName(topic('name:'))).toBeNull()
+  })
+
+  it('非章程文件（条目 / 普通 md）→ null', () => {
+    expect(parseWikiTopicName(entry('name: 条目名'))).toBeNull()
+    expect(parseWikiTopicName('---\nname: 普通\n---\n正文\n')).toBeNull()
   })
 })
 
