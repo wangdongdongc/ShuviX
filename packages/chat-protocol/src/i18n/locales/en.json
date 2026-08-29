@@ -86,8 +86,6 @@
     "saved": "Saved",
     "saveFailed": "Save failed",
     "closeFile": "Close",
-    "promptPlaceholder": "Instruct the notebook (each send spawns an independent sub-agent)…",
-    "send": "Send",
     "menu": {
       "textFormat": "Text format",
       "paragraph": "Paragraph",
@@ -210,6 +208,9 @@
     "cacheWrite": "cache write"
   },
   "pendingInputs": {
+    "title": "Pending inputs {{count}}",
+    "expand": "Expand pending inputs",
+    "collapse": "Collapse pending inputs",
     "submitAllFilled": "Submit filled",
     "otherPlaceholder": "Or just type your thoughts — Enter sends them to the AI...",
     "submitOther": "Send feedback",
@@ -228,6 +229,11 @@
     "nextTurnHint": "Hold for next turn: sent with your next message; survives abort",
     "images": "{{count}} image(s)",
     "emptyText": "(images only)"
+  },
+  "threadDrawer": {
+    "running": "Running…",
+    "expand": "Expand conversation",
+    "collapse": "Collapse conversation"
   },
   "toolCall": {
     "generating": "Generating...",

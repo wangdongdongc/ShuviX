@@ -8,7 +8,6 @@
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { messageStore } from '../storage/messageStore'
-import { readSessionRunConfig } from '../storage/sessionEntryStore'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { capsFor } from './resolveSessionModel'
 import { sessionStore } from '../storage/sessionStore'
@@ -25,17 +24,13 @@ import {
   resolveSessionMeta,
   getRuntimeSession,
   removeRuntimeSession,
-  setSessionModel,
-  buildSessionTools
+  setSessionModel
 } from './agentRuntime'
-import { subAgentManager, registerSessionTools, extensionSubAgentRegistry } from './subAgent'
+import { subAgentManager, extensionSubAgentRegistry } from './subAgent'
 import { withTabLease } from './tabLease'
 import {
-  runNotebookTask,
-  resolveInitialThinkingLevel,
   BASE_PROFILE_NAMES,
   DEFAULT_PROFILE_NAME,
-  NOTEBOOK_PROFILE_NAME,
   validateShuvixMdText
 } from '@shuvix/agent-runtime'
 import { titlerFor, removeTitler } from './titleRuntime'
@@ -104,53 +99,6 @@ export const chatApiAdapter: ChatApi = {
       // 自动标题（与桌面 AgentSession.prompt 同一时序）：首轮快速标题已由 HarnessSession 的
       // onPromptAccepted 触发，这里在本轮回复落库后用更完整上下文精修一次（不 await）
       void titlerFor(sessionId).refine()
-      return ok
-    },
-    // 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。仅注入笔记本路径 + read 提示，
-    // 正文由子代理自行读取；子代理不含 ask（面板只读无法应答）。信封组装与派发由共享 runNotebookTask 完成。
-    notebookPrompt: async ({ sessionId, text }) => {
-      // 绑定 md 的项目内相对路径（文件工具相对工作目录寻址）
-      const session = await sessionStore.getById(sessionId)
-      const notebookPath = session?.settings?.notebookPath ?? ''
-      const parts = await buildSessionTools(sessionId, {
-        // 面板只读、无法应答交互式提问 → ask 已剔除；file tools 的 requestUserInput 为预留项
-        requestUserInput: () => Promise.reject(new Error('NO_INTERACTIVE_INPUT')),
-        includeAsk: false,
-        notebookPath
-      })
-      const notebookProfile = extensionSubAgentRegistry.getProfile(NOTEBOOK_PROFILE_NAME)
-      // resolveTools 读 sessionTools map（笔记本无 runtime，故在此登记）；扩展按注册表解析 → tools 传 []
-      registerSessionTools(sessionId, parts.tools)
-      // 会话所选思考深度（唯一事实源是会话树）
-      const treeThinkingLevel = (await readSessionRunConfig(sessionId)).thinkingLevel ?? undefined
-      // fire-and-forget，但整轮持有标签页租约（runNotebookTask 返回完成 promise、永不 reject）
-      void withTabLease(() =>
-        runNotebookTask(
-          subAgentManager,
-          {
-            sessionId,
-            text,
-            systemPrompt: parts.systemPrompt,
-            modelConfig: {
-              provider: parts.provider,
-              model: parts.model,
-              capabilities: parts.caps,
-              // 笔记本子代理继承会话所选思考深度（与桌面/主会话同一 helper）
-              thinkingLevel: resolveInitialThinkingLevel({
-                persisted: treeThinkingLevel,
-                reasoning: parts.caps.reasoning
-              })
-            },
-            tools: [],
-            // notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选
-            model: notebookProfile?.model,
-            // notebook 档案的指令文件清单（内置为空；用户覆盖档案列出即经创建管线生效）
-            instructionFiles: notebookProfile?.instructionFiles,
-            projectPrompt: notebookProfile?.projectPrompt
-          },
-          (error) => eventBus.emit({ type: 'error', sessionId, error })
-        )
-      )
       return ok
     },
     // 继续与已存在子代理对话：复用该子会话 Agent 追加一轮（fire-and-forget，进展走事件流；整轮持有标签页租约）
@@ -344,8 +292,16 @@ export const chatApiAdapter: ChatApi = {
     // （buildRuntimeSession 读 settings.agentProfile）。档案声明的模型与 mcp:/skill: 工具
     // 作为种子写进会话树（口径同桌面：事实源是会话树，档案只在切换这一刻参与一次）。
     updateAgentProfile: async ({ id, name }) => {
+      // 笔记本会话的档案钉死为 notebook 基座（buildRuntimeSession），不接受任何切换
+      if ((await sessionStore.getById(id))?.settings?.notebookPath) {
+        return { success: false, error: 'Notebook sessions are pinned to the notebook profile' }
+      }
       const profile = extensionSubAgentRegistry.getProfile(name)
       if (!profile) return { success: false, error: `Unknown agent "${name}"` }
+      // 基座档案不是切换目标（'default' 除外 —— 切回主会话的入口；口径同桌面 sessionService）
+      if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
+        return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
+      }
       // dispatch-only 档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）
       if (profile.dispatchOnly) {
         return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }

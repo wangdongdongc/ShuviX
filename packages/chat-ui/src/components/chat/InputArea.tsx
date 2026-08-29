@@ -52,14 +52,15 @@ const MAX_H = 480
 
 export interface InputAreaProps {
   /**
-   * 笔记本会话模式（仅行为差异，外观已与普通会话统一为悬浮卡片）：发送走 `agent.notebookPrompt`
-   * （每次开启独立子智能体；子智能体上下文仅注入笔记本路径 + read 提示，正文由其自行读取）。
-   * 无主 Agent → 不显示压缩归档 / Agent 信息 / 上下文用量，不参与草稿回退。
-   * 模型/工具选择沿用 ModelPicker/ToolPicker（写会话配置 → 子智能体继承，与普通会话一致）。
+   * 笔记本会话模式（纯外观差异，发送与普通会话同走 `agent.prompt` 主管线）：
+   * 档案钉死 notebook 基座（不显示档案选择器），对话经 thread 插槽以抽屉形态呈现。
+   * 模型/工具选择沿用 ModelPicker/ToolPicker（写会话配置，与普通会话一致）。
    */
   notebook?: boolean
   /** 常规流内嵌模式（欢迎页）：外观同悬浮卡片，但随文档流布局、不绝对定位贴底 */
   inline?: boolean
+  /** 卡片最顶插槽（对话抽屉）：渲染在待处理输入面板之上，卡片首格的顶圆角由插槽内容自己承担 */
+  thread?: React.ReactNode
   /** 卡片顶部插槽（待处理输入面板）：渲染进卡片内部第一格，与输入区共用同一张卡片的边框与圆角 */
   accessory?: React.ReactNode
   /** 输入区整体（卡片 + 外边距）高度变化回调，卸载时回调 0；宿主用于给消息列表留出底部空白 */
@@ -77,6 +78,7 @@ export interface InputAreaProps {
 export function InputArea({
   notebook,
   inline,
+  thread,
   accessory,
   onHeightChange
 }: InputAreaProps = {}): React.JSX.Element {
@@ -177,7 +179,7 @@ export function InputArea({
   // 直接回填裸 content 会让 {{shuvixInlineToken}} 标记失去 metadata → token 失效丢信息。
   const draftRestore = useChatStore((s) => s.draftRestoreRequest)
   useEffect(() => {
-    if (!draftRestore || isNotebook) return
+    if (!draftRestore) return
     useChatStore.getState().clearDraftRestore()
     const { text, atTokens, pasteTokens } = rebuildDraftFromContent(
       draftRestore.content,
@@ -187,7 +189,7 @@ export function InputArea({
     if (atTokens.length > 0) at.restoreFromTokens(atTokens)
     setInputText(text)
     setTimeout(() => textareaRef.current?.focus(), 0)
-  }, [draftRestore, isNotebook, at, paste, setInputText])
+  }, [draftRestore, at, paste, setInputText])
 
   /** 粘贴处理：图片交给 useImageUpload；超阈值长文本折叠为粘贴芯片（短文本走默认粘贴） */
   const handleTextareaPaste = useCallback(
@@ -433,26 +435,6 @@ export function InputArea({
     const rawText = inputText.trim()
     const images = pendingImages
 
-    // 笔记本模式：每次发送开启独立子智能体（fire-and-forget）。子代理上下文仅注入笔记本路径 + read 提示，
-    // 正文由其自行读取。不走主会话流式态（笔记本无主 Agent）；进展看右侧子智能体面板。模型/工具由会话配置决定。
-    if (notebook) {
-      if ((!rawText && !slashChip) || !activeSessionId) return
-      // 笔记本会话同样支持 slash 命令 / skill：展开为内联 Token，后端解析为发给子代理的真实指令
-      const { contentText, inlineTokens } = buildSlashOutgoing(rawText, activeSessionId)
-      const store = useChatStore.getState()
-      store.setInputText('')
-      store.clearPendingImages()
-      setSlashChip(null)
-      at.reset()
-      paste.reset()
-      void getSessionChannelApi().agent.notebookPrompt({
-        sessionId: activeSessionId,
-        text: contentText,
-        inlineTokens
-      })
-      return
-    }
-
     // 有芯片时即使参数为空也允许发送（纯命令）
     if ((!rawText && !slashChip && images.length === 0) || isStreaming || isAgentClosing) return
 
@@ -463,7 +445,7 @@ export function InputArea({
       if (!sid) return
     }
 
-    // ─── 前端斜杠命令展开 + Token 构造（与笔记本会话共用 buildSlashOutgoing） ───
+    // ─── 前端斜杠命令展开 + Token 构造 ───
     const outgoing = buildSlashOutgoing(rawText, sid)
     await sendToMainAgent(
       sid,
@@ -649,7 +631,7 @@ export function InputArea({
   const pickers = (
     <div className="flex-shrink-0 flex items-center gap-1.5">
       {/* 档案选择器居首：档案决定系统提示词与内置工具白名单，是三者里最上位的一层。
-          笔记本会话没有根 Agent（每次发送都是一次性子代理），没有可切的会话档案 */}
+          笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），无可切项故不显示 */}
       {canEdit && !isNotebook && (
         <AgentProfilePicker disabled={isStreaming} onApplied={applyProfileSeed} />
       )}
@@ -784,6 +766,9 @@ export function InputArea({
                 : 'border-border-secondary/40'
           }`}
         >
+          {/* 卡片最顶：对话抽屉（笔记本会话）—— 排在待处理输入之上，让审批紧邻输入区 */}
+          {thread}
+
           {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
           {accessory}
 
@@ -900,8 +885,7 @@ export function InputArea({
             )}
           </div>
 
-          {/* 底部工具行（统一布局）：选择器居左；普通会话在右侧追加上下文用量环 / 压缩入口
-              （笔记本会话无主 Agent，无这些项）；最右为麦克风 + 发送/停止 */}
+          {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为麦克风 + 发送/停止 */}
           <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
             {pickers}
 
@@ -910,7 +894,7 @@ export function InputArea({
 
             {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
                 纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口 */}
-            {!isNotebook && (maxContextTokens > 0 || usedContextTokens !== null) && (
+            {(maxContextTokens > 0 || usedContextTokens !== null) && (
               <span
                 aria-label={ctxTooltip}
                 className="relative group/token p-1 rounded flex items-center"

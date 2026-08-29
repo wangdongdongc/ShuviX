@@ -21,9 +21,9 @@
  *    落到根会话上，所以这里维护 sub→root 映射（`ChatEventBase.subAgentId` 是个从没有人
  *    写过的字段，指望不上，只能像 ChatFrontendRegistry 那样自己按 register/end 记）。
  *
- * 3. **用户主动触发的子会话（笔记本发送）算一次运行**，用 `sub_session_end` 补一条完成/失败
- *    通知 —— 笔记本会话没有根 agent，整轮都跑在子会话里，不补就永远等不到通知。
- *    Agent 自己派发的（带 `parentToolCallId`）不补，那是上面第 2 条。
+ * 3. **非工具派发的子会话（如 workflow 引擎 `run()` 起的 agent）算一次运行**，用
+ *    `sub_session_end` 补一条完成/失败通知 —— 这类运行没有根 agent 的 `agent_end` 兜底，
+ *    不补就永远等不到通知。Agent 自己派发的（带 `parentToolCallId`）不补，那是上面第 2 条。
  */
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
@@ -171,7 +171,7 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
         case 'sub_session_register': {
           subSessions.set(event.sessionId, {
             root: event.rootSessionId || event.parentSessionId,
-            // 无 parentToolCallId = 用户主动触发（笔记本发送），这一支算一次完整运行
+            // 无 parentToolCallId = 非工具派发（如 workflow 引擎 run()），这一支算一次完整运行
             userTriggered: !event.parentToolCallId
           })
           break

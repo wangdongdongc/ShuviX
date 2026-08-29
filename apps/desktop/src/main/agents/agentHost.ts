@@ -15,9 +15,6 @@ import type { AgentTool as PiAgentTool } from '@earendil-works/pi-agent-core'
 import type { TSchema } from 'typebox'
 import {
   createAgentFactory,
-  renderProfileSystemPrompt,
-  toInProcessAgentType,
-  NOTEBOOK_PROFILE_NAME,
   DISPATCH_TOOL_NAME,
   type AgentHostAdapter,
   type AnyAgentTool,
@@ -36,7 +33,6 @@ import { app } from 'electron'
 import i18next from 'i18next'
 import { formatLanguageDisplay } from '@shuvix/agent-runtime'
 import { getBuiltinToolEntries } from '../services/toolRegistry'
-import { agentService } from '../services/agentService'
 import { SkillTool } from '../services/skillTool'
 import { mcpService } from '../services/mcpService'
 import { resolveModel } from '../services/agentModelResolver'
@@ -202,7 +198,15 @@ function desktopPromptVars(ctx: PromptVarsCtx): PromptVars {
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
-    projectName: project?.name ?? ''
+    projectName: project?.name ?? '',
+    // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
+    // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
+    // 占位符原样保留并 warn（派生档案本就不该引用它）
+    ...(ctx.kind === 'root'
+      ? {
+          notebookPath: sessionDao.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? ''
+        }
+      : {})
   }
 }
 
@@ -263,24 +267,3 @@ const desktopAgentHost: AgentHostAdapter = {
 
 /** 桌面唯一 agent 工厂：根会话（AgentSession）与派生（AgentManager）共用 */
 export const agentFactory = createAgentFactory(desktopAgentHost)
-
-/**
- * 组装笔记本一次性子代理的完整系统提示（sessionService.buildNotebookRunParams 调用）。
- *
- * 走 notebook 基座档案而非 default —— 笔记任务与「软件工程助手」人格错位。
- * 这里就地渲染而不是交给 createAgent：派生 agent 的 promptVars ctx 拿到的是 agentId
- * 而非会话 id，宿主无从解析 notebookPath；渲染后的文本作为派生档案的 systemPrompt 下传，
- * createAgent 里的第二次替换对已无占位符的文本是 no-op。
- */
-export async function renderNotebookSystemPrompt(
-  sessionId: string,
-  cwd: string,
-  notebookPath: string
-): Promise<string> {
-  const profile = toInProcessAgentType(agentService.getProfile(NOTEBOOK_PROFILE_NAME)!)
-  return renderProfileSystemPrompt(
-    profile,
-    { ...desktopPromptVars({ sessionId, kind: 'root', cwd }), notebookPath },
-    runtimeLogger
-  )
-}

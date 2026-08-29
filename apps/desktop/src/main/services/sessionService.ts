@@ -34,14 +34,13 @@ import {
   BASE_PROFILE_NAMES,
   DEFAULT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
-  SessionManager,
-  resolveInitialThinkingLevel
+  SessionManager
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { agentService } from './agentService'
 import { AgentSession } from './agentSession'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
-import { renderNotebookSystemPrompt, resolveProfileModelSpec } from '../agents/agentHost'
+import { resolveProfileModelSpec } from '../agents/agentHost'
 import {
   broadcastSessionConfigChanged,
   broadcastSessionListChanged,
@@ -182,12 +181,16 @@ export class SessionService {
   /**
    * 解析会话根 Agent 的档案名。
    *
-   * settings.agentProfile 缺省即 'default'；档案文件被删/改名时也回落 'default'
+   * 笔记本会话（settings.notebookPath 非空）恒为 'notebook' 基座档案，忽略 agentProfile
+   * （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）。
+   * 其余会话：settings.agentProfile 缺省即 'default'；档案文件被删/改名时也回落 'default'
    * （档案是纯 md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，
    * 会话设置不该因此把根 Agent 卡死在一个不存在的档案上）。
    */
   resolveAgentProfileName(sessionId: string): string {
-    const name = sessionDao.pickSettings(sessionId, ['agentProfile'])?.agentProfile
+    const settings = sessionDao.pickSettings(sessionId, ['agentProfile', 'notebookPath'])
+    if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
+    const name = settings?.agentProfile
     if (!name || name === DEFAULT_PROFILE_NAME) return DEFAULT_PROFILE_NAME
     if (agentService.getProfile(name)) return name
     log.warn(`会话档案 "${name}" 已不存在，回落 default（session=${sessionId}）`)
@@ -219,6 +222,10 @@ export class SessionService {
     applied?: { model?: SubAgentModelConfig; tools: string[] }
     modelUnavailable?: string
   }> {
+    // 笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），不接受任何切换
+    if (sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath) {
+      return { success: false, error: 'Notebook sessions are pinned to the notebook profile' }
+    }
     const profile = agentService.getProfile(name)
     if (!profile) return { success: false, error: `Unknown agent "${name}"` }
     // 'notebook' 是笔记本会话形态的基座，切到聊天会话上只会得到一个指向不存在笔记的人格
@@ -456,49 +463,6 @@ export class SessionService {
    */
   invalidateAgent(sessionId: string): Promise<void> {
     return this.agents.remove(sessionId, 'invalidate')
-  }
-
-  /**
-   * 解析笔记本会话「一次性子智能体」的运行数据（systemPrompt + 工具白名单 + 模型 + 注入开关），
-   * 不创建任何运行时。仅负责数据存取；信封组装与派发由 runNotebookTask（共享内核）完成。
-   *
-   * 人格与工具白名单都取 **notebook 基座档案**（用户 ~/.shuvix/agents/notebook.md 可覆盖），
-   * 笔记路径经 {{shuvix:notebookPath}} 在渲染时替换进 body。session 不存在返回 null。
-   */
-  async buildNotebookRunParams(sessionId: string): Promise<{
-    systemPrompt: string
-    /** 子代理工具白名单（buildSubAgentTools 按名解析） */
-    tools: string[]
-    modelConfig: SubAgentModelConfig
-    /** notebook 档案声明的模型（`shuvix-model`）；声明了就优先于会话所选 */
-    model?: string
-    /** notebook 档案的两项上下文注入声明（内置默认都不注入，用户覆盖档案可打开） */
-    instructionFiles: readonly string[]
-    projectPrompt: boolean
-  } | null> {
-    const ctx = await this.resolveSessionAgentContext(sessionId)
-    if (!ctx) return null
-    const notebookPath = sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath ?? ''
-    const profile = agentService.getProfile(NOTEBOOK_PROFILE_NAME)!
-    // 档案白名单（内置已排除 ask —— 面板只读无法应答 —— 与 Agent）+ 会话启用的 mcp:/skill:
-    const mcpSkill = ctx.enabledTools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:'))
-    return {
-      systemPrompt: await renderNotebookSystemPrompt(sessionId, ctx.workingDirectory, notebookPath),
-      tools: [...profile.tools, ...mcpSkill],
-      model: profile.model,
-      instructionFiles: profile.instructionFiles,
-      projectPrompt: profile.projectPrompt,
-      modelConfig: {
-        provider: ctx.provider,
-        model: ctx.model,
-        capabilities: ctx.capabilities,
-        // 笔记本子代理继承会话所选思考深度（与主会话口径一致，经共享 helper 解析）
-        thinkingLevel: resolveInitialThinkingLevel({
-          persisted: ctx.modelMetadata.thinkingLevel,
-          reasoning: ctx.capabilities.reasoning
-        })
-      }
-    }
   }
 
   // ─── 用户输入响应路由(遍历所有 session 查找归属) ──

@@ -196,7 +196,7 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   parentSessionId: string
   /**
    * 父 Agent 派发本子会话的 tool_call id。有值 = Agent 自行触发（对话内 ToolCallBlock 内联展示）；
-   * 无值 = 用户主动触发（如笔记本会话发送），进右侧 Sub-agent 面板。
+   * 无值 = 非工具派发（如 workflow 引擎 run() 起的 agent），进右侧 Sub-agent 面板。
    */
   parentToolCallId?: string
   /** 子智能体类型名（如 'explore'） */
@@ -211,7 +211,7 @@ export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   prompt: string
   /** prompt 中内联 Token（slash 命令 / skill）的字典；面板据此把 prompt 渲染为命令标签 + 文本 */
   inlineTokens?: Record<string, InlineToken>
-  /** 额外注入子智能体上下文的人读文本（如笔记本会话的当前 md 内容）；UI 以折叠用户消息卡展示 */
+  /** 额外注入子智能体上下文的人读文本（runTask 的 contextMessages）；UI 以折叠用户消息卡展示 */
   contextNote?: string
   /** 派生层级（根会话=0 不发此事件；直接派生=1，嵌套派生依次递增） */
   depth?: number

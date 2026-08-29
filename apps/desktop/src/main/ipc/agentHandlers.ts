@@ -7,7 +7,6 @@ import { getAgentRuntimeDetail, listAgentRuntimes } from '../services/agentMonit
 import type {
   AgentInitParams,
   AgentPromptParams,
-  AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
@@ -33,14 +32,6 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agent:prompt', (_event, params: AgentPromptParams) =>
     operationContext.run(createElectronContext(params.sessionId), async () => {
       await chatGateway.prompt(params.sessionId, params.text, params.images, params.inlineTokens)
-      return { success: true }
-    })
-  )
-
-  /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，不 await 整轮） */
-  ipcMain.handle('agent:notebookPrompt', (_event, params: AgentNotebookPromptParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.notebookPrompt(params.sessionId, params.text, params.images, params.inlineTokens)
       return { success: true }
     })
   )

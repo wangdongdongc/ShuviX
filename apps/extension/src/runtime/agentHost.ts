@@ -17,9 +17,6 @@ import i18next from 'i18next'
 import {
   createAgentFactory,
   formatLanguageDisplay,
-  renderProfileSystemPrompt,
-  toInProcessAgentType,
-  NOTEBOOK_PROFILE_NAME,
   DISPATCH_TOOL_NAME,
   createAskTool,
   createBrowserTool,
@@ -48,12 +45,7 @@ import { resolveSessionModel, capsFor } from './resolveSessionModel'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { resolveInstructionForSession } from './instructionFilesRuntime'
 import { createExtensionPreviewTool } from './previewTool'
-import {
-  getSessionTools,
-  registerSessionTools,
-  createExtensionDispatchTool,
-  extensionSubAgentRegistry
-} from './subAgent'
+import { getSessionTools, registerSessionTools, createExtensionDispatchTool } from './subAgent'
 
 const logger: RuntimeLogger = {
   info: (m) => console.info('[shuvix]', m),
@@ -104,7 +96,12 @@ async function extensionPromptVars(ctx: PromptVarsCtx): Promise<PromptVars> {
     date: new Date().toISOString().slice(0, 10),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
-    workspaceIntro: handle ? projectIntro(handle.name) : SCRATCH_INTRO
+    workspaceIntro: handle ? projectIntro(handle.name) : SCRATCH_INTRO,
+    // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
+    // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给
+    ...(ctx.kind === 'root'
+      ? { notebookPath: (await sessionStore.getById(ctx.sessionId))?.settings?.notebookPath ?? '' }
+      : {})
   }
 }
 
@@ -249,21 +246,3 @@ const extensionAgentHost: AgentHostAdapter = {
 
 /** 扩展唯一 agent 工厂：派生（subAgentManager）与根会话（buildRuntimeSession）共用 */
 export const extensionAgentFactory = createAgentFactory(extensionAgentHost)
-
-/**
- * 组装笔记本一次性子代理的完整系统提示（agentRuntime.buildSessionTools 调用）。
- * 走 notebook 基座档案而非 default；笔记路径经 {{shuvix:notebookPath}} 就地替换 ——
- * 派生 agent 的 promptVars ctx 拿到的是 agentId，宿主无从解析该路径（与桌面同口径）。
- */
-export async function renderNotebookSystemPrompt(
-  sessionId: string,
-  cwd: string,
-  notebookPath: string
-): Promise<string> {
-  const profile = toInProcessAgentType(extensionSubAgentRegistry.getProfile(NOTEBOOK_PROFILE_NAME)!)
-  return renderProfileSystemPrompt(
-    profile,
-    { ...(await extensionPromptVars({ sessionId, kind: 'root', cwd })), notebookPath },
-    logger
-  )
-}

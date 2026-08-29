@@ -66,7 +66,7 @@ export interface SessionSettings {
   allowList?: string[]
   /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
   /**
    * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
@@ -182,13 +182,6 @@ interface ChatState {
    */
   filePreviewRequest: { absPath: string; nonce: number; openedBy: 'agent' | 'user' } | null
   /**
-   * 请求显示右侧「子智能体」面板的信号（子会话 id + 单调 nonce）。
-   * useAgentEvents 收到当前会话的 sub_session_register 时设置；宿主订阅后打开自己的右侧面板并切到
-   * subagent tab（面板属宿主外壳、各端 store 不同，故「事件检测」收敛到此处，「如何显示」仍由宿主实现）。
-   * 含 nonce 以便同一会话多次起子代理也能触发（值变化）。
-   */
-  subAgentRevealRequest: { subSessionId: string; nonce: number } | null
-  /**
    * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
    * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
    * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
@@ -268,6 +261,11 @@ interface ChatState {
   sessionActiveInputId: Record<string, string>
   /** 各 session 的 pi 消息队列快照（queue_update 事件镜像；只读） */
   sessionQueues: Record<string, SessionQueueSnapshot>
+  /**
+   * 各 session 的对话抽屉展开态（笔记本会话：输入框卡片顶部的限高对话面板）。
+   * 缺键 = 折叠；活动（流式/审批）的上升沿由 ThreadDrawer 自动置 true，手动折叠置 false。
+   */
+  sessionThreadOpen: Record<string, boolean>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -275,8 +273,6 @@ interface ChatState {
   /** 请求打开某文件预览（绝对路径）；preview 工具事件 / 笔记本 [[wiki-link]] / Files 面板点击触发。
    *  openedBy 缺省 'user'：只有智能体事件那条路显式传 'agent'（预览面板据此亮出来源横幅）。 */
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
-  /** 请求显示右侧「子智能体」面板（子会话 id）；由 useAgentEvents 收到当前会话 sub_session_register 时触发 */
-  requestSubAgentReveal: (subSessionId: string) => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
@@ -351,6 +347,8 @@ interface ChatState {
   setActiveInputId: (sessionId: string, requestId: string) => void
   /** 整体替换某会话的队列快照（queue_update 事件唯一写入点） */
   setSessionQueue: (sessionId: string, queue: SessionQueueSnapshot) => void
+  /** 设置某会话对话抽屉的展开/折叠态 */
+  setThreadOpen: (sessionId: string, open: boolean) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
   flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /**
@@ -523,7 +521,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   ...deriveActive(null),
   filePreviewRequest: null,
-  subAgentRevealRequest: null,
   draftRestoreRequest: null,
   pendingAgentProfile: null,
   messages: [],
@@ -534,6 +531,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionInputDrafts: {},
   sessionActiveInputId: {},
   sessionQueues: {},
+  sessionThreadOpen: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
@@ -569,13 +567,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   requestFilePreview: (absPath, openedBy = 'user') =>
     set((state) => ({
       filePreviewRequest: { absPath, nonce: (state.filePreviewRequest?.nonce ?? 0) + 1, openedBy }
-    })),
-  requestSubAgentReveal: (subSessionId) =>
-    set((state) => ({
-      subAgentRevealRequest: {
-        subSessionId,
-        nonce: (state.subAgentRevealRequest?.nonce ?? 0) + 1
-      }
     })),
   requestDraftRestore: (content, inlineTokens) =>
     set((state) => ({
@@ -908,6 +899,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       return { sessionQueues: { ...state.sessionQueues, [sessionId]: queue } }
     }),
+
+  setThreadOpen: (sessionId, open) =>
+    set((state) =>
+      state.sessionThreadOpen[sessionId] === open
+        ? {}
+        : { sessionThreadOpen: { ...state.sessionThreadOpen, [sessionId]: open } }
+    ),
 
   flushStreamingDeltas: (buffers) =>
     set((state) => {

@@ -1,7 +1,7 @@
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -23,17 +23,6 @@ export interface ChatGateway {
     sessionId: string,
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
-  ): Promise<void>
-
-  /**
-   * 笔记本会话发送：不走主会话，每次开启独立子智能体（fire-and-forget）。
-   * 上下文注入「当前笔记本文件路径 + 如需正文先用 read 读取」（路径由会话配置解析）。
-   */
-  notebookPrompt(
-    sessionId: string,
-    text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
-    inlineTokens?: Record<string, InlineToken>
   ): Promise<void>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */

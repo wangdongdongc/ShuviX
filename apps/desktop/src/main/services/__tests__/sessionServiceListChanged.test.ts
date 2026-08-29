@@ -56,7 +56,6 @@ vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
 vi.mock('../agentSession', () => ({ AgentSession: class {} }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({
-  renderNotebookSystemPrompt: vi.fn(),
   resolveProfileModelSpec: vi.fn()
 }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({

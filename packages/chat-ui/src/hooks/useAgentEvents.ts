@@ -164,15 +164,9 @@ export function useAgentEvents(): void {
         promptInlineTokens: event.inlineTokens,
         contextNote: event.contextNote
       })
-      // 用户主动触发（无 parentToolCallId，如笔记本会话）→ 发「显示子智能体面板」信号（事件检测统一在此；
-      // 各宿主订阅 chatStore.subAgentRevealRequest 后打开自己的右侧面板并切到 subagent tab）。
-      // Agent 经派发工具自行触发的（有 parentToolCallId）内联在对话流的 ToolCallBlock 卡片中，不开右侧面板。
-      if (
-        !event.parentToolCallId &&
-        event.parentSessionId === useChatStore.getState().activeSessionId
-      ) {
-        useChatStore.getState().requestSubAgentReveal(event.sessionId)
-      }
+      // 刻意不自动打开右侧 Sub-agent 面板：工具派发的（有 parentToolCallId）内联在对话流的
+      // ToolCallBlock 卡片中；非工具派发的（如 workflow run() 起的 agent）经工具栏胶囊的
+      // 数量徽标可见，用户自己决定看不看 —— 自动弹面板打断当前阅读。
       return
     }
     if (event.type === 'sub_session_end') {

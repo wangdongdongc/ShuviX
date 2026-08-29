@@ -86,8 +86,6 @@
     "saved": "保存済み",
     "saveFailed": "保存に失敗しました",
     "closeFile": "閉じる",
-    "promptPlaceholder": "ノートブックに指示（送信ごとに独立サブエージェントを起動）…",
-    "send": "送信",
     "menu": {
       "textFormat": "テキスト書式",
       "paragraph": "段落設定",
@@ -210,6 +208,9 @@
     "cacheWrite": "キャッシュ書込"
   },
   "pendingInputs": {
+    "title": "確認待ち {{count}}",
+    "expand": "確認事項を展開",
+    "collapse": "確認事項を折りたたむ",
     "submitAllFilled": "入力済みを送信",
     "otherPlaceholder": "そのまま考えを入力すると、Enter で AI に伝わります...",
     "submitOther": "AI にフィードバック",
@@ -228,6 +229,11 @@
     "nextTurnHint": "次回に持ち越し：次のメッセージ送信時に一緒に送られます（中止しても消えません）",
     "images": "画像 {{count}} 枚",
     "emptyText": "(画像のみ)"
+  },
+  "threadDrawer": {
+    "running": "実行中…",
+    "expand": "会話を展開",
+    "collapse": "会話を折りたたむ"
   },
   "toolCall": {
     "generating": "生成中...",

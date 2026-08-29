@@ -405,11 +405,6 @@ export {
   type CreatedAgent,
   type ToolResolveRequest
 } from './agentProfile/createAgent'
-export {
-  notebookTaskName,
-  runNotebookTask,
-  type NotebookTaskInputs
-} from './subagent/notebookContext'
 // harness 接入层：会话状态的存储与上下文构建交给 pi AgentHarness。
 // entry 树是唯一真理源，entriesToChatMessages 是它的「UI 视角」（唯一投影方向）。
 export {

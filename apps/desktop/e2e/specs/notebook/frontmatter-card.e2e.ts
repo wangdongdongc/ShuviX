@@ -363,7 +363,8 @@ describe('frontmatter 属性卡', () => {
     const badge = await app.main.eval<string>(
       `document.querySelector('.cm-shuvix-fmcard-badge')?.textContent ?? ''`
     )
-    expect(badge).toBe('ShuviX wiki-entry · v1')
+    // 徽章文案取 shuvixMdDescriptors 的 badge（f18e6d2 起 wiki-entry 有描述符），非裸类型名回退
+    expect(badge).toBe('ShuviX wiki entry · v1')
 
     // unknown 状态不 paint：等异步校验落定后，状态徽章仍隐藏且无任何 is-* 语义类
     await sleep(800)

@@ -86,8 +86,6 @@
     "saved": "已保存",
     "saveFailed": "保存失败",
     "closeFile": "关闭",
-    "promptPlaceholder": "对笔记本下达指令（每次发送开启一个独立子智能体）…",
-    "send": "发送",
     "menu": {
       "textFormat": "文本格式",
       "paragraph": "段落设置",
@@ -210,6 +208,9 @@
     "cacheWrite": "缓存写入"
   },
   "pendingInputs": {
+    "title": "待处理询问 {{count}}",
+    "expand": "展开询问",
+    "collapse": "收起询问",
     "submitAllFilled": "提交已填",
     "otherPlaceholder": "或直接输入你的想法，回车反馈给 AI...",
     "submitOther": "反馈给 AI",
@@ -228,6 +229,11 @@
     "nextTurnHint": "留到下轮：下次发送消息时一并带出；中止也不会清空",
     "images": "{{count}} 张图",
     "emptyText": "(仅图片)"
+  },
+  "threadDrawer": {
+    "running": "运行中…",
+    "expand": "展开对话",
+    "collapse": "折叠对话"
   },
   "toolCall": {
     "generating": "生成中...",

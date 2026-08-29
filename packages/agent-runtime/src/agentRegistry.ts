@@ -13,7 +13,7 @@ export interface AgentRegistryEntry {
   parentAgentId: string
   /** 派生层级（根会话 = 0，直接派生 = 1，依此类推） */
   depth: number
-  /** agent profile 名（AgentProfile.name / 'notebook-task' 等） */
+  /** agent profile 名（AgentProfile.name） */
   profileName: string
   displayName: string
   description: string

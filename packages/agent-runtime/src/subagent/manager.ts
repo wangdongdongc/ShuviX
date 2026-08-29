@@ -127,9 +127,9 @@ export interface RunTaskParams {
   promptInlineTokens?: Record<string, InlineToken>
   parentAbortSignal?: AbortSignal
   /**
-   * 在 prompt 之前预置进派生 agent 上下文的消息（如笔记本会话把当前 md 内容作为一条 user message 注入）。
+   * 在 prompt 之前预置进派生 agent 上下文的消息（调用方注入额外背景材料的通用口）。
    * 这些消息进 LLM 上下文。其文本会随 sub_session_register 的 contextNote 广播给面板，
-   * 故面板「笔记本内容」卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
+   * 故面板的上下文卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
    */
   contextMessages?: AgentMessage[]
   /**

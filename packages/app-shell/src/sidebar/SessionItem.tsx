@@ -14,7 +14,7 @@ export interface SessionItemProps {
   pendingCount?: number
   /** 专注模式下淡化（由宿主计算后传入） */
   dim?: boolean
-  /** 笔记本会话（绑定 md 文件，纯预览）—— 显示笔记本图标，选中后中间区为 live-preview */
+  /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
   isNotebook?: boolean
   onSelect: (id: string) => void
   onDelete?: (id: string) => void

@@ -4,7 +4,6 @@ import type { UpdateEvent } from '../main/types'
 import type {
   AgentInitParams,
   AgentPromptParams,
-  AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
@@ -133,10 +132,6 @@ const api = {
 
     /** 向指定 session 发送消息 */
     prompt: (params: AgentPromptParams) => ipcRenderer.invoke('agent:prompt', params),
-
-    /** 笔记本会话发送：每次开启独立子智能体 */
-    notebookPrompt: (params: AgentNotebookPromptParams) =>
-      ipcRenderer.invoke('agent:notebookPrompt', params),
 
     /** 继续与已存在子代理对话：追加一轮用户消息 */
     subAgentPrompt: (params: AgentSubAgentPromptParams) =>

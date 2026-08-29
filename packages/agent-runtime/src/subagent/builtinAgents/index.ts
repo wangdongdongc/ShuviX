@@ -166,7 +166,7 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
 
 /**
  * 「基座档案」——某种会话形态的创建基座，而非可派发/可切换的具名 agent：
- * `default` 是主会话，`notebook` 是笔记本每次发送派生的一次性子代理。
+ * `default` 是主会话，`notebook` 是笔记本会话的根 Agent。
  *
  * 两者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该出现在派发工具的
  * 可用名单里（会诱导 LLM 派发一个全权限/错场景的类型），也不该作为 `/<agentName>`

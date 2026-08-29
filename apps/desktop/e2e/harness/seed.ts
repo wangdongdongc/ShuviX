@@ -338,13 +338,14 @@ export async function createProject(main: CdpClient, seed: ProjectSeed): Promise
  */
 export async function createAgentSession(
   main: CdpClient,
-  opts: { projectId?: string; title?: string } = {}
+  opts: { projectId?: string; title?: string; notebookPath?: string } = {}
 ): Promise<{ sid: string; systemPrompt: string }> {
   return main.eval(
     `(async () => {
       const s = await window.api.session.create(${JSON.stringify({
         title: opts.title ?? 'e2e',
-        ...(opts.projectId ? { projectId: opts.projectId } : {})
+        ...(opts.projectId ? { projectId: opts.projectId } : {}),
+        ...(opts.notebookPath ? { notebookPath: opts.notebookPath } : {})
       })})
       const sid = s.id
       const info = await window.api.agent.getInfo(sid, { ensure: true })

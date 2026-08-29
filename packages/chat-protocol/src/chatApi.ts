@@ -57,7 +57,7 @@ export interface SessionSettings {
    * 系统提示词与内置工具白名单随之更换（会话历史不受影响，切换即重建运行时）。
    */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（纯预览，无对话/Agent） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
   /**
    * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
@@ -226,19 +226,6 @@ export interface AgentPromptParams {
   sessionId: string
   text: string
   images?: ImageContentParam[]
-  inlineTokens?: Record<string, InlineToken>
-}
-
-/**
- * 笔记本会话发送：不走主会话，每次 prompt 开启一个独立子智能体；
- * 子智能体上下文注入「当前笔记本文件路径 + 如需正文先用 read 读取」（路径后端由会话配置解析）。
- */
-export interface AgentNotebookPromptParams {
-  sessionId: string
-  /** 含内联 Token 标记的展示文本（slash 命令 / skill 展开为 {{shuvixInlineToken:uid}} 标记 + 参数） */
-  text: string
-  images?: ImageContentParam[]
-  /** 前端展开的内联 Token（slash 命令 / skill 等）；后端解析为发给子代理的真实指令并供面板渲染标签 */
   inlineTokens?: Record<string, InlineToken>
 }
 
@@ -475,8 +462,6 @@ export interface SessionChannelApi {
   agent: {
     init: (params: AgentInitParams) => Promise<AgentInitResult>
     prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
-    /** 笔记本会话发送：每次开启独立子智能体（fire-and-forget，进展走事件流） */
-    notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
     /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，进展走事件流） */
     subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
     /** 销毁子会话：中止其 Agent 循环并从注册表移除（面板里彻底消失）。子代理基础能力，各端必须实现。 */

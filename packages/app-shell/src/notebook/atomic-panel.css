@@ -124,8 +124,10 @@
 }
 .atomic-panel .cm-scroller {
   overflow: auto;
-  /* 底部留白加大：笔记本会话底部悬浮输入框约 ~120px，留白让末尾内容可滚动到输入框之上不被遮挡 */
-  padding: 24px 28px 128px;
+  /* 底部留白 = 24px + 悬浮输入卡片实高（NotebookSession 经 onHeightChange 写入 --chat-input-h，
+     对话抽屉展开时卡片会长高，让位随之增大）；无变量的嵌入场景（FilePreview 等）回落 104px
+     以维持原 128px 总留白 */
+  padding: 24px 28px calc(24px + var(--chat-input-h, 104px));
 }
 .atomic-panel .cm-content {
   max-width: 700px;

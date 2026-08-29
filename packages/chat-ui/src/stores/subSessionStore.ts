@@ -31,7 +31,7 @@ export interface SubSessionState {
   prompt: string
   /** prompt 中内联 Token（slash 命令 / skill）字典；面板据此把 prompt 渲染为命令标签 + 文本 */
   promptInlineTokens?: Record<string, InlineToken>
-  /** 额外注入上下文的人读文本（如笔记本当前内容）；面板以折叠用户消息卡展示 */
+  /** 额外注入上下文的人读文本（runTask 的 contextMessages）；面板以折叠用户消息卡展示 */
   contextNote?: string
   status: SubSessionStatus
   startedAt: number

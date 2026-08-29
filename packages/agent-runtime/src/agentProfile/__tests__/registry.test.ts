@@ -360,10 +360,10 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
   })
 })
 
-describe('notebook 档案钉板(笔记本一次性子代理的基座)', () => {
-  it('工具集不含 ask / agent —— 面板只读无法应答,且不嵌套派发', () => {
+describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
+  it('工具集含 ask（对话抽屉可应答审批/提问）但不含 agent —— 不嵌套派发', () => {
     const built = profile(NOTEBOOK_PROFILE_NAME)
-    expect(built.tools).not.toContain('ask')
+    expect(built.tools).toContain('ask')
     expect(built.tools).not.toContain('agent')
     expect(built.tools).toContain('read')
     expect(built.tools).toContain('edit')

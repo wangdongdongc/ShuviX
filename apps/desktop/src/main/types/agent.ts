@@ -11,7 +11,6 @@ export type {
   AgentRuntimeToolInfo,
   ImageContentParam,
   AgentPromptParams,
-  AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,

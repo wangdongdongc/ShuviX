@@ -55,20 +55,13 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
 
 /**
  * 揭示信号 → 会话面板（宿主常驻组件内调用一次；面板收起时内容未挂载，故须在此消费）：
- *   - subAgentRevealRequest（当前会话注册子智能体）→ 展开并切到 Sub-agent
  *   - filePreviewRequest（仅 previewInPanel=true 的宿主）→ 展开并切到 Preview ——
  *     预览目标本身由宿主经 usePreviewRequestBridge 落入共享 usePreviewPanelStore；
  *     桌面主窗预览在 app 级右侧面板（useRightPanelBridge 揭示），不传此标志。
- * 信号均含单调 nonce，重复触发同样生效。enabled=false 时忽略（如 WebUI / 悬浮占位态）。
+ * （Sub-agent tab 不再自动揭示 —— 子会话经工具栏胶囊的数量徽标可见，由用户手动打开。）
+ * 信号含单调 nonce，重复触发同样生效。enabled=false 时忽略（如 WebUI / 悬浮占位态）。
  */
 export function useSessionPanelReveal(enabled = true, previewInPanel = false): void {
-  const subAgentReveal = useChatStore((s) => s.subAgentRevealRequest)
-  useEffect(() => {
-    if (!enabled || !subAgentReveal) return
-    const sid = useChatStore.getState().activeSessionId
-    if (sid) useSessionPanelStore.getState().show(sid, 'subagent')
-  }, [subAgentReveal, enabled])
-
   const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
   useEffect(() => {
     if (!enabled || !previewInPanel || !filePreviewRequest) return

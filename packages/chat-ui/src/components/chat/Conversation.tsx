@@ -61,7 +61,7 @@ function streamingPlaceholder(sessionId: string): AssistantMessage {
  * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
  * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
  */
-function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
+export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
   const items: VisibleItem[] = []
   let group: AssistantMessage[] = []
 

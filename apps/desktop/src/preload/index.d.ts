@@ -7,7 +7,6 @@ import type {
   AgentInitResult,
   AgentRuntimeInfo,
   AgentPromptParams,
-  AgentNotebookPromptParams,
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
@@ -428,7 +427,6 @@ declare global {
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
       prompt: (params: AgentPromptParams) => Promise<{ success: boolean }>
-      notebookPrompt: (params: AgentNotebookPromptParams) => Promise<{ success: boolean }>
       subAgentPrompt: (params: AgentSubAgentPromptParams) => Promise<{ success: boolean }>
       subSessionDestroy: (subSessionId: string) => Promise<{ success: boolean }>
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>

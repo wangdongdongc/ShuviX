@@ -17,7 +17,7 @@ const isPinnedWindow = window.location.hash.startsWith('#pinned-chat')
  *   - filePreviewRequest（preview 工具 / Files 面板点击 / 笔记本 wiki-link）经共享
  *     usePreviewRequestBridge 落为预览目标，主窗再展开右侧面板并切到 preview tab
  *     （悬浮窗由 PreviewOverlay 按目标自动露出，不动窗口宽度）。
- * （子智能体揭示信号 subAgentRevealRequest 已随 Sub-agent 移入会话面板，由 ChatView 消费。）
+ * （Sub-agent tab 无自动揭示信号 —— 子会话经工具栏胶囊徽标可见，由用户手动打开。）
  *
  * 服务端项目若有自己的预览面板，会用它自己的等价桥替换本文件。
  */

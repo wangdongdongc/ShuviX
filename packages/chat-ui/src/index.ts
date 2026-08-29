@@ -45,6 +45,8 @@ export { InstructionBubble } from './components/chat/InstructionBubble'
 export { SystemNoticeCard } from './components/chat/SystemNoticeCard'
 export { StreamingFooter } from './components/chat/StreamingFooter'
 export { PendingInputsPanel } from './components/chat/PendingInputsPanel'
+export { PendingInputsDrawer } from './components/chat/PendingInputsDrawer'
+export { ThreadDrawer } from './components/chat/ThreadDrawer'
 export { SlashCommandPopover } from './components/chat/SlashCommandPopover'
 
 // ── 对话域 stores ──

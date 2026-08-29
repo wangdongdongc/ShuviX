@@ -58,7 +58,7 @@ export function getSessionTools(rootSessionId: string): Map<string, AnyAgentTool
  * 默认子代理不在此：它由 createExtensionDispatchTool 以 defaultAgentType 注入，`agent` 省略即用。
  */
 /**
- * 扩展支持的内置档案子集：两个基座档案 default（主会话）/ notebook（笔记本一次性子代理）
+ * 扩展支持的内置档案子集：两个基座档案 default（主会话）/ notebook（笔记本会话根 Agent）
  * + visualization。explore 依赖 ls/grep/glob（ripgrep）扩展没有，coding 依赖 bash/ssh/database
  * 更是无从谈起；widget/wiki 因缺根目录参数被构建器自动跳过。
  */
