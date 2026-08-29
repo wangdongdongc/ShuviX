@@ -836,7 +836,16 @@ declare global {
       createTab: (url?: string) => Promise<string>
       closeTab: (tabId: string) => Promise<void>
       activateTab: (tabId: string) => Promise<void>
-      listTabs: () => Promise<Array<{ id: string; url: string; title: string; active: boolean }>>
+      listTabs: () => Promise<
+        Array<{
+          id: string
+          url: string
+          title: string
+          active: boolean
+          cdpAttached: boolean
+          cdpIntercepting: boolean
+        }>
+      >
       navigate: (tabId: string, url: string) => Promise<void>
       goBack: (tabId: string) => Promise<void>
       goForward: (tabId: string) => Promise<void>
@@ -864,6 +873,13 @@ declare global {
       ) => () => void
       onTabFaviconUpdated: (
         callback: (payload: { tabId: string; favicon?: string }) => void
+      ) => () => void
+      onTabCdpState: (
+        callback: (payload: {
+          tabId: string
+          cdpAttached: boolean
+          cdpIntercepting: boolean
+        }) => void
       ) => () => void
       onDidStartLoading: (callback: (payload: { tabId: string }) => void) => () => void
       onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) => () => void

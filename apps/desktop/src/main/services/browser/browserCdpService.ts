@@ -10,7 +10,7 @@
  */
 
 import { CdpAttachManager, type CdpTabTransportFactory } from '@shuvix/agent-runtime'
-import { getTabView } from './browserViewService'
+import { getBrowserHostWindow, getTabView } from './browserViewService'
 import { createLogger } from '../../logger'
 
 const log = createLogger('BrowserCDP')
@@ -76,5 +76,21 @@ const factory: CdpTabTransportFactory = {
   }
 }
 
+/**
+ * CDP 状态标识推送：attach/detach/拦截翻转 → renderer（BrowserCard 的 AI 接入/请求拦截标识）。
+ * 桌面的 attach 刻意跨轮持久（保 network/console 缓冲），没有扩展端的原生横幅——
+ * 这条事件是用户能看见"该 tab 被 agent 接入/内容可能被改写"的唯一通道。
+ */
+function broadcastCdpState(tabId: string): void {
+  const win = getBrowserHostWindow()
+  if (!win || win.isDestroyed()) return
+  const state = browserCdpManager.cdpState(tabId)
+  win.webContents.send('browser-view:tab-cdp-state', {
+    tabId,
+    cdpAttached: state.attached,
+    cdpIntercepting: state.intercepting
+  })
+}
+
 /** 应用级单例；tab 关闭 / app 退出时由 browserViewService 调 detach/detachAll */
-export const browserCdpManager = new CdpAttachManager(factory)
+export const browserCdpManager = new CdpAttachManager(factory, broadcastCdpState)

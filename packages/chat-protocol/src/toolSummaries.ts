@@ -33,8 +33,15 @@ const EXTRA_SUMMARY_BUILDERS: Record<string, ToolSummaryBuilder> = {
   grep: field('pattern'),
   skill: field('name'),
   // ── 统一 browser 工具（桌面 + 扩展）：action + 该 action 最有信息量的参数 ──
+  // method 是 cdp/events 的主参数（如 "Fetch.enable"）：折叠态必须露出，用户才看得见原生协议调用
   browser: (args) => {
-    const detail = asStr(args.url) ?? asStr(args.text) ?? asStr(args.key) ?? asStr(args.uid)
+    const detail =
+      asStr(args.url) ??
+      asStr(args.text) ??
+      asStr(args.key) ??
+      asStr(args.uid) ??
+      asStr(args.method) ??
+      asStr(args.event)
     return [asStr(args.action), detail].filter(Boolean).join(' ') || undefined
   },
   // ── 扩展端旧离散浏览器工具（已并入 browser，保留供历史会话展示） ──

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import {
   ArrowLeft,
   ArrowRight,
+  Bot,
   ExternalLink,
   Globe,
   RotateCw,
@@ -153,6 +154,20 @@ export function BrowserCard({
           </div>
         </form>
 
+        {/* AI 接入标识：CDP attach 在桌面跨轮持久且无原生横幅，这里是用户唯一的可见提示。
+            警示色 = 请求拦截生效（页面内容可能被 agent 修改/替换）；中性色 = 仅接入（可观察/操作）。 */}
+        {(tab.cdpAttached || tab.cdpIntercepting) && (
+          <span
+            title={t(
+              tab.cdpIntercepting ? 'browser.agent.intercepting' : 'browser.agent.connected'
+            )}
+            className={`flex-shrink-0 p-0.5 ${
+              tab.cdpIntercepting ? 'text-amber-500' : 'text-text-tertiary/70'
+            }`}
+          >
+            <Bot size={11} />
+          </span>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation()

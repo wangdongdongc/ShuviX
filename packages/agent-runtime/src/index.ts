@@ -107,6 +107,7 @@ export {
   TabCdpSession,
   type CdpTabTransport,
   type CdpTabTransportFactory,
+  type TabCdpState,
   type NetworkEntry,
   type ConsoleEntry,
   type RawEventEntry

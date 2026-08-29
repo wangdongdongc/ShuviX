@@ -29,7 +29,9 @@ export function useBrowserTabsBridge(): void {
             url,
             title: '',
             isLoading: false,
-            loadError: null
+            loadError: null,
+            cdpAttached: false,
+            cdpIntercepting: false
           }
           return { tabs: [...s.tabs, tab], ...(active ? { activeTabId: tabId } : {}) }
         })
@@ -48,6 +50,10 @@ export function useBrowserTabsBridge(): void {
       }),
       api.onTabFaviconUpdated(({ tabId, favicon }) => {
         updateTab(tabId, { favicon })
+      }),
+      // agent 的 CDP 接入/请求拦截状态（卡片上的 AI 标识）
+      api.onTabCdpState(({ tabId, cdpAttached, cdpIntercepting }) => {
+        updateTab(tabId, { cdpAttached, cdpIntercepting })
       }),
       api.onDidStartLoading(({ tabId }) => {
         updateTab(tabId, { isLoading: true, loadError: null })
@@ -75,7 +81,9 @@ export function useBrowserTabsBridge(): void {
               url: t.url,
               title: t.title,
               isLoading: false,
-              loadError: null
+              loadError: null,
+              cdpAttached: t.cdpAttached,
+              cdpIntercepting: t.cdpIntercepting
             }
         )
         const active = list.find((t) => t.active)

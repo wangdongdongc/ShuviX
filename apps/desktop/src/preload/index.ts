@@ -601,7 +601,14 @@ const api = {
     activateTab: (tabId: string) => ipcRenderer.invoke('browser-view:activate-tab', tabId),
     listTabs: () =>
       ipcRenderer.invoke('browser-view:list-tabs') as Promise<
-        Array<{ id: string; url: string; title: string; active: boolean }>
+        Array<{
+          id: string
+          url: string
+          title: string
+          active: boolean
+          cdpAttached: boolean
+          cdpIntercepting: boolean
+        }>
       >,
     // ---- 导航（按 tab） ----
     navigate: (tabId: string, url: string) =>
@@ -634,6 +641,10 @@ const api = {
       onBrowserViewEvent('browser-view:tab-title-updated', callback),
     onTabFaviconUpdated: (callback: (payload: { tabId: string; favicon?: string }) => void) =>
       onBrowserViewEvent('browser-view:tab-favicon-updated', callback),
+    /** tab 的 CDP 状态变化（agent 接入/断开、请求拦截开/关）——卡片上的 AI 标识 */
+    onTabCdpState: (
+      callback: (payload: { tabId: string; cdpAttached: boolean; cdpIntercepting: boolean }) => void
+    ) => onBrowserViewEvent('browser-view:tab-cdp-state', callback),
     /** tab spinner 开始转（Chromium 加载位置真） */
     onDidStartLoading: (callback: (payload: { tabId: string }) => void) =>
       onBrowserViewEvent('browser-view:did-start-loading', callback),

@@ -344,14 +344,26 @@ export function getTabView(tabId: string): WebContentsView | null {
   return tabs.get(tabId) ?? null
 }
 
-/** tab 列表快照（renderer 水合用），顺序 = tab 条顺序 */
-export function listTabs(): Array<{ id: string; url: string; title: string; active: boolean }> {
-  return [...tabs.entries()].map(([id, view]) => ({
-    id,
-    url: view.webContents.getURL() || 'about:blank',
-    title: view.webContents.getTitle(),
-    active: id === activeTabId
-  }))
+/** tab 列表快照（renderer 水合用），顺序 = tab 条顺序；带 CDP 状态供重载后恢复标识 */
+export function listTabs(): Array<{
+  id: string
+  url: string
+  title: string
+  active: boolean
+  cdpAttached: boolean
+  cdpIntercepting: boolean
+}> {
+  return [...tabs.entries()].map(([id, view]) => {
+    const cdp = browserCdpManager.cdpState(id)
+    return {
+      id,
+      url: view.webContents.getURL() || 'about:blank',
+      title: view.webContents.getTitle(),
+      active: id === activeTabId,
+      cdpAttached: cdp.attached,
+      cdpIntercepting: cdp.intercepting
+    }
+  })
 }
 
 /**

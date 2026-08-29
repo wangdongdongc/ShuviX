@@ -68,12 +68,20 @@ export interface RawEventEntry {
   truncatedFrom?: number
 }
 
+/** 一个 tab 的 CDP 状态快照（宿主 UI 标识用）：attached=agent 已接入；intercepting=请求拦截生效中 */
+export interface TabCdpState {
+  attached: boolean
+  intercepting: boolean
+}
+
 /** 一个 tab 的自动化会话：controller（UID 映射）+ CDP 命令 + 事件缓冲（网络/控制台摘要 + 通用环形） */
 export class TabCdpSession {
   readonly controller: CdpController
 
   private networkEnabled = false
   private consoleEnabled = false
+  /** 请求拦截是否生效（Fetch.enable / Network.setRequestInterception 有 patterns）——页面内容可能被改写 */
+  private interceptionEnabled = false
   private networkEntries: NetworkEntry[] = []
   private networkMap = new Map<string, NetworkEntry>() // requestId → entry
   private consoleEntries: ConsoleEntry[] = []
@@ -87,13 +95,42 @@ export class TabCdpSession {
   private autoDismissDialogs = true
   private dialogEnabled = false
 
-  constructor(private transport: CdpTabTransport) {
+  constructor(
+    private transport: CdpTabTransport,
+    /** 拦截状态翻转时回调（宿主借 CdpAttachManager 的 onStateChange 推给 UI） */
+    private notifyStateChange?: () => void
+  ) {
     this.controller = new CdpController(transport)
     this.unsubscribe = transport.onEvent((method, params) => this.onCdpMessage(method, params))
   }
 
-  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
-    return this.transport.sendCommand<T>(method, params)
+  async send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+    const result = await this.transport.sendCommand<T>(method, params)
+    // 只在命令成功后记账：失败的 Fetch.enable 不应点亮拦截标识
+    this.trackInterception(method, params)
+    return result
+  }
+
+  /** 请求拦截是否生效（该 tab 加载的内容可能被 agent 修改/替换） */
+  get intercepting(): boolean {
+    return this.interceptionEnabled
+  }
+
+  /**
+   * send 必经点上的拦截状态记账。cdp 逃生口是启用拦截的唯一通道，
+   * 所以盯住 Fetch.enable/disable 与（已废弃但仍可用的）Network.setRequestInterception 即可。
+   */
+  private trackInterception(method: string, params?: Record<string, unknown>): void {
+    let next: boolean | null = null
+    if (method === 'Fetch.enable') next = true
+    else if (method === 'Fetch.disable') next = false
+    else if (method === 'Network.setRequestInterception') {
+      const patterns = (params as { patterns?: unknown[] } | undefined)?.patterns
+      next = Array.isArray(patterns) && patterns.length > 0
+    }
+    if (next === null || next === this.interceptionEnabled) return
+    this.interceptionEnabled = next
+    this.notifyStateChange?.()
   }
 
   // ====== 通用事件缓冲 ======
@@ -171,6 +208,8 @@ export class TabCdpSession {
     this.consoleCounter = 0
     this.networkEnabled = false
     this.consoleEnabled = false
+    // 拦截状态随 debugger 会话消灭（detach 即清除 Fetch 状态），不单独 notify——manager 在 detach 后统一通知
+    this.interceptionEnabled = false
     this.eventBuffer = []
     this.eventSeq = 0
     this.dialogEnabled = false
@@ -290,7 +329,11 @@ export class CdpAttachManager {
   private sessions = new Map<string, TabCdpSession>()
   private pending = new Map<string, Promise<TabCdpSession>>()
 
-  constructor(private factory: CdpTabTransportFactory) {}
+  constructor(
+    private factory: CdpTabTransportFactory,
+    /** 某 tab 的 CDP 状态（attach/detach/拦截翻转）变化时回调；宿主借此推 UI 标识，用 cdpState 取快照 */
+    private onStateChange?: (tabId: string) => void
+  ) {}
 
   /** 懒 attach + 缓存；每 tab 一个 TabCdpSession（并发调用共享同一次 attach） */
   async session(tabId: string): Promise<TabCdpSession> {
@@ -301,8 +344,9 @@ export class CdpAttachManager {
 
     const attaching = (async () => {
       const transport = await this.factory.attach(tabId)
-      const session = new TabCdpSession(transport)
+      const session = new TabCdpSession(transport, () => this.onStateChange?.(tabId))
       this.sessions.set(tabId, session)
+      this.onStateChange?.(tabId)
       return session
     })()
     this.pending.set(tabId, attaching)
@@ -323,6 +367,7 @@ export class CdpAttachManager {
     const session = this.sessions.get(tabId)
     if (!session) return
     this.sessions.delete(tabId)
+    this.onStateChange?.(tabId)
     await session.dispose()
   }
 
@@ -337,9 +382,16 @@ export class CdpAttachManager {
     if (!session) return
     this.sessions.delete(tabId)
     session.disposeLocal()
+    this.onStateChange?.(tabId)
   }
 
   isAttached(tabId: string): boolean {
     return this.sessions.has(tabId)
+  }
+
+  /** 某 tab 当前的 CDP 状态快照（宿主 UI 标识用） */
+  cdpState(tabId: string): TabCdpState {
+    const session = this.sessions.get(tabId)
+    return { attached: !!session, intercepting: session?.intercepting ?? false }
   }
 }

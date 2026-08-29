@@ -37,6 +37,10 @@ export interface BrowserTabInfo {
   favicon?: string
   isLoading: boolean
   loadError: { errorCode: number; errorDescription: string; url: string } | null
+  /** agent 已通过 CDP 接入此 tab（可观察和操作页面）；桌面 attach 跨轮持久，标识随之常亮 */
+  cdpAttached: boolean
+  /** agent 开启了请求拦截（Fetch 域）——此 tab 加载的内容可能被修改或替换 */
+  cdpIntercepting: boolean
 }
 
 /**

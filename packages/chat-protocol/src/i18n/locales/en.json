@@ -974,6 +974,10 @@
     "newTab": "New tab",
     "closeTab": "Close tab",
     "untitledTab": "New Tab",
+    "agent": {
+      "connected": "AI agent is connected to this tab (can observe and operate the page)",
+      "intercepting": "AI agent has request interception enabled — content this tab loads may be modified or replaced"
+    },
     "cert": {
       "title": "Untrusted certificate: {{host}}",
       "continue": "Continue anyway",

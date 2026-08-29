@@ -974,6 +974,10 @@
     "newTab": "新建标签页",
     "closeTab": "关闭标签页",
     "untitledTab": "新标签页",
+    "agent": {
+      "connected": "AI 已接入此标签页（可观察和操作页面）",
+      "intercepting": "AI 已开启请求拦截——此标签页加载的内容可能被修改或替换"
+    },
     "cert": {
       "title": "证书不受信任：{{host}}",
       "continue": "继续访问",
