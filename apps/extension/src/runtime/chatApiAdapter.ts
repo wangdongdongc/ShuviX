@@ -289,12 +289,15 @@ export const chatApiAdapter: ChatApi = {
     list: async () => sessionStore.list(),
     create: async (params) => {
       const sel = await activeSelection()
-      return sessionStore.create({
+      const session = await sessionStore.create({
         ...sel,
         projectId: params?.projectId ?? null,
         notebookPath: params?.notebookPath,
         title: params?.title
       })
+      // 与桌面 sessionService.create 对齐：列表成员变化 → 信号事件，订阅端重拉
+      appEventBus.publish({ type: 'session.listChanged' })
+      return session
     },
     updateTitle: async ({ id, title }) => {
       await sessionStore.updateTitle(id, title)
@@ -317,6 +320,7 @@ export const chatApiAdapter: ChatApi = {
       await removeRuntimeSession(id)
       removeTitler(id)
       await sessionStore.delete(id)
+      appEventBus.publish({ type: 'session.listChanged' })
       return ok
     },
     getById: async (id) => sessionStore.getById(id),

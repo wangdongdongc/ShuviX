@@ -47,6 +47,7 @@ vi.mock('../../agents/agentHost', () => ({
 }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: vi.fn(),
+  broadcastSessionListChanged: vi.fn(),
   broadcastSessionTitleChanged: mocks.broadcastTitleChanged
 }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({

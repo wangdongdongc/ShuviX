@@ -23,3 +23,14 @@ export function broadcastSessionConfigChanged(sessionId: string): void {
 export function broadcastSessionTitleChanged(sessionId: string, title: string): void {
   appEventBus.publish({ type: 'session.titleChanged', sessionId, title })
 }
+
+/**
+ * 发布"会话列表成员已变化"事件（AppEvent 'session.listChanged'）。
+ *
+ * 触发场景: sessionService 的 create / delete / updateProjectId 落库后。信号事件不带载荷，
+ * 各端消费者重拉 session.list —— 让 IPC/CLI/wiki 去重等非 UI 流程创建的会话也能出现在
+ * 所有窗口（主窗/悬浮窗）的会话列表里；UI 流程自身的刷新照旧，属幂等重复。
+ */
+export function broadcastSessionListChanged(): void {
+  appEventBus.publish({ type: 'session.listChanged' })
+}

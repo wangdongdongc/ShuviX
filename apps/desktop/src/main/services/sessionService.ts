@@ -44,6 +44,7 @@ import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { renderNotebookSystemPrompt, resolveProfileModelSpec } from '../agents/agentHost'
 import {
   broadcastSessionConfigChanged,
+  broadcastSessionListChanged,
   broadcastSessionTitleChanged
 } from '../utils/sessionConfigBroadcast'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
@@ -171,6 +172,7 @@ export class SessionService {
       updatedAt: now
     }
     sessionDao.insert(session)
+    broadcastSessionListChanged()
     // 注：指令文件不在创建时注入。改为在用户首次发送 prompt 时按当前配置懒注入
     // （由 AgentSession.prompt 判定 agent 上下文是否为空），使得用户可以在
     // 创建会话后、发送第一条消息前任意切换配置。
@@ -272,6 +274,7 @@ export class SessionService {
   /** 更新会话所属项目 */
   updateProjectId(id: string, projectId: string | null): void {
     sessionDao.updateProjectId(id, projectId)
+    broadcastSessionListChanged()
   }
 
   /** 更新命令免询问（bash + ssh 统一开关） */
@@ -315,6 +318,7 @@ export class SessionService {
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)
     sessionDao.deleteById(id)
+    broadcastSessionListChanged()
     // 清理临时会话工作目录
     const tempDir = getTempWorkspace(id)
     if (existsSync(tempDir)) {
