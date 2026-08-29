@@ -960,7 +960,8 @@
     "tasksLogMissing": "ログファイルがありません",
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",
     "tasksNoOutput": "まだ出力はありません",
-    "tasksStatusEnded": "終了"
+    "tasksStatusEnded": "終了",
+    "calendar": "カレンダー"
   },
   "browser": {
     "back": "戻る",

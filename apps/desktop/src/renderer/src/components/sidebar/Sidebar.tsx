@@ -1,21 +1,16 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
-import { getChatApi, useChatStore, type Session } from '@shuvix/chat-ui'
+import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import {
   Sidebar as SharedSidebar,
-  ProjectSessionGroups,
-  CalendarView,
-  ViewSwitchButton,
   WikiGroup,
   useProjects,
   useSessionDelete,
-  SessionConfigDialog,
-  type SidebarViewMode
+  SessionConfigDialog
 } from '@shuvix/app-shell'
 import { useUpdateStore } from '../../stores/updateStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
-import { useSidebarStore } from '../../stores/sidebarStore'
 import { ProjectEditDialog } from './ProjectEditDialog'
 
 /**
@@ -23,9 +18,9 @@ import { ProjectEditDialog } from './ProjectEditDialog'
  *   - 窗口拖拽 / 置顶徽标 / 分享·Telegram 徽标（caps）
  *   - 打开文件夹走 Electron 目录对话框；置顶会话选中时聚焦悬浮窗
  *   - 会话/分组右键菜单由共享组件统一渲染（桌面经 ContextMenuProvider 注入原生渲染器）
- *   - 会话配置弹窗、项目编辑弹窗；标题行视图切换（项目 / 日历，原生菜单）
+ *   - 会话配置弹窗、项目编辑弹窗
  *   - 知识库置顶分组（WikiGroup 经 groupsPrepend 注入，接 window.api.wiki.*）
- *   - 底部更新提示；日历视图经 bodyOverride 复用 ProjectSessionGroups
+ *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → Projects → 已归档」
  */
 export function Sidebar(): React.JSX.Element {
@@ -35,16 +30,12 @@ export function Sidebar(): React.JSX.Element {
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const updateEvent = useUpdateStore((s) => s.updateEvent)
   const hasUpdate = updateEvent?.type === 'available' || updateEvent?.type === 'ready'
-  const sidebarWidth = useSidebarStore((s) => s.width)
-  const sidebarResizing = useSidebarStore((s) => s.isResizing)
   const { requestDelete: handleDelete, deleteDialog } = useSessionDelete()
 
-  const [viewMode, setViewMode] = useState<SidebarViewMode>('projects')
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [configuringSessionId, setConfiguringSessionId] = useState<string | null>(null)
-  const [calendarCollapsed, setCalendarCollapsed] = useState<Set<string>>(() => new Set())
 
-  // 在指定项目下新建会话（日历视图 + 文件夹流程用）
+  // 在指定项目下新建会话（文件夹流程用）
   const handleNewChat = async (projectId: string | null): Promise<void> => {
     const session = await getChatApi().session.create({ projectId: projectId ?? null })
     useChatStore.getState().setSessions(await getChatApi().session.list())
@@ -99,7 +90,6 @@ export function Sidebar(): React.JSX.Element {
     <SharedSidebar
       caps={{ windowDrag: true, pin: true }}
       memory={memoryAdapter}
-      title={viewMode === 'calendar' ? t('sidebar.viewCalendar') : t('sidebar.title')}
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
@@ -108,7 +98,6 @@ export function Sidebar(): React.JSX.Element {
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
-      titleActions={<ViewSwitchButton viewMode={viewMode} onChange={setViewMode} />}
       footerActions={
         hasUpdate ? (
           <button
@@ -125,36 +114,6 @@ export function Sidebar(): React.JSX.Element {
         ) : undefined
       }
       groupsPrepend={<WikiGroup listFiles={listWikiFiles} onSelectFile={handleOpenWikiNote} />}
-      bodyOverride={
-        viewMode === 'calendar' ? (
-          <CalendarView
-            width={sidebarWidth}
-            isResizing={sidebarResizing}
-            renderGroupedSessionsForDay={(daySessions: Session[]) => (
-              <ProjectSessionGroups
-                projects={projects}
-                sessionsOverride={daySessions}
-                hideEmptyGroups
-                collapsed={calendarCollapsed}
-                onToggleGroup={(key) =>
-                  setCalendarCollapsed((prev) => {
-                    const next = new Set(prev)
-                    if (next.has(key)) next.delete(key)
-                    else next.add(key)
-                    return next
-                  })
-                }
-                onNewChat={(pid) => void handleNewChat(pid)}
-                onSelect={handleSelectSession}
-                onDelete={handleDelete}
-                onConfigureSession={setConfiguringSessionId}
-                caps={{ pin: true }}
-                pinnedSessionIds={pinnedSessionIds}
-              />
-            )}
-          />
-        ) : undefined
-      }
       overlays={
         <>
           {editingProjectId && (

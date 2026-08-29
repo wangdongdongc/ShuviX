@@ -960,7 +960,8 @@
     "tasksLogMissing": "Log file is gone",
     "tasksLogCapped": "Log exceeds 50 MB — only the tail is shown",
     "tasksNoOutput": "No output yet",
-    "tasksStatusEnded": "Finished"
+    "tasksStatusEnded": "Finished",
+    "calendar": "Calendar"
   },
   "browser": {
     "back": "Back",

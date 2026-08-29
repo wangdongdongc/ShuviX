@@ -31,6 +31,7 @@ export function PanelToggleButton({
     <button
       onClick={onClick}
       title={title}
+      data-side={side}
       className={`${noDrag ? 'titlebar-no-drag ' : ''}p-1 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors`}
     >
       <svg
