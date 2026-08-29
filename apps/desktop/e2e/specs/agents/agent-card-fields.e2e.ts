@@ -923,11 +923,12 @@ describe('E 组 · 宿主差异', () => {
       )
     ).toBe(true)
     expect(await count('.cm-shuvix-fmcard-src')).toBe(0)
+    // 布尔行两个：项目感知（项目提示词与项目记忆合成的那一个）与 dispatch-only
     expect(
       await app.main.eval<boolean[]>(
         `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((t) => t.disabled)`
       )
-    ).toEqual([true, true, true])
+    ).toEqual([true, true])
   })
 })
 

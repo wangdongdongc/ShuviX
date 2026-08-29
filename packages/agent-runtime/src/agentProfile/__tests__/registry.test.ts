@@ -236,7 +236,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
         const loc = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!
         expect(loc.tools, `${spec.name}.${language} tools`).toEqual(en.tools)
         expect(loc.instructionFiles, `${spec.name}.${language}`).toEqual(en.instructionFiles)
-        expect(loc.projectPrompt, `${spec.name}.${language}`).toBe(en.projectPrompt)
+        expect(loc.projectAwareness, `${spec.name}.${language}`).toBe(en.projectAwareness)
       }
     }
   })
@@ -271,15 +271,20 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md、项目提示词默认开（notebook/titler 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook/titler 除外）、项目感知默认开（titler 除外）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
-      // notebook：维持迁移前的笔记本行为；titler：上下文无关的执行型一次性任务 ——
-      // 给每次标题生成注入整份项目文档纯属浪费 token 且稀释指令
-      const on = spec.name !== NOTEBOOK_PROFILE_NAME && spec.name !== 'titler'
+      // 两项注入的开关面不同：
+      //  - 指令文件：notebook 不吃 —— AGENTS.md/CLAUDE.md 是写代码的工程约定，改一篇笔记用不上；
+      //  - 项目感知：notebook 照常开 —— 笔记就写在项目里，项目提示词与项目记忆正是它的上下文；
+      //  - titler 两样都不要：上下文无关的执行型一次性任务，注入整份项目文档纯属浪费 token 且稀释指令。
+      const instructionsOn = spec.name !== NOTEBOOK_PROFILE_NAME && spec.name !== 'titler'
+      const awarenessOn = spec.name !== 'titler'
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
-      expect(built.instructionFiles, spec.name).toEqual(on ? ['AGENTS.md', 'CLAUDE.md'] : [])
-      expect(built.projectPrompt, spec.name).toBe(on)
+      expect(built.instructionFiles, spec.name).toEqual(
+        instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : []
+      )
+      expect(built.projectAwareness, spec.name).toBe(awarenessOn)
     }
   })
 })

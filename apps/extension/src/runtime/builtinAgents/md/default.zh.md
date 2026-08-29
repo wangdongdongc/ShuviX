@@ -6,8 +6,7 @@ description: 主会话智能体——每个聊天会话都以此档案为创建�
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: 默认
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
-shuvix-project-memory: true
+shuvix-project-awareness: true
 ---
 
 ## 身份

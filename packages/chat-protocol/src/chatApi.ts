@@ -110,7 +110,7 @@ export interface Project {
   id: string
   name: string
   path: string
-  /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+  /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
   systemPrompt: string
   settings: ProjectSettings
   archivedAt: number

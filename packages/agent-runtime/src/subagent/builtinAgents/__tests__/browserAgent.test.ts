@@ -100,7 +100,7 @@ describe('三份语言文件的一致性', () => {
     for (const p of built.slice(1)) {
       expect(p.tools).toEqual(built[0].tools)
       expect(p.instructionFiles).toEqual(built[0].instructionFiles)
-      expect(p.projectPrompt).toBe(built[0].projectPrompt)
+      expect(p.projectAwareness).toBe(built[0].projectAwareness)
     }
   })
 })

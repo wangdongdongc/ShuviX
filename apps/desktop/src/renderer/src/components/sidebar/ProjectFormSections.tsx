@@ -4,7 +4,7 @@ import { Plus, Trash2, Puzzle, BookOpen, WifiOff, Eye, EyeOff } from 'lucide-rea
 import type { ToolItem } from '../common/ToolSelectList'
 import { SettingsSection } from '../settings/SettingsPrimitives'
 
-// ─── 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） ───
+// ─── 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） ───
 
 interface ProjectSystemPromptGroupProps {
   value: string

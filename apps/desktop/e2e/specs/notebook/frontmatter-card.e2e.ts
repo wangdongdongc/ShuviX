@@ -228,11 +228,12 @@ describe('frontmatter 属性卡', () => {
       )
     ).toBe('AGENTS.md, CLAUDE.md')
 
-    // 三个布尔字段按描述符顺序，均缺省 unset（instruction-files 已改为清单，不再是开关）
+    // 两个布尔字段按描述符顺序（项目感知 → dispatch-only），均缺省 unset
+    // —— instruction-files 是清单不是开关，项目提示词与项目记忆已合成项目感知一个开关
     const toggles = await app.main.eval<string[]>(
       `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((n) => n.dataset.state)`
     )
-    expect(toggles).toEqual(['unset', 'unset', 'unset'])
+    expect(toggles).toEqual(['unset', 'unset'])
 
     // 未知键（shuvix-builtin）落通用 key/value 行；类型标记键本身不成行
     const labels = await app.main.eval<string[]>(
@@ -259,8 +260,9 @@ describe('frontmatter 属性卡', () => {
     await maybeScreenshot()
   })
 
-  it('卡上开关 → 行级写回：project-prompt 缺省态点开 → 文件闭合线前插入 true 行', async () => {
-    // 布尔行只剩三个（instruction-files 已改为清单）：project-prompt 排第一
+  it('卡上开关 → 行级写回：project-awareness 缺省态点开 → 文件闭合线前插入 true 行', async () => {
+    // 布尔行只剩两个（instruction-files 是清单、项目提示词与记忆已合成项目感知）：
+    // project-awareness 排第一
     await app.main.eval(
       `document.querySelectorAll('.cm-shuvix-fmcard-toggle')[0]` +
         `.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`
@@ -276,7 +278,7 @@ describe('frontmatter 属性卡', () => {
     // 笔记本防抖自动保存落盘：插入行位于闭合定界线之前，其余行原样保留
     await until(() => {
       const text = readFileSync(cardMdPath, 'utf8')
-      return /shuvix-project-prompt: true\r?\n---/.test(text)
+      return /shuvix-project-awareness: true\r?\n---/.test(text)
     }, 'scoped line write persisted')
     const text = readFileSync(cardMdPath, 'utf8')
     expect(text).toContain('shuvix-builtin: true')

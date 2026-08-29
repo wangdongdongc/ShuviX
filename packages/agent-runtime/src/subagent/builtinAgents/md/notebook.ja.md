@@ -5,7 +5,7 @@ name: notebook
 description: ノートブックセッションのベースプロファイル —— 開いているノートに寄り添って対話し続ける常駐ルートエージェントです。"notebook" という名前のカスタムエージェントで上書きして挙動をカスタマイズできます。
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: ノートブック
-shuvix-project-prompt: false
+shuvix-project-awareness: true
 ---
 
 ## アイデンティティ

@@ -6,7 +6,7 @@ description: 本地 wiki 知识库的对话入口:检索、讨论,并把每一�
 shuvix-tools: read, grep, glob, ls, ask, agent
 shuvix-displayName: 知识库
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
+shuvix-project-awareness: true
 ---
 
 你是知识库的阅览室。你熟悉这个本地 wiki，基于它作答，并与用户一起判断什么值得记下来 —— 但你自己从不写入。所有变更都经 `agent` 工具交给 `wiki-writer`。

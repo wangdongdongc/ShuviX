@@ -129,11 +129,19 @@ export interface AgentHostAdapter {
     | { filename: string; content: string }
     | null
     | Promise<{ filename: string; content: string } | null>
-  /** 项目提示词解析（profile.projectPrompt 时调用）：返回原文或 null，围栏由 fenceProjectPrompt 统一加 */
+  /**
+   * 项目提示词解析（profile.projectAwareness 时调用）：返回原文或 null，
+   * 围栏由 fenceProjectPrompt 统一加。
+   */
   resolveProjectPrompt?: (rootSessionId: string) => string | null | Promise<string | null>
   /**
-   * 项目记忆索引解析（profile.projectMemory 时调用）：返回**渲染好的索引正文**或 null，
+   * 项目记忆索引解析（同样受 profile.projectAwareness 门控）：返回**渲染好的索引正文**或 null，
    * 围栏由本模块的 fenceProjectMemory 统一加。
+   *
+   * 与项目提示词共用一个开关、分成两个 seam：一个开关是因为它们表达同一个意图
+   * （这个 agent 要不要知道自己在哪个项目里），两个 seam 是因为数据源与围栏都不同 ——
+   * 一个来自项目设置的纯文本，一个是现扫记忆目录渲染出来的索引，且宿主可以只实现其中一个
+   * （扩展端没有项目记忆，缺这个 seam 就只注入提示词）。
    *
    * 只收 rootSessionId、不收 cwd —— 记忆按项目绑定（无项目会话解析为 null），
    * 与 resolveProjectPrompt 同源，而非像指令文件那样按 cwd 扫盘。
@@ -293,13 +301,17 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
         systemPrompt += `\n\n${fenceInstructionFile(resolved.filename, resolved.content)}`
       }
     }
-    if (profile.projectPrompt && host.resolveProjectPrompt) {
-      const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
-      if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
-    }
-    if (profile.projectMemory && host.resolveProjectMemory) {
-      const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
-      if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
+    // 项目感知一个开关带两段注入：数据源与围栏各自独立，但「要不要知道自己在哪个项目里」
+    // 只是一个决定；宿主未实现某个 seam（扩展端无项目记忆）时那一段自然缺席。
+    if (profile.projectAwareness) {
+      if (host.resolveProjectPrompt) {
+        const text = (await host.resolveProjectPrompt(rootSessionId))?.trim()
+        if (text) systemPrompt += `\n\n${fenceProjectPrompt(text)}`
+      }
+      if (host.resolveProjectMemory) {
+        const text = (await host.resolveProjectMemory(rootSessionId))?.trim()
+        if (text) systemPrompt += `\n\n${fenceProjectMemory(text)}`
+      }
     }
 
     const buildResolveRequest = (overlay: readonly string[] | undefined): ToolResolveRequest => ({

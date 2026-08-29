@@ -6,8 +6,7 @@ description: コーディングエージェント——フルツールチェー�
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: コーディング
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
-shuvix-project-memory: true
+shuvix-project-awareness: true
 ---
 
 ## アイデンティティ

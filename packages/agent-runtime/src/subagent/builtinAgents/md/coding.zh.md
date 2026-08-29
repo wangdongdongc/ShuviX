@@ -6,8 +6,7 @@ description: 编码智能体——完整工具链（shell、SSH、数据库、�
 shuvix-tools: bash, read, write, edit, ask, browser, ls, grep, glob, ssh, database, agent
 shuvix-displayName: 编码
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
-shuvix-project-memory: true
+shuvix-project-awareness: true
 ---
 
 ## 身份

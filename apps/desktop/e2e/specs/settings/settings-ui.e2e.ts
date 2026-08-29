@@ -30,10 +30,10 @@ describe('智能体设置页', () => {
   it('内置详情：md 原文 + 属性卡；只读靠禁用体现（控件形态与可编辑态一致）', async () => {
     const detail = await pane.detail()
     expect(detail.cardBadge).toBe('ShuviX agent · v1')
-    // 字段行按契约键断言（locale-free）：描述与两个注入开关都在卡上
+    // 字段行按契约键断言（locale-free）：描述与两项注入声明都在卡上
     expect(detail.fieldKeys).toContain('description')
     expect(detail.fieldKeys).toContain('shuvix-instruction-files')
-    expect(detail.fieldKeys).toContain('shuvix-project-prompt')
+    expect(detail.fieldKeys).toContain('shuvix-project-awareness')
     // 内置档案随包发布、无文件：只读。控件**照常渲染**（槽位与可编辑态同为 3），
     // 只读通过禁用体现 —— 两种模式换的不是长相，只是可否交互
     expect(detail.togglesDisabled).toBe(true)

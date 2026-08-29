@@ -12,12 +12,17 @@
  *     条目大小写不敏感（内置工具名归一为小写注册名），`agent` 为嵌套派发 opt-in，
  *     `mcp:<server>` / `skill:<name>` 前缀语法为 ShuviX 扩展（余部大小写保留）；
  *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`、
- *     曝光开关 `shuvix-dispatch-only`，与三个上下文注入声明：
+ *     曝光开关 `shuvix-dispatch-only`，与两个上下文注入声明：
  *     `shuvix-instruction-files`（**逗号分隔的文件清单**，如
  *     `shuvix-instruction-files: AGENTS.md, CLAUDE.md`：该 agent 认哪些项目指令文件，
  *     按列出顺序取**第一个存在且非空**的注入，至多一个；省略 = 不注入），
- *     与两个布尔开关 `shuvix-project-prompt` / `shuvix-project-memory`
- *     （是否向该 agent 注入项目提示词 / 项目记忆索引）；
+ *     与布尔开关 `shuvix-project-awareness`（**项目感知**：该 agent 是否了解它所在的项目 ——
+ *     项目提示词与项目记忆索引一并注入）；
+ *     项目感知曾是 `shuvix-project-prompt` / `shuvix-project-memory` 两个开关，合成一个是因为
+ *     它们同源同废：都由「这个 agent 要不要知道自己在哪个项目里」这一个意图决定，都按**根会话
+ *     的项目**解析、无项目时同样降级为不注入。拆成两问只是把同一个决定问了两遍，而两个答案
+ *     不一致（认项目提示词却不认项目记忆）表达不出任何有用的策略。指令文件不并进来 ——
+ *     它按 cwd 扫盘、顺序即优先级，是清单不是布尔，与「在不在项目里」无关；
  *     指令文件的「选哪个」曾是会话设置里的单选下拉，现已整体收进本文件 ——
  *     一个 agent 该吃哪份项目文档，是它的人格设定，不是每个会话各自的临时选择；
  *   - `shuvix-builtin: true` 是随包发布的内置档案的**自述标记**：本解析器不读它
@@ -37,9 +42,10 @@
  *   - frontmatter 用完整 YAML 解析（支持多行字符串、引号、注释等）。
  *
  * 无历史兼容：旧方言 key（`whenToUse` / `displayName`）、已废弃的 requiredMcp 系 key、
- * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）与通用 `tools` key
+ * `shuvix-prompt-sections`（动态段机制已被 {{shuvix:*}} 变量取代）、被 `shuvix-project-awareness`
+ * 合并掉的 `shuvix-project-prompt` / `shuvix-project-memory` 与通用 `tools` key
  * （其他 app 语义，见上）都不再读取（未知 key 忽略）；`shuvix-tools` /
- * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、两个注入开关仅接受布尔，
+ * `shuvix-instruction-files` / `shuvix-model` 仅接受字符串、两个布尔 key 仅接受布尔，
  * 类型不符视为文件非法（跳过并记警告），宁可整体拒绝也不静默降级 —— 包括
  * `shuvix-instruction-files: true` 这种改制前的写法：布尔已不再是合法取值，
  * 拒绝理由里直说「改列文件名」，比默默按老语义猜一份清单可诊断。
@@ -69,10 +75,11 @@ export interface ParsedAgentFile {
    * 缺省 = 空数组（不注入）。
    */
   instructionFiles: string[]
-  /** `shuvix-project-prompt`；缺省 false */
-  projectPrompt: boolean
-  /** `shuvix-project-memory`：是否注入项目记忆索引；缺省 false */
-  projectMemory: boolean
+  /**
+   * `shuvix-project-awareness`：项目感知 —— 是否向该 agent 注入项目提示词与项目记忆索引
+   * （两者同一开关，都按根会话的项目解析）；缺省 false。
+   */
+  projectAwareness: boolean
   /** `shuvix-dispatch-only`：只可派发、不可切换为会话档案；缺省 false */
   dispatchOnly: boolean
 }
@@ -170,11 +177,7 @@ export function parseAgentDefinitionFile(
   if (modelRaw !== null && typeof modelRaw !== 'string') {
     return reject("'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)")
   }
-  for (const key of [
-    'shuvix-project-prompt',
-    'shuvix-project-memory',
-    'shuvix-dispatch-only'
-  ] as const) {
+  for (const key of ['shuvix-project-awareness', 'shuvix-dispatch-only'] as const) {
     const value = fields[key] ?? null
     if (value !== null && typeof value !== 'boolean') {
       return reject(`'${key}' must be a boolean (true / false)`)
@@ -187,8 +190,7 @@ export function parseAgentDefinitionFile(
         '(e.g. "AGENTS.md, CLAUDE.md"); the boolean form is gone — list the file names instead'
     )
   }
-  const projectPromptRaw = (fields['shuvix-project-prompt'] ?? null) as boolean | null
-  const projectMemoryRaw = (fields['shuvix-project-memory'] ?? null) as boolean | null
+  const projectAwarenessRaw = (fields['shuvix-project-awareness'] ?? null) as boolean | null
   const dispatchOnlyRaw = (fields['shuvix-dispatch-only'] ?? null) as boolean | null
 
   // 省略 = 空白名单（无工具）；去重保序
@@ -217,8 +219,7 @@ export function parseAgentDefinitionFile(
     tools,
     model: stringField(fields, 'shuvix-model'),
     instructionFiles,
-    projectPrompt: projectPromptRaw ?? false,
-    projectMemory: projectMemoryRaw ?? false,
+    projectAwareness: projectAwarenessRaw ?? false,
     dispatchOnly: dispatchOnlyRaw ?? false
   }
 }
@@ -244,8 +245,7 @@ export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
   if (data.instructionFiles.length > 0) {
     fields['shuvix-instruction-files'] = data.instructionFiles.join(', ')
   }
-  if (data.projectPrompt) fields['shuvix-project-prompt'] = true
-  if (data.projectMemory) fields['shuvix-project-memory'] = true
+  if (data.projectAwareness) fields['shuvix-project-awareness'] = true
 
   const frontmatter = stringifyYaml(fields, { lineWidth: 0 }).trimEnd()
   const body = data.systemPrompt.trim()

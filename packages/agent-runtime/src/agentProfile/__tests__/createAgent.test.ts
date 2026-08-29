@@ -76,6 +76,7 @@ interface HostBundle {
   treeSession: { buildContextEntries: ReturnType<typeof vi.fn> }
   resolveInstruction: ReturnType<typeof vi.fn>
   resolveProjectPrompt: ReturnType<typeof vi.fn>
+  resolveProjectMemory: ReturnType<typeof vi.fn>
   resolveProfileModel: ReturnType<typeof vi.fn>
   logger: {
     info: ReturnType<typeof vi.fn>
@@ -93,6 +94,7 @@ function makeHost(): HostBundle {
   const eventSink = { broadcast: vi.fn(), hasUserInputCapability: () => true }
   const resolveInstruction = vi.fn().mockResolvedValue({ filename: 'CLAUDE.md', content: 'INS' })
   const resolveProjectPrompt = vi.fn().mockResolvedValue('PROJ-PROMPT')
+  const resolveProjectMemory = vi.fn().mockResolvedValue('PROJ-MEMORY')
   // 缺省不解析（返回 null = 档案模型当前不可用）；声明模型的用例各自 mockResolvedValue
   const resolveProfileModel = vi.fn().mockResolvedValue(null)
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -113,7 +115,8 @@ function makeHost(): HostBundle {
     httpLog: { logRequest, updateUsage: vi.fn() },
     logger,
     resolveInstruction,
-    resolveProjectPrompt
+    resolveProjectPrompt,
+    resolveProjectMemory
   }
   return {
     host,
@@ -123,6 +126,7 @@ function makeHost(): HostBundle {
     treeSession,
     resolveInstruction,
     resolveProjectPrompt,
+    resolveProjectMemory,
     resolveProfileModel,
     logger,
     fakeEnv,
@@ -450,15 +454,16 @@ describe('CreatedAgent 运行期操作', () => {
     })
     expect(b.resolveInstruction).not.toHaveBeenCalled()
     expect(b.resolveProjectPrompt).not.toHaveBeenCalled()
+    expect(b.resolveProjectMemory).not.toHaveBeenCalled()
     expect(created.systemPrompt).toBe('BASE PERSONA')
   })
 
-  it('上下文注入:spawned 全开 → 按根会话 id 解析、按序 append(指令文件→项目提示词)', async () => {
+  it('上下文注入:spawned 全开 → 按根会话 id 解析、按序 append(指令文件→项目提示词→项目记忆)', async () => {
     const b = makeHost()
     const created = await createAgentFactory(b.host).createAgent({
       kind: 'spawned',
       sessionId: 'sub-9',
-      profile: { ...PROFILE, projectPrompt: true },
+      profile: { ...PROFILE, projectAwareness: true },
       model: MODEL_CFG,
       thinkingLevel: 'off',
       cwd: '',
@@ -468,12 +473,15 @@ describe('CreatedAgent 运行期操作', () => {
     // 派生解析恒用根会话 id（spawn.rootSessionId），而非自身 agentId
     // 档案清单原样透传给宿主 —— 「读哪些文件」的决定权全在档案
     expect(b.resolveInstruction).toHaveBeenCalledWith('root-s', '', ['AGENTS.md', 'CLAUDE.md'])
+    // 项目感知是一个开关带两段注入 —— 提示词与记忆索引同开同关
     expect(b.resolveProjectPrompt).toHaveBeenCalledWith('root-s')
-    // 直接 append 到系统提示词,不落任何消息；两段各自被围栏包住
+    expect(b.resolveProjectMemory).toHaveBeenCalledWith('root-s')
+    // 直接 append 到系统提示词,不落任何消息；三段各自被围栏包住
     const expected =
       'BASE PERSONA\n\n' +
       '<project_instructions file="CLAUDE.md">\nINS\n</project_instructions>\n\n' +
-      '<project_prompt>\nPROJ-PROMPT\n</project_prompt>'
+      '<project_prompt>\nPROJ-PROMPT\n</project_prompt>\n\n' +
+      '<project_memory>\nPROJ-MEMORY\n</project_memory>'
     expect(created.systemPrompt).toBe(expected)
     expect(constructed[constructed.length - 1].deps.systemPrompt).toBe(expected)
     // resolveTools 收到的也是完整系统提示词（扩展默认子代理继承它）

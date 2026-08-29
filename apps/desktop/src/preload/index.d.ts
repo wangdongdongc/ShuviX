@@ -263,7 +263,7 @@ declare global {
     id: string
     name: string
     path: string
-    /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+    /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
     systemPrompt: string
     settings: ProjectSettings
     archivedAt: number
@@ -394,9 +394,8 @@ declare global {
     overridden?: boolean
     /** 项目指令文件清单（shuvix-instruction-files），顺序即优先级；空 = 不注入 */
     instructionFiles: string[]
-    /** 是否注入项目提示词（shuvix-project-prompt） */
-    projectPrompt: boolean
-    projectMemory: boolean
+    /** 项目感知：是否注入项目提示词与项目记忆索引（shuvix-project-awareness） */
+    projectAwareness: boolean
     /** 只可派发、不可切换为会话档案（shuvix-dispatch-only）；GUI 暂不提供开关,原样透传保存 */
     dispatchOnly: boolean
     source: 'builtin' | 'user'

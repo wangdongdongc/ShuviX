@@ -5,7 +5,7 @@ name: notebook
 description: Base profile for notebook sessions — the persistent root agent conversing alongside the open note. Override it with a custom agent named "notebook" to customize notebook behavior.
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: Notebook
-shuvix-project-prompt: false
+shuvix-project-awareness: true
 ---
 
 ## Identity

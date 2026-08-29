@@ -71,8 +71,7 @@ beforeEach(() => {
     systemPrompt: 'BODY',
     tools: ['session-config'],
     instructionFiles: [],
-    projectPrompt: false,
-    projectMemory: false,
+    projectAwareness: false,
     dispatchOnly: true,
     source: 'builtin' as const,
     basePath: ''

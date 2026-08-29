@@ -13,9 +13,8 @@ export interface SubAgentPayload {
   model?: string
   /** `shuvix-instruction-files`：项目指令文件清单，顺序即优先级；空 = 不注入 */
   instructionFiles: string[]
-  /** `shuvix-project-prompt`：是否注入项目提示词 */
-  projectPrompt: boolean
-  projectMemory: boolean
+  /** `shuvix-project-awareness`：项目感知 —— 是否注入项目提示词与项目记忆索引 */
+  projectAwareness: boolean
   /** `shuvix-dispatch-only`：只可派发、不可切换为会话档案（GUI 无开关，原样透传） */
   dispatchOnly: boolean
 }

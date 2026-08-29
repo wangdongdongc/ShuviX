@@ -6,7 +6,7 @@ description: '代わりにブラウザを操作して結論を返す：ナビゲ
 shuvix-tools: browser, read
 shuvix-displayName: ブラウザ
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
+shuvix-project-awareness: true
 ---
 
 あなたは他者の代わりにブラウザを操作します。相手はページを見ることも、あなたのスナップショットを見ることもできず、受け取れるのはあなたが返すテキストだけです。

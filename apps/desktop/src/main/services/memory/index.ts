@@ -1,7 +1,7 @@
 /**
  * Memory 模块入口 —— 项目记忆的扫描与注入解析。
  *
- * 注入契约：`createAgent` 在 profile.projectMemory 为真时调用 resolveProjectMemoryIndex，
+ * 注入契约：`createAgent` 在 profile.projectAwareness 为真时调用 resolveProjectMemoryIndex，
  * 把返回文本包进 `<project_memory>` 围栏 append 到系统提示词（系统提示词不参与滚动压缩，
  * 天然免重注入）。索引是**现扫现渲染**的，不落地成文件 —— 物理索引会与正文漂移。
  *

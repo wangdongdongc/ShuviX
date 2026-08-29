@@ -81,7 +81,7 @@ const INVALID_MD = [
   '---',
   'shuvix: agent v1',
   'name: broken',
-  'shuvix-project-prompt: yes please',
+  'shuvix-project-awareness: yes please',
   '---',
   '',
   'Invalid agent body.',
@@ -189,7 +189,7 @@ describe('agentService.createAgentSource —— 按原文新建', () => {
     expect(existsSync(state.dir)).toBe(false)
     const result = agentService.createAgentSource(INVALID_MD)
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-prompt' must be a boolean")
+    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
     expect(result.error).toContain('the whole file is rejected')
     // 解析在 ensureUserDir 之前 —— 一次失败的新建不该在用户家目录里留下空目录
     expect(existsSync(state.dir)).toBe(false)
@@ -305,7 +305,7 @@ describe('agentService.saveAgentSource —— 按原文覆写', () => {
     expect(agentService.createAgentSource(V1).success).toBe(true)
     const result = agentService.saveAgentSource('c-saved', INVALID_MD)
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-prompt' must be a boolean")
+    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
     expect(result.error).toContain('the whole file is rejected')
 
     expect(readAgentFile('c-saved.md')).toBe(V1)
@@ -388,8 +388,7 @@ describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent
     systemPrompt: `Body of ${name}.`,
     tools: ['read'],
     instructionFiles: [],
-    projectPrompt: false,
-    projectMemory: false,
+    projectAwareness: false,
     dispatchOnly: false,
     ...extra
   })

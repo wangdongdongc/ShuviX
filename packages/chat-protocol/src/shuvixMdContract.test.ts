@@ -154,7 +154,7 @@ describe('detectShuvixMarker', () => {
       'description: 只读探索代理',
       'shuvix-tools: read, grep, glob',
       'shuvix-instruction-files: true',
-      'shuvix-project-prompt: false',
+      'shuvix-project-awareness: false',
       '---',
       '',
       '# 角色',

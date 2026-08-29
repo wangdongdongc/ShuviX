@@ -5,7 +5,7 @@ name: notebook
 description: 笔记本会话的基座档案 —— 与打开的笔记并行对话的持久根 Agent。用同名自定义 agent「notebook」覆盖它即可定制笔记本行为。
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: 笔记本
-shuvix-project-prompt: false
+shuvix-project-awareness: true
 ---
 
 ## 身份

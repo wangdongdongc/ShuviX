@@ -18,24 +18,23 @@ const PROFILE: AgentProfile = {
   systemPrompt: 'BODY',
   tools: ['read', 'grep'],
   instructionFiles: [],
-  projectPrompt: false,
-  projectMemory: false,
+  projectAwareness: false,
   dispatchOnly: false,
   source: 'builtin',
   basePath: ''
 }
 
 describe('toInProcessAgentType', () => {
-  it('model / instructionFiles / projectPrompt 逐字段带到投影', () => {
+  it('model / instructionFiles / projectAwareness 逐字段带到投影', () => {
     const projected = toInProcessAgentType({
       ...PROFILE,
       model: 'openai/gpt-4o',
       instructionFiles: ['AGENTS.md'],
-      projectPrompt: true
+      projectAwareness: true
     })
     expect(projected.model).toBe('openai/gpt-4o')
     expect(projected.instructionFiles).toEqual(['AGENTS.md'])
-    expect(projected.projectPrompt).toBe(true)
+    expect(projected.projectAwareness).toBe(true)
   })
 
   it('未声明模型 → 投影的 model 为 undefined（不声明 = 继承派发方）', () => {
@@ -52,8 +51,7 @@ describe('toInProcessAgentType', () => {
       systemPrompt: 'BODY',
       model: undefined,
       instructionFiles: [],
-      projectPrompt: false,
-      projectMemory: false
+      projectAwareness: false
     })
     expect(projected.tools).not.toBe(PROFILE.tools)
   })

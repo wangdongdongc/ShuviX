@@ -19,14 +19,14 @@ interface AgentRow {
   source: 'builtin' | 'user'
   description: string
   instructionFiles: string[]
-  projectPrompt: boolean
+  projectAwareness: boolean
   overridden?: boolean
 }
 
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 
 describe('内置档案', () => {
-  it('十个内置齐全，上下文注入默认全开（notebook/titler 除外），描述非空；无启用开关字段', async () => {
+  it('十个内置齐全，上下文注入默认全开（notebook 只开项目感知、titler 全关），描述非空；无启用开关字段', async () => {
     const builtins = (await listAgents()).filter((a) => a.source === 'builtin')
     expect(builtins.map((a) => a.name).sort()).toEqual([
       'browser',
@@ -41,12 +41,13 @@ describe('内置档案', () => {
       'wiki-writer'
     ])
     for (const a of builtins) {
-      // notebook 是笔记本会话根 Agent 的基座，两项注入刻意默认关（维持迁移前行为）；
-      // titler 是自动标题的派发专用档案，刻意不注入指令文件/项目提示词（见其 md）
-      const expected = a.name !== 'notebook' && a.name !== 'titler'
+      // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件
+      // （AGENTS.md/CLAUDE.md 是写代码的工程约定）；titler 是自动标题的派发专用档案，两样都不要
+      const instructionsOn = a.name !== 'notebook' && a.name !== 'titler'
+      const awarenessOn = a.name !== 'titler'
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
-      expect(a.instructionFiles, a.name).toEqual(expected ? ['AGENTS.md', 'CLAUDE.md'] : [])
-      expect(a.projectPrompt, a.name).toBe(expected)
+      expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])
+      expect(a.projectAwareness, a.name).toBe(awarenessOn)
       expect(a.description.length, a.name).toBeGreaterThan(0)
       expect('isEnabled' in a, a.name).toBe(false)
     }

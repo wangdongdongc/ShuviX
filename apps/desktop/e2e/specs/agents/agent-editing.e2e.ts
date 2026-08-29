@@ -72,7 +72,7 @@ const invalidAgent = (name: string): string =>
     '---',
     'shuvix: agent v1',
     `name: ${name}`,
-    'shuvix-project-prompt: yes please',
+    'shuvix-project-awareness: yes please',
     '---',
     '',
     'Invalid body.',
@@ -181,7 +181,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
     const before = agentFiles()
     const result = await createSource(invalidAgent('ae5-invalid'))
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-prompt' must be a boolean")
+    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
     expect(result.error).toContain('the whole file is rejected')
     expect(agentFiles()).toEqual(before)
   })
@@ -209,7 +209,7 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 覆写', () => {
     const before = readAgentFile('ae6-file.md')
     const result = await saveSource('ae6-dst', invalidAgent('ae6-dst'))
     expect(result.success).toBe(false)
-    expect(result.error).toContain("'shuvix-project-prompt' must be a boolean")
+    expect(result.error).toContain("'shuvix-project-awareness' must be a boolean")
     expect(result.error).toContain('the whole file is rejected')
 
     expect(readAgentFile('ae6-file.md')).toBe(before)

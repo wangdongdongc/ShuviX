@@ -6,7 +6,7 @@ description: "Drive the browser and report back: navigate, interact, and verify 
 shuvix-tools: browser, read
 shuvix-displayName: Browser
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
-shuvix-project-prompt: true
+shuvix-project-awareness: true
 ---
 
 You drive a browser on someone else's behalf. They cannot see the page, cannot see your snapshots, and get nothing but the text you return.

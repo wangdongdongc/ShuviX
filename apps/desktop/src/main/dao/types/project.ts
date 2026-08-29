@@ -28,7 +28,7 @@ export interface Project {
   name: string
   /** 项目根目录绝对路径 */
   path: string
-  /** 项目提示词（纯文本；经 shuvix-project-prompt 开关注入会话上下文） */
+  /** 项目提示词（纯文本；经 shuvix-project-awareness 开关注入会话上下文） */
   systemPrompt: string
   /** 项目扩展配置 */
   settings: ProjectSettings
