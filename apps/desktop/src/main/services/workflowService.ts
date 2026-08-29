@@ -16,13 +16,23 @@
  * 引擎在 init() 里装配（main/index.ts 调用）而非模块顶层 —— 依赖 agentManager /
  * agentService / sessionService 的运行时状态，顶层装配会踩 ESM 初始化环。
  */
-import { existsSync, readdirSync, readFileSync, mkdirSync, appendFileSync } from 'fs'
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  mkdirSync,
+  appendFileSync,
+  writeFileSync,
+  unlinkSync
+} from 'fs'
 import { join } from 'path'
+import { shell } from 'electron'
 import i18next from 'i18next'
 import {
   BUILTIN_WORKFLOW_NAMES,
   buildBuiltinWorkflows,
   createWorkflowEngine,
+  getBuiltinWorkflowSource,
   parseWorkflowDefinitionFile,
   toInProcessAgentType,
   type ParsedWorkflowFile,
@@ -45,6 +55,41 @@ const log = createLogger('Workflow')
 interface WorkflowConfig {
   disabled?: string[]
   autorunEnabled?: Record<string, boolean>
+}
+
+/**
+ * 设置页列表项 —— 刻意**不外传** script / schemas / inputSchema / vars / limits：
+ * 列表只需要「是什么、什么时候跑、开没开」，编辑走 getSource 拿整份 md 原文
+ * （与 agent/policy 设置页同形：详情即原文编辑器）。
+ */
+export interface WorkflowListItem {
+  name: string
+  displayName: string
+  description: string
+  /** 绑定的埋点 id 列表（列表行的副标题；空 = 只能手动运行，当前无手动入口） */
+  triggers: string[]
+  concurrency: string
+  /** `shuvix-workflow-model` 原样值；省略 = 跟随会话模型 */
+  model?: string
+  source: 'builtin' | 'user'
+  /** 用户文件路径（内置为空串） */
+  basePath: string
+  /** 自动触发开关的当前值（含缺省规则求值结果） */
+  autorunEnabled: boolean
+  /** 整体停用（`.config.json` 的 disabled 列表；本页不提供开关，外部编辑可用） */
+  disabled: boolean
+  /** 该内置已被同名用户文件遮蔽（仅展示，不生效） */
+  overridden?: boolean
+}
+
+/**
+ * 无法解析的用户工作流文件（结构非法或脚本语法错）。身份是文件名 —— 它解析不出 name，
+ * 读写走 *ByFile 一组接口（同 policyService.InvalidPolicyFile）。
+ */
+export interface InvalidWorkflowFile {
+  fileName: string
+  /** 人读原因：解析器拒绝原因，或脚本引擎的语法错 */
+  error: string
 }
 
 class WorkflowService {
@@ -96,9 +141,18 @@ class WorkflowService {
     }
   }
 
-  /** 用户目录扫描（同 agentService.scanDir 口径：非法文件警告跳过、同名保留先扫到的） */
-  private scanUserDir(): ParsedWorkflowFile[] {
-    if (!existsSync(this.userDir)) return []
+  /**
+   * 用户目录扫描，分出可解析与不可解析两拨（同 policyService.scanDir 口径）。
+   *
+   * 非法文件**不进运行时**（不触发、不遮蔽内置），但必须被设置页看见：用外部编辑器
+   * 写坏一份工作流后，它既不生效也不出现在任何界面里 —— 用户无从发现更无从修复。
+   * invalid 一路带着人读原因（解析器的拒绝原因，或脚本引擎的语法错）回到 UI。
+   */
+  private scanDir(): {
+    valid: Array<{ file: ParsedWorkflowFile; basePath: string }>
+    invalid: InvalidWorkflowFile[]
+  } {
+    if (!existsSync(this.userDir)) return { valid: [], invalid: [] }
     let names: string[]
     try {
       names = readdirSync(this.userDir, { withFileTypes: true })
@@ -108,27 +162,37 @@ class WorkflowService {
         .map((e) => e.name)
     } catch (e) {
       log.warn(`扫描目录 ${this.userDir} 失败:`, e)
-      return []
+      return { valid: [], invalid: [] }
     }
 
-    const result: ParsedWorkflowFile[] = []
+    const valid: Array<{ file: ParsedWorkflowFile; basePath: string }> = []
+    const invalid: InvalidWorkflowFile[] = []
     const seen = new Set<string>()
     for (const fileName of names) {
+      const filePath = join(this.userDir, fileName)
       let raw: string
       try {
-        raw = readFileSync(join(this.userDir, fileName), 'utf-8')
+        raw = readFileSync(filePath, 'utf-8')
       } catch (e) {
         log.warn(`加载 workflow "${fileName}" 失败:`, e)
+        invalid.push({ fileName, error: e instanceof Error ? e.message : String(e) })
         continue
       }
-      const parsed = parseWorkflowDefinitionFile(raw, fileName.slice(0, -3), (msg) => log.warn(msg))
-      if (!parsed) continue
+      const reasons: string[] = []
+      const parsed = parseWorkflowDefinitionFile(raw, fileName.slice(0, -3), (msg) => {
+        reasons.push(msg)
+        log.warn(msg)
+      })
+      if (!parsed) {
+        invalid.push({ fileName, error: reasons.join('\n') || 'Invalid workflow file' })
+        continue
+      }
       // 结构合法后再过脚本语法检查（共享解析器无脚本引擎依赖，语法归宿主）
       const compiled = nodeVmScriptEngine.compile(parsed.script)
       if (!compiled.ok) {
-        log.warn(
-          `workflow "${parsed.name}": script syntax error — ${compiled.error}; the whole file is rejected`
-        )
+        const error = `script syntax error — ${compiled.error}`
+        log.warn(`workflow "${parsed.name}": ${error}; the whole file is rejected`)
+        invalid.push({ fileName, error })
         continue
       }
       if (seen.has(parsed.name)) {
@@ -136,16 +200,29 @@ class WorkflowService {
         continue
       }
       seen.add(parsed.name)
-      result.push(parsed)
+      valid.push({ file: parsed, basePath: filePath })
     }
-    return result
+    return { valid, invalid }
+  }
+
+  /** 合法用户工作流（引擎装配用；非法的既不触发也不遮蔽内置） */
+  private scanUserFiles(): Array<{ file: ParsedWorkflowFile; basePath: string }> {
+    return this.scanDir().valid
+  }
+
+  /**
+   * autorun 缺省：内置名（含覆盖内置的同名用户文件）默认 true —— 覆盖 auto-title
+   * 不该让自动标题静默消失；纯用户工作流默认 false（放下 md 不该能静默烧 token）。
+   */
+  private autorunOf(config: WorkflowConfig, name: string): boolean {
+    return config.autorunEnabled?.[name] ?? BUILTIN_WORKFLOW_NAMES.has(name)
   }
 
   /** 合并列表（用户覆盖内置同名）+ 配置解析；引擎每次 fire 现算，文件/配置改动即时生效 */
   private listForEngine(): WorkflowRegistryEntry[] {
     const config = this.readConfig()
     const disabled = new Set(config.disabled ?? [])
-    const users = this.scanUserDir()
+    const users = this.scanUserFiles().map((u) => u.file)
     const userNames = new Set(users.map((w) => w.name))
     const builtins = buildBuiltinWorkflows({ language: i18next.language }).filter(
       (w) => !userNames.has(w.name)
@@ -157,15 +234,242 @@ class WorkflowService {
       ...users.map((file) => ({ file, source: 'user' as const }))
     ]) {
       if (disabled.has(file.name)) continue
-      entries.push({
-        file,
-        source,
-        // autorun 缺省：内置名（含覆盖内置的同名用户文件）默认 true —— 覆盖 auto-title
-        // 不该让自动标题静默消失；纯用户工作流默认 false（放下 md 不该能静默烧 token）
-        autorunEnabled: config.autorunEnabled?.[file.name] ?? BUILTIN_WORKFLOW_NAMES.has(file.name)
-      })
+      entries.push({ file, source, autorunEnabled: this.autorunOf(config, file.name) })
     }
     return entries
+  }
+
+  // ─── 设置页 API（对标 policyService：合并列表 / md 原文读写 / 非法文件修复） ───
+
+  /**
+   * 设置页列表：合并结果 + 被同名用户文件遮蔽的内置（`overridden` 标记，仅展示）。
+   * 每项带 autorun 开关的当前值 —— 它是本页相对智能体/策略页多出来的那一维
+   * （文件存在 ≠ 自动触发，见设计 §3.4）。
+   */
+  listForSettings(): WorkflowListItem[] {
+    const config = this.readConfig()
+    const users = this.scanUserFiles()
+    const userNames = new Set(users.map((u) => u.file.name))
+    const builtins = buildBuiltinWorkflows({ language: i18next.language })
+
+    const merged: WorkflowListItem[] = [
+      ...builtins
+        .filter((w) => !userNames.has(w.name))
+        .map((file) => ({ file, source: 'builtin' as const, basePath: '' })),
+      ...users.map((u) => ({ file: u.file, source: 'user' as const, basePath: u.basePath }))
+    ].map(({ file, source, basePath }) => this.toListItem(file, source, basePath, config))
+
+    const shadowed = builtins
+      .filter((w) => userNames.has(w.name))
+      .map((file) => ({
+        ...this.toListItem(file, 'builtin', '', config),
+        overridden: true
+      }))
+    return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** ParsedWorkflowFile → 前端列表项（脚本/schema 原文不外传：列表不需要，编辑走 getSource） */
+  private toListItem(
+    file: ParsedWorkflowFile,
+    source: 'builtin' | 'user',
+    basePath: string,
+    config: WorkflowConfig
+  ): WorkflowListItem {
+    return {
+      name: file.name,
+      displayName: file.displayName,
+      description: file.description,
+      triggers: file.bindings.map((b) => b.trigger),
+      concurrency: file.concurrency,
+      model: file.model,
+      source,
+      basePath,
+      autorunEnabled: this.autorunOf(config, file.name),
+      disabled: (config.disabled ?? []).includes(file.name)
+    }
+  }
+
+  /** 目录里无法解析的工作流文件（设置页显示为可点开修复的告警项） */
+  listInvalid(): InvalidWorkflowFile[] {
+    return this.scanDir().invalid
+  }
+
+  /**
+   * 取 md 原文（编辑器数据源）。用户文件读原文；内置直接回 bundle 里的 md 原文 ——
+   * 工作流正文是「散文 + 脚本块」的混合体，无法从解析产物序列化还原（见
+   * getBuiltinWorkflowSource）。内置原文同时是「创建覆盖副本」的初值。
+   */
+  getSource(name: string, source: 'builtin' | 'user'): { text: string } | { error: string } {
+    if (source === 'user') {
+      const target = this.scanUserFiles().find((u) => u.file.name === name)
+      if (!target) return { error: `Workflow "${name}" not found` }
+      try {
+        return { text: readFileSync(target.basePath, 'utf-8') }
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+    const text = getBuiltinWorkflowSource(name, { language: i18next.language })
+    return text === null ? { error: `Builtin workflow "${name}" not found` } : { text }
+  }
+
+  /**
+   * 解析 + 脚本语法双重校验（写盘前）。**非法一律拒绝**：一份存在但非法的工作流会被
+   * 扫描跳过（不触发也不遮蔽内置），与其让它躺在磁盘上假装生效，不如把原因交回 UI。
+   */
+  private parseForWrite(
+    text: string,
+    defaultName: string
+  ): { file: ParsedWorkflowFile } | { error: string } {
+    const messages: string[] = []
+    const file = parseWorkflowDefinitionFile(text, defaultName, (msg) => messages.push(msg))
+    if (!file) return { error: messages.join('\n') || 'Invalid workflow file' }
+    const compiled = nodeVmScriptEngine.compile(file.script)
+    if (!compiled.ok) return { error: `script syntax error — ${compiled.error}` }
+    return { file }
+  }
+
+  /** 覆写用户工作流文件（`originalName` 定位文件；frontmatter name 为准，可改名） */
+  save(originalName: string, text: string): { success: boolean; error?: string } {
+    const users = this.scanUserFiles()
+    const target = users.find((u) => u.file.name === originalName)
+    if (!target) return { success: false, error: `Workflow "${originalName}" not found` }
+
+    const parsed = this.parseForWrite(text, originalName)
+    if ('error' in parsed) return { success: false, error: parsed.error }
+    const name = parsed.file.name
+    if (name !== originalName && users.some((u) => u.file.name === name)) {
+      return { success: false, error: `Workflow "${name}" already exists` }
+    }
+    try {
+      writeFileSync(target.basePath, text, 'utf-8')
+    } catch (e) {
+      log.warn(`保存 workflow "${originalName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true }
+  }
+
+  /** 新建用户工作流（「新建」与「创建覆盖副本」共用）；文件名由 name 净化派生 */
+  create(text: string): { success: boolean; name?: string; error?: string } {
+    const parsed = this.parseForWrite(text, 'workflow')
+    if ('error' in parsed) return { success: false, error: parsed.error }
+    const name = parsed.file.name
+    if (this.scanUserFiles().some((u) => u.file.name === name)) {
+      return { success: false, error: `Workflow "${name}" already exists` }
+    }
+
+    const safeBase = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'workflow'
+    if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
+    let filePath = join(this.userDir, `${safeBase}.md`)
+    for (let i = 1; existsSync(filePath); i++) {
+      filePath = join(this.userDir, `${safeBase}-${i}.md`)
+    }
+    try {
+      writeFileSync(filePath, text, 'utf-8')
+    } catch (e) {
+      log.warn(`新建 workflow "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true, name }
+  }
+
+  /** 删除用户工作流（删掉覆盖副本后同名内置自动恢复） */
+  delete(name: string): { success: boolean; error?: string } {
+    const target = this.scanUserFiles().find((u) => u.file.name === name)
+    if (!target) return { success: false, error: `Workflow "${name}" not found` }
+    try {
+      unlinkSync(target.basePath)
+    } catch (e) {
+      log.warn(`删除 workflow "${name}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    log.info(`已删除 workflow "${name}" (${target.basePath})`)
+    return { success: true }
+  }
+
+  /**
+   * 文件名白名单：仅接受工作流目录下的单个 .md 文件名，杜绝路径穿越
+   * （fileName 来自渲染进程，虽只由 listInvalid 的返回值填充，仍按不可信入参处理）。
+   */
+  private resolveUserFile(fileName: string): string | null {
+    if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.')) return null
+    const filePath = join(this.userDir, fileName)
+    return existsSync(filePath) ? filePath : null
+  }
+
+  /** 非法文件的读/写/删（身份是文件名 —— 它解析不出 name） */
+  getSourceByFile(fileName: string): { text: string } | { error: string } {
+    const filePath = this.resolveUserFile(fileName)
+    if (!filePath) return { error: `Workflow file "${fileName}" not found` }
+    try {
+      return { text: readFileSync(filePath, 'utf-8') }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
+  }
+
+  saveByFile(fileName: string, text: string): { success: boolean; error?: string } {
+    const filePath = this.resolveUserFile(fileName)
+    if (!filePath) return { success: false, error: `Workflow file "${fileName}" not found` }
+    const parsed = this.parseForWrite(text, fileName.slice(0, -3))
+    if ('error' in parsed) return { success: false, error: parsed.error }
+    try {
+      writeFileSync(filePath, text, 'utf-8')
+    } catch (e) {
+      log.warn(`保存 workflow 文件 "${fileName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    return { success: true }
+  }
+
+  deleteByFile(fileName: string): { success: boolean; error?: string } {
+    const filePath = this.resolveUserFile(fileName)
+    if (!filePath) return { success: false, error: `Workflow file "${fileName}" not found` }
+    try {
+      unlinkSync(filePath)
+    } catch (e) {
+      log.warn(`删除 workflow 文件 "${fileName}" 失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    log.info(`已删除 workflow 文件 "${fileName}"`)
+    return { success: true }
+  }
+
+  /**
+   * 自动触发开关（写 `.config.json` 的 autorunEnabled 映射）。**恒写显式值**，
+   * 不因「等于缺省值」而删键 —— 用户把某个内置关掉再打开，与从未碰过它，
+   * 在缺省规则变化时的含义不同，显式记录才不会被规则变更悄悄改写。
+   */
+  setAutorun(name: string, enabled: boolean): { success: boolean; error?: string } {
+    const config = this.readConfig()
+    const next: WorkflowConfig = {
+      ...config,
+      autorunEnabled: { ...(config.autorunEnabled ?? {}), [name]: enabled }
+    }
+    try {
+      if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
+      writeFileSync(
+        join(this.userDir, '.config.json'),
+        `${JSON.stringify(next, null, 2)}\n`,
+        'utf-8'
+      )
+    } catch (e) {
+      log.warn(`写入 workflow 配置失败:`, e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    log.info(`workflow "${name}" autorun=${enabled}`)
+    return { success: true }
+  }
+
+  getUserDir(): string {
+    return this.userDir
+  }
+
+  /** 打开用户工作流目录（OS 文件管理器；懒创建） */
+  async openUserFolder(): Promise<void> {
+    if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
+    await shell.openPath(this.userDir)
   }
 
   // ─── run 记录（JSONL journal） ────────────────

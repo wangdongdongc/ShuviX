@@ -26,12 +26,13 @@ import {
  * 字段渲染方式。前五种是可编辑/可点选的标量面：
  *   text 普通文本 / mono 等宽（标识符）/ boolean 开关 /
  *   csv 逗号分隔列表（chips，宿主给候选项时可增删）/ select 单选（宿主给候选项时可换）。
- * 后五种是**只读展示**（点击跳源码编辑）—— 嵌套/长文按设计不做表单：
+ * 后六种是**只读展示**（点击跳源码编辑）—— 嵌套/长文按设计不做表单：
  *   prose 长文段落（wiki 条目正文：标签在上、整宽左对齐阅读排版）
  *   list 标量数组（wiki 来源：逐行等宽展示）
  *   conditions 条件映射（键即 CEL 路径，值为字符串或字符串列表）
  *   exprMap 具名表达式映射（policy 的 lets）
  *   policyRules 规则数组（effect 徽章 + 条件/match 摘要）
+ *   workflowBindings 触发绑定数组（埋点 id 徽章 + CEL when/参数摘要）
  * 另有 hidden：已知但不渲染（wiki 的 description 横幅是机器面所有权声明，
  * 对人只是噪音 —— 列进描述符防它落通用行，渲染时整行跳过；源码视图仍可见）。
  * 值的实际形状与 kind 不符时一律退回通用标量渲染 —— 合法性判定归解析器，卡片只展示。
@@ -47,6 +48,7 @@ export type ShuvixMdFieldKind =
   | 'conditions'
   | 'exprMap'
   | 'policyRules'
+  | 'workflowBindings'
   | 'hidden'
 
 /**
@@ -160,9 +162,35 @@ const WIKI_TOPIC_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/**
+ * 工作流文件（agent-runtime workflow/workflowFile.ts 的键集）。
+ *
+ * `shuvix-workflow-on` 是这份文件最要紧的一行——「什么时候会跑」——故给它专属摘要
+ * （埋点 id + when 表达式），同 policy 的 rules。其余嵌套键（input schema / vars /
+ * limits）只落通用行：它们的形状是任意 JSON，做表单成本远高于收益，而正文里的脚本块
+ * 本来就要在源码视图里读。concurrency 是三值封闭枚举（select，候选项由宿主给）。
+ */
+const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'workflow',
+  badge: 'ShuviX workflow',
+  fields: [
+    { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
+    { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
+    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
+    { key: 'shuvix-workflow-on', labelKey: 'settings.workflowOn', kind: 'workflowBindings' },
+    { key: 'shuvix-workflow-model', labelKey: 'tool.subAgentModel', kind: 'select' },
+    {
+      key: 'shuvix-workflow-concurrency',
+      labelKey: 'settings.workflowConcurrency',
+      kind: 'select'
+    }
+  ]
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
+  WORKFLOW_DESCRIPTOR,
   MEMORY_DESCRIPTOR,
   WIKI_ENTRY_DESCRIPTOR,
   WIKI_TOPIC_DESCRIPTOR

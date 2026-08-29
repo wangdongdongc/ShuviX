@@ -356,6 +356,27 @@ const api = {
     openFolder: () => ipcRenderer.invoke('policy:openFolder')
   },
 
+  // ============ 工作流（文件系统驱动，md 原文编辑；autorun 开关走 .config.json） ============
+  workflow: {
+    list: () => ipcRenderer.invoke('workflow:list'),
+    getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
+      ipcRenderer.invoke('workflow:getSource', params),
+    save: (params: { originalName: string; text: string }) =>
+      ipcRenderer.invoke('workflow:save', params),
+    create: (params: { text: string }) => ipcRenderer.invoke('workflow:create', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('workflow:delete', params),
+    setAutorun: (params: { name: string; enabled: boolean }) =>
+      ipcRenderer.invoke('workflow:setAutorun', params),
+    listInvalid: () => ipcRenderer.invoke('workflow:listInvalid'),
+    getSourceByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('workflow:getSourceByFile', params),
+    saveByFile: (params: { fileName: string; text: string }) =>
+      ipcRenderer.invoke('workflow:saveByFile', params),
+    deleteByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('workflow:deleteByFile', params),
+    openFolder: () => ipcRenderer.invoke('workflow:openFolder')
+  },
+
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) =>

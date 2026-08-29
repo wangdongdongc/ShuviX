@@ -154,6 +154,36 @@ describe('validateShuvixMdText — workflow', () => {
       )
     ).toEqual({ status: 'valid', messages: [] })
   })
+
+  it('U14 属性卡重组形状（无正文）→ valid：脚本块是正文的规则，不该让每份合法工作流亮红', () => {
+    // 设置页的属性卡只把 frontmatter 片段送来校验（同 memory）。原样判定必然报
+    // 「缺 js workflow 脚本块」—— 实际打开内置 auto-title 就会看到一条假红。
+    const yaml = md(
+      'shuvix: workflow v1',
+      'name: ok-wf',
+      'shuvix-workflow-on:',
+      '  - trigger: session.turn-completed',
+      '    when: event.turnCount == 2'
+    )
+    expect(validateShuvixMdText('workflow', recompose(yaml))).toEqual({
+      status: 'valid',
+      messages: []
+    })
+  })
+
+  it('U15 送整份文件时缺脚本块仍判非法（占位只在无正文时补，不放宽真实文件的判定）', () => {
+    const withBodyNoScript = md(
+      '---',
+      'shuvix: workflow v1',
+      'name: no-script',
+      '---',
+      '',
+      '说明文字'
+    )
+    const result = validateShuvixMdText('workflow', withBodyNoScript)
+    expect(result.status).toBe('invalid')
+    expect(result.messages[0]).toContain('js workflow')
+  })
 })
 
 describe('validateShuvixMdText — 类型路由与边界', () => {

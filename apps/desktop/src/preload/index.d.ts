@@ -381,6 +381,37 @@ declare global {
     error: string
   }
 
+  /** 工作流元信息（文件系统驱动；与主进程 WorkflowListItem 对齐） */
+  interface WorkflowInfo {
+    name: string
+    /** 显示名（shuvix-displayName；缺省 = name） */
+    displayName: string
+    /** 一句话摘要 */
+    description: string
+    /** 绑定的埋点 id 列表（空 = 没有自动触发绑定） */
+    triggers: string[]
+    /** 重入策略 skip | queue | parallel */
+    concurrency: string
+    /** `shuvix-workflow-model` 原样值；省略 = 跟随会话模型 */
+    model?: string
+    source: 'builtin' | 'user'
+    /** 用户文件路径（内置为空串） */
+    basePath: string
+    /** 自动触发是否启用（内置默认开，纯用户工作流默认关） */
+    autorunEnabled: boolean
+    /** 整体停用（.config.json 的 disabled；本页无开关，外部编辑可用） */
+    disabled: boolean
+    /** 该内置已被同名用户工作流遮蔽（仅展示，不生效） */
+    overridden?: boolean
+  }
+
+  /** 无法解析的用户工作流文件（结构非法或脚本语法错），读写走 workflow.*ByFile */
+  interface InvalidWorkflowFile {
+    fileName: string
+    /** 人读原因：解析器拒绝原因，或脚本引擎的语法错 */
+    error: string
+  }
+
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
   interface SubAgentInfo {
     name: string
@@ -603,6 +634,35 @@ declare global {
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
       listInvalid: () => Promise<Array<{ fileName: string; error: string }>>
+      getSourceByFile: (params: {
+        fileName: string
+      }) => Promise<{ text: string } | { error: string }>
+      saveByFile: (params: {
+        fileName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      openFolder: () => Promise<{ success: boolean }>
+    }
+    workflow: {
+      list: () => Promise<WorkflowInfo[]>
+      getSource: (params: {
+        name: string
+        source: 'builtin' | 'user'
+      }) => Promise<{ text: string } | { error: string }>
+      save: (params: {
+        originalName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      create: (params: {
+        text: string
+      }) => Promise<{ success: boolean; name?: string; error?: string }>
+      delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      setAutorun: (params: {
+        name: string
+        enabled: boolean
+      }) => Promise<{ success: boolean; error?: string }>
+      listInvalid: () => Promise<InvalidWorkflowFile[]>
       getSourceByFile: (params: {
         fileName: string
       }) => Promise<{ text: string } | { error: string }>

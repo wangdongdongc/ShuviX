@@ -32,9 +32,20 @@ export function validateShuvixMdText(
   }
   if (type === 'workflow') {
     // 结构级校验（frontmatter/绑定/CEL/块布局）；脚本**语法**由宿主的脚本引擎在扫描侧
-    // 另行 compile —— 本函数保持两端可用（无脚本引擎依赖）
+    // 另行 compile —— 本函数保持两端可用（无脚本引擎依赖）。
+    //
+    // 与 memory 同一处理（理由见下）：属性卡只送 frontmatter 片段，而「恰一个 js workflow
+    // 脚本块」是正文的规则 —— 原样送进去，每一份合法工作流都会亮红。仅在没有正文时补一个
+    // 占位脚本块，把判定限定在 frontmatter 上；送整份文件的调用方（写后校验）照旧按真实
+    // 正文判定，缺脚本块的工作流仍判非法 —— 那种文件扫描侧本来就会跳过。
     const messages: string[] = []
-    const parsed = parseWorkflowDefinitionFile(text, name, (msg) => messages.push(msg))
+    const hasBody = (splitFrontmatter(text)?.body ?? '').trim() !== ''
+    // 占位块的内容必须非空 —— 纯空白脚本按「缺脚本块」拒绝（见 workflowFile 的块提取）
+    const parsed = parseWorkflowDefinitionFile(
+      hasBody ? text : `${text}\n\`\`\`js workflow\nreturn null\n\`\`\`\n`,
+      name,
+      (msg) => messages.push(msg)
+    )
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'memory') {

@@ -70,6 +70,7 @@ interface SettingsState {
     | 'projects'
     | 'providers'
     | 'agents'
+    | 'workflows'
     | 'policies'
     | 'tools'
     | 'mcp'
@@ -100,21 +101,7 @@ interface SettingsState {
   setUiZoom: (zoom: number) => void
   setFocusMode: (enabled: boolean) => void
   setIsSettingsOpen: (open: boolean) => void
-  setActiveSettingsTab: (
-    tab:
-      | 'general'
-      | 'projects'
-      | 'providers'
-      | 'agents'
-      | 'policies'
-      | 'tools'
-      | 'mcp'
-      | 'skills'
-      | 'voice'
-      | 'telegramBots'
-      | 'monitor'
-      | 'about'
-  ) => void
+  setActiveSettingsTab: (tab: SettingsState['activeSettingsTab']) => void
   loadSettings: (settings: Record<string, string>) => void
   /** 加载配置元数据（启动时调用一次） */
   loadConfigMeta: (

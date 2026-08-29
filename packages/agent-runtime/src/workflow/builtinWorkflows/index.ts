@@ -10,6 +10,7 @@
  * 默认关闭，须在配置里显式启用（放下一个 md 不该能静默开始烧 token）。
  */
 import { buildBuiltinWorkflow, type BuiltinWorkflowDeps, type BuiltinWorkflowSpec } from './spec'
+import { pickLocalizedSource } from '../../subagent/builtinAgents/spec'
 import type { ParsedWorkflowFile } from '../workflowFile'
 
 import autoTitleEn from './md/auto-title.md?raw'
@@ -32,4 +33,20 @@ export function buildBuiltinWorkflows(deps: BuiltinWorkflowDeps): ParsedWorkflow
   return BUILTIN_WORKFLOW_SPECS.map((spec) => buildBuiltinWorkflow(spec, deps)).filter(
     (w): w is ParsedWorkflowFile => w !== null
   )
+}
+
+/**
+ * 内置工作流的 md **原文**（设置页只读展示 + 「创建覆盖副本」的初值）。
+ *
+ * 直接回原文而非像 agent/policy 那样序列化解析结果 —— 那两者的内置档案序列化是
+ * 既有设计，而工作流正文是「文档散文 + 具名代码块」的混合体：脚本块与说明文字
+ * 都无法从解析产物还原。原文本就以字符串形式躺在 bundle 里（`?raw`），拿来即最保真。
+ * 未知名返回 null。
+ */
+export function getBuiltinWorkflowSource(
+  name: string,
+  deps: BuiltinWorkflowDeps = {}
+): string | null {
+  const spec = BUILTIN_WORKFLOW_SPECS.find((s) => s.name === name)
+  return spec ? pickLocalizedSource(spec.sources, deps.language) : null
 }

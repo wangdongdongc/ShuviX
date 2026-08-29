@@ -411,6 +411,38 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
     }
     return box
   }
+  // 触发绑定（workflow 的 shuvix-workflow-on）：埋点 id 徽章 + when/参数摘要。
+  // 「什么时候会跑」是这份文件最要紧的一行，与 policyRules 同等待遇。
+  if (kind === 'workflowBindings') {
+    if (!Array.isArray(value)) return null
+    const box = el('div', 'cm-shuvix-fmcard-value space-y-1')
+    for (const item of value) {
+      const raw = isPlainObject(item) ? item : {}
+      const line = el('div', 'cm-shuvix-fmcard-rule flex items-baseline gap-2')
+      const trigger = typeof raw.trigger === 'string' ? raw.trigger : '?'
+      line.appendChild(
+        el(
+          'span',
+          'cm-shuvix-fmcard-trigger shrink-0 px-1.5 py-0.5 rounded font-mono text-[9px] tracking-wide bg-accent/10 text-accent',
+          trigger
+        )
+      )
+      // when 之外的键是该埋点自己声明的绑定参数（如未来的 debounce）—— 一并摘要
+      const params = Object.entries(raw).filter(([k]) => k !== 'trigger' && k !== 'when')
+      const parts: string[] = []
+      if (typeof raw.when === 'string' && raw.when.trim()) parts.push(raw.when.trim())
+      for (const [k, v] of params) parts.push(`${k}: ${scalarText(v)}`)
+      line.appendChild(
+        el(
+          'span',
+          'cm-shuvix-fmcard-rule-text font-mono text-[11px] text-text-secondary break-words',
+          parts.join('  ·  ')
+        )
+      )
+      box.appendChild(line)
+    }
+    return box
+  }
   return null
 }
 
