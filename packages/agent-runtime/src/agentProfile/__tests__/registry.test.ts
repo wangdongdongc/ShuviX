@@ -173,7 +173,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 九个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'default',
       'notebook',
@@ -183,15 +183,18 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'visualization',
       'widget',
       'wiki',
-      'wiki-writer'
+      'wiki-writer',
+      'titler'
     ])
+    // titler 无宿主参数依赖：缺 widget/wiki 根也在（模型走 shuvix-model 通用链路，内置不声明）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'default',
       'notebook',
       'coding',
       'browser',
       'explore',
-      'visualization'
+      'visualization',
+      'titler'
     ])
   })
 
@@ -268,10 +271,12 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md、项目提示词默认开（notebook 除外 —— 维持迁移前的笔记本行为）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md、项目提示词默认开（notebook/titler 除外）', () => {
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
-      const on = spec.name !== NOTEBOOK_PROFILE_NAME
+      // notebook：维持迁移前的笔记本行为；titler：上下文无关的执行型一次性任务 ——
+      // 给每次标题生成注入整份项目文档纯属浪费 token 且稀释指令
+      const on = spec.name !== NOTEBOOK_PROFILE_NAME && spec.name !== 'titler'
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
       expect(built.instructionFiles, spec.name).toEqual(on ? ['AGENTS.md', 'CLAUDE.md'] : [])
       expect(built.projectPrompt, spec.name).toBe(on)
@@ -327,6 +332,30 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
         expect(def, `default.${language} 需点名 ${named}`).toContain(named)
       }
       expect(def, `default.${language} 不应点名 explore`).not.toContain('explore')
+    }
+  })
+})
+
+describe('titler 档案钉板（auto-title 的执行侧）', () => {
+  it('tools 恰为 [session-config] —— 命名任务的全部权限就是改自己会话的标题', () => {
+    expect(profile('titler').tools).toEqual(['session-config'])
+  })
+
+  it('dispatchOnly：只可派发、不可 /titler 切换，也不是基座档案', () => {
+    expect(profile('titler').dispatchOnly).toBe(true)
+    expect(BASE_PROFILE_NAMES.has('titler')).toBe(false)
+  })
+
+  it('不声明 shuvix-model（内置跟随派发方；钉便宜模型走用户覆盖 titler.md）', () => {
+    expect(profile('titler').model).toBeUndefined()
+  })
+
+  it('三语 body 都含 session-config / next / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
+    for (const language of ['en', 'zh', 'ja']) {
+      const body = profile('titler', language).systemPrompt
+      for (const anchor of ['session-config', 'next', 'set-title', '60']) {
+        expect(body, `titler.${language} 需含 ${anchor}`).toContain(anchor)
+      }
     }
   })
 })

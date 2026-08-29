@@ -256,14 +256,6 @@ export const settingsStore = {
     }
   },
 
-  /** 读「设置中的标题模型」原始值（设置页 ModelDefaults 标题模型一节显示用，未配置则空） */
-  async getConfiguredTitle(): Promise<{ provider: string; model: string }> {
-    return {
-      provider: (await this.get('general.titleProvider')) ?? '',
-      model: (await this.get('general.titleModel')) ?? ''
-    }
-  },
-
   async updateConfig(
     id: string,
     patch: Partial<

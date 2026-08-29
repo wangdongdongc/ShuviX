@@ -16,6 +16,8 @@ import './browser'
 import './git'
 // preview 工具：不在内置 default 档案清单 —— 可视化子代理经白名单解析使用
 import './preview'
+// session-config：agent 读改自己所属会话的配置（v1 仅 set-title，内置 titler 的落笔工具）
+import './sessionConfig'
 // 注：session 工具已删除 —— 压缩不再经「compact 子代理 + 工具调用」，
 // 而是 harness 内建的自动压缩（见 HarnessSession.maybeAutoCompact）。
 

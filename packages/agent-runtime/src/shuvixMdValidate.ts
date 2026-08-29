@@ -13,6 +13,7 @@ import { parseAgentDefinitionFile } from './agentProfile/definitionFile'
 import { splitFrontmatter } from './markdownFrontmatter'
 import { parseMemoryFile } from './memory/memoryFile'
 import { parsePolicyDefinitionFile } from './security/policyFile'
+import { parseWorkflowDefinitionFile } from './workflow/workflowFile'
 
 export function validateShuvixMdText(
   type: string,
@@ -27,6 +28,13 @@ export function validateShuvixMdText(
   if (type === 'policy') {
     const messages: string[] = []
     const parsed = parsePolicyDefinitionFile(text, name, (msg) => messages.push(msg))
+    return { status: parsed ? 'valid' : 'invalid', messages }
+  }
+  if (type === 'workflow') {
+    // 结构级校验（frontmatter/绑定/CEL/块布局）；脚本**语法**由宿主的脚本引擎在扫描侧
+    // 另行 compile —— 本函数保持两端可用（无脚本引擎依赖）
+    const messages: string[] = []
+    const parsed = parseWorkflowDefinitionFile(text, name, (msg) => messages.push(msg))
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'memory') {

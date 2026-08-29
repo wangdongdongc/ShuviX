@@ -82,20 +82,9 @@ export function registerSessionHandlers(): void {
     return { success: true }
   })
 
-  /** AI 自动生成会话标题（后台静默，对用户透明） */
-  ipcMain.handle(
-    'session:generateTitle',
-    async (_event, params: { sessionId: string; conversationText: string }) => {
-      const title =
-        (await sessionService
-          .getAgentSession(params.sessionId)
-          ?.generateTitle(params.conversationText)) ?? null
-      if (title) {
-        sessionService.updateTitle(params.sessionId, title)
-      }
-      return { title }
-    }
-  )
+  // 注：session:generateTitle 已删除 —— 自动标题改由内置 auto-title 工作流驱动
+  // （session.prompt-accepted / session.turn-completed 埋点 + titler agent），
+  // 该 IPC 本就没有任何渲染端调用方。
 
   /** 选择文件并读取其文本内容（用于 SSH 私钥等） */
   ipcMain.handle(

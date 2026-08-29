@@ -65,6 +65,13 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'Archive', iconColor: '#8b5cf6' },
     buildSummary: field('action')
   },
+  'session-config': {
+    labelKey: 'tool.sessionConfigLabel',
+    presentation: { icon: 'Wrench', iconColor: '#8b5cf6' },
+    // action + 该 action 最有信息量的参数（set-title → 新标题）
+    buildSummary: (args) =>
+      [asStr(args.action), asStr(args.title)].filter(Boolean).join(' · ') || undefined
+  },
   git: {
     labelKey: 'tool.gitLabel',
     presentation: { icon: 'GitBranch', iconColor: '#f59e0b' },

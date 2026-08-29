@@ -78,10 +78,6 @@ interface SettingsState {
     | 'telegramBots'
     | 'monitor'
     | 'about'
-  /** 标题生成模型 provider ID(空 = 不自动生成标题) */
-  titleProvider: string
-  /** 标题生成模型 model ID */
-  titleModel: string
   /** 启动时自动检查更新 */
   autoCheckUpdate: boolean
   /** 是否已加载 */
@@ -96,8 +92,6 @@ interface SettingsState {
   setAvailableModels: (models: AvailableModel[]) => void
   setActiveProvider: (provider: string) => void
   setActiveModel: (model: string) => void
-  setTitleProvider: (provider: string) => void
-  setTitleModel: (model: string) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setDarkTheme: (theme: DarkThemeId) => void
   setLightTheme: (theme: LightThemeId) => void
@@ -152,8 +146,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   voiceTtsQwen3Voice: 'Vivian',
   voiceTtsQwen3Speed: 1.0,
   voiceTtsQwen3Emotion: '',
-  titleProvider: '',
-  titleModel: '',
   isSettingsOpen: false,
   activeSettingsTab: 'general',
   autoCheckUpdate: true,
@@ -165,8 +157,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setAvailableModels: (models) => set({ availableModels: models }),
   setActiveProvider: (provider) => set({ activeProvider: provider }),
   setActiveModel: (model) => set({ activeModel: model }),
-  setTitleProvider: (provider) => set({ titleProvider: provider }),
-  setTitleModel: (model) => set({ titleModel: model }),
   setTheme: (theme) => set({ theme }),
   setDarkTheme: (darkTheme) => set({ darkTheme }),
   setLightTheme: (lightTheme) => set({ lightTheme }),
@@ -204,8 +194,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       voiceTtsQwen3Voice: settings['voice.tts.qwen3.voice'] || 'Vivian',
       voiceTtsQwen3Speed: Number(settings['voice.tts.qwen3.speed']) || 1.0,
       voiceTtsQwen3Emotion: settings['voice.tts.qwen3.emotion'] || '',
-      titleProvider: settings['general.titleProvider'] || '',
-      titleModel: settings['general.titleModel'] || '',
       autoCheckUpdate: settings['updates.autoCheck'] !== 'false',
       loaded: true
     })

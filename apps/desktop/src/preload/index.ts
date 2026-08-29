@@ -265,8 +265,6 @@ const api = {
       ipcRenderer.invoke('session:updateAutoAllow', params),
     removeAllowListEntry: (params: SessionAllowListRemoveParams) =>
       ipcRenderer.invoke('session:removeAllowListEntry', params),
-    generateTitle: (params: { sessionId: string; conversationText: string }) =>
-      ipcRenderer.invoke('session:generateTitle', params),
     delete: (id: string) => ipcRenderer.invoke('session:delete', id),
     /** 获取单个会话（含 workingDirectory） */
     getById: (id: string) => ipcRenderer.invoke('session:getById', id),

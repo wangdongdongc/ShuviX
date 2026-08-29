@@ -40,6 +40,7 @@ import { initBrowserHost, destroyAllTabs, initBrowserSession } from './services/
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
+import { workflowService } from './services/workflowService'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -616,6 +617,9 @@ app.whenReady().then(async () => {
 
   // 注册所有 IPC 处理器
   measure('registerIPC', () => registerIpcHandlers())
+
+  // 装配 workflow 引擎（业务埋点在此之前的 fire 静默丢弃）
+  measure('workflowService.init', () => workflowService.init())
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   registerAppEventBridge()

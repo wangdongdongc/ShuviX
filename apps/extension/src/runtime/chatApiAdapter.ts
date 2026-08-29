@@ -38,7 +38,7 @@ import {
   NOTEBOOK_PROFILE_NAME,
   validateShuvixMdText
 } from '@shuvix/agent-runtime'
-import { generateTitleForSession, titlerFor, removeTitler } from './titleRuntime'
+import { titlerFor, removeTitler } from './titleRuntime'
 import { filesRuntime, workingDirNameForSession } from './filesRuntime'
 import { appEventBus } from './appEventBus'
 
@@ -312,12 +312,6 @@ export const chatApiAdapter: ChatApi = {
       const cur = sessionStore.getSettingsSync(id).allowList ?? []
       await sessionStore.updateSettings(id, { allowList: cur.filter((e) => e !== entry) })
       return ok
-    },
-    // LLM 标题生成（与桌面同源，见 titleRuntime）：仅用设置中的专用标题模型，未配置则返回 null；
-    // 生成后落库 IndexedDB 并广播 session.titleChanged
-    generateTitle: async ({ sessionId, conversationText }) => {
-      const title = await generateTitleForSession(sessionId, conversationText)
-      return { title }
     },
     delete: async (id) => {
       await removeRuntimeSession(id)

@@ -510,10 +510,6 @@ declare global {
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       updateAutoAllow: (params: SessionUpdateAutoAllowParams) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
-      generateTitle: (params: {
-        sessionId: string
-        conversationText: string
-      }) => Promise<{ title: string | null }>
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>

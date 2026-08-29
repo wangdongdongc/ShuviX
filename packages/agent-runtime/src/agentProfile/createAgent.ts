@@ -60,6 +60,12 @@ export interface ToolResolveRequest {
   spawn?: SpawnContext
   /** 工具可达的用户输入通道（root=自身运行时；spawned=经 helpers 路由到根会话） */
   requestUserInput?: (req: InputRequest) => Promise<InputResponse>
+  /**
+   * 已实例化的附加工具（如派发结果契约的 `next`，见 subagent/nextTool.ts）。
+   * 宿主在按名解析产物**之后**追加，并施加与内置工具相同的包装/门控（截断、L1 门）；
+   * 与解析产物同名时以 extraTools 为准（先移除同名再追加）。
+   */
+  extraTools?: readonly AnyAgentTool[]
 }
 
 /** 宿主一次性注入的端适配面 */
@@ -152,6 +158,8 @@ export interface CreateAgentParams {
   /** kind='spawned' 必传 */
   spawn?: SpawnContext
   spawnHelpers?: SubAgentToolHelpers
+  /** 已实例化的附加工具（透传 ToolResolveRequest.extraTools；overlay 重解析时保留） */
+  extraTools?: readonly AnyAgentTool[]
   /** 仅 root：UserPromptSubmit 通过后的首轮快速标题钩子 */
   onPromptAccepted?: (text: string) => void
 }
@@ -303,7 +311,8 @@ export function createAgentFactory(host: AgentHostAdapter): AgentFactory {
       names: normalizeToolNames(kind, profile.tools, overlay),
       getModelConfig,
       spawn,
-      requestUserInput
+      requestUserInput,
+      extraTools: params.extraTools
     })
 
     const tools = await host.resolveTools(buildResolveRequest(params.toolOverlay))

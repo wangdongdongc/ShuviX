@@ -288,6 +288,48 @@ export {
   type RunTaskParams,
   type AnyAgentTool
 } from './subagent/manager'
+// 派发结果契约：schema 收口的 next 工具（workflow run() 的结构化结果通道）
+export {
+  NextTool,
+  NEXT_TOOL_NAME,
+  NEXT_NUDGE_TEXT,
+  buildResultContractNote,
+  validateContractSchema,
+  type ResultContract
+} from './subagent/nextTool'
+// Workflow：md 格式解析 / 类型化埋点注册表 / 引擎（设计见 docs/workflow-md-design.md）
+export {
+  parseWorkflowDefinitionFile,
+  WORKFLOW_FILE_MARKER,
+  WORKFLOW_FILE_MARKER_KEY,
+  type ParsedWorkflowFile,
+  type WorkflowTriggerBinding,
+  type WorkflowLimits,
+  type WorkflowConcurrency
+} from './workflow/workflowFile'
+export {
+  TRIGGER_POINTS,
+  getTriggerPoint,
+  type TriggerId,
+  type TriggerPayloadMap,
+  type TriggerPointDef
+} from './workflow/triggerPoints'
+export {
+  createWorkflowEngine,
+  DEFAULT_WORKFLOW_LIMITS,
+  type WorkflowEngine,
+  type WorkflowEngineDeps,
+  type WorkflowRegistryEntry,
+  type WorkflowScriptEngine
+} from './workflow/engine'
+export {
+  buildBuiltinWorkflows,
+  BUILTIN_WORKFLOW_SPECS,
+  BUILTIN_WORKFLOW_NAMES,
+  AUTO_TITLE_WORKFLOW_SPEC,
+  type BuiltinWorkflowDeps,
+  type BuiltinWorkflowSpec
+} from './workflow/builtinWorkflows'
 // 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
 // （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）
 export {
@@ -305,6 +347,7 @@ export {
   WIDGET_SPEC,
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
+  TITLER_SPEC,
   WIKI_ENTRY_BANNER,
   WIKI_TOPIC_BANNER,
   type BuiltinProfileDeps,

@@ -124,6 +124,38 @@ describe('validateShuvixMdText — policy', () => {
   })
 })
 
+describe('validateShuvixMdText — workflow', () => {
+  const workflowMd = (fm: string[], script = 'return 1'): string =>
+    md('---', ...fm, '---', '', '```js workflow', script, '```', '')
+
+  it('U11 合法 workflow md → valid 且 messages 为空', () => {
+    expect(
+      validateShuvixMdText('workflow', workflowMd(['shuvix: workflow v1', 'name: ok-wf']))
+    ).toEqual({ status: 'valid', messages: [] })
+  })
+
+  it('U12 非法 workflow md（裸 on）→ invalid + 人读原因原样回传', () => {
+    const result = validateShuvixMdText(
+      'workflow',
+      workflowMd(['shuvix: workflow v1', 'name: bad-wf', 'on: []'])
+    )
+    expect(result.status).toBe('invalid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain("workflow 'bad-wf'")
+    expect(result.messages[0]).toContain("bare 'on' key is not read")
+    expect(result.messages[0]).toContain('the whole file is rejected')
+  })
+
+  it('U13 分工钉板：脚本体 JS 语法错但结构合法 → 此处仍 valid（脚本语法归宿主扫描侧）', () => {
+    expect(
+      validateShuvixMdText(
+        'workflow',
+        workflowMd(['shuvix: workflow v1', 'name: syntax-err'], 'return ((( oops')
+      )
+    ).toEqual({ status: 'valid', messages: [] })
+  })
+})
+
 describe('validateShuvixMdText — 类型路由与边界', () => {
   it.each(['chart', 'wiki-entry', 'wiki-topic', 'bogus', '', 'Agent'])(
     'U8 无校验器类型 %j → unknown 且 messages 为空',

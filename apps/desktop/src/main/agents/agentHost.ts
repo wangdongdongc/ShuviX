@@ -154,6 +154,17 @@ function resolveDesktopTools(req: ToolResolveRequest): AnyAgentTool[] {
       tools.push(wrap(mcpTool))
     }
   }
+
+  // 已实例化的附加工具（派发结果契约的 next 等）：与内置工具同样包装（截断 + L1 门），
+  // 同名以 extraTools 为准 —— 先移除解析产物里的同名者再追加
+  if (req.extraTools?.length) {
+    const extraNames = new Set(
+      req.extraTools.map((tool) => (tool as { name?: string }).name).filter(Boolean)
+    )
+    const kept = tools.filter((tool) => !extraNames.has((tool as { name?: string }).name))
+    kept.push(...req.extraTools.map((tool) => wrap(tool as object)))
+    return kept
+  }
   return tools
 }
 

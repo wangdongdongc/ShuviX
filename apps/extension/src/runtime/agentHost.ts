@@ -207,7 +207,19 @@ function resolveSpawnedTools(req: ToolResolveRequest): AnyAgentTool[] {
 }
 
 const extensionAgentHost: AgentHostAdapter = {
-  resolveTools: (req) => (req.kind === 'root' ? resolveRootTools(req) : resolveSpawnedTools(req)),
+  resolveTools: async (req) => {
+    const tools = await (req.kind === 'root' ? resolveRootTools(req) : resolveSpawnedTools(req))
+    // 已实例化的附加工具（派发结果契约的 next 等）：同名让位后追加。
+    // 扩展现阶段没有传 resultContract 的调用方，此处只为保持 seam 契约与桌面一致。
+    if (!req.extraTools?.length) return tools
+    const extraNames = new Set(
+      req.extraTools.map((tool) => (tool as { name?: string }).name).filter(Boolean)
+    )
+    return [
+      ...tools.filter((tool) => !extraNames.has((tool as { name?: string }).name)),
+      ...req.extraTools
+    ]
+  },
   promptVars: extensionPromptVars,
   buildModel: (config) => resolveSessionModel(config.provider, config.model, config.capabilities),
   // 档案声明的模型（`shuvix-model`）→ 可用模型表里的一条；不可用返回 null 由创建管线回落

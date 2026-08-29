@@ -35,11 +35,7 @@ export function GeneralSettings(): React.JSX.Element {
     activeProvider,
     activeModel,
     setActiveProvider,
-    setActiveModel,
-    titleProvider,
-    titleModel,
-    setTitleProvider,
-    setTitleModel
+    setActiveModel
   } = useSettingsStore()
 
   /** 仅持久化（store + DB）的单值 setter —— 编排逻辑在共享 ModelDefaultsSettings 内 */
@@ -51,15 +47,6 @@ export function GeneralSettings(): React.JSX.Element {
     setActiveModel(id)
     window.api.settings.set({ key: 'general.defaultModel', value: id })
   }
-  const persistTitleProvider = (id: string): void => {
-    setTitleProvider(id)
-    window.api.settings.set({ key: 'general.titleProvider', value: id })
-  }
-  const persistTitleModel = (id: string): void => {
-    setTitleModel(id)
-    window.api.settings.set({ key: 'general.titleModel', value: id })
-  }
-
   return (
     <div className="flex-1">
       <AppearanceTab
@@ -116,11 +103,6 @@ export function GeneralSettings(): React.JSX.Element {
         defaultModel={activeModel}
         setDefaultProvider={persistDefaultProvider}
         setDefaultModel={persistDefaultModel}
-        caps={{ showTitleModel: true }}
-        titleProvider={titleProvider}
-        titleModel={titleModel}
-        setTitleProvider={persistTitleProvider}
-        setTitleModel={persistTitleModel}
       />
     </div>
   )

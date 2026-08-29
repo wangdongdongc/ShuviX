@@ -1,8 +1,6 @@
 import {
   DEFAULT_PROFILE_NAME,
   clearSessionDecisions,
-  generateSessionTitle,
-  SessionTitler,
   resolveInitialThinkingLevel,
   toInProcessAgentType,
   type CreatedAgent,
@@ -13,17 +11,15 @@ import { messageService } from './messageService'
 import { providerDao } from '../dao/providerDao'
 import { sessionDao } from '../dao/sessionDao'
 import { t } from '../i18n'
-import { broadcastSessionTitleChanged } from '../utils/sessionConfigBroadcast'
 import { agentService } from './agentService'
 import { agentFactory } from '../agents/agentHost'
-import { resolveModel } from './agentModelResolver'
+import { workflowTriggers } from './workflowService'
 import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTime'
 import { sshManager } from './sshManager'
 import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../types'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionModelMetadata } from '../dao/types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { settingsDao } from '../dao/settingsDao'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
@@ -52,7 +48,10 @@ export interface AgentSessionCreateParams {
  *
  * 创建/装配（systemPrompt 组装、工具解析、指令注入）已收敛到统一创建管线
  * （agents/agentHost 的 agentFactory + 'default' 档案）；本类保留桌面特有的
- * 生命周期编排：titler、generateTitle、setModel 的能力查询、ssh / fileTime 清理。
+ * 生命周期编排：workflow 埋点、setModel 的能力查询、ssh / fileTime 清理。
+ *
+ * 自动标题不再是这里的业务：本类只在 prompt 受理与轮结束处 fire 两个**通用埋点**
+ * （payload = 会话此刻的事实），标题逻辑整体在内置 auto-title 工作流 + titler agent md。
  *
  * 通过 AgentSession.create() 工厂方法创建。
  */
@@ -62,25 +61,10 @@ export class AgentSession {
   private created: CreatedAgent
   private runtime: HarnessSession
 
-  // 标题自动生成（两阶段：首轮快速 + 精修一次）—— 策略在 @shuvix/agent-runtime 与扩展端共用
-  private readonly titler: SessionTitler
-
   private constructor(sessionId: string, created: CreatedAgent) {
     this.sessionId = sessionId
     this.created = created
     this.runtime = created.runtime
-    this.titler = new SessionTitler({
-      getCurrentTitle: () => sessionDao.pick(sessionId, ['title'])?.title ?? null,
-      getDefaultTitle: () => t('agent.defaultTitle'),
-      listMessages: () => messageService.listBySession(sessionId),
-      generate: (conversationText) => this.generateTitle(conversationText),
-      // 落库 + 广播 AppEvent，各端统一刷新会话列表标题
-      applyTitle: (title) => {
-        sessionDao.updateTitle(sessionId, title)
-        broadcastSessionTitleChanged(sessionId, title)
-      },
-      warn: (message) => log.warn(message)
-    })
   }
 
   /** 工厂方法：经统一创建管线（agentFactory + 会话档案）构建完整的 AgentSession */
@@ -119,8 +103,8 @@ export class AgentSession {
       cwd: workingDirectory,
       // 会话勾选（mcp:/skill:）作为 overlay 叠加在档案工具白名单上
       toolOverlay: enabledTools,
-      // UserPromptSubmit 通过、正式派发前触发首轮快速标题（保持与旧行为一致的并发时序）
-      onPromptAccepted: (text) => void session.titler.quick(text)
+      // UserPromptSubmit 通过、正式派发前的业务埋点（auto-title 的 quick 阶段订阅在此）
+      onPromptAccepted: (text) => session.firePromptAccepted(text)
     })
 
     session = new AgentSession(sessionId, created)
@@ -132,7 +116,7 @@ export class AgentSession {
   /**
    * 向 Agent 发送消息（支持附带图片）。
    *
-   * 首轮快速标题经注入的 `onPromptAccepted` 在派发前触发（各端一致）。
+   * 派发前的埋点经注入的 `onPromptAccepted` 触发；轮结束后 fire `session.turn-completed`。
    */
   async prompt(
     text: string,
@@ -145,8 +129,8 @@ export class AgentSession {
 
     await this.runtime.prompt(text, images, display)
 
-    // 精修：agent 首轮回复落库后，用更完整上下文重生成一次（不 await）
-    void this.titler.refine()
+    // 轮结束埋点（不 await；payload 组装失败只记日志，绝不影响会话主流程）
+    void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
   }
 
   // 注：指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
@@ -210,36 +194,46 @@ export class AgentSession {
     return await this.runtime.getRuntimeInfo()
   }
 
-  /**
-   * AI 生成简短标题（使用 settings 中配置的 titleProvider / titleModel）。
-   */
-  async generateTitle(conversationText: string): Promise<string | null> {
-    const titleProvider = settingsDao.findByKey('general.titleProvider')
-    const titleModelId = settingsDao.findByKey('general.titleModel')
-    if (!titleProvider || !titleModelId) return null
+  // ─── 业务埋点（workflow 触发；payload = 会话此刻的事实，与任何具体工作流无关） ───
 
-    const providerRow = providerDao.pick(titleProvider, ['apiKey'])
-    if (!providerRow?.apiKey) {
-      log.warn(`标题模型 provider ${titleProvider} 无 API Key,跳过标题生成`)
-      return null
-    }
+  /** 对话末尾文本的上限（`session.turn-completed` 的 recentText） */
+  private static readonly RECENT_TEXT_MAX_CHARS = 1000
 
-    try {
-      const modelRow = providerDao
-        .findModelsByProvider(titleProvider)
-        .find((m) => m.modelId === titleModelId)
-      const caps = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
-      const model = resolveModel({
-        provider: titleProvider,
-        model: titleModelId,
-        capabilities: caps
-      })
-      // LLM 调用 + 解析复用共享内核（与扩展同源）
-      return await generateSessionTitle({ model, apiKey: providerRow.apiKey, conversationText })
-    } catch (err) {
-      log.error(`生成标题失败: ${err}`)
-    }
-    return null
+  /** prompt 受理埋点：派发前同步取会话事实，fire 后立即返回（fire 绝不抛出） */
+  private firePromptAccepted(promptText: string): void {
+    const title = sessionDao.pick(this.sessionId, ['title'])?.title ?? ''
+    workflowTriggers.fire('session.prompt-accepted', {
+      sessionId: this.sessionId,
+      profileName: this.created.profile.name,
+      title,
+      isDefaultTitle: title === t('agent.defaultTitle'),
+      promptText
+    })
+  }
+
+  /** 轮结束埋点：从消息投影与会话行现算本轮统计与对话尾部文本 */
+  private async fireTurnCompleted(): Promise<void> {
+    const picked = sessionDao.pick(this.sessionId, ['title', 'settings'])
+    if (!picked) return
+    const messages = await messageService.listBySession(this.sessionId)
+    const textMessages = messages.filter(
+      (m) => (m.role === 'user' || m.role === 'assistant') && !!m.content.trim()
+    )
+    const recentText = textMessages
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n')
+      .slice(-AgentSession.RECENT_TEXT_MAX_CHARS)
+
+    workflowTriggers.fire('session.turn-completed', {
+      sessionId: this.sessionId,
+      profileName: this.created.profile.name,
+      title: picked.title,
+      isDefaultTitle: picked.title === t('agent.defaultTitle'),
+      titleAutoGenerated: picked.settings?.titleOrigin === 'auto',
+      turnCount: textMessages.filter((m) => m.role === 'user').length,
+      textMessageCount: textMessages.length,
+      recentText
+    })
   }
 
   // ─── 用户输入挂起 / 响应（委托 runtime） ────────────────

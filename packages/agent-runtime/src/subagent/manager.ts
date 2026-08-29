@@ -23,6 +23,13 @@ import type { HarnessSession } from '../harness/harnessSession'
 import type { AgentFactory } from '../agentProfile/createAgent'
 import type { InProcessAgentType, SubAgentModelConfig } from './types'
 import type { RuntimeLogger } from '../types'
+import {
+  NextTool,
+  NEXT_NUDGE_TEXT,
+  buildResultContractNote,
+  validateContractSchema,
+  type ResultContract
+} from './nextTool'
 
 type AnyAgentTool = Agent['state']['tools'][number]
 
@@ -125,10 +132,22 @@ export interface RunTaskParams {
    * 故面板「笔记本内容」卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
    */
   contextMessages?: AgentMessage[]
+  /**
+   * 结果契约（可选）：声明后派生 agent 获得一个按 schema 现造的 `next` 工具（extraTools
+   * 注入，经宿主与内置工具同样包装），任务 prompt 末尾追加契约段，要求以恰好一次 `next`
+   * 调用收尾 —— 合规调用即捕获：软停止本 agent（interrupt 语义），返回值的 `structured`
+   * 为捕获对象。run 自然结束却没调 next 时补救追问 `nudges` 次（缺省 1），仍无捕获则
+   * `structured` 为 undefined，由调用方决定成败。见 subagent/nextTool.ts。
+   */
+  resultContract?: ResultContract
 }
 
 export interface SubAgentManager {
-  runTask: (params: RunTaskParams) => Promise<{ result: string }>
+  /**
+   * 跑一个一次性派发任务。`result` 恒为文本（无契约 = 转写抽取；有契约且捕获 =
+   * 捕获对象的 JSON 文本）；`structured` 仅在结果契约捕获成功时存在。
+   */
+  runTask: (params: RunTaskParams) => Promise<{ result: string; structured?: unknown }>
   /**
    * 继续与一个已存在派生 agent 对话：复用其 Agent（保留历史）追加一轮 user prompt（fire-and-forget）。
    * 面板先收到 user_message（后续用户消息内联到转写），随后流式事件如常，末了再发 sub_session_end。
@@ -225,8 +244,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     description: string
     modelConfig: SubAgentModelConfig
     contextMessages?: AgentMessage[]
+    extraTools?: readonly AnyAgentTool[]
   }): Promise<SpawnedAgent> {
-    const { parentSessionId, agentType, description, modelConfig, contextMessages } = params
+    const { parentSessionId, agentType, description, modelConfig, contextMessages, extraTools } =
+      params
 
     // ── 深度校验：唯一的层级控制点（派发工具全员可用，越界在此拒绝） ──
     const depth = registry.depthOf(parentSessionId) + 1
@@ -263,7 +284,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       thinkingLevel: modelConfig.thinkingLevel ?? 'off',
       cwd: '',
       spawn,
-      spawnHelpers: helpers
+      spawnHelpers: helpers,
+      extraTools
     })
     const runtime = created.runtime
     const piSession = runtime.session
@@ -306,12 +328,26 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     return error
   }
 
-  /** 一轮结束后的收尾：抽取结果 + 广播 sub_session_end */
+  /** 一轮结束后的收尾：抽取结果 + 广播 sub_session_end。契约捕获成功时结果即捕获值的 JSON */
   async function finishTurn(
     session: SpawnedAgent,
     parentSessionId: string,
-    execError: string | undefined
-  ): Promise<{ result: string }> {
+    execError: string | undefined,
+    captured?: { hit: boolean; value?: unknown }
+  ): Promise<{ result: string; structured?: unknown }> {
+    // 契约捕获：结果以捕获值为准 —— 捕获后紧跟软停止，树尾部（部分消息/中止痕迹）不代表结果
+    if (captured?.hit) {
+      const result = JSON.stringify(captured.value, null, 2)
+      deps.broadcast({
+        type: 'sub_session_end',
+        sessionId: session.agentId,
+        parentSessionId,
+        result,
+        isError: false
+      })
+      return { result, structured: captured.value }
+    }
+
     // 上下文真理源是内存会话树（含 harness 落进去的失败消息）
     const messages = (await session.piSession.buildContext()).messages
     const result = session.interrupted
@@ -360,7 +396,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   return {
     registry,
 
-    async runTask(params: RunTaskParams): Promise<{ result: string }> {
+    async runTask(params: RunTaskParams): Promise<{ result: string; structured?: unknown }> {
       const {
         parentSessionId,
         parentToolCallId,
@@ -370,7 +406,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         modelConfig,
         parentAbortSignal,
         contextMessages,
-        promptInlineTokens
+        promptInlineTokens,
+        resultContract
       } = params
       // 面板「笔记本内容」卡片 = 实际注入的 context 消息文本（与发给 LLM 的 UserMessage 一致）
       const contextNote = contextMessages?.length ? agentMessagesToText(contextMessages) : undefined
@@ -378,7 +415,28 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       // 内联 Token（slash 命令 / skill）：prompt 原文（含 marker）用于面板展示标签；
       // 发给 Agent 的文本经解析展开为真实指令（如 skill 模板正文）。
       const hasTokens = promptInlineTokens && Object.keys(promptInlineTokens).length > 0
-      const llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
+      let llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
+
+      // ── 结果契约：next 工具（extraTools 注入）+ prompt 契约段 + 捕获通道 ──
+      // 捕获即软停止（interrupt 语义）：结果以捕获值为准，树尾部的中止痕迹无关紧要；
+      // queueMicrotask 让 next 的成功 tool result 先返回，再触发停止。
+      const captured: { hit: boolean; value?: unknown } = { hit: false }
+      let extraTools: AnyAgentTool[] | undefined
+      // 前向引用：捕获回调在 agent 执行期才触发，届时 id 已就位
+      let capturedAgentId = ''
+      if (resultContract) {
+        const schemaError = validateContractSchema(resultContract.schema)
+        if (schemaError) throw new Error(`invalid result contract: ${schemaError}`)
+        const nextTool = new NextTool(resultContract.schema, (value) => {
+          captured.hit = true
+          captured.value = value
+          queueMicrotask(() => {
+            if (capturedAgentId) interrupt(capturedAgentId)
+          })
+        })
+        extraTools = [nextTool as unknown as AnyAgentTool]
+        llmPrompt = `${llmPrompt}\n\n${buildResultContractNote(resultContract)}`
+      }
 
       // 不限制并发数量：可同时堆叠任意多个（面板纵向手风琴展示）；层级由深度校验约束
       const session = await createSession({
@@ -386,7 +444,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         agentType,
         description,
         modelConfig,
-        contextMessages
+        contextMessages,
+        extraTools
       })
 
       deps.broadcast({
@@ -406,6 +465,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         rootSessionId: registry.rootSessionOf(session.agentId)
       })
 
+      capturedAgentId = session.agentId
+
       if (parentAbortSignal) {
         if (parentAbortSignal.aborted) {
           abortOne(session)
@@ -414,8 +475,37 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         }
       }
 
-      const execError = await runTurn(session, llmPrompt)
-      return await finishTurn(session, parentSessionId, execError)
+      let execError = await runTurn(session, llmPrompt)
+
+      // 契约补救：run 自然结束却没调 next → 追问 nudges 次（缺省 1）。
+      // 中止/出错不追问；捕获会置 interrupted（软停止），故以 captured.hit 先行判定。
+      if (resultContract && !captured.hit) {
+        const nudges = resultContract.nudges ?? 1
+        for (
+          let i = 0;
+          i < nudges && !captured.hit && !session.aborted && !session.interrupted && !execError;
+          i++
+        ) {
+          // 面板转写连贯：与 continueTask 同形广播这条追问（用户可见自动化的补救动作）
+          deps.broadcast({
+            type: 'user_message',
+            sessionId: session.agentId,
+            message: JSON.stringify({
+              id: `${session.agentId}-user-${Date.now()}`,
+              sessionId: session.agentId,
+              role: 'user' as const,
+              type: 'text' as const,
+              content: NEXT_NUDGE_TEXT,
+              metadata: null,
+              model: '',
+              createdAt: Date.now()
+            })
+          })
+          execError = await runTurn(session, NEXT_NUDGE_TEXT)
+        }
+      }
+
+      return await finishTurn(session, parentSessionId, execError, captured)
     },
 
     async continueTask(params: {

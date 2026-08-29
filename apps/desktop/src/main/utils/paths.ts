@@ -76,6 +76,11 @@ export function getDefaultPoliciesDir(): string {
   return join(homedir(), '.shuvix', 'policies')
 }
 
+/** 全局工作流目录：~/.shuvix/workflows/（不自动创建，由 workflowService 管理；内置工作流硬编码进 @shuvix/agent-runtime） */
+export function getDefaultWorkflowsDir(): string {
+  return join(homedir(), '.shuvix', 'workflows')
+}
+
 /** Wiki 根目录：~/.shuvix/wikis/（不自动创建，由 Wiki Curator 子代理按政策管理） */
 export function getDefaultWikisDir(): string {
   return join(homedir(), '.shuvix', 'wikis')

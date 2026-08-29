@@ -188,9 +188,7 @@ export async function seedFakeProvider(
       }
       for (const [key, value] of [
         ['general.defaultProvider', p.id],
-        ['general.defaultModel', ${modelId}],
-        ['general.titleProvider', p.id],
-        ['general.titleModel', ${modelId}]
+        ['general.defaultModel', ${modelId}]
       ]) {
         await window.api.settings.set({ key, value })
       }

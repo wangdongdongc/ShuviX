@@ -39,6 +39,9 @@ import wikiJa from './md/wiki.ja.md?raw'
 import wikiWriterEn from './md/wiki-writer.md?raw'
 import wikiWriterZh from './md/wiki-writer.zh.md?raw'
 import wikiWriterJa from './md/wiki-writer.ja.md?raw'
+import titlerEn from './md/titler.md?raw'
+import titlerZh from './md/titler.zh.md?raw'
+import titlerJa from './md/titler.ja.md?raw'
 
 export {
   buildBuiltinProfile,
@@ -134,6 +137,17 @@ export const WIKI_WRITER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
+ * 标题生成 agent —— auto-title 内置工作流的执行侧（dispatch-only：切成主会话人格无意义）。
+ * 模型走 agent md `shuvix-model` 的通用链路：内置档案不声明 → 跟随派发方 = 会话当前模型；
+ * 想钉住便宜模型就覆盖 `~/.shuvix/agents/titler.md` 写上 `shuvix-model`
+ * （旧的「标题模型」专项设置已废弃）。经 session-config 工具落标题。
+ */
+export const TITLER_SPEC: BuiltinProfileSpec = {
+  name: 'titler',
+  sources: { en: titlerEn, zh: titlerZh, ja: titlerJa }
+}
+
+/**
  * 内置 spec 全集（两个基座档案 default / notebook 居首，其后为可派发的具名 agent；
  * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
  */
@@ -146,7 +160,8 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   VISUALIZATION_SPEC,
   WIDGET_SPEC,
   WIKI_SPEC,
-  WIKI_WRITER_SPEC
+  WIKI_WRITER_SPEC,
+  TITLER_SPEC
 ]
 
 /**

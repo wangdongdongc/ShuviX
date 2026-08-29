@@ -25,7 +25,8 @@
     "test:e2e:agents": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/agents",
     "test:e2e:policies": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/policies",
     "test:e2e:settings": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/settings",
-    "test:e2e:notebook": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/notebook"
+    "test:e2e:notebook": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/notebook",
+    "test:e2e:workflows": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/workflows"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
