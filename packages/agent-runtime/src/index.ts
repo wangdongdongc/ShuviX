@@ -327,7 +327,6 @@ export {
   buildBuiltinWorkflows,
   getBuiltinWorkflowSource,
   BUILTIN_WORKFLOW_SPECS,
-  BUILTIN_WORKFLOW_NAMES,
   AUTO_TITLE_WORKFLOW_SPEC,
   type BuiltinWorkflowDeps,
   type BuiltinWorkflowSpec

@@ -79,6 +79,9 @@ export interface ShuvixMdTypeDescriptor {
   fields: ShuvixMdFieldSpec[]
 }
 
+/** agent 档案的模型键 —— 属性卡据它把槽位分派给 ModelSelect（唯一走模型选择器的键） */
+export const AGENT_MODEL_KEY = 'shuvix-model'
+
 /** agent 定义文件（agent-runtime definitionFile.ts 的键集；labelKey 复用智能体设置页文案） */
 const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'agent',
@@ -87,7 +90,7 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
-    { key: 'shuvix-model', labelKey: 'tool.subAgentModel', kind: 'select' },
+    { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
     { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' },
@@ -162,13 +165,23 @@ const WIKI_TOPIC_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/** 工作流的重入策略枚举 —— 解析器与属性卡下拉共用的单一真源（同 wiki 契约常量的分层） */
+export const WORKFLOW_CONCURRENCY_MODES = ['skip', 'queue', 'parallel'] as const
+
+/** 重入策略字段的 frontmatter 键（属性卡按它分派下拉候选项） */
+export const WORKFLOW_CONCURRENCY_KEY = 'shuvix-workflow-concurrency'
+
 /**
  * 工作流文件（agent-runtime workflow/workflowFile.ts 的键集）。
  *
  * `shuvix-workflow-on` 是这份文件最要紧的一行——「什么时候会跑」——故给它专属摘要
  * （埋点 id + when 表达式），同 policy 的 rules。其余嵌套键（input schema / vars /
  * limits）只落通用行：它们的形状是任意 JSON，做表单成本远高于收益，而正文里的脚本块
- * 本来就要在源码视图里读。concurrency 是三值封闭枚举（select，候选项由宿主给）。
+ * 本来就要在源码视图里读。
+ *
+ * **刻意没有模型字段**：派发用哪个模型是被派发 agent 的属性（agent md 的 `shuvix-model`，
+ * 不声明则跟随会话当前模型），工作流不再另开一个覆盖入口 —— 两处都能定模型时，
+ * 「这次到底用了谁」就要靠读优先级表才能回答。
  */
 const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   type: 'workflow',
@@ -178,12 +191,7 @@ const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
     { key: 'shuvix-workflow-on', labelKey: 'settings.workflowOn', kind: 'workflowBindings' },
-    { key: 'shuvix-workflow-model', labelKey: 'tool.subAgentModel', kind: 'select' },
-    {
-      key: 'shuvix-workflow-concurrency',
-      labelKey: 'settings.workflowConcurrency',
-      kind: 'select'
-    }
+    { key: WORKFLOW_CONCURRENCY_KEY, labelKey: 'settings.workflowConcurrency', kind: 'select' }
   ]
 }
 

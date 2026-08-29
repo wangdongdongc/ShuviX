@@ -7,12 +7,10 @@ import { workflowService } from '../services/workflowService'
  * 纯 md 驱动：每次 list 现扫 ~/.shuvix/workflows 并按当前界面语言取内置工作流。
  * 编辑走 **md 原文**（frontmatter 由属性卡渲染，正文含编排脚本块），写盘前经解析器 +
  * 脚本引擎双重校验（非法拒绝并回传原因）。引擎每次 fire 现算注册表，无需失效通知。
- *
- * 相对策略页多一个 `setAutorun`：文件存在只代表「可用」，自动触发要显式启用
- * （设计 §3.4 —— 放下一个 md 不该能静默开始烧 token）。
+ * 与策略页同形：没有启用开关，文件存在且校验通过即生效。
  */
 export function registerWorkflowHandlers(): void {
-  /** 列出所有工作流（内置 + 用户 + 被覆盖内置的展示项，含 autorun 当前值） */
+  /** 列出所有工作流（内置 + 用户 + 被覆盖内置的展示项） */
   ipcMain.handle('workflow:list', () => workflowService.listForSettings())
 
   /** 取 md 原文（用户读文件；内置回 bundle 原文，作覆盖副本初值） */
@@ -33,11 +31,6 @@ export function registerWorkflowHandlers(): void {
   /** 删除用户工作流文件（同名内置随之恢复生效） */
   ipcMain.handle('workflow:delete', (_e, params: { name: string }) =>
     workflowService.delete(params.name)
-  )
-
-  /** 自动触发开关（写 .config.json；引擎下次 fire 现读，即时生效） */
-  ipcMain.handle('workflow:setAutorun', (_e, params: { name: string; enabled: boolean }) =>
-    workflowService.setAutorun(params.name, params.enabled)
   )
 
   /** 目录里无法解析的文件（设置页显示为可点开修复的告警项） */

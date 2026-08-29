@@ -23,10 +23,8 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
  * （内置与用户合并为同一列表、内置置顶），右侧是**整份 md 原文编辑器**（frontmatter
  * 由属性卡渲染成结构化字段，正文含编排脚本块）。
  *
- * 相对那两页多一维：**自动触发开关**。工作流的「文件存在」只代表可用，自动触发要显式
- * 启用（设计 §3.4 —— 放下一个 md 不该能静默开始按埋点烧 token）；内置工作流出厂即开
- * （auto-title 是产品的一部分），纯用户工作流默认关。开关写 `.config.json`，引擎每次
- * fire 现读，改完即时生效、无需重启。
+ * 纯 md 驱动（同 agent md）：文件存在且校验通过即生效，没有启用开关也没有旁路配置 ——
+ * 一个既在目录里、又「没启用」的工作流，是排查「为什么没触发」时最先骗到人的东西。
  *
  * 保存前经解析器 + 脚本引擎双重校验，非法拒绝写盘并回传人读原因 —— 一份存在但非法的
  * 工作流会被扫描静默跳过，正是要消灭的失败模式（同策略页）。
@@ -157,15 +155,6 @@ export function WorkflowSettings(): React.JSX.Element {
     }
   }, [selected])
 
-  /** autorun 开关：乐观更新 + 失败回滚（开关手感优先于一次往返） */
-  const handleToggleAutorun = async (w: WorkflowInfo, enabled: boolean): Promise<void> => {
-    setWorkflows((list) =>
-      list.map((x) => (x.name === w.name ? { ...x, autorunEnabled: enabled } : x))
-    )
-    const r = await window.api.workflow.setAutorun({ name: w.name, enabled })
-    if (!r.success) await load()
-  }
-
   /** 打开无法解析的文件去修（身份是文件名 —— 它解析不出 name） */
   const openInvalidEditor = async (fileName: string): Promise<void> => {
     const r = await window.api.workflow.getSourceByFile({ fileName })
@@ -225,7 +214,6 @@ export function WorkflowSettings(): React.JSX.Element {
                   workflow={workflow}
                   selected={selectedKey === keyOf(workflow)}
                   onSelect={() => setSelectedKey(keyOf(workflow))}
-                  onToggleAutorun={(enabled) => void handleToggleAutorun(workflow, enabled)}
                 />
               ))}
               {/* 无法解析的文件：不触发也不遮蔽内置，但必须可见 —— 否则用户无从发现更无从修复 */}
@@ -534,98 +522,48 @@ function WorkflowEditor({
 function WorkflowRow({
   workflow,
   selected,
-  onSelect,
-  onToggleAutorun
+  onSelect
 }: {
   workflow: WorkflowInfo
   selected: boolean
   onSelect: () => void
-  onToggleAutorun: (enabled: boolean) => void
 }): React.JSX.Element {
   const { t } = useTranslation()
-  // 被遮蔽的内置只是展示，开关无意义（生效的是同名用户文件那一行）
-  const canToggle = !workflow.overridden && !workflow.disabled
+  // 副标题给「什么时候会跑」—— 这份文件最要紧的一行，列表上直接可见
   const triggerHint = workflow.triggers.length
     ? workflow.triggers.join(', ')
     : t('settings.workflowNoTriggers')
   return (
-    <div
-      className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors ${
+    <button
+      onClick={onSelect}
+      title={triggerHint}
+      className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
         selected
           ? 'bg-accent/10 text-accent'
           : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary'
       } ${workflow.overridden ? 'opacity-60' : ''}`}
     >
-      <button
-        onClick={onSelect}
-        title={triggerHint}
-        className="min-w-0 flex-1 flex items-center gap-2 text-left"
-      >
-        <WorkflowIcon size={14} className="shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div
-            className={`text-xs font-medium truncate ${workflow.overridden ? 'line-through text-text-tertiary' : ''}`}
-          >
-            {workflow.displayName}
-          </div>
-          <div className="text-[10px] text-text-tertiary truncate font-mono">{triggerHint}</div>
+      <WorkflowIcon size={14} className="shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div
+          className={`text-xs font-medium truncate ${workflow.overridden ? 'line-through text-text-tertiary' : ''}`}
+        >
+          {workflow.displayName}
         </div>
-        {workflow.source === 'builtin' && (
-          /* 内置随包发布、不可直接编辑 —— 锁即「这行只能建覆盖副本」 */
-          <span title={t('settings.workflowSourceBuiltin')} className="shrink-0 text-text-tertiary">
-            <Lock size={11} />
-          </span>
-        )}
-      </button>
-      {canToggle ? (
-        <AutorunSwitch
-          enabled={workflow.autorunEnabled}
-          onChange={onToggleAutorun}
-          title={
-            workflow.autorunEnabled
-              ? t('settings.workflowAutorunOnHint')
-              : t('settings.workflowAutorunOffHint')
-          }
-        />
-      ) : (
+        <div className="text-[10px] text-text-tertiary truncate font-mono">{triggerHint}</div>
+      </div>
+      {workflow.overridden && (
+        /* 被同名用户工作流覆盖的内置：仅展示,不生效 */
         <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] bg-bg-secondary text-text-tertiary">
-          {workflow.overridden
-            ? t('settings.workflowOverridden')
-            : t('settings.workflowDisabledBadge')}
+          {t('settings.workflowOverridden')}
         </span>
       )}
-    </div>
-  )
-}
-
-/** 自动触发开关（小号 toggle；语义见本文件头 —— 文件存在 ≠ 自动触发） */
-function AutorunSwitch({
-  enabled,
-  onChange,
-  title
-}: {
-  enabled: boolean
-  onChange: (enabled: boolean) => void
-  title: string
-}): React.JSX.Element {
-  return (
-    <button
-      role="switch"
-      aria-checked={enabled}
-      title={title}
-      onClick={(e) => {
-        e.stopPropagation()
-        onChange(!enabled)
-      }}
-      className={`shrink-0 relative w-7 h-4 rounded-full transition-colors ${
-        enabled ? 'bg-accent' : 'bg-bg-tertiary border border-border-secondary'
-      }`}
-    >
-      <span
-        className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-          enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-        }`}
-      />
+      {workflow.source === 'builtin' && (
+        /* 内置随包发布、不可直接编辑 —— 锁即「这行只能建覆盖副本」 */
+        <span title={t('settings.workflowSourceBuiltin')} className="shrink-0 text-text-tertiary">
+          <Lock size={11} />
+        </span>
+      )}
     </button>
   )
 }

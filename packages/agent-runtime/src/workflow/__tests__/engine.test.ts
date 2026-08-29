@@ -55,7 +55,7 @@ const fileOf = (over: Partial<ParsedWorkflowFile> = {}): ParsedWorkflowFile => (
 const entryOf = (
   file: ParsedWorkflowFile,
   over: Partial<WorkflowRegistryEntry> = {}
-): WorkflowRegistryEntry => ({ file, source: 'builtin', autorunEnabled: true, ...over })
+): WorkflowRegistryEntry => ({ file, source: 'builtin', ...over })
 
 const payload = (
   over: Partial<TriggerPayloadMap['session.prompt-accepted']> = {}
@@ -175,12 +175,12 @@ describe('fire — 埋点匹配', () => {
     ])
   })
 
-  it('autorunEnabled:false → 不起', () => {
-    const { engine, records } = makeEngine({
-      entries: [entryOf(fileOf(), { autorunEnabled: false })]
-    })
+  it('纯 md 驱动：注册表里的条目一律参与匹配（没有启用开关这一维）', () => {
+    // 曾有过 autorunEnabled 门；撤销后「在注册表里」== 「会被触发」，
+    // 不想让它跑的唯一办法是把文件从目录里拿走（同 agent md）
+    const { engine, records } = makeEngine({ entries: [entryOf(fileOf())] })
     engine.fire('session.prompt-accepted', payload())
-    expect(records).toEqual([])
+    expect(records.length).toBeGreaterThan(0)
   })
 
   it('绑定在别的埋点 → 不起', () => {
@@ -542,8 +542,8 @@ describe('run() — 派发原语', () => {
     expect((runTask.mock.calls[0][0] as RunTaskParams).resultContract).toBeUndefined()
   })
 
-  it('模型链：opts.model > file.model；resolveRunModel 返回 null → no model available', async () => {
-    const specs: Array<{ sessionId?: string; modelSpec?: string }> = []
+  it('模型只由归属会话给基准（工作流与脚本都不参与选模型）；无可用模型 → no model available', async () => {
+    const specs: Array<{ sessionId?: string }> = []
     const { engine, waitEnd } = makeEngine({
       resolveRunModel: async (ctx) => {
         specs.push(ctx)
@@ -552,19 +552,16 @@ describe('run() — 派发原语', () => {
       entries: [
         entryOf(
           fileOf({
-            model: 'wf-model',
+            // 脚本里写 model 选项也不再有任何影响 —— 定模型是被派发 agent 的属性
             script:
-              "await run('worker', 'a', { model: 'opt-model' })\nawait run('worker', 'b')\nreturn 'ok'"
+              "await run('worker', 'a', { model: 'ignored' })\nawait run('worker', 'b')\nreturn 'ok'"
           })
         )
       ]
     })
     engine.fire('session.prompt-accepted', payload())
     await waitEnd()
-    expect(specs).toEqual([
-      { sessionId: 's1', modelSpec: 'opt-model' },
-      { sessionId: 's1', modelSpec: 'wf-model' }
-    ])
+    expect(specs).toEqual([{ sessionId: 's1' }, { sessionId: 's1' }])
 
     const noModel = makeEngine({
       resolveRunModel: async () => null,

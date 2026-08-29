@@ -139,7 +139,7 @@ describe('键集纪律', () => {
     const { parsed, warns } = parse(md(fm('shuvix-workflow-foo: 1')))
     expect(parsed).toBeNull()
     expect(warns[0]).toContain("unknown key 'shuvix-workflow-foo'")
-    for (const key of ['on', 'input', 'vars', 'model', 'limits', 'concurrency']) {
+    for (const key of ['on', 'input', 'vars', 'limits', 'concurrency']) {
       expect(warns[0]).toContain(`shuvix-workflow-${key}`)
     }
   })
@@ -268,14 +268,12 @@ describe('input / vars / model / limits / concurrency', () => {
     expect(ok.parsed?.vars).toEqual({ dir: 'reports', nested: { list: [1, 2] } })
   })
 
-  it('shuvix-workflow-model 非字符串 → null；空串/纯空白 → 解析通过但 model 为 undefined', () => {
-    const bad = parse(md(fm('shuvix-workflow-model: 1')))
-    expect(bad.parsed).toBeNull()
-    expect(bad.warns[0]).toContain("'shuvix-workflow-model' must be a string")
-
-    expect(parse(md(fm("shuvix-workflow-model: ''"))).parsed?.model).toBeUndefined()
-    expect(parse(md(fm("shuvix-workflow-model: '   '"))).parsed?.model).toBeUndefined()
-    expect(parse(md(fm('shuvix-workflow-model: kimi/kimi-k2'))).parsed?.model).toBe('kimi/kimi-k2')
+  it('shuvix-workflow-model 已退役：写了它即整份非法（模型是被派发 agent 的属性）', () => {
+    // 工作流不再参与选模型 —— 未知的 shuvix-workflow-* 键一律整份拒绝，
+    // 比静默忽略好：用户会看见「这个键没了」，而不是以为自己钉住了模型
+    const r = parse(md(fm('shuvix-workflow-model: kimi/kimi-k2')))
+    expect(r.parsed).toBeNull()
+    expect(r.warns[0]).toContain("unknown key 'shuvix-workflow-model'")
   })
 
   it.each([

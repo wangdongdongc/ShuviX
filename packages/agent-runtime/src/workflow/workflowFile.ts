@@ -12,7 +12,6 @@
  *    是逐版本增补的开放集合，两端埋点天然不同，判非法会让每个新埋点炸掉旧安装上的同一份文件；
  *  - `shuvix-workflow-input`：手动/API 调用入参的 JSON Schema（顶层须 type:'object'）；
  *  - `shuvix-workflow-vars`：常量表（注入脚本 `vars` 与 when 的 `vars`）；
- *  - `shuvix-workflow-model`：派发默认模型（同 agent md `shuvix-model` 取值契约）；
  *  - `shuvix-workflow-limits` / `shuvix-workflow-concurrency`：限额与重入策略；
  *  - 正文 = 文档散文 + 具名围栏代码块（**行首**围栏，info string 判别）：
  *      · ```js workflow（或 javascript workflow）—— 编排脚本，必须恰好一个；
@@ -26,6 +25,10 @@
  * 暂无序列化器：工作流没有编辑 GUI，用户文件手写、内置文件随包（需要时再补，与 agent md 同形）。
  */
 import { parse as parseYaml } from 'yaml'
+import {
+  WORKFLOW_CONCURRENCY_KEY,
+  WORKFLOW_CONCURRENCY_MODES
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { getTriggerPoint } from './triggerPoints'
 import { compileWhen } from './when'
@@ -36,16 +39,14 @@ export const WORKFLOW_FILE_MARKER = 'workflow v1'
 export const WORKFLOW_ON_KEY = 'shuvix-workflow-on'
 export const WORKFLOW_INPUT_KEY = 'shuvix-workflow-input'
 export const WORKFLOW_VARS_KEY = 'shuvix-workflow-vars'
-export const WORKFLOW_MODEL_KEY = 'shuvix-workflow-model'
 export const WORKFLOW_LIMITS_KEY = 'shuvix-workflow-limits'
-export const WORKFLOW_CONCURRENCY_KEY = 'shuvix-workflow-concurrency'
+export { WORKFLOW_CONCURRENCY_KEY } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 
 /** 本格式认识的全部 `shuvix-workflow-*` 键 —— 其余同前缀键判整份非法（防"以为生效"） */
 const WORKFLOW_KEYS = new Set([
   WORKFLOW_ON_KEY,
   WORKFLOW_INPUT_KEY,
   WORKFLOW_VARS_KEY,
-  WORKFLOW_MODEL_KEY,
   WORKFLOW_LIMITS_KEY,
   WORKFLOW_CONCURRENCY_KEY
 ])
@@ -53,8 +54,7 @@ const WORKFLOW_KEYS = new Set([
 /** 裸键（丢了前缀的旧写法/他家方言）→ 整份非法，同 policy md 对裸 rules/lets/scope 的处置 */
 const BARE_KEYS = ['on', 'input', 'vars'] as const
 
-const CONCURRENCY_MODES = ['skip', 'queue', 'parallel'] as const
-export type WorkflowConcurrency = (typeof CONCURRENCY_MODES)[number]
+export type WorkflowConcurrency = (typeof WORKFLOW_CONCURRENCY_MODES)[number]
 
 /** 限额覆盖（缺省值在引擎侧，见 engine.ts DEFAULT_WORKFLOW_LIMITS） */
 export interface WorkflowLimits {
@@ -81,8 +81,6 @@ export interface ParsedWorkflowFile {
   /** `shuvix-workflow-input`（顶层 type:'object'）；省略 = 不接受入参 */
   inputSchema?: Record<string, unknown>
   vars: Record<string, unknown>
-  /** `shuvix-workflow-model` 原样值（`<modelId>` 或 `<provider>/<modelId>`） */
-  model?: string
   limits: WorkflowLimits
   concurrency: WorkflowConcurrency
   /** 编排脚本（```js workflow 块原文；语法校验在宿主脚本引擎） */
@@ -247,13 +245,6 @@ export function parseWorkflowDefinitionFile(
     return reject(`'${WORKFLOW_VARS_KEY}' must be a mapping`)
   }
 
-  const modelRaw = fields[WORKFLOW_MODEL_KEY] ?? null
-  if (modelRaw !== null && typeof modelRaw !== 'string') {
-    return reject(
-      `'${WORKFLOW_MODEL_KEY}' must be a string (\`<modelId>\` or \`<provider>/<modelId>\`)`
-    )
-  }
-
   // ── 限额 / 重入 ──
   const limitsRaw = fields[WORKFLOW_LIMITS_KEY] ?? null
   const limits: WorkflowLimits = {}
@@ -275,9 +266,11 @@ export function parseWorkflowDefinitionFile(
   const concurrencyRaw = fields[WORKFLOW_CONCURRENCY_KEY] ?? null
   if (
     concurrencyRaw !== null &&
-    !(CONCURRENCY_MODES as readonly unknown[]).includes(concurrencyRaw)
+    !(WORKFLOW_CONCURRENCY_MODES as readonly unknown[]).includes(concurrencyRaw)
   ) {
-    return reject(`'${WORKFLOW_CONCURRENCY_KEY}' must be one of: ${CONCURRENCY_MODES.join(' | ')}`)
+    return reject(
+      `'${WORKFLOW_CONCURRENCY_KEY}' must be one of: ${WORKFLOW_CONCURRENCY_MODES.join(' | ')}`
+    )
   }
 
   // ── 正文块：恰一个脚本块 + 具名 schema 块 ──
@@ -329,7 +322,6 @@ export function parseWorkflowDefinitionFile(
     bindings,
     inputSchema,
     vars: (varsRaw as Record<string, unknown> | null) ?? {},
-    model: stringField(fields, WORKFLOW_MODEL_KEY),
     limits,
     concurrency: (concurrencyRaw as WorkflowConcurrency | null) ?? 'skip',
     script,

@@ -10,7 +10,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   AUTO_TITLE_WORKFLOW_SPEC,
-  BUILTIN_WORKFLOW_NAMES,
   buildBuiltinWorkflow,
   buildBuiltinWorkflows
 } from '../builtinWorkflows'
@@ -24,10 +23,9 @@ const autoTitle = (): NonNullable<ReturnType<typeof buildBuiltinWorkflow>> =>
   buildBuiltinWorkflow(AUTO_TITLE_WORKFLOW_SPEC, {})!
 
 describe('auto-title — 结构钉板', () => {
-  it('buildBuiltinWorkflows({}) 恰含 auto-title 且解析非 null；BUILTIN_WORKFLOW_NAMES 含之', () => {
+  it('buildBuiltinWorkflows({}) 恰含 auto-title 且解析非 null', () => {
     const all = buildBuiltinWorkflows({})
     expect(all.map((w) => w.name)).toEqual(['auto-title'])
-    expect(BUILTIN_WORKFLOW_NAMES.has('auto-title')).toBe(true)
     expect(autoTitle()).not.toBeNull()
   })
 
@@ -48,10 +46,9 @@ describe('auto-title — 结构钉板', () => {
     expect(schema.required).toEqual(['title'])
   })
 
-  it('结构缺省钉板：concurrency skip、无 model、无 limits', () => {
+  it('结构缺省钉板：concurrency skip、无 limits（模型跟随会话/被派发 agent 的声明）', () => {
     const wf = autoTitle()
     expect(wf.concurrency).toBe('skip')
-    expect(wf.model).toBeUndefined()
     expect(wf.limits).toEqual({})
   })
 })
@@ -86,9 +83,7 @@ function makeAutoTitleEngine(): {
     result: JSON.stringify({ title: 'X' }),
     structured: { title: 'X' }
   }))
-  const entries: WorkflowRegistryEntry[] = [
-    { file: autoTitle(), source: 'builtin', autorunEnabled: true }
-  ]
+  const entries: WorkflowRegistryEntry[] = [{ file: autoTitle(), source: 'builtin' }]
   const engine = createWorkflowEngine({
     manager: { runTask } as unknown as SubAgentManager,
     script: scriptEngine,

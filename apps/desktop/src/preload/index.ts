@@ -356,7 +356,7 @@ const api = {
     openFolder: () => ipcRenderer.invoke('policy:openFolder')
   },
 
-  // ============ 工作流（文件系统驱动，md 原文编辑；autorun 开关走 .config.json） ============
+  // ============ 工作流（文件系统驱动，md 原文编辑；纯 md 驱动，无启用开关） ============
   workflow: {
     list: () => ipcRenderer.invoke('workflow:list'),
     getSource: (params: { name: string; source: 'builtin' | 'user' }) =>
@@ -365,8 +365,6 @@ const api = {
       ipcRenderer.invoke('workflow:save', params),
     create: (params: { text: string }) => ipcRenderer.invoke('workflow:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('workflow:delete', params),
-    setAutorun: (params: { name: string; enabled: boolean }) =>
-      ipcRenderer.invoke('workflow:setAutorun', params),
     listInvalid: () => ipcRenderer.invoke('workflow:listInvalid'),
     getSourceByFile: (params: { fileName: string }) =>
       ipcRenderer.invoke('workflow:getSourceByFile', params),

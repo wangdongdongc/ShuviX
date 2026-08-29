@@ -1,5 +1,5 @@
 /**
- * WorkflowService —— 注册表（内置 + 用户覆盖 + .config.json）、autorun 缺省规则、
+ * WorkflowService —— 注册表（内置 + 用户覆盖，纯 md 驱动）、
  * 脚本语法门与 run journal 的桌面宿主语义。
  *
  * 观测面 = `.runs/<name>/<runId>.jsonl` journal：meta 记录在 fire 的同步段写盘
@@ -28,16 +28,12 @@ import type { TriggerPayloadMap } from '@shuvix/agent-runtime'
 const state = vi.hoisted(() => ({ dir: '' }))
 const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
-  resolveProfileModelSpec: vi.fn(),
   getProfile: vi.fn(),
   resolveRunModelConfig: vi.fn()
 }))
 
 vi.mock('../../utils/paths', () => ({ getDefaultWorkflowsDir: () => state.dir }))
 vi.mock('../../agents/AgentManager', () => ({ agentManager: { runTask: mocks.runTask } }))
-vi.mock('../../agents/agentHost', () => ({
-  resolveProfileModelSpec: mocks.resolveProfileModelSpec
-}))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../sessionService', () => ({
   sessionService: { resolveRunModelConfig: mocks.resolveRunModelConfig }
@@ -63,7 +59,6 @@ beforeEach(() => {
     result: JSON.stringify({ title: 'T' }),
     structured: { title: 'T' }
   }))
-  mocks.resolveProfileModelSpec.mockReset().mockReturnValue(null)
   mocks.getProfile.mockReset().mockImplementation((name: string) => ({
     name,
     displayName: name,
@@ -109,9 +104,6 @@ const firePrompt = (over: Partial<TriggerPayloadMap['session.prompt-accepted']> 
     ...over
   })
 
-const writeConfig = (config: Record<string, unknown>): void =>
-  writeFileSync(join(state.dir, '.config.json'), JSON.stringify(config))
-
 /** 最小合法用户工作流 md */
 const userWf = (
   name: string,
@@ -135,7 +127,7 @@ const userWf = (
   return lines.join('\n')
 }
 
-describe('workflowService — 初始化与内置 autorun', () => {
+describe('workflowService — 初始化与内置工作流', () => {
   it('init 前 fire → 不抛、零副作用；init 幂等', () => {
     // 本用例必须最先跑：单例尚未 init，fire 应静默丢弃
     expect(() => firePrompt({ isDefaultTitle: true })).not.toThrow()
@@ -148,7 +140,7 @@ describe('workflowService — 初始化与内置 autorun', () => {
     expect(runFilesOf('auto-title')).toHaveLength(1)
   })
 
-  it('内置 autorun 出厂即开：fire 后 auto-title journal 出现，meta/end 各就位且每行带 ts 的合法 JSON', async () => {
+  it('内置出厂即生效：fire 后 auto-title journal 出现，meta/end 各就位且每行带 ts 的合法 JSON', async () => {
     workflowService.init()
     firePrompt({ isDefaultTitle: true })
     await waitForEnd('auto-title')
@@ -166,30 +158,31 @@ describe('workflowService — 初始化与内置 autorun', () => {
     expect(runFilesOf('auto-title')[0]).toMatch(/^wfr-.+\.jsonl$/)
   })
 
-  it('.config.json disabled 含 auto-title → 不触发', () => {
+  it('.config.json 已退役：目录里放一份旁路配置也不影响触发（纯 md 驱动）', async () => {
     workflowService.init()
-    writeConfig({ disabled: ['auto-title'] })
+    writeFileSync(
+      join(state.dir, '.config.json'),
+      JSON.stringify({ disabled: ['auto-title'], autorunEnabled: { 'auto-title': false } })
+    )
     firePrompt({ isDefaultTitle: true })
-    expect(existsSync(runsDirOf('auto-title'))).toBe(false)
+    // 文件在、校验通过 → 照跑；「既在目录里又没启用」这种状态不再存在
+    expect(runFilesOf('auto-title')).toHaveLength(1)
+    await waitForEnd('auto-title')
   })
 })
 
-describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
-  it('纯用户工作流默认关：无配置 fire 不触发；autorunEnabled 显式 true 后同一 fire 触发', async () => {
+describe('workflowService — 用户工作流（纯 md 驱动）', () => {
+  it('放下一份合法用户工作流即生效：无需任何开关', async () => {
     workflowService.init()
     writeFileSync(join(state.dir, 'my-echo.md'), userWf('my-echo'))
 
     firePrompt() // isDefaultTitle:false → auto-title 不掺和
-    expect(existsSync(runsDirOf('my-echo'))).toBe(false)
-
-    writeConfig({ autorunEnabled: { 'my-echo': true } })
-    firePrompt()
     expect(runFilesOf('my-echo')).toHaveLength(1)
     await waitForEnd('my-echo')
     expect(readRecords('my-echo').find((r) => r.type === 'end')!.output).toBe('hello')
   })
 
-  it('用户覆盖内置保持默认开：auto-title.md 用户文件 → meta.source=user 且跑的是用户版', async () => {
+  it('用户覆盖内置：auto-title.md 用户文件 → meta.source=user 且跑的是用户版', async () => {
     workflowService.init()
     writeFileSync(
       join(state.dir, 'auto-title.md'),
@@ -203,7 +196,7 @@ describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
     expect(records.find((r) => r.type === 'end')!.output).toBe('USER-VERSION')
   })
 
-  it('结构非法用户文件（裸 on）→ 扫描跳过不触发（即便 autorunEnabled 显式 true）', () => {
+  it('结构非法用户文件（裸 on）→ 扫描跳过不触发', () => {
     workflowService.init()
     writeFileSync(
       join(state.dir, 'bad-wf.md'),
@@ -221,7 +214,6 @@ describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
         ''
       ].join('\n')
     )
-    writeConfig({ autorunEnabled: { 'bad-wf': true } })
     firePrompt()
     expect(existsSync(runsDirOf('bad-wf'))).toBe(false)
   })
@@ -232,7 +224,6 @@ describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
       join(state.dir, 'syntax-err.md'),
       userWf('syntax-err', { script: 'return ((( oops' })
     )
-    writeConfig({ autorunEnabled: { 'syntax-err': true } })
     firePrompt()
     expect(existsSync(runsDirOf('syntax-err'))).toBe(false)
   })
@@ -241,7 +232,6 @@ describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
     workflowService.init()
     writeFileSync(join(state.dir, '.hidden.md'), userWf('hidden-wf'))
     writeFileSync(join(state.dir, 'not-md.txt'), userWf('txt-wf'))
-    writeConfig({ autorunEnabled: { 'hidden-wf': true, 'txt-wf': true } })
     firePrompt()
     expect(existsSync(runsDirOf('hidden-wf'))).toBe(false)
     expect(existsSync(runsDirOf('txt-wf'))).toBe(false)
@@ -251,7 +241,6 @@ describe('workflowService — 用户工作流与 autorun 缺省规则', () => {
     workflowService.init()
     writeFileSync(join(state.dir, 'dup1.md'), userWf('dup-wf'))
     writeFileSync(join(state.dir, 'dup2.md'), userWf('dup-wf'))
-    writeConfig({ autorunEnabled: { 'dup-wf': true } })
     firePrompt()
     expect(runFilesOf('dup-wf')).toHaveLength(1)
     await waitForEnd('dup-wf')
@@ -263,7 +252,6 @@ describe('workflowService — journal 目录名净化（裁决增补 4）', () =
     workflowService.init()
     writeFileSync(join(state.dir, 'slashy.md'), userWf('a/b:c'))
     writeFileSync(join(state.dir, 'dotty.md'), userWf('..'))
-    writeConfig({ autorunEnabled: { 'a/b:c': true, '..': true } })
     firePrompt()
     expect(runFilesOf('a-b-c')).toHaveLength(1)
     expect(runFilesOf('workflow')).toHaveLength(1)
@@ -274,41 +262,18 @@ describe('workflowService — journal 目录名净化（裁决增补 4）', () =
   })
 })
 
-describe('workflowService — 模型决定链', () => {
-  it('md 带 shuvix-workflow-model → resolveProfileModelSpec 收到该 spec；返回 null → 回落 resolveRunModelConfig(sessionId)', async () => {
+describe('workflowService — 模型来源', () => {
+  it('工作流不参与选模型：基准恒为会话当前模型（agent 档案的 shuvix-model 在创建管线里优先）', async () => {
     workflowService.init()
     writeFileSync(
       join(state.dir, 'model-wf.md'),
-      userWf('model-wf', {
-        fm: ['shuvix-workflow-model: prov/mod'],
-        script: "return await run('titler', 'p')"
-      })
+      userWf('model-wf', { script: "return await run('titler', 'p')" })
     )
-    writeConfig({ autorunEnabled: { 'model-wf': true } })
-
-    // 一：spec 可解析 → 用它，不回落会话模型
-    mocks.resolveProfileModelSpec.mockReturnValue({
-      provider: 'prov',
-      model: 'mod',
-      capabilities: {}
-    })
     firePrompt()
     await waitForEnd('model-wf')
-    expect(mocks.resolveProfileModelSpec).toHaveBeenCalledWith('prov/mod')
-    expect(mocks.resolveRunModelConfig).not.toHaveBeenCalled()
-    expect(mocks.runTask.mock.calls[0][0].modelConfig).toEqual({
-      provider: 'prov',
-      model: 'mod',
-      capabilities: {}
-    })
 
-    // 二：spec 不可用 → 回落会话当前模型
-    rmSync(join(state.dir, '.runs'), { recursive: true, force: true })
-    mocks.resolveProfileModelSpec.mockReturnValue(null)
-    firePrompt()
-    await waitForEnd('model-wf')
     expect(mocks.resolveRunModelConfig).toHaveBeenCalledWith('s1')
-    expect(mocks.runTask.mock.calls[1][0].modelConfig).toEqual({
+    expect(mocks.runTask.mock.calls[0][0].modelConfig).toEqual({
       provider: 'p',
       model: 'm',
       capabilities: {}

@@ -2,9 +2,9 @@
  * 属性卡字段槽位里的选择器 —— **直接复用仓库既有的成熟组件**，不另造轮子：
  *   - `shuvix-tools`（csv）→ ToolSelectList（分组勾选、MCP 连接态、skill 启停）
  *   - `shuvix-model`（select）→ ModelSelect（提供商图标、能力标记、搜索、清除）
- *   - wiki 的 status / entry-type（select）→ EnumField（契约封闭枚举的原生下拉；
- *     状态带生命周期圆点）。候选项直接引 wikiFileContract 常量 —— 它们是静态契约，
- *     不像工具/模型那样依赖运行时目录。
+ *   - wiki 的 status / entry-type、workflow 的重入策略（select）→ EnumField（契约封闭
+ *     枚举的原生下拉；wiki 状态带生命周期圆点）。候选项直接引契约常量 —— 它们是静态
+ *     契约，不像工具/模型那样依赖运行时目录。
  *   - 其余 csv 键（如 `shuvix-instruction-files` 的指令文件清单）→ 纯文本逗号串输入。
  *     刻意不给它挂文件选择器：清单里可以写工作目录下任意相对路径，而属性卡编辑档案时
  *     根本不知道这份档案将来跑在哪个工作目录 —— 一个只能列出「此刻某个目录」的选择器
@@ -27,6 +27,11 @@ import {
   WIKI_ENTRY_TYPE_KEY,
   WIKI_STATUS_KEY
 } from '@shuvix/chat-protocol/wikiFileContract'
+import {
+  AGENT_MODEL_KEY,
+  WORKFLOW_CONCURRENCY_KEY,
+  WORKFLOW_CONCURRENCY_MODES
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
 export interface FrontmatterFieldPickerProps {
@@ -325,28 +330,29 @@ export function FrontmatterFieldPicker({
   readOnly
 }: FrontmatterFieldPickerProps): React.JSX.Element {
   if (kind === 'select') {
-    if (fieldKey === WIKI_STATUS_KEY) {
-      return (
-        <EnumField
-          options={WIKI_ENTRY_STATUSES}
-          dotByValue={STATUS_DOT}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-        />
-      )
+    // **按键显式分派**：模型选择器只认模型键。曾经它是 select 的兜底，于是任何新加的
+    // select 字段（如工作流的重入策略）都会静默变成一个写着「选择模型」的模型下拉 ——
+    // 属性卡不认识某个键时，退回自由文本下拉才是诚实的降级。
+    if (fieldKey === AGENT_MODEL_KEY) {
+      return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
     }
-    if (fieldKey === WIKI_ENTRY_TYPE_KEY) {
-      return (
-        <EnumField
-          options={WIKI_ENTRY_TYPES}
-          value={value}
-          onChange={onChange}
-          readOnly={readOnly}
-        />
-      )
-    }
-    return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+    const options =
+      fieldKey === WIKI_STATUS_KEY
+        ? WIKI_ENTRY_STATUSES
+        : fieldKey === WIKI_ENTRY_TYPE_KEY
+          ? WIKI_ENTRY_TYPES
+          : fieldKey === WORKFLOW_CONCURRENCY_KEY
+            ? WORKFLOW_CONCURRENCY_MODES
+            : []
+    return (
+      <EnumField
+        options={options}
+        dotByValue={fieldKey === WIKI_STATUS_KEY ? STATUS_DOT : undefined}
+        value={value}
+        onChange={onChange}
+        readOnly={readOnly}
+      />
+    )
   }
   return fieldKey === 'shuvix-tools' ? (
     <ToolsField value={value} onChange={onChange} readOnly={readOnly} />

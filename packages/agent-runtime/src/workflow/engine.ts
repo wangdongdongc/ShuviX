@@ -2,7 +2,7 @@
  * Workflow 引擎（宿主无关核心）—— 埋点匹配 + run 生命周期 + 脚本 API 装配。
  *
  * 职责边界（docs/workflow-md-design.md §4–§6）：
- *  - `fire(id, payload)`：对着注册表匹配「绑定了该埋点、autorun 已启用、CEL when 命中」
+ *  - `fire(id, payload)`：对着注册表匹配「绑定了该埋点、CEL when 命中」
  *    的工作流并起 run。**绝不抛出**，emit 侧对订阅情况零感知；
  *  - run：脚本经宿主注入的 WorkflowScriptEngine 执行；脚本唯一的副作用通道是 `run()`
  *    派发 agent（经共享 SubAgentManager，结果契约见 subagent/nextTool.ts）—— 脚本本身
@@ -49,12 +49,16 @@ export interface WorkflowScriptEngine {
   ): Promise<unknown>
 }
 
-/** 注册表条目 —— 宿主 listWorkflows() 现算（builtin + 用户覆盖合并、disabled 已滤除） */
+/**
+ * 注册表条目 —— 宿主 listWorkflows() 现算（builtin + 用户覆盖合并）。
+ *
+ * **纯 md 驱动**：文件存在且校验通过即生效，没有启用开关也没有旁路配置（同 agent md）。
+ * 不想让它跑就把文件删掉或改坏名字 —— 一个既在目录里、又"没启用"的工作流，
+ * 是用户下次排查「为什么没触发」时最先被骗到的东西。
+ */
 export interface WorkflowRegistryEntry {
   file: ParsedWorkflowFile
   source: 'builtin' | 'user'
-  /** 自动触发是否启用（手动运行不看它）。缺省规则在宿主：内置名默认 true，纯用户默认 false */
-  autorunEnabled: boolean
 }
 
 export interface WorkflowEngineDeps {
@@ -65,14 +69,14 @@ export interface WorkflowEngineDeps {
   /** 具名 agent 档案解析（运行投影）；未知返回 null */
   resolveAgentProfile: (ref: string) => InProcessAgentType | null
   /**
-   * 解析一次派发的模型：modelSpec（run opts.model ?? workflow md model，原样字符串）优先，
-   * 不可用/未声明回落 sessionId 的会话当前模型；都没有返回 null（run() 报错）。
-   * agent 档案自己的 `shuvix-model` 不经这里 —— 统一创建管线在 spawned 路径本就优先它。
+   * 本次 run 的基准模型 = 归属会话的当前模型（无会话上下文时宿主自行兜底）；
+   * 没有可用模型返回 null（run() 报错）。
+   *
+   * **工作流不参与选模型**：被派发 agent 的 `shuvix-model` 声明优先于这里给的值
+   * （统一创建管线在 spawned 路径本就如此），没声明就跟随会话 —— 定模型是 agent 的
+   * 属性，工作流再开一个覆盖入口只会让「这次到底用了谁」需要查优先级表。
    */
-  resolveRunModel: (ctx: {
-    sessionId?: string
-    modelSpec?: string
-  }) => Promise<SubAgentModelConfig | null>
+  resolveRunModel: (ctx: { sessionId?: string }) => Promise<SubAgentModelConfig | null>
   /** run 记录落盘（宿主 JSONL journal）；缺省丢弃 */
   onRecord?: (workflowName: string, runId: string, record: Record<string, unknown>) => void
   /** CEL `when` 的 env 上下文 */
@@ -90,7 +94,6 @@ export interface WorkflowEngine {
 /** run() 的脚本侧选项（脚本传入，逐字段防御性校验） */
 interface RunOpts {
   schema?: unknown
-  model?: unknown
   tools?: unknown
   description?: unknown
   nudges?: unknown
@@ -227,8 +230,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           const allow = new Set(opts.tools.map((t) => String(t).toLowerCase()))
           tools = tools.filter((t) => allow.has(t.toLowerCase()))
         }
-        const modelSpec = typeof opts?.model === 'string' && opts.model ? opts.model : file.model
-        const modelConfig = await deps.resolveRunModel({ sessionId, modelSpec })
+        const modelConfig = await deps.resolveRunModel({ sessionId })
         if (!modelConfig) {
           throw new Error('no model available for this run — configure a session or default model')
         }
@@ -382,7 +384,6 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
         // 信封 = payload + 保留键：trigger（埋点 id）与 chain（触发链占位，恒空数组）
         const envelope: Record<string, unknown> = { ...payload, trigger: id, chain: [] }
         for (const entry of safeList()) {
-          if (!entry.autorunEnabled) continue
           // 同一埋点的多条绑定：命中一条即起一个 run（不重复起）
           const binding = entry.file.bindings.find(
             (b) => b.trigger === id && whenHit(entry, b.when, envelope)

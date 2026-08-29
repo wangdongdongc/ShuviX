@@ -392,15 +392,9 @@ declare global {
     triggers: string[]
     /** 重入策略 skip | queue | parallel */
     concurrency: string
-    /** `shuvix-workflow-model` 原样值；省略 = 跟随会话模型 */
-    model?: string
     source: 'builtin' | 'user'
     /** 用户文件路径（内置为空串） */
     basePath: string
-    /** 自动触发是否启用（内置默认开，纯用户工作流默认关） */
-    autorunEnabled: boolean
-    /** 整体停用（.config.json 的 disabled；本页无开关，外部编辑可用） */
-    disabled: boolean
     /** 该内置已被同名用户工作流遮蔽（仅展示，不生效） */
     overridden?: boolean
   }
@@ -658,10 +652,6 @@ declare global {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
-      setAutorun: (params: {
-        name: string
-        enabled: boolean
-      }) => Promise<{ success: boolean; error?: string }>
       listInvalid: () => Promise<InvalidWorkflowFile[]>
       getSourceByFile: (params: {
         fileName: string

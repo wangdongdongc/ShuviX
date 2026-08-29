@@ -5,9 +5,7 @@
  *  - 注册表：内置（@shuvix/agent-runtime buildBuiltinWorkflows，随语言现算）+ 用户
  *    `~/.shuvix/workflows/<name>.md`（目录扫描，同名覆盖内置 —— 与 agentService 同口径），
  *    用户文件额外过脚本引擎的 compile 语法检查（结构校验在共享解析器内）；
- *  - autorun 缺省规则：内置名（含覆盖内置的同名用户文件）默认启用 —— auto-title 出厂
- *    即工作；纯用户工作流默认关闭。`~/.shuvix/workflows/.config.json` 显式覆盖
- *    （{ disabled: string[], autorunEnabled: Record<name, boolean> }，同 skills 的旁路配置）；
+ *  - **纯 md 驱动**：文件存在且校验通过即生效，无启用开关、无旁路配置（同 agentService）；
  *  - run 记录：`~/.shuvix/workflows/.runs/<name>/<runId>.jsonl` 追加式 journal；
  *  - `workflowTriggers.fire(id, payload)`：业务埋点的唯一入口 —— **业务侧只声明
  *    「我在哪、上下文里有什么」**（payload 类型由 TriggerPayloadMap 收窄），订阅与
@@ -29,7 +27,6 @@ import { join } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
 import {
-  BUILTIN_WORKFLOW_NAMES,
   buildBuiltinWorkflows,
   createWorkflowEngine,
   getBuiltinWorkflowSource,
@@ -43,19 +40,12 @@ import {
 } from '@shuvix/agent-runtime'
 import { getDefaultWorkflowsDir } from '../utils/paths'
 import { agentManager } from '../agents/AgentManager'
-import { resolveProfileModelSpec } from '../agents/agentHost'
 import { agentService } from './agentService'
 import { sessionService } from './sessionService'
 import { nodeVmScriptEngine } from './workflowScriptEngine'
 import { createLogger } from '../logger'
 
 const log = createLogger('Workflow')
-
-/** 旁路配置（`.config.json`）：显式开关，覆盖 autorun 缺省规则 */
-interface WorkflowConfig {
-  disabled?: string[]
-  autorunEnabled?: Record<string, boolean>
-}
 
 /**
  * 设置页列表项 —— 刻意**不外传** script / schemas / inputSchema / vars / limits：
@@ -69,15 +59,9 @@ export interface WorkflowListItem {
   /** 绑定的埋点 id 列表（列表行的副标题；空 = 只能手动运行，当前无手动入口） */
   triggers: string[]
   concurrency: string
-  /** `shuvix-workflow-model` 原样值；省略 = 跟随会话模型 */
-  model?: string
   source: 'builtin' | 'user'
   /** 用户文件路径（内置为空串） */
   basePath: string
-  /** 自动触发开关的当前值（含缺省规则求值结果） */
-  autorunEnabled: boolean
-  /** 整体停用（`.config.json` 的 disabled 列表；本页不提供开关，外部编辑可用） */
-  disabled: boolean
   /** 该内置已被同名用户文件遮蔽（仅展示，不生效） */
   overridden?: boolean
 }
@@ -107,16 +91,10 @@ class WorkflowService {
         const profile = agentService.getProfile(ref)
         return profile ? toInProcessAgentType(profile) : null
       },
-      resolveRunModel: async ({ sessionId, modelSpec }) => {
-        // modelSpec（run opts.model ?? workflow md model）优先；不可用回落会话当前模型。
-        // agent 档案自己的 shuvix-model 不经这里 —— 创建管线的 spawned 路径本就优先它。
-        if (modelSpec) {
-          const resolved = resolveProfileModelSpec(modelSpec)
-          if (resolved) return resolved
-          log.warn(`workflow model "${modelSpec}" 当前不可用，回落会话模型`)
-        }
-        return sessionId ? await sessionService.resolveRunModelConfig(sessionId) : null
-      },
+      // 基准模型 = 归属会话的当前模型；被派发 agent 的 shuvix-model 声明优先于它
+      // （统一创建管线的 spawned 路径本就如此）—— 工作流自己不参与选模型
+      resolveRunModel: async ({ sessionId }) =>
+        sessionId ? await sessionService.resolveRunModelConfig(sessionId) : null,
       onRecord: (name, runId, record) => this.appendRunRecord(name, runId, record),
       env: { host: 'desktop', platform: process.platform },
       logger: { info: (m) => log.info(m), warn: (m) => log.warn(m), error: (m) => log.error(m) }
@@ -130,16 +108,6 @@ class WorkflowService {
   }
 
   // ─── 注册表 ──────────────────────────────────
-
-  private readConfig(): WorkflowConfig {
-    try {
-      const raw = readFileSync(join(this.userDir, '.config.json'), 'utf-8')
-      const parsed: unknown = JSON.parse(raw)
-      return typeof parsed === 'object' && parsed !== null ? (parsed as WorkflowConfig) : {}
-    } catch {
-      return {}
-    }
-  }
 
   /**
    * 用户目录扫描，分出可解析与不可解析两拨（同 policyService.scanDir 口径）。
@@ -210,44 +178,24 @@ class WorkflowService {
     return this.scanDir().valid
   }
 
-  /**
-   * autorun 缺省：内置名（含覆盖内置的同名用户文件）默认 true —— 覆盖 auto-title
-   * 不该让自动标题静默消失；纯用户工作流默认 false（放下 md 不该能静默烧 token）。
-   */
-  private autorunOf(config: WorkflowConfig, name: string): boolean {
-    return config.autorunEnabled?.[name] ?? BUILTIN_WORKFLOW_NAMES.has(name)
-  }
-
-  /** 合并列表（用户覆盖内置同名）+ 配置解析；引擎每次 fire 现算，文件/配置改动即时生效 */
+  /** 合并列表（用户覆盖内置同名）；引擎每次 fire 现算，文件改动即时生效 */
   private listForEngine(): WorkflowRegistryEntry[] {
-    const config = this.readConfig()
-    const disabled = new Set(config.disabled ?? [])
     const users = this.scanUserFiles().map((u) => u.file)
     const userNames = new Set(users.map((w) => w.name))
     const builtins = buildBuiltinWorkflows({ language: i18next.language }).filter(
       (w) => !userNames.has(w.name)
     )
 
-    const entries: WorkflowRegistryEntry[] = []
-    for (const { file, source } of [
+    return [
       ...builtins.map((file) => ({ file, source: 'builtin' as const })),
       ...users.map((file) => ({ file, source: 'user' as const }))
-    ]) {
-      if (disabled.has(file.name)) continue
-      entries.push({ file, source, autorunEnabled: this.autorunOf(config, file.name) })
-    }
-    return entries
+    ]
   }
 
   // ─── 设置页 API（对标 policyService：合并列表 / md 原文读写 / 非法文件修复） ───
 
-  /**
-   * 设置页列表：合并结果 + 被同名用户文件遮蔽的内置（`overridden` 标记，仅展示）。
-   * 每项带 autorun 开关的当前值 —— 它是本页相对智能体/策略页多出来的那一维
-   * （文件存在 ≠ 自动触发，见设计 §3.4）。
-   */
+  /** 设置页列表：合并结果 + 被同名用户文件遮蔽的内置（`overridden` 标记，仅展示） */
   listForSettings(): WorkflowListItem[] {
-    const config = this.readConfig()
     const users = this.scanUserFiles()
     const userNames = new Set(users.map((u) => u.file.name))
     const builtins = buildBuiltinWorkflows({ language: i18next.language })
@@ -257,12 +205,12 @@ class WorkflowService {
         .filter((w) => !userNames.has(w.name))
         .map((file) => ({ file, source: 'builtin' as const, basePath: '' })),
       ...users.map((u) => ({ file: u.file, source: 'user' as const, basePath: u.basePath }))
-    ].map(({ file, source, basePath }) => this.toListItem(file, source, basePath, config))
+    ].map(({ file, source, basePath }) => this.toListItem(file, source, basePath))
 
     const shadowed = builtins
       .filter((w) => userNames.has(w.name))
       .map((file) => ({
-        ...this.toListItem(file, 'builtin', '', config),
+        ...this.toListItem(file, 'builtin', ''),
         overridden: true
       }))
     return [...merged, ...shadowed].sort((a, b) => a.name.localeCompare(b.name))
@@ -272,8 +220,7 @@ class WorkflowService {
   private toListItem(
     file: ParsedWorkflowFile,
     source: 'builtin' | 'user',
-    basePath: string,
-    config: WorkflowConfig
+    basePath: string
   ): WorkflowListItem {
     return {
       name: file.name,
@@ -281,11 +228,8 @@ class WorkflowService {
       description: file.description,
       triggers: file.bindings.map((b) => b.trigger),
       concurrency: file.concurrency,
-      model: file.model,
       source,
-      basePath,
-      autorunEnabled: this.autorunOf(config, file.name),
-      disabled: (config.disabled ?? []).includes(file.name)
+      basePath
     }
   }
 
@@ -433,32 +377,6 @@ class WorkflowService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除 workflow 文件 "${fileName}"`)
-    return { success: true }
-  }
-
-  /**
-   * 自动触发开关（写 `.config.json` 的 autorunEnabled 映射）。**恒写显式值**，
-   * 不因「等于缺省值」而删键 —— 用户把某个内置关掉再打开，与从未碰过它，
-   * 在缺省规则变化时的含义不同，显式记录才不会被规则变更悄悄改写。
-   */
-  setAutorun(name: string, enabled: boolean): { success: boolean; error?: string } {
-    const config = this.readConfig()
-    const next: WorkflowConfig = {
-      ...config,
-      autorunEnabled: { ...(config.autorunEnabled ?? {}), [name]: enabled }
-    }
-    try {
-      if (!existsSync(this.userDir)) mkdirSync(this.userDir, { recursive: true })
-      writeFileSync(
-        join(this.userDir, '.config.json'),
-        `${JSON.stringify(next, null, 2)}\n`,
-        'utf-8'
-      )
-    } catch (e) {
-      log.warn(`写入 workflow 配置失败:`, e)
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
-    }
-    log.info(`workflow "${name}" autorun=${enabled}`)
     return { success: true }
   }
 
