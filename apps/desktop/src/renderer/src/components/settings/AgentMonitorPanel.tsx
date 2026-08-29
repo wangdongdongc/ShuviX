@@ -135,9 +135,15 @@ export function AgentMonitorPanel(): React.JSX.Element {
                       a.phase === 'idle' ? '' : 'animate-pulse'
                     }`}
                   />
-                  {/* 派生 agent 用缩进标记血缘（depth 最深 2 层，无需连线） */}
+                  {/* 派生 agent 用箭头 + 缩进标记血缘：列表按血缘分组排序（父在上、子紧随），
+                      所以箭头指的就是紧邻的上一行；再按 depth 递进缩进，是为了把"上一行派出的"
+                      与"和上一行同父的兄弟"分开 —— 两者都是派生 agent，只差一层。 */}
                   {a.kind === 'spawned' && (
-                    <CornerDownRight size={11} className="text-text-tertiary/60 shrink-0" />
+                    <CornerDownRight
+                      size={11}
+                      className="text-text-tertiary/60 shrink-0"
+                      style={{ marginLeft: (a.depth - 1) * 12 }}
+                    />
                   )}
                   <span className="text-text-primary truncate max-w-[11rem] shrink-0 text-left">
                     {a.kind === 'root' ? a.rootSessionTitle || a.displayName : a.displayName}
