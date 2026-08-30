@@ -64,6 +64,8 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
+  /** 成员 bot 名单；非空即为聊天会话（无根会话）。判定用 `bots?.length`，空数组不算 */
+  bots?: string[]
   /** 会话根 Agent 采用的档案名（`/<agentName>` 切换）；缺省 / 档案已不存在 → 回落 'default' */
   agentProfile?: string
   /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */

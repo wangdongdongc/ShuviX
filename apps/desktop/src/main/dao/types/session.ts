@@ -19,6 +19,13 @@ export interface SessionSettings {
   /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
   allowList?: string[]
   /**
+   * 聊天会话的成员 bot 名单（`~/.shuvix/bots/<name>.md`）。**非空即为聊天会话**：
+   * 它没有根 Agent —— 用户消息由成员各自的管线应答，`resolveAgentProfileName` 因此返回 null。
+   * 判定一律用 `bots?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能
+   * 写 `[]`，而空数组是 truthy。
+   */
+  bots?: string[]
+  /**
    * 会话根 Agent 采用的档案名（内置档案或 `~/.shuvix/agents/<name>.md`）。
    * 缺省 / 档案已不存在 → 回落 'default'（见 sessionService.resolveAgentProfileName）。
    */

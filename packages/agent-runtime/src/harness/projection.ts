@@ -13,6 +13,7 @@
  *   compactionSummary    → AssistantMessage + isCompactionSummary
  *   custom(instruction)  → UserTextMessage + isInstructionInjection
  *   custom(inline_tokens)→ 不产出消息；把紧随其后的 user 消息还原成标记文本 + inlineTokens
+ *   custom(bot_sender)   → 不产出消息；给**紧邻的下一条** assistant 消息挂上 metadata.sender
  *   stopReason==='error' → ErrorEventMessage
  *
  * id 稳定性：消息 id **就是** entry id（不再有 `:think` / `:text` 派生后缀，工具块也不
@@ -53,6 +54,53 @@ export interface InlineTokensSidecar {
   content: string
   /** uid → InlineToken 字典 */
   tokens: Record<string, InlineToken>
+}
+
+/**
+ * 署名侧车：聊天会话里 bot 回复落树时，在 assistant entry **之前**追加的纯 custom entry，
+ * 携带「是哪个 bot 说的」。两条 entry 在同一次互斥持有内连续 append（botService），
+ * 中间不得有任何 await 逃逸点 —— 本投影靠「紧邻」配对它们。
+ *
+ * 为什么署名不现查 bot md：bot 文件被删或改名之后，历史消息仍要显示当初那个名字。
+ * 侧车自带 displayName，历史因此永不裂。
+ *
+ * 为什么是 `custom` 而不是 `custom_message`：前者只在注册了 entryProjectors 时才产模型
+ * 消息，而全仓不注册（两端 `new Session(storage)` 都不传第二参）—— 侧车因此不进模型
+ * 上下文。这是**实现事实而非类型保证**：谁将来给 Session 传了 projector map，侧车就会
+ * 变成模型可见消息。
+ */
+export const BOT_SENDER_CUSTOM_TYPE = 'shuvix:bot_sender'
+
+/** 署名侧车 entry 的 data 形状（botService 写入 / 本投影读取） */
+export interface BotSenderSidecar {
+  /** bot md 的文件名（稳定标识） */
+  botName: string
+  /** 落树当时的显示名 */
+  displayName: string
+  /** 意图段判定（M4′ 收窄为枚举）；clarify 回连谓词的数据源 */
+  decision?: string
+  /** 结构化回复原文（M8′ 收窄为 BotReply），仅供 UI —— 模型看到的是 content 的 markdown */
+  reply?: unknown
+}
+
+/**
+ * ShuviX 写进会话树的全部侧车 customType。
+ *
+ * 回退/清空要**逐条跨越**它们才能落在真正的消息上：停在一条孤儿侧车上，它就会被
+ * 下一条到达的消息当成自己的侧车消费掉（见 messageService.resolveRollbackTarget）。
+ */
+export const SIDECAR_CUSTOM_TYPES: readonly string[] = [
+  INLINE_TOKENS_CUSTOM_TYPE,
+  BOT_SENDER_CUSTOM_TYPE
+]
+
+function asBotSenderSidecar(data: unknown): BotSenderSidecar | null {
+  if (typeof data !== 'object' || data === null) return null
+  const d = data as Record<string, unknown>
+  if (typeof d.botName !== 'string' || !d.botName) return null
+  if (typeof d.displayName !== 'string' || !d.displayName) return null
+  // 其余键原样带过：这是持久化数据，schema 还要长两轮（decision/reply）
+  return d as unknown as BotSenderSidecar
 }
 
 function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
@@ -169,6 +217,14 @@ interface ProjectionState {
    * （随后的 prompt 未能派发 —— 侧车已落盘但 user 消息永远不会来）。
    */
   pendingInline: InlineTokensSidecar | null
+  /**
+   * 待消费的署名侧车。规则**比 pendingInline 更严**：每轮迭代开头就取走，
+   * 只有紧邻的下一条 entry 能用上它。错挂署名比丢署名更糟 —— 中间夹了任何东西
+   * （model_change、压缩切点、另一条 custom）都只降级为「无署名」，绝不张冠李戴。
+   *
+   * 夹的若是**另一条署名侧车**，则后者胜出（取走之后又被重新赋值）——「紧邻」的直觉解。
+   */
+  pendingSender: BotSenderSidecar | null
 }
 
 function projectUserMessage(
@@ -199,7 +255,8 @@ function projectAssistantMessage(
   entryId: string,
   sessionId: string,
   msg: AssistantMessage,
-  createdAt: number
+  createdAt: number,
+  sender: BotSenderSidecar | null
 ): void {
   // 实际产出这条消息的模型/provider，取自消息自身而非会话当前配置
   const model = msg.model || state.model
@@ -261,7 +318,12 @@ function projectAssistantMessage(
     metadata: {
       // 一条 entry = 一次 LLM 调用，用量各归各，不跨消息累加
       usage: usageOf(msg),
-      images
+      images,
+      ...(sender
+        ? {
+            sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName }
+          }
+        : {})
     }
   })
 }
@@ -284,22 +346,30 @@ function projectToolResult(
  * @param entries   会话树 entry（通常是 `session.buildContextEntries()` 的结果）
  * @param sessionId 会话 id（写进每条 ChatMessage）
  * @param fallbackModel entry 里没有 model_change 时使用的模型 id
+ * @param fallbackProvider 同上的 provider —— **切片投影必须传**：广播只跑新 append 的
+ *        那一两条 entry，其中没有 model_change，而 user 消息没有自身归属可兜底。
+ *        不传会让「流式所见」与「重开所见」在 provider 字段上不一致。
  */
 export function entriesToChatMessages(
   entries: readonly SessionTreeEntry[],
   sessionId: string,
-  fallbackModel = ''
+  fallbackModel = '',
+  fallbackProvider = ''
 ): ChatMessage[] {
   const state: ProjectionState = {
     out: [],
     pendingToolBlocks: new Map(),
     model: fallbackModel,
-    provider: '',
-    pendingInline: null
+    provider: fallbackProvider,
+    pendingInline: null,
+    pendingSender: null
   }
 
   for (const entry of entries) {
     const createdAt = Date.parse(entry.timestamp) || 0
+    // 署名侧车逐迭代取走：只有紧邻的下一条 entry 用得上它（见 pendingSender 的注释）
+    const sender = state.pendingSender
+    state.pendingSender = null
 
     if (entry.type === 'model_change') {
       state.model = entry.modelId
@@ -329,6 +399,11 @@ export function entriesToChatMessages(
         state.pendingInline = asInlineTokensSidecar(entry.data)
         continue
       }
+      if (entry.customType === BOT_SENDER_CUSTOM_TYPE) {
+        state.pendingSender = asBotSenderSidecar(entry.data)
+        continue
+      }
+      // 未知 customType 静默跳过 —— 「不含侧车的树投影逐字节不变」由这一行保证
       continue
     }
 
@@ -362,7 +437,14 @@ export function entriesToChatMessages(
         projectUserMessage(state, entry.id, sessionId, msg, createdAt)
         break
       case 'assistant':
-        projectAssistantMessage(state, entry.id, sessionId, msg as AssistantMessage, createdAt)
+        projectAssistantMessage(
+          state,
+          entry.id,
+          sessionId,
+          msg as AssistantMessage,
+          createdAt,
+          sender
+        )
         break
       case 'toolResult':
         projectToolResult(state, msg as Extract<AgentMessage, { role: 'toolResult' }>)

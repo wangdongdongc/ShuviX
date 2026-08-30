@@ -3,6 +3,7 @@ import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
+import { botService } from '../../services/botService'
 import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
@@ -40,6 +41,13 @@ export class DefaultChatGateway implements ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
   ): Promise<void> {
+    // 聊天会话没有根 Agent：消息交给成员各自的管线。分流必须在 ensureAgentSession
+    // **之前**，也必须是 early-return 式互斥 —— 前端的 user_message 走 addMessage
+    // （同 id 已存在则整体 no-op，不是 upsert），两边都跑一点会出双气泡且不被去重
+    if (sessionService.isBotSession(sessionId)) {
+      await botService.handleUserMessage({ sessionId, text, images, inlineTokens })
+      return
+    }
     // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
@@ -57,8 +65,9 @@ export class DefaultChatGateway implements ChatGateway {
     // 指令文件/项目提示词已在 createAgent 时 append 进系统提示词（Agent 首次发言时才创建，
     // 所以"发送第一条消息前调整配置"的语义保持不变）。
 
-    // 用户消息不再由网关落库：harness 在 message_end 把它作为 entry 追加，
-    // 并经 HarnessSession 的事件翻译广播 user_message —— 单一写入点，无重复。
+    // 有根会话的用户消息不由网关落库：harness 在 message_end 把它作为 entry 追加，
+    // 并经 HarnessSession 的事件翻译广播 user_message。聊天会话没有那个运行时，
+    // 由上面分流出去的 botService 走同一顺序自己落（先 append 取 id 再广播）。
     await session.prompt(promptText, images, display)
   }
 
@@ -81,6 +90,9 @@ export class DefaultChatGateway implements ChatGateway {
    * 落盘与广播都在 message_end 事件里发生，网关不碰。
    */
   private enqueue(sessionId: string, push: (session: AgentSession) => Promise<void>): void {
+    // 聊天会话恒无根 Agent —— 引导/追加/下一轮对它没有意义，安静退出。
+    // 报「Agent 未初始化」是把一个正常形态说成故障（这三个按钮的隐藏归 A2）
+    if (sessionService.isBotSession(sessionId)) return
     const session = sessionService.getAgentSession(sessionId)
     if (!session) {
       chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
@@ -99,6 +111,7 @@ export class DefaultChatGateway implements ChatGateway {
     // harness 会把带 stopReason='aborted' 的部分消息正常落成 entry，
     // 不再需要网关回传「抢救出来的半条消息」。
     await sessionService.getAgentSession(sessionId)?.abort()
+    if (sessionService.isBotSession(sessionId)) await botService.abortSession(sessionId)
     return { success: true }
   }
 
@@ -163,8 +176,11 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async clearMessages(sessionId: string): Promise<void> {
-    // 先关停运行时再删文件：还在跑的 run 会往刚删掉的会话树里接着写
+    // 先关停写者再删文件：还在跑的 run 会往刚删掉的会话树里接着写。
+    // 两条写者路径并列停：有根会话是 AgentSession，聊天会话是 botService 的树写锁
+    // （对另一形态各自是 no-op，无脑并列安全）
     await sessionService.invalidateAgent(sessionId)
+    await botService.abortSession(sessionId)
     messageService.clear(sessionId)
   }
 
@@ -180,6 +196,7 @@ export class DefaultChatGateway implements ChatGateway {
     const target = await messageService.resolveRollbackTarget(sessionId, messageId)
     if (!target) return
     await sessionService.invalidateAgent(sessionId)
+    await botService.abortSession(sessionId)
     await messageService.applyRollback(sessionId, target.targetId)
   }
 

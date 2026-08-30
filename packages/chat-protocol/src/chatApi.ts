@@ -52,6 +52,14 @@ export interface SessionSettings {
   autoAllow?: boolean
   allowList?: string[]
   /**
+   * 聊天会话的成员 bot 名单（`~/.shuvix/bots/<name>.md`）。**非空即为聊天会话**：
+   * 它没有根 Agent —— 用户消息由成员各自的管线应答，`resolveAgentProfileName` 因此返回 null。
+   * 判定一律用 `bots?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能
+   * 写 `[]`，而空数组是 truthy。
+   */
+  bots?: string[]
+
+  /**
    * 会话根 Agent 采用的档案名（`~/.shuvix/agents/<name>.md` 或内置档案）。
    * 缺省 / 档案已不存在 → 回落 'default'。经 `/<agentName>` 斜杠命令切换，粘性生效：
    * 系统提示词与内置工具白名单随之更换（会话历史不受影响，切换即重建运行时）。
@@ -338,6 +346,8 @@ export interface SessionCreateParams {
   notebookPath?: string
   /** 会话标题；缺省时聊天会话用默认标题、笔记本会话用文件 basename */
   title?: string
+  /** 成员 bot 名单；非空则创建聊天会话（无根会话，见 SessionSettings.bots） */
+  bots?: string[]
 }
 
 export interface SessionUpdateTitleParams {

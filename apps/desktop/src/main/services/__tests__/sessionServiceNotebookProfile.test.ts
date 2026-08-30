@@ -32,7 +32,7 @@ vi.mock('../../dao/settingsDao', () => ({ settingsDao: {} }))
 vi.mock('../messageService', () => ({ messageService: {} }))
 vi.mock('../sessionStorage', () => ({
   readSessionRunConfig: vi.fn(),
-  setSessionTreePinned: vi.fn(),
+  addSessionTreePin: vi.fn(),
   appendModelChange: mocks.appendModelChange,
   appendActiveToolsChange: mocks.appendActiveToolsChange
 }))
@@ -43,6 +43,13 @@ vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
+vi.mock('../botService', () => ({
+  botService: {
+    abortSession: vi.fn(async () => {}),
+    seedGreetings: vi.fn(async () => {}),
+    isActive: vi.fn(() => false)
+  }
+}))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 vi.mock('../agentSession', () => ({ AgentSession: class {} }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))

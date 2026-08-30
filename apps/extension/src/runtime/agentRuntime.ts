@@ -19,7 +19,7 @@ import {
 import {
   appendModelChange,
   readSessionRunConfig,
-  setSessionTreePinned
+  addSessionTreePin
 } from '../storage/sessionEntryStore'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import type { SessionModelMetadata } from '@shuvix/chat-protocol/chatApi'
@@ -56,7 +56,7 @@ const manager = new SessionManager<CreatedAgent>({
 })
 
 // 会话树共享缓存的逐出保护：有运行时（或创建中）的会话，树实例与 harness 共享，LRU 不得回收
-setSessionTreePinned((sessionId) => manager.tracked(sessionId))
+addSessionTreePin((sessionId) => manager.tracked(sessionId))
 
 /**
  * 解析会话的 provider/model/caps（**不创建运行时**）—— 供 agent.init 同步元信息。

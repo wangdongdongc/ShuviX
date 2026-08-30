@@ -39,9 +39,15 @@ const registry = createSessionTreeRegistry({
   }
 })
 
-/** 注入钉住判定（agentRuntime 启动时接 SessionManager.tracked） */
-export function setSessionTreePinned(fn: (sessionId: string) => boolean): void {
-  registry.setPinned(fn)
+/**
+ * 注册一条钉住判定 —— 可叠加，任一为真即钉住（与桌面端同形）。
+ * 覆盖式 setter 会让后注册者静默吃掉前一个，症状是「有些会话偶尔丢消息」。
+ */
+const pinPredicates: Array<(sessionId: string) => boolean> = []
+
+export function addSessionTreePin(fn: (sessionId: string) => boolean): void {
+  pinPredicates.push(fn)
+  registry.setPinned((sessionId) => pinPredicates.some((p) => p(sessionId)))
 }
 
 /** 取共享会话树；文件不存在时返回 null（不创建） —— 读取路径用 */

@@ -10,8 +10,8 @@
  *   addStepThinking / addStepText / addErrorEvent —— 写入不再经这里。
  *   rollbackToMessage / deleteFromMessage —— 改为树导航（moveTo），见下方新方法。
  */
-import { INLINE_TOKENS_CUSTOM_TYPE, entriesToChatMessages } from '@shuvix/agent-runtime'
-import { deleteSessionFile, getSessionTree } from './sessionStorage'
+import { SIDECAR_CUSTOM_TYPES, entriesToChatMessages } from '@shuvix/agent-runtime'
+import { deleteSessionFile, getSessionTree, readSessionRunConfig } from './sessionStorage'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 export class MessageService {
@@ -20,7 +20,12 @@ export class MessageService {
     const session = await getSessionTree(sessionId)
     if (!session) return [] // 还没发过消息 → 没有转写文件
     const entries = await session.buildContextEntries()
-    return entriesToChatMessages(entries, sessionId)
+    // fallback 与流式广播同源（都取 readSessionRunConfig）：**「流式所见 = 重开所见」是
+    // 两侧一起兑现的**。这里的 entries 过了压缩过滤，一旦某条 model_change 早于压缩切点，
+    // 不给 fallback 会让重开后所有 user 消息的 model/provider 塌成空串 —— 而流式当时
+    // 显示的是真实模型。聊天会话今天不压缩，摸不到；但这正是那两个参数要防的事
+    const cfg = await readSessionRunConfig(sessionId)
+    return entriesToChatMessages(entries, sessionId, cfg.model ?? '', cfg.provider ?? '')
   }
 
   /** 会话最后一条消息 */
@@ -55,13 +60,13 @@ export class MessageService {
     if (!session) return undefined
     const entry = await session.getEntry(messageId)
     if (!entry) return undefined
-    // user 消息前若有内联 Token 显示侧车，一并越过 —— 免得叶子停在无主侧车上
+    // 消息前若有侧车（内联 Token 显示态 / bot 署名），**逐条**越过 —— 叶子停在一条
+    // 无主侧车上，它就会被下一条到达的消息当成自己的侧车消费掉（署名张冠李戴）
     let targetId = entry.parentId
-    if (targetId) {
+    while (targetId) {
       const parent = await session.getEntry(targetId)
-      if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
-        targetId = parent.parentId
-      }
+      if (parent?.type !== 'custom' || !SIDECAR_CUSTOM_TYPES.includes(parent.customType)) break
+      targetId = parent.parentId
     }
     return { targetId }
   }

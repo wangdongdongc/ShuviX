@@ -1,9 +1,13 @@
 /**
  * BotService —— bot 注册表（桌面宿主层）。设计见 docs/bot-design.md §4。
  *
- * 落地分期（docs/bot-implementation-plan.md）：本文件是 **M1′ 的注册表半边** ——
- * 扫描 / md 原文读写 / 非法文件修复通道 / 新建模板。管线执行侧（cohort、仲裁、mailbox
- * lane、笔记写盘、决策记录）属于后续里程碑，此处刻意不留半成品桩。
+ * 落地分期（docs/bot-implementation-plan.md）：本文件现有两半 ——
+ *  - **注册表半边（M1′）**：扫描 / md 原文读写 / 非法文件修复通道 / 新建模板；
+ *  - **消息半边（M3′）**：无根会话的用户消息落盘、bot 消息的双 append、greeting 播种、
+ *    在飞计数（树钉住用）与 abortSession 会师点。
+ *
+ * 管线执行侧（L0 门、cohort、仲裁、mailbox lane、笔记写盘、决策记录）属于后续里程碑，
+ * 此处刻意不留半成品桩：`handleUserMessage` 现在**只落用户消息，不派发任何东西**。
  *
  * **不内置任何 bot**（设计 §4.2）：内置的只有管线 workflow（`bot-chat`）与阶段 agent
  * （`bot-intent` / `bot-notes`）。因此这里没有 agent/workflow/policy 三件套那种
@@ -17,15 +21,32 @@
 import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { shell } from 'electron'
+import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
 import {
+  BOT_SENDER_CUSTOM_TYPE,
   DEFAULT_BOT_PIPELINE,
+  INLINE_TOKENS_CUSTOM_TYPE,
+  entriesToChatMessages,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
+  type BotSenderSidecar,
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
+import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { createLogger } from '../logger'
+import {
+  addSessionTreePin,
+  drainSessionTreeLock,
+  getSessionTree,
+  readSessionRunConfig,
+  withSessionTreeLock
+} from './sessionStorage'
+import { electronEventSink } from './agentRuntimeAdapters'
+import { sessionService } from './sessionService'
 
 const log = createLogger('Bot')
 
@@ -325,6 +346,208 @@ class BotService {
     }
     log.info(`已删除 bot 文件 "${fileName}"`)
     return { success: true }
+  }
+
+  // ─── 消息半边（M3′：无根会话的落盘与广播；不派发任何管线） ───────────────
+
+  /**
+   * 在飞会话计数 —— 树钉住谓词的数据源。
+   *
+   * 聊天会话恒无 AgentSession，所以 `agents.tracked()` 对它永远是 false；不另外钉住的话，
+   * 树槽会被 LRU 逐出（默认只留 8 个未钉住的），而**逐出并不销毁 Session 实例** ——
+   * 在飞的那个实例还会继续往同一个 jsonl 追加，与新开的实例各写各的，消息静默分叉。
+   *
+   * 口径对齐 `SessionManager.tracked`：覆盖「排队中 / 执行中 / 收尾中」，不是「有 run 在跑」。
+   */
+  private readonly inflight = new Map<string, number>()
+
+  /** 主进程启动时装配（同 workflowService.init 的时机，避免 ESM 初始化环） */
+  init(): void {
+    addSessionTreePin((sessionId) => this.isActive(sessionId))
+  }
+
+  /** 同步、O(1)、纯内存 —— 钉住谓词会对每个缓存槽各调一次，不能读盘或 parse JSON */
+  isActive(sessionId: string): boolean {
+    return (this.inflight.get(sessionId) ?? 0) > 0
+  }
+
+  private enter(sessionId: string): void {
+    this.inflight.set(sessionId, (this.inflight.get(sessionId) ?? 0) + 1)
+  }
+
+  private leave(sessionId: string): void {
+    const n = (this.inflight.get(sessionId) ?? 1) - 1
+    if (n > 0) this.inflight.set(sessionId, n)
+    else this.inflight.delete(sessionId)
+  }
+
+  /**
+   * 聊天会话的用户消息落盘 —— gateway.prompt 对无根会话分流到这里。
+   *
+   * 有根会话里这件事发生在 pi 内部（harness 把 user 消息作为 entry 追加，随后广播）；
+   * 聊天会话没有那个运行时，所以宿主自己走一遍**同样的顺序**：先 append 拿到 entry id，
+   * 再用这个 id 广播。**禁止合成 id**，也禁止 append 之后回读叶子取 id —— 多写者下
+   * 回读会拿到别人刚写的那条。
+   *
+   * **M3′ 到此为止：不 invoke 管线、不做 L0 门、不组 cohort。**
+   */
+  async handleUserMessage(params: AgentPromptParams): Promise<void> {
+    const { sessionId, text, images, inlineTokens } = params
+    this.enter(sessionId)
+    try {
+      // LLM 看到的是展开后的全文；标记态原文进显示侧车（与网关有根路径同一形状）
+      const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
+      const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
+      const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+
+      const message: AgentMessage = {
+        role: 'user',
+        content: [
+          { type: 'text', text: promptText },
+          ...(images ?? []).map((img) => ({
+            type: 'image' as const,
+            data: img.data,
+            mimeType: img.mimeType
+          }))
+        ]
+      } as AgentMessage
+
+      const ids = await withSessionTreeLock(
+        sessionId,
+        async (tree) => {
+          const sidecarId = display
+            ? await tree.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, display)
+            : null
+          const entryId = await tree.appendMessage(message)
+          return { sidecarId, entryId }
+        },
+        sessionService.getById(sessionId)?.workingDirectory ?? ''
+      )
+
+      const projected = await this.projectSlice(sessionId, [ids.sidecarId, ids.entryId])
+      if (projected) {
+        electronEventSink.broadcast({
+          type: 'user_message',
+          sessionId,
+          message: JSON.stringify(projected)
+        })
+      }
+    } finally {
+      this.leave(sessionId)
+    }
+  }
+
+  /**
+   * bot 消息落树 —— 一次持锁内**连续 append 两条 entry**：署名侧车在前、assistant 在后。
+   *
+   * 两者之间不得有任何 await 逃逸点（广播、日志、投影一律移到锁外）：投影层靠「紧邻」
+   * 配对它们，中间插进别人的消息就会让署名挂错人 —— 而错挂署名比丢署名更糟。
+   *
+   * 返回 assistant entry 的 id。
+   */
+  async appendBotMessage(
+    sessionId: string,
+    sender: BotSenderSidecar,
+    message: { content: string; model?: string; provider?: string }
+  ): Promise<string | null> {
+    // 投影对 assistant 消息有两处「整条吃掉」的早退（stopReason==='error' / blocks 为空），
+    // 落一条投不出来的 entry 只会留下一个无主侧车去污染下一条消息。宁可不落。
+    if (!message.content.trim()) {
+      log.warn(`bot "${sender.botName}" 的消息内容为空，未落树（session=${sessionId}）`)
+      return null
+    }
+    this.enter(sessionId)
+    try {
+      const assistant = {
+        role: 'assistant',
+        content: [{ type: 'text', text: message.content }],
+        // 切片投影里没有 model_change，assistant 消息只能靠自身兜底
+        model: message.model ?? '',
+        provider: message.provider ?? '',
+        stopReason: 'stop'
+      } as unknown as AgentMessage
+
+      const ids = await withSessionTreeLock(
+        sessionId,
+        async (tree) => {
+          const sidecarId = await tree.appendCustomEntry(BOT_SENDER_CUSTOM_TYPE, { ...sender })
+          const entryId = await tree.appendMessage(assistant)
+          return { sidecarId, entryId }
+        },
+        sessionService.getById(sessionId)?.workingDirectory ?? ''
+      )
+
+      const projected = await this.projectSlice(sessionId, [ids.sidecarId, ids.entryId])
+      if (projected) {
+        electronEventSink.broadcast({
+          type: 'assistant_message',
+          sessionId,
+          messageId: ids.entryId,
+          message: JSON.stringify(projected)
+        })
+      }
+      return ids.entryId
+    } finally {
+      this.leave(sessionId)
+    }
+  }
+
+  /**
+   * 成员的开场白落树（会话创建后由 `session:create` handler await）。
+   *
+   * 按成员顺序逐条落；没写 greeting 的成员跳过。`listAll()` 每次现扫全目录，
+   * 所以这里只扫一次再按名取，别在循环里反复扫。
+   */
+  async seedGreetings(sessionId: string): Promise<void> {
+    const names = sessionService.getById(sessionId)?.settings?.bots ?? []
+    if (!names.length) return
+    const byName = new Map(this.listAll().map((b) => [b.file.name, b.file]))
+    for (const name of names) {
+      const bot = byName.get(name)
+      if (!bot?.greeting.trim()) continue
+      await this.appendBotMessage(
+        sessionId,
+        { botName: bot.name, displayName: bot.displayName },
+        { content: bot.greeting }
+      )
+    }
+  }
+
+  /**
+   * 会师点：Promise 落定时保证**不会再有人写这棵树**（契约对齐 `invalidateAgent`）。
+   * `clearMessages` / `rollbackMessage` / `session.delete` 在动树之前一律先 await 它。
+   *
+   * M3′ 语义 = 排空写锁。管线 run 的级联中止留到 M8′。
+   */
+  async abortSession(sessionId: string): Promise<void> {
+    await drainSessionTreeLock(sessionId)
+  }
+
+  /**
+   * 对新 append 的 entry 切片跑投影 —— 广播的内容与 id 都取自它，
+   * 「流式所见」因此与「重开所见」逐字段同源。
+   *
+   * fallback 走 `readSessionRunConfig`（沿分支扫 model_change，与全量投影同一数据源）：
+   * 切片里没有 model_change，而 user 消息没有自身归属可兜底。
+   */
+  private async projectSlice(
+    sessionId: string,
+    ids: Array<string | null>
+  ): Promise<ChatMessage | null> {
+    const tree = await getSessionTree(sessionId)
+    if (!tree) return null
+    // 按调用方给的顺序逐条取，而不是过滤 getEntries()：顺序在这里是语义的一部分
+    // （署名侧车必须在前，投影才配得上对），而且 O(1) 取代对整棵树的一次扫描
+    const slice: SessionTreeEntry[] = []
+    for (const id of ids) {
+      if (!id) continue
+      const entry = await tree.getEntry(id)
+      if (entry) slice.push(entry)
+    }
+    if (!slice.length) return null
+    const cfg = await readSessionRunConfig(sessionId)
+    const [projected] = entriesToChatMessages(slice, sessionId, cfg.model ?? '', cfg.provider ?? '')
+    return projected ?? null
   }
 
   getUserDir(): string {

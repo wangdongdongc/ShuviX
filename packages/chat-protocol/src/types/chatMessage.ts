@@ -64,6 +64,8 @@ export interface MessageMetadata {
   usage?: UsageInfo
   // —— compaction ——
   isCompactionSummary?: boolean
+  // —— 聊天会话：这条 assistant 消息由哪个 bot 说出 ——
+  sender?: MessageSender
   // —— project instruction injection (AGENTS.md / CLAUDE.md) ——
   isInstructionInjection?: boolean
   /** 注入消息对应的原始指令文件名 */
@@ -83,6 +85,21 @@ export interface UserTextMeta {
   instructionFilename?: string
 }
 
+/**
+ * 消息的署名 —— 聊天会话里一条 assistant 消息由哪个 bot 说出。
+ *
+ * 来源是 assistant entry **紧前**那条 sender 侧车 custom entry（见 agent-runtime 的
+ * `BOT_SENDER_CUSTOM_TYPE`）。侧车自带 displayName 而不是让 UI 现查 bot md：bot 文件
+ * 被删或改名之后，历史消息仍要显示当初那个名字，历史不该因为配置变动而改写。
+ */
+export interface MessageSender {
+  kind: 'bot'
+  /** bot md 的文件名（稳定标识） */
+  name: string
+  /** 当时的显示名 */
+  displayName: string
+}
+
 /** 助手消息元数据 */
 export interface AssistantMeta {
   /** 本条消息产出的图片（模型生成图） */
@@ -91,6 +108,8 @@ export interface AssistantMeta {
   usage?: UsageInfo
   /** 这条消息是压缩摘要（compaction entry 投影而来） */
   isCompactionSummary?: boolean
+  /** 聊天会话：这条消息由哪个 bot 说出（缺省 = 会话根 Agent 说的） */
+  sender?: MessageSender
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----

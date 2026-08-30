@@ -18,7 +18,10 @@ export {
   entriesToChatMessages,
   INSTRUCTION_CUSTOM_TYPE,
   INLINE_TOKENS_CUSTOM_TYPE,
-  type InlineTokensSidecar
+  BOT_SENDER_CUSTOM_TYPE,
+  SIDECAR_CUSTOM_TYPES,
+  type InlineTokensSidecar,
+  type BotSenderSidecar
 } from './projection'
 export { createModelsAdapter, type ModelsAdapterDeps } from './modelsAdapter'
 export { createStubExecutionEnv } from './stubEnv'

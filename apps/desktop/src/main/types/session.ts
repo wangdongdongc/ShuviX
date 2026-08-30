@@ -16,6 +16,8 @@ export interface SessionCreateParams {
   /** 项目记忆笔记本的 slug（由 services/memory 传入；见 SessionSettings.memorySlug） */
   memorySlug?: string
   title?: string
+  /** 成员 bot 名单；非空则创建聊天会话（无根会话，见 SessionSettings.bots） */
+  bots?: string[]
 }
 
 /** IPC: 更新会话标题参数 */

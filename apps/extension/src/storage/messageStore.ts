@@ -6,7 +6,7 @@
  * 消息由 harness 落成 entry，这里只做投影。
  * 读取经 sessionEntryStore 的共享 registry —— 与运行时同一棵树，不重复加载。
  */
-import { INLINE_TOKENS_CUSTOM_TYPE, entriesToChatMessages } from '@shuvix/agent-runtime'
+import { SIDECAR_CUSTOM_TYPES, entriesToChatMessages } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { deleteSessionFile, getSessionTree } from './sessionEntryStore'
 
@@ -35,13 +35,13 @@ export const messageStore = {
     if (!session) return
     const entry = await session.getEntry(entryId)
     if (!entry) return
-    // user 消息前若有内联 Token 显示侧车，一并越过（与桌面 messageService 同构）
+    // 消息前若有侧车（内联 Token 显示态 / bot 署名），**逐条**越过 —— 叶子停在一条
+    // 无主侧车上，它就会被下一条到达的消息当成自己的侧车消费掉（署名张冠李戴）
     let targetId = entry.parentId
-    if (targetId) {
+    while (targetId) {
       const parent = await session.getEntry(targetId)
-      if (parent?.type === 'custom' && parent.customType === INLINE_TOKENS_CUSTOM_TYPE) {
-        targetId = parent.parentId
-      }
+      if (parent?.type !== 'custom' || !SIDECAR_CUSTOM_TYPES.includes(parent.customType)) break
+      targetId = parent.parentId
     }
     await session.moveTo(targetId)
   }

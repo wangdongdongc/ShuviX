@@ -404,6 +404,47 @@ export async function createAgentSession(
   )
 }
 
+/**
+ * 创建一个聊天会话（`settings.bots` 非空 = 无根会话），返回 sid。
+ *
+ * 与 `createAgentSession` 的关键差别是**只 create、不 getInfo**：聊天会话没有根 Agent，
+ * `agent.getInfo(sid, { ensure: true })` 恒为 null，读它的 `.systemPrompt` 直接抛。
+ *
+ * `session:create` 现在是 async 且内部 await 了 `seedGreetings` —— 它 resolve 时开场白
+ * 已在树上，调用方不需要 sleep。
+ */
+export async function createBotSession(
+  main: CdpClient,
+  opts: { bots: string[]; title?: string; projectId?: string }
+): Promise<string> {
+  return main.eval(
+    `window.api.session.create(${JSON.stringify({
+      bots: opts.bots,
+      title: opts.title ?? 'e2e-bots',
+      ...(opts.projectId ? { projectId: opts.projectId } : {})
+    })}).then((s) => s.id)`
+  )
+}
+
+/**
+ * 给聊天会话发一条消息并返回消息列表。
+ *
+ * 与 `promptAndListMessages` 的关键差别是**不需要 `.catch()`**：聊天会话的 prompt
+ * 根本不碰 LLM（botService 只落盘 + 广播），它若 reject 就是真 bug。
+ */
+export async function promptBotSession(
+  main: CdpClient,
+  sid: string,
+  text: string
+): Promise<
+  Array<{ id: string; role?: string; content?: unknown; metadata?: Record<string, unknown> }>
+> {
+  await main.eval(
+    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} })`
+  )
+  return main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
+}
+
 /** 发送 prompt 并容忍 LLM 失败（无 API key），等事件落定后返回消息列表 */
 export async function promptAndListMessages(
   main: CdpClient,

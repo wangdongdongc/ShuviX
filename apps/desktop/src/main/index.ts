@@ -41,6 +41,7 @@ import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { workflowService } from './services/workflowService'
+import { botService } from './services/botService'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -620,6 +621,8 @@ app.whenReady().then(async () => {
 
   // 装配 workflow 引擎（业务埋点在此之前的 fire 静默丢弃）
   measure('workflowService.init', () => workflowService.init())
+  // 注册聊天会话的树钉住谓词（同 workflowService：装配挪进 init 以避开 ESM 初始化环）
+  measure('botService.init', () => botService.init())
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   registerAppEventBridge()

@@ -5,7 +5,7 @@ import { sessionDao } from '../dao/sessionDao'
 import { messageService } from './messageService'
 import {
   readSessionRunConfig,
-  setSessionTreePinned,
+  addSessionTreePin,
   appendModelChange,
   appendActiveToolsChange
 } from './sessionStorage'
@@ -38,6 +38,8 @@ import {
 } from '@shuvix/agent-runtime'
 import type { SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { agentService } from './agentService'
+// 仅在方法体内调用：两个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
+import { botService } from './botService'
 import { AgentSession } from './agentSession'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { resolveProfileModelSpec } from '../agents/agentHost'
@@ -73,6 +75,9 @@ export class SessionService {
         return undefined
       }
       const profileName = this.resolveAgentProfileName(sessionId)
+      // 聊天会话恒无根 Agent。守在这一处，`tracked()` 便恒为 false，
+      // `ensureAgentSession` 与 `getAgentInfo({ensure})` 两个消费方一行都不用改
+      if (profileName === null) return undefined
       log.info(`创建 Agent model=${ctx.model} profile=${profileName} session=${sessionId}`)
       return AgentSession.create({
         sessionId,
@@ -99,7 +104,7 @@ export class SessionService {
   constructor() {
     // 会话树共享缓存的逐出保护：有 AgentSession（或创建中）的会话，
     // 树实例与运行时共享 —— LRU 不得回收，否则读取端会另开分叉实例
-    setSessionTreePinned((sessionId) => this.agents.tracked(sessionId))
+    addSessionTreePin((sessionId) => this.agents.tracked(sessionId))
 
     // 后台任务结束 → 告知该会话的 Agent。刻意**不懒建 Agent**：没建过 Agent 的会话
     // 说明用户根本没在跟它对话，为一条后台通知把整个运行时拉起来不值当
@@ -165,7 +170,9 @@ export class SessionService {
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
-        ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {})
+        ...(params?.memorySlug ? { memorySlug: params.memorySlug } : {}),
+        // 只在非空时写键：缺省即无键，空数组不算聊天会话
+        ...(params?.bots?.length ? { bots: params.bots } : {})
       },
       createdAt: now,
       updatedAt: now
@@ -179,16 +186,30 @@ export class SessionService {
   }
 
   /**
+   * 聊天会话判定 —— `settings.bots` 非空。
+   *
+   * 一律用 `?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能写 `[]`，
+   * 而空数组是 truthy。写成 `!!bots` 会让被写过空数组的普通会话整片变成无根会话。
+   */
+  isBotSession(sessionId: string): boolean {
+    return (sessionDao.pickSettings(sessionId, ['bots'])?.bots?.length ?? 0) > 0
+  }
+
+  /**
    * 解析会话根 Agent 的档案名。
    *
+   * 聊天会话（settings.bots 非空）返回 **null** —— 它没有根 Agent。
    * 笔记本会话（settings.notebookPath 非空）恒为 'notebook' 基座档案，忽略 agentProfile
    * （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）。
    * 其余会话：settings.agentProfile 缺省即 'default'；档案文件被删/改名时也回落 'default'
    * （档案是纯 md 驱动的，用户随时可能删掉某个 `~/.shuvix/agents/<name>.md`，
    * 会话设置不该因此把根 Agent 卡死在一个不存在的档案上）。
    */
-  resolveAgentProfileName(sessionId: string): string {
-    const settings = sessionDao.pickSettings(sessionId, ['agentProfile', 'notebookPath'])
+  resolveAgentProfileName(sessionId: string): string | null {
+    const settings = sessionDao.pickSettings(sessionId, ['agentProfile', 'notebookPath', 'bots'])
+    // 聊天会话没有根 Agent：消息由成员各自的管线应答。返回类型因此是可空的 ——
+    // 把「这个会话没有档案」变成编译期事实，胜过再造一个与它并行、迟早漂移的谓词
+    if (settings?.bots?.length) return null
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
     const name = settings?.agentProfile
     if (!name || name === DEFAULT_PROFILE_NAME) return DEFAULT_PROFILE_NAME
@@ -222,8 +243,13 @@ export class SessionService {
     applied?: { model?: SubAgentModelConfig; tools: string[] }
     modelUnavailable?: string
   }> {
-    // 笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），不接受任何切换
-    if (sessionDao.pickSettings(sessionId, ['notebookPath'])?.notebookPath) {
+    // 两类会话的档案都不接受切换（见 resolveAgentProfileName）。守在方法体第一句：
+    // 拒绝必须先于 getProfile / 落库 / 种子写入 / invalidateAgent，零副作用
+    const pinned = sessionDao.pickSettings(sessionId, ['notebookPath', 'bots'])
+    if (pinned?.bots?.length) {
+      return { success: false, error: 'Chat sessions have no root agent to switch' }
+    }
+    if (pinned?.notebookPath) {
       return { success: false, error: 'Notebook sessions are pinned to the notebook profile' }
     }
     const profile = agentService.getProfile(name)
@@ -321,6 +347,8 @@ export class SessionService {
     // 再清理运行时 AgentSession（dispose 触发 destroy）。等它彻底停下才继续删数据 ——
     // 否则一个还在跑的 run 会往刚被删掉的会话文件/结果目录里继续写
     await this.agents.remove(id, 'destroy')
+    // 聊天会话的写者不是 AgentSession 而是 botService 的树写锁，并列排空
+    await botService.abortSession(id)
     // 再清理持久化数据
     messageService.clear(id)
     httpLogDao.deleteBySessionId(id)

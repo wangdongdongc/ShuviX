@@ -1,6 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { sessionService } from '../services/sessionService'
 import { agentService } from '../services/agentService'
+import { botService } from '../services/botService'
 import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createElectronContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
@@ -22,9 +23,18 @@ export function registerSessionHandlers(): void {
     return sessionService.list()
   })
 
-  /** 创建新会话（含笔记本会话：params.notebookPath 非空时绑定 md 文件） */
-  ipcMain.handle('session:create', (_event, params?: SessionCreateParams) => {
-    return sessionService.create(params)
+  /**
+   * 创建新会话（笔记本会话：params.notebookPath 非空；聊天会话：params.bots 非空）。
+   *
+   * greeting 在这里 await 而不是在 `sessionService.create` 里：create 是同步的 DB 写入
+   * 原语（wikiService / memoryService 都在同步上下文里用它），而 greeting 是异步树写。
+   * 解析之后再返回，渲染端随后的 `message.list` 就一定看得到开场白 —— 火并忘会让广播
+   * 赶在渲染端绑定会话之前，开场白直到重载才出现。
+   */
+  ipcMain.handle('session:create', async (_event, params?: SessionCreateParams) => {
+    const session = sessionService.create(params)
+    if (params?.bots?.length) await botService.seedGreetings(session.id)
+    return session
   })
 
   /** 更新会话标题 */
