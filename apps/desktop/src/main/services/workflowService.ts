@@ -37,6 +37,8 @@ import {
   type TriggerId,
   type TriggerPayloadMap,
   type WorkflowEngine,
+  type WorkflowInvokeRequest,
+  type WorkflowInvokeResult,
   type WorkflowRegistryEntry
 } from '@shuvix/agent-runtime'
 import { getDefaultWorkflowsDir } from '../utils/paths'
@@ -100,6 +102,11 @@ class WorkflowService {
    */
   private scanCache: { fingerprint: string; result: ScanResult } | null = null
 
+  /** run 记录的落盘重定向（见 registerRunJournalSink） */
+  private journalSink: ((record: Record<string, unknown>) => string | null) | null = null
+  /** runId → 重定向目录；meta 时登记、end 时销号 */
+  private readonly redirectedRuns = new Map<string, string>()
+
   /**
    * 本进程自己的写路径显式失效。指纹已经能兜住外部编辑器，但**同一秒内、同样大小**的
    * 覆写在秒级精度的文件系统上骗得过它 —— 而「点保存后立刻生效」正是本进程最常见的动作。
@@ -133,6 +140,42 @@ class WorkflowService {
   /** 业务埋点入口（绝不抛出）。引擎未就绪时静默丢弃。 */
   fire<K extends TriggerId>(id: K, payload: TriggerPayloadMap[K]): void {
     this.engine?.fire(id, payload)
+  }
+
+  /**
+   * 定向调用（绝不抛出）。bot 管线走这条路。
+   *
+   * 引擎未就绪只可能出现在启动竞态里（`init()` 在任何 prompt 之前装配），属于内部故障 ——
+   * 回 `'error'` + 人读串，**不给 reason 枚举加「未就绪」这一项**：那会让调用方为一个
+   * 不可达的分支写降级。
+   */
+  async invoke(req: WorkflowInvokeRequest): Promise<WorkflowInvokeResult> {
+    if (!this.engine) return { started: false, reason: 'error', error: 'workflow engine not ready' }
+    return await this.engine.invoke(req)
+  }
+
+  /** 中止某会话名下的全部 run（聊天会话的会师点会师用）；引擎未就绪返回 0 */
+  abortSessionRuns(sessionId: string): number {
+    return this.engine?.abortSession(sessionId) ?? 0
+  }
+
+  /** 注册表里有没有这个名字 —— 派发**之前**就能判「这份管线存在」，不必靠事后的 not-found */
+  hasWorkflow(name: string): boolean {
+    return this.listForEngine().some((e) => e.file.name === name)
+  }
+
+  /**
+   * run 记录的落盘重定向 —— bot 路径的 journal 要落到 `~/.shuvix/bots/.runs/<bot>/`。
+   *
+   * 形状是「一次解析、按 runId 记住」：`meta` 是每个 run 的第一条记录，且是唯一带调用方
+   * 身份（`invocation.label`）的一条 —— 后续的 step_start / log / end 什么身份都不带。
+   * sink 在 meta 时返回目标目录即登记，`end` 时销号；返回 null 走原路径。
+   *
+   * 这条映射**不参与任何正确性判定**：建不起来的最坏后果是那个 run 的 journal 落回
+   * 工作流目录，决策记录少一个可交叉引用的 runId。
+   */
+  registerRunJournalSink(resolve: (record: Record<string, unknown>) => string | null): void {
+    this.journalSink = resolve
   }
 
   // ─── 注册表 ──────────────────────────────────
@@ -444,19 +487,36 @@ class WorkflowService {
 
   private appendRunRecord(name: string, runId: string, record: Record<string, unknown>): void {
     try {
+      const redirected = this.resolveJournalDir(runId, record)
       // 与 agentService 的文件名净化同一习语；前导点一并剥掉（`..` 这类名不得逃出 .runs）
       const safeName = name.replace(/[\\/:*?"<>|]/g, '-').replace(/^\.+/, '') || 'workflow'
-      const dir = join(this.userDir, '.runs', safeName)
+      const dir = redirected ?? join(this.userDir, '.runs', safeName)
       mkdirSync(dir, { recursive: true })
+      // 重定向路径（bot）落盘前剔掉 event：bot 的信封里是会话窗口 + 笔记 + 成员表，
+      // 每个 run 抄一份，而 journal 要回答的是「发生了什么」不是「输入是什么」
+      const payload = redirected ? { ...record, event: undefined } : record
       appendFileSync(
         join(dir, `${runId}.jsonl`),
-        `${JSON.stringify({ ts: Date.now(), ...record })}\n`
+        `${JSON.stringify({ ts: Date.now(), ...payload })}\n`
       )
-      // meta 是每个 run 的第一条记录 —— 一个 run 一次剪枝，代价是一次 readdir
-      if (record.type === 'meta') this.pruneRunJournal(dir)
+      // meta 是每个 run 的第一条记录 —— 一个 run 一次剪枝，代价是一次 readdir。
+      // 重定向出去的目录由它的所有者（botService）自己剪：这里的通配会连 decisions.jsonl 一起剪
+      if (record.type === 'meta' && !redirected) this.pruneRunJournal(dir)
     } catch (e) {
       log.warn(`workflow run journal 写入失败 (${name}/${runId}):`, e)
     }
+  }
+
+  /** meta 时问一次 sink 并记住；end 时销号。其余记录查表 */
+  private resolveJournalDir(runId: string, record: Record<string, unknown>): string | null {
+    if (record.type === 'meta') {
+      const dir = this.journalSink?.(record) ?? null
+      if (dir) this.redirectedRuns.set(runId, dir)
+      return dir
+    }
+    const dir = this.redirectedRuns.get(runId) ?? null
+    if (record.type === 'end') this.redirectedRuns.delete(runId)
+    return dir
   }
 
   /**
