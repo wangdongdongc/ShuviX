@@ -209,12 +209,12 @@ function present(names: string[], inp: L0Input, records: L0Record[]): string[] {
 }
 
 /**
- * **这里不记 `l0_silent`**：L0 之后每一次沉默都已经有具体原因（`l0_member_missing` /
- * `l0_mention_only_skipped`），一个成员若既在册又不是 mention-only，它必然进 cohort ——
- * 「无从解释的沉默」在这一层根本不存在。
+ * **这一层没有「无从解释的沉默」**：L0 之后每一次沉默都已经有具体原因
+ * （`l0_member_missing` / `l0_mention_only_skipped`），一个成员若既在册又不是
+ * mention-only，它必然进 cohort。
  *
- * 设计 §7 说的「全体沉默」是另一回事：cohort 组起来了，但成员们**自己判定**不接。
- * 那是仲裁的事（`claim` 全员 ignore），`l0_silent` 这个 kind 留给它（M6′）。
+ * 设计 §7 说的「全体沉默」是另一回事：cohort 组起来了，但一个字都没换来 —— 它只有
+ * 等全员跑完才知道，因此记在 `dispatchCohort` 收尾处（`cohort_silent`），不在这里。
  */
 function finish(
   cohort: string[],

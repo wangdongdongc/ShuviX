@@ -132,7 +132,13 @@ if (!intent) {
 // 3 ── Whose message is this? The host joins here. With one bot, or when this bot was named,
 //      it degenerates to a constant: no waiting, no grace window.
 const verdict = await claim(intent)
-if (!verdict.won) return { gate: 'ok', outcome: 'yielded', to: verdict.winner }
+if (!verdict.won) {
+  // "I judged this was not mine" and "someone else was judged a better fit" are different
+  // endings, and the run journal is where you go to tell them apart. Collapsing both into
+  // `yielded` is the same mistake as writing a slow claim down as a silent one.
+  const ending = verdict.reason === 'ignored' ? 'ignored' : 'yielded'
+  return { gate: 'ok', outcome: ending, to: verdict.winner }
+}
 
 // 4 ── Anything answerable in one line is answered here — don't open a task for it.
 if (intent.decision !== 'task') {

@@ -7,7 +7,13 @@
  * 这条纪律，只有数 setTimer 才看得见。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { CohortBarrier, GRACE_MS, type ClaimIntent, type ClaimVerdict } from '../botArbiter'
+import {
+  CohortBarrier,
+  GRACE_MS,
+  type ClaimIntent,
+  type ClaimVerdict,
+  type SuppressedIntent
+} from '../botArbiter'
 
 interface FakeTimer {
   id: number
@@ -72,7 +78,11 @@ function makeClock(): FakeClock {
   }
 }
 
-type Settled = { winner: string | null; losers: string[]; unresponsive: string[] }
+type Settled = {
+  winner: string | null
+  suppressed: SuppressedIntent[]
+  unresponsive: string[]
+}
 
 function makeBarrier(members: string[]): {
   barrier: CohortBarrier
@@ -156,7 +166,7 @@ describe('ignore —— 立即返回且永不参与评分', () => {
     await barrier.claim('b', intent('ignore'))
 
     expect(clock.setCalls).toHaveLength(0)
-    expect(settled).toEqual([{ winner: null, losers: [], unresponsive: [] }])
+    expect(settled).toEqual([{ winner: null, suppressed: [], unresponsive: [] }])
   })
 
   it('定局之后才到的 ignore 记 timeout（F-6：settled 分支先于 ignore 分支）', async () => {
@@ -219,7 +229,7 @@ describe('宽限窗', () => {
     clock.advance(GRACE_MS)
 
     await expect(pa).resolves.toEqual({ won: true, winner: 'a', reason: 'won' })
-    expect(settled).toEqual([{ winner: 'a', losers: [], unresponsive: ['b'] }])
+    expect(settled).toEqual([{ winner: 'a', suppressed: [], unresponsive: ['b'] }])
   })
 })
 
@@ -288,10 +298,14 @@ describe('迟到 / 中止 / 误用', () => {
     clock.advance(GRACE_MS)
 
     const r = settled[0]
-    expect(r).toEqual({ winner: 'a', losers: ['b'], unresponsive: ['c'] })
-    expect(r.losers).not.toContain(r.winner)
+    expect(r).toEqual({
+      winner: 'a',
+      suppressed: [{ botName: 'b', decision: 'reply', relevance: 3 }],
+      unresponsive: ['c']
+    })
+    expect(r.suppressed.map((s) => s.botName)).not.toContain(r.winner)
     expect(r.unresponsive).not.toContain(r.winner)
-    expect([...r.losers, ...r.unresponsive].sort()).toEqual(['b', 'c'])
+    expect([...r.suppressed.map((s) => s.botName), ...r.unresponsive].sort()).toEqual(['b', 'c'])
   })
 
   it('abort 前的等待者拿 aborted，且宽限窗被清', async () => {

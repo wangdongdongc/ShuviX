@@ -36,7 +36,11 @@ import {
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
 import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
-import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  ChatMessage,
+  InlineToken,
+  SuppressedCandidate
+} from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
@@ -157,6 +161,12 @@ interface BotTicket {
   messageId: string
   barrier: CohortBarrier
   claimState: 'none' | 'won' | 'lost'
+  /**
+   * 仲裁给出的具体理由。`claimState` 把 ignored / lost / timeout 压成一个 'lost' ——
+   * 强制点只关心「能不能说」，而全体沉默的定性要分清「全员判定不接」（正常）与
+   * 「全都没跑到判定」（坏了），两者对用户的意味完全相反
+   */
+  claimReason?: ClaimVerdict['reason']
   /** run 已收尾（超时 / 被中止 / settle）—— `say` 的硬闸，见下 */
   terminal: boolean
   /** 本 ticket 已经往会话里说过话 —— 可见结局兜底据此决定要不要再补一条失败气泡 */
@@ -214,6 +224,53 @@ export function asSayContent(raw: unknown): string {
     if (text.trim()) return text
   }
   throw new Error('say(reply): reply must be a non-empty string or carry a headline')
+}
+
+/** 一个 cohort 成员这一轮的结局 —— 全体沉默的判据由它们汇总而来 */
+interface MemberOutcome {
+  botName: string
+  displayName: string
+  /** 这个成员往会话里放了东西没有（一条回复、或一条可见失败） */
+  said: boolean
+  /** 取值与决策记录的 kind 同源 */
+  outcome: string
+}
+
+/**
+ * 一个成员这一轮的结局用哪句话说清楚。三级优先：
+ *
+ * 1. **仲裁理由**（宿主亲眼所见）—— 它是全体沉默定性的唯一依据，因为只有它证明这个成员
+ *    真的进过仲裁。自定义管线可以一句 `outcome:'ignored'` 随口一说，那不算「判定不接」；
+ * 2. 脚本自报的 outcome —— `gate-broken` / `task-pending` 这类，比「run 跑完了」有信息量；
+ * 3. run 本身怎么收的。
+ */
+function memberOutcome(
+  claimReason: ClaimVerdict['reason'] | undefined,
+  scriptOutcome: string | undefined,
+  ended: string
+): string {
+  if (claimReason && claimReason !== 'won' && claimReason !== 'solo') return `claim_${claimReason}`
+  return scriptOutcome || ended
+}
+
+/**
+ * cohort 整体沉默了没有，以及该怎么定性（设计 §9 的可见结局不变式）。
+ *
+ * 只看「会话里多出东西了吗」：任何一个成员开了口，这一轮就有结局，不必提示。
+ * 定性只分两类 —— 自判不接（沉默白名单里唯一的正常项）与其余（有东西坏了）。
+ */
+export function cohortSilence(
+  outcomes: MemberOutcome[]
+): { reason: 'all_ignored' | 'all_failed' | 'mixed' } | null {
+  if (!outcomes.length || outcomes.some((o) => o.said)) return null
+  const ignored = outcomes.filter((o) => o.outcome === 'claim_ignored').length
+  if (ignored === outcomes.length) return { reason: 'all_ignored' }
+  return { reason: ignored ? 'mixed' : 'all_failed' }
+}
+
+/** 被压制候选的暂存键：一轮仲裁 = 一条用户消息 = (会话, seq) */
+function suppressedKey(sessionId: string, messageSeq: number): string {
+  return `${sessionId}\u0000${messageSeq}`
 }
 
 class BotService {
@@ -500,6 +557,15 @@ class BotService {
   /** 禁写位：`abortSession` 期间 `say` 一律硬失败（drain 只排空队列，挡不住新写者） */
   private readonly blockWrites = new Set<string>()
   /**
+   * 定局那一刻被压制的候选，键是 `<sessionId>\u0000<messageSeq>` —— 等胜者真的开口时
+   * 挂到它的署名侧车上（救济 chip 的数据源）。
+   *
+   * **不在定局时直接广播**：那时胜者可能还有一整个任务段要跑，chip 得跟着胜者那条消息走，
+   * 而不是提前孤零零地飘在会话里。取走即删（一轮只挂一次，任务段后续的 say 不再重复挂），
+   * cohort 收尾时无论取没取都清 —— 胜者半路失败的话就没人来取了。
+   */
+  private readonly suppressedBy = new Map<string, SuppressedCandidate[]>()
+  /**
    * 门控段的健康度：连续故障计数与「已回落」标记。
    *
    * 设计 §6.1：同一个 bot **连续 2 次**破损就回落内置门控 agent。超时与破损共用同一条
@@ -672,16 +738,30 @@ class BotService {
     const window = await this.buildWindow(sessionId, messageId)
 
     const barrier = new CohortBarrier(gate.cohort, {
-      onSettled: ({ unresponsive }) => {
+      onSettled: ({ unresponsive, suppressed }) => {
         // 定局时连意图都还没交的成员：继续跑纯属烧钱。已 claim 的败者**不**中止 ——
         // 让脚本按 verdict.won === false 自己优雅收尾，`say` 的强制点是兜底
         for (const name of unresponsive) this.ticketOf(sessionId, name, messageSeq)?.abort.abort()
+        if (suppressed.length) {
+          this.suppressedBy.set(
+            suppressedKey(sessionId, messageSeq),
+            suppressed.map((s) => ({
+              name: s.botName,
+              // 显示名取**定局当时**的快照，与署名侧车同理：bot 改名或被删之后，
+              // 历史消息上的 chip 仍该显示当初那个名字
+              displayName: known.get(s.botName)?.displayName ?? s.botName,
+              decision: s.decision,
+              relevance: s.relevance,
+              ...(s.reason ? { reason: s.reason } : {})
+            }))
+          )
+        }
       }
     })
 
     this.enter(sessionId)
     try {
-      await Promise.all(
+      const outcomes = await Promise.all(
         gate.cohort.map((botName) =>
           this.runPipeline({
             bot: known.get(botName)!,
@@ -698,11 +778,58 @@ class BotService {
             members: gate.cohort,
             known,
             window
+          }).catch((e) => {
+            // 一个成员炸了不该拖垮整个 cohort：Promise.all 一 reject，后面的沉默判定
+            // 就永远跑不到，用户看到的是一条消息发出去之后彻底没有下文
+            log.warn(`bot 管线异常退出 (${botName}):`, e)
+            return {
+              botName,
+              displayName: known.get(botName)?.displayName ?? botName,
+              said: false,
+              outcome: 'pipeline_error'
+            }
           })
         )
       )
+
+      // 多 bot 的沉默是 cohort 整体的结局，逐成员补气泡会让每条消息多出 N 条噪音
+      // （M4′ 的 `!ctx.arbitrated` 正是为此留的口子，这里把它补完）。单 bot 会话不发 ——
+      // 那里的沉默只可能是失败，一条留痕的失败消息比一次转瞬即逝的提示更该有
+      const silence = gate.cohort.length > 1 ? cohortSilence(outcomes) : null
+      if (silence) {
+        // 逐成员各记一条，而不是找个 `_cohort` 假目录记一条：决策记录按 bot 分目录，
+        // 回答的是「这个 bot 为什么没说话」—— 「这一轮谁都没说」正是它自己那份记录里
+        // 最该有、又只能由 cohort 视角给出的一句（否则要跨 N 个文件对账才看得出来）
+        for (const o of outcomes) {
+          appendBotDecision({
+            kind: 'cohort_silent',
+            sessionId,
+            botName: o.botName,
+            ticketId: '-',
+            messageSeq,
+            messageId,
+            detail: { reason: silence.reason, self: o.outcome }
+          })
+        }
+        // 胜者半路失败的场合，暂存里还躺着一份没人来取的候选名单 —— 而这恰恰是最需要
+        // 救济的一次：有人想接、赢家却哑了。没有胜者消息可挂，就挂到这条提示上
+        const orphaned = this.suppressedBy.get(suppressedKey(sessionId, messageSeq))
+        electronEventSink.broadcast({
+          type: 'bot_cohort_silent',
+          sessionId,
+          messageId,
+          reason: silence.reason,
+          members: outcomes.map((o) => ({
+            name: o.botName,
+            displayName: o.displayName,
+            outcome: o.outcome
+          })),
+          ...(orphaned?.length ? { suppressed: orphaned } : {})
+        })
+      }
     } finally {
       this.leave(sessionId)
+      this.suppressedBy.delete(suppressedKey(sessionId, messageSeq))
     }
   }
 
@@ -810,7 +937,7 @@ class BotService {
     members: string[]
     known: Map<string, ParsedBotFile>
     window: { lines: string[]; after: (entryId: string) => string[] }
-  }): Promise<void> {
+  }): Promise<MemberOutcome> {
     const { bot, sessionId, messageId, messageSeq } = ctx
     // 连续故障之后回落内置门控：用户覆盖的 `shuvix-bot-agents.intent` 让位
     const degraded = this.gateHealth.get(bot.name)?.degraded
@@ -850,7 +977,15 @@ class BotService {
         { botName: bot.name, displayName: bot.displayName },
         { content: `⚠️ 管线 "${pipeline.workflow}" 不存在或无法解析，这条消息没有被处理。` }
       )
-      return
+      // said=true：这个成员确实往会话里放了东西（一条可见失败）。全体沉默的判据是
+      // 「会话里什么都没多出来」，不是「脚本调过 say」—— 否则一条已经显形的失败
+      // 还会再触发一次沉默提示
+      return {
+        botName: bot.name,
+        displayName: bot.displayName,
+        said: true,
+        outcome: 'pipeline_not_found'
+      }
     }
 
     this.tickets.set(ticket.ticketId, ticket)
@@ -915,6 +1050,7 @@ class BotService {
       // 可见结局兜底（设计 §9）：脚本自己抛了、没有可用模型、mailbox 超时 —— 这些今天
       // 在会话里什么都不会出现。**`!ctx.arbitrated` 是必须的**：多 bot 会话里未表态的成员
       // 是被宿主主动 abort 的，那是设计要的沉默；一刀切会让每条多 bot 消息多出 N−1 条错误气泡
+      let spoke = ticket.said
       if (!result.ok && !ticket.said && !ctx.arbitrated && !ticket.abort.signal.aborted) {
         await this.appendBotMessage(
           sessionId,
@@ -923,8 +1059,16 @@ class BotService {
             content: `⚠️ ${bot.displayName}：这条消息没能处理完 —— ${result.error ?? 'unknown error'}`
           }
         )
+        spoke = true
       }
-      this.activity(ticket, 'ended', result.started ? (result.ok ? 'ok' : 'failed') : result.reason)
+      const ended = result.started ? (result.ok ? 'ok' : 'failed') : (result.reason ?? 'error')
+      this.activity(ticket, 'ended', ended)
+      return {
+        botName: bot.name,
+        displayName: bot.displayName,
+        said: spoke,
+        outcome: memberOutcome(ticket.claimReason, output?.outcome, ended)
+      }
     } finally {
       ticket.terminal = true
       this.mailbox.releaseByTicket(ticket.ticketId)
@@ -958,6 +1102,7 @@ class BotService {
         const intent = asClaimIntent(raw)
         const verdict = await ticket.barrier.claim(ticket.botName, intent)
         ticket.claimState = verdict.won ? 'won' : 'lost'
+        ticket.claimReason = verdict.reason
         decide(
           verdict.reason === 'solo'
             ? 'claim_solo'
@@ -1022,12 +1167,18 @@ class BotService {
         // 降级出声（`{error:true}`）**绝不带 decision** —— 否则一条 clarify 会把用户的
         // 下一条无关消息硬路由回这个刚出过故障的 bot
         const decision = o.error !== true && typeof o.decision === 'string' ? o.decision : undefined
+        // 救济 chip 只挂在胜者**第一次**开口的那条上：任务段会 say 好几次，每条都挂等于
+        // 把「还有谁想回答」重复 N 遍。取走即删
+        const sKey = suppressedKey(ticket.sessionId, ticket.messageSeq)
+        const suppressed = this.suppressedBy.get(sKey)
+        if (suppressed) this.suppressedBy.delete(sKey)
         const messageId = await this.appendBotMessage(
           ticket.sessionId,
           {
             botName: ticket.botName,
             displayName: ticket.displayName,
             ...(decision ? { decision } : {}),
+            ...(suppressed?.length ? { suppressed } : {}),
             // 原值原样存进侧车：M8′ 只需收窄类型，不必迁移数据
             ...(typeof raw === 'object' && raw !== null ? { reply: raw } : {})
           },

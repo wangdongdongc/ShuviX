@@ -32,7 +32,6 @@ export type BotDecisionKind =
   | 'l0_clarify_relink'
   | 'l0_mention_only_skipped'
   | 'l0_member_missing'
-  | 'l0_silent'
   | 'cohort_formed'
   // 派发
   | 'pipeline_not_found'
@@ -53,6 +52,8 @@ export type BotDecisionKind =
   | 'claim_timeout'
   | 'arbitration_bypassed'
   | 'arbitration_lost'
+  /** 这一轮 cohort 一个字都没换来 —— 每个成员的文件里各记一条（见 dispatchCohort） */
+  | 'cohort_silent'
   // mailbox
   | 'mailbox_queued'
   | 'mailbox_granted'

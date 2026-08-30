@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   ImageMeta,
   InlineToken,
+  SuppressedCandidate,
   ToolResultDetails,
   UsageInfo
 } from '@shuvix/chat-protocol/types/chatMessage'
@@ -81,6 +82,14 @@ export interface BotSenderSidecar {
   decision?: string
   /** 结构化回复原文（M8′ 收窄为 BotReply），仅供 UI —— 模型看到的是 content 的 markdown */
   reply?: unknown
+  /**
+   * 本条消息赢下仲裁时被压制的其它候选（救济 chip 的数据源）。
+   *
+   * **跟着消息持久化而不是走一次事件**：这是个可点击纠正的决策面，会话重开之后它必须
+   * 还在 —— 一次性事件在刷新那一刻就把救济丢了。也因此它与 live 广播是同一份数据，
+   * 「流式与重开一致」这条投影契约自动成立。
+   */
+  suppressed?: SuppressedCandidate[]
 }
 
 /**
@@ -101,6 +110,31 @@ function asBotSenderSidecar(data: unknown): BotSenderSidecar | null {
   if (typeof d.displayName !== 'string' || !d.displayName) return null
   // 其余键原样带过：这是持久化数据，schema 还要长两轮（decision/reply）
   return d as unknown as BotSenderSidecar
+}
+
+/**
+ * 侧车里的被压制候选 —— 逐条校验后才交给 UI。
+ *
+ * 侧车其余键是「原样带过」的，这一个不行：它是 UI 唯一会去遍历的字段，而数据来自磁盘上
+ * 一份可能由旧版本、手工编辑或半截写入留下的 JSON。一条坏记录在这里被丢掉，总好过在
+ * 渲染时炸掉整条会话。全部不合法时返回 undefined，让调用点连这个键都不铺。
+ */
+function suppressedOf(sender: BotSenderSidecar): SuppressedCandidate[] | undefined {
+  if (!Array.isArray(sender.suppressed)) return undefined
+  // 声明类型是给消费方看的；这里读的是磁盘上的 JSON，先退回 unknown 再逐条收窄
+  const raw = sender.suppressed as unknown[]
+  const ok = raw.filter((c): c is SuppressedCandidate => {
+    if (typeof c !== 'object' || c === null) return false
+    const d = c as Record<string, unknown>
+    return (
+      typeof d.name === 'string' &&
+      !!d.name &&
+      typeof d.displayName === 'string' &&
+      (d.decision === 'reply' || d.decision === 'task' || d.decision === 'clarify') &&
+      typeof d.relevance === 'number'
+    )
+  })
+  return ok.length ? ok : undefined
 }
 
 function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
@@ -305,6 +339,8 @@ function projectAssistantMessage(
   // 什么都没产出（如首 token 前被中止）：不留空卡片
   if (blocks.length === 0 && !images) return
 
+  const suppressed = sender ? suppressedOf(sender) : undefined
+
   state.out.push({
     id: entryId,
     sessionId,
@@ -321,7 +357,8 @@ function projectAssistantMessage(
       images,
       ...(sender
         ? {
-            sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName }
+            sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName },
+            ...(suppressed ? { suppressed } : {})
           }
         : {})
     }

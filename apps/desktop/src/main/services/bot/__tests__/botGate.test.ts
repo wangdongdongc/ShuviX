@@ -352,14 +352,15 @@ describe('runL0Gate —— mention-only / cohort / 全体沉默', () => {
     expect(kindsOf(res, 'ghost')).toEqual(['l0_member_missing'])
   })
 
-  it('L0 层不产生 l0_silent：每一次沉默都有具体原因', () => {
+  it('L0 层的每一次沉默都说得出原因，没有笼统的「沉默」记录', () => {
     // 在册且非 mention-only 的成员必然进 cohort ——「无从解释的沉默」在这一层不存在。
-    // 设计 §7 的「全体沉默」是成员们自己判 ignore，那归仲裁（M6′）
+    // 设计 §7 的「全体沉默」要等全员跑完才知道，归 dispatchCohort 的 cohort_silent
     const res = runL0Gate(input(['ghost', 'quiet'], [quiet], { text: '大家好' }))
     expect(res.cohort).toEqual([])
-    expect(res.records.some((r) => r.kind === 'l0_silent')).toBe(false)
     expect(kindsOf(res, 'ghost')).toEqual(['l0_member_missing'])
     expect(kindsOf(res, 'quiet')).toEqual(['l0_mention_only_skipped'])
+    // 每条记录都归属到某个具体成员，kind 本身就是原因
+    expect(res.records.every((r) => !!r.botName && r.kind.startsWith('l0_'))).toBe(true)
   })
 
   it('cohort 顺序跟 members，不跟 known 的插入序', () => {

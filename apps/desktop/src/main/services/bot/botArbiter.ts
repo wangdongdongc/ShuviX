@@ -53,11 +53,24 @@ interface Candidate extends ClaimIntent {
   at: number
 }
 
+/** 一个败者连同它本来想做的事 —— 救济 chip 要的就是这三个字段 */
+export interface SuppressedIntent extends Omit<ClaimIntent, 'decision'> {
+  botName: string
+  /** 不含 ignore：自判不接的成员从不进候选池，也就永远不是「被压制」 */
+  decision: Exclude<ClaimDecision, 'ignore'>
+}
+
 export interface BarrierDeps {
-  /** 定局时通知宿主：胜者、败者、以及仍未表态因而该被中止的成员 */
+  /** 定局时通知宿主：胜者、被压制的候选、以及仍未表态因而该被中止的成员 */
   onSettled?: (result: {
     winner: string | null
-    losers: string[]
+    /**
+     * 落败的候选**连同意图**（自判 ignore 的不在内 —— 它并不想说话）。
+     *
+     * 刻意不是一份 `losers: string[]` 外加一份意图表：两份成员必然相同的名单，迟早会在
+     * 「谁算候选」的定义微调时错位。救济面要的是「XX 也想回答（因为…）」，名字本身答不了。
+     */
+    suppressed: SuppressedIntent[]
     /** 定局时连意图都还没交的成员 —— 继续跑纯属烧钱，宿主应中止它们 */
     unresponsive: string[]
   }) => void
@@ -178,12 +191,23 @@ export class CohortBarrier {
     })
     this.settledWinner = ranked[0]?.botName ?? null
 
-    const losers: string[] = []
+    // 名单**按排名而不是按到达顺序**：救济 chip 是「差一点就赢的是谁」，最接近的排最前。
+    // waiters 是 Map，遍历它拿到的是 claim 到达序 —— 那是网络抖动，不是任何有意义的顺序
+    const suppressed: SuppressedIntent[] = ranked
+      .filter((c) => c.botName !== this.settledWinner)
+      .map(({ botName, decision, relevance, reason }) => ({
+        botName,
+        // 断言在这里而不是调用点：`claim` 里 ignore 直接返回、从不进 candidates，
+        // 这条不变量是本文件的，别让宿主去替它收窄
+        decision: decision as Exclude<ClaimDecision, 'ignore'>,
+        relevance,
+        ...(reason !== undefined ? { reason } : {})
+      }))
+
     for (const [botName, resolve] of this.waiters) {
       if (botName === this.settledWinner) {
         resolve({ won: true, winner: botName, reason: 'won' })
       } else {
-        losers.push(botName)
         resolve({ won: false, winner: this.settledWinner ?? undefined, reason: 'lost' })
       }
     }
@@ -194,7 +218,7 @@ export class CohortBarrier {
     // `say` 的强制点是它的兜底
     this.deps.onSettled?.({
       winner: this.settledWinner,
-      losers,
+      suppressed,
       unresponsive: [...this.pending]
     })
   }

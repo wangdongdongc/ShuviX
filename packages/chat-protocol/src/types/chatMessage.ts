@@ -100,6 +100,30 @@ export interface MessageSender {
   displayName: string
 }
 
+/**
+ * 仲裁里被压制的候选 —— **误压制的救济面**，不是日志。
+ *
+ * 多 bot 会话一条消息只有一个回复者，但「归属判错」是这套机制最可能的失误。渲染成胜者
+ * 回复卡底部的 chip（「XX 也想回答」，点击 = 定向重发）让用户一眼看见还有谁想接、并能
+ * 一步纠正；只写进 `decisions.jsonl` 等于把救济埋进文件系统深处。
+ *
+ * 名单是**定局那一刻**的候选（自判 ignore 的不在内 —— 它并不想说话）。定局之后才交意图
+ * 的迟到者也不在内：它写进决策记录的是 `claim_timeout`，而 chip 出不出现要是取决于一次
+ * 竞态，这个面就不可信了。
+ */
+export interface SuppressedCandidate {
+  /** bot md 的文件名（稳定标识，定向重发用它） */
+  name: string
+  /** 定局当时的显示名 */
+  displayName: string
+  /** 它本来打算做什么 */
+  decision: 'reply' | 'task' | 'clarify'
+  /** 它自评的相关度 0..9 —— 与胜者的差距就是这次压制有多勉强 */
+  relevance: number
+  /** 一句话理由，直接就是 chip 的 tooltip */
+  reason?: string
+}
+
 /** 助手消息元数据 */
 export interface AssistantMeta {
   /** 本条消息产出的图片（模型生成图） */
@@ -110,6 +134,8 @@ export interface AssistantMeta {
   isCompactionSummary?: boolean
   /** 聊天会话：这条消息由哪个 bot 说出（缺省 = 会话根 Agent 说的） */
   sender?: MessageSender
+  /** 聊天会话：本条消息赢下仲裁时，被它压制的其它候选 */
+  suppressed?: SuppressedCandidate[]
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----
