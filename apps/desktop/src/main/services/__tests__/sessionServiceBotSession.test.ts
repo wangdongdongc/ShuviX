@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   getProfile: vi.fn(),
   appendModelChange: vi.fn(),
   appendActiveToolsChange: vi.fn(),
-  broadcastSessionConfigChanged: vi.fn()
+  broadcastSessionConfigChanged: vi.fn(),
+  seedGreetings: vi.fn(async () => {})
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -55,7 +56,7 @@ vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../botService', () => ({
   botService: {
     abortSession: vi.fn(async () => {}),
-    seedGreetings: vi.fn(async () => {}),
+    seedGreetings: mocks.seedGreetings,
     isActive: vi.fn(() => false)
   }
 }))
@@ -203,5 +204,70 @@ describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
     const res = await sessionService.updateAgentProfile('s1', 'coding')
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/pinned/)
+  })
+})
+
+describe('updateBots —— 成员管理，也是名单写坏之后的逃生口', () => {
+  beforeEach(() => {
+    mocks.seedGreetings.mockClear()
+    mocks.daoUpdateSettings.mockClear()
+  })
+
+  it('改名单：落库、只对新增成员补开场白、返回实际名单与新增集', async () => {
+    mocks.daoPickSettings.mockReturnValue({ bots: ['a', 'b'] })
+    const res = await sessionService.updateBots('s1', ['a', 'c'])
+
+    expect(res).toMatchObject({ success: true, bots: ['a', 'c'], added: ['c'] })
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bots: ['a', 'c'] })
+    // 老成员 a 不重播开场白，被移除的 b 也不播
+    expect(mocks.seedGreetings).toHaveBeenCalledWith('s1', ['c'])
+  })
+
+  it('名单没变化时不补任何开场白（差集为空即不调）', async () => {
+    mocks.daoPickSettings.mockReturnValue({ bots: ['a', 'b'] })
+    const res = await sessionService.updateBots('s1', ['b', 'a'])
+    expect(res.added).toEqual([])
+    expect(mocks.seedGreetings).not.toHaveBeenCalled()
+  })
+
+  it('去重但保序 —— 名单顺序就是开场白顺序', async () => {
+    mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+    const res = await sessionService.updateBots('s1', ['c', 'b', 'c', ' b ', 'a'])
+    expect(res.bots).toEqual(['c', 'b', 'a'])
+    expect(mocks.seedGreetings).toHaveBeenCalledWith('s1', ['c', 'b'])
+  })
+
+  it('**这就是逃生口**：成员 md 全被删也照样能把名单改回可用的', async () => {
+    // 名单里全是已经不存在的 bot —— 会话仍是聊天会话（判定只看非空），
+    // 于是这个接口够得着它。校验「名字是否存在」等于把逃生口一起锁上
+    mocks.daoPickSettings.mockReturnValue({ bots: ['deleted-1', 'typo'] })
+    const res = await sessionService.updateBots('s1', ['alive'])
+    expect(res).toMatchObject({ success: true, bots: ['alive'] })
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { bots: ['alive'] })
+  })
+
+  it.each([[[]], [['', '   ']]])(
+    '空名单被拒（%j）：形态不该被「管理成员」顺手改掉',
+    async (next) => {
+      mocks.daoPickSettings.mockReturnValue({ bots: ['a'] })
+      const res = await sessionService.updateBots('s1', next as string[])
+      expect(res.success).toBe(false)
+      expect(res.error).toMatch(/at least one member/i)
+      expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+      expect(mocks.seedGreetings).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    ['普通会话', {}],
+    ['空数组的会话', { bots: [] }],
+    ['笔记本会话', { notebookPath: 'a.md' }]
+  ])('非聊天会话被拒（%s）：零副作用', async (_label, settings) => {
+    mocks.daoPickSettings.mockReturnValue(settings)
+    const res = await sessionService.updateBots('s1', ['a'])
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/not a chat session/i)
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(mocks.seedGreetings).not.toHaveBeenCalled()
   })
 })

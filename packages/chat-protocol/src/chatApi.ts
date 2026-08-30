@@ -659,6 +659,26 @@ export interface HostApi {
       /** 档案声明了模型但当前不可用（提供商停用 / 模型已删）时回传原始值 */
       modelUnavailable?: string
     }>
+    /**
+     * 改聊天会话的成员名单。
+     *
+     * **只对聊天会话生效，且名单不得为空** —— 「有没有 bots」决定的是会话形态
+     * （无根 / 有根），把它清空等于中途换一种会话，那不是「管理成员」这个动作该做的事。
+     *
+     * 名单里的名字**不校验是否存在**（与 create 同口径）：bot md 是纯 md 驱动的，
+     * 用户随时可能删掉一个。缺失成员由后续里程碑的降级表处理（L0 剔除、会话头部标灰），
+     * 历史消息靠署名侧车自带的 displayName 永不裂。这个接口本身就是名单写坏之后的逃生口。
+     *
+     * 新加入的成员会补一条开场白落树（只对**新增**的成员，不重播老成员的）。
+     */
+    updateBots: (params: { id: string; bots: string[] }) => Promise<{
+      success: boolean
+      error?: string
+      /** 实际落库的名单 */
+      bots?: string[]
+      /** 本次新加入、并因此落了开场白的成员 */
+      added?: string[]
+    }>
     // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
     // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
     // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。

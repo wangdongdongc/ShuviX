@@ -259,3 +259,65 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     expect(existsSync(file)).toBe(false)
   })
 })
+
+describe('updateBots —— 中途增删成员', () => {
+  const updateBots = (
+    sid: string,
+    bots: string[]
+  ): Promise<{ success: boolean; error?: string; bots?: string[]; added?: string[] }> =>
+    app.main.eval(
+      `window.api.session.updateBots({ id: ${JSON.stringify(sid)}, bots: ${JSON.stringify(bots)} })`
+    )
+
+  it('加一个成员：名单落库，且只有新成员补开场白', async () => {
+    const sid = await createBotSession(app.main, { bots: ['e2e-alpha'] })
+    expect((await listMessages(sid)).map((m) => m.metadata?.sender?.name)).toEqual(['e2e-alpha'])
+
+    const res = await updateBots(sid, ['e2e-alpha', 'e2e-beta'])
+    expect(res).toMatchObject({ success: true, added: ['e2e-beta'] })
+    // alpha 的开场白没有重播
+    expect((await listMessages(sid)).map((m) => m.metadata?.sender?.name)).toEqual([
+      'e2e-alpha',
+      'e2e-beta'
+    ])
+    expect((await getSettings(sid))?.bots).toEqual(['e2e-alpha', 'e2e-beta'])
+  })
+
+  it('删一个成员：名单变短，历史消息与署名分毫不动', async () => {
+    const sid = await createBotSession(app.main, { bots: ['e2e-alpha', 'e2e-beta'] })
+    const before = await listMessages(sid)
+
+    expect(await updateBots(sid, ['e2e-alpha'])).toMatchObject({ success: true, added: [] })
+    expect((await getSettings(sid))?.bots).toEqual(['e2e-alpha'])
+    // 移除成员不动历史：老消息连署名带 id 都不变
+    expect(await listMessages(sid)).toEqual(before)
+  })
+
+  it('成员 md 全被删之后仍能把名单改回可用的（逃生口）', async () => {
+    const filePath = writeBotMd(app, 'e2e-gone', {
+      description: 'will be deleted',
+      displayName: 'Gone',
+      greeting: 'gone 打个招呼'
+    })
+    const sid = await createBotSession(app.main, { bots: ['e2e-gone'] })
+    unlinkSync(filePath)
+
+    // 会话仍是聊天会话（判定只看名单非空），所以 updateBots 够得着它
+    expect(await updateBots(sid, ['e2e-alpha'])).toMatchObject({ success: true })
+    expect((await getSettings(sid))?.bots).toEqual(['e2e-alpha'])
+    // 老消息的署名不因成员被移除而改写
+    expect((await listMessages(sid))[0].metadata?.sender?.displayName).toBe('Gone')
+  })
+
+  it('空名单与非聊天会话都被拒（形态不被顺手改掉）', async () => {
+    const chat = await createBotSession(app.main, { bots: ['e2e-alpha'] })
+    const empty = await updateBots(chat, [])
+    expect(empty.success).toBe(false)
+    expect((await getSettings(chat))?.bots).toEqual(['e2e-alpha'])
+
+    const plain = await createBotSession(app.main, { bots: [] })
+    const res = await updateBots(plain, ['e2e-alpha'])
+    expect(res.success).toBe(false)
+    expect((await getSettings(plain))?.bots).toBeUndefined()
+  })
+})

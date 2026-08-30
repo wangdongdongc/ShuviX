@@ -73,6 +73,11 @@ export function registerSessionHandlers(): void {
   /** 可切换的会话档案（输入框档案选择器；纯文件系统驱动，每次现扫） */
   ipcMain.handle('session:listAgentProfiles', () => agentService.listSwitchable())
 
+  /** 改聊天会话的成员名单；新加入的成员在这里 await 完开场白再返回（同 session:create） */
+  ipcMain.handle('session:updateBots', (_event, params: { id: string; bots: string[] }) =>
+    sessionService.updateBots(params.id, params.bots)
+  )
+
   ipcMain.handle('session:updateAgentProfile', (_event, params: { id: string; name: string }) =>
     sessionService.updateAgentProfile(params.id, params.name)
   )

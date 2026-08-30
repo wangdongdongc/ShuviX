@@ -186,6 +186,43 @@ export class SessionService {
   }
 
   /**
+   * 改聊天会话的成员名单（设计 §5.7 的成员管理）。
+   *
+   * 三条纪律：
+   *  - **只对聊天会话生效**，且**名单不得为空**。「有没有 bots」决定的是会话形态
+   *    （无根 / 有根），把它清空等于中途换一种会话 —— 那不是「管理成员」该做的事，
+   *    而且这个会话的历史里躺着 bot 消息，忽然给它接上一个根 Agent 只会让人困惑。
+   *  - **不校验名字是否存在**（与 create 同口径）：bot md 是纯 md 驱动的，用户随时可能
+   *    删掉一个。缺失成员由降级表处理（L0 剔除、会话头部标灰），历史消息靠署名侧车自带的
+   *    displayName 永不裂。**这个接口本身就是名单写坏之后的逃生口** —— 在这里校验，
+   *    等于把逃生口也锁上。
+   *  - 开场白只补**新增**的成员：老成员不重播，去重也按名单差集算。
+   */
+  async updateBots(
+    id: string,
+    bots: string[]
+  ): Promise<{ success: boolean; error?: string; bots?: string[]; added?: string[] }> {
+    const current = sessionDao.pickSettings(id, ['bots'])?.bots
+    if (!current?.length) {
+      return { success: false, error: 'Not a chat session (settings.bots is empty)' }
+    }
+    // 去重但保序：名单顺序是开场白与后续成员展示的顺序
+    const next = [...new Set(bots.map((b) => b.trim()).filter(Boolean))]
+    if (!next.length) {
+      return { success: false, error: 'A chat session needs at least one member' }
+    }
+
+    const added = next.filter((name) => !current.includes(name))
+    sessionDao.updateSettings(id, { bots: next })
+    broadcastSessionConfigChanged(id)
+    log.info(`updateBots session=${id} ${current.length} → ${next.length}（新增 ${added.length}）`)
+
+    // 落盘之后再补开场白：seedGreetings 读的是 settings.bots，差集由调用方给
+    if (added.length) await botService.seedGreetings(id, added)
+    return { success: true, bots: next, added }
+  }
+
+  /**
    * 聊天会话判定 —— `settings.bots` 非空。
    *
    * 一律用 `?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能写 `[]`，

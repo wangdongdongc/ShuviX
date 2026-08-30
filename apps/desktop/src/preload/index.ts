@@ -266,7 +266,9 @@ const api = {
     /** 切换会话根 Agent 的档案（`/<agentName>` 斜杠命令） */
     listAgentProfiles: () => ipcRenderer.invoke('session:listAgentProfiles'),
     updateAgentProfile: (params: { id: string; name: string }) =>
-      ipcRenderer.invoke('session:updateAgentProfile', params)
+      ipcRenderer.invoke('session:updateAgentProfile', params),
+    updateBots: (params: { id: string; bots: string[] }) =>
+      ipcRenderer.invoke('session:updateBots', params)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 

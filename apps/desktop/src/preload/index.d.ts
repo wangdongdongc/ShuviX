@@ -583,6 +583,13 @@ declare global {
         }
         modelUnavailable?: string
       }>
+      /** 改聊天会话的成员名单（只对聊天会话生效、名单不得为空；新成员补开场白） */
+      updateBots: (params: { id: string; bots: string[] }) => Promise<{
+        success: boolean
+        error?: string
+        bots?: string[]
+        added?: string[]
+      }>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>

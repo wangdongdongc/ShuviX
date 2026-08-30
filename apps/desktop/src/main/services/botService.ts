@@ -493,13 +493,18 @@ class BotService {
   }
 
   /**
-   * 成员的开场白落树（会话创建后由 `session:create` handler await）。
+   * 成员的开场白落树（会话创建后由 `session:create` handler await；
+   * 中途加成员时由 `updateBots` 只对**新增**的那几个调）。
    *
    * 按成员顺序逐条落；没写 greeting 的成员跳过。`listAll()` 每次现扫全目录，
    * 所以这里只扫一次再按名取，别在循环里反复扫。
+   *
+   * @param only 只播这几个成员（缺省 = 会话当前的全部成员）
    */
-  async seedGreetings(sessionId: string): Promise<void> {
-    const names = sessionService.getById(sessionId)?.settings?.bots ?? []
+  async seedGreetings(sessionId: string, only?: string[]): Promise<void> {
+    const members = sessionService.getById(sessionId)?.settings?.bots ?? []
+    // 传了 only 就按 only 的顺序播（它是「新增顺序」，与名单顺序一致）
+    const names = only ?? members
     if (!names.length) return
     const byName = new Map(this.listAll().map((b) => [b.file.name, b.file]))
     for (const name of names) {
