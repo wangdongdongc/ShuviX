@@ -766,7 +766,11 @@
     "workflowOn": "触发时机",
     "workflowConcurrency": "重入策略",
     "workflowTemplateDesc": "一句话说明这个工作流做什么",
-    "workflowTemplateBody": "描述这个工作流做什么、什么时候运行。引擎只读下面带标记的代码块，其余都是给人看的文档。"
+    "workflowTemplateBody": "描述这个工作流做什么、什么时候运行。引擎只读下面带标记的代码块，其余都是给人看的文档。",
+    "botRespond": "何时应答",
+    "botNotes": "维护笔记",
+    "botGreeting": "开场白",
+    "botSuggestions": "建议问题"
   },
   "about": {
     "description": "您的 AI 助手",

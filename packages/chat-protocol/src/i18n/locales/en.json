@@ -766,7 +766,11 @@
     "workflowOn": "Triggers",
     "workflowConcurrency": "Re-entry",
     "workflowTemplateDesc": "What this workflow does, in one line",
-    "workflowTemplateBody": "Describe what this workflow does and when it runs. Only the fenced blocks below are read by the engine — everything else is documentation."
+    "workflowTemplateBody": "Describe what this workflow does and when it runs. Only the fenced blocks below are read by the engine — everything else is documentation.",
+    "botRespond": "Replies when",
+    "botNotes": "Keeps notes",
+    "botGreeting": "Greeting",
+    "botSuggestions": "Suggested questions"
   },
   "about": {
     "description": "Your AI Assistant",

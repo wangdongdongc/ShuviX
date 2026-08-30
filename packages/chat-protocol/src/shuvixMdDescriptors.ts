@@ -195,10 +195,42 @@ const WORKFLOW_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/** bot 的门控模式枚举 —— 解析器与属性卡下拉共用的单一真源（同 WORKFLOW_CONCURRENCY_MODES） */
+export const BOT_RESPOND_MODES = ['auto', 'mention-only'] as const
+
+/** 门控模式字段的 frontmatter 键（属性卡按它分派下拉候选项） */
+export const BOT_RESPOND_KEY = 'shuvix-bot-respond'
+
+/**
+ * bot 定义文件（agent-runtime bot/botFile.ts 的键集）。设计见 docs/bot-design.md §4。
+ *
+ * bot md 是 **agent md 的超集**：前半段的键与 agent 卡逐行同义（正文即任务段系统提示词），
+ * 后半段是 bot 专属的门控 / 记忆 / 表现层声明。`shuvix-bot-agents` 是嵌套映射，
+ * 只落通用行（三个阶段 ref 做成表单的成本高于收益，原文编辑器里一眼可读）。
+ */
+const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'bot',
+  badge: 'ShuviX bot',
+  fields: [
+    { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
+    { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
+    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
+    { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
+    { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
+    { key: BOT_RESPOND_KEY, labelKey: 'settings.botRespond', kind: 'select' },
+    { key: 'shuvix-bot-notes', labelKey: 'settings.botNotes', kind: 'boolean' },
+    { key: 'shuvix-bot-greeting', labelKey: 'settings.botGreeting', kind: 'text' },
+    { key: 'shuvix-bot-suggestions', labelKey: 'settings.botSuggestions', kind: 'list' },
+    { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
+    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' }
+  ]
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
   WORKFLOW_DESCRIPTOR,
+  BOT_DESCRIPTOR,
   MEMORY_DESCRIPTOR,
   WIKI_ENTRY_DESCRIPTOR,
   WIKI_TOPIC_DESCRIPTOR

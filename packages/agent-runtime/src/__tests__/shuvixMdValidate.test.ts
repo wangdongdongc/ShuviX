@@ -8,6 +8,7 @@
  *   - 其余类型（chart / wiki-*）是宽容读取的展示型契约，无校验器 → unknown 且 messages 恒空。
  */
 import { describe, expect, it } from 'vitest'
+import { parseBotDefinitionFile } from '../bot/botFile'
 import { validateShuvixMdText } from '../shuvixMdValidate'
 
 const md = (...lines: string[]): string => lines.join('\n')
@@ -183,6 +184,166 @@ describe('validateShuvixMdText — workflow', () => {
     const result = validateShuvixMdText('workflow', withBodyNoScript)
     expect(result.status).toBe('invalid')
     expect(result.messages[0]).toContain('js workflow')
+  })
+})
+
+describe('validateShuvixMdText — bot', () => {
+  const VALID_BOT = md('---', 'shuvix: bot v1', 'name: ok-bot', 'description: d', '---', 'Body')
+
+  it('BV-1 合法整份 bot md → valid 且 messages 为空', () => {
+    expect(validateShuvixMdText('bot', VALID_BOT)).toEqual({ status: 'valid', messages: [] })
+  })
+
+  it('BV-2 非法 bot md → invalid + 人读原因原样回传（横幅文案的唯一来源）', () => {
+    const result = validateShuvixMdText(
+      'bot',
+      md('---', 'shuvix: bot v1', 'name: x', '---', 'Body'),
+      'x'
+    )
+    expect(result.status).toBe('invalid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain("bot 'x'")
+    expect(result.messages[0]).toContain("'description' is required")
+  })
+
+  it('BV-3 属性卡重组形状（无正文）→ valid：正文规则不该让每份合法 bot 亮红', () => {
+    // 「正文即任务段系统提示词」是正文的规则；属性卡只送 frontmatter 片段，
+    // 原样判定必然报缺正文 —— 故 validate 在无正文时补一行占位正文。
+    const yaml = md(
+      'shuvix: bot v1',
+      'name: ok-bot',
+      'description: d',
+      'shuvix-bot-respond: mention-only'
+    )
+    expect(validateShuvixMdText('bot', recompose(yaml))).toEqual({ status: 'valid', messages: [] })
+  })
+
+  it('BV-4 片段里的 frontmatter 级错误照样判非法（占位只放宽正文，不放宽字段）', () => {
+    const result = validateShuvixMdText(
+      'bot',
+      recompose(
+        md('shuvix: bot v1', 'name: bad-bot', 'description: d', 'shuvix-bot-respond: sometimes')
+      )
+    )
+    expect(result.status).toBe('invalid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain('shuvix-bot-respond')
+  })
+
+  it('BV-5 合法但有提示 → valid + 非空 messages（软告警语义，同 policy 的 U6）', () => {
+    // 角色表已是开放集合（任意角色名合法），唯一还会「合法但有话说」的角色是 task ——
+    // 且这条提示是**占位正文** `<body>` 触发的：validate 在无正文时补一行占位，
+    // 于是 agents.task + 非空正文的组合必然出现。
+    const result = validateShuvixMdText(
+      'bot',
+      recompose(
+        md('shuvix: bot v1', 'name: ok-bot', 'description: d', 'shuvix-bot-agents: {task: t}')
+      )
+    )
+    expect(result.status).toBe('valid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain('replaces the task stage')
+  })
+
+  it('BV-6 已知缺口：整份文件空正文仍判 valid（与 workflow 的 U15 不同）', () => {
+    // bot 的正文规则只有「非空」一条，占位正文一补，validate 就无法区分「片段」与
+    // 「空正文的真文件」—— 属性卡显示绿灯，而 botService.save 会拒。
+    const emptyBodyFile = md('---', 'shuvix: bot v1', 'name: ok-bot', 'description: d', '---', '')
+    expect(validateShuvixMdText('bot', emptyBodyFile).status).toBe('valid')
+    expect(parseBotDefinitionFile(emptyBodyFile, 'ok-bot')).toBeNull()
+  })
+
+  it("BV-7 'bot' 不再落 unknown 分支（大小写不符的 'Bot' 仍是 unknown）", () => {
+    expect(validateShuvixMdText('bot', VALID_BOT).status).not.toBe('unknown')
+    expect(validateShuvixMdText('Bot', VALID_BOT)).toEqual({ status: 'unknown', messages: [] })
+  })
+
+  it('BV-8 name 透传进诊断；省略时缺省 file（与 policy 的 U7 同形）', () => {
+    expect(validateShuvixMdText('bot', 'not a shuvix md', 'mybot.md').messages[0]).toContain(
+      "bot 'mybot.md'"
+    )
+    expect(validateShuvixMdText('bot', 'not a shuvix md').messages[0]).toContain("bot 'file'")
+  })
+
+  it('BV-9 空文本 / 无 frontmatter → invalid + no YAML frontmatter block', () => {
+    for (const text of ['', 'just a plain markdown body']) {
+      const result = validateShuvixMdText('bot', text)
+      expect(result.status, text).toBe('invalid')
+      expect(result.messages, text).toHaveLength(1)
+      expect(result.messages[0], text).toContain('no YAML frontmatter block')
+    }
+  })
+
+  it('BV-10 **笔记区异常是软告警，不是红灯**（定义区硬失败 / 状态区软失败在 UI 层的落点）', () => {
+    // 笔记区收缩成「一条起始线」之后，唯一还剩的结构异常是「多条分界线」
+    const twoMarkers = md(
+      '---',
+      'shuvix: bot v1',
+      'name: ok-bot',
+      'description: d',
+      '---',
+      'PERSONA',
+      '<!-- shuvix:bot-notes -->',
+      'note',
+      '<!-- shuvix:bot-notes -->',
+      'more',
+      ''
+    )
+    const result = validateShuvixMdText('bot', twoMarkers)
+    expect(result.status).toBe('valid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain('notes:')
+  })
+
+  it('BV-11 新键的 frontmatter 级错误照旧判红（占位只放宽正文，不放宽字段）', () => {
+    for (const line of ['shuvix-bot-pipeline: 3', 'shuvix-bot-input: [a]']) {
+      const result = validateShuvixMdText(
+        'bot',
+        recompose(md('shuvix: bot v1', 'name: bad-bot', 'description: d', line))
+      )
+      expect(result.status, line).toBe('invalid')
+      expect(result.messages, line).toHaveLength(1)
+      expect(result.messages[0], line).toContain(line.split(':')[0])
+    }
+  })
+
+  it('BV-12 已知缺口：分界线写在正文顶端的整份文件判红（BN-7 在属性卡上的映像）', () => {
+    // 正文非空 → hasBody 为真 → 不补占位正文 → 人设区为空 → 「正文即任务段系统提示词」
+    // 这条硬规则击穿笔记区的软失败。**这不再是「bot 把笔记写坏了」**：写入走
+    // spliceBotNotes，人设区逐字不动，模型写不出这个形状；剩下的可达路径只有
+    // 「用户手写时把分界线放到了正文顶端」。
+    const onlyNotes = md(
+      '---',
+      'shuvix: bot v1',
+      'name: ok-bot',
+      'description: d',
+      '---',
+      '<!-- shuvix:bot-notes -->',
+      'swallowed persona',
+      ''
+    )
+    const result = validateShuvixMdText('bot', onlyNotes)
+    expect(result.status).toBe('invalid')
+    expect(result.messages[result.messages.length - 1]).toContain(
+      "the body is the task stage's system prompt"
+    )
+  })
+
+  it('BV-13 缺口的边界：同一形状 + shuvix-bot-agents.task → valid', () => {
+    // 硬规则针对的是「没有任务段提示词」，与笔记区无关
+    const withTask = md(
+      '---',
+      'shuvix: bot v1',
+      'name: ok-bot',
+      'description: d',
+      'shuvix-bot-agents: {task: t}',
+      '---',
+      '<!-- shuvix:bot-notes -->',
+      'the notes',
+      ''
+    )
+    expect(validateShuvixMdText('bot', withTask).status).toBe('valid')
+    expect(parseBotDefinitionFile(withTask, 'ok-bot')!.notes).toBe('the notes')
   })
 })
 

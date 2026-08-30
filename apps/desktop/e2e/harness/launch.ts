@@ -40,6 +40,8 @@ export interface E2EApp {
   home: string
   /** ~/.shuvix/agents（惰性创建） */
   agentsDir: string
+  /** ~/.shuvix/bots（惰性创建） */
+  botsDir: string
   /** 主窗口页面的 CDP 客户端（window.api 已就绪） */
   main: CdpClient
   /** 打开设置窗口并连接其页面（tab 缺省 'agents'） */
@@ -110,6 +112,7 @@ export async function launchApp(): Promise<E2EApp> {
   const userData = join(home, 'userdata')
   mkdirSync(userData, { recursive: true })
   const agentsDir = join(home, '.shuvix', 'agents')
+  const botsDir = join(home, '.shuvix', 'bots')
 
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, SHUVIX_VERIFY_USERDATA: userData }
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
@@ -181,6 +184,7 @@ export async function launchApp(): Promise<E2EApp> {
       port,
       home,
       agentsDir,
+      botsDir,
       main,
       async openSettings(tab = 'agents') {
         await main.eval(`window.api.app.openSettings(${JSON.stringify(tab)})`)

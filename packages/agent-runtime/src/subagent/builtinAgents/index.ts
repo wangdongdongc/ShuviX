@@ -42,6 +42,12 @@ import wikiWriterJa from './md/wiki-writer.ja.md?raw'
 import titlerEn from './md/titler.md?raw'
 import titlerZh from './md/titler.zh.md?raw'
 import titlerJa from './md/titler.ja.md?raw'
+import botIntentEn from './md/bot-intent.md?raw'
+import botIntentZh from './md/bot-intent.zh.md?raw'
+import botIntentJa from './md/bot-intent.ja.md?raw'
+import botNotesEn from './md/bot-notes.md?raw'
+import botNotesZh from './md/bot-notes.zh.md?raw'
+import botNotesJa from './md/bot-notes.ja.md?raw'
 
 export {
   buildBuiltinProfile,
@@ -148,6 +154,29 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
+ * 聊天会话（bot）管线的两个阶段档案 —— 设计见 docs/bot-design.md §6.1 / §6.3。
+ * 都是 dispatch-only：切成主会话人格毫无意义，它们只在 bot 管线里被派发。
+ *
+ * 两者都**不声明 `shuvix-model`**，但理由不同：
+ *  - `bot-intent` 跑在每条消息的首字节路径上，跟随会话模型是最差默认 —— 门控模型是
+ *    一等配置，由设置页的「门控模型」选择器写进 `~/.shuvix/agents/bot-intent.md`
+ *    覆盖文件（GUI 写覆盖文件，模型链本身零改动）；
+ *  - `bot-notes` 异步跑在回复之后，无人等待，跟随会话模型即可。
+ *
+ * 两者的 `shuvix-tools` 都**刻意留空**：它们经 next 契约把结果交回管线脚本，由脚本调注入
+ * 的能力落地（`say` / `remember`），自己不持有任何工具 —— 见 docs/bot-design.md §3.3。
+ */
+export const BOT_INTENT_SPEC: BuiltinProfileSpec = {
+  name: 'bot-intent',
+  sources: { en: botIntentEn, zh: botIntentZh, ja: botIntentJa }
+}
+
+export const BOT_NOTES_SPEC: BuiltinProfileSpec = {
+  name: 'bot-notes',
+  sources: { en: botNotesEn, zh: botNotesZh, ja: botNotesJa }
+}
+
+/**
  * 内置 spec 全集（两个基座档案 default / notebook 居首，其后为可派发的具名 agent；
  * widget/wiki 依赖宿主根目录参数，缺参自动跳过）
  */
@@ -161,7 +190,9 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WIDGET_SPEC,
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
-  TITLER_SPEC
+  TITLER_SPEC,
+  BOT_INTENT_SPEC,
+  BOT_NOTES_SPEC
 ]
 
 /**

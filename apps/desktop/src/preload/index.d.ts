@@ -406,6 +406,36 @@ declare global {
     error: string
   }
 
+  /** Bot 列表项（设计见 docs/bot-design.md §4；正文/笔记区不外传，编辑走 bot.getSource） */
+  interface BotInfo {
+    name: string
+    displayName: string
+    description: string
+    /** 管线框架（workflow 名） */
+    pipeline: string
+    /** 门控模式 auto | mention-only */
+    respond: string
+    /** 笔记开关 */
+    notesEnabled: boolean
+    /** 笔记字符数 */
+    notesChars: number
+    /** 任务段工具白名单 */
+    tools: string[]
+    /** 任务段模型（`shuvix-model`）；省略 = 跟随会话 */
+    model?: string
+    /** 文件路径 */
+    basePath: string
+    /** 笔记区的结构异常（软失败，不影响可用性） */
+    warnings: string[]
+  }
+
+  /** 无法解析的用户 bot 文件，读写走 bot.*ByFile */
+  interface InvalidBotFile {
+    fileName: string
+    /** 人读原因：解析器的拒绝理由 */
+    error: string
+  }
+
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
   interface SubAgentInfo {
     name: string
@@ -628,6 +658,33 @@ declare global {
       }) => Promise<{ success: boolean; name?: string; error?: string }>
       delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
       listInvalid: () => Promise<Array<{ fileName: string; error: string }>>
+      getSourceByFile: (params: {
+        fileName: string
+      }) => Promise<{ text: string } | { error: string }>
+      saveByFile: (params: {
+        fileName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
+      openFolder: () => Promise<{ success: boolean }>
+    }
+    bot: {
+      list: () => Promise<BotInfo[]>
+      getSource: (params: { name: string }) => Promise<{ text: string } | { error: string }>
+      template: (params: {
+        name: string
+        description?: string
+        persona?: string
+      }) => Promise<{ text: string }>
+      save: (params: {
+        originalName: string
+        text: string
+      }) => Promise<{ success: boolean; error?: string }>
+      create: (params: {
+        text: string
+      }) => Promise<{ success: boolean; name?: string; error?: string }>
+      delete: (params: { name: string }) => Promise<{ success: boolean; error?: string }>
+      listInvalid: () => Promise<InvalidBotFile[]>
       getSourceByFile: (params: {
         fileName: string
       }) => Promise<{ text: string } | { error: string }>

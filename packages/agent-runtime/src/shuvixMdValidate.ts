@@ -10,6 +10,7 @@
  */
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import { parseAgentDefinitionFile } from './agentProfile/definitionFile'
+import { parseBotDefinitionFile } from './bot/botFile'
 import { splitFrontmatter } from './markdownFrontmatter'
 import { parseMemoryFile } from './memory/memoryFile'
 import { parsePolicyDefinitionFile } from './security/policyFile'
@@ -28,6 +29,17 @@ export function validateShuvixMdText(
   if (type === 'policy') {
     const messages: string[] = []
     const parsed = parsePolicyDefinitionFile(text, name, (msg) => messages.push(msg))
+    return { status: parsed ? 'valid' : 'invalid', messages }
+  }
+  if (type === 'bot') {
+    // 与 memory/workflow 同一处理：属性卡只送 frontmatter 片段，而「正文即任务段系统提示词」
+    // 是正文的规则 —— 原样送进去，每一份合法 bot 都会亮红。仅在没有正文时补一行占位正文，
+    // 把判定限定在 frontmatter 上；送整份文件的调用方（写后校验）照旧按真实正文判定。
+    const messages: string[] = []
+    const hasBody = (splitFrontmatter(text)?.body ?? '').trim() !== ''
+    const parsed = parseBotDefinitionFile(hasBody ? text : `${text}\n<body>\n`, name, (msg) =>
+      messages.push(msg)
+    )
     return { status: parsed ? 'valid' : 'invalid', messages }
   }
   if (type === 'workflow') {

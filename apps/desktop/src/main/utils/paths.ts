@@ -81,6 +81,11 @@ export function getDefaultWorkflowsDir(): string {
   return join(homedir(), '.shuvix', 'workflows')
 }
 
+/** 全局 Bots 目录：~/.shuvix/bots/（不自动创建，由 botService 管理；内置 bot 硬编码进 @shuvix/agent-runtime） */
+export function getDefaultBotsDir(): string {
+  return join(homedir(), '.shuvix', 'bots')
+}
+
 /** Wiki 根目录：~/.shuvix/wikis/（不自动创建，由 Wiki Curator 子代理按政策管理） */
 export function getDefaultWikisDir(): string {
   return join(homedir(), '.shuvix', 'wikis')

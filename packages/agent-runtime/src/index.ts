@@ -331,6 +331,27 @@ export {
   type BuiltinWorkflowDeps,
   type BuiltinWorkflowSpec
 } from './workflow/builtinWorkflows'
+// Bot：md 格式解析 + 笔记区（设计见 docs/bot-design.md）
+// **不内置任何 bot** —— 内置的只有管线 workflow（bot-chat）与阶段 agent（bot-intent /
+// bot-notes）；「新建 bot」由 UI 用这些内置件填一份模板，用户取个名字即可。
+export {
+  parseBotDefinitionFile,
+  serializeBotDefinitionFile,
+  BOT_FILE_MARKER,
+  BOT_FILE_MARKER_KEY,
+  BOT_PIPELINE_KEY,
+  BOT_INPUT_KEY,
+  BOT_RESPOND_KEY,
+  BOT_RESPOND_MODES,
+  BOT_NOTES_KEY,
+  BOT_AGENTS_KEY,
+  BOT_GREETING_KEY,
+  BOT_SUGGESTIONS_KEY,
+  DEFAULT_BOT_PIPELINE,
+  type ParsedBotFile,
+  type BotRespondMode
+} from './bot/botFile'
+export { splitBotNotes, BOT_NOTES_MARKER, type BotNotesSplit } from './bot/botNotes'
 // 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
 // （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）
 export {
@@ -349,6 +370,8 @@ export {
   WIKI_SPEC,
   WIKI_WRITER_SPEC,
   TITLER_SPEC,
+  BOT_INTENT_SPEC,
+  BOT_NOTES_SPEC,
   WIKI_ENTRY_BANNER,
   WIKI_TOPIC_BANNER,
   type BuiltinProfileDeps,

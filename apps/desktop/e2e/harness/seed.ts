@@ -47,6 +47,56 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
   return filePath
 }
 
+export interface BotMdSeed {
+  /** description 是 bot md 的必填项 —— 缺省给一句，测「缺 description」时显式传空串 */
+  description?: string
+  /** shuvix-tools 逗号串 */
+  tools?: string
+  model?: string
+  displayName?: string
+  /** shuvix-bot-respond：auto | mention-only */
+  respond?: string
+  /** shuvix-bot-notes */
+  notes?: boolean
+  greeting?: string
+  suggestions?: string[]
+  projectAwareness?: boolean
+  body?: string
+  /** 追加的原始 frontmatter 行（测未知键/类型错时用） */
+  rawLines?: string[]
+  /** 省略文件类型标记（bot md 与 agent md 同口径：读取可选） */
+  omitMarker?: boolean
+}
+
+/**
+ * 写一个 bot 定义文件到隔离实例的 ~/.shuvix/bots/<name>.md。
+ *
+ * bot 与 agent/policy/workflow 同为纯 md 驱动：文件落盘即被 `bot:list` 现扫看见，
+ * 没有启用开关也没有旁路配置要一并种。
+ */
+export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): string {
+  mkdirSync(app.botsDir, { recursive: true })
+  const lines = ['---']
+  if (!seed.omitMarker) lines.push('shuvix: bot v1')
+  lines.push(`name: ${name}`)
+  lines.push(`description: ${seed.description ?? `e2e seeded bot ${name}`}`)
+  if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
+  if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
+  if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
+  if (seed.respond) lines.push(`shuvix-bot-respond: ${seed.respond}`)
+  if (seed.notes === false) lines.push('shuvix-bot-notes: false')
+  if (seed.greeting) lines.push(`shuvix-bot-greeting: ${seed.greeting}`)
+  if (seed.suggestions) {
+    lines.push('shuvix-bot-suggestions:', ...seed.suggestions.map((s) => `  - ${s}`))
+  }
+  if (seed.projectAwareness) lines.push('shuvix-project-awareness: true')
+  if (seed.rawLines) lines.push(...seed.rawLines)
+  lines.push('---', '', seed.body ?? 'BOT BODY.')
+  const filePath = join(app.botsDir, `${name}.md`)
+  writeFileSync(filePath, lines.join('\n'))
+  return filePath
+}
+
 /**
  * 让一个模型出现在「可用模型目录」里 —— 档案模型解析（findAllEnabledModels）要求
  * **提供商 isEnabled=1 且模型 isEnabled=1**，而内置提供商的种子数据是 isEnabled=0，

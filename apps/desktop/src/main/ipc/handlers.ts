@@ -19,6 +19,7 @@ import { registerMcpServerHandlers } from './mcpServerHandlers'
 import { registerSubAgentHandlers } from './subAgentHandlers'
 import { registerPolicyHandlers } from './policyHandlers'
 import { registerWorkflowHandlers } from './workflowHandlers'
+import { registerBotHandlers } from './botHandlers'
 import { registerShuvixMdHandlers } from './shuvixMdHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBgTaskHandlers } from './bgTaskHandlers'
@@ -59,6 +60,7 @@ export function registerIpcHandlers(): void {
   registerSubAgentHandlers()
   registerPolicyHandlers()
   registerWorkflowHandlers()
+  registerBotHandlers()
   registerShuvixMdHandlers()
   registerTerminalHandlers()
   registerBgTaskHandlers()

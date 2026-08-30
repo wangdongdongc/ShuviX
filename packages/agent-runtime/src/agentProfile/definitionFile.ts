@@ -130,6 +130,81 @@ function stringField(fields: Record<string, unknown>, key: string): string | und
 }
 
 /**
+ * agent 形状字段（displayName / description / tools / model / 两个上下文注入声明）——
+ * bot md（`shuvix: bot v1`）是 agent md 的**超集**，这几个键在两种文件里必须逐字同义：
+ * 同一套类型纪律、同一句拒绝理由。抽成共享函数而非各写一遍，是为了让 agent md 将来
+ * 加键/改纪律时 bot 自动跟上 —— 两份复制品迟早会漂移，而漂移出来的差异没人解释得清。
+ *
+ * `shuvix-dispatch-only` 不在其列：它是「能否被切成会话档案」的开关，bot 没有这个概念。
+ */
+export interface AgentSharedFields {
+  displayName: string
+  description: string
+  tools: string[]
+  model?: string
+  instructionFiles: string[]
+  projectAwareness: boolean
+}
+
+export function parseAgentSharedFields(
+  fields: Record<string, unknown>,
+  name: string
+): { fields: AgentSharedFields } | { error: string } {
+  // 列表字段仅接受逗号分隔字符串、布尔字段仅接受布尔；类型不符 = 文件非法
+  const toolsRaw = fields['shuvix-tools'] ?? null
+  if (toolsRaw !== null && typeof toolsRaw !== 'string') {
+    return {
+      error: '\'shuvix-tools\' must be a comma-separated string (e.g. "read, bash"), not a list'
+    }
+  }
+  const modelRaw = fields['shuvix-model'] ?? null
+  if (modelRaw !== null && typeof modelRaw !== 'string') {
+    return { error: "'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)" }
+  }
+  const projectAwarenessRaw = fields['shuvix-project-awareness'] ?? null
+  if (projectAwarenessRaw !== null && typeof projectAwarenessRaw !== 'boolean') {
+    return { error: "'shuvix-project-awareness' must be a boolean (true / false)" }
+  }
+  const instructionRaw = fields['shuvix-instruction-files'] ?? null
+  if (instructionRaw !== null && typeof instructionRaw !== 'string') {
+    return {
+      error:
+        "'shuvix-instruction-files' must be a comma-separated file list " +
+        '(e.g. "AGENTS.md, CLAUDE.md"); the boolean form is gone — list the file names instead'
+    }
+  }
+
+  // 省略 = 空白名单（无工具）；去重保序
+  const tools =
+    toolsRaw === null
+      ? []
+      : [...new Set(splitList(toolsRaw).map(normalizeToolName))].filter(Boolean)
+
+  // 指令文件清单：逐条归一，越界条目判整份文件非法
+  const instructionFiles: string[] = []
+  for (const entry of instructionRaw === null ? [] : splitList(instructionRaw)) {
+    const normalized = normalizeInstructionEntry(entry)
+    if (!normalized) {
+      return {
+        error: `'shuvix-instruction-files' entry '${entry}' must be a relative path inside the working directory`
+      }
+    }
+    if (!instructionFiles.includes(normalized)) instructionFiles.push(normalized)
+  }
+
+  return {
+    fields: {
+      displayName: stringField(fields, 'shuvix-displayName') ?? name,
+      description: stringField(fields, 'description') ?? '',
+      tools,
+      model: stringField(fields, 'shuvix-model'),
+      instructionFiles,
+      projectAwareness: projectAwarenessRaw ?? false
+    }
+  }
+}
+
+/**
  * 解析 agent 定义 markdown。格式非法（无 frontmatter / YAML 语法错误 / 字段类型不符）
  * 返回 null，由调用方记日志跳过。`defaultName` 为文件 basename（frontmatter `name` 可覆盖）。
  * `warn`（可选）：诊断出口 —— 判非法时输出人读原因。原文编辑（设置页 / 笔记本属性卡）
@@ -166,60 +241,19 @@ export function parseAgentDefinitionFile(
   const name = stringField(fields, 'name') ?? defaultName
   const reject = (why: string): null => rejectAs(name, why)
 
-  // 列表字段仅接受逗号分隔字符串、布尔字段仅接受布尔；类型不符 = 文件非法
-  const toolsRaw = fields['shuvix-tools'] ?? null
-  if (toolsRaw !== null && typeof toolsRaw !== 'string') {
-    return reject(
-      '\'shuvix-tools\' must be a comma-separated string (e.g. "read, bash"), not a list'
-    )
-  }
-  const modelRaw = fields['shuvix-model'] ?? null
-  if (modelRaw !== null && typeof modelRaw !== 'string') {
-    return reject("'shuvix-model' must be a string (`<modelId>` or `<provider>/<modelId>`)")
-  }
-  for (const key of ['shuvix-project-awareness', 'shuvix-dispatch-only'] as const) {
-    const value = fields[key] ?? null
-    if (value !== null && typeof value !== 'boolean') {
-      return reject(`'${key}' must be a boolean (true / false)`)
-    }
-  }
-  const instructionRaw = fields['shuvix-instruction-files'] ?? null
-  if (instructionRaw !== null && typeof instructionRaw !== 'string') {
-    return reject(
-      "'shuvix-instruction-files' must be a comma-separated file list " +
-        '(e.g. "AGENTS.md, CLAUDE.md"); the boolean form is gone — list the file names instead'
-    )
-  }
-  const projectAwarenessRaw = (fields['shuvix-project-awareness'] ?? null) as boolean | null
-  const dispatchOnlyRaw = (fields['shuvix-dispatch-only'] ?? null) as boolean | null
+  // agent 形状字段（与 bot md 共用同一份纪律）
+  const shared = parseAgentSharedFields(fields, name)
+  if ('error' in shared) return reject(shared.error)
 
-  // 省略 = 空白名单（无工具）；去重保序
-  const tools =
-    toolsRaw === null
-      ? []
-      : [...new Set(splitList(toolsRaw).map(normalizeToolName))].filter(Boolean)
-
-  // 指令文件清单：逐条归一，越界条目判整份文件非法（同 tools 之外的其他类型错误）
-  const instructionFiles: string[] = []
-  for (const entry of instructionRaw === null ? [] : splitList(instructionRaw)) {
-    const normalized = normalizeInstructionEntry(entry)
-    if (!normalized) {
-      return reject(
-        `'shuvix-instruction-files' entry '${entry}' must be a relative path inside the working directory`
-      )
-    }
-    if (!instructionFiles.includes(normalized)) instructionFiles.push(normalized)
+  const dispatchOnlyRaw = fields['shuvix-dispatch-only'] ?? null
+  if (dispatchOnlyRaw !== null && typeof dispatchOnlyRaw !== 'boolean') {
+    return reject("'shuvix-dispatch-only' must be a boolean (true / false)")
   }
 
   return {
     name,
-    displayName: stringField(fields, 'shuvix-displayName') ?? name,
-    description: stringField(fields, 'description') ?? '',
+    ...shared.fields,
     systemPrompt: split.body.trim(),
-    tools,
-    model: stringField(fields, 'shuvix-model'),
-    instructionFiles,
-    projectAwareness: projectAwarenessRaw ?? false,
     dispatchOnly: dispatchOnlyRaw ?? false
   }
 }

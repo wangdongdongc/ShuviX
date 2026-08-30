@@ -173,7 +173,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
+  it('全参数 → 十二个内置,两个基座档案居首;缺 widget/wiki 根 → 自动跳过', () => {
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'default',
       'notebook',
@@ -184,9 +184,12 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'widget',
       'wiki',
       'wiki-writer',
-      'titler'
+      'titler',
+      'bot-intent',
+      'bot-notes'
     ])
-    // titler 无宿主参数依赖：缺 widget/wiki 根也在（模型走 shuvix-model 通用链路，内置不声明）
+    // titler 与两个 bot 阶段档案无宿主参数依赖：缺 widget/wiki 根也在
+    //（模型走 shuvix-model 通用链路，内置不声明）
     expect(buildBuiltinProfiles({}).map((a) => a.name)).toEqual([
       'default',
       'notebook',
@@ -194,7 +197,9 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'browser',
       'explore',
       'visualization',
-      'titler'
+      'titler',
+      'bot-intent',
+      'bot-notes'
     ])
   })
 
@@ -271,15 +276,19 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook/titler 除外）、项目感知默认开（titler 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook/titler/bot 阶段档案除外）、项目感知默认开（同上除外）', () => {
+    /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
+    const NO_INJECTION = ['titler', 'bot-intent', 'bot-notes']
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
       // 两项注入的开关面不同：
       //  - 指令文件：notebook 不吃 —— AGENTS.md/CLAUDE.md 是写代码的工程约定，改一篇笔记用不上；
       //  - 项目感知：notebook 照常开 —— 笔记就写在项目里，项目提示词与项目记忆正是它的上下文；
-      //  - titler 两样都不要：上下文无关的执行型一次性任务，注入整份项目文档纯属浪费 token 且稀释指令。
-      const instructionsOn = spec.name !== NOTEBOOK_PROFILE_NAME && spec.name !== 'titler'
-      const awarenessOn = spec.name !== 'titler'
+      //  - titler 两样都不要；bot-intent / bot-notes 同一取舍：门控段跑在每条消息的首字节
+      //    路径上、记忆段异步跑在回复之后，两者都不该背项目提示词与记忆索引。
+      const instructionsOn =
+        spec.name !== NOTEBOOK_PROFILE_NAME && !NO_INJECTION.includes(spec.name)
+      const awarenessOn = !NO_INJECTION.includes(spec.name)
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
       expect(built.instructionFiles, spec.name).toEqual(
         instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : []

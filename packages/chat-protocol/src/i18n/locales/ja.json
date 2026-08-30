@@ -766,7 +766,11 @@
     "workflowOn": "トリガー",
     "workflowConcurrency": "再入時の扱い",
     "workflowTemplateDesc": "このワークフローが何をするかを一言で",
-    "workflowTemplateBody": "このワークフローが何をし、いつ実行されるかを記述します。エンジンが読むのは下のマーク付きコードブロックだけで、それ以外は人間向けのドキュメントです。"
+    "workflowTemplateBody": "このワークフローが何をし、いつ実行されるかを記述します。エンジンが読むのは下のマーク付きコードブロックだけで、それ以外は人間向けのドキュメントです。",
+    "botRespond": "応答する条件",
+    "botNotes": "ノートを維持",
+    "botGreeting": "あいさつ",
+    "botSuggestions": "候補の質問"
   },
   "about": {
     "description": "あなたのAIアシスタント",

@@ -375,6 +375,25 @@ const api = {
     openFolder: () => ipcRenderer.invoke('workflow:openFolder')
   },
 
+  // ============ Bots（文件系统驱动，md 原文编辑；纯 md 驱动，无启用开关） ============
+  bot: {
+    list: () => ipcRenderer.invoke('bot:list'),
+    getSource: (params: { name: string }) => ipcRenderer.invoke('bot:getSource', params),
+    template: (params: { name: string; description?: string; persona?: string }) =>
+      ipcRenderer.invoke('bot:template', params),
+    save: (params: { originalName: string; text: string }) =>
+      ipcRenderer.invoke('bot:save', params),
+    create: (params: { text: string }) => ipcRenderer.invoke('bot:create', params),
+    delete: (params: { name: string }) => ipcRenderer.invoke('bot:delete', params),
+    listInvalid: () => ipcRenderer.invoke('bot:listInvalid'),
+    getSourceByFile: (params: { fileName: string }) =>
+      ipcRenderer.invoke('bot:getSourceByFile', params),
+    saveByFile: (params: { fileName: string; text: string }) =>
+      ipcRenderer.invoke('bot:saveByFile', params),
+    deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
+    openFolder: () => ipcRenderer.invoke('bot:openFolder')
+  },
+
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============
   shuvixMd: {
     validate: (params: { type: string; text: string; name?: string }) =>
