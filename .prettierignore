@@ -1,10 +1,17 @@
 out
 dist
+
+# 第三方产物与生成物，不受 prettier 管辖。裸 `resources` 是 gitignore 语义，
+# 匹配任意层级的同名目录，覆盖 apps/desktop/resources/ 下的：
+#   bundler/deps/            —— vendored 第三方 bundle（react / tailwind / react-router）
+#   bundler/templates/       —— bundler 产出的模板，格式由模板自身决定
+#   bundler/export-template/ —— 同上
+#   litellm-models.json      —— 上游模型清单（1.1MB）
+# 不要收窄成具体子路径：那会把 litellm-models.json 重新暴露给 prettier。
 resources
+
 pnpm-lock.yaml
 LICENSE.md
-tsconfig.json
-tsconfig.*.json
 
 # Vendored upstream (git subtree) —— 不格式化，保持与上游一致以便干净合并
 packages/atomic-editor

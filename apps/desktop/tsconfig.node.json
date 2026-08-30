@@ -21,12 +21,8 @@
     "lib": ["ES2022"],
     "baseUrl": ".",
     "paths": {
-      "@shuvix/chat-protocol/*": [
-        "../../packages/chat-protocol/src/*"
-      ],
-      "@shuvix/agent-runtime": [
-        "../../packages/agent-runtime/src/index.ts"
-      ]
+      "@shuvix/chat-protocol/*": ["../../packages/chat-protocol/src/*"],
+      "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"]
     }
   }
 }
