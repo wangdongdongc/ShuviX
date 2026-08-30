@@ -116,13 +116,15 @@ describe('聊天会话 = 无根会话', () => {
     expect(msgs.map((m) => m.metadata?.sender?.name)).toEqual(['e2e-beta', 'e2e-alpha'])
   })
 
-  it('发一条消息：只落 user 消息，事件序列恰为 [user_message]，不派发任何管线', async () => {
+  it('发一条消息：user entry 先落树，随后管线起跑（首个事件恒为 user_message）', async () => {
     const sid = await createBotSession(app.main, { bots: ['e2e-alpha'] })
     await events.clear()
 
     const msgs = await promptBotSession(app.main, sid, 'e2e bot hello')
-    expect(msgs[msgs.length - 1]).toMatchObject({ role: 'user', content: 'e2e bot hello' })
-    expect(await typesFor(sid)).toEqual(['user_message'])
+    // prompt resolve 时用户消息已经在树上（bot 的回复可能还在路上，那是 pipeline.e2e 的事）
+    expect(msgs.some((m) => m.role === 'user' && m.content === 'e2e bot hello')).toBe(true)
+    // 顺序契约：先 append 拿到 id 再广播 —— user_message 恒为这一轮的第一个事件
+    expect((await typesFor(sid))[0]).toBe('user_message')
   })
 
   it('发消息之后仍然没有根 Agent（没偷偷建）', async () => {
@@ -220,7 +222,7 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     expect(await listMessages(sid)).toEqual([])
 
     const msgs = await promptBotSession(app.main, sid, 'after clear')
-    expect(msgs.map((m) => m.content)).toEqual(['after clear'])
+    expect(msgs.map((m) => m.content)).toContain('after clear')
   })
 
   it('message.rollback 回退到 bot 消息之前，署名侧车一并越过', async () => {
@@ -235,11 +237,11 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     )
     expect(await listMessages(sid)).toEqual([])
 
-    // 孤儿侧车若还留在叶子上，下一条消息就会被它错挂成 e2e-alpha
+    // 孤儿侧车若还留在叶子上，这条**用户**消息就会被它错挂成 e2e-alpha
     await promptBotSession(app.main, sid, 'after rollback')
-    const after = await listMessages(sid)
-    expect(after).toHaveLength(1)
-    expect(after[0].metadata?.sender).toBeUndefined()
+    const user = (await listMessages(sid)).find((m) => m.role === 'user')!
+    expect(user.content).toBe('after rollback')
+    expect(user.metadata?.sender).toBeUndefined()
   })
 
   it('session.delete 聊天会话不抛，会话随之消失', async () => {

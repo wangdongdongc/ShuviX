@@ -378,8 +378,15 @@ export function InputArea({
   ): Promise<void> => {
     resetComposer()
     const store = useChatStore.getState()
-    store.setIsStreaming(sid, true)
-    store.clearStreamingContent(sid)
+    // 聊天会话（有 bots）**不置流式态**：它没有根 Agent，永远不会发 agent_end / error /
+    // agent_closing，乐观置位之后就再也没人来清 —— 第一条消息之后输入框永久锁死，
+    // 回车会被当成「排队」而网关对聊天会话安静早退，用户按下去毫无反应。
+    // 设计明写「永不锁输入」；bot 的忙碌状态由 bot_activity 单独呈现（A2）
+    const isBotSession = !!store.sessions.find((x) => x.id === sid)?.settings?.bots?.length
+    if (!isBotSession) {
+      store.setIsStreaming(sid, true)
+      store.clearStreamingContent(sid)
+    }
     // 后端直接使用附带的图片 + 内联 Token，不再重复查询
     await getSessionChannelApi().agent.prompt({
       sessionId: sid,

@@ -56,6 +56,10 @@ export interface BotMdSeed {
   displayName?: string
   /** shuvix-bot-respond：auto | mention-only */
   respond?: string
+  /** `shuvix-bot-pipeline` —— 指向哪份管线 workflow（缺省 bot-chat） */
+  pipeline?: string
+  /** `shuvix-bot-input` —— 铺进管线 input 的用户键（骨架管线读 skeletonDecision） */
+  botInput?: Record<string, string | number | boolean>
   /** shuvix-bot-notes */
   notes?: boolean
   greeting?: string
@@ -84,6 +88,11 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
   if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
   if (seed.respond) lines.push(`shuvix-bot-respond: ${seed.respond}`)
+  if (seed.pipeline) lines.push(`shuvix-bot-pipeline: ${seed.pipeline}`)
+  if (seed.botInput) {
+    lines.push('shuvix-bot-input:')
+    for (const [k, v] of Object.entries(seed.botInput)) lines.push(`  ${k}: ${String(v)}`)
+  }
   if (seed.notes === false) lines.push('shuvix-bot-notes: false')
   if (seed.greeting) lines.push(`shuvix-bot-greeting: ${seed.greeting}`)
   if (seed.suggestions) {

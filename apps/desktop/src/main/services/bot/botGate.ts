@@ -85,7 +85,11 @@ export function mentionsFromTokens(tokens?: Record<string, InlineToken>): string
  *  - `@` 前须是行首或空白（词边界）：邮箱、`a@b` 这类不该算提及；
  *  - **大小写不敏感**：它本来就是胶囊没落地之前的降级路径，宁可宽一点。
  */
-export function mentionsFromText(text: string, members: string[], known: Map<string, ParsedBotFile>): string[] {
+export function mentionsFromText(
+  text: string,
+  members: string[],
+  known: Map<string, ParsedBotFile>
+): string[] {
   const candidates: Array<{ member: string; alias: string }> = []
   for (const member of members) {
     const bot = known.get(member)

@@ -28,6 +28,15 @@ const mocks = vi.hoisted(() => ({
   getById: vi.fn()
 }))
 
+vi.mock('../workflowService', () => ({
+  workflowService: {
+    invoke: vi.fn(async () => ({ started: false, reason: 'not-found' })),
+    abortSessionRuns: vi.fn(() => 0),
+    hasWorkflow: vi.fn(() => false),
+    registerRunJournalSink: vi.fn()
+  },
+  workflowTriggers: { fire: vi.fn() }
+}))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
 vi.mock('../../utils/paths', () => ({
   getSessionsDir: () => dirs.sessions,
