@@ -19,30 +19,14 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@renderer/*": [
-        "src/renderer/src/*"
-      ],
-      "@shuvix/chat-protocol/*": [
-        "../../packages/chat-protocol/src/*"
-      ],
-      "@shuvix/chat-ui": [
-        "../../packages/chat-ui/src/index.ts"
-      ],
-      "@shuvix/chat-ui/*": [
-        "../../packages/chat-ui/src/*"
-      ],
-      "@shuvix/app-shell": [
-        "../../packages/app-shell/src/index.ts"
-      ],
-      "@shuvix/app-shell/*": [
-        "../../packages/app-shell/src/*"
-      ],
-      "@shuvix/atomic-editor": [
-        "../../packages/atomic-editor/src/index.ts"
-      ],
-      "@shuvix/atomic-editor/code-languages": [
-        "../../packages/atomic-editor/src/code-languages.ts"
-      ]
+      "@renderer/*": ["src/renderer/src/*"],
+      "@shuvix/chat-protocol/*": ["../../packages/chat-protocol/src/*"],
+      "@shuvix/chat-ui": ["../../packages/chat-ui/src/index.ts"],
+      "@shuvix/chat-ui/*": ["../../packages/chat-ui/src/*"],
+      "@shuvix/app-shell": ["../../packages/app-shell/src/index.ts"],
+      "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
+      "@shuvix/atomic-editor": ["../../packages/atomic-editor/src/index.ts"],
+      "@shuvix/atomic-editor/code-languages": ["../../packages/atomic-editor/src/code-languages.ts"]
     }
   }
 }
