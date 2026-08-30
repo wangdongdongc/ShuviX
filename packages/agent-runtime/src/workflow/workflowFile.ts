@@ -16,6 +16,7 @@
  *  - 正文 = 文档散文 + 具名围栏代码块（**行首**围栏，info string 判别）：
  *      · ```js workflow（或 javascript workflow）—— 编排脚本，必须恰好一个；
  *      · ```json schema=<name> —— 具名 JSON Schema，脚本经 schemas.<name> 引用；
+ *      · ```md prompt=<name> —— 具名提示词模板，脚本经 prompt('<name>') 取渲染后的字符串；
  *      · 其余块与散文都是纯文档，引擎不评估。
  *
  * 解析哲学与 agent/policy 一致：结构非法**整份拒绝**（null + warn 人读原因）。
@@ -70,6 +71,12 @@ export interface WorkflowTriggerBinding {
   trigger: string
   /** CEL 过滤（上下文 {event, vars, env}）；省略 = 恒命中 */
   when?: string
+  /**
+   * 分道键的 CEL（同一上下文）—— 同一工作流内**相同键**的 run 才互斥，
+   * 撞车时怎么办由文件的 `shuvix-workflow-concurrency` 决定。
+   * 省略 = 按埋点 scope 推导（见 engine.ts）。
+   */
+  key?: string
   params: Record<string, unknown>
 }
 
@@ -87,6 +94,11 @@ export interface ParsedWorkflowFile {
   script: string
   /** 具名 schema 块：name → JSON Schema（顶层已校验为 object） */
   schemas: Record<string, Record<string, unknown>>
+  /**
+   * 具名提示词块：name → 模板原文（`{{path}}` 在 `prompt()` 取用时渲染）。
+   * 提示词是文案不是程序 —— 放在 md 块里可读可改，脚本因此只剩流程（见 promptTemplate.ts）。
+   */
+  prompts: Record<string, string>
 }
 
 /** 行首围栏代码块提取（不支持缩进围栏 —— 机器块要求顶格，缩进的按文档散文处理） */
@@ -125,6 +137,8 @@ function extractFencedBlocks(body: string): FencedBlock[] {
 
 const SCRIPT_INFO_RE = /^(?:js|javascript)\s+workflow$/
 const SCHEMA_INFO_RE = /^json\s+schema=([A-Za-z_][A-Za-z0-9_-]*)$/
+/** 提示词块：`md prompt=<name>`，脚本里以 `prompt('<name>')` 取用（渲染后的字符串） */
+const PROMPT_INFO_RE = /^(?:md|markdown)\s+prompt=([A-Za-z_][A-Za-z0-9_-]*)$/
 
 function stringField(fields: Record<string, unknown>, key: string): string | undefined {
   const v = fields[key]
@@ -201,9 +215,21 @@ export function parseWorkflowDefinitionFile(
         const celError = compileWhen(when)
         if (celError) return reject(`binding '${trigger}': invalid when CEL — ${celError}`)
       }
+      // 分道键：**「什么和什么算同一件事」由订阅方决定**，引擎不猜维度。
+      // 省略 → 由埋点 scope 推导（会话域埋点即 event.sessionId，其余全局一条道）。
+      // 写 `key: "'shared'"`（CEL 字符串字面量）可要回旧的「整份文件一条道」语义。
+      let key: string | undefined
+      if (entry.key !== undefined) {
+        if (typeof entry.key !== 'string' || !entry.key.trim()) {
+          return reject(`binding '${trigger}': 'key' must be a CEL expression string`)
+        }
+        key = entry.key.trim()
+        const keyError = compileWhen(key)
+        if (keyError) return reject(`binding '${trigger}': invalid key CEL — ${keyError}`)
+      }
       const params: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(entry)) {
-        if (k === 'trigger' || k === 'when') continue
+        if (k === 'trigger' || k === 'when' || k === 'key') continue
         params[k] = v
       }
       const def = getTriggerPoint(trigger)
@@ -224,7 +250,7 @@ export function parseWorkflowDefinitionFile(
           `workflow '${name}': trigger '${trigger}' is not known on this build — binding is inert`
         )
       }
-      bindings.push({ trigger, when, params })
+      bindings.push({ trigger, when, key, params })
     }
   }
 
@@ -273,9 +299,10 @@ export function parseWorkflowDefinitionFile(
     )
   }
 
-  // ── 正文块：恰一个脚本块 + 具名 schema 块 ──
+  // ── 正文块：恰一个脚本块 + 具名 schema / prompt 块 ──
   let script: string | undefined
   const schemas: Record<string, Record<string, unknown>> = {}
+  const prompts: Record<string, string> = {}
   for (const block of extractFencedBlocks(split.body)) {
     if (SCRIPT_INFO_RE.test(block.info)) {
       if (script !== undefined)
@@ -308,6 +335,21 @@ export function parseWorkflowDefinitionFile(
         )
       }
       schemas[schemaName] = parsed
+      continue
+    }
+    // `md prompt` 形状但整体不合规 → 整份非法（同 schema 块：静默当散文会让脚本
+    // 读 `prompt('<name>')` 悄悄拿到空串）
+    if (/^(?:md|markdown)\s+prompt\b/.test(block.info) && !PROMPT_INFO_RE.test(block.info)) {
+      return reject(
+        `prompt block info string '${block.info}' is invalid — expected \`md prompt=<name>\` with <name> matching [A-Za-z_][A-Za-z0-9_-]*`
+      )
+    }
+    const promptMatch = PROMPT_INFO_RE.exec(block.info)
+    if (promptMatch) {
+      const promptName = promptMatch[1]
+      if (promptName in prompts) return reject(`duplicate prompt block '${promptName}'`)
+      prompts[promptName] = block.content
+      continue
     }
     // 其余 info string 的块是纯文档，跳过
   }
@@ -325,6 +367,7 @@ export function parseWorkflowDefinitionFile(
     limits,
     concurrency: (concurrencyRaw as WorkflowConcurrency | null) ?? 'skip',
     script,
-    schemas
+    schemas,
+    prompts
   }
 }

@@ -321,8 +321,13 @@ export {
   type WorkflowEngine,
   type WorkflowEngineDeps,
   type WorkflowRegistryEntry,
-  type WorkflowScriptEngine
+  type WorkflowScriptEngine,
+  type WorkflowInvokeRequest,
+  type WorkflowInvokeResult,
+  type WorkflowReentry,
+  type WorkflowRunSnapshot
 } from './workflow/engine'
+export { renderPromptTemplate } from './workflow/promptTemplate'
 export {
   buildBuiltinWorkflows,
   getBuiltinWorkflowSource,

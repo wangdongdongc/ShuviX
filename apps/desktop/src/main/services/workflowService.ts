@@ -20,6 +20,7 @@ import {
   readFileSync,
   mkdirSync,
   appendFileSync,
+  statSync,
   writeFileSync,
   unlinkSync
 } from 'fs'
@@ -46,6 +47,9 @@ import { nodeVmScriptEngine } from './workflowScriptEngine'
 import { createLogger } from '../logger'
 
 const log = createLogger('Workflow')
+
+/** 每个工作流保留的 run journal 文件数（见 pruneRunJournal） */
+const RUN_JOURNAL_KEEP = 200
 
 /**
  * 设置页列表项 —— 刻意**不外传** script / schemas / inputSchema / vars / limits：
@@ -76,9 +80,33 @@ export interface InvalidWorkflowFile {
   error: string
 }
 
+interface ScanResult {
+  valid: Array<{ file: ParsedWorkflowFile; basePath: string }>
+  invalid: InvalidWorkflowFile[]
+}
+
 class WorkflowService {
   private readonly userDir = getDefaultWorkflowsDir()
   private engine: WorkflowEngine | null = null
+
+  /**
+   * 目录扫描缓存 —— 键是「每份文件的 mtime+size」的指纹。
+   *
+   * 引擎每次 fire/invoke 都现算注册表（这是「文件改动即时生效」的实现方式），而现算
+   * 意味着 readdir + 逐份 readFile + YAML parse + vm compile。bot 管线把这条路径从
+   * 「每个会话轮几次」推到「每条消息 × 每个成员一次」，且就落在门控的首字节路径上。
+   *
+   * 缓存按指纹失效，所以承诺不变：外部编辑器改文件 mtime 就变，下一次调用照常重扫。
+   */
+  private scanCache: { fingerprint: string; result: ScanResult } | null = null
+
+  /**
+   * 本进程自己的写路径显式失效。指纹已经能兜住外部编辑器，但**同一秒内、同样大小**的
+   * 覆写在秒级精度的文件系统上骗得过它 —— 而「点保存后立刻生效」正是本进程最常见的动作。
+   */
+  private invalidateScan(): void {
+    this.scanCache = null
+  }
 
   /** main 启动时装配引擎（此前的 fire 静默丢弃 —— 启动早期没有值得触发的业务事件） */
   init(): void {
@@ -116,10 +144,7 @@ class WorkflowService {
    * 写坏一份工作流后，它既不生效也不出现在任何界面里 —— 用户无从发现更无从修复。
    * invalid 一路带着人读原因（解析器的拒绝原因，或脚本引擎的语法错）回到 UI。
    */
-  private scanDir(): {
-    valid: Array<{ file: ParsedWorkflowFile; basePath: string }>
-    invalid: InvalidWorkflowFile[]
-  } {
+  private scanDir(): ScanResult {
     if (!existsSync(this.userDir)) return { valid: [], invalid: [] }
     let names: string[]
     try {
@@ -132,6 +157,10 @@ class WorkflowService {
       log.warn(`扫描目录 ${this.userDir} 失败:`, e)
       return { valid: [], invalid: [] }
     }
+
+    // 指纹命中即复用上次的解析结果（见 scanCache 的注释）
+    const fingerprint = this.fingerprint(names)
+    if (this.scanCache?.fingerprint === fingerprint) return this.scanCache.result
 
     const valid: Array<{ file: ParsedWorkflowFile; basePath: string }> = []
     const invalid: InvalidWorkflowFile[] = []
@@ -170,7 +199,23 @@ class WorkflowService {
       seen.add(parsed.name)
       valid.push({ file: parsed, basePath: filePath })
     }
-    return { valid, invalid }
+    const result: ScanResult = { valid, invalid }
+    this.scanCache = { fingerprint, result }
+    return result
+  }
+
+  /** 目录指纹：文件名 + mtimeMs + size。stat 失败的条目记为 `?`，天然不命中缓存 */
+  private fingerprint(names: string[]): string {
+    return names
+      .map((name) => {
+        try {
+          const st = statSync(join(this.userDir, name))
+          return `${name}:${st.mtimeMs}:${st.size}`
+        } catch {
+          return `${name}:?`
+        }
+      })
+      .join('|')
   }
 
   /** 合法用户工作流（引擎装配用；非法的既不触发也不遮蔽内置） */
@@ -287,6 +332,7 @@ class WorkflowService {
     }
     try {
       writeFileSync(target.basePath, text, 'utf-8')
+      this.invalidateScan()
     } catch (e) {
       log.warn(`保存 workflow "${originalName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -311,6 +357,7 @@ class WorkflowService {
     }
     try {
       writeFileSync(filePath, text, 'utf-8')
+      this.invalidateScan()
     } catch (e) {
       log.warn(`新建 workflow "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -324,6 +371,7 @@ class WorkflowService {
     if (!target) return { success: false, error: `Workflow "${name}" not found` }
     try {
       unlinkSync(target.basePath)
+      this.invalidateScan()
     } catch (e) {
       log.warn(`删除 workflow "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -360,6 +408,7 @@ class WorkflowService {
     if ('error' in parsed) return { success: false, error: parsed.error }
     try {
       writeFileSync(filePath, text, 'utf-8')
+      this.invalidateScan()
     } catch (e) {
       log.warn(`保存 workflow 文件 "${fileName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -372,6 +421,7 @@ class WorkflowService {
     if (!filePath) return { success: false, error: `Workflow file "${fileName}" not found` }
     try {
       unlinkSync(filePath)
+      this.invalidateScan()
     } catch (e) {
       log.warn(`删除 workflow 文件 "${fileName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -402,8 +452,42 @@ class WorkflowService {
         join(dir, `${runId}.jsonl`),
         `${JSON.stringify({ ts: Date.now(), ...record })}\n`
       )
+      // meta 是每个 run 的第一条记录 —— 一个 run 一次剪枝，代价是一次 readdir
+      if (record.type === 'meta') this.pruneRunJournal(dir)
     } catch (e) {
       log.warn(`workflow run journal 写入失败 (${name}/${runId}):`, e)
+    }
+  }
+
+  /**
+   * 保留每个工作流最近 `RUN_JOURNAL_KEEP` 个 run 文件。
+   *
+   * 无保留策略不可上线：auto-title 是「每会话每轮一个」，bot 管线会是「每条消息 ×
+   * 每个成员一个」——一个长期使用的用户目录会攒出十万级小文件。按 mtime 而不是文件名
+   * 排序：runId 是 uuid，名字里没有时间。
+   */
+  private pruneRunJournal(dir: string): void {
+    try {
+      const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+      if (files.length <= RUN_JOURNAL_KEEP) return
+      const stamped = files.map((f) => {
+        const path = join(dir, f)
+        try {
+          return { path, mtime: statSync(path).mtimeMs }
+        } catch {
+          return { path, mtime: 0 }
+        }
+      })
+      stamped.sort((a, b) => b.mtime - a.mtime)
+      for (const { path } of stamped.slice(RUN_JOURNAL_KEEP)) {
+        try {
+          unlinkSync(path)
+        } catch {
+          /* 并发/权限问题跳过这一个，下次再剪 */
+        }
+      }
+    } catch (e) {
+      log.warn(`workflow run journal 剪枝失败 (${dir}):`, e)
     }
   }
 }

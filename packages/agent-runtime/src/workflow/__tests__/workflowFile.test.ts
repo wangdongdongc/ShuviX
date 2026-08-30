@@ -44,7 +44,8 @@ describe('parseWorkflowDefinitionFile — 基础形态与命名', () => {
       limits: {},
       concurrency: 'skip',
       script: 'return 1',
-      schemas: {}
+      schemas: {},
+      prompts: {}
     })
   })
 
@@ -435,5 +436,134 @@ describe('正文块提取', () => {
     expect(warns).toEqual([])
     expect(parsed?.name).toBe('crlf-wf')
     expect(parsed?.script).toBe('return 1')
+  })
+})
+
+describe('绑定的分道键（key）—— 与 trigger/when 同为保留字段', () => {
+  const withKey = (...lines: string[]): ReturnType<typeof parse> =>
+    parse(md(fm('shuvix-workflow-on:', '  - trigger: session.prompt-accepted', ...lines)))
+
+  it('合法 key 保留且 trim，且不进 params', () => {
+    const { parsed, warns } = withKey("    key: '  event.sessionId  '")
+    expect(warns).toEqual([])
+    expect(parsed?.bindings).toEqual([
+      {
+        trigger: 'session.prompt-accepted',
+        when: undefined,
+        key: 'event.sessionId',
+        params: {}
+      }
+    ])
+  })
+
+  it.each([
+    ['非字符串', 'key: 1'],
+    ['空串', "key: ''"]
+  ])('key %s → 整份非法（键集纪律）', (_label, line) => {
+    const { parsed, warns } = withKey(`    ${line}`)
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain("'key' must be a CEL expression string")
+  })
+
+  it('key CEL 语法错 → 整份非法（语法错不留到运行期），消息含 invalid key CEL 与 trigger 名', () => {
+    const { parsed, warns } = withKey("    key: 'event.'")
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain("binding 'session.prompt-accepted'")
+    expect(warns[0]).toContain('invalid key CEL')
+  })
+
+  it('已知埋点（bindingParamKeys 为空）带 key 不算未知参数', () => {
+    // 回归守卫：params 收集循环必须跳过 trigger/when/key 三个保留键
+    const { parsed, warns } = withKey('    key: "\'shared\'"')
+    expect(warns).toEqual([])
+    expect(parsed?.bindings[0].key).toBe("'shared'")
+    expect(parsed?.bindings[0].params).toEqual({})
+  })
+
+  it('未知埋点 + key → 绑定惰性化但 key 保留（两条放宽规则叠加）', () => {
+    const { parsed, warns } = parse(
+      md(
+        fm(
+          'name: lazy-key-wf',
+          'shuvix-workflow-on:',
+          '  - trigger: browser.tab-opened',
+          '    key: event.tabId'
+        )
+      )
+    )
+    expect(parsed).not.toBeNull()
+    expect(parsed?.bindings[0].key).toBe('event.tabId')
+    expect(warns.some((w) => w.includes('binding is inert'))).toBe(true)
+  })
+})
+
+describe('提示词块（```md prompt=<name>）', () => {
+  it.each(['md', 'markdown'])('`%s prompt=x` 收进 prompts，内容为原文（不 trim）', (lang) => {
+    const { parsed, warns } = parse(
+      md(fm(), [
+        `\`\`\`${lang} prompt=greeting`,
+        'Hello {{name}}.',
+        '',
+        '  indented line',
+        '```',
+        '',
+        SCRIPT_BLOCK
+      ])
+    )
+    expect(warns).toEqual([])
+    // 提示词是文案 —— 内部空行与缩进逐字保留
+    expect(parsed?.prompts).toEqual({ greeting: 'Hello {{name}}.\n\n  indented line' })
+  })
+
+  it('重名 prompt 块 → 整份非法（同 schema 块纪律）', () => {
+    const { parsed, warns } = parse(
+      md(fm(), ['```md prompt=x', 'A', '```', '```md prompt=x', 'B', '```', SCRIPT_BLOCK])
+    )
+    expect(parsed).toBeNull()
+    expect(warns[0]).toContain("duplicate prompt block 'x'")
+  })
+
+  it.each(['md prompt', 'md prompt=1bad', 'md prompt =x', 'md prompt=x extra'])(
+    '`md prompt` 形状但不合规（%s）→ 整份非法（静默当散文会让 prompt() 抛）',
+    (info) => {
+      const { parsed, warns } = parse(md(fm(), [`\`\`\`${info}`, 'BODY', '```', '', SCRIPT_BLOCK]))
+      expect(parsed).toBeNull()
+      expect(warns[0]).toContain('expected `md prompt=<name>`')
+    }
+  )
+
+  it('【钉现状】大写 `MD prompt=x` 不识别 → 当散文，文件合法（与 `JS workflow` 同一口径）', () => {
+    const { parsed, warns } = parse(md(fm(), ['```MD prompt=x', 'BODY', '```', '', SCRIPT_BLOCK]))
+    expect(warns).toEqual([])
+    expect(parsed).not.toBeNull()
+    expect(parsed?.prompts).toEqual({})
+  })
+
+  it('prompt 名与 schema 名同名可共存（两张表互不覆盖）', () => {
+    const { parsed } = parse(
+      md(fm(), [
+        '```json schema=a',
+        '{ "type": "object" }',
+        '```',
+        '```md prompt=a',
+        'PROMPT-A',
+        '```',
+        SCRIPT_BLOCK
+      ])
+    )
+    expect(parsed?.schemas.a).toEqual({ type: 'object' })
+    expect(parsed?.prompts.a).toBe('PROMPT-A')
+  })
+
+  it('【钉现状】空 prompt 块 → prompts.x === ""，文件合法（与脚本块「纯空白即拒绝」不同口径）', () => {
+    const { parsed, warns } = parse(md(fm(), ['```md prompt=x', '```', '', SCRIPT_BLOCK]))
+    expect(warns).toEqual([])
+    expect(parsed?.prompts).toEqual({ x: '' })
+  })
+
+  it('普通 ```md 块是散文：只认带 prompt= 的 info string', () => {
+    const { parsed, warns } = parse(md(fm(), ['```md', 'DOC', '```', '', SCRIPT_BLOCK]))
+    expect(warns).toEqual([])
+    expect(parsed?.prompts).toEqual({})
   })
 })

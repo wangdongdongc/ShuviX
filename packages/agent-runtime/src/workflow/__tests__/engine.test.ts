@@ -2,13 +2,15 @@
  * Workflow 引擎 —— 埋点匹配（autorun/when/strict fail-safe）、run 生命周期（journal 记录、
  * 限额、墙钟超时、重入策略）、脚本 API（run/map/log/sleep/now/fail 与冻结克隆）。
  *
- * 全 fake deps：脚本引擎用 AsyncFunction 真执行脚本串（与 node:vm 同为「标准 JS +
- * 顶层 return/await」语义，但零宿主依赖）；manager 可编排（gate 控制 run 挂起/放行）；
- * 观测面 = onRecord 收集数组 + logger 收集。meta 记录在 fire 的同步段落盘 ——
- * 「fire 后立即断言 meta 有无」因此是确定性的，负向用例不需要等待。
+ * 全 fake deps（夹具在 ./harness.ts，与 engineLanes / engineInvoke 共用）：脚本引擎用
+ * AsyncFunction 真执行脚本串（与 node:vm 同为「标准 JS + 顶层 return/await」语义，但零
+ * 宿主依赖）；manager 可编排（gate 控制 run 挂起/放行）；观测面 = onRecord 收集数组 +
+ * logger 收集。meta 记录在 fire 的同步段落盘 ——「fire 后立即断言 meta 有无」因此是
+ * 确定性的，负向用例不需要等待。
+ *
+ * 分道 / invoke / 能力注入的用例在 engineLanes.test.ts 与 engineInvoke.test.ts。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createWorkflowEngine, type WorkflowEngineDeps, type WorkflowScriptEngine } from '../engine'
 import {
   TRIGGER_POINTS,
   getTriggerPoint,
@@ -17,131 +19,8 @@ import {
 } from '../triggerPoints'
 import type { ParsedWorkflowFile, WorkflowConcurrency } from '../workflowFile'
 import type { WorkflowRegistryEntry } from '../engine'
-import type { RunTaskParams, SubAgentManager } from '../../subagent/manager'
-import type { InProcessAgentType } from '../../subagent/types'
-
-/** AsyncFunction 引擎：api 键作形参、脚本串作函数体 —— 顶层 await/return 语义与 vm 包装一致 */
-const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
-  ...args: string[]
-) => (...vals: unknown[]) => Promise<unknown>
-const scriptEngine: WorkflowScriptEngine = {
-  compile: () => ({ ok: true }),
-  execute: async (source, api) =>
-    new AsyncFunction(...Object.keys(api), source)(...Object.values(api))
-}
-
-const PROFILE: InProcessAgentType = {
-  name: 'worker',
-  displayName: 'Worker',
-  description: '',
-  tools: ['read', 'grep', 'mcp:MyServer'],
-  systemPrompt: 'S'
-}
-const MODEL = { provider: 'p', model: 'm', capabilities: {} }
-
-const fileOf = (over: Partial<ParsedWorkflowFile> = {}): ParsedWorkflowFile => ({
-  name: 'wf',
-  displayName: 'wf',
-  description: '',
-  bindings: [{ trigger: 'session.prompt-accepted', when: undefined, params: {} }],
-  vars: {},
-  limits: {},
-  concurrency: 'skip' as WorkflowConcurrency,
-  script: 'return 1',
-  schemas: {},
-  ...over
-})
-
-const entryOf = (
-  file: ParsedWorkflowFile,
-  over: Partial<WorkflowRegistryEntry> = {}
-): WorkflowRegistryEntry => ({ file, source: 'builtin', ...over })
-
-const payload = (
-  over: Partial<TriggerPayloadMap['session.prompt-accepted']> = {}
-): TriggerPayloadMap['session.prompt-accepted'] => ({
-  sessionId: 's1',
-  profileName: 'default',
-  title: 'T',
-  isDefaultTitle: false,
-  promptText: 'hi',
-  ...over
-})
-
-interface RecordedRec {
-  name: string
-  runId: string
-  rec: Record<string, unknown>
-}
-
-function makeEngine(
-  opts: {
-    entries?: WorkflowRegistryEntry[]
-    listWorkflows?: () => WorkflowRegistryEntry[]
-    runTask?: (p: RunTaskParams) => Promise<{ result: string; structured?: unknown }>
-    resolveAgentProfile?: WorkflowEngineDeps['resolveAgentProfile']
-    resolveRunModel?: WorkflowEngineDeps['resolveRunModel']
-    onRecord?: (name: string, runId: string, rec: Record<string, unknown>) => void
-  } = {}
-): {
-  engine: ReturnType<typeof createWorkflowEngine>
-  records: RecordedRec[]
-  logs: string[]
-  runTask: ReturnType<typeof vi.fn>
-  waitEnd: (n?: number) => Promise<void>
-  ends: () => Array<Record<string, unknown>>
-  metas: () => Array<Record<string, unknown>>
-} {
-  const records: RecordedRec[] = []
-  const logs: string[] = []
-  const runTask = vi.fn(opts.runTask ?? (async () => ({ result: 'ok' })))
-  const engine = createWorkflowEngine({
-    manager: { runTask } as unknown as SubAgentManager,
-    script: scriptEngine,
-    listWorkflows: opts.listWorkflows ?? ((): WorkflowRegistryEntry[] => opts.entries ?? []),
-    resolveAgentProfile: opts.resolveAgentProfile ?? ((ref) => (ref === 'worker' ? PROFILE : null)),
-    resolveRunModel: opts.resolveRunModel ?? (async () => MODEL),
-    onRecord: (name, runId, rec) => {
-      records.push({ name, runId, rec })
-      opts.onRecord?.(name, runId, rec)
-    },
-    env: { host: 'desktop', platform: 'darwin' },
-    logger: {
-      info: (m) => logs.push(m),
-      warn: (m) => logs.push(m),
-      error: (m) => logs.push(m)
-    }
-  })
-  const ends = (): Array<Record<string, unknown>> =>
-    records.filter((r) => r.rec.type === 'end').map((r) => r.rec)
-  return {
-    engine,
-    records,
-    logs,
-    runTask,
-    ends,
-    metas: () => records.filter((r) => r.rec.type === 'meta').map((r) => r.rec),
-    waitEnd: (n = 1) =>
-      vi.waitFor(() => {
-        expect(ends().length).toBeGreaterThanOrEqual(n)
-      })
-  }
-}
-
-/** gate 版 runTask：每次调用挂起，测试端显式放行（skip/queue/parallel 用） */
-function gatedRunTask(): {
-  runTask: (p: RunTaskParams) => Promise<{ result: string }>
-  gates: Array<{ prompt: string; release: () => void }>
-} {
-  const gates: Array<{ prompt: string; release: () => void }> = []
-  return {
-    gates,
-    runTask: (p) =>
-      new Promise((resolve) =>
-        gates.push({ prompt: p.prompt, release: () => resolve({ result: 'ok' }) })
-      )
-  }
-}
+import type { RunTaskParams } from '../../subagent/manager'
+import { MODEL, entryOf, fileOf, gatedRunTask, makeEngine, payload } from './harness'
 
 describe('TRIGGER_POINTS 目录钉板', () => {
   it('恰两条目：id === 键、scope session、bindingParamKeys 空；未知 id 查无', () => {
@@ -159,7 +38,7 @@ describe('TRIGGER_POINTS 目录钉板', () => {
 })
 
 describe('fire — 埋点匹配', () => {
-  it('绑定命中 + autorunEnabled → 起 run：meta 含 trigger/source/sessionId，event 信封 = payload + trigger + chain:[]', async () => {
+  it('绑定命中 → 起 run：meta 含 invocation/source/sessionId/lane，event 信封 = payload + trigger + chain:[]', async () => {
     const { engine, metas, waitEnd } = makeEngine({ entries: [entryOf(fileOf())] })
     const p = payload()
     engine.fire('session.prompt-accepted', p)
@@ -167,9 +46,13 @@ describe('fire — 埋点匹配', () => {
     expect(metas()).toEqual([
       {
         type: 'meta',
-        trigger: 'session.prompt-accepted',
+        // 调用路径进 meta（`fire` 是广播、`invoke` 是定向调用）—— journal 要能回答
+        // 「这个 run 是被什么唤起的」，而 run 的身份是 runId 不是文件名
+        invocation: { kind: 'trigger', trigger: 'session.prompt-accepted' },
         source: 'builtin',
         sessionId: 's1',
+        // 分道键：会话域埋点缺省按会话分道（工作流名 + \0 + 会话 id）
+        lane: 'wf\u0000s1',
         event: { ...p, trigger: 'session.prompt-accepted', chain: [] }
       }
     ])
@@ -710,7 +593,7 @@ describe('重入策略与限时', () => {
   const gateFile = (concurrency: WorkflowConcurrency): ParsedWorkflowFile =>
     fileOf({ concurrency, script: "return await run('worker', event.promptText)" })
 
-  it('skip（缺省）：run 挂起时二次 fire → 恰一条 meta + trigger skipped 日志', async () => {
+  it('skip（缺省）：run 挂起时二次 fire → 恰一条 meta + lane busy 日志', async () => {
     const { runTask, gates } = gatedRunTask()
     const eng = makeEngine({ runTask, entries: [entryOf(gateFile('skip'))] })
     eng.engine.fire('session.prompt-accepted', payload({ promptText: 'A' }))
@@ -718,7 +601,7 @@ describe('重入策略与限时', () => {
 
     eng.engine.fire('session.prompt-accepted', payload({ promptText: 'B' }))
     expect(eng.metas()).toHaveLength(1)
-    expect(eng.logs.some((l) => l.includes('trigger skipped'))).toBe(true)
+    expect(eng.logs.some((l) => l.includes('lane busy — skipped'))).toBe(true)
 
     gates[0].release()
     await eng.waitEnd()
@@ -735,7 +618,7 @@ describe('重入策略与限时', () => {
     eng.engine.fire('session.prompt-accepted', payload({ promptText: 'B' }))
     eng.engine.fire('session.prompt-accepted', payload({ promptText: 'C' }))
     expect(eng.metas()).toHaveLength(1)
-    expect(eng.logs.filter((l) => l.includes('trigger queued (slot of 1)'))).toHaveLength(2)
+    expect(eng.logs.filter((l) => l.includes('lane busy — queued (slot of 1)'))).toHaveLength(2)
 
     gates[0].release()
     await vi.waitFor(() => expect(gates).toHaveLength(2))
@@ -837,5 +720,243 @@ describe('重入策略与限时', () => {
     gates[0].release()
     await eng.waitEnd()
     await vi.waitFor(() => expect(eng.engine.runningCount()).toBe(0))
+  })
+})
+
+describe('run() 的 timeoutSec —— 本次派发的墙钟', () => {
+  /** 'slow' 挂到 parentAbortSignal 落下才 reject（真 manager 的中止语义）；其余立刻返回 */
+  const slowThenFast = (
+    capture: (p: RunTaskParams) => void
+  ): ((p: RunTaskParams) => Promise<{ result: string }>) => {
+    return (p) => {
+      capture(p)
+      if (p.prompt !== 'slow') return Promise.resolve({ result: 'FAST' })
+      return new Promise((_resolve, reject) =>
+        p.parentAbortSignal?.addEventListener(
+          'abort',
+          () => reject(new Error('step aborted by signal')),
+          { once: true }
+        )
+      )
+    }
+  }
+
+  it('到点只落这一层：该步骤 signal aborted，run 本身不受影响（后续 run() 照常派发、end ok:true）', async () => {
+    const seen: RunTaskParams[] = []
+    const eng = makeEngine({
+      runTask: slowThenFast((p) => seen.push(p)),
+      entries: [
+        entryOf(
+          fileOf({
+            script: [
+              "try { await run('worker', 'slow', { timeoutSec: 0.05 }) } catch (e) { log('step:' + e.message) }",
+              "return await run('worker', 'fast')"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd()
+
+    // 这一层落下了……
+    expect(seen[0].parentAbortSignal?.aborted).toBe(true)
+    expect(
+      eng.records.some(
+        (r) => r.rec.type === 'log' && r.rec.message === 'step:step aborted by signal'
+      )
+    ).toBe(true)
+    // ……run 本身没有：第二次派发照常发生，脚本正常收尾
+    expect(seen).toHaveLength(2)
+    expect(seen[1].parentAbortSignal?.aborted).toBe(false)
+    expect(eng.ends()[0]).toMatchObject({ ok: true, output: 'FAST' })
+  })
+
+  it('与 run 级 deadline 取先到者：maxDurationSec 更短 → 整 run 超时收尾，步骤随之落下', async () => {
+    const seen: RunTaskParams[] = []
+    const eng = makeEngine({
+      runTask: slowThenFast((p) => seen.push(p)),
+      entries: [
+        entryOf(
+          fileOf({
+            limits: { maxDurationSec: 0.03 },
+            // timeoutSec 远在 deadline 之后 —— 落下的是 run 级那一层
+            script: "return await run('worker', 'slow', { timeoutSec: 30 })"
+          })
+        )
+      ]
+    })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd()
+    expect(eng.ends()[0].ok).toBe(false)
+    expect(eng.ends()[0].error).toContain('timed out after')
+    expect(seen[0].parentAbortSignal?.aborted).toBe(true)
+  })
+
+  it('无 timeoutSec 时 run 级中止仍级联到在飞步骤（链在 run 的 controller 上）', async () => {
+    const seen: RunTaskParams[] = []
+    const eng = makeEngine({
+      runTask: slowThenFast((p) => seen.push(p)),
+      entries: [entryOf(fileOf({ script: "return await run('worker', 'slow')" }))]
+    })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    const runId = eng.engine.listRuns()[0].runId
+
+    expect(eng.engine.abortRun(runId)).toBe(true)
+    await eng.waitEnd()
+    expect(seen[0].parentAbortSignal?.aborted).toBe(true)
+  })
+
+  it('步骤正常结束后定时器与 run-abort 监听都被清理：过了 timeoutSec 该步骤的 signal 仍未 aborted', async () => {
+    const seen: RunTaskParams[] = []
+    const eng = makeEngine({
+      runTask: slowThenFast((p) => seen.push(p)),
+      entries: [
+        entryOf(fileOf({ script: "return await run('worker', 'fast', { timeoutSec: 0.05 })" }))
+      ]
+    })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd()
+    // 等过 timeoutSec：未清理的定时器会在此期间 abort 这个（已经结束的）步骤
+    await new Promise((r) => setTimeout(r, 120))
+    expect(seen[0].parentAbortSignal?.aborted).toBe(false)
+  })
+
+  it.each([
+    ['0', '0'],
+    ['负数', '-1'],
+    ['字符串', "'5'"],
+    ['null', 'null']
+  ])(
+    '【钉现状】timeoutSec 非法值（%s）→ 不设限时也不抛（与 opts.tools/opts.schema 的严格校验不同口径）',
+    async (_label, literal) => {
+      const eng = makeEngine({
+        entries: [
+          entryOf(fileOf({ script: `return await run('worker', 'p', { timeoutSec: ${literal} })` }))
+        ]
+      })
+      eng.engine.fire('session.prompt-accepted', payload())
+      await eng.waitEnd()
+      expect(eng.ends()[0].ok).toBe(true)
+      expect(eng.runTask).toHaveBeenCalledTimes(1)
+    }
+  )
+})
+
+describe('收尾的两处安全网（回归）', () => {
+  it('run 中止之后新发起的 sleep 立即 reject —— 脱手脚本不得在收尾后继续跑', async () => {
+    // node:vm 无法硬中断异步续体：run 判超时收尾后脚本还在跑。少了 sleep 的 aborted 守卫，
+    // `while (true) { await sleep(1000) }` 会永远跑下去
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          fileOf({
+            limits: { maxDurationSec: 0.05 },
+            script: [
+              "try { await sleep(60000) } catch (e) { log('first:' + e.message) }",
+              "try { await sleep(10); log('second:resolved') } catch (e) { log('second:' + e.message) }"
+            ].join('\n')
+          })
+        )
+      ]
+    })
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd()
+    await vi.waitFor(() => {
+      const logs = eng.records.filter((r) => r.rec.type === 'log').map((r) => r.rec.message)
+      expect(logs).toContain('first:workflow run aborted')
+      expect(logs).toContain('second:workflow run aborted')
+    })
+  })
+
+  it('占坑之后的异常（不可 JSON 化的 payload）仍走收尾：end 落盘、分道释放、下一次 fire 照起', async () => {
+    const eng = makeEngine({ entries: [entryOf(fileOf())] })
+    const circular = payload() as TriggerPayloadMap['session.prompt-accepted'] & {
+      self?: unknown
+    }
+    circular.self = circular
+
+    eng.engine.fire('session.prompt-accepted', circular)
+    await eng.waitEnd()
+    expect(eng.ends()[0].ok).toBe(false)
+    await vi.waitFor(() => expect(eng.engine.runningCount()).toBe(0))
+
+    // 同一分道（缺省 = 同一 sessionId）没有被永久占住
+    eng.engine.fire('session.prompt-accepted', payload())
+    await eng.waitEnd(2)
+    expect(eng.ends()[1]).toMatchObject({ ok: true, output: 1 })
+  })
+})
+
+describe('prompt() —— md 提示词块的脚本 API', () => {
+  const promptFile = (
+    script: string,
+    prompts: Record<string, string>,
+    vars: Record<string, unknown> = {}
+  ): ParsedWorkflowFile => fileOf({ script, prompts, vars })
+
+  it('作用域 = {...input, input, vars, event}：顶层平铺、点分路径、vars/event 都可达', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          promptFile(
+            "return prompt('task')",
+            {
+              task: [
+                'tag={{tag}}',
+                'nested={{deep.k}}',
+                'viaInput={{input.tag}}',
+                'var={{vars.dir}}',
+                'trigger={{event.trigger}}'
+              ].join('\n')
+            },
+            { dir: 'reports' }
+          )
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({
+      workflow: 'wf',
+      input: { tag: 'T', deep: { k: 'K' } }
+    })
+    expect(res.output).toBe(
+      ['tag=T', 'nested=K', 'viaInput=T', 'var=reports', 'trigger=call'].join('\n')
+    )
+  })
+
+  it('extras 并进作用域且优先级最高（窗口切片留在脚本里，模板不发明切片语法）', async () => {
+    const eng = makeEngine({
+      entries: [
+        entryOf(
+          promptFile(
+            "return prompt('task', { window: input.window.slice(-2), tag: 'FROM-EXTRAS' })",
+            {
+              task: 'tag={{tag}}\n<window>\n{{window}}\n</window>'
+            }
+          )
+        )
+      ]
+    })
+    const res = await eng.engine.invoke({
+      workflow: 'wf',
+      input: { tag: 'FROM-INPUT', window: ['a', 'b', 'c'] }
+    })
+    expect(res.output).toBe('tag=FROM-EXTRAS\n<window>\nb\nc\n</window>')
+  })
+
+  it('取不存在的块 → throw，文案指出该加一个 md prompt=<name> 块', async () => {
+    const eng = makeEngine({ entries: [entryOf(promptFile("return prompt('ghost')", {}))] })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('prompt("ghost")')
+    expect(res.error).toContain('md prompt=ghost')
+  })
+
+  it('可选上下文不留空洞：缺失的占位符行整行消失', async () => {
+    const eng = makeEngine({
+      entries: [entryOf(promptFile("return prompt('task')", { task: 'head\n{{missing}}\ntail' }))]
+    })
+    expect((await eng.engine.invoke({ workflow: 'wf' })).output).toBe('head\ntail')
   })
 })

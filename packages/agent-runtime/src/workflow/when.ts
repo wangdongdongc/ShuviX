@@ -40,3 +40,16 @@ export function evaluateWhen(expression: string, context: Record<string, unknown
   }
   return result
 }
+
+/**
+ * 求值绑定的分道 `key`。要求 string / number（number 转字符串）—— 键是身份，
+ * 布尔或对象当键只会把不相干的 run 挤成一条道。错误/类型不符向上抛，
+ * 由引擎 fail-safe 处置为「回落缺省键 + 告警」：键算错时宁可**更强的互斥**，
+ * 也不给一个来路不明的触发发一张并发许可。
+ */
+export function evaluateLaneKey(expression: string, context: Record<string, unknown>): string {
+  const result = program(expression)(context)
+  if (typeof result === 'string') return result
+  if (typeof result === 'number' && Number.isFinite(result)) return String(result)
+  throw new Error(`key expression must evaluate to a string or number, got ${typeof result}`)
+}

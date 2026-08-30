@@ -72,17 +72,23 @@ const TITLER: InProcessAgentType = {
   systemPrompt: 'You name chat sessions.'
 }
 
-function makeAutoTitleEngine(): {
+function makeAutoTitleEngine(
+  overrideRunTask?: (p: RunTaskParams) => Promise<{ result: string; structured?: unknown }>
+): {
   engine: ReturnType<typeof createWorkflowEngine>
   runTask: ReturnType<typeof vi.fn>
   records: Array<Record<string, unknown>>
-  waitEnd: () => Promise<void>
+  metas: () => Array<Record<string, unknown>>
+  waitEnd: (n?: number) => Promise<void>
 } {
   const records: Array<Record<string, unknown>> = []
-  const runTask = vi.fn(async () => ({
-    result: JSON.stringify({ title: 'X' }),
-    structured: { title: 'X' }
-  }))
+  const runTask = vi.fn(
+    overrideRunTask ??
+      (async () => ({
+        result: JSON.stringify({ title: 'X' }),
+        structured: { title: 'X' }
+      }))
+  )
   const entries: WorkflowRegistryEntry[] = [{ file: autoTitle(), source: 'builtin' }]
   const engine = createWorkflowEngine({
     manager: { runTask } as unknown as SubAgentManager,
@@ -97,9 +103,10 @@ function makeAutoTitleEngine(): {
     engine,
     runTask,
     records,
-    waitEnd: () =>
+    metas: () => records.filter((r) => r.type === 'meta'),
+    waitEnd: (n = 1) =>
       vi.waitFor(() => {
-        expect(records.some((r) => r.type === 'end')).toBe(true)
+        expect(records.filter((r) => r.type === 'end').length).toBeGreaterThanOrEqual(n)
       })
   }
 }
@@ -190,5 +197,51 @@ describe('auto-title — 摘录裁尾', () => {
     const excerpt = /<conversation>\n([\s\S]*?)\n<\/conversation>/.exec(prompt)?.[1]
     expect(excerpt).toBeDefined()
     expect(excerpt!.length).toBeLessThanOrEqual(1000)
+  })
+})
+
+describe('auto-title — 分道（M2′ 顺带修掉的既有缺陷）', () => {
+  /** 挂起的 titler 派发：测试端显式放行 */
+  const gatedTitler = (
+    gates: Array<() => void>
+  ): (() => Promise<{ result: string; structured?: unknown }>) => {
+    return () =>
+      new Promise((resolve) =>
+        gates.push(() =>
+          resolve({ result: JSON.stringify({ title: 'X' }), structured: { title: 'X' } })
+        )
+      )
+  }
+
+  it('迁移承诺：md 一字未改 —— 两条绑定都没有 key，缺省键由埋点 scope 推导', () => {
+    expect(autoTitle().bindings.every((b) => b.key === undefined)).toBe(true)
+  })
+
+  it('两个会话同时 turn-completed → 各起一个 run（refine 是一次性窗口，被 skip 即永久丢标题）', async () => {
+    const gates: Array<() => void> = []
+    const { engine, runTask, metas, waitEnd } = makeAutoTitleEngine(gatedTitler(gates))
+
+    engine.fire('session.turn-completed', turnPayload({ sessionId: 's1' }))
+    engine.fire('session.turn-completed', turnPayload({ sessionId: 's2' }))
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+
+    expect(metas().map((m) => m.lane)).toEqual(['auto-title\u0000s1', 'auto-title\u0000s2'])
+    expect(runTask).toHaveBeenCalledTimes(2)
+
+    gates.forEach((release) => release())
+    await waitEnd(2)
+  })
+
+  it('同一会话内 quick 与 refine 仍互斥（同道按文件策略 skip）', async () => {
+    const gates: Array<() => void> = []
+    const { engine, metas, waitEnd } = makeAutoTitleEngine(gatedTitler(gates))
+
+    engine.fire('session.prompt-accepted', promptPayload({ sessionId: 's1' }))
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    engine.fire('session.turn-completed', turnPayload({ sessionId: 's1' }))
+
+    expect(metas()).toHaveLength(1)
+    gates[0]()
+    await waitEnd()
   })
 })

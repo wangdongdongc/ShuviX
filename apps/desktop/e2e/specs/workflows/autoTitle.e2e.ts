@@ -113,9 +113,12 @@ describe('内置 auto-title —— session.prompt-accepted 埋点链路', () => 
 
     const records = await untilRunForSession('auto-title', sid)
     const meta = records.find((r) => r.type === 'meta')!
-    expect(meta.trigger).toBe('session.prompt-accepted')
+    // 调用路径进 meta（M2′）：run 的身份是 runId，「被什么唤起」是它的一个属性
+    expect(meta.invocation).toEqual({ kind: 'trigger', trigger: 'session.prompt-accepted' })
     expect(meta.source).toBe('builtin')
     expect(meta.sessionId).toBe(sid)
+    // 会话域埋点缺省按会话分道 —— 两个会话同时轮结束不再互相 skip
+    expect(meta.lane).toBe(`auto-title\u0000${sid}`)
     expect(meta.event!.promptText).toBe('hello')
     expect(meta.event!.isDefaultTitle).toBe(true)
     expect(meta.event!.profileName).toBe('default')
@@ -134,8 +137,9 @@ describe('用户工作流 —— session.turn-completed 全链', () => {
 
     const records = await untilRunForSession('echo', sid)
     const meta = records.find((r) => r.type === 'meta')!
-    expect(meta.trigger).toBe('session.turn-completed')
+    expect(meta.invocation).toEqual({ kind: 'trigger', trigger: 'session.turn-completed' })
     expect(meta.sessionId).toBe(sid)
+    expect(meta.lane).toBe(`echo\u0000${sid}`)
     const event = meta.event as { turnCount: number; textMessageCount: number; recentText: string }
     expect(event.turnCount).toBeGreaterThanOrEqual(1)
     expect(event.textMessageCount).toBeGreaterThanOrEqual(1)

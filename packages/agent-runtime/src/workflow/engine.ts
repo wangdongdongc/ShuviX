@@ -1,22 +1,28 @@
 /**
  * Workflow 引擎（宿主无关核心）—— 埋点匹配 + run 生命周期 + 脚本 API 装配。
  *
- * 职责边界（docs/workflow-md-design.md §4–§6）：
- *  - `fire(id, payload)`：对着注册表匹配「绑定了该埋点、CEL when 命中」
- *    的工作流并起 run。**绝不抛出**，emit 侧对订阅情况零感知；
- *  - run：脚本经宿主注入的 WorkflowScriptEngine 执行；脚本唯一的副作用通道是 `run()`
- *    派发 agent（经共享 SubAgentManager，结果契约见 subagent/nextTool.ts）—— 脚本本身
- *    零环境权限；
- *  - 限额（maxAgents / maxDurationSec / maxConcurrentAgents）与重入（skip/queue/parallel）
- *    在此收口；run 级 AbortController 作为 parentAbortSignal 下传，超时/中止级联到
- *    全部在飞 agent；
+ * 职责边界（docs/workflow-md-design.md §3.6/§4–§6）：
+ *  - **两条调用路径**：`fire(id, payload)` 是广播（按埋点 id 匹配、CEL when 命中即起 run，
+ *    **绝不抛出**，emit 侧对订阅情况零感知）；`invoke(req)` 是定向调用（按名起一份、
+ *    回传结果）—— bot 管线、未来的手动运行 / CLI / mcp.call 共用后者；
+ *  - **run 的身份是引擎生成的 runId**，不是工作流文件名。同一份 md 可经不同路径、
+ *    不同参数同时执行，互不干扰 —— 声明是声明，执行态不焊在声明上；
+ *  - **互斥拆成两个正交问题**：*什么算同一件事*（分道键 laneKey，**由调用方给**）与
+ *    *同一件事撞车了怎么办*（策略，即文件的 `shuvix-workflow-concurrency`，作用域从
+ *    「整份文件」收窄为「本分道」）。引擎不猜维度：会话域埋点的缺省键是 sessionId，
+ *    bot 路径三种粒度（gate/task/notes）并存，都由调用方说了算；
+ *  - run：脚本经宿主注入的 WorkflowScriptEngine 执行。基础 API 无副作用面，副作用主要
+ *    经 `run()` 派发 agent（agent 照走 security 策略门）；**特定调用路径可以在 invoke 时
+ *    注入能力**（构造期绑定身份，如 bot 路径的 say —— 它只能写本次调用的那个会话），
+ *    fire 路径不注入任何能力；
+ *  - 限额（maxAgents / maxDurationSec / maxConcurrentAgents）在此收口；run 级
+ *    AbortController 作为 parentAbortSignal 下传，超时/中止级联到全部在飞 agent；
  *  - 会话域埋点（TriggerPointDef.scope==='session'）：payload.sessionId 即 run 的归属会话，
  *    派发以它为 parentSessionId —— 工具绑定/询问路由/LLM 日志/子代理面板都自然落位；
  *    无会话上下文的 run 以 runId 自成归属。
  *
  * 可观测性走 onRecord（宿主落 JSONL journal）：meta / step_start / step_end / log / end。
- * v1 刻意不做：ask/notify 脚本原语（需要作答/通知面）、手动运行入口、触发链 provenance
- * （现有埋点不会由 run 的副作用再触发，chain 恒空数组占位）。
+ * 刻意不做：ask/notify 脚本原语（需要作答/通知面）、触发链 provenance（chain 恒空数组占位）。
  */
 import { v4 as uuid } from 'uuid'
 import type { SubAgentManager } from '../subagent/manager'
@@ -24,8 +30,9 @@ import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
 import type { RuntimeLogger } from '../types'
 import { validateContractSchema } from '../subagent/nextTool'
 import { TRIGGER_POINTS, type TriggerId, type TriggerPayloadMap } from './triggerPoints'
-import { evaluateWhen } from './when'
-import type { ParsedWorkflowFile } from './workflowFile'
+import { evaluateWhen, evaluateLaneKey } from './when'
+import { renderPromptTemplate } from './promptTemplate'
+import type { ParsedWorkflowFile, WorkflowConcurrency } from './workflowFile'
 
 /** 限额缺省（`shuvix-workflow-limits` 可覆盖）；askTimeoutSec 预留给未来的 ask 原语 */
 export const DEFAULT_WORKFLOW_LIMITS = {
@@ -84,12 +91,112 @@ export interface WorkflowEngineDeps {
   logger?: RuntimeLogger
 }
 
+/** 重入分道 —— 「什么和什么算同一件事」由调用方决定，引擎不猜 */
+export interface WorkflowReentry {
+  /** 分道键；同一工作流内相同 key 的 run 互斥。省略 → 不参与任何互斥 */
+  key?: string
+  /** 忙道策略；省略 → 文件的 `shuvix-workflow-concurrency` */
+  mode?: WorkflowConcurrency
+}
+
+export interface WorkflowInvokeRequest {
+  /** 注册表具名（用户覆盖内置同名，规则与 fire 一致） */
+  workflow: string
+  /** 脚本 `input`；文件声明了 `shuvix-workflow-input` 时按其 `required` 做浅校验 */
+  input?: unknown
+  /** 本次调用注入的能力（与基础 API 同名即拒绝装配，见 BASE_API_NAMES） */
+  capabilities?: Record<string, unknown>
+  reentry?: WorkflowReentry
+  /** 归属会话（派发的 parentSessionId：工具/询问/LLM 日志/面板落位） */
+  sessionId?: string
+  /** 外部中止（会话 abort / per-bot 停止级联） */
+  signal?: AbortSignal
+  /** 调用来源标签（journal / listRuns 可读） */
+  label?: string
+}
+
+export interface WorkflowInvokeResult {
+  /** 真的起跑了才有 */
+  runId?: string
+  started: boolean
+  /**
+   * `started: false` 的原因：
+   *  - `not-found` 注册表里没有这个名字（用户改坏/删了引用的 workflow）
+   *  - `invalid-input` 入参不满足 `shuvix-workflow-input`
+   *  - `skipped` 本分道忙且策略为 skip
+   *  - `superseded` 在 queue 槽里被更新的调用顶掉（槽容量恒为 1）
+   *  - `error` 引擎内部失败（注册表抛错之类）—— 兜底不谎称「没这个工作流」，
+   *    调用方据此提示用户会指错方向
+   */
+  reason?: 'not-found' | 'invalid-input' | 'skipped' | 'superseded' | 'error'
+  /** started 时：脚本是否正常收尾 */
+  ok?: boolean
+  output?: unknown
+  error?: string
+}
+
+/** 一次运行的只读快照（Monitor / 宿主中止面 / 测试） */
+export interface WorkflowRunSnapshot {
+  runId: string
+  workflowName: string
+  source: 'builtin' | 'user'
+  invocation: { kind: 'trigger'; trigger: string } | { kind: 'call'; label?: string }
+  laneKey?: string
+  sessionId?: string
+  startedAt: number
+}
+
 export interface WorkflowEngine {
   /** 业务埋点入口 —— payload 形状按 id 收窄（TriggerPayloadMap）。绝不抛出。 */
   fire<K extends TriggerId>(id: K, payload: TriggerPayloadMap[K]): void
+  /** 定向调用入口 —— 按名起一份并回传结果。绝不抛出（失败经返回值表达）。 */
+  invoke(req: WorkflowInvokeRequest): Promise<WorkflowInvokeResult>
+  /** 在跑的 run 快照（唯一权威是 runId，不是文件名） */
+  listRuns(): WorkflowRunSnapshot[]
+  /** 中止一个 run；未知 runId 返回 false */
+  abortRun(runId: string): boolean
+  /** 中止一条分道上的全部 run（含排队中的那一个），返回中止数 */
+  abortLane(laneKey: string): number
+  /** 中止某会话名下的全部 run，返回中止数 */
+  abortSession(sessionId: string): number
   /** 正在运行的 run 数（监控/测试用） */
   runningCount(): number
+  /**
+   * 当前有条目的分道数（监控/测试用）。存在的理由是「空道即删」这条不变量本身 ——
+   * 它的动机是内存增长（bot 路径的键含 sessionId+botName），而一条只能靠
+   * 「跑完还能不能再起」间接断言的不变量，等于没有验收面。
+   */
+  laneCount(): number
 }
+
+/**
+ * 分道键的组合口径 —— 宿主要主动中止一条道（会话删除、per-bot 停止）时用这个拼，
+ * 不要自己复制 `\u0000`：分隔符一旦被抄进宿主，下一次重构就会与引擎漂移。
+ */
+export function workflowLaneKey(workflowName: string, key: string): string {
+  return `${workflowName}\u0000${key}`
+}
+
+/** 合法 JS 标识符 —— 注入能力名要能在脚本里被写出来 */
+const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/
+
+/**
+ * 脚本可见的基础 API 名 —— 注入能力与之同名即拒绝装配。
+ * 能力遮蔽掉 `run`/`log` 这类基础面，会让同一份 md 在不同调用路径下语义不同。
+ */
+const BASE_API_NAMES = [
+  'event',
+  'input',
+  'vars',
+  'schemas',
+  'prompt',
+  'run',
+  'map',
+  'log',
+  'sleep',
+  'now',
+  'fail'
+] as const
 
 /** run() 的脚本侧选项（脚本传入，逐字段防御性校验） */
 interface RunOpts {
@@ -97,6 +204,8 @@ interface RunOpts {
   tools?: unknown
   description?: unknown
   nudges?: unknown
+  /** 本次派发的墙钟上限（秒）；与 run 级 deadline 取先到者 */
+  timeoutSec?: unknown
 }
 
 function errText(err: unknown): string {
@@ -119,16 +228,39 @@ function jsonClone<T>(value: T): T {
 
 export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
   const logger = deps.logger
-  /** 每工作流的在跑计数（skip/queue 重入判定） */
-  const running = new Map<string, number>()
-  /**
-   * queue 模式的待跑槽 —— **容量恒为 1**，新触发覆盖旧的（设计 §3.3「队列长度 1」）：
-   * 高频埋点上无界积压只会让迟到的 run 拿着过期的信封挨个空跑，最后一个事件才是现状。
-   */
-  const queuedNext = new Map<
-    string,
-    { entry: WorkflowRegistryEntry; envelope: Record<string, unknown> }
-  >()
+
+  /** 一次运行的活状态 —— **唯一权威是 runId**，文件名只是它的一个属性 */
+  interface WorkflowRun {
+    runId: string
+    workflowName: string
+    source: 'builtin' | 'user'
+    invocation: { kind: 'trigger'; trigger: string } | { kind: 'call'; label?: string }
+    laneKey?: string
+    sessionId?: string
+    startedAt: number
+    controller: AbortController
+  }
+
+  /** 一条分道：谁在跑 + 至多一个待跑槽 */
+  interface Lane {
+    active: Set<string>
+    queued?: { plan: RunPlan; settle: (r: WorkflowInvokeResult) => void }
+  }
+
+  /** 起跑一次 run 所需的全部输入（fire 与 invoke 汇合成同一个形状） */
+  interface RunPlan {
+    entry: WorkflowRegistryEntry
+    envelope: Record<string, unknown>
+    invocation: { kind: 'trigger'; trigger: string } | { kind: 'call'; label?: string }
+    laneKey?: string
+    mode: WorkflowConcurrency
+    sessionId?: string
+    capabilities?: Record<string, unknown>
+    externalSignal?: AbortSignal
+  }
+
+  const runs = new Map<string, WorkflowRun>()
+  const lanes = new Map<string, Lane>()
 
   function safeList(): WorkflowRegistryEntry[] {
     try {
@@ -154,23 +286,42 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
     }
   }
 
-  async function executeRun(
-    entry: WorkflowRegistryEntry,
-    envelope: Record<string, unknown>
-  ): Promise<void> {
+  async function startRun(plan: RunPlan): Promise<WorkflowInvokeResult> {
+    const { entry, envelope } = plan
     const file = entry.file
     const name = file.name
-    // 同步段先占坑：skip 判定与本次启动之间无 await 窗口
-    running.set(name, (running.get(name) ?? 0) + 1)
-
     const runId = `wfr-${uuid()}`
-    const triggerId = envelope.trigger as string
-    const def = TRIGGER_POINTS[triggerId as TriggerId]
-    const sessionId =
-      def?.scope === 'session' ? (envelope as { sessionId?: string }).sessionId : undefined
+    const sessionId = plan.sessionId
     const limits = { ...DEFAULT_WORKFLOW_LIMITS, ...file.limits }
     const controller = new AbortController()
     const startedAt = Date.now()
+    /**
+     * 这一次 abort 是「限时到了」还是「有人喊停」—— 收尾文案据此分叉。
+     * journal 与 invoke 的返回值不该对「用户点了停 / 会话删了 / 外部 signal 落下」
+     * 撒谎说超时（默认限额 1800s 的文案配上几十毫秒的 run 尤其误导）。
+     */
+    let abortReason: 'aborted' | 'timeout' = 'aborted'
+
+    // 同步段先占坑：忙道判定与本次启动之间无 await 窗口
+    runs.set(runId, {
+      runId,
+      workflowName: name,
+      source: entry.source,
+      invocation: plan.invocation,
+      laneKey: plan.laneKey,
+      sessionId,
+      startedAt,
+      controller
+    })
+    if (plan.laneKey) {
+      const lane = lanes.get(plan.laneKey) ?? { active: new Set<string>() }
+      lane.active.add(runId)
+      lanes.set(plan.laneKey, lane)
+    }
+    // 外部中止（会话 abort / per-bot 停止）级联进本 run
+    const onExternalAbort = (): void => controller.abort()
+    plan.externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+    if (plan.externalSignal?.aborted) controller.abort()
 
     const record = (rec: Record<string, unknown>): void => {
       try {
@@ -179,153 +330,244 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
         /* journal 失败不影响 run */
       }
     }
-    record({ type: 'meta', trigger: triggerId, source: entry.source, sessionId, event: envelope })
-    logger?.info(`workflow "${name}" run=${runId} start trigger=${triggerId}`)
 
-    // ── run() 原语：agent 派发（配额 + 并发信号量 + 结果契约） ──
-    let agentCount = 0
-    let activeAgents = 0
-    const waiters: Array<() => void> = []
-    const acquire = async (): Promise<void> => {
-      while (activeAgents >= limits.maxConcurrentAgents) {
-        await new Promise<void>((resolve) => waiters.push(resolve))
-      }
-      activeAgents++
-    }
-    const release = (): void => {
-      activeAgents--
-      waiters.shift()?.()
-    }
-
-    const runAgent = async (ref: unknown, prompt: unknown, opts?: RunOpts): Promise<unknown> => {
-      if (controller.signal.aborted) throw new Error('workflow run aborted')
-      if (typeof ref !== 'string' || !ref.trim()) {
-        throw new Error('run(agent, prompt): agent ref must be a non-empty string')
-      }
-      if (typeof prompt !== 'string' || !prompt.trim()) {
-        throw new Error('run(agent, prompt): prompt must be a non-empty string')
-      }
-      if (++agentCount > limits.maxAgents) {
-        throw new Error(`workflow agent limit reached (maxAgents=${limits.maxAgents})`)
-      }
-      const schema = opts?.schema
-      if (schema !== undefined) {
-        const schemaError = validateContractSchema(schema)
-        if (schemaError) throw new Error(`run(): ${schemaError}`)
-      }
-      await acquire()
-      try {
-        const profile = deps.resolveAgentProfile(ref.trim())
-        if (!profile) {
-          throw new Error(
-            `unknown agent "${ref.trim()}" — the ref must name a configured agent definition`
-          )
-        }
-        // opts.tools = 档案白名单的交集收窄（只能减不能加 —— 提权须改 agent md）；
-        // 两侧统一小写比较：mcp:/skill: 名的余部大小写保留在档案侧，收窄判定不因此漏配
-        let tools = [...profile.tools]
-        if (opts?.tools !== undefined) {
-          if (!Array.isArray(opts.tools))
-            throw new Error('run(): opts.tools must be a string array')
-          const allow = new Set(opts.tools.map((t) => String(t).toLowerCase()))
-          tools = tools.filter((t) => allow.has(t.toLowerCase()))
-        }
-        const modelConfig = await deps.resolveRunModel({ sessionId })
-        if (!modelConfig) {
-          throw new Error('no model available for this run — configure a session or default model')
-        }
-        const description =
-          typeof opts?.description === 'string' && opts.description.trim()
-            ? opts.description.trim()
-            : prompt.trim().split('\n')[0].slice(0, 40)
-        const nudges = typeof opts?.nudges === 'number' ? opts.nudges : undefined
-
-        record({ type: 'step_start', agent: profile.name, description })
-        const t0 = Date.now()
-        const res = await deps.manager.runTask({
-          // 会话域 run 挂到归属会话名下（工具/询问/日志/面板落位）；否则 runId 自成血缘根
-          parentSessionId: sessionId ?? runId,
-          agentType: { ...profile, tools },
-          prompt,
-          description,
-          modelConfig,
-          parentAbortSignal: controller.signal,
-          resultContract: schema
-            ? { schema: schema as Record<string, unknown>, sourceLabel: name, nudges }
-            : undefined
-        })
-        record({
-          type: 'step_end',
-          agent: profile.name,
-          ms: Date.now() - t0,
-          captured: schema ? res.structured !== undefined : undefined
-        })
-        if (schema !== undefined) {
-          if (res.structured === undefined) {
-            // 可编程失败（设计 §5.5）：脚本 catch 后可读 e.code / e.finalText 降级使用散文结果。
-            // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠
-            const err = new Error(
-              `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
-            ) as Error & { code?: string; finalText?: string }
-            err.code = 'next_not_called'
-            err.finalText = res.result
-            throw err
-          }
-          return jsonClone(res.structured)
-        }
-        return res.result
-      } finally {
-        release()
-      }
-    }
-
-    // ── 脚本 API（唯一可见的 global 面；出入参一律纯 JSON 值） ──
-    const api: Record<string, unknown> = {
-      event: deepFreeze(jsonClone(envelope)),
-      input: deepFreeze(jsonClone((envelope as { input?: unknown }).input ?? {})),
-      vars: deepFreeze(jsonClone(file.vars)),
-      schemas: deepFreeze(jsonClone(file.schemas)),
-      run: runAgent,
-      /** 并发辅助：单项失败落为 null（不整体 reject）；并发上限由 run() 内的信号量统一约束 */
-      map: async (items: unknown, fn: (item: unknown, index: number) => unknown) => {
-        if (!Array.isArray(items)) throw new Error('map(items, fn): items must be an array')
-        if (typeof fn !== 'function') throw new Error('map(items, fn): fn must be a function')
-        return Promise.all(
-          items.map((item, index) =>
-            Promise.resolve()
-              .then(() => fn(item, index))
-              .catch((err) => {
-                record({ type: 'log', message: `map[${index}] failed: ${errText(err)}` })
-                return null
-              })
-          )
-        )
-      },
-      log: (message: unknown) => record({ type: 'log', message: String(message) }),
-      sleep: (ms: unknown) =>
-        new Promise<void>((resolve, reject) => {
-          const delay = Math.max(0, Number(ms) || 0)
-          const timer = setTimeout(resolve, delay)
-          controller.signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timer)
-              reject(new Error('workflow run aborted'))
-            },
-            { once: true }
-          )
-        }),
-      now: () => new Date().toISOString(),
-      fail: (message: unknown): never => {
-        throw new Error(String(message ?? 'workflow failed'))
-      }
-    }
-
-    // ── 执行 + 墙钟限时（超时 abort 级联到脚本原语与全部在飞 agent） ──
-    const deadlineMs = limits.maxDurationSec * 1000
-    const timer = setTimeout(() => controller.abort(), deadlineMs)
+    // 占坑之后的**一切**都在同一个 try/finally 里：中间任何一步抛（例如不可 JSON 化的
+    // payload 让 deepFreeze(jsonClone(envelope)) 炸）都不得让 run 与分道被永久占住 ——
+    // fire 路径的 `void launch(...)` 还会把它变成一条无归属的 unhandled rejection
     let exec: Promise<unknown> | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let result: WorkflowInvokeResult
     try {
+      record({
+        type: 'meta',
+        invocation: plan.invocation,
+        source: entry.source,
+        sessionId,
+        lane: plan.laneKey,
+        event: envelope
+      })
+      const how =
+        plan.invocation.kind === 'trigger'
+          ? `trigger=${plan.invocation.trigger}`
+          : `call${plan.invocation.label ? `=${plan.invocation.label}` : ''}`
+      logger?.info(`workflow "${name}" run=${runId} start ${how}`)
+
+      // ── run() 原语：agent 派发（配额 + 并发信号量 + 结果契约） ──
+      let agentCount = 0
+      let activeAgents = 0
+      const waiters: Array<() => void> = []
+      const acquire = async (): Promise<void> => {
+        while (activeAgents >= limits.maxConcurrentAgents) {
+          await new Promise<void>((resolve) => waiters.push(resolve))
+        }
+        activeAgents++
+      }
+      const release = (): void => {
+        activeAgents--
+        waiters.shift()?.()
+      }
+
+      const runAgent = async (ref: unknown, prompt: unknown, opts?: RunOpts): Promise<unknown> => {
+        if (controller.signal.aborted) throw new Error('workflow run aborted')
+        if (typeof ref !== 'string' || !ref.trim()) {
+          throw new Error('run(agent, prompt): agent ref must be a non-empty string')
+        }
+        if (typeof prompt !== 'string' || !prompt.trim()) {
+          throw new Error('run(agent, prompt): prompt must be a non-empty string')
+        }
+        if (++agentCount > limits.maxAgents) {
+          throw new Error(`workflow agent limit reached (maxAgents=${limits.maxAgents})`)
+        }
+        const schema = opts?.schema
+        if (schema !== undefined) {
+          const schemaError = validateContractSchema(schema)
+          if (schemaError) throw new Error(`run(): ${schemaError}`)
+        }
+        await acquire()
+        try {
+          const profile = deps.resolveAgentProfile(ref.trim())
+          if (!profile) {
+            throw new Error(
+              `unknown agent "${ref.trim()}" — the ref must name a configured agent definition`
+            )
+          }
+          // opts.tools = 档案白名单的交集收窄（只能减不能加 —— 提权须改 agent md）；
+          // 两侧统一小写比较：mcp:/skill: 名的余部大小写保留在档案侧，收窄判定不因此漏配
+          let tools = [...profile.tools]
+          if (opts?.tools !== undefined) {
+            if (!Array.isArray(opts.tools))
+              throw new Error('run(): opts.tools must be a string array')
+            const allow = new Set(opts.tools.map((t) => String(t).toLowerCase()))
+            tools = tools.filter((t) => allow.has(t.toLowerCase()))
+          }
+          const modelConfig = await deps.resolveRunModel({ sessionId })
+          if (!modelConfig) {
+            throw new Error(
+              'no model available for this run — configure a session or default model'
+            )
+          }
+          const description =
+            typeof opts?.description === 'string' && opts.description.trim()
+              ? opts.description.trim()
+              : prompt.trim().split('\n')[0].slice(0, 40)
+          const nudges = typeof opts?.nudges === 'number' ? opts.nudges : undefined
+
+          // 本次派发的墙钟：与 run 级 deadline 取先到者。链在 run 的 controller 上，
+          // 所以 run 超时/被中止时这一层也随之落下（无需各自监听）
+          const stepController = new AbortController()
+          const onRunAbort = (): void => stepController.abort()
+          controller.signal.addEventListener('abort', onRunAbort, { once: true })
+          if (controller.signal.aborted) stepController.abort()
+          const stepTimeout =
+            typeof opts?.timeoutSec === 'number' && opts.timeoutSec > 0
+              ? setTimeout(() => stepController.abort(), opts.timeoutSec * 1000)
+              : undefined
+
+          record({ type: 'step_start', agent: profile.name, description })
+          const t0 = Date.now()
+          try {
+            const res = await deps.manager.runTask({
+              // 会话域 run 挂到归属会话名下（工具/询问/日志/面板落位）；否则 runId 自成血缘根
+              parentSessionId: sessionId ?? runId,
+              agentType: { ...profile, tools },
+              prompt,
+              description,
+              modelConfig,
+              parentAbortSignal: stepController.signal,
+              resultContract: schema
+                ? { schema: schema as Record<string, unknown>, sourceLabel: name, nudges }
+                : undefined
+            })
+            record({
+              type: 'step_end',
+              agent: profile.name,
+              ms: Date.now() - t0,
+              captured: schema ? res.structured !== undefined : undefined
+            })
+            if (schema !== undefined) {
+              if (res.structured === undefined) {
+                // 可编程失败（设计 §5.5）：脚本 catch 后可读 e.code / e.finalText 降级使用散文结果。
+                // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠
+                const err = new Error(
+                  `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
+                ) as Error & { code?: string; finalText?: string }
+                err.code = 'next_not_called'
+                err.finalText = res.result
+                throw err
+              }
+              return jsonClone(res.structured)
+            }
+            return res.result
+          } finally {
+            clearTimeout(stepTimeout)
+            controller.signal.removeEventListener('abort', onRunAbort)
+          }
+        } finally {
+          release()
+        }
+      }
+
+      // ── 脚本 API（脚本可见的 global 面；出入参一律纯 JSON 值） ──
+      const frozenEvent = deepFreeze(jsonClone(envelope))
+      const frozenInput = deepFreeze(jsonClone((envelope as { input?: unknown }).input ?? {}))
+      const frozenVars = deepFreeze(jsonClone(file.vars))
+      const api: Record<string, unknown> = {
+        event: frozenEvent,
+        input: frozenInput,
+        vars: frozenVars,
+        schemas: deepFreeze(jsonClone(file.schemas)),
+        /**
+         * 取一份渲染好的提示词块（`md prompt=<name>`）。`extras` 并进渲染作用域 ——
+         * 窗口切片这类一个表达式的事留在脚本里（`prompt('task', {window: …slice(-n)})`），
+         * 比在模板里发明一套切片语法便宜得多。
+         */
+        prompt: (promptName: unknown, extras?: unknown): string => {
+          const key = String(promptName ?? '')
+          const template = file.prompts[key]
+          if (template === undefined) {
+            throw new Error(
+              `prompt("${key}"): no such prompt block — add a \`\`\`md prompt=${key} block to this workflow`
+            )
+          }
+          const scope: Record<string, unknown> = {
+            ...(frozenInput as Record<string, unknown>),
+            input: frozenInput,
+            vars: frozenVars,
+            event: frozenEvent,
+            ...(extras && typeof extras === 'object' ? jsonClone(extras as object) : {})
+          }
+          return renderPromptTemplate(template, scope)
+        },
+        run: runAgent,
+        /** 并发辅助：单项失败落为 null（不整体 reject）；并发上限由 run() 内的信号量统一约束 */
+        map: async (items: unknown, fn: (item: unknown, index: number) => unknown) => {
+          if (!Array.isArray(items)) throw new Error('map(items, fn): items must be an array')
+          if (typeof fn !== 'function') throw new Error('map(items, fn): fn must be a function')
+          return Promise.all(
+            items.map((item, index) =>
+              Promise.resolve()
+                .then(() => fn(item, index))
+                .catch((err) => {
+                  record({ type: 'log', message: `map[${index}] failed: ${errText(err)}` })
+                  return null
+                })
+            )
+          )
+        },
+        log: (message: unknown) => record({ type: 'log', message: String(message) }),
+        sleep: (ms: unknown) =>
+          new Promise<void>((resolve, reject) => {
+            // 已中止即刻拒绝：run 收尾后脚本还在脱手运行（node:vm 无法硬中断异步续体），
+            // 少了这一条，`while (true) { await sleep(1000) }` 会在 run 记录为「已收尾」
+            // 之后永远跑下去 —— run() 首行的同一条守卫，sleep 也要有
+            if (controller.signal.aborted) {
+              reject(new Error('workflow run aborted'))
+              return
+            }
+            const delay = Math.max(0, Number(ms) || 0)
+            const timer = setTimeout(resolve, delay)
+            controller.signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer)
+                reject(new Error('workflow run aborted'))
+              },
+              { once: true }
+            )
+          }),
+        now: () => new Date().toISOString(),
+        fail: (message: unknown): never => {
+          throw new Error(String(message ?? 'workflow failed'))
+        }
+      }
+
+      // ── 能力注入：本次调用路径特有的副作用面（fire 路径恒无） ──
+      // 构造期已绑定身份（bot 路径的 say 只能写本次调用的那个会话），所以脚本拿到的
+      // 不是「一套环境权限」，而是「这一次被授予的东西」。与基础 API 同名即拒绝装配 ——
+      // 能力遮蔽掉 run/log 会让同一份 md 在不同路径下语义不同。
+      for (const [capName, cap] of Object.entries(plan.capabilities ?? {})) {
+        // 名字不合法就当装配失败，而不是留一个脚本写不出来的 global —— 失败形态否则
+        // 随宿主脚本引擎而异（AsyncFunction 抛语法错、node:vm 静默不可达）
+        const nameError = !IDENTIFIER_RE.test(capName)
+          ? `capability "${capName}" is not a valid identifier — a script cannot name it`
+          : (BASE_API_NAMES as readonly string[]).includes(capName)
+            ? `capability "${capName}" collides with the base script API`
+            : null
+        if (nameError) {
+          record({ type: 'end', ok: false, ms: 0, error: nameError })
+          logger?.error(`workflow "${name}" run=${runId}: ${nameError}`)
+          // 销号交给 finally（早退路径与正常路径同一条收尾）
+          return { runId, started: true, ok: false, error: nameError }
+        }
+        api[capName] = cap
+      }
+
+      // ── 执行 + 墙钟限时（超时 abort 级联到脚本原语与全部在飞 agent） ──
+      const deadlineMs = limits.maxDurationSec * 1000
+      timer = setTimeout(() => {
+        abortReason = 'timeout'
+        controller.abort()
+      }, deadlineMs)
       exec = deps.script.execute(file.script, api, {
         signal: controller.signal,
         timeoutMs: deadlineMs
@@ -333,73 +575,255 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
       // 无视脚本是否还挂着（node:vm 无法硬中断异步续体）：deadline 一到 run 即判超时收尾
       const output = await Promise.race([
         exec,
-        new Promise<never>((_, reject) =>
-          controller.signal.addEventListener(
-            'abort',
-            () => reject(new Error(`workflow run timed out after ${limits.maxDurationSec}s`)),
-            { once: true }
-          )
-        )
+        new Promise<never>((_, reject) => {
+          const rejectAborted = (): void =>
+            reject(
+              new Error(
+                abortReason === 'timeout'
+                  ? `workflow run timed out after ${limits.maxDurationSec}s`
+                  : 'workflow run aborted'
+              )
+            )
+          // **已 abort 的 signal 不会再派发 abort 事件** —— 少了这一条同步分支，
+          // 「传入一个已 aborted 的 signal」会让这一路永不 reject、setTimeout 也因
+          // 已 abort 而成空操作：整张墙钟安全网失效，run 与分道被永久占住
+          if (controller.signal.aborted) rejectAborted()
+          else controller.signal.addEventListener('abort', rejectAborted, { once: true })
+        })
       ])
       record({ type: 'end', ok: true, ms: Date.now() - startedAt, output: jsonClone(output) })
       logger?.info(`workflow "${name}" run=${runId} ok (${Date.now() - startedAt}ms)`)
+      result = { runId, started: true, ok: true, output: jsonClone(output) }
     } catch (err) {
       record({ type: 'end', ok: false, ms: Date.now() - startedAt, error: errText(err) })
       logger?.warn(`workflow "${name}" run=${runId} failed: ${errText(err)}`)
+      result = { runId, started: true, ok: false, error: errText(err) }
     } finally {
       // race 输掉/超时后脚本稍后才 settle 时不留 unhandled rejection
       exec?.catch(() => {})
       clearTimeout(timer)
       controller.abort()
-      running.set(name, (running.get(name) ?? 1) - 1)
-      // queue 模式的排空：空闲后拉起待跑槽里最后一个触发（skip/parallel 从不写这个槽）
-      const next = queuedNext.get(name)
-      if (next && (running.get(name) ?? 0) === 0) {
-        queuedNext.delete(name)
-        void executeRun(next.entry, next.envelope)
+      plan.externalSignal?.removeEventListener('abort', onExternalAbort)
+      finish()
+    }
+    return result
+
+    /** 从 runs / lane 里销号，并拉起本分道待跑槽里的那一个 */
+    function finish(): void {
+      runs.delete(runId)
+      if (!plan.laneKey) return
+      const lane = lanes.get(plan.laneKey)
+      if (!lane) return
+      lane.active.delete(runId)
+      if (lane.active.size > 0) return
+      const next = lane.queued
+      if (next) {
+        lane.queued = undefined
+        void startRun(next.plan).then(next.settle, (err) =>
+          next.settle({ started: true, ok: false, error: errText(err) })
+        )
+        return
       }
+      // 空道即删条目 —— bot 路径的键含 sessionId+botName，留 0 值条目会真的长起来
+      lanes.delete(plan.laneKey)
     }
   }
 
-  function launch(entry: WorkflowRegistryEntry, envelope: Record<string, unknown>): void {
-    const name = entry.file.name
-    const mode = entry.file.concurrency
-    if (mode === 'skip' && (running.get(name) ?? 0) > 0) {
-      logger?.info(`workflow "${name}": previous run still active — trigger skipped`)
-      return
+  /** 忙道判定 → 起跑 / 丢弃 / 入槽。返回值即 invoke 的结果（fire 不看） */
+  function launch(plan: RunPlan): Promise<WorkflowInvokeResult> {
+    const name = plan.entry.file.name
+    const lane = plan.laneKey ? lanes.get(plan.laneKey) : undefined
+    const busy = (lane?.active.size ?? 0) > 0
+    if (!busy) return startRun(plan)
+
+    if (plan.mode === 'skip') {
+      logger?.info(`workflow "${name}": lane busy — skipped`)
+      return Promise.resolve({ started: false, reason: 'skipped' })
     }
-    if (mode === 'queue' && (running.get(name) ?? 0) > 0) {
-      // 队列长度 1：覆盖待跑槽（迟到多次只保最后一个事件）
-      queuedNext.set(name, { entry, envelope })
-      logger?.info(`workflow "${name}": previous run still active — trigger queued (slot of 1)`)
-      return
+    if (plan.mode === 'queue') {
+      // 待跑槽容量恒为 1：新调用顶掉旧的（高频埋点上无界积压只会让迟到的 run
+      // 拿着过期的信封挨个空跑，最后一个事件才是现状）
+      const prev = lane!.queued
+      if (prev) prev.settle({ started: false, reason: 'superseded' })
+      logger?.info(`workflow "${name}": lane busy — queued (slot of 1)`)
+      return new Promise<WorkflowInvokeResult>((resolve) => {
+        lane!.queued = { plan, settle: resolve }
+      })
     }
-    void executeRun(entry, envelope)
+    // parallel：分道不阻断
+    return startRun(plan)
   }
 
   return {
     fire(id, payload): void {
       try {
-        if (!TRIGGER_POINTS[id]) return
+        const def = TRIGGER_POINTS[id]
+        if (!def) return
         // 信封 = payload + 保留键：trigger（埋点 id）与 chain（触发链占位，恒空数组）
         const envelope: Record<string, unknown> = { ...payload, trigger: id, chain: [] }
+        const sessionId =
+          def.scope === 'session' ? (envelope as { sessionId?: string }).sessionId : undefined
         for (const entry of safeList()) {
           // 同一埋点的多条绑定：命中一条即起一个 run（不重复起）
           const binding = entry.file.bindings.find(
             (b) => b.trigger === id && whenHit(entry, b.when, envelope)
           )
           if (!binding) continue
-          launch(entry, envelope)
+          // fire 是广播、不回传结果 —— 但 launch 的失败仍要落到日志，
+          // 不能变成一条无归属的 unhandled rejection（Electron 主进程里尤其难查）
+          void launch({
+            entry,
+            envelope,
+            invocation: { kind: 'trigger', trigger: id },
+            laneKey: workflowLaneKey(
+              entry.file.name,
+              triggerLaneKey(entry, binding.key, envelope, def)
+            ),
+            mode: entry.file.concurrency,
+            sessionId
+          }).catch((err) =>
+            logger?.warn(`workflow "${entry.file.name}": run failed to start — ${errText(err)}`)
+          )
         }
       } catch (err) {
         logger?.warn(`workflow fire(${String(id)}) failed: ${errText(err)}`)
       }
     },
 
+    async invoke(req): Promise<WorkflowInvokeResult> {
+      try {
+        // 刻意不走 safeList()：它为 fire 而设（注册表读不出来就当没人订阅，绝不抛）。
+        // 定向调用有个等着答案的调用方，「扫描失败」与「没这个名字」必须分得开 ——
+        // 否则用户会看到一句指错方向的「工作流不存在」
+        const entry = deps.listWorkflows().find((e) => e.file.name === req.workflow)
+        if (!entry) {
+          logger?.warn(`workflow invoke("${req.workflow}"): no such workflow`)
+          return { started: false, reason: 'not-found' }
+        }
+        // 「没传 input」归一为 `{}` **一次**，校验与信封读同一个值 —— 两边各归一各的，
+        // 会让「声明了 input schema 但 required 为空」的工作流 invoke({workflow}) 被拒、
+        // invoke({workflow, input:{}}) 通过（显式传 null 仍是入参错误，不是「没传」）
+        const input = req.input === undefined ? {} : req.input
+        const inputError = checkInput(entry.file, input)
+        if (inputError) {
+          logger?.warn(`workflow invoke("${req.workflow}"): ${inputError}`)
+          return { started: false, reason: 'invalid-input', error: inputError }
+        }
+        // 信封形状与 fire 一致，只是 trigger 位写 'call' —— 脚本读 event 时不必分路径
+        const envelope: Record<string, unknown> = { trigger: 'call', chain: [], input }
+        return await launch({
+          entry,
+          envelope,
+          invocation: { kind: 'call', label: req.label },
+          laneKey: req.reentry?.key ? workflowLaneKey(entry.file.name, req.reentry.key) : undefined,
+          mode: req.reentry?.mode ?? entry.file.concurrency,
+          sessionId: req.sessionId,
+          capabilities: req.capabilities,
+          externalSignal: req.signal
+        })
+      } catch (err) {
+        logger?.warn(`workflow invoke("${req.workflow}") failed: ${errText(err)}`)
+        return { started: false, reason: 'error', error: errText(err) }
+      }
+    },
+
+    listRuns(): WorkflowRunSnapshot[] {
+      return [...runs.values()].map(({ controller: _controller, ...snapshot }) => snapshot)
+    },
+
+    abortRun(runId): boolean {
+      const run = runs.get(runId)
+      if (!run) return false
+      run.controller.abort()
+      return true
+    },
+
+    abortLane(laneKey): number {
+      const lane = lanes.get(laneKey)
+      if (!lane) return 0
+      // 先清待跑槽：否则排空逻辑会在最后一个 active 落下时把它拉起来
+      const queued = lane.queued
+      if (queued) {
+        lane.queued = undefined
+        queued.settle({ started: false, reason: 'superseded' })
+      }
+      let n = queued ? 1 : 0
+      for (const runId of [...lane.active]) {
+        runs.get(runId)?.controller.abort()
+        n++
+      }
+      return n
+    },
+
+    abortSession(sessionId): number {
+      let n = 0
+      // 先作废该会话的待跑槽：否则被中止的 run 收尾时排空逻辑会把它拉起来 ——
+      // 「会话刚被中止/删除，引擎又给它起了一个新 run」（还带着已删会话的
+      // parentSessionId 去派发 agent）。顺序与 abortLane 一致
+      for (const lane of lanes.values()) {
+        const queued = lane.queued
+        if (!queued || queued.plan.sessionId !== sessionId) continue
+        lane.queued = undefined
+        queued.settle({ started: false, reason: 'superseded' })
+        n++
+      }
+      for (const run of runs.values()) {
+        if (run.sessionId !== sessionId) continue
+        run.controller.abort()
+        n++
+      }
+      return n
+    },
+
     runningCount(): number {
-      let total = 0
-      for (const count of running.values()) total += count
-      return total
+      return runs.size
+    },
+
+    laneCount(): number {
+      return lanes.size
     }
+  }
+
+  /**
+   * 埋点路径的分道键：绑定写了 `key` 就按它的 CEL 求值，否则由埋点 scope 推导 ——
+   * 会话域埋点天然按会话分道（两个会话同时轮结束不该互相 skip），其余全局一条道
+   * （= 引入分道之前的行为）。
+   *
+   * 求值失败 fail-safe 到缺省键而不是「不互斥」：键算错时宁可更强的互斥，
+   * 也不给一个来路不明的触发发一张并发许可。
+   */
+  function triggerLaneKey(
+    entry: WorkflowRegistryEntry,
+    key: string | undefined,
+    envelope: Record<string, unknown>,
+    def: { scope?: 'session' }
+  ): string {
+    const fallback =
+      def.scope === 'session' ? String((envelope as { sessionId?: string }).sessionId ?? '*') : '*'
+    if (!key) return fallback
+    try {
+      return evaluateLaneKey(key, { event: envelope, vars: entry.file.vars, env: deps.env })
+    } catch (err) {
+      logger?.warn(
+        `workflow "${entry.file.name}": lane key evaluation failed — ${errText(err)}; using the default lane`
+      )
+      return fallback
+    }
+  }
+
+  /**
+   * invoke 入参的浅校验 —— 只看 `shuvix-workflow-input` 的 `type: object` 与 `required`。
+   * 深层 JSON Schema 校验刻意不做：入参来自宿主自己的代码（不是模型输出），
+   * 而 required 恰好挡住「换了个调用方、少传一个字段」这类真实错误。
+   */
+  function checkInput(file: ParsedWorkflowFile, input: unknown): string | null {
+    const schema = file.inputSchema
+    if (!schema) return null
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      return 'input must be an object (this workflow declares shuvix-workflow-input)'
+    }
+    const required = Array.isArray(schema.required) ? schema.required : []
+    const missing = required.filter((k) => !(String(k) in (input as Record<string, unknown>)))
+    return missing.length ? `input is missing required field(s): ${missing.join(', ')}` : null
   }
 }

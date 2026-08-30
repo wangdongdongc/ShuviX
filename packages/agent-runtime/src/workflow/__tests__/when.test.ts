@@ -4,7 +4,7 @@
  * **向上抛**，由引擎兜成「不命中 + 告警」—— 宁漏一次触发，绝不误发一个 run。
  */
 import { describe, expect, it } from 'vitest'
-import { compileWhen, evaluateWhen } from '../when'
+import { compileWhen, evaluateLaneKey, evaluateWhen } from '../when'
 
 describe('compileWhen — 解析期语法门', () => {
   it('合法表达式 → null', () => {
@@ -55,5 +55,45 @@ describe('evaluateWhen — strict 求值', () => {
     expect(evaluateWhen(expr, { vars: { a: 1 } })).toBe(true)
     expect(evaluateWhen(expr, { vars: { a: 2 } })).toBe(false)
     expect(evaluateWhen(expr, { vars: { a: 1 } })).toBe(true)
+  })
+})
+
+describe('evaluateLaneKey — 分道键求值', () => {
+  it('string 结果原样返回', () => {
+    expect(evaluateLaneKey("'a'", {})).toBe('a')
+    expect(evaluateLaneKey('event.sessionId', { event: { sessionId: 's-42' } })).toBe('s-42')
+  })
+
+  it('number → 字符串（键是身份，类型在这里收敛）', () => {
+    expect(evaluateLaneKey('event.n', { event: { n: 42 } })).toBe('42')
+    expect(evaluateLaneKey('event.n', { event: { n: 1.5 } })).toBe('1.5')
+  })
+
+  it.each([
+    ['布尔', 'event.v', { v: true }, 'got boolean'],
+    ['对象', 'event.v', { v: { a: 1 } }, 'got object'],
+    ['列表', 'event.v', { v: [1, 2] }, 'got object'],
+    ['null', 'event.v', { v: null }, 'got object']
+  ])(
+    '%s 结果 → throw must evaluate to a string or number（布尔当键会把不相干的 run 挤成一条道）',
+    (_label, expr, event, got) => {
+      expect(() => evaluateLaneKey(expr, { event })).toThrow('must evaluate to a string or number')
+      expect(() => evaluateLaneKey(expr, { event })).toThrow(got)
+    }
+  )
+
+  it('strict 语义：访问缺失属性 → throw（引擎据此 fail-safe 到缺省键）', () => {
+    expect(() => evaluateLaneKey('event.nope', { event: {} })).toThrow()
+  })
+
+  it('与 when 共用编译缓存互不干扰：各自的类型校验照常生效（两个方向各一）', () => {
+    // 先 when 后 key
+    expect(evaluateWhen('event.v', { event: { v: true } })).toBe(true)
+    expect(() => evaluateLaneKey('event.v', { event: { v: true } })).toThrow('got boolean')
+    // 先 key 后 when（换一个表达式，走另一条缓存条目）
+    expect(evaluateLaneKey('event.k', { event: { k: 'lane-1' } })).toBe('lane-1')
+    expect(() => evaluateWhen('event.k', { event: { k: 'lane-1' } })).toThrow(
+      'must evaluate to a boolean'
+    )
   })
 })
