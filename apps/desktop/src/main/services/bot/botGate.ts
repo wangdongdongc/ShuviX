@@ -101,21 +101,27 @@ export function mentionsFromText(
   // 长名优先
   candidates.sort((a, b) => b.alias.length - a.alias.length)
 
-  const lower = text.toLowerCase()
+  // 命中的区间就地抹掉 —— 「长名优先」只靠排序是不够的：`hit` 是按**成员**去重的，
+  // 所以 `@研究员` 命中「研究员」之后，短名「研究」照样能在同一段文字上再命中一次
+  // （一个没被点名的 bot 因此被唤起）。抹区间而不是加词尾边界：词尾边界会把
+  // `@bobby` 命中 `bob` 这类降级期刻意的宽松一并禁掉。填充字符用 NUL 而不是空格：
+  // 空格会凭空造出一个词边界，让紧跟其后的短别名（`@alpha@b` 里的 `@b`）反而变成命中。
+  let scan = text.toLowerCase()
   const hit = new Set<string>()
   for (const { member, alias } of candidates) {
-    if (hit.has(member)) continue
     const needle = `@${alias.toLowerCase()}`
     let from = 0
     for (;;) {
-      const at = lower.indexOf(needle, from)
+      const at = scan.indexOf(needle, from)
       if (at < 0) break
-      const before = at === 0 ? '' : lower[at - 1]
+      const before = at === 0 ? '' : scan[at - 1]
       if (before === '' || /\s/.test(before)) {
         hit.add(member)
-        break
+        scan = scan.slice(0, at) + '\u0000'.repeat(needle.length) + scan.slice(at + needle.length)
+        from = at + needle.length
+      } else {
+        from = at + 1
       }
-      from = at + 1
     }
   }
   // 按成员序输出（命中集合的顺序不该取决于匹配顺序）
@@ -126,15 +132,28 @@ export function runL0Gate(inp: L0Input): L0Result {
   const records: L0Record[] = []
 
   // ── 1. @提及：token 优先，裸文本降级 ──
-  const byToken = mentionsFromTokens(inp.inlineTokens).filter((n) => inp.members.includes(n))
+  // 去重：两个指向同一 bot 的提及胶囊否则会派两个 run，而 barrier 的 members 有两项、
+  // pending 只有一项 —— 第一个 claim 就定局，第二个走 settled 分支也拿到 won，
+  // 于是**两条重复回复都通过 say 的闸**
+  const byToken = [
+    ...new Set(mentionsFromTokens(inp.inlineTokens).filter((n) => inp.members.includes(n)))
+  ]
   const mentioned = byToken.length ? byToken : mentionsFromText(inp.text, inp.members, inp.known)
-  if (mentioned.length) {
+  // 「命中」指**解析出了活着的成员**，不是「文本里出现了 @」：否则打一个已删除的 bot 名字
+  // 就成了会话的静音开关 —— 它会吞掉本该发生的 clarify 回连与正常组队
+  // 这一步是**探测**：不命中就回落到后续段，所以不落记录 —— 缺失成员的
+  // l0_member_missing 统一由段 3 记，否则同一条消息会读出两次缺失
+  const directedCohort = mentioned.filter((n) => inp.known.has(n))
+  if (directedCohort.length) {
     const via = byToken.length ? 'token' : 'text'
-    const cohort = present(mentioned, inp, records)
-    for (const name of cohort) {
+    // 被提及但已删除的成员：在这里记，段 3 不会再走到
+    for (const name of mentioned) {
+      if (!inp.known.has(name)) records.push({ kind: 'l0_member_missing', botName: name })
+    }
+    for (const name of directedCohort) {
       records.push({ kind: 'l0_directed', botName: name, detail: { via } })
     }
-    return finish(cohort, true, records, inp.members)
+    return finish(directedCohort, true, records, inp.members)
   }
 
   // ── 2. clarify 回连 ──
@@ -143,9 +162,12 @@ export function runL0Gate(inp: L0Input): L0Result {
     last &&
     last.decision === 'clarify' &&
     inp.members.includes(last.botName) &&
+    // 缺失判定前移：走 present 会在这里记一条 l0_member_missing，回落到段 3 又记一条 ——
+    // 决策记录是按 bot 分目录的调查材料，同一条消息重复归因会读出两次缺失
+    inp.known.has(last.botName) &&
     !inp.clarifyConsumed.has(last.entryId)
   ) {
-    const cohort = present([last.botName], inp, records)
+    const cohort = [last.botName]
     if (cohort.length) {
       records.push({
         kind: 'l0_clarify_relink',
@@ -186,23 +208,20 @@ function present(names: string[], inp: L0Input, records: L0Record[]): string[] {
   return out
 }
 
+/**
+ * **这里不记 `l0_silent`**：L0 之后每一次沉默都已经有具体原因（`l0_member_missing` /
+ * `l0_mention_only_skipped`），一个成员若既在册又不是 mention-only，它必然进 cohort ——
+ * 「无从解释的沉默」在这一层根本不存在。
+ *
+ * 设计 §7 说的「全体沉默」是另一回事：cohort 组起来了，但成员们**自己判定**不接。
+ * 那是仲裁的事（`claim` 全员 ignore），`l0_silent` 这个 kind 留给它（M6′）。
+ */
 function finish(
   cohort: string[],
   directed: boolean,
   records: L0Record[],
-  members: string[]
+  _members: string[]
 ): L0Result {
-  if (!cohort.length) {
-    // 全体沉默。**逐成员记**而不是记一条会话级的 —— 决策记录按 bot 分目录，
-    // 「这个 bot 为什么没说话」不该需要跨文件对账。已经因缺失/mention-only
-    // 记过原因的成员不重复记
-    const explained = new Set(records.map((r) => r.botName))
-    for (const name of members) {
-      if (explained.has(name)) continue
-      records.push({ kind: 'l0_silent', botName: name })
-    }
-    return { cohort, directed, records }
-  }
   for (const name of cohort) {
     records.push({
       kind: 'cohort_formed',

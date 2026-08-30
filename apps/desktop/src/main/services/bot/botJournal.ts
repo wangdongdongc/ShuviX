@@ -51,6 +51,7 @@ export type BotDecisionKind =
   | 'mailbox_granted'
   | 'mailbox_merged'
   | 'mailbox_timeout'
+  | 'mailbox_aborted'
   // 收尾
   | 'run_end'
 
@@ -132,9 +133,11 @@ export function pruneBotRuns(botName: string): void {
 /** decisions.jsonl 按尾部裁剪（它是一个不断追加的单文件，不能靠删文件收口） */
 function trimDecisions(file: string): void {
   try {
-    const lines = readFileSync(file, 'utf-8').split('\n')
+    // 过滤空串：`split('\n')` 会为尾部换行多出一格，不去掉的话「保留 5000 条」
+    // 实际只留 4999 条，断言精确值时会莫名其妙差一
+    const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean)
     if (lines.length <= DECISIONS_KEEP_LINES) return
-    writeFileSync(file, `${lines.slice(-DECISIONS_KEEP_LINES).join('\n')}`)
+    writeFileSync(file, `${lines.slice(-DECISIONS_KEEP_LINES).join('\n')}\n`)
   } catch (e) {
     log.warn(`决策记录裁剪失败 (${file}):`, e)
   }

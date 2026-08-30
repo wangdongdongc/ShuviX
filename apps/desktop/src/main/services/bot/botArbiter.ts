@@ -32,6 +32,12 @@ export interface ClaimVerdict {
   reason: 'solo' | 'won' | 'lost' | 'ignored' | 'timeout' | 'aborted'
 }
 
+/** 成员序，非成员排到最后 */
+function rank(members: string[], botName: string): number {
+  const at = members.indexOf(botName)
+  return at < 0 ? Number.POSITIVE_INFINITY : at
+}
+
 /** 决策优先序：同分时任务 > 澄清 > 轻回应 */
 const DECISION_RANK: Record<Exclude<ClaimDecision, 'ignore'>, number> = {
   task: 0,
@@ -70,6 +76,8 @@ export class CohortBarrier {
   private graceTimer: NodeJS.Timeout | null = null
   private settledWinner: string | null = null
   private settled = false
+  /** 定局是被 settle() 关的还是被 abort() 关的 —— 决定迟到者拿 timeout 还是 aborted */
+  private closedBy: 'settle' | 'abort' = 'settle'
 
   constructor(
     readonly members: string[],
@@ -101,13 +109,22 @@ export class CohortBarrier {
       return Promise.resolve({ won: true, winner: botName, reason: 'solo' })
     }
     if (this.settled) {
-      // 定局之后才到 —— 记为 timeout 而不是 ignored（「慢」不是「不想说」）
+      // 定局之后才到。记为 timeout 而不是 ignored（「慢」不是「不想说」）—— 但会话被中止
+      // 又是另一回事：把它也写成 timeout，等于让排查的人去调宽限窗，而实际是有人按了停止
       this.pending.delete(botName)
+      if (this.closedBy === 'abort') {
+        return Promise.resolve({ won: false, reason: 'aborted' })
+      }
       return Promise.resolve({
         won: this.settledWinner === botName,
         winner: this.settledWinner ?? undefined,
         reason: this.settledWinner === botName ? 'won' : 'timeout'
       })
+    }
+    // 同一个 bot 二次 claim：第一个 Promise 的 resolve 会被覆盖而永不落定，run 要挂到
+    // 引擎墙钟才收 —— 而 say 的三道闸都拦不住「卡住」。当脚本 bug 抛，与 asClaimIntent 同策
+    if (this.waiters.has(botName)) {
+      throw new Error(`claim() called twice by "${botName}" in one run`)
     }
     this.pending.delete(botName)
 
@@ -132,6 +149,7 @@ export class CohortBarrier {
   abort(): void {
     if (this.settled) return
     this.settled = true
+    this.closedBy = 'abort'
     this.clearGrace()
     for (const [, resolve] of this.waiters) resolve({ won: false, reason: 'aborted' })
     this.waiters.clear()
@@ -153,8 +171,10 @@ export class CohortBarrier {
       const ra = DECISION_RANK[a.decision as Exclude<ClaimDecision, 'ignore'>] ?? 9
       const rb = DECISION_RANK[b.decision as Exclude<ClaimDecision, 'ignore'>] ?? 9
       if (ra !== rb) return ra - rb
-      // 最后一级：成员序
-      return this.members.indexOf(a.botName) - this.members.indexOf(b.botName)
+      // 最后一级：成员序。非成员（indexOf === -1）排到最后而不是最前 ——
+      // 今天调用点恒来自 ticket 所以不可达，但让一个不在 cohort 里的人夺冠是个
+      // 「接自定义管线时才现形」的隐式不变量
+      return rank(this.members, a.botName) - rank(this.members, b.botName)
     })
     this.settledWinner = ranked[0]?.botName ?? null
 

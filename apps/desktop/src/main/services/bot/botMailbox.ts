@@ -51,11 +51,24 @@ export class MailboxMergedError extends Error {
   }
 }
 
-/** 排队超时被中止时抛出的错误 */
+/** 排队超过上限时抛出的错误 */
 export class MailboxTimeoutError extends Error {
   readonly code = 'mailbox_timeout'
   constructor() {
     super('queued too long in the bot mailbox')
+  }
+}
+
+/**
+ * 会话被中止时排队者拿到的错误。
+ *
+ * **与超时分开**：把「会话被删了」转写成「你等太久了」，与仲裁那边把「慢」转写成「沉默」
+ * 是同一类错误 —— 排查的人会去调排队上限，而真正发生的事是有人按了停止。
+ */
+export class MailboxAbortedError extends Error {
+  readonly code = 'mailbox_aborted'
+  constructor() {
+    super('the session was aborted while queued')
   }
 }
 
@@ -85,7 +98,12 @@ export interface MailboxDeps {
   /** 合并 / 超时 / 授予时记决策 */
   onEvent?: (
     key: string,
-    kind: 'mailbox_queued' | 'mailbox_granted' | 'mailbox_merged' | 'mailbox_timeout',
+    kind:
+      | 'mailbox_queued'
+      | 'mailbox_granted'
+      | 'mailbox_merged'
+      | 'mailbox_timeout'
+      | 'mailbox_aborted',
     item: QueueItem,
     detail?: Record<string, unknown>
   ) => void
@@ -141,8 +159,9 @@ export class BotMailbox {
       if (at < 0) lane.queue.push(waiter)
       else lane.queue.splice(at, 0, waiter)
 
-      this.deps.onEvent?.(key, 'mailbox_queued', item, { depth: lane.queue.length })
       this.trim(key, lane)
+      // depth 记 trim **之后**的真实队列长度 —— 满队时报 9 会让读日志的人以为上限没生效
+      this.deps.onEvent?.(key, 'mailbox_queued', item, { depth: lane.queue.length })
       this.emit(key)
     })
   }
@@ -164,7 +183,9 @@ export class BotMailbox {
     this.heldBy.delete(ticketId)
     const lane = this.lanes.get(key)
     if (!lane || lane.active?.item.ticketId !== ticketId) return
-    lane.repliedSeqs.add(lane.active.item.messageSeq)
+    // **不在这里置 repliedSeqs**：`selfReplied` 的契约是「我排队等着的这段时间里，我自己
+    // 已经答过话了」。无条件置位会让输掉仲裁、脚本报错、say 被闸掉的回合统统染成 true，
+    // 到 M5′ 的出队复核那里这个谓词就没有区分力了。唯一的置位口是 `noteReplied`（say 成功后）
     lane.active = null
     this.grantNext(key, lane)
     this.emit(key)
@@ -198,7 +219,8 @@ export class BotMailbox {
       if (!key.startsWith(prefix)) continue
       for (const w of lane.queue.splice(0)) {
         if (w.timer) this.clearTimer(w.timer)
-        w.reject(new MailboxTimeoutError())
+        this.deps.onEvent?.(key, 'mailbox_aborted', w.item)
+        w.reject(new MailboxAbortedError())
       }
       if (lane.active) this.heldBy.delete(lane.active.item.ticketId)
       lane.active = null
@@ -225,16 +247,14 @@ export class BotMailbox {
   private trim(key: string, lane: Lane): void {
     while (lane.queue.length > MAX_DEPTH) {
       const dropped = lane.queue.shift()!
+      // 循环条件保证 shift 之后队列至少还有 MAX_DEPTH 个 —— into 必然存在。
+      // 不为它写防御：那个分支永远测不到，而它的回退值会说出「你被合并进了你自己」
       const into = lane.queue[0]
       if (dropped.timer) this.clearTimer(dropped.timer)
-      if (into) {
-        into.superseded.push(dropped.item.messageSeq, ...dropped.superseded)
-        into.superseded.sort((a, b) => a - b)
-      }
-      this.deps.onEvent?.(key, 'mailbox_merged', dropped.item, {
-        intoSeq: into?.item.messageSeq
-      })
-      dropped.reject(new MailboxMergedError(into?.item.messageSeq ?? dropped.item.messageSeq))
+      into.superseded.push(dropped.item.messageSeq, ...dropped.superseded)
+      into.superseded.sort((a, b) => a - b)
+      this.deps.onEvent?.(key, 'mailbox_merged', dropped.item, { intoSeq: into.item.messageSeq })
+      dropped.reject(new MailboxMergedError(into.item.messageSeq))
     }
   }
 
@@ -270,9 +290,12 @@ export class BotMailbox {
 
   /** 空 lane 即删条目 —— 键含 sessionId+botName，留 0 值条目会真的长起来 */
   private gc(key: string, lane: Lane): void {
-    if (!lane.active && lane.queue.length === 0 && lane.repliedSeqs.size === 0) {
-      this.lanes.delete(key)
-    }
+    // 判据是「这条道闲下来了」，**不含 repliedSeqs** —— `releaseByTicket` 每次都会往里加一条，
+    // 把它算进条件等于让 lane 永远删不掉（键含 sessionId+botName，会真的长起来）。
+    //
+    // 连同 repliedSeqs 一起丢掉是对的：`selfReplied` 要回答的是「**我排队等着的这段时间里**，
+    // 我自己是不是已经答过话了」—— 而闲道意味着下一个请求根本没排队，那个问题无从谈起。
+    if (!lane.active && lane.queue.length === 0) this.lanes.delete(key)
   }
 
   private emit(key: string): void {

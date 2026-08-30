@@ -155,7 +155,7 @@ interface BotTicket {
  * `claim(intent)` 的入参校验。值跨 vm realm 到达，`instanceof` 不可靠 —— 逐字段 typeof。
  * 形状不合法即抛：这是脚本 bug，不是沉默的理由。
  */
-function asClaimIntent(raw: unknown): ClaimIntent {
+export function asClaimIntent(raw: unknown): ClaimIntent {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('claim(intent): intent must be an object')
   }
@@ -184,8 +184,13 @@ function asClaimIntent(raw: unknown): ClaimIntent {
  * `say(reply)` 的正文投影。M4′ 只取 headline —— BotReply 的**全键** markdown 投影
  * （含 points / table / followups，需要全键覆盖断言）归 M8′。
  */
-function asSayContent(raw: unknown): string {
-  if (typeof raw === 'string') return raw
+export function asSayContent(raw: unknown): string {
+  // 空串一路走到 appendBotMessage 只会 return null + 一条 warn：脚本拿到 messageId:null、
+  // journal 里没有失败记录、会话里什么都没有 —— 正是「可见结局」不变式要杜绝的形态
+  if (typeof raw === 'string') {
+    if (!raw.trim()) throw new Error('say(reply): reply must be a non-empty string')
+    return raw
+  }
   if (typeof raw === 'object' && raw !== null) {
     const d = raw as Record<string, unknown>
     const head = typeof d.headline === 'string' ? d.headline : ''
