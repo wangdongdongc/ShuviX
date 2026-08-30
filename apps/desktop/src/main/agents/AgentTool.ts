@@ -25,8 +25,9 @@ import { registerBuiltinTool } from '../services/toolRegistry'
 
 /**
  * 派发面注册表：两个基座档案（default 主会话 / notebook 笔记本）不进错误提示的可用名
- * 列表 —— 报出来会诱导 LLM 派发一个全权限或错场景的类型。显式按名 get 仍可解析：
- * 用户在自己的系统提示词里点名某个基座档案属显式意图，不在这里拦。
+ * 列表 —— 报出来会诱导 LLM 拿基座档案当一次性任务 agent 使（default 是主会话的人格、
+ * notebook 是笔记本的人格，都不是为一次性任务写的；论工具清单 default 反而比 coding 窄）。
+ * 显式按名 get 仍可解析：用户在自己的系统提示词里点名某个基座档案属显式意图，不在这里拦。
  */
 const dispatchRegistry: SubAgentRegistry = {
   list: () => agentService.listAll().filter((a) => !BASE_PROFILE_NAMES.has(a.name)),

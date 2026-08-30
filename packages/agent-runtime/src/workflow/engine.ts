@@ -11,10 +11,13 @@
  *    *同一件事撞车了怎么办*（策略，即文件的 `shuvix-workflow-concurrency`，作用域从
  *    「整份文件」收窄为「本分道」）。引擎不猜维度：会话域埋点的缺省键是 sessionId，
  *    bot 路径三种粒度（gate/task/notes）并存，都由调用方说了算；
- *  - run：脚本经宿主注入的 WorkflowScriptEngine 执行。基础 API 无副作用面，副作用主要
- *    经 `run()` 派发 agent（agent 照走 security 策略门）；**特定调用路径可以在 invoke 时
- *    注入能力**（构造期绑定身份，如 bot 路径的 say —— 它只能写本次调用的那个会话），
- *    fire 路径不注入任何能力；
+ *  - run：脚本经宿主注入的 WorkflowScriptEngine 执行。基础 API 只有流程原语（条件、并行、
+ *    聚合、日志），干活的是 `run()` 派发出去的 agent —— 它与 dispatch 工具派发的 agent
+ *    走完全同一条创建与执行路径，照走 security 策略门。`invoke` 的调用方还可以随本次调用
+ *    传几个自己造好的函数进来（`extraApi`，如 bot 路径的 say/claim/turn，目标已固化在
+ *    闭包里）；`fire` 是广播、没有单一调用方，也就没有可传的东西。**这是脚本 API 面的
+ *    装配差异，不是安全维度**：被派发 agent 能做什么只由策略引擎在执行期判定，与它经哪条
+ *    路径起跑无关（工作流不构成第二套安全机制）；
  *  - 限额（maxAgents / maxDurationSec / maxConcurrentAgents）在此收口；run 级
  *    AbortController 作为 parentAbortSignal 下传，超时/中止级联到全部在飞 agent；
  *  - 会话域埋点（TriggerPointDef.scope==='session'）：payload.sessionId 即 run 的归属会话，
@@ -104,8 +107,11 @@ export interface WorkflowInvokeRequest {
   workflow: string
   /** 脚本 `input`；文件声明了 `shuvix-workflow-input` 时按其 `required` 做浅校验 */
   input?: unknown
-  /** 本次调用注入的能力（与基础 API 同名即拒绝装配，见 BASE_API_NAMES） */
-  capabilities?: Record<string, unknown>
+  /**
+   * 调用方为本次 run 额外装配进脚本 API 的函数（bot 路径的 say/claim/turn）。
+   * 与基础 API 同名、或名字不是合法标识符即拒绝装配，见 BASE_API_NAMES。
+   */
+  extraApi?: Record<string, unknown>
   reentry?: WorkflowReentry
   /** 归属会话（派发的 parentSessionId：工具/询问/LLM 日志/面板落位） */
   sessionId?: string
@@ -177,12 +183,12 @@ export function workflowLaneKey(workflowName: string, key: string): string {
   return `${workflowName}\u0000${key}`
 }
 
-/** 合法 JS 标识符 —— 注入能力名要能在脚本里被写出来 */
+/** 合法 JS 标识符 —— 装配进脚本 API 的名字要能在脚本里被写出来 */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/
 
 /**
- * 脚本可见的基础 API 名 —— 注入能力与之同名即拒绝装配。
- * 能力遮蔽掉 `run`/`log` 这类基础面，会让同一份 md 在不同调用路径下语义不同。
+ * 脚本可见的基础 API 名 —— `extraApi` 与之同名即拒绝装配。
+ * 遮蔽掉 `run`/`log` 这类基础面，会让同一份 md 在不同调用路径下语义不同。
  */
 const BASE_API_NAMES = [
   'event',
@@ -255,7 +261,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
     laneKey?: string
     mode: WorkflowConcurrency
     sessionId?: string
-    capabilities?: Record<string, unknown>
+    extraApi?: Record<string, unknown>
     externalSignal?: AbortSignal
   }
 
@@ -391,7 +397,12 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
               `unknown agent "${ref.trim()}" — the ref must name a configured agent definition`
             )
           }
-          // opts.tools = 档案白名单的交集收窄（只能减不能加 —— 提权须改 agent md）；
+          // opts.tools = 与档案白名单取交集（缺省 = 档案全量）：让一份通用 agent 在这一步
+          // 只做窄任务，少给几个工具 = 少一点跑偏与噪声。**不是一道权限闸** —— 档案白名单
+          // 不是权限集，agent 能做什么由策略引擎逐次判定，少给工具不改变其中任何一次判定。
+          // 取交集而不是并集的理由是 md 的自洽：档案 body 是按它自己声明的工具清单写的，
+          // 塞一个提示词里没提过的工具进去，等于让这份 md 描述的不是它自己（与 extraApi
+          // 撞名拒装配同一条纪律）。
           // 两侧统一小写比较：mcp:/skill: 名的余部大小写保留在档案侧，收窄判定不因此漏配
           let tools = [...profile.tools]
           if (opts?.tools !== undefined) {
@@ -427,7 +438,11 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           const t0 = Date.now()
           try {
             const res = await deps.manager.runTask({
-              // 会话域 run 挂到归属会话名下（工具/询问/日志/面板落位）；否则 runId 自成血缘根
+              // 会话域 run 挂到归属会话名下（工具/询问/日志/面板落位）；否则 runId 自成血缘根。
+              // 后一支是**静默降级**，调用方漏传 sessionId 时会一路走到底：runId 不在登记簿里，
+              // 于是会话授权（autoAllow / 已授予路径）恒空、工作区落到临时目录、ask 因会话不存在
+              // 而 reject 成工具错误。方向全是更严，不构成绕过，但用户会看成「策略突然变严了」——
+              // bot 路径（M3′）接上来时，漏传 sessionId 是最容易踩的那一脚
               parentSessionId: sessionId ?? runId,
               agentType: { ...profile, tools },
               prompt,
@@ -541,17 +556,18 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
         }
       }
 
-      // ── 能力注入：本次调用路径特有的副作用面（fire 路径恒无） ──
-      // 构造期已绑定身份（bot 路径的 say 只能写本次调用的那个会话），所以脚本拿到的
-      // 不是「一套环境权限」，而是「这一次被授予的东西」。与基础 API 同名即拒绝装配 ——
-      // 能力遮蔽掉 run/log 会让同一份 md 在不同路径下语义不同。
-      for (const [capName, cap] of Object.entries(plan.capabilities ?? {})) {
+      // ── 调用方随本次调用传进来的函数（fire 是广播、没有调用方，所以恒为空） ──
+      // 它们由调用方在 invoke 之前造好，目标（bot 路径的那个会话、那个 bot）已经是闭包里
+      // 的常量 —— 脚本调 say 时不传会话号，也没有那个参数位可传。这是 API 形状，不是
+      // 作用域授权；被派发 agent 能做什么由策略引擎在执行期判定，与路径无关。
+      for (const [fnName, fn] of Object.entries(plan.extraApi ?? {})) {
         // 名字不合法就当装配失败，而不是留一个脚本写不出来的 global —— 失败形态否则
-        // 随宿主脚本引擎而异（AsyncFunction 抛语法错、node:vm 静默不可达）
-        const nameError = !IDENTIFIER_RE.test(capName)
-          ? `capability "${capName}" is not a valid identifier — a script cannot name it`
-          : (BASE_API_NAMES as readonly string[]).includes(capName)
-            ? `capability "${capName}" collides with the base script API`
+        // 随宿主脚本引擎而异（AsyncFunction 抛语法错、node:vm 静默不可达）；
+        // 与基础 API 同名则会让同一份 md 在不同调用路径下语义不同（脚本里的 run 被换掉）
+        const nameError = !IDENTIFIER_RE.test(fnName)
+          ? `extraApi "${fnName}" is not a valid identifier — a script cannot name it`
+          : (BASE_API_NAMES as readonly string[]).includes(fnName)
+            ? `extraApi "${fnName}" collides with the base script API`
             : null
         if (nameError) {
           record({ type: 'end', ok: false, ms: 0, error: nameError })
@@ -559,7 +575,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           // 销号交给 finally（早退路径与正常路径同一条收尾）
           return { runId, started: true, ok: false, error: nameError }
         }
-        api[capName] = cap
+        api[fnName] = fn
       }
 
       // ── 执行 + 墙钟限时（超时 abort 级联到脚本原语与全部在飞 agent） ──
@@ -718,7 +734,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           laneKey: req.reentry?.key ? workflowLaneKey(entry.file.name, req.reentry.key) : undefined,
           mode: req.reentry?.mode ?? entry.file.concurrency,
           sessionId: req.sessionId,
-          capabilities: req.capabilities,
+          extraApi: req.extraApi,
           externalSignal: req.signal
         })
       } catch (err) {

@@ -6,8 +6,10 @@
  *    superseded / error）；
  *  - 信封与 fire 同形（`{trigger:'call', chain:[], input}`）—— 脚本读 `event` 不必分路径；
  *  - 入参按 `shuvix-workflow-input` 的 `type:object` + `required` 做**浅**校验；
- *  - **能力按调用路径注入**：与 11 个基础 API 同名即拒绝装配（能力遮蔽掉 run/log 会让
- *    同一份 md 在不同路径下语义不同），而 **fire 路径恒不注入任何能力**。
+ *  - **调用方可以随本次调用装配几个自己的函数进脚本 API**（`extraApi`）：与 11 个基础
+ *    API 同名、或名字不是合法标识符，即拒绝装配（遮蔽掉 run/log 会让同一份 md 在不同
+ *    调用路径下语义不同）。fire 是广播、没有调用方，所以这些名字在 fire 起的 run 里
+ *    根本不在作用域内 —— 那是装配面的事实，与安全无关。
  *
  * 夹具见 ./harness.ts；分道/重入/中止面的用例在 engineLanes.test.ts。
  */
@@ -207,19 +209,19 @@ describe('invoke — 入参归一', () => {
   })
 })
 
-describe('invoke — 能力注入', () => {
-  it('注入的能力能被脚本调用到', async () => {
+describe('invoke — extraApi 装配', () => {
+  it('装配进来的函数能被脚本调用到', async () => {
     const eng = makeEngine({
       entries: [entryOf(fileOf({ script: "return await say('x')" }))]
     })
     const res = await eng.engine.invoke({
       workflow: 'wf',
-      capabilities: { say: async (t: string) => `said:${t}` }
+      extraApi: { say: async (t: string) => `said:${t}` }
     })
     expect(res.output).toBe('said:x')
   })
 
-  it('多个能力同时注入，与基础 API 并存', async () => {
+  it('多个函数同时装配，与基础 API 并存', async () => {
     const eng = makeEngine({
       entries: [
         entryOf(
@@ -237,23 +239,23 @@ describe('invoke — 能力注入', () => {
     })
     const res = await eng.engine.invoke({
       workflow: 'wf',
-      capabilities: { say: async (t: string) => `said:${t}`, claim: (n: number) => n * 10 }
+      extraApi: { say: async (t: string) => `said:${t}`, claim: (n: number) => n * 10 }
     })
     expect(res.output).toEqual({ a: 'said:a', b: 20, c: 'ok' })
     expect(eng.records.some((r) => r.rec.type === 'log' && r.rec.message === 'start')).toBe(true)
   })
 
   it.each(BASE_API_NAMES)(
-    '能力名与基础 API "%s" 碰撞 → 拒绝装配：ok:false + end 记录，脚本一次都没执行',
-    async (capName) => {
+    'extraApi 名与基础 API "%s" 碰撞 → 拒绝装配：ok:false + end 记录，脚本一次都没执行',
+    async (fnName) => {
       const eng = makeEngine({ entries: [entryOf(fileOf({ script: "return 'SHOULD NOT RUN'" }))] })
       const res = await eng.engine.invoke({
         workflow: 'wf',
-        capabilities: { [capName]: () => 1 }
+        extraApi: { [fnName]: () => 1 }
       })
       expect(res).toMatchObject({ started: true, ok: false })
       expect(res.runId).toMatch(/^wfr-/)
-      expect(res.error).toContain(`capability "${capName}" collides with the base script API`)
+      expect(res.error).toContain(`extraApi "${fnName}" collides with the base script API`)
       expect(eng.ends()[0]).toMatchObject({ ok: false, ms: 0 })
       expect(eng.execute).not.toHaveBeenCalled()
     }
@@ -263,7 +265,7 @@ describe('invoke — 能力注入', () => {
     const eng = makeEngine({ entries: [entryOf(fileOf({ script: 'return 1' }))] })
     const bad = await eng.engine.invoke({
       workflow: 'wf',
-      capabilities: { log: () => 1 },
+      extraApi: { log: () => 1 },
       reentry: { key: 'k' }
     })
     expect(bad.ok).toBe(false)
@@ -272,8 +274,9 @@ describe('invoke — 能力注入', () => {
     expect((await eng.engine.invoke({ workflow: 'wf', reentry: { key: 'k' } })).ok).toBe(true)
   })
 
-  it('fire 路径恒不注入能力：引用 say 的 md 走 fire → say is not defined', async () => {
-    // 已绑 session.turn-completed 的用户 md 不因本轮改造获得写会话的权力
+  it('fire 路径没有调用方可传函数：引用 say 的 md 走 fire → say is not defined', async () => {
+    // 纯装配面的事实，不是一道安全闸 —— 被派发 agent 能做什么由 security 策略在执行期
+    // 判定，与它经 fire 还是 invoke 起跑无关
     const eng = makeEngine({ entries: [entryOf(fileOf({ script: "return await say('x')" }))] })
     eng.engine.fire('session.prompt-accepted', payload())
     await eng.waitEnd()
@@ -281,7 +284,7 @@ describe('invoke — 能力注入', () => {
     expect(eng.ends()[0].error).toContain('say is not defined')
   })
 
-  it('排队中的调用其能力随 plan 保留，起跑时照常注入（bot mailbox 依赖）', async () => {
+  it('排队中的调用其 extraApi 随 plan 保留，起跑时照常装配（bot mailbox 依赖）', async () => {
     const { runTask, gates } = gatedRunTask()
     const eng = makeEngine({
       runTask,
@@ -293,7 +296,7 @@ describe('invoke — 能力注入', () => {
       eng.engine.invoke({
         workflow: 'wf',
         input: { tag },
-        capabilities: { say: async (t: string) => `said:${t}` },
+        extraApi: { say: async (t: string) => `said:${t}` },
         reentry: { key: 'k', mode: 'queue' }
       })
 
@@ -309,14 +312,14 @@ describe('invoke — 能力注入', () => {
   })
 
   it.each(['my-cap', '2fast', 'say it', ''])(
-    '能力名不是合法标识符（%s）→ 拒绝装配，与碰撞守卫同形',
-    async (capName) => {
+    'extraApi 名不是合法标识符（%s）→ 拒绝装配，与碰撞守卫同形',
+    async (fnName) => {
       // 不校验的话失败形态随宿主脚本引擎而异：AsyncFunction 在装配形参时炸出一句
       // 看不懂的语法错，node:vm 下则静默留一个脚本根本写不出来的 global
       const eng = makeEngine({ entries: [entryOf(fileOf({ script: 'return 1' }))] })
       const res = await eng.engine.invoke({
         workflow: 'wf',
-        capabilities: { [capName]: () => 1 }
+        extraApi: { [fnName]: () => 1 }
       })
       expect(res).toMatchObject({ started: true, ok: false })
       expect(res.error).toContain('is not a valid identifier')

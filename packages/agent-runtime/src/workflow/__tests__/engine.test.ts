@@ -8,7 +8,7 @@
  * logger 收集。meta 记录在 fire 的同步段落盘 ——「fire 后立即断言 meta 有无」因此是
  * 确定性的，负向用例不需要等待。
  *
- * 分道 / invoke / 能力注入的用例在 engineLanes.test.ts 与 engineInvoke.test.ts。
+ * 分道 / invoke / extraApi 装配的用例在 engineLanes.test.ts 与 engineInvoke.test.ts。
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -271,7 +271,7 @@ describe('run 生命周期与脚本 API', () => {
 })
 
 describe('run() — 派发原语', () => {
-  it('opts.tools 交集收窄：只能减不能加、两侧统一小写（mcp:MyServer 被 mcp:myserver 保留）', async () => {
+  it('opts.tools 交集收窄：档案没有的加不进来、两侧统一小写（mcp:MyServer 被 mcp:myserver 保留）', async () => {
     const { engine, runTask, ends, waitEnd } = makeEngine({
       entries: [
         entryOf(

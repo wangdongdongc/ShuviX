@@ -105,8 +105,9 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
     for (const language of ['en', 'zh', 'ja']) {
       const desk = buildBuiltinProfile(WIKI_SPEC, { wikiRoot: '/k', language })!
       const writer = buildBuiltinProfile(WIKI_WRITER_SPEC, { wikiRoot: '/k', language })!
-      // 整套拆分的效力不靠提示词自觉，靠这条：对话侧的上下文被长对话稀释也损坏不了知识库。
-      // git 也不给 —— 它是单个工具带 commit 子命令，无法只授读权限。
+      // 拆分的意义就在这份清单上：对话侧拿不到写入类工具，长对话把上下文稀释掉时也不会
+      // 顺手改坏知识库（真要保证不被改坏得靠 security 策略，这里是少给工具少跑偏）。
+      // git 也不给 —— 它是单个工具带 commit 子命令，给了就等于把写入动作放回对话侧的清单里。
       for (const forbidden of ['write', 'edit', 'git']) {
         expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
@@ -351,7 +352,7 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
 })
 
 describe('titler 档案钉板（auto-title 的执行侧）', () => {
-  it('tools 恰为 [session-config] —— 命名任务的全部权限就是改自己会话的标题', () => {
+  it('tools 恰为 [session-config] —— 命名任务只需要改自己会话的标题这一件事', () => {
     expect(profile('titler').tools).toEqual(['session-config'])
   })
 
