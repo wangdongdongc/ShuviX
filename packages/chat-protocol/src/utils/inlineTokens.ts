@@ -153,6 +153,15 @@ export function parseSlashCommandInput<C extends SlashCommandLike>(
  *   参数里可再嵌其他类型标记（如 paste），对 payload 追加一次就地替换
  * - 其他类型（at / paste 等）：逐个替换 token 标记处，保留周围文本
  */
+/**
+ * 提及胶囊的 token 类型 —— `'at'` 已经被工作区文件引用占用了，所以另起一个。
+ *
+ * **生产者是 A3 的输入框胶囊，此刻还没有**。L0 门的消费口先落地（`mentionsFromTokens`），
+ * 在那之前它恒返回空数组 —— 消费必须发生在 `resolveTokensForAgent` **之前**：
+ * 展开之后 token 的 type 就永久丢失了。
+ */
+export const BOT_MENTION_TOKEN_TYPE = 'bot'
+
 export function resolveTokensForAgent(
   content: string,
   tokens?: Record<string, InlineToken>

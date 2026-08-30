@@ -18,14 +18,16 @@ import type { WorkflowRegistryEntry } from '../engine'
 import type { TriggerPayloadMap } from '../triggerPoints'
 import type { RunTaskParams, SubAgentManager } from '../../subagent/manager'
 import type { InProcessAgentType } from '../../subagent/types'
+import type { ParsedWorkflowFile } from '../workflowFile'
 
 const autoTitle = (): NonNullable<ReturnType<typeof buildBuiltinWorkflow>> =>
   buildBuiltinWorkflow(AUTO_TITLE_WORKFLOW_SPEC, {})!
 
 describe('auto-title — 结构钉板', () => {
-  it('buildBuiltinWorkflows({}) 恰含 auto-title 且解析非 null', () => {
+  it('buildBuiltinWorkflows({}) 的内置清单是钉板：auto-title + bot-chat，都解析非 null', () => {
+    // 保持 toEqual 的严格性 —— 内置清单多一条少一条都该在这里现形
     const all = buildBuiltinWorkflows({})
-    expect(all.map((w) => w.name)).toEqual(['auto-title'])
+    expect(all.map((w) => w.name)).toEqual(['auto-title', 'bot-chat'])
     expect(autoTitle()).not.toBeNull()
   })
 
@@ -243,5 +245,51 @@ describe('auto-title — 分道（M2′ 顺带修掉的既有缺陷）', () => {
     expect(metas()).toHaveLength(1)
     gates[0]()
     await waitEnd()
+  })
+})
+
+describe('bot-chat — 骨架管线的结构钉板', () => {
+  const botChat = (): ParsedWorkflowFile =>
+    buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
+
+  it('没有任何埋点绑定 —— 它只由会话按名 invoke', () => {
+    expect(botChat().bindings).toEqual([])
+  })
+
+  it('concurrency 为 parallel：引擎重入彻底让位，独占由宿主的 turn() 提供', () => {
+    // 这两件事是**两个粒度**：引擎重入管「要不要起 run」，mailbox 管「已在跑的 run
+    // 何时进独占段」。声明 parallel 才不会让两者打架
+    expect(botChat().concurrency).toBe('parallel')
+  })
+
+  it('四个契约块齐全且都是 type:object（M5′/M8′ 直接消费，此刻已是最终形态）', () => {
+    const schemas = botChat().schemas
+    expect(Object.keys(schemas).sort()).toEqual(['intent', 'intentSolo', 'recheck', 'reply'])
+    for (const [name, schema] of Object.entries(schemas)) {
+      expect((schema as { type?: string }).type, name).toBe('object')
+    }
+  })
+
+  it('intent 有 ignore、intentSolo 没有 —— 1:1 会话里沉默与坏掉分不开', () => {
+    const enumOf = (n: string): string[] =>
+      (botChat().schemas[n] as Record<string, Record<string, Record<string, string[]>>>).properties
+        .decision.enum ?? []
+    expect(enumOf('intent')).toContain('ignore')
+    expect(enumOf('intentSolo')).not.toContain('ignore')
+  })
+
+  it('脚本一律读 input.* —— 脚本作用域不平铺 input（裸名是 ReferenceError）', () => {
+    const script = botChat().script
+    // 平铺只发生在提示词块的渲染作用域；脚本 global 只有基础 API + 调用方装配的那几个。
+    // 逐个钉住骨架用到的字段都带 input. 前缀
+    for (const field of ['occasion', 'skeletonDecision', 'bot.displayName', 'message.text']) {
+      expect(script, field).toContain(`input.${field}`)
+    }
+    // 三个装配进来的函数都用上了 —— 它们正是「这份 md 是 bot 管线」的全部含义
+    for (const api of ['claim(', 'turn(', 'say(']) expect(script).toContain(api)
+  })
+
+  it('刻意不含 md prompt 块：提示词随 M5′ 的真意图段一起落，不留死文本', () => {
+    expect(botChat().prompts).toEqual({})
   })
 })
