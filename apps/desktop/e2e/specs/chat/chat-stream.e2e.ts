@@ -280,7 +280,32 @@ describe('自动标题', () => {
   it('首轮生成的标题回写会话并同步侧栏', async () => {
     provider.reset()
     await events.clear()
-    provider.script({ text: 'titled' })
+
+    // 自动标题现在是 **auto-title 工作流派发 titler agent**，不再是那条带 TITLE_MARKER 的
+    // 专用请求 —— 所以它是一次普通对话请求，会正常消费脚本队列。用 `when` 按内容认领：
+    // titler 的工具集里有 session-config，主对话没有。
+    // （fakeProvider 里那条「标题请求不消费队列」的分支因此已是死代码，见 TITLE_MARKER。）
+    const isTitler = (r: { body: { tools?: unknown[] } }): boolean =>
+      JSON.stringify(r.body.tools ?? []).includes('session-config')
+    provider.script(
+      { text: 'titled', when: (r) => !isTitler(r) },
+      // titler 先用 session-config 写标题……
+      {
+        toolCalls: [
+          {
+            id: 'call_title',
+            name: 'session-config',
+            args: JSON.stringify({ action: 'set-title', title: 'E2E 标题' })
+          }
+        ],
+        when: isTitler
+      },
+      // ……再以结果契约收尾
+      {
+        toolCalls: [{ id: 'call_next', name: 'next', args: JSON.stringify({ title: 'E2E 标题' }) }],
+        when: isTitler
+      }
+    )
 
     expect(await sidebar.openSession(defaultTitle)).toBe(true)
     await chat.ready()
@@ -293,8 +318,7 @@ describe('自动标题', () => {
     )
     await until(async () => (await sidebar.titles()).includes('E2E 标题'), 'sidebar title synced')
 
-    // 标题请求走独立分支，不消费脚本队列（本轮只发了一个对话请求）
-    expect(provider.chatRequestCount()).toBe(1)
-    expect(provider.requests().filter((r) => r.isTitle).length).toBeGreaterThan(0)
+    // 主对话一次 + titler 两次（工具调用一次、契约收尾一次）
+    expect(provider.chatRequests().filter((r) => !isTitler(r))).toHaveLength(1)
   })
 })

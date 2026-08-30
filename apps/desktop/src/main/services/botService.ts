@@ -54,6 +54,7 @@ import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
 import { CohortBarrier, type ClaimIntent, type ClaimVerdict } from './bot/botArbiter'
 import { BotMailbox, mailboxKey, type QueueItem, type TurnSlot } from './bot/botMailbox'
 import { electronEventSink } from './agentRuntimeAdapters'
+import { messageService } from './messageService'
 import { sessionService } from './sessionService'
 
 const log = createLogger('Bot')
@@ -95,8 +96,15 @@ export interface InvalidBotFile {
   error: string
 }
 
+/** 连续多少次门控故障就回落内置（设计 §6.1） */
+const GATE_FAILURE_STREAK = 2
+
 /** 角色回落表 —— bot md 的 `shuvix-bot-agents` 逐键覆盖它 */
-const DEFAULT_STAGE_AGENTS = { intent: 'bot-intent', notes: 'bot-notes' } as const
+const DEFAULT_STAGE_AGENTS = {
+  intent: 'bot-intent',
+  recheck: 'bot-intent',
+  notes: 'bot-notes'
+} as const
 
 /**
  * 任务段指向 bot 自己。**必须是全局可寻址的 `bot:<name>` 而不是 `bot:self`** ——
@@ -114,7 +122,10 @@ export interface ResolvedPipeline {
   agents: Record<string, string>
 }
 
-export function resolvePipeline(bot: ParsedBotFile): ResolvedPipeline {
+export function resolvePipeline(
+  bot: ParsedBotFile,
+  overrides?: Record<string, string>
+): ResolvedPipeline {
   const workflow = bot.pipeline || DEFAULT_BOT_PIPELINE
   return {
     workflow,
@@ -122,7 +133,9 @@ export function resolvePipeline(bot: ParsedBotFile): ResolvedPipeline {
     agents: {
       ...DEFAULT_STAGE_AGENTS,
       task: botSelfRef(bot.name),
-      ...bot.agents
+      ...bot.agents,
+      // 回落覆盖用户的 shuvix-bot-agents —— 它正是「那份不可靠的门控 agent」的来源
+      ...overrides
     }
   }
 }
@@ -146,6 +159,8 @@ interface BotTicket {
   claimState: 'none' | 'won' | 'lost'
   /** run 已收尾（超时 / 被中止 / settle）—— `say` 的硬闸，见下 */
   terminal: boolean
+  /** 本 ticket 已经往会话里说过话 —— 可见结局兜底据此决定要不要再补一条失败气泡 */
+  said: boolean
   abort: AbortController
   /** meta 到达时回填 */
   runId?: string
@@ -484,6 +499,17 @@ class BotService {
   private readonly clarifyConsumed = new Map<string, Set<string>>()
   /** 禁写位：`abortSession` 期间 `say` 一律硬失败（drain 只排空队列，挡不住新写者） */
   private readonly blockWrites = new Set<string>()
+  /**
+   * 门控段的健康度：连续故障计数与「已回落」标记。
+   *
+   * 设计 §6.1：同一个 bot **连续 2 次**破损就回落内置门控 agent。超时与破损共用同一条
+   * streak —— 回落这个救济对两者是同一个动作（换掉那个不可靠的门控 agent / 模型），
+   * 分成两条只会让「一次超时 + 一次破损」永远够不到阈值。决策记录里两者仍分 kind。
+   *
+   * **回落是 sticky 的**：回落之后跑出的成功是**内置**跑出来的，不是那份覆盖跑出来的，
+   * 拿它清零会造成「回落 → 成功 → 切回 → 再坏两次」的振荡。sticky 到进程重启为止。
+   */
+  private readonly gateHealth = new Map<string, { streak: number; degraded?: string }>()
   private readonly mailbox = new BotMailbox({
     onChange: (key, snapshot) => {
       const [sessionId, botName] = key.split('\u0000')
@@ -642,6 +668,9 @@ class BotService {
     }
     if (!gate.cohort.length) return
 
+    // 窗口只建一次，切好之后发给每个成员 —— 它要读一遍会话树 + 跑一次投影
+    const window = await this.buildWindow(sessionId, messageId)
+
     const barrier = new CohortBarrier(gate.cohort, {
       onSettled: ({ unresponsive }) => {
         // 定局时连意图都还没交的成员：继续跑纯属烧钱。已 claim 的败者**不**中止 ——
@@ -662,14 +691,109 @@ class BotService {
             messageSeq,
             promptText,
             barrier,
+            // 「还有别人可能接这条消息吗」—— 降级出声的判据
             arbitrated: gate.cohort.length > 1,
-            members: gate.cohort
+            // 「这条消息点名了我吗」—— 契约选择的判据（定向与单 bot 一样用 intentSolo）
+            directed: gate.directed,
+            members: gate.cohort,
+            known,
+            window
           })
         )
       )
     } finally {
       this.leave(sessionId)
     }
+  }
+
+  /**
+   * 会话窗口 —— 喂给提示词的**已成型字符串行**，不是对象数组。
+   *
+   * 提示词模板对数组是「逐项 String 后按行拼」，而对象会走 JSON.stringify：给对象数组，
+   * `{{window}}` 渲染出来就是一行一个 JSON，白烧 token 还难读。字符预算也只有在拼成行
+   * 之后才有确切含义。脚本仍能按条数切（`input.window.slice(-vars.gateWindow)`）。
+   *
+   * 发言人标签用固定的 `User` / bot 的 displayName，**刻意不本地化** —— 它是数据标注
+   * 不是文案，模型跨语言都读得懂。bot 的名字取投影产物里的 `metadata.sender`，
+   * 那是落树当时的快照，所以历史行不会因为改名而改写。
+   *
+   * @param untilEntryId 截到这条 entry **之前**（新用户消息在派发前已经落树，
+   *        不截的话它会和提示词里的 `{{message.text}}` 重复一遍）
+   */
+  private async buildWindow(
+    sessionId: string,
+    untilEntryId?: string
+  ): Promise<{ lines: string[]; after: (entryId: string) => string[] }> {
+    const msgs = await messageService.listBySession(sessionId)
+    const cut = untilEntryId ? msgs.findIndex((m) => m.id === untilEntryId) : -1
+    const upTo = cut >= 0 ? msgs.slice(0, cut) : msgs
+    const lineOf = (m: (typeof msgs)[number]): string => {
+      const who =
+        m.role === 'user'
+          ? 'User'
+          : ((m.metadata as { sender?: { displayName?: string } } | null)?.sender?.displayName ??
+            'Assistant')
+      // user 消息的 content 是标记态原文（内联 Token 还没展开）—— 还原成人读文本
+      const text =
+        m.role === 'user' ? resolveTokensForAgent(m.content, m.metadata?.inlineTokens) : m.content
+      return `${who}: ${String(text ?? '').trim()}`
+    }
+    return {
+      lines: upTo.filter((m) => m.role === 'user' || m.role === 'assistant').map(lineOf),
+      after: (entryId: string) => {
+        const at = msgs.findIndex((m) => m.id === entryId)
+        if (at < 0) return []
+        return msgs
+          .slice(at + 1)
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map(lineOf)
+      }
+    }
+  }
+
+  /**
+   * 门控段的健康度记账。信道是脚本返回值的 `gate` 字段 —— 宿主看不见脚本内 `run()` 的错，
+   * 而管线自己知道它这一轮是怎么收的。
+   *
+   * `gate` 缺省（自定义管线、`started:false`、脚本自身抛出）→ **既不递增也不清零**：
+   * 这个计数器问的是「内置门控契约还灵不灵」，网络抖动不该把用户的自定义管线打成回落态。
+   */
+  private noteGateHealth(botName: string, gate: string | undefined, ticket: BotTicket): void {
+    if (gate !== 'ok' && gate !== 'broken' && gate !== 'timeout') return
+    const health = this.gateHealth.get(botName) ?? { streak: 0 }
+    if (gate === 'ok') {
+      // 已回落的不清零（见 gateHealth 的注释）
+      if (!health.degraded) health.streak = 0
+      this.gateHealth.set(botName, health)
+      return
+    }
+    health.streak += 1
+    appendBotDecision({
+      kind: gate === 'timeout' ? 'gate_timeout' : 'gate_broken',
+      sessionId: ticket.sessionId,
+      botName,
+      ticketId: ticket.ticketId,
+      messageSeq: ticket.messageSeq,
+      messageId: ticket.messageId,
+      detail: { streak: health.streak }
+    })
+    if (health.streak >= GATE_FAILURE_STREAK && !health.degraded) {
+      health.degraded = gate
+      appendBotDecision({
+        kind: 'gate_fallback',
+        sessionId: ticket.sessionId,
+        botName,
+        ticketId: ticket.ticketId,
+        detail: { after: health.streak, reason: gate }
+      })
+      log.warn(`bot "${botName}" 的门控段连续 ${health.streak} 次故障，已回落内置 bot-intent`)
+    }
+    this.gateHealth.set(botName, health)
+  }
+
+  /** 某个 bot 的门控段是不是已经回落（设置页徽标的数据位） */
+  gateDegradedOf(botName: string): string | undefined {
+    return this.gateHealth.get(botName)?.degraded
   }
 
   /** 一个成员的一次应答：建 ticket → 装配三个回调 → invoke */
@@ -682,10 +806,15 @@ class BotService {
     promptText: string
     barrier: CohortBarrier
     arbitrated: boolean
+    directed: boolean
     members: string[]
+    known: Map<string, ParsedBotFile>
+    window: { lines: string[]; after: (entryId: string) => string[] }
   }): Promise<void> {
     const { bot, sessionId, messageId, messageSeq } = ctx
-    const pipeline = resolvePipeline(bot)
+    // 连续故障之后回落内置门控：用户覆盖的 `shuvix-bot-agents.intent` 让位
+    const degraded = this.gateHealth.get(bot.name)?.degraded
+    const pipeline = resolvePipeline(bot, degraded ? { intent: 'bot-intent' } : undefined)
     const ticket: BotTicket = {
       ticketId: `bt-${uuidv4()}`,
       sessionId,
@@ -696,6 +825,7 @@ class BotService {
       barrier: ctx.barrier,
       claimState: ctx.barrier.isSolo ? 'won' : 'none',
       terminal: false,
+      said: false,
       abort: new AbortController()
     }
 
@@ -744,7 +874,19 @@ class BotService {
             file: ctx.basePath
           },
           agents: pipeline.agents,
-          session: { id: sessionId, arbitrated: ctx.arbitrated, members: ctx.members },
+          session: {
+            id: sessionId,
+            arbitrated: ctx.arbitrated,
+            directed: ctx.directed,
+            members: ctx.members,
+            // 其它成员的身份 —— 门控段据此判断「这条明显是冲着别人去的」
+            others: ctx.members
+              .filter((n) => n !== bot.name)
+              .map((n) => ctx.known.get(n))
+              .filter((b): b is ParsedBotFile => !!b)
+              .map((b) => ({ displayName: b.displayName, description: b.description }))
+          },
+          window: ctx.window.lines,
           message: { id: messageId, seq: messageSeq, text: ctx.promptText },
           notes: bot.notes ?? ''
         },
@@ -753,18 +895,34 @@ class BotService {
         // 只给 mode 不给 key 静默无效，而显式传 mode 等于替用户的管线 md 做主
       })
 
+      const output = result.output as { outcome?: string; gate?: string } | undefined
       if (!result.started) {
         decide(result.reason === 'invalid-input' ? 'pipeline_invalid_input' : 'pipeline_error', {
           reason: result.reason,
           error: result.error
         })
       } else {
+        this.noteGateHealth(bot.name, output?.gate, ticket)
         decide('run_end', {
           ok: result.ok,
-          outcome: (result.output as { outcome?: string } | undefined)?.outcome,
+          outcome: output?.outcome,
+          gate: output?.gate,
           error: result.error,
           ms: Date.now() - startedAt
         })
+      }
+
+      // 可见结局兜底（设计 §9）：脚本自己抛了、没有可用模型、mailbox 超时 —— 这些今天
+      // 在会话里什么都不会出现。**`!ctx.arbitrated` 是必须的**：多 bot 会话里未表态的成员
+      // 是被宿主主动 abort 的，那是设计要的沉默；一刀切会让每条多 bot 消息多出 N−1 条错误气泡
+      if (!result.ok && !ticket.said && !ctx.arbitrated && !ticket.abort.signal.aborted) {
+        await this.appendBotMessage(
+          sessionId,
+          { botName: bot.name, displayName: bot.displayName },
+          {
+            content: `⚠️ ${bot.displayName}：这条消息没能处理完 —— ${result.error ?? 'unknown error'}`
+          }
+        )
       }
       this.activity(ticket, 'ended', result.started ? (result.ok ? 'ok' : 'failed') : result.reason)
     } finally {
@@ -825,18 +983,23 @@ class BotService {
         this.activity(ticket, 'queued')
         const slot = await this.mailbox.acquireBare(key, item)
         this.activity(ticket, 'working')
+        // 排队期间发生的事 —— 在这里补而不是在 mailbox 的 slot() 里：那是同步纯函数，
+        // 塞一次读树进去会污染它的假时钟单测。mailbox 只需要知道 messageId，
+        // 「那条消息之后有什么」是宿主的窗口构建器的事
+        const since = (await this.buildWindow(ticket.sessionId)).after(ticket.messageId)
+        const granted: TurnSlot = { ...slot, since }
         if (typeof fn !== 'function') {
           // 裸形式：由 run 收尾时释放（runPipeline 的 finally）
-          return { ...slot }
+          return granted
         }
         try {
-          return await (fn as (s: TurnSlot) => Promise<unknown>)({ ...slot })
+          return await (fn as (s: TurnSlot) => Promise<unknown>)(granted)
         } finally {
           this.mailbox.releaseByTicket(ticket.ticketId)
         }
       },
 
-      say: async (raw: unknown): Promise<{ messageId: string | null }> => {
+      say: async (raw: unknown, opts?: unknown): Promise<{ messageId: string | null }> => {
         // ① run 已收尾：引擎只是 race 输掉，node:vm 无法硬中断异步续体，脚本还在脱手跑。
         //    少了这条闸，会出现「journal 记为超时失败、会话里却多出一条消息」的分叉
         if (ticket.terminal) throw new Error('this run has already ended')
@@ -852,12 +1015,28 @@ class BotService {
           throw new Error('call claim() before say() in a multi-bot session')
         }
         const content = asSayContent(raw)
+        const o = (typeof opts === 'object' && opts !== null ? opts : {}) as {
+          decision?: unknown
+          error?: unknown
+        }
+        // 降级出声（`{error:true}`）**绝不带 decision** —— 否则一条 clarify 会把用户的
+        // 下一条无关消息硬路由回这个刚出过故障的 bot
+        const decision = o.error !== true && typeof o.decision === 'string' ? o.decision : undefined
         const messageId = await this.appendBotMessage(
           ticket.sessionId,
-          { botName: ticket.botName, displayName: ticket.displayName },
+          {
+            botName: ticket.botName,
+            displayName: ticket.displayName,
+            ...(decision ? { decision } : {}),
+            // 原值原样存进侧车：M8′ 只需收窄类型，不必迁移数据
+            ...(typeof raw === 'object' && raw !== null ? { reply: raw } : {})
+          },
           { content }
         )
-        if (messageId) this.mailbox.noteReplied(key, ticket.messageSeq)
+        if (messageId) {
+          ticket.said = true
+          this.mailbox.noteReplied(key, ticket.messageSeq)
+        }
         return { messageId }
       }
     }

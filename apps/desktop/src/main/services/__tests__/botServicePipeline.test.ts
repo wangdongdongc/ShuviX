@@ -97,9 +97,10 @@ describe('resolvePipeline —— 管线与角色的回落表', () => {
     expect(mocks.hasWorkflow).toHaveBeenLastCalledWith('my-flow')
   })
 
-  it('默认角色表：intent / notes 走内置件，task 自指', () => {
+  it('默认角色表：intent / recheck / notes 走内置件，task 自指', () => {
     expect(resolvePipeline(stubBot({ name: 'scout' })).agents).toEqual({
       intent: 'bot-intent',
+      recheck: 'bot-intent',
       notes: 'bot-notes',
       task: 'bot:scout'
     })
@@ -107,7 +108,12 @@ describe('resolvePipeline —— 管线与角色的回落表', () => {
 
   it('bot.agents 逐键覆盖（只给 intent 时其余不动）', () => {
     const r = resolvePipeline(stubBot({ name: 'scout', agents: { intent: 'my-intent' } }))
-    expect(r.agents).toEqual({ intent: 'my-intent', notes: 'bot-notes', task: 'bot:scout' })
+    expect(r.agents).toEqual({
+      intent: 'my-intent',
+      recheck: 'bot-intent',
+      notes: 'bot-notes',
+      task: 'bot:scout'
+    })
   })
 
   it('bot.agents 可以覆盖 task（用户值胜过 botSelfRef）', () => {

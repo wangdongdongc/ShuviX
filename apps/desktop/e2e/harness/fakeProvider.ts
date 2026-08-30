@@ -35,6 +35,16 @@ export interface FakeTurn {
   thinking?: string | string[]
   /** 工具调用；有值时 finishReason 缺省为 'tool_calls' */
   toolCalls?: Array<{ id: string; name: string; args: string }>
+  /**
+   * 按请求内容认领这个 turn；缺省 = 纯 FIFO（既有用例零改动）。
+   *
+   * **并发场景必须用它**：队列的消费序是「请求体读完的顺序」而不是发出顺序，所以多个
+   * 并行派发（双 bot 的两个意图段）拿到哪个脚本完全不确定。服务跑在 vitest 进程里，
+   * 判定就是一个普通闭包 —— 可用的判据都在已记录的 `raw`/`body` 里：提示词带的
+   * bot displayName、契约里有没有 `"ignore"`（天然区分 intent / intentSolo）、
+   * `body.tools?.length === 1`（只有 next 的意图段）。
+   */
+  when?: (req: FakeRequest) => boolean
   /** 本次调用的用量（prompt/completion，务必是小数值） */
   usage?: { prompt: number; completion: number }
   finishReason?: 'stop' | 'tool_calls' | 'length'
@@ -234,12 +244,13 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       const isTitle = rawBody.includes(TITLE_MARKER)
       const messages = body.messages ?? []
       const lastUser = [...messages].reverse().find((m) => m.role === 'user')
-      recorded.push({
+      const record: FakeRequest = {
         isTitle,
         body,
         raw: rawBody,
         lastUserText: textOfContent(lastUser?.content)
-      })
+      }
+      recorded.push(record)
 
       const model = body.model ?? 'e2e-model'
       // 标题请求：直接回 JSON 标题，绝不动脚本队列
@@ -248,7 +259,10 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         return
       }
 
-      const turn = queue.shift() ?? { text: 'OK', finishReason: 'stop' as const }
+      // 取队列里第一个「没写 when 或 when 命中」的 turn：无 when 的仍是纯 FIFO
+      const at = queue.findIndex((t) => !t.when || t.when(record))
+      const turn =
+        at >= 0 ? queue.splice(at, 1)[0] : ({ text: 'OK', finishReason: 'stop' } as FakeTurn)
       if (turn.httpStatus) {
         res.writeHead(turn.httpStatus, { 'Content-Type': 'application/json' })
         res.end(

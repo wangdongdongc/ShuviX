@@ -280,16 +280,52 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
 
   it('脚本一律读 input.* —— 脚本作用域不平铺 input（裸名是 ReferenceError）', () => {
     const script = botChat().script
-    // 平铺只发生在提示词块的渲染作用域；脚本 global 只有基础 API + 调用方装配的那几个。
-    // 逐个钉住骨架用到的字段都带 input. 前缀
-    for (const field of ['occasion', 'skeletonDecision', 'bot.displayName', 'message.text']) {
+    // 平铺只发生在提示词块的渲染作用域；脚本 global 只有基础 API + 调用方装配的那几个
+    for (const field of [
+      'occasion',
+      'window',
+      'notes',
+      'agents.intent',
+      'session.arbitrated',
+      'session.directed',
+      'session.others'
+    ]) {
       expect(script, field).toContain(`input.${field}`)
     }
+    // 反过来：新消息的正文脚本一次都不碰 —— 它经模板的 {{message.text}} 进提示词，
+    // 那里的作用域才是平铺的。脚本只挑材料，不拼文案
+    expect(script).not.toContain('input.message.text')
+    expect(botChat().prompts.gate).toContain('{{message.text}}')
     // 三个装配进来的函数都用上了 —— 它们正是「这份 md 是 bot 管线」的全部含义
     for (const api of ['claim(', 'turn(', 'say(']) expect(script).toContain(api)
   })
 
-  it('刻意不含 md prompt 块：提示词随 M5′ 的真意图段一起落，不留死文本', () => {
-    expect(botChat().prompts).toEqual({})
+  it('故障与被中止分开：step_aborted 安静退出，另两种才算门控故障', () => {
+    // 「有人赢了 / 会话停了」不是「门控坏了」—— 把它算进破损计数会让正常的多 bot 让位
+    // 两次之后把 bot 打成回落态
+    const script = botChat().script
+    expect(script).toContain('step_aborted')
+    expect(script).toContain('next_not_called')
+    expect(script).toContain('step_timeout')
+  })
+
+  it("脚本里每个 prompt('x') 的 x 都真有对应的块（改名漏一处 = 运行时抛）", () => {
+    const wf = botChat()
+    const used = [...wf.script.matchAll(/prompt\('([A-Za-z][\w-]*)'/g)].map((m) => m[1])
+    expect(used.length).toBeGreaterThan(0)
+    for (const name of new Set(used)) {
+      expect(Object.keys(wf.prompts), name).toContain(name)
+    }
+  })
+
+  it('可选上下文是嵌套 prompt 块，不是裸占位符', () => {
+    // 模板语法只有 {{path}}（无条件无循环），而「整行消失」只在该行除占位符外全是空白时
+    // 成立 —— 所以「有内容才出现的一整段」必须整体是一个值，标题得住在值**里面**
+    const wf = botChat()
+    for (const optional of ['notes', 'others', 'addressed', 'window', 'since']) {
+      expect(Object.keys(wf.prompts), optional).toContain(optional)
+    }
+    expect(wf.prompts.notes).toContain('##')
+    expect(wf.script).toContain("prompt('notes'")
   })
 })

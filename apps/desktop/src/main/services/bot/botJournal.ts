@@ -38,6 +38,13 @@ export type BotDecisionKind =
   | 'pipeline_not_found'
   | 'pipeline_invalid_input'
   | 'pipeline_error'
+  // 门控段
+  | 'gate_broken'
+  | 'gate_timeout'
+  | 'gate_fallback'
+  | 'degraded_reply'
+  | 'recheck_skipped'
+  | 'say_blocked'
   // 仲裁
   | 'claim_solo'
   | 'claim_won'

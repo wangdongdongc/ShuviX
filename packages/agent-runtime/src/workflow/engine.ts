@@ -426,12 +426,22 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           // 本次派发的墙钟：与 run 级 deadline 取先到者。链在 run 的 controller 上，
           // 所以 run 超时/被中止时这一层也随之落下（无需各自监听）
           const stepController = new AbortController()
-          const onRunAbort = (): void => stepController.abort()
+          // 这一步是怎么停的：超时 / run 级中止 / 都没有。**必须与「模型没调 next」分得开** ——
+          // 三者在 manager 那里都表现为「没有 structured」，而脚本要据此做完全不同的事：
+          // 超时与破损是故障（该出声或让位），被中止则是「有人赢了、或会话停了」（该安静退出）
+          let stepStop: 'timeout' | 'aborted' | null = null
+          const onRunAbort = (): void => {
+            stepStop ??= 'aborted'
+            stepController.abort()
+          }
           controller.signal.addEventListener('abort', onRunAbort, { once: true })
           if (controller.signal.aborted) stepController.abort()
           const stepTimeout =
             typeof opts?.timeoutSec === 'number' && opts.timeoutSec > 0
-              ? setTimeout(() => stepController.abort(), opts.timeoutSec * 1000)
+              ? setTimeout(() => {
+                  stepStop ??= 'timeout'
+                  stepController.abort()
+                }, opts.timeoutSec * 1000)
               : undefined
 
           record({ type: 'step_start', agent: profile.name, description })
@@ -462,11 +472,24 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
             if (schema !== undefined) {
               if (res.structured === undefined) {
                 // 可编程失败（设计 §5.5）：脚本 catch 后可读 e.code / e.finalText 降级使用散文结果。
-                // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠
+                // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠。
+                //
+                // 三种 code 分得开，因为脚本对它们的处置完全不同：
+                //  - step_timeout   本次派发的墙钟到点（`opts.timeoutSec`）
+                //  - step_aborted   run 被中止（会话停了、或仲裁里别人赢了）
+                //  - next_not_called 模型自己跑完了却没交结构化结果
+                const code =
+                  stepStop === 'timeout'
+                    ? 'step_timeout'
+                    : stepStop === 'aborted'
+                      ? 'step_aborted'
+                      : 'next_not_called'
                 const err = new Error(
-                  `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
+                  code === 'next_not_called'
+                    ? `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
+                    : `agent "${profile.name}" ${code === 'step_timeout' ? 'timed out' : 'was aborted'} before calling \`next\``
                 ) as Error & { code?: string; finalText?: string }
-                err.code = 'next_not_called'
+                err.code = code
                 err.finalText = res.result
                 throw err
               }

@@ -58,8 +58,10 @@ export interface BotMdSeed {
   respond?: string
   /** `shuvix-bot-pipeline` —— 指向哪份管线 workflow（缺省 bot-chat） */
   pipeline?: string
-  /** `shuvix-bot-input` —— 铺进管线 input 的用户键（骨架管线读 skeletonDecision） */
+  /** `shuvix-bot-input` —— 铺进管线 input 的用户键 */
   botInput?: Record<string, string | number | boolean>
+  /** `shuvix-bot-agents` —— 阶段角色覆盖（换掉门控/复核/任务段的 agent） */
+  agents?: Record<string, string>
   /** shuvix-bot-notes */
   notes?: boolean
   greeting?: string
@@ -92,6 +94,10 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   if (seed.botInput) {
     lines.push('shuvix-bot-input:')
     for (const [k, v] of Object.entries(seed.botInput)) lines.push(`  ${k}: ${String(v)}`)
+  }
+  if (seed.agents) {
+    lines.push('shuvix-bot-agents:')
+    for (const [k, v] of Object.entries(seed.agents)) lines.push(`  ${k}: ${v}`)
   }
   if (seed.notes === false) lines.push('shuvix-bot-notes: false')
   if (seed.greeting) lines.push(`shuvix-bot-greeting: ${seed.greeting}`)
