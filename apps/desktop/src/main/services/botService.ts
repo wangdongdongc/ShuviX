@@ -171,6 +171,12 @@ interface BotTicket {
   terminal: boolean
   /** 本 ticket 已经往会话里说过话 —— 可见结局兜底据此决定要不要再补一条失败气泡 */
   said: boolean
+  /**
+   * `say` 被仲裁挡下过。挡下之后脚本通常就抛到顶、run 记一个笼统的 `failed` ——
+   * 而「你的管线忘了调 claim」与「网络抖了一下」在提示里长得一模一样，写管线的人
+   * 第一次踩这个坑时线索太薄。带上它，沉默提示就能直接说出是哪一种
+   */
+  blockedBy?: 'arbitration_lost' | 'arbitration_bypassed'
   abort: AbortController
   /** meta 到达时回填 */
   runId?: string
@@ -232,7 +238,12 @@ interface MemberOutcome {
   displayName: string
   /** 这个成员往会话里放了东西没有（一条回复、或一条可见失败） */
   said: boolean
-  /** 取值与决策记录的 kind 同源 */
+  /**
+   * 这个成员这一轮的结局。取值域是三者的并：仲裁理由（`claim_*`，与决策记录的 kind 同源）、
+   * 脚本自报的 outcome（`gate-broken` / `task-pending` …）、run 本身怎么收的（`ok` /
+   * `failed` / 引擎的 reason）。**刻意不归一成一张封闭表** —— 自定义管线的 outcome 本就
+   * 是开放的，硬归一只会把它们全冲成 `other`
+   */
   outcome: string
 }
 
@@ -245,11 +256,15 @@ interface MemberOutcome {
  * 3. run 本身怎么收的。
  */
 function memberOutcome(
-  claimReason: ClaimVerdict['reason'] | undefined,
+  ticket: BotTicket,
   scriptOutcome: string | undefined,
   ended: string
 ): string {
-  if (claimReason && claimReason !== 'won' && claimReason !== 'solo') return `claim_${claimReason}`
+  const r = ticket.claimReason
+  if (r && r !== 'won' && r !== 'solo') return `claim_${r}`
+  // 没有仲裁理由却被强制点挡下 = 压根没 claim（`arbitration_bypassed`）。这是管线的
+  // 写法问题，笼统的 'failed' 会让人往网络/模型上找原因
+  if (ticket.blockedBy) return ticket.blockedBy
   return scriptOutcome || ended
 }
 
@@ -566,6 +581,13 @@ class BotService {
    */
   private readonly suppressedBy = new Map<string, SuppressedCandidate[]>()
   /**
+   * 会话里在飞的 barrier。**中止会话必须连它一起拆**：ticket / mailbox / workflow run
+   * 都在 `abortSession` 里拆掉了，唯独 barrier 会带着它的宽限窗定时器活到 3 秒之后 ——
+   * 那时会话早已收尾，它却仍会回调宿主、往 `suppressedBy` 里塞一份再也没人来取的名单。
+   * `ClaimVerdict.reason:'aborted'` 这一支也是因为没人调 `abort()` 才一直是死代码。
+   */
+  private readonly barriers = new Map<string, Set<CohortBarrier>>()
+  /**
    * 门控段的健康度：连续故障计数与「已回落」标记。
    *
    * 设计 §6.1：同一个 bot **连续 2 次**破损就回落内置门控 agent。超时与破损共用同一条
@@ -747,7 +769,7 @@ class BotService {
             suppressedKey(sessionId, messageSeq),
             suppressed.map((s) => ({
               name: s.botName,
-              // 显示名取**定局当时**的快照，与署名侧车同理：bot 改名或被删之后，
+              // 显示名取 cohort 组建那一刻的快照，与署名侧车同理：bot 改名或被删之后，
               // 历史消息上的 chip 仍该显示当初那个名字
               displayName: known.get(s.botName)?.displayName ?? s.botName,
               decision: s.decision,
@@ -758,6 +780,10 @@ class BotService {
         }
       }
     })
+
+    const live = this.barriers.get(sessionId) ?? new Set<CohortBarrier>()
+    live.add(barrier)
+    this.barriers.set(sessionId, live)
 
     this.enter(sessionId)
     try {
@@ -794,8 +820,12 @@ class BotService {
 
       // 多 bot 的沉默是 cohort 整体的结局，逐成员补气泡会让每条消息多出 N 条噪音
       // （M4′ 的 `!ctx.arbitrated` 正是为此留的口子，这里把它补完）。单 bot 会话不发 ——
-      // 那里的沉默只可能是失败，一条留痕的失败消息比一次转瞬即逝的提示更该有
-      const silence = gate.cohort.length > 1 ? cohortSilence(outcomes) : null
+      // 那里的沉默只可能是失败，一条留痕的失败消息比一次转瞬即逝的提示更该有。
+      //
+      // **被中止的一轮也不发**：用户自己按的停止不属于「无从解释的沉默」，跟单 bot 那条
+      // 降级气泡的 `!signal.aborted` 是同一条纪律 —— 少了它，点一次停止就弹一条
+      // 「全体沉默：有东西坏了」
+      const silence = gate.cohort.length > 1 && !barrier.wasAborted ? cohortSilence(outcomes) : null
       if (silence) {
         // 逐成员各记一条，而不是找个 `_cohort` 假目录记一条：决策记录按 bot 分目录，
         // 回答的是「这个 bot 为什么没说话」—— 「这一轮谁都没说」正是它自己那份记录里
@@ -830,6 +860,8 @@ class BotService {
     } finally {
       this.leave(sessionId)
       this.suppressedBy.delete(suppressedKey(sessionId, messageSeq))
+      live.delete(barrier)
+      if (!live.size) this.barriers.delete(sessionId)
     }
   }
 
@@ -1048,26 +1080,34 @@ class BotService {
       }
 
       // 可见结局兜底（设计 §9）：脚本自己抛了、没有可用模型、mailbox 超时 —— 这些今天
-      // 在会话里什么都不会出现。**`!ctx.arbitrated` 是必须的**：多 bot 会话里未表态的成员
-      // 是被宿主主动 abort 的，那是设计要的沉默；一刀切会让每条多 bot 消息多出 N−1 条错误气泡
-      let spoke = ticket.said
-      if (!result.ok && !ticket.said && !ctx.arbitrated && !ticket.abort.signal.aborted) {
+      // 在会话里什么都不会出现。
+      //
+      // 谁该出这条气泡：**没有仲裁的场合，或者仲裁的胜者**。多 bot 会话里的败者与未表态者
+      // 一刀切会让每条消息多出 N−1 条错误气泡（那是设计要的沉默），但**胜者不在此列** ——
+      // 它正是那个欠着一条回复的人，它的失败恰恰最该看得见。顺带这也让被它压制的候选有处
+      // 可挂：气泡是一条正经的 bot 消息，救济 chip 跟着它走
+      const owesReply = !ctx.arbitrated || ticket.claimState === 'won'
+      if (!result.ok && !ticket.said && owesReply && !ticket.abort.signal.aborted) {
         await this.appendBotMessage(
           sessionId,
-          { botName: bot.name, displayName: bot.displayName },
+          {
+            botName: bot.name,
+            displayName: bot.displayName,
+            ...(this.takeSuppressed(ticket) ?? {})
+          },
           {
             content: `⚠️ ${bot.displayName}：这条消息没能处理完 —— ${result.error ?? 'unknown error'}`
           }
         )
-        spoke = true
+        ticket.said = true
       }
       const ended = result.started ? (result.ok ? 'ok' : 'failed') : (result.reason ?? 'error')
       this.activity(ticket, 'ended', ended)
       return {
         botName: bot.name,
         displayName: bot.displayName,
-        said: spoke,
-        outcome: memberOutcome(ticket.claimReason, output?.outcome, ended)
+        said: ticket.said,
+        outcome: memberOutcome(ticket, output?.outcome, ended)
       }
     } finally {
       ticket.terminal = true
@@ -1112,7 +1152,11 @@ class BotService {
                 ? 'claim_ignored'
                 : verdict.reason === 'timeout'
                   ? 'claim_timeout'
-                  : 'claim_lost',
+                  : // 中止不是「输了」。并进 claim_lost 会让排查的人去找那个并不存在的胜者，
+                    // 也会与沉默事件里的 claim_aborted 对不上号
+                    verdict.reason === 'aborted'
+                    ? 'claim_aborted'
+                    : 'claim_lost',
           { decision: intent.decision, relevance: intent.relevance, winner: verdict.winner }
         )
         this.activity(ticket, verdict.won ? 'claimed' : 'silent', verdict.reason)
@@ -1151,11 +1195,13 @@ class BotService {
         if (this.blockWrites.has(ticket.sessionId)) throw new Error('session is being torn down')
         // ② 仲裁的**唯一强制点**：claim 返回 false 只是建议，落树才是有外部后果的动作
         if (ticket.claimState === 'lost') {
+          ticket.blockedBy = 'arbitration_lost'
           decide('arbitration_lost')
           throw new Error('another bot won this message')
         }
         if (ticket.claimState === 'none' && !ticket.barrier.isSolo) {
           // 隐式入场 = 给「不调 claim」发一张永远赢的票
+          ticket.blockedBy = 'arbitration_bypassed'
           decide('arbitration_bypassed')
           throw new Error('call claim() before say() in a multi-bot session')
         }
@@ -1167,18 +1213,13 @@ class BotService {
         // 降级出声（`{error:true}`）**绝不带 decision** —— 否则一条 clarify 会把用户的
         // 下一条无关消息硬路由回这个刚出过故障的 bot
         const decision = o.error !== true && typeof o.decision === 'string' ? o.decision : undefined
-        // 救济 chip 只挂在胜者**第一次**开口的那条上：任务段会 say 好几次，每条都挂等于
-        // 把「还有谁想回答」重复 N 遍。取走即删
-        const sKey = suppressedKey(ticket.sessionId, ticket.messageSeq)
-        const suppressed = this.suppressedBy.get(sKey)
-        if (suppressed) this.suppressedBy.delete(sKey)
         const messageId = await this.appendBotMessage(
           ticket.sessionId,
           {
             botName: ticket.botName,
             displayName: ticket.displayName,
             ...(decision ? { decision } : {}),
-            ...(suppressed?.length ? { suppressed } : {}),
+            ...(this.takeSuppressed(ticket) ?? {}),
             // 原值原样存进侧车：M8′ 只需收窄类型，不必迁移数据
             ...(typeof raw === 'object' && raw !== null ? { reply: raw } : {})
           },
@@ -1191,6 +1232,21 @@ class BotService {
         return { messageId }
       }
     }
+  }
+
+  /**
+   * 取走这一轮被压制的候选，交给即将落树的那条 bot 消息。
+   *
+   * **取走即删**：一轮只挂一次 —— 任务段会 say 好几次，每条都挂等于把「还有谁想回答」
+   * 重复 N 遍。两个调用点（正常回复、胜者的失败气泡）共用它，因为它们是同一件事的
+   * 两种结局：这条消息就是胜者对这一轮的交代。
+   */
+  private takeSuppressed(ticket: BotTicket): { suppressed: SuppressedCandidate[] } | null {
+    const key = suppressedKey(ticket.sessionId, ticket.messageSeq)
+    const list = this.suppressedBy.get(key)
+    if (!list?.length) return null
+    this.suppressedBy.delete(key)
+    return { suppressed: list }
   }
 
   private ticketOf(sessionId: string, botName: string, messageSeq: number): BotTicket | undefined {
@@ -1348,6 +1404,8 @@ class BotService {
       for (const t of [...this.tickets.values()]) {
         if (t.sessionId === sessionId) t.abort.abort()
       }
+      // barrier 也要拆：不拆的话它的宽限窗定时器会在会话收尾之后才 fire
+      for (const b of this.barriers.get(sessionId) ?? []) b.abort()
       this.mailbox.abortSession(sessionId)
       workflowService.abortSessionRuns(sessionId)
       await drainSessionTreeLock(sessionId)

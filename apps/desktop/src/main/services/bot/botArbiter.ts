@@ -86,6 +86,12 @@ export class CohortBarrier {
   private readonly candidates = new Map<string, Candidate>()
   private readonly waiters = new Map<string, (v: ClaimVerdict) => void>()
   private readonly pending: Set<string>
+  /**
+   * 已经表过态的成员。**与 `waiters` 分开记**：`settle()` 会清空 waiters，只靠它判重的话
+   * 「同一个 bot 二次 claim 直接抛」这条保护在定局之后就失效了 —— 而定局后的二次 claim
+   * 会把这个成员的裁决理由从 lost 改写成 timeout，进而改写沉默事件里它的结局与决策记录
+   */
+  private readonly claimed = new Set<string>()
   private graceTimer: NodeJS.Timeout | null = null
   private settledWinner: string | null = null
   private settled = false
@@ -117,13 +123,32 @@ export class CohortBarrier {
     return this.members.length === 1
   }
 
+  /**
+   * 这一轮是被 `abort()` 关掉的（有人按了停止 / 会话在拆），不是自然定局。
+   *
+   * 宿主据此**不发全体沉默提示**：用户自己按的停止不属于「无从解释的沉默」，
+   * 跟单 bot 那条降级气泡的 `!signal.aborted` 是同一条纪律。
+   */
+  get wasAborted(): boolean {
+    return this.settled && this.closedBy === 'abort'
+  }
+
   claim(botName: string, intent: ClaimIntent): Promise<ClaimVerdict> {
     if (this.isSolo) {
       return Promise.resolve({ won: true, winner: botName, reason: 'solo' })
     }
+    // 判重排在 settled 之前：settle() 清空了 waiters，靠它判重会让这条保护只在定局前有效
+    if (this.claimed.has(botName)) {
+      throw new Error(`claim() called twice by "${botName}" in one run`)
+    }
+    this.claimed.add(botName)
     if (this.settled) {
       // 定局之后才到。记为 timeout 而不是 ignored（「慢」不是「不想说」）—— 但会话被中止
-      // 又是另一回事：把它也写成 timeout，等于让排查的人去调宽限窗，而实际是有人按了停止
+      // 又是另一回事：把它也写成 timeout，等于让排查的人去调宽限窗，而实际是有人按了停止。
+      //
+      // **`timeout` 实际上是一个很窄的竞态值**：定局时宿主会立刻中止未表态的成员，所以
+      // 循规蹈矩的管线在能调到这里之前就已经被中止了（拿到的是 `aborted`）。只有自己吞掉
+      // 中止信号的管线才走得到这一支。别因为 journal 里罕见 `claim_timeout` 就以为它是死码
       this.pending.delete(botName)
       if (this.closedBy === 'abort') {
         return Promise.resolve({ won: false, reason: 'aborted' })
@@ -134,11 +159,8 @@ export class CohortBarrier {
         reason: this.settledWinner === botName ? 'won' : 'timeout'
       })
     }
-    // 同一个 bot 二次 claim：第一个 Promise 的 resolve 会被覆盖而永不落定，run 要挂到
-    // 引擎墙钟才收 —— 而 say 的三道闸都拦不住「卡住」。当脚本 bug 抛，与 asClaimIntent 同策
-    if (this.waiters.has(botName)) {
-      throw new Error(`claim() called twice by "${botName}" in one run`)
-    }
+    // （二次 claim 已在上面拦下：第一个 Promise 的 resolve 会被覆盖而永不落定，run 要挂到
+    // 引擎墙钟才收 —— 而 say 的三道闸都拦不住「卡住」。当脚本 bug 抛，与 asClaimIntent 同策）
     this.pending.delete(botName)
 
     if (intent.decision === 'ignore') {
@@ -147,7 +169,15 @@ export class CohortBarrier {
       return Promise.resolve({ won: false, reason: 'ignored' })
     }
 
-    this.candidates.set(botName, { ...intent, botName, at: this.now() })
+    // reason 空串等于没有理由（它是 chip 的 tooltip）—— 在入口归一，免得宿主与这里
+    // 各有一套判空口径
+    const reason = typeof intent.reason === 'string' ? intent.reason.trim() : ''
+    this.candidates.set(botName, {
+      ...intent,
+      ...(reason ? { reason } : { reason: undefined }),
+      botName,
+      at: this.now()
+    })
     const verdict = new Promise<ClaimVerdict>((resolve) => this.waiters.set(botName, resolve))
 
     // 首个非 ignore 候选到达时才起宽限窗 —— 全员 ignore 的会话不必白等 3 秒

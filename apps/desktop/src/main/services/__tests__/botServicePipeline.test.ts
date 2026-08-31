@@ -39,7 +39,13 @@ vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: { broadcast: vi.f
 vi.mock('../sessionService', () => ({ sessionService: { getById: vi.fn() } }))
 
 import { DEFAULT_BOT_PIPELINE } from '@shuvix/agent-runtime'
-import { asClaimIntent, asSayContent, botSelfRef, resolvePipeline } from '../botService'
+import {
+  asClaimIntent,
+  asSayContent,
+  botSelfRef,
+  cohortSilence,
+  resolvePipeline
+} from '../botService'
 
 function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
   return {
@@ -213,5 +219,72 @@ describe('asSayContent —— say 的正文投影', () => {
     // 一条 warn —— 脚本拿到 {messageId: null}、journal 里没有失败记录、会话里什么都没有，
     // 正是「可见结局」不变式点名要杜绝的形态
     expect(() => asSayContent(raw)).toThrow(/non-empty string/)
+  })
+})
+
+/**
+ * 「这一轮 cohort 一个字都没换来」的定性 —— 又一张**表**，所以摆在这一层而不是 e2e。
+ *
+ * 它要答的是两个用户能读懂的问题：会话里到底有没有多出东西（第一问），以及这次沉默
+ * 是正常的（大家都判定这条不归自己）还是坏掉了（没有一个走到判定）。两者对用户的意味
+ * 完全相反 —— 前者不必管，后者要去看日志。端到端能验的是链路，这张表的每一格只能在
+ * 这里逐条摆开。
+ */
+describe('cohortSilence —— 全体沉默的定性表', () => {
+  let seq = 0
+  /** 一个成员的结局：只有「说没说话」与「怎么收的」两个自由度 */
+  const o = (
+    said: boolean,
+    outcome: string
+  ): { botName: string; displayName: string; said: boolean; outcome: string } => {
+    seq += 1
+    return { botName: `b${seq}`, displayName: `B${seq}`, said, outcome }
+  }
+
+  it('任一成员开了口就没有沉默可言（哪怕另一个坏掉了）', () => {
+    expect(cohortSilence([o(true, 'ok'), o(false, 'failed')])).toBeNull()
+  })
+
+  it('全员自判不接 → all_ignored（沉默白名单里唯一的正常项）', () => {
+    expect(cohortSilence([o(false, 'claim_ignored'), o(false, 'claim_ignored')])).toEqual({
+      reason: 'all_ignored'
+    })
+  })
+
+  it('没有一个走到判定 → all_failed', () => {
+    expect(cohortSilence([o(false, 'failed'), o(false, 'pipeline_error')])).toEqual({
+      reason: 'all_failed'
+    })
+  })
+
+  it('一个判定不接、一个坏掉 → mixed（不能说成「大家都不接」）', () => {
+    expect(cohortSilence([o(false, 'claim_ignored'), o(false, 'failed')])).toEqual({
+      reason: 'mixed'
+    })
+  })
+
+  it.each([
+    ['claim_timeout 是慢不是判定', 'claim_ignored', 'claim_timeout', 'mixed'],
+    ['claim_lost 与 claim_timeout 都不是判定', 'claim_lost', 'claim_timeout', 'all_failed']
+  ])('%s', (_n, a, b, reason) => {
+    // 白名单只有 claim_ignored 一项 —— 「输了」「太慢了」都意味着本该有人说话却没说，
+    // 把它们算进正常项，一次真正的故障就会被写成「大家都判定这条不归自己」
+    expect(cohortSilence([o(false, a), o(false, b)])).toEqual({ reason })
+  })
+
+  it('空列表 → null（没有 cohort 就没有结局可言）', () => {
+    expect(cohortSilence([])).toBeNull()
+  })
+
+  it('said 问的是「会话里多出了东西吗」，不是「脚本调过 say 吗」', () => {
+    // 管线不存在时宿主自己落了一条可见失败并把 said 记为 true —— 一条已经显形的失败
+    // 不该再触发一次沉默提示
+    expect(cohortSilence([o(true, 'pipeline_not_found'), o(false, 'claim_ignored')])).toBeNull()
+  })
+
+  it('单成员数组照样被定性 —— 「多 bot 才提示」的纪律住在调用点', () => {
+    // cohort.length > 1 的判断刻意留在 dispatchCohort：单 bot 的沉默只可能是失败，
+    // 那里要的是一条留痕的失败消息而不是一次转瞬即逝的提示。这个函数不替它做主
+    expect(cohortSilence([o(false, 'failed')])).toEqual({ reason: 'all_failed' })
   })
 })

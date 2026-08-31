@@ -118,7 +118,7 @@ export interface SuppressedCandidate {
   displayName: string
   /** 它本来打算做什么 */
   decision: 'reply' | 'task' | 'clarify'
-  /** 它自评的相关度 0..9 —— 与胜者的差距就是这次压制有多勉强 */
+  /** 它自评的相关度 0..9 —— 名单按它排序，最接近赢的排最前 */
   relevance: number
   /** 一句话理由，直接就是 chip 的 tooltip */
   reason?: string

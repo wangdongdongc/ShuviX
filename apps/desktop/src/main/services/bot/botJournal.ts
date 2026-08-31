@@ -50,6 +50,8 @@ export type BotDecisionKind =
   | 'claim_lost'
   | 'claim_ignored'
   | 'claim_timeout'
+  /** 会话被中止时还在等裁决 —— 与 claim_lost 分开，「有人按了停止」不是「输了」 */
+  | 'claim_aborted'
   | 'arbitration_bypassed'
   | 'arbitration_lost'
   /** 这一轮 cohort 一个字都没换来 —— 每个成员的文件里各记一条（见 dispatchCohort） */

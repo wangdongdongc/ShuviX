@@ -123,17 +123,29 @@ function suppressedOf(sender: BotSenderSidecar): SuppressedCandidate[] | undefin
   if (!Array.isArray(sender.suppressed)) return undefined
   // 声明类型是给消费方看的；这里读的是磁盘上的 JSON，先退回 unknown 再逐条收窄
   const raw = sender.suppressed as unknown[]
-  const ok = raw.filter((c): c is SuppressedCandidate => {
-    if (typeof c !== 'object' || c === null) return false
+  const ok: SuppressedCandidate[] = []
+  for (const c of raw) {
+    if (typeof c !== 'object' || c === null) continue
     const d = c as Record<string, unknown>
-    return (
-      typeof d.name === 'string' &&
-      !!d.name &&
-      typeof d.displayName === 'string' &&
-      (d.decision === 'reply' || d.decision === 'task' || d.decision === 'clarify') &&
-      typeof d.relevance === 'number'
+    if (typeof d.name !== 'string' || !d.name) continue
+    if (typeof d.displayName !== 'string' || !d.displayName) continue
+    if (d.decision !== 'reply' && d.decision !== 'task' && d.decision !== 'clarify') continue
+    if (
+      !Number.isInteger(d.relevance) ||
+      (d.relevance as number) < 0 ||
+      (d.relevance as number) > 9
     )
-  })
+      continue
+    // **重建而不是放行**：与紧邻的 sender 同一条纪律 —— 侧车是磁盘数据，未知键原样带过
+    // 就等于把旧版本、手工编辑、半截写入留下的东西直接端给渲染层
+    ok.push({
+      name: d.name,
+      displayName: d.displayName,
+      decision: d.decision,
+      relevance: d.relevance as number,
+      ...(typeof d.reason === 'string' && d.reason ? { reason: d.reason } : {})
+    })
+  }
   return ok.length ? ok : undefined
 }
 

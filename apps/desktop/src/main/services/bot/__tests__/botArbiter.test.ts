@@ -364,3 +364,130 @@ describe('迟到 / 中止 / 误用', () => {
     expect(await outsider).toMatchObject({ won: false, winner: 'a', reason: 'lost' })
   })
 })
+
+/**
+ * 落败的候选连同它本来想做的事 —— 救济 chip（「XX 也想回答」）唯一的数据源。
+ *
+ * 这一节钉的全是**名单本身的形状**，因为宿主对它是纯搬运：`dispatchCohort` 只把
+ * botName 换成落树当时的 displayName 就原样存进署名侧车。次序、成员资格、字段有无
+ * 一旦在这里错了，UI 上就是「差一点赢的排在最后」「自己说不接的被写成想回答」，
+ * 而那时已经没有任何一层能把它纠回来。
+ */
+describe('被压制候选名单 —— 救济面的数据源', () => {
+  it('名单按排名而不是按到达序（到达序会给出相反的答案）', () => {
+    // 到达序是网络抖动，不是任何有意义的顺序。candidates 是 Map，遍历它拿到的就是
+    // 到达序 —— 这条用例把两者刻意排成互相矛盾的形状：到达 c→a→b，排名 a>b>c
+    const { barrier, settled } = makeBarrier(['a', 'b', 'c'])
+    void barrier.claim('c', intent('reply', 2))
+    void barrier.claim('a', intent('reply', 9))
+    void barrier.claim('b', intent('task', 7)) // 全员表态即刻定局
+
+    expect(barrier.winner).toBe('a')
+    expect(settled[0].suppressed).toEqual([
+      { botName: 'b', decision: 'task', relevance: 7 },
+      { botName: 'c', decision: 'reply', relevance: 2 }
+    ])
+  })
+
+  it('同分时名单次序也走 task > clarify > reply，最后才是成员序', () => {
+    // 名单序与胜负判定共用同一个 ranked 数组 —— 「谁差一点赢」和「谁赢了」必须是
+    // 同一把尺子量出来的，否则 chip 的顺序会与用户看到的结果自相矛盾
+    const { barrier, settled } = makeBarrier(['a', 'b', 'c', 'd'])
+    void barrier.claim('a', intent('reply', 9))
+    void barrier.claim('b', intent('reply', 5))
+    void barrier.claim('c', intent('task', 5))
+    void barrier.claim('d', intent('clarify', 5))
+
+    expect(barrier.winner).toBe('a')
+    expect(settled[0].suppressed.map((s) => s.botName)).toEqual(['c', 'd', 'b'])
+  })
+
+  it('自判 ignore 既不在 suppressed 也不在 unresponsive —— 它并不想说话', () => {
+    // 「被压制」的意思是「想说而没轮到」。把 ignore 者写进名单，UI 上就是
+    // 「它也想回答」—— 恰好是它刚刚明确否认过的那句话
+    const { barrier, settled } = makeBarrier(['a', 'b', 'c'])
+    void barrier.claim('a', intent('ignore', 9))
+    void barrier.claim('b', intent('reply', 5))
+    void barrier.claim('c', intent('reply', 4))
+
+    const r = settled[0]
+    expect(r.winner).toBe('b')
+    expect(r.suppressed).toEqual([{ botName: 'c', decision: 'reply', relevance: 4 }])
+    expect(r.unresponsive).toEqual([])
+    // 三个集合合起来也不该提到它：ignore 是一个已经有解释的结局，不是待救济的候选
+    expect([...r.suppressed.map((s) => s.botName), ...r.unresponsive]).not.toContain('a')
+    for (const s of r.suppressed) expect(s.decision).not.toBe('ignore')
+  })
+
+  it('定局之后才到的候选进不了名单，onSettled 也不会再发一次', async () => {
+    // 名单是**定局那一刻**的快照：迟到者若能追加进去，胜者那条消息上的 chip 就会
+    // 在它已经落树之后凭空多出一项（更糟的是宿主早已把它取走了）
+    const { barrier, clock, settled, onSettled } = makeBarrier(['a', 'b', 'c'])
+    const pa = barrier.claim('a', intent('reply', 5))
+    void barrier.claim('b', intent('reply', 4))
+    clock.advance(GRACE_MS)
+    await pa
+
+    await expect(barrier.claim('c', intent('reply', 9))).resolves.toEqual({
+      won: false,
+      winner: 'a',
+      reason: 'timeout'
+    })
+    expect(onSettled).toHaveBeenCalledTimes(1)
+    expect(settled[0].suppressed).toEqual([{ botName: 'b', decision: 'reply', relevance: 4 }])
+  })
+
+  it('reason 原样带上；没写理由时这个键根本不存在', () => {
+    // reason 就是 chip 的 tooltip。铺一个 `reason: undefined` 出去，署名侧车里就会
+    // 落一个 `"reason": null`（JSON 没有 undefined），重开会话时它又变成一句空理由
+    const { barrier, settled } = makeBarrier(['a', 'b', 'c'])
+    void barrier.claim('a', intent('reply', 9))
+    void barrier.claim('b', { decision: 'reply', relevance: 5, reason: '这条像是我的' })
+    void barrier.claim('c', intent('reply', 1))
+
+    const suppressed = settled[0].suppressed
+    expect(suppressed[0]).toEqual({
+      botName: 'b',
+      decision: 'reply',
+      relevance: 5,
+      reason: '这条像是我的'
+    })
+    expect(Object.keys(suppressed[1])).toEqual(['botName', 'decision', 'relevance'])
+  })
+
+  it('纯空白的 reason 等于没有理由（归一在入口，不留两套判空口径）', () => {
+    const { barrier, settled } = makeBarrier(['a', 'b'])
+    void barrier.claim('a', intent('reply', 9))
+    void barrier.claim('b', { decision: 'reply', relevance: 5, reason: '   ' })
+
+    expect(settled[0].suppressed[0]).not.toHaveProperty('reason')
+  })
+
+  it('定局之后的二次 claim 同样直接抛（settle 清空了 waiters，判重不能只靠它）', async () => {
+    // 这条保护此前只在定局前有效。定局后的二次 claim 会走 settled 分支，把这个成员的
+    // 裁决理由从 lost 改写成 timeout —— 进而改写沉默事件里它的结局和它那份决策记录
+    const { barrier } = makeBarrier(['a', 'b'])
+    const pa = barrier.claim('a', intent('reply', 9))
+    await barrier.claim('b', intent('reply', 1))
+    expect(barrier.isSettled).toBe(true)
+
+    expect(() => barrier.claim('a', intent('reply', 9))).toThrow(/called twice/)
+    expect(await pa).toMatchObject({ won: true, reason: 'won' })
+  })
+
+  it('wasAborted 只在被 abort() 关掉时为真 —— 宿主据此不发全体沉默提示', async () => {
+    // 用户自己按的停止不属于「无从解释的沉默」。少了这个分辨，点一次停止就会弹一条
+    // 「全体沉默：有东西坏了」，跟单 bot 那条降级气泡的 `!signal.aborted` 是同一条纪律
+    const open = makeBarrier(['a', 'b'])
+    expect(open.barrier.wasAborted).toBe(false) // 尚未定局
+
+    const natural = makeBarrier(['a', 'b'])
+    void natural.barrier.claim('a', intent('reply', 5))
+    await natural.barrier.claim('b', intent('reply', 1))
+    expect(natural.barrier.isSettled).toBe(true)
+    expect(natural.barrier.wasAborted).toBe(false)
+
+    open.barrier.abort()
+    expect(open.barrier.wasAborted).toBe(true)
+  })
+})

@@ -565,6 +565,173 @@ describe('bot sender sidecar', () => {
   })
 })
 
+// ─── 救济 chip（被压制的候选） ────────────────────────────────────
+
+/** 读一条消息的 metadata.suppressed（不存在时 undefined） */
+function suppressedOf(msg: ChatMessage | undefined): unknown {
+  return (msg?.metadata as { suppressed?: unknown } | null | undefined)?.suppressed
+}
+
+/** 一条合法的被压制候选 —— 五个白名单键齐全 */
+const CANDIDATE = {
+  name: 'beta',
+  displayName: 'Beta',
+  decision: 'reply',
+  relevance: 3,
+  reason: '我也能答'
+}
+
+/**
+ * 「XX 也想回答」这枚 chip 从磁盘回到 UI 的那一段。
+ *
+ * 它与紧邻的 sender 有一条关键差别：sender 的未知键是**原样带过**的（schema 还要长），
+ * 而这份名单是 UI 唯一会去遍历的字段，数据又来自一份可能由旧版本、手工编辑或半截写入
+ * 留下的 JSON —— 所以这里是**逐条校验后重建**。这一节钉的就是这条纪律的两半：
+ * 坏记录不进来，好记录进来时也只带白名单里的键。
+ */
+describe('救济 chip 的持久化投影', () => {
+  it('合法名单挂到紧邻的 assistant 上，逐字段等值；sender 本身仍只有三个键', async () => {
+    await sidecar('scout', 'Scout', { suppressed: [CANDIDATE] })
+    const assistantId = await session.appendMessage(botSaid('我来回答'))
+
+    const [msg] = await project()
+    expect(msg.id).toBe(assistantId)
+    expect(suppressedOf(msg)).toEqual([CANDIDATE])
+    // chip 是 metadata 上与 sender 并列的一个键，不是塞进 sender 里的第四个字段
+    expect(Object.keys(senderOf(msg) as object).sort()).toEqual(['displayName', 'kind', 'name'])
+  })
+
+  it.each([
+    ['name 为空串', { ...CANDIDATE, name: '' }],
+    ['缺 displayName', { name: 'beta', decision: 'reply', relevance: 3 }],
+    ['decision 是 ignore（自判不接的人从不是「被压制」）', { ...CANDIDATE, decision: 'ignore' }],
+    ['relevance 不是数', { ...CANDIDATE, relevance: '高' }],
+    ['relevance 越界', { ...CANDIDATE, relevance: 12 }],
+    ['relevance 非整数', { ...CANDIDATE, relevance: 3.5 }]
+  ])('逐条校验：坏记录（%s）被丢掉，同一份名单里的好记录照常留下', async (_n, bad) => {
+    // 整份名单一票否决的话，一条半截写入就能把这一轮的救济全部抹掉；而放行则会把
+    // `relevance: 12` 这种东西端给渲染层（0..9 是 chip 的刻度，不是随手写的整数）
+    await sidecar('scout', 'Scout', { suppressed: [bad, CANDIDATE] })
+    await session.appendMessage(botSaid('我来回答'))
+
+    expect(suppressedOf((await project())[0])).toEqual([CANDIDATE])
+  })
+
+  it.each([
+    ['全部记录都不合法', { suppressed: [{ name: '', displayName: 'B', decision: 'x' }] }],
+    ['空数组', { suppressed: [] }],
+    ['不是数组', { suppressed: 'x' }],
+    ['空对象元素', { suppressed: [{}] }],
+    ['null', { suppressed: null }],
+    ['键根本不存在', {}]
+  ])('没有一条能留下时（%s）连 suppressed 这个键都不铺', async (_n, extra) => {
+    // 铺一个空数组出去，UI 就得自己再判一次「长度大于零吗」—— 而署名是有还是无
+    // 这件事在投影层已经是靠「键在不在」表达的，两套口径迟早会错开
+    await sidecar('scout', 'Scout', extra)
+    await session.appendMessage(botSaid('我来回答'))
+
+    const [msg] = await project()
+    expect(senderOf(msg)).toMatchObject({ name: 'scout' })
+    expect(msg.metadata).not.toHaveProperty('suppressed')
+  })
+
+  it('没有署名就没有 chip：侧车本身不合法时，带着的名单一并作废', async () => {
+    // chip 是「胜者这条消息对这一轮的交代」—— 没有胜者署名，它就无处可挂，
+    // 更不该顺延成一条无主的「还有人想回答」
+    await session.appendCustomEntry(BOT_SENDER_CUSTOM_TYPE, {
+      botName: '',
+      displayName: 'Scout',
+      suppressed: [CANDIDATE]
+    })
+    await session.appendMessage(botSaid('我来回答'))
+
+    const [msg] = await project()
+    expect((await project()).length).toBe(1) // 与无侧车基线同条数
+    expect(senderOf(msg)).toBeUndefined()
+    expect(msg.metadata).not.toHaveProperty('suppressed')
+  })
+
+  it('署名后跟 stopReason=error 的 assistant：chip 随署名一起被吃掉，不顺延', async () => {
+    await sidecar('scout', 'Scout', { suppressed: [CANDIDATE] })
+    const errMsg = botSaid('', 'error') as unknown as Record<string, unknown>
+    errMsg.errorMessage = 'prompt is too long'
+    await session.appendMessage(errMsg as unknown as AgentMessage)
+    await session.appendMessage(botSaid('下一条'))
+
+    const msgs = await project()
+    expect(msgs.map((m) => m.type)).toEqual(['error_event', 'message'])
+    for (const m of msgs) expect(suppressedOf(m)).toBeUndefined()
+  })
+
+  it('署名后跟空 assistant：空卡与 chip 一起消失，不污染下一条', async () => {
+    await sidecar('scout', 'Scout', { suppressed: [CANDIDATE] })
+    await session.appendMessage(assistant([], 'aborted'))
+    await session.appendMessage(botSaid('下一条'))
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe('下一条')
+    expect(suppressedOf(msgs[0])).toBeUndefined()
+  })
+
+  it('与 decision / reply / 内联 Token 侧车共存，互不干扰', async () => {
+    // 侧车的其余键各有各的消费方（clarify 回连读 decision、M8′ 读 reply），
+    // 两个 pending 槽也各自独立 —— 多长一个字段不该让任何一边失灵
+    const tokens = { t0: { type: 'cmd', id: 'x', displayText: '/x', payload: '展开' } }
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}}',
+      tokens
+    })
+    await session.appendMessage(user('展开'))
+    await sidecar('scout', 'Scout', {
+      decision: 'clarify',
+      reply: { headline: '你指的是哪一个？' },
+      suppressed: [CANDIDATE]
+    })
+    await session.appendMessage(botSaid('你指的是哪一个？'))
+
+    const msgs = await project()
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(msgs[0].metadata).toMatchObject({ inlineTokens: tokens })
+    expect(suppressedOf(msgs[0])).toBeUndefined()
+    expect(senderOf(msgs[1])).toEqual({ kind: 'bot', name: 'scout', displayName: 'Scout' })
+    expect(suppressedOf(msgs[1])).toEqual([CANDIDATE])
+  })
+
+  it('切片投影与全量投影逐字段全等 —— 流式所见即重开所见', async () => {
+    // 广播只跑新 append 的那一两条 entry（`projectSlice`），重开会话跑的是整棵树。
+    // chip 若只在其中一条路径上成型，「XX 也想回答」就会在刷新之后凭空出现或消失
+    await session.appendMessage(user('谁来答'))
+    const sidecarId = await sidecar('scout', 'Scout', { suppressed: [CANDIDATE] })
+    const assistantId = await session.appendMessage(botSaid('我来回答'))
+
+    const entries = await session.buildContextEntries()
+    const slice = entries.filter((e) => e.id === sidecarId || e.id === assistantId)
+    const [fromSlice] = entriesToChatMessages(slice, SESSION_ID, 'test-model')
+    const fromWhole = (await project()).find((m) => m.id === assistantId)
+
+    expect(fromSlice).toEqual(fromWhole)
+    expect(suppressedOf(fromSlice)).toEqual([CANDIDATE])
+  })
+
+  it('合法记录带上未知键：投影**重建**它，未知键不会被端到渲染层', async () => {
+    // 与紧邻的 sender 分道扬镳的那一条纪律。原样放行的话，一条手工编辑塞进去的
+    // `evil` 会一路活到 UI —— 而这份名单恰恰是 UI 唯一会遍历的字段
+    await sidecar('scout', 'Scout', { suppressed: [{ ...CANDIDATE, evil: true }] })
+    await session.appendMessage(botSaid('我来回答'))
+
+    const [only] = suppressedOf((await project())[0]) as Array<Record<string, unknown>>
+    expect(only).not.toHaveProperty('evil')
+    expect(Object.keys(only).sort()).toEqual([
+      'decision',
+      'displayName',
+      'name',
+      'reason',
+      'relevance'
+    ])
+  })
+})
+
 describe('未知 customType 对投影是完全透明的', () => {
   /**
    * 造一棵含全部 entry 形态的树（user / assistant / toolCall / toolResult /
