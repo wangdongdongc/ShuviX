@@ -48,9 +48,8 @@ admission check. What makes this file a bot pipeline is simply that its script u
 somewhere that does not and it fails on the first of those names, the way any script fails
 on an undefined function.
 
-> **Status (M5′).** The gate is real. The task stage is not: a `task` verdict still takes the
-> turn and still says something, but what it says is a placeholder — M8′ replaces that one
-> branch. The notes occasion is M9′.
+> **Status (M8′).** The gate and the task stage are both real. The notes occasion is still
+> M9′: `occasion: 'notes'` returns immediately and changes nothing.
 
 ## The pipeline
 
@@ -169,19 +168,81 @@ return await turn(async function (slot) {
     }
   }
 
-  // M8′ replaces this branch with the real task stage. Until then the verdict is honoured as
-  // far as it can be: the turn is taken, and the session is told what is missing.
+  // 6 ── The work itself. The agent **is** the bot (`bot:<name>`): its own body is the system
+  //      prompt, its own `shuvix-tools` the tool list. There is deliberately no `tools`
+  //      option here — narrowing it would overrule what the bot md said about itself, and
+  //      unlike the gate (which is a shared builtin) this agent was written for this job.
   const objective = (intent.task && intent.task.objective) || intent.reason
-  await say(prompt('taskPending', { objective: objective }), { error: true })
-  return {
-    gate: 'ok',
-    outcome: 'task-pending',
-    queuedMs: slot.queuedMs,
-    superseded: slot.superseded
+  const boundaries = (intent.task && intent.task.boundaries) || ''
+  const taskLines = (input.window || []).slice(-vars.taskWindow)
+
+  let reply = null
+  try {
+    reply = await run(
+      input.agents.task,
+      prompt('task', {
+        objective: objective,
+        boundariesBlock: boundaries ? prompt('boundaries', { boundaries: boundaries }) : '',
+        notesBlock: notesBlock,
+        windowBlock: taskLines.length ? prompt('window', { window: taskLines }) : '',
+        sinceBlock: slot.since && slot.since.length ? prompt('since', { since: slot.since }) : ''
+      }),
+      { schema: schemas.reply, timeoutSec: vars.taskTimeoutSec }
+    )
+  } catch (e) {
+    const code = e && e.code
+    // Someone stopped the session, or this run lost its place. Saying so would be noise.
+    if (code === 'step_aborted') return { gate: 'ok', outcome: 'aborted', queuedMs: slot.queuedMs }
+
+    // It did the work and then wrote prose instead of filling in the contract. Someone is
+    // waiting for an answer, and an answer with no shape beats no answer at all — so the
+    // first line becomes the conclusion and the rest becomes the explanation.
+    const prose = ((e && e.finalText) || '').trim()
+    if (code === 'next_not_called' && prose) {
+      await say(wrapProse(prose), { decision: 'task' })
+      return { gate: 'ok', outcome: 'task-unshaped', queuedMs: slot.queuedMs }
+    }
+
+    // Nothing usable came back. Past the claim there is nobody left to cover for us, so the
+    // failure has to be said out loud — silence here is indistinguishable from a dropped
+    // message, and this bot already took the turn.
+    await say(prompt(code === 'step_timeout' ? 'taskTimeout' : 'taskFailed'), { error: true })
+    return {
+      gate: 'ok',
+      outcome: code === 'step_timeout' ? 'task-timeout' : 'task-failed',
+      queuedMs: slot.queuedMs
+    }
   }
+
+  await say(reply, { decision: 'task' })
+  return { gate: 'ok', outcome: 'task', queuedMs: slot.queuedMs, superseded: slot.superseded }
 })
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Prose with no shape → the least shape a reply is allowed to have. The first line carries
+ *  the conclusion often enough to be worth promoting to one; a leading `#` is markdown
+ *  furniture rather than a headline, so it goes. The last resort matters more than it looks:
+ *  a `wrapProse` that returns an empty headline would make `say` throw **inside the
+ *  degradation path**, turning "answer with no shape" into "no answer". */
+function wrapProse(text) {
+  const lines = text.split('\n')
+  let i = 0
+  while (i < lines.length && !stripHeading(lines[i])) i++
+  const first = stripHeading(lines[i] || '')
+  if (!first) return { headline: text.trim().slice(0, 200) }
+  const rest = lines
+    .slice(i + 1)
+    .join('\n')
+    .trim()
+  return rest ? { headline: first, body: rest } : { headline: first }
+}
+
+function stripHeading(line) {
+  return String(line || '')
+    .replace(/^#+\s*/, '')
+    .trim()
+}
 
 /** Cut the notes to budget, then back off to the last paragraph break — a slice that lands
  *  mid-sentence or mid-heading reads to the model as a fact that stops halfway. */
@@ -407,7 +468,53 @@ a shape I could not read. Ask again, or put it a different way.
 I spent too long deciding how to answer that and gave up. Ask again if it still matters.
 ```
 
-```md prompt=taskPending
-That one needs real work, and the stage that does the work is not connected yet. What I
-understood the goal to be: {{objective}}
+```md prompt=task
+You are answering a message in a chat session, on this bot's behalf. Do the work, then answer.
+
+## The bot you speak for
+
+{{bot.displayName}} — {{bot.description}}
+
+{{notesBlock}}
+
+{{windowBlock}}
+
+## The message
+
+{{message.text}}
+
+{{sinceBlock}}
+
+## What you decided this needs
+
+{{objective}}
+
+{{boundariesBlock}}
+
+## Answering
+
+Lead with the conclusion — that one sentence is what the reader sees first and often all they
+read. Then choose the shape the content already has, rather than the shape that looks
+thorough: an explanation is prose and belongs in `body`; a set of parallel facts is a list;
+rows and columns are a table. Splitting a paragraph into three half-sentences to make it look
+like a list costs the reader the argument that held them together.
+
+Say what you actually did and what you did not. If you could not finish, say so in the
+conclusion — a hedged answer that reads like a finished one is worse than an admitted gap.
+```
+
+```md prompt=boundaries
+### Stay inside
+
+{{boundaries}}
+```
+
+```md prompt=taskTimeout
+I worked on that for as long as I'm allowed and didn't finish. Ask again if it still matters —
+narrowing it down will help.
+```
+
+```md prompt=taskFailed
+I took that on and it broke partway through. Nothing was finished, so don't count on anything
+from me on that one.
 ```
