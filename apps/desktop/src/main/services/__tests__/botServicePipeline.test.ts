@@ -240,6 +240,68 @@ describe('asSayContent —— say 的正文投影', () => {
     // 正是「可见结局」不变式点名要杜绝的形态
     expect(() => asSayContent(raw)).toThrow(/non-empty string/)
   })
+
+  /**
+   * **全键**：落树的 content 是模型可见的唯一权威（重开、滚动压缩、标题、复制、TTS 读的
+   * 都是它）。任务段交回来的 BotReply 漏投一个字段，就等于那条信息对模型不存在，而 UI 上
+   * 它明明还在 —— 用户看得见一张表，模型下一轮却当它没说过。
+   *
+   * 投影本身的逐格用例在 `chat-protocol/src/botReply.test.ts`；这里钉的是**这条接线确实
+   * 走了那个投影**，而不是某处又手写了一份只认 headline/body 的简化版。
+   */
+  describe('全键投影 —— content 是模型可见的唯一权威', () => {
+    const FULL = {
+      headline: '扫描完成，三处待修',
+      body: '改动集中在鉴权中间件。',
+      points: ['auth.ts:42 少了空值判断', 'router 的顺序变了'],
+      table: { columns: ['接口', '状态'], rows: [['/login', '待修']] },
+      status: 'warn' as const,
+      followups: ['要我直接改吗？']
+    }
+
+    it.each([
+      ['headline', '扫描完成，三处待修'],
+      ['body', '改动集中在鉴权中间件。'],
+      ['points', '- auth.ts:42 少了空值判断'],
+      ['table', '| 接口 | 状态 |'],
+      ['status', 'Status: warn'],
+      ['followups', '- 要我直接改吗？']
+    ])('SC 全键样本里 %s 在 content 中留下痕迹', (_key, trace) => {
+      expect(asSayContent(FULL)).toContain(trace)
+    })
+
+    it('SC 段序与投影一致：结论最先，机器标签 Status 在正文之后', () => {
+      const md = asSayContent(FULL)
+      expect(md.indexOf(FULL.headline)).toBe(0)
+      expect(md.indexOf(FULL.body)).toBeLessThan(md.indexOf('Status: warn'))
+    })
+
+    it('SC 未知键被丢掉 —— 侧车与 content 同源，多出的字段两边都不该有', () => {
+      const md = asSayContent({ ...FULL, secretHint: '不该出现在 content 里' })
+      expect(md).not.toContain('不该出现在 content 里')
+    })
+
+    it('SC 表格按列数对齐（短补空、长截断）—— 与 markdown 投影同口径', () => {
+      const md = asSayContent({
+        headline: 'H',
+        table: { columns: ['A', 'B'], rows: [['1'], ['1', '2', '3']] }
+      })
+      expect(md).toContain('| 1 |  |')
+      expect(md).toContain('| 1 | 2 |')
+      expect(md).not.toContain('| 3 |')
+    })
+
+    it('SC 空数组 / 空表整段消失，不留一个只有标题的小节', () => {
+      expect(
+        asSayContent({
+          headline: 'H',
+          points: [],
+          followups: [],
+          table: { columns: ['A'], rows: [] }
+        })
+      ).toBe('H')
+    })
+  })
 })
 
 /**

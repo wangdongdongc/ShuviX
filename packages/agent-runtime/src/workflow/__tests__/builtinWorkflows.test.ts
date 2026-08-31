@@ -8,6 +8,7 @@
  * 透传与 journal 落点全部走真代码，只有 manager 与档案解析是 fake。
  */
 import { describe, expect, it, vi } from 'vitest'
+import { botReplyToMarkdown, type BotReply } from '@shuvix/chat-protocol/botReply'
 import {
   AUTO_TITLE_WORKFLOW_SPEC,
   buildBuiltinWorkflow,
@@ -327,5 +328,130 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
     }
     expect(wf.prompts.notes).toContain('##')
     expect(wf.script).toContain("prompt('notes'")
+  })
+})
+
+/**
+ * 任务段（M8′）落地之后 bot-chat 的结构面。行为面在 botChatTask.test.ts 真跑，这里只钉
+ * **md 上肉眼可查、改了就该有人知道**的那几处：默认值、契约形状、以及两条刻意的「不写」
+ * （任务段不给 tools、提示词不宣告附件）——「刻意不写」是最容易在下一次编辑里被好心补上的。
+ */
+describe('bot-chat —— 任务段与 BotReply 的结构钉板', () => {
+  const botChat = (): ParsedWorkflowFile =>
+    buildBuiltinWorkflows({}).find((w) => w.name === 'bot-chat')!
+
+  it('BC-1 vars 数值钉板：两个窗口、三个墙钟、笔记预算与出队复核开关', () => {
+    // 数值本身没有神圣性，但它们是 e2e 与单测里一堆断言的依据（切片条数、超时秒数），
+    // 改一个就该在这里显形一次
+    expect(botChat().vars).toEqual({
+      gateWindow: 8,
+      taskWindow: 20,
+      gateTimeoutSec: 60,
+      taskTimeoutSec: 1800,
+      notesTimeoutSec: 300,
+      notesWindow: 60,
+      notesBudget: 2000,
+      recheckStale: true
+    })
+  })
+
+  it('BC-2 limits：agent 上限 4、墙钟 2400s —— 必须宽于最长的单步（taskTimeoutSec）', () => {
+    const wf = botChat()
+    expect(wf.limits).toEqual({ maxAgents: 4, maxDurationSec: 2400 })
+    // run 级墙钟若短于单步墙钟，任务段永远等不到自己的超时，出声的就成了笼统的 run 失败
+    expect(wf.limits.maxDurationSec!).toBeGreaterThan(wf.vars.taskTimeoutSec as number)
+  })
+
+  it('BC-3 reply 契约恰六键，required 只有 headline（结论先行是唯一的硬要求）', () => {
+    const reply = botChat().schemas.reply as {
+      required?: string[]
+      properties?: Record<string, unknown>
+    }
+    expect(reply.required).toEqual(['headline'])
+    expect(Object.keys(reply.properties!).sort()).toEqual([
+      'body',
+      'followups',
+      'headline',
+      'points',
+      'status',
+      'table'
+    ])
+  })
+
+  it('BC-4 【契约↔投影闭环】reply 契约里的每个键都能在 markdown 投影里留下痕迹', () => {
+    // 契约多出一个投影不认识的键，模型就会去填一个既不进 content 也不上屏的字段 ——
+    // 让它填等于骗它。这条把 md 那份 JSON Schema 与 chat-protocol 的投影拴在一起，
+    // 两边任何一侧单方面加键都在这里现形
+    const sample: Record<string, unknown> = {
+      headline: '结论一句',
+      body: '一段解释',
+      points: ['要点甲'],
+      table: { columns: ['列甲'], rows: [['格甲']] },
+      status: 'warn',
+      followups: ['接着问什么']
+    }
+    const traces: Record<string, string> = {
+      headline: '结论一句',
+      body: '一段解释',
+      points: '要点甲',
+      table: '列甲',
+      status: 'Status: warn',
+      followups: '接着问什么'
+    }
+    const reply = botChat().schemas.reply as { properties: Record<string, unknown> }
+    for (const key of Object.keys(reply.properties)) {
+      expect(Object.keys(sample), key).toContain(key)
+      const single = { headline: '结论一句', [key]: sample[key] } as BotReply
+      expect(botReplyToMarkdown(single), key).toContain(traces[key])
+    }
+    // table 的行列都得声明出来，否则模型会交回半张表而投影只能整段丢掉它
+    const table = reply.properties.table as { required?: string[] }
+    expect(table.required).toEqual(['columns', 'rows'])
+  })
+
+  it('BC-5 【刻意不写】任务段的 run 没有 tools 选项 —— 门控与复核才有', () => {
+    // 收窄任务段的工具等于推翻 bot md 关于它自己的说法（它的正文就是按那份清单写的）；
+    // 门控是共享内置件，锁成零工具才防得住用户覆盖它之后长出工具
+    const script = botChat().script
+    const gateCall = script.slice(script.indexOf('1 ── The gate'), script.indexOf('2 ── A broken'))
+    const taskCall = script.slice(
+      script.indexOf('6 ── The work itself'),
+      script.indexOf('} catch (e) {\n    const code = e && e.code\n    // Someone stopped')
+    )
+    expect(gateCall).toContain('tools: []')
+    expect(taskCall).not.toContain('tools:')
+    expect(taskCall).toContain('schema: schemas.reply')
+  })
+
+  it('BC-6 【刻意不写】没有 attached 提示词块，也没有任何一句宣告附件张数', () => {
+    // 取不到附件时那句话就是在诱导幻觉，而图片本来就以 user 消息的形式在上下文里
+    const wf = botChat()
+    expect(Object.keys(wf.prompts)).not.toContain('attached')
+    for (const [name, body] of Object.entries(wf.prompts)) {
+      expect(body, name).not.toMatch(/attach|image/i)
+    }
+    // 转交本身仍在：句柄经 run 的 attach 选项走，不经提示词
+    expect(wf.script).toContain('attach: attached')
+    expect(wf.script).toContain('input.message && input.message.attachments')
+  })
+
+  it('BC-7 【刻意不写】任务段提示词不带 notesBlock —— 任务段 agent 就是 bot 自己', () => {
+    const script = botChat().script
+    const taskPrompt = script.slice(script.indexOf("prompt('task'"), script.indexOf('sinceBlock:'))
+    expect(taskPrompt).not.toContain('notesBlock')
+    // 对照：门控段是共享内置件，它必须被告知这个 bot 学过什么
+    expect(script).toContain('notesBlock: notesBlock')
+    expect(botChat().prompts.task).not.toContain('{{notesBlock}}')
+    expect(botChat().prompts.gate).toContain('{{notesBlock}}')
+  })
+
+  it('BC-8 失败文案齐备：四种任务段结局各有自己的一句话', () => {
+    // 「配置错」「超时」「跑挂了」「没形状」对用户的意味完全不同，共用一句就等于让人
+    // 去猜下一步该做什么
+    for (const name of ['taskNoAgent', 'taskTimeout', 'taskFailed', 'gateBroken', 'gateTimeout']) {
+      expect(Object.keys(botChat().prompts), name).toContain(name)
+      expect(botChat().prompts[name].trim(), name).not.toBe('')
+    }
+    expect(botChat().prompts.taskNoAgent).toContain('{{agent}}')
   })
 })

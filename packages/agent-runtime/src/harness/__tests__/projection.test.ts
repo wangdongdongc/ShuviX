@@ -17,6 +17,7 @@ import type {
   ChatMessage,
   UserTextMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
+import { botReplyToMarkdown } from '@shuvix/chat-protocol/botReply'
 import {
   entriesToChatMessages,
   BOT_SENDER_CUSTOM_TYPE,
@@ -729,6 +730,137 @@ describe('救济 chip 的持久化投影', () => {
       'reason',
       'relevance'
     ])
+  })
+})
+
+/** 侧车里那份结构化回复回到 UI 之后的样子 */
+function replyOf(msg: ChatMessage | undefined): unknown {
+  return (msg?.metadata as { reply?: unknown } | null | undefined)?.reply
+}
+
+/**
+ * 结构化回复（`BotReply`）从磁盘回到 UI 的那一段。
+ *
+ * 它与 `suppressed` 同属「UI 会去读、所以必须逐字段重建」的那一类，与 sender 其余键的
+ * 「原样带过」刻意不同。但它多背一条**别处没有的**不变量：侧车里这份结构与消息 content
+ * 里那份 markdown **同源**（content 由 `botReplyToMarkdown(reply)` 得来）。所以这里的
+ * 收窄口径必须与投影口径逐格一致 —— 不一致的表现是 UI 上显示着一个模型看不见的单元格，
+ * 而这种错位不会报错，只会让下一轮的追问显得莫名其妙。
+ */
+describe('结构化回复侧车的投影', () => {
+  const REPLY = {
+    headline: '扫描完成，两处待修',
+    body: '鉴权中间件的空值判断没跟上。',
+    points: ['auth.ts:42'],
+    table: { columns: ['接口', '状态'], rows: [['/login', '待修']] },
+    status: 'warn' as const,
+    followups: ['要我直接改吗？']
+  }
+
+  it('PJ-1 合法结构挂到紧邻的 assistant 上，逐字段等值；sender 本身仍只有三个键', async () => {
+    await sidecar('scout', 'Scout', { reply: REPLY })
+    const assistantId = await session.appendMessage(botSaid(botReplyToMarkdown(REPLY)))
+
+    const [msg] = await project()
+    expect(msg.id).toBe(assistantId)
+    expect(replyOf(msg)).toEqual(REPLY)
+    // reply 是 metadata 上与 sender 并列的一个键，不是塞进 sender 里的第四个字段
+    expect(Object.keys(senderOf(msg) as object).sort()).toEqual(['displayName', 'kind', 'name'])
+  })
+
+  it('PJ-2 【同源】侧车里的结构投影成 markdown 就是这条消息的 content', async () => {
+    // 两者一旦能各说各话，用户读到的与模型读到的就是两份不同的回答
+    await sidecar('scout', 'Scout', { reply: REPLY })
+    await session.appendMessage(botSaid(botReplyToMarkdown(REPLY)))
+
+    const [msg] = await project()
+    expect(msg.content).toBe(botReplyToMarkdown(replyOf(msg) as never))
+  })
+
+  it.each([
+    ['缺 headline', { body: 'b' }],
+    ['headline 纯空白', { headline: '   ', body: 'b' }],
+    ['headline 非字符串', { headline: 42 }],
+    ['不是对象', 'nope'],
+    ['null', null],
+    ['数组', [{ headline: 'H' }]],
+    ['空对象', {}]
+  ])('PJ-3 坏结构（%s）→ 连 reply 这个键都不铺，消息本身照常显示', async (_n, bad) => {
+    // 投影层用的是**严格版** asBotReply：这里是给 UI 的那一份，宁可退回普通气泡，
+    // 也不能端出一个没有结论的卡片。补救（从正文里提一句当结论）发生在落树之前的
+    // say 那一侧 —— 那时还来得及把补出来的结论一并写进 content
+    await sidecar('scout', 'Scout', { reply: bad })
+    await session.appendMessage(botSaid('照常显示的正文'))
+
+    const [msg] = await project()
+    expect(senderOf(msg)).toMatchObject({ name: 'scout' })
+    expect(msg.metadata).not.toHaveProperty('reply')
+    expect(msg.content).toBe('照常显示的正文')
+  })
+
+  it('PJ-4 未知键与坏子字段被**重建**掉，不端给渲染层', async () => {
+    await sidecar('scout', 'Scout', {
+      reply: {
+        headline: 'H',
+        evil: '<script>',
+        status: 'catastrophic',
+        points: ['好的', 42, '  '],
+        table: { columns: ['A', 'B'], rows: [['1'], 'nope'] }
+      }
+    })
+    await session.appendMessage(botSaid('H'))
+
+    const reply = replyOf((await project())[0]) as Record<string, unknown>
+    expect(reply).not.toHaveProperty('evil')
+    // 取值域外的 status 整个键不铺（而不是原样带过一个 UI 不认识的 chip 值）
+    expect(reply).not.toHaveProperty('status')
+    expect(reply.points).toEqual(['好的'])
+    // 行按列数对齐、坏行整条丢掉 —— 与 markdown 投影同口径
+    expect(reply.table).toEqual({ columns: ['A', 'B'], rows: [['1', '']] })
+  })
+
+  it('PJ-5 切片投影与全量投影逐字段全等 —— 流式所见即重开所见', async () => {
+    // 广播只跑新 append 的那一两条 entry（projectSlice），重开会话跑的是整棵树。
+    // 卡片若只在其中一条路径上成型，刷新之后它就会变成一个普通气泡
+    await session.appendMessage(user('查一下'))
+    const sidecarId = await sidecar('scout', 'Scout', { reply: REPLY })
+    const assistantId = await session.appendMessage(botSaid(botReplyToMarkdown(REPLY)))
+
+    const entries = await session.buildContextEntries()
+    const slice = entries.filter((e) => e.id === sidecarId || e.id === assistantId)
+    const [fromSlice] = entriesToChatMessages(slice, SESSION_ID, 'test-model')
+    const fromWhole = (await project()).find((m) => m.id === assistantId)
+
+    expect(fromSlice).toEqual(fromWhole)
+    expect(replyOf(fromSlice)).toEqual(REPLY)
+  })
+
+  it('PJ-6 侧车本身不合法 → 结构一并作废（没有署名就没有卡片可挂）', async () => {
+    await session.appendCustomEntry(BOT_SENDER_CUSTOM_TYPE, {
+      botName: '',
+      displayName: 'Scout',
+      reply: REPLY
+    })
+    await session.appendMessage(botSaid('我来回答'))
+
+    const [msg] = await project()
+    expect(senderOf(msg)).toBeUndefined()
+    expect(msg.metadata).not.toHaveProperty('reply')
+  })
+
+  it('PJ-7 与 suppressed / decision 共存，三者互不干扰', async () => {
+    await sidecar('scout', 'Scout', {
+      decision: 'task',
+      reply: REPLY,
+      suppressed: [CANDIDATE]
+    })
+    await session.appendMessage(botSaid(botReplyToMarkdown(REPLY)))
+
+    const [msg] = await project()
+    expect(replyOf(msg)).toEqual(REPLY)
+    expect(suppressedOf(msg)).toEqual([CANDIDATE])
+    // decision 只服务宿主侧的 clarify 回连，不进 UI 的 metadata
+    expect(msg.metadata).not.toHaveProperty('decision')
   })
 })
 

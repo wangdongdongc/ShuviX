@@ -438,3 +438,121 @@ describe('invoke — signal 与重入参数', () => {
     await first
   })
 })
+
+/**
+ * `run(..., { attach })` —— **附件接缝**。脚本转交的是宿主给的不透明句柄，引擎自己一个
+ * 字节都不认识：它只负责在派发之前把句柄交给宿主的 `resolveAttachments`，把换回来的
+ * 消息挂进派生 agent 的上下文。
+ *
+ * 这条接缝的每一格都是「取不到图时会怎样」：宿主没有这个能力、回读抛了、回读回来是空的 ——
+ * 三者都必须是「少一张图的回答」，而不是「没有回答」。带图的消息本来就少，一次带图的
+ * 失败会被当成偶发，而它其实是这条路径每次都会走的那一条。
+ */
+describe('invoke — attach 接缝', () => {
+  const HANDLE = { sessionId: 'S1', entryId: 'e1', index: 0, mimeType: 'image/png' }
+  const IMAGE = {
+    role: 'user',
+    content: [{ type: 'image', data: 'BYTES', mimeType: 'image/png' }]
+  } as never
+
+  const attaching = (opts = '{ attach: [HANDLE] }'): ParsedWorkflowFile =>
+    fileOf({
+      script: `const HANDLE = ${JSON.stringify(HANDLE)}\nreturn await run('worker', 'p', ${opts})`
+    })
+
+  it('EA-1 句柄经 resolveAttachments 换成消息，挂进派生上下文；sessionId 一并交付', async () => {
+    const resolveAttachments = vi.fn(async () => [IMAGE])
+    const eng = makeEngine({ resolveAttachments, entries: [entryOf(attaching())] })
+    await eng.engine.invoke({ workflow: 'wf', sessionId: 'S1' })
+
+    expect(resolveAttachments).toHaveBeenCalledTimes(1)
+    expect(resolveAttachments.mock.calls[0]).toEqual([[HANDLE], 'S1'])
+    expect((eng.runTask.mock.calls[0][0] as RunTaskParams).contextMessages).toEqual([IMAGE])
+  })
+
+  it('EA-2 没有 attach → 回读一次都不调，contextMessages 整个键不铺', async () => {
+    const resolveAttachments = vi.fn(async () => [IMAGE])
+    const eng = makeEngine({
+      resolveAttachments,
+      entries: [entryOf(fileOf({ script: "return await run('worker', 'p')" }))]
+    })
+    await eng.engine.invoke({ workflow: 'wf' })
+    expect(resolveAttachments).not.toHaveBeenCalled()
+    expect((eng.runTask.mock.calls[0][0] as RunTaskParams).contextMessages).toBeUndefined()
+  })
+
+  it.each([
+    ['空数组', '{ attach: [] }'],
+    ['非数组', "{ attach: 'nope' }"],
+    ['显式 null', '{ attach: null }']
+  ])('EA-3 attach 是 %s → 当作没有附件，不调回读也不报错', async (_n, opts) => {
+    const resolveAttachments = vi.fn(async () => [IMAGE])
+    const eng = makeEngine({ resolveAttachments, entries: [entryOf(attaching(opts))] })
+    expect(await eng.engine.invoke({ workflow: 'wf' })).toMatchObject({ ok: true })
+    expect(resolveAttachments).not.toHaveBeenCalled()
+  })
+
+  it('EA-4 宿主没有回读能力 → 留一条 log 并照常派发（附件是宿主能力，不是每个宿主都有）', async () => {
+    const eng = makeEngine({ entries: [entryOf(attaching())] })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: true, output: 'ok' })
+    expect(
+      eng.records.some(
+        (r) =>
+          r.rec.type === 'log' &&
+          r.rec.message === 'attach ignored: host has no attachment resolver'
+      )
+    ).toBe(true)
+    expect((eng.runTask.mock.calls[0][0] as RunTaskParams).contextMessages).toBeUndefined()
+  })
+
+  it('EA-5 回读抛错 → log 记下原因，派发照常（少一张图的回答好过没有回答）', async () => {
+    const eng = makeEngine({
+      resolveAttachments: async () => {
+        throw new Error('tree is gone')
+      },
+      entries: [entryOf(attaching())]
+    })
+    const res = await eng.engine.invoke({ workflow: 'wf' })
+    expect(res).toMatchObject({ ok: true, output: 'ok' })
+    const log = eng.records.find((r) => r.rec.type === 'log')!.rec
+    expect(String(log.message)).toContain('attach failed')
+    expect(String(log.message)).toContain('tree is gone')
+    expect(eng.runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('EA-6 回读回来是空数组 → contextMessages 不铺（不给模型一条空的 user 消息）', async () => {
+    const eng = makeEngine({ resolveAttachments: async () => [], entries: [entryOf(attaching())] })
+    await eng.engine.invoke({ workflow: 'wf' })
+    expect((eng.runTask.mock.calls[0][0] as RunTaskParams).contextMessages).toBeUndefined()
+  })
+
+  it('EA-7 【读盘不计入步超时】回读比 timeoutSec 还慢时，这一步照样跑得起来', async () => {
+    // 计时器若在回读之前武装，一条带图的消息就会在模型还没被调用之前先被判超时 ——
+    // 而读盘的耗时本来就不该记到这一步的模型账上
+    vi.useFakeTimers()
+    try {
+      const eng = makeEngine({
+        // 派发那一刻 signal 已经落下 = 计时器武装早了
+        runTask: async (p) => ({ result: p.parentAbortSignal?.aborted ? 'ARMED-TOO-EARLY' : 'ok' }),
+        resolveAttachments: async () => {
+          await new Promise((r) => setTimeout(r, 5_000))
+          return [IMAGE]
+        },
+        entries: [entryOf(attaching('{ attach: [HANDLE], timeoutSec: 1 }'))]
+      })
+      const p = eng.engine.invoke({ workflow: 'wf' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await p).toMatchObject({ ok: true, output: 'ok' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('EA-8 不传 sessionId → 回读拿到 undefined（宿主据此拒绝跨会话句柄）', async () => {
+    const resolveAttachments = vi.fn(async (_refs: unknown[], _sessionId?: string) => [IMAGE])
+    const eng = makeEngine({ resolveAttachments, entries: [entryOf(attaching())] })
+    await eng.engine.invoke({ workflow: 'wf' })
+    expect(resolveAttachments.mock.calls[0][1]).toBeUndefined()
+  })
+})

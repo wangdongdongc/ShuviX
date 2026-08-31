@@ -28,7 +28,9 @@ import {
   SHUVIX_MD_DESCRIPTORS
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
+import { toInProcessAgentType } from '../../subagent/dispatchTool'
 import {
+  BOT_AGENT_REF_PREFIX,
   BOT_AGENTS_KEY,
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
@@ -40,6 +42,8 @@ import {
   BOT_RESPOND_MODES,
   BOT_SUGGESTIONS_KEY,
   DEFAULT_BOT_PIPELINE,
+  botToInProcessAgentType,
+  parseBotAgentRef,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   type ParsedBotFile
@@ -1380,5 +1384,176 @@ describe('BD —— 属性卡描述符与解析器的对齐', () => {
     }
     // 从 chat-protocol 再导出的门控键同样在册
     expect(parserKeys).toContain(BOT_RESPOND_KEY)
+  })
+})
+
+// ───────────────── REF：`bot:<name>` 任务段 ref 的解析 ─────────────────
+
+/**
+ * 任务段 agent 的 ref 是**全局可寻址的 `bot:<name>`，不是 `bot:self`** —— 引擎的
+ * `resolveAgentProfile(ref)` 是一个无 run 上下文的全局 dep，相对 ref 在那里永远解析
+ * 不出来。这个纯函数因此是「bot 即 agent」那条投影的入口闸，它认错一个前缀，任务段就
+ * 会被当成一个普通 agent 名去查、然后以 `unknown_agent` 收场。
+ */
+describe('REF —— parseBotAgentRef', () => {
+  it('REF-1 `bot:<name>` → name', () => {
+    expect(parseBotAgentRef('bot:scout')).toBe('scout')
+  })
+
+  it('REF-2 名字原样保留：CJK / 空格 / 连字符 / 点都合法（bot 名就是文件名）', () => {
+    expect(parseBotAgentRef('bot:研究员')).toBe('研究员')
+    expect(parseBotAgentRef('bot:my bot')).toBe('my bot')
+    expect(parseBotAgentRef('bot:a-b.c')).toBe('a-b.c')
+  })
+
+  it('REF-3 前缀与名字之间的空白被 trim（YAML 里 `bot: x` 这类写法的容错）', () => {
+    expect(parseBotAgentRef('bot:  scout  ')).toBe('scout')
+  })
+
+  it.each([['coding'], ['agent:scout'], ['Bot:scout'], ['bots:scout'], ['']])(
+    'REF-4 不是 bot ref（%s）→ null',
+    (ref) => {
+      expect(parseBotAgentRef(ref)).toBeNull()
+    }
+  )
+
+  it.each([['bot:'], ['bot:   ']])('REF-5 前缀后没有名字（%s）→ null，不是空串', (ref) => {
+    // 回 '' 的话调用方会拿它去查注册表并得到 null，错误消息里的名字是空的
+    expect(parseBotAgentRef(ref)).toBeNull()
+  })
+
+  it('REF-6 名字里再出现冒号时只切最前一段前缀（bot 名不禁止冒号）', () => {
+    expect(parseBotAgentRef('bot:ns:scout')).toBe('ns:scout')
+  })
+
+  it('REF-7 与 BOT_AGENT_REF_PREFIX 同源 —— 前缀常量改了这里跟着改', () => {
+    expect(parseBotAgentRef(`${BOT_AGENT_REF_PREFIX}scout`)).toBe('scout')
+    expect(BOT_AGENT_REF_PREFIX).toBe('bot:')
+  })
+})
+
+// ───────────── PRJ：ParsedBotFile → InProcessAgentType 的运行投影 ─────────────
+
+/**
+ * 「agent 即 bot 自身」这条设计（§6.2）的落点：任务段拿到的 systemPrompt 是**整篇正文
+ * （含笔记区）**，工具/模型/两个上下文注入声明照常生效。
+ *
+ * PRJ-6 是本组的看门用例：它把这份投影的键集与 `toInProcessAgentType`（AgentProfile
+ * 那条）对齐。两条投影刻意分开写（bot md 多出管线/门控/开场白/笔记这些只有 bot 才有的
+ * 字段，硬凑一个类型会让「哪些字段对 agent 有意义」变得不可读），但**产物必须同形** ——
+ * 派生执行侧只认 InProcessAgentType，少一个键就是「bot 的某个声明在任务段悄悄失效」。
+ */
+describe('PRJ —— botToInProcessAgentType', () => {
+  const parsed = (raw: string): ParsedBotFile => {
+    const out = parseBotDefinitionFile(raw, 'fn')
+    expect(out, raw).not.toBeNull()
+    return out!
+  }
+
+  it('PRJ-1 身份三键取自 bot md（name / displayName / description）', () => {
+    const p = botToInProcessAgentType(
+      parsed(
+        md('---', 'name: scout', 'description: 侦察', 'shuvix-displayName: 侦察兵', '---', 'B')
+      )
+    )
+    expect(p).toMatchObject({ name: 'scout', displayName: '侦察兵', description: '侦察' })
+  })
+
+  it('PRJ-2 systemPrompt 是**整篇正文含笔记区** —— bot 当然要知道自己学过什么', () => {
+    const p = botToInProcessAgentType(
+      parsed(md('---', 'description: d', '---', bodyWithNotes('人设一句', '记得：用户偏好简答')))
+    )
+    expect(p.systemPrompt).toContain('人设一句')
+    expect(p.systemPrompt).toContain('记得：用户偏好简答')
+    expect(p.systemPrompt).toContain(BOT_NOTES_MARKER)
+  })
+
+  it('PRJ-3 tools / instructionFiles 是拷贝而非同一引用（投影不该让调用方改到原件）', () => {
+    const bot = parsed(
+      md(
+        '---',
+        'description: d',
+        'shuvix-tools: read, bash',
+        'shuvix-instruction-files: AGENTS.md',
+        '---',
+        'B'
+      )
+    )
+    const p = botToInProcessAgentType(bot)
+    expect(p.tools).toEqual(['read', 'bash'])
+    expect(p.tools).not.toBe(bot.tools)
+    expect(p.instructionFiles).not.toBe(bot.instructionFiles)
+    p.tools.push('rm -rf')
+    expect(bot.tools).toEqual(['read', 'bash'])
+  })
+
+  it('PRJ-4 model：声明了就带上，没声明则**整个键不铺**（不是 undefined 值）', () => {
+    // 派发侧用 `'model' in x` 之外的写法也不该被一个显式 undefined 骗到：没声明 =
+    // 跟随会话/继承派发方，铺一个 undefined 与不铺在 JSON 序列化后才等价
+    const withModel = botToInProcessAgentType(
+      parsed(md('---', 'description: d', 'shuvix-model: gpt-x', '---', 'B'))
+    )
+    expect(withModel.model).toBe('gpt-x')
+    expect(botToInProcessAgentType(parsed(bot()))).not.toHaveProperty('model')
+  })
+
+  it('PRJ-5 projectAwareness 原样透传（true / 缺省 false）', () => {
+    expect(
+      botToInProcessAgentType(
+        parsed(md('---', 'description: d', 'shuvix-project-awareness: true', '---', 'B'))
+      ).projectAwareness
+    ).toBe(true)
+    expect(botToInProcessAgentType(parsed(bot())).projectAwareness).toBe(false)
+  })
+
+  it('PRJ-6 【键集守卫】与 toInProcessAgentType 的产物同形（bot 专属字段一个都不外泄）', () => {
+    // 两条投影分开写是刻意的，但产物必须同形：派生执行侧只认 InProcessAgentType
+    const agentSide = Object.keys(
+      toInProcessAgentType({
+        name: 'a',
+        displayName: 'A',
+        description: 'd',
+        systemPrompt: 'S',
+        tools: ['read'],
+        model: 'm',
+        instructionFiles: ['AGENTS.md'],
+        projectAwareness: true,
+        // AgentProfile 独有的三个注册表字段 —— 它们**不该**出现在运行投影里，
+        // 所以在这里给上值，让下面那句键集比较真的能证明它们被投影丢掉了
+        dispatchOnly: false,
+        source: 'user',
+        basePath: '/tmp/a.md'
+      })
+    ).sort()
+    const botSide = Object.keys(
+      botToInProcessAgentType(
+        parsed(
+          md(
+            '---',
+            'description: d',
+            'shuvix-tools: read',
+            'shuvix-model: m',
+            'shuvix-instruction-files: AGENTS.md',
+            'shuvix-project-awareness: true',
+            '---',
+            'B'
+          )
+        )
+      )
+    ).sort()
+    expect(botSide).toEqual(agentSide)
+    // 反向：管线/门控/开场白/笔记这些只有 bot 才有的字段不得混进运行投影
+    for (const leak of [
+      'pipeline',
+      'pipelineInput',
+      'respond',
+      'notes',
+      'notesEnabled',
+      'agents',
+      'greeting',
+      'suggestions'
+    ]) {
+      expect(botSide, leak).not.toContain(leak)
+    }
   })
 })

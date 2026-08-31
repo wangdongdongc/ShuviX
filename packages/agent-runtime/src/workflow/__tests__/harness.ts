@@ -94,6 +94,8 @@ export function makeEngine(
     runTask?: (p: RunTaskParams) => Promise<{ result: string; structured?: unknown }>
     resolveAgentProfile?: WorkflowEngineDeps['resolveAgentProfile']
     resolveRunModel?: WorkflowEngineDeps['resolveRunModel']
+    /** 附件回读接缝；不传 = 宿主没有这个能力（引擎应当忽略 attach 并留一条 log） */
+    resolveAttachments?: WorkflowEngineDeps['resolveAttachments']
     onRecord?: (name: string, runId: string, rec: Record<string, unknown>) => void
     script?: WorkflowScriptEngine
   } = {}
@@ -109,6 +111,7 @@ export function makeEngine(
     listWorkflows: opts.listWorkflows ?? ((): WorkflowRegistryEntry[] => opts.entries ?? []),
     resolveAgentProfile: opts.resolveAgentProfile ?? ((ref) => (ref === 'worker' ? PROFILE : null)),
     resolveRunModel: opts.resolveRunModel ?? (async () => MODEL),
+    ...(opts.resolveAttachments ? { resolveAttachments: opts.resolveAttachments } : {}),
     onRecord: (name, runId, rec) => {
       records.push({ name, runId, rec })
       opts.onRecord?.(name, runId, rec)
