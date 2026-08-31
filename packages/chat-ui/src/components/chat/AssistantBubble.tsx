@@ -13,6 +13,7 @@ import {
   Archive
 } from 'lucide-react'
 import { SystemNoticeCard } from './SystemNoticeCard'
+import { BotAvatar } from '../common/BotAvatar'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
@@ -66,6 +67,9 @@ export const AssistantBubble = memo(function AssistantBubble({
   const [showRaw, setShowRaw] = useState(false)
   const anchor = msgs[msgs.length - 1]
   const isCompactionSummary = !!anchor.metadata?.isCompactionSummary
+  // bot 署名（聊天会话）。bot 消息永远是单条无工具块的终答卡（工具在派生 agent 自己的
+  // 树里跑），所以一张卡至多一个 sender，从 anchor 读即可
+  const sender = anchor.metadata?.sender
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === anchor.id
   const isThisLoading = isLoading && playingMessageId === anchor.id
@@ -117,6 +121,16 @@ export const AssistantBubble = memo(function AssistantBubble({
     <div className="group relative px-4 py-3">
       {/* 内容 */}
       <div className="min-w-0">
+        {/* bot 署名卡头（A0 简版：头像 + 显示名） */}
+        {sender && (
+          <div
+            className="flex items-center gap-1.5 mb-1.5 text-xs font-medium text-text-primary"
+            data-bot-sender={sender.name}
+          >
+            <BotAvatar name={sender.name} displayName={sender.displayName} size={18} />
+            <span className="truncate">{sender.displayName}</span>
+          </div>
+        )}
         {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
             （不用左侧竖轴：那会再吃掉一列缩进） */}
         {(blockGroups.length > 0 || liveThinking) && (

@@ -22,6 +22,8 @@ export interface ProjectSessionGroupsProps {
   onToggleGroup: (key: string) => void
   /** 在某组下新建会话（临时组传 null） */
   onNewChat: (projectId: string | null) => void
+  /** 在某组下新建 Bot 会话（打开成员多选）；宿主未注入 bots 能力时缺省，入口整体不渲染 */
+  onNewBotChat?: (projectId: string | null) => void
   /** 选中会话（缺省用 chatStore.setActiveSessionId） */
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
@@ -59,6 +61,7 @@ export function ProjectSessionGroups({
   collapsed,
   onToggleGroup,
   onNewChat,
+  onNewBotChat,
   onSelect,
   onDelete,
   onEditProject,
@@ -146,13 +149,15 @@ export function ProjectSessionGroups({
     })
   }
 
-  // 分组右键菜单：新建对话 /（项目组）编辑项目
+  // 分组右键菜单：新建对话 / 新建 Bot 会话（能力注入时）/（项目组）编辑项目
   const openGroupMenu = (key: string, isTemp: boolean, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [{ id: 'new-chat', label: t('sidebar.newChat') }]
+    if (onNewBotChat) items.push({ id: 'new-bot-chat', label: t('sidebar.newBotChat') })
     if (!isTemp && onEditProject)
       items.push({ id: 'edit-project', label: t('sidebar.editProject') })
     void showContextMenu(e, items, (action) => {
       if (action === 'new-chat') onNewChat(isTemp ? null : key)
+      if (action === 'new-bot-chat') onNewBotChat?.(isTemp ? null : key)
       if (action === 'edit-project') onEditProject?.(key)
     })
   }
@@ -179,6 +184,7 @@ export function ProjectSessionGroups({
             collapsed={collapsed.has(groupKey)}
             onToggle={() => onToggleGroup(groupKey)}
             onNewChat={() => onNewChat(isTemp ? null : groupKey)}
+            onNewBotChat={onNewBotChat ? () => onNewBotChat(isTemp ? null : groupKey) : undefined}
             active={activeGroupKey === groupKey}
             dim={groupDim}
             showDividerAbove={isTemp && idx > 0}
@@ -204,6 +210,7 @@ export function ProjectSessionGroups({
                 pendingCount={pendingCounts[s.id]}
                 dim={dim && activeGroupKey === groupKey && activeSessionId !== s.id}
                 isNotebook={!!s.settings.notebookPath}
+                isBot={!!s.settings.bots?.length}
                 isPinned={caps.pin ? pinnedSessionIds?.has(s.id) : undefined}
                 onSelect={handleSelect}
                 onDelete={onDelete}

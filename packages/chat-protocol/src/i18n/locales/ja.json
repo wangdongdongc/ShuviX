@@ -51,7 +51,8 @@
     "memoryPinned": "常駐メモリ（本文を毎回注入）",
     "switchView": "ビュー切り替え",
     "today": "今日",
-    "noSessionsOnDay": "この日のセッションはありません"
+    "noSessionsOnDay": "この日のセッションはありません",
+    "newBotChat": "新しい Bot 会話"
   },
   "transcript": {
     "untitled": "無題のセッション",
@@ -1098,6 +1099,14 @@
   "bot": {
     "pipelineMissing": "⚠️ パイプライン \"{{pipeline}}\" が見つからないか解析できません。このメッセージは処理されませんでした。",
     "runFailed": "⚠️ {{name}}：このメッセージを最後まで処理できませんでした。",
-    "gateFallback": "⚠️ {{name}}：応答するかどうかを判断する部分が {{count}} 回続けて失敗したため、組み込みのものに戻しました。自分の設定に戻すには設定を確認してください。"
+    "gateFallback": "⚠️ {{name}}：応答するかどうかを判断する部分が {{count}} 回続けて失敗したため、組み込みのものに戻しました。自分の設定に戻すには設定を確認してください。",
+    "dialogTitle": "新しい Bot 会話",
+    "dialogSubtitle": "この会話に参加するメンバーを選択（複数可）",
+    "dialogProject": "プロジェクト",
+    "dialogNoProject": "なし",
+    "dialogNoProjectHint": "プロジェクト未選択 —— メンバーのファイル操作はホームディレクトリを作業区とします",
+    "dialogEmpty": "Bot がまだありません。定義ファイルをフォルダに置くと使えます。",
+    "dialogOpenFolder": "Bots フォルダを開く",
+    "dialogCreate": "作成（メンバー {{count}} 名）"
   }
 }

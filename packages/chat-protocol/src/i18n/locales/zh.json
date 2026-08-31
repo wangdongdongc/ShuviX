@@ -51,7 +51,8 @@
     "memoryPinned": "常驻记忆（正文每次注入）",
     "switchView": "切换视图",
     "today": "今天",
-    "noSessionsOnDay": "当日无会话"
+    "noSessionsOnDay": "当日无会话",
+    "newBotChat": "新建 Bot 会话"
   },
   "transcript": {
     "untitled": "未命名会话",
@@ -1098,6 +1099,14 @@
   "bot": {
     "pipelineMissing": "⚠️ 管线 \"{{pipeline}}\" 不存在或无法解析，这条消息没有被处理。",
     "runFailed": "⚠️ {{name}}：这条消息没能处理完。",
-    "gateFallback": "⚠️ {{name}}：判断该不该接话的那一段连续出了 {{count}} 次问题，已经换回内置的那一个。要用回自己的配置，去设置里看看它。"
+    "gateFallback": "⚠️ {{name}}：判断该不该接话的那一段连续出了 {{count}} 次问题，已经换回内置的那一个。要用回自己的配置，去设置里看看它。",
+    "dialogTitle": "新建 Bot 会话",
+    "dialogSubtitle": "选择参与这个会话的成员 · 可多选",
+    "dialogProject": "项目",
+    "dialogNoProject": "无",
+    "dialogNoProjectHint": "未选项目 —— 成员的文件操作将以主目录为工作区",
+    "dialogEmpty": "还没有 Bot。把 bot 定义文件放进目录即可使用。",
+    "dialogOpenFolder": "打开 Bots 文件夹",
+    "dialogCreate": "创建（{{count}} 名成员）"
   }
 }

@@ -43,6 +43,7 @@ export { TokenBadge, InvalidTokenBadge } from './components/chat/InlineTokenBadg
 export { TokenChip, TokenPayloadDialog } from './components/chat/TokenChip'
 export { InstructionBubble } from './components/chat/InstructionBubble'
 export { SystemNoticeCard } from './components/chat/SystemNoticeCard'
+export { BotAvatar } from './components/common/BotAvatar'
 export { StreamingFooter } from './components/chat/StreamingFooter'
 export { PendingInputsPanel } from './components/chat/PendingInputsPanel'
 export { PendingInputsDrawer } from './components/chat/PendingInputsDrawer'

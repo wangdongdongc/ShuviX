@@ -4,7 +4,7 @@
  * 通用部分（图标/标题/流式脉冲/待输入计数/选中态/删除）两宿主共用；桌面专属能力
  * （悬浮 pin / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
  */
-import { MessageSquare, FileText, PictureInPicture2, Settings2, Trash2 } from 'lucide-react'
+import { Bot, MessageSquare, FileText, PictureInPicture2, Settings2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export interface SessionItemProps {
@@ -16,6 +16,8 @@ export interface SessionItemProps {
   dim?: boolean
   /** 笔记本会话（绑定 md 文件）—— 显示笔记本图标，选中后中间区为 live-preview */
   isNotebook?: boolean
+  /** 聊天会话（settings.bots 非空）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
+  isBot?: boolean
   onSelect: (id: string) => void
   onDelete?: (id: string) => void
   // —— 桌面专属（可选） ——
@@ -31,6 +33,7 @@ export function SessionItem({
   pendingCount = 0,
   dim = false,
   isNotebook = false,
+  isBot = false,
   onSelect,
   onDelete,
   isPinned = false,
@@ -50,7 +53,18 @@ export function SessionItem({
             }`
       }`}
     >
-      {isNotebook ? (
+      {isBot ? (
+        <Bot
+          size={11}
+          className={`flex-shrink-0 ${
+            isStreaming
+              ? 'text-accent animate-pulse'
+              : active
+                ? 'text-accent'
+                : 'text-text-tertiary/40'
+          }`}
+        />
+      ) : isNotebook ? (
         <FileText
           size={11}
           className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}

@@ -101,6 +101,11 @@ export function InputArea({
    * 彻底停下才出生 —— 这期间任何发送都无处可去，直接拦在输入框。
    */
   const isAgentClosing = useChatStore(selectIsAgentClosing)
+  // 聊天会话（bots 非空）：无根 Agent —— 档案切换器与上下文用量环都是关于根 Agent 的
+  // UI，一并隐藏（A0）。会话形态创建时定死，此值对同一会话恒定
+  const isBotSession = useChatStore(
+    (s) => !!s.sessions.find((x) => x.id === s.activeSessionId)?.settings?.bots?.length
+  )
   // 待处理输入请求（步进器选中的那条）——非空时输入框改投「其它」反馈，并按 kind 换描边色
   const activePendingInput = useChatStore(selectActivePendingInput)
   const pendingTone: 'warning' | 'accent' | null = !activePendingInput
@@ -638,8 +643,9 @@ export function InputArea({
   const pickers = (
     <div className="flex-shrink-0 flex items-center gap-1.5">
       {/* 档案选择器居首：档案决定系统提示词与内置工具白名单，是三者里最上位的一层。
-          笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），无可切项故不显示 */}
-      {canEdit && !isNotebook && (
+          笔记本会话的档案钉死为 notebook 基座（resolveAgentProfileName），无可切项故不显示；
+          聊天会话（bots）没有根 Agent，同样无档案可切 */}
+      {canEdit && !isNotebook && !isBotSession && (
         <AgentProfilePicker disabled={isStreaming} onApplied={applyProfileSeed} />
       )}
       <ModelPicker readonly={!canEdit} />
@@ -900,8 +906,9 @@ export function InputArea({
             <span className="flex-1" />
 
             {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
-                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口 */}
-            {(maxContextTokens > 0 || usedContextTokens !== null) && (
+                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。
+                聊天会话隐藏：没有单一 LLM 吃整棵树，「上下文用量」对它没有定义（A0） */}
+            {!isBotSession && (maxContextTokens > 0 || usedContextTokens !== null) && (
               <span
                 aria-label={ctxTooltip}
                 className="relative group/token p-1 rounded flex items-center"

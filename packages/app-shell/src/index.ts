@@ -49,6 +49,12 @@ export { ProjectMemoryFolder } from './sidebar/ProjectMemoryFolder'
 export type { ProjectMemoryFolderProps, ProjectMemoryAdapter } from './sidebar/ProjectMemoryFolder'
 export { Sidebar } from './sidebar/Sidebar'
 export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
+export { BotSessionDialog } from './sidebar/BotSessionDialog'
+export type {
+  BotSessionDialogProps,
+  BotPickItem,
+  SidebarBotsAdapter
+} from './sidebar/BotSessionDialog'
 export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
 export { ViewSwitchButton } from './sidebar/ViewSwitchButton'

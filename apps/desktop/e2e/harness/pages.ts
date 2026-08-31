@@ -107,6 +107,19 @@ export interface ChatPane {
   /** 待处理输入面板（PendingInputsPanel）是否在屏 + 是否顶格在输入卡片内 */
   pendingPanel(): Promise<{ open: boolean; firstInCard: boolean }>
 
+  /**
+   * 卡头署名（聊天会话，A0）：对话区里所有 `[data-bot-sender]` 卡头的快照（document 序）。
+   * avatarBg 是 getComputedStyle 归一后的 `rgb(r, g, b)` —— 与 hexToRgb(botColorFor(name))
+   * 做**精确**比较，不做近似。
+   */
+  botSenders(): Promise<BotSenderShot[]>
+  /** 档案选择器在屏（输入卡工具行内含 .lucide-bot 的按钮 —— 别处的 bot 图标不算） */
+  profilePickerPresent(): Promise<boolean>
+  /** 上下文用量环在屏（输入卡工具行内的 circle[r="6"]，轨道圈即可认） */
+  ctxRingPresent(): Promise<boolean>
+  /** 模型选择器在屏（输入卡工具行选择器簇内 ModelSelect inline 触发器的 chevron） */
+  modelPickerPresent(): Promise<boolean>
+
   /** 悬浮某条用户气泡点回退（图标按钮，opacity-0 不影响程序化点击） */
   clickRollback(msgId: string): Promise<void>
   /** 末条助手卡片的「重新生成」 */
@@ -115,6 +128,24 @@ export interface ChatPane {
   confirmOpen(): Promise<boolean>
   /** 点 ConfirmDialog 的确认（页脚第二个按钮，与 policiesPane 同款） */
   confirmAccept(): Promise<void>
+}
+
+/** 卡头署名快照（AssistantBubble 的 data-bot-sender 卡头 + BotAvatar） */
+export interface BotSenderShot {
+  /** bot 身份键（data-bot-sender 属性值） */
+  name: string
+  /** 卡头显示名（.truncate 那个 span） */
+  display: string
+  /** 头像色块的计算背景色（'rgb(r, g, b)'） */
+  avatarBg: string
+  /** 头像字（displayName 首个码点，可能是 emoji/CJK） */
+  avatarInitial: string
+}
+
+/** '#rrggbb' → 'rgb(r, g, b)'（getComputedStyle 的归一形态；颜色断言做精确比较用） */
+export function hexToRgb(hex: string): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgb(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff})`
 }
 
 /** 空闲确认间隔：取实测起流延迟（6~33ms）的十倍量级，满载也留得住余量 */
@@ -153,6 +184,10 @@ export function chatPane(main: CdpClient): ChatPane {
   const DIALOG = `document.querySelector('.dialog-panel')`
   const MSG = (id: string): string =>
     `document.querySelector('[data-msg-id=${JSON.stringify(id)}]')`
+  // 输入卡工具行 = textarea 容器（div.relative）的下一个兄弟（InputArea 固定结构）。
+  // 档案选择器/上下文环/模型选择器的存在性判断**必须**锚定在这里 —— `.lucide-bot`
+  // 一图三用（分组头入口 / 会话行图标 / 档案选择器），裸查 document 必然误命中
+  const TOOL_ROW = `(${TEXTAREA}?.parentElement?.nextElementSibling ?? null)`
 
   // 条目主文本：助手正文的 .markdown-body 是 .min-w-0 的**直接子节点**，
   // 过程区里的中间文本块也用 .markdown-body，靠这一层父子关系区分
@@ -321,6 +356,25 @@ export function chatPane(main: CdpClient): ChatPane {
         return { open: true, firstInCard: panel.parentElement?.firstElementChild === panel }
       })()`),
 
+    botSenders: () =>
+      main.eval<BotSenderShot[]>(
+        `[...document.querySelectorAll('[data-bot-sender]')].map((el) => {
+          const avatar = el.querySelector('span[aria-hidden]')
+          return {
+            name: el.getAttribute('data-bot-sender') ?? '',
+            display: (el.querySelector('span.truncate')?.textContent ?? '').trim(),
+            avatarBg: avatar ? getComputedStyle(avatar).backgroundColor : '',
+            avatarInitial: (avatar?.textContent ?? '').trim()
+          }
+        })`
+      ),
+    // 选择器簇是工具行的第一个子节点（pickers），bot 图标只可能是档案选择器的
+    profilePickerPresent: () =>
+      main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-bot')`),
+    ctxRingPresent: () => main.eval<boolean>(`!!${TOOL_ROW}?.querySelector('svg circle[r="6"]')`),
+    modelPickerPresent: () =>
+      main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-chevron-down')`),
+
     clickRollback: async (msgId) => {
       await main.eval(
         `[...(${MSG(msgId)}?.querySelectorAll('button') ?? [])]
@@ -343,6 +397,13 @@ export function chatPane(main: CdpClient): ChatPane {
   }
 }
 
+/**
+ * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
+ * CSS uppercase 不改 textContent），临时组按 `.lucide-message-circle` 图标认
+ * （MessageCircle 只出现在临时组头；会话行的普通图标是 message-square）。
+ */
+export type GroupTarget = { project: string } | 'temp'
+
 export interface SidebarPane {
   titles(): Promise<string[]>
   /**
@@ -357,11 +418,26 @@ export interface SidebarPane {
   /**
    * 点分组头的「新建对话」并等列表落定。
    *
-   * 这是**让渲染端重新拉全量会话列表的唯一 UI 入口**（`setSessions(await session.list())`）：
-   * 经 IPC 建的会话不会广播，不点这一下侧栏里看不到它们；而 `location.reload()` 被主进程的
+   * 会让渲染端重新拉全量会话列表（`setSessions(await session.list())`）。经 IPC 建的会话
+   * 如今也有 `session.listChanged` 广播兜底（sessions-changed.e2e.ts 钉住），这一下不再是
+   * 唯一入口，但仍是「确定已落定」的同步等待点；`location.reload()` 被主进程的
    * will-navigate 守卫挡掉，不可用。分组头须已存在（至少有一个项目或一条会话）。
    */
   clickNewChat(): Promise<void>
+  /**
+   * 分组头悬停操作区快照（A0 Bot 入口）：新建对话 / 新建 Bot 会话按钮是否存在、
+   * 是否并排（同一个操作容器）。按钮 opacity-0 只影响视觉，不影响存在性与可点性。
+   * 组头找不到返回 null。
+   */
+  groupHeaderActions(
+    target: GroupTarget
+  ): Promise<{ newChat: boolean; newBot: boolean; sameContainer: boolean } | null>
+  /** 点分组头的「新建 Bot 会话」（打开成员多选对话框；等待用 botDialogPane.waitOpen） */
+  clickNewBotChat(target: GroupTarget): Promise<void>
+  /** 当前活动会话行（bg-bg-active）存在且带 bot 图标 */
+  activeRowIsBot(): Promise<boolean>
+  /** 按标题认的会话行带 bot 图标；行不存在返回 false */
+  rowIsBot(title: string): Promise<boolean>
 }
 
 /** 主窗侧栏会话列表（SessionItem 无 data-*，按「含 span.truncate 的可点击行」认） */
@@ -377,6 +453,16 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim() ===
         ${JSON.stringify(title)}
     )`
+  /** 分组头行（SessionGroup 的 group/header 那层）—— 见 GroupTarget 的定位说明 */
+  const HEADERS = `[...document.querySelectorAll('div[class*="group/header"]')]`
+  const HEADER = (target: GroupTarget): string =>
+    target === 'temp'
+      ? `${HEADERS}.find((h) => h.querySelector('.lucide-message-circle'))`
+      : `${HEADERS}.find(
+          (h) =>
+            (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
+            ${JSON.stringify(target.project)}
+        )`
 
   return {
     clickNewChat: async () => {
@@ -403,6 +489,172 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         `session "${title}" activated`
       )
       return true
+    },
+
+    groupHeaderActions: async (target) => {
+      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      return main.eval(`(() => {
+        const h = ${HEADER(target)}
+        if (!h) return null
+        // 一律先落到组头行内再找图标（.lucide-bot 在别处另有他用）
+        const bot = h.querySelector('.lucide-bot')?.closest('button') ?? null
+        const chat = h.querySelector('.lucide-message-square-plus')?.closest('button') ?? null
+        return {
+          newChat: !!chat,
+          newBot: !!bot,
+          sameContainer: !!bot && !!chat && bot.parentElement === chat.parentElement
+        }
+      })()`)
+    },
+    clickNewBotChat: async (target) => {
+      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      const clicked = await main.eval<boolean>(`(() => {
+        const btn = ${HEADER(target)}?.querySelector('.lucide-bot')?.closest('button')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error('new-bot-chat entry not found on group header')
+      await sleep(200)
+    },
+    activeRowIsBot: () =>
+      main.eval<boolean>(`(() => {
+        const row = ${ROWS}.find((d) => d.className.includes('bg-bg-active'))
+        return !!row && !!row.querySelector('.lucide-bot')
+      })()`),
+    rowIsBot: (title) => main.eval<boolean>(`!!${ROW(title)}?.querySelector('.lucide-bot')`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 新建 Bot 会话对话框（BotSessionDialog）
+//
+// 结构锚点全部来自组件自带的 data-*（data-bot-dialog / data-bot-pick /
+// data-bot-dialog-create）；成员行的勾选态走 aria-checked（role=checkbox）。
+// 「打开 Bots 文件夹」按钮**只断存在、绝不点击**：点了会真的弹 Finder 窗口，
+// 隔离实例收不回来。
+
+export interface BotDialogRow {
+  /** bot 身份键（data-bot-pick 属性值） */
+  name: string
+  /** aria-checked 勾选态 */
+  checked: boolean
+}
+
+export interface BotDialogPane {
+  /**
+   * 等对话框**就绪**（由 sidebarPane.clickNewBotChat 触发后调用）：不止元素上屏，
+   * 还要成员列表落定 —— items 是异步拉的（bots.list()），加载中只有一个 '…' 占位，
+   * 这时候读 rows/空态都会踩进空窗期。就绪 = 有成员行，或空态分支已渲染（flex-col 那层）。
+   */
+  waitOpen(): Promise<void>
+  isOpen(): Promise<boolean>
+  /** 等对话框真的卸载（关闭动画 120ms 之后才离开 DOM，不能同步断） */
+  waitClosed(): Promise<void>
+  /** 成员行快照（DOM 序 = bots.list() 序） */
+  rows(): Promise<BotDialogRow[]>
+  /** 点一行切换勾选；行不存在返回 false */
+  toggle(name: string): Promise<boolean>
+  /** 点「创建」（成功后对话框自关，另用 waitClosed 等） */
+  create(): Promise<void>
+  /** 同一次 eval 里连点两下「创建」（防重入用例专用 —— 两下之间不给 React 任何喘息） */
+  createDoubleClick(): Promise<void>
+  createDisabled(): Promise<boolean>
+  /** 空态证据：对话框**内**的「打开 Bots 文件夹」按钮是否存在（只认，不点！） */
+  emptyState(): Promise<{ openFolderButton: boolean }>
+  /** 无项目警示块（bg-warning/10 那条）是否在屏 */
+  noProjectHintShown(): Promise<boolean>
+  /** 页脚项目归属文案（项目名，或本地化的「无」—— 断言只钉自己种的项目名） */
+  projectLabelText(): Promise<string>
+  /** Escape 关闭（对话框在 window 上听 keydown，直接派发到 window） */
+  pressEscape(): Promise<void>
+}
+
+export function botDialogPane(main: CdpClient): BotDialogPane {
+  const DIALOG = `document.querySelector('[data-bot-dialog]')`
+  // 成员列表容器是唯一的 flex-1 直接子节点（header/footer/操作行都不是）
+  const LIST = `${DIALOG}?.querySelector(':scope > .flex-1')`
+  const CREATE = `${DIALOG}?.querySelector('[data-bot-dialog-create]')`
+  const ROWS = `[...(${DIALOG}?.querySelectorAll('[data-bot-pick]') ?? [])]`
+
+  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${DIALOG} !== null`)
+
+  return {
+    waitOpen: async () => {
+      await until(
+        () =>
+          main.eval<boolean>(`(() => {
+            const list = ${LIST}
+            if (!list) return false
+            if (list.querySelector('[data-bot-pick]')) return true
+            // 空态分支（flex-col）已渲染 = items 已从加载态落定为 []
+            return !!list.firstElementChild?.className.includes('flex-col')
+          })()`),
+        'bot dialog ready (members resolved)'
+      )
+    },
+    isOpen,
+    waitClosed: async () => {
+      await until(async () => !(await isOpen()), 'bot dialog closed')
+    },
+    rows: () =>
+      main.eval<BotDialogRow[]>(
+        `${ROWS}.map((d) => ({
+          name: d.dataset.botPick ?? '',
+          checked: d.getAttribute('aria-checked') === 'true'
+        }))`
+      ),
+    toggle: async (name) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const row = ${ROWS}.find((d) => d.dataset.botPick === ${JSON.stringify(name)})
+        if (!row) return false
+        row.click()
+        return true
+      })()`)
+      await sleep(150)
+      return clicked
+    },
+    create: async () => {
+      await main.eval(`${CREATE}?.click()`)
+      await sleep(200)
+    },
+    createDoubleClick: async () => {
+      // 两下必须落在同一个 eval：隔一个 CDP 来回 React 早已 re-render 出禁用态，
+      // 那测的就不是防重入而是禁用属性
+      await main.eval(`(() => {
+        const btn = ${CREATE}
+        btn.click()
+        btn.click()
+        return true
+      })()`)
+      await sleep(200)
+    },
+    createDisabled: () => main.eval<boolean>(`${CREATE}?.disabled ?? true`),
+    emptyState: () =>
+      main.eval(`({
+        openFolderButton: !!${DIALOG}?.querySelector('.lucide-folder-open')
+      })`),
+    noProjectHintShown: () =>
+      main.eval<boolean>(
+        `[...(${DIALOG}?.querySelectorAll('p') ?? [])].some((p) => p.className.includes('bg-warning/10'))`
+      ),
+    projectLabelText: () =>
+      main.eval<string>(`(() => {
+        const dialog = ${DIALOG}
+        if (!dialog) return ''
+        const footer = [...dialog.querySelectorAll(':scope > div')].find((d) =>
+          d.querySelector(':scope > span.text-text-secondary')
+        )
+        return (footer?.querySelector(':scope > span.text-text-secondary')?.textContent ?? '').trim()
+      })()`),
+    pressEscape: async () => {
+      await main.eval(
+        `(() => {
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          return true
+        })()`
+      )
+      await sleep(100)
     }
   }
 }

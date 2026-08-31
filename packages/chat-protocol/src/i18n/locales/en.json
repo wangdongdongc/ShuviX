@@ -51,7 +51,8 @@
     "memoryPinned": "Always applies (full text injected every session)",
     "switchView": "Switch view",
     "today": "Today",
-    "noSessionsOnDay": "No sessions on this day"
+    "noSessionsOnDay": "No sessions on this day",
+    "newBotChat": "New bot chat"
   },
   "transcript": {
     "untitled": "Untitled Session",
@@ -1098,6 +1099,14 @@
   "bot": {
     "pipelineMissing": "⚠️ Pipeline \"{{pipeline}}\" is missing or could not be parsed — this message was not handled.",
     "runFailed": "⚠️ {{name}}: I couldn't finish handling that one.",
-    "gateFallback": "⚠️ {{name}}: the part of me that decides whether to answer failed {{count}} times in a row, so I switched back to the built-in one. Check its settings if you want your own back."
+    "gateFallback": "⚠️ {{name}}: the part of me that decides whether to answer failed {{count}} times in a row, so I switched back to the built-in one. Check its settings if you want your own back.",
+    "dialogTitle": "New bot chat",
+    "dialogSubtitle": "Pick the members for this chat",
+    "dialogProject": "Project",
+    "dialogNoProject": "None",
+    "dialogNoProjectHint": "No project — members’ file operations will use the home directory as their workspace",
+    "dialogEmpty": "No bots yet. Drop a bot definition file into the folder to get started.",
+    "dialogOpenFolder": "Open bots folder",
+    "dialogCreate": "Create ({{count}} member(s))"
   }
 }

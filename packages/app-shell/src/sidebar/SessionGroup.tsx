@@ -8,6 +8,7 @@
  */
 import {
   BookOpen,
+  Bot,
   MessageCircle,
   FolderClosed,
   FolderOpen,
@@ -24,6 +25,12 @@ export interface SessionGroupProps {
   onToggle: () => void
   /** 「新建对话」悬停按钮；缺省不渲染（wiki 组无新建入口） */
   onNewChat?: () => void
+  /**
+   * 「新建 Bot 会话」悬停按钮（UI 形态裁决①的落地形态：并排第二颗图标而非 “+” 下拉 ——
+   * 悬停条小图标挂菜单既难点又难画，且桌面原生菜单忽略锚点位置）。宿主注入了 bots
+   * 能力才渲染（扩展端 v1 无 bot）
+   */
+  onNewBotChat?: () => void
   /** 活动组高亮（当前会话所属组） */
   active?: boolean
   /** 专注模式下整组淡化 */
@@ -46,6 +53,7 @@ export function SessionGroup({
   collapsed,
   onToggle,
   onNewChat,
+  onNewBotChat,
   active = false,
   dim = false,
   showDividerAbove = false,
@@ -92,6 +100,18 @@ export function SessionGroup({
                 title={t('sidebar.newChat')}
               >
                 <MessageSquarePlus size={11} />
+              </button>
+            )}
+            {onNewBotChat && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onNewBotChat()
+                }}
+                className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
+                title={t('sidebar.newBotChat')}
+              >
+                <Bot size={11} />
               </button>
             )}
             {onEdit && (

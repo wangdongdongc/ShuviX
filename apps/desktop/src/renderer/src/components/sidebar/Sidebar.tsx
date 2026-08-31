@@ -59,6 +59,15 @@ export function Sidebar(): React.JSX.Element {
 
   const listWikiFiles = useCallback(() => window.api.wiki.listFiles(), [])
 
+  /** bots 能力注入（窄投影）—— 注入即点亮分组里的「新建 Bot 会话」入口与成员多选 */
+  const botsAdapter = useMemo(
+    () => ({
+      list: () => window.api.bot.list(),
+      openFolder: () => window.api.bot.openFolder()
+    }),
+    []
+  )
+
   /**
    * 项目记忆能力注入 —— 清单读盘，打开一条即打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
    * 引用必须稳定（useMemo）：子文件夹以 adapter 为扫描依赖，每渲染新建对象会导致反复扫盘。
@@ -90,6 +99,7 @@ export function Sidebar(): React.JSX.Element {
     <SharedSidebar
       caps={{ windowDrag: true, pin: true }}
       memory={memoryAdapter}
+      bots={botsAdapter}
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}

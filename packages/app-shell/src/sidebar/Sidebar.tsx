@@ -4,6 +4,7 @@ import { Settings, FolderPlus } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
 import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
+import { BotSessionDialog, type SidebarBotsAdapter } from './BotSessionDialog'
 import type { ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import type { ProjectRef } from './useProjects'
 
@@ -46,6 +47,8 @@ export interface SidebarProps {
   title?: string
   /** 项目记忆能力（桌面注入；见 ProjectSessionGroupsProps.memory） */
   memory?: ProjectMemoryAdapter
+  /** bots 能力（桌面注入 window.api.bot 的窄投影；扩展 v1 无 —— 缺省时 Bot 会话入口整体不渲染） */
+  bots?: SidebarBotsAdapter
 }
 
 /**
@@ -71,7 +74,8 @@ export function Sidebar({
   groupsPrepend,
   overlays,
   title,
-  memory
+  memory,
+  bots
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -90,11 +94,10 @@ export function Sidebar({
     setCollapsedGroups(initial)
   }, [projects])
 
-  // 在指定项目下新建会话（统一经 getChatApi），并自动展开所在组
-  const handleNewChat = async (projectId: string | null): Promise<void> => {
-    const session = await getChatApi().session.create({ projectId: projectId ?? null })
+  // 建会话后的统一收尾：刷新列表、选中新会话、自动展开所在组
+  const afterCreate = async (sessionId: string, projectId: string | null): Promise<void> => {
     useChatStore.getState().setSessions(await getChatApi().session.list())
-    useChatStore.getState().setActiveSessionId(session.id)
+    useChatStore.getState().setActiveSessionId(sessionId)
     const groupKey = projectId ?? TEMP_GROUP_KEY
     setCollapsedGroups((prev) => {
       if (!prev.has(groupKey)) return prev
@@ -103,6 +106,15 @@ export function Sidebar({
       return next
     })
   }
+
+  // 在指定项目下新建会话（统一经 getChatApi）
+  const handleNewChat = async (projectId: string | null): Promise<void> => {
+    const session = await getChatApi().session.create({ projectId: projectId ?? null })
+    await afterCreate(session.id, projectId)
+  }
+
+  // Bot 会话：先弹成员多选（BotSessionDialog），确认后带 bots 创建
+  const [botDialogFor, setBotDialogFor] = useState<{ projectId: string | null } | null>(null)
 
   // 菜单栏「新建对话 / 新建项目」（桌面原生菜单；扩展适配器为 no-op）
   useEffect(() => {
@@ -171,6 +183,7 @@ export function Sidebar({
                 collapsed={collapsedGroups}
                 onToggleGroup={toggleGroup}
                 onNewChat={(pid) => void handleNewChat(pid)}
+                onNewBotChat={bots ? (pid) => setBotDialogFor({ projectId: pid }) : undefined}
                 onSelect={onSelectSession}
                 onDelete={onDeleteSession}
                 onEditProject={onEditProject}
@@ -199,6 +212,26 @@ export function Sidebar({
       </div>
 
       {overlays}
+
+      {bots && botDialogFor && (
+        <BotSessionDialog
+          projectId={botDialogFor.projectId}
+          projectName={
+            botDialogFor.projectId
+              ? projects.find((p) => p.id === botDialogFor.projectId)?.name
+              : undefined
+          }
+          bots={bots}
+          onCreate={async (names) => {
+            const session = await getChatApi().session.create({
+              projectId: botDialogFor.projectId,
+              bots: names
+            })
+            await afterCreate(session.id, botDialogFor.projectId)
+          }}
+          onClose={() => setBotDialogFor(null)}
+        />
+      )}
     </div>
   )
 }
