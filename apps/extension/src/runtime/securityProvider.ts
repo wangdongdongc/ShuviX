@@ -34,6 +34,8 @@ export function createExtensionSecurityProvider(
       toolResultsBase: '',
       skillsDirs: [],
       memoryDirs: [],
+      // 扩展端没有 bots 目录；空串让 inDir 恒不匹配（内置策略引用的 var 必须有值）
+      botsDir: '',
       home: '',
       systemDirs: []
     }),

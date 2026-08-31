@@ -73,7 +73,7 @@ const getPane = async (): Promise<PoliciesPane> => {
 }
 
 describe('policy IPC（列表与详情渲染）', () => {
-  it('内置 11 份策略齐全，规则与人读面就绪；openFolder 通道存在', async () => {
+  it('内置 12 份策略齐全，规则与人读面就绪；openFolder 通道存在', async () => {
     const list = await listPolicies()
     const builtins = list.filter((p) => p.source === 'builtin')
     // 字母序（断言前已 sort）—— 九道防护 + 两份 force-allow 层的会话授权
@@ -84,6 +84,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'ask-on-write',
       'block-catastrophic-commands',
       'git-safety',
+      'protect-bot-notes',
       'protect-credentials',
       'protect-system',
       'review-memory-writes',
@@ -177,6 +178,7 @@ describe('policy IPC（列表与详情渲染）', () => {
       'ask-on-read',
       'block-catastrophic-commands',
       'git-safety',
+      'protect-bot-notes',
       'protect-credentials',
       'protect-system',
       'review-memory-writes',

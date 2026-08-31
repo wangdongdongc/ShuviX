@@ -13,6 +13,7 @@ import {
   getTempWorkspace,
   getToolResultsBase,
   getDefaultSkillsDir,
+  getDefaultBotsDir,
   getMemoryRootDir,
   getBuiltinSkillsDir
 } from '../utils/paths'
@@ -204,6 +205,7 @@ export function makeDesktopSecurityProvider(
         ...skillService.listExternalDirs().map((d) => d.path)
       ],
       memoryDirs: [getMemoryRootDir()],
+      botsDir: getDefaultBotsDir(),
       home: homedir(),
       systemDirs: windowsSystemDirs()
     }),

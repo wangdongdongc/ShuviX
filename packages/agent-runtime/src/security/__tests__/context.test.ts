@@ -54,6 +54,7 @@ function makeProvider(
       skillsDirs: ['/skills'],
       memoryDirs: [],
       home: '/home/u',
+      botsDir: '/home/u/.shuvix/bots',
       systemDirs: []
     }),
     getSessionGrants: () => grants,
@@ -642,6 +643,7 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
       skillsDirs: ['/skills'],
       memoryDirs: [],
       home: '/home/u',
+      botsDir: '/home/u/.shuvix/bots',
       systemDirs: [],
       blocked: '/ws/a'
     }
@@ -1000,6 +1002,7 @@ describe('createSecurityContext — 授权快照一次性（回归守护）', ()
       skillsDirs: ['/skills'],
       memoryDirs: [],
       home: '/home/u',
+      botsDir: '/home/u/.shuvix/bots',
       systemDirs: [] as string[]
     }))
 

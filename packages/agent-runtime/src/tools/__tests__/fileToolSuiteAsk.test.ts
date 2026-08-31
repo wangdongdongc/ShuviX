@@ -99,6 +99,7 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     pathSep: '/',
     getVars: () => ({
       workspace: ROOT,
+      botsDir: '/tmp/shuvix-bots',
       toolResultsBase: '/nonexistent/tool_results',
       skillsDirs: [],
       memoryDirs: [],

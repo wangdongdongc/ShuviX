@@ -29,6 +29,7 @@ beforeAll(async () => {
 /** 内置策略引用的完整桌面变量表（与 builtinPolicies.test.ts 同款） */
 const DESKTOP_VARS: Record<string, string | string[]> = {
   workspace: '/ws',
+  botsDir: '/tmp/shuvix-bots',
   toolResultsBase: '/tool-results',
   skillsDirs: ['/skills/a', '/skills/b'],
   memoryDirs: [],
@@ -572,6 +573,7 @@ describe('block-catastrophic-commands — tier 结算与通道', () => {
       host: 'extension',
       getVars: () => ({
         workspace: '',
+        botsDir: '/tmp/shuvix-bots',
         toolResultsBase: '',
         skillsDirs: [],
         memoryDirs: [],

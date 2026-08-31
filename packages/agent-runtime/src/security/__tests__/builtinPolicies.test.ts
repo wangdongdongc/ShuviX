@@ -35,12 +35,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 11 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 12 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies()).not.toThrow()
     const policies = buildBuiltinPolicies()
-    expect(policies).toHaveLength(11)
+    expect(policies).toHaveLength(12)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(11)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(12)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -424,6 +424,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     skillsDirs: ['/skills/a', '/skills/b'],
     memoryDirs: ['/memory'],
     home: '/Users/u',
+    botsDir: '/Users/u/.shuvix/bots',
     systemDirs: []
   }
 
@@ -552,6 +553,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         skillsDirs: [],
         memoryDirs: [],
         home: '',
+        botsDir: '',
         systemDirs: []
       }),
       logger: { info: vi.fn(), warn, error: vi.fn() }

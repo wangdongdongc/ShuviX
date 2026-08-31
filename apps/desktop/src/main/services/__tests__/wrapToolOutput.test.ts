@@ -167,6 +167,7 @@ describe('wrapToolOutput — L1 全工具门', () => {
         pathSep: '/',
         getVars: () => ({
           workspace: '/ws',
+          botsDir: '/tmp/shuvix-bots',
           toolResultsBase: '/tool-results',
           skillsDirs: ['/skills'],
           memoryDirs: [],

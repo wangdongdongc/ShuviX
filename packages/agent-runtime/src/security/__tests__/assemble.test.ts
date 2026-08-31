@@ -25,6 +25,7 @@ const BUILTIN_VARS: Record<string, string | string[]> = {
   skillsDirs: ['/skills/a', '/skills/b'],
   memoryDirs: [],
   home: '/home/u',
+  botsDir: '/home/u/.shuvix/bots',
   systemDirs: []
 }
 

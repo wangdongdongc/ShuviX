@@ -42,7 +42,8 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => TOOL_RESULTS,
   getDefaultSkillsDir: () => DEFAULT_SKILLS,
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
-  getMemoryRootDir: () => MEMORY_ROOT
+  getMemoryRootDir: () => MEMORY_ROOT,
+  getDefaultBotsDir: () => '/tmp/shuvix-bots'
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
