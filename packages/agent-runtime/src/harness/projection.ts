@@ -94,6 +94,13 @@ export interface BotSenderSidecar {
    * 「流式与重开一致」这条投影契约自动成立。
    */
   suppressed?: SuppressedCandidate[]
+  /**
+   * 这条消息是失败/降级通告（管线缺失、任务失败、门控回落、脚本 `say(…, {error:true})`），
+   * UI 据此上失败卡样式。**走侧车而不是 stopReason:'error'**：投影对 error 停机原因是
+   * 「整条吃掉」的早退（那是给真 · 半途中止的 assistant entry 的），标成 error 的失败
+   * 通告根本到不了渲染层。
+   */
+  error?: true
 }
 
 /**
@@ -378,7 +385,9 @@ function projectAssistantMessage(
         ? {
             sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName },
             ...(suppressed ? { suppressed } : {}),
-            ...(reply ? { reply } : {})
+            ...(reply ? { reply } : {}),
+            // `=== true` 即收窄：侧车是磁盘数据，字符串 "true" 之类的赃值不放行
+            ...(sender.error === true ? { botFailure: true as const } : {})
           }
         : {})
     }

@@ -14,6 +14,8 @@ import {
 } from 'lucide-react'
 import { SystemNoticeCard } from './SystemNoticeCard'
 import { BotAvatar } from '../common/BotAvatar'
+import { BotReplyCard } from './BotReplyCard'
+import { BotRescueChips } from './BotRescueChips'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
@@ -70,6 +72,10 @@ export const AssistantBubble = memo(function AssistantBubble({
   // bot 署名（聊天会话）。bot 消息永远是单条无工具块的终答卡（工具在派生 agent 自己的
   // 树里跑），所以一张卡至多一个 sender，从 anchor 读即可
   const sender = anchor.metadata?.sender
+  // 结构化回复 / 失败通告 / 被压制候选（A2）—— 三者都随消息持久化，重开会话仍在
+  const botReply = anchor.metadata?.reply
+  const isBotFailure = !!anchor.metadata?.botFailure
+  const suppressed = anchor.metadata?.suppressed
   const { isPlaying, isLoading, playingMessageId, speak, stop } = useTtsPlayback()
   const isThisPlaying = isPlaying && playingMessageId === anchor.id
   const isThisLoading = isLoading && playingMessageId === anchor.id
@@ -121,7 +127,7 @@ export const AssistantBubble = memo(function AssistantBubble({
     <div className="group relative px-4 py-3">
       {/* 内容 */}
       <div className="min-w-0">
-        {/* bot 署名卡头（A0 简版：头像 + 显示名） */}
+        {/* bot 署名卡头（头像 + 显示名；失败通告带角标） */}
         {sender && (
           <div
             className="flex items-center gap-1.5 mb-1.5 text-xs font-medium text-text-primary"
@@ -129,6 +135,11 @@ export const AssistantBubble = memo(function AssistantBubble({
           >
             <BotAvatar name={sender.name} displayName={sender.displayName} size={18} />
             <span className="truncate">{sender.displayName}</span>
+            {isBotFailure && (
+              <span className="text-[10.5px] font-normal text-error" data-bot-failure>
+                {t('bot.failureLabel')}
+              </span>
+            )}
           </div>
         )}
         {/* 过程区（步骤 + 思考）— 有正文跟随时以一条细线收尾，把「过程」和「结论」分层
@@ -193,7 +204,7 @@ export const AssistantBubble = memo(function AssistantBubble({
           </div>
         )}
 
-        {/* Markdown / 原始文本 */}
+        {/* Markdown / 原始文本 / BotReply 双形态 */}
         {displayContent &&
           (isCompactionSummary ? (
             <SystemNoticeCard
@@ -203,8 +214,17 @@ export const AssistantBubble = memo(function AssistantBubble({
             />
           ) : showRaw ? (
             <pre className="code-surface text-sm text-text-primary font-mono">{displayContent}</pre>
+          ) : botReply ? (
+            // content 是同一份数据的 markdown 投影（复制/TTS/模型读它）,渲染只走结构 —— 不重复
+            <div className="text-sm">
+              <BotReplyCard reply={botReply} />
+            </div>
           ) : (
-            <div className="markdown-body text-sm">
+            <div
+              className={`markdown-body text-sm${
+                isBotFailure ? ' rounded-lg border border-error/40 bg-error/10 px-3 py-2' : ''
+              }`}
+            >
               <ReactMarkdown
                 remarkPlugins={markdownRemarkPlugins}
                 rehypePlugins={markdownRehypePlugins}
@@ -258,6 +278,18 @@ export const AssistantBubble = memo(function AssistantBubble({
             </div>
           )
         })()}
+
+        {/* 误压制救济 chip（设计 §7）：胜者卡底部、常显 —— 它是可点击纠正的决策面，
+            不是悬停操作。数据随消息持久化，重开会话仍在 */}
+        {!isStreaming && suppressed && suppressed.length > 0 && (
+          <div className="mt-2.5 pt-2 border-t border-border-secondary/40">
+            <BotRescueChips
+              sessionId={anchor.sessionId}
+              suppressed={suppressed}
+              origin={{ beforeAssistantId: anchor.id }}
+            />
+          </div>
+        )}
 
         {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
             仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，

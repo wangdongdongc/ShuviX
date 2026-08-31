@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Send, Square, Mic, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
+import { BotSilenceNotice } from './BotSilenceNotice'
 import {
   expandCommandTemplate,
   buildCommandToken,
@@ -784,6 +785,9 @@ export function InputArea({
 
           {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
           {accessory}
+
+          {/* 全体沉默一次性提示（聊天会话；自空,非 bot 会话恒 null） */}
+          <BotSilenceNotice />
 
           {/* 待投递队列（只读回执）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
           <QueuePanel />

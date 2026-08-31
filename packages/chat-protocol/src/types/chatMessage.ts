@@ -144,6 +144,11 @@ export interface AssistantMeta {
    * 同一份内容的结构，只服务 UI（见 `@shuvix/chat-protocol/botReply`）。
    */
   reply?: BotReply
+  /**
+   * 聊天会话：这条 bot 消息是失败/降级通告（管线缺失、任务失败、门控回落、脚本降级出声），
+   * UI 据此上失败卡样式。不用 stopReason:'error' —— 投影对那种 entry 整条早退。
+   */
+  botFailure?: true
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----

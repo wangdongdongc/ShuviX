@@ -13,14 +13,16 @@ import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
+import { BotActivityCards } from './BotActivityCards'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 
-/** Virtuoso Footer：流式指示器 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
+/** Virtuoso Footer：流式指示器 / bot 在飞占位卡 + 底部留白（高度 = 悬浮输入卡片实高，经 --chat-input-h 变量传递） */
 function ConversationFooter(): React.JSX.Element {
   return (
     <>
       <StreamingFooter />
+      <BotActivityCards />
       <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
     </>
   )

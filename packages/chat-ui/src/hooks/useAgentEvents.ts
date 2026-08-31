@@ -287,6 +287,27 @@ export function useAgentEvents(): void {
         })
         break
 
+      case 'bot_activity':
+        // 聊天会话：成员在飞活动（占位卡/判断行的数据源）。与 queue_update 同理不做
+        // 活跃会话门 —— 面板按会话读，切回来时要能看到还在跑的东西
+        store.handleBotActivity(sid, event)
+        break
+
+      case 'bot_mailbox':
+        // 聊天会话：某成员的 mailbox 整份快照（用户消息下方回执的数据源）
+        store.setBotMailbox(sid, event.botName, { active: event.active, queued: event.queued })
+        break
+
+      case 'bot_cohort_silent':
+        // 聊天会话：这一轮一个字都没换来 —— 输入框上方的一次性提示
+        store.setBotSilence(sid, {
+          messageId: event.messageId,
+          reason: event.reason,
+          members: event.members,
+          suppressed: event.suppressed
+        })
+        break
+
       case 'input_request':
         // 统一的"用户输入请求"事件 — 命令询问 / 选择题 / SSH 凭证
         store.addPendingInput(sid, event.request)
@@ -382,6 +403,9 @@ export function useAgentEvents(): void {
 
       // ─── 消息列表重载（后端整体改写，如 session 工具压缩归档后） ───
       case 'messages_reloaded':
+        // 回退/清空把树整体改写了 —— 聊天会话一切在飞展示（占位卡/回执/沉默提示）随之作废。
+        // 不做活跃门：后台会话的 stale 展示等到切回来才清就晚了
+        store.clearBotLiveState(sid)
         if (sid === store.activeSessionId) {
           const msgs = await getSessionChannelApi().message.list(sid)
           store.setMessages(msgs)

@@ -484,6 +484,15 @@ export interface SessionChannelApi {
     /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
     nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
+    /**
+     * per-bot 停止（聊天会话，A2）：中止某成员对**某条消息**的应答；该成员的排队与
+     * 其它消息不受影响。可选 —— 渠道端缺省即不渲染停止钮。
+     */
+    abortBot?: (params: {
+      sessionId: string
+      botName: string
+      messageId: string
+    }) => Promise<{ aborted: boolean }>
     respondToInput: (params: {
       sessionId: string
       requestId: string

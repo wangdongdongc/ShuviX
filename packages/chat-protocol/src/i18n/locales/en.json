@@ -1107,6 +1107,20 @@
     "dialogNoProjectHint": "No project — members’ file operations will use the home directory as their workspace",
     "dialogEmpty": "No bots yet. Drop a bot definition file into the folder to get started.",
     "dialogOpenFolder": "Open bots folder",
-    "dialogCreate": "Create ({{count}} member(s))"
+    "dialogCreate": "Create ({{count}} member(s))",
+    "activityIntent": "Deciding whether to respond…",
+    "activityClaimed": "On it — composing a reply…",
+    "activityQueued": "Queued — earlier messages are still being handled",
+    "activityWorking": "Working…",
+    "stop": "Stop",
+    "failureLabel": "failed",
+    "rescueLabel": "Also wanted to answer:",
+    "silenceAllIgnored": "No member responded this round — all {{count}} decided no response was needed.",
+    "silenceAllFailed": "No member responded this round — every member hit an error before answering.",
+    "silenceMixed": "No member responded this round — some decided not to, the rest hit errors.",
+    "receiptQueued": "Queued for {{names}} — will be answered in order",
+    "statusOk": "Done",
+    "statusWarn": "With caveats",
+    "statusError": "Incomplete"
   }
 }

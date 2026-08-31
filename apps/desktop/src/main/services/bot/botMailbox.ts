@@ -212,6 +212,29 @@ export class BotMailbox {
     }
   }
 
+  /**
+   * 单票中止（per-bot 停止，A2）：若该 ticket 还在某条 lane 里**排队**，摘下并以
+   * MailboxAbortedError 拒绝 —— 引擎的 run 级 abort 唤不醒一个 await 在宿主 Promise 上
+   * 的脚本，不在这里拒绝它就只能等到排队超时。
+   *
+   * **持有者（active）不在此处理**：它的 run 正被 AbortController 结束，独占段随脚本
+   * 自身的 finally 释放（turn 的作用域回调形式），这里抢先清 active 反而会让下一个
+   * 授予者与还没退完场的持有者并行进独占段。
+   */
+  abortTicket(ticketId: string): void {
+    for (const [key, lane] of this.lanes) {
+      const at = lane.queue.findIndex((w) => w.item.ticketId === ticketId)
+      if (at < 0) continue
+      const [w] = lane.queue.splice(at, 1)
+      if (w.timer) this.clearTimer(w.timer)
+      this.deps.onEvent?.(key, 'mailbox_aborted', w.item)
+      w.reject(new MailboxAbortedError())
+      this.emit(key)
+      this.gc(key, lane)
+      return
+    }
+  }
+
   /** 会话被中止：该会话全部 lane 的等待者立即失败 */
   abortSession(sessionId: string): void {
     const prefix = `${sessionId}\u0000`

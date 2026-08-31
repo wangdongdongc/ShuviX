@@ -22,6 +22,12 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 /**
+ * 不参与「新出现即独占展开」的阶段 agent（bot 管线的意图/复核与笔记归纳）——
+ * 它们高频、短命、且转写价值低；用户手动点开不受影响。
+ */
+const AUTO_COLLAPSED_AGENTS = new Set(['bot-intent', 'bot-notes'])
+
+/**
  * 折叠头右侧的单一状态/动作按钮 —— 合并原「状态图标 + 关闭按钮」为一个状态唯一的按钮：
  *   进行中：主 agent 输入框同款的小号中断按钮（实心方块，error 红），点击软停止生成；
  *   已完成/出错：静止显示状态图标（✓ 绿 / ✕ 红），hover 切换为删除 ✕，点击移除该子会话。
@@ -408,14 +414,22 @@ export function SubAgentPanel(): React.JSX.Element {
 
   // 纵向手风琴：每个子会话一节，独立展开/折叠。新出现的子会话独占展开、同时折叠其余（聚焦最新一次任务的
   // 进展）；此后保持用户的开合状态不自动变化；可同时堆叠任意多个子会话（不再受横向 tab 数量限制）。
+  //
+  // 聊天会话的例外（设计 §5.4「面板对聊天会话默认折叠意图段 run」，A2）：bot 管线的意图段/
+  // 笔记段 run 不参与「新出现即独占展开」—— 每条消息都会起一轮意图判定，任由它抢占会让面板
+  // 永远停在几秒即逝的判定转写上。判据用阶段 agent 名（内置管线的 intent/recheck/notes 恒为
+  // 这两个名字；用户经 shuvix-bot-agents 换掉后就按普通 run 对待）。手动点开不受影响。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const seenRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    const newly = list.map((s) => s.subSessionId).filter((id) => !seenRef.current.has(id))
+    const newly = list.filter((s) => !seenRef.current.has(s.subSessionId))
     if (newly.length === 0) return
-    newly.forEach((id) => seenRef.current.add(id))
-    // 新会话独占展开：折叠其它，仅保留本批新出现的
-    setExpandedIds(new Set(newly))
+    newly.forEach((s) => seenRef.current.add(s.subSessionId))
+    const expandable = newly.filter((s) => !AUTO_COLLAPSED_AGENTS.has(s.subAgentName))
+    // 本批全是默认折叠的段 run：不动现有开合（否则等于「新意图段把你手动展开的都收走」）
+    if (expandable.length === 0) return
+    // 新会话独占展开：折叠其它，仅保留本批新出现的可展开项
+    setExpandedIds(new Set(expandable.map((s) => s.subSessionId)))
   }, [list])
 
   const toggle = (id: string): void =>

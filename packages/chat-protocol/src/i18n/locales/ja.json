@@ -1107,6 +1107,20 @@
     "dialogNoProjectHint": "プロジェクト未選択 —— メンバーのファイル操作はホームディレクトリを作業区とします",
     "dialogEmpty": "Bot がまだありません。定義ファイルをフォルダに置くと使えます。",
     "dialogOpenFolder": "Bots フォルダを開く",
-    "dialogCreate": "作成（メンバー {{count}} 名）"
+    "dialogCreate": "作成（メンバー {{count}} 名）",
+    "activityIntent": "応答するか判断中…",
+    "activityClaimed": "対応中 —— 返信を作成しています…",
+    "activityQueued": "順番待ち —— 前のメッセージを処理中",
+    "activityWorking": "処理中…",
+    "stop": "停止",
+    "failureLabel": "失敗",
+    "rescueLabel": "ほかに答えたいメンバー：",
+    "silenceAllIgnored": "このラウンドは誰も応答しませんでした —— {{count}} 名全員が応答不要と判断。",
+    "silenceAllFailed": "このラウンドは誰も応答しませんでした —— 全員が応答前にエラーになりました。",
+    "silenceMixed": "このラウンドは誰も応答しませんでした —— 一部は応答不要と判断、残りはエラー。",
+    "receiptQueued": "{{names}} の順番待ちに追加 —— 順に返信します",
+    "statusOk": "完了",
+    "statusWarn": "留保あり",
+    "statusError": "未完了"
   }
 }

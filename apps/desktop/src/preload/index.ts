@@ -154,6 +154,8 @@ const api = {
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
+    abortBot: (params: { sessionId: string; botName: string; messageId: string }) =>
+      ipcRenderer.invoke('bot:abort', params),
 
     /** 切换模型 */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),

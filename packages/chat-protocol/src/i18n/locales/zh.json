@@ -1107,6 +1107,20 @@
     "dialogNoProjectHint": "未选项目 —— 成员的文件操作将以主目录为工作区",
     "dialogEmpty": "还没有 Bot。把 bot 定义文件放进目录即可使用。",
     "dialogOpenFolder": "打开 Bots 文件夹",
-    "dialogCreate": "创建（{{count}} 名成员）"
+    "dialogCreate": "创建（{{count}} 名成员）",
+    "activityIntent": "正在判断…",
+    "activityClaimed": "已接手，正在组织回复…",
+    "activityQueued": "排队中 —— 前面的消息还在处理",
+    "activityWorking": "正在处理…",
+    "stop": "停止",
+    "failureLabel": "失败",
+    "rescueLabel": "还想回答：",
+    "silenceAllIgnored": "本轮没有成员回应 —— {{count}} 名成员均判定无需回应。",
+    "silenceAllFailed": "本轮没有成员回应 —— 成员在应答前出了故障。",
+    "silenceMixed": "本轮没有成员回应 —— 部分成员判定无需回应，其余出了故障。",
+    "receiptQueued": "已排入 {{names}} 的队列，将按序作答",
+    "statusOk": "完成",
+    "statusWarn": "有保留",
+    "statusError": "未完成"
   }
 }

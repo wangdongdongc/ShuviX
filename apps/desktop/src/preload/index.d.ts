@@ -488,6 +488,12 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
+      /** per-bot 停止（聊天会话）：中止某成员对某条消息的应答（bot:abort 的会话通道别名） */
+      abortBot: (params: {
+        sessionId: string
+        botName: string
+        messageId: string
+      }) => Promise<{ aborted: boolean }>
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
       /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，

@@ -1229,7 +1229,7 @@ class BotService {
       // 线索埋在文件系统里。回落是 sticky 的,所以这条一个进程只出一次
       this.appendBotMessage(
         ticket.sessionId,
-        { botName, displayName: ticket.displayName },
+        { botName, displayName: ticket.displayName, error: true },
         { content: t('bot.gateFallback', { name: ticket.displayName, count: health.streak }) }
       ).catch((e) => log.warn(`回落提示落树失败 (${botName}):`, e))
     }
@@ -1293,7 +1293,7 @@ class BotService {
       this.activity(ticket, 'ended', 'pipeline_not_found')
       await this.appendBotMessage(
         sessionId,
-        { botName: bot.name, displayName: bot.displayName },
+        { botName: bot.name, displayName: bot.displayName, error: true },
         { content: t('bot.pipelineMissing', { pipeline: pipeline.workflow }) }
       )
       // said=true：这个成员确实往会话里放了东西（一条可见失败）。全体沉默的判据是
@@ -1395,6 +1395,7 @@ class BotService {
           {
             botName: bot.name,
             displayName: bot.displayName,
+            error: true,
             ...(this.takeSuppressed(ticket) ?? {})
           },
           { content: t('bot.runFailed', { name: bot.displayName }) }
@@ -1523,7 +1524,9 @@ class BotService {
             ...(this.takeSuppressed(ticket) ?? {}),
             // 侧车存**校验过**的结构，与 content 里那份 markdown 同源（content 由
             // botReplyToMarkdown 得来）—— 读写两侧同一个形状，UI 不必再自己防一遍
-            ...(botReply ? { reply: botReply } : {})
+            ...(botReply ? { reply: botReply } : {}),
+            // 脚本降级出声（门控破损/超时、任务失败等）—— 失败卡样式的数据源
+            ...(o.error === true ? { error: true as const } : {})
           },
           { content }
         )
@@ -1906,6 +1909,33 @@ class BotService {
         { content: bot.greeting }
       )
     }
+  }
+
+  /**
+   * per-bot 停止（A2，设计 §5.4「中止粒度到 bot」）：中止某个成员**对某条消息**的应答。
+   *
+   * 粒度到 (bot, 消息) 而不是整个 bot：占位卡是 per-(bot,消息) 的面，「停止」停的是
+   * 卡上那件事。**不清 mailbox、不丢消息** —— 该 bot 为其它消息排着的队原样保留
+   * （UI 也只在 claimed/working 卡上给停止钮，排队卡是纯信息）；防御性地仍调
+   * `mailbox.abortTicket`：万一目标票正排着队，引擎的 run 级 abort 唤不醒 await 在
+   * 宿主 Promise 上的脚本，不拒绝它就只能等排队超时。
+   *
+   * 不动 barrier：停止钮只出现在 claim 已定的相位上；claim 未定的票撑死再等 3s 宽限窗。
+   * 失败气泡被 `!ticket.abort.signal.aborted` 守卫压掉 —— 用户按的停止不是「无从解释的
+   * 沉默」（§9.1），结局进决策记录。
+   */
+  abortBot(sessionId: string, botName: string, messageId: string): boolean {
+    let hit = false
+    for (const t of [...this.tickets.values()]) {
+      if (t.sessionId !== sessionId || t.botName !== botName || t.messageId !== messageId) continue
+      hit = true
+      t.abort.abort()
+      this.mailbox.abortTicket(t.ticketId)
+    }
+    if (!hit) {
+      log.info(`abortBot 未命中在飞票（session=${sessionId} bot=${botName}）—— 多半已收尾`)
+    }
+    return hit
   }
 
   /**
