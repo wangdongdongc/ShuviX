@@ -72,7 +72,7 @@ vi.mock('../../utils/sessionConfigBroadcast', () => ({
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: vi.fn() }
 }))
-vi.mock('../userInputBroker', () => ({ registerUserInputResolver: vi.fn() }))
+vi.mock('../userInputBroker', () => ({ registerUserInputParticipant: vi.fn() }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))

@@ -13,6 +13,7 @@ import {
   appendModelChange,
   appendThinkingLevelChange
 } from '../../services/sessionStorage'
+import { respondToUserInput } from '../../services/userInputBroker'
 import { sshManager } from '../../services/sshManager'
 import { dbManager } from '../../services/dbManager'
 import { mcpService } from '../../services/mcpService'
@@ -118,8 +119,9 @@ export class DefaultChatGateway implements ChatGateway {
   // ─── 交互响应 ─────────────────────────────────
 
   respondToInput(_sessionId: string, requestId: string, response: InputResponse): void {
-    // sessionService 在内部遍历所有 session 找到归属;sessionId 参数仅作日志/校验
-    sessionService.respondToInput(requestId, response)
+    // broker 按 requestId 找归属（有根会话 / 聊天会话各自认领）；sessionId 参数仅作日志。
+    // 用它来选参与方等于把前端以为的归属当成真相
+    respondToUserInput(requestId, response)
   }
 
   // ─── 运行时调整 ────────────────────────────────

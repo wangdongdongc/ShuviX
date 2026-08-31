@@ -28,7 +28,6 @@ import type {
 } from '../types'
 import type { Project } from '../dao/types'
 
-import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import {
   BASE_PROFILE_NAMES,
@@ -49,7 +48,7 @@ import {
   broadcastSessionTitleChanged
 } from '../utils/sessionConfigBroadcast'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
-import { registerUserInputResolver } from './userInputBroker'
+import { registerUserInputParticipant } from './userInputBroker'
 import { createLogger } from '../logger'
 
 const log = createLogger('SessionService')
@@ -530,16 +529,16 @@ export class SessionService {
     return this.agents.remove(sessionId, 'invalidate')
   }
 
-  // ─── 用户输入响应路由(遍历所有 session 查找归属) ──
+  // ─── 用户输入 ──────────────────────────────────
 
   /**
-   * 统一响应入口:根据 requestId 找到归属 session 并把响应送达。
-   * 所有类型的用户输入(询问 / 选择题 / SSH 凭证)都走这一个路径。
+   * 此刻活着的 AgentSession —— 供 broker 的参与方按 requestId 找归属。
+   *
+   * 响应入口本身已经上移到 `userInputBroker`：那里同时握着请求与答复两个方向，
+   * 而聊天会话（无根）的询问归 botService 管，留在这里就永远轮不到它。
    */
-  respondToInput(requestId: string, response: InputResponse): void {
-    for (const session of this.agents.values()) {
-      if (session.respondToInput(requestId, response)) return
-    }
+  liveAgentSessions(): Iterable<AgentSession> {
+    return this.agents.values()
   }
 
   // ─── private ──────────────────────────────────
@@ -574,10 +573,28 @@ export const sessionService = new SessionService()
 
 // 子代理询问通道：把子代理工具的 InputRequest 转发到父会话（表单出现在父会话对话流）。
 // 经 userInputBroker 注册，避免 AgentManager 静态依赖 sessionService 形成循环。
-registerUserInputResolver((sessionId, request) => {
-  const agent = sessionService.getAgentSession(sessionId)
-  if (!agent) {
-    return Promise.reject(new Error(`Session ${sessionId} is not active`))
+/**
+ * 有根 agent 的会话由这里认领。
+ *
+ * `claims` 问的是「此刻有没有活着的运行时」而不是「这条会话记录存不存在」—— 询问要送到
+ * 的是内存里那个 AgentSession 的 pendingInputs，运行时不在就没有可送达的地方。
+ * 无根的聊天会话在这里恒不认领，它由 botService 自己那份参与方接管。
+ */
+registerUserInputParticipant({
+  name: 'session',
+  claims: (sessionId) => !!sessionService.getAgentSession(sessionId),
+  request: (sessionId, request) => {
+    const agent = sessionService.getAgentSession(sessionId)
+    // claims 与 request 之间会话可能刚被失效（切档案 / 回退 / 清空）
+    if (!agent) return Promise.reject(new Error(`Session ${sessionId} is not active`))
+    return agent.requestUserInput(request)
+  },
+  respond: (requestId, response) => {
+    // 遍历而不是按 sessionId 索引：requestId 才是全局唯一的那个 —— 拿调用方以为的
+    // sessionId 去选会话，等于把前端的判断当成真相
+    for (const session of sessionService.liveAgentSessions()) {
+      if (session.respondToInput(requestId, response)) return true
+    }
+    return false
   }
-  return agent.requestUserInput(request)
 })

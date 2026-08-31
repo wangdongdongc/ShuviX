@@ -36,6 +36,7 @@ import {
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
 import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   ChatMessage,
   InlineToken,
@@ -58,6 +59,8 @@ import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
 import { CohortBarrier, type ClaimIntent, type ClaimVerdict } from './bot/botArbiter'
 import { BotMailbox, mailboxKey, type QueueItem, type TurnSlot } from './bot/botMailbox'
 import { electronEventSink } from './agentRuntimeAdapters'
+import { registerUserInputParticipant } from './userInputBroker'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { messageService } from './messageService'
 import { sessionService } from './sessionService'
 
@@ -587,6 +590,19 @@ class BotService {
    * `ClaimVerdict.reason:'aborted'` 这一支也是因为没人调 `abort()` 才一直是死代码。
    */
   private readonly barriers = new Map<string, Set<CohortBarrier>>()
+  /**
+   * 在飞的用户询问，键是 requestId。
+   *
+   * 有根会话里这份状态住在 `HarnessSession.pendingInputs`；聊天会话没有根运行时，
+   * 于是这一份得自己养。**任务段 agent 是派生的、自身没有输入面板**，它的询问带着
+   * 聊天会话 id 走 broker 到这里 —— 此前 broker 的单槽 resolver 只认有根会话，
+   * 于是 bot 管线里的每一次询问都以「Session … is not active」收场：工具拿到一条错误，
+   * 用户那边什么都没发生。
+   */
+  private readonly pendingInputs = new Map<
+    string,
+    { sessionId: string; resolve: (r: InputResponse) => void }
+  >()
   /**
    * 门控段的健康度：连续故障计数与「已回落」标记。
    *
@@ -1234,6 +1250,57 @@ class BotService {
     }
   }
 
+  // ─── 用户询问（聊天会话没有根运行时，这份生命周期得自己养） ───
+
+  /**
+   * 一次询问。返回的 Promise 落定于：用户答复、会话被中止、或前端根本不在。
+   *
+   * 与 `HarnessSession.requestUserInput` 同一套判据 —— 没有输入面板就**立刻取消**而不是
+   * 挂起：一个永远等不到答复的 Promise 会把任务段的墙钟耗光，而用户那边压根没看见问题。
+   */
+  requestUserInput(sessionId: string, request: InputRequest): Promise<InputResponse> {
+    if (
+      this.blockWrites.has(sessionId) ||
+      !chatFrontendRegistry.hasCapability(sessionId, 'userInput')
+    ) {
+      return Promise.resolve({ kind: 'cancel', reason: 'aborted' })
+    }
+    return new Promise<InputResponse>((resolve) => {
+      this.pendingInputs.set(request.id, { sessionId, resolve })
+      electronEventSink.broadcast({ type: 'input_request', sessionId, request })
+    })
+  }
+
+  /** 答复送达；`false` = 这条不是我发出的（broker 会继续问下一个参与方） */
+  respondToInput(requestId: string, response: InputResponse): boolean {
+    const pending = this.pendingInputs.get(requestId)
+    if (!pending) return false
+    this.pendingInputs.delete(requestId)
+    pending.resolve(response)
+    electronEventSink.broadcast({
+      type: 'input_request_resolved',
+      sessionId: pending.sessionId,
+      requestId
+    })
+    return true
+  }
+
+  /**
+   * 会话被中止：在飞的询问一律取消。
+   *
+   * **必须广播 `input_request_resolved`**：前端的 pending 卡片只认这一个事件（不看
+   * agent_end，而聊天会话本来也永不发 agent_end）—— 少了它，会话停了、卡片还挂在那里，
+   * 点下去石沉大海。
+   */
+  private cancelPendingInputs(sessionId: string): void {
+    for (const [id, pending] of [...this.pendingInputs]) {
+      if (pending.sessionId !== sessionId) continue
+      this.pendingInputs.delete(id)
+      pending.resolve({ kind: 'cancel', reason: 'aborted' })
+      electronEventSink.broadcast({ type: 'input_request_resolved', sessionId, requestId: id })
+    }
+  }
+
   /**
    * 取走这一轮被压制的候选，交给即将落树的那条 bot 消息。
    *
@@ -1406,6 +1473,8 @@ class BotService {
       }
       // barrier 也要拆：不拆的话它的宽限窗定时器会在会话收尾之后才 fire
       for (const b of this.barriers.get(sessionId) ?? []) b.abort()
+      // 在飞的询问也要收：blockWrites 已经置上，此后新的询问会直接取消
+      this.cancelPendingInputs(sessionId)
       this.mailbox.abortSession(sessionId)
       workflowService.abortSessionRuns(sessionId)
       await drainSessionTreeLock(sessionId)
@@ -1453,3 +1522,18 @@ class BotService {
 }
 
 export const botService = new BotService()
+
+/**
+ * 聊天会话（无根）的询问由这里认领。
+ *
+ * `claims` 只问「这条会话是不是聊天会话」，**不问此刻有没有在飞的 run** —— 与有根会话那份
+ * 参与方（问的是「运行时还活着吗」）刻意不同：那边没有运行时就真的没有可送达的地方，
+ * 而这边的送达面是会话本身的输入面板，问的人是派生 agent，它在不在飞由它自己的中止负责。
+ * 两个 claims 因此天然互斥：一条会话要么有根 agent、要么 settings.bots 非空。
+ */
+registerUserInputParticipant({
+  name: 'bot',
+  claims: (sessionId) => sessionService.isBotSession(sessionId),
+  request: (sessionId, request) => botService.requestUserInput(sessionId, request),
+  respond: (requestId, response) => botService.respondToInput(requestId, response)
+})
