@@ -157,6 +157,21 @@ export class BotNotesScheduler {
     this.save()
   }
 
+  /**
+   * bot 改名：把状态整条搬过去。
+   *
+   * 幂等：新名字已经有状态就不覆盖（改名迁移做了一半重来时，后写的一方赢会把已经跑过的
+   * 归纳记录抹掉，于是同一批材料被归纳两遍）。
+   */
+  rename(oldName: string, newName: string): void {
+    this.load()
+    const from = this.state[oldName]
+    if (!from || this.state[newName]) return
+    this.state[newName] = from
+    delete this.state[oldName]
+    this.save()
+  }
+
   /** 会话被删：它的检查点没有意义了，留着只会让状态文件无限长 */
   forgetSession(sessionId: string): void {
     this.load()

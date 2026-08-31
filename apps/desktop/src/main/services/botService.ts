@@ -20,7 +20,8 @@
  * `scanDir` 随时可能读进来 —— `writeFileSync` 的「先截断再写」会让 bot 在注册表里瞬时
  * 消失并落进 invalid 双轨。
  */
-import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, mkdirSync, renameSync, unlinkSync } from 'fs'
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { shell } from 'electron'
@@ -307,6 +308,16 @@ export interface BotAttachmentRef {
   mimeType: string
 }
 
+/**
+ * 一份 md 原文的版本指纹。
+ *
+ * 用内容哈希而不是 mtime：笔记段的写入与用户的保存可以落在同一秒里，而 mtime 的分辨率
+ * 恰好会把这种情况判成「没变」——那正是要拦的那一种。
+ */
+function revisionOf(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16)
+}
+
 /** 被压制候选的暂存键：一轮仲裁 = 一条用户消息 = (会话, seq) */
 function suppressedKey(sessionId: string, messageSeq: number): string {
   return `${sessionId}\u0000${messageSeq}`
@@ -419,10 +430,18 @@ class BotService {
     return this.scanDir().invalid
   }
 
-  /** 取 md 原文（编辑器数据源） */
-  getSource(name: string): { text: string } | { error: string } {
+  /**
+   * 取 md 原文（编辑器数据源），连同一枚**版本指纹**。
+   *
+   * 指纹是给 `save` 用的:笔记段会在后台改这份文件,而用户可能在那之前就打开了编辑器。
+   * 没有它,「T0 打开 → T1 笔记段改 → T2 用户保存」会把 T1 的归纳整份吃掉,而且是静默的
+   * (设计 §8.2 把这条记为已知未解,留给 M9′)。`edit` 工具自带的「读后被改」检测保护的是
+   * agent 那一侧,反方向从来没有人守。
+   */
+  getSource(name: string): { text: string; revision: string } | { error: string } {
     const target = this.readBotFile(name)
-    return target ? { text: target.raw } : { error: `Bot "${name}" not found` }
+    if (!target) return { error: `Bot "${name}" not found` }
+    return { text: target.raw, revision: revisionOf(target.raw) }
   }
 
   /**
@@ -439,11 +458,34 @@ class BotService {
     return { file }
   }
 
-  /** 覆写 bot 文件（`originalName` 定位文件；frontmatter name 为准，可改名） */
-  save(originalName: string, text: string): { success: boolean; error?: string } {
+  /**
+   * 覆写 bot 文件（`originalName` 定位文件；frontmatter name 为准，可改名）。
+   *
+   * `revision` 是 `getSource` 那一刻的指纹。对不上说明这份文件在你编辑期间被改过 ——
+   * 几乎总是笔记段干的 —— 此时**拒绝并让 UI 去解决冲突**，而不是让后写的一方赢。
+   * 不传 revision 的调用方按旧语义直接覆盖（`saveByFile` 的修复通道就该这样：
+   * 那条路走的是解析不出来的坏文件，没有可对照的版本）。
+   */
+  save(
+    originalName: string,
+    text: string,
+    revision?: string
+  ): { success: boolean; error?: string; conflict?: { current: string } } {
     const bots = this.listAll()
     const target = bots.find((b) => b.file.name === originalName)
     if (!target) return { success: false, error: `Bot "${originalName}" not found` }
+
+    if (revision) {
+      const onDisk = this.readBotFile(originalName)
+      const now = onDisk ? revisionOf(onDisk.raw) : ''
+      if (now !== revision) {
+        return {
+          success: false,
+          error: 'This bot changed on disk since you opened it — most likely its own notes pass.',
+          conflict: { current: onDisk?.raw ?? '' }
+        }
+      }
+    }
 
     const parsed = this.parseForWrite(text, originalName)
     if ('error' in parsed) return { success: false, error: parsed.error }
@@ -457,7 +499,47 @@ class BotService {
       log.warn(`保存 bot "${originalName}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    if (name !== originalName) this.migrateRename(originalName, name)
     return { success: true }
+  }
+
+  /**
+   * 改名之后把散在别处的旧名字迁过来。
+   *
+   * bot 的身份是 frontmatter 里的 `name`，而这个名字被三处引用：会话的 `settings.bots`
+   * 成员名单、决策记录与 run journal 的目录、以及笔记检查点。**不迁的话改一次名等于把
+   * 这个 bot 从所有会话里删掉** —— L0 门会把它当成「成员 md 不存在」，而用户看到的是
+   * 「我只是改了个名字」。
+   *
+   * **幂等**：每一步都先看目标状态再动手，重复跑一遍不会出错 —— 迁移做了一半崩掉时，
+   * 下一次保存（或用户手动改回来再改过去）能把剩下的补上。
+   *
+   * 历史消息里的署名**不迁**，那是刻意的：侧车自带落树当时的 displayName，历史不该因为
+   * 今天的一次改名而改写（这条纪律从 M3′ 起就写在署名侧车的注释里）。
+   */
+  private migrateRename(oldName: string, newName: string): void {
+    // ① 会话成员名单
+    try {
+      for (const session of sessionService.list()) {
+        const bots = session.settings?.bots
+        if (!bots?.includes(oldName)) continue
+        // 已经有新名字就只是去掉旧的（用户可能先手动加过新名字）
+        const next = bots.map((b) => (b === oldName ? newName : b))
+        sessionService.rewriteBots(session.id, [...new Set(next)])
+      }
+    } catch (e) {
+      log.warn(`改名迁移：会话名单改写失败 ${oldName} → ${newName}:`, e)
+    }
+    // ② 决策记录与 run journal 的目录
+    try {
+      const from = botRunsDir(oldName)
+      const to = botRunsDir(newName)
+      if (existsSync(from) && !existsSync(to)) renameSync(from, to)
+    } catch (e) {
+      log.warn(`改名迁移：journal 目录改名失败 ${oldName} → ${newName}:`, e)
+    }
+    // ③ 笔记检查点
+    this.notes.rename(oldName, newName)
   }
 
   /** 新建 bot；文件名由 name 净化派生 */

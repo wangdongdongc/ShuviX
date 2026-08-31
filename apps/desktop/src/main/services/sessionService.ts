@@ -222,6 +222,20 @@ export class SessionService {
   }
 
   /**
+   * 改名迁移专用的名单改写。
+   *
+   * 与 `updateBots` 刻意分开：那个是**用户操作**（校验空名单、补新成员的开场白、
+   * 广播配置变更），而这里是一次跟着 bot 改名走的机械替换 —— 成员没有变化，只是同一个
+   * 成员换了个名字。走 `updateBots` 会给它补一遍开场白，等于每次改名都往所有会话里
+   * 塞一句「你好」。
+   */
+  rewriteBots(id: string, bots: string[]): void {
+    if (!bots.length) return
+    sessionDao.updateSettings(id, { bots })
+    broadcastSessionConfigChanged(id)
+  }
+
+  /**
    * 聊天会话判定 —— `settings.bots` 非空。
    *
    * 一律用 `?.length`：settings 的 JSON patch 没有删键路径，「移除全部成员」只能写 `[]`，

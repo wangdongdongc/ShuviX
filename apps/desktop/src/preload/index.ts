@@ -383,7 +383,7 @@ const api = {
     getSource: (params: { name: string }) => ipcRenderer.invoke('bot:getSource', params),
     template: (params: { name: string; description?: string; persona?: string }) =>
       ipcRenderer.invoke('bot:template', params),
-    save: (params: { originalName: string; text: string }) =>
+    save: (params: { originalName: string; text: string; revision?: string }) =>
       ipcRenderer.invoke('bot:save', params),
     create: (params: { text: string }) => ipcRenderer.invoke('bot:create', params),
     delete: (params: { name: string }) => ipcRenderer.invoke('bot:delete', params),

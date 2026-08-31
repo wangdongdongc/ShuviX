@@ -659,7 +659,9 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-      }) => Promise<{ success: boolean; error?: string }>
+        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
+        revision?: string
+      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
@@ -677,7 +679,10 @@ declare global {
     }
     bot: {
       list: () => Promise<BotInfo[]>
-      getSource: (params: { name: string }) => Promise<{ text: string } | { error: string }>
+      /** revision 是这一刻的内容指纹，save 时回传即可发现「打开之后被笔记段改过」 */
+      getSource: (params: {
+        name: string
+      }) => Promise<{ text: string; revision: string } | { error: string }>
       template: (params: {
         name: string
         description?: string
@@ -686,7 +691,9 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-      }) => Promise<{ success: boolean; error?: string }>
+        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
+        revision?: string
+      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
@@ -711,7 +718,9 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-      }) => Promise<{ success: boolean; error?: string }>
+        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
+        revision?: string
+      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>

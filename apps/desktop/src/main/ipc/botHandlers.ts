@@ -27,8 +27,10 @@ export function registerBotHandlers(): void {
   )
 
   /** 覆写用户 bot 文件（非法一律拒绝） */
-  ipcMain.handle('bot:save', (_e, params: { originalName: string; text: string }) =>
-    botService.save(params.originalName, params.text)
+  ipcMain.handle(
+    'bot:save',
+    (_e, params: { originalName: string; text: string; revision?: string }) =>
+      botService.save(params.originalName, params.text, params.revision)
   )
 
   /** 新建用户 bot 文件（「新建」与「创建覆盖副本」共用） */
