@@ -31,6 +31,14 @@ export const NOTES_MIN_EVENTS = 3
 interface BotNotesState {
   /** 上次成功归纳的时刻 */
   lastRunAt: number
+  /**
+   * 上次**尝试**的时刻（成功与否都记）。
+   *
+   * 没有它，一次失败会让 `due()` 从此恒为真 —— 之后每一条值得记的消息都触发一次全量重跑，
+   * 而每次重跑都要把所有 dirty 会话的树读一遍再派一次 workflow。退避与「检查点只在成功后
+   * 前进」不冲突：材料还在，只是不再每来一条消息就试一次。
+   */
+  lastAttemptAt?: number
   /** 自上次归纳以来攒了几件 */
   pending: number
   /** sessionId → 该会话最后已归纳的 entry id（空串 = 还没归纳过这个会话） */
@@ -116,7 +124,10 @@ export class BotNotesScheduler {
   /** 两个门槛都过了才值得跑 */
   private due(botName: string): boolean {
     const st = this.of(botName)
-    return st.pending >= NOTES_MIN_EVENTS && this.now() - st.lastRunAt >= NOTES_MIN_INTERVAL_MS
+    if (st.pending < NOTES_MIN_EVENTS) return false
+    // 从**上次尝试**起算而不是上次成功：失败之后同样要等满一个间隔再试
+    const since = Math.max(st.lastRunAt, st.lastAttemptAt ?? 0)
+    return this.now() - since >= NOTES_MIN_INTERVAL_MS
   }
 
   /**
@@ -134,15 +145,24 @@ export class BotNotesScheduler {
       sessionId,
       sinceEntryId
     }))
+    // 开跑那一刻的计数快照：归纳能跑好几分钟（`notesTimeoutSec` 是 300s），这期间到达的
+    // 事件属于**下一轮**。一律清零会把它们连同下一次触发的资格一起作废 —— 材料本身不丢
+    // （检查点只推进到开跑时的最后一条），但在密集对话里会把节流拉成「30 分钟 + 再攒 3 件」
+    const snapshot = st.pending
+    st.lastAttemptAt = this.now()
     try {
       const ok = await this.deps.runNotes(botName, dirty)
-      if (!ok) return
+      if (!ok) {
+        this.save()
+        return
+      }
       // **只在成功之后前进**：失败的那一轮下次会看到同样的材料
       st.lastRunAt = this.now()
-      st.pending = 0
+      st.pending = Math.max(0, st.pending - snapshot)
       this.save()
     } catch (e) {
       log.warn(`笔记归纳异常 (${botName}):`, e)
+      this.save()
     } finally {
       this.running.delete(botName)
     }
@@ -182,7 +202,14 @@ export class BotNotesScheduler {
         touched = true
       }
     }
-    if (touched) this.save()
+    if (touched) {
+      // 一个 bot 的最后一条 dirty 会话被删掉之后，它攒着的计数再也找不到对应材料 ——
+      // 留着的话，之后每条新消息都会白跑一次「没有材料」的归纳
+      for (const st of Object.values(this.state)) {
+        if (!Object.keys(st.sessions).length) st.pending = 0
+      }
+      this.save()
+    }
   }
 
   /** 退出前 flush：所有攒着东西的 bot 各跑一次，忽略门槛 */

@@ -302,6 +302,142 @@ describe('OC —— 场合分流', () => {
     expect(h.says).toHaveLength(0)
   })
 
+  it('OC-1d 笔记段用 notesTimeoutSec（300s）那把尺：过了门控的 60s 还活着', async () => {
+    // 笔记跑在关键路径之外、没人等着，所以它可以慢；门控在首字节路径上，必须快。两处若
+    // 共用一个常量，改宽笔记就等于把每条消息的首字节一起放慢，反过来收紧门控又会让笔记
+    // 在 60 秒上被腰斩 —— 而那一刀之后这批材料要等下一个门槛才有第二次机会。
+    //
+    // 观测点是**墙钟到点时那次 abort**：`timeoutSec` 由引擎自己 setTimeout 兑现，
+    // 并不进 runTask 的入参，所以断言只能落在「到点之前没被拆、到点之后被拆了」上
+    vi.useFakeTimers()
+    try {
+      const h = makeBotChat({ task: { hang: true } })
+      const p = h.invoke({ occasion: 'notes', since: ['User: x'] })
+      await vi.advanceTimersByTimeAsync(61_000)
+      expect(h.runs).toHaveLength(1)
+      expect(h.runs[0].parentAbortSignal?.aborted, '在门控那把尺上就被拆了').toBe(false)
+
+      await vi.advanceTimersByTimeAsync(240_000)
+      expect(h.runs[0].parentAbortSignal?.aborted, '到 300s 仍没拆').toBe(true)
+      await p
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('OC-1n 墙钟到点算失败,不算「归纳完了」', async () => {
+    // 无契约的一步此前根本报不出超时:整段失败合成都关在 `schema !== undefined` 里,于是
+    // 300s 到点之后 run() 正常返回、脚本走到 `return {outcome:'notes'}`、宿主据此推进检查点
+    // —— 那批材料就此埋掉。这正是「检查点只在成功后前进」要防的形状,只是走的另一条路
+    vi.useFakeTimers()
+    try {
+      const h = makeBotChat({ task: { hang: true } })
+      const p = h.invoke({ occasion: 'notes', since: ['User: x'] })
+      await vi.advanceTimersByTimeAsync(301_000)
+      expect(outcomeOf(await p)).toBe('notes-failed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('OC-1e 笔记段没有结果契约 —— 活儿就是那次 edit，没有第二个读者', async () => {
+    // 给它一份 schema 会诱导模型「描述自己改了什么」而不是去改；而那份描述没有任何人读
+    // （宿主只看 outcome，脚本一个字都不碰笔记正文）。也因此正文里不该提 next（BA-14）
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    expect(h.runs[0].resultContract).toBeUndefined()
+  })
+
+  it('OC-1f 笔记提示词点名那份文件的路径，并要求就地改', async () => {
+    // 宿主传的是 `bot.file` 的绝对路径 —— 笔记段靠它 read/edit，猜不出来也不该猜
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    const p = h.runs[0].prompt
+    expect(p).toContain('/b/scout.md')
+    expect(p).toContain('edit it in place')
+  })
+
+  it('OC-1g 笔记提示词里「什么都不改是常态」在场（机制侧的对位在 e2e）', async () => {
+    // 提示词与 agent md（BA-10）各说一遍是刻意的：agent md 是这个段的长期人格，
+    // 而这一句在任务里重复，是因为它恰恰是模型最容易违背的那条 —— 一个被派来「更新笔记」
+    // 的 agent 天然倾向于写点什么。**机制上**「一次 edit 都没调」必须算成功，那条在 e2e
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    expect(h.runs[0].prompt).toContain('Changing nothing is a normal outcome')
+  })
+
+  it('OC-1h since 切到 vars.notesWindow 条（给 80 条只出现最后 60 条）', async () => {
+    // 与门控窗口同一个理由，但这里更要紧：笔记的材料是**跨会话累积**的，一个忙了半小时的
+    // bot 能攒出上千行。宿主侧另有一把尺（NOTES_MAX_LINES），两处都要 —— 一处管提示词，
+    // 一处管被原样写进 run journal 的那份 input
+    const since = Array.from({ length: 80 }, (_, i) => `User: 第${i}条`)
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since })
+    const p = h.runs[0].prompt
+    expect(p).not.toContain('第19条')
+    expect(p).toContain('第20条')
+    expect(p).toContain('第79条')
+  })
+
+  it('OC-1i since 为空 → 材料块连标题一起消失（不给一个空标题）', async () => {
+    // 认的是**小节标题**而不是散文：notesTask 开头那句「The conversations below have
+    // finished」恒在，可选的只有它下面那一段带 `##` 的材料块
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: [] })
+    expect(h.runs).toHaveLength(1)
+    expect(h.runs[0].prompt).not.toContain('## The conversations')
+  })
+
+  it('OC-1j 笔记场合用自己的标题「The conversations」，不复用复核那句「等待期间发生了什么」', async () => {
+    // 两处都渲染一份 `since` 数组，于是很容易顺手复用同一个块 —— 但复核那句的语境是
+    // 「这个 bot 正等着答一条排队的消息」，而笔记场合根本没有谁在等。同一份材料配错标题，
+    // 模型会按「我刚才漏了什么」而不是「这些对话教了我什么」去读它
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: ['User: 以后用 pnpm'] })
+    const p = h.runs[0].prompt
+    expect(p).toContain('## The conversations')
+    expect(p).not.toContain('What happened while it waited')
+    expect(p).toContain('以后用 pnpm')
+  })
+
+  it('OC-1k 被中止 ≠ 归纳失败：step_aborted 原样抛出，run 记为失败且不报 notes-failed', async () => {
+    // **这是「检查点只在成功后前进」的兑现处**（宿主那半边在 botServiceNotes）。脚本若把
+    // step_aborted 也 catch 成 `{outcome:'notes-failed'}`，一次用户按停止就会被记成一轮
+    // 「跑过了的归纳」——而宿主只要认了它，这批材料就永远埋掉了。对照 recheck 的同款处理
+    // 笔记段挂住：中止是唯一一种「不是失败、而是根本没跑」的结局
+    // （stageOf 把非 bot-intent 的派发都算作 'task'，笔记段的脚本化因此走 opts.task）
+    const hung = makeBotChat({ task: { hang: true } })
+    const ac = new AbortController()
+    const p = hung.invokeWith({ occasion: 'notes', since: ['User: x'] }, ac.signal)
+    await vi.waitFor(() => expect(hung.runs).toHaveLength(1))
+    ac.abort()
+    const res = await p
+    expect(res.ok).toBe(false)
+    expect(outcomeOf(res)).not.toBe('notes-failed')
+    expect(outcomeOf(res)).not.toBe('notes')
+  })
+
+  it('OC-1l 归纳失败的一轮 run 本身仍是 ok:true —— 「跑完了」不等于「归纳成功了」', async () => {
+    // 脚本 catch 之后是**正常返回**的，所以引擎照例记 ok:true。宿主因此不能只看 result.ok
+    // （那正是 D1 那条缺陷的形状）：判据必须是脚本自报的 outcome
+    const h = makeBotChat({ notesAgentMissing: true })
+    const res = await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    expect(res.ok).toBe(true)
+    expect(outcomeOf(res)).toBe('notes-failed')
+  })
+
+  it('OC-1m 仲裁落败者照样带回 memorable —— 记什么不该由「谁赢了这条消息」决定', async () => {
+    // 一条「以后都用 pnpm」是说给整个会话听的。把 memorable 绑到胜者身上，等于一次对话
+    // 只教会一个 bot，而落败者下一轮仍然一无所知
+    const h = makeBotChat({
+      claim: { won: false, reason: 'lost', winner: 'ranger' },
+      gate: { structured: { ...GATE_REPLY, memorable: true } }
+    })
+    const res = await h.invoke()
+    expect(res.output).toMatchObject({ outcome: 'yielded', to: 'ranger', memorable: true })
+    expect(h.says).toHaveLength(0)
+  })
+
   it.each(['occasion', 'bot', 'agents', 'session'])(
     'OC-2 少了 required 键 %s → invalid-input，脚本一次都没跑',
     async (key) => {

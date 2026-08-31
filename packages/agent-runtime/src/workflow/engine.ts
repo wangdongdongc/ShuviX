@@ -509,27 +509,33 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
               ms: Date.now() - t0,
               captured: schema ? res.structured !== undefined : undefined
             })
+            // **停在半路与有没有契约无关**：`timeoutSec` 是 `run()` 的独立选项，对一步无契约的
+            // 派发同样成立。此前整段合成都关在 `schema !== undefined` 里，于是无契约的一步
+            // 超时之后正常返回 —— 在脚本那里与「跑完了」长得一模一样，而笔记段正是这样一步：
+            // 300s 墙钟到点会被当成归纳成功，检查点照常前进，那批材料就此埋掉。
+            //
+            // `structured === undefined` 是必要条件：模型赶在墙钟前一刻交了结果就是交了，
+            // 不该因为随后定时器到点而把它作废
+            if (stepStop && res.structured === undefined) {
+              const stopped = new Error(
+                `agent "${profile.name}" ${stepStop === 'timeout' ? 'timed out' : 'was aborted'} before finishing`
+              ) as Error & { code?: string; finalText?: string }
+              stopped.code = stepStop === 'timeout' ? 'step_timeout' : 'step_aborted'
+              stopped.finalText = res.result
+              throw stopped
+            }
             if (schema !== undefined) {
               if (res.structured === undefined) {
                 // 可编程失败（设计 §5.5）：脚本 catch 后可读 e.code / e.finalText 降级使用散文结果。
                 // 用属性而非错误子类 —— 错误对象要跨脚本膜（vm realm），instanceof 不可靠。
                 //
-                // 三种 code 分得开，因为脚本对它们的处置完全不同：
-                //  - step_timeout   本次派发的墙钟到点（`opts.timeoutSec`）
-                //  - step_aborted   run 被中止（会话停了、或仲裁里别人赢了）
-                //  - next_not_called 模型自己跑完了却没交结构化结果
-                const code =
-                  stepStop === 'timeout'
-                    ? 'step_timeout'
-                    : stepStop === 'aborted'
-                      ? 'step_aborted'
-                      : 'next_not_called'
+                // 走到这里 `stepStop` 必为 null（超时与中止在上面已经抛掉），所以只剩一种：
+                // 模型自己跑完了却没交结构化结果。三种 code 对脚本的意味完全不同 ——
+                // 故障要出声或让位，被中止要安静退出，而这一种是契约破损
                 const err = new Error(
-                  code === 'next_not_called'
-                    ? `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
-                    : `agent "${profile.name}" ${code === 'step_timeout' ? 'timed out' : 'was aborted'} before calling \`next\``
+                  `agent "${profile.name}" finished without calling \`next\` — transcript tail: ${res.result.slice(0, 300)}`
                 ) as Error & { code?: string; finalText?: string }
-                err.code = code
+                err.code = 'next_not_called'
                 err.finalText = res.result
                 throw err
               }
