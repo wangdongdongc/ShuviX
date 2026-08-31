@@ -1631,3 +1631,306 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// A1 · 设置页「Bots」tab —— 列表 / md 编辑器 / 运行时读数条 / 门控模型选择器 /
+// 丢更新冲突对话框。
+//
+// 锚点全部是 A1 落的 data-*（data-bot-new / data-bot-row / data-bot-save /
+// data-bot-new-session / data-bot-inspect{,-warnings} / data-bot-notes-status /
+// data-bot-gate-model / data-bot-conflict-{reload,overwrite}），左栏与右面板按
+// DOM 结构从 [data-bot-new] 反推（底栏的父级 = 列表列，其下一个兄弟 = 右面板），
+// 不认宽度类。ModelSelect 面板沿用 fmCardPane 的 `.picker-panel` 约定（body portal）。
+
+export interface BotsPaneRow {
+  /** bot 身份键（data-bot-row 属性值 = frontmatter name） */
+  name: string
+  displayName: string
+  description: string
+  selected: boolean
+}
+
+/** 运行时读数条快照（data-bot-inspect 未上屏时 present=false 其余为空） */
+export interface BotsInspectShot {
+  present: boolean
+  /** 管线行文案：`<workflow>` 或 `<workflow> · <concurrency>` */
+  pipelineText: string
+  /** 角色行文案：`intent: … · recheck: … · notes: … · task: …` */
+  stagesText: string
+  /** 笔记状态行（data-bot-notes-status）文案 */
+  notesText: string
+  /** 问题区条目数（data-bot-inspect-warnings 属性值）；块未上屏为 0 */
+  warningsCount: number
+  /** 门控模型选择器行（仅 intent 仍指向内置 bot-intent 时上屏） */
+  gateModelPresent: boolean
+}
+
+/** 右面板编辑器快照（编辑 / 新建 / 修复三态通用） */
+export interface BotsEditorShot {
+  present: boolean
+  /** 头部有取消按钮 —— 新建/修复这类临时编辑态（常态编辑没有取消） */
+  transient: boolean
+  /** 屏幕上的文本：CM6 文档 + 属性卡各输入框 value（后者不进 textContent） */
+  text: string
+  /** 属性卡 name 行输入框的当前值 */
+  nameInput: string
+  /** 属性卡类型徽章（bot md 应为 'ShuviX bot · v1'） */
+  cardBadge: string
+  /** 红色错误横幅文案（保存失败/加载失败；无横幅为空串） */
+  error: string
+  /** 「新建会话」按钮在屏（仅 edit 态） */
+  newSessionPresent: boolean
+}
+
+export interface BotsPane {
+  /** 设置窗口当前 hash（tab 路由断言用） */
+  hash(): Promise<string>
+  newButtonPresent(): Promise<boolean>
+  rows(): Promise<BotsPaneRow[]>
+  /** 「无法解析」琥珀分组里的文件名（无分组时空数组） */
+  invalidRows(): Promise<string[]>
+  selectRow(name: string): Promise<void>
+  selectInvalid(fileName: string): Promise<void>
+  /** 底栏重扫按钮（列表只在挂载/保存后刷新，磁盘外改动需手动重扫） */
+  refresh(): Promise<void>
+  /** 非法文件详情（文件名 + 解析器拒绝理由） */
+  invalidDetail(): Promise<{ fileName: string; error: string }>
+  /** 非法详情里的「点击修复」按钮 → 打开修复编辑器 */
+  clickInvalidEdit(): Promise<void>
+  editor(): Promise<BotsEditorShot>
+  /** 底栏「新建 bot」 */
+  clickNew(): Promise<void>
+  /** 编辑器头部保存（data-bot-save） */
+  clickSave(): Promise<void>
+  /** 编辑器头部取消（仅 transient 态存在） */
+  clickCancel(): Promise<void>
+  /** 编辑器头部「新建会话」（data-bot-new-session） */
+  clickNewSession(): Promise<void>
+  inspect(): Promise<BotsInspectShot>
+
+  /** 丢更新冲突对话框是否在屏（以 data-bot-conflict-reload 的存在为准） */
+  conflictOpen(): Promise<boolean>
+  /** 冲突对话框三个决议：加载磁盘版本 / 仍然覆盖 / 取消 */
+  clickConflictReload(): Promise<void>
+  clickConflictOverwrite(): Promise<void>
+  clickConflictCancel(): Promise<void>
+
+  /** 门控模型：开面板（trigger 监听 click）并等 portal 上屏 */
+  openGateModel(): Promise<void>
+  gateModelOpen(): Promise<boolean>
+  /** 面板里的提供商分组名（型号按钮带 pl-5，据此与分组头区分 —— 同 fmCardPane） */
+  gateModelGroups(): Promise<string[]>
+  expandGateModelGroup(label: string): Promise<boolean>
+  pickGateModel(modelId: string): Promise<boolean>
+  /** 触发器文案（未选态 = 「跟随会话」占位） */
+  gateModelTriggerText(): Promise<string>
+  /** 已选态的清除按钮（.lucide-x）；未选态不存在 → 返回 false */
+  clearGateModel(): Promise<boolean>
+}
+
+/** 设置窗口「Bots」tab（openSettings('bots') 后调用；就绪判据 = data-bot-new 上屏） */
+export async function botsPane(settings: CdpClient): Promise<BotsPane> {
+  await until(
+    () => settings.eval<boolean>(`document.querySelector('[data-bot-new]') !== null`),
+    'bots tab ready'
+  )
+
+  // 列表列 = 底栏（data-bot-new 的父级）的父级；右面板 = 列表列的下一个兄弟
+  const COLUMN = `document.querySelector('[data-bot-new]').parentElement.parentElement`
+  const PANEL = `${COLUMN}.nextElementSibling`
+  const ROWS = `[...document.querySelectorAll('[data-bot-row]')]`
+  // 非法行：列表列里带 font-mono 文件名的按钮（合法行显示 displayName，无 font-mono）
+  const INVALID_ROWS = `[...${COLUMN}.querySelectorAll('button')].filter((b) => b.querySelector('span.font-mono'))`
+  const MODEL_PANEL = `document.querySelector('.picker-panel')`
+  const MODEL_BUTTONS = `[...document.querySelectorAll('.picker-panel button')]`
+  const GATE_ROW = `document.querySelector('[data-bot-gate-model]')`
+  const CONFLICT_RELOAD = `document.querySelector('[data-bot-conflict-reload]')`
+
+  const editorSnapshot = (): Promise<BotsEditorShot> =>
+    settings.eval(`(() => {
+      const panel = ${PANEL}
+      if (!panel?.querySelector('.cm-content')) {
+        return { present: false, transient: false, text: '', nameInput: '', cardBadge: '', error: '', newSessionPresent: false }
+      }
+      const cancelBtn = [...panel.querySelectorAll('button')].find(
+        (b) => !b.closest('.cm-editor') && b.querySelector('.lucide-x')
+      )
+      // 错误横幅（红色 tailwind 类）在 CM6 之外；属性卡的校验横幅不算
+      const banner = [...panel.querySelectorAll('div')].find(
+        (d) => !d.closest('.cm-editor') && d.className.includes('text-red-500')
+      )
+      return {
+        present: true,
+        transient: !!cancelBtn,
+        // 属性卡把 name/description 渲染成 <input>，其值不进 textContent —— 一并算上
+        text:
+          (panel.querySelector('.cm-content')?.textContent ?? '') +
+          [...panel.querySelectorAll('.cm-shuvix-fmcard-input')].map((i) => ' ' + i.value).join(''),
+        nameInput:
+          panel.querySelector('.cm-shuvix-fmcard-row[data-key="name"] .cm-shuvix-fmcard-input')
+            ?.value ?? '',
+        cardBadge: panel.querySelector('.cm-shuvix-fmcard-badge')?.textContent.trim() ?? '',
+        error: banner ? banner.textContent.trim() : '',
+        newSessionPresent: !!panel.querySelector('[data-bot-new-session]')
+      }
+    })()`)
+
+  const gateModelOpen = (): Promise<boolean> => settings.eval<boolean>(`${MODEL_PANEL} !== null`)
+
+  return {
+    hash: () => settings.eval<string>('location.hash'),
+    newButtonPresent: () =>
+      settings.eval<boolean>(`document.querySelector('[data-bot-new]') !== null`),
+    rows: () =>
+      settings.eval(`${ROWS}.map((r) => ({
+        name: r.getAttribute('data-bot-row') ?? '',
+        displayName: r.querySelector('.font-medium')?.textContent.trim() ?? '',
+        description: r.querySelector('.text-\\\\[10px\\\\]')?.textContent.trim() ?? '',
+        selected: r.className.includes('bg-accent/10')
+      }))`),
+    invalidRows: () =>
+      settings.eval(
+        `${INVALID_ROWS}.map((b) => b.querySelector('span.font-mono').textContent.trim())`
+      ),
+    selectRow: async (name) => {
+      await settings.eval(
+        `${ROWS}.find((r) => r.getAttribute('data-bot-row') === ${JSON.stringify(name)}).click()`
+      )
+      // 选中 → 拉原文 + inspect，各是一趟 IPC —— 等编辑器真挂上再回
+      await until(
+        () =>
+          settings.eval<boolean>(`(() => {
+            const row = ${ROWS}.find((r) => r.getAttribute('data-bot-row') === ${JSON.stringify(name)})
+            return !!row && row.className.includes('bg-accent/10') && ${PANEL}?.querySelector('.cm-content') !== null
+          })()`),
+        `bot row selected: ${name}`
+      )
+    },
+    selectInvalid: async (fileName) => {
+      await settings.eval(
+        `${INVALID_ROWS}.find(
+          (b) => b.querySelector('span.font-mono').textContent.trim() === ${JSON.stringify(fileName)}
+        ).click()`
+      )
+      await until(
+        () => settings.eval<boolean>(`${PANEL}?.querySelector('.font-mono') !== null`),
+        `invalid bot file selected: ${fileName}`
+      )
+    },
+    refresh: async () => {
+      await settings.eval(
+        `[...${COLUMN}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-refresh-cw')).click()`
+      )
+      await sleep(400)
+    },
+    invalidDetail: () =>
+      settings.eval(`(() => {
+        const panel = ${PANEL}
+        const amber = [...panel.querySelectorAll('div')].find((d) =>
+          d.className.includes('bg-amber-500/10')
+        )
+        return {
+          fileName: panel.querySelector('.font-mono')?.textContent.trim() ?? '',
+          error: amber ? amber.textContent.trim() : ''
+        }
+      })()`),
+    clickInvalidEdit: async () => {
+      await settings.eval(
+        `[...${PANEL}.querySelectorAll('button')].find((b) => b.className.includes('bg-accent')).click()`
+      )
+      await until(async () => (await editorSnapshot()).present, 'bot fix editor mounted')
+    },
+    editor: editorSnapshot,
+    clickNew: async () => {
+      await settings.eval(`document.querySelector('[data-bot-new]').click()`)
+      await until(async () => (await editorSnapshot()).transient, 'bot create editor mounted')
+    },
+    clickSave: async () => {
+      await settings.eval(`document.querySelector('[data-bot-save]').click()`)
+    },
+    clickCancel: async () => {
+      await settings.eval(
+        `[...${PANEL}.querySelectorAll('button')].find(
+          (b) => !b.closest('.cm-editor') && b.querySelector('.lucide-x')
+        ).click()`
+      )
+      await until(async () => !(await editorSnapshot()).transient, 'bot editor closed')
+    },
+    clickNewSession: async () => {
+      await settings.eval(`document.querySelector('[data-bot-new-session]').click()`)
+    },
+    inspect: () =>
+      settings.eval(`(() => {
+        const strip = document.querySelector('[data-bot-inspect]')
+        if (!strip) {
+          return { present: false, pipelineText: '', stagesText: '', notesText: '', warningsCount: 0, gateModelPresent: false }
+        }
+        const mono = [...strip.querySelectorAll('span.font-mono')]
+        const warn = strip.querySelector('[data-bot-inspect-warnings]')
+        return {
+          present: true,
+          pipelineText: mono[0]?.textContent.trim() ?? '',
+          stagesText: mono[1]?.textContent.trim() ?? '',
+          notesText: strip.querySelector('[data-bot-notes-status]')?.textContent.trim() ?? '',
+          warningsCount: warn ? Number(warn.getAttribute('data-bot-inspect-warnings')) : 0,
+          gateModelPresent: ${GATE_ROW} !== null
+        }
+      })()`),
+
+    conflictOpen: () => settings.eval<boolean>(`${CONFLICT_RELOAD} !== null`),
+    clickConflictReload: async () => {
+      await settings.eval(`${CONFLICT_RELOAD}.click()`)
+      await sleep(200)
+    },
+    clickConflictOverwrite: async () => {
+      await settings.eval(`document.querySelector('[data-bot-conflict-overwrite]').click()`)
+      await sleep(200)
+    },
+    clickConflictCancel: async () => {
+      // 取消是决议行里唯一不带 data-* 的按钮（JSX 序第一个）
+      await settings.eval(
+        `[...${CONFLICT_RELOAD}.parentElement.querySelectorAll('button')].find(
+          (b) => !b.hasAttribute('data-bot-conflict-reload') && !b.hasAttribute('data-bot-conflict-overwrite')
+        ).click()`
+      )
+      await sleep(200)
+    },
+
+    openGateModel: async () => {
+      await settings.eval(`${GATE_ROW}.querySelector('button').click()`)
+      await until(gateModelOpen, 'gate model picker panel mounted')
+    },
+    gateModelOpen,
+    gateModelGroups: () =>
+      settings.eval(
+        `${MODEL_BUTTONS}.filter((b) => !b.className.includes('pl-5')).map((b) => b.textContent.trim())`
+      ),
+    expandGateModelGroup: (label) =>
+      settings.eval<boolean>(`(() => {
+        const head = ${MODEL_BUTTONS}.find(
+          (b) => !b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(label)}
+        )
+        if (!head) return false
+        head.click()
+        return true
+      })()`),
+    pickGateModel: (modelId) =>
+      settings.eval<boolean>(`(() => {
+        const item = ${MODEL_BUTTONS}.find(
+          (b) => b.className.includes('pl-5') && b.textContent.trim() === ${JSON.stringify(modelId)}
+        )
+        if (!item) return false
+        item.click()
+        return true
+      })()`),
+    gateModelTriggerText: () =>
+      settings.eval<string>(`(${GATE_ROW}?.querySelector('button')?.textContent ?? '').trim()`),
+    clearGateModel: () =>
+      settings.eval<boolean>(`(() => {
+        const btn = [...${GATE_ROW}.querySelectorAll('button')].find((b) => b.querySelector('.lucide-x'))
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+  }
+}

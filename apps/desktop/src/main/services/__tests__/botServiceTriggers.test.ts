@@ -44,7 +44,9 @@ vi.mock('../workflowService', () => ({
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
 vi.mock('../../utils/paths', () => ({
   getSessionsDir: () => dirs.sessions,
-  getDefaultBotsDir: () => dirs.bots
+  getDefaultBotsDir: () => dirs.bots,
+  // botService → agentService 的模块作用域构造器在 import 阶段就要它
+  getDefaultAgentsDir: () => `${dirs.base}/agents`
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {} })
