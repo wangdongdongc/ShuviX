@@ -48,6 +48,12 @@ vi.mock('../../logger', () => ({
 vi.mock('../agentRuntimeAdapters', () => ({
   electronEventSink: { broadcast: mocks.broadcast }
 }))
+// 会话域埋点的事实构造器会拉进 sessionDao / messageService / i18n —— 这些用例不测埋点，
+// 桩掉比给 paths mock 补一串无关导出干净
+vi.mock('../sessionTriggerFacts', () => ({
+  buildTurnCompletedFacts: vi.fn(async () => null),
+  isDefaultTitle: vi.fn(() => false)
+}))
 vi.mock('../sessionService', () => ({ sessionService: { getById: mocks.getById } }))
 
 import { BOT_SENDER_CUSTOM_TYPE, INLINE_TOKENS_CUSTOM_TYPE } from '@shuvix/agent-runtime'

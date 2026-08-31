@@ -37,6 +37,12 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: { broadcast: mocks.broadcast } }))
+// botService 会拉进埋点的事实构造器（sessionDao / messageService / i18n）——
+// 这份用例测的是侧车回退，桩掉即可
+vi.mock('../sessionTriggerFacts', () => ({
+  buildTurnCompletedFacts: vi.fn(async () => null),
+  isDefaultTitle: vi.fn(() => false)
+}))
 vi.mock('../sessionService', () => ({ sessionService: { getById: mocks.getById } }))
 
 import { BOT_SENDER_CUSTOM_TYPE, INLINE_TOKENS_CUSTOM_TYPE } from '@shuvix/agent-runtime'

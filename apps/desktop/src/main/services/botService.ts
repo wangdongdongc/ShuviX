@@ -54,7 +54,8 @@ import {
   readSessionRunConfig,
   withSessionTreeLock
 } from './sessionStorage'
-import { workflowService } from './workflowService'
+import { workflowService, workflowTriggers } from './workflowService'
+import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { appendBotDecision, botRunsDir, pruneBotRuns, type BotDecisionKind } from './bot/botJournal'
 import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
 import { CohortBarrier, type ClaimIntent, type ClaimVerdict } from './bot/botArbiter'
@@ -758,6 +759,14 @@ class BotService {
         })
       }
 
+      // 会话域埋点：**聊天会话也 fire**，用户工作流因此能旁观这里发生的事（auto-title
+      // 也就顺带对聊天会话生效了）。payload 只是会话此刻的事实，与订阅方无关
+      this.firePromptAccepted(
+        sessionId,
+        promptText,
+        sessionService.getById(sessionId)?.settings?.bots ?? []
+      )
+
       await this.dispatchCohort({
         sessionId,
         text,
@@ -787,6 +796,32 @@ class BotService {
    * 唯一依据，而被逐出的 Session 实例并不销毁、还会继续往同一个 jsonl 写 —— 症状是低频
    * 消息静默分叉，e2e 里几乎不可能稳定复现。
    */
+  /** prompt 受理埋点（fire 绝不抛出）。members 现取：名单随时可能被 updateBots 改 */
+  private firePromptAccepted(sessionId: string, promptText: string, bots: string[]): void {
+    const title = sessionService.getById(sessionId)?.title ?? ''
+    workflowTriggers.fire('session.prompt-accepted', {
+      sessionId,
+      // 无根会话没有档案名。空串而不是编一个 —— 订阅方要区分会话种类,看 bots
+      profileName: '',
+      title,
+      isDefaultTitle: isDefaultTitle(title),
+      bots,
+      promptText
+    })
+  }
+
+  /** 轮结束埋点：事实由与有根会话**同一个**构造器现算 */
+  private async fireTurnCompleted(sessionId: string, bots: string[]): Promise<void> {
+    const facts = await buildTurnCompletedFacts(sessionId)
+    if (!facts) return
+    workflowTriggers.fire('session.turn-completed', {
+      sessionId,
+      profileName: '',
+      bots,
+      ...facts
+    })
+  }
+
   private async dispatchCohort(ctx: {
     sessionId: string
     text: string
@@ -928,6 +963,9 @@ class BotService {
       live.delete(barrier)
       if (!live.size) this.barriers.delete(sessionId)
     }
+
+    // 全员收尾之后才算「一轮结束」——聊天会话的一轮是 cohort 整体，不是某个成员
+    await this.fireTurnCompleted(sessionId, members)
   }
 
   /**

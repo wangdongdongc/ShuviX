@@ -36,6 +36,12 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../agentRuntimeAdapters', () => ({ electronEventSink: { broadcast: vi.fn() } }))
+// 会话域埋点的事实构造器会拉进 sessionDao / messageService / i18n —— 这些用例不测埋点，
+// 桩掉比给 paths mock 补一串无关导出干净
+vi.mock('../sessionTriggerFacts', () => ({
+  buildTurnCompletedFacts: vi.fn(async () => null),
+  isDefaultTitle: vi.fn(() => false)
+}))
 vi.mock('../sessionService', () => ({ sessionService: { getById: vi.fn() } }))
 
 import { DEFAULT_BOT_PIPELINE } from '@shuvix/agent-runtime'
