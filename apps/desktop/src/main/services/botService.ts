@@ -630,6 +630,8 @@ class BotService {
    * 对照 `HarnessSession.inputsClosed`（那边置位在 abort、复位在下一次 prompt）。
    */
   private readonly inputsClosed = new Set<string>()
+  /** 等「这个会话一个 run 都不剩」的人（`abortSession` 的会师点） */
+  private readonly idleWaiters = new Map<string, Array<() => void>>()
   /**
    * 门控段的健康度：连续故障计数与「已回落」标记。
    *
@@ -689,6 +691,8 @@ class BotService {
       return
     }
     this.inflight.delete(sessionId)
+    for (const wake of this.idleWaiters.get(sessionId) ?? []) wake()
+    this.idleWaiters.delete(sessionId)
     // 这个会话一个 run 都不剩了，还挂着的询问按定义**没有人能消费它的答复** ——
     // 询问是被工具 await 着的，run 正常跑着就不可能结束；能走到这里只有一种情况：
     // 那个 run 被单独中止或超时掉了（定局时中止未表态成员、引擎墙钟），而中止路径
@@ -796,6 +800,34 @@ class BotService {
    * 唯一依据，而被逐出的 Session 实例并不销毁、还会继续往同一个 jsonl 写 —— 症状是低频
    * 消息静默分叉，e2e 里几乎不可能稳定复现。
    */
+  /**
+   * 等这个会话的在飞管线全部收尾。
+   *
+   * **带上限**:中止已经把 ticket / barrier / mailbox / run 全拆了,正常情况下这里几乎
+   * 立刻返回。上限是为了不让一个卡死的脚本把「删除会话」这类用户操作永久挂住 —— 宁可
+   * 让极端情况下多出一次并发写(树是 append-only 的,最坏是多一条孤儿 entry),
+   * 也不能让界面卡在那里。
+   */
+  private whenIdle(sessionId: string, timeoutMs = 5000): Promise<void> {
+    if (!this.inflight.get(sessionId)) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let done = false
+      const finish = (): void => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        log.warn(`会话 ${sessionId} 的管线在中止后仍未收尾(${timeoutMs}ms),不再等`)
+        finish()
+      }, timeoutMs)
+      const list = this.idleWaiters.get(sessionId) ?? []
+      list.push(finish)
+      this.idleWaiters.set(sessionId, list)
+    })
+  }
+
   /** prompt 受理埋点（fire 绝不抛出）。members 现取：名单随时可能被 updateBots 改 */
   private firePromptAccepted(sessionId: string, promptText: string, bots: string[]): void {
     const title = sessionService.getById(sessionId)?.title ?? ''
@@ -1049,6 +1081,16 @@ class BotService {
         detail: { after: health.streak, reason: gate }
       })
       log.warn(`bot "${botName}" 的门控段连续 ${health.streak} 次故障，已回落内置 bot-intent`)
+      // 回落是**会话里看得见的行为改变**（设计 §6.1）：这个 bot 从此不再用用户指定的门控
+      // agent 了。只落 journal + 设置页徽标的话,用户看到的是「它忽然变得不一样了」而
+      // 线索埋在文件系统里。回落是 sticky 的,所以这条一个进程只出一次
+      void this.appendBotMessage(
+        ticket.sessionId,
+        { botName, displayName: ticket.displayName },
+        {
+          content: `⚠️ ${ticket.displayName}：判断该不该接话的那一段连续出了 ${health.streak} 次问题，已经换回内置的那一个。要用回自己的配置，去设置里看看它。`
+        }
+      )
     }
     this.gateHealth.set(botName, health)
   }
@@ -1627,6 +1669,10 @@ class BotService {
       this.cancelPendingInputs(sessionId)
       this.mailbox.abortSession(sessionId)
       workflowService.abortSessionRuns(sessionId)
+      // **先等管线真的停下来,再排空写锁**。drain 只保证「此刻队列里的写入」落完,而一条
+      // 还在收尾的管线随时可能再拿一次锁 —— 三个调用点(回退/清空/删除会话)都拿这个方法
+      // 当「动树之前的安全前提」,顺序反了等于那个前提只在没有并发时成立
+      await this.whenIdle(sessionId)
       await drainSessionTreeLock(sessionId)
     } finally {
       this.blockWrites.delete(sessionId)
