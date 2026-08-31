@@ -197,10 +197,16 @@ describe('asSayContent —— say 的正文投影', () => {
 
   it.each([
     ['只有 headline', { headline: '标题' }, '标题'],
-    ['只有 body', { body: '正文' }, '正文'],
     ['两者以空行相连', { headline: '标题', body: '正文' }, '标题\n\n正文']
   ])('对象形态：%s', (_n, raw, expected) => {
     expect(asSayContent(raw)).toBe(expected)
+  })
+
+  it('只有 body 没有 headline —— M8′ 收窄之后不再放行', () => {
+    // BotReply 的 headline 是必填的「结论先行」。没有结论的散文该走脚本里那条降级
+    // （`{headline: 首行, body: 余下}`），而不是让宿主替它把无形状的一坨认成合法回复 ——
+    // 宿主一放行，脚本那条降级就永远不会被写出来
+    expect(() => asSayContent({ body: '正文' })).toThrow(/non-empty string or carry a headline/)
   })
 
   it.each([[{}], [{ headline: 1 }], [null], [42], [[]], [{ body: undefined }]])(

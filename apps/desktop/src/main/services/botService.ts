@@ -43,6 +43,7 @@ import type {
   SuppressedCandidate
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
+import { asBotReply, botReplyToMarkdown } from '@shuvix/chat-protocol/botReply'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { createLogger } from '../logger'
@@ -215,8 +216,11 @@ export function asClaimIntent(raw: unknown): ClaimIntent {
 }
 
 /**
- * `say(reply)` 的正文投影。M4′ 只取 headline —— BotReply 的**全键** markdown 投影
- * （含 points / table / followups，需要全键覆盖断言）归 M8′。
+ * `say(reply)` 的正文投影 —— 落树的 content 就是它的返回值。
+ *
+ * 对象形态走 `BotReply` 的**全键** markdown 投影：content 是模型可见的唯一权威
+ * （重开、压缩、标题、复制、TTS 读的都是它），漏投一个字段就等于那条信息对模型不存在，
+ * 而 UI 上它明明还在。裸字符串照旧原样通过 —— 门控段的轻回应本来就是一句话。
  */
 export function asSayContent(raw: unknown): string {
   // 空串一路走到 appendBotMessage 只会 return null + 一条 warn：脚本拿到 messageId:null、
@@ -225,12 +229,10 @@ export function asSayContent(raw: unknown): string {
     if (!raw.trim()) throw new Error('say(reply): reply must be a non-empty string')
     return raw
   }
-  if (typeof raw === 'object' && raw !== null) {
-    const d = raw as Record<string, unknown>
-    const head = typeof d.headline === 'string' ? d.headline : ''
-    const body = typeof d.body === 'string' ? d.body : ''
-    const text = [head, body].filter(Boolean).join('\n\n')
-    if (text.trim()) return text
+  const reply = asBotReply(raw)
+  if (reply) {
+    const md = botReplyToMarkdown(reply)
+    if (md.trim()) return md
   }
   throw new Error('say(reply): reply must be a non-empty string or carry a headline')
 }
@@ -1244,6 +1246,7 @@ class BotService {
           throw new Error('call claim() before say() in a multi-bot session')
         }
         const content = asSayContent(raw)
+        const botReply = asBotReply(raw)
         const o = (typeof opts === 'object' && opts !== null ? opts : {}) as {
           decision?: unknown
           error?: unknown
@@ -1258,8 +1261,9 @@ class BotService {
             displayName: ticket.displayName,
             ...(decision ? { decision } : {}),
             ...(this.takeSuppressed(ticket) ?? {}),
-            // 原值原样存进侧车：M8′ 只需收窄类型，不必迁移数据
-            ...(typeof raw === 'object' && raw !== null ? { reply: raw } : {})
+            // 侧车存**校验过**的结构，与 content 里那份 markdown 同源（content 由
+            // botReplyToMarkdown 得来）—— 读写两侧同一个形状，UI 不必再自己防一遍
+            ...(botReply ? { reply: botReply } : {})
           },
           { content }
         )

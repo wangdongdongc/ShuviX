@@ -356,6 +356,7 @@ export {
   type ParsedBotFile,
   type BotRespondMode
 } from './bot/botFile'
+export { BOT_AGENT_REF_PREFIX, parseBotAgentRef, botToInProcessAgentType } from './bot/botFile'
 export { splitBotNotes, BOT_NOTES_MARKER, type BotNotesSplit } from './bot/botNotes'
 // 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
 // （visualization 的图表文件契约常量在 @shuvix/chat-protocol/chartFileContract —— UI 与提示词共用）

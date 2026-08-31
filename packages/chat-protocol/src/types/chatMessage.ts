@@ -2,6 +2,7 @@
  * 消息相关共享类型 — main / preload / renderer 共用
  * 唯一定义源，消除跨进程类型重复
  */
+import type { BotReply } from '../botReply'
 
 // ---- 基础元数据类型 ----
 
@@ -136,6 +137,13 @@ export interface AssistantMeta {
   sender?: MessageSender
   /** 聊天会话：本条消息赢下仲裁时，被它压制的其它候选 */
   suppressed?: SuppressedCandidate[]
+  /**
+   * 聊天会话：任务段的结构化回复，供卡片/气泡双形态渲染。
+   *
+   * **不是 content 的替代品**：content 里那份 markdown 投影才是模型可见的权威，这里是
+   * 同一份内容的结构，只服务 UI（见 `@shuvix/chat-protocol/botReply`）。
+   */
+  reply?: BotReply
 }
 
 // ---- 工具结构化详情（按工具 type 判别） ----

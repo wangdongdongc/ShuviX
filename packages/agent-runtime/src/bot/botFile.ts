@@ -281,3 +281,50 @@ export function serializeBotDefinitionFile(data: ParsedBotFile): string {
   const body = data.systemPrompt.trim()
   return `---\n${frontmatter}\n---\n${body ? `\n${body}\n` : ''}`
 }
+
+/**
+ * 任务段 agent 的 ref 前缀。
+ *
+ * **必须是全局可寻址的 `bot:<name>`，不能是 `bot:self`**：引擎的 `resolveAgentProfile`
+ * 是一个无 run 上下文的全局 dep，相对 ref 在那里永远解析不出来（M4′ 定名时的裁决）。
+ */
+export const BOT_AGENT_REF_PREFIX = 'bot:'
+
+/** `bot:<name>` → `<name>`；不是 bot ref 则 null。名字原样保留（CJK / 空格都合法） */
+export function parseBotAgentRef(ref: string): string | null {
+  if (!ref.startsWith(BOT_AGENT_REF_PREFIX)) return null
+  const name = ref.slice(BOT_AGENT_REF_PREFIX.length).trim()
+  return name || null
+}
+
+/**
+ * ParsedBotFile → 运行投影。**agent 即 bot 自身**（设计 §6.2）：正文就是它的系统提示词、
+ * `shuvix-tools` / `shuvix-model` / 指令文件 / 项目感知全部照常生效。
+ *
+ * 与 `toInProcessAgentType`（AgentProfile 那条）刻意分开写而不是让两种文件共用一个类型：
+ * bot md 比 agent md 多出管线、门控模式、开场白、笔记这些**只有 bot 才有**的字段，
+ * 硬凑成一个类型会让「哪些字段对 agent 有意义」变得不可读。这里是投影，不是继承。
+ *
+ * `systemPrompt` 取的是**整篇正文（含笔记区）** —— bot 当然要知道自己学过什么。
+ */
+export function botToInProcessAgentType(bot: ParsedBotFile): {
+  name: string
+  displayName: string
+  description: string
+  tools: string[]
+  systemPrompt: string
+  model?: string
+  instructionFiles: string[]
+  projectAwareness: boolean
+} {
+  return {
+    name: bot.name,
+    displayName: bot.displayName,
+    description: bot.description,
+    tools: [...bot.tools],
+    systemPrompt: bot.systemPrompt,
+    ...(bot.model ? { model: bot.model } : {}),
+    instructionFiles: [...bot.instructionFiles],
+    projectAwareness: bot.projectAwareness
+  }
+}

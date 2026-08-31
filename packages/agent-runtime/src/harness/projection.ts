@@ -32,6 +32,7 @@ import type {
   ToolResultDetails,
   UsageInfo
 } from '@shuvix/chat-protocol/types/chatMessage'
+import { asBotReply, type BotReply } from '@shuvix/chat-protocol/botReply'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 
 /** 指令注入使用的 custom_message 类型标记（与 instructionInjector 共用） */
@@ -80,8 +81,11 @@ export interface BotSenderSidecar {
   displayName: string
   /** 意图段判定（M4′ 收窄为枚举）；clarify 回连谓词的数据源 */
   decision?: string
-  /** 结构化回复原文（M8′ 收窄为 BotReply），仅供 UI —— 模型看到的是 content 的 markdown */
-  reply?: unknown
+  /**
+   * 结构化回复原文，**仅供 UI**（卡片/气泡双形态）—— 模型看到的永远是 content 里那份
+   * markdown 投影。两者同源：content 由 `botReplyToMarkdown(reply)` 得来。
+   */
+  reply?: BotReply
   /**
    * 本条消息赢下仲裁时被压制的其它候选（救济 chip 的数据源）。
    *
@@ -108,7 +112,8 @@ function asBotSenderSidecar(data: unknown): BotSenderSidecar | null {
   const d = data as Record<string, unknown>
   if (typeof d.botName !== 'string' || !d.botName) return null
   if (typeof d.displayName !== 'string' || !d.displayName) return null
-  // 其余键原样带过：这是持久化数据，schema 还要长两轮（decision/reply）
+  // 其余键原样带过；**会被 UI 遍历的两个（reply / suppressed）另有逐字段收窄** ——
+  // 它们来自磁盘，一条坏记录不该在渲染时炸掉整条会话
   return d as unknown as BotSenderSidecar
 }
 
@@ -352,6 +357,8 @@ function projectAssistantMessage(
   if (blocks.length === 0 && !images) return
 
   const suppressed = sender ? suppressedOf(sender) : undefined
+  // 与 suppressed 同一条纪律：侧车是磁盘数据，交给渲染层之前逐字段重建
+  const reply = sender ? asBotReply(sender.reply) : null
 
   state.out.push({
     id: entryId,
@@ -370,7 +377,8 @@ function projectAssistantMessage(
       ...(sender
         ? {
             sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName },
-            ...(suppressed ? { suppressed } : {})
+            ...(suppressed ? { suppressed } : {}),
+            ...(reply ? { reply } : {})
           }
         : {})
     }

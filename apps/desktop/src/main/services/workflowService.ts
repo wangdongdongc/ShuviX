@@ -33,6 +33,8 @@ import {
   getBuiltinWorkflowSource,
   parseWorkflowDefinitionFile,
   toInProcessAgentType,
+  parseBotAgentRef,
+  botToInProcessAgentType,
   type ParsedWorkflowFile,
   type TriggerId,
   type TriggerPayloadMap,
@@ -44,6 +46,9 @@ import {
 import { getDefaultWorkflowsDir } from '../utils/paths'
 import { agentManager } from '../agents/AgentManager'
 import { agentService } from './agentService'
+// 仅在 init() 装配的闭包里调用 —— botService 顶部 import 了本模块，两者的构造期都不
+// 互相触碰，ESM 活绑定下无初始化环（同 sessionService ↔ botService 的既有处置）
+import { botService } from './botService'
 import { sessionService } from './sessionService'
 import { nodeVmScriptEngine } from './workflowScriptEngine'
 import { createLogger } from '../logger'
@@ -123,6 +128,13 @@ class WorkflowService {
       script: nodeVmScriptEngine,
       listWorkflows: () => this.listForEngine(),
       resolveAgentProfile: (ref) => {
+        // `bot:<name>` —— 任务段 agent 即 bot 自身（设计 §6.2）。必须在这里解析而不是靠
+        // 相对 ref：本函数是无 run 上下文的全局 dep，`bot:self` 在这里永远解析不出来
+        const botName = parseBotAgentRef(ref)
+        if (botName) {
+          const bot = botService.getBot(botName)
+          return bot ? botToInProcessAgentType(bot) : null
+        }
         const profile = agentService.getProfile(ref)
         return profile ? toInProcessAgentType(profile) : null
       },
