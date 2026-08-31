@@ -175,6 +175,7 @@ return await turn(async function (slot) {
   const objective = (intent.task && intent.task.objective) || intent.reason
   const boundaries = (intent.task && intent.task.boundaries) || ''
   const taskLines = (input.window || []).slice(-vars.taskWindow)
+  const attached = (input.message && input.message.attachments) || []
 
   let reply = null
   try {
@@ -182,12 +183,22 @@ return await turn(async function (slot) {
       input.agents.task,
       prompt('task', {
         objective: objective,
+        attachedBlock: attached.length
+          ? prompt('attached', { attachedCount: String(attached.length) })
+          : '',
         boundariesBlock: boundaries ? prompt('boundaries', { boundaries: boundaries }) : '',
         notesBlock: notesBlock,
         windowBlock: taskLines.length ? prompt('window', { window: taskLines }) : '',
         sinceBlock: slot.since && slot.since.length ? prompt('since', { since: slot.since }) : ''
       }),
-      { schema: schemas.reply, timeoutSec: vars.taskTimeoutSec }
+      {
+        schema: schemas.reply,
+        timeoutSec: vars.taskTimeoutSec,
+        // Whatever the user attached to the message. These are opaque handles, not bytes:
+        // the script's own input is written into the run journal verbatim, so images travel
+        // by reference and the host fetches them at dispatch.
+        attach: attached
+      }
     )
   } catch (e) {
     const code = e && e.code
@@ -483,6 +494,8 @@ You are answering a message in a chat session, on this bot's behalf. Do the work
 
 {{message.text}}
 
+{{attachedBlock}}
+
 {{sinceBlock}}
 
 ## What you decided this needs
@@ -501,6 +514,10 @@ like a list costs the reader the argument that held them together.
 
 Say what you actually did and what you did not. If you could not finish, say so in the
 conclusion — a hedged answer that reads like a finished one is worse than an admitted gap.
+```
+
+```md prompt=attached
+The user attached {{attachedCount}} image(s) to that message; they are in your context above.
 ```
 
 ```md prompt=boundaries

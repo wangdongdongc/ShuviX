@@ -288,6 +288,20 @@ export function cohortSilence(
   return { reason: ignored ? 'mixed' : 'all_failed' }
 }
 
+/**
+ * 附件句柄 —— 交给脚本原样转交给 `run(..., { attach })` 的不透明值。
+ *
+ * **自包含且不含字节**：引擎那一层没有会话上下文，而脚本的 input 会被原样写进 run
+ * journal —— 让 base64 进 input 等于每条带图消息都在磁盘上留下一份逐 bot 的副本。
+ * `mimeType` 留着是为了让提示词能说出「用户附了一张 png」，它不参与回读。
+ */
+export interface BotAttachmentRef {
+  sessionId: string
+  entryId: string
+  index: number
+  mimeType: string
+}
+
 /** 被压制候选的暂存键：一轮仲裁 = 一条用户消息 = (会话, seq) */
 function suppressedKey(sessionId: string, messageSeq: number): string {
   return `${sessionId}\u0000${messageSeq}`
@@ -750,7 +764,16 @@ class BotService {
         inlineTokens,
         promptText,
         messageId: ids.entryId,
-        messageSeq: ids.seq
+        messageSeq: ids.seq,
+        // **只带描述符，不带字节**：脚本的 input 会被原样写进 run journal（meta 记录带着
+        // 整个 envelope），让 base64 进 input 等于每条带图消息都在磁盘上留下一份逐 bot 的
+        // 副本。真正的字节由 resolveAttachments 在派发那一刻按引用取回
+        attachments: (images ?? []).map((img, i) => ({
+          sessionId,
+          entryId: ids.entryId,
+          index: i,
+          mimeType: img.mimeType
+        }))
       })
     } finally {
       this.leave(sessionId)
@@ -771,6 +794,7 @@ class BotService {
     promptText: string
     messageId: string
     messageSeq: number
+    attachments?: BotAttachmentRef[]
   }): Promise<void> {
     const { sessionId, messageId, messageSeq, promptText } = ctx
     const members = sessionService.getById(sessionId)?.settings?.bots ?? []
@@ -843,7 +867,8 @@ class BotService {
             directed: gate.directed,
             members: gate.cohort,
             known,
-            window
+            window,
+            attachments: ctx.attachments
           }).catch((e) => {
             // 一个成员炸了不该拖垮整个 cohort：Promise.all 一 reject，后面的沉默判定
             // 就永远跑不到，用户看到的是一条消息发出去之后彻底没有下文
@@ -1009,6 +1034,7 @@ class BotService {
     members: string[]
     known: Map<string, ParsedBotFile>
     window: { lines: string[]; after: (entryId: string) => string[] }
+    attachments?: BotAttachmentRef[]
   }): Promise<MemberOutcome> {
     const { bot, sessionId, messageId, messageSeq } = ctx
     // 连续故障之后回落内置门控：用户覆盖的 `shuvix-bot-agents.intent` 让位
@@ -1094,7 +1120,12 @@ class BotService {
               .map((b) => ({ displayName: b.displayName, description: b.description }))
           },
           window: ctx.window.lines,
-          message: { id: messageId, seq: messageSeq, text: ctx.promptText },
+          message: {
+            id: messageId,
+            seq: messageSeq,
+            text: ctx.promptText,
+            ...(ctx.attachments?.length ? { attachments: ctx.attachments } : {})
+          },
           notes: bot.notes ?? ''
         },
         extraApi: this.makeBotApi(ticket)
@@ -1274,6 +1305,58 @@ class BotService {
         return { messageId }
       }
     }
+  }
+
+  /**
+   * 附件句柄 → 派生 agent 上下文里的真实图片消息（引擎的 `resolveAttachments` 接缝）。
+   *
+   * 句柄是**自包含**的（会话 + entry + 第几张）：引擎那一层没有会话上下文，它只是把脚本
+   * 转交的值原样递过来。字节**从会话树回读而不是在内存里另存一份** —— 消息可能在 mailbox
+   * 里排很久才轮到任务段，而树是这些字节唯一的权威副本；内存缓存要么跟着排队时长一起
+   * 泄漏，要么在超时那一刻恰好被清掉。
+   *
+   * 取不到就跳过那一张（少一张图的回答好过没有回答），不抛。
+   */
+  async resolveAttachments(refs: unknown[]): Promise<AgentMessage[]> {
+    const wanted = new Map<string, { sessionId: string; entryId: string; indexes: number[] }>()
+    for (const raw of refs) {
+      if (typeof raw !== 'object' || raw === null) continue
+      const d = raw as { sessionId?: unknown; entryId?: unknown; index?: unknown }
+      if (typeof d.sessionId !== 'string' || !d.sessionId) continue
+      if (typeof d.entryId !== 'string' || !d.entryId) continue
+      if (!Number.isInteger(d.index) || (d.index as number) < 0) continue
+      const key = `${d.sessionId}\u0000${d.entryId}`
+      const slot = wanted.get(key) ?? {
+        sessionId: d.sessionId,
+        entryId: d.entryId,
+        indexes: [] as number[]
+      }
+      slot.indexes.push(d.index as number)
+      wanted.set(key, slot)
+    }
+    if (!wanted.size) return []
+
+    const out: Array<{ type: 'image'; data: string; mimeType: string }> = []
+    for (const { sessionId, entryId, indexes } of wanted.values()) {
+      try {
+        const tree = await getSessionTree(sessionId)
+        const entry = tree ? await tree.getEntry(entryId) : null
+        if (!entry || entry.type !== 'message') continue
+        const content = (entry.message as { content?: unknown }).content
+        if (!Array.isArray(content)) continue
+        const images = content.filter(
+          (c): c is { type: 'image'; data: string; mimeType: string } =>
+            typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'image'
+        )
+        for (const i of indexes) if (images[i]) out.push(images[i])
+      } catch (e) {
+        log.warn(`附件回读失败 session=${sessionId} entry=${entryId}:`, e)
+      }
+    }
+    if (!out.length) return []
+    // 一条 user 消息装全部图片：模型看到的是「用户随这条消息附了这些图」，拆成多条会让
+    // 上下文里凭空多出几轮对话
+    return [{ role: 'user', content: out } as AgentMessage]
   }
 
   // ─── 用户询问（聊天会话没有根运行时，这份生命周期得自己养） ───

@@ -138,6 +138,8 @@ class WorkflowService {
         const profile = agentService.getProfile(ref)
         return profile ? toInProcessAgentType(profile) : null
       },
+      // 附件回读：脚本转交的是自包含的轻量句柄，字节在派发那一刻才从会话树取
+      resolveAttachments: (refs) => botService.resolveAttachments(refs),
       // 基准模型 = 归属会话的当前模型；被派发 agent 的 shuvix-model 声明优先于它
       // （统一创建管线的 spawned 路径本就如此）—— 工作流自己不参与选模型
       resolveRunModel: async ({ sessionId }) =>

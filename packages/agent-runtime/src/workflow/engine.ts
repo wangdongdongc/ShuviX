@@ -28,6 +28,7 @@
  * 刻意不做：ask/notify 脚本原语（需要作答/通知面）、触发链 provenance（chain 恒空数组占位）。
  */
 import { v4 as uuid } from 'uuid'
+import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { SubAgentManager } from '../subagent/manager'
 import type { InProcessAgentType, SubAgentModelConfig } from '../subagent/types'
 import type { RuntimeLogger } from '../types'
@@ -78,6 +79,17 @@ export interface WorkflowEngineDeps {
   listWorkflows: () => WorkflowRegistryEntry[]
   /** 具名 agent 档案解析（运行投影）；未知返回 null */
   resolveAgentProfile: (ref: string) => InProcessAgentType | null
+  /**
+   * `run(..., { attach })` 里那些**不透明句柄**换成派生 agent 上下文里的真实消息。
+   *
+   * 为什么是句柄而不是内容本身：`run` 的入参来自脚本，而脚本的 input 会被原样写进 run
+   * journal（`meta` 记录带着整个 envelope）—— 让 base64 图片进 input，等于每条带图消息
+   * 都在磁盘上留下一份逐 bot 的副本。所以宿主放进 input 的是「第几张图、什么类型」这种
+   * 轻量引用，真正的字节由本函数在派发那一刻取回来。
+   *
+   * 未注入时 `attach` 被忽略（附件是宿主能力，不是每个宿主都有）。
+   */
+  resolveAttachments?: (refs: unknown[]) => Promise<AgentMessage[]> | AgentMessage[]
   /**
    * 本次 run 的基准模型 = 归属会话的当前模型（无会话上下文时宿主自行兜底）；
    * 没有可用模型返回 null（run() 报错）。
@@ -212,6 +224,8 @@ interface RunOpts {
   nudges?: unknown
   /** 本次派发的墙钟上限（秒）；与 run 级 deadline 取先到者 */
   timeoutSec?: unknown
+  /** 宿主给出的不透明附件句柄（见 `resolveAttachments`）——脚本只转交，不解释内容 */
+  attach?: unknown
 }
 
 function errText(err: unknown): string {
@@ -444,6 +458,20 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
                 }, opts.timeoutSec * 1000)
               : undefined
 
+          // 附件在计时之外解析：读盘的耗时不该记到这一步的模型账上，解析失败也不该
+          // 让整个任务段挂掉 —— 少一张图的回答，好过没有回答
+          let contextMessages: AgentMessage[] = []
+          const attach = Array.isArray(opts?.attach) ? opts.attach : []
+          if (attach.length && deps.resolveAttachments) {
+            try {
+              contextMessages = await deps.resolveAttachments(attach)
+            } catch (e) {
+              record({ type: 'log', message: `attach failed: ${errText(e)}` })
+            }
+          } else if (attach.length) {
+            record({ type: 'log', message: 'attach ignored: host has no attachment resolver' })
+          }
+
           record({ type: 'step_start', agent: profile.name, description })
           const t0 = Date.now()
           try {
@@ -459,6 +487,7 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
               description,
               modelConfig,
               parentAbortSignal: stepController.signal,
+              ...(contextMessages.length ? { contextMessages } : {}),
               resultContract: schema
                 ? { schema: schema as Record<string, unknown>, sourceLabel: name, nudges }
                 : undefined
