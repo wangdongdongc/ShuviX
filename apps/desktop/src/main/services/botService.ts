@@ -604,6 +604,16 @@ class BotService {
     { sessionId: string; resolve: (r: InputResponse) => void }
   >()
   /**
+   * 被中止过、且还没有新消息进来的会话 —— 此间一律不受理新询问。
+   *
+   * **不能拿 `blockWrites` 顶替**：那个的语义是「`abortSession` 正在执行期间」，出了
+   * finally 就没了。而工具是在自己的收尾里才发出询问的，它完全可能晚于整个 abortSession
+   * 落定 —— 那条询问于是登记进 pendingInputs 再没人取消，run 一路烧到墙钟上限，用户还会
+   * 在**按下停止之后**看见一张新冒出来的待答卡片。两者差的正是一个 finally。
+   * 对照 `HarnessSession.inputsClosed`（那边置位在 abort、复位在下一次 prompt）。
+   */
+  private readonly inputsClosed = new Set<string>()
+  /**
    * 门控段的健康度：连续故障计数与「已回落」标记。
    *
    * 设计 §6.1：同一个 bot **连续 2 次**破损就回落内置门控 agent。超时与破损共用同一条
@@ -657,8 +667,17 @@ class BotService {
 
   private leave(sessionId: string): void {
     const n = (this.inflight.get(sessionId) ?? 1) - 1
-    if (n > 0) this.inflight.set(sessionId, n)
-    else this.inflight.delete(sessionId)
+    if (n > 0) {
+      this.inflight.set(sessionId, n)
+      return
+    }
+    this.inflight.delete(sessionId)
+    // 这个会话一个 run 都不剩了，还挂着的询问按定义**没有人能消费它的答复** ——
+    // 询问是被工具 await 着的，run 正常跑着就不可能结束；能走到这里只有一种情况：
+    // 那个 run 被单独中止或超时掉了（定局时中止未表态成员、引擎墙钟），而中止路径
+    // 拿不到「哪条询问属于哪张票」——询问经 broker 到达时只带着会话 id。
+    // 按「会话归零」收口，就不必伪造那个归属
+    this.cancelPendingInputs(sessionId)
   }
 
   /**
@@ -677,6 +696,9 @@ class BotService {
    */
   async handleUserMessage(params: AgentPromptParams): Promise<void> {
     const { sessionId, text, images, inlineTokens } = params
+    // 新消息 = 重新开门（对照 HarnessSession.prompt 里的 inputsClosed 复位）。
+    // 中止只该管住那一轮，不是把这条会话的询问永久拒收
+    this.inputsClosed.delete(sessionId)
     this.enter(sessionId)
     try {
       // LLM 看到的是展开后的全文；标记态原文进显示侧车（与网关有根路径同一形状）
@@ -1261,6 +1283,7 @@ class BotService {
   requestUserInput(sessionId: string, request: InputRequest): Promise<InputResponse> {
     if (
       this.blockWrites.has(sessionId) ||
+      this.inputsClosed.has(sessionId) ||
       !chatFrontendRegistry.hasCapability(sessionId, 'userInput')
     ) {
       return Promise.resolve({ kind: 'cancel', reason: 'aborted' })
@@ -1473,7 +1496,9 @@ class BotService {
       }
       // barrier 也要拆：不拆的话它的宽限窗定时器会在会话收尾之后才 fire
       for (const b of this.barriers.get(sessionId) ?? []) b.abort()
-      // 在飞的询问也要收：blockWrites 已经置上，此后新的询问会直接取消
+      // 在飞的询问也要收，并且**关上门**：blockWrites 出了 finally 就没了，而工具可能
+      // 在整个 abortSession 落定之后才发出询问
+      this.inputsClosed.add(sessionId)
       this.cancelPendingInputs(sessionId)
       this.mailbox.abortSession(sessionId)
       workflowService.abortSessionRuns(sessionId)

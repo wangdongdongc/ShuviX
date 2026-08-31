@@ -118,10 +118,16 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 交互响应 ─────────────────────────────────
 
-  respondToInput(_sessionId: string, requestId: string, response: InputResponse): void {
-    // broker 按 requestId 找归属（有根会话 / 聊天会话各自认领）；sessionId 参数仅作日志。
-    // 用它来选参与方等于把前端以为的归属当成真相
-    respondToUserInput(requestId, response)
+  respondToInput(sessionId: string, requestId: string, response: InputResponse): void {
+    // broker 按 requestId 找归属（有根会话 / 聊天会话各自认领）。**不拿 sessionId 去选
+    // 参与方** —— 那等于把前端以为的归属当成真相；它在这里只有一个用途：无人认领时
+    // 把那张卡片从界面上收走。
+    //
+    // 无人认领 = 请求早已被取消（会话停了、run 超时了），而前端那张待答卡还在：它只认
+    // `input_request_resolved`，后端既然不会再发，就在这里补一条。少了它，用户面对的是
+    // 一个点下去毫无反应的按钮，而唯一的线索在主进程日志里
+    if (respondToUserInput(requestId, response)) return
+    chatFrontendRegistry.broadcast({ type: 'input_request_resolved', sessionId, requestId })
   }
 
   // ─── 运行时调整 ────────────────────────────────
