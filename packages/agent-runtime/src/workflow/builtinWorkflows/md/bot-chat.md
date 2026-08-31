@@ -175,6 +175,10 @@ return await turn(async function (slot) {
   const objective = (intent.task && intent.task.objective) || intent.reason
   const boundaries = (intent.task && intent.task.boundaries) || ''
   const taskLines = (input.window || []).slice(-vars.taskWindow)
+  // Handles, not bytes (the script's own input is written to the run journal verbatim).
+  // Nothing in the prompt announces them: whatever the host manages to fetch arrives as a
+  // real user message in context, and a sentence claiming "2 images are above" would be a
+  // lie on exactly the runs where the fetch failed.
   const attached = (input.message && input.message.attachments) || []
 
   let reply = null
@@ -183,11 +187,11 @@ return await turn(async function (slot) {
       input.agents.task,
       prompt('task', {
         objective: objective,
-        attachedBlock: attached.length
-          ? prompt('attached', { attachedCount: String(attached.length) })
-          : '',
         boundariesBlock: boundaries ? prompt('boundaries', { boundaries: boundaries }) : '',
-        notesBlock: notesBlock,
+        // No notes block here on purpose. The gate is a shared builtin and has to be told
+        // what this bot has learned; the task agent **is** the bot, so its own body already
+        // carries the notes. Sending them again costs a second copy per task message — and a
+        // truncated one at that, so the model would see the same facts twice, disagreeing.
         windowBlock: taskLines.length ? prompt('window', { window: taskLines }) : '',
         sinceBlock: slot.since && slot.since.length ? prompt('since', { since: slot.since }) : ''
       }),
@@ -208,6 +212,14 @@ return await turn(async function (slot) {
     // It did the work and then wrote prose instead of filling in the contract. Someone is
     // waiting for an answer, and an answer with no shape beats no answer at all — so the
     // first line becomes the conclusion and the rest becomes the explanation.
+    // A task agent that does not exist is a configuration mistake, not a run that broke:
+    // retrying will never fix it, and "it broke partway through" sends the reader looking at
+    // the wrong thing.
+    if (code === 'unknown_agent') {
+      await say(prompt('taskNoAgent', { agent: String(input.agents.task) }), { error: true })
+      return { gate: 'ok', outcome: 'task-no-agent', queuedMs: slot.queuedMs }
+    }
+
     const prose = ((e && e.finalText) || '').trim()
     if (code === 'next_not_called' && prose) {
       await say(wrapProse(prose), { decision: 'task' })
@@ -486,15 +498,11 @@ You are answering a message in a chat session, on this bot's behalf. Do the work
 
 {{bot.displayName}} — {{bot.description}}
 
-{{notesBlock}}
-
 {{windowBlock}}
 
 ## The message
 
 {{message.text}}
-
-{{attachedBlock}}
 
 {{sinceBlock}}
 
@@ -516,14 +524,15 @@ Say what you actually did and what you did not. If you could not finish, say so 
 conclusion — a hedged answer that reads like a finished one is worse than an admitted gap.
 ```
 
-```md prompt=attached
-The user attached {{attachedCount}} image(s) to that message; they are in your context above.
-```
-
 ```md prompt=boundaries
 ### Stay inside
 
 {{boundaries}}
+```
+
+```md prompt=taskNoAgent
+I was set up to hand that kind of work to `{{agent}}`, and there is no such agent. That is a
+configuration problem on my side — asking again won't help until it is fixed.
 ```
 
 ```md prompt=taskTimeout

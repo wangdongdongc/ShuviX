@@ -87,9 +87,16 @@ export interface WorkflowEngineDeps {
    * 都在磁盘上留下一份逐 bot 的副本。所以宿主放进 input 的是「第几张图、什么类型」这种
    * 轻量引用，真正的字节由本函数在派发那一刻取回来。
    *
+   * 第二参是**本次 run 的归属会话**：句柄来自脚本，而脚本是用户写的 md —— 不把它交给
+   * 宿主，任何工作流都能写一个指向别的会话的句柄，把那边的图片字节拉进本次派发的上下文。
+   * 这不构成越权（会话都是同一个用户的），但「附件」这个词不该悄悄含有跨会话读取的意思。
+   *
    * 未注入时 `attach` 被忽略（附件是宿主能力，不是每个宿主都有）。
    */
-  resolveAttachments?: (refs: unknown[]) => Promise<AgentMessage[]> | AgentMessage[]
+  resolveAttachments?: (
+    refs: unknown[],
+    sessionId: string | undefined
+  ) => Promise<AgentMessage[]> | AgentMessage[]
   /**
    * 本次 run 的基准模型 = 归属会话的当前模型（无会话上下文时宿主自行兜底）；
    * 没有可用模型返回 null（run() 报错）。
@@ -407,9 +414,13 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
         try {
           const profile = deps.resolveAgentProfile(ref.trim())
           if (!profile) {
-            throw new Error(
+            // 带 code：**配置错与「跑到一半挂了」是两回事** —— 前者重试永远不会好，而脚本
+            // 此前只能落进通用 catch，对用户说「中途坏了」，把人指向错误的方向
+            const unknownAgent = new Error(
               `unknown agent "${ref.trim()}" — the ref must name a configured agent definition`
-            )
+            ) as Error & { code?: string }
+            unknownAgent.code = 'unknown_agent'
+            throw unknownAgent
           }
           // opts.tools = 与档案白名单取交集（缺省 = 档案全量）：让一份通用 agent 在这一步
           // 只做窄任务，少给几个工具 = 少一点跑偏与噪声。**不是一道权限闸** —— 档案白名单
@@ -450,6 +461,20 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
           }
           controller.signal.addEventListener('abort', onRunAbort, { once: true })
           if (controller.signal.aborted) stepController.abort()
+          // 附件**在计时开始之前**解析：读盘的耗时不该记到这一步的模型账上。解析失败也不
+          // 让整个任务段挂掉 —— 少一张图的回答，好过没有回答
+          let contextMessages: AgentMessage[] = []
+          const attach = Array.isArray(opts?.attach) ? opts.attach : []
+          if (attach.length && deps.resolveAttachments) {
+            try {
+              contextMessages = await deps.resolveAttachments(attach, sessionId)
+            } catch (e) {
+              record({ type: 'log', message: `attach failed: ${errText(e)}` })
+            }
+          } else if (attach.length) {
+            record({ type: 'log', message: 'attach ignored: host has no attachment resolver' })
+          }
+
           const stepTimeout =
             typeof opts?.timeoutSec === 'number' && opts.timeoutSec > 0
               ? setTimeout(() => {
@@ -457,20 +482,6 @@ export function createWorkflowEngine(deps: WorkflowEngineDeps): WorkflowEngine {
                   stepController.abort()
                 }, opts.timeoutSec * 1000)
               : undefined
-
-          // 附件在计时之外解析：读盘的耗时不该记到这一步的模型账上，解析失败也不该
-          // 让整个任务段挂掉 —— 少一张图的回答，好过没有回答
-          let contextMessages: AgentMessage[] = []
-          const attach = Array.isArray(opts?.attach) ? opts.attach : []
-          if (attach.length && deps.resolveAttachments) {
-            try {
-              contextMessages = await deps.resolveAttachments(attach)
-            } catch (e) {
-              record({ type: 'log', message: `attach failed: ${errText(e)}` })
-            }
-          } else if (attach.length) {
-            record({ type: 'log', message: 'attach ignored: host has no attachment resolver' })
-          }
 
           record({ type: 'step_start', agent: profile.name, description })
           const t0 = Date.now()

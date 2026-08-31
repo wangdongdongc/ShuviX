@@ -80,7 +80,9 @@ export function botReplyToMarkdown(reply: BotReply): string {
   if (points.length) parts.push(points.map((p) => `- ${p}`).join('\n'))
 
   const table = reply.table
-  if (table?.columns?.length) parts.push(tableToMarkdown(table))
+  // 行数也要看：一张只有表头的空表，正是本函数开头那条规矩点名要避免的「只有标题
+  // 没有内容的小节」—— points 与 followups 都遵守了，table 不该例外
+  if (table?.columns?.length && table.rows?.length) parts.push(tableToMarkdown(table))
 
   // status 放在正文之后：headline 本来就该把「出没出事」说清楚，这一行是给 UI chip 和
   // 重读历史的模型用的机器标签，挤在结论前面只会把结论推下去
@@ -117,10 +119,16 @@ export function asBotReply(raw: unknown): BotReply | null {
     const t = table as Record<string, unknown>
     const columns = strings(t.columns)
     if (columns.length) {
+      // **按列数对齐**：短的补空、长的截掉。markdown 投影本来就是这么渲染的（多一格会让
+      // 整张表在 GFM 里错位），两边口径不一致的话，UI 会显示模型看不见的单元格 ——
+      // 那正是本文件开头那条不变量在单元格粒度上的样子
       const rows = Array.isArray(t.rows)
-        ? t.rows.filter(Array.isArray).map((r) => (r as unknown[]).map((c) => String(c ?? '')))
+        ? t.rows
+            .filter(Array.isArray)
+            .map((r) => columns.map((_, i) => String((r as unknown[])[i] ?? '')))
         : []
-      out.table = { columns, rows }
+      out.table = rows.length ? { columns, rows } : undefined
+      if (!out.table) delete out.table
     }
   }
 
@@ -129,6 +137,46 @@ export function asBotReply(raw: unknown): BotReply | null {
   const followups = strings(d.followups)
   if (followups.length) out.followups = followups
 
+  return out
+}
+
+/**
+ * `asBotReply` 的补救版：缺 `headline` 时**从已有内容里提一句当结论**，而不是整条作废。
+ *
+ * 为什么要有这一层：`headline` 是必填项没错，但「有形状、缺一句结论」离「没有回复」差得
+ * 很远 —— 而缺了它,落树那一步会抛,用户拿到的是一句内部错误串(还会成为模型可见的历史)。
+ * 管线脚本在散文降级那里的立场是「无形状的回复胜过没有回复」,这里只是把同一条立场贯彻到
+ * 「无结论」这一格。
+ *
+ * 提法与 `wrapProse` 一致：body 首行 → 第一个要点 → 表头首格。全都没有才真的放弃。
+ */
+export function coerceBotReply(raw: unknown): BotReply | null {
+  const direct = asBotReply(raw)
+  if (direct) return direct
+  if (typeof raw !== 'object' || raw === null) return null
+
+  const salvaged = asBotReply({ ...(raw as Record<string, unknown>), headline: 'x' })
+  if (!salvaged) return null
+
+  const fromBody = (salvaged.body ?? '')
+    .trim()
+    .split('\n')[0]
+    ?.replace(/^#+\s*/, '')
+    .trim()
+  const headline = fromBody || salvaged.points?.[0] || salvaged.table?.columns?.[0] || ''
+  if (!headline) return null
+
+  // 被提上去当结论的那一句不再在原位重复一遍
+  const out: BotReply = { ...salvaged, headline }
+  if (fromBody && salvaged.body) {
+    const rest = salvaged.body.trim().split('\n').slice(1).join('\n').trim()
+    if (rest) out.body = rest
+    else delete out.body
+  } else if (!fromBody && salvaged.points?.[0] === headline) {
+    const rest = salvaged.points.slice(1)
+    if (rest.length) out.points = rest
+    else delete out.points
+  }
   return out
 }
 

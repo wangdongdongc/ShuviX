@@ -43,10 +43,11 @@ import type {
   SuppressedCandidate
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
-import { asBotReply, botReplyToMarkdown } from '@shuvix/chat-protocol/botReply'
+import { botReplyToMarkdown, coerceBotReply } from '@shuvix/chat-protocol/botReply'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { createLogger } from '../logger'
+import { t } from '../i18n'
 import {
   addSessionTreePin,
   drainSessionTreeLock,
@@ -230,7 +231,9 @@ export function asSayContent(raw: unknown): string {
     if (!raw.trim()) throw new Error('say(reply): reply must be a non-empty string')
     return raw
   }
-  const reply = asBotReply(raw)
+  // 补救版而不是严格版：缺一句结论就把整条回答作废,用户拿到的是一句内部错误串 ——
+  // 而那串还会成为模型可见的历史。见 coerceBotReply
+  const reply = coerceBotReply(raw)
   if (reply) {
     const md = botReplyToMarkdown(reply)
     if (md.trim()) return md
@@ -590,7 +593,7 @@ class BotService {
   /** 已经硬路由过的 clarify entry —— 一条 clarify 只回连一次 */
   private readonly clarifyConsumed = new Map<string, Set<string>>()
   /** 禁写位：`abortSession` 期间 `say` 一律硬失败（drain 只排空队列，挡不住新写者） */
-  private readonly blockWrites = new Set<string>()
+  private readonly blockWrites = new Map<string, number>()
   /**
    * 定局那一刻被压制的候选，键是 `<sessionId>\u0000<messageSeq>` —— 等胜者真的开口时
    * 挂到它的署名侧车上（救济 chip 的数据源）。
@@ -885,7 +888,13 @@ class BotService {
       seen.add(gate.consumedClarifyEntryId)
       this.clarifyConsumed.set(sessionId, seen)
     }
-    if (!gate.cohort.length) return
+    if (!gate.cohort.length) {
+      // L0 把所有成员都筛掉了（全是 mention-only 而这条没提及谁）——**这一轮仍然算结束**。
+      // 有根会话那侧的契约是「无论成败恒触发」，两边在「什么时候算一轮」上错开，订阅方
+      // 看到的就是「某类会话的工作流莫名其妙不触发」
+      await this.fireTurnCompleted(sessionId, members)
+      return
+    }
 
     // 窗口只建一次，切好之后发给每个成员 —— 它要读一遍会话树 + 跑一次投影
     const window = await this.buildWindow(sessionId, messageId)
@@ -989,15 +998,16 @@ class BotService {
           ...(orphaned?.length ? { suppressed: orphaned } : {})
         })
       }
+      // 全员收尾之后才算「一轮结束」——聊天会话的一轮是 cohort 整体，不是某个成员。
+      // **在 finally 之前**：放到在飞计数之外的话，`abortSession` 的会师点可以在这次
+      // fire 还在飞时就落定，于是 auto-title 能在一个正在被删除/清空的会话上新起一个 run
+      await this.fireTurnCompleted(sessionId, members)
     } finally {
       this.leave(sessionId)
       this.suppressedBy.delete(suppressedKey(sessionId, messageSeq))
       live.delete(barrier)
       if (!live.size) this.barriers.delete(sessionId)
     }
-
-    // 全员收尾之后才算「一轮结束」——聊天会话的一轮是 cohort 整体，不是某个成员
-    await this.fireTurnCompleted(sessionId, members)
   }
 
   /**
@@ -1084,13 +1094,11 @@ class BotService {
       // 回落是**会话里看得见的行为改变**（设计 §6.1）：这个 bot 从此不再用用户指定的门控
       // agent 了。只落 journal + 设置页徽标的话,用户看到的是「它忽然变得不一样了」而
       // 线索埋在文件系统里。回落是 sticky 的,所以这条一个进程只出一次
-      void this.appendBotMessage(
+      this.appendBotMessage(
         ticket.sessionId,
         { botName, displayName: ticket.displayName },
-        {
-          content: `⚠️ ${ticket.displayName}：判断该不该接话的那一段连续出了 ${health.streak} 次问题，已经换回内置的那一个。要用回自己的配置，去设置里看看它。`
-        }
-      )
+        { content: t('bot.gateFallback', { name: ticket.displayName, count: health.streak }) }
+      ).catch((e) => log.warn(`回落提示落树失败 (${botName}):`, e))
     }
     this.gateHealth.set(botName, health)
   }
@@ -1153,7 +1161,7 @@ class BotService {
       await this.appendBotMessage(
         sessionId,
         { botName: bot.name, displayName: bot.displayName },
-        { content: `⚠️ 管线 "${pipeline.workflow}" 不存在或无法解析，这条消息没有被处理。` }
+        { content: t('bot.pipelineMissing', { pipeline: pipeline.workflow }) }
       )
       // said=true：这个成员确实往会话里放了东西（一条可见失败）。全体沉默的判据是
       // 「会话里什么都没多出来」，不是「脚本调过 say」—— 否则一条已经显形的失败
@@ -1246,9 +1254,7 @@ class BotService {
             displayName: bot.displayName,
             ...(this.takeSuppressed(ticket) ?? {})
           },
-          {
-            content: `⚠️ ${bot.displayName}：这条消息没能处理完 —— ${result.error ?? 'unknown error'}`
-          }
+          { content: t('bot.runFailed', { name: bot.displayName }) }
         )
         ticket.said = true
       }
@@ -1357,7 +1363,7 @@ class BotService {
           throw new Error('call claim() before say() in a multi-bot session')
         }
         const content = asSayContent(raw)
-        const botReply = asBotReply(raw)
+        const botReply = coerceBotReply(raw)
         const o = (typeof opts === 'object' && opts !== null ? opts : {}) as {
           decision?: unknown
           error?: unknown
@@ -1397,12 +1403,19 @@ class BotService {
    *
    * 取不到就跳过那一张（少一张图的回答好过没有回答），不抛。
    */
-  async resolveAttachments(refs: unknown[]): Promise<AgentMessage[]> {
+  async resolveAttachments(refs: unknown[], ownerSessionId?: string): Promise<AgentMessage[]> {
     const wanted = new Map<string, { sessionId: string; entryId: string; indexes: number[] }>()
     for (const raw of refs) {
       if (typeof raw !== 'object' || raw === null) continue
       const d = raw as { sessionId?: unknown; entryId?: unknown; index?: unknown }
       if (typeof d.sessionId !== 'string' || !d.sessionId) continue
+      // **只读本次 run 归属的那条会话**：句柄来自脚本，而脚本是用户写的 md —— 不设这道
+      // 闸，任何工作流都能写一个指向别的会话的句柄，把那边的图片拉进本次上下文。不是越权
+      // （会话都是同一个用户的），但「附件」这个词不该悄悄含有跨会话读取的意思
+      if (ownerSessionId && d.sessionId !== ownerSessionId) {
+        log.warn(`附件句柄指向别的会话，已忽略：${d.sessionId}`)
+        continue
+      }
       if (typeof d.entryId !== 'string' || !d.entryId) continue
       if (!Number.isInteger(d.index) || (d.index as number) < 0) continue
       const key = `${d.sessionId}\u0000${d.entryId}`
@@ -1656,7 +1669,10 @@ class BotService {
   async abortSession(sessionId: string): Promise<void> {
     // 禁写位：drain 只排空**此刻队列里**的写入，挡不住随后拿锁的新写者。管线跑起来之后
     // 那是可达的（脚本还在脱手运行），而三个调用点都拿这个方法当「动树之前的安全前提」
-    this.blockWrites.add(sessionId)
+    // **引用计数而不是 Set**：四个入口（回退 / 清空 / 删除会话 / 网关 abort）可以重叠，
+    // 而 `whenIdle` 把每次中止的驻留窗口从毫秒级 drain 拉到秒级 —— 先完成的那个若直接
+    // 撤掉禁写位，另一个还在等的中止就失去了它赖以成立的前提
+    this.blockWrites.set(sessionId, (this.blockWrites.get(sessionId) ?? 0) + 1)
     try {
       for (const t of [...this.tickets.values()]) {
         if (t.sessionId === sessionId) t.abort.abort()
@@ -1675,7 +1691,9 @@ class BotService {
       await this.whenIdle(sessionId)
       await drainSessionTreeLock(sessionId)
     } finally {
-      this.blockWrites.delete(sessionId)
+      const left = (this.blockWrites.get(sessionId) ?? 1) - 1
+      if (left > 0) this.blockWrites.set(sessionId, left)
+      else this.blockWrites.delete(sessionId)
     }
   }
 

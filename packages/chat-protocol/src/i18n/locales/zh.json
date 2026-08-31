@@ -1094,5 +1094,10 @@
     "askSshDetail": "SSH 凭证",
     "doneBody": "已完成",
     "failedBody": "运行出错：{{error}}"
+  },
+  "bot": {
+    "pipelineMissing": "⚠️ 管线 \"{{pipeline}}\" 不存在或无法解析，这条消息没有被处理。",
+    "runFailed": "⚠️ {{name}}：这条消息没能处理完。",
+    "gateFallback": "⚠️ {{name}}：判断该不该接话的那一段连续出了 {{count}} 次问题，已经换回内置的那一个。要用回自己的配置，去设置里看看它。"
   }
 }

@@ -1094,5 +1094,10 @@
     "askSshDetail": "SSH credentials",
     "doneBody": "Finished",
     "failedBody": "Run failed: {{error}}"
+  },
+  "bot": {
+    "pipelineMissing": "⚠️ Pipeline \"{{pipeline}}\" is missing or could not be parsed — this message was not handled.",
+    "runFailed": "⚠️ {{name}}: I couldn't finish handling that one.",
+    "gateFallback": "⚠️ {{name}}: the part of me that decides whether to answer failed {{count}} times in a row, so I switched back to the built-in one. Check its settings if you want your own back."
   }
 }

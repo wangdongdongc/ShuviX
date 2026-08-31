@@ -208,11 +208,19 @@ describe('asSayContent —— say 的正文投影', () => {
     expect(asSayContent(raw)).toBe(expected)
   })
 
-  it('只有 body 没有 headline —— M8′ 收窄之后不再放行', () => {
-    // BotReply 的 headline 是必填的「结论先行」。没有结论的散文该走脚本里那条降级
-    // （`{headline: 首行, body: 余下}`），而不是让宿主替它把无形状的一坨认成合法回复 ——
-    // 宿主一放行，脚本那条降级就永远不会被写出来
-    expect(() => asSayContent({ body: '正文' })).toThrow(/non-empty string or carry a headline/)
+  it.each([
+    ['只有 body', { body: '第一句\n\n余下' }, '第一句\n\n余下'],
+    ['只有 points', { points: ['要点一', '要点二'] }, '要点一\n\n- 要点二'],
+    ['headline 是纯空白但别处有内容', { headline: '  ', body: '完整分析' }, '完整分析']
+  ])('缺结论时从已有内容里提一句当结论：%s', (_n, raw, expected) => {
+    // headline 确实是必填项，但「有形状、缺一句结论」离「没有回复」差得很远 —— 严格作废
+    // 会让 say 抛在脚本的 try 之外，用户拿到的是一句内部错误串，而那串还会成为模型可见的
+    // 会话历史。管线脚本在散文降级处的立场（「无形状的回复胜过没有回复」）在这里同样成立
+    expect(asSayContent(raw)).toBe(expected)
+  })
+
+  it('一个可用字段都没有时才真的拒绝', () => {
+    expect(() => asSayContent({ status: 'ok' })).toThrow(/non-empty string or carry a headline/)
   })
 
   it.each([[{}], [{ headline: 1 }], [null], [42], [[]], [{ body: undefined }]])(
