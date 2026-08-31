@@ -662,6 +662,10 @@ app.whenReady().then(async () => {
 
 // 应用退出前清理
 app.on('before-quit', () => {
+  // 攒着的笔记再不写就永远没有下一次了。**刻意不 await** —— before-quit 不等异步，
+  // 强行等只会把退出拖住而并不保证写完；真正的兜底是检查点只在成功后前进，
+  // 这一批材料下次启动照样看得见
+  botService.flushNotes().catch(() => {})
   destroyAllTabs()
   killAllBgTasks()
   mcpService.disconnectAll().catch(() => {})

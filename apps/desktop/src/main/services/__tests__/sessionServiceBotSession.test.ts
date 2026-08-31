@@ -56,6 +56,7 @@ vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../botService', () => ({
   botService: {
     abortSession: vi.fn(async () => {}),
+    forgetNotesSession: vi.fn(),
     seedGreetings: mocks.seedGreetings,
     isActive: vi.fn(() => false)
   }

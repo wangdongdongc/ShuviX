@@ -66,9 +66,35 @@ it into one string that is either whole or empty.
 
 ```js workflow
 if (input.occasion === 'notes') {
-  // M9′: the notes occasion. The notes stage edits the bot's own markdown in place —
-  // nothing comes back here, and a failure changes nothing.
-  return { outcome: 'notes-skipped' }
+  // The notes occasion. Nobody is waiting: this runs off the critical path, long after the
+  // bot answered. The stage edits the bot's own markdown **in place with `read`/`edit`** —
+  // nothing comes back through here, and the script never touches the notes text itself.
+  //
+  // No result contract on purpose: the work *is* the edit. A schema would only invite the
+  // model to describe what it changed instead of changing it, and there is no reader for
+  // that description.
+  try {
+    const sinceLines = input.since || []
+    await run(
+      input.agents.notes,
+      prompt('notesTask', {
+        file: input.bot.file,
+        sinceBlock: sinceLines.length ? prompt('since', { since: sinceLines }) : ''
+      }),
+      {
+        // Same reason the gate narrows to nothing: this is a shared builtin, and a user's
+        // override of it should not be able to grow a tool list behind the pipeline's back.
+        tools: ['read', 'edit'],
+        timeoutSec: vars.notesTimeoutSec
+      }
+    )
+  } catch (e) {
+    // A failed notes pass changes nothing and is nobody's emergency — the next one sees the
+    // same material, because the host only advances its checkpoints on success.
+    log('notes failed: ' + String((e && e.code) || (e && e.message) || e))
+    return { outcome: 'notes-failed' }
+  }
+  return { outcome: 'notes' }
 }
 
 // ── The material. Prompts are prose and live in the blocks below; the script only picks.
@@ -434,6 +460,18 @@ it.
 ## What this bot remembers
 
 {{notes}}
+```
+
+```md prompt=notesTask
+The conversations below have finished. Bring this bot's own markdown up to date.
+
+The file is at `{{file}}`. Read it, then edit it in place — surgically, only the lines that
+change. Everything you need to know about what belongs there is in your own instructions.
+
+Changing nothing is a normal outcome. If these conversations taught nothing that will still
+matter next week, read the file, decide that, and stop.
+
+{{sinceBlock}}
 ```
 
 ```md prompt=others

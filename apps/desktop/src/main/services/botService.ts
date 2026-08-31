@@ -61,6 +61,7 @@ import { appendBotDecision, botRunsDir, pruneBotRuns, type BotDecisionKind } fro
 import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
 import { CohortBarrier, type ClaimIntent, type ClaimVerdict } from './bot/botArbiter'
 import { BotMailbox, mailboxKey, type QueueItem, type TurnSlot } from './bot/botMailbox'
+import { BotNotesScheduler } from './bot/botNotesScheduler'
 import { electronEventSink } from './agentRuntimeAdapters'
 import { registerUserInputParticipant } from './userInputBroker'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
@@ -646,6 +647,13 @@ class BotService {
    * 拿它清零会造成「回落 → 成功 → 切回 → 再坏两次」的振荡。sticky 到进程重启为止。
    */
   private readonly gateHealth = new Map<string, { streak: number; degraded?: string }>()
+  /**
+   * 笔记归纳的节流调度（设计 §8）。真正的归纳由 `runNotes` 派发 —— 调度器只管
+   * 「什么时候值得跑、给它看哪些新材料、跑完记到哪儿」
+   */
+  private readonly notes = new BotNotesScheduler({
+    runNotes: (botName, dirty) => this.runNotesPass(botName, dirty)
+  })
   private readonly mailbox = new BotMailbox({
     onChange: (key, snapshot) => {
       const [sessionId, botName] = key.split('\u0000')
@@ -1221,7 +1229,9 @@ class BotService {
         // 只给 mode 不给 key 静默无效，而显式传 mode 等于替用户的管线 md 做主
       })
 
-      const output = result.output as { outcome?: string; gate?: string } | undefined
+      const output = result.output as
+        | { outcome?: string; gate?: string; memorable?: boolean }
+        | undefined
       if (!result.started) {
         decide(result.reason === 'invalid-input' ? 'pipeline_invalid_input' : 'pipeline_error', {
           reason: result.reason,
@@ -1229,6 +1239,16 @@ class BotService {
         })
       } else {
         this.noteGateHealth(bot.name, output?.gate, ticket)
+        // 值得归纳的事：干过一次活，或者意图段觉得这条带着可长期沿用的东西。
+        // 关掉笔记的 bot 连账都不记 —— 攒一堆永远不会被读的计数没有意义
+        const worthNoting =
+          bot.notesEnabled &&
+          (output?.memorable === true || String(output?.outcome ?? '').startsWith('task'))
+        if (worthNoting) {
+          this.notes.note(bot.name, sessionId)
+          // 不 await：归纳是离线的，把它挂在这一轮的收尾上等于让用户等笔记
+          void this.notes.maybeRun(bot.name)
+        }
         decide('run_end', {
           ok: result.ok,
           outcome: output?.outcome,
@@ -1450,6 +1470,91 @@ class BotService {
     // 一条 user 消息装全部图片：模型看到的是「用户随这条消息附了这些图」，拆成多条会让
     // 上下文里凭空多出几轮对话
     return [{ role: 'user', content: out } as AgentMessage]
+  }
+
+  /**
+   * 跑一次笔记归纳。
+   *
+   * **归属会话取最近一个有增量的那条**：笔记本身是跨会话的（per-bot），但派发出去的
+   * agent 要写 `~/.shuvix/bots/<bot>.md` —— 那是工作区之外的路径，会撞 ask-on-write 的
+   * 询问卡（设计 §8.2 明确接受这个代价）。而询问卡必须落在一条用户看得见的会话上：
+   * 不给 sessionId 的话，M7′ 那条路由找不到参与方，每次笔记写入都会被直接拒绝。
+   *
+   * **分道键是 `bot:<name>:notes`**：同一个 bot 的笔记同一时刻只能有一处在改，而这与
+   * 会话无关 —— 它改的是那一份文件。`queue` 而不是 `skip`：排队时被更新的调用顶掉是对的
+   * （检查点只在成功后前进，所以后来者看到的材料是前者的超集），丢掉则是真的丢。
+   */
+  private async runNotesPass(
+    botName: string,
+    dirty: Array<{ sessionId: string; sinceEntryId: string }>
+  ): Promise<boolean> {
+    const bot = this.getBot(botName)
+    if (!bot || !bot.notesEnabled) return false
+    const basePath = this.listAll().find((b) => b.file.name === botName)?.basePath ?? ''
+    if (!basePath) return false
+
+    // 各会话的增量窗 + 归纳到哪一条的新检查点。一并算出来，免得成功之后再读一遍树
+    const since: string[] = []
+    const checkpoints: Record<string, string> = {}
+    let owner = ''
+    for (const { sessionId, sinceEntryId } of dirty) {
+      const msgs = await messageService.listBySession(sessionId)
+      const at = sinceEntryId ? msgs.findIndex((m) => m.id === sinceEntryId) : -1
+      const fresh = msgs.slice(at + 1).filter((m) => m.role === 'user' || m.role === 'assistant')
+      if (!fresh.length) continue
+      owner = sessionId
+      checkpoints[sessionId] = msgs[msgs.length - 1]?.id ?? ''
+      const title = sessionService.getById(sessionId)?.title ?? sessionId
+      since.push(`--- ${title} ---`)
+      for (const m of fresh) {
+        const who =
+          m.role === 'user'
+            ? 'User'
+            : ((m.metadata as { sender?: { displayName?: string } } | null)?.sender?.displayName ??
+              'Assistant')
+        const text =
+          m.role === 'user' ? resolveTokensForAgent(m.content, m.metadata?.inlineTokens) : m.content
+        since.push(`${who}: ${String(text ?? '').trim()}`)
+      }
+    }
+    if (!since.length) return false
+
+    const pipeline = resolvePipeline(bot)
+    if (!pipeline.exists) return false
+    const result = await workflowService.invoke({
+      workflow: pipeline.workflow,
+      sessionId: owner,
+      label: `notes:${botName}`,
+      reentry: { mode: 'queue', key: `bot:${botName}:notes` },
+      input: {
+        ...bot.pipelineInput,
+        occasion: 'notes',
+        bot: {
+          name: bot.name,
+          displayName: bot.displayName,
+          description: bot.description,
+          file: basePath
+        },
+        agents: pipeline.agents,
+        session: { id: owner, arbitrated: false, directed: false, members: [] },
+        since,
+        notes: bot.notes ?? ''
+      }
+    })
+    const ok = result.started && result.ok === true
+    if (ok) this.notes.advance(botName, checkpoints)
+    else log.warn(`笔记归纳未完成 (${botName}): ${result.reason ?? result.error ?? 'unknown'}`)
+    return ok
+  }
+
+  /** 退出前把攒着的笔记写掉（再不写就永远没有下一次了） */
+  async flushNotes(): Promise<void> {
+    await this.notes.flushAll()
+  }
+
+  /** 会话被删：连它的笔记检查点一起忘掉 */
+  forgetNotesSession(sessionId: string): void {
+    this.notes.forgetSession(sessionId)
   }
 
   // ─── 用户询问（聊天会话没有根运行时，这份生命周期得自己养） ───

@@ -34,6 +34,17 @@ const BOT_CHAT = (): ParsedWorkflowFile =>
 const NOTES = '用户偏好简答；项目根在 ~/work/api。'
 
 /** 内置门控段：无工具，靠 next 交结构化结果 */
+/** 笔记段：共享内置件，声明的工具比脚本给的宽 —— 用来验证脚本确实把它收窄了 */
+const NOTES_AGENT: InProcessAgentType = {
+  name: 'bot-notes',
+  displayName: 'bot-notes',
+  description: 'notes stage',
+  tools: ['read', 'edit', 'bash'],
+  systemPrompt: 'notes stage',
+  instructionFiles: [],
+  projectAwareness: false
+}
+
 const INTENT: InProcessAgentType = {
   name: 'bot-intent',
   displayName: 'Intent',
@@ -118,6 +129,8 @@ interface BotChatOpts {
   slot?: Partial<{ superseded: string[]; selfReplied: boolean; queuedMs: number; since: string[] }>
   /** 任务段 ref 解析不出来（配置错） */
   taskAgentMissing?: boolean
+  /** 笔记段 ref 解析不出来 */
+  notesAgentMissing?: boolean
   /** 宿主没有附件回读能力 */
   noAttachmentResolver?: boolean
   /** say 抛出（宿主的仲裁强制点挡下） */
@@ -174,6 +187,7 @@ function makeBotChat(opts: BotChatOpts = {}): {
     listWorkflows: () => entries,
     resolveAgentProfile: (ref) => {
       if (ref === 'bot-intent') return INTENT
+      if (ref === 'bot-notes') return opts.notesAgentMissing ? null : NOTES_AGENT
       if (ref === 'bot:scout') return opts.taskAgentMissing ? null : SELF
       return null
     },
@@ -258,13 +272,34 @@ const outcomeOf = (res: { output?: unknown }): string =>
 // ────────────────────────────── OC：场合分流 ──────────────────────────────
 
 describe('OC —— 场合分流', () => {
-  it("OC-1 occasion:'notes' 立刻返回 notes-skipped：零派发、零 say、零 claim（M9′ 之前它什么都不做）", async () => {
+  it("OC-1 occasion:'notes' 只派发笔记段：零 say、零 claim、不碰仲裁", async () => {
+    // 笔记是离线的：没人在等，也不该往会话里说任何话。它与消息场合共用一份 md，
+    // 但两条路径除了 input 之外没有任何交集
     const h = makeBotChat()
-    const res = await h.invoke({ occasion: 'notes' })
-    expect(outcomeOf(res)).toBe('notes-skipped')
-    expect(h.runs).toHaveLength(0)
+    const res = await h.invoke({ occasion: 'notes', since: ['User: 以后用 pnpm'] })
+    expect(outcomeOf(res)).toBe('notes')
+    expect(h.runs).toHaveLength(1)
+    expect(h.runs[0].agentType.name).toBe('bot-notes')
     expect(h.says).toHaveLength(0)
     expect(h.claims).toHaveLength(0)
+  })
+
+  it('OC-1b 笔记段拿到的工具恰为 read/edit —— 用户覆盖它也长不出别的', async () => {
+    // 与门控段那行 `tools: []` 同一条理由：这是共享内置件，一份用户覆盖不该能在管线
+    // 背后给自己添工具
+    const h = makeBotChat()
+    await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    // 声明了三个，脚本只给两个 —— 交集就是脚本说了算的那两个
+    expect(h.runs[0].agentType.tools).toEqual(['read', 'edit'])
+  })
+
+  it('OC-1c 笔记段派不出去时不出声、不抛 —— 归纳失败是它自己的事', async () => {
+    // 检查点只在成功后前进，所以失败的这一轮下次会看到同样的材料，不需要补偿动作。
+    // 用「解析不出这个 agent」制造失败：它是唯一一种不依赖计时器的确定性 run 失败
+    const h = makeBotChat({ notesAgentMissing: true })
+    const res = await h.invoke({ occasion: 'notes', since: ['User: x'] })
+    expect(outcomeOf(res)).toBe('notes-failed')
+    expect(h.says).toHaveLength(0)
   })
 
   it.each(['occasion', 'bot', 'agents', 'session'])(
