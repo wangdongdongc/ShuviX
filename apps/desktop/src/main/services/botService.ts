@@ -22,7 +22,7 @@
  */
 import { existsSync, readdirSync, readFileSync, mkdirSync, renameSync, unlinkSync } from 'fs'
 import { createHash } from 'crypto'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { shell } from 'electron'
 import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
@@ -309,6 +309,26 @@ export interface BotAttachmentRef {
 }
 
 /**
+ * 归纳材料的行数上限。`bot-chat.md` 的 `notesWindow` 是脚本侧的同一把尺，这里是宿主侧的
+ * 那一把 —— 两处都要，因为这份 input 既进提示词也进 run journal。
+ */
+const NOTES_MAX_LINES = 200
+
+/**
+ * 这一轮值得记进笔记吗。
+ *
+ * `task` 前缀不能一刀切：`task-failed` / `task-timeout` / `task-no-agent` 都是**没干成**，
+ * 而 `task-no-agent` 更是配置错（脚本自己的注释就写着重试永远不会好）。让它们把计数顶到
+ * 门槛，换来的是一次没有材料价值的归纳 —— 代价是一整份笔记进上下文外加一张询问卡。
+ */
+export function isNoteWorthy(
+  output: { outcome?: string; memorable?: boolean } | undefined
+): boolean {
+  if (output?.memorable === true) return true
+  return output?.outcome === 'task' || output?.outcome === 'task-unshaped'
+}
+
+/**
  * 一份 md 原文的版本指纹。
  *
  * 用内容哈希而不是 mtime：笔记段的写入与用户的保存可以落在同一秒里，而 mtime 的分辨率
@@ -470,19 +490,26 @@ class BotService {
     originalName: string,
     text: string,
     revision?: string
-  ): { success: boolean; error?: string; conflict?: { current: string } } {
+  ): { success: boolean; error?: string; revision?: string; conflict?: { current: string } } {
     const bots = this.listAll()
     const target = bots.find((b) => b.file.name === originalName)
     if (!target) return { success: false, error: `Bot "${originalName}" not found` }
 
-    if (revision) {
-      const onDisk = this.readBotFile(originalName)
-      const now = onDisk ? revisionOf(onDisk.raw) : ''
-      if (now !== revision) {
+    if (revision !== undefined) {
+      // **按路径读而不是按名字查**：笔记段拿的是普通 `edit`，改得动 frontmatter 的
+      // `name:` 那一行 —— 按旧名字查就查不到，于是最需要三方合并的那一次反而拿不到
+      // 盘上的内容。空串同理算「给了一个对不上的指纹」，不是「没给」
+      let onDisk = ''
+      try {
+        onDisk = readFileSync(target.basePath, 'utf-8')
+      } catch {
+        /* 文件在这一刻消失了：当作对不上，交给 UI */
+      }
+      if (revisionOf(onDisk) !== revision) {
         return {
           success: false,
           error: 'This bot changed on disk since you opened it — most likely its own notes pass.',
-          conflict: { current: onDisk?.raw ?? '' }
+          conflict: { current: onDisk }
         }
       }
     }
@@ -500,7 +527,15 @@ class BotService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     if (name !== originalName) this.migrateRename(originalName, name)
-    return { success: true }
+    // 半途崩溃的补做：文件名不随改名变，所以「文件叫 scout.md、里面写着 ranger」正是
+    // 一次没走完的迁移。此时若还有会话引用着 scout，而 scout 已经不是任何一个活着的
+    // bot —— 那就是它，补迁一次。幂等，正常保存时这一步什么都不做
+    const stale = basename(target.basePath).replace(/\.md$/i, '')
+    if (stale !== name && !this.listAll().some((b) => b.file.name === stale)) {
+      this.migrateRename(stale, name)
+    }
+    // 成功回新指纹：UI 不必为了「再保存一次」而重新 getSource，否则第二次必然误报冲突
+    return { success: true, revision: revisionOf(text) }
   }
 
   /**
@@ -519,16 +554,24 @@ class BotService {
    */
   private migrateRename(oldName: string, newName: string): void {
     // ① 会话成员名单
+    // **逐会话独立 try**：一个会话写失败不该让它后面的会话全部留在旧名上 ——
+    // 那会让「迁移了一半」这个本就难查的状态再多出一种形态
+    let sessions: ReturnType<typeof sessionService.list> = []
     try {
-      for (const session of sessionService.list()) {
-        const bots = session.settings?.bots
-        if (!bots?.includes(oldName)) continue
+      sessions = sessionService.list()
+    } catch (e) {
+      log.warn(`改名迁移：会话列表读取失败 ${oldName} → ${newName}:`, e)
+    }
+    for (const session of sessions) {
+      const bots = session.settings?.bots
+      if (!bots?.includes(oldName)) continue
+      try {
         // 已经有新名字就只是去掉旧的（用户可能先手动加过新名字）
         const next = bots.map((b) => (b === oldName ? newName : b))
         sessionService.rewriteBots(session.id, [...new Set(next)])
+      } catch (e) {
+        log.warn(`改名迁移：会话 ${session.id} 名单改写失败:`, e)
       }
-    } catch (e) {
-      log.warn(`改名迁移：会话名单改写失败 ${oldName} → ${newName}:`, e)
     }
     // ② 决策记录与 run journal 的目录
     try {
@@ -1323,9 +1366,7 @@ class BotService {
         this.noteGateHealth(bot.name, output?.gate, ticket)
         // 值得归纳的事：干过一次活，或者意图段觉得这条带着可长期沿用的东西。
         // 关掉笔记的 bot 连账都不记 —— 攒一堆永远不会被读的计数没有意义
-        const worthNoting =
-          bot.notesEnabled &&
-          (output?.memorable === true || String(output?.outcome ?? '').startsWith('task'))
+        const worthNoting = bot.notesEnabled && isNoteWorthy(output)
         if (worthNoting) {
           this.notes.note(bot.name, sessionId)
           // 不 await：归纳是离线的，把它挂在这一轮的收尾上等于让用户等笔记
@@ -1575,19 +1616,27 @@ class BotService {
     const basePath = this.listAll().find((b) => b.file.name === botName)?.basePath ?? ''
     if (!basePath) return false
 
+    // 便宜的检查排在读树之前：管线名写坏的 bot 否则每条消息都要白读一遍所有会话树
+    const pipeline = resolvePipeline(bot)
+    if (!pipeline.exists) return false
+
     // 各会话的增量窗 + 归纳到哪一条的新检查点。一并算出来，免得成功之后再读一遍树
-    const since: string[] = []
-    const checkpoints: Record<string, string> = {}
-    let owner = ''
+    const blocks: Array<{ sessionId: string; at: number; lines: string[]; last: string }> = []
     for (const { sessionId, sinceEntryId } of dirty) {
       const msgs = await messageService.listBySession(sessionId)
-      const at = sinceEntryId ? msgs.findIndex((m) => m.id === sinceEntryId) : -1
-      const fresh = msgs.slice(at + 1).filter((m) => m.role === 'user' || m.role === 'assistant')
+      let from = 0
+      if (sinceEntryId) {
+        const at = msgs.findIndex((m) => m.id === sinceEntryId)
+        // **找不到就跳过这个会话**，而不是从头再来一遍。检查点可能因为一次回退而不在
+        // 当前分支的投影里了 —— 那时把整段历史当成新材料重灌，代价是成倍的
+        if (at < 0) continue
+        from = at + 1
+      }
+      const fresh = msgs.slice(from).filter((m) => m.role === 'user' || m.role === 'assistant')
       if (!fresh.length) continue
-      owner = sessionId
-      checkpoints[sessionId] = msgs[msgs.length - 1]?.id ?? ''
+      const lines: string[] = []
       const title = sessionService.getById(sessionId)?.title ?? sessionId
-      since.push(`--- ${title} ---`)
+      lines.push(`--- ${title} ---`)
       for (const m of fresh) {
         const who =
           m.role === 'user'
@@ -1596,13 +1645,26 @@ class BotService {
               'Assistant')
         const text =
           m.role === 'user' ? resolveTokensForAgent(m.content, m.metadata?.inlineTokens) : m.content
-        since.push(`${who}: ${String(text ?? '').trim()}`)
+        lines.push(`${who}: ${String(text ?? '').trim()}`)
       }
+      blocks.push({
+        sessionId,
+        at: fresh[fresh.length - 1]?.createdAt ?? 0,
+        lines,
+        last: msgs[msgs.length - 1]?.id ?? ''
+      })
     }
-    if (!since.length) return false
+    if (!blocks.length) return false
 
-    const pipeline = resolvePipeline(bot)
-    if (!pipeline.exists) return false
+    // 归属会话 = **最近有增量的那条**（询问卡落在用户刚才还在看的地方）。dirty 的顺序是
+    // 「这个会话第一次被记账」的插入序，拿它当「最近」会让卡片挂到一条早就冷掉的会话上
+    const owner = [...blocks].sort((a, b) => b.at - a.at)[0].sessionId
+    const checkpoints: Record<string, string> = {}
+    for (const b of blocks) checkpoints[b.sessionId] = b.last
+    // **有上限**：`notesWindow` 声明了就得用上。不设限的话，一个 bot 在三个繁忙会话里
+    // 攒半小时就能把上千行灌进笔记段的提示词 —— 而这份 input 还会被原样写进 run journal
+    const since = blocks.flatMap((b) => b.lines).slice(-NOTES_MAX_LINES)
+    if (!since.length) return false
     const result = await workflowService.invoke({
       workflow: pipeline.workflow,
       sessionId: owner,
@@ -1623,15 +1685,14 @@ class BotService {
         notes: bot.notes ?? ''
       }
     })
-    const ok = result.started && result.ok === true
+    // **run 跑完 ≠ 归纳成功**：脚本 catch 掉任何错误之后是正常返回的，于是引擎记 ok:true。
+    // 只认它自报的 outcome —— 少了这一刀，一次失败（甚至用户按停止）都会推进检查点，
+    // 把这批材料永远埋掉，而那恰恰是「检查点只在成功后前进」要防的唯一一件事
+    const output = result.output as { outcome?: string } | undefined
+    const ok = result.started && result.ok === true && output?.outcome === 'notes'
     if (ok) this.notes.advance(botName, checkpoints)
     else log.warn(`笔记归纳未完成 (${botName}): ${result.reason ?? result.error ?? 'unknown'}`)
     return ok
-  }
-
-  /** 退出前把攒着的笔记写掉（再不写就永远没有下一次了） */
-  async flushNotes(): Promise<void> {
-    await this.notes.flushAll()
   }
 
   /** 会话被删：连它的笔记检查点一起忘掉 */

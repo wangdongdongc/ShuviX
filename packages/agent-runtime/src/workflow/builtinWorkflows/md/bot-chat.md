@@ -74,12 +74,14 @@ if (input.occasion === 'notes') {
   // model to describe what it changed instead of changing it, and there is no reader for
   // that description.
   try {
-    const sinceLines = input.since || []
+    // `notesWindow` is the ceiling on how much new material one pass reads. Without it a bot
+    // busy in three sessions for half an hour ships a thousand lines into this prompt.
+    const sinceLines = (input.since || []).slice(-vars.notesWindow)
     await run(
       input.agents.notes,
       prompt('notesTask', {
         file: input.bot.file,
-        sinceBlock: sinceLines.length ? prompt('since', { since: sinceLines }) : ''
+        sinceBlock: sinceLines.length ? prompt('sinceNotes', { since: sinceLines }) : ''
       }),
       {
         // Same reason the gate narrows to nothing: this is a shared builtin, and a user's
@@ -89,8 +91,12 @@ if (input.occasion === 'notes') {
       }
     )
   } catch (e) {
-    // A failed notes pass changes nothing and is nobody's emergency — the next one sees the
-    // same material, because the host only advances its checkpoints on success.
+    // Being torn down is not a failed pass — it is no pass at all. Rethrow so the run ends as
+    // aborted (the same thing `recheck()` does, and for the same reason): swallowing it would
+    // report a tidy `notes-failed` for something the user chose.
+    if (e && e.code === 'step_aborted') throw e
+    // A failed pass changes nothing and is nobody's emergency — the next one sees the same
+    // material, because the host advances its checkpoints only on the `notes` outcome.
     log('notes failed: ' + String((e && e.code) || (e && e.message) || e))
     return { outcome: 'notes-failed' }
   }
@@ -162,7 +168,10 @@ if (!verdict.won) {
   // endings, and the run journal is where you go to tell them apart. Collapsing both into
   // `yielded` is the same mistake as writing a slow claim down as a silent one.
   const ending = verdict.reason === 'ignored' ? 'ignored' : 'yielded'
-  return { gate: 'ok', outcome: ending, to: verdict.winner }
+  // `memorable` travels even when this bot does not answer. A bot that heard the preference
+  // clearly and handed the turn to a better-placed peer still learned it — tying what gets
+  // remembered to who won the message would teach exactly one bot per conversation.
+  return { gate: 'ok', outcome: ending, to: verdict.winner, memorable: !!intent.memorable }
 }
 
 // 4 ── Anything answerable in one line is answered here — don't open a task for it.
@@ -508,6 +517,12 @@ the meantime. Decide whether the queued request still needs doing.
 {{message.text}}
 
 {{sinceBlock}}
+```
+
+```md prompt=sinceNotes
+## The conversations
+
+{{since}}
 ```
 
 ```md prompt=since

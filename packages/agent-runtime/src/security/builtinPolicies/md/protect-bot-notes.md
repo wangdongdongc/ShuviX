@@ -37,8 +37,10 @@ to put in front of you.
 - It gates the file tools only. An agent that can run commands can write files
   without passing through here — the real backstop is the audit trail and the
   fact that these files are visible in Settings.
-- It says nothing about reading. Bot files are prompts; the bot's own text is
-  already in its context.
+- It says nothing about reading — but reading these files is not free either:
+  the bots directory is outside the workspace, so `ask-on-read` covers it. A
+  notes pass therefore asks twice with auto-allow off (read, then write), and
+  once with it on: auto-allow can waive the read, never this.
 
 **To adjust**: create an override copy and edit it. Narrowing it to skip the
 notes stage (`subject.profile == 'bot-notes'`) is a reasonable change once you

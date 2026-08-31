@@ -194,7 +194,10 @@ export class BotNotesScheduler {
 
   /** 仅供测试与设置页：这个 bot 此刻攒了多少、上次什么时候跑的 */
   peek(botName: string): { pending: number; lastRunAt: number; sessions: number } {
-    const st = this.of(botName)
+    this.load()
+    // **不走 `of()`**：那个会为未知名字种一条空状态，于是「看一眼」也能让状态文件长出
+    // 一个从没归纳过的 bot
+    const st = this.state[botName] ?? emptyState()
     return {
       pending: st.pending,
       lastRunAt: st.lastRunAt,

@@ -659,9 +659,7 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
-        revision?: string
-      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
+      }) => Promise<{ success: boolean; error?: string }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
@@ -691,9 +689,15 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
+        /** getSource 那一刻的指纹;对不上即冲突,回传 conflict.current 供 UI 解决 */
         revision?: string
-      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
+      }) => Promise<{
+        success: boolean
+        error?: string
+        /** 成功时回新指纹 —— 连续保存两次不该被误判成冲突 */
+        revision?: string
+        conflict?: { current: string }
+      }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
@@ -718,9 +722,7 @@ declare global {
       save: (params: {
         originalName: string
         text: string
-        /** getSource 那一刻的指纹；对不上即冲突，回传 conflict.current 供 UI 解决 */
-        revision?: string
-      }) => Promise<{ success: boolean; error?: string; conflict?: { current: string } }>
+      }) => Promise<{ success: boolean; error?: string }>
       create: (params: {
         text: string
       }) => Promise<{ success: boolean; name?: string; error?: string }>
