@@ -8,6 +8,7 @@ import type { AgentSession } from '../../services/agentSession'
 import '../../tools/allTools'
 import { getBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
+import { electronEventSink } from '../../services/agentRuntimeAdapters'
 import {
   appendActiveToolsChange,
   appendModelChange,
@@ -190,6 +191,7 @@ export class DefaultChatGateway implements ChatGateway {
     await sessionService.invalidateAgent(sessionId)
     await botService.abortSession(sessionId)
     messageService.clear(sessionId)
+    this.notifyBotSessionReloaded(sessionId)
   }
 
   /**
@@ -206,6 +208,18 @@ export class DefaultChatGateway implements ChatGateway {
     await sessionService.invalidateAgent(sessionId)
     await botService.abortSession(sessionId)
     await messageService.applyRollback(sessionId, target.targetId)
+    this.notifyBotSessionReloaded(sessionId)
+  }
+
+  /**
+   * 聊天会话的回退/清空广播 `messages_reloaded` —— A2 消费端（清 bot live 态 + 活跃会话
+   * 重拉列表）在此才有生产者：仅有的两个既有发射点在 harness/压缩路径上，无根会话永远
+   * 走不到；而有根会话的这两条路径由调用方自刷 + agent_closing 收口，不需要它。
+   * 只对聊天会话发 —— 给有根会话多播一发会与 useChatActions 的自刷竞态。
+   */
+  private notifyBotSessionReloaded(sessionId: string): void {
+    if (!sessionService.isBotSession(sessionId)) return
+    electronEventSink.broadcast({ type: 'messages_reloaded', sessionId })
   }
 
   // ─── 运行时资源 ──────────────────────────────────

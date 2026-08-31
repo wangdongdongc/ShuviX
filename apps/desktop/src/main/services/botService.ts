@@ -256,6 +256,11 @@ interface MemberOutcome {
    * 是开放的，硬归一只会把它们全冲成 `other`
    */
   outcome: string
+  /**
+   * 这个成员这一轮的票被用户中止过（per-bot 停止）。沉默判定据此对整轮闭嘴 ——
+   * §9.1「用户按停止不是无从解释的沉默」；barrier 级守卫只覆盖会话中止，覆盖不到这里
+   */
+  aborted?: boolean
 }
 
 /**
@@ -1086,7 +1091,9 @@ class BotService {
               botName,
               displayName: known.get(botName)?.displayName ?? botName,
               said: false,
-              outcome: 'pipeline_error'
+              outcome: 'pipeline_error',
+              // invoke 从不抛,这条 catch 只接意料外的炸——到不了这里的中止信息按未中止算
+              aborted: false
             }
           })
         )
@@ -1098,8 +1105,12 @@ class BotService {
       //
       // **被中止的一轮也不发**：用户自己按的停止不属于「无从解释的沉默」，跟单 bot 那条
       // 降级气泡的 `!signal.aborted` 是同一条纪律 —— 少了它，点一次停止就弹一条
-      // 「全体沉默：有东西坏了」
-      const silence = gate.cohort.length > 1 && !barrier.wasAborted ? cohortSilence(outcomes) : null
+      // 「全体沉默：有东西坏了」。两个守卫各管一半：barrier.wasAborted 是会话级中止，
+      // outcomes 里的 aborted 位是 per-bot 停止（它刻意不动 barrier）
+      const silence =
+        gate.cohort.length > 1 && !barrier.wasAborted && !outcomes.some((o) => o.aborted)
+          ? cohortSilence(outcomes)
+          : null
       if (silence) {
         // 逐成员各记一条，而不是找个 `_cohort` 假目录记一条：决策记录按 bot 分目录，
         // 回答的是「这个 bot 为什么没说话」—— 「这一轮谁都没说」正是它自己那份记录里
@@ -1408,7 +1419,8 @@ class BotService {
         botName: bot.name,
         displayName: bot.displayName,
         said: ticket.said,
-        outcome: memberOutcome(ticket, output?.outcome, ended)
+        outcome: memberOutcome(ticket, output?.outcome, ended),
+        aborted: ticket.abort.signal.aborted
       }
     } finally {
       ticket.terminal = true

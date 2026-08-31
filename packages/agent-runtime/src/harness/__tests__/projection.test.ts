@@ -864,6 +864,105 @@ describe('结构化回复侧车的投影', () => {
   })
 })
 
+/** 读一条消息的 metadata.botFailure（不存在时 undefined） */
+function botFailureOf(msg: ChatMessage | undefined): unknown {
+  return (msg?.metadata as { botFailure?: unknown } | null | undefined)?.botFailure
+}
+
+/**
+ * 失败通告标记（A2）：侧车 `error: true` → `AssistantMeta.botFailure`。
+ *
+ * 走侧车而不是 stopReason:'error' —— 投影对 error 停机原因是「整条吃掉」的早退，
+ * 标成 error 的失败通告根本到不了渲染层。收窄口径是 **`=== true`**：侧车是磁盘数据，
+ * 字符串 "true" 之类的赃值不放行；不铺键（而不是铺 false/undefined）与 sender /
+ * suppressed 的「键在不在即语义」同一套口径。
+ */
+describe('失败通告侧车的投影（A2）', () => {
+  it('A2-A1 侧车 error:true → metadata.botFailure === true，sender 三键照常', async () => {
+    await sidecar('scout', 'Scout', { error: true })
+    const assistantId = await session.appendMessage(botSaid('⚠️ 这条没办成'))
+
+    const [msg] = await project()
+    expect(msg.id).toBe(assistantId)
+    // toBe(true) 而不是 truthy：botFailure 的取值域只有「true 或键不存在」两种
+    expect(botFailureOf(msg)).toBe(true)
+    expect(senderOf(msg)).toEqual({ kind: 'bot', name: 'scout', displayName: 'Scout' })
+  })
+
+  it('A2-A2 侧车无 error 键 → 连 botFailure 这个键都不铺', async () => {
+    await sidecar('scout', 'Scout')
+    await session.appendMessage(botSaid('正常回复'))
+
+    const [msg] = await project()
+    expect(msg.metadata).not.toHaveProperty('botFailure')
+    expect(senderOf(msg)).toMatchObject({ name: 'scout' })
+  })
+
+  it.each([
+    ['字符串 "true"', 'true'],
+    ['数字 1', 1],
+    ['false', false],
+    ['null', null],
+    ['空对象', {}],
+    ['空数组', []]
+  ])('A2-A3 赃值（%s）一律不铺 —— 收窄是 === true 不是 truthy/存在性', async (_n, dirty) => {
+    await sidecar('scout', 'Scout', { error: dirty })
+    await session.appendMessage(botSaid('正文照常'))
+
+    const [msg] = await project()
+    expect(msg.metadata).not.toHaveProperty('botFailure')
+    // 赃值只作废这一个键，署名照常 —— 一格脏数据不该拖垮整条消息
+    expect(senderOf(msg)).toMatchObject({ name: 'scout' })
+  })
+
+  it('A2-A4 error 与 reply / suppressed / decision 同侧车：三个 UI 键齐挂互不干扰', async () => {
+    const reply = { headline: '出错但有结构', body: '降级通告也可以带结构。' }
+    await sidecar('scout', 'Scout', {
+      error: true,
+      decision: 'reply',
+      reply,
+      suppressed: [CANDIDATE]
+    })
+    await session.appendMessage(botSaid('出错但有结构\n\n降级通告也可以带结构。'))
+
+    const [msg] = await project()
+    expect(botFailureOf(msg)).toBe(true)
+    expect(replyOf(msg)).toEqual(reply)
+    expect(suppressedOf(msg)).toEqual([CANDIDATE])
+    // decision 仍只服务宿主侧，不进 UI 的 metadata
+    expect(msg.metadata).not.toHaveProperty('decision')
+    expect(Object.keys(senderOf(msg) as object).sort()).toEqual(['displayName', 'kind', 'name'])
+  })
+
+  it('A2-A5 切片投影与全量投影对 error:true 消息逐字段全等 —— 流式所见即重开所见', async () => {
+    // 广播只跑新 append 的那一两条 entry（projectSlice），重开会话跑的是整棵树。
+    // 失败卡若只在其中一条路径上成型，刷新一下它就会退回普通气泡
+    await session.appendMessage(user('这条会失败'))
+    const sidecarId = await sidecar('scout', 'Scout', { error: true })
+    const assistantId = await session.appendMessage(botSaid('⚠️ 没办成'))
+
+    const entries = await session.buildContextEntries()
+    const slice = entries.filter((e) => e.id === sidecarId || e.id === assistantId)
+    const [fromSlice] = entriesToChatMessages(slice, SESSION_ID, 'test-model')
+    const fromWhole = (await project()).find((m) => m.id === assistantId)
+
+    expect(fromSlice).toEqual(fromWhole)
+    expect(botFailureOf(fromSlice)).toBe(true)
+  })
+
+  it('A2-A6 侧车缺 displayName（整车不合法）带 error:true → sender / botFailure 均不铺', async () => {
+    // 失败标记是署名侧车的一个键 —— 没有合法署名就没有失败卡可言，
+    // 不该顺延成一条无主的「失败」标在别人的消息上
+    await session.appendCustomEntry(BOT_SENDER_CUSTOM_TYPE, { botName: 'scout', error: true })
+    await session.appendMessage(botSaid('照常显示的正文'))
+
+    const [msg] = await project()
+    expect(senderOf(msg)).toBeUndefined()
+    expect(msg.metadata).not.toHaveProperty('botFailure')
+    expect(msg.content).toBe('照常显示的正文')
+  })
+})
+
 describe('未知 customType 对投影是完全透明的', () => {
   /**
    * 造一棵含全部 entry 形态的树（user / assistant / toolCall / toolResult /

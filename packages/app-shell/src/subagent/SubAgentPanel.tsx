@@ -475,6 +475,8 @@ export function SubAgentPanel(): React.JSX.Element {
           return (
             <div
               key={sub.subSessionId}
+              data-subagent-run={sub.subAgentName}
+              data-subagent-expanded={expanded ? 'true' : 'false'}
               className={`transition-opacity duration-200 ${idx > 0 ? 'border-t border-border-secondary/30' : ''} ${
                 dim && !expanded ? 'opacity-40 hover:opacity-100' : ''
               }`}

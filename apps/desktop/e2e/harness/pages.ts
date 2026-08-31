@@ -1379,3 +1379,255 @@ export function fmCardPane(main: CdpClient): FmCardPane {
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// A2 · 对话流完整渲染 —— 占位卡 / 失败卡 / BotReply 双形态 / 救济 chip / 沉默提示 /
+// mailbox 回执 / 子代理面板行。
+//
+// 锚点全部是 A2 落的 data-*（data-bot-activity / data-bot-stop / data-bot-failure /
+// data-bot-reply / data-bot-rescue-chip / data-bot-silence / data-bot-receipt /
+// data-subagent-run），文案一概不认。IPC 能断的（metadata.botFailure、事件序列）
+// 不在这里断 —— 这里只认「屏幕上真的长出来了什么」。
+
+/** 一张在飞活动占位卡的快照 */
+export interface BotActivityCardShot {
+  /** bot 稳定名（data-bot-activity 属性值） */
+  name: string
+  /** 相位（data-bot-activity-phase：claimed / queued / working；started 不落卡） */
+  phase: string
+  /** 停止钮在不在（data-bot-stop；排队卡刻意没有） */
+  hasStop: boolean
+}
+
+/** 一条消息卡上与 A2 相关的呈现位 */
+export interface BotMessageFlags {
+  /** 卡头「失败」角标（data-bot-failure）在不在 */
+  failureBadge: boolean
+  /** 正文容器 className（失败卡 = 含 border-error 的错误色镶边盒） */
+  contentClassName: string
+  /** BotReply 双形态容器（data-bot-reply）在不在 */
+  replyCard: boolean
+}
+
+/** BotReply 双形态渲染的结构快照（在某条消息卡内） */
+export interface BotReplyShot {
+  present: boolean
+  /** 加粗结论行（p.font-bold）的文本；无则空串 */
+  headline: string
+  /** 结论行是否真的加粗（font-bold 类） */
+  headlineBold: boolean
+  bullets: string[]
+  /** 表格单元格文本（含表头行），每行一个数组 */
+  tableRows: string[][]
+  /** data-bot-status 属性值；无 chip 则 null */
+  status: string | null
+  followups: string[]
+}
+
+export interface BotRescueChipShot {
+  /** bot 稳定名（data-bot-rescue-chip 属性值） */
+  name: string
+  /** chip 上的可见文本（displayName） */
+  label: string
+}
+
+export interface SubAgentRowShot {
+  /** 阶段 agent 名（data-subagent-run 属性值，如 bot-intent） */
+  agent: string
+  expanded: boolean
+}
+
+export interface BotFlowPane {
+  /** 对话尾部的活动占位卡（document 序） */
+  activityCards(): Promise<BotActivityCardShot[]>
+  /** 「正在判断」合并行的成员数（data-bot-deciding 属性值）；行不在时 null */
+  decidingCount(): Promise<number | null>
+  /** 点某个 bot 占位卡上的停止钮；无钮返回 false */
+  clickStop(botName: string): Promise<boolean>
+
+  /** 某条消息卡上的失败/回复呈现位 */
+  messageFlags(msgId: string): Promise<BotMessageFlags>
+  /** 某条消息卡内 BotReply 的结构快照 */
+  replyShape(msgId: string): Promise<BotReplyShot>
+  /** 点某条消息卡内第 i 个追问 chip（data-bot-followup）；无则 false */
+  clickFollowup(msgId: string, index: number): Promise<boolean>
+
+  /** 某条消息卡底部的救济 chip（data-bot-rescue-chip） */
+  rescueChips(msgId: string): Promise<BotRescueChipShot[]>
+  /** 点某条消息卡底部指定 bot 的救济 chip；无则 false */
+  clickRescueChip(msgId: string, botName: string): Promise<boolean>
+
+  /** 输入卡内的全体沉默提示；不在时 null */
+  silence(): Promise<{ reason: string } | null>
+  /** 沉默提示块内的救济 chip */
+  silenceRescueChips(): Promise<BotRescueChipShot[]>
+  clickSilenceRescueChip(botName: string): Promise<boolean>
+  /** 点沉默提示的 ✕（data-bot-silence-dismiss） */
+  dismissSilence(): Promise<boolean>
+
+  /** 用户消息下的 mailbox 回执（data-bot-receipt；names 是逗号连的 botName 串） */
+  receipts(): Promise<Array<{ msgId: string; names: string }>>
+
+  /**
+   * 打开会话面板的 Sub-agent 页。入口是状态横幅右侧工具栏的胶囊按钮 ——
+   * 全应用唯一「.lucide-bot 与数量徽标（span.tabular-nums）同居一个 button」的地方
+   * （侧栏组头的新建 bot 会话钮只有图标，档案选择器只有图标+文字，会话行不是 button）。
+   * 按钮只在当前会话有子会话时存在；找不到返回 false。
+   */
+  openSubAgentPanel(): Promise<boolean>
+  /** 子代理面板里的行（document 序 = startedAt 升序） */
+  subAgentRows(): Promise<SubAgentRowShot[]>
+  /** 点第 i 行的折叠头（开合切换） */
+  toggleSubAgentRow(index: number): Promise<void>
+}
+
+export function botFlowPane(main: CdpClient): BotFlowPane {
+  const CARDS = `[...document.querySelectorAll('[data-bot-activity]')]`
+  const MSG = (id: string): string =>
+    `document.querySelector('[data-msg-id=${JSON.stringify(id)}]')`
+  const SILENCE = `document.querySelector('[data-bot-silence]')`
+  const SUB_ROWS = `[...document.querySelectorAll('[data-subagent-run]')]`
+  const chipShot = (root: string): string =>
+    `[...(${root}?.querySelectorAll('[data-bot-rescue-chip]') ?? [])].map((b) => ({
+      name: b.getAttribute('data-bot-rescue-chip') ?? '',
+      label: (b.textContent ?? '').trim()
+    }))`
+  const clickChip = (root: string, botName: string): string =>
+    `(() => {
+      const chip = [...(${root}?.querySelectorAll('[data-bot-rescue-chip]') ?? [])].find(
+        (b) => b.getAttribute('data-bot-rescue-chip') === ${JSON.stringify(botName)}
+      )
+      if (!chip) return false
+      chip.click()
+      return true
+    })()`
+
+  return {
+    activityCards: () =>
+      main.eval<BotActivityCardShot[]>(
+        `${CARDS}.map((el) => ({
+          name: el.getAttribute('data-bot-activity') ?? '',
+          phase: el.getAttribute('data-bot-activity-phase') ?? '',
+          hasStop: el.querySelector('[data-bot-stop]') !== null
+        }))`
+      ),
+    decidingCount: () =>
+      main.eval<number | null>(`(() => {
+        const row = document.querySelector('[data-bot-deciding]')
+        return row ? Number(row.getAttribute('data-bot-deciding')) : null
+      })()`),
+    clickStop: async (botName) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-bot-stop=${JSON.stringify(botName)}]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(200)
+      return hit
+    },
+
+    messageFlags: (msgId) =>
+      main.eval<BotMessageFlags>(`(() => {
+        const el = ${MSG(msgId)}
+        return {
+          failureBadge: !!el?.querySelector('[data-bot-failure]'),
+          contentClassName: el?.querySelector('.markdown-body')?.className ?? '',
+          replyCard: !!el?.querySelector('[data-bot-reply]')
+        }
+      })()`),
+    replyShape: (msgId) =>
+      main.eval<BotReplyShot>(`(() => {
+        const card = ${MSG(msgId)}?.querySelector('[data-bot-reply]')
+        if (!card) {
+          return { present: false, headline: '', headlineBold: false, bullets: [],
+                   tableRows: [], status: null, followups: [] }
+        }
+        const head = card.querySelector('p')
+        return {
+          present: true,
+          headline: (head?.textContent ?? '').trim(),
+          headlineBold: (head?.className ?? '').includes('font-bold'),
+          bullets: [...card.querySelectorAll('ul li')].map((li) => (li.textContent ?? '').trim()),
+          tableRows: [...card.querySelectorAll('table tr')].map((tr) =>
+            [...tr.querySelectorAll('th, td')].map((c) => (c.textContent ?? '').trim())
+          ),
+          status: card.querySelector('[data-bot-status]')?.getAttribute('data-bot-status') ?? null,
+          followups: [...card.querySelectorAll('[data-bot-followup]')]
+            .map((b) => (b.textContent ?? '').trim())
+        }
+      })()`),
+    clickFollowup: async (msgId, index) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const chips = [...(${MSG(msgId)}?.querySelectorAll('[data-bot-followup]') ?? [])]
+        if (!chips[${index}]) return false
+        chips[${index}].click()
+        return true
+      })()`)
+      await sleep(300)
+      return hit
+    },
+
+    rescueChips: (msgId) => main.eval<BotRescueChipShot[]>(chipShot(MSG(msgId))),
+    clickRescueChip: async (msgId, botName) => {
+      const hit = await main.eval<boolean>(clickChip(MSG(msgId), botName))
+      await sleep(300)
+      return hit
+    },
+
+    silence: () =>
+      main.eval<{ reason: string } | null>(`(() => {
+        const el = ${SILENCE}
+        return el ? { reason: el.getAttribute('data-bot-silence') ?? '' } : null
+      })()`),
+    silenceRescueChips: () => main.eval<BotRescueChipShot[]>(chipShot(SILENCE)),
+    clickSilenceRescueChip: async (botName) => {
+      const hit = await main.eval<boolean>(clickChip(SILENCE, botName))
+      await sleep(300)
+      return hit
+    },
+    dismissSilence: async () => {
+      const hit = await main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-bot-silence-dismiss]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(200)
+      return hit
+    },
+
+    receipts: () =>
+      main.eval(
+        `[...document.querySelectorAll('[data-bot-receipt]')].map((el) => ({
+          msgId: el.closest('[data-msg-id]')?.getAttribute('data-msg-id') ?? '',
+          names: el.getAttribute('data-bot-receipt') ?? ''
+        }))`
+      ),
+
+    openSubAgentPanel: async () => {
+      const hit = await main.eval<boolean>(`(() => {
+        const btn = [...document.querySelectorAll('button')].find(
+          (b) => b.querySelector('.lucide-bot') && b.querySelector('span.tabular-nums')
+        )
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(300)
+      return hit
+    },
+    subAgentRows: () =>
+      main.eval<SubAgentRowShot[]>(
+        `${SUB_ROWS}.map((el) => ({
+          agent: el.getAttribute('data-subagent-run') ?? '',
+          expanded: el.getAttribute('data-subagent-expanded') === 'true'
+        }))`
+      ),
+    toggleSubAgentRow: async (index) => {
+      // 行根的第一个子节点是折叠头（onClick=toggle）；展开内容是其后的兄弟
+      await main.eval(`${SUB_ROWS}[${index}]?.firstElementChild?.click()`)
+      await sleep(250)
+    }
+  }
+}

@@ -517,3 +517,105 @@ describe('abortSession / lane 生命周期', () => {
     expect((await mb.acquireBare(key, item(2))).selfReplied).toBe(false)
   })
 })
+
+/**
+ * abortTicket —— per-bot 停止的 mailbox 半边（A2，设计 §5.4）。
+ *
+ * 它只处理**还在排队**的票（引擎的 run 级 abort 唤不醒 await 在宿主 Promise 上的脚本），
+ * 对 ACTIVE 持有者刻意 no-op：那个 run 正被 AbortController 结束，独占段随脚本自身的
+ * finally 释放 —— 这里抢先清 active 会让下一个授予者与还没退完场的持有者并行进独占段。
+ */
+describe('abortTicket —— per-bot 停止（A2）', () => {
+  it('A2-B1 命中排队票：MailboxAbortedError reject、出队、mailbox_aborted 恰一次、快照更新', async () => {
+    const { mb, events, key } = makeMailbox()
+    await mb.acquireBare(key, item(1))
+    const queued = mb.acquireBare(key, item(2))
+
+    mb.abortTicket('t2')
+    await expect(queued).rejects.toBeInstanceOf(MailboxAbortedError)
+    await expect(queued).rejects.toMatchObject({ code: 'mailbox_aborted' })
+    expect(events.filter((e) => e.kind === 'mailbox_aborted')).toHaveLength(1)
+    expect(events.find((e) => e.kind === 'mailbox_aborted')?.item.messageSeq).toBe(2)
+    // 快照同步更新：active 原地不动，队列已经空了
+    expect(mb.snapshot(key)).toEqual({ active: { messageSeq: 1, messageId: 'm1' }, queued: [] })
+  })
+
+  it('A2-B2 命中 ACTIVE 持有者：完全 no-op（active 不清、队列不动、零事件、不越级授予）', async () => {
+    // 抢先清 active 的后果是下一个授予者与还没退完场的持有者并行进独占段 ——
+    // 三个断言面（active / 队列+事件 / 排队 promise 仍挂起）一起钉死这个 no-op
+    const { mb, events, changes, key } = makeMailbox()
+    await mb.acquireBare(key, item(1))
+    const queued = mb.acquireBare(key, item(2))
+    const eventCount = events.length
+    const changeCount = changes.length
+
+    mb.abortTicket('t1')
+
+    expect(mb.snapshot(key).active).toEqual({ messageSeq: 1, messageId: 'm1' })
+    expect(mb.snapshot(key).queued.map((q) => q.messageSeq)).toEqual([2])
+    expect(events).toHaveLength(eventCount)
+    expect(changes).toHaveLength(changeCount)
+    // 不越级授予：排队者仍然挂着，没有因为一次「停止持有者」而被提前放进独占段
+    expect(await isPending(queued)).toBe(true)
+  })
+
+  it('A2-B3 未知 ticketId：no-op、零事件', async () => {
+    const { mb, events, key } = makeMailbox()
+    await mb.acquireBare(key, item(1))
+    const queued = mb.acquireBare(key, item(2))
+    const eventCount = events.length
+
+    expect(() => mb.abortTicket('nobody')).not.toThrow()
+    expect(events).toHaveLength(eventCount)
+    expect(await isPending(queued)).toBe(true)
+    expect(mb.snapshot(key).queued).toHaveLength(1)
+  })
+
+  it('A2-B4 被中止票的超时定时器被清：推过 QUEUE_MAX_MS 无二次 reject / timeout 事件', async () => {
+    const { mb, clock, events, key } = makeMailbox()
+    await mb.acquireBare(key, item(1))
+    const queued = mb.acquireBare(key, item(2))
+
+    mb.abortTicket('t2')
+    await expect(queued).rejects.toBeInstanceOf(MailboxAbortedError)
+    expect(clock.clearCalls).toHaveLength(1)
+
+    clock.advance(QUEUE_MAX_MS)
+    expect(events.some((e) => e.kind === 'mailbox_timeout')).toBe(false)
+    expect(events.filter((e) => e.kind === 'mailbox_aborted')).toHaveLength(1)
+  })
+
+  it('A2-B5 中止队列中间一票：其余按 messageSeq 的授予序不变', async () => {
+    const { mb, events, key } = makeMailbox()
+    await mb.acquireBare(key, item(0))
+    const p1 = mb.acquireBare(key, item(1))
+    const p2 = mb.acquireBare(key, item(2))
+    p2.catch(() => {})
+    const p3 = mb.acquireBare(key, item(3))
+
+    mb.abortTicket('t2')
+    await expect(p2).rejects.toBeInstanceOf(MailboxAbortedError)
+
+    mb.releaseByTicket('t0')
+    await p1
+    mb.releaseByTicket('t1')
+    await p3
+    expect(grantedSeqs(events)).toEqual([0, 1, 3])
+  })
+
+  it('A2-B6 中止唯一排队票后持有者 release：无越级授予、lane 被 gc（selfReplied 从 false 起步）', async () => {
+    const { mb, events, key } = makeMailbox()
+    await mb.acquireBare(key, item(1))
+    mb.noteReplied(key, 1)
+    const queued = mb.acquireBare(key, item(2))
+
+    mb.abortTicket('t2')
+    await expect(queued).rejects.toBeInstanceOf(MailboxAbortedError)
+    mb.releaseByTicket('t1')
+
+    // 队列已空，release 只清 active —— 不会把早已 reject 的那张票再授予一次
+    expect(events.filter((e) => e.kind === 'mailbox_granted')).toHaveLength(1)
+    // lane 已被 gc：repliedSeqs 随 lane 一起丢弃，同 key 的下一次 acquire 从 false 起步
+    expect((await mb.acquireBare(key, item(9))).selfReplied).toBe(false)
+  })
+})
