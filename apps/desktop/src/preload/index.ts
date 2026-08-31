@@ -395,7 +395,8 @@ const api = {
     saveByFile: (params: { fileName: string; text: string }) =>
       ipcRenderer.invoke('bot:saveByFile', params),
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
-    openFolder: () => ipcRenderer.invoke('bot:openFolder')
+    openFolder: () => ipcRenderer.invoke('bot:openFolder'),
+    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params)
   },
 
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============

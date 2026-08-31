@@ -31,6 +31,7 @@ import {
   DEFAULT_BOT_PIPELINE,
   INLINE_TOKENS_CUSTOM_TYPE,
   entriesToChatMessages,
+  parseBotAgentRef,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   type BotSenderSidecar,
@@ -57,6 +58,7 @@ import {
   withSessionTreeLock
 } from './sessionStorage'
 import { workflowService, workflowTriggers } from './workflowService'
+import { agentService } from './agentService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { appendBotDecision, botRunsDir, pruneBotRuns, type BotDecisionKind } from './bot/botJournal'
 import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
@@ -453,6 +455,53 @@ class BotService {
   /** 目录里无法解析的 bot 文件（设置页显示为可点开修复的告警项） */
   listInvalid(): InvalidBotFile[] {
     return this.scanDir().invalid
+  }
+
+  /**
+   * 设置页详情的**运行时读数**（`bot:inspect`）：管线与各阶段 agent 的解析结果、
+   * 门控 sticky 降级、笔记调度状态。frontmatter 本身归属性卡（bot 描述符），这里只回答
+   * 「按现在的注册表状态，这个 bot 跑起来会解析成什么」—— 引用缺失即回落之类的事实
+   * 埋在 journal 里不算呈现（§8.5）。
+   */
+  inspect(name: string):
+    | {
+        pipeline: { name: string; exists: boolean; concurrency?: string }
+        /** 角色 → ref 解析结果；missing = 引用的 agent/bot 不存在（运行时将回落内置并 warn） */
+        stages: Array<{ role: string; ref: string; missing: boolean }>
+        /** 门控段已 sticky 回落内置的原因（broken / timeout）；未降级则缺省 */
+        gateDegraded?: string
+        notes: { enabled: boolean; chars: number; pending: number; lastRunAt: number }
+      }
+    | { error: string } {
+    const bot = this.getBot(name)
+    if (!bot) return { error: `Bot "${name}" not found` }
+    const pipeline = resolvePipeline(bot)
+    // 生效的那一份 workflow（用户同名遮蔽内置）：取未被遮蔽的条目读并发模式
+    const wf = workflowService
+      .listForSettings()
+      .find((w) => w.name === pipeline.workflow && !w.overridden)
+    const stages = Object.entries(pipeline.agents).map(([role, ref]) => {
+      const selfName = parseBotAgentRef(ref)
+      return {
+        role,
+        ref,
+        // `bot:<name>` 指向 bot 注册表（task 缺省即自身）；其余对照 agent 档案注册表
+        missing: selfName !== null ? !this.getBot(selfName) : !agentService.getProfile(ref)
+      }
+    })
+    const degraded = this.gateDegradedOf(name)
+    const peek = this.notes.peek(name)
+    return {
+      pipeline: { name: pipeline.workflow, exists: pipeline.exists, concurrency: wf?.concurrency },
+      stages,
+      ...(degraded ? { gateDegraded: degraded } : {}),
+      notes: {
+        enabled: bot.notesEnabled,
+        chars: bot.notes?.length ?? 0,
+        pending: peek.pending,
+        lastRunAt: peek.lastRunAt
+      }
+    }
   }
 
   /**

@@ -59,6 +59,9 @@ export function registerBotHandlers(): void {
     return { success: true }
   })
 
+  /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控降级 + 笔记调度状态 */
+  ipcMain.handle('bot:inspect', (_e, params: { name: string }) => botService.inspect(params.name))
+
   /** per-bot 停止（A2）：中止某成员对某条消息的应答；排队与其它消息不受影响 */
   ipcMain.handle(
     'bot:abort',

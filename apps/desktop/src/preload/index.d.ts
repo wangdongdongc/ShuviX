@@ -436,6 +436,16 @@ declare global {
     error: string
   }
 
+  /** bot 详情的运行时读数（bot.inspect；frontmatter 本身归属性卡） */
+  interface BotInspect {
+    pipeline: { name: string; exists: boolean; concurrency?: string }
+    /** 角色 → ref 解析结果；missing = 引用不存在（运行时回落内置并 warn） */
+    stages: Array<{ role: string; ref: string; missing: boolean }>
+    /** 门控段已 sticky 回落内置的原因；未降级则缺省 */
+    gateDegraded?: string
+    notes: { enabled: boolean; chars: number; pending: number; lastRunAt: number }
+  }
+
   /** Sub-agent 元信息（文件系统驱动；与主进程 AgentProfile 对齐） */
   interface SubAgentInfo {
     name: string
@@ -718,6 +728,8 @@ declare global {
       }) => Promise<{ success: boolean; error?: string }>
       deleteByFile: (params: { fileName: string }) => Promise<{ success: boolean; error?: string }>
       openFolder: () => Promise<{ success: boolean }>
+      /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控 sticky 降级 + 笔记调度状态 */
+      inspect: (params: { name: string }) => Promise<BotInspect | { error: string }>
     }
     workflow: {
       list: () => Promise<WorkflowInfo[]>
