@@ -1150,6 +1150,7 @@
     "receiptQueued": "Queued for {{names}} — will be answered in order",
     "statusOk": "Done",
     "statusWarn": "With caveats",
-    "statusError": "Incomplete"
+    "statusError": "Incomplete",
+    "mentionOnly": "Responds only when mentioned"
   }
 }

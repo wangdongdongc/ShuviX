@@ -44,10 +44,28 @@ export interface ChatVoiceConfig {
   ttsEnabled: boolean
 }
 
+/** @提及候选所需的 bot 元信息（bot 注册表条目的窄投影） */
+export interface ChatBotCandidate {
+  name: string
+  displayName: string
+  description: string
+  /** L0 门控模式为 mention-only（弹层里标注 —— @提及是这类成员唯一的入口） */
+  mentionOnly?: boolean
+}
+
+/**
+ * bot 注册表能力（可选端口；桌面注入 window.api.bot 的窄投影，扩展 v1 不注入）。
+ * 缺省时聊天会话的 @提及弹层只有文件候选 —— 提及仍可裸文本手打（L0 有降级匹配）。
+ */
+export interface ChatBotsSource {
+  list: () => Promise<ChatBotCandidate[]>
+}
+
 export interface ChatHostValue {
   appearance: ChatAppearance
   models: ChatModelSelection
   voice?: ChatVoiceConfig
+  bots?: ChatBotsSource
 }
 
 export const ChatHostContext = createContext<ChatHostValue | null>(null)

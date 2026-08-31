@@ -1,4 +1,9 @@
-import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
+import {
+  getSessionChannelApi,
+  getHostApi,
+  useChatHost,
+  type ChatBotCandidate
+} from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Send, Square, Mic, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
@@ -28,10 +33,9 @@ import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
 import { MentionHighlighter } from './MentionHighlighter'
-import { useAtMentions } from '../../hooks/useAtMentions'
+import { useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
 import { isImeComposing } from '../../utils/ime'
-import type { FileSuggestion } from '@shuvix/chat-protocol/utils/fileMap'
 
 /**
  * streaming 时的三个发送出口，顺序即急迫度从高到低：
@@ -131,8 +135,43 @@ export function InputArea({
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
 
-  // @ 工作区文件引用自动补全（可在任意位置触发，可多个；胶囊仅展示文件名）
-  const at = useAtMentions(activeSessionId)
+  // @ 候选里的 bot 成员（聊天会话，A3）：宿主注入注册表窄投影，按会话成员名单过滤、
+  // 名单序呈现。状态带 key 自校验 —— 切会话/改名单后旧列表立即失效，effect 里
+  // 不做同步 setState（异步 .then 落新值即可，无清场需求）
+  const memberKey =
+    useChatStore((s) =>
+      s.sessions.find((x) => x.id === s.activeSessionId)?.settings?.bots?.join(',')
+    ) ?? ''
+  const [botCands, setBotCands] = useState<{ key: string; list: ChatBotCandidate[] }>({
+    key: '',
+    list: []
+  })
+  useEffect(() => {
+    const src = chatHost.bots
+    if (!src || !memberKey) return
+    let alive = true
+    void src
+      .list()
+      .then((all) => {
+        if (!alive) return
+        const byName = new Map(all.map((b) => [b.name, b]))
+        const list = memberKey
+          .split(',')
+          .map((n) => byName.get(n))
+          .filter((b): b is ChatBotCandidate => !!b)
+        setBotCands({ key: memberKey, list })
+      })
+      .catch(() => {
+        /* 注册表读取失败：@ 弹层退回纯文件候选，裸文本提及仍有 L0 降级匹配 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [chatHost.bots, memberKey])
+  const botCandidates = botCands.key === memberKey ? botCands.list : undefined
+
+  // @ 引用自动补全（可在任意位置触发，可多个）：聊天会话成员在前、工作区文件在后
+  const at = useAtMentions(activeSessionId, botCandidates)
   // 长文粘贴折叠为芯片（占位明文进 textarea，完整内容随 paste 类型 InlineToken 发送）
   const paste = usePasteChips()
   // 背景镜像层（画 @ / 粘贴胶囊）—— 与 textarea 同步 scrollTop
@@ -218,7 +257,7 @@ export function InputArea({
 
   /** @ 引用选中：在光标处替换 @query → @token，登记引用，落回文本并置光标 */
   const applyAtSelect = useCallback(
-    (s: FileSuggestion) => {
+    (s: AtSuggestion) => {
       const el = textareaRef.current
       const caret = el?.selectionStart ?? inputText.length
       const { text, caret: newCaret } = at.select(s, inputText, caret)

@@ -15,7 +15,9 @@ export type {
   ChatHostValue,
   ChatAppearance,
   ChatModelSelection,
-  ChatVoiceConfig
+  ChatVoiceConfig,
+  ChatBotCandidate,
+  ChatBotsSource
 } from './host/chatHostContext'
 
 // ── 对话区组件 ──

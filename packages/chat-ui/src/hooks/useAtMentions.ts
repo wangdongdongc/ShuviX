@@ -1,13 +1,16 @@
 /**
- * useAtMentions —— 聊天输入框 `@` 工作区文件引用（仿笔记本 `[[ ]]` 双链补全）。
+ * useAtMentions —— 聊天输入框 `@` 引用：工作区文件（仿笔记本 `[[ ]]` 双链补全）
+ * + 聊天会话的 bot 成员提及（A3）。
  *
  * 与斜杠命令芯片（仅行首单个）不同：`@` 可在输入框任意位置触发、可多个。故不走「芯片 + text-indent」，
  * 而是让 textarea 存明文 `@<token>`，配合 MentionHighlighter 背景镜像画出胶囊（胶囊文字 === 底层文字，
- * 光标天然对齐）。发送时把每处引用就地替换成 {{shuvixInlineToken}} 标记 + 构造 at 类型 InlineToken，
- * 后端 resolveTokensForAgent 展开为「用户引用了工作区文件 xxx」告知 Agent（见 inlineTokens.ts）。
+ * 光标天然对齐）。发送时把每处引用就地替换成 {{shuvixInlineToken}} 标记 + 构造 InlineToken
+ * （文件 `at` 类型展开为「用户引用了工作区文件 xxx」，bot `bot` 类型展开为 `@显示名` 原文并被
+ * L0 门在展开前按 token.id 精确认领 —— 见 inlineTokens.ts / botGate.mentionsFromTokens）。
  *
  * 文件表：files.scan 一次性拉回工作目录路径，建内存 FileMap 后本地过滤（不每次击键回后端），
  * 随 files.changed 事件刷新。查询/排序复用 chat-protocol 的 searchFileMap（与双链同一套）。
+ * bot 候选由调用方注入（InputArea 按会话成员名单过滤宿主注册表），排在文件之前。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -18,19 +21,34 @@ import {
   type FileSuggestion
 } from '@shuvix/chat-protocol/utils/fileMap'
 import {
+  BOT_MENTION_TOKEN_TYPE,
   buildAtToken,
+  buildBotToken,
   makeTokenMarker,
   type AtFileLike
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { getSessionChannelApi } from '../api/chatApi'
 import { useAppEvent } from './useAppEvents'
+import type { ChatBotCandidate } from '../host/chatHostContext'
 
-/** 一条已选中的 @ 引用：text 为写入 textarea 的明文（含前导 @），rel/base 供展开与展示 */
+/**
+ * 一条已选中的 @ 引用：text 为写入 textarea 的明文（含前导 @），rel/base 供展开与展示。
+ * bot 提及（A3）复用同一套登记/匹配/胶囊机制：`kind:'bot'` 判别，rel 存 `bot:<name>`
+ * 作唯一键（与文件 rel 不同名字空间），base 存显示名，botName 存身份键。
+ */
 export interface AtMention extends AtFileLike {
-  /** 写入 textarea 的明文，如 `@src/foo.ts`（含前导 @） */
+  /** 写入 textarea 的明文，如 `@src/foo.ts` / `@Shuvi`（含前导 @） */
   text: string
+  kind?: 'bot'
+  /** bot 的身份键（md 文件名；token.id 用它，L0 与成员名单求交） */
+  botName?: string
 }
+
+/** @ 弹层候选：bot 成员（聊天会话，排最前）+ 工作区文件 */
+export type AtSuggestion =
+  | ({ kind: 'file' } & FileSuggestion)
+  | ({ kind: 'bot' } & ChatBotCandidate)
 
 /** textarea 内一处命中的引用区间 [start, end) */
 export interface MentionMatch {
@@ -95,8 +113,8 @@ export function matchMentions(text: string, mentions: AtMention[]): MentionMatch
 export interface UseAtMentions {
   /** 当前触发的补全弹层是否可见 */
   showPopover: boolean
-  /** 补全候选（已按 searchFileMap 排序） */
-  suggestions: FileSuggestion[]
+  /** 补全候选（bot 成员在前，文件按 searchFileMap 排序在后） */
+  suggestions: AtSuggestion[]
   /** 键盘选中索引 */
   selectedIndex: number
   /** 已登记的引用（供背景镜像渲染） */
@@ -108,11 +126,7 @@ export interface UseAtMentions {
   /** 弹层可见时的方向键/Esc 导航；消费返回 true */
   handleKeyDown: (e: React.KeyboardEvent) => boolean
   /** 选中某候选：返回替换后的文本与新光标位置（并登记引用） */
-  select: (
-    suggestion: FileSuggestion,
-    text: string,
-    caret: number
-  ) => { text: string; caret: number }
+  select: (suggestion: AtSuggestion, text: string, caret: number) => { text: string; caret: number }
   /** 光标紧邻引用尾部时，一次退格整体删除；否则返回 null */
   backspace: (text: string, caret: number) => { text: string; caret: number } | null
   /** 发送时构造标记文本 + at 类型 InlineToken（无引用则原样返回） */
@@ -128,7 +142,10 @@ export interface UseAtMentions {
   reset: () => void
 }
 
-export function useAtMentions(sessionId: string | null): UseAtMentions {
+export function useAtMentions(
+  sessionId: string | null,
+  botCandidates?: ChatBotCandidate[]
+): UseAtMentions {
   const [mentions, setMentions] = useState<AtMention[]>([])
   const [trigger, setTrigger] = useState<{ at: number; query: string } | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -184,10 +201,22 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
   // 渲染期从模块级表取当前会话的文件表（切会话即时呈现缓存，scan 回来再刷新）
   const fileMap = sessionId ? (FILE_MAPS.get(sessionId) ?? null) : null
 
-  const suggestions = useMemo(
-    () => (trigger ? searchFileMap(fileMap, trigger.query) : []),
-    [trigger, fileMap]
-  )
+  const suggestions = useMemo<AtSuggestion[]>(() => {
+    if (!trigger) return []
+    // bot 成员在前：聊天会话里 @ 的第一语义是点名成员（mention-only 成员这是唯一入口），
+    // 文件引用照旧跟在后面。空查询列全员，命中按显示名/身份键子串（大小写不敏感）
+    const q = trigger.query.toLowerCase()
+    const botHits: AtSuggestion[] = (botCandidates ?? [])
+      .filter(
+        (b) => !q || b.displayName.toLowerCase().includes(q) || b.name.toLowerCase().includes(q)
+      )
+      .map((b) => ({ kind: 'bot' as const, ...b }))
+    const fileHits: AtSuggestion[] = searchFileMap(fileMap, trigger.query).map((s) => ({
+      kind: 'file' as const,
+      ...s
+    }))
+    return [...botHits, ...fileHits]
+  }, [trigger, fileMap, botCandidates])
 
   const showPopover = trigger !== null && suggestions.length > 0
 
@@ -237,19 +266,25 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
   )
 
   const select = useCallback(
-    (suggestion: FileSuggestion, text: string, caret: number): { text: string; caret: number } => {
+    (suggestion: AtSuggestion, text: string, caret: number): { text: string; caret: number } => {
       const at = trigger?.at ?? caret
       const before = text.slice(0, at)
       const after = text.slice(caret)
-      // 写入 textarea 的明文用「完整文件名」（含扩展名），胶囊即照此原样显示（镜像层字符须与底层一致）。
-      // 唯一标识/展开正文用 rel（见 buildAtToken），故同名不同目录也不会串味。
-      const key = `@${suggestion.label}`
-      const insert = `${key} `
-      setMentions((prev) =>
-        prev.some((m) => m.text === key)
-          ? prev
-          : [...prev, { text: key, rel: suggestion.rel, base: suggestion.label }]
-      )
+      // 写入 textarea 的明文：文件用「完整文件名」（含扩展名），bot 用显示名 ——
+      // 胶囊即照此原样显示（镜像层字符须与底层一致）。唯一标识/展开正文用 rel
+      // （bot 存 `bot:<name>`，与文件 rel 不同名字空间），同名不同目录/同显示名不同 bot 不串味。
+      const entry: AtMention =
+        suggestion.kind === 'bot'
+          ? {
+              kind: 'bot',
+              text: `@${suggestion.displayName}`,
+              rel: `bot:${suggestion.name}`,
+              base: suggestion.displayName,
+              botName: suggestion.name
+            }
+          : { text: `@${suggestion.label}`, rel: suggestion.rel, base: suggestion.label }
+      const insert = `${entry.text} `
+      setMentions((prev) => (prev.some((m) => m.text === entry.text) ? prev : [...prev, entry]))
       setTrigger(null)
       return { text: before + insert + after, caret: before.length + insert.length }
     },
@@ -289,7 +324,13 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
         if (!uid) {
           uid = `a${counter++}`
           uidByRel.set(mt.mention.rel, uid)
-          tokens[uid] = buildAtToken(mt.mention)
+          tokens[uid] =
+            mt.mention.kind === 'bot'
+              ? buildBotToken({
+                  name: mt.mention.botName ?? mt.mention.base,
+                  displayName: mt.mention.base
+                })
+              : buildAtToken(mt.mention)
         }
         out += makeTokenMarker(uid)
         last = mt.end
@@ -306,7 +347,14 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     let out = ''
     let last = 0
     for (const mt of matches) {
-      out += text.slice(last, mt.start) + buildAtToken(mt.mention).payload
+      const payload =
+        mt.mention.kind === 'bot'
+          ? buildBotToken({
+              name: mt.mention.botName ?? mt.mention.base,
+              displayName: mt.mention.base
+            }).payload
+          : buildAtToken(mt.mention).payload
+      out += text.slice(last, mt.start) + payload
       last = mt.end
     }
     return out + text.slice(last)
@@ -317,9 +365,19 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     setMentions((prev) => {
       const next = [...prev]
       for (const t of tokens) {
-        const text = `@${t.displayText}`
-        if (!next.some((m) => m.text === text)) {
-          next.push({ text, rel: t.id, base: t.displayText })
+        // bot token 的 displayText 已带 @（`@Shuvi`），再拼前导 @ 会翻倍
+        const entry: AtMention =
+          t.type === BOT_MENTION_TOKEN_TYPE
+            ? {
+                kind: 'bot',
+                text: t.displayText,
+                rel: `bot:${t.id}`,
+                base: t.name ?? t.displayText.replace(/^@/, ''),
+                botName: t.id
+              }
+            : { text: `@${t.displayText}`, rel: t.id, base: t.displayText }
+        if (!next.some((m) => m.text === entry.text)) {
+          next.push(entry)
         }
       }
       return next.length === prev.length ? prev : next

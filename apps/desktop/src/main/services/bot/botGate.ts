@@ -64,9 +64,8 @@ export interface L0Result {
 }
 
 /**
- * 提及胶囊的消费口。
- *
- * **生产端（输入框胶囊）是 A3**，所以今天它恒返回空数组 —— 刻意不假装它已经能用。
+ * 提及胶囊的消费口（生产端 = 输入框 @ 弹层的 `buildBotToken`，A3 已落地；
+ * `token.id` 即 bot 的 name，按身份键精确认领，displayName 撞名也不糊）。
  * 位置在这里是因为消费必须发生在 token 展开**之前**：`resolveTokensForAgent` 之后
  * type 就永久丢失了，那时再想认出「这是一次提及」已经没有依据。
  */

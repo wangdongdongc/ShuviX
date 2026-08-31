@@ -1,5 +1,9 @@
 import { forwardRef } from 'react'
-import { buildAtToken, buildPasteToken } from '@shuvix/chat-protocol/utils/inlineTokens'
+import {
+  buildAtToken,
+  buildBotToken,
+  buildPasteToken
+} from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { matchMentions, type AtMention } from '../../hooks/useAtMentions'
 import { matchPasteChips, type PasteChip } from '../../hooks/usePasteChips'
@@ -38,7 +42,14 @@ export const MentionHighlighter = forwardRef<HTMLDivElement, MentionHighlighterP
       ...matchMentions(text, mentions).map((mt) => ({
         start: mt.start,
         end: mt.end,
-        token: buildAtToken(mt.mention)
+        // bot 提及走 bot token：点开胶囊显示的是 `@显示名` 而不是文件话术
+        token:
+          mt.mention.kind === 'bot'
+            ? buildBotToken({
+                name: mt.mention.botName ?? mt.mention.base,
+                displayName: mt.mention.base
+              })
+            : buildAtToken(mt.mention)
       })),
       ...matchPasteChips(text, pasteChips ?? []).map((m) => ({
         start: m.start,

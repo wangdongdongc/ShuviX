@@ -1,26 +1,30 @@
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { FileText } from 'lucide-react'
-import type { FileSuggestion } from '@shuvix/chat-protocol/utils/fileMap'
+import type { AtSuggestion } from '../../hooks/useAtMentions'
+import { BotAvatar } from '../common/BotAvatar'
 
 interface AtMentionPopoverProps {
-  /** 补全候选（已排序） */
-  suggestions: FileSuggestion[]
+  /** 补全候选（bot 成员在前，文件在后；已排序） */
+  suggestions: AtSuggestion[]
   /** 选中回调 */
-  onSelect: (suggestion: FileSuggestion) => void
+  onSelect: (suggestion: AtSuggestion) => void
   /** 当前键盘选中索引 */
   selectedIndex: number
 }
 
 /**
- * `@` 文件引用自动补全浮层 —— 复用斜杠命令 / 内置技能选择框的视觉样式，
- * 但每行展示文件名（主）+ 所在目录（次）。锚定在 textarea 上方（与斜杠命令一致，
- * 不做光标坐标测量，键位与整体观感统一）。
+ * `@` 自动补全浮层 —— 复用斜杠命令 / 内置技能选择框的视觉样式。
+ * 两类候选：bot 成员（聊天会话，A3 —— 头像 + 显示名 + 描述，mention-only 成员带标注，
+ * @提及是它们唯一的入口所以排最前）与工作区文件（文件名主 + 所在目录次）。
+ * 锚定在 textarea 上方（与斜杠命令一致，不做光标坐标测量，键位与整体观感统一）。
  */
 export function AtMentionPopover({
   suggestions,
   onSelect,
   selectedIndex
 }: AtMentionPopoverProps): React.JSX.Element | null {
+  const { t } = useTranslation()
   const listRef = useRef<HTMLDivElement>(null)
 
   // 确保选中项可见
@@ -40,8 +44,8 @@ export function AtMentionPopover({
     >
       {suggestions.map((s, idx) => (
         <button
-          // token 可能重复（同名裸名回退），叠加 idx 保唯一
-          key={`${s.token}-${idx}`}
+          // 文件 token 可能重复（同名裸名回退），叠加 idx 保唯一；bot 按名字唯一
+          key={s.kind === 'bot' ? `bot:${s.name}` : `${s.token}-${idx}`}
           onMouseDown={(e) => {
             // mousedown 抢在 textarea blur 之前，避免点击丢失焦点/触发态
             e.preventDefault()
@@ -52,11 +56,33 @@ export function AtMentionPopover({
               ? 'bg-accent/15 text-text-primary'
               : 'text-text-secondary hover:bg-bg-tertiary'
           }`}
+          data-at-suggestion={s.kind === 'bot' ? `bot:${s.name}` : s.rel}
         >
-          <FileText size={12} className="flex-shrink-0 text-sky-500" />
-          <span className="font-mono text-accent truncate">{s.label}</span>
-          {s.detail && (
-            <span className="text-text-tertiary text-[11px] truncate ml-auto pl-2">{s.detail}</span>
+          {s.kind === 'bot' ? (
+            <>
+              <BotAvatar name={s.name} displayName={s.displayName} size={16} />
+              <span className="truncate text-text-primary">{s.displayName}</span>
+              {s.mentionOnly && (
+                <span className="flex-shrink-0 rounded bg-warning/10 px-1 text-[10px] text-warning">
+                  {t('bot.mentionOnly')}
+                </span>
+              )}
+              {s.description && (
+                <span className="text-text-tertiary text-[11px] truncate ml-auto pl-2 max-w-[50%]">
+                  {s.description}
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <FileText size={12} className="flex-shrink-0 text-sky-500" />
+              <span className="font-mono text-accent truncate">{s.label}</span>
+              {s.detail && (
+                <span className="text-text-tertiary text-[11px] truncate ml-auto pl-2">
+                  {s.detail}
+                </span>
+              )}
+            </>
           )}
         </button>
       ))}

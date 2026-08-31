@@ -1150,6 +1150,7 @@
     "receiptQueued": "已排入 {{names}} 的队列，将按序作答",
     "statusOk": "完成",
     "statusWarn": "有保留",
-    "statusError": "未完成"
+    "statusError": "未完成",
+    "mentionOnly": "仅提及时响应"
   }
 }

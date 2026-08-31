@@ -1150,6 +1150,7 @@
     "receiptQueued": "{{names}} の順番待ちに追加 —— 順に返信します",
     "statusOk": "完了",
     "statusWarn": "留保あり",
-    "statusError": "未完了"
+    "statusError": "未完了",
+    "mentionOnly": "メンション時のみ応答"
   }
 }
