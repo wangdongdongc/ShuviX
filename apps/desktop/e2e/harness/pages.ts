@@ -55,6 +55,8 @@ export interface ChatPane {
   type(text: string): Promise<void>
   /** 敲回车（走 React 的 onKeyDown → handleSend / handleSteer） */
   pressEnter(): Promise<void>
+  /** 往输入框派发任意按键（弹层方向键导航等；只走 keydown，不改 value） */
+  pressKey(key: string): Promise<void>
   /** type + pressEnter */
   typeAndSend(text: string): Promise<void>
   /** 点发送按钮（禁用态下浏览器本就不派发 onClick，用于验证「点不动」） */
@@ -230,6 +232,12 @@ export function chatPane(main: CdpClient): ChatPane {
     )
   }
 
+  const pressKey = async (key: string): Promise<void> => {
+    await main.eval(
+      `${TEXTAREA}.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`
+    )
+  }
+
   return {
     ready: async () => {
       await until(() => main.eval<boolean>(`${TEXTAREA} !== null`), 'chat input mounted')
@@ -237,6 +245,7 @@ export function chatPane(main: CdpClient): ChatPane {
 
     type: type,
     pressEnter: pressEnter,
+    pressKey: pressKey,
     typeAndSend: async (text) => {
       await type(text)
       await pressEnter()
@@ -393,6 +402,65 @@ export function chatPane(main: CdpClient): ChatPane {
     confirmAccept: async () => {
       await main.eval(`[...${DIALOG}.querySelectorAll('button')][1].click()`)
       await new Promise((r) => setTimeout(r, 400))
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// A3 · 输入框 `@` 提及弹层（AtMentionPopover）
+//
+// 行锚点是组件自带的 data-at-suggestion：bot 行的值是 `bot:<name>`（身份键），
+// 文件行的值是工作区相对路径 —— 两个名字空间天然不撞。徽标/选中态按**结构类**认
+// （mention-only 徽标 = 行内 bg-warning/10 的 span；键盘选中 = bg-accent/15），
+// 不认 i18n 文案。bot 候选是异步拉的（bots.list()），行何时出现由 spec 用 until 等。
+
+/** @ 弹层里的一行 */
+export interface AtSuggestionRow {
+  /** data-at-suggestion 属性值：bot 行 `bot:<name>`，文件行为相对路径 */
+  key: string
+  /** mention-only 徽标节点在不在（bot 行专属；按 bg-warning/10 结构类认） */
+  mentionBadge: boolean
+  /** 键盘选中态（bg-accent/15） */
+  selected: boolean
+}
+
+export interface AtPopoverPane {
+  /** 弹层是否在屏（有至少一行） */
+  open(): Promise<boolean>
+  /** 行快照（document 序 = bot 成员序在前、文件在后） */
+  rows(): Promise<AtSuggestionRow[]>
+  /**
+   * 选中某行 —— 派发 **bubbling mousedown**：行按钮监听的是 onMouseDown
+   * （抢在 textarea blur 之前），element.click() 只发 click，选不中。
+   */
+  select(key: string): Promise<boolean>
+}
+
+export function atPopoverPane(main: CdpClient): AtPopoverPane {
+  const ROWS = `[...document.querySelectorAll('[data-at-suggestion]')]`
+  return {
+    open: () => main.eval<boolean>(`${ROWS}.length > 0`),
+    rows: () =>
+      main.eval<AtSuggestionRow[]>(
+        `${ROWS}.map((b) => ({
+          key: b.getAttribute('data-at-suggestion') ?? '',
+          mentionBadge: [...b.querySelectorAll('span')].some((s) =>
+            s.className.includes('bg-warning/10')
+          ),
+          selected: b.className.includes('bg-accent/15')
+        }))`
+      ),
+    select: async (key) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const row = ${ROWS}.find(
+          (b) => b.getAttribute('data-at-suggestion') === ${JSON.stringify(key)}
+        )
+        if (!row) return false
+        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      await sleep(150)
+      return hit
     }
   }
 }

@@ -159,6 +159,15 @@ export function useAtMentions(
     mentionsRef.current = mentions
   })
 
+  // 切会话即收弹层：InputArea 不按会话重挂，触发态若跨会话存活，A 会话开着的弹层会
+  // 带着过期锚点悬在 B 会话上 —— 此时回车在错误位置插胶囊而不是发送（A3 交卷时的实测毛边；
+  // 空草稿的同值 input 事件被 React 去重，靠 refresh 清不掉它）
+  useEffect(() => {
+    // 同步清态是本意：等微任务的话切换后首帧仍会闪一下旧弹层
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTrigger(null)
+  }, [sessionId])
+
   // ── 文件表：挂载即扫描，files.changed 时刷新（内存内过滤，不每次击键回后端） ──
   const scan = useCallback(async (): Promise<void> => {
     if (!sessionId) return

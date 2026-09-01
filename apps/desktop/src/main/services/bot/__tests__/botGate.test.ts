@@ -7,6 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { ParsedBotFile } from '@shuvix/agent-runtime'
+import { buildBotToken } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import {
   mentionsFromText,
@@ -91,6 +92,13 @@ describe('mentionsFromTokens —— 提及胶囊的消费口', () => {
     // 钉住当前形状：去重发生在这里之外还是根本没发生，是消费口的语义边界
     const tokens: Record<string, InlineToken> = { t0: mentionToken('a'), t1: mentionToken('a') }
     expect(mentionsFromTokens(tokens)).toEqual(['a', 'a'])
+  })
+
+  it('生产↔消费对接（A5）：buildBotToken 的产物被按身份键认领，不是显示名', () => {
+    // 生产端（输入框胶囊）与消费端（L0）各自演化，唯一的握手就是 token 的 type/id 两个
+    // 字段 —— 用 name ≠ displayName 的语料钉住「认领拿的是 id（身份键），不是显示名」
+    const tokens = { a0: buildBotToken({ name: 'scout', displayName: '侦察兵' }) }
+    expect(mentionsFromTokens(tokens)).toEqual(['scout'])
   })
 })
 
