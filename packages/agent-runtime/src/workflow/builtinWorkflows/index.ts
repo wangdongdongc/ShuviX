@@ -11,6 +11,8 @@ import type { ParsedWorkflowFile } from '../workflowFile'
 
 import autoTitleEn from './md/auto-title.md?raw'
 import botChatEn from './md/bot-chat.md?raw'
+import botChatZh from './md/bot-chat.zh.md?raw'
+import botChatJa from './md/bot-chat.ja.md?raw'
 
 export { buildBuiltinWorkflow, type BuiltinWorkflowDeps, type BuiltinWorkflowSpec } from './spec'
 
@@ -22,10 +24,13 @@ export const AUTO_TITLE_WORKFLOW_SPEC: BuiltinWorkflowSpec = {
 /**
  * 聊天会话里每个 bot 跑的管线。**没有 `shuvix-workflow-on`** —— 没有埋点指向它，
  * 由会话按名 invoke（bot md 的 `shuvix-bot-pipeline` 指向这里）。
+ *
+ * 三语言整文件回落（同 builtinAgents）；**脚本与 schema 块必须与 en 逐字节同**
+ * （守护测试钉住）—— 本地化只许动散文与提示词，行为永远只有一份。
  */
 export const BOT_CHAT_WORKFLOW_SPEC: BuiltinWorkflowSpec = {
   name: 'bot-chat',
-  sources: { en: botChatEn }
+  sources: { en: botChatEn, zh: botChatZh, ja: botChatJa }
 }
 
 export const BUILTIN_WORKFLOW_SPECS: readonly BuiltinWorkflowSpec[] = [

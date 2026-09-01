@@ -2,7 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
-description: The pipeline a bot runs in a chat session — decide whether to speak, answer, then quietly bring its notes up to date.
+description: bot 在聊天会话里跑的管线 —— 判定要不要说话、作答,再在闲时悄悄把自己的笔记整理好。
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:
   maxAgents: 4
@@ -30,39 +30,33 @@ shuvix-workflow-input:
     since: { type: array }
 ---
 
-## What this is
+## 这是什么
 
-Every bot in a chat session runs this file, once per message, per bot. It is the whole of
-what a bot does, in order: decide whether to speak, settle who the message belongs to,
-answer, and — later, off the critical path — bring its own notes up to date.
+聊天会话里的每个 bot、每条消息都跑一遍这份文件。它就是一个 bot 做的全部事情,按序:
+判定要不要说话、裁定这条消息归谁、作答,以及 —— 稍后、在关键路径之外 —— 把自己的
+笔记整理好。
 
-There is no `shuvix-workflow-on` here: no trigger leads to this file. A bot points at it
-(`shuvix-bot-pipeline: bot-chat`) and the session invokes it. `parallel` is deliberate:
-run-level re-entry gets out of the way entirely, and one-thing-at-a-time is provided by
-`turn()`, which serialises _this bot in this session_ — never the file, which many bots and
-many sessions share at the same moment.
+这里没有 `shuvix-workflow-on`:没有任何埋点通向这份文件。bot 指向它
+(`shuvix-bot-pipeline: bot-chat`),由会话来 invoke。`parallel` 是刻意的:run 级重入
+整个让位,「一次只做一件事」由 `turn()` 提供 —— 它串行化的是**这个 bot 在这个会话里**,
+而不是这份被许多 bot、许多会话同时共用的文件。
 
-There is also no key saying "only a bot may call this" — the invocation path is not an
-admission check. What makes this file a bot pipeline is simply that its script uses `say`,
-`claim` and `turn`, which only the bot caller assembles into the script API. Start it from
-somewhere that does not and it fails on the first of those names, the way any script fails
-on an undefined function.
+也没有一个「只有 bot 才能调用」的键 —— 调用路径不是准入检查。让这份文件成为 bot 管线的,
+只是它的脚本用了 `say`、`claim` 与 `turn`,而只有 bot 调用方会把这三个名字装配进脚本
+API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到未定义函数一个样。
 
-> **Status.** All three stages are real: the gate, the task stage (M8′) and the notes
-> occasion (M9′) have all landed.
+> **状态。** 三段都是真的:门控、任务段(M8′)与笔记场合(M9′)均已落地。
 
-## The pipeline
+## 管线
 
-Everything is read off `input.*`. The script scope holds the base API plus whatever the
-caller assembled (`say` / `claim` / `turn`) — it does **not** flatten `input`, so a bare
-`message` or `agents` would be a ReferenceError. Flattening happens only in the render scope
-of a `md prompt=` block.
+一切都从 `input.*` 上读。脚本作用域里是基础 API 加上调用方装配的那几个
+(`say` / `claim` / `turn`)—— 它**不会**摊平 `input`,裸写 `message` 或 `agents`
+是 ReferenceError。摊平只发生在 `md prompt=` 块的渲染作用域里。
 
-**Optional context is a nested prompt, never a bare placeholder.** The template language is
-one thing wide — `{{path}}`, no conditions, no loops — and a line vanishes only when it holds
-nothing but placeholders. So a heading that should disappear along with its value has to live
-_inside_ that value: each optional section is its own `md prompt=` block, and the script turns
-it into one string that is either whole or empty.
+**可选上下文是嵌套提示词,不是裸占位符。** 模板语言只有一样东西 —— `{{path}}`,
+没有条件没有循环 —— 一行只有当整行都是占位符时才会消失。所以要跟着值一起消失的标题,
+必须住在那个值**里面**:每个可选小节各是一个 `md prompt=` 块,脚本把它变成
+「要么完整要么为空」的一个字符串。
 
 ```js workflow
 if (input.occasion === 'notes') {
@@ -333,16 +327,14 @@ async function recheck(slot, windowBlock) {
 }
 ```
 
-Anything that throws here ends the run, and the session says so in the chat — failures are
-never silent. Silence is reserved for one thing only: the gate deciding a message was not
-for this bot.
+在这里抛出的任何东西都会结束这个 run,而且会话会在聊天里说出来 —— 失败从不沉默。
+沉默只留给一件事:门控判定这条消息不归这个 bot。
 
-## Contracts
+## 契约
 
-Each stage that returns data ends by calling `next` with an object shaped by one of these
-blocks (the instruction to do so is added at dispatch, along with the schema itself). The
-gate is offered `ignore` only when another bot could pick the message up: in a one-on-one
-session, silence is indistinguishable from a broken bot.
+每个交回数据的段以调用 `next` 收尾,对象形状取自下面这些块(这条指令连同 schema 本身
+在派发时附加)。只有当别的 bot 还能接住这条消息时,门控才会被给到 `ignore`:
+一对一会话里,沉默与坏掉的 bot 无从分辨。
 
 ```json schema=intent
 {
@@ -439,18 +431,17 @@ session, silence is indistinguishable from a broken bot.
 }
 ```
 
-## Prompts
+## 提示词
 
-The gate's own words. All of it is editable prose: copy this file to
-`~/.shuvix/workflows/bot-chat.md` and it is yours.
+各段的原话。全部是可编辑的散文:把这份文件拷到 `~/.shuvix/workflows/bot-chat.md`,
+它就是你的了。
 
 ```md prompt=gate
-A message has just arrived in a chat session. Decide, on this bot's behalf, what to do with
-it.
+聊天会话里刚到了一条消息。替这个 bot 决定拿它怎么办。
 
-## The bot you speak for
+## 你代言的 bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{notesBlock}}
 
@@ -460,59 +451,59 @@ it.
 
 {{windowBlock}}
 
-## The new message
+## 新消息
 
 {{message.text}}
 ```
 
 ```md prompt=notes
-## What this bot remembers
+## 这个 bot 记得的事
 
 {{notes}}
 ```
 
 ```md prompt=notesTask
-The conversations below have finished. Bring this bot's own markdown up to date.
+下面这些对话已经结束。把这个 bot 自己的 markdown 更新到位。
 
-The file is at `{{file}}`. Read it, then edit it in place — surgically, only the lines that
-change. Everything you need to know about what belongs there is in your own instructions.
+文件在 `{{file}}`。读它,然后就地编辑 —— 外科式的,只动会变的那几行。什么内容属于
+那里,你自己的指令里已经写全了。
 
-Changing nothing is a normal outcome. If these conversations taught nothing that will still
-matter next week, read the file, decide that, and stop.
+什么都不改是正常结局。如果这些对话没教会任何下周还用得上的东西,读完文件、下这个
+判断,然后停手。
 
 {{sinceBlock}}
 ```
 
 ```md prompt=others
-## The other bots in this session
+## 会话里的其他 bot
 
 {{others}}
 
-These bots see this message too. One plainly aimed at one of them is theirs, not yours.
+这些 bot 也看得到这条消息。明显冲着其中某个去的,是它的,不是你的。
 ```
 
 ```md prompt=addressed
-This message is addressed to this bot — it was named, or it answers a question this bot just
-asked. Answering is not optional, and `ignore` is not on the contract.
+这条消息就是冲这个 bot 来的 —— 它被点了名,或这条消息在回答它刚问出的问题。
+作答不是可选项,契约里也没有 `ignore`。
 ```
 
 ```md prompt=window
-## Recent conversation
+## 最近的对话
 
 {{window}}
 ```
 
 ```md prompt=recheck
-This request was queued while the bot was busy, and the bot has replied to something else in
-the meantime. Decide whether the queued request still needs doing.
+这条请求在 bot 忙碌时排了队,而 bot 在这期间已经答过别的东西。判定这条排队的请求
+还需不需要做。
 
-## The bot you speak for
+## 你代言的 bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{windowBlock}}
 
-## The queued message
+## 排队的那条消息
 
 {{message.text}}
 
@@ -520,80 +511,76 @@ the meantime. Decide whether the queued request still needs doing.
 ```
 
 ```md prompt=sinceNotes
-## The conversations
+## 这些对话
 
 {{since}}
 ```
 
 ```md prompt=since
-## What happened while it waited
+## 它排队期间发生了什么
 
 {{since}}
 ```
 
 ```md prompt=recheckSkipped
-Already covered by my last reply — nothing further from me on that one.
+我刚才那条回复已经把这件事覆盖了 —— 这条就不再另答了。
 ```
 
 ```md prompt=gateBroken
-I could not work out how to answer that — the part of me that decides what to do came back in
-a shape I could not read. Ask again, or put it a different way.
+我没能弄明白该怎么接这条 —— 我负责拿主意的那部分交回了一个我读不懂的形状。
+再问一次,或者换个说法。
 ```
 
 ```md prompt=gateTimeout
-I spent too long deciding how to answer that and gave up. Ask again if it still matters.
+我在「怎么接这条」上花了太久,放弃了。还要紧的话,再问一次。
 ```
 
 ```md prompt=task
-You are answering a message in a chat session, on this bot's behalf. Do the work, then answer.
+你在替这个 bot 回答聊天会话里的一条消息。先把活干了,再作答。
 
-## The bot you speak for
+## 你代言的 bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{windowBlock}}
 
-## The message
+## 这条消息
 
 {{message.text}}
 
 {{sinceBlock}}
 
-## What you decided this needs
+## 你判定它需要什么
 
 {{objective}}
 
 {{boundariesBlock}}
 
-## Answering
+## 作答
 
-Lead with the conclusion — that one sentence is what the reader sees first and often all they
-read. Then choose the shape the content already has, rather than the shape that looks
-thorough: an explanation is prose and belongs in `body`; a set of parallel facts is a list;
-rows and columns are a table. Splitting a paragraph into three half-sentences to make it look
-like a list costs the reader the argument that held them together.
+结论先行 —— 那一句话是读者最先看到、也常常是唯一会读的部分。然后选内容本来就有的
+形状,而不是看起来周全的形状:解释天然是散文,归 `body`;一组并列事实是列点;
+行与列是表格。把一个段落劈成三句半只为看着像列表,读者失去的是把它们串起来的那条论证。
 
-Say what you actually did and what you did not. If you could not finish, say so in the
-conclusion — a hedged answer that reads like a finished one is worse than an admitted gap.
+说你实际做了什么、没做什么。没做完就在结论里说没做完 —— 一条读起来像做完了的含糊
+回答,比一个承认了的缺口更糟。
 ```
 
 ```md prompt=boundaries
-### Stay inside
+### 边界之内
 
 {{boundaries}}
 ```
 
 ```md prompt=taskNoAgent
-I was set up to hand that kind of work to `{{agent}}`, and there is no such agent. That is a
-configuration problem on my side — asking again won't help until it is fixed.
+我被配置成把这类活交给 `{{agent}}`,而这个 agent 并不存在。这是我这边的配置问题 ——
+修好之前,再问也没用。
 ```
 
 ```md prompt=taskTimeout
-I worked on that for as long as I'm allowed and didn't finish. Ask again if it still matters —
-narrowing it down will help.
+这件事我做满了被允许的时长,没能做完。还要紧的话再问一次 —— 把范围收窄会有帮助。
 ```
 
 ```md prompt=taskFailed
-I took that on and it broke partway through. Nothing was finished, so don't count on anything
-from me on that one.
+这件事我接了,半路坏掉了。什么都没做完,这一条别指望我交出任何东西。
 ```

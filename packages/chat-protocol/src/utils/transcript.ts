@@ -215,7 +215,10 @@ export function transcribeConversation(
       if (imgs) parts.push(imgs)
     }
     if (options.includeUsage && meta?.usage) parts.push(formatUsage(meta.usage))
-    pushBody(`${labels.assistant}${ts}`, parts.filter(Boolean).join('\n\n'))
+    // 聊天会话的 bot 消息按署名出角色标签（A5）：displayName 来自侧车,文件被删历史也不裂;
+    // 与会话窗口里的处置一致 —— 发言人名是数据标注,不走 labels 表也不本地化
+    const speaker = meta?.sender?.kind === 'bot' ? meta.sender.displayName : labels.assistant
+    pushBody(`${speaker}${ts}`, parts.filter(Boolean).join('\n\n'))
   }
 
   return blocks.join('\n\n')

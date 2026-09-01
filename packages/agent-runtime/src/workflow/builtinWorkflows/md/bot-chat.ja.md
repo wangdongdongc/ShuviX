@@ -2,7 +2,7 @@
 shuvix: workflow v1
 shuvix-builtin: true
 name: bot-chat
-description: The pipeline a bot runs in a chat session — decide whether to speak, answer, then quietly bring its notes up to date.
+description: チャット会話で bot が走らせるパイプライン —— 話すかを判定し、答え、あとで静かに自分のノートを整える。
 shuvix-workflow-concurrency: parallel
 shuvix-workflow-limits:
   maxAgents: 4
@@ -30,39 +30,37 @@ shuvix-workflow-input:
     since: { type: array }
 ---
 
-## What this is
+## これは何か
 
-Every bot in a chat session runs this file, once per message, per bot. It is the whole of
-what a bot does, in order: decide whether to speak, settle who the message belongs to,
-answer, and — later, off the critical path — bring its own notes up to date.
+チャット会話の各 bot が、メッセージごとにこのファイルを一度走らせる。bot のやること
+全部が、順にここにある:話すかを判定し、そのメッセージが誰のものかを決め、答え、
+そして —— あとで、クリティカルパスの外で —— 自分のノートを整える。
 
-There is no `shuvix-workflow-on` here: no trigger leads to this file. A bot points at it
-(`shuvix-bot-pipeline: bot-chat`) and the session invokes it. `parallel` is deliberate:
-run-level re-entry gets out of the way entirely, and one-thing-at-a-time is provided by
-`turn()`, which serialises _this bot in this session_ — never the file, which many bots and
-many sessions share at the same moment.
+ここに `shuvix-workflow-on` はない:どのトリガーもこのファイルには通じない。bot が
+それを指し(`shuvix-bot-pipeline: bot-chat`)、会話が invoke する。`parallel` は意図的:
+run 級の再入は完全に脇へ退き、「一度に一つ」は `turn()` が提供する —— それが直列化
+するのは**この会話のこの bot** であって、多くの bot と会話が同時に共有するこの
+ファイルではない。
 
-There is also no key saying "only a bot may call this" — the invocation path is not an
-admission check. What makes this file a bot pipeline is simply that its script uses `say`,
-`claim` and `turn`, which only the bot caller assembles into the script API. Start it from
-somewhere that does not and it fails on the first of those names, the way any script fails
-on an undefined function.
+「bot だけが呼べる」という鍵もない —— 呼び出し経路は入場検査ではない。このファイルを
+bot パイプラインたらしめるのは、スクリプトが `say`・`claim`・`turn` を使うこと、
+そしてその三つは bot 呼び出し側だけがスクリプト API に組み込むこと。組み込まない場所
+から起動すれば、未定義関数を踏んだスクリプトと同じように最初の名前で失敗する。
 
-> **Status.** All three stages are real: the gate, the task stage (M8′) and the notes
-> occasion (M9′) have all landed.
+> **状態。** 三段とも本物:ゲート、タスク段(M8′)、ノートの場(M9′)まで全て着地済み。
 
-## The pipeline
+## パイプライン
 
-Everything is read off `input.*`. The script scope holds the base API plus whatever the
-caller assembled (`say` / `claim` / `turn`) — it does **not** flatten `input`, so a bare
-`message` or `agents` would be a ReferenceError. Flattening happens only in the render scope
-of a `md prompt=` block.
+すべて `input.*` から読む。スクリプトのスコープは基礎 API + 呼び出し側が組み込んだもの
+(`say` / `claim` / `turn`)であり、`input` を**フラット化しない** —— 裸の `message` や
+`agents` は ReferenceError になる。フラット化は `md prompt=` ブロックの描画スコープ
+だけで起こる。
 
-**Optional context is a nested prompt, never a bare placeholder.** The template language is
-one thing wide — `{{path}}`, no conditions, no loops — and a line vanishes only when it holds
-nothing but placeholders. So a heading that should disappear along with its value has to live
-_inside_ that value: each optional section is its own `md prompt=` block, and the script turns
-it into one string that is either whole or empty.
+**任意の文脈はネストしたプロンプトであり、裸のプレースホルダではない。** テンプレート
+言語には `{{path}}` の一つしかない —— 条件も繰り返しもなく、行はプレースホルダしか
+含まないときだけ消える。だから値と一緒に消えるべき見出しは、その値の**内側**に住む:
+任意のセクションはそれぞれ自分の `md prompt=` ブロックであり、スクリプトがそれを
+「丸ごとあるか空か」の一つの文字列にする。
 
 ```js workflow
 if (input.occasion === 'notes') {
@@ -333,16 +331,16 @@ async function recheck(slot, windowBlock) {
 }
 ```
 
-Anything that throws here ends the run, and the session says so in the chat — failures are
-never silent. Silence is reserved for one thing only: the gate deciding a message was not
-for this bot.
+ここで投げられたものは run を終わらせ、会話はそれをチャットで言う —— 失敗は決して
+沈黙しない。沈黙が許されるのは一つだけ:ゲートが「このメッセージはこの bot のもの
+ではない」と判定したときだ。
 
-## Contracts
+## 契約
 
-Each stage that returns data ends by calling `next` with an object shaped by one of these
-blocks (the instruction to do so is added at dispatch, along with the schema itself). The
-gate is offered `ignore` only when another bot could pick the message up: in a one-on-one
-session, silence is indistinguishable from a broken bot.
+データを返す各段は、以下のブロックの形をしたオブジェクトで `next` を呼んで終わる
+(その指示は schema 本体とともに派遣時に付加される)。`ignore` がゲートに提示される
+のは、他の bot がそのメッセージを拾えるときだけ:一対一の会話では、沈黙は壊れた bot
+と見分けがつかない。
 
 ```json schema=intent
 {
@@ -439,18 +437,17 @@ session, silence is indistinguishable from a broken bot.
 }
 ```
 
-## Prompts
+## プロンプト
 
-The gate's own words. All of it is editable prose: copy this file to
-`~/.shuvix/workflows/bot-chat.md` and it is yours.
+各段の言葉そのもの。全部が編集できる散文:このファイルを
+`~/.shuvix/workflows/bot-chat.md` にコピーすれば、あなたのものだ。
 
 ```md prompt=gate
-A message has just arrived in a chat session. Decide, on this bot's behalf, what to do with
-it.
+チャット会話にメッセージが届いた。この bot に代わって、どうするかを決めよ。
 
-## The bot you speak for
+## あなたが代弁する bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{notesBlock}}
 
@@ -460,59 +457,60 @@ it.
 
 {{windowBlock}}
 
-## The new message
+## 新しいメッセージ
 
 {{message.text}}
 ```
 
 ```md prompt=notes
-## What this bot remembers
+## この bot が覚えていること
 
 {{notes}}
 ```
 
 ```md prompt=notesTask
-The conversations below have finished. Bring this bot's own markdown up to date.
+下の会話は終わった。この bot 自身の markdown を最新にせよ。
 
-The file is at `{{file}}`. Read it, then edit it in place — surgically, only the lines that
-change. Everything you need to know about what belongs there is in your own instructions.
+ファイルは `{{file}}` にある。読んでから、その場で編集する —— 外科的に、変わる行だけ。
+何がそこに属するかは、あなた自身の指示に全部書いてある。
 
-Changing nothing is a normal outcome. If these conversations taught nothing that will still
-matter next week, read the file, decide that, and stop.
+何も変えないのは普通の結末だ。来週も意味を持つことを何も教えてくれない会話なら、
+ファイルを読み、そう判断して、やめよ。
 
 {{sinceBlock}}
 ```
 
 ```md prompt=others
-## The other bots in this session
+## この会話にいる他の bot
 
 {{others}}
 
-These bots see this message too. One plainly aimed at one of them is theirs, not yours.
+これらの bot もこのメッセージを見ている。明らかにそのどれかに向けられたものは、
+その bot のものであって、あなたのものではない。
 ```
 
 ```md prompt=addressed
-This message is addressed to this bot — it was named, or it answers a question this bot just
-asked. Answering is not optional, and `ignore` is not on the contract.
+このメッセージはこの bot 宛てだ —— 名指しされたか、この bot がいま尋ねた質問への
+答えだ。答えることは選択肢ではなく、契約に `ignore` はない。
 ```
 
 ```md prompt=window
-## Recent conversation
+## 直近の会話
 
 {{window}}
 ```
 
 ```md prompt=recheck
-This request was queued while the bot was busy, and the bot has replied to something else in
-the meantime. Decide whether the queued request still needs doing.
+このリクエストは bot が忙しい間に列に並び、その間に bot は別のものに返信した。
+並んでいたリクエストがまだ必要かを判定せよ。
 
-## The bot you speak for
+## あなたが代弁する bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{windowBlock}}
 
-## The queued message
+## 並んでいたメッセージ
 
 {{message.text}}
 
@@ -520,80 +518,79 @@ the meantime. Decide whether the queued request still needs doing.
 ```
 
 ```md prompt=sinceNotes
-## The conversations
+## これらの会話
 
 {{since}}
 ```
 
 ```md prompt=since
-## What happened while it waited
+## 待っている間に起きたこと
 
 {{since}}
 ```
 
 ```md prompt=recheckSkipped
-Already covered by my last reply — nothing further from me on that one.
+さっきの返信でもう触れました —— この件はこれ以上ありません。
 ```
 
 ```md prompt=gateBroken
-I could not work out how to answer that — the part of me that decides what to do came back in
-a shape I could not read. Ask again, or put it a different way.
+どう答えるべきか分かりませんでした —— 判断を担う部分が読めない形で返ってきました。
+もう一度聞くか、言い方を変えてみてください。
 ```
 
 ```md prompt=gateTimeout
-I spent too long deciding how to answer that and gave up. Ask again if it still matters.
+どう答えるかを決めるのに時間をかけすぎて、諦めました。まだ必要ならもう一度どうぞ。
 ```
 
 ```md prompt=task
-You are answering a message in a chat session, on this bot's behalf. Do the work, then answer.
+この bot に代わって、チャット会話のメッセージに答える。仕事をしてから、答えよ。
 
-## The bot you speak for
+## あなたが代弁する bot
 
-{{bot.displayName}} — {{bot.description}}
+{{bot.displayName}} —— {{bot.description}}
 
 {{windowBlock}}
 
-## The message
+## メッセージ
 
 {{message.text}}
 
 {{sinceBlock}}
 
-## What you decided this needs
+## これに必要だとあなたが判定したこと
 
 {{objective}}
 
 {{boundariesBlock}}
 
-## Answering
+## 答え方
 
-Lead with the conclusion — that one sentence is what the reader sees first and often all they
-read. Then choose the shape the content already has, rather than the shape that looks
-thorough: an explanation is prose and belongs in `body`; a set of parallel facts is a list;
-rows and columns are a table. Splitting a paragraph into three half-sentences to make it look
-like a list costs the reader the argument that held them together.
+結論を先に —— その一文が読者の最初に見るものであり、しばしば読む全てだ。それから、
+内容が元々持っている形を選ぶ。周到に見える形ではなく:説明は散文であり `body` に
+属する;並列の事実は箇条書き;行と列は表だ。リストに見せるために段落を三つの半端な
+文に割れば、読者はそれらを繋いでいた論旨を失う。
 
-Say what you actually did and what you did not. If you could not finish, say so in the
-conclusion — a hedged answer that reads like a finished one is worse than an admitted gap.
+実際にやったこと・やらなかったことを言う。終えられなかったなら結論でそう言う ——
+終わったように読める曖昧な答えは、認めた欠落より悪い。
 ```
 
 ```md prompt=boundaries
-### Stay inside
+### この範囲の内で
 
 {{boundaries}}
 ```
 
 ```md prompt=taskNoAgent
-I was set up to hand that kind of work to `{{agent}}`, and there is no such agent. That is a
-configuration problem on my side — asking again won't help until it is fixed.
+その種の仕事は `{{agent}}` に渡す設定になっていますが、その agent は存在しません。
+こちら側の設定の問題です —— 直るまで、もう一度聞いても変わりません。
 ```
 
 ```md prompt=taskTimeout
-I worked on that for as long as I'm allowed and didn't finish. Ask again if it still matters —
-narrowing it down will help.
+許された時間いっぱい取り組みましたが、終わりませんでした。まだ必要ならもう一度 ——
+範囲を絞ると助かります。
 ```
 
 ```md prompt=taskFailed
-I took that on and it broke partway through. Nothing was finished, so don't count on anything
-from me on that one.
+引き受けましたが、途中で壊れました。何も仕上がっていないので、この件について私からの
+成果は当てにしないでください。
 ```
