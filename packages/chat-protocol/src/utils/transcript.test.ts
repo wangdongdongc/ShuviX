@@ -166,3 +166,61 @@ describe('transcribeConversation', () => {
     expect(transcribeConversation([])).toBe('')
   })
 })
+
+/**
+ * bot 署名标签（metadata.sender）—— 聊天会话里 bot 说的 assistant 消息，转写标题用
+ * 侧车里的 displayName 而不是 labels.assistant：发言人名是数据标注，不走 labels 表也不本地化。
+ *
+ * 用例清单（先由契约枚举，TB-4 为读实现后的白盒补充）：
+ *  - TB-1 bot 署名 → 标题用 displayName 原样（自定义 labels.assistant 对该条无效；文件名 name 不上屏）
+ *  - TB-2 无署名 → labels.assistant 照旧（回归）
+ *  - TB-3 混排：两个不同 bot + 一条无署名 → 三个互异标题按消息顺序出现
+ *  - TB-4（白盒）sender.kind 非 'bot'（未来扩展）→ 回落 labels.assistant
+ */
+describe('transcribeConversation — bot 署名标签', () => {
+  const bot = (name: string, displayName: string): Record<string, unknown> => ({
+    metadata: { sender: { kind: 'bot', name, displayName } }
+  })
+
+  it('TB-1 bot 署名 → 标题用 displayName 原样，无视自定义 labels.assistant', () => {
+    const msgs = [assistantText('结论在此', bot('weaver-bot', '织答'))]
+    const md = transcribeConversation(msgs, { labels: { assistant: '助手' } })
+    expect(md).toContain('### 织答')
+    expect(md).not.toContain('助手')
+    // 文件名是稳定标识不是给人读的 —— 上屏的只有当时的显示名
+    expect(md).not.toContain('weaver-bot')
+  })
+
+  it('TB-2 无署名 → labels.assistant 照旧（回归）', () => {
+    const md = transcribeConversation([assistantText('plain answer')])
+    expect(md).toContain('### Assistant')
+    expect(md).toContain('plain answer')
+  })
+
+  it('TB-3 混排：两个不同 bot + 一条无署名 → 三个互异标题按序', () => {
+    const msgs = [
+      assistantText('甲的结论', bot('bot-a', '甲号机')),
+      assistantText('乙的结论', bot('bot-b', '乙号机')),
+      assistantText('root answer')
+    ]
+    const md = transcribeConversation(msgs)
+    const at = (h: string): number => {
+      const i = md.indexOf(h)
+      expect(i, `缺标题 ${h}`).toBeGreaterThanOrEqual(0)
+      return i
+    }
+    expect(at('### 甲号机')).toBeLessThan(at('### 乙号机'))
+    expect(at('### 乙号机')).toBeLessThan(at('### Assistant'))
+  })
+
+  it("TB-4（白盒）sender.kind 非 'bot'（未来扩展）→ 回落 labels.assistant", () => {
+    const msgs = [
+      assistantText('spoken', {
+        metadata: { sender: { kind: 'user', name: 'x', displayName: '某人' } }
+      })
+    ]
+    const md = transcribeConversation(msgs)
+    expect(md).toContain('### Assistant')
+    expect(md).not.toContain('某人')
+  })
+})
