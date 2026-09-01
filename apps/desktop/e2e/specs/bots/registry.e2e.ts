@@ -32,6 +32,7 @@ interface ShuvixBotInfo {
   notesEnabled: boolean
   notesChars: number
   tools: string[]
+  suggestions: string[]
   basePath: string
   warnings: string[]
 }
@@ -61,6 +62,7 @@ describe('bot registry', () => {
     expect(scout!.respond).toBe('mention-only')
     expect(scout!.notesEnabled).toBe(false)
     expect(scout!.tools).toEqual(['read', 'grep'])
+    expect(scout!.suggestions).toEqual(['what changed?'])
     expect(scout!.basePath).toContain('e2e-scout.md')
     // 管线缺省即内置的 bot-chat —— 用户不写这一行也有一条能跑的管线
     expect(scout!.pipeline).toBe('bot-chat')

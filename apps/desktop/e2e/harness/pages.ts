@@ -506,6 +506,11 @@ export interface SidebarPane {
   activeRowIsBot(): Promise<boolean>
   /** 按标题认的会话行带 bot 图标；行不存在返回 false */
   rowIsBot(title: string): Promise<boolean>
+  /**
+   * 会话行的未读呈现（A4）：badge = 计数徽标的 data-unread 属性值（无徽标为 null），
+   * bold = 标题 span 是否加粗（font-semibold）。行不存在返回 null。
+   */
+  rowUnread(title: string): Promise<{ badge: string | null; bold: boolean } | null>
 }
 
 /** 主窗侧栏会话列表（SessionItem 无 data-*，按「含 span.truncate 的可点击行」认） */
@@ -590,7 +595,18 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         const row = ${ROWS}.find((d) => d.className.includes('bg-bg-active'))
         return !!row && !!row.querySelector('.lucide-bot')
       })()`),
-    rowIsBot: (title) => main.eval<boolean>(`!!${ROW(title)}?.querySelector('.lucide-bot')`)
+    rowIsBot: (title) => main.eval<boolean>(`!!${ROW(title)}?.querySelector('.lucide-bot')`),
+    rowUnread: (title) =>
+      main.eval(`(() => {
+        const row = ${ROW(title)}
+        if (!row) return null
+        const badge = row.querySelector('[data-unread]')
+        const titleSpan = row.querySelector(':scope > div > span.truncate')
+        return {
+          badge: badge ? badge.getAttribute('data-unread') : null,
+          bold: (titleSpan?.className ?? '').includes('font-semibold')
+        }
+      })()`)
   }
 }
 
@@ -621,8 +637,15 @@ export interface BotDialogPane {
   waitClosed(): Promise<void>
   /** 成员行快照（DOM 序 = bots.list() 序） */
   rows(): Promise<BotDialogRow[]>
+  /**
+   * 幽灵成员行快照（A4 manage 模式：名单里有、注册表里没有 —— data-bot-pick-ghost）。
+   * DOM 序 = 原名单相对序。
+   */
+  ghostRows(): Promise<BotDialogRow[]>
   /** 点一行切换勾选；行不存在返回 false */
   toggle(name: string): Promise<boolean>
+  /** 点幽灵行切换勾选；行不存在返回 false */
+  toggleGhost(name: string): Promise<boolean>
   /** 点「创建」（成功后对话框自关，另用 waitClosed 等） */
   create(): Promise<void>
   /** 同一次 eval 里连点两下「创建」（防重入用例专用 —— 两下之间不给 React 任何喘息） */
@@ -644,6 +667,7 @@ export function botDialogPane(main: CdpClient): BotDialogPane {
   const LIST = `${DIALOG}?.querySelector(':scope > .flex-1')`
   const CREATE = `${DIALOG}?.querySelector('[data-bot-dialog-create]')`
   const ROWS = `[...(${DIALOG}?.querySelectorAll('[data-bot-pick]') ?? [])]`
+  const GHOST_ROWS = `[...(${DIALOG}?.querySelectorAll('[data-bot-pick-ghost]') ?? [])]`
 
   const isOpen = (): Promise<boolean> => main.eval<boolean>(`${DIALOG} !== null`)
 
@@ -672,9 +696,26 @@ export function botDialogPane(main: CdpClient): BotDialogPane {
           checked: d.getAttribute('aria-checked') === 'true'
         }))`
       ),
+    ghostRows: () =>
+      main.eval<BotDialogRow[]>(
+        `${GHOST_ROWS}.map((d) => ({
+          name: d.dataset.botPickGhost ?? '',
+          checked: d.getAttribute('aria-checked') === 'true'
+        }))`
+      ),
     toggle: async (name) => {
       const clicked = await main.eval<boolean>(`(() => {
         const row = ${ROWS}.find((d) => d.dataset.botPick === ${JSON.stringify(name)})
+        if (!row) return false
+        row.click()
+        return true
+      })()`)
+      await sleep(150)
+      return clicked
+    },
+    toggleGhost: async (name) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const row = ${GHOST_ROWS}.find((d) => d.dataset.botPickGhost === ${JSON.stringify(name)})
         if (!row) return false
         row.click()
         return true
@@ -2000,5 +2041,165 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
         btn.click()
         return true
       })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// A4 · 会话配套 —— 头部成员条 / 会话工具栏胶囊 / 「Bot 决策」面板 / 聊天会话空态。
+//
+// 锚点全部是 A4 落的 data-*（data-bot-members / data-bot-member{,-missing} /
+// data-bot-manage-members / data-bot-empty{,-member} / data-bot-suggestion /
+// data-bot-decisions / data-bot-decision-group / data-bot-decision-kind），外加
+// 会话工具栏胶囊的 data-session-tool（共享 SessionToolbar，工具 id 与
+// SessionPanelTool 一一对应）。kind 徽章按等宽类（font-mono）认形态，不认文案。
+
+/** 头部成员条里的一枚胶囊 */
+export interface BotMemberChip {
+  /** bot 身份键（data-bot-member 属性值） */
+  name: string
+  /** 胶囊可见文本（displayName；缺失成员回落身份键） */
+  display: string
+  /** 缺失标注（data-bot-member-missing）在不在 */
+  missing: boolean
+}
+
+/** 「Bot 决策」面板里的一组（按 messageSeq 分组） */
+export interface BotDecisionGroupShot {
+  /** data-bot-decision-group 属性值（messageSeq；无 seq 的会话级组为 '-1'） */
+  seq: string
+  /** 组头文案（`#<seq> · <time>`；无 seq 组以 '·' 开头） */
+  header: string
+  /** 组内各行的 kind（data-bot-decision-kind 属性值，DOM 序 = ts 升序） */
+  kinds: string[]
+  /** 每行的 kind 徽章都以等宽原文呈现（span.font-mono 且文本 === kind） */
+  monoAll: boolean
+}
+
+export interface BotSessionPane {
+  /** 头部成员条快照：present = data-bot-members 在屏；chips 按 DOM 序 = 名单序 */
+  membersBar(): Promise<{ present: boolean; chips: BotMemberChip[] }>
+  /** 点成员条的「管理成员」入口（data-bot-manage-members；随后用 botDialogPane 驱动）；无则 false */
+  clickManageMembers(): Promise<boolean>
+
+  /** 会话工具栏的工具胶囊 id 列表（data-session-tool 属性值，DOM 序） */
+  toolbarTools(): Promise<string[]>
+  /** 点某个工具胶囊（开合面板/切换工具）；无则 false */
+  clickToolbarTool(tool: string): Promise<boolean>
+
+  /** 「Bot 决策」面板快照（data-bot-decisions 未上屏时 present=false 其余为空） */
+  decisions(): Promise<{ present: boolean; empty: boolean; groups: BotDecisionGroupShot[] }>
+
+  /** 聊天会话空态快照：present = data-bot-empty；cards 按 DOM 序 = 名单序 */
+  emptyState(): Promise<{
+    present: boolean
+    cards: Array<{ name: string; suggestions: string[] }>
+  }>
+  /** 点某成员卡的第 index 个建议 chip（data-bot-suggestion）；无则 false */
+  clickSuggestion(memberName: string, index: number): Promise<boolean>
+}
+
+/** 主窗聊天会话的 A4 配套面（会话已选中后调用） */
+export function botSessionPane(main: CdpClient): BotSessionPane {
+  const MEMBERS = `document.querySelector('[data-bot-members]')`
+  const TOOL_BTNS = `[...document.querySelectorAll('[data-session-tool]')]`
+  const DECISIONS = `document.querySelector('[data-bot-decisions]')`
+  const EMPTY = `document.querySelector('[data-bot-empty]')`
+  const CARD = (name: string): string =>
+    `document.querySelector('[data-bot-empty-member=${JSON.stringify(name)}]')`
+
+  return {
+    membersBar: () =>
+      main.eval(`(() => {
+        const bar = ${MEMBERS}
+        if (!bar) return { present: false, chips: [] }
+        return {
+          present: true,
+          chips: [...bar.querySelectorAll('[data-bot-member]')].map((c) => ({
+            name: c.getAttribute('data-bot-member') ?? '',
+            display: (c.querySelector('span.truncate')?.textContent ?? '').trim(),
+            missing: c.hasAttribute('data-bot-member-missing')
+          }))
+        }
+      })()`),
+    clickManageMembers: async () => {
+      const hit = await main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-bot-manage-members]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(200)
+      return hit
+    },
+
+    toolbarTools: () =>
+      main.eval<string[]>(`${TOOL_BTNS}.map((b) => b.getAttribute('data-session-tool') ?? '')`),
+    clickToolbarTool: async (tool) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const btn = ${TOOL_BTNS}.find(
+          (b) => b.getAttribute('data-session-tool') === ${JSON.stringify(tool)}
+        )
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      await sleep(300)
+      return hit
+    },
+
+    decisions: () =>
+      main.eval(`(() => {
+        const panel = ${DECISIONS}
+        if (!panel) return { present: false, empty: false, groups: [] }
+        return {
+          present: true,
+          // 空态占位是唯一一个内容恰为 '—' 的块（组头时间行是 '·'，不撞）
+          empty: [...panel.querySelectorAll('div')].some(
+            (d) => d.childElementCount === 0 && (d.textContent ?? '').trim() === '—'
+          ),
+          groups: [...panel.querySelectorAll('[data-bot-decision-group]')].map((g) => {
+            const rows = [...g.querySelectorAll('[data-bot-decision-kind]')]
+            return {
+              seq: g.getAttribute('data-bot-decision-group') ?? '',
+              header: (g.firstElementChild?.textContent ?? '').trim(),
+              kinds: rows.map((r) => r.getAttribute('data-bot-decision-kind') ?? ''),
+              monoAll:
+                rows.length > 0 &&
+                rows.every((r) => {
+                  const badge = r.querySelector('span.font-mono')
+                  return (
+                    !!badge &&
+                    (badge.textContent ?? '').trim() === r.getAttribute('data-bot-decision-kind')
+                  )
+                })
+            }
+          })
+        }
+      })()`),
+
+    emptyState: () =>
+      main.eval(`(() => {
+        const root = ${EMPTY}
+        if (!root) return { present: false, cards: [] }
+        return {
+          present: true,
+          cards: [...root.querySelectorAll('[data-bot-empty-member]')].map((c) => ({
+            name: c.getAttribute('data-bot-empty-member') ?? '',
+            suggestions: [...c.querySelectorAll('[data-bot-suggestion]')].map((b) =>
+              (b.textContent ?? '').trim()
+            )
+          }))
+        }
+      })()`),
+    clickSuggestion: async (memberName, index) => {
+      const hit = await main.eval<boolean>(`(() => {
+        const chips = [...(${CARD(memberName)}?.querySelectorAll('[data-bot-suggestion]') ?? [])]
+        if (!chips[${index}]) return false
+        chips[${index}].click()
+        return true
+      })()`)
+      await sleep(300)
+      return hit
+    }
   }
 }

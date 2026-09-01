@@ -25,7 +25,8 @@ const dirs = vi.hoisted(() => {
 })
 const mocks = vi.hoisted(() => ({
   broadcast: vi.fn(),
-  getById: vi.fn()
+  getById: vi.fn(),
+  noteUnread: vi.fn()
 }))
 
 vi.mock('../workflowService', () => ({
@@ -57,8 +58,9 @@ vi.mock('../sessionTriggerFacts', () => ({
   isDefaultTitle: vi.fn(() => false)
 }))
 vi.mock('../sessionService', () => ({
-  // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
-  sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
+  // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账。spy 缺省即 no-op，
+  // 既不打扰不关心它的既有用例，又让「未读记账」组能断调用次数与早退不记账
+  sessionService: { getById: mocks.getById, noteUnreadBotReply: mocks.noteUnread }
 }))
 
 import { BOT_SENDER_CUSTOM_TYPE, INLINE_TOKENS_CUSTOM_TYPE } from '@shuvix/agent-runtime'
@@ -136,6 +138,7 @@ beforeEach(() => {
   clearSessionTreeCacheForTests()
   mocks.broadcast.mockReset()
   mocks.getById.mockReset()
+  mocks.noteUnread.mockReset()
   seedSession()
 })
 
@@ -271,6 +274,45 @@ describe('appendBotMessage —— 署名侧车与消息的双 append', () => {
       }
     )
     expect(senderOf(broadcastMessage(0, 'assistant_message'))).toMatchObject({ name: 'ranger' })
+  })
+})
+
+describe('appendBotMessage —— 未读记账（A4）', () => {
+  it('成功落树后记一笔：noteUnreadBotReply(sessionId) 恰一次', async () => {
+    await botService.appendBotMessage(SID, SCOUT, { content: '侦察完毕' })
+
+    expect(mocks.noteUnread).toHaveBeenCalledTimes(1)
+    expect(mocks.noteUnread).toHaveBeenCalledWith(SID)
+  })
+
+  it('早退不记账：空内容与 blockWrites 两条 return null 路径都不碰账本', async () => {
+    // 路径一：空白内容被拒
+    expect(await botService.appendBotMessage(SID, SCOUT, { content: '   ' })).toBeNull()
+    expect(mocks.noteUnread).not.toHaveBeenCalled()
+
+    // 路径二：会话正在关停（blockWrites）。abortSession 在首个 await 之前同步置位禁写，
+    // 用一个持锁者把它卡在 drain 上，就得到一个确定性的「禁写在位」窗口
+    const lock = holdLock()
+    const aborting = botService.abortSession(SID)
+    expect(await botService.appendBotMessage(SID, SCOUT, { content: '关停中想说话' })).toBeNull()
+    expect(mocks.noteUnread).not.toHaveBeenCalled()
+
+    lock.release()
+    await lock.done
+    await aborting
+  })
+
+  it('seedGreetings：两带一不带 → 恰两笔（每条开场白各 +1，跳过的不记）', async () => {
+    // 计数必须用双成员语料断「=2」：单成员断「≥1」分不出「每条一笔」与「每轮一笔」
+    writeBot('a', { greeting: 'a 的开场白' })
+    writeBot('b') // 没写 greeting —— 落树被跳过，也不该记账
+    writeBot('c', { greeting: 'c 的开场白' })
+    seedSession(['a', 'b', 'c'])
+
+    await botService.seedGreetings(SID)
+    expect(mocks.noteUnread).toHaveBeenCalledTimes(2)
+    expect(mocks.noteUnread).toHaveBeenNthCalledWith(1, SID)
+    expect(mocks.noteUnread).toHaveBeenNthCalledWith(2, SID)
   })
 })
 

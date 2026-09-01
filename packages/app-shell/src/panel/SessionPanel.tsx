@@ -157,6 +157,7 @@ export function SessionToolbar({
         return (
           <button
             key={tool}
+            data-session-tool={tool}
             onClick={() =>
               openTool
                 ? useSessionPanelStore.getState().show(sessionId, tool)

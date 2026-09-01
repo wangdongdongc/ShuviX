@@ -31,6 +31,7 @@ import {
   appendBotDecision,
   botRunsDir,
   pruneBotRuns,
+  readBotDecisions,
   resetDecisionCounterForTests,
   safeBotDirName,
   type BotDecisionRecord
@@ -202,5 +203,122 @@ describe('decisions.jsonl 的行数收口', () => {
 
     expect(realLines(decisionsFile('a')).length).toBe(6199)
     expect(realLines(decisionsFile('b')).length).toBe(KEEP_LINES)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// A4 · readBotDecisions —— 会话视角的跨目录对账（设计 §9 预言的那次，收在一个读函数里）
+
+/** 一条带显式 ts 的决策记录（直写文件用，不走 appendBotDecision 的 Date.now） */
+function decision(
+  botName: string,
+  ts: number,
+  over: Partial<BotDecisionRecord> = {}
+): BotDecisionRecord {
+  return { ts, kind: 'run_end', sessionId: 's1', botName, ticketId: `bt-${ts}`, ...over }
+}
+
+/**
+ * 直写某个 bot 目录的 decisions.jsonl。行可以是记录对象，也可以是**原始字符串**
+ * （坏行语料：半截 JSON、非对象 JSON 值等）。
+ */
+function seedDecisionLines(botName: string, lines: Array<BotDecisionRecord | string>): void {
+  const dir = botRunsDir(botName)
+  mkdirSync(dir, { recursive: true })
+  const body = lines.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n')
+  writeFileSync(join(dir, 'decisions.jsonl'), `${body}\n`)
+}
+
+describe('readBotDecisions —— 跨目录合并 / 过滤 / 截断', () => {
+  it('跨目录合并 + 会话过滤：两目录混写 s1/s2，读 s1 恰回两目录里 s1 的那些', () => {
+    // 两个目录各自混写两个会话的记录 —— 会话视角必须跨目录收齐、且一条不多
+    seedDecisionLines('bot-a', [
+      decision('bot-a', 10, { sessionId: 's1', kind: 'claim_won' }),
+      decision('bot-a', 20, { sessionId: 's2', kind: 'claim_lost' }),
+      decision('bot-a', 30, { sessionId: 's1', kind: 'run_end' })
+    ])
+    seedDecisionLines('bot-b', [
+      decision('bot-b', 15, { sessionId: 's2', kind: 'mailbox_queued' }),
+      decision('bot-b', 25, { sessionId: 's1', kind: 'claim_solo' })
+    ])
+
+    const got = readBotDecisions('s1')
+    expect(got.map((r) => [r.botName, r.ts, r.kind])).toEqual([
+      ['bot-a', 10, 'claim_won'],
+      ['bot-b', 25, 'claim_solo'],
+      ['bot-a', 30, 'run_end']
+    ])
+    expect(got.every((r) => r.sessionId === 's1')).toBe(true)
+  })
+
+  it('跨文件 ts 交错升序：a 给 1,3,5 / b 给 2,4,6 → 合并后 1..6', () => {
+    seedDecisionLines('bot-a', [decision('bot-a', 1), decision('bot-a', 3), decision('bot-a', 5)])
+    seedDecisionLines('bot-b', [decision('bot-b', 2), decision('bot-b', 4), decision('bot-b', 6)])
+
+    expect(readBotDecisions('s1').map((r) => r.ts)).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('limit=3：交错语料下恰回 ts 4,5,6 —— 截掉的是最旧的头，最新尾部仍升序', () => {
+    seedDecisionLines('bot-a', [decision('bot-a', 1), decision('bot-a', 3), decision('bot-a', 5)])
+    seedDecisionLines('bot-b', [decision('bot-b', 2), decision('bot-b', 4), decision('bot-b', 6)])
+
+    expect(readBotDecisions('s1', 3).map((r) => r.ts)).toEqual([4, 5, 6])
+  })
+
+  it('缺省 limit=300：跨目录直写 305 条 → 300 条、首条是第 6 条、尾部仍升序', () => {
+    // ts 1..305 按奇偶交错进两个目录 —— 截断语料必须跨目录，单目录测不到合并后再截
+    const a: BotDecisionRecord[] = []
+    const b: BotDecisionRecord[] = []
+    for (let ts = 1; ts <= 305; ts++)
+      (ts % 2 ? a : b).push(decision(ts % 2 ? 'bot-a' : 'bot-b', ts))
+    seedDecisionLines('bot-a', a)
+    seedDecisionLines('bot-b', b)
+
+    const got = readBotDecisions('s1')
+    expect(got).toHaveLength(300)
+    expect(got[0].ts).toBe(6)
+    expect(got.at(-1)!.ts).toBe(305)
+    expect(got.map((r) => r.ts)).toEqual(Array.from({ length: 300 }, (_, i) => i + 6))
+  })
+
+  it('坏行韧性：好-坏-好 夹心下好行全留、坏行逐条跳过、不抛', () => {
+    // 坏行必须夹在好行**中间**：只坏在尾部的语料测不出「跳过之后还继续读」
+    seedDecisionLines('bot-a', [
+      decision('bot-a', 1, { kind: 'claim_won' }),
+      '{"ts":99,"sessionId":"s1","kind":', // 半截 JSON（追加账本的典型伤）
+      decision('bot-a', 2, { kind: 'run_end' }),
+      'null', // JSON 合法但不是记录对象
+      '42',
+      '"str"',
+      '{"ts":3,"kind":"orphan"}', // 缺 sessionId 的对象行 —— 过滤不中，静默跳过
+      decision('bot-a', 4, { kind: 'mailbox_granted' })
+    ])
+
+    let got: BotDecisionRecord[] = []
+    expect(() => {
+      got = readBotDecisions('s1')
+    }).not.toThrow()
+    expect(got.map((r) => [r.ts, r.kind])).toEqual([
+      [1, 'claim_won'],
+      [2, 'run_end'],
+      [4, 'mailbox_granted']
+    ])
+  })
+
+  it('目录形态韧性：.runs 缺失 / 子目录无账本 / 混入普通文件 / .runs 是文件', () => {
+    // .runs 不存在 → []
+    expect(readBotDecisions('s1')).toEqual([])
+
+    // 子目录没有 decisions.jsonl（只有 run journal）→ 跳过；.runs 下混普通文件 → 跳过
+    seedDecisionLines('bot-a', [decision('bot-a', 1)])
+    mkdirSync(join(dirs.bots, '.runs', 'no-ledger'), { recursive: true })
+    writeFileSync(join(dirs.bots, '.runs', 'no-ledger', 'run-0001.jsonl'), '{}\n')
+    writeFileSync(join(dirs.bots, '.runs', 'stray.txt'), 'not a dir')
+    expect(readBotDecisions('s1').map((r) => r.ts)).toEqual([1])
+
+    // .runs 本身是个文件 → readdir 失败，安静回空
+    rmSync(join(dirs.bots, '.runs'), { recursive: true, force: true })
+    writeFileSync(join(dirs.bots, '.runs'), 'a file, not a dir')
+    expect(readBotDecisions('s1')).toEqual([])
   })
 })
