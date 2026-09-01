@@ -57,8 +57,10 @@ const BashParamsSchema = Type.Object({
       description:
         'Run the command as a background task bound to this session: it outlives this tool call ' +
         'and has no timeout. Use for dev servers, watchers, and long builds. Returns a pid and a ' +
-        'log file path right away. Read that log with the read tool whenever you need the output ' +
-        `(reading it needs no approval); stop the task with \`${stopCommandHint()}\`. ` +
+        'log file path right away — deliberately without any output content. Before relying on ' +
+        'the task (e.g. requesting a dev server you just started), read that log with the read ' +
+        'tool to confirm it is ready, and read it again whenever you need the output (reading it ' +
+        `needs no approval); stop the task with \`${stopCommandHint()}\`. ` +
         'Write the command exactly as you would run it in the foreground: do NOT append `&` and ' +
         'do NOT redirect the output yourself — this option already detaches the process and ' +
         'captures stdout+stderr. Doing either makes the tracked process exit immediately, which ' +
@@ -299,7 +301,9 @@ export class BashTool extends BaseTool<typeof BashParamsSchema> {
     }
 
     return {
-      content: [{ type: 'text' as const, text: formatStartReceipt(started.info, started.tail) }],
+      content: [
+        { type: 'text' as const, text: formatStartReceipt(started.info, started.logBytes) }
+      ],
       // exitCode 0 = 启动成功（非命令结果）；background 标记让 UI 走后台形态
       details: { type: 'bash', exitCode: 0, truncated: false, cwd, background: true }
     }

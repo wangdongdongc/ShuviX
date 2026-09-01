@@ -48,8 +48,8 @@ const FSTAT_INTERVAL_MS = 30_000
 const LOG_WARN_BYTES = 50 * 1024 * 1024
 /** 日志硬上限：自动停止。远超任何正常 dev server 日志，防的是无人值守的智能体循环写满磁盘 */
 const LOG_KILL_BYTES = 1024 * 1024 * 1024
-/** 启动回执里回显的日志尾部字节数 */
-const RECEIPT_TAIL_BYTES = 4096
+/** 退出通知里回显的日志尾部读取窗口（从中再取最后 NOTIFY_TAIL_LINES 行） */
+const NOTIFY_TAIL_BYTES = 4096
 
 // ─── 类型 ────────────────────────────────────────────
 
@@ -73,7 +73,7 @@ interface BgTask extends BgTaskInfo {
 /** 启动结果：预热窗口内退出 → 前台形态；否则转入后台 */
 export type BgTaskStartResult =
   | { kind: 'settled'; info: BgTaskInfo; output: string }
-  | { kind: 'background'; info: BgTaskInfo; tail: string }
+  | { kind: 'background'; info: BgTaskInfo; logBytes: number }
 
 export interface StartBgTaskParams {
   sessionId: string
@@ -352,7 +352,13 @@ export async function startBgTask(params: StartBgTaskParams): Promise<BgTaskStar
   }
 
   broadcast(task)
-  return { kind: 'background', info: toInfo(task), tail: readTail(logPath, RECEIPT_TAIL_BYTES) }
+  let logBytes = 0
+  try {
+    logBytes = statSync(logPath).size
+  } catch {
+    /* 忽略 */
+  }
+  return { kind: 'background', info: toInfo(task), logBytes }
 }
 
 function finishTask(task: BgTask, code: number | null, signal: NodeJS.Signals | null): void {
@@ -373,7 +379,7 @@ function finishTask(task: BgTask, code: number | null, signal: NodeJS.Signals | 
     // 只对宣告过的任务通知 —— 预热窗口内退出的已经按前台形态把完整输出交给模型了，
     // 再通知一次纯属重复
     if (task.notifyAgent) {
-      notifier?.(task.sessionId, formatExitNotice(task, readTail(task.logPath, RECEIPT_TAIL_BYTES)))
+      notifier?.(task.sessionId, formatExitNotice(task, readTail(task.logPath, NOTIFY_TAIL_BYTES)))
     }
   }
   maybeStopFstatTimer()
@@ -542,15 +548,18 @@ export function stopCommandHint(): string {
   return process.platform === 'win32' ? 'taskkill /T /F /PID <pid>' : 'kill -- -<pid>'
 }
 
-/** 回执里回显的输出行数上限 */
-const RECEIPT_TAIL_LINES = 5
-
 /**
- * 启动回执 —— **只放模型无从得知的东西**：pid、日志绝对路径、头几行输出
- * （后者是"到底起来没有"的信号，也正是预热窗口存在的理由）。
+ * 启动回执 —— **只放模型无从得知的稳定事实**：pid、日志绝对路径，以及一个不引用内容的
+ * 活性信号（预热窗口内已写入的字节数）。
  *
- * 刻意不放的三样，以及为什么：
+ * 刻意不放的四样，以及为什么：
  *
+ *  - **日志内容采样（曾是尾部 5 行）**：t≈2s 的尾部是对启动输出的随机采样，与"命令成没
+ *    成功"没有语义保证，却落在模型注意力最高的通道（工具结果）里 —— 一行 error 长相的
+ *    启动噪音就足以把智能体带去排查一个不存在的问题；且结果永久留在上下文、每步重发，
+ *    噪音会被一直重申。快速失败已由预热窗口的 settled 路径全量接住；readiness 则该由
+ *    智能体在使用服务前 read 日志确认（这条引导写在 run_in_background 的参数 schema 里，
+ *    走 prompt cache）。
  *  - **命令与 description**：模型自己刚写进 tool call 参数，纯重复。
  *  - **"用 read 读它 / 用 kill 停它" 这类指令**：指令属于参数 schema（每次请求随 tools 块
  *    发一份，走 prompt cache），不属于结果。工具结果会永久留在上下文里、被 agent loop
@@ -558,9 +567,7 @@ const RECEIPT_TAIL_LINES = 5
  *  - **"其它还在跑的任务"**：那些任务自己的回执还在上下文里、pid 都带着；此处重列只多
  *    告诉模型"它们还活着"，而那正是退出通知（P4）负责的事。
  */
-export function formatStartReceipt(info: BgTaskInfo, tail: string): string {
-  const trimmed = tail.trimEnd()
-  const head = `Background task started, pid ${info.pid}. Output is being appended to:\n${info.logPath}`
-  if (!trimmed) return `${head}\n\n(no output yet)`
-  return `${head}\n\n${trimmed.split('\n').slice(-RECEIPT_TAIL_LINES).join('\n')}`
+export function formatStartReceipt(info: BgTaskInfo, logBytes: number): string {
+  const activity = logBytes > 0 ? `${logBytes} bytes of output so far` : 'no output yet'
+  return `Background task started, pid ${info.pid} (${activity}). Output is being appended to:\n${info.logPath}`
 }
