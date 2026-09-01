@@ -43,6 +43,11 @@ export interface SessionSettings {
    * 自动标题据此不覆盖用户手动改过的名字。
    */
   titleOrigin?: 'user' | 'auto'
+  /**
+   * 聊天会话的未读 bot 回复数（A4）。bot 落树 +1（settings 写顺带 touch updatedAt ——
+   * 列表按它排序，上浮与未读同一笔账）；`session:markRead` 清零。仅聊天会话在维护。
+   */
+  unreadCount?: number
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

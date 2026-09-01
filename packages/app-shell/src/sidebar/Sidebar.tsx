@@ -222,12 +222,13 @@ export function Sidebar({
               : undefined
           }
           bots={bots}
-          onCreate={async (names) => {
+          onSubmit={async (names) => {
             const session = await getChatApi().session.create({
               projectId: botDialogFor.projectId,
               bots: names
             })
             await afterCreate(session.id, botDialogFor.projectId)
+            return null
           }}
           onClose={() => setBotDialogFor(null)}
         />

@@ -270,7 +270,8 @@ const api = {
     updateAgentProfile: (params: { id: string; name: string }) =>
       ipcRenderer.invoke('session:updateAgentProfile', params),
     updateBots: (params: { id: string; bots: string[] }) =>
-      ipcRenderer.invoke('session:updateBots', params)
+      ipcRenderer.invoke('session:updateBots', params),
+    markRead: (id: string) => ipcRenderer.invoke('session:markRead', id)
     // 配置变更订阅已并入 events.subscribe（AppEvent 'session.configChanged'）
   },
 
@@ -396,7 +397,9 @@ const api = {
       ipcRenderer.invoke('bot:saveByFile', params),
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
     openFolder: () => ipcRenderer.invoke('bot:openFolder'),
-    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params)
+    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params),
+    decisions: (params: { sessionId: string; limit?: number }) =>
+      ipcRenderer.invoke('bot:decisions', params)
   },
 
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============

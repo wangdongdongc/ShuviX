@@ -421,6 +421,8 @@ declare global {
     notesChars: number
     /** 任务段工具白名单 */
     tools: string[]
+    /** 建议问题（shuvix-bot-suggestions） */
+    suggestions: string[]
     /** 任务段模型（`shuvix-model`）；省略 = 跟随会话 */
     model?: string
     /** 文件路径 */
@@ -434,6 +436,19 @@ declare global {
     fileName: string
     /** 人读原因：解析器的拒绝理由 */
     error: string
+  }
+
+  /** 一条 bot 决策记录（bot.decisions；kind 取值与 decisions.jsonl 同源,开放集） */
+  interface BotDecisionEntry {
+    ts: number
+    kind: string
+    sessionId: string
+    botName: string
+    ticketId: string
+    runId?: string
+    messageSeq?: number
+    messageId?: string
+    detail?: Record<string, unknown>
   }
 
   /** bot 详情的运行时读数（bot.inspect；frontmatter 本身归属性卡） */
@@ -600,6 +615,8 @@ declare global {
         modelUnavailable?: string
       }>
       /** 改聊天会话的成员名单（只对聊天会话生效、名单不得为空；新成员补开场白） */
+      /** 清零聊天会话未读（A4）；幂等 */
+      markRead: (id: string) => Promise<{ success: boolean }>
       updateBots: (params: { id: string; bots: string[] }) => Promise<{
         success: boolean
         error?: string
@@ -730,6 +747,8 @@ declare global {
       openFolder: () => Promise<{ success: boolean }>
       /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控 sticky 降级 + 笔记调度状态 */
       inspect: (params: { name: string }) => Promise<BotInspect | { error: string }>
+      /** 某会话的决策记录（A4「Bot 决策」子视图；ts 升序、尾部截断） */
+      decisions: (params: { sessionId: string; limit?: number }) => Promise<BotDecisionEntry[]>
     }
     workflow: {
       list: () => Promise<WorkflowInfo[]>

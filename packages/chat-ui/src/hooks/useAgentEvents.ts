@@ -1,4 +1,4 @@
-import { getChatApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { getChatApi, getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useEffect, useCallback, useRef } from 'react'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -264,6 +264,15 @@ export function useAgentEvents(): void {
         // 一次 LLM 调用落盘：清除流式内容 + 按 id upsert 这张卡（单次 set，避免中间帧闪空）
         const card = sid === store.activeSessionId ? JSON.parse(event.message) : null
         store.handleAssistantMessage(sid, card)
+        // 聊天会话正被看着：bot 回复即到即读（服务端幂等，已 0 不空转广播）。
+        // 只有 bot 会话在维护未读，有根会话不发这趟 IPC
+        if (
+          card &&
+          store.sessions.find((x) => x.id === sid)?.settings?.bots?.length &&
+          getHostApi()?.session.markRead
+        ) {
+          void getHostApi()?.session.markRead?.(sid)
+        }
         break
       }
 

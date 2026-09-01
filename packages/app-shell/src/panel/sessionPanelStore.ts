@@ -6,7 +6,7 @@ export const SESSION_PANEL_MAX_W = 600
 
 /** 会话面板可装载的工具（会话工具栏按钮与之一一对应；preview 仅注入了 previewContent 的宿主有，
  *  tasks 仅本会话有后台任务时有） */
-export type SessionPanelTool = 'files' | 'preview' | 'subagent' | 'tasks'
+export type SessionPanelTool = 'files' | 'preview' | 'subagent' | 'tasks' | 'botDecisions'
 
 /**
  * 共享会话面板视图状态（桌面 / 扩展共用）—— 聊天区内部右侧的「会话工具栏」悬浮卡片

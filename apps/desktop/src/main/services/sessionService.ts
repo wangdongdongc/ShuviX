@@ -222,6 +222,29 @@ export class SessionService {
   }
 
   /**
+   * bot 回复落树后的会话侧账（A4 未读）：未读 +1。`updateSettings` 顺带 touch
+   * updatedAt —— 列表按它排序，**上浮与未读是同一笔账**；随后广播列表变更
+   * （渲染端 seq-guarded 重拉）。只有聊天会话的落树路径会调它，有根会话恒缺省。
+   */
+  noteUnreadBotReply(id: string): void {
+    const cur = sessionDao.pickSettings(id, ['unreadCount'])?.unreadCount ?? 0
+    sessionDao.updateSettings(id, { unreadCount: cur + 1 })
+    broadcastSessionListChanged()
+  }
+
+  /**
+   * 清零未读（A4）。幂等：已为 0 不写库不广播 —— 正在看的会话每来一条回复都会
+   * 「+1 → 清零」跑一轮，这个短路让第二次清零不再空转一圈广播。
+   */
+  markRead(id: string): { success: boolean } {
+    const cur = sessionDao.pickSettings(id, ['unreadCount'])?.unreadCount ?? 0
+    if (cur === 0) return { success: true }
+    sessionDao.updateSettings(id, { unreadCount: 0 })
+    broadcastSessionListChanged()
+    return { success: true }
+  }
+
+  /**
    * 改名迁移专用的名单改写。
    *
    * 与 `updateBots` 刻意分开：那个是**用户操作**（校验空名单、补新成员的开场白、

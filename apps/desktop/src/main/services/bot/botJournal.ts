@@ -108,6 +108,45 @@ export function appendBotDecision(record: Omit<BotDecisionRecord, 'ts'>): void {
 }
 
 /**
+ * 读某会话的决策记录（A4「Bot 决策」子视图的数据源）。
+ *
+ * 决策记录按 bot 分目录（「这个 bot 为什么没说话」是 per-bot 的问题），会话视角只能
+ * 跨全部目录过滤合并 —— 这正是设计 §9 说的「跨文件对账」，收在这一个读函数里，
+ * UI 不用知道目录形状。按 ts 升序、尾部截断；坏行/坏目录逐个跳过（追加账本可能
+ * 有半截行，可观测性数据坏一条不该丢整页）。
+ */
+export function readBotDecisions(sessionId: string, limit = 300): BotDecisionRecord[] {
+  const root = join(getDefaultBotsDir(), '.runs')
+  const out: BotDecisionRecord[] = []
+  if (!existsSync(root)) return out
+  let dirs: string[] = []
+  try {
+    dirs = readdirSync(root)
+  } catch {
+    return out
+  }
+  for (const dir of dirs) {
+    const file = join(root, dir, 'decisions.jsonl')
+    if (!existsSync(file)) continue
+    try {
+      for (const line of readFileSync(file, 'utf-8').split('\n')) {
+        if (!line) continue
+        try {
+          const rec = JSON.parse(line) as BotDecisionRecord
+          if (rec && rec.sessionId === sessionId) out.push(rec)
+        } catch {
+          /* 半截行跳过 */
+        }
+      }
+    } catch {
+      /* 单目录读失败跳过 */
+    }
+  }
+  out.sort((a, b) => a.ts - b.ts)
+  return out.slice(-limit)
+}
+
+/**
  * 剪掉某个 bot 目录里过旧的 run journal。
  *
  * **不复用 workflowService.pruneRunJournal**：它按 `*.jsonl` 通配，会把 decisions.jsonl

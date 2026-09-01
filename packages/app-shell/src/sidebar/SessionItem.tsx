@@ -18,6 +18,8 @@ export interface SessionItemProps {
   isNotebook?: boolean
   /** 聊天会话（settings.bots 非空）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
+  /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
+  unreadCount?: number
   onSelect: (id: string) => void
   onDelete?: (id: string) => void
   // —— 桌面专属（可选） ——
@@ -34,6 +36,7 @@ export function SessionItem({
   dim = false,
   isNotebook = false,
   isBot = false,
+  unreadCount = 0,
   onSelect,
   onDelete,
   isPinned = false,
@@ -88,7 +91,17 @@ export function SessionItem({
         />
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
-        <span className="truncate">{session.title}</span>
+        <span className={`truncate${unreadCount > 0 ? ' font-semibold text-text-primary' : ''}`}>
+          {session.title}
+        </span>
+        {unreadCount > 0 && (
+          <span
+            className="ml-auto shrink-0 min-w-[17px] h-[17px] px-1 rounded-full bg-accent text-white text-[10px] font-semibold tabular-nums flex items-center justify-center"
+            data-unread={unreadCount}
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
         {pendingCount > 0 && (
           <span className="flex items-center gap-1 ml-auto shrink-0">
             <span className="relative flex h-1.5 w-1.5">

@@ -78,6 +78,9 @@ export function registerSessionHandlers(): void {
     sessionService.updateBots(params.id, params.bots)
   )
 
+  /** 清零聊天会话未读（A4）；幂等 */
+  ipcMain.handle('session:markRead', (_event, id: string) => sessionService.markRead(id))
+
   ipcMain.handle('session:updateAgentProfile', (_event, params: { id: string; name: string }) =>
     sessionService.updateAgentProfile(params.id, params.name)
   )

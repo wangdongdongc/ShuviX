@@ -1022,7 +1022,8 @@
     "tasksLogCapped": "Log exceeds 50 MB — only the tail is shown",
     "tasksNoOutput": "No output yet",
     "tasksStatusEnded": "Finished",
-    "calendar": "Calendar"
+    "calendar": "Calendar",
+    "botDecisions": "Bot decisions"
   },
   "browser": {
     "back": "Back",
@@ -1151,6 +1152,12 @@
     "statusOk": "Done",
     "statusWarn": "With caveats",
     "statusError": "Incomplete",
-    "mentionOnly": "Responds only when mentioned"
+    "mentionOnly": "Responds only when mentioned",
+    "manageTitle": "Manage members",
+    "manageSubtitle": "Adjust this chat’s members · keep at least one",
+    "manageSave": "Save ({{count}} member(s))",
+    "memberMissing": "md deleted",
+    "manageMembers": "Manage members",
+    "emptyHint": "Send the members your first message — type @ to direct it at someone."
   }
 }

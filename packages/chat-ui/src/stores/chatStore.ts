@@ -76,6 +76,8 @@ export interface SessionSettings {
    * （同一条记忆在同一处出现两次，比少一处入口更糟）。
    */
   memorySlug?: string
+  /** 聊天会话的未读 bot 回复数（A4）；bot 落树 +1、markRead 清零。有根会话恒缺省 */
+  unreadCount?: number
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */

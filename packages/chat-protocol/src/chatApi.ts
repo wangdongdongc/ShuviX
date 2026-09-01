@@ -75,6 +75,12 @@ export interface SessionSettings {
   memorySlug?: string
   /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session-config 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
+  /**
+   * 聊天会话的未读 bot 回复数（A4）。bot 落树 +1（settings 写顺带 touch updatedAt，
+   * 列表按它排序 —— 上浮与未读同一笔账）；`session.markRead` 清零。仅聊天会话在维护，
+   * 有根会话恒缺省。
+   */
+  unreadCount?: number
 }
 
 /**
@@ -688,6 +694,11 @@ export interface HostApi {
       /** 本次新加入、并因此落了开场白的成员 */
       added?: string[]
     }>
+    /**
+     * 清零聊天会话的未读计数（A4）。可选 —— 渠道端缺省即不维护未读。
+     * 幂等：已为 0 时不写库不广播。
+     */
+    markRead?: (id: string) => Promise<{ success: boolean }>
     // 注：updateModelConfig / updateThinkingLevel / updateEnabledTools 已移除 ——
     // 运行配置的唯一事实源是会话树，改动统一走 agent.setModel / setThinkingLevel /
     // setEnabledTools（Agent 未创建时后端直接往树上追加对应 entry）。

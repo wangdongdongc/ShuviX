@@ -74,9 +74,10 @@ import { sessionService } from './sessionService'
 const log = createLogger('Bot')
 
 /**
- * 设置页列表项 —— 刻意**不外传** systemPrompt / 笔记区 / suggestions：列表只需要
+ * 设置页列表项 —— 刻意**不外传** systemPrompt / 笔记区：列表只需要
  * 「是谁、干什么、怎么应答、用哪条管线」，编辑走 getSource 拿整份 md 原文
  * （与 agent/workflow/policy 设置页同形：详情即原文编辑器）。
+ * suggestions 自 A4 起外传 —— 聊天会话空态的建议问题按钮以它为数据源。
  */
 export interface BotListItem {
   name: string
@@ -92,6 +93,8 @@ export interface BotListItem {
   notesChars: number
   /** 任务段工具白名单 */
   tools: string[]
+  /** 建议问题（shuvix-bot-suggestions；空态点击 = 文本进输入框 + 隐式定向本 bot） */
+  suggestions: string[]
   /** 任务段模型（`shuvix-model`）；省略 = 跟随会话 */
   model?: string
   /** 文件路径 */
@@ -445,6 +448,7 @@ class BotService {
         notesEnabled: file.notesEnabled,
         notesChars: file.notes?.length ?? 0,
         tools: file.tools,
+        suggestions: file.suggestions,
         model: file.model,
         basePath,
         warnings
@@ -1940,6 +1944,8 @@ class BotService {
           message: JSON.stringify(projected)
         })
       }
+      // 会话侧账（A4）：未读 +1、updatedAt 上浮、列表广播。正在看的一侧随后 markRead 清零
+      sessionService.noteUnreadBotReply(sessionId)
       return ids.entryId
     } finally {
       this.leave(sessionId)

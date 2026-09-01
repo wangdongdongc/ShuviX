@@ -25,6 +25,8 @@ import {
   useSessionPanelReveal
 } from '@shuvix/app-shell'
 import { EmptySessionHint } from './WelcomeView'
+import { BotMembersBar } from './BotMembersBar'
+import { BotDecisionsPanel } from './BotDecisionsPanel'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 
 /**
@@ -43,6 +45,10 @@ interface ChatViewProps {
 export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSessionId } = useChatStore()
+  // 聊天会话判定（bots 非空）——「Bot 决策」工具页与成员条只对它出现
+  const isBotSession = useChatStore(
+    (s) => !!s.sessions.find((x) => x.id === s.activeSessionId)?.settings?.bots?.length
+  )
 
   const [showSessionConfig, setShowSessionConfig] = useState(false)
 
@@ -133,6 +139,10 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       </>
     ) : (
       <>
+        {/* 聊天会话：成员胶囊列 + 管理入口（自空,非 bot 会话不渲染） */}
+        {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
+          <BotMembersBar sessionId={activeSessionId} />
+        )}
         {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
           <button
             onClick={() => void getHostApi()?.pinChat.pin(activeSessionId)}
@@ -205,6 +215,11 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
               sessionId={activeSessionId}
               filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
               previewContent={floatingPreviewContent}
+              botDecisionsContent={
+                isBotSession && activeSessionId ? (
+                  <BotDecisionsPanel sessionId={activeSessionId} />
+                ) : undefined
+              }
             />
           </MediaUrlProvider>
         ) : undefined
@@ -216,7 +231,11 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
             sessionId={activeSessionId}
             trailing={
               !isWeb ? (
-                <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} />
+                <SessionToolbar
+                  sessionId={activeSessionId}
+                  showPreview={isFloating}
+                  showBotDecisions={isBotSession}
+                />
               ) : undefined
             }
           />

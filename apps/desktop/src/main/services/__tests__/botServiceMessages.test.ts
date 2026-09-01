@@ -56,7 +56,10 @@ vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: vi.fn(async () => null),
   isDefaultTitle: vi.fn(() => false)
 }))
-vi.mock('../sessionService', () => ({ sessionService: { getById: mocks.getById } }))
+vi.mock('../sessionService', () => ({
+  // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
+  sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
+}))
 
 import { BOT_SENDER_CUSTOM_TYPE, INLINE_TOKENS_CUSTOM_TYPE } from '@shuvix/agent-runtime'
 import { botService } from '../botService'

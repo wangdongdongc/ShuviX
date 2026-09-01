@@ -1022,7 +1022,8 @@
     "tasksLogCapped": "日志超过 50 MB —— 只显示尾部",
     "tasksNoOutput": "暂无输出",
     "tasksStatusEnded": "已结束",
-    "calendar": "日历"
+    "calendar": "日历",
+    "botDecisions": "Bot 决策"
   },
   "browser": {
     "back": "后退",
@@ -1151,6 +1152,12 @@
     "statusOk": "完成",
     "statusWarn": "有保留",
     "statusError": "未完成",
-    "mentionOnly": "仅提及时响应"
+    "mentionOnly": "仅提及时响应",
+    "manageTitle": "管理成员",
+    "manageSubtitle": "调整这个会话的成员 · 至少保留一名",
+    "manageSave": "保存（{{count}} 名成员）",
+    "memberMissing": "md 已删除",
+    "manageMembers": "管理成员",
+    "emptyHint": "给成员发第一条消息吧 —— 输入 @ 可点名让某位成员回答。"
   }
 }

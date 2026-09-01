@@ -1,4 +1,4 @@
-import { getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
 import { useEffect } from 'react'
 import { useBgTaskStore } from '../stores/bgTaskStore'
@@ -27,6 +27,15 @@ export function useSessionInit(activeSessionId: string | null): void {
       const msgs = await getSessionChannelApi().message.list(activeSessionId)
       if (cancelled) return
       useChatStore.getState().setMessages(msgs)
+
+      // 打开即读（A4）：聊天会话带着未读被点开，这一眼就是「读过了」。
+      // 服务端幂等；有根会话不维护未读，不发这趟 IPC
+      {
+        const s = useChatStore.getState().sessions.find((x) => x.id === activeSessionId)
+        if (s?.settings?.bots?.length && (s.settings.unreadCount ?? 0) > 0) {
+          void getHostApi()?.session.markRead?.(activeSessionId)
+        }
+      }
 
       // 2. 后端初始化 Agent 并返回完整会话元信息
       const result = await getSessionChannelApi().agent.init({ sessionId: activeSessionId })

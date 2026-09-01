@@ -211,6 +211,7 @@ export function ProjectSessionGroups({
                 dim={dim && activeGroupKey === groupKey && activeSessionId !== s.id}
                 isNotebook={!!s.settings.notebookPath}
                 isBot={!!s.settings.bots?.length}
+                unreadCount={s.settings.unreadCount}
                 isPinned={caps.pin ? pinnedSessionIds?.has(s.id) : undefined}
                 onSelect={handleSelect}
                 onDelete={onDelete}

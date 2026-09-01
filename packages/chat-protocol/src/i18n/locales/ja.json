@@ -1022,7 +1022,8 @@
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",
     "tasksNoOutput": "まだ出力はありません",
     "tasksStatusEnded": "終了",
-    "calendar": "カレンダー"
+    "calendar": "カレンダー",
+    "botDecisions": "Bot 判断"
   },
   "browser": {
     "back": "戻る",
@@ -1151,6 +1152,12 @@
     "statusOk": "完了",
     "statusWarn": "留保あり",
     "statusError": "未完了",
-    "mentionOnly": "メンション時のみ応答"
+    "mentionOnly": "メンション時のみ応答",
+    "manageTitle": "メンバー管理",
+    "manageSubtitle": "この会話のメンバーを調整 · 最低 1 名",
+    "manageSave": "保存（{{count}} 名）",
+    "memberMissing": "md 削除済み",
+    "manageMembers": "メンバー管理",
+    "emptyHint": "メンバーに最初のメッセージを送りましょう —— @ で特定のメンバーを指名できます。"
   }
 }
