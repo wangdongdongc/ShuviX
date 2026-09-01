@@ -21,9 +21,13 @@
  *    落到根会话上，所以这里维护 sub→root 映射（`ChatEventBase.subAgentId` 是个从没有人
  *    写过的字段，指望不上，只能像 ChatFrontendRegistry 那样自己按 register/end 记）。
  *
- * 3. **非工具派发的子会话（如 workflow 引擎 `run()` 起的 agent）算一次运行**，用
- *    `sub_session_end` 补一条完成/失败通知 —— 这类运行没有根 agent 的 `agent_end` 兜底，
- *    不补就永远等不到通知。Agent 自己派发的（带 `parentToolCallId`）不补，那是上面第 2 条。
+ * 3. **子会话的结束一律不弹**：`sub_session_end` 只用来销血缘。这里一度按「无
+ *    `parentToolCallId` = 用户触发」补过一条完成/失败通知 —— 那时笔记本发送整轮跑在子会话里，
+ *    没有根 agent 的 `agent_end` 兜底。笔记本改回真正的根 agent 之后，唯一还这么派发的是
+ *    workflow 引擎的 `run()`，而它起的都是机械动作（auto-title 一条、bot 管线每个 bot 每条
+ *    消息两三条）：补通知的结果是用户刚发完消息就先收到一条「已完成」，而他等的那轮还在跑。
+ *    真要给某类 workflow 运行发通知，得由发起方说自己是一次用户在等的运行，而不是从
+ *    「有没有 toolCallId」反推。
  */
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
@@ -90,8 +94,8 @@ function describeRequest(request: InputRequest, t: NotificationTranslate): strin
 }
 
 export function createNotificationCenter(deps: NotificationCenterDeps): NotificationCenter {
-  /** 子会话 id → 血缘。register 时记，end 时删 */
-  const subSessions = new Map<string, { root: string; userTriggered: boolean }>()
+  /** 子会话 id → 根会话 id。register 时记，end 时删 */
+  const subSessions = new Map<string, string>()
   /** 会话 → 它名下已弹出的通知 key（撤回用） */
   const keysBySession = new Map<string, Set<string>>()
   /**
@@ -108,9 +112,9 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
     let current = sessionId
     // 嵌套派生最多 MAX_AGENT_DEPTH 层，给个上限纯粹是防御环形数据
     for (let i = 0; i < 8; i++) {
-      const parent = subSessions.get(current)
-      if (!parent) return current
-      current = parent.root
+      const root = subSessions.get(current)
+      if (!root) return current
+      current = root
     }
     return current
   }
@@ -169,20 +173,13 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
     handleEvent(event: ChatEvent): void {
       switch (event.type) {
         case 'sub_session_register': {
-          subSessions.set(event.sessionId, {
-            root: event.rootSessionId || event.parentSessionId,
-            // 无 parentToolCallId = 非工具派发（如 workflow 引擎 run()），这一支算一次完整运行
-            userTriggered: !event.parentToolCallId
-          })
+          subSessions.set(event.sessionId, event.rootSessionId || event.parentSessionId)
           break
         }
 
         case 'sub_session_end': {
-          const lineage = subSessions.get(event.sessionId)
+          // 只销血缘，不补通知（见文件头注 3）：子会话的结局属于派它的那一轮
           subSessions.delete(event.sessionId)
-          if (lineage?.userTriggered) {
-            notifyRunEnd(rootOf(lineage.root), !!event.isError, event.result)
-          }
           break
         }
 
@@ -197,7 +194,10 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
           // error 和 prompt() catch 的 error，攒着才不会弹两条）；
           // 不在运行中说明这轮压根没起来（模型解析失败等），没有 agent_end 兜底，立刻弹。
           if (runningSessions.has(event.sessionId)) pendingErrors.set(event.sessionId, event.error)
-          else notifyRunEnd(rootOf(event.sessionId), true, event.error)
+          // 派生 agent 的错同样不弹（与 agent_end 分支同因）：它以 tool error 回到父 agent，
+          // 父那轮的 agent_end 才是结局
+          else if (rootOf(event.sessionId) === event.sessionId)
+            notifyRunEnd(event.sessionId, true, event.error)
           break
         }
 

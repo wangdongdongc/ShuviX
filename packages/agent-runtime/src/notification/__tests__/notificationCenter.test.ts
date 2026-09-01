@@ -47,7 +47,7 @@ function askRequest(id = 'req-1', command = 'rm -rf build'): InputRequest {
   return { id, kind: 'ask', toolName: 'bash', createdAt: 0, command }
 }
 
-/** 子会话登记：parentToolCallId 有值 = agent 自己派发；无值 = 用户触发（笔记本发送） */
+/** 子会话登记：parentToolCallId 有值 = agent 经派发工具起的；无值 = workflow 引擎 run() 起的 */
 function register(sessionId: string, parent: string, parentToolCallId?: string): ChatEvent {
   return {
     type: 'sub_session_register',
@@ -208,24 +208,17 @@ describe('通知决策器 — 派生 agent', () => {
     expect(h.shown[0].title).toBe('根会话')
   })
 
-  it('用户触发的子会话（笔记本发送）算一次运行，用 sub_session_end 补通知', () => {
+  it('派生 agent 的 error 落在运行态之外也不弹 —— 血缘在手，就不该被当成根会话那轮', () => {
     const h = makeCenter()
-    h.center.handleEvent(register(SUB, ROOT)) // 无 parentToolCallId
-    h.center.handleEvent({ type: 'agent_end', sessionId: SUB, reason: 'ok' })
+    h.center.handleEvent(register(SUB, ROOT, 'tool-call-1'))
+    // 没有 agent_start（例如这轮压根没起来）：根会话遇到这种会立刻弹，子会话不该
+    h.center.handleEvent({ type: 'error', sessionId: SUB, error: '模型未配置' })
     expect(h.shown).toHaveLength(0)
-
-    h.center.handleEvent({
-      type: 'sub_session_end',
-      sessionId: SUB,
-      parentSessionId: ROOT,
-      result: '写好了'
-    })
-    expect(h.shown).toHaveLength(1)
-    expect(h.shown[0]).toMatchObject({ kind: 'done', sessionId: ROOT })
   })
 
-  it('agent 自己派发的子会话结束不补通知', () => {
+  it('子会话结束一律不补通知 —— 无论是不是工具派发的', () => {
     const h = makeCenter()
+    // 工具派发（agent 自己起的）
     h.center.handleEvent(register(SUB, ROOT, 'tool-call-1'))
     h.center.handleEvent({
       type: 'sub_session_end',
@@ -233,20 +226,28 @@ describe('通知决策器 — 派生 agent', () => {
       parentSessionId: ROOT,
       result: '找完了'
     })
-    expect(h.shown).toHaveLength(0)
-  })
-
-  it('用户触发的子会话失败，弹失败并带上结果文本', () => {
-    const h = makeCenter()
-    h.center.handleEvent(register(SUB, ROOT))
+    // 非工具派发（workflow 引擎 run()：auto-title / bot 管线），成功与失败都不弹 ——
+    // 用户等的是根会话那轮，机械动作跑完先弹一条「已完成」只会误导
+    h.center.handleEvent(register('sub-wf', ROOT))
+    h.center.handleEvent({ type: 'agent_end', sessionId: 'sub-wf', reason: 'ok' })
     h.center.handleEvent({
       type: 'sub_session_end',
-      sessionId: SUB,
+      sessionId: 'sub-wf',
+      parentSessionId: ROOT,
+      result: '标题已改'
+    })
+    h.center.handleEvent(register('sub-wf2', ROOT))
+    h.center.handleEvent({
+      type: 'sub_session_end',
+      sessionId: 'sub-wf2',
       parentSessionId: ROOT,
       result: '工具连续失败',
       isError: true
     })
-    expect(h.shown[0]).toMatchObject({ kind: 'failed', sessionId: ROOT })
-    expect(h.shown[0].body).toBe('notification.failedBody|工具连续失败')
+    expect(h.shown).toHaveLength(0)
+
+    // 根会话那轮照常弹
+    h.center.handleEvent({ type: 'agent_end', sessionId: ROOT, reason: 'ok' })
+    expect(h.shown.map((n) => n.kind)).toEqual(['done'])
   })
 })
