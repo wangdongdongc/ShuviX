@@ -40,7 +40,13 @@ vi.mock('../workflowService', () => ({
   workflowTriggers: { fire: vi.fn() }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => join(dirs.base, 'data'),
+  getChatAttachmentsDir: (sid: string) => join(dirs.base, 'data', 'chat-attachments', sid),
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -62,6 +68,9 @@ vi.mock('../sessionService', () => ({
     rewriteBots: mocks.rewriteBots
   }
 }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import { botService } from '../botService'
 

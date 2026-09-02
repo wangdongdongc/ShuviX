@@ -56,6 +56,8 @@ export interface BotMdSeed {
   displayName?: string
   /** shuvix-bot-respond：auto | mention-only */
   respond?: string
+  /** `shuvix-bot-respond-to`：user（缺省，只答用户消息）| all（也答别的 bot 的消息） */
+  respondTo?: string
   /** `shuvix-bot-pipeline` —— 指向哪份管线 workflow（缺省 bot-chat） */
   pipeline?: string
   /** `shuvix-bot-input` —— 铺进管线 input 的用户键 */
@@ -90,6 +92,7 @@ export function writeBotMd(app: E2EApp, name: string, seed: BotMdSeed = {}): str
   if (seed.tools) lines.push(`shuvix-tools: ${seed.tools}`)
   if (seed.model) lines.push(`shuvix-model: ${seed.model}`)
   if (seed.respond) lines.push(`shuvix-bot-respond: ${seed.respond}`)
+  if (seed.respondTo) lines.push(`shuvix-bot-respond-to: ${seed.respondTo}`)
   if (seed.pipeline) lines.push(`shuvix-bot-pipeline: ${seed.pipeline}`)
   if (seed.botInput) {
     lines.push('shuvix-bot-input:')

@@ -25,7 +25,8 @@
  * sessionService 在这里是假件，所以它那份参与方从未注册，注册表里干干净净只有 bot 一个。
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
-import { mkdirSync, rmSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 
 const dirs = vi.hoisted(() => {
@@ -34,6 +35,7 @@ const dirs = vi.hoisted(() => {
   return { base, sessions: `${base}/sessions`, bots: `${base}/bots` }
 })
 const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(async () => ({ started: false, reason: 'not-found' })),
   broadcast: vi.fn(),
   getById: vi.fn(),
   isBotSession: vi.fn(() => true),
@@ -42,15 +44,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../workflowService', () => ({
   workflowService: {
-    invoke: vi.fn(async () => ({ started: false, reason: 'not-found' })),
+    invoke: mocks.invoke,
     abortSessionRuns: vi.fn(() => 0),
-    hasWorkflow: vi.fn(() => false),
+    hasWorkflow: vi.fn(() => true),
     registerRunJournalSink: vi.fn()
   },
   workflowTriggers: { fire: vi.fn() }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => `${dirs.base}/data`,
+  getChatAttachmentsDir: (sid: string) => `${dirs.base}/data/chat-attachments/${sid}`,
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -71,13 +79,17 @@ vi.mock('../sessionTriggerFacts', () => ({
 vi.mock('../sessionService', () => ({
   sessionService: { getById: mocks.getById, isBotSession: mocks.isBotSession }
 }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { hasCapability: mocks.hasCapability, broadcast: vi.fn() }
 }))
 
 import { botService } from '../botService'
 import { requestUserInputFor, respondToUserInput } from '../userInputBroker'
-import { clearSessionTreeCacheForTests, withSessionTreeLock } from '../sessionStorage'
+import { clearSessionTreeCacheForTests } from '../sessionStorage'
+import { __reset as resetRows } from './fakeChatMessageDao'
 
 /**
  * **每条用例一套全新的 id**。botService 是模块级单例，而 `inputsClosed` 按设计是 sticky 的
@@ -117,13 +129,36 @@ function peek<T>(p: Promise<T>): Promise<T | typeof PENDING> {
   return Promise.race([p, new Promise<typeof PENDING>((r) => setTimeout(() => r(PENDING), 20))])
 }
 
-/** 拿住写锁并卡住 —— 用来造「run 还在飞」的确定性窗口（同 botServiceMessages） */
-function holdLock(sid = SID): { release: () => void; done: Promise<void> } {
+/** 一份最小可用的 bot 定义 —— 只为让 L0 组得出 cohort，好让管线真的飞起来 */
+function writeBot(name: string): void {
+  mkdirSync(dirs.bots, { recursive: true })
+  writeFileSync(
+    join(dirs.bots, `${name}.md`),
+    ['---', 'shuvix: bot v1', `name: ${name}`, `description: unit bot`, '---', '', 'BODY.'].join(
+      '\n'
+    )
+  )
+}
+
+/**
+ * 造一个「run 还在飞」的确定性窗口：卡住管线的 invoke。
+ *
+ * v1 这里是拿住会话树的写锁 —— v2 的写者是一次同步事务，锁根本卡不住 `handleUserMessage`，
+ * 而 `abortSession` 等的也从来不是那把锁，是 `whenIdle`（在飞管线计数）。所以窗口的
+ * 支点跟着挪到管线本身
+ */
+function holdInflight(): { release: () => void; inflight: Promise<unknown> } {
   let release: () => void = () => {}
   const gate = new Promise<void>((r) => {
     release = r
   })
-  return { release, done: withSessionTreeLock(sid, () => gate) }
+  mocks.invoke.mockImplementation(async () => {
+    await gate
+    return { started: false, reason: 'not-found' }
+  })
+  writeBot('scout')
+  const inflight = botService.handleUserMessage({ sessionId: SID, text: '你好' })
+  return { release, inflight }
 }
 
 beforeEach(() => {
@@ -134,6 +169,9 @@ beforeEach(() => {
   mkdirSync(dirs.sessions, { recursive: true })
   mkdirSync(dirs.bots, { recursive: true })
   clearSessionTreeCacheForTests()
+  resetRows()
+  mocks.invoke.mockReset()
+  mocks.invoke.mockResolvedValue({ started: false, reason: 'not-found' })
   mocks.broadcast.mockReset()
   mocks.getById.mockReset()
   mocks.getById.mockReturnValue({ workingDirectory: dirs.sessions, settings: { bots: ['scout'] } })
@@ -179,16 +217,17 @@ describe('requestUserInput —— 挂起还是立刻取消', () => {
     await pending
   })
 
-  it('abortSession 进行中（写锁没排空）发起的询问 → 立刻取消、不广播', async () => {
-    const lock = holdLock()
+  it('abortSession 进行中（在飞管线没排空）发起的询问 → 立刻取消、不广播', async () => {
+    const held = holdInflight()
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalled())
     const aborting = botService.abortSession(SID)
     expect(await peek(aborting)).toBe(PENDING)
 
     await expect(botService.requestUserInput(SID, req('r1'))).resolves.toEqual(CANCELLED)
     expect(broadcasts('input_request')).toHaveLength(0)
 
-    lock.release()
-    await lock.done
+    held.release()
+    await held.inflight
     await aborting
   })
 
@@ -340,16 +379,15 @@ describe('abortSession —— 在飞询问的收口', () => {
     // 还挂着」只有一种情况：那个 run 被单独中止或超时掉了（定局时中止未表态成员、引擎
     // 墙钟）。而中止路径拿不到「哪条询问属于哪张票」（询问经 broker 到达时只带会话 id），
     // 所以收口按「会话归零」来，不必伪造那个归属。
-    // 这里用写锁把 handleUserMessage 卡在飞行中，好在归零之前把询问挂上去
-    const lock = holdLock()
-    const inflight = botService.handleUserMessage({ sessionId: SID, text: '你好' })
+    // 这里把管线卡在飞行中，好在归零之前把询问挂上去
+    const held = holdInflight()
+    await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalled())
     const pending = botService.requestUserInput(SID, req('r1'))
     expect(await peek(pending)).toBe(PENDING)
     mocks.broadcast.mockClear()
 
-    lock.release()
-    await lock.done
-    await inflight
+    held.release()
+    await held.inflight
 
     await expect(pending).resolves.toEqual(CANCELLED)
     expect(broadcasts('input_request_resolved')).toEqual([

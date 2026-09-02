@@ -6,7 +6,7 @@
  *   - 成员条按 settings.bots 的**名单序**铺胶囊（不是注册表字典序）；非聊天会话不渲染；
  *   - manage 模式：当前名单预勾选、项目区不渲染（会话归属早已定死）；
  *   - 保存按 bot.list() 的列表序（`bot:list` 按 name.localeCompare 排序），仍被勾着的
- *     幽灵成员按原名单相对序缀尾；新增成员的开场白即刻落树（署名侧车）；
+ *     幽灵成员按原名单相对序缀尾；新增成员的开场白即刻落库（行上自带署名）；
  *   - 幽灵成员（名单里有、注册表里没有）灰行呈现且可取消勾选 —— updateBots 刻意不校验
  *     名字，这个对话框就是名单写坏之后的逃生口；
  *   - 空态：成员介绍卡（注册表缺失者不自我介绍）+ 建议问题 chip（shuvix-bot-suggestions），
@@ -160,7 +160,7 @@ describe('头部成员条', () => {
   })
 
   // A4-24（含 A4-32：有消息之后不出空态）
-  it('加成员保存：名单按列表序落库、胶囊更新、新成员开场白落树、看着即读归 0', async () => {
+  it('加成员保存：名单按列表序落库、胶囊更新、新成员开场白落库、看着即读归 0', async () => {
     await open('A4-M22')
     expect(await pane.clickManageMembers()).toBe(true)
     await dialog.waitOpen()
@@ -175,7 +175,7 @@ describe('头部成员条', () => {
       async () => (await chipNames()).join() === 'm-alpha,m-beta,m-gamma',
       'chips updated'
     )
-    // 只有新增成员补开场白，署名侧车自带 displayName
+    // 只有新增成员补开场白，消息行自带落库当时的 displayName
     const msgs = await listMessages(s1)
     const assistants = msgs.filter((m) => m.role === 'assistant')
     expect(assistants).toHaveLength(1)

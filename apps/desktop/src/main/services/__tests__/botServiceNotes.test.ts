@@ -42,7 +42,13 @@ vi.mock('../workflowService', () => ({
   workflowTriggers: { fire: vi.fn() }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => join(dirs.base, 'data'),
+  getChatAttachmentsDir: (sid: string) => join(dirs.base, 'data', 'chat-attachments', sid),
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -65,6 +71,9 @@ vi.mock('../sessionService', () => ({
     rewriteBots: vi.fn()
   }
 }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 // 材料组装的唯一数据源。真树给不了「这两条会话的最后一条消息差 3 秒」这种时序控制，
 // 而归属会话正是按那个时刻挑的（D12）
 vi.mock('../messageService', () => ({ messageService: { listBySession: mocks.listBySession } }))
@@ -446,17 +455,12 @@ describe('BN-B —— invoke 入参形态', () => {
     expect(notesInput().agents).toMatchObject({ notes: 'my-notes', task: `bot:${BOT}` })
   })
 
-  it('BN-B4 session 信封是「无仲裁、无点名、无成员」的退化形态', async () => {
-    // 笔记场合没有第二个人在场：仲裁、点名、成员名单在这条路径上都没有意义，
+  it('BN-B4 session 信封是「无点名、无成员」的退化形态', async () => {
+    // 笔记场合没有第二个人在场：点名与成员名单在这条路径上都没有意义，
     // 但键必须齐 —— 它们是管线 input 的 required 字段
     await accumulate([SID, SID, SID])
     await waitForNotes()
-    expect(notesInput().session).toEqual({
-      id: SID,
-      arbitrated: false,
-      directed: false,
-      members: []
-    })
+    expect(notesInput().session).toEqual({ id: SID, directed: false, members: [] })
   })
 
   it('BN-B5 分道键是 bot:<name>:notes 且排队而不是丢弃', async () => {

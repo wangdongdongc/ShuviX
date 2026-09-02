@@ -2,7 +2,7 @@
  * botService 管线半边（M4′）的接线与两个跨 realm 校验器。
  *
  * 这里测的三件事都是**表**，不是流程：管线/角色的回落表（`resolvePipeline`）、
- * claim intent 的取值表（`asClaimIntent`）、say 正文的投影表（`asSayContent`）。
+ * say 正文的投影表（`asSayContent`）。仲裁相关的取值表随 v2 去仲裁一并移除。
  * 后两个是脚本值进入宿主的信任边界 —— 值跨 vm realm 到达，`instanceof` 不可靠，
  * 逐字段 typeof 是唯一防线，因此每一格都值得单独摆一条。
  *
@@ -28,7 +28,13 @@ vi.mock('../workflowService', () => ({
   workflowTriggers: { fire: vi.fn() }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => `${dirs.base}/data`,
+  getChatAttachmentsDir: (sid: string) => `${dirs.base}/data/chat-attachments/${sid}`,
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -45,15 +51,12 @@ vi.mock('../sessionTriggerFacts', () => ({
   isDefaultTitle: vi.fn(() => false)
 }))
 vi.mock('../sessionService', () => ({ sessionService: { getById: vi.fn() } }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import { DEFAULT_BOT_PIPELINE } from '@shuvix/agent-runtime'
-import {
-  asClaimIntent,
-  asSayContent,
-  botSelfRef,
-  cohortSilence,
-  resolvePipeline
-} from '../botService'
+import { asSayContent, botSelfRef, resolvePipeline } from '../botService'
 
 function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
   return {
@@ -66,6 +69,7 @@ function stubBot(p: Partial<ParsedBotFile> & { name: string }): ParsedBotFile {
     pipeline: '',
     pipelineInput: {},
     respond: 'auto',
+    respondTo: 'user',
     notesEnabled: true,
     agents: {},
     greeting: '',
@@ -139,62 +143,6 @@ describe('resolvePipeline —— 管线与角色的回落表', () => {
   it('未知角色键透传（角色表是开放的，不做过滤）', () => {
     const r = resolvePipeline(stubBot({ name: 'scout', agents: { verify: 'explore' } }))
     expect(r.agents).toMatchObject({ verify: 'explore', intent: 'bot-intent' })
-  })
-})
-
-describe('asClaimIntent —— 跨 realm 的取值表', () => {
-  it.each([
-    ['reply', 0],
-    ['reply', 9],
-    ['task', 0],
-    ['task', 9],
-    ['clarify', 0],
-    ['clarify', 9],
-    ['ignore', 0],
-    ['ignore', 9]
-  ])('%s @ relevance %i 通过，reason 原样保留', (decision, relevance) => {
-    expect(asClaimIntent({ decision, relevance, reason: '因为我管这块' })).toEqual({
-      decision,
-      relevance,
-      reason: '因为我管这块'
-    })
-  })
-
-  it.each([[undefined], [42], [null], [{ nested: true }]])(
-    'reason 缺省或非字符串（%s）→ undefined',
-    (reason) => {
-      expect(asClaimIntent({ decision: 'reply', relevance: 5, reason }).reason).toBeUndefined()
-    }
-  )
-
-  it.each([[null], [undefined], ['reply'], [42], [true]])('非对象入参 %s 一律抛', (raw) => {
-    expect(() => asClaimIntent(raw)).toThrow(/must be an object/)
-  })
-
-  it.each([['respond'], [''], [undefined], [['reply']]])(
-    'decision 为 %s 时抛，且带上原值',
-    (decision) => {
-      expect(() => asClaimIntent({ decision, relevance: 5 })).toThrow(/unknown decision/)
-    }
-  )
-
-  it.each([['5'], [NaN], [null], [undefined]])('relevance 非 number（%s）抛', (relevance) => {
-    expect(() => asClaimIntent({ decision: 'reply', relevance })).toThrow(/integer in 0\.\.9/)
-  })
-
-  it.each([[-1], [10], [3.5]])('relevance 越界或非整数（%s）抛', (relevance) => {
-    expect(() => asClaimIntent({ decision: 'reply', relevance })).toThrow(/integer in 0\.\.9/)
-  })
-
-  it('多余的键被丢弃（跨 realm 的投影纪律）', () => {
-    const out = asClaimIntent({
-      decision: 'reply',
-      relevance: 5,
-      reason: 'ok',
-      say: 'anything',
-      __proto__: { evil: true }
-    })
-    expect(Object.keys(out).sort()).toEqual(['decision', 'reason', 'relevance'])
   })
 })
 
@@ -314,61 +262,3 @@ describe('asSayContent —— say 的正文投影', () => {
  * 完全相反 —— 前者不必管，后者要去看日志。端到端能验的是链路，这张表的每一格只能在
  * 这里逐条摆开。
  */
-describe('cohortSilence —— 全体沉默的定性表', () => {
-  let seq = 0
-  /** 一个成员的结局：只有「说没说话」与「怎么收的」两个自由度 */
-  const o = (
-    said: boolean,
-    outcome: string
-  ): { botName: string; displayName: string; said: boolean; outcome: string } => {
-    seq += 1
-    return { botName: `b${seq}`, displayName: `B${seq}`, said, outcome }
-  }
-
-  it('任一成员开了口就没有沉默可言（哪怕另一个坏掉了）', () => {
-    expect(cohortSilence([o(true, 'ok'), o(false, 'failed')])).toBeNull()
-  })
-
-  it('全员自判不接 → all_ignored（沉默白名单里唯一的正常项）', () => {
-    expect(cohortSilence([o(false, 'claim_ignored'), o(false, 'claim_ignored')])).toEqual({
-      reason: 'all_ignored'
-    })
-  })
-
-  it('没有一个走到判定 → all_failed', () => {
-    expect(cohortSilence([o(false, 'failed'), o(false, 'pipeline_error')])).toEqual({
-      reason: 'all_failed'
-    })
-  })
-
-  it('一个判定不接、一个坏掉 → mixed（不能说成「大家都不接」）', () => {
-    expect(cohortSilence([o(false, 'claim_ignored'), o(false, 'failed')])).toEqual({
-      reason: 'mixed'
-    })
-  })
-
-  it.each([
-    ['claim_timeout 是慢不是判定', 'claim_ignored', 'claim_timeout', 'mixed'],
-    ['claim_lost 与 claim_timeout 都不是判定', 'claim_lost', 'claim_timeout', 'all_failed']
-  ])('%s', (_n, a, b, reason) => {
-    // 白名单只有 claim_ignored 一项 —— 「输了」「太慢了」都意味着本该有人说话却没说，
-    // 把它们算进正常项，一次真正的故障就会被写成「大家都判定这条不归自己」
-    expect(cohortSilence([o(false, a), o(false, b)])).toEqual({ reason })
-  })
-
-  it('空列表 → null（没有 cohort 就没有结局可言）', () => {
-    expect(cohortSilence([])).toBeNull()
-  })
-
-  it('said 问的是「会话里多出了东西吗」，不是「脚本调过 say 吗」', () => {
-    // 管线不存在时宿主自己落了一条可见失败并把 said 记为 true —— 一条已经显形的失败
-    // 不该再触发一次沉默提示
-    expect(cohortSilence([o(true, 'pipeline_not_found'), o(false, 'claim_ignored')])).toBeNull()
-  })
-
-  it('单成员数组照样被定性 —— 「多 bot 才提示」的纪律住在调用点', () => {
-    // cohort.length > 1 的判断刻意留在 dispatchCohort：单 bot 的沉默只可能是失败，
-    // 那里要的是一条留痕的失败消息而不是一次转瞬即逝的提示。这个函数不替它做主
-    expect(cohortSilence([o(false, 'failed')])).toEqual({ reason: 'all_failed' })
-  })
-})

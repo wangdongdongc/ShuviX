@@ -42,7 +42,13 @@ vi.mock('../workflowService', () => ({
   workflowTriggers: { fire: mocks.fire }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => join(dirs.base, 'data'),
+  getChatAttachmentsDir: (sid: string) => join(dirs.base, 'data', 'chat-attachments', sid),
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -62,9 +68,12 @@ vi.mock('../sessionService', () => ({
   // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
   sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
 }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
 import { botService } from '../botService'
-import { messageService } from '../messageService'
+import { messageService, setChatSessionPredicate } from '../messageService'
 import { clearSessionTreeCacheForTests, withSessionTreeLock } from '../sessionStorage'
 
 /**
@@ -168,6 +177,10 @@ function gateInvoke(output: Record<string, unknown> = { gate: 'ok', outcome: 're
 
 const prompt = (text = 'hello', over: Record<string, unknown> = {}): Promise<void> =>
   botService.handleUserMessage({ sessionId: SID, text, ...over } as never)
+
+// v2：messageService 靠注入的谓词分流「聊天会话读表 / 有根会话读树」。
+// 真件在 botService.init() 里注册，用例不走那条路，所以这里直接把本文件的会话全判为聊天会话
+setChatSessionPredicate(() => true)
 
 beforeEach(() => {
   sidSeq += 1

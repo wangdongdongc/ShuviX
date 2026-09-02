@@ -1,7 +1,7 @@
 /**
  * A3 · @提及胶囊，端到端 —— 弹层（成员优先/过滤/键盘）→ 胶囊落输入框 → token 生产
  * （contentText 带标记 + metadata.inlineTokens）→ L0 按 token.id 精确定向（via:'token'）
- * → 署名回复落树；外加回退重建（胶囊消息回填输入框后原样重发仍走 token 路）与
+ * → 署名回复落库；外加回退重建（胶囊消息回填输入框后原样重发仍走 token 路）与
  * 程序化半链锚点（不经 DOM，直接 `agent.prompt` 带手写 bot token）。
  *
  * 双断纪律：链路事实走 IPC（message.list / decisions.jsonl / 假提供商请求记录），
@@ -196,12 +196,9 @@ describe('@ 弹层 → 胶囊 → token 定向（主链路）', () => {
     await until(async () => (await chat.inputValue()) === '大家好 @Quiet ', 'capsule inserted')
     expect((await listMessages(sidC1)).length).toBe(msgsBefore)
 
-    // 脚本化 quiet 的意图段（定向 solo：恰一发），再第二次回车发送
+    // 脚本化 quiet 的意图段（被点名 = 不给 ignore 的那份契约，恰一发），再第二次回车发送
     provider.script(
-      gate(
-        { decision: 'reply', relevance: 6, reason: '被点名', reply: '收到，我在。' },
-        forBot('Quiet')
-      )
+      gate({ decision: 'reply', reason: '被点名', reply: '收到，我在。' }, forBot('Quiet'))
     )
     await chat.pressEnter()
 
@@ -216,7 +213,7 @@ describe('@ 弹层 → 胶囊 → token 定向（主链路）', () => {
     expect(directedOf('at-quiet').length).toBeGreaterThan(0)
     expect(viaOfLast('at-quiet')).toBe('token')
 
-    // user 消息落树：content 是标记态原文，token 全量进 metadata（id 是身份键全名）
+    // user 消息落库：content 是标记态原文，token 全量进 metadata（id 是身份键全名）
     const user = (await listMessages(sidC1)).find((m) => m.role === 'user')!
     c1UserMsgId = user.id
     expect(String(user.content)).toContain('{{shuvixInlineToken:')
@@ -369,10 +366,7 @@ describe('回退重建与程序化半链', () => {
     // 原样重发：第二次定向仍是 token（胶囊经 restoreFromTokens 重新登记）
     const before = directedOf('at-quiet').length
     provider.script(
-      gate(
-        { decision: 'reply', relevance: 6, reason: '再次被点名', reply: '第二次收到。' },
-        forBot('Quiet')
-      )
+      gate({ decision: 'reply', reason: '再次被点名', reply: '第二次收到。' }, forBot('Quiet'))
     )
     await chat.pressEnter()
 
@@ -388,10 +382,7 @@ describe('回退重建与程序化半链', () => {
     const sid = await createBotSession(app.main, { bots: ['at-quiet'], title: 'AT-C10' })
     const before = directedOf('at-quiet').length
     provider.script(
-      gate(
-        { decision: 'reply', relevance: 6, reason: '被点名', reply: '看到了。' },
-        forBot('Quiet')
-      )
+      gate({ decision: 'reply', reason: '被点名', reply: '看到了。' }, forBot('Quiet'))
     )
 
     // 文本里没有任何 @ —— 定向若发生，只可能来自 token（裸文本降级无从命中）

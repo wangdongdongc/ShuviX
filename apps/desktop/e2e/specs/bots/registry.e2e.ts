@@ -130,6 +130,33 @@ describe('bot registry', () => {
     expect(fresh?.pipeline).toBe('bot-chat')
   })
 
+  // v2 的第二根轴：`shuvix-bot-respond-to`（响应谁说的话），与 `shuvix-bot-respond`
+  // （要不要被点名才响应）正交。缺省 `user` 与 v1 的硬规则「bot 的回复不触发 bot」等价；
+  // 真正的接力行为归 pipeline.e2e.ts 的护栏用例，这里只钉解析与拒绝面
+  it('rejects an out-of-vocabulary shuvix-bot-respond-to and leaves the file untouched', async () => {
+    const filePath = writeBotMd(app, 'e2e-relay-bad', { description: 'bad relay axis' })
+    const before = readFileSync(filePath, 'utf-8')
+    const res = await app.main.eval<{ success: boolean; error?: string }>(
+      `window.api.bot.save({ originalName: 'e2e-relay-bad', text: ${JSON.stringify(
+        '---\nshuvix: bot v1\nname: e2e-relay-bad\ndescription: still described\n' +
+          'shuvix-bot-respond-to: everyone\n---\n\nBODY.\n'
+      )} })`
+    )
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/shuvix-bot-respond-to/)
+    expect(readFileSync(filePath, 'utf-8')).toBe(before)
+
+    // 合法值照常收下（两轴各走各的：respond 仍是 auto）
+    const ok = await app.main.eval<{ success: boolean; error?: string }>(
+      `window.api.bot.save({ originalName: 'e2e-relay-bad', text: ${JSON.stringify(
+        '---\nshuvix: bot v1\nname: e2e-relay-bad\ndescription: still described\n' +
+          'shuvix-bot-respond-to: all\n---\n\nBODY.\n'
+      )} })`
+    )
+    expect(ok.success, ok.error).toBe(true)
+    expect((await list()).find((b) => b.name === 'e2e-relay-bad')?.respond).toBe('auto')
+  })
+
   it('rejects an invalid save and leaves the file on disk untouched', async () => {
     const filePath = writeBotMd(app, 'e2e-keeper', { description: 'keeps its old content' })
     const before = readFileSync(filePath, 'utf-8')

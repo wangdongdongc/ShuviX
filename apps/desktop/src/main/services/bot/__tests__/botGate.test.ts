@@ -18,11 +18,12 @@ import {
 } from '../botGate'
 import type { BotDecisionKind } from '../botJournal'
 
-/** 门只读 name / displayName / respond 三个字段，其余补齐到 ParsedBotFile 的形状即可 */
+/** 门只读 name / displayName / respond / respondTo，其余补齐到 ParsedBotFile 的形状即可 */
 function stubBot(p: {
   name: string
   displayName?: string
   respond?: 'auto' | 'mention-only'
+  respondTo?: 'user' | 'all'
 }): ParsedBotFile {
   return {
     name: p.name,
@@ -33,6 +34,7 @@ function stubBot(p: {
     instructionFiles: [],
     projectAwareness: false,
     pipeline: 'bot-chat',
+    respondTo: p.respondTo ?? 'user',
     pipelineInput: {},
     respond: p.respond ?? 'auto',
     notesEnabled: true,
@@ -51,6 +53,11 @@ function input(members: string[], bots: ParsedBotFile[], over: Partial<L0Input> 
   return {
     members,
     known: knownOf(bots),
+    // v2 的三个必填：缺省按「用户消息、第一跳、扇出未触顶」——即 v1 的唯一场景
+    author: { kind: 'user' },
+    hop: 0,
+    fanout: 0,
+    limits: { maxHop: 2, maxFanout: 8 },
     text: '',
     lastBotSender: null,
     clarifyConsumed: new Set<string>(),
@@ -379,6 +386,10 @@ describe('runL0Gate —— mention-only / cohort / 全体沉默', () => {
     const res = runL0Gate({
       members: ['a', 'b'],
       known,
+      author: { kind: 'user' },
+      hop: 0,
+      fanout: 0,
+      limits: { maxHop: 2, maxFanout: 8 },
       text: '大家好',
       lastBotSender: null,
       clarifyConsumed: new Set()
@@ -390,5 +401,294 @@ describe('runL0Gate —— mention-only / cohort / 全体沉默', () => {
     const res = runL0Gate(input([], [], { text: '@a 在吗' }))
     expect(res.cohort).toEqual([])
     expect(res.records).toEqual([])
+  })
+})
+
+// ─────────────────────── 段 0b：作者过滤（v2 的第二根轴） ───────────────────────
+
+/**
+ * `respondTo` 回答的是「**谁说的话算数**」，与 `respond`（「什么条件下我开口」）正交。
+ *
+ * 这一段跑在四段之前，且**只对 bot 作者生效**：用户消息恒对全体成员可见 —— respondTo
+ * 若被实现成对称过滤，用户就再也叫不动那些声明了 `all` 的 bot。另一条是结构性的：
+ * **任何 bot 不响应自己**，没有开关可以打开它 —— 失守即单 bot 自问自答直到 hop 用尽。
+ */
+describe('runL0Gate —— 作者过滤(v2)', () => {
+  const relay = (name: string, over: { respond?: 'auto' | 'mention-only' } = {}): ParsedBotFile =>
+    stubBot({ name, respondTo: 'all', ...over })
+
+  it('A-1 用户消息：全体成员照旧可见，与 respondTo 取值无关', () => {
+    // respondTo 是「我答谁」不是「谁答我」—— user/all 混编的名单在用户消息上必须一视同仁
+    const bots = [relay('a'), stubBot({ name: 'b' }), relay('c')]
+    const res = runL0Gate(input(['a', 'b', 'c'], bots, { text: '大家好' }))
+    expect(res.cohort).toEqual(['a', 'b', 'c'])
+  })
+
+  it('A-2 bot 作者：发言人自己永不在 cohort 里（结构性，没有开关）', () => {
+    const res = runL0Gate(
+      input(['a', 'b'], [relay('a'), relay('b')], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual(['b'])
+  })
+
+  it("A-3 唯一声明 'all' 的成员就是发言人自己 → cohort 空、records 空、directed false", () => {
+    const res = runL0Gate(
+      input(['a', 'b'], [relay('a'), stubBot({ name: 'b' })], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual([])
+    expect(res.records).toEqual([])
+    expect(res.directed).toBe(false)
+  })
+
+  it("A-4 bot 作者 + 成员全为 'user' → cohort 空，且一条决策记录都不落（钉住现状）", () => {
+    // 这类沉默在决策日志里毫无痕迹：排查「为什么 b 没接话」时翻不到任何一行。
+    // 将来若补一条 `l0_relay_ineligible` 之类的记录，本例反转
+    const res = runL0Gate(
+      input(['a', 'b'], [stubBot({ name: 'a' }), stubBot({ name: 'b' })], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual([])
+    expect(res.records).toEqual([])
+  })
+
+  it('A-5 bot 作者路径上，known 查不到的成员被静默剔除（不落 l0_member_missing）', () => {
+    // 与用户消息路径刻意不对称：那边缺失成员会记一条（段 3 的 present()），这边在段 0b
+    // 就被 `known.get(m)?.respondTo === 'all'` 的短路吃掉了。钉住这处不对称
+    const res = runL0Gate(
+      input(['a', 'ghost', 'b'], [relay('a'), relay('b')], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual(['b'])
+    expect(kindsOf(res, 'ghost')).toEqual([])
+  })
+
+  it("A-6 bot 作者：mention-only + respondTo 'user' 的成员不落 l0_mention_only_skipped", () => {
+    // 它在段 0b 就出局了，根本走不到段 3 —— 两个原因同时成立时，记录只说得出先命中的那个
+    const quiet = stubBot({ name: 'quiet', respond: 'mention-only' })
+    const res = runL0Gate(
+      input(['a', 'quiet'], [relay('a'), quiet], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual([])
+    expect(kindsOf(res, 'quiet')).toEqual([])
+  })
+
+  it("A-7 bot 作者：mention-only + 'all' 且未被提及 → 落 l0_mention_only_skipped，不进 cohort", () => {
+    const quiet = relay('quiet', { respond: 'mention-only' })
+    const res = runL0Gate(
+      input(['a', 'quiet'], [relay('a'), quiet], {
+        author: { kind: 'bot', name: 'a' },
+        text: '我说完了'
+      })
+    )
+    expect(res.cohort).toEqual([])
+    expect(kindsOf(res, 'quiet')).toEqual(['l0_mention_only_skipped'])
+  })
+
+  it("A-8 bot 作者：mention-only + 'all' 且正文点名 → 定向唤起，via 是 'text'", () => {
+    // 两轴组合出的目标档位。注意 relayToBots 不传 inlineTokens —— bot 之间的提及只有
+    // 裸文本降级这一条路可走，token 优先那一支在接力路径上永远不成立
+    const quiet = relay('quiet', { respond: 'mention-only' })
+    const res = runL0Gate(
+      input(['a', 'quiet'], [relay('a'), quiet], {
+        author: { kind: 'bot', name: 'a' },
+        text: '这个问题 @quiet 更清楚'
+      })
+    )
+    expect(res.cohort).toEqual(['quiet'])
+    expect(res.directed).toBe(true)
+    expect(res.records.find((r) => r.kind === 'l0_directed')?.detail).toEqual({ via: 'text' })
+  })
+
+  it("A-9 bot 作者提及了一个 'user' 成员 → 提及不命中，其余 all 成员照常组队", () => {
+    // 提及匹配跑在**过滤后**的候选上。两步顺序反了就会得到 directed:true + 空 cohort ——
+    // 链路凭空断掉，而且断在一条看起来最该接话的消息上
+    const res = runL0Gate(
+      input(['a', 'b', 'c'], [relay('a'), stubBot({ name: 'b' }), relay('c')], {
+        author: { kind: 'bot', name: 'a' },
+        text: '@b 你怎么看'
+      })
+    )
+    expect(res.cohort).toEqual(['c'])
+    expect(res.directed).toBe(false)
+    expect(kindsOf(res, 'b')).toEqual([])
+  })
+
+  it('A-10 clarify 的提问者就是作者自己 → 不回连（否则就是一台自问自答机）', () => {
+    const res = runL0Gate(
+      input(['a', 'b'], [relay('a'), relay('b')], {
+        author: { kind: 'bot', name: 'a' },
+        text: '补充一句',
+        lastBotSender: { botName: 'a', displayName: 'a', decision: 'clarify', entryId: 'e1' }
+      })
+    )
+    expect(res.consumedClarifyEntryId).toBeUndefined()
+    expect(kindsOf(res, 'a')).toEqual([])
+    // 回落到段 3/4：其余 all 成员照常组队
+    expect(res.cohort).toEqual(['b'])
+  })
+
+  it('A-11 反向对照：提问者是别人且它声明了 all → 正常回连', () => {
+    const res = runL0Gate(
+      input(['a', 'b'], [relay('a'), relay('b')], {
+        author: { kind: 'bot', name: 'a' },
+        text: '补充一句',
+        lastBotSender: { botName: 'b', displayName: 'b', decision: 'clarify', entryId: 'e1' }
+      })
+    )
+    expect(res.cohort).toEqual(['b'])
+    expect(res.consumedClarifyEntryId).toBe('e1')
+    expect(kindsOf(res, 'b')).toContain('l0_clarify_relink')
+  })
+
+  it('A-12 cohort 顺序跟会话名单序，不跟 eligible 的构造序或 known 的插入序', () => {
+    const known = new Map([
+      ['c', relay('c')],
+      ['b', relay('b')],
+      ['a', relay('a')]
+    ])
+    const res = runL0Gate({
+      members: ['a', 'b', 'c'],
+      known,
+      author: { kind: 'bot', name: 'a' },
+      hop: 0,
+      fanout: 0,
+      limits: { maxHop: 2, maxFanout: 8 },
+      text: '我说完了',
+      lastBotSender: null,
+      clarifyConsumed: new Set()
+    })
+    expect(res.cohort).toEqual(['b', 'c'])
+  })
+})
+
+// ─────────────────────── 段 0a：hop / fanout 两道循环护栏 ───────────────────────
+
+/**
+ * 终止性靠**结构**保证，不靠提示词自觉：hop 管纵向（链路必然收敛），fanout 管横向
+ * （一条消息不会炸出几十条）。两者都**只对 bot 作者生效** —— 若不作者门控，用户在一条
+ * 长会话里的第 9 句话会被静默吞掉。
+ *
+ * 顺序即语义：深度先判，所以同时越界时只看得到 hop 那一条。两条护栏对用户的可见度也
+ * 刻意不同（fanoutExceeded 会让宿主落一条 system 行，hop 触顶什么都不说）。
+ */
+describe('runL0Gate —— 循环护栏(v2)', () => {
+  const relay = (name: string): ParsedBotFile => stubBot({ name, respondTo: 'all' })
+  const bots = [relay('a'), relay('b')]
+  /** 一次来自 a 的接力消息 */
+  const fromA = (over: Partial<L0Input> = {}): L0Result =>
+    runL0Gate(
+      input(['a', 'b'], bots, { author: { kind: 'bot', name: 'a' }, text: '我说完了', ...over })
+    )
+
+  it('H-1 用户消息：hop / fanout 再大也不参与判定', () => {
+    const res = runL0Gate(input(['a', 'b'], bots, { text: '大家好', hop: 99, fanout: 99 }))
+    expect(res.cohort).toEqual(['a', 'b'])
+    expect(res.records.some((r) => r.kind.endsWith('_exceeded'))).toBe(false)
+  })
+
+  it('H-2 hop 触顶 → cohort 空、恰一条 l0_hop_exceeded，且**不给用户可见提示**', () => {
+    const res = fromA({ hop: 2 })
+    expect(res.cohort).toEqual([])
+    expect(res.records).toHaveLength(1)
+    expect(res.records[0]).toMatchObject({
+      kind: 'l0_hop_exceeded',
+      botName: 'a',
+      detail: { hop: 2 }
+    })
+    // 与扇出触顶刻意不对称：深度触顶只落决策记录，不在会话里出声
+    expect(res.fanoutExceeded).toBeUndefined()
+  })
+
+  it('H-3 hop = maxHop - 1 → 正常组队（差一错误的另一半）', () => {
+    const res = fromA({ hop: 1 })
+    expect(res.cohort).toEqual(['b'])
+    expect(res.records.some((r) => r.kind === 'l0_hop_exceeded')).toBe(false)
+  })
+
+  it('H-4 limits 真的被读了：maxHop=1 时 hop=1 立即触顶（「1 等价于关掉 bot→bot」）', () => {
+    const res = fromA({ hop: 1, limits: { maxHop: 1, maxFanout: 8 } })
+    expect(res.cohort).toEqual([])
+    expect(kindsOf(res, 'a')).toEqual(['l0_hop_exceeded'])
+  })
+
+  it('H-5 扇出触顶 → cohort 空、恰一条 l0_fanout_exceeded，且 fanoutExceeded 为 true', () => {
+    // 这个 true 是宿主落「本轮已达上限」那条 system 行的唯一依据：横向被拦下时链路是
+    // 凭空断掉的，用户看不出发生过什么，所以必须出声
+    const res = fromA({ fanout: 8 })
+    expect(res.cohort).toEqual([])
+    expect(res.records).toHaveLength(1)
+    expect(res.records[0]).toMatchObject({
+      kind: 'l0_fanout_exceeded',
+      botName: 'a',
+      detail: { fanout: 8 }
+    })
+    expect(res.fanoutExceeded).toBe(true)
+  })
+
+  it('H-6 fanout = maxFanout - 1 → 正常组队', () => {
+    const res = fromA({ fanout: 7 })
+    expect(res.cohort).toEqual(['b'])
+    expect(res.fanoutExceeded).toBeUndefined()
+  })
+
+  it('H-7 两道同时越界 → 只落 hop 那一条（顺序即语义：深度先判）', () => {
+    const res = fromA({ hop: 2, fanout: 8 })
+    expect(res.records.map((r) => r.kind)).toEqual(['l0_hop_exceeded'])
+    expect(res.fanoutExceeded).toBeUndefined()
+  })
+
+  it.each([
+    ['hop', { hop: 2 }],
+    ['fanout', { fanout: 8 }]
+  ])('H-8 护栏触发（%s）时结果面干净：无 cohort_formed、不定向、不消费 clarify', (_n, over) => {
+    const res = fromA({
+      ...over,
+      text: '@b 你来',
+      lastBotSender: { botName: 'b', displayName: 'b', decision: 'clarify', entryId: 'e1' }
+    })
+    expect(res.records).toHaveLength(1)
+    expect(res.records.some((r) => r.kind === 'cohort_formed')).toBe(false)
+    expect(res.directed).toBe(false)
+    expect(res.consumedClarifyEntryId).toBeUndefined()
+  })
+
+  it.each([
+    ['hop', { hop: 2 }, 'l0_hop_exceeded'],
+    ['fanout', { fanout: 8 }, 'l0_fanout_exceeded']
+  ])('H-9 护栏记录归属**作者**而不是被拦下的候选（%s）', (_n, over, kind) => {
+    // 决策记录按 bot 分目录存 —— 归错目录的后果不是断言变红，而是排查时在
+    // .runs/<被拦的那个>/ 下翻不到任何东西
+    const res = fromA(over)
+    expect(kindsOf(res, 'a')).toEqual([kind])
+    expect(kindsOf(res, 'b')).toEqual([])
+  })
+
+  it('H-10 三级链路走查：用户 → 第一跳 → 第二跳，第三次调用触顶', () => {
+    // hop 是「这条消息的传播跳数」：用户消息 0，它触发的 bot 回复带 1，再下一层带 2。
+    // maxHop=2 于是意味着「一条用户消息最多引出两层 bot→bot 接力」
+    const user = runL0Gate(input(['a', 'b'], bots, { text: '大家好', hop: 0 }))
+    expect(user.cohort).toEqual(['a', 'b'])
+
+    const first = fromA({ hop: 1 })
+    expect(first.cohort).toEqual(['b'])
+
+    const second = runL0Gate(
+      input(['a', 'b'], bots, { author: { kind: 'bot', name: 'b' }, text: '我也说完了', hop: 2 })
+    )
+    expect(second.cohort).toEqual([])
+    expect(kindsOf(second, 'b')).toEqual(['l0_hop_exceeded'])
   })
 })

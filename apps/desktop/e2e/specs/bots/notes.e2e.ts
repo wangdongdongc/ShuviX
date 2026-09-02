@@ -71,7 +71,6 @@ const gateTurn = (): Parameters<FakeProvider['script']>[0] => ({
       name: 'next',
       args: JSON.stringify({
         decision: 'reply',
-        relevance: 5,
         reason: 'small talk with a durable preference',
         reply: 'noted.',
         memorable: true
@@ -270,7 +269,7 @@ describe('bot 笔记归纳', () => {
     expect(notesReq.raw).toContain(botFile(BOT))
     expect(notesReq.raw).toContain('The conversations')
 
-    // 检查点前进到这条会话投影的最后一条 entry
+    // 检查点前进到这条会话投影的最后一条消息
     await until(async () => (checkpoints(BOT)?.[sid] ? true : undefined), 'checkpoint persisted')
     const msgs = await listMessages(sid)
     expect(checkpoints(BOT)?.[sid]).toBe(msgs[msgs.length - 1].id)
@@ -402,7 +401,7 @@ describe('bot 笔记归纳', () => {
 
   it('E-4 没跑成的那一轮不推进检查点（材料留给下一轮）', async () => {
     // 用「笔记段的 agent 解析不出来」制造失败：它是唯一一种不依赖计时器的确定性 run 失败。
-    // 检查点若在这时前进，这批 entry 就永远不会被任何一轮看见了 —— 而失败连一句话都不会说
+    // 检查点若在这时前进，这批消息就永远不会被任何一轮看见了 —— 而失败连一句话都不会说
     const BOT = 'n-fail'
     writeBotMd(app, BOT, {
       displayName: 'Failing',
@@ -503,7 +502,7 @@ describe('bot 笔记归纳', () => {
     expect(checkpoints(RENAMED)?.[sid]).toBeTruthy()
     expect(checkpoints(BOT)).toBeUndefined()
 
-    // 历史署名留在原地：侧车带的是落树当时的身份
+    // 历史署名留在原地：消息行存的是落库当时的身份
     const assistants = (await listMessages(sid)).filter((m) => m.role === 'assistant')
     expect(assistants.length).toBeGreaterThan(0)
     expect(assistants.every((m) => m.metadata?.sender?.name === BOT)).toBe(true)

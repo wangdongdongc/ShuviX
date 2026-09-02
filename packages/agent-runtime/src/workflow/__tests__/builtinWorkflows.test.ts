@@ -287,7 +287,6 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
       'window',
       'notes',
       'agents.intent',
-      'session.arbitrated',
       'session.directed',
       'session.others'
     ]) {
@@ -297,8 +296,10 @@ describe('bot-chat — 骨架管线的结构钉板', () => {
     // 那里的作用域才是平铺的。脚本只挑材料，不拼文案
     expect(script).not.toContain('input.message.text')
     expect(botChat().prompts.gate).toContain('{{message.text}}')
-    // 三个装配进来的函数都用上了 —— 它们正是「这份 md 是 bot 管线」的全部含义
-    for (const api of ['claim(', 'turn(', 'say(']) expect(script).toContain(api)
+    // 两个装配进来的函数都用上了 —— 它们正是「这份 md 是 bot 管线」的全部含义。
+    // v2 取消仲裁后 claim 一并消失：没有竞争就没有「这条归谁」要裁
+    for (const api of ['turn(', 'say(']) expect(script).toContain(api)
+    expect(script).not.toContain('claim(')
   })
 
   it('故障与被中止分开：step_aborted 安静退出，另两种才算门控故障', () => {

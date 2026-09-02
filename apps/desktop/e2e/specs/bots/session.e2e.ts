@@ -9,6 +9,10 @@
  *   - 署名自带 displayName：bot md 被删或改名，历史消息的署名不变；
  *   - 清空 / 回退 / 删除三处的 `abortSession` 会师点不抛。
  *
+ * v2 起聊天会话的存储是 `chat_messages` 表（一行一条消息，`authorKind` 分 user/bot/system），
+ * 不再是会话树 JSONL —— 所以「回退越过署名侧车」那类断言换成了表的语义（删掉这条及其之后），
+ * 而「不留空 jsonl」变成了更强的一句：聊天会话**从头到尾**不建那个文件。
+ *
  * 全程 no-LLM（聊天会话的 prompt 根本不碰模型），断言走 IPC + 事件录制器，不碰 DOM。
  */
 import { existsSync, unlinkSync } from 'node:fs'
@@ -116,12 +120,12 @@ describe('聊天会话 = 无根会话', () => {
     expect(msgs.map((m) => m.metadata?.sender?.name)).toEqual(['e2e-beta', 'e2e-alpha'])
   })
 
-  it('发一条消息：user entry 先落树，随后管线起跑（首个事件恒为 user_message）', async () => {
+  it('发一条消息：user 行先落库，随后管线起跑（首个事件恒为 user_message）', async () => {
     const sid = await createBotSession(app.main, { bots: ['e2e-alpha'] })
     await events.clear()
 
     const msgs = await promptBotSession(app.main, sid, 'e2e bot hello')
-    // prompt resolve 时用户消息已经在树上（bot 的回复可能还在路上，那是 pipeline.e2e 的事）
+    // prompt resolve 时用户消息已经落库（bot 的回复可能还在路上，那是 pipeline.e2e 的事）
     expect(msgs.some((m) => m.role === 'user' && m.content === 'e2e bot hello')).toBe(true)
     // 顺序契约：先 append 拿到 id 再广播 —— user_message 恒为这一轮的第一个事件
     expect((await typesFor(sid))[0]).toBe('user_message')
@@ -209,7 +213,7 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     expect(await typesFor(sid)).toEqual([])
   })
 
-  it('agent.abort 不抛（对聊天会话并列排空写锁）', async () => {
+  it('agent.abort 不抛（对聊天会话并列停掉在飞管线）', async () => {
     const sid = await createBotSession(app.main, { bots: ['e2e-alpha'] })
     await expect(
       app.main.eval(`window.api.agent.abort(${JSON.stringify(sid)})`)
@@ -225,7 +229,9 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     expect(msgs.map((m) => m.content)).toContain('after clear')
   })
 
-  it('message.rollback 回退到 bot 消息之前，署名侧车一并越过', async () => {
+  it('message.rollback 回退到 bot 消息：这条及其之后一并撤回，之后照常能发', async () => {
+    // 群聊里「回退」就是撤回这条与后续 —— 表上是一句 `seq >= ?` 的删除，没有会话树那种
+    // 「保留旧分支」（这里既没有 regenerate 的分叉需求，也没有压缩）
     const sid = await createBotSession(app.main, { bots: ['e2e-alpha'] })
     const greeting = (await listMessages(sid))[0]
     expect(greeting.metadata?.sender?.name).toBe('e2e-alpha')
@@ -237,7 +243,7 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     )
     expect(await listMessages(sid)).toEqual([])
 
-    // 孤儿侧车若还留在叶子上，这条**用户**消息就会被它错挂成 e2e-alpha
+    // 回退不该在会话上留下任何会污染下一条消息的残留：用户消息就是用户消息，没有署名
     await promptBotSession(app.main, sid, 'after rollback')
     const user = (await listMessages(sid)).find((m) => m.role === 'user')!
     expect(user.content).toBe('after rollback')
@@ -250,11 +256,15 @@ describe('引导/追加/中止/清空/回退/删除对聊天会话的安全性',
     expect(await app.main.eval(`window.api.session.getById(${JSON.stringify(sid)})`)).toBeFalsy()
   })
 
-  it('从未发过消息的会话按停止键不会留下空 jsonl', async () => {
-    // drain 曾借写锁实现，锁体里的 ensureSessionTree 会把文件建出来 —— 违反
-    // 「打开一个从未发过消息的会话不该在磁盘上留下空文件」。现在没有在飞写入即直接返回
+  it('聊天会话自始至终不建会话树文件（发过消息、按过停止都不建）', async () => {
+    // v1 这条问的是「drain 会不会顺手把空 jsonl 建出来」（它曾借写锁实现，锁体里的
+    // ensureSessionTree 会造文件）。v2 的判据强了一档也简单了一档：聊天会话的存储是
+    // chat_messages 表，那条路径根本不该碰 sessions/ 目录 —— 建出文件即回归
     const sid = await createBotSession(app.main, { bots: ['e2e-silent'] })
     const file = join(app.home, 'userdata', 'data', 'sessions', `${sid}.jsonl`)
+    expect(existsSync(file)).toBe(false)
+
+    await promptBotSession(app.main, sid, '发一条看看')
     expect(existsSync(file)).toBe(false)
 
     await app.main.eval(`window.api.agent.abort(${JSON.stringify(sid)})`)

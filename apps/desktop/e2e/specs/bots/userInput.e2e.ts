@@ -51,7 +51,8 @@ const MARK = 'ASK-PROBE-MARKER'
  * 回归发生时（询问在 broker 处被拒）这里会留下那句 `Session … is not active`，
  * 而不是只在某个没人看的子代理转录里一闪而过。
  *
- * 单 bot 会话是 solo 的，`say` 不需要先 `claim`（仲裁的强制点只在多 bot 时生效）。
+ * `say` 就是纯粹的落库动作：v2 取消仲裁之后没有「赢了才能说」那道强制，脚本 API 里
+ * 也不再有 `claim`（写它是 ReferenceError）。
  */
 const PIPELINE_MD = [
   '---',

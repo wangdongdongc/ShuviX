@@ -13,7 +13,7 @@
  *   3. 聊天会话与有根会话的埋点 payload 形状一致（两个 emit 侧分处两个模块，
  *      只有让它们各跑一轮再对账才作数）；
  *   4. 自动标题对聊天会话也生效（内置工作流 + 埋点 + 会话表三者的合流）；
- *   5. 任务段在飞时按停止 / 删会话不留残骸（会师点、写锁、进程级未处理异常）。
+ *   5. 任务段在飞时按停止 / 删会话不留残骸（会师点、附件目录、进程级未处理异常）。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -72,9 +72,9 @@ const prompt = (sid: string, text: string, extra = ''): Promise<void> =>
  * 所以「任务段挂着的时候按停止」这类用例必须脱手发送 —— 否则测试自己先卡在那条 prompt 上，
  * 停止键根本没机会被按下。
  */
-const promptDetached = (sid: string, text: string): Promise<void> =>
+const promptDetached = (sid: string, text: string, extra = ''): Promise<void> =>
   app.main.eval(
-    `void window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} }).catch(() => undefined); 1`
+    `void window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)}${extra} }).catch(() => undefined); 1`
   )
 
 /** 一次 next 调用（意图段 / 任务段都靠它交回结构化结果） */
@@ -146,14 +146,11 @@ afterAll(async () => {
   await provider?.close()
 })
 
-describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工具干活 → 结构化回复落树', () => {
-  it('工具清单、结果契约、落树的三种形态（content / 侧车 / 署名）逐项落位', async () => {
+describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工具干活 → 结构化回复落库', () => {
+  it('工具清单、结果契约、落库的三种形态（content / reply / 署名）逐项落位', async () => {
     provider.reset()
     provider.script(
-      next(
-        { decision: 'task', relevance: 8, reason: '要动手', task: { objective: '查鉴权' } },
-        isGate
-      ),
+      next({ decision: 'task', reason: '要动手', task: { objective: '查鉴权' } }, isGate),
       next(REPLY, isTask)
     )
     const sid = await createBotSession(app.main, { bots: ['t-worker'] })
@@ -181,7 +178,8 @@ describe('E-1 —— 任务段全链：门控判 task → bot 带着自己的工
     )
     expect(gateToolNames).toEqual(['next'])
 
-    // ③ content 是**全键 markdown**（模型可见的唯一权威），侧车是同源的结构（UI 用）
+    // ③ content 是**全键 markdown**（模型可见的唯一权威），行上的 reply 列是同源的
+    //    结构（UI 用）—— v2 起它就是消息那一行的一列，不再是紧邻的一条署名 entry
     const content = String(reply.content)
     for (const trace of [
       REPLY.headline,
@@ -202,10 +200,7 @@ describe('E-2 —— 附件：图片到得了 provider，字节进不了 journal
   it('任务段请求体含 base64；journal 只记句柄；门控段不带图', async () => {
     provider.reset()
     provider.script(
-      next(
-        { decision: 'task', relevance: 8, reason: '看图', task: { objective: '看这张图' } },
-        isGate
-      ),
+      next({ decision: 'task', reason: '看图', task: { objective: '看这张图' } }, isGate),
       next({ headline: '看到了一张 4×4 的图' }, isTask)
     )
     const sid = await createBotSession(app.main, { bots: ['t-worker'] })
@@ -216,10 +211,11 @@ describe('E-2 —— 附件：图片到得了 provider，字节进不了 journal
     )
     await untilReplies(sid, 1)
 
-    // ① 字节真的到了模型那边 —— 句柄是在派发那一刻才回读会话树换成真消息的
+    // ① 字节真的到了模型那边 —— 句柄是在派发那一刻才按路径回读文件换成真消息的
+    //    （v2 起字节落 `<userData>/data/chat-attachments/<会话>/`，行里只存描述符）
     expect(provider.chatRequests().find(isTask)!.raw).toContain(PNG_B64)
 
-    // ② 门控段不带图：判断该不该接话不需要看图，也省一次读树
+    // ② 门控段不带图：判断该不该接话不需要看图，也省一次读盘
     expect(provider.chatRequests().find(isGate)!.raw).not.toContain(PNG_B64)
 
     // ③ journal 里只有句柄。脚本的 input 被原样写进 run 记录 —— 让 base64 进 input
@@ -283,9 +279,7 @@ describe('E-3 —— 两种会话的 turn-completed 形状一致', () => {
     await prompt(rooted, 'rooted turn')
 
     provider.reset()
-    provider.script(
-      next({ decision: 'reply', relevance: 5, reason: '寒暄', reply: '你好。' }, isGate)
-    )
+    provider.script(next({ decision: 'reply', reason: '寒暄', reply: '你好。' }, isGate))
     const chat = await createBotSession(app.main, { bots: ['t-worker'] })
     await prompt(chat, 'chat turn')
     await untilReplies(chat, 1)
@@ -305,7 +299,7 @@ describe('E-4 —— 自动标题对聊天会话也生效', () => {
     const isTitler = (r: FakeRequest): boolean => !r.isTitle && r.raw.includes('<conversation>')
     provider.reset()
     provider.script(
-      next({ decision: 'reply', relevance: 5, reason: '寒暄', reply: '你好，我在。' }, isGate),
+      next({ decision: 'reply', reason: '寒暄', reply: '你好，我在。' }, isGate),
       // titler 自己动手改名（session-config），下一轮才交结构化结果
       {
         toolCalls: [
@@ -347,18 +341,27 @@ describe('E-4 —— 自动标题对聊天会话也生效', () => {
 })
 
 describe('E-5/E-6 —— 任务段在飞时被打断，不留残骸', () => {
-  /** 让任务段的那次 LLM 调用挂住，返回该会话 id（此时管线正卡在任务段里） */
-  async function startHangingTask(): Promise<string> {
+  /**
+   * 让任务段的那次 LLM 调用挂住，返回该会话 id（此时管线正卡在任务段里）。
+   *
+   * `withImage` 让用户消息带一张图 —— 附件字节落在
+   * `<userData>/data/chat-attachments/<会话>/`，E-6 用那个目录当「残骸还在不在」的观测面
+   * （v1 用的是会话树的 jsonl，v2 聊天会话根本不建那个文件）。
+   */
+  async function startHangingTask(withImage = false): Promise<string> {
     provider.reset()
     provider.script(
-      next(
-        { decision: 'task', relevance: 8, reason: '慢活', task: { objective: '慢慢查' } },
-        isGate
-      ),
+      next({ decision: 'task', reason: '慢活', task: { objective: '慢慢查' } }, isGate),
       next({ headline: '不会走到这里' }, isTask, 60_000)
     )
     const sid = await createBotSession(app.main, { bots: ['t-quiet'] })
-    await promptDetached(sid, '开始一个很慢的活')
+    await promptDetached(
+      sid,
+      '开始一个很慢的活',
+      withImage
+        ? `, images: [{ type: 'image', data: ${JSON.stringify(PNG_B64)}, mimeType: 'image/png' }]`
+        : ''
+    )
     await until(
       async () => (provider.chatRequests().some(isTask) ? true : undefined),
       'task stage dispatched'
@@ -382,18 +385,25 @@ describe('E-5/E-6 —— 任务段在飞时被打断，不留残骸', () => {
     expect((await listMessages(sid)).filter((m) => m.role === 'assistant')).toHaveLength(0)
   })
 
-  it('E-6 在飞时删会话：jsonl 随之消失，进程没有未处理异常', async () => {
-    // 会师点的全部意义：Promise 落定时保证不会再有人写这棵树。少了它，被删掉的文件会
-    // 被一条还在收尾的管线重新写出来 —— 一个再也回不到列表里的孤儿会话
-    const sid = await startHangingTask()
-    const file = join(app.home, 'userdata', 'data', 'sessions', `${sid}.jsonl`)
-    expect(existsSync(file)).toBe(true)
+  it('E-6 在飞时删会话：消息与附件目录随之消失，进程没有未处理异常', async () => {
+    // 会师点的全部意义：Promise 落定时保证不会再有人往这条会话里写。少了它，被删掉的
+    // 数据会被一条还在收尾的管线重新写出来 —— 一个再也回不到列表里的孤儿会话。
+    //
+    // v2 的观测面换了两处：会话树 jsonl 不再存在（聊天会话是 chat_messages 表），
+    // 附件目录取而代之成为**磁盘上**唯一能被残骸重建的东西
+    const sid = await startHangingTask(true)
+    const attachmentsDir = join(app.home, 'userdata', 'data', 'chat-attachments', sid)
+    const treeFile = join(app.home, 'userdata', 'data', 'sessions', `${sid}.jsonl`)
+    expect(existsSync(attachmentsDir)).toBe(true)
+    // 顺带钉住形态：聊天会话从来不建会话树文件
+    expect(existsSync(treeFile)).toBe(false)
+    expect((await listMessages(sid)).length).toBeGreaterThan(0)
 
     await app.main.eval(`window.api.session.delete(${JSON.stringify(sid)})`)
     provider.release()
     await new Promise((r) => setTimeout(r, 800))
 
-    expect(existsSync(file)).toBe(false)
+    expect(existsSync(attachmentsDir)).toBe(false)
     expect(await app.main.eval(`window.api.session.getById(${JSON.stringify(sid)})`)).toBeFalsy()
     // 主进程还活着并且照常服务（未处理异常会让 Electron 主进程崩掉，下面这句就取不到值）
     expect(

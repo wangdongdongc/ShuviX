@@ -1,5 +1,5 @@
 /**
- * A4 · 未读账本 —— bot 回复的会话侧账：落树 +1（updateSettings 顺带 touch updatedAt，
+ * A4 · 未读账本 —— bot 回复的会话侧账：落库 +1（updateSettings 顺带 touch updatedAt，
  * 上浮与未读同一笔账）、打开即读（useSessionInit）、看着即读（useAgentEvents 活跃分支）、
  * markRead 幂等短路（已 0 不写库 —— updatedAt 不动是它唯一的外显）。
  *
@@ -7,7 +7,7 @@
  * 渲染端 useSessionInit 上，只测 IPC 建法等于没测「UI 建出来就已激活」那半边。
  *
  * 回复语料全程零 LLM：greeting 播种（16/19）与 `a4-unread-probe` 参数化管线（20/21，
- * claim+say，preClaimMs 撑出「发出去、人走了」的窗口）。
+ * preSayMs 撑出「发出去、人走了」的窗口）。
  *
  * 双断纪律：先 IPC（session.getById 的 settings.unreadCount / updatedAt）后 DOM
  * （sidebarPane.rowUnread 的 data-unread 徽标 + 标题加粗）。
@@ -34,23 +34,21 @@ let dialog: BotDialogPane
 
 const PROBE = 'a4-unread-probe'
 
-/** claim + say 的最小管线；preClaim 窗口由各 bot md 的 shuvix-bot-input 撑开 */
+/** 只 say 一句的最小管线；说话前的窗口由各 bot md 的 shuvix-bot-input 撑开 */
 const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A4 unread e2e probe — claim then say; pre-claim window from shuvix-bot-input.',
+  'description: A4 unread e2e probe — say one line; pre-say window from shuvix-bot-input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',
-  'A4 未读探针：可选 preClaim 窗 → claim → say，零 LLM。',
+  'A4 未读探针：可选延时窗 → say，零 LLM。v2 的脚本 API 只有 `say` / `turn`。',
   '',
   '```js workflow',
-  'if (input.preClaimMs) {',
-  '  await sleep(input.preClaimMs)',
+  'if (input.preSayMs) {',
+  '  await sleep(input.preSayMs)',
   '}',
-  "var verdict = await claim({ decision: 'reply', relevance: 5 })",
-  'if (!verdict.won) return { outcome: verdict.reason }',
   "await say(input.sayLine || 'ok')",
   "return { outcome: 'reply' }",
   '```',
@@ -120,11 +118,11 @@ beforeAll(async () => {
     botInput: { sayLine: '快答一句' }
   })
   writeBotMd(app, 'u-slow', {
-    description: 'slow claimer',
+    description: 'slow replier',
     displayName: 'Slow',
     pipeline: PROBE,
-    // 「发出去、人切走」的观察窗：claim 之前先睡，说话必然落在切走之后
-    botInput: { sayLine: '迟到的回答', preClaimMs: 4000 }
+    // 「发出去、人切走」的观察窗：说话之前先睡，回复必然落在切走之后
+    botInput: { sayLine: '迟到的回答', preSayMs: 4000 }
   })
 }, 120_000)
 
@@ -202,7 +200,7 @@ describe('未读账本（侧栏 UI 全流程）', () => {
 
 describe('未读账本（管线回复路径）', () => {
   // A4-20
-  it('活跃即到即读：开着的 probe 会话 claim+say，回复落树后未读归 0（全程不切会话）', async () => {
+  it('活跃即到即读：开着的 probe 会话说一句，回复落库后未读归 0（全程不切会话）', async () => {
     const sid = await createBotSession(app.main, { bots: ['u-quick'], title: 'A4-U20' })
     await until(async () => (await sidebar.titles()).includes('A4-U20'), 'row listed')
     expect(await sidebar.openSession('A4-U20')).toBe(true)
@@ -218,7 +216,7 @@ describe('未读账本（管线回复路径）', () => {
   })
 
   // A4-21
-  it('发消息趁 preClaim 窗切走：say 后原会话长徽标并浮到切走目的地之上；切回清零', async () => {
+  it('发消息趁 preSay 窗切走：say 后原会话长徽标并浮到切走目的地之上；切回清零', async () => {
     const sid = await createBotSession(app.main, { bots: ['u-slow'], title: 'A4-U21' })
     await until(async () => (await sidebar.titles()).includes('A4-U21'), 'row listed')
     expect(await sidebar.openSession('A4-U21')).toBe(true)
@@ -230,7 +228,7 @@ describe('未读账本（管线回复路径）', () => {
     )
     await until(async () => (await sidebar.titles()).includes('A4-U21-away'), 'away listed')
 
-    // 发出去（probe 先睡 4000ms 再 claim），趁窗口切走
+    // 发出去（probe 先睡 4000ms 再说话），趁窗口切走
     await promptDetached(sid, '我先走了')
     expect(await sidebar.openSession('A4-U21-away')).toBe(true)
 

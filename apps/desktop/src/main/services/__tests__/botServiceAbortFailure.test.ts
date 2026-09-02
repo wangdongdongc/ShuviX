@@ -41,7 +41,13 @@ vi.mock('../workflowService', () => ({
   workflowTriggers: { fire: mocks.fire }
 }))
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// v2：聊天会话转写在 chat_messages 表里。真 DAO 一经导入就会打开 sqlite
+// （DatabaseManager 构造即开库，而原生绑定是 Electron ABI 的），故整个替换成内存版
+vi.mock('../../dao/chatMessageDao', async () => await import('./fakeChatMessageDao'))
 vi.mock('../../utils/paths', () => ({
+  // v2 起 botService 经 chatMessageDao 触到 DatabaseManager，它的构造读 getDataDir
+  getDataDir: () => join(dirs.base, 'data'),
+  getChatAttachmentsDir: (sid: string) => join(dirs.base, 'data', 'chat-attachments', sid),
   getSessionsDir: () => dirs.sessions,
   getDefaultBotsDir: () => dirs.bots,
   // botService → agentService 的模块作用域构造器在 import 阶段就要它
@@ -61,12 +67,14 @@ vi.mock('../sessionService', () => ({
   // noteUnreadBotReply：A4 起 appendBotMessage 每次落树都记未读账 —— 本组用例不关心它,给 no-op
   sessionService: { getById: mocks.getById, noteUnreadBotReply: () => {} }
 }))
+// botService 经 settingsService 读两道循环护栏。真件一经导入就把 settingsDao →
+// dao/database 拉进模块图，而 DatabaseManager 构造即开 sqlite（原生绑定是 Electron ABI 的）
+vi.mock('../settingsService', () => ({ settingsService: { get: () => undefined } }))
 
-import { BOT_SENDER_CUSTOM_TYPE } from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { botService } from '../botService'
-import { messageService } from '../messageService'
-import { clearSessionTreeCacheForTests, getSessionTree } from '../sessionStorage'
+import { messageService, setChatSessionPredicate } from '../messageService'
+import { clearSessionTreeCacheForTests } from '../sessionStorage'
 
 /** 每条用例一条新会话（botService 是模块级单例，按会话 id 记着在飞计数与消息序） */
 let SID = 'a2-sess'
@@ -163,20 +171,23 @@ function gateCalls(): { calls: GatedCall[]; wait: (n: number) => Promise<void> }
 const prompt = (text = 'hello'): Promise<void> =>
   botService.handleUserMessage({ sessionId: SID, text } as never)
 
-/** 树上最后一条署名侧车的**原始** data（投影会压掉 decision/error，这里读原始 entry） */
+/** 表里最后一条 bot 行 —— v2 的「原始存储」就是这一行（decision / error 都是列） */
 async function lastSidecarData(): Promise<Record<string, unknown>> {
-  const tree = await getSessionTree(SID)
-  const branch = (await tree!.getBranch()) as Array<{
-    type: string
-    customType?: string
-    data?: unknown
-  }>
-  const sidecars = branch.filter(
-    (e) => e.type === 'custom' && e.customType === BOT_SENDER_CUSTOM_TYPE
-  )
-  expect(sidecars.length).toBeGreaterThan(0)
-  return sidecars[sidecars.length - 1].data as Record<string, unknown>
+  const { chatMessageDao } = await import('./fakeChatMessageDao')
+  const row = chatMessageDao.findLastBot(SID)
+  if (!row) throw new Error('no bot message')
+  return {
+    botName: row.botName,
+    displayName: row.displayName,
+    ...(row.decision ? { decision: row.decision } : {}),
+    ...(row.reply ? { reply: JSON.parse(row.reply) } : {}),
+    ...(row.isError ? { error: true } : {})
+  } as Record<string, unknown>
 }
+
+// v2：messageService 靠注入的谓词分流「聊天会话读表 / 有根会话读树」。
+// 真件在 botService.init() 里注册，用例不走那条路，所以这里直接把本文件的会话全判为聊天会话
+setChatSessionPredicate(() => true)
 
 beforeEach(() => {
   sidSeq += 1

@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   BOT_RESPOND_MODES as PROTOCOL_RESPOND_MODES,
+  BOT_RESPOND_TO_MODES as PROTOCOL_RESPOND_TO_MODES,
   SHUVIX_MD_DESCRIPTORS
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
@@ -40,6 +41,8 @@ import {
   BOT_PIPELINE_KEY,
   BOT_RESPOND_KEY,
   BOT_RESPOND_MODES,
+  BOT_RESPOND_TO_KEY,
+  BOT_RESPOND_TO_MODES,
   BOT_SUGGESTIONS_KEY,
   DEFAULT_BOT_PIPELINE,
   botToInProcessAgentType,
@@ -148,6 +151,7 @@ describe('BP —— 解析：合法形状与缺省', () => {
       pipeline: 'my-pipeline',
       pipelineInput: { tone: 'terse' },
       respond: 'mention-only',
+      respondTo: 'user',
       notesEnabled: false,
       agents: { intent: 'my-intent', gate: 'my-gate', notes: 'my-notes' },
       greeting: 'hi there',
@@ -217,6 +221,54 @@ describe('BP —— 解析：合法形状与缺省', () => {
 
   it('BP-7 shuvix-bot-notes: false 保真（`?? true` 不得把显式 false 吃掉）', () => {
     expect(parseBotDefinitionFile(bot(`${BOT_NOTES_KEY}: false`), 'fn')!.notesEnabled).toBe(false)
+  })
+
+  it("RT-1 省略 shuvix-bot-respond-to → 'user'（v1 硬规则的逐字节等价物）", () => {
+    // 缺省是「bot 的回复不触发 bot」——「不写这个键的 bot 存量最多」这件事让它成为一条
+    // 行为契约而不是一个默认值：缺省若哪天改成 'all'，全部存量 bot 会突然开始互相接话
+    expect(parseBotDefinitionFile(bot(), 'fn')!.respondTo).toBe('user')
+  })
+
+  it("RT-2 留空（YAML null）等同省略 → 'user'，不判非法（同 BP-4 的口径）", () => {
+    // 编辑器里最常见的中间态：键敲完了值还没写
+    const parsed = parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}:`), 'fn')
+    expect(parsed).not.toBeNull()
+    expect(parsed!.respondTo).toBe('user')
+  })
+
+  it.each([['user'], ['all']])('RT-3 显式 %s 各自落位', (mode) => {
+    expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: ${mode}`), 'fn')!.respondTo).toBe(
+      mode
+    )
+  })
+
+  it.each([
+    ['auto', 'user'],
+    ['auto', 'all'],
+    ['mention-only', 'user'],
+    ['mention-only', 'all']
+  ])('RT-4 两根轴正交（respond=%s × respond-to=%s）', (respond, respondTo) => {
+    // 它们答的是两个不同的问题：respond =「什么条件下我开口」，respond-to =「谁说的话
+    // 算数」。特别是 mention-only × all =「只有别的 bot 点我名我才接话」这一档 ——
+    // 若哪天有人把两轴合并成一个五值枚举，这条先响
+    const parsed = parseBotDefinitionFile(
+      bot(`${BOT_RESPOND_KEY}: ${respond}`, `${BOT_RESPOND_TO_KEY}: ${respondTo}`),
+      'fn'
+    )!
+    expect(parsed.respond).toBe(respond)
+    expect(parsed.respondTo).toBe(respondTo)
+  })
+
+  it('RT-5 两个键名互为前缀但取值互不串扰（YAML 键是全等匹配，不是前缀匹配）', () => {
+    // `shuvix-bot-respond` 是 `shuvix-bot-respond-to` 的真前缀 —— 键查找若哪天改成
+    // startsWith，两个键会互相吃掉对方的值，而症状是「另一根轴莫名其妙地变了」
+    const onlyRespond = parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: mention-only`), 'fn')!
+    expect(onlyRespond.respond).toBe('mention-only')
+    expect(onlyRespond.respondTo).toBe('user')
+
+    const onlyRespondTo = parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: all`), 'fn')!
+    expect(onlyRespondTo.respondTo).toBe('all')
+    expect(onlyRespondTo.respond).toBe('auto')
   })
 
   it('BP-8 正文里的 {{shuvix:*}} 原样保留（替换发生在 createAgent，解析层不动）', () => {
@@ -624,6 +676,28 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
     expect(rejectReason(bot(`${BOT_RESPOND_KEY}: true`))).toContain('must be one of')
   })
 
+  it('RT-6 shuvix-bot-respond-to 枚举封闭，理由点名键并回显两个合法值', () => {
+    const msg = rejectReason(bot(`${BOT_RESPOND_TO_KEY}: sometimes`))
+    expect(msg).toContain(`'${BOT_RESPOND_TO_KEY}' must be one of:`)
+    expect(msg).toContain('user | all')
+  })
+
+  it.each([
+    ['首字母大写', 'All'],
+    ['两侧带空白', "' all '"]
+  ])('RT-7 shuvix-bot-respond-to 大小写/空白敏感（%s）—— 同 BR-7 的钉板立场', (_label, v) => {
+    // 钉板而非背书（同 BR-7）：若将来对枚举值统一做 trim().toLowerCase() 归一，本例反转
+    expect(rejectReason(bot(`${BOT_RESPOND_TO_KEY}: ${v}`))).toContain(`'${BOT_RESPOND_TO_KEY}'`)
+  })
+
+  it.each([
+    ['布尔（`yes` 会被 YAML 读成 true）', 'yes'],
+    ['显式布尔', 'true'],
+    ['列表', '[all]']
+  ])('RT-8 shuvix-bot-respond-to 非字符串（%s）同样落枚举分支', (_label, v) => {
+    expect(rejectReason(bot(`${BOT_RESPOND_TO_KEY}: ${v}`))).toContain('must be one of')
+  })
+
   it.each([
     ['非布尔字符串', 'yes please'],
     ['引号包住的 true', '"true"'],
@@ -720,6 +794,11 @@ describe('BR —— 整份拒绝清单（逐条 + warn 人读原因）', () => {
       bot('shuvix-project-awareness: yes please'),
       bot(`${BOT_RESPOND_KEY}: sometimes`),
       bot(`${BOT_RESPOND_KEY}: Auto`),
+      // RT-9：第二根轴的非法样本也进这张总表 —— 消费方 botService.parseForWrite 依赖
+      // 「最后一行是原因」，新键的拒绝路径同样得守住这条不变式
+      bot(`${BOT_RESPOND_TO_KEY}: sometimes`),
+      bot(`${BOT_RESPOND_TO_KEY}: All`),
+      bot(`${BOT_RESPOND_TO_KEY}: [all]`),
       bot(`${BOT_NOTES_KEY}: yes please`),
       bot(`${BOT_AGENTS_KEY}: [a]`),
       bot(`${BOT_AGENTS_KEY}:`, '  "bad role": x'),
@@ -1000,6 +1079,21 @@ describe('BX —— 宽松侧（与 agent md 同口径）', () => {
     )!
     expect(parsed.respond).toBe('auto')
   })
+
+  it("RT-10 裸键 respond-to 被**静默忽略** → 回落 'user'，零 warn", () => {
+    // 风险钉板：用户以为开了接力，实际得到的是一个「永远不接别的 bot 的话」的 bot，
+    // 而全链路一句提示都没有 —— 它不会报错、不会进决策日志，只是永远不说话
+    const { result, messages } = parseWithWarn(bot('respond-to: all'))
+    expect(result!.respondTo).toBe('user')
+    expect(messages).toEqual([])
+  })
+
+  it.each([['shuvix-bot-respondto'], ['shuvix-bot-respond_to'], ['shuvix-bot-respond-To']])(
+    "RT-11 拼错前缀（%s）同样静默忽略并回落 'user'",
+    (key) => {
+      expect(parseBotDefinitionFile(bot(`${key}: all`), 'fn')!.respondTo).toBe('user')
+    }
+  )
 })
 
 // ────────────────────────────── BS：序列化 ──────────────────────────────
@@ -1017,6 +1111,9 @@ const FULL: ParsedBotFile = {
   pipeline: 'my-pipeline',
   pipelineInput: { tone: 'terse' },
   respond: 'mention-only',
+  // 刻意取非缺省值：'user' 是缺省，序列化器会省略它，那样 BS-1 / BS-4 / BS-10 就都
+  // 覆盖不到这个键（「全字段非缺省样本」这个夹具的意义正在于此）
+  respondTo: 'all',
   notesEnabled: false,
   agents: { intent: 'my-intent', task: 'my-task', reply: 'my-reply', notes: 'my-notes' },
   greeting: 'Hi, I review things.',
@@ -1050,6 +1147,7 @@ const PARSED_BOT_KEYS = [
   'pipelineInput',
   'projectAwareness',
   'respond',
+  'respondTo',
   'suggestions',
   'systemPrompt',
   'tools'
@@ -1087,6 +1185,7 @@ describe('BS —— 序列化（与解析互逆）', () => {
       pipeline: 'bot-chat',
       pipelineInput: {},
       respond: 'auto',
+      respondTo: 'user',
       notesEnabled: true,
       agents: {},
       greeting: '',
@@ -1112,6 +1211,9 @@ describe('BS —— 序列化（与解析互逆）', () => {
       BOT_INPUT_KEY,
       BOT_AGENTS_KEY,
       BOT_RESPOND_KEY,
+      // 两根轴相邻：respond-to 紧跟 respond，都在 notes 之前 —— 读起来是
+      // 「什么时候开口 / 谁说的话算数 / 要不要记笔记」
+      BOT_RESPOND_TO_KEY,
       BOT_NOTES_KEY,
       BOT_GREETING_KEY,
       BOT_SUGGESTIONS_KEY,
@@ -1124,6 +1226,29 @@ describe('BS —— 序列化（与解析互逆）', () => {
     expect(serializeBotDefinitionFile(FULL).split('\n')[1]).toBe(
       `${BOT_FILE_MARKER_KEY}: ${BOT_FILE_MARKER}`
     )
+  })
+
+  it("RT-12 respondTo 缺省 'user' 不写出、'all' 写出（缺省省略是序列化器的通行纪律）", () => {
+    // 与 BS-3 同一条纪律：文件里出现的键都是用户真的作了主的那些。第二根轴上写出一个
+    // 恒等于缺省的 `respond-to: user`，等于让每一份新建 bot 都在文件里声明一件它没选过的事
+    expect(serializeBotDefinitionFile({ ...FULL, respondTo: 'user' })).not.toContain(
+      BOT_RESPOND_TO_KEY
+    )
+    expect(serializeBotDefinitionFile({ ...FULL, respondTo: 'all' })).toContain(
+      `${BOT_RESPOND_TO_KEY}: all`
+    )
+  })
+
+  it("RT-14/15 respondTo:'all' 的往返保真与幂等（裸枚举值穿过 YAML 引号规则）", () => {
+    // FULL 已经是 'all'，所以 BS-1 / BS-10 顺带覆盖了这一条；这里再单独钉一次「写出去的
+    // 那个裸值读回来还是同一个枚举成员」—— 序列化器若哪天给值加了引号或大小写归一，
+    // 解析侧的大小写敏感（RT-7）会把它变成一份整份非法的文件
+    const value: ParsedBotFile = { ...FULL, respondTo: 'all' }
+    const once = serializeBotDefinitionFile(value)
+    const readBack = parseBotDefinitionFile(once, 'other-name')!
+    expect(readBack.respondTo).toBe('all')
+    expect(readBack).toEqual(value)
+    expect(serializeBotDefinitionFile(readBack)).toBe(once)
   })
 
   it('BS-6 agents 角色键序恒为字母序（与对象插入序无关 —— 开放集合没有「阶段顺序」可依）', () => {
@@ -1313,6 +1438,7 @@ describe('BD —— 属性卡描述符与解析器的对齐', () => {
     BOT_PIPELINE_KEY,
     BOT_INPUT_KEY,
     BOT_RESPOND_KEY,
+    BOT_RESPOND_TO_KEY,
     BOT_NOTES_KEY,
     BOT_AGENTS_KEY,
     BOT_GREETING_KEY,
@@ -1360,15 +1486,24 @@ describe('BD —— 属性卡描述符与解析器的对齐', () => {
     ).not.toBeNull()
   })
 
-  it('BD-5 select 的枚举候选来自 BOT_RESPOND_MODES（解析器与下拉共用单一真源）', () => {
+  it('BD-5 两根轴的 select 候选都来自 chat-protocol 常量（解析器与下拉共用单一真源）', () => {
     // 模型键也是 select，但它的候选是运行时事实（模型目录），不归本契约
-    expect(keysOf('select').filter((k) => k !== 'shuvix-model')).toEqual([BOT_RESPOND_KEY])
+    expect(keysOf('select').filter((k) => k !== 'shuvix-model')).toEqual(
+      [BOT_RESPOND_KEY, BOT_RESPOND_TO_KEY].sort()
+    )
     for (const mode of BOT_RESPOND_MODES) {
       expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: ${mode}`), 'x')!.respond).toBe(mode)
     }
     expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_KEY}: whenever`), 'x')).toBeNull()
+    for (const mode of BOT_RESPOND_TO_MODES) {
+      expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: ${mode}`), 'x')!.respondTo).toBe(
+        mode
+      )
+    }
+    expect(parseBotDefinitionFile(bot(`${BOT_RESPOND_TO_KEY}: nobody`), 'x')).toBeNull()
     // botFile 的再导出与 chat-protocol 的常量必须是同一引用
     expect(BOT_RESPOND_MODES).toBe(PROTOCOL_RESPOND_MODES)
+    expect(BOT_RESPOND_TO_MODES).toBe(PROTOCOL_RESPOND_TO_MODES)
   })
 
   it('BD-6 弱守卫：botFile.ts 里每一个 BOT_*_KEY 常量都在 parserKeys 清单里', () => {
@@ -1382,8 +1517,10 @@ describe('BD —— 属性卡描述符与解析器的对齐', () => {
       if (constName === 'BOT_FILE_MARKER_KEY') continue
       expect(parserKeys, constName).toContain(key)
     }
-    // 从 chat-protocol 再导出的门控键同样在册
+    // 从 chat-protocol 再导出的两根门控轴同样在册（正则只抓 botFile.ts 里的 `export
+    // const BOT_*_KEY = '…'`，而这两个是 re-export，抓不到 —— 手动补上）
     expect(parserKeys).toContain(BOT_RESPOND_KEY)
+    expect(parserKeys).toContain(BOT_RESPOND_TO_KEY)
   })
 })
 
@@ -1547,6 +1684,7 @@ describe('PRJ —— botToInProcessAgentType', () => {
       'pipeline',
       'pipelineInput',
       'respond',
+      'respondTo',
       'notes',
       'notesEnabled',
       'agents',

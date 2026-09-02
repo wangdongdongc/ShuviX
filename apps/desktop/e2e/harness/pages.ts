@@ -110,9 +110,13 @@ export interface ChatPane {
   pendingPanel(): Promise<{ open: boolean; firstInCard: boolean }>
 
   /**
-   * 卡头署名（聊天会话，A0）：对话区里所有 `[data-bot-sender]` 卡头的快照（document 序）。
+   * 群聊气泡的署名（v2）：对话区里所有 `[data-bot-sender]` 气泡的快照（document 序）。
    * avatarBg 是 getComputedStyle 归一后的 `rgb(r, g, b)` —— 与 hexToRgb(botColorFor(name))
    * 做**精确**比较，不做近似。
+   *
+   * ⚠️ 连续同一个 bot 的消息**合并头部**（IM 惯例）：第二条起没有头像也没有显示名，
+   * 只剩气泡。所以 display / avatar* 三项对 `merged: true` 的项恒为空串 ——
+   * 断署名时要么先按 merged 过滤，要么正是在断合并本身。
    */
   botSenders(): Promise<BotSenderShot[]>
   /** 档案选择器在屏（输入卡工具行内含 .lucide-bot 的按钮 —— 别处的 bot 图标不算） */
@@ -121,6 +125,15 @@ export interface ChatPane {
   ctxRingPresent(): Promise<boolean>
   /** 模型选择器在屏（输入卡工具行选择器簇内 ModelSelect inline 触发器的 chevron） */
   modelPickerPresent(): Promise<boolean>
+  /**
+   * 选择器簇（工具行第一个子节点）的直接子节点数 —— 「少了哪个选择器」的判据。
+   *
+   * 普通会话是三个（档案 / 模型 / 工具），聊天会话只剩模型一个：v2 起 `ToolPicker`
+   * 也对聊天会话隐藏（任务段的 agent 就是 bot 自己，工具来自它 md 里的 `shuvix-tools`）。
+   * **不按图标认工具选择器**：它的触发钮在没有 MCP / skill 工具时连图标都不渲染，
+   * 隔离实例里恰好就是那个空钮；数子节点是这里唯一不靠运气的判据。
+   */
+  pickerCount(): Promise<number>
 
   /** 悬浮某条用户气泡点回退（图标按钮，opacity-0 不影响程序化点击） */
   clickRollback(msgId: string): Promise<void>
@@ -132,11 +145,13 @@ export interface ChatPane {
   confirmAccept(): Promise<void>
 }
 
-/** 卡头署名快照（AssistantBubble 的 data-bot-sender 卡头 + BotAvatar） */
+/** 群聊气泡的署名快照（BotBubble 根节点的 data-bot-sender + 头部的 BotAvatar） */
 export interface BotSenderShot {
   /** bot 身份键（data-bot-sender 属性值） */
   name: string
-  /** 卡头显示名（.truncate 那个 span） */
+  /** 头部被合并（连续同一 bot 的第二条起）—— 下面三项此时恒为空串 */
+  merged: boolean
+  /** 头部显示名（.truncate 那个 span） */
   display: string
   /** 头像色块的计算背景色（'rgb(r, g, b)'） */
   avatarBg: string
@@ -367,11 +382,17 @@ export function chatPane(main: CdpClient): ChatPane {
 
     botSenders: () =>
       main.eval<BotSenderShot[]>(
+        // 头部 = 含显示名 span.truncate 的那个直接子节点；合并头部时它整个不渲染。
+        // 头像只在头部里找 —— 气泡本体另有一个 span[aria-hidden] 占位（合并时用来
+        // 对齐头像列的那 18px），裸查 span[aria-hidden] 会把它当成头像读出空色块
         `[...document.querySelectorAll('[data-bot-sender]')].map((el) => {
-          const avatar = el.querySelector('span[aria-hidden]')
+          const hasName = (n) => !!n && !!n.querySelector(':scope > span.truncate')
+          const head = hasName(el) ? el : [...el.children].find(hasName)
+          const avatar = head?.querySelector('span[aria-hidden]') ?? null
           return {
             name: el.getAttribute('data-bot-sender') ?? '',
-            display: (el.querySelector('span.truncate')?.textContent ?? '').trim(),
+            merged: !head,
+            display: (head?.querySelector('span.truncate')?.textContent ?? '').trim(),
             avatarBg: avatar ? getComputedStyle(avatar).backgroundColor : '',
             avatarInitial: (avatar?.textContent ?? '').trim()
           }
@@ -383,6 +404,7 @@ export function chatPane(main: CdpClient): ChatPane {
     ctxRingPresent: () => main.eval<boolean>(`!!${TOOL_ROW}?.querySelector('svg circle[r="6"]')`),
     modelPickerPresent: () =>
       main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-chevron-down')`),
+    pickerCount: () => main.eval<number>(`${TOOL_ROW}?.firstElementChild?.childElementCount ?? 0`),
 
     clickRollback: async (msgId) => {
       await main.eval(
@@ -1490,30 +1512,37 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A2 · 对话流完整渲染 —— 占位卡 / 失败卡 / BotReply 双形态 / 救济 chip / 沉默提示 /
+// A2 · 对话流完整渲染（v2 群聊形态）—— 「正在输入」行 / 失败气泡 / BotReply 双形态 /
 // mailbox 回执 / 子代理面板行。
 //
-// 锚点全部是 A2 落的 data-*（data-bot-activity / data-bot-stop / data-bot-failure /
-// data-bot-reply / data-bot-rescue-chip / data-bot-silence / data-bot-receipt /
-// data-subagent-run），文案一概不认。IPC 能断的（metadata.botFailure、事件序列）
-// 不在这里断 —— 这里只认「屏幕上真的长出来了什么」。
+// 锚点全部是 data-*（data-bot-activity / data-bot-activity-phase / data-bot-stop /
+// data-bot-failure / data-bot-reply / data-bot-receipt / data-subagent-run），
+// 文案一概不认。IPC 能断的（metadata.botFailure、事件序列）不在这里断 ——
+// 这里只认「屏幕上真的长出来了什么」。
+//
+// v2 删掉的三个锚点（连同它们描述的能力）：`data-bot-deciding`（「正在判断」合并行 ——
+// 现在每个在飞成员各占一行，判断中即 phase='started'）、`data-bot-rescue-chip`
+// （误压制救济，随仲裁一并退场）、`data-bot-silence{,-dismiss}`（全体沉默提示，同上）。
 
-/** 一张在飞活动占位卡的快照 */
-export interface BotActivityCardShot {
+/** 一行「正在输入」的快照（BotTypingIndicator 的一行；v1 是一张占位卡） */
+export interface BotTypingRowShot {
   /** bot 稳定名（data-bot-activity 属性值） */
   name: string
-  /** 相位（data-bot-activity-phase：claimed / queued / working；started 不落卡） */
+  /** 相位（data-bot-activity-phase：started / queued / working —— v2 没有 claimed 了） */
   phase: string
-  /** 停止钮在不在（data-bot-stop；排队卡刻意没有） */
+  /** 停止钮在不在（data-bot-stop；排队那行刻意没有 —— 还没开始做，无处可停） */
   hasStop: boolean
 }
 
-/** 一条消息卡上与 A2 相关的呈现位 */
+/** 一条 bot 消息上与呈现相关的位 */
 export interface BotMessageFlags {
-  /** 卡头「失败」角标（data-bot-failure）在不在 */
+  /** 头部「失败」角标（data-bot-failure）在不在 */
   failureBadge: boolean
-  /** 正文容器 className（失败卡 = 含 border-error 的错误色镶边盒） */
-  contentClassName: string
+  /**
+   * 气泡容器的 className（失败气泡 = 含 border-error 的错误色盒）。
+   * 取气泡而不是 `.markdown-body`：v2 的错误色镶在气泡上，正文那一层是干净的。
+   */
+  bubbleClassName: string
   /** BotReply 双形态容器（data-bot-reply）在不在 */
   replyCard: boolean
 }
@@ -1533,13 +1562,6 @@ export interface BotReplyShot {
   followups: string[]
 }
 
-export interface BotRescueChipShot {
-  /** bot 稳定名（data-bot-rescue-chip 属性值） */
-  name: string
-  /** chip 上的可见文本（displayName） */
-  label: string
-}
-
 export interface SubAgentRowShot {
   /** 阶段 agent 名（data-subagent-run 属性值，如 bot-intent） */
   agent: string
@@ -1547,32 +1569,17 @@ export interface SubAgentRowShot {
 }
 
 export interface BotFlowPane {
-  /** 对话尾部的活动占位卡（document 序） */
-  activityCards(): Promise<BotActivityCardShot[]>
-  /** 「正在判断」合并行的成员数（data-bot-deciding 属性值）；行不在时 null */
-  decidingCount(): Promise<number | null>
-  /** 点某个 bot 占位卡上的停止钮；无钮返回 false */
+  /** 对话尾部的「正在输入」行（document 序） */
+  typingRows(): Promise<BotTypingRowShot[]>
+  /** 点某个 bot 那一行上的停止钮；无钮返回 false */
   clickStop(botName: string): Promise<boolean>
 
-  /** 某条消息卡上的失败/回复呈现位 */
+  /** 某条 bot 消息上的失败/回复呈现位 */
   messageFlags(msgId: string): Promise<BotMessageFlags>
-  /** 某条消息卡内 BotReply 的结构快照 */
+  /** 某条消息内 BotReply 的结构快照 */
   replyShape(msgId: string): Promise<BotReplyShot>
-  /** 点某条消息卡内第 i 个追问 chip（data-bot-followup）；无则 false */
+  /** 点某条消息内第 i 个追问 chip（data-bot-followup）；无则 false */
   clickFollowup(msgId: string, index: number): Promise<boolean>
-
-  /** 某条消息卡底部的救济 chip（data-bot-rescue-chip） */
-  rescueChips(msgId: string): Promise<BotRescueChipShot[]>
-  /** 点某条消息卡底部指定 bot 的救济 chip；无则 false */
-  clickRescueChip(msgId: string, botName: string): Promise<boolean>
-
-  /** 输入卡内的全体沉默提示；不在时 null */
-  silence(): Promise<{ reason: string } | null>
-  /** 沉默提示块内的救济 chip */
-  silenceRescueChips(): Promise<BotRescueChipShot[]>
-  clickSilenceRescueChip(botName: string): Promise<boolean>
-  /** 点沉默提示的 ✕（data-bot-silence-dismiss） */
-  dismissSilence(): Promise<boolean>
 
   /** 用户消息下的 mailbox 回执（data-bot-receipt；names 是逗号连的 botName 串） */
   receipts(): Promise<Array<{ msgId: string; names: string }>>
@@ -1591,40 +1598,20 @@ export interface BotFlowPane {
 }
 
 export function botFlowPane(main: CdpClient): BotFlowPane {
-  const CARDS = `[...document.querySelectorAll('[data-bot-activity]')]`
+  const ROWS = `[...document.querySelectorAll('[data-bot-activity]')]`
   const MSG = (id: string): string =>
     `document.querySelector('[data-msg-id=${JSON.stringify(id)}]')`
-  const SILENCE = `document.querySelector('[data-bot-silence]')`
   const SUB_ROWS = `[...document.querySelectorAll('[data-subagent-run]')]`
-  const chipShot = (root: string): string =>
-    `[...(${root}?.querySelectorAll('[data-bot-rescue-chip]') ?? [])].map((b) => ({
-      name: b.getAttribute('data-bot-rescue-chip') ?? '',
-      label: (b.textContent ?? '').trim()
-    }))`
-  const clickChip = (root: string, botName: string): string =>
-    `(() => {
-      const chip = [...(${root}?.querySelectorAll('[data-bot-rescue-chip]') ?? [])].find(
-        (b) => b.getAttribute('data-bot-rescue-chip') === ${JSON.stringify(botName)}
-      )
-      if (!chip) return false
-      chip.click()
-      return true
-    })()`
 
   return {
-    activityCards: () =>
-      main.eval<BotActivityCardShot[]>(
-        `${CARDS}.map((el) => ({
+    typingRows: () =>
+      main.eval<BotTypingRowShot[]>(
+        `${ROWS}.map((el) => ({
           name: el.getAttribute('data-bot-activity') ?? '',
           phase: el.getAttribute('data-bot-activity-phase') ?? '',
           hasStop: el.querySelector('[data-bot-stop]') !== null
         }))`
       ),
-    decidingCount: () =>
-      main.eval<number | null>(`(() => {
-        const row = document.querySelector('[data-bot-deciding]')
-        return row ? Number(row.getAttribute('data-bot-deciding')) : null
-      })()`),
     clickStop: async (botName) => {
       const hit = await main.eval<boolean>(`(() => {
         const btn = document.querySelector('[data-bot-stop=${JSON.stringify(botName)}]')
@@ -1639,9 +1626,12 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
     messageFlags: (msgId) =>
       main.eval<BotMessageFlags>(`(() => {
         const el = ${MSG(msgId)}
+        // 气泡是署名根节点里第一个 .rounded-lg —— 头像用 rounded-[5px]、状态 chip 与
+        // 追问 chip 用 rounded-full，气泡是这棵子树里唯一戴 rounded-lg 的那层
+        const bubble = el?.querySelector('[data-bot-sender] .rounded-lg') ?? null
         return {
           failureBadge: !!el?.querySelector('[data-bot-failure]'),
-          contentClassName: el?.querySelector('.markdown-body')?.className ?? '',
+          bubbleClassName: bubble?.className ?? '',
           replyCard: !!el?.querySelector('[data-bot-reply]')
         }
       })()`),
@@ -1674,35 +1664,6 @@ export function botFlowPane(main: CdpClient): BotFlowPane {
         return true
       })()`)
       await sleep(300)
-      return hit
-    },
-
-    rescueChips: (msgId) => main.eval<BotRescueChipShot[]>(chipShot(MSG(msgId))),
-    clickRescueChip: async (msgId, botName) => {
-      const hit = await main.eval<boolean>(clickChip(MSG(msgId), botName))
-      await sleep(300)
-      return hit
-    },
-
-    silence: () =>
-      main.eval<{ reason: string } | null>(`(() => {
-        const el = ${SILENCE}
-        return el ? { reason: el.getAttribute('data-bot-silence') ?? '' } : null
-      })()`),
-    silenceRescueChips: () => main.eval<BotRescueChipShot[]>(chipShot(SILENCE)),
-    clickSilenceRescueChip: async (botName) => {
-      const hit = await main.eval<boolean>(clickChip(SILENCE, botName))
-      await sleep(300)
-      return hit
-    },
-    dismissSilence: async () => {
-      const hit = await main.eval<boolean>(`(() => {
-        const btn = document.querySelector('[data-bot-silence-dismiss]')
-        if (!btn) return false
-        btn.click()
-        return true
-      })()`)
-      await sleep(200)
       return hit
     },
 
@@ -2045,13 +2006,16 @@ export async function botsPane(settings: CdpClient): Promise<BotsPane> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// A4 · 会话配套 —— 头部成员条 / 会话工具栏胶囊 / 「Bot 决策」面板 / 聊天会话空态。
+// A4 · 会话配套 —— 头部成员条 / 会话工具栏胶囊 / 聊天会话空态。
 //
 // 锚点全部是 A4 落的 data-*（data-bot-members / data-bot-member{,-missing} /
-// data-bot-manage-members / data-bot-empty{,-member} / data-bot-suggestion /
-// data-bot-decisions / data-bot-decision-group / data-bot-decision-kind），外加
+// data-bot-manage-members / data-bot-empty{,-member} / data-bot-suggestion），外加
 // 会话工具栏胶囊的 data-session-tool（共享 SessionToolbar，工具 id 与
-// SessionPanelTool 一一对应）。kind 徽章按等宽类（font-mono）认形态，不认文案。
+// SessionPanelTool 一一对应）。
+//
+// v2 删掉「Bot 决策」面板（连同 `bot:decisions` IPC 与 data-bot-decision* 三个锚点）：
+// 竞争与仲裁取消之后，那个面板回答的「谁赢了谁让位」已经不是会发生的事。
+// `decisions.jsonl` 本身留着 —— L0 剔除根本不产生 run，没有那个文件就什么线索都不剩。
 
 /** 头部成员条里的一枚胶囊 */
 export interface BotMemberChip {
@@ -2061,18 +2025,6 @@ export interface BotMemberChip {
   display: string
   /** 缺失标注（data-bot-member-missing）在不在 */
   missing: boolean
-}
-
-/** 「Bot 决策」面板里的一组（按 messageSeq 分组） */
-export interface BotDecisionGroupShot {
-  /** data-bot-decision-group 属性值（messageSeq；无 seq 的会话级组为 '-1'） */
-  seq: string
-  /** 组头文案（`#<seq> · <time>`；无 seq 组以 '·' 开头） */
-  header: string
-  /** 组内各行的 kind（data-bot-decision-kind 属性值，DOM 序 = ts 升序） */
-  kinds: string[]
-  /** 每行的 kind 徽章都以等宽原文呈现（span.font-mono 且文本 === kind） */
-  monoAll: boolean
 }
 
 export interface BotSessionPane {
@@ -2085,9 +2037,6 @@ export interface BotSessionPane {
   toolbarTools(): Promise<string[]>
   /** 点某个工具胶囊（开合面板/切换工具）；无则 false */
   clickToolbarTool(tool: string): Promise<boolean>
-
-  /** 「Bot 决策」面板快照（data-bot-decisions 未上屏时 present=false 其余为空） */
-  decisions(): Promise<{ present: boolean; empty: boolean; groups: BotDecisionGroupShot[] }>
 
   /** 聊天会话空态快照：present = data-bot-empty；cards 按 DOM 序 = 名单序 */
   emptyState(): Promise<{
@@ -2102,7 +2051,6 @@ export interface BotSessionPane {
 export function botSessionPane(main: CdpClient): BotSessionPane {
   const MEMBERS = `document.querySelector('[data-bot-members]')`
   const TOOL_BTNS = `[...document.querySelectorAll('[data-session-tool]')]`
-  const DECISIONS = `document.querySelector('[data-bot-decisions]')`
   const EMPTY = `document.querySelector('[data-bot-empty]')`
   const CARD = (name: string): string =>
     `document.querySelector('[data-bot-empty-member=${JSON.stringify(name)}]')`
@@ -2146,36 +2094,6 @@ export function botSessionPane(main: CdpClient): BotSessionPane {
       await sleep(300)
       return hit
     },
-
-    decisions: () =>
-      main.eval(`(() => {
-        const panel = ${DECISIONS}
-        if (!panel) return { present: false, empty: false, groups: [] }
-        return {
-          present: true,
-          // 空态占位是唯一一个内容恰为 '—' 的块（组头时间行是 '·'，不撞）
-          empty: [...panel.querySelectorAll('div')].some(
-            (d) => d.childElementCount === 0 && (d.textContent ?? '').trim() === '—'
-          ),
-          groups: [...panel.querySelectorAll('[data-bot-decision-group]')].map((g) => {
-            const rows = [...g.querySelectorAll('[data-bot-decision-kind]')]
-            return {
-              seq: g.getAttribute('data-bot-decision-group') ?? '',
-              header: (g.firstElementChild?.textContent ?? '').trim(),
-              kinds: rows.map((r) => r.getAttribute('data-bot-decision-kind') ?? ''),
-              monoAll:
-                rows.length > 0 &&
-                rows.every((r) => {
-                  const badge = r.querySelector('span.font-mono')
-                  return (
-                    !!badge &&
-                    (badge.textContent ?? '').trim() === r.getAttribute('data-bot-decision-kind')
-                  )
-                })
-            }
-          })
-        }
-      })()`),
 
     emptyState: () =>
       main.eval(`(() => {

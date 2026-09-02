@@ -123,8 +123,6 @@ interface BotChatOpts {
   gate?: StageOutcome
   task?: StageOutcome
   recheck?: StageOutcome
-  /** claim 的裁决；缺省「赢了」 */
-  claim?: { won: boolean; reason?: string; winner?: string }
   /** turn 授予的时隙 */
   slot?: Partial<{ superseded: string[]; selfReplied: boolean; queuedMs: number; since: string[] }>
   /** 任务段 ref 解析不出来（配置错） */
@@ -133,7 +131,7 @@ interface BotChatOpts {
   notesAgentMissing?: boolean
   /** 宿主没有附件回读能力 */
   noAttachmentResolver?: boolean
-  /** say 抛出（宿主的仲裁强制点挡下） */
+  /** say 抛出（宿主侧的写入闸挡下） */
   sayThrows?: string
 }
 
@@ -145,7 +143,6 @@ function makeBotChat(opts: BotChatOpts = {}): {
   /** 不铺 baseInput —— 入参闸的用例要能少传一个键 */
   invokeRaw: (input: Input) => Promise<{ started?: boolean; reason?: string; error?: string }>
   says: SayCall[]
-  claims: unknown[]
   turns: number
   runs: RunTaskParams[]
   of: (stage: 'gate' | 'recheck' | 'task') => RunTaskParams[]
@@ -154,7 +151,6 @@ function makeBotChat(opts: BotChatOpts = {}): {
   prompts: Record<string, string>
 } {
   const says: SayCall[] = []
-  const claims: unknown[] = []
   const runs: RunTaskParams[] = []
   const logs: string[] = []
   const attachCalls: Array<{ refs: unknown[]; sessionId?: string }> = []
@@ -205,10 +201,6 @@ function makeBotChat(opts: BotChatOpts = {}): {
       says.push({ raw, opts: o as Record<string, unknown> | undefined })
       return { messageId: 'm-1' }
     },
-    claim: async (intent: unknown): Promise<Record<string, unknown>> => {
-      claims.push(intent)
-      return { won: true, reason: 'solo', ...(opts.claim ?? {}) }
-    },
     turn: async (fn?: unknown): Promise<unknown> => {
       state.turns += 1
       const slot = {
@@ -241,7 +233,6 @@ function makeBotChat(opts: BotChatOpts = {}): {
     invokeRaw: (input) =>
       engine.invoke({ workflow: 'bot-chat', sessionId: 'S1', label: 'bt-1', extraApi, input }),
     says,
-    claims,
     get turns() {
       return state.turns
     },
@@ -281,7 +272,6 @@ describe('OC —— 场合分流', () => {
     expect(h.runs).toHaveLength(1)
     expect(h.runs[0].agentType.name).toBe('bot-notes')
     expect(h.says).toHaveLength(0)
-    expect(h.claims).toHaveLength(0)
   })
 
   it('OC-1b 笔记段拿到的工具恰为 read/edit —— 用户覆盖它也长不出别的', async () => {
@@ -426,15 +416,14 @@ describe('OC —— 场合分流', () => {
     expect(outcomeOf(res)).toBe('notes-failed')
   })
 
-  it('OC-1m 仲裁落败者照样带回 memorable —— 记什么不该由「谁赢了这条消息」决定', async () => {
-    // 一条「以后都用 pnpm」是说给整个会话听的。把 memorable 绑到胜者身上，等于一次对话
-    // 只教会一个 bot，而落败者下一轮仍然一无所知
+  it('OC-1m 判定不接的成员照样带回 memorable —— 记什么不该由「这条我接不接」决定', async () => {
+    // 一条「以后都用 pnpm」是说给整个会话听的。把 memorable 绑到「开口了的人」身上，
+    // 等于一次对话只教会一个 bot，判定不接的那些下一轮仍然一无所知
     const h = makeBotChat({
-      claim: { won: false, reason: 'lost', winner: 'ranger' },
-      gate: { structured: { ...GATE_REPLY, memorable: true } }
+      gate: { structured: { decision: 'ignore', relevance: 1, reason: '不归我', memorable: true } }
     })
     const res = await h.invoke()
-    expect(res.output).toMatchObject({ outcome: 'yielded', to: 'ranger', memorable: true })
+    expect(res.output).toMatchObject({ outcome: 'ignored', memorable: true })
     expect(h.says).toHaveLength(0)
   })
 
@@ -487,7 +476,6 @@ describe('P —— 提示词组装', () => {
     const many = await gatePrompt({
       session: {
         id: 'S1',
-        arbitrated: true,
         directed: false,
         members: ['scout', 'writer'],
         others: [{ displayName: '写手', description: '负责文案' }]
@@ -499,32 +487,27 @@ describe('P —— 提示词组装', () => {
     expect(await gatePrompt()).not.toContain('The other bots in this session')
   })
 
-  it('P-4 solo（无仲裁或被点名）→ addressed 段出现；多 bot 且未点名则不出现', async () => {
-    expect(await gatePrompt()).toContain('This message is addressed to this bot')
+  it('P-4 被点名 → addressed 段出现；没点名（哪怕会话里只有它一个）则不出现', async () => {
+    // v2 里 solo 的判据只剩「这条消息点了我的名」。成员数不再参与判断 —— bot 各自独立
+    // 处理消息，「只有我一个」不再意味着「这条一定归我」
+    expect(await gatePrompt()).not.toContain('This message is addressed to this bot')
 
-    const contested = {
-      session: { id: 'S1', arbitrated: true, directed: false, members: ['scout', 'writer'] }
-    }
-    expect(await gatePrompt(contested)).not.toContain('This message is addressed to this bot')
-
-    // 被点名 → 即使仲裁中也按 solo 待遇
-    const named = {
-      session: { id: 'S1', arbitrated: true, directed: true, members: ['scout', 'writer'] }
-    }
+    const named = { session: { id: 'S1', directed: true, members: ['scout', 'writer'] } }
     expect(await gatePrompt(named)).toContain('This message is addressed to this bot')
+
+    const solo = { session: { id: 'S1', directed: false, members: ['scout'] } }
+    expect(await gatePrompt(solo)).not.toContain('This message is addressed to this bot')
   })
 
-  it('P-5 契约随 solo 切换：solo 用 intentSolo（没有 ignore），有竞争才给 ignore', async () => {
-    // 1:1 会话里沉默与坏掉长得一模一样 —— 所以那里根本不提供 ignore 这个选项
-    const solo = makeBotChat()
-    await solo.invoke()
-    expect(JSON.stringify(solo.of('gate')[0].resultContract?.schema)).not.toContain('ignore')
+  it('P-5 契约随点名切换：被点名用 intentSolo（没有 ignore），没点名才给 ignore', async () => {
+    // 点名了还沉默，与坏掉长得一模一样 —— 所以那里根本不提供 ignore 这个选项
+    const named = makeBotChat()
+    await named.invoke({ session: { id: 'S1', directed: true, members: ['scout', 'writer'] } })
+    expect(JSON.stringify(named.of('gate')[0].resultContract?.schema)).not.toContain('ignore')
 
-    const contested = makeBotChat()
-    await contested.invoke({
-      session: { id: 'S1', arbitrated: true, directed: false, members: ['scout', 'writer'] }
-    })
-    expect(JSON.stringify(contested.of('gate')[0].resultContract?.schema)).toContain('ignore')
+    const open = makeBotChat()
+    await open.invoke()
+    expect(JSON.stringify(open.of('gate')[0].resultContract?.schema)).toContain('ignore')
   })
 
   it('P-6 门控窗口切到 vars.gateWindow 条（给 12 条只出现最后 8 条）', async () => {
@@ -657,22 +640,13 @@ describe('S —— gate 一句话答完，不开任务段', () => {
     expect((res.output as { memorable?: unknown }).memorable).toBe(true)
   })
 
-  it('S-5 claim 输了 → 一个字都不说，outcome 分清「我判定不接」与「别人更合适」', async () => {
-    const ignored = makeBotChat({ claim: { won: false, reason: 'ignored' } })
-    expect(outcomeOf(await ignored.invoke())).toBe('ignored')
-    expect(ignored.says).toHaveLength(0)
-
-    const lost = makeBotChat({ claim: { won: false, reason: 'lost', winner: 'writer' } })
-    const res = await lost.invoke()
-    expect(outcomeOf(res)).toBe('yielded')
-    expect((res.output as { to?: unknown }).to).toBe('writer')
-    expect(lost.says).toHaveLength(0)
-  })
-
-  it('S-6 claim 拿到的是收窄前的完整 intent（宿主自己再校验一遍取值域）', async () => {
-    const h = makeBotChat()
-    await h.invoke()
-    expect(h.claims[0]).toMatchObject({ decision: 'reply', relevance: 5, reason: '寒暄' })
+  it('S-5 判定 ignore → 一个字都不说，也不占 turn（v2 里这是 bot 唯一被允许的沉默）', async () => {
+    const h = makeBotChat({
+      gate: { structured: { decision: 'ignore', relevance: 1, reason: '不归我' } }
+    })
+    expect(outcomeOf(await h.invoke())).toBe('ignored')
+    expect(h.says).toHaveLength(0)
+    expect(h.turns).toBe(0)
   })
 })
 
@@ -833,16 +807,17 @@ describe('F —— 失败与超时：过了 claim 就没人替我兜底', () => 
     expect(h.says[0].raw).toContain('shape I could not read')
     expect(h.says[0].opts).toEqual({ error: true })
     expect(res.output).toMatchObject({ gate: 'broken', outcome: 'gate-broken' })
-    // 没走到 claim —— 故障不是判定
-    expect(h.claims).toHaveLength(0)
   })
 
-  it('F-2 门控破损 + 多 bot → 一声不吭地让位（别人还能接）', async () => {
+  it('F-2 门控破损 + 多 bot → 照样出声：v2 没有「别人会替我兜底」这回事', async () => {
+    // v1 这里是沉默让位（反正胜出的那个会说话）。取消竞争之后，每个 bot 为自己的结局
+    // 负责 —— 它闭嘴，这条消息对它就彻底没有下文了
     const h = makeBotChat({ gate: { prose: '……' } })
     const res = await h.invoke({
-      session: { id: 'S1', arbitrated: true, directed: false, members: ['scout', 'writer'] }
+      session: { id: 'S1', directed: false, members: ['scout', 'writer'] }
     })
-    expect(h.says).toHaveLength(0)
+    expect(h.says).toHaveLength(1)
+    expect(h.says[0].opts).toEqual({ error: true })
     expect(res.output).toMatchObject({ gate: 'broken', outcome: 'gate-broken' })
   })
 
@@ -982,7 +957,7 @@ describe('A —— 被拆掉不是故障：安静退出', () => {
     expect(h.of('gate')[0].parentAbortSignal?.aborted).toBe(true)
   })
 
-  it('A-5 中止先于门控返回 → 既不进仲裁也不占 turn', async () => {
+  it('A-5 中止先于门控返回 → 不占 turn', async () => {
     const h = makeBotChat({ gate: { hang: true } })
     const ac = new AbortController()
     const p = h.invokeWith({}, ac.signal)
@@ -990,7 +965,6 @@ describe('A —— 被拆掉不是故障：安静退出', () => {
     ac.abort()
     await p
     await settleDetached()
-    expect(h.claims).toHaveLength(0)
     expect(h.turns).toBe(0)
   })
 })

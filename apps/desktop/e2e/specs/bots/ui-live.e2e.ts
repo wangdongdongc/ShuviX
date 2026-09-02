@@ -1,15 +1,24 @@
 /**
- * A2 · 对话流完整渲染（C 组后半）—— 失败卡、BotReply 双形态、追问 chip、救济 chip、
- * 「正在判断」行、全体沉默提示的三个出口、子代理面板的 bot-intent 折叠纪律。
+ * A2 · 对话流完整渲染（C 组后半，v2 群聊形态）—— 失败气泡、BotReply 双形态、追问 chip、
+ * 「正在输入」行、清空对在飞展示的作废、子代理面板的 bot-intent 折叠纪律。
  *
  * 除 C-15（真 bot-chat 意图段，需要假提供商喂 `next` 裁决）外全程零 LLM：
- * `a2-ui-probe` 是参数化 bot 管线，结局（mode / sayLine）与相位窗（preClaimMs）
+ * `a2-ui-probe` 是参数化 bot 管线，结局（mode / sayLine）与相位窗（preTurnMs）
  * 全部读自各 bot md 的 `shuvix-bot-input`。
  *
+ * **v2 删掉的四条用例**（测的是已经取消的能力，不是陈旧的写法）：
+ *   - C-8 / C-9「全体沉默提示」的两个出口 —— `bot_cohort_silent` 事件与
+ *     `BotSilenceNotice` 随仲裁一并退场：没有胜者，也就没有「有人被压制了」这回事；
+ *   - C-11 / C-12「误压制救济 chip」—— 同上，`AssistantMeta.suppressed` 与
+ *     `BotRescueChips` 都已删除。
+ * C-4 从「N 个成员合并成一行 data-bot-deciding」改成 v2 的对位：每个在飞成员各占一行，
+ * 判断中即 `data-bot-activity-phase="started"`。C-10 只留前半段（卡与回执随清空作废），
+ * 沉默提示那半段随提示一并删。
+ *
  * 双断纪律：同一条消息先按 id 走 IPC（message.list 的 metadata），再进 DOM 断视觉物
- * （data-* 锚点，经 pages.ts 的 botFlowPane）—— DOM 只answers「屏幕上长出来了什么」。
+ * （data-* 锚点，经 pages.ts 的 botFlowPane）—— DOM 只回答「屏幕上长出来了什么」。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
@@ -51,31 +60,24 @@ const PROBE_MD = [
   '---',
   'shuvix: workflow v1',
   `name: ${PROBE}`,
-  'description: A2 e2e probe — endings and the pre-claim window come from shuvix-bot-input.',
+  'description: A2 e2e probe — endings and the pre-turn window come from shuvix-bot-input.',
   'shuvix-workflow-concurrency: parallel',
   '---',
   '',
   'A2 参数化 bot 管线（渲染半边）：结局与意图窗全部来自 bot md 的 `shuvix-bot-input`，零 LLM。',
   '',
   '```js workflow',
-  '// 「正在判断」行的观察窗：claim 之前先睡',
-  'if (input.preClaimMs) {',
+  '// 「正在输入 · 判断中」那一行的观察窗：说话之前先睡（v2 的脚本 API 只有 say / turn）',
+  'if (input.preTurnMs) {',
   '  try {',
-  '    await sleep(input.preClaimMs)',
+  '    await sleep(input.preTurnMs)',
   '  } catch (e) {',
-  "    log('pre-claim wake: ' + String((e && e.message) || e))",
-  "    return { outcome: 'aborted-before-claim' }",
+  "    log('pre-turn wake: ' + String((e && e.message) || e))",
+  "    return { outcome: 'aborted-before-turn' }",
   '  }',
   '}',
   '',
-  'var verdict = await claim({',
-  "  decision: input.decision || 'reply',",
-  "  relevance: typeof input.relevance === 'number' ? input.relevance : 5,",
-  '  reason: input.reason',
-  '})',
-  'if (!verdict.won) return { outcome: verdict.reason }',
-  '',
-  "if (input.mode === 'mute') return { outcome: 'won-but-mute' }",
+  "if (input.mode === 'mute') return { outcome: 'mute' }",
   "if (input.mode === 'say-error') {",
   "  await say(input.sayLine || '出错降级的一句', { error: true })",
   "  return { outcome: 'said-error' }",
@@ -100,7 +102,7 @@ const PROBE_MD = [
   "  return { outcome: 'reply' }",
   '}',
   '',
-  '// working/queued 窗（C-10 的卡与回执要靠它撑开）',
+  '// working/queued 窗（C-10 的「正在输入」行与回执要靠它撑开）',
   'if (input.turnMs) {',
   '  await turn(async function (slot) {',
   '    await sleep(input.turnMs)',
@@ -125,17 +127,15 @@ const FULL_REPLY = {
 
 interface ProbeSeed {
   displayName: string
-  decision?: 'reply' | 'task' | 'clarify' | 'ignore'
-  relevance?: number
   reason?: string
   sayLine?: string
   mode?: 'mute' | 'say-error' | 'reply-error' | 'reply-bubble' | 'reply-full'
-  preClaimMs?: number
+  preTurnMs?: number
 }
 
 function probe(name: string, seed: ProbeSeed): string {
   const botInput: Record<string, string | number> = {}
-  for (const k of ['decision', 'relevance', 'reason', 'sayLine', 'mode', 'preClaimMs'] as const) {
+  for (const k of ['reason', 'sayLine', 'mode', 'preTurnMs'] as const) {
     if (seed[k] !== undefined) botInput[k] = seed[k] as string | number
   }
   writeBotMd(app, name, {
@@ -155,7 +155,6 @@ interface Msg {
     sender?: { name: string; displayName: string }
     reply?: Record<string, unknown>
     botFailure?: unknown
-    suppressed?: Array<{ name: string }>
   } | null
 }
 
@@ -207,18 +206,7 @@ async function waitPhase(
   }
 }
 
-/** 某个 bot 的决策记录 kind 序列 */
-function kindsOf(botName: string): string[] {
-  const file = join(app.home, '.shuvix', 'bots', '.runs', botName, 'decisions.jsonl')
-  if (!existsSync(file)) return []
-  return readFileSync(file, 'utf-8')
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => String((JSON.parse(l) as Record<string, unknown>).kind))
-}
-
-/** 建会话并在 UI 里打开（失败卡/提示/回执/面板都只对活动会话渲染） */
+/** 建会话并在 UI 里打开（失败气泡/回执/面板都只对活动会话渲染） */
 async function openBotSession(bots: string[], title: string): Promise<string> {
   const sid = await createBotSession(app.main, { bots, title })
   await until(async () => (await sidebar.titles()).includes(title), `session ${title} listed`)
@@ -248,8 +236,8 @@ afterAll(async () => {
   await provider?.close()
 })
 
-describe('失败卡（C-1 / C-2）', () => {
-  it('A2-C1 管线缺失的失败卡：metadata.botFailure === true + 失败角标 + 错误色盒', async () => {
+describe('失败气泡（C-1 / C-2）', () => {
+  it('A2-C1 管线缺失的失败气泡：metadata.botFailure === true + 失败角标 + 错误色盒', async () => {
     writeBotMd(app, 'ul-missing', {
       description: 'points at a pipeline that does not exist',
       displayName: 'Missing',
@@ -263,15 +251,16 @@ describe('失败卡（C-1 / C-2）', () => {
     expect(msgs[0].metadata?.botFailure).toBe(true)
     expect(String(msgs[0].content)).toContain('a2-no-such-flow')
 
-    // DOM 只断视觉物，且与 IPC 断的是**同一条消息**（按 id 对齐）
+    // DOM 只断视觉物，且与 IPC 断的是**同一条消息**（按 id 对齐）。
+    // v2 的错误色镶在**气泡**上（v1 是正文那层的 markdown-body）
     await until(async () => (await flow.messageFlags(msgs[0].id)).failureBadge, 'failure badge')
     const flags = await flow.messageFlags(msgs[0].id)
     expect(flags.failureBadge).toBe(true)
-    expect(flags.contentClassName).toContain('border-error')
+    expect(flags.bubbleClassName).toContain('border-error')
     expect(flags.replyCard).toBe(false)
   })
 
-  it('A2-C2 say({error:true}) 同款失败卡；结构化 + error 时失败角标与回复卡并存', async () => {
+  it('A2-C2 say({error:true}) 同款失败气泡；结构化 + error 时失败角标与回复卡并存', async () => {
     probe('ul-err', { displayName: 'Degraded', mode: 'say-error', sayLine: '出错降级的一句' })
     const sidPlain = await openBotSession(['ul-err'], 'A2-C2a')
     await prompt(sidPlain, '降级出声')
@@ -280,7 +269,7 @@ describe('失败卡（C-1 / C-2）', () => {
     await until(async () => (await flow.messageFlags(plain[0].id)).failureBadge, 'failure badge')
     const plainFlags = await flow.messageFlags(plain[0].id)
     expect(plainFlags.failureBadge).toBe(true)
-    expect(plainFlags.contentClassName).toContain('border-error')
+    expect(plainFlags.bubbleClassName).toContain('border-error')
 
     // 变体：结构化 + error —— 失败角标与 BotReply 卡并存（结构照常渲染，角标说明它是通告）
     probe('ul-err-reply', { displayName: 'DegradedReply', mode: 'reply-error' })
@@ -299,169 +288,61 @@ describe('失败卡（C-1 / C-2）', () => {
   })
 })
 
-describe('「正在判断」合并行（C-4）', () => {
-  it('A2-C4 双成员意图段：一行 data-bot-deciding="2"、无成员卡；claim 后行消失', async () => {
-    probe('ul-dec-a', { displayName: 'DecA', relevance: 8, preClaimMs: 1800, sayLine: 'A 的回答' })
-    probe('ul-dec-b', { displayName: 'DecB', relevance: 3, preClaimMs: 1800 })
+describe('「正在输入」行（C-4）', () => {
+  it('A2-C4 双成员意图段：两行、各带自己的名字与 started 相位；说完话行就消失', async () => {
+    // v1 这里是一行 `data-bot-deciding="2"`（N 个成员合并成「N 人正在判断」）。
+    // v2 每个在飞成员各占一行 —— 合并那一行存在的理由是「他们在竞争同一条消息」，
+    // 而现在他们各答各的，把两个人压成一个计数反而看不出是谁在说话
+    probe('ul-dec-a', { displayName: 'DecA', preTurnMs: 2500, sayLine: 'A 的回答' })
+    probe('ul-dec-b', { displayName: 'DecB', preTurnMs: 2500, sayLine: 'B 的回答' })
     const sid = await openBotSession(['ul-dec-a', 'ul-dec-b'], 'A2-C4')
     await events.clear()
-    await promptDetached(sid, '你们谁来')
+    await promptDetached(sid, '你们都说说')
 
-    // 意图窗内：两个成员合并成一行「正在判断」，不铺成员卡（started 不落卡）
+    // 意图窗内：两行，各自 started
     await until(async () => {
-      const [count, cards] = await Promise.all([flow.decidingCount(), flow.activityCards()])
-      return count === 2 && cards.length === 0
-    }, 'deciding row with 2 members, zero member cards')
+      const rows = await flow.typingRows()
+      return (
+        rows.length === 2 &&
+        rows.every((r) => r.phase === 'started') &&
+        rows
+          .map((r) => r.name)
+          .sort()
+          .join(',') === 'ul-dec-a,ul-dec-b'
+      )
+    }, 'two typing rows, both in the started phase')
 
-    // claim 之后：行消失（成员各自进入 claimed/silent，不再是「判断中」）
-    await waitPhase(sid, 'ul-dec-a', 'claimed')
-    await until(async () => (await flow.decidingCount()) === null, 'deciding row gone after claim')
-    await untilReplies(sid, 1)
+    // 说完话：行原位换成气泡，两行都收摊
+    await untilReplies(sid, 2)
+    await until(async () => (await flow.typingRows()).length === 0, 'typing rows gone')
   })
 })
 
-describe('全体沉默提示的出口（C-8 / C-9 / C-10）', () => {
-  it('A2-C8 双 ignore → 输入卡内 all_ignored 提示；点 ✕ 消失', async () => {
-    probe('ul-ig1', { displayName: 'Ig1', decision: 'ignore', relevance: 1, preClaimMs: 1200 })
-    probe('ul-ig2', { displayName: 'Ig2', decision: 'ignore', relevance: 1, preClaimMs: 1200 })
-    const sid = await openBotSession(['ul-ig1', 'ul-ig2'], 'A2-C8')
-    await events.clear()
-    await prompt(sid, '这条跟你们都没关系')
-
-    await events.waitFor('bot_cohort_silent', { sessionId: sid })
-    await until(async () => (await flow.silence())?.reason === 'all_ignored', 'silence notice')
-    expect(await flow.dismissSilence()).toBe(true)
-    await until(async () => (await flow.silence()) === null, 'notice dismissed')
-  })
-
-  it('A2-C9 提示在屏时再发一条：下一轮 started 即清（preClaimMs 拉宽断言窗）', async () => {
-    const sid = await openBotSession(['ul-ig1', 'ul-ig2'], 'A2-C9')
-    await events.clear()
-    await prompt(sid, '第一轮沉默')
-    await events.waitFor('bot_cohort_silent', { sessionId: sid })
-    await until(async () => (await flow.silence()) !== null, 'notice on screen')
-
-    // 第二条消息 → started 即清提示；preClaimMs 1200 保证「已清、下一次定局未到」的窗口
-    await promptDetached(sid, '第二轮来了')
-    await waitPhase(sid, 'ul-ig1', 'started')
-    await until(async () => (await flow.silence()) === null, 'notice cleared by next started')
-  })
-
-  it('A2-C10 message.clear：提示 / 占位卡 / 回执全部消失（messages_reloaded 清）', async () => {
-    // 先铺出「卡 + 回执」：worker bot 两条消息，一条 working 一条排队
-    // （turnMs 不在本文件 ProbeSeed 里 —— abort.e2e.ts 才大量用它，这里直接写 botInput）
+describe('清空作废在飞展示（C-10）', () => {
+  it('A2-C10 message.clear：「正在输入」行与 mailbox 回执一并消失（messages_reloaded 清）', async () => {
+    // v1 在这里还有后半段：断「全体沉默提示」也被同一把 messages_reloaded 扫掉，
+    // 并附了一条已知缺陷说明（聊天会话没有 messages_reloaded 的生产者）。v2 两件事都变了
+    // —— 提示随仲裁删除，而 `DefaultChatGateway` 的清空/回退现在**确实**广播这个事件，
+    // 所以剩下的这半段不再是「按设计期望钉住」，它就是当下的行为
     writeBotMd(app, 'ul-work', {
       description: 'probe ul-work',
       displayName: 'Worker',
       pipeline: PROBE,
+      // turnMs 不在本文件 ProbeSeed 里 —— abort.e2e.ts 才大量用它，这里直接写 botInput
       botInput: { sayLine: 'W 的回答', turnMs: 8000 }
     })
-    const sidWork = await openBotSession(['ul-work'], 'A2-C10a')
+    const sidWork = await openBotSession(['ul-work'], 'A2-C10')
     await events.clear()
     await promptDetached(sidWork, '第一条')
     await waitPhase(sidWork, 'ul-work', 'working')
     await promptDetached(sidWork, '第二条')
     await waitPhase(sidWork, 'ul-work', 'queued')
-    await until(async () => (await flow.activityCards()).length > 0, 'activity card on screen')
+    await until(async () => (await flow.typingRows()).length > 0, 'typing row on screen')
     await until(async () => (await flow.receipts()).length > 0, 'receipt on screen')
 
     await app.main.eval(`window.api.message.clear(${JSON.stringify(sidWork)})`)
-    await until(async () => (await flow.activityCards()).length === 0, 'cards cleared')
+    await until(async () => (await flow.typingRows()).length === 0, 'typing rows cleared')
     await until(async () => (await flow.receipts()).length === 0, 'receipts cleared')
-
-    // 再铺「沉默提示」：ignore 会话取得提示后 clear —— 同一把 messages_reloaded 扫掉。
-    //
-    // ⚠️ 已知实现缺陷（上报，勿弱化断言）：A2 只落了 messages_reloaded 的**消费侧**
-    // （useAgentEvents → clearBotLiveState），聊天会话没有任何**生产者** ——
-    // DefaultChatGateway.clearMessages / rollbackMessage 不广播它，而唯二的 emit 点
-    // （harnessSession 自动压缩 / eventHandler session_compact）都是聊天会话永远走不到的
-    // harness 路径。于是清空会话后：卡与回执靠 abortSession 的副作用消失（上半段绿），
-    // 沉默提示却在一条已被清空的会话上永久残留（BotSilenceNotice 文档声称的第三个出口
-    // 是死的）。此断言按设计期望钉住，修复生产侧后即绿。
-    const sidIg = await openBotSession(['ul-ig1', 'ul-ig2'], 'A2-C10b')
-    await events.clear()
-    await prompt(sidIg, '沉默一轮')
-    await events.waitFor('bot_cohort_silent', { sessionId: sidIg })
-    await until(async () => (await flow.silence()) !== null, 'notice before clear')
-    await app.main.eval(`window.api.message.clear(${JSON.stringify(sidIg)})`)
-    await until(async () => (await flow.silence()) === null, 'notice cleared by messages_reloaded')
-  })
-})
-
-describe('救济 chip（C-11 / C-12）', () => {
-  it('A2-C11 胜者卡底的败者 chip：点击 = 带 @displayName 前缀定向重发，原消息集合不动', async () => {
-    probe('ul-win', { displayName: 'Winner', relevance: 8, sayLine: 'W 的回答' })
-    probe('ul-lose', {
-      displayName: 'Loser',
-      relevance: 2,
-      reason: '我也能答',
-      sayLine: 'L 的回答'
-    })
-    const sid = await openBotSession(['ul-win', 'ul-lose'], 'A2-C11')
-    await prompt(sid, '救济这一条')
-
-    const [winnerMsg] = await untilReplies(sid, 1)
-    expect(winnerMsg.metadata?.sender?.name).toBe('ul-win')
-    expect(winnerMsg.metadata?.suppressed?.map((s) => s.name)).toEqual(['ul-lose'])
-
-    // chip 的锚是稳定名，可见文本是 displayName
-    await until(async () => (await flow.rescueChips(winnerMsg.id)).length === 1, 'rescue chip')
-    const [chip] = await flow.rescueChips(winnerMsg.id)
-    expect(chip.name).toBe('ul-lose')
-    expect(chip.label).toContain('Loser')
-
-    const before = (await listMessages(sid)).map((m) => m.id)
-    expect(await flow.clickRescueChip(winnerMsg.id, 'ul-lose')).toBe(true)
-
-    // 定向重发：新 user 消息 = `@<displayName> <原文>`；败者按 l0_directed 应答
-    const after = await until(async () => {
-      const msgs = await listMessages(sid)
-      return msgs.filter((m) => m.role === 'assistant').length >= 2 ? msgs : undefined
-    }, 'loser answered the rescue resend')
-    // 原消息集合不动：新 id 只增不改（旧序是新序的前缀）
-    expect(after.map((m) => m.id).slice(0, before.length)).toEqual(before)
-    const resent = after.filter((m) => m.role === 'user').at(-1)!
-    expect(resent.content).toBe('@Loser 救济这一条')
-    const rescue = after.filter((m) => m.role === 'assistant').at(-1)!
-    expect(rescue.metadata?.sender?.name).toBe('ul-lose')
-    expect(rescue.content).toBe('L 的回答')
-    expect(kindsOf('ul-lose')).toContain('l0_directed')
-  })
-
-  it('A2-C12 胜者 mute → 沉默提示带 suppressed，chip 在提示块内；点击按 userMessageId 重发', async () => {
-    probe('ul-mute', { displayName: 'Muter', relevance: 8, mode: 'mute' })
-    probe('ul-lose2', {
-      displayName: 'Rescue',
-      relevance: 2,
-      reason: '我也能答',
-      sayLine: 'R 的回答'
-    })
-    const sid = await openBotSession(['ul-mute', 'ul-lose2'], 'A2-C12')
-    await events.clear()
-    await prompt(sid, '这轮胜者会哑')
-
-    const evt = await events.waitFor<RecordedEvent & { suppressed?: Array<{ name: string }> }>(
-      'bot_cohort_silent',
-      { sessionId: sid }
-    )
-    expect(evt.suppressed?.map((s) => s.name)).toEqual(['ul-lose2'])
-    expect(await replies(sid)).toHaveLength(0)
-
-    // chip 挂在提示块内（胜者半路失败时名单无消息可挂）
-    await until(async () => (await flow.silenceRescueChips()).length === 1, 'chip inside notice')
-    const before = (await listMessages(sid)).map((m) => m.id)
-    expect(await flow.clickSilenceRescueChip('ul-lose2')).toBe(true)
-
-    const after = await until(async () => {
-      const msgs = await listMessages(sid)
-      return msgs.filter((m) => m.role === 'assistant').length >= 1 ? msgs : undefined
-    }, 'rescue answered after mute round')
-    expect(after.map((m) => m.id).slice(0, before.length)).toEqual(before)
-    const resent = after.filter((m) => m.role === 'user').at(-1)!
-    expect(resent.content).toBe('@Rescue 这轮胜者会哑')
-    const rescue = after.filter((m) => m.role === 'assistant').at(-1)!
-    expect(rescue.metadata?.sender?.name).toBe('ul-lose2')
-    expect(kindsOf('ul-lose2')).toContain('l0_directed')
   })
 })
 
@@ -527,7 +408,7 @@ describe('子代理面板的 bot-intent 折叠纪律（C-15）', () => {
       {
         id: 'call_next',
         name: 'next',
-        args: JSON.stringify({ decision: 'reply', relevance: 5, reason: 'e2e', reply })
+        args: JSON.stringify({ decision: 'reply', reason: 'e2e', reply })
       }
     ],
     usage: { prompt: 150, completion: 10 },
