@@ -178,6 +178,18 @@ describe('SessionTool — 注册与描述', () => {
 const textOf = (r: unknown): string =>
   ((r as { content: Array<{ text: string }> }).content ?? []).map((c) => c.text).join('')
 
+const info = (
+  id: string,
+  title: string,
+  status: 'idle' | 'running' | 'waiting-input'
+): { id: string; title: string; status: typeof status; driven: boolean; updatedAt: number } => ({
+  id,
+  title,
+  status,
+  driven: false,
+  updatedAt: 1
+})
+
 describe('SessionTool — 子会话 action', () => {
   it('create-sub-session：转调 runner（title/agent_profile 原样），回话含 id', async () => {
     mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: '重构 parser' })
@@ -201,8 +213,13 @@ describe('SessionTool — 子会话 action', () => {
     )
   })
 
-  it('prompt-sub-session 前台：parentId 取 ToolContext，缺省超时 300s，回话带答复正文', async () => {
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'answered', answer: 'DONE.' })
+  it('prompt-sub-session 前台：parentId 取 ToolContext，缺省超时 300s，答复在 <reply> 围栏内', async () => {
+    // info 由 prompt 顺带带回（工具层不再为一个标题重投影整棵转写）
+    mocks.runnerPrompt.mockResolvedValue({
+      kind: 'answered',
+      answer: 'DONE.',
+      info: info('sub-1', 'A', 'idle')
+    })
     const res = await tool.execute('tc-1', {
       action: 'prompt-sub-session',
       sub_session_id: 'sub-1',
@@ -217,7 +234,9 @@ describe('SessionTool — 子会话 action', () => {
         timeoutSeconds: 300
       })
     )
-    expect(textOf(res)).toContain('DONE.')
+    // 子会话说的话恒在围栏内 —— 围栏外的每个字都是工具在说话
+    expect(textOf(res)).toContain('<reply>\nDONE.\n</reply>')
+    expect(textOf(res)).toContain('<sub-session id="sub-1"')
   })
 
   it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {
@@ -252,8 +271,13 @@ describe('SessionTool — 子会话 action', () => {
     expect(timedOut).toContain('wait-for-sub-sessions')
   })
 
-  it('失败的一轮照样回话（错误是子会话里的事实，父级要看见同一份）', async () => {
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'answered', answer: 'boom', isError: true })
+  it('失败的一轮走 <error> 围栏（同一份事实，但与正常答复分得开）', async () => {
+    mocks.runnerPrompt.mockResolvedValue({
+      kind: 'answered',
+      answer: 'boom',
+      isError: true,
+      info: info('sub-1', 'A', 'idle')
+    })
     expect(
       textOf(
         await tool.execute('tc-1', {
@@ -262,7 +286,7 @@ describe('SessionTool — 子会话 action', () => {
           message: 'go'
         })
       )
-    ).toContain('boom')
+    ).toContain('<error>\nboom\n</error>')
   })
 
   it('wait-for-sub-sessions：不传 id = 等全部；结果一次交齐（含答复正文）', async () => {
@@ -291,8 +315,9 @@ describe('SessionTool — 子会话 action', () => {
     const out = textOf(
       await tool.execute('tc-1', { action: 'wait-for-sub-sessions', timeout_seconds: 30 })
     )
+    expect(out).toContain('<sub-sessions status="timeout">')
     expect(out).toContain('NOT cancelled')
-    expect(out).toContain('sub-1  [running]  A')
+    expect(out).toContain('status="running"')
   })
 
   it('wait 到一条卡在 ask 上的：明说它不会自己好起来（否则父级会一直等）', async () => {
@@ -300,9 +325,9 @@ describe('SessionTool — 子会话 action', () => {
       kind: 'settled',
       results: [{ id: 'sub-1', title: 'A', status: 'waiting-input', driven: false, updatedAt: 1 }]
     })
-    expect(textOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))).toContain(
-      'waiting for the user'
-    )
+    const out = textOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))
+    expect(out).toContain('status="waiting-input"')
+    expect(out).toContain('Waiting for the user')
   })
 
   it('list-sub-sessions：每行 id + 状态 + 标题；空名单给出创建指引', async () => {
@@ -313,8 +338,8 @@ describe('SessionTool — 子会话 action', () => {
       ]
     })
     const listed = textOf(await tool.execute('tc-1', { action: 'list-sub-sessions' }))
-    expect(listed).toContain('sub-1  [running]  A')
-    expect(listed).toContain('sub-2  [waiting-input]  B')
+    expect(listed).toContain('<sub-session id="sub-1" title="A" status="running"/>')
+    expect(listed).toContain('<sub-session id="sub-2" title="B" status="waiting-input"/>')
 
     mocks.runnerList.mockReturnValue({ subSessions: [] })
     expect(textOf(await tool.execute('tc-1', { action: 'list-sub-sessions' }))).toContain(
@@ -322,19 +347,36 @@ describe('SessionTool — 子会话 action', () => {
     )
   })
 
-  it('read-sub-session：状态行 + 最新答复；还没回话时说清「还没回」', async () => {
-    const info = { id: 'sub-1', title: 'A', status: 'idle' as const, driven: false, updatedAt: 1 }
-    mocks.runnerRead.mockResolvedValue({ info, answer: 'RESULT' })
+  it('read-sub-session：整块在 <sub-session> 围栏里；还没回话时是 <note> 而不是空答复', async () => {
+    const row = info('sub-1', 'A', 'idle')
+    mocks.runnerRead.mockResolvedValue({ info: row, answer: 'RESULT' })
     const read = textOf(
       await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' })
     )
-    expect(read).toContain('sub-1  [idle]  A')
-    expect(read).toContain('RESULT')
+    expect(read).toContain('<sub-session id="sub-1" title="A" status="idle">')
+    expect(read).toContain('<reply>\nRESULT\n</reply>')
+    expect(read.trimEnd().endsWith('</sub-session>')).toBe(true)
 
-    mocks.runnerRead.mockResolvedValue({ info })
-    expect(
-      textOf(await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' }))
-    ).toMatch(/not replied/i)
+    mocks.runnerRead.mockResolvedValue({ info: row })
+    const empty = textOf(
+      await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' })
+    )
+    expect(empty).toContain('<note>No reply yet.</note>')
+    expect(empty).not.toContain('<reply>')
+  })
+
+  it('标题里的引号/换行不撕破标签（标题是 LLM 起的，不能假定它干净）', async () => {
+    mocks.runnerRead.mockResolvedValue({
+      info: info('sub-1', '他说 "干完了"\n第二行', 'idle'),
+      answer: 'ok'
+    })
+    const out = textOf(
+      await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' })
+    )
+    // 开标签仍是完整的一行：引号被换成单引号、换行被压平
+    const openLine = out.split('\n').find((l) => l.startsWith('<sub-session '))!
+    expect(openLine.endsWith('>')).toBe(true)
+    expect(openLine).toContain("他说 '干完了' 第二行")
   })
 
   it('stop-sub-session：停住与本就没在跑，回话不同（模型据此判断要不要再等）', async () => {

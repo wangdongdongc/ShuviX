@@ -161,8 +161,10 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
     expect(childMsgs[0].content).toBe('干活')
     expect(childMsgs[1].content).toContain('CHILD DONE.')
 
-    // 父会话拿到的是子会话的最终答复
-    expect(toolResults(await listMessages(parentSid)).join('\n')).toContain('CHILD DONE.')
+    // 父会话拿到的是子会话的最终答复，且**在围栏里** —— 围栏外的字都是工具在说话
+    const parentResults = toolResults(await listMessages(parentSid)).join('\n')
+    expect(parentResults).toContain('<reply>\nCHILD DONE.\n</reply>')
+    expect(parentResults).toContain('<sub-session id="' + subSid + '"')
   })
 
   it('后台：立刻回执且**不带答复正文**，跑完再由 read 取', async () => {
@@ -206,9 +208,11 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
     expect(receipt).not.toContain('BG DONE.')
     expect(receipt).not.toMatch(/notified/i)
 
-    // wait 一次交回答复：父级不必再 read 一遍
+    // wait 一次交回答复：父级不必再 read 一遍；答复同样在围栏里
     const collected = results.find((r) => r.includes('BG DONE.'))
     expect(collected, 'wait 应把子会话的答复一次交回').toBeDefined()
+    expect(collected).toContain('<sub-sessions status="settled">')
+    expect(collected).toContain('<reply>\nBG DONE.\n</reply>')
 
     await until(
       async () => (await listMessages(subSid)).some((m) => m.content.includes('BG DONE.')),

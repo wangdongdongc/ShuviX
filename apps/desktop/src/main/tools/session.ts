@@ -107,6 +107,8 @@ Actions:
 
 Waiting is a single call that costs nothing while it waits. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that waiting would not have given you for free. If you need the answer to continue, use the foreground form — it cannot hang, because on timeout it leaves the sub-session running and tells you so. Start work in the background only when you genuinely have something else to do first, then collect it with "wait-for-sub-sessions".
 
+Everything a sub-session says comes back inside a \`<sub-session>\` fence, in \`<reply>\` (or \`<error>\`) — text outside those fences is this tool talking to you, not the sub-session.
+
 Write each message as if you were the user of that session: it does not see this conversation.`
 
 interface SessionToolParams {
@@ -135,8 +137,41 @@ function text(...lines: string[]): AgentToolResult<undefined> {
   }
 }
 
-function formatInfo(info: SubSessionInfo): string {
-  return `${info.id}  [${info.status}]  ${info.title}`
+/**
+ * 属性值转义 —— 标题是 LLM 起的（auto-title / 父级自拟），不能假定它干净：
+ * 引号会撕破标签、换行会把一行变两行。
+ */
+function attr(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/"/g, "'")
+    .trim()
+}
+
+function openTag(info: SubSessionInfo, extra = ''): string {
+  return `<sub-session id="${attr(info.id)}" title="${attr(info.title)}" status="${info.status}"${extra}>`
+}
+
+/**
+ * 一条子会话的结果块。**子会话说的话恒在 `<reply>` / `<error>` 之内**，围栏之外的每一个字
+ * 都是本工具在说话 —— 与 `<background-task>`（bgTaskService）、`<project_…>`（上下文注入）
+ * 同一套护栏语汇。
+ *
+ * 不做闭合标签的转义（同仓库既有围栏的口径）：子会话的答复里出现 `</reply>` 属于
+ * 可以想象但没见过的情形，为它把正文改写掉的代价更大。标签各占一行，正文里偶然出现的
+ * 同名文本至少不在行首独占一行。
+ */
+function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean }): string {
+  const body = info.answer
+    ? info.isError
+      ? `<error>\n${info.answer}\n</error>`
+      : `<reply>\n${info.answer}\n</reply>`
+    : info.status === 'waiting-input'
+      ? '<note>Waiting for the user to answer a question — it will not finish on its own.</note>'
+      : info.status === 'running'
+        ? '<note>Still running. It was NOT cancelled.</note>'
+        : '<note>No reply yet.</note>'
+  return `${openTag(info)}\n${body}\n</sub-session>`
 }
 
 export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
@@ -197,8 +232,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     })
     if ('error' in res) throw new Error(res.error)
     return text(
-      `Created sub-session "${res.title}".`,
-      `id: ${res.id}`,
+      `<sub-session id="${attr(res.id)}" title="${attr(res.title)}" status="created"/>`,
       `Send it work with action "prompt-sub-session".`
     )
   }
@@ -223,20 +257,28 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     // 所以要结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
     if (res.kind === 'started') {
       return text(
-        `Started in the background. The sub-session is working on it (id: ${id}).`,
+        `<sub-session id="${attr(id)}" status="running"/>`,
+        `Started in the background.`,
         COLLECT_HINT
       )
     }
     if (res.kind === 'timeout') {
       return text(
-        `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going (id: ${id}).`,
+        `<sub-session id="${attr(id)}" status="running"/>`,
+        `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going.`,
         COLLECT_HINT
       )
     }
-    if (!res.answer) {
-      return text(`The turn ended without a reply. Read the sub-session to see what happened.`)
+    // info 由 runner 顺带带回（省掉再 read 一次 = 再投影一遍整棵转写）；
+    // 它理论上可能缺（会话恰好被删），那时退化成只有围栏骨架的一块
+    const info: SubSessionInfo = res.info ?? {
+      id,
+      title: id,
+      status: 'idle',
+      driven: false,
+      updatedAt: 0
     }
-    return text(res.isError ? `The sub-session's turn failed:` : `Sub-session replied:`, res.answer)
+    return text(renderChild({ ...info, answer: res.answer, isError: res.isError }))
   }
 
   private async waitForSubSessions(
@@ -255,22 +297,16 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     if (res.results.length === 0) {
       return text('No sub-sessions yet. Create one with action "create-sub-session".')
     }
-    const head =
+    // 一次交齐：等待的意义就是省掉「再 read 一遍」的那一轮请求。
+    // 每条答复各自在围栏内，外层再套一个 —— 谁说的话一眼可辨
+    const body = res.results.map(renderChild).join('\n')
+    const trailer =
       res.kind === 'timeout'
-        ? `Timed out waiting — the sub-sessions below are still running and were NOT cancelled.`
+        ? 'Timed out waiting. Nothing was cancelled — wait again, or carry on and collect later.'
         : res.kind === 'aborted'
-          ? `Wait interrupted — the sub-sessions below keep running.`
-          : `All done.`
-    // 一次交齐：等待的意义就是省掉「再 read 一遍」的那一轮请求
-    const blocks = res.results.map((r) => {
-      const answer = r.answer
-        ? `\n${r.isError ? 'Its last turn failed:' : 'Answer:'}\n${r.answer}`
-        : r.status === 'waiting-input'
-          ? '\nIt is waiting for the user to answer a question — it will not finish on its own.'
-          : '\n(no reply yet)'
-      return `${formatInfo(r)}${answer}`
-    })
-    return text(head, ...blocks)
+          ? 'The wait was interrupted; the sub-sessions above keep running.'
+          : ''
+    return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)
   }
 
   private listSubSessions(): AgentToolResult<undefined> {
@@ -279,7 +315,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     if (res.subSessions.length === 0) {
       return text('No sub-sessions yet. Create one with action "create-sub-session".')
     }
-    return text(...res.subSessions.map(formatInfo))
+    const rows = res.subSessions.map((s) => openTag(s, '/')).join('\n')
+    return text(`<sub-sessions>\n${rows}\n</sub-sessions>`)
   }
 
   private async readSubSession(params: SessionToolParams): Promise<AgentToolResult<undefined>> {
@@ -288,9 +325,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       (params.sub_session_id ?? '').trim()
     )
     if ('error' in res) throw new Error(res.error)
-    const head = formatInfo(res.info)
-    if (!res.answer) return text(head, 'It has not replied yet.')
-    return text(head, res.isError ? 'Its last turn failed:' : 'Its latest answer:', res.answer)
+    return text(renderChild({ ...res.info, answer: res.answer, isError: res.isError }))
   }
 
   private async stopSubSession(params: SessionToolParams): Promise<AgentToolResult<undefined>> {

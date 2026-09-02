@@ -58,6 +58,11 @@ export interface PromptOutcome {
   answer?: string
   /** 末条消息是错误事件 */
   isError?: boolean
+  /**
+   * kind==='answered' 时子会话的快照。顺带带回来是为了省掉调用方「再 read 一次」——
+   * 那会把整棵转写重新投影一遍，只为拿一个标题和状态。
+   */
+  info?: SubSessionInfo
 }
 
 /** 本进程正在驱动的一次子会话运行 */
@@ -278,7 +283,24 @@ class SubSessionRunner {
       await this.stopRun(childId)
       await run.done
     }
-    return { kind: 'answered', ...(await this.lastAnswer(childId)) }
+    const [answer, info] = await Promise.all([
+      this.lastAnswer(childId),
+      this.infoOf(parentId, childId)
+    ])
+    return { kind: 'answered', ...answer, ...(info ? { info } : {}) }
+  }
+
+  /** 单条子会话的快照（不含答复；lastAnswer 另取） */
+  private infoOf(parentId: string, childId: string): SubSessionInfo | undefined {
+    const row = sessionDao.findChildren(parentId).find((s) => s.id === childId)
+    if (!row) return undefined
+    return {
+      id: row.id,
+      title: row.title,
+      status: this.statusOf(row.id),
+      driven: this.runs.has(row.id),
+      updatedAt: row.updatedAt
+    }
   }
 
   /**
