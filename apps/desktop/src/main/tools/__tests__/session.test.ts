@@ -380,14 +380,29 @@ describe('SessionTool — 子会话 action', () => {
     expect(out).toContain('status="running"')
   })
 
-  it('wait 到一条卡在 ask 上的：明说它不会自己好起来（否则父级会一直等）', async () => {
+  it('wait 到一条卡在等批准的：外层状态是 blocked（不是 settled），且交代清楚三件事', async () => {
     mocks.runnerWait.mockResolvedValue({
-      kind: 'settled',
-      results: [{ id: 'sub-1', title: 'A', status: 'waiting-input', driven: false, updatedAt: 1 }]
+      kind: 'blocked',
+      results: [
+        {
+          id: 'sub-1',
+          title: 'A',
+          status: 'waiting-input',
+          driven: false,
+          updatedAt: 1,
+          blockedOn: ['bash: rm -rf build']
+        }
+      ]
     })
     const out = textOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))
-    expect(out).toContain('status="waiting-input"')
-    expect(out).toContain('Waiting for the user')
+    // 报成 settled 会让父级以为成了 —— 实测里它就是这么被骗过去的
+    expect(out).toContain('<sub-sessions status="blocked">')
+    // ① 问的是什么 ② 只有用户能解 ③ 父级该做什么
+    expect(out).toContain('rm -rf build')
+    expect(out).toContain('you cannot answer it')
+    expect(out).toContain('Tell the user')
+    // 「再等一会儿」是错的建议
+    expect(out).toContain('Waiting again will not help')
   })
 
   it('list-sub-sessions：每行 id + 状态 + 标题；空名单给出创建指引', async () => {

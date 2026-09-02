@@ -48,11 +48,24 @@ export interface SubSessionInfo {
   /** 本进程是否正在替父会话驱动它（用户自己在里面发消息时为 false，status 仍是 running） */
   driven: boolean
   updatedAt: number
+  /**
+   * `waiting-input` 时它到底卡在什么问题上（待答询问的人读摘要）。
+   *
+   * 没有这个，父级读到的只是「在等用户回答」——**它无从判断该做什么**：实测里模型
+   * 因此把这个状态当成「子代理自己爱提问」，反复改提示词说「不要提问、直接执行」，
+   * 换了四条子会话都一样，因为真正的原因是**应用在等人点一下批准**，而那件事只有
+   * 用户能做、父级做不了。
+   */
+  blockedOn?: string[]
 }
 
 export interface WaitOutcome {
-  /** 'settled' = 全部落定；'timeout' = 到点仍有在跑的；'aborted' = 父会话被停止 */
-  kind: 'settled' | 'timeout' | 'aborted'
+  /**
+   * 'settled' = 全部跑完；'blocked' = 有人卡在**等用户批准**上（不是"完成"，
+   * 报成 settled 会让父级以为成了 —— 实测里它就是这么被骗过去的）；
+   * 'timeout' = 到点仍有在跑的；'aborted' = 父会话被停止。
+   */
+  kind: 'settled' | 'blocked' | 'timeout' | 'aborted'
   /** 等待期间关注的每条子会话（含最终状态与最新答复） */
   results: Array<SubSessionInfo & { answer?: string; isError?: boolean }>
 }
@@ -122,6 +135,12 @@ class SubSessionRunner {
    * 状态取自运行时而不是本地记账：用户自己在子会话里发消息同样是 running，
    * 一个只认「我发起的」记账会把那种情况报成 idle。
    */
+  /** 待答询问的摘要（只有 waiting-input 时有意义） */
+  private blockedOn(sessionId: string): string[] | undefined {
+    const asked = sessionService.getAgentSession(sessionId)?.pendingInputSummaries ?? []
+    return asked.length > 0 ? asked : undefined
+  }
+
   private statusOf(sessionId: string): SubSessionStatus {
     const agent = sessionService.getAgentSession(sessionId)
     if (!agent) return 'idle'
@@ -138,7 +157,8 @@ class SubSessionRunner {
         title: s.title,
         status: this.statusOf(s.id),
         driven: this.runs.has(s.id),
-        updatedAt: s.updatedAt
+        updatedAt: s.updatedAt,
+        blockedOn: this.blockedOn(s.id)
       }))
     }
   }
@@ -160,7 +180,8 @@ class SubSessionRunner {
         title: row?.title ?? child.title,
         status: this.statusOf(childId),
         driven: this.runs.has(childId),
-        updatedAt: row?.updatedAt ?? 0
+        updatedAt: row?.updatedAt ?? 0,
+        blockedOn: this.blockedOn(childId)
       },
       ...last
     }
@@ -347,7 +368,8 @@ class SubSessionRunner {
       title: row.title,
       status: this.statusOf(row.id),
       driven: this.runs.has(row.id),
-      updatedAt: row.updatedAt
+      updatedAt: row.updatedAt,
+      blockedOn: this.blockedOn(row.id)
     }
   }
 
@@ -386,7 +408,9 @@ class SubSessionRunner {
         .filter((id) => this.statusOf(id) === 'running')
     }
     if (targets.length === 0) {
-      return { kind: 'settled', results: await this.infoWithAnswers(parentId) }
+      const results = await this.infoWithAnswers(parentId)
+      const blocked = results.some((r) => r.status === 'waiting-input')
+      return { kind: blocked ? 'blocked' : 'settled', results }
     }
 
     for (const id of targets) this.waiters.add(id)
@@ -414,7 +438,10 @@ class SubSessionRunner {
     })
 
     for (const id of targets) this.waiters.delete(id)
-    return { kind, results: await this.infoWithAnswers(parentId, targets) }
+    const results = await this.infoWithAnswers(parentId, targets)
+    // 落定了但有人卡在等批准 —— 那不是「完成」，外层状态必须说清楚
+    const blocked = results.some((r) => r.status === 'waiting-input')
+    return { kind: kind === 'settled' && blocked ? 'blocked' : kind, results }
   }
 
   /** 子会话快照 + 各自最新答复（wait 的返回形状；ids 省略 = 全部子会话） */
@@ -430,6 +457,7 @@ class SubSessionRunner {
         status: this.statusOf(s.id),
         driven: this.runs.has(s.id),
         updatedAt: s.updatedAt,
+        blockedOn: this.blockedOn(s.id),
         ...(await this.lastAnswer(s.id))
       }))
     )
@@ -471,20 +499,28 @@ class SubSessionRunner {
     // 已经有人在 wait 它 —— 结果会在**同一轮里**交回去，再补一条通知只会让父级
     // 把刚拿到的东西再读一遍（实测里就白烧了一轮）
     if (this.waiters.has(childId)) return
+    // 被停掉的那次不用通知：停它的就是父级自己（stop-sub-session / 前台级联），
+    // 它早就知道。实测里这条通知反而把父级叫醒去「收」一个它刚亲手停掉的东西
+    if (run.stopped) return
     const parent = sessionService.getAgentSession(run.parentId)
     if (!parent) return
     const title = sessionDao.pick(childId, ['title'])?.title ?? childId
-    // 说实话：被停掉的那次不是「跑完了」；状态词也用与别处一致的那套
-    const status = run.stopped ? 'stopped' : this.statusOf(childId)
-    const line = run.stopped
-      ? 'The turn you started in the background was stopped before it finished.'
-      : 'The turn you started in the background has finished.'
+    // 状态词用与别处一致的那套；卡在等批准时明说，别让父级以为它跑完了
+    const status = this.statusOf(childId)
+    const asked = this.blockedOn(childId)
     const notice = [
       `<sub-session id="${childId}" title="${title}" status="${status}">`,
-      line,
-      'Collect it with the session tool: action "wait-for-sub-sessions".',
+      status === 'waiting-input'
+        ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
+        : 'The turn you started in the background has finished.',
+      asked?.length ? `It is asking: ${asked.join(' | ')}` : '',
+      status === 'waiting-input'
+        ? 'Tell the user what it is waiting for — you cannot answer it yourself.'
+        : 'Collect it with the session tool: action "wait-for-sub-sessions".',
       '</sub-session>'
-    ].join('\n')
+    ]
+      .filter(Boolean)
+      .join('\n')
     void parent
       .notify(notice)
       .catch((err) => log.warn(`子会话完成通知失败 parent=${run.parentId}: ${err}`))

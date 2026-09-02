@@ -510,7 +510,7 @@ describe('并发与失败 —— 实测里那条错误链的两个断点', () =>
 })
 
 describe('完成通知 —— 说实话，且不重复', () => {
-  it('被停掉的那次不说「跑完了」', async () => {
+  it('自己停掉的那次**不通知**（停它的就是父级，它早就知道）', async () => {
     const parentAgent = fakeAgent()
     // 派活时子会话必须是空闲的（否则命中忙碌拒绝，压根不会有 run）
     const childAgent = fakeAgent()
@@ -533,9 +533,37 @@ describe('完成通知 —— 说实话，且不重复', () => {
     childAgent.isStreaming = true
     await runner.stop(PARENT, CHILD)
     release()
+    // 实测里这条通知反而把父级叫醒去「收」一个它刚亲手停掉的东西，白烧一轮
+    await new Promise((r) => setTimeout(r, 300))
+    expect(parentAgent.notify).not.toHaveBeenCalled()
+  })
+
+  it('卡在等批准时跑完的通知：说清在等批准并带出问题，而不是「跑完了」', async () => {
+    const parentAgent = fakeAgent()
+    const childAgent = fakeAgent()
+    mocks.getAgentSession.mockImplementation((id: string) =>
+      id === PARENT ? parentAgent : childAgent
+    )
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
+      })
+    )
+    await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60
+    })
+    childAgent.pendingInputCount = 1
+    childAgent.pendingInputSummaries = ['bash: rm -rf build']
+    release()
     await vi.waitFor(() => expect(parentAgent.notify).toHaveBeenCalled())
     const notice = parentAgent.notify.mock.calls[0][0] as string
-    expect(notice).toContain('was stopped before it finished')
+    expect(notice).toContain('ask the user for approval')
+    expect(notice).toContain('rm -rf build')
     expect(notice).not.toContain('has finished')
   })
 
@@ -637,17 +665,21 @@ describe('wait —— 替掉 sleep 轮询的那个原语', () => {
     release()
   })
 
-  it('卡在 ask 上算落定 —— 它不会自己好起来，继续等只是白等', async () => {
+  it('卡在等批准：不再等（它不会自己好起来），但外层状态是 blocked 而不是 settled', async () => {
     mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
     const asking = fakeAgent({ isStreaming: true, pendingInputCount: 1 })
+    asking.pendingInputSummaries = ['bash: rm -rf build']
     mocks.getAgentSession.mockReturnValue(asking)
     const res = (await runner.wait({
       parentId: PARENT,
       childId: CHILD,
       timeoutSeconds: 30
-    })) as { kind: string; results: Array<{ status: string }> }
-    expect(res.kind).toBe('settled')
+    })) as { kind: string; results: Array<{ status: string; blockedOn?: string[] }> }
+    // settled 会被父级读成「成了」；这里必须是另一个词
+    expect(res.kind).toBe('blocked')
     expect(res.results[0].status).toBe('waiting-input')
+    // 问的是什么要带出来 —— 没有它父级连转告用户都做不到
+    expect(res.results[0].blockedOn).toEqual(['bash: rm -rf build'])
   })
 
   it('父会话被停止：立刻返回，**不**级联杀子会话（后台的活不该被连累）', async () => {

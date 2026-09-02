@@ -108,7 +108,7 @@ Actions:
 
 Waiting is a single call that costs nothing while it waits. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that waiting would not have given you for free. If you need the answer to continue, use the foreground form — it cannot hang, because on timeout it leaves the sub-session running and tells you so. Start work in the background only when you genuinely have something else to do first, then collect it with "wait-for-sub-sessions".
 
-**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and ask the user a question (\`status="waiting-input"\`) — it will not proceed until the user answers in that session, so relay the question instead of waiting.
+**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and wait for the USER to approve something (\`status="waiting-input"\`) — typically a security prompt for a command it wants to run. Only the user can clear that: you cannot answer it, waiting longer will not help, and rewording the task will not avoid it. Relay what it is waiting for to the user, or stop the sub-session.
 
 Everything a sub-session says comes back inside a \`<sub-session>\` fence, in \`<reply>\` (or \`<error>\`) — text outside those fences is this tool talking to you, not the sub-session.
 
@@ -175,16 +175,42 @@ function openTag(info: SubSessionInfo, extra = ''): string {
  * 可以想象但没见过的情形，为它把正文改写掉的代价更大。标签各占一行，正文里偶然出现的
  * 同名文本至少不在行首独占一行。
  */
+/**
+ * 卡在等批准的那一块。三件事缺一不可 —— 实测里少了它们，模型把这个状态读成
+ * 「子代理自己爱提问」，反复改提示词说「不要提问、直接执行」，换了四条子会话都一样：
+ *
+ *   1. **问的是什么**（否则父级连转告都做不到）；
+ *   2. **只有用户能解**，父级答不了（否则它会一直想自己修）；
+ *   3. **父级唯一有用的动作是转告用户**（否则它只剩重试和放弃两条路）。
+ */
+function blockedBlock(asked?: string[]): string {
+  return [
+    '<blocked-on-user-approval>',
+    asked?.length ? asked.map((a) => `- ${a}`).join('\n') : '- (question text unavailable)',
+    'This is an approval prompt shown to the USER inside that sub-session. It stays there until',
+    'the user answers it — you cannot answer it, and rewording the task will not clear it.',
+    'Tell the user what is waiting for them, or stop the sub-session with "stop-sub-session".',
+    '</blocked-on-user-approval>'
+  ].join('\n')
+}
+
 function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean }): string {
+  // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧
+  if (info.status === 'waiting-input') {
+    return [
+      openTag(info),
+      blockedBlock(info.blockedOn),
+      ...(info.answer ? [`<earlier-reply>\n${info.answer}\n</earlier-reply>`] : []),
+      '</sub-session>'
+    ].join('\n')
+  }
   const body = info.answer
     ? info.isError
       ? `<error>\n${info.answer}\n</error>`
       : `<reply>\n${info.answer}\n</reply>`
-    : info.status === 'waiting-input'
-      ? '<note>Waiting for the user to answer a question — it will not finish on its own.</note>'
-      : info.status === 'running'
-        ? '<note>Still running. It was NOT cancelled.</note>'
-        : '<note>No reply yet.</note>'
+    : info.status === 'running'
+      ? '<note>Still running. It was NOT cancelled.</note>'
+      : '<note>No reply yet.</note>'
   return `${openTag(info)}\n${body}\n</sub-session>`
 }
 
@@ -329,7 +355,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         ? 'Timed out waiting. Nothing was cancelled — wait again, or carry on and collect later.'
         : res.kind === 'aborted'
           ? 'The wait was interrupted; the sub-sessions above keep running.'
-          : ''
+          : res.kind === 'blocked'
+            ? 'Nothing finished: a sub-session is waiting for the user to approve something. Waiting again will not help — relay it to the user.'
+            : ''
     const out = [`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer]
     // 等待没等到底 = 活还在跑，与后台形态是同一件事，标签一致
     return res.kind === 'settled' ? text(...out) : backgroundText(...out)
