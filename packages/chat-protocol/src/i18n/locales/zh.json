@@ -394,7 +394,7 @@
     "fontSize": "字体大小",
     "uiZoom": "界面缩放",
     "focusMode": "专注模式",
-    "focusModeDesc": "选中会话时，淡化未选中的会话项、对话顶栏、输入区、设置按钮与右侧未选中标签",
+    "focusModeDesc": "选中会话时，淡化未选中的会话项、对话顶栏、输入区、设置按钮、右侧未选中标签与终端面板",
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
     "defaultModelNone": "无",

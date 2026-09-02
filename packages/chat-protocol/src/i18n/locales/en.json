@@ -394,7 +394,7 @@
     "fontSize": "Font Size",
     "uiZoom": "UI Zoom",
     "focusMode": "Focus Mode",
-    "focusModeDesc": "When a session is selected, fade unselected session items, chat header, input area, settings button, and inactive right-panel tabs",
+    "focusModeDesc": "When a session is selected, fade unselected session items, chat header, input area, settings button, inactive right-panel tabs, and the terminal panel",
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
     "defaultModelNone": "None",

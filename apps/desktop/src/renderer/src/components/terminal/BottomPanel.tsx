@@ -4,12 +4,17 @@
  *
  * 终端以「浏览器式 tab 条」组织：一次只显示激活终端，
  * 占满整个内容区；所有 Terminal 常驻挂载，经 visibility 切换避免 xterm 重建。
+ *
+ * 专注模式：整块淡化（终端是当前会话之外的旁路面板），悬浮 / 键盘聚焦即恢复——
+ * 与输入区同一手感，而非右侧面板那种「只淡化未选中页签」：底部栏与对话共用聊天列，
+ * 正文才是抢注意力的那部分，只淡 tab 条等于没覆盖。
  */
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, TerminalSquare, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
+import { useFocusDim } from '@shuvix/app-shell'
 import { useBottomPanelStore } from '../../stores/bottomPanelStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { XTerminal } from './XTerminal'
@@ -30,12 +35,19 @@ export function BottomPanel(): React.JSX.Element {
     createTab(projectPath || undefined)
   }, [createTab, projectPath])
 
+  // 专注模式淡化；拖拽调高时不淡化——拖过 maxHeight 上限后光标会甩出面板（hover 断开），
+  // 拖到一半整块闪暗看着像 bug
+  const { dim } = useFocusDim()
+  const [resizing, setResizing] = useState(false)
+  const faded = dim && !resizing
+
   const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
       dragRef.current = { startY: e.clientY, startH: useBottomPanelStore.getState().height }
+      setResizing(true)
       document.body.style.cursor = 'row-resize'
       document.body.style.userSelect = 'none'
 
@@ -45,6 +57,7 @@ export function BottomPanel(): React.JSX.Element {
       }
       const onUp = (): void => {
         dragRef.current = null
+        setResizing(false)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
         document.removeEventListener('mousemove', onMove)
@@ -58,7 +71,9 @@ export function BottomPanel(): React.JSX.Element {
 
   return (
     <div
-      className="flex-shrink-0 flex flex-col bg-bg-secondary overflow-hidden"
+      className={`flex-shrink-0 flex flex-col bg-bg-secondary overflow-hidden transition-opacity duration-200 ${
+        faded ? 'opacity-30 hover:opacity-100 focus-within:opacity-100' : ''
+      }`}
       style={{ height, maxHeight: '70%' }}
     >
       {/* 顶部拖拽分隔条（与 BrowserResizeHandle 同样式，横向版） */}

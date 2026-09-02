@@ -33,7 +33,7 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   },
   'appearance.focusMode': {
     labelKey: 'settings.focusMode',
-    desc: 'true | false — fade unselected sidebar items, chat header, input area, settings button, and inactive right-panel tabs when a session is selected'
+    desc: 'true | false — fade unselected sidebar items, chat header, input area, settings button, inactive right-panel tabs, and the bottom terminal panel when a session is selected'
   },
   'bot.maxHop': {
     labelKey: 'settings.botMaxHop',
