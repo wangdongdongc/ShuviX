@@ -84,6 +84,13 @@ export interface UserTextMeta {
   isInstructionInjection?: boolean
   /** 注入消息对应的原始指令文件名 */
   instructionFilename?: string
+  /**
+   * 系统通知消息：后台任务/子会话跑完时**自动续跑**起的那一轮，其"用户消息"其实是
+   * 系统写的通知（见 agent-runtime 的 SYSTEM_NOTICE_CUSTOM_TYPE 侧车）。
+   * 用户没说过这句话，所以 UI 渲染为 SystemNoticeCard 而不是用户气泡 —— 与
+   * isInstructionInjection 同一条纪律：转写不得把系统写的话记成用户说的。
+   */
+  isSystemNotice?: boolean
 }
 
 /**

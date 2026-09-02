@@ -19,9 +19,22 @@ import type { ModelCapabilities, ThinkingLevel, AgentRuntimeInfo } from '../type
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SessionModelMetadata } from '../dao/types'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { settingsService } from './settingsService'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentSession')
+
+/**
+ * 自动续跑开关（现读，同 `bot.maxHop` / `httpLog.enabled` 的口径：改了立刻生效）。
+ * **缺省开** —— 只有明确写 'false' 才关：设置项是纯文本键值，一个写坏的值不该把能力关掉。
+ */
+export const AUTO_RESUME_KEY = 'session.autoResume'
+
+/**
+ * 通知合并窗口。几条后台任务同一时刻跑完时只起一轮 —— 这不是给 agent 设限，
+ * 是别把一次「三件事都好了」拆成三轮各花一次上下文。
+ */
+const RESUME_COALESCE_MS = 500
 
 // 注：原 buildSystemPrompt 已收敛到统一创建管线 —— persona/workspace/project 三个
 // 具名段 provider 见 agents/agentHost.ts；笔记本复用见 renderDefaultSystemPrompt。
@@ -59,6 +72,11 @@ export class AgentSession {
 
   private created: CreatedAgent
   private runtime: HarnessSession
+  /** 有人显式喊停过（用户按停止 / 级联停子会话），到下一条用户消息为止不自动续跑 */
+  private stoppedByUser = false
+  /** 合并窗口内待送达的通知 */
+  private pendingNotices: string[] = []
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null
 
   private constructor(sessionId: string, created: CreatedAgent) {
     this.sessionId = sessionId
@@ -125,6 +143,8 @@ export class AgentSession {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
+    // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止
+    this.stoppedByUser = false
 
     await this.runtime.prompt(text, images, display)
 
@@ -139,9 +159,57 @@ export class AgentSession {
     await this.runtime.steer(text)
   }
 
-  /** 送达系统侧通知（运行中即刻插话，空闲则搭下一条用户消息的便车） */
+  /**
+   * 送达系统侧通知（后台任务 / 子会话跑完）。三岔：
+   *
+   *   运行中          → steer，插进当前 run（runtime.notify 内部处理）
+   *   空闲 + 允许续跑 → **自己起一轮**（resume）—— agent 因此能接着干，不必等用户开口
+   *   空闲 + 不允许   → nextTurn 排队，搭下一条用户消息的便车（改制前的行为）
+   *
+   * 「不允许」只有两种：全局设置关掉，或**这条会话刚被显式停过**。后者不是丢通知 ——
+   * 它退回排队路径,信息一条不少;要的是「用户喊停之后会话就收敛，直到他再开口」这个
+   * 语义（与 HarnessSession.abort 把 inputsClosed 置真同一条纪律）。刚按完停止两秒后
+   * agent 又自己说起话来，那是没听懂停止。
+   *
+   * **刻意不设续跑次数上限**：一个 agent 拿着完整状态决定自己的下一步，那是它的活；
+   * 该防的是「工具让它看不见真实状态」（那会让它空转），不是它的判断力。代价如实记：
+   * 无人值守时的花费没有上界，兜底是可见 + 可随时停。
+   */
   async notify(text: string): Promise<void> {
-    await this.runtime.notify(text)
+    if (this.runtime.isStreaming || !this.canAutoResume()) {
+      await this.runtime.notify(text)
+      return
+    }
+    // 合并同一时刻到达的多条：3 条子会话同一秒跑完不该起 3 轮
+    this.pendingNotices.push(text)
+    if (this.resumeTimer) return
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null
+      const notices = this.pendingNotices.splice(0)
+      if (notices.length === 0) return
+      void this.flushNotices(notices)
+    }, RESUME_COALESCE_MS)
+  }
+
+  /** 起自动续跑那一轮；起不成（用户抢先发话 / 设置刚被关）就退回排队路径 */
+  private async flushNotices(notices: string[]): Promise<void> {
+    const text = notices.join('\n\n')
+    try {
+      if (!this.runtime.isStreaming && this.canAutoResume()) {
+        if (await this.runtime.resume(text)) return
+      }
+    } catch (err) {
+      log.warn(`自动续跑异常 session=${this.sessionId}: ${err}`)
+    }
+    await this.runtime.notify(text).catch((err) => log.warn(`通知排队失败: ${err}`))
+  }
+
+  /** 全局开关（现读，同 bot 那两道护栏的口径）+ 「刚被显式停过」 */
+  private canAutoResume(): boolean {
+    if (this.stoppedByUser) return false
+    const raw = settingsService.get(AUTO_RESUME_KEY)
+    // 缺省开：没有这个键、或值写坏了，都按开处理；只有明确的 'false' 才关
+    return raw?.trim() !== 'false'
   }
 
   /** 本轮结束前追加消息，继续同一次运行（harness 新增能力） */
@@ -154,8 +222,15 @@ export class AgentSession {
     await this.runtime.nextTurn(text)
   }
 
-  /** 中止生成 */
+  /**
+   * 中止生成（用户按停止、父会话级联停子会话、stop-sub-session）。
+   *
+   * 置 `stoppedByUser`：这三种都是「有人**显式**要它停下」，此后到下一条用户消息之前
+   * 不再自动续跑（见 notify）。内部清理路径（invalidate / destroy）走 abortQuietly，
+   * 不经这里 —— 那不是「有人喊停」，而是运行时被换掉。
+   */
   async abort(): Promise<void> {
+    this.stoppedByUser = true
     await this.runtime.abort()
   }
 
@@ -275,6 +350,12 @@ export class AgentSession {
    * 而「run 已停」这个保证由 abort 自身的 waitForIdle 提供，抛错时它已经不在跑了。
    */
   private async abortQuietly(): Promise<void> {
+    // 待起的自动续跑随运行时一起作废 —— 否则它会在一个已经被换掉/销毁的会话上起一轮
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer)
+      this.resumeTimer = null
+    }
+    this.pendingNotices.length = 0
     try {
       await this.runtime.abort()
     } catch (err) {

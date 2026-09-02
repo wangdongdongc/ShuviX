@@ -33,6 +33,7 @@ import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { elideHistoricalThinking, type ThinkingElisionState } from './thinkingElision'
 import {
   INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
   entriesToChatMessages,
   type InlineTokensSidecar
 } from './projection'
@@ -384,6 +385,32 @@ export class HarnessSession {
       // 通知丢了比把它硬塞进一个不接受插话的状态要好
       await this.harness.nextTurn(text)
       this.logger.info(`notify(nextTurn) session=${this.sessionId}`)
+    }
+  }
+
+  /**
+   * **自动续跑**：空闲时替会话起一轮，把系统通知作为这一轮的输入。
+   *
+   * 后台任务/子会话跑完时,`notify` 只能 steer 一个还在跑的 run；空闲的会话拿到的是
+   * `nextTurn` 排队 —— 等用户下次开口才浮出来。想让 agent 自己接着干,只能由宿主
+   * 在这里替它调一次 prompt（pi 没有别的起轮原语）。
+   *
+   * 通知先落一条 `SYSTEM_NOTICE_CUSTOM_TYPE` 侧车再 prompt：那条消息在 pi 的上下文里
+   * 只能是 user 角色（模型必须看见它），侧车负责让投影把它渲染成通知卡 ——
+   * **转写不得把系统写的话记成用户说的**。
+   *
+   * 返回 false = 没起成（并发抢跑：判定空闲与真正 prompt 之间用户先发了话，pi 拒 busy）。
+   * 调用方据此退回 `notify` 的排队路径，通知不会丢。
+   */
+  async resume(text: string): Promise<boolean> {
+    try {
+      await this.session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+      await this.prompt(text)
+      this.logger.info(`resume session=${this.sessionId}`)
+      return true
+    } catch (err) {
+      this.logger.warn(`自动续跑失败 session=${this.sessionId}: ${errText(err)}`)
+      return false
     }
   }
 

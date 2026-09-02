@@ -16,6 +16,7 @@ import type { AssistantMessage, UserTextMeta } from '@shuvix/chat-protocol/types
 import {
   entriesToChatMessages,
   INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
   INSTRUCTION_CUSTOM_TYPE,
   SIDECAR_CUSTOM_TYPES
 } from '../projection'
@@ -296,6 +297,40 @@ describe('entriesToChatMessages', () => {
     expect(msgs[0].metadata).toMatchObject({ inlineTokens: tokens })
   })
 
+  it('系统通知侧车把紧随的 user 消息标成 isSystemNotice（自动续跑那一轮不是用户说的）', async () => {
+    await session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '<sub-session id="x" status="finished">…</sub-session>' }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    // 正文照常进上下文（模型必须看见它），只是渲染侧知道这不是用户说的
+    expect(msgs[0]).toMatchObject({ role: 'user' })
+    expect(msgs[0].content).toContain('sub-session')
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+  })
+
+  it('普通 user 消息不带 isSystemNotice（侧车不粘连到下一条）', async () => {
+    await session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '通知那一轮' }],
+      timestamp: Date.now()
+    } as AgentMessage)
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '用户真正说的话' }],
+      timestamp: Date.now()
+    } as AgentMessage)
+
+    const msgs = await project()
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+    expect((msgs[1].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+
   it('无主侧车（prompt 被 deny）不产出消息，也不污染后续 user 消息', async () => {
     await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
       content: '{{shuvixInlineToken:t0}}',
@@ -441,8 +476,11 @@ describe('未知 customType 对投影是完全透明的', () => {
     expect(ids.filter((id) => unknown.has(id))).toEqual([])
   })
 
-  it('SIDECAR_CUSTOM_TYPES 恰为两种侧车，且每种都不产出消息', async () => {
-    expect([...SIDECAR_CUSTOM_TYPES]).toEqual([INLINE_TOKENS_CUSTOM_TYPE])
+  it('SIDECAR_CUSTOM_TYPES 恰为这两种，且每种都不产出消息', async () => {
+    expect([...SIDECAR_CUSTOM_TYPES]).toEqual([
+      INLINE_TOKENS_CUSTOM_TYPE,
+      SYSTEM_NOTICE_CUSTOM_TYPE
+    ])
     // 新增侧车类型却忘了在投影里 handle 时，这条会红
     for (const type of SIDECAR_CUSTOM_TYPES) {
       await session.appendCustomEntry(type, { botName: 'b', displayName: 'B' })

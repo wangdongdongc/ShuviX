@@ -64,7 +64,20 @@ export interface InlineTokensSidecar {
  * v2 起只剩内联 token 一种：bot 的署名侧车随「群聊转写迁进 chat_messages 表」一并
  * 退场 —— 「谁说的」在那里是一列，不再需要靠「紧邻配对」把它绑到一条 assistant entry 上。
  */
-export const SIDECAR_CUSTOM_TYPES: readonly string[] = [INLINE_TOKENS_CUSTOM_TYPE]
+/**
+ * 系统通知侧车：自动续跑（后台任务/子会话跑完）起的那一轮，紧随其后的 user entry
+ * 其实是系统写的通知。投影据此把它渲染成 SystemNoticeCard 而不是用户气泡。
+ *
+ * 为什么是侧车而不是新 entry 类型：那条通知**必须进模型上下文**（agent 要看见它才能
+ * 接着干），而 pi 的上下文里只有 user/assistant/toolResult —— 所以它只能是一条 user
+ * 消息，侧车负责在渲染侧还原「这不是用户说的」。同 INLINE_TOKENS 的手法。
+ */
+export const SYSTEM_NOTICE_CUSTOM_TYPE = 'shuvix:system_notice'
+
+export const SIDECAR_CUSTOM_TYPES: readonly string[] = [
+  INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE
+]
 
 function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
   if (typeof data !== 'object' || data === null) return null
@@ -181,6 +194,11 @@ interface ProjectionState {
    */
   pendingInline: InlineTokensSidecar | null
   /**
+   * 待消费的系统通知侧车（同 pendingInline 的配对规则）：紧随其后的 user 消息
+   * 其实是系统写的通知，渲染成通知卡而不是用户气泡。
+   */
+  pendingSystemNotice: boolean
+  /**
    * 待消费的署名侧车。规则**比 pendingInline 更严**：每轮迭代开头就取走，
    * 只有紧邻的下一条 entry 能用上它。错挂署名比丢署名更糟 —— 中间夹了任何东西
    * （model_change、压缩切点、另一条 custom）都只降级为「无署名」，绝不张冠李戴。
@@ -199,6 +217,8 @@ function projectUserMessage(
   // 侧车还原：内容换回标记态原文，tokens 进 metadata（气泡渲染芯片 / 复制 / 草稿重建用）
   const inline = state.pendingInline
   state.pendingInline = null
+  const systemNotice = state.pendingSystemNotice
+  state.pendingSystemNotice = false
   state.out.push({
     id: entryId,
     sessionId,
@@ -208,7 +228,11 @@ function projectUserMessage(
     model: state.model,
     provider: state.provider,
     createdAt,
-    metadata: { images: imagesOf(msg.content), ...(inline ? { inlineTokens: inline.tokens } : {}) }
+    metadata: {
+      images: imagesOf(msg.content),
+      ...(inline ? { inlineTokens: inline.tokens } : {}),
+      ...(systemNotice ? { isSystemNotice: true } : {})
+    }
   })
 }
 
@@ -319,7 +343,8 @@ export function entriesToChatMessages(
     pendingToolBlocks: new Map(),
     model: fallbackModel,
     provider: fallbackProvider,
-    pendingInline: null
+    pendingInline: null,
+    pendingSystemNotice: false
   }
 
   for (const entry of entries) {
@@ -353,6 +378,11 @@ export function entriesToChatMessages(
         state.pendingInline = asInlineTokensSidecar(entry.data)
         continue
       }
+      // 系统通知侧车：由紧随其后的 user 消息消费（渲染成通知卡而不是用户气泡）
+      if (entry.customType === SYSTEM_NOTICE_CUSTOM_TYPE) {
+        state.pendingSystemNotice = true
+        continue
+      }
       // 未知 customType 静默跳过 —— 「不含侧车的树投影逐字节不变」由这一行保证
       continue
     }
@@ -381,7 +411,10 @@ export function entriesToChatMessages(
 
     const msg = entry.message
     // 侧车只配对「紧随其后的 user 消息」；先来了别的消息说明它已陈旧（如 prompt 未派发）
-    if (msg.role !== 'user') state.pendingInline = null
+    if (msg.role !== 'user') {
+      state.pendingInline = null
+      state.pendingSystemNotice = false
+    }
     switch (msg.role) {
       case 'user':
         projectUserMessage(state, entry.id, sessionId, msg, createdAt)

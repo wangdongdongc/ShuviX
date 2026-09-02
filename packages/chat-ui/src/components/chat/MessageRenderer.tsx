@@ -5,6 +5,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
 import { BotBubble } from './BotBubble'
 import { AssistantBubble } from './AssistantBubble'
+import { BackgroundNoticeBubble } from './BackgroundNoticeBubble'
 import { InstructionBubble } from './InstructionBubble'
 
 /** 流式占位卡的固定 id（Conversation 追加，AssistantBubble 据此读流式状态） */
@@ -109,6 +110,10 @@ function MessageBody({
     // 项目指令注入消息走专用卡片
     if (msg.metadata?.isInstructionInjection) {
       return <InstructionBubble msg={msg} />
+    }
+    // 自动续跑那一轮的「用户消息」其实是系统写的通知 —— 用户没说过这句话，不能画成用户气泡
+    if (msg.metadata?.isSystemNotice) {
+      return <BackgroundNoticeBubble msg={msg} />
     }
     return <UserBubble msg={msg} onRollback={onRollback ? () => onRollback(msg.id) : undefined} />
   }

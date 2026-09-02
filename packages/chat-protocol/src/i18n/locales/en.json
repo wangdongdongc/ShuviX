@@ -177,6 +177,10 @@
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"
   },
+  "backgroundNotice": {
+    "sender": "System",
+    "title": "Background work finished"
+  },
   "instruction": {
     "sender": "System",
     "loaded": "Project instructions loaded · {{filename}}"

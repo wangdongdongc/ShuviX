@@ -177,6 +177,10 @@
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"
   },
+  "backgroundNotice": {
+    "sender": "系统",
+    "title": "后台任务已完成"
+  },
   "instruction": {
     "sender": "系统",
     "loaded": "项目指令已加载 · {{filename}}"
