@@ -239,6 +239,66 @@ describe('SessionTool — 子会话 action', () => {
     expect(textOf(res)).toContain('<sub-session id="sub-1"')
   })
 
+  it('后台与超时降级的结果带 details.background —— UI 上与 bash 后台任务同一枚标签', async () => {
+    const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started' })
+    expect(
+      detailsOf(
+        await tool.execute('tc-1', {
+          action: 'prompt-sub-session',
+          sub_session_id: 'sub-1',
+          message: 'go',
+          run_in_background: true
+        })
+      )
+    ).toEqual({ type: 'session', background: true })
+
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
+    expect(
+      detailsOf(
+        await tool.execute('tc-1', {
+          action: 'prompt-sub-session',
+          sub_session_id: 'sub-1',
+          message: 'go'
+        })
+      )
+    ).toEqual({ type: 'session', background: true })
+
+    // 前台拿到答复 = 这次调用等到底了，不是后台形态
+    mocks.runnerPrompt.mockResolvedValue({
+      kind: 'answered',
+      answer: 'ok',
+      info: info('sub-1', 'A', 'idle')
+    })
+    expect(
+      detailsOf(
+        await tool.execute('tc-1', {
+          action: 'prompt-sub-session',
+          sub_session_id: 'sub-1',
+          message: 'go'
+        })
+      )
+    ).toBeUndefined()
+  })
+
+  it('wait 没等到底也是后台形态（活还在跑）；settled 不是', async () => {
+    const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
+    const row = { ...info('sub-1', 'A', 'running') }
+    mocks.runnerWait.mockResolvedValue({ kind: 'timeout', results: [row] })
+    expect(detailsOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))).toEqual({
+      type: 'session',
+      background: true
+    })
+
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'settled',
+      results: [{ ...info('sub-1', 'A', 'idle'), answer: 'done' }]
+    })
+    expect(
+      detailsOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))
+    ).toBeUndefined()
+  })
+
   it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {
     mocks.runnerPrompt.mockResolvedValue({ kind: 'started' })
     const started = textOf(

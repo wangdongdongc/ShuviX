@@ -24,6 +24,7 @@ import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
+import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import type { ToolContext } from '../services/toolContext'
 import { sessionDao } from '../dao/sessionDao'
@@ -130,10 +131,21 @@ const COLLECT_HINT =
   'When you need the result, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
-function text(...lines: string[]): AgentToolResult<undefined> {
+function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefined> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
     details: undefined
+  }
+}
+
+/**
+ * 后台形态的结果：带上 `details.background`，UI 据此渲染与 bash 后台任务**同一枚**
+ * 「后台」标签 —— 对用户而言两者是同一件事：这次调用没有等结果，活还在跑。
+ */
+function backgroundText(...lines: string[]): AgentToolResult<SessionToolDetails> {
+  return {
+    content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
+    details: { type: 'session', background: true }
   }
 }
 
@@ -197,7 +209,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     _toolCallId: string,
     params: SessionToolParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     switch (params.action) {
       case 'set-title':
         return this.setTitle(params.title)
@@ -225,7 +237,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   // 五个 case 都是同一形状：调 runner → 拿到 { error } 就抛（错误文案是 runner 写的，
   // 它握着准入规则）→ 否则把结果排版成一段文本。工具层不作任何判断。
 
-  private async createSubSession(params: SessionToolParams): Promise<AgentToolResult<undefined>> {
+  private async createSubSession(
+    params: SessionToolParams
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.create(this.ctx.sessionId, {
       title: params.title,
       agentProfile: params.agent_profile
@@ -240,7 +254,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   private async promptSubSession(
     params: SessionToolParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.prompt({
       parentId: this.ctx.sessionId,
       childId: (params.sub_session_id ?? '').trim(),
@@ -256,14 +270,14 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     // 收尾指引说的是**真实**机制：完成通知只在这一轮还没结束时插得进来，
     // 所以要结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
     if (res.kind === 'started') {
-      return text(
+      return backgroundText(
         `<sub-session id="${attr(id)}" status="running"/>`,
         `Started in the background.`,
         COLLECT_HINT
       )
     }
     if (res.kind === 'timeout') {
-      return text(
+      return backgroundText(
         `<sub-session id="${attr(id)}" status="running"/>`,
         `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going.`,
         COLLECT_HINT
@@ -284,7 +298,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   private async waitForSubSessions(
     params: SessionToolParams,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const id = params.sub_session_id?.trim()
     const res = await subSessionRunner.wait({
       parentId: this.ctx.sessionId,
@@ -306,10 +320,12 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         : res.kind === 'aborted'
           ? 'The wait was interrupted; the sub-sessions above keep running.'
           : ''
-    return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)
+    const out = [`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer]
+    // 等待没等到底 = 活还在跑，与后台形态是同一件事，标签一致
+    return res.kind === 'settled' ? text(...out) : backgroundText(...out)
   }
 
-  private listSubSessions(): AgentToolResult<undefined> {
+  private listSubSessions(): AgentToolResult<SessionToolDetails | undefined> {
     const res = subSessionRunner.list(this.ctx.sessionId)
     if ('error' in res) throw new Error(res.error)
     if (res.subSessions.length === 0) {
@@ -319,7 +335,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     return text(`<sub-sessions>\n${rows}\n</sub-sessions>`)
   }
 
-  private async readSubSession(params: SessionToolParams): Promise<AgentToolResult<undefined>> {
+  private async readSubSession(
+    params: SessionToolParams
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.read(
       this.ctx.sessionId,
       (params.sub_session_id ?? '').trim()
@@ -328,7 +346,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     return text(renderChild({ ...res.info, answer: res.answer, isError: res.isError }))
   }
 
-  private async stopSubSession(params: SessionToolParams): Promise<AgentToolResult<undefined>> {
+  private async stopSubSession(
+    params: SessionToolParams
+  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const id = (params.sub_session_id ?? '').trim()
     const res = await subSessionRunner.stop(this.ctx.sessionId, id)
     if ('error' in res) throw new Error(res.error)
@@ -336,7 +356,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   }
 
   /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
-  private setTitle(rawTitle: string | undefined): AgentToolResult<undefined> {
+  private setTitle(rawTitle: string | undefined): AgentToolResult<SessionToolDetails | undefined> {
     const sessionId = this.ctx.sessionId
     const session = sessionDao.pick(sessionId, ['title', 'settings'])
     if (!session) {

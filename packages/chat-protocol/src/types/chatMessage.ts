@@ -318,8 +318,22 @@ export interface GitToolDetails {
   error?: string
 }
 
+/**
+ * session 工具详情 —— 目前只表达一件事：**这次调用起的是后台运行**
+ * （`prompt-sub-session` 的后台形态，或前台等待超时降级）。
+ *
+ * 与 bash 的后台任务共用 UI 上的那枚「后台」标签：对用户而言两者是同一件事
+ * ——「这次调用没有等结果，活还在跑」。判别收在 `isBackgroundCall()` 里，
+ * 免得 UI 各自维护一份「哪些工具有后台形态」的清单。
+ */
+export interface SessionToolDetails {
+  type: 'session'
+  background?: boolean
+}
+
 /** 工具结构化详情联合类型 — 按 type 字段判别 */
 export type ToolResultDetails =
+  | SessionToolDetails
   | EditToolDetails
   | WriteToolDetails
   | BashToolDetails
@@ -335,6 +349,18 @@ export type ToolResultDetails =
   | McpToolDetails
   | BrowserToolDetails
   | GitToolDetails
+
+/**
+ * 这次工具调用是不是**后台形态**（活还在跑、结果要另外去收）。
+ *
+ * 收在这里而不是让 UI 写 `details.type === 'bash' && details.background`：后台形态
+ * 已经有两个来源（bash 的 run_in_background、子会话的后台/超时降级），下一个再加
+ * 只改这一处。
+ */
+export function isBackgroundCall(details?: ToolResultDetails): boolean {
+  if (!details) return false
+  return (details.type === 'bash' || details.type === 'session') && details.background === true
+}
 
 /**
  * 从工具详情里取「模型收到的那张图」；该工具没有这个语义、或这次没读到图 → undefined。

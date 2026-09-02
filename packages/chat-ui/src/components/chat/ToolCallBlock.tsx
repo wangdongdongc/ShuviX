@@ -41,7 +41,7 @@ import {
   type FormItemRenderer
 } from '../../stores/chatStore'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
-import { toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
+import { isBackgroundCall, toolResultImage } from '@shuvix/chat-protocol/types/chatMessage'
 import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
 import { useSubSessionStore } from '../../stores/subSessionStore'
@@ -230,10 +230,13 @@ export function ToolCallBlock({
   const isTerminalView =
     presentation?.detailView === 'terminal' && typeof args?.command === 'string'
 
-  // 后台任务（bash run_in_background）：标签紧跟图标（那是这次调用的性质，该和工具名
-  // 挨在一起），实时状态挂行尾。details 是消息树里的静态数据不会自更新，实时态按
-  // toolCallId 从 bgTaskStore 取 —— 与子智能体卡片同一套路子。
-  const isBackground = details?.type === 'bash' && details.background === true
+  // 后台形态（bash 的 run_in_background、子会话的后台/超时降级）：标签紧跟图标
+  // （那是这次调用的性质，该和工具名挨在一起）。对用户而言两者是同一件事 ——
+  // 「这次调用没有等结果，活还在跑」，所以共用同一枚标签，判别收在 isBackgroundCall。
+  const isBackground = isBackgroundCall(details)
+  // 行尾的实时状态只有 bash 有：那份实时态住在 bgTaskStore 里，按 toolCallId 取。
+  // 子会话的实时状态在会话列表上（那一行会流式脉冲），不重复搬到这里
+  const hasLiveState = details?.type === 'bash'
 
   // 摘要行内容：图标槽为状态（无状态时落回工具图标），其后名称 + 摘要
   const rowProps = {
@@ -242,7 +245,10 @@ export function ToolCallBlock({
     label: presentation?.label || toolName,
     detail: detail ? <span className="font-mono">{detail}</span> : undefined,
     badge: isBackground ? <BackgroundBadge /> : undefined,
-    trailing: isBackground && toolCallId ? <BgTaskRowState toolCallId={toolCallId} /> : undefined
+    trailing:
+      isBackground && hasLiveState && toolCallId ? (
+        <BgTaskRowState toolCallId={toolCallId} />
+      ) : undefined
   }
 
   // `data-tool-name` / `data-tool-status`：工具行在 DOM 上唯一的语义锚点
