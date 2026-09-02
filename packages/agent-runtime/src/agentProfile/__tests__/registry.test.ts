@@ -254,7 +254,18 @@ describe('default 档案钉板(主会话默认工具集/环境段的唯一事实
     // browser→ls→grep→glob→ssh→database)——LLM 所见工具序列的稳定性依赖它;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
     const built = profile(DEFAULT_PROFILE_NAME)
-    expect(built.tools).toEqual(['bash', 'read', 'write', 'edit', 'ask', 'browser', 'agent'])
+    // session 在末尾：它是「管自己这条会话」的工具（改标题 / 开子会话并驱动它），
+    // 与前面那些「对外干活」的工具不同类，所以列在 agent 之后
+    expect(built.tools).toEqual([
+      'bash',
+      'read',
+      'write',
+      'edit',
+      'ask',
+      'browser',
+      'agent',
+      'session'
+    ])
     // ls/grep/glob 亦不在（通用会话里检索走 bash,成规模的调研切 /coding）
     for (const gone of ['ls', 'grep', 'glob', 'ssh', 'database', 'git', 'preview']) {
       expect(built.tools, `default 不应持有 ${gone}`).not.toContain(gone)
@@ -314,7 +325,8 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
       'glob',
       'ssh',
       'database',
-      'agent'
+      'agent',
+      'session'
     ])
   })
 

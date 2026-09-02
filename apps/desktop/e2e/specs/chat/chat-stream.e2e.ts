@@ -283,11 +283,12 @@ describe('自动标题', () => {
 
     // 自动标题现在是 **auto-title 工作流派发 titler agent**，不再是那条带 TITLE_MARKER 的
     // 专用请求 —— 所以它是一次普通对话请求，会正常消费脚本队列。用 `when` 按内容认领：
-    // titler 的工具集里有 session 工具，主对话没有（按工具名精确匹配 —— 单词 session
-    // 在别的工具描述里也出现，子串匹配会误认领）。
+    // 判据取「有没有 bash」——titler 的工具集只有 session（加契约段的 next），主对话有 bash。
+    // 曾经用「有没有 session」认领，子会话落地后 default 也拿到了 session 工具，那个判据
+    // 就会把主对话也认成 titler（两边都命中 = 队列被前一条脚本吃掉）。
     // （fakeProvider 里那条「标题请求不消费队列」的分支因此已是死代码，见 TITLE_MARKER。）
     const isTitler = (r: { body: { tools?: unknown[] } }): boolean =>
-      JSON.stringify(r.body.tools ?? []).includes('"name":"session"')
+      !JSON.stringify(r.body.tools ?? []).includes('"name":"bash"')
     provider.script(
       { text: 'titled', when: (r) => !isTitler(r) },
       // titler 先用 session 工具写标题……

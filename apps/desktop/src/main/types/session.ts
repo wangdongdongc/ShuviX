@@ -9,9 +9,14 @@ export interface SessionInfo extends Session {
   enabledTools?: string[]
 }
 
-/** IPC: 创建会话参数（notebookPath 非空则创建笔记本会话） */
+/** IPC: 创建会话参数（notebookPath 非空则创建笔记本会话；parentId 非空则创建子会话） */
 export interface SessionCreateParams {
   projectId?: string | null
+  /**
+   * 父会话 ID —— 提供则创建子会话（projectId 恒随父会话）。
+   * 只有 `session` 工具走这条路，UI 的新建入口不传。
+   */
+  parentId?: string
   notebookPath?: string
   /** 项目记忆笔记本的 slug（由 services/memory 传入；见 SessionSettings.memorySlug） */
   memorySlug?: string

@@ -105,6 +105,11 @@ export interface Session {
   id: string
   title: string
   projectId: string | null
+  /**
+   * 父会话 ID（null = 顶层会话）。非空即子会话 —— 除了侧栏渲染在父会话下面之外，
+   * 与顶层会话完全一致（见 docs/sub-session-design.md）。
+   */
+  parentId: string | null
   settings: SessionSettings
   createdAt: number
   updatedAt: number
@@ -358,6 +363,11 @@ export interface ProjectDeleteParams {
 export interface SessionCreateParams {
   /** 所属项目 ID（null/缺省 = 临时会话） */
   projectId?: string | null
+  /**
+   * 父会话 ID —— 提供则创建子会话（projectId 恒随父会话，传了也以父会话为准）。
+   * 仅 `session` 工具使用；UI 的新建入口不传。
+   */
+  parentId?: string
   /** 绑定的 md 文件（相对项目根）；提供则创建笔记本会话 */
   notebookPath?: string
   /** 会话标题；缺省时聊天会话用默认标题、笔记本会话用文件 basename */

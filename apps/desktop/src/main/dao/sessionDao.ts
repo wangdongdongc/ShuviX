@@ -74,11 +74,12 @@ export class SessionDao extends BaseDao {
   /** 插入会话 */
   insert(session: Session): void {
     this.stmt(
-      'INSERT INTO sessions (id, title, projectId, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       session.id,
       session.title,
       session.projectId,
+      session.parentId,
       JSON.stringify(session.settings),
       session.createdAt,
       session.updatedAt
@@ -133,6 +134,18 @@ export class SessionDao extends BaseDao {
       "SELECT * FROM sessions WHERE projectId = ? AND json_extract(settings, '$.notebookPath') = ? LIMIT 1"
     ).get(projectId, notebookPath) as SessionRow | undefined
     return row ? parseRow(row) : undefined
+  }
+
+  /**
+   * 某会话的直接子会话（创建序）。子会话只有一层，所以「直接子」就是全部后代。
+   * 排序按 createdAt 升序：侧栏与工具的 list 都要求「先开的在上面」，
+   * 而 findAll 的 updatedAt 倒序会让一组子会话每跑一轮就重排一次。
+   */
+  findChildren(parentId: string): Session[] {
+    const rows = this.stmt('SELECT * FROM sessions WHERE parentId = ? ORDER BY createdAt ASC').all(
+      parentId
+    ) as SessionRow[]
+    return rows.map(parseRow)
   }
 
   /** 删除会话 */

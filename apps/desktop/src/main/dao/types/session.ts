@@ -75,6 +75,12 @@ export interface Session {
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
+  /**
+   * 父会话 ID（null = 顶层会话）。非空即「子会话」：agent 经 `session` 工具自建、
+   * 由它代替用户发消息驱动的一条**普通会话** —— 产品行为与顶层会话完全一致，
+   * 唯一差别是侧栏把它渲染在父会话下面。嵌套只允许一层（子会话不能再开子会话）。
+   */
+  parentId: string | null
   /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number

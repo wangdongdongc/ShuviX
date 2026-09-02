@@ -3,7 +3,7 @@ shuvix: agent v1
 shuvix-builtin: true
 name: default
 description: メイン会話エージェント——各チャットセッションはこのプロファイルから作成されます。"default" という名前のカスタムエージェントで上書きできます。
-shuvix-tools: bash, read, write, edit, ask, browser, agent
+shuvix-tools: bash, read, write, edit, ask, browser, agent, session
 shuvix-displayName: デフォルト
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

@@ -155,17 +155,24 @@ export class SessionService {
    *
    * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename
    * （去后缀的标题由共享的 useCreateNotebook 显式传入 params.title）。
+   *
+   * params.parentId 非空时创建**子会话**：形态仍是普通会话，只是多一个父指针。
+   * projectId 恒随父会话（工作目录是会话的地基，跨项目的子会话没有可用语义）——
+   * 调用方传的 projectId 在这种情况下被忽略。
    */
   create(params?: SessionCreateParams): Session {
     const id = uuidv7()
-    const pid = params?.projectId ?? null
     const notebookPath = params?.notebookPath
     const now = Date.now()
+    const parentId = params?.parentId ?? null
+    const parent = parentId ? sessionDao.pick(parentId, ['projectId']) : undefined
+    const pid = parent ? parent.projectId : (params?.projectId ?? null)
 
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
       projectId: pid,
+      parentId,
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
@@ -440,6 +447,12 @@ export class SessionService {
 
   /** 删除会话（同时清理 AgentSession、后台任务、消息、HTTP 日志和临时工作目录） */
   async delete(id: string): Promise<void> {
+    // 子会话先走一遍同样的清理（嵌套只有一层，所以不会递归下去第二层）。
+    // 放在最前面：父会话的资源清理不该被子会话的运行时拖着。删除确认框已经告诉用户
+    // 会一起删掉几条（见 useSessionDelete）——这是「递归删」唯一的补偿。
+    for (const child of sessionDao.findChildren(id)) {
+      await this.delete(child.id)
+    }
     // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
     // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着
     killBySession(id)

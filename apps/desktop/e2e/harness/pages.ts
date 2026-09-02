@@ -497,6 +497,13 @@ export type GroupTarget = { project: string } | 'temp'
 export interface SidebarPane {
   titles(): Promise<string[]>
   /**
+   * 子会话行的标题（`data-sub` 锚点）。父子关系在侧栏只有一种可见形式：
+   * 子行缩进渲染在父行下面，且**不再**出现在分组的平铺列表里。
+   */
+  subTitles(): Promise<string[]>
+  /** 某个父行显示的子会话数徽标（`data-sub-count`）；没有徽标返回 0 */
+  subCountOf(title: string): Promise<number>
+  /**
    * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
    *
    * 「点完睡 600ms 就往下走」曾经是这里的做法：机器一慢，切换还没落定就开始断言，
@@ -569,6 +576,13 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       main.eval<string[]>(
         `${ROWS}.map((d) => (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim())`
       ),
+    subTitles: () =>
+      main.eval<string[]>(
+        `${ROWS}.filter((d) => d.hasAttribute('data-sub'))` +
+          `.map((d) => (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim())`
+      ),
+    subCountOf: (title) =>
+      main.eval<number>(`Number(${ROW(title)}?.getAttribute('data-sub-count') ?? 0)`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {

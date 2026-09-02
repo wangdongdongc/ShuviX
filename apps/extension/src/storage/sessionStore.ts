@@ -49,6 +49,8 @@ export const sessionStore = {
           ? notebookPath.split('/').pop() || notebookPath
           : i18n.t('agent.defaultTitle')),
       projectId: defaults.projectId ?? null,
+      // 子会话是桌面端形态（agent 经 session 工具自建）—— 扩展端不产生，恒为顶层
+      parentId: null,
       // 不预写运行配置：provider / model / thinkingLevel / enabledTools 的唯一事实源是
       // 会话树（model_change / thinking_level_change / active_tools_change entry）
       // 指令文件不预写配置：留空即「未显式配置」，装配系统提示时按 AGENTS.md → CLAUDE.md 优先级自动选

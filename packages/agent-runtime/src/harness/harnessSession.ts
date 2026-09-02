@@ -499,6 +499,20 @@ export class HarnessSession {
     return await this.session.getEntries()
   }
 
+  /**
+   * 当前是否有 run 在跑。事件驱动的一个布尔（agent_start/agent_end 翻转），
+   * 与 `getRuntimeInfo().isStreaming` 同源但**零成本** —— 后者要 buildContext。
+   * 子会话的状态查询逐条会话地问，不能为一个布尔组装一次上下文。
+   */
+  get isStreaming(): boolean {
+    return this.streaming
+  }
+
+  /** 挂起中的用户询问数（`ask` 工具、写入确认等停在这里） */
+  get pendingInputCount(): number {
+    return this.pendingInputs.size
+  }
+
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
     const model = this.harness.getModel()
     const context = await this.session.buildContext()

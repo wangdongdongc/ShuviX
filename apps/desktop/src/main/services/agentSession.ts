@@ -193,6 +193,16 @@ export class AgentSession {
     return await this.runtime.getRuntimeInfo()
   }
 
+  /** 当前是否有 run 在跑（零成本布尔；子会话状态查询用） */
+  get isStreaming(): boolean {
+    return this.runtime.isStreaming
+  }
+
+  /** 挂起中的用户询问数（>0 = 卡在 ask 上等人回答） */
+  get pendingInputCount(): number {
+    return this.runtime.pendingInputCount
+  }
+
   // ─── 业务埋点（workflow 触发；payload = 会话此刻的事实，与任何具体工作流无关） ───
 
   /** prompt 受理埋点：派发前同步取会话事实，fire 后立即返回（fire 绝不抛出） */

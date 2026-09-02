@@ -4,7 +4,16 @@
  * 通用部分（图标/标题/流式脉冲/待输入计数/选中态/删除）两宿主共用；桌面专属能力
  * （悬浮 pin / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
  */
-import { Bot, MessageSquare, FileText, PictureInPicture2, Settings2, Trash2 } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  FileText,
+  PictureInPicture2,
+  Settings2,
+  Trash2
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export interface SessionItemProps {
@@ -20,6 +29,13 @@ export interface SessionItemProps {
   isBot?: boolean
   /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
   unreadCount?: number
+  /** 子会话行：缩进一级 + 左侧竖线。除此之外与顶层会话行完全一致 */
+  isSub?: boolean
+  /** 拥有的子会话数（>0 时标题后出现折叠钮 + 计数） */
+  subCount?: number
+  /** 子会话折叠态（仅 subCount>0 时有意义） */
+  subCollapsed?: boolean
+  onToggleSubs?: (id: string) => void
   onSelect: (id: string) => void
   onDelete?: (id: string) => void
   // —— 桌面专属（可选） ——
@@ -37,6 +53,10 @@ export function SessionItem({
   isNotebook = false,
   isBot = false,
   unreadCount = 0,
+  isSub = false,
+  subCount = 0,
+  subCollapsed = false,
+  onToggleSubs,
   onSelect,
   onDelete,
   isPinned = false,
@@ -48,7 +68,13 @@ export function SessionItem({
     <div
       onClick={() => onSelect(session.id)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(session.id, e) : undefined}
-      className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+      // 父子关系的稳定锚点（同 data-unread 的做法）：缩进靠 class 表达，
+      // 而 class 会随样式调整变化 —— e2e 认这两个属性
+      data-sub={isSub ? '' : undefined}
+      data-sub-count={subCount > 0 ? subCount : undefined}
+      className={`group relative flex items-center gap-1.5 ${
+        isSub ? 'pl-6 border-l border-border-subtle/60 ml-3' : 'pl-2.5'
+      } pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
         active
           ? 'bg-bg-active/80 text-text-primary'
           : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
@@ -94,6 +120,19 @@ export function SessionItem({
         <span className={`truncate${unreadCount > 0 ? ' font-semibold text-text-primary' : ''}`}>
           {session.title}
         </span>
+        {subCount > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleSubs?.(session.id)
+            }}
+            className="shrink-0 flex items-center gap-0.5 px-1 rounded text-[10px] tabular-nums text-text-tertiary hover:bg-bg-active hover:text-text-secondary"
+            title={t('sidebar.subSessions', { count: subCount })}
+          >
+            {subCollapsed ? <ChevronRight size={9} /> : <ChevronDown size={9} />}
+            {subCount}
+          </button>
+        )}
         {unreadCount > 0 && (
           <span
             className="ml-auto shrink-0 min-w-[17px] h-[17px] px-1 rounded-full bg-accent text-white text-[10px] font-semibold tabular-nums flex items-center justify-center"

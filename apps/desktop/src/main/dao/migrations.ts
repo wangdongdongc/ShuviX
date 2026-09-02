@@ -490,6 +490,19 @@ export const migrations: Migration[] = [
         WHERE json_array_length(json_extract(settings, '$.bots')) > 0
       `)
     }
+  },
+  {
+    version: 17,
+    description: '子会话：sessions 增加 parentId 列（agent 经 session 工具自建的会话的父指针）',
+    up: (db) => {
+      // 父子是**关系**不是形态配置，所以是一列而不是 settings 键 —— 与 projectId 同层同用途
+      // （指向另一行、只被列表分组消费）。另两个理由是硬的：settings 的 JSON patch 没有删键
+      // 路径（见 SessionSettings.bots 的注释），而父子关系必须能被解除；级联删除要的是
+      // `WHERE parentId = ?`，不是把每条会话的 JSON 拉出来扫。
+      db.exec(`ALTER TABLE sessions ADD COLUMN parentId TEXT DEFAULT NULL`)
+      // 唯一的查询形状：取某个会话的子会话（工具的 list、删除级联、侧栏分组）
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_parentId ON sessions(parentId)`)
+    }
   }
 ]
 

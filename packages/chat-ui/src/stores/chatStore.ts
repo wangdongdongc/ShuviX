@@ -93,6 +93,11 @@ export interface Session {
   title: string
   /** 所属项目 ID（null 表示临时会话） */
   projectId: string | null
+  /**
+   * 父会话 ID（null = 顶层会话）。非空即子会话：agent 经 `session` 工具自建的一条
+   * **普通会话**，侧栏渲染在父会话下面，其余行为与顶层会话完全一致。
+   */
+  parentId: string | null
   /** 会话级配置（SSH 免询问等） */
   settings: SessionSettings
   createdAt: number

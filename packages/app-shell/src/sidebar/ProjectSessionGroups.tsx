@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
@@ -107,6 +107,33 @@ export function ProjectSessionGroups({
     return slug ? { projectId: s.projectId, slug } : null
   }, [activeSessionId, storeSessions])
 
+  // 子会话（agent 经 session 工具自建）按父会话归拢，从平铺列表里摘出去 —— 与「绑定项目
+  // 记忆的笔记本会话不进列表」同一手法。父级不在列表里（已删/被过滤）的子会话**退回平铺**：
+  // 宁可让它以顶层会话出现，也不能让一条真实会话在侧栏里凭空消失
+  const childrenByParent = useMemo(() => {
+    const ids = new Set(sessions.map((s) => s.id))
+    const map = new Map<string, Session[]>()
+    for (const s of sessions) {
+      if (!s.parentId || !ids.has(s.parentId)) continue
+      const list = map.get(s.parentId)
+      if (list) list.push(s)
+      else map.set(s.parentId, [s])
+    }
+    // 创建序：一组子会话每跑完一轮就按 updatedAt 重排会让人找不到刚才那条
+    for (const list of map.values()) list.sort((a, b) => a.createdAt - b.createdAt)
+    return map
+  }, [sessions])
+
+  // 折叠了子会话的父会话（本地 UI 状态，与项目组折叠同形）。缺省展开 ——
+  // 子会话就是要被看见的，藏起来等于让这个能力隐形
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(() => new Set())
+  const toggleSubs = (id: string): void =>
+    setCollapsedParents((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+
   // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
   // 绑定项目记忆的笔记本会话不进列表 —— 它们由组内的「项目记忆」子文件夹按磁盘条目呈现
   const groups = useMemo(() => {
@@ -115,6 +142,8 @@ export function ProjectSessionGroups({
     const temp: Session[] = []
     for (const s of sessions) {
       if (memory && s.settings.memorySlug) continue
+      // 子会话跟着父行渲染（父级不在列表里时 childrenByParent 也没收它，照常平铺）
+      if (s.parentId && childrenByParent.has(s.parentId)) continue
       if (s.projectId && map.has(s.projectId)) map.get(s.projectId)!.push(s)
       else if (!s.projectId) temp.push(s)
     }
@@ -126,7 +155,7 @@ export function ProjectSessionGroups({
     const out: Array<[string, Session[]]> = sorted
     if (temp.length > 0) out.push([TEMP_GROUP_KEY, temp])
     return out
-  }, [projects, sessions, projectNames, memory])
+  }, [projects, sessions, projectNames, memory, childrenByParent])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
@@ -201,24 +230,39 @@ export function ProjectSessionGroups({
                 dim={dim && activeGroupKey === groupKey}
               />
             )}
-            {shownSessions.map((s) => (
-              <SessionItem
-                key={s.id}
-                session={s}
-                active={activeSessionId === s.id}
-                isStreaming={sessionStreams[s.id]?.isStreaming}
-                pendingCount={pendingCounts[s.id]}
-                dim={dim && activeGroupKey === groupKey && activeSessionId !== s.id}
-                isNotebook={!!s.settings.notebookPath}
-                isBot={!!s.settings.bots?.length}
-                unreadCount={s.settings.unreadCount}
-                isPinned={caps.pin ? pinnedSessionIds?.has(s.id) : undefined}
-                onSelect={handleSelect}
-                onDelete={onDelete}
-                onConfigure={onConfigureSession}
-                onContextMenu={openSessionMenu}
-              />
-            ))}
+            {shownSessions.map((s) => {
+              const children = childrenByParent.get(s.id) ?? []
+              const subCollapsed = collapsedParents.has(s.id)
+              const row = (item: Session, isSub: boolean): React.JSX.Element => (
+                <SessionItem
+                  key={item.id}
+                  session={item}
+                  active={activeSessionId === item.id}
+                  isStreaming={sessionStreams[item.id]?.isStreaming}
+                  pendingCount={pendingCounts[item.id]}
+                  dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
+                  isNotebook={!!item.settings.notebookPath}
+                  isBot={!!item.settings.bots?.length}
+                  unreadCount={item.settings.unreadCount}
+                  isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
+                  isSub={isSub}
+                  subCount={isSub ? 0 : children.length}
+                  subCollapsed={subCollapsed}
+                  onToggleSubs={toggleSubs}
+                  onSelect={handleSelect}
+                  onDelete={onDelete}
+                  onConfigure={onConfigureSession}
+                  onContextMenu={openSessionMenu}
+                />
+              )
+              if (children.length === 0) return row(s, false)
+              return (
+                <React.Fragment key={s.id}>
+                  {row(s, false)}
+                  {!subCollapsed && children.map((c) => row(c, true))}
+                </React.Fragment>
+              )
+            })}
             {shownSessions.length < groupSessions.length && (
               <div
                 onClick={() =>

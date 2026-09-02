@@ -18,7 +18,14 @@ import type { ToolContext } from '../../services/toolContext'
 const mocks = vi.hoisted(() => ({
   pick: vi.fn<(id: string, cols: string[]) => unknown>(),
   updateTitle: vi.fn(),
-  registerBuiltinTool: vi.fn()
+  registerBuiltinTool: vi.fn(),
+  // 子会话：runner 握着全部业务规则，工具层只做参数面与文案 —— 这里整体换成假件，
+  // 断言的是「转调了什么」与「结果怎么排版」，不是子会话的语义（那是 runner 的用例）
+  runnerCreate: vi.fn(),
+  runnerPrompt: vi.fn(),
+  runnerList: vi.fn(),
+  runnerRead: vi.fn(),
+  runnerStop: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: mocks.pick } }))
@@ -26,6 +33,16 @@ vi.mock('../../services/sessionService', () => ({
   sessionService: { updateTitle: mocks.updateTitle }
 }))
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
+vi.mock('../../services/subSessionRunner', () => ({
+  DEFAULT_PROMPT_TIMEOUT_SEC: 300,
+  subSessionRunner: {
+    create: mocks.runnerCreate,
+    prompt: mocks.runnerPrompt,
+    list: mocks.runnerList,
+    read: mocks.runnerRead,
+    stop: mocks.runnerStop
+  }
+}))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 
 type SessionModule = typeof import('../session')
@@ -40,6 +57,15 @@ beforeAll(async () => {
 beforeEach(() => {
   mocks.pick.mockReset()
   mocks.updateTitle.mockReset()
+  for (const fn of [
+    mocks.runnerCreate,
+    mocks.runnerPrompt,
+    mocks.runnerList,
+    mocks.runnerRead,
+    mocks.runnerStop
+  ]) {
+    fn.mockReset()
+  }
   // 缺省：普通聊天会话存在
   mocks.pick.mockReturnValue({ title: 'Old', settings: {} })
 })
@@ -48,14 +74,27 @@ const setTitle = (title?: string): Promise<unknown> =>
   tool.execute('tc-1', { action: 'set-title', ...(title !== undefined ? { title } : {}) })
 
 describe('SessionTool — 参数面与目标会话边界', () => {
-  it('schema 不含 sessionId（目标会话恒取 ToolContext，参数层就没有这个洞）', () => {
-    expect(Object.keys(mod.SessionParamsSchema.properties)).toEqual(['action', 'title'])
+  it('schema 不含 sessionId：能点名的只有 sub_session_id（且必须是自己的子会话）', () => {
+    const keys = Object.keys(mod.SessionParamsSchema.properties)
+    expect(keys).toEqual([
+      'action',
+      'title',
+      'agent_profile',
+      'sub_session_id',
+      'message',
+      'run_in_background',
+      'timeout_seconds'
+    ])
+    // 「改哪条会话」的选择权始终不给模型：本会话恒取 ToolContext.sessionId，
+    // 而 sub_session_id 只能指向调用方自己的子会话（判定在 runner，见其用例）
+    expect(keys).not.toContain('sessionId')
+    expect(keys).not.toContain('session_id')
   })
 
-  it('未知 action → 错误列出合法值 set-title', async () => {
+  it('未知 action → 错误列出全部合法值', async () => {
     await expect(
       tool.execute('tc-1', { action: 'rename' as 'set-title', title: 'x' })
-    ).rejects.toThrow(/Unknown action "rename"\. Valid actions: set-title/)
+    ).rejects.toThrow(/Unknown action "rename"\. Valid actions: set-title, create-sub-session/)
     expect(mocks.updateTitle).not.toHaveBeenCalled()
   })
 
@@ -123,5 +162,142 @@ describe('SessionTool — 注册与描述', () => {
   it('描述文案含上限 60（LLM 直接从描述得知长度约束）', () => {
     expect(mod.SESSION_DESCRIPTION).toContain('60')
     expect(tool.description).toContain('60')
+  })
+})
+
+// ── 子会话的五个 action ────────────────────────────────
+//
+// 工具层是**翻译层**：调 runner → 有 error 就抛（文案原样，它握着准入规则）→
+// 没有就把结果排版成文本。所以这里钉的是「转调了什么」与「回话长什么样」，
+// 语义（准入 / 上限 / 超时降级 / 越权）全在 subSessionRunner 的用例里。
+
+const textOf = (r: unknown): string =>
+  ((r as { content: Array<{ text: string }> }).content ?? []).map((c) => c.text).join('')
+
+describe('SessionTool — 子会话 action', () => {
+  it('create-sub-session：转调 runner（title/agent_profile 原样），回话含 id', async () => {
+    mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: '重构 parser' })
+    const res = await tool.execute('tc-1', {
+      action: 'create-sub-session',
+      title: '重构 parser',
+      agent_profile: 'coding'
+    })
+    expect(mocks.runnerCreate).toHaveBeenCalledWith('s1', {
+      title: '重构 parser',
+      agentProfile: 'coding'
+    })
+    expect(textOf(res)).toContain('sub-1')
+    expect(textOf(res)).toContain('重构 parser')
+  })
+
+  it('runner 的 error 原样抛出（准入理由只有一份，工具层不复述也不改写）', async () => {
+    mocks.runnerCreate.mockResolvedValue({ error: 'Chat sessions cannot have sub-sessions.' })
+    await expect(tool.execute('tc-1', { action: 'create-sub-session' })).rejects.toThrow(
+      'Chat sessions cannot have sub-sessions.'
+    )
+  })
+
+  it('prompt-sub-session 前台：parentId 取 ToolContext，缺省超时 300s，回话带答复正文', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'answered', answer: 'DONE.' })
+    const res = await tool.execute('tc-1', {
+      action: 'prompt-sub-session',
+      sub_session_id: 'sub-1',
+      message: '去把测试跑绿'
+    })
+    expect(mocks.runnerPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentId: 's1',
+        childId: 'sub-1',
+        message: '去把测试跑绿',
+        background: false,
+        timeoutSeconds: 300
+      })
+    )
+    expect(textOf(res)).toContain('DONE.')
+  })
+
+  it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started' })
+    const started = textOf(
+      await tool.execute('tc-1', {
+        action: 'prompt-sub-session',
+        sub_session_id: 'sub-1',
+        message: 'go',
+        run_in_background: true
+      })
+    )
+    expect(mocks.runnerPrompt).toHaveBeenCalledWith(expect.objectContaining({ background: true }))
+    expect(started).toMatch(/background/i)
+    expect(started).toContain('read-sub-session')
+
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
+    const timedOut = textOf(
+      await tool.execute('tc-1', {
+        action: 'prompt-sub-session',
+        sub_session_id: 'sub-1',
+        message: 'go',
+        timeout_seconds: 30
+      })
+    )
+    // 超时**没有**中止子会话 —— 这句话必须写在回执里，否则模型会以为工作被丢了
+    expect(timedOut).toContain('NOT cancelled')
+    expect(timedOut).toContain('read-sub-session')
+  })
+
+  it('失败的一轮照样回话（错误是子会话里的事实，父级要看见同一份）', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'answered', answer: 'boom', isError: true })
+    expect(
+      textOf(
+        await tool.execute('tc-1', {
+          action: 'prompt-sub-session',
+          sub_session_id: 'sub-1',
+          message: 'go'
+        })
+      )
+    ).toContain('boom')
+  })
+
+  it('list-sub-sessions：每行 id + 状态 + 标题；空名单给出创建指引', async () => {
+    mocks.runnerList.mockReturnValue({
+      subSessions: [
+        { id: 'sub-1', title: 'A', status: 'running', driven: true, updatedAt: 1 },
+        { id: 'sub-2', title: 'B', status: 'waiting-input', driven: false, updatedAt: 2 }
+      ]
+    })
+    const listed = textOf(await tool.execute('tc-1', { action: 'list-sub-sessions' }))
+    expect(listed).toContain('sub-1  [running]  A')
+    expect(listed).toContain('sub-2  [waiting-input]  B')
+
+    mocks.runnerList.mockReturnValue({ subSessions: [] })
+    expect(textOf(await tool.execute('tc-1', { action: 'list-sub-sessions' }))).toContain(
+      'create-sub-session'
+    )
+  })
+
+  it('read-sub-session：状态行 + 最新答复；还没回话时说清「还没回」', async () => {
+    const info = { id: 'sub-1', title: 'A', status: 'idle' as const, driven: false, updatedAt: 1 }
+    mocks.runnerRead.mockResolvedValue({ info, answer: 'RESULT' })
+    const read = textOf(
+      await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' })
+    )
+    expect(read).toContain('sub-1  [idle]  A')
+    expect(read).toContain('RESULT')
+
+    mocks.runnerRead.mockResolvedValue({ info })
+    expect(
+      textOf(await tool.execute('tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' }))
+    ).toMatch(/not replied/i)
+  })
+
+  it('stop-sub-session：停住与本就没在跑，回话不同（模型据此判断要不要再等）', async () => {
+    mocks.runnerStop.mockResolvedValue({ stopped: true })
+    expect(
+      textOf(await tool.execute('tc-1', { action: 'stop-sub-session', sub_session_id: 'sub-1' }))
+    ).toContain('Stopped')
+
+    mocks.runnerStop.mockResolvedValue({ stopped: false })
+    expect(
+      textOf(await tool.execute('tc-1', { action: 'stop-sub-session', sub_session_id: 'sub-1' }))
+    ).toContain('not running')
   })
 })

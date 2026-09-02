@@ -291,6 +291,8 @@ declare global {
     title: string
     /** 所属项目 ID（null 表示临时会话） */
     projectId: string | null
+    /** 父会话 ID（null = 顶层会话）；非空即子会话，侧栏渲染在父会话下面 */
+    parentId: string | null
     provider: string
     model: string
     systemPrompt: string
