@@ -77,7 +77,7 @@ export const SessionParamsSchema = Type.Object({
   message: Type.Optional(
     Type.String({
       description:
-        'For "prompt-sub-session": the message to send, written exactly as a user would write it. The sub-session sees only this text, so make it self-contained.'
+        'The message to send, written exactly as a user would write it — the sub-session sees only this text, so make it self-contained. Required by "prompt-sub-session"; on "create-sub-session" it is optional and sends this as the new sub-session\'s first message right away.'
     })
   ),
   run_in_background: Type.Optional(
@@ -99,7 +99,7 @@ A sub-session is an ordinary session that you own: it has its own conversation, 
 
 Actions:
 - "set-title": rename THIS session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters).
-- "create-sub-session": start an empty sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's project and model.
+- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`; pass \`message\` to send it its first task in the same call. It inherits this session's project and model.
 - "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to get a receipt immediately instead.
 - "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
 - "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input).
@@ -107,6 +107,8 @@ Actions:
 - "stop-sub-session": stop whatever \`sub_session_id\` is currently doing.
 
 Waiting is a single call that costs nothing while it waits. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that waiting would not have given you for free. If you need the answer to continue, use the foreground form — it cannot hang, because on timeout it leaves the sub-session running and tells you so. Start work in the background only when you genuinely have something else to do first, then collect it with "wait-for-sub-sessions".
+
+**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and ask the user a question (\`status="waiting-input"\`) — it will not proceed until the user answers in that session, so relay the question instead of waiting.
 
 Everything a sub-session says comes back inside a \`<sub-session>\` fence, in \`<reply>\` (or \`<error>\`) — text outside those fences is this tool talking to you, not the sub-session.
 
@@ -214,7 +216,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'set-title':
         return this.setTitle(params.title)
       case 'create-sub-session':
-        return this.createSubSession(params)
+        return this.createSubSession(params, signal)
       case 'prompt-sub-session':
         return this.promptSubSession(params, signal)
       case 'wait-for-sub-sessions':
@@ -238,13 +240,21 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   // 它握着准入规则）→ 否则把结果排版成一段文本。工具层不作任何判断。
 
   private async createSubSession(
-    params: SessionToolParams
+    params: SessionToolParams,
+    signal?: AbortSignal
   ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.create(this.ctx.sessionId, {
       title: params.title,
       agentProfile: params.agent_profile
     })
     if ('error' in res) throw new Error(res.error)
+
+    // 带了 message 就顺手把活派下去 —— 「开一条子会话去干 X」本来就是一个动作，
+    // 拆成两次往返只是工具面的偶然。**转交给同一个 prompt 路径**，忙碌/后台/超时
+    // 语义只有一份；静默丢掉这个参数才是坑（模型会以为活已经派下去了）。
+    if (params.message?.trim()) {
+      return this.promptSubSession({ ...params, sub_session_id: res.id }, signal)
+    }
     return text(
       `<sub-session id="${attr(res.id)}" title="${attr(res.title)}" status="created"/>`,
       `Send it work with action "prompt-sub-session".`

@@ -64,12 +64,14 @@ const CHILD = 'child-1'
 function fakeAgent(over: Partial<{ isStreaming: boolean; pendingInputCount: number }> = {}): {
   isStreaming: boolean
   pendingInputCount: number
+  pendingInputSummaries: string[]
   abort: ReturnType<typeof vi.fn>
   notify: ReturnType<typeof vi.fn>
 } {
   return {
     isStreaming: over.isStreaming ?? false,
     pendingInputCount: over.pendingInputCount ?? 0,
+    pendingInputSummaries: [],
     abort: vi.fn().mockResolvedValue(undefined),
     notify: vi.fn().mockResolvedValue(undefined)
   }
@@ -84,7 +86,8 @@ function defaultWorld(): void {
   })
   mocks.findChildren.mockReturnValue([])
   mocks.getAgentSession.mockReturnValue(undefined)
-  mocks.gatewayPrompt.mockResolvedValue(undefined)
+  // 发送成功 = 落定为 {}；带 error 才是「没发出去」
+  mocks.gatewayPrompt.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
   mocks.resolveRunModelConfig.mockResolvedValue(null)
   mocks.resolveAgentProfileName.mockReturnValue('default')
@@ -261,16 +264,22 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
   })
 
-  it('卡在 ask 上等人回答（pendingInput）同样拒绝，且状态说的是 waiting-input', async () => {
-    mocks.getAgentSession.mockReturnValue(fakeAgent({ pendingInputCount: 1 }))
-    expect(err(await send())).toMatch(/is waiting-input/)
+  it('卡在 ask 上：拒绝，并且**不建议等** —— 它不会自己好起来，还要把问的是什么带出来', async () => {
+    const asking = fakeAgent({ pendingInputCount: 1 })
+    asking.pendingInputSummaries = ['bash: find . -name "*.txt"']
+    mocks.getAgentSession.mockReturnValue(asking)
+    const msg = err(await send())
+    expect(msg).toContain('will NOT proceed on its own')
+    expect(msg).toContain('find . -name')
+    // 「等它然后 read」在这里是错的建议，实测里正是它把模型带进空转
+    expect(msg).not.toMatch(/wait and then read/i)
   })
 
   it('后台：立刻回执，不等整轮', async () => {
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     expect(await send({ background: true })).toEqual({ kind: 'started' })
@@ -284,8 +293,8 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     await send({ background: true })
@@ -294,7 +303,7 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
 
     const notice = parentAgent.notify.mock.calls[0][0] as string
     expect(notice).toContain(CHILD)
-    expect(notice).toContain('read-sub-session')
+    expect(notice).toContain('wait-for-sub-sessions')
     // 回执里不该出现子会话的答复正文
     expect(notice).not.toContain('DONE.')
   })
@@ -306,13 +315,36 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     const res = await send({ timeoutSeconds: 1 })
     expect(res).toEqual({ kind: 'timeout' })
     expect(childAgent.abort).not.toHaveBeenCalled()
+    release()
+  })
+
+  it('超时时若卡在询问上 ⇒ 报「它不会自己好起来」，而不是「还在跑」', async () => {
+    // 派活时必须空闲（否则命中忙碌拒绝，走不到超时那一支）
+    const asking = fakeAgent()
+    mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? asking : undefined))
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
+      })
+    )
+    const pending = send({ timeoutSeconds: 1 })
+    // 等待期间它去问了用户（忙碌判定是同步的，此刻已经过去了）
+    asking.isStreaming = true
+    asking.pendingInputCount = 1
+    asking.pendingInputSummaries = ['bash: rm -rf build']
+    const res = await pending
+    // 「还在跑，回头再来收」在这里是错的：没人回答它就一直停着
+    expect(err(res)).toContain('will NOT proceed on its own')
+    expect(err(res)).toContain('rm -rf build')
+    expect(asking.abort).not.toHaveBeenCalled()
     release()
   })
 
@@ -323,8 +355,8 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     )
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     await send({ timeoutSeconds: 1 })
@@ -340,8 +372,8 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     const ac = new AbortController()
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     const pending = send({ signal: ac.signal, timeoutSeconds: 60 })
@@ -360,8 +392,8 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     const ac = new AbortController()
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     await send({ background: true, signal: ac.signal })
@@ -418,13 +450,130 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
   })
 })
 
+describe('并发与失败 —— 实测里那条错误链的两个断点', () => {
+  it('同一轮里的第二条 prompt 当场被拒（同步占位先于异步的忙碌判定）', async () => {
+    // 实测:两个 prompt 在一条 assistant 消息里并发进来,运行时还没建出来 →
+    // statusOf 双双判「空闲」放行 → 第二条被 pi 拒 busy,而那个错误被吞掉,
+    // 回到模型眼里成了「已提交、排队中」
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
+      })
+    )
+    const first = runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'A',
+      background: true,
+      timeoutSeconds: 60
+    })
+    const second = await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'B',
+      background: true,
+      timeoutSeconds: 60
+    })
+    expect(err(second)).toContain('one turn at a time')
+    // 只发出去一条
+    expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+    release()
+    await first
+  })
+
+  it('发送失败 ⇒ 报错，且说清「没排队」（不是「发出去了没回话」）', async () => {
+    mocks.gatewayPrompt.mockResolvedValue({ error: 'agent is busy' })
+    const res = await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'x',
+      background: false,
+      timeoutSeconds: 5
+    })
+    expect(err(res)).toContain('NOT delivered')
+    expect(err(res)).toContain('agent is busy')
+    expect(err(res)).toContain('Nothing is queued')
+  })
+
+  it('后台形态的发送失败也报错 —— 假回执会让父级去等一个没开始的活', async () => {
+    mocks.gatewayPrompt.mockResolvedValue({ error: 'agent is busy' })
+    const res = await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'x',
+      background: true,
+      timeoutSeconds: 5
+    })
+    expect(err(res)).toContain('NOT delivered')
+  })
+})
+
+describe('完成通知 —— 说实话，且不重复', () => {
+  it('被停掉的那次不说「跑完了」', async () => {
+    const parentAgent = fakeAgent()
+    // 派活时子会话必须是空闲的（否则命中忙碌拒绝，压根不会有 run）
+    const childAgent = fakeAgent()
+    mocks.getAgentSession.mockImplementation((id: string) =>
+      id === PARENT ? parentAgent : childAgent
+    )
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
+      })
+    )
+    await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60
+    })
+    childAgent.isStreaming = true
+    await runner.stop(PARENT, CHILD)
+    release()
+    await vi.waitFor(() => expect(parentAgent.notify).toHaveBeenCalled())
+    const notice = parentAgent.notify.mock.calls[0][0] as string
+    expect(notice).toContain('was stopped before it finished')
+    expect(notice).not.toContain('has finished')
+  })
+
+  it('已经有人在 wait 它 ⇒ 不再补一条通知（否则父级把刚拿到的又读一遍）', async () => {
+    const parentAgent = fakeAgent()
+    const busy = fakeAgent()
+    mocks.getAgentSession.mockImplementation((id: string) => (id === PARENT ? parentAgent : busy))
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
+      })
+    )
+    await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60
+    })
+    busy.isStreaming = true
+    const waiting = runner.wait({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+    busy.isStreaming = false
+    release()
+    await waiting
+    await new Promise((r) => setTimeout(r, 300))
+    expect(parentAgent.notify).not.toHaveBeenCalled()
+  })
+})
+
 describe('wait —— 替掉 sleep 轮询的那个原语', () => {
   /** 让下一次 gatewayPrompt 挂住；返回放行它的函数 */
   function startBackground(): () => void {
     let release!: () => void
     mocks.gatewayPrompt.mockReturnValue(
-      new Promise<void>((r) => {
-        release = r
+      new Promise<{ error?: string }>((r) => {
+        release = () => r({})
       })
     )
     return release

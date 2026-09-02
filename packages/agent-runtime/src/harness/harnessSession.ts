@@ -300,6 +300,9 @@ export class HarnessSession {
       }
       await this.harness.prompt(text, images ? { images } : undefined)
     } catch (err) {
+      // 发送失败（最典型：pi 拒 busy）——广播给 UI，**同时把 error 交回调用方**。
+      // 「没发出去」与「发出去了还没回话」必须是两件事：子会话的驱动方靠它区分，
+      // 吞掉这个返回值会让调用方以为消息已经排上队（实测过的那次幻觉就是这么来的）。
       const error = errText(err)
       this.eventSink.broadcast({ type: 'error', sessionId: this.sessionId, error })
       return { error }
@@ -538,6 +541,18 @@ export class HarnessSession {
   /** 挂起中的用户询问数（`ask` 工具、写入确认等停在这里） */
   get pendingInputCount(): number {
     return this.pendingInputs.size
+  }
+
+  /**
+   * 待答询问的人读摘要。给**别的会话**看的 —— 父会话只知道子会话「卡在等人回答」
+   * 却不知道问的是什么，就只能干等或反复重试（实测过的那种空转）。
+   * 有了这个它至少能把问题转告用户。
+   */
+  get pendingInputSummaries(): string[] {
+    return [...this.pendingInputs.values()].map(({ request }) => {
+      const r = request as { kind: string; toolName: string; command?: string; question?: string }
+      return [r.toolName, r.command ?? r.question ?? r.kind].filter(Boolean).join(': ')
+    })
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {

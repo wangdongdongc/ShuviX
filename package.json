@@ -39,6 +39,7 @@
     "test:e2e:notebook": "npm run test:e2e:notebook -w shuvix",
     "test:e2e:workflows": "npm run test:e2e:workflows -w shuvix",
     "test:e2e:bots": "npm run test:e2e:bots -w shuvix",
-    "test:e2e:sessions": "npm run test:e2e:sessions -w shuvix"
+    "test:e2e:sessions": "npm run test:e2e:sessions -w shuvix",
+    "probe": "npm run probe -w shuvix"
   }
 }

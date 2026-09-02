@@ -30,6 +30,12 @@ const log = createLogger('SubSession')
 export const MAX_RUNNING_SUB_SESSIONS = 4
 /** 一个父会话最多拥有的子会话数（只数未删除的） */
 export const MAX_SUB_SESSIONS = 20
+/**
+ * 后台形态回执前的「确认发出去了」窗口。只等这么久 —— 发送失败（拒 busy）是同步就
+ * 落定的，而正常发出去的那一路会一直跑到轮结束，不能在这里等它。
+ */
+const SEND_CONFIRM_MS = 50
+
 /** 前台等待的缺省上限（秒）。到点降级成后台，不中止 */
 export const DEFAULT_PROMPT_TIMEOUT_SEC = 300
 
@@ -68,14 +74,22 @@ export interface PromptOutcome {
 /** 本进程正在驱动的一次子会话运行 */
 interface DrivenRun {
   parentId: string
-  /** 整轮结束的 promise（永不 reject —— 失败已在会话里表达） */
-  done: Promise<void>
+  /**
+   * 整轮结束的 promise（永不 reject）。落定值带 `error` = **消息没发出去**
+   * （最典型：子会话正忙，pi 拒 busy）—— 与「发出去了但没回话」必须分得开，
+   * 后者才是「还在跑」。混为一谈会让调用方以为消息排上了队。
+   */
+  done: Promise<{ error?: string }>
   /** 已降级为后台（前台超时）或本就是后台形态 */
   background: boolean
+  /** 被 stop-sub-session / 父级级联中止过 —— 完成通知据此不说「跑完了」 */
+  stopped?: boolean
 }
 
 class SubSessionRunner {
   private runs = new Map<string, DrivenRun>()
+  /** 正在被 `wait` 等着的子会话 —— 它们落定时不再另发完成通知（同一轮里就交回去了） */
+  private waiters = new Set<string>()
 
   // ─── 准入 ──────────────────────────────────────
 
@@ -166,6 +180,8 @@ class SubSessionRunner {
     parentId: string,
     params: { title?: string; agentProfile?: string }
   ): Promise<{ error: string } | { id: string; title: string }> {
+    // 注：首条消息不在这里发 —— 见工具层 createSubSession（建完立刻转 prompt，
+    // 复用同一套忙碌/后台/超时语义，不在创建路径上再造一份）
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
 
@@ -235,13 +251,30 @@ class SubSessionRunner {
       return { error: 'Pass the message text in `message` (a non-empty string).' }
 
     // 忙就拒绝，刻意不排队（harness 有 nextTurn 可以排）：一个忙着的子会话是父级
-    // 该知道并作决策的状态，替它排队等于把这个状态藏起来
+    // 该知道并作决策的状态，替它排队等于把这个状态藏起来。
+    //
+    // **同步占位先于异步判定**：两个 prompt 在同一轮里并发进来时，`statusOf` 查的是
+    // 运行时，而运行时是懒创建的（第一条还没把它建出来），于是两边都判「空闲」双双放行
+    // —— 第二条随后被 pi 拒 busy，而那个错误一路被吞掉，回到模型眼里成了「已提交、
+    // 排队中」。这一行让第二条当场拿到拒绝理由。
+    if (this.runs.has(childId)) {
+      return {
+        error:
+          `Sub-session "${child.title}" is already running a turn you just started. ` +
+          `One sub-session runs one turn at a time — wait for it with "wait-for-sub-sessions", ` +
+          `or create another sub-session to work in parallel.`
+      }
+    }
     const status = this.statusOf(childId)
+    if (status === 'waiting-input') {
+      // 「等它」在这里是错的建议：它不会自己好起来
+      return { error: this.blockedError(child.title, childId) }
+    }
     if (status !== 'idle') {
       return {
         error:
           `Sub-session "${child.title}" is ${status}. ` +
-          `Wait and then read it with action "read-sub-session", or stop it with "stop-sub-session".`
+          `Collect it with action "wait-for-sub-sessions", or stop it with "stop-sub-session".`
       }
     }
 
@@ -259,21 +292,34 @@ class SubSessionRunner {
     const run: DrivenRun = {
       parentId,
       background,
-      // 永不 reject：发送失败已经在子会话里表达（错误气泡），父级读到的是同一份事实
+      // 永不 reject，但**保留 error**：发送失败与「跑完了没说话」是两件事
       done: chatGateway.prompt(childId, message).catch((err) => {
         log.warn(`子会话 ${childId} 发送失败: ${err}`)
+        return { error: err instanceof Error ? err.message : String(err) }
       })
     }
     this.runs.set(childId, run)
     void run.done.then(() => this.settle(childId, run))
 
     if (background) {
+      // 后台形态也要确认「发出去了」：竞态窗口收窄之后仍可能失败（压缩相位等），
+      // 而一张假回执会让父级去等一个根本没开始的活
+      const sendError = await Promise.race([
+        run.done,
+        new Promise<{ error?: string }>((r) => setTimeout(() => r({}), SEND_CONFIRM_MS))
+      ])
+      if (sendError.error) return { error: this.sendFailedError(child.title, sendError.error) }
       log.info(`prompt sub-session ${childId} (background)`)
       return { kind: 'started' }
     }
 
     const raced = await this.waitForeground(run, timeoutSeconds, signal)
     if (raced === 'timeout') {
+      // 卡在询问上的不是「还在跑」——它不会自己好起来，说成还在跑等于让父级白等第二轮
+      if (this.statusOf(childId) === 'waiting-input') {
+        run.background = true
+        return { error: this.blockedError(child.title, childId) }
+      }
       // 降级：本次调用不再等，运行继续，跑完照后台形态回报
       run.background = true
       log.info(`子会话 ${childId} 前台等待超时 ${timeoutSeconds}s，降级为后台`)
@@ -283,6 +329,8 @@ class SubSessionRunner {
       await this.stopRun(childId)
       await run.done
     }
+    const sent = await run.done
+    if (sent.error) return { error: this.sendFailedError(child.title, sent.error) }
     const [answer, info] = await Promise.all([
       this.lastAnswer(childId),
       this.infoOf(parentId, childId)
@@ -341,6 +389,7 @@ class SubSessionRunner {
       return { kind: 'settled', results: await this.infoWithAnswers(parentId) }
     }
 
+    for (const id of targets) this.waiters.add(id)
     const settled = (): boolean => targets.every((id) => this.statusOf(id) !== 'running')
     const kind = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
       let done = false
@@ -364,6 +413,7 @@ class SubSessionRunner {
       if (settled()) finish('settled')
     })
 
+    for (const id of targets) this.waiters.delete(id)
     return { kind, results: await this.infoWithAnswers(parentId, targets) }
   }
 
@@ -418,13 +468,21 @@ class SubSessionRunner {
   private settle(childId: string, run: DrivenRun): void {
     if (this.runs.get(childId) === run) this.runs.delete(childId)
     if (!run.background) return
+    // 已经有人在 wait 它 —— 结果会在**同一轮里**交回去，再补一条通知只会让父级
+    // 把刚拿到的东西再读一遍（实测里就白烧了一轮）
+    if (this.waiters.has(childId)) return
     const parent = sessionService.getAgentSession(run.parentId)
     if (!parent) return
     const title = sessionDao.pick(childId, ['title'])?.title ?? childId
+    // 说实话：被停掉的那次不是「跑完了」；状态词也用与别处一致的那套
+    const status = run.stopped ? 'stopped' : this.statusOf(childId)
+    const line = run.stopped
+      ? 'The turn you started in the background was stopped before it finished.'
+      : 'The turn you started in the background has finished.'
     const notice = [
-      `<sub-session id="${childId}" title="${title}" status="finished">`,
-      'The turn you started in the background has finished.',
-      'Read its answer with the session tool: action "read-sub-session".',
+      `<sub-session id="${childId}" title="${title}" status="${status}">`,
+      line,
+      'Collect it with the session tool: action "wait-for-sub-sessions".',
       '</sub-session>'
     ].join('\n')
     void parent
@@ -443,6 +501,8 @@ class SubSessionRunner {
   }
 
   private async stopRun(childId: string): Promise<boolean> {
+    const run = this.runs.get(childId)
+    if (run) run.stopped = true
     const agent = sessionService.getAgentSession(childId)
     if (!agent) return false
     await agent.abort()
@@ -458,6 +518,27 @@ class SubSessionRunner {
     if (last.role === 'system_notify') return { answer: last.content, isError: true }
     if (last.role !== 'assistant') return {}
     return { answer: last.content }
+  }
+
+  /** 卡在询问上：**它不会自己好起来** —— 给的建议必须是「去让用户回答」或「停掉」 */
+  private blockedError(title: string, childId: string): string {
+    const agent = sessionService.getAgentSession(childId)
+    const asked = agent?.pendingInputSummaries ?? []
+    return [
+      `Sub-session "${title}" is blocked on a question for the user and will NOT proceed on its own.`,
+      asked.length ? `It is asking: ${asked.join(' | ')}` : '',
+      `Tell the user to answer it in that session, or stop it with "stop-sub-session".`
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+
+  /** 没发出去（≠ 发出去了没回话）——说清是哪一种，别让调用方以为排上了队 */
+  private sendFailedError(title: string, reason: string): string {
+    return (
+      `The message was NOT delivered to sub-session "${title}": ${reason}. ` +
+      `Nothing is queued — check its status with "list-sub-sessions" and send again when it is idle.`
+    )
   }
 
   private unknownChildError(parentId: string, childId: string): string {

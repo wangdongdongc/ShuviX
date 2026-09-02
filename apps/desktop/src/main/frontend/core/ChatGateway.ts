@@ -19,11 +19,16 @@ export interface ChatGateway {
   startChat(sessionId: string): Promise<AgentInitResult>
 
   /** 发送用户消息 */
+  /**
+   * 发一条用户消息并等整轮结束。返回 `{error}` = **没发出去**（最典型：会话正忙，
+   * pi 拒 busy）——调用方必须能把它与「发出去了但没回话」区分开，子会话的驱动方
+   * 正是靠这个报错而不是假装排队。
+   */
   prompt(
     sessionId: string,
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>
-  ): Promise<void>
+  ): Promise<{ error?: string }>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void

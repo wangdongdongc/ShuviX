@@ -42,19 +42,20 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>
-  ): Promise<void> {
+  ): Promise<{ error?: string }> {
     // 聊天会话没有根 Agent：消息交给成员各自的管线。分流必须在 ensureAgentSession
     // **之前**，也必须是 early-return 式互斥 —— 前端的 user_message 走 addMessage
     // （同 id 已存在则整体 no-op，不是 upsert），两边都跑一点会出双气泡且不被去重
     if (sessionService.isBotSession(sessionId)) {
       await botService.handleUserMessage({ sessionId, text, images, inlineTokens })
-      return
+      return {}
     }
     // 首次发送消息时才创建 Agent（打开会话/笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
-      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error: 'Agent 未初始化' })
-      return
+      const error = 'Agent 未初始化'
+      chatFrontendRegistry.broadcast({ type: 'error', sessionId, error })
+      return { error }
     }
 
     // ─── 内联 Token 处理 ───
@@ -70,7 +71,8 @@ export class DefaultChatGateway implements ChatGateway {
     // 有根会话的用户消息不由网关落库：harness 在 message_end 把它作为 entry 追加，
     // 并经 HarnessSession 的事件翻译广播 user_message。聊天会话没有那个运行时，
     // 由上面分流出去的 botService 走同一顺序自己落（先 append 取 id 再广播）。
-    await session.prompt(promptText, images, display)
+    // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」
+    return await session.prompt(promptText, images, display)
   }
 
   steer(sessionId: string, text: string): void {

@@ -139,17 +139,20 @@ export class AgentSession {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     display?: InlineTokensSidecar
-  ): Promise<void> {
+  ): Promise<{ error?: string }> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
     )
     // 用户又开口了 —— 上一次「显式喊停」的收敛到此为止
     this.stoppedByUser = false
 
-    await this.runtime.prompt(text, images, display)
+    const result = await this.runtime.prompt(text, images, display)
 
     // 轮结束埋点（不 await；payload 组装失败只记日志，绝不影响会话主流程）
     void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
+    // 发送失败原样上交（UI 侧已由 HarnessSession 广播 error 事件）：调用方要能区分
+    // 「没发出去」与「发出去了没回话」—— 子会话的驱动方据此报错而不是假装排队
+    return result
   }
 
   // 注：指令文件/项目提示词随 createAgent 直接 append 进系统提示词（不再有懒注入步骤）。
@@ -276,6 +279,11 @@ export class AgentSession {
   /** 挂起中的用户询问数（>0 = 卡在 ask 上等人回答） */
   get pendingInputCount(): number {
     return this.runtime.pendingInputCount
+  }
+
+  /** 待答询问的人读摘要（父会话据此把问题转告用户） */
+  get pendingInputSummaries(): string[] {
+    return this.runtime.pendingInputSummaries
   }
 
   // ─── 业务埋点（workflow 触发；payload = 会话此刻的事实，与任何具体工作流无关） ───
