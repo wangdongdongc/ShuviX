@@ -16,7 +16,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
-import { createProject, seedFakeProvider, waitRendererReady } from '../../harness/seed'
+import {
+  createProject,
+  installAutoAllow,
+  seedFakeProvider,
+  waitRendererReady
+} from '../../harness/seed'
 import { sidebarPane, type SidebarPane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
@@ -84,6 +89,9 @@ beforeAll(async () => {
       .then((s) => s.id)`
   )
   sidebar = sidebarPane(app.main)
+  // 内置 ask-on-sub-session 对「开子会话」要问一句 —— e2e 里没人看着，扮演那个点
+  // 「允许一次」的用户。这条用例测的是子会话机制，不是那道门（门本身在 policies 区）
+  await installAutoAllow(app.main)
 }, 60_000)
 
 afterAll(async () => {

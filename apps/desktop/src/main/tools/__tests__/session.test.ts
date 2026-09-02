@@ -281,22 +281,20 @@ describe('SessionTool — 子会话 action', () => {
     ).toBeUndefined()
   })
 
-  it('wait 没等到底也是后台形态（活还在跑）；settled 不是', async () => {
+  it('wait **从不**带后台标签 —— 它什么也没起，是一次读取', async () => {
     const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
-    const row = { ...info('sub-1', 'A', 'running') }
-    mocks.runnerWait.mockResolvedValue({ kind: 'timeout', results: [row] })
-    expect(detailsOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))).toEqual({
-      type: 'session',
-      background: true
-    })
-
-    mocks.runnerWait.mockResolvedValue({
-      kind: 'settled',
-      results: [{ ...info('sub-1', 'A', 'idle'), answer: 'done' }]
-    })
-    expect(
-      detailsOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))
-    ).toBeUndefined()
+    // 那枚标签的含义是「这次调用甩下了一件还在跑的活」。wait 超时时还在跑的那件活是
+    // 上一次 prompt 甩下的，标签早就打在那张卡上了；blocked 时更是什么都没在跑
+    for (const kind of ['settled', 'timeout', 'aborted', 'blocked']) {
+      mocks.runnerWait.mockResolvedValue({
+        kind,
+        results: [{ ...info('sub-1', 'A', kind === 'settled' ? 'idle' : 'running') }]
+      })
+      expect(
+        detailsOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' })),
+        kind
+      ).toBeUndefined()
+    }
   })
 
   it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {

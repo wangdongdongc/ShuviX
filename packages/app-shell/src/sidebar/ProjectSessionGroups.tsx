@@ -6,6 +6,7 @@ import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { ProjectMemoryFolder, type ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
+import { parentsToAutoExpand } from './autoExpandSubs'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
@@ -136,24 +137,21 @@ export function ProjectSessionGroups({
     })
 
   // 新建的子会话自动展开它的父会话：agent 刚开出来的那条要立刻可见，否则「它到底建了没有」
-  // 只能靠数字。判据是**这一轮新出现的 id**，所以首次挂载（此前的子会话全是「新」的）
-  // 不触发 —— 那不是新建，是本来就在。
-  const seenChildren = useRef<Set<string> | null>(null)
+  // 只能靠数字。判据见 parentsToAutoExpand —— 关键是它**不会**在新窗口第一次拿到列表时
+  // 把整棵树摊开（缺省折叠）。
+  const seenSessions = useRef<Set<string>>(new Set())
+  const seenChildren = useRef<Set<string>>(new Set())
   useEffect(() => {
-    const current = new Set<string>()
-    const fresh: string[] = []
-    for (const [parentId, list] of childrenByParent) {
-      for (const child of list) {
-        current.add(child.id)
-        if (seenChildren.current && !seenChildren.current.has(child.id)) fresh.push(parentId)
-      }
-    }
-    const firstPass = seenChildren.current === null
-    seenChildren.current = current
-    if (firstPass || fresh.length === 0) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const fresh = parentsToAutoExpand({
+      childrenByParent,
+      seenChildren: seenChildren.current,
+      seenSessions: seenSessions.current
+    })
+    seenChildren.current = new Set([...childrenByParent.values()].flat().map((c) => c.id))
+    seenSessions.current = new Set(sessions.map((s) => s.id))
+    if (fresh.length === 0) return
     setExpandedParents((prev) => new Set([...prev, ...fresh]))
-  }, [childrenByParent])
+  }, [childrenByParent, sessions])
 
   // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
   // 绑定项目记忆的笔记本会话不进列表 —— 它们由组内的「项目记忆」子文件夹按磁盘条目呈现

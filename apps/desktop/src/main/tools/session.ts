@@ -358,9 +358,11 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
           : res.kind === 'blocked'
             ? 'Nothing finished: a sub-session is waiting for the user to approve something. Waiting again will not help — relay it to the user.'
             : ''
-    const out = [`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer]
-    // 等待没等到底 = 活还在跑，与后台形态是同一件事，标签一致
-    return res.kind === 'settled' ? text(...out) : backgroundText(...out)
+    // **不带后台标签**：那枚标签的含义是「这次调用甩下了一件还在跑的活」（bash 的
+    // run_in_background、prompt 的后台形态与超时降级都是）。wait 什么也没起 —— 它是一次
+    // 读取；即便超时，还在跑的那件活是**上一次 prompt** 甩下的，标签早就打在那张卡上了。
+    // blocked 更不是：那时根本没有东西在跑，是有人在等用户点批准。
+    return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)
   }
 
   private listSubSessions(): AgentToolResult<SessionToolDetails | undefined> {

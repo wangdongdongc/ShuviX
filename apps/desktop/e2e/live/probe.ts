@@ -26,6 +26,7 @@ import { launchApp, type E2EApp } from '../harness/launch'
 import {
   createProject,
   eventRecorder,
+  installAutoAllow,
   waitRendererReady,
   type EventRecorder
 } from '../harness/seed'
@@ -192,29 +193,8 @@ export async function startProbe(opts: {
   const events = eventRecorder(app.main)
   await events.install()
 
-  const autoAllow = async (o?: { only?: (command: string) => boolean }): Promise<void> => {
-    // 装在渲染端：input_request 事件一到就回一条 allowed（与用户点「允许一次」同一条 IPC）
-    const filter = o?.only ? `(${o.only.toString()})` : '(() => true)'
-    await app.main.eval(
-      `(() => {
-        if (window.__probeAutoAllow) return true
-        window.__probeAutoAllow = []
-        window.api.agent.onEvent((ev) => {
-          if (ev.type !== 'input_request') return
-          const req = ev.request
-          const command = req.command ?? req.question ?? ''
-          if (!${filter}(command)) return
-          window.__probeAutoAllow.push(command)
-          window.api.agent.respondToInput({
-            sessionId: ev.sessionId,
-            requestId: req.id,
-            response: { kind: req.kind, allowed: true, selections: [] }
-          })
-        })
-        return true
-      })()`
-    )
-  }
+  const autoAllow = (o?: { only?: (command: string) => boolean }): Promise<void> =>
+    installAutoAllow(app.main, o)
 
   const ask = async (sessionId: string, text: string, o?: { quietMs?: number }): Promise<void> => {
     const quietMs = o?.quietMs ?? 8000

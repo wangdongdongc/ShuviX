@@ -273,6 +273,41 @@ export async function seedFakeProvider(
 }
 
 /**
+ * 自动放行安全询问 —— 扮演那个会点「允许一次」的用户。
+ *
+ * 隔离实例带着全套内置策略（`ask-on-command` 对每条命令问、`ask-on-sub-session` 对开
+ * 子会话问），而 e2e 里没人看着：不装它的话，任何触发询问的用例都会挂到超时。
+ * 装在渲染端（`agent.onEvent` → `agent.respondToInput`），走的是用户点按钮的同一条 IPC。
+ *
+ * 想**故意**测「没人回答」的那条路径就别装它（或用 `only` 只放行一部分）。
+ */
+export async function installAutoAllow(
+  main: CdpClient,
+  opts?: { only?: (command: string) => boolean }
+): Promise<void> {
+  const filter = opts?.only ? `(${opts.only.toString()})` : '(() => true)'
+  await main.eval(
+    `(() => {
+      if (window.__e2eAutoAllow) return true
+      window.__e2eAutoAllow = []
+      window.api.agent.onEvent((ev) => {
+        if (ev.type !== 'input_request') return
+        const req = ev.request
+        const command = req.command ?? req.question ?? ''
+        if (!${filter}(command)) return
+        window.__e2eAutoAllow.push(command)
+        window.api.agent.respondToInput({
+          sessionId: ev.sessionId,
+          requestId: req.id,
+          response: { kind: req.kind, allowed: true, selections: [] }
+        })
+      })
+      return true
+    })()`
+  )
+}
+
+/**
  * 等 React 真正挂载（`launchApp` 只等到 preload 的 `window.api`，此后还有 ~1.5s 才上屏）。
  *
  * ⚠️ **不要用 `location.reload()` 让渲染端重新初始化**：主进程的 `will-navigate`

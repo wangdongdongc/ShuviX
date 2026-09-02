@@ -35,12 +35,12 @@ const byName = (name: string): ParsedPolicyFile => {
 }
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 12 份；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 13 份；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies()).not.toThrow()
     const policies = buildBuiltinPolicies()
-    expect(policies).toHaveLength(12)
+    expect(policies).toHaveLength(13)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(new Set(policies.map((p) => p.name)).size).toBe(12)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(13)
   })
 
   it('BP-1b 每份语言文件都声明 shuvix-builtin: true（新增内置策略漏写即红）', () => {
@@ -242,21 +242,43 @@ describe('buildBuiltinPolicies', () => {
     expect(rule.match).not.toContain('sql')
   })
 
-  it('BP-T1 出厂无调用门：内置的 ask/deny 规则都不作用于 invocation 客体（否则击穿 L1 非事件快路）', () => {
+  it('BP-T1 出厂的调用门只有一道，且必须按工具名收窄（别的工具照走 L1 非事件快路）', () => {
+    // 原先这条是「出厂一道调用门都没有」。ask-on-sub-session 是刻意加的第一道：
+    // 开一条子会话开出去的是**一整场会自己跑的对话**，值得一次询问，而它没有路径/命令
+    // 那样的专属客体，只能落在 invocation 上。
+    //
+    // 于是不变式换成更要紧的那一条：**调用门必须窄**。L1 每次工具调用都过，靠
+    // 「probe 得 allow 就走非事件快路（不弹窗不记日志）」活着；一条不按 tool.name 收窄的
+    // ask/deny 会让**每个**工具调用都落进真评估 —— 免询问会话会以每调用一条的速度刷爆
+    // 决策 ring buffer。
+    const gates: string[] = []
     for (const policy of buildBuiltinPolicies()) {
       for (const rule of policy.rules) {
-        // allow/force-allow 命中 invocation 无害：L1 对 allow 一律走非事件快路（不弹窗不记日志），
-        // 与默认放行同待遇。会击穿快路的只有 ask/deny —— 那才是这条不变式要挡的。
+        // allow/force-allow 命中 invocation 无害：L1 对 allow 一律走非事件快路，与默认放行同待遇
         if (rule.effect === 'allow' || rule.effect === 'force-allow') continue
         const effective = mergeConditions(policy.scope, rule.conditions)
         const objectTypes = effective?.['object.type']
         expect(objectTypes, `${policy.name} 的 ${rule.effect} 规则未限定 object.type`).toBeDefined()
-        expect(
-          objectTypes,
-          `${policy.name} 含 invocation 客体的 ${rule.effect} 规则`
-        ).not.toContain('invocation')
+        if (!objectTypes?.includes('invocation')) continue
+        gates.push(policy.name)
+        // 收窄的判据必须在规则里点名工具 —— 否则别的工具全被拖下快路
+        expect(rule.match, `${policy.name} 的调用门未按 tool.name 收窄`).toContain('tool.name')
       }
     }
+    expect(gates).toEqual(['ask-on-sub-session'])
+  })
+
+  it('BP-T2 ask-on-sub-session 只拦"开"这一个动作（发消息/等待/读取都不再问）', () => {
+    const policy = byName('ask-on-sub-session')
+    expect(policy.rules).toHaveLength(1)
+    const rule = policy.rules[0]
+    expect(rule.effect).toBe('ask')
+    expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'object.type': ['invocation'] })
+    expect(rule.conditions).toEqual({ action: ['execute'] })
+    // 判据同时点名工具与动作：只有 create-sub-session 会问，session 工具的别的 action
+    // （set-title / prompt / wait / read / stop）与别的工具一律走快路
+    expect(rule.match).toContain("tool.name == 'session'")
+    expect(rule.match).toContain("tool.operation == 'create-sub-session'")
   })
 
   it('BP-4 同语言两次调用返回同一引用（按语言缓存）；不同语言各自缓存', () => {
