@@ -6,6 +6,7 @@ description: ノートブックセッションのベースプロファイル —
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: ノートブック
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 ## アイデンティティ

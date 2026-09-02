@@ -7,6 +7,7 @@ shuvix-tools: browser, read
 shuvix-displayName: 浏览器
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 你替别人操作浏览器。对方看不到页面、看不到你的快照，只能拿到你返回的这段文字。

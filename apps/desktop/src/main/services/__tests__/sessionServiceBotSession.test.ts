@@ -137,7 +137,7 @@ describe('resolveAgentProfileName —— 聊天会话没有根 Agent', () => {
 
   it('bots 为空数组 + agentProfile → 该档案名（空数组不劫持普通会话）', () => {
     mocks.daoPickSettings.mockReturnValue({ bots: [], agentProfile: 'coding' })
-    mocks.getProfile.mockReturnValue({ tools: [], dispatchOnly: false })
+    mocks.getProfile.mockReturnValue({ tools: [], sessionAwareness: true })
     expect(sessionService.resolveAgentProfileName('s1')).toBe('coding')
   })
 })
@@ -193,7 +193,7 @@ describe('updateAgentProfile —— 聊天会话拒绝一切切换', () => {
 
   it('bots 为空数组的会话照常切换成功（空数组不误伤）', async () => {
     mocks.daoPickSettings.mockReturnValue({ bots: [] })
-    mocks.getProfile.mockReturnValue({ tools: ['read'], dispatchOnly: false })
+    mocks.getProfile.mockReturnValue({ tools: ['read'], sessionAwareness: true })
     const res = await sessionService.updateAgentProfile('s1', 'coding')
     expect(res.success).toBe(true)
     expect(mocks.daoUpdateSettings).toHaveBeenCalledTimes(1)

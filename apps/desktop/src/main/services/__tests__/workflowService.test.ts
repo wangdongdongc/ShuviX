@@ -91,7 +91,7 @@ beforeEach(() => {
     tools: ['session'],
     instructionFiles: [],
     projectAwareness: false,
-    dispatchOnly: true,
+    sessionAwareness: false,
     source: 'builtin' as const,
     basePath: ''
   }))

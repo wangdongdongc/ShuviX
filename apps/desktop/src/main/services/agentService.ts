@@ -148,16 +148,17 @@ class AgentService implements AgentProfileRegistry {
   /**
    * 会话档案选择器的列表：可切换的档案 + 选择器要显示的字段。
    *
-   * 与 updateAgentProfile 的准入同源：排除 notebook（笔记本会话形态的基座，切到聊天会话上
-   * 只会得到一个指向不存在笔记的人格）与 `shuvix-dispatch-only` 档案（政策必须跑在新鲜
-   * 上下文里的执行型 agent，如 wiki-writer），保留 default（切回主会话基座的唯一入口）。
+   * 与 updateAgentProfile 的准入同源：只收**声明了 `shuvix-session-awareness`** 的档案
+   * （不声明 = 只可被派发的执行体，如 wiki-writer：政策必须跑在新鲜上下文里），
+   * 再排除 notebook（笔记本会话形态的基座，切到聊天会话上只会得到一个指向不存在笔记的
+   * 人格），保留 default（切回主会话基座的唯一入口）。
    * 不带 systemPrompt —— 选择器不需要，见 AgentProfileSummary。
    */
   listSwitchable(): AgentProfileSummary[] {
     return this.listAll()
       .filter(
         (a) =>
-          a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && !a.dispatchOnly)
+          a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
       )
       .map((a) => ({
         name: a.name,

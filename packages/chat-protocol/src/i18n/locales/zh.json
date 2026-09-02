@@ -884,7 +884,7 @@
     "subAgentDisplayName": "显示名",
     "subAgentDescPlaceholder": "一句话描述该智能体(用于列表与斜杠命令提示)",
     "subAgentDispatchLabel": "允许继续派发子智能体（嵌套，深度受限）",
-    "subAgentDispatchOnly": "仅可派发（不能切换为会话档案）",
+    "subAgentSessionAwareness": "会话感知（可在输入框选为会话的智能体）",
     "subAgentReadOnly": "内置智能体随应用发布，只读不可编辑。",
     "subAgentCreateOverride": "创建覆盖副本",
     "subAgentOverridden": "已覆盖",

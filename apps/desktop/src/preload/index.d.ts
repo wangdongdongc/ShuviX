@@ -463,8 +463,8 @@ declare global {
     instructionFiles: string[]
     /** 项目感知：是否注入项目提示词与项目记忆索引（shuvix-project-awareness） */
     projectAwareness: boolean
-    /** 只可派发、不可切换为会话档案（shuvix-dispatch-only）；GUI 暂不提供开关,原样透传保存 */
-    dispatchOnly: boolean
+    /** 会话感知（shuvix-session-awareness）：可被选为会话自己的 agent；缺省 false = 只可派发 */
+    sessionAwareness: boolean
     source: 'builtin' | 'user'
     basePath: string
   }

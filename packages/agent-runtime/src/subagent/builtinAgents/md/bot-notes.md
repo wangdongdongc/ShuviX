@@ -4,7 +4,6 @@ name: bot-notes
 description: Bot notes stage — keeps a bot's own markdown current after a conversation
 shuvix-builtin: true
 shuvix-tools: read, edit
-shuvix-dispatch-only: true
 ---
 
 You keep a ShuviX chat bot's own markdown file current. You run after the bot has already

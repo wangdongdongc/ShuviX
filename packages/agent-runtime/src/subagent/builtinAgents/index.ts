@@ -126,7 +126,7 @@ export const WIDGET_SPEC: BuiltinProfileSpec = {
 
 /**
  * wiki 一分为二：`wiki` 是对话入口（可 `/wiki` 切换，只读工具 + Agent），
- * `wiki-writer` 是执行侧（dispatch-only，握有全部写入/同意/提交政策）。
+ * `wiki-writer` 是执行侧（不声明会话感知 = 只可派发，握有全部写入/同意/提交政策）。
  * 拆分的判据是爆炸半径 —— 违反后果静默且不可逆的政策必须跑在每次派发的新鲜上下文里，
  * 而对话侧被长对话稀释也无妨：它压根没有写入工具，损坏不了知识库。
  */
@@ -143,7 +143,7 @@ export const WIKI_WRITER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 标题生成 agent —— auto-title 内置工作流的执行侧（dispatch-only：切成主会话人格无意义）。
+ * 标题生成 agent —— auto-title 内置工作流的执行侧（不声明会话感知：切成主会话人格无意义）。
  * 模型走 agent md `shuvix-model` 的通用链路：内置档案不声明 → 跟随派发方 = 会话当前模型；
  * 想钉住便宜模型就覆盖 `~/.shuvix/agents/titler.md` 写上 `shuvix-model`
  * （旧的「标题模型」专项设置已废弃）。经 session 工具落标题。
@@ -155,7 +155,7 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 
 /**
  * 聊天会话（bot）管线的两个阶段档案 —— 设计见 docs/bot-design.md §6.1 / §6.3。
- * 都是 dispatch-only：切成主会话人格毫无意义，它们只在 bot 管线里被派发。
+ * 都不声明会话感知：切成主会话人格毫无意义，它们只在 bot 管线里被派发。
  *
  * 两者都**不声明 `shuvix-model`**，但理由不同：
  *  - `bot-intent` 跑在每条消息的首字节路径上，跟随会话模型是最差默认 —— 门控模型是

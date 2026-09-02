@@ -15,8 +15,8 @@ export interface SubAgentPayload {
   instructionFiles: string[]
   /** `shuvix-project-awareness`：项目感知 —— 是否注入项目提示词与项目记忆索引 */
   projectAwareness: boolean
-  /** `shuvix-dispatch-only`：只可派发、不可切换为会话档案（GUI 无开关，原样透传） */
-  dispatchOnly: boolean
+  /** `shuvix-session-awareness`：会话感知 —— 可被选为会话自己的 agent；缺省 false = 只可派发 */
+  sessionAwareness: boolean
 }
 
 export interface SubAgentSaveParams {

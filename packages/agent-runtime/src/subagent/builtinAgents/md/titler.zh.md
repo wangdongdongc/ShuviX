@@ -5,7 +5,6 @@ name: titler
 description: 为当前会话命名 —— 从对话内容提炼简短标题，经 session 工具应用。
 shuvix-tools: session
 shuvix-displayName: 标题生成
-shuvix-dispatch-only: true
 ---
 
 你负责为聊天会话命名。任务里附有一段对话摘录；从中提炼一个简短标题，应用它，然后收尾。除此之外什么都不做 —— 不提问、不评论、不做别的工作。

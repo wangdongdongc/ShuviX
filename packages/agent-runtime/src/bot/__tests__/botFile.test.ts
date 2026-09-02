@@ -594,12 +594,12 @@ describe('SP —— 共享字段与 agent md 逐字同义', () => {
     expect(both().agent!.projectAwareness).toBe(false)
   })
 
-  it('SP-7 shuvix-dispatch-only 在 bot 侧是未知键（bot 没有「切换为会话档案」概念）', () => {
-    const { agent, bot: b } = both('shuvix-dispatch-only: true')
-    expect(agent!.dispatchOnly).toBe(true)
-    // 产物里没有 dispatchOnly 字段，且写了该键不影响合法性
+  it('SP-7 shuvix-session-awareness 在 bot 侧是未知键（bot 没有「切换为会话档案」概念）', () => {
+    const { agent, bot: b } = both('shuvix-session-awareness: true')
+    expect(agent!.sessionAwareness).toBe(true)
+    // 产物里没有 sessionAwareness 字段，且写了该键不影响合法性
     expect(b).not.toBeNull()
-    expect(Object.keys(b!)).not.toContain('dispatchOnly')
+    expect(Object.keys(b!)).not.toContain('sessionAwareness')
   })
 
   it('SP-合流 六键的产物切片在两侧逐字相等（一次性对照，防将来加键只改一边）', () => {
@@ -1657,7 +1657,7 @@ describe('PRJ —— botToInProcessAgentType', () => {
         projectAwareness: true,
         // AgentProfile 独有的三个注册表字段 —— 它们**不该**出现在运行投影里，
         // 所以在这里给上值，让下面那句键集比较真的能证明它们被投影丢掉了
-        dispatchOnly: false,
+        sessionAwareness: false,
         source: 'user',
         basePath: '/tmp/a.md'
       })

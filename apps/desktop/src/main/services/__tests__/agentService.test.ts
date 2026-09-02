@@ -389,7 +389,7 @@ describe('agentService —— 结构化写路径（属性卡/表单的 saveAgent
     tools: ['read'],
     instructionFiles: [],
     projectAwareness: false,
-    dispatchOnly: false,
+    sessionAwareness: false,
     ...extra
   })
 

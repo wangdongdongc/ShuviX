@@ -122,18 +122,27 @@ describe('parseAgentDefinitionFile', () => {
     }
   })
 
-  it('shuvix-dispatch-only：布尔往返，缺省 false，非布尔视为文件非法', () => {
-    const on = parseAgentDefinitionFile('---\nshuvix-dispatch-only: true\n---\nbody', 'x')
-    expect(on!.dispatchOnly).toBe(true)
-    expect(parseAgentDefinitionFile('---\nname: x\n---\nbody', 'x')!.dispatchOnly).toBe(false)
-    expect(parseAgentDefinitionFile('---\nshuvix-dispatch-only: sure\n---\nbody', 'x')).toBeNull()
-    // 序列化往返：false 不写 key（与其他布尔同策），true 必须写出，否则保存一次就丢了隔离
-    expect(serializeAgentDefinitionFile({ ...on!, name: 'x' })).toContain(
-      'shuvix-dispatch-only: true'
-    )
-    expect(serializeAgentDefinitionFile({ ...on!, name: 'x', dispatchOnly: false })).not.toContain(
+  it('shuvix-session-awareness：布尔往返，缺省 false（= 只可派发），非布尔视为文件非法', () => {
+    const on = parseAgentDefinitionFile('---\nshuvix-session-awareness: true\n---\nbody', 'x')
+    expect(on!.sessionAwareness).toBe(true)
+    // 缺省 false 是这个键的整个要点：不声明的档案用户在输入框里选不到
+    expect(parseAgentDefinitionFile('---\nname: x\n---\nbody', 'x')!.sessionAwareness).toBe(false)
+    expect(
+      parseAgentDefinitionFile('---\nshuvix-session-awareness: sure\n---\nbody', 'x')
+    ).toBeNull()
+    // 退役的反向开关只是未知键（取值相反，不做迁移）：写了不报错，也不再让档案可切换
+    const legacy = parseAgentDefinitionFile('---\nshuvix-dispatch-only: true\n---\nbody', 'x')
+    expect(legacy!.sessionAwareness).toBe(false)
+    expect(serializeAgentDefinitionFile({ ...legacy!, name: 'x' })).not.toContain(
       'shuvix-dispatch-only'
     )
+    // 序列化往返：false 不写 key（与其他布尔同策），true 必须写出，否则保存一次档案就选不到了
+    expect(serializeAgentDefinitionFile({ ...on!, name: 'x' })).toContain(
+      'shuvix-session-awareness: true'
+    )
+    expect(
+      serializeAgentDefinitionFile({ ...on!, name: 'x', sessionAwareness: false })
+    ).not.toContain('shuvix-session-awareness')
   })
 
   it('正文里的 {{shuvix:*}} 占位符原样保留（替换发生在 createAgent，解析层不动）', () => {
@@ -244,7 +253,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: ['read', 'grep', 'mcp:Context7', 'skill:pdf', 'agent'],
       instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
       projectAwareness: true,
-      dispatchOnly: false
+      sessionAwareness: false
     }
     const md = serializeAgentDefinitionFile(def)
     expect(md).toContain('shuvix-instruction-files: AGENTS.md, docs/house-rules.md')
@@ -261,7 +270,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
     expect(md).toBe('---\nshuvix: agent v1\nname: minimal\n---\n\nbody\n')
     expect(parseAgentDefinitionFile(md, 'x')).toEqual({
@@ -272,7 +281,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
   })
 
@@ -285,7 +294,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     }
     expect(serializeAgentDefinitionFile({ ...base, model: 'openai/gpt-4o' })).toContain(
       'shuvix-model: openai/gpt-4o'
@@ -305,7 +314,7 @@ describe('serializeAgentDefinitionFile', () => {
       model: 'openai/gpt-4o',
       instructionFiles: ['AGENTS.md'],
       projectAwareness: true,
-      dispatchOnly: false
+      sessionAwareness: false
     })
     const keys = md
       .split('\n---')[0]
@@ -338,7 +347,7 @@ describe('serializeAgentDefinitionFile', () => {
       model,
       instructionFiles: ['AGENTS.md'],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     }
     expect(parseAgentDefinitionFile(serializeAgentDefinitionFile(def), 'other-name')).toEqual(def)
   })
@@ -357,7 +366,7 @@ describe('serializeAgentDefinitionFile', () => {
       model,
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
     expect(parseAgentDefinitionFile(md, 'x')!.model).toBe(model)
   })
@@ -371,7 +380,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
     expect(md.split('\n')[1]).toBe(`${AGENT_FILE_MARKER_KEY}: ${AGENT_FILE_MARKER}`)
   })
@@ -386,7 +395,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: ['read'],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
   })
 
@@ -400,7 +409,7 @@ describe('serializeAgentDefinitionFile', () => {
       tools: [],
       instructionFiles: [],
       projectAwareness: false,
-      dispatchOnly: false
+      sessionAwareness: false
     })
     const parsed = parseAgentDefinitionFile(md, 'x')
     expect(parsed).not.toBeNull()
@@ -497,7 +506,7 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
 
   it.each([
     ['WU-7', 'shuvix-project-awareness'],
-    ['WU-8', 'shuvix-dispatch-only']
+    ['WU-8', 'shuvix-session-awareness']
   ])('%s %s 非布尔：点名该键并给出 true / false', (_id, key) => {
     // `yes please` 是最真实的误写：YAML 里 `yes` 本身是布尔，加了词才落回字符串
     const msg = soleWarn(`---\nname: b\n${key}: yes please\n---\nbody`)
@@ -570,7 +579,7 @@ describe('DG —— 诊断完整性守卫', () => {
       '---\nshuvix-instruction-files: true\n---\nbody',
       '---\nshuvix-instruction-files: ../outside.md\n---\nbody',
       '---\nshuvix-project-awareness: [a]\n---\nbody',
-      '---\nshuvix-dispatch-only: sure\n---\nbody'
+      '---\nshuvix-session-awareness: sure\n---\nbody'
     ]
     for (const raw of rejected) {
       const messages: string[] = []
@@ -784,7 +793,7 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-tools',
       'shuvix-instruction-files',
       'shuvix-project-awareness',
-      'shuvix-dispatch-only'
+      'shuvix-session-awareness'
     ])
 
     // boolean kind 的键 = 解析器强制布尔的两个（非布尔即整份非法）
@@ -792,7 +801,7 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       .filter((f) => f.kind === 'boolean')
       .map((f) => f.key)
       .sort()
-    expect(booleanKeys).toEqual(['shuvix-dispatch-only', 'shuvix-project-awareness'])
+    expect(booleanKeys).toEqual(['shuvix-project-awareness', 'shuvix-session-awareness'])
     for (const key of booleanKeys) {
       expect(parseAgentDefinitionFile(`---\n${key}: nope\n---\nbody`, 'x'), key).toBeNull()
       expect(parseAgentDefinitionFile(`---\n${key}: true\n---\nbody`, 'x'), key).not.toBeNull()

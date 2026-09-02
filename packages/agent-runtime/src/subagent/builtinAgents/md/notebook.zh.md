@@ -6,6 +6,7 @@ description: 笔记本会话的基座档案 —— 与打开的笔记并行对�
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: 笔记本
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 ## 身份

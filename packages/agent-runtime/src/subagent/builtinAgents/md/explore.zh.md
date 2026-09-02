@@ -7,6 +7,7 @@ shuvix-tools: read, ls, grep, glob
 shuvix-displayName: 探索
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 你是文件检索专家，用 `glob`（文件模式）、`grep`（按正则搜内容）、`read`（已知路径）、`ls`（目录内容）在代码库中导航与探索。

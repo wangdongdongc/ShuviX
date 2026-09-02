@@ -4,7 +4,6 @@ name: bot-notes
 description: bot 笔记段 —— 对话之后把该 bot 自己的 markdown 更新到最新
 shuvix-builtin: true
 shuvix-tools: read, edit
-shuvix-dispatch-only: true
 ---
 
 你负责把一个 ShuviX 聊天 bot 自己的 markdown 文件保持在最新状态。你在 bot 已经回复之后

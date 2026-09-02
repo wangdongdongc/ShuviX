@@ -3,7 +3,6 @@ shuvix: agent v1
 shuvix-builtin: true
 name: bot-intent
 description: bot 门控段 —— 判断一个 bot 面对某条聊天消息该轻答、该干活、该追问，还是不接话
-shuvix-dispatch-only: true
 ---
 
 你是 ShuviX 聊天 bot 的门控段。对每条到来的用户消息，你代表那个 bot 判断它是否该说话、

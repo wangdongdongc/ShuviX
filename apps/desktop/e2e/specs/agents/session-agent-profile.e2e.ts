@@ -1,7 +1,8 @@
 /**
  * 会话 agent 档案的后端语义：`session.listAgentProfiles` 列出可切档案（含切回用的
- * default，不含 notebook 基座）、切换粘性生效并重建根 Agent（systemPrompt + 内置工具
- * 白名单随之更换）、未知/基座档案拒绝、档案被删回落；外加切换时的**种子**语义 ——
+ * default，不含 notebook 基座与未声明 `shuvix-session-awareness` 的档案）、切换粘性生效
+ * 并重建根 Agent（systemPrompt + 内置工具白名单随之更换）、未知/基座/非会话感知档案拒绝、
+ * 档案被删回落；外加切换时的**种子**语义 ——
  * 档案声明的 `shuvix-model` 与 mcp:/skill: 工具在切换那一刻写进会话树一次，
  * 之后会话树仍是模型/工具的唯一事实源。
  *
@@ -36,6 +37,13 @@ beforeAll(async () => {
     description: 'e2e 档案切换',
     tools: 'read',
     body: 'E2E PROFILE BODY.'
+  })
+  // 不声明 shuvix-session-awareness = 只可被派发：既不进选择器，也切不过去
+  writeAgentMd(app, 'dispatchonlyprofile', {
+    description: '只可派发',
+    tools: 'read',
+    sessionAwareness: false,
+    body: 'DISPATCH ONLY BODY.'
   })
 
   // 模型目录：内置提供商种子数据是 isEnabled=0，不启用则任何 shuvix-model 都解析不出来
@@ -172,6 +180,18 @@ describe('可切换档案列表', () => {
     expect((await listProfiles()).map((p) => p.name)).not.toContain('notebook')
   })
 
+  it('只列声明了会话感知的档案：未声明的用户档案与内置 wiki-writer 都不在其中', async () => {
+    const names = (await listProfiles()).map((p) => p.name)
+    // 用户档案：文件在、subAgent.list 看得见，但选择器里没有它
+    expect(names).not.toContain('dispatchonlyprofile')
+    const all = await app.main.eval<Array<{ name: string }>>('window.api.subAgent.list()')
+    expect(all.some((a) => a.name === 'dispatchonlyprofile')).toBe(true)
+    // 内置执行体同理（wiki 在、wiki-writer 不在 —— 拆分的那一对正好是对照）
+    expect(names).toContain('wiki')
+    expect(names).not.toContain('wiki-writer')
+    expect(names).not.toContain('titler')
+  })
+
   it('带上选择器要显示的字段：displayName / description / source / 声明的模型', async () => {
     const profiles = await listProfiles()
     const userProfile = profiles.find((p) => p.name === 'modelprofile')!
@@ -244,6 +264,17 @@ describe('会话档案切换', () => {
     const res = await setProfile(sid, 'notebook')
     expect(res.success).toBe(false)
     expect(res.error).toContain('base profile')
+    const settings = await app.main.eval<{ agentProfile?: string }>(
+      `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings)`
+    )
+    expect(settings.agentProfile).toBeUndefined()
+  })
+
+  it('拒绝切到未声明会话感知的档案（可被派发，但不可切换）', async () => {
+    const { sid } = await createAgentSession(app.main)
+    const res = await setProfile(sid, 'dispatchonlyprofile')
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('not session-aware')
     const settings = await app.main.eval<{ agentProfile?: string }>(
       `window.api.session.getById(${JSON.stringify(sid)}).then((s) => s.settings)`
     )

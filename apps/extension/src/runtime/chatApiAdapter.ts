@@ -272,14 +272,15 @@ export const chatApiAdapter: ChatApi = {
       return ok
     },
     getById: async (id) => sessionStore.getById(id),
-    // 可切换的会话档案（扩展只有内置档案，无用户目录）：排除 notebook 基座与 dispatch-only
-    // 执行型档案（政策要求新鲜上下文），保留 default
+    // 可切换的会话档案（扩展只有内置档案，无用户目录）：只收声明了会话感知的档案
+    // （不声明 = 只可被派发的执行型档案，政策要求新鲜上下文），排除 notebook 基座，保留 default
     listAgentProfiles: async () =>
       extensionSubAgentRegistry
         .listAll()
         .filter(
           (a) =>
-            a.name === DEFAULT_PROFILE_NAME || (!BASE_PROFILE_NAMES.has(a.name) && !a.dispatchOnly)
+            a.name === DEFAULT_PROFILE_NAME ||
+            (!BASE_PROFILE_NAMES.has(a.name) && a.sessionAwareness)
         )
         .map((a) => ({
           name: a.name,
@@ -309,9 +310,10 @@ export const chatApiAdapter: ChatApi = {
       if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
         return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
       }
-      // dispatch-only 档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）
-      if (profile.dispatchOnly) {
-        return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }
+      // 未声明会话感知的档案只能被派发：切成主会话后长对话会稀释其政策的权重（见 definitionFile）。
+      // 'default' 豁免（与上面的列表同源）：它是主会话本身的基座，不能把退路堵死
+      if (name !== DEFAULT_PROFILE_NAME && !profile.sessionAwareness) {
+        return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
       }
       await sessionStore.updateSettings(id, { agentProfile: name })
       // await：旧运行时彻底停下才算解绑，之后再写模型种子才不会和它抢叶子

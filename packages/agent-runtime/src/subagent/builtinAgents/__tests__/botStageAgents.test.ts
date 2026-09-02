@@ -5,7 +5,7 @@
  * 有人设的聊天参与者」，阶段 agent 是它内部的执行段。解析器不读文件类型标记，所以
  * 「别把它写成 bot」只能靠守卫（BA-8）。
  *
- * 其余四条不变式来自 docs/bot-design.md §6：dispatch-only、工具白名单一空一实
+ * 其余四条不变式来自 docs/bot-design.md §6：只可派发、工具白名单一空一实
  * （门控段恒零工具；笔记段拿 read/edit，因为它就地编辑 bot 自己的那份 md）、
  * 都不钉扎模型、结构化输出的枚举词汇不能被翻译掉。
  */
@@ -40,11 +40,11 @@ describe('bot 阶段 agent —— 结构钉板', () => {
     }
   })
 
-  it.each(SPECS)('BA-2 %s：dispatch-only 且 name 恒等于 spec.name', (name, spec) => {
-    // 阶段 agent 切成主会话人格毫无意义 —— 只可派发
+  it.each(SPECS)('BA-2 %s：不声明会话感知（只可派发）且 name 恒等于 spec.name', (name, spec) => {
+    // 阶段 agent 切成主会话人格毫无意义 —— 不声明会话感知，用户在输入框里选不到
     for (const language of LANGS) {
       const profile = build(spec, language)
-      expect(profile.dispatchOnly, `${name}.${language}`).toBe(true)
+      expect(profile.sessionAwareness, `${name}.${language}`).toBe(false)
       expect(profile.name, `${name}.${language}`).toBe(spec.name)
     }
   })

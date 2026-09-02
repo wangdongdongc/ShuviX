@@ -5,7 +5,6 @@ name: wiki-writer
 description: ローカル wiki ナレッジベースへの変更の実行:エントリ、トピック、ライフサイクル、git 履歴。
 shuvix-tools: read, grep, glob, ls, write, edit, git, ask
 shuvix-displayName: ナレッジベース編集
-shuvix-dispatch-only: true
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
 ---

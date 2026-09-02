@@ -356,10 +356,12 @@ export class SessionService {
     if (name !== DEFAULT_PROFILE_NAME && BASE_PROFILE_NAMES.has(name)) {
       return { success: false, error: `"${name}" is a base profile and cannot be switched to` }
     }
-    // dispatch-only 档案（如 wiki-writer）：政策的有效性依赖每次派发都是新鲜上下文，
-    // 切成主会话后长对话会稀释系统提示词权重，而它们违规的代价静默且不可逆。
-    if (profile.dispatchOnly) {
-      return { success: false, error: `"${name}" is dispatch-only and cannot be switched to` }
+    // 未声明会话感知的档案（如 wiki-writer）只可被派发：政策的有效性依赖每次派发都是
+    // 新鲜上下文，切成主会话后长对话会稀释系统提示词权重，而它们违规的代价静默且不可逆。
+    // 'default' 豁免（与 listSwitchable 同源）：它是主会话本身的基座 —— 会话本就由它创建，
+    // 一份漏写该键的用户 default.md 不该把「切回主会话」这条唯一退路也堵死。
+    if (name !== DEFAULT_PROFILE_NAME && !profile.sessionAwareness) {
+      return { success: false, error: `"${name}" is not session-aware and cannot be switched to` }
     }
     log.info(`updateAgentProfile session=${sessionId} → ${name}`)
     sessionDao.updateSettings(sessionId, { agentProfile: name })

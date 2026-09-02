@@ -25,6 +25,12 @@ export interface AgentMdSeed {
   /** shuvix-instruction-files 逗号串（如 'AGENTS.md, CLAUDE.md'） */
   instructionFiles?: string
   projectAwareness?: boolean
+  /**
+   * shuvix-session-awareness —— **缺省 true**：种子代表「用户自己建的档案」，
+   * 而 GUI 新建的初值就是会话感知开。要测「不声明会话感知的档案选不到 / 切不过去」
+   * 时显式传 false。
+   */
+  sessionAwareness?: boolean
   /** 追加的原始 frontmatter 行（测未知/废弃 key 时用） */
   rawLines?: string[]
 }
@@ -40,6 +46,7 @@ export function writeAgentMd(app: E2EApp, name: string, seed: AgentMdSeed = {}):
   if (seed.displayName) lines.push(`shuvix-displayName: ${seed.displayName}`)
   if (seed.instructionFiles) lines.push(`shuvix-instruction-files: ${seed.instructionFiles}`)
   if (seed.projectAwareness) lines.push('shuvix-project-awareness: true')
+  if (seed.sessionAwareness !== false) lines.push('shuvix-session-awareness: true')
   if (seed.rawLines) lines.push(...seed.rawLines)
   lines.push('---', '', seed.body ?? 'BODY.')
   const filePath = join(app.agentsDir, `${name}.md`)

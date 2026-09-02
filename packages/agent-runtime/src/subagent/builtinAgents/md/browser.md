@@ -7,6 +7,7 @@ shuvix-tools: browser, read
 shuvix-displayName: Browser
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 You drive a browser on someone else's behalf. They cannot see the page, cannot see your snapshots, and get nothing but the text you return.

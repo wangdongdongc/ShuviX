@@ -6,6 +6,7 @@ description: Base profile for notebook sessions — the persistent root agent co
 shuvix-tools: read, write, edit, ls, grep, glob, bash, browser, ask
 shuvix-displayName: Notebook
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 ## Identity

@@ -232,7 +232,9 @@ describe('设置页 Bots tab', () => {
     // 覆盖文件完整性：从内置原文整份带出，不是只有一行 model 的残片
     expect(content).toContain('shuvix: agent v1')
     expect(content).toContain('name: bot-intent')
-    expect(content).toContain('shuvix-dispatch-only: true')
+    expect(content).toMatch(/\ndescription: .+/)
+    // 正文（人格提示词）也在 —— 只剩 frontmatter 就说明没带出原文
+    expect(content.replace(/^---\n[\s\S]*?\n---\n/, '').trim().length).toBeGreaterThan(100)
 
     // 注册表视角：用户条目带 model 生效，内置条目被遮蔽
     const agents = await settings.eval<

@@ -5,7 +5,6 @@ name: wiki-writer
 description: 'Executes changes to the local wiki knowledge base: entries, topics, lifecycle and git history.'
 shuvix-tools: read, grep, glob, ls, write, edit, git, ask
 shuvix-displayName: Knowledge Base Writer
-shuvix-dispatch-only: true
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
 ---

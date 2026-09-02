@@ -7,6 +7,7 @@ shuvix-tools: bash, read, write, edit, ask, browser, agent
 shuvix-displayName: Default
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
+shuvix-session-awareness: true
 ---
 
 ## Identity

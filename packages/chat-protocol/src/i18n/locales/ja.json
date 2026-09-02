@@ -884,7 +884,7 @@
     "subAgentDisplayName": "表示名",
     "subAgentDescPlaceholder": "このエージェントの一文説明(一覧やスラッシュコマンドのヒントに表示)",
     "subAgentDispatchLabel": "さらにサブエージェントの派遣を許可（ネスト・深さ制限あり）",
-    "subAgentDispatchOnly": "派遣専用（セッションのプロファイルには切り替え不可）",
+    "subAgentSessionAwareness": "セッション認識（セッションのエージェントとして選択可能）",
     "subAgentReadOnly": "組み込みエージェントはアプリに同梱され、読み取り専用です。",
     "subAgentCreateOverride": "上書きコピーを作成",
     "subAgentOverridden": "上書き済み",

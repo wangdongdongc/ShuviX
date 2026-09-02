@@ -20,7 +20,7 @@ const DOC = [
   'name: bot-intent',
   'description: gate stage',
   'shuvix-model: openai/gpt-old',
-  'shuvix-dispatch-only: true',
+  'shuvix-session-awareness: true',
   '---',
   '',
   'BODY LINE ONE.',

@@ -96,7 +96,7 @@ describe('resolveAgentProfileName — 笔记本会话钉死 notebook 基座', ()
 
   it('notebookPath 为空串 = 非笔记本 → 走 agentProfile 解析', () => {
     mocks.daoPickSettings.mockReturnValue({ notebookPath: '', agentProfile: 'coding' })
-    mocks.getProfile.mockReturnValue({ tools: [], dispatchOnly: false })
+    mocks.getProfile.mockReturnValue({ tools: [], sessionAwareness: true })
     expect(sessionService.resolveAgentProfileName('s1')).toBe('coding')
   })
 
@@ -131,16 +131,39 @@ describe('updateAgentProfile — 笔记本钉死与正常切换链', () => {
 
   it("聊天会话切 'notebook'：基座档案拒绝（错误含 base profile），不落库", async () => {
     mocks.daoPickSettings.mockReturnValue({})
-    mocks.getProfile.mockReturnValue({ tools: ['read'], dispatchOnly: false })
+    mocks.getProfile.mockReturnValue({ tools: ['read'], sessionAwareness: true })
     const res = await sessionService.updateAgentProfile('s1', 'notebook')
     expect(res.success).toBe(false)
     expect(res.error).toContain('base profile')
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
   })
 
+  it('未声明会话感知的档案：拒绝（错误含 not session-aware），不落库', async () => {
+    mocks.daoPickSettings.mockReturnValue({})
+    mocks.getProfile.mockReturnValue({ tools: ['read'], sessionAwareness: false })
+    const res = await sessionService.updateAgentProfile('s1', 'wiki-writer')
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('not session-aware')
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(invalidateSpy).not.toHaveBeenCalled()
+  })
+
+  it("'default' 豁免该门：一份漏写会话感知的用户 default.md 不该堵死切回主会话的退路", async () => {
+    // 与 agentService.listSwitchable 的 default 短路同源 —— 两处口径必须一致，
+    // 否则选择器列得出 default、切过去却被拒，用户再也回不到主会话
+    mocks.daoPickSettings.mockReturnValue({})
+    mocks.getProfile.mockReturnValue({ tools: ['read'], sessionAwareness: false })
+    const res = await sessionService.updateAgentProfile('s1', 'default')
+    expect(res.success).toBe(true)
+    expect(mocks.daoUpdateSettings).toHaveBeenCalledWith('s1', { agentProfile: 'default' })
+  })
+
   it('正控制组：普通档案切换走完整链（落库 → invalidate → 工具种子 → 广播）', async () => {
     mocks.daoPickSettings.mockReturnValue({})
-    mocks.getProfile.mockReturnValue({ tools: ['read', 'skill:x', 'mcp:y'], dispatchOnly: false })
+    mocks.getProfile.mockReturnValue({
+      tools: ['read', 'skill:x', 'mcp:y'],
+      sessionAwareness: true
+    })
     const res = await sessionService.updateAgentProfile('s1', 'myprof')
     expect(res).toEqual({
       success: true,

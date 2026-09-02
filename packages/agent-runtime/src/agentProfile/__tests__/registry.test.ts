@@ -112,8 +112,8 @@ describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
         expect(desk.tools, `wiki.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       expect(desk.tools, `wiki.${language} 需能派发`).toContain('agent')
-      expect(desk.dispatchOnly, `wiki.${language} 必须可切换`).toBe(false)
-      expect(writer.dispatchOnly, `wiki-writer.${language} 必须只可派发`).toBe(true)
+      expect(desk.sessionAwareness, `wiki.${language} 必须可切换`).toBe(true)
+      expect(writer.sessionAwareness, `wiki-writer.${language} 必须只可派发`).toBe(false)
       // 对话侧必须点名执行侧 —— 派发工具不枚举 agent 名，名字只能来自提示词
       expect(desk.systemPrompt, `wiki.${language} 需点名 wiki-writer`).toContain('wiki-writer')
       // 派发调用形状与确认通道必须写明 —— 弱模型曾靠猜参数名连番失败、把批准确认写成纯文本
@@ -318,9 +318,9 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
     ])
   })
 
-  it('是可切换的具名档案（/coding），不是基座档案也不是 dispatch-only', () => {
+  it('声明会话感知（可 /coding 切换），且不是基座档案', () => {
     expect(BASE_PROFILE_NAMES.has('coding')).toBe(false)
-    expect(profile('coding').dispatchOnly).toBe(false)
+    expect(profile('coding').sessionAwareness).toBe(true)
   })
 
   it('三语 default 都点名 coding —— 切换入口只能从提示词被用户知晓', () => {
@@ -356,8 +356,8 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').tools).toEqual(['session'])
   })
 
-  it('dispatchOnly：只可派发、不可 /titler 切换，也不是基座档案', () => {
-    expect(profile('titler').dispatchOnly).toBe(true)
+  it('不声明会话感知：只可派发、不可 /titler 切换，也不是基座档案', () => {
+    expect(profile('titler').sessionAwareness).toBe(false)
     expect(BASE_PROFILE_NAMES.has('titler')).toBe(false)
   })
 

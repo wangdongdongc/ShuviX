@@ -19,7 +19,7 @@ const PROFILE: AgentProfile = {
   tools: ['read', 'grep'],
   instructionFiles: [],
   projectAwareness: false,
-  dispatchOnly: false,
+  sessionAwareness: false,
   source: 'builtin',
   basePath: ''
 }

@@ -20,6 +20,7 @@ interface AgentRow {
   description: string
   instructionFiles: string[]
   projectAwareness: boolean
+  sessionAwareness: boolean
   overridden?: boolean
 }
 
@@ -53,6 +54,10 @@ describe('内置档案', () => {
       // 指令文件清单顺序即优先级 —— 内置沿用改制前的 AGENTS.md 优先、CLAUDE.md 次之
       expect(a.instructionFiles, a.name).toEqual(instructionsOn ? ['AGENTS.md', 'CLAUDE.md'] : [])
       expect(a.projectAwareness, a.name).toBe(awarenessOn)
+      // 会话感知 = 用户能否在输入框把会话切成它。派发专用的执行体一律不声明：
+      // 三个窄档案，外加 wiki-writer（写入政策的有效性依赖每次派发都是新鲜上下文）
+      const switchable = !narrow.includes(a.name) && a.name !== 'wiki-writer'
+      expect(a.sessionAwareness, a.name).toBe(switchable)
       expect(a.description.length, a.name).toBeGreaterThan(0)
       expect('isEnabled' in a, a.name).toBe(false)
     }

@@ -884,7 +884,7 @@
     "subAgentDisplayName": "Display name",
     "subAgentDescPlaceholder": "One-sentence description of this agent (shown in the agents list and slash-command hints)",
     "subAgentDispatchLabel": "Allow dispatching further sub-agents (nested, depth-limited)",
-    "subAgentDispatchOnly": "Dispatch-only (cannot be switched to as a session profile)",
+    "subAgentSessionAwareness": "Session awareness (selectable as a session's agent)",
     "subAgentReadOnly": "Built-in agents ship with the app and are read-only.",
     "subAgentCreateOverride": "Create override copy",
     "subAgentOverridden": "Overridden",

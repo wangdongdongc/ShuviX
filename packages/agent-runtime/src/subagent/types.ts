@@ -39,10 +39,12 @@ export interface AgentProfile {
    */
   projectAwareness: boolean
   /**
-   * `shuvix-dispatch-only`：只可被派发，不作为 `/<agentName>` 会话档案切换目标。
-   * 与 BASE_PROFILE_NAMES 不同 —— 那是「两边都不进」，这里只挡切换、照常可派发。
+   * `shuvix-session-awareness`：会话感知 —— 该档案懂得「自己是一场会话的人格」，
+   * 因而可被用户选为会话的 agent（`/<agentName>` 切换 / 输入框档案选择器）。
+   * 缺省 false = 只可被派发。只管切换、不管派发；与 BASE_PROFILE_NAMES 不同 ——
+   * 那是「两边都不进」。
    */
-  dispatchOnly: boolean
+  sessionAwareness: boolean
   /** 来源（决定 UI 能否编辑/删除） */
   source: 'builtin' | 'user'
   /** 配置所在路径（桌面=agent md 文件路径；扩展可为空） */
