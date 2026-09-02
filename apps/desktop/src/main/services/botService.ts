@@ -233,7 +233,7 @@ const BOT_LOOP_DEFAULTS = { maxHop: 2, maxFanout: 8 } as const
 /**
  * 实时读取两道护栏（同 `httpLog.enabled` 的口径：改了立刻生效，不必重建会话）。
  * 写坏的值（非数、负数、小数）一律回落缺省 —— 设置项是纯文本键值，UI 之外还有
- * `session-config` 工具这条写入口，一个 `maxHop: "很多"` 不该把护栏整个关掉。
+ * `session` 工具这条写入口，一个 `maxHop: "很多"` 不该把护栏整个关掉。
  */
 function readLoopLimits(): { maxHop: number; maxFanout: number } {
   const num = (key: string, fallback: number): number => {

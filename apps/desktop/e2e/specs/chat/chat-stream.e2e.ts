@@ -283,18 +283,19 @@ describe('自动标题', () => {
 
     // 自动标题现在是 **auto-title 工作流派发 titler agent**，不再是那条带 TITLE_MARKER 的
     // 专用请求 —— 所以它是一次普通对话请求，会正常消费脚本队列。用 `when` 按内容认领：
-    // titler 的工具集里有 session-config，主对话没有。
+    // titler 的工具集里有 session 工具，主对话没有（按工具名精确匹配 —— 单词 session
+    // 在别的工具描述里也出现，子串匹配会误认领）。
     // （fakeProvider 里那条「标题请求不消费队列」的分支因此已是死代码，见 TITLE_MARKER。）
     const isTitler = (r: { body: { tools?: unknown[] } }): boolean =>
-      JSON.stringify(r.body.tools ?? []).includes('session-config')
+      JSON.stringify(r.body.tools ?? []).includes('"name":"session"')
     provider.script(
       { text: 'titled', when: (r) => !isTitler(r) },
-      // titler 先用 session-config 写标题……
+      // titler 先用 session 工具写标题……
       {
         toolCalls: [
           {
             id: 'call_title',
-            name: 'session-config',
+            name: 'session',
             args: JSON.stringify({ action: 'set-title', title: 'E2E 标题' })
           }
         ],

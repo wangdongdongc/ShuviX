@@ -352,8 +352,8 @@ describe('coding 档案钉板(从 default 拆出的工程人格)', () => {
 })
 
 describe('titler 档案钉板（auto-title 的执行侧）', () => {
-  it('tools 恰为 [session-config] —— 命名任务只需要改自己会话的标题这一件事', () => {
-    expect(profile('titler').tools).toEqual(['session-config'])
+  it('tools 恰为 [session] —— 命名任务只需要改自己会话的标题这一件事', () => {
+    expect(profile('titler').tools).toEqual(['session'])
   })
 
   it('dispatchOnly：只可派发、不可 /titler 切换，也不是基座档案', () => {
@@ -365,10 +365,10 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
     expect(profile('titler').model).toBeUndefined()
   })
 
-  it('三语 body 都含 session-config / next / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
+  it('三语 body 都含 session / next / set-title 与 60（工具协议与长度上限不因翻译走样）', () => {
     for (const language of ['en', 'zh', 'ja']) {
       const body = profile('titler', language).systemPrompt
-      for (const anchor of ['session-config', 'next', 'set-title', '60']) {
+      for (const anchor of ['`session`', 'next', 'set-title', '60']) {
         expect(body, `titler.${language} 需含 ${anchor}`).toContain(anchor)
       }
     }

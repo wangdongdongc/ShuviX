@@ -2,8 +2,8 @@
 shuvix: agent v1
 shuvix-builtin: true
 name: titler
-description: 为当前会话命名 —— 从对话内容提炼简短标题，经 session-config 工具应用。
-shuvix-tools: session-config
+description: 为当前会话命名 —— 从对话内容提炼简短标题，经 session 工具应用。
+shuvix-tools: session
 shuvix-displayName: 标题生成
 shuvix-dispatch-only: true
 ---
@@ -22,5 +22,5 @@ shuvix-dispatch-only: true
 
 ## 步骤
 
-1. 调用 `session-config`，action 为 `set-title`，附上你的标题 —— 这会重命名本任务所属的会话。
+1. 调用 `session`，action 为 `set-title`，附上你的标题 —— 这会重命名本任务所属的会话。
 2. 收尾。若工具列表里有 `next`，以调用 `next` 结束并传 `{"title": "<你设置的标题>"}`；否则只回复标题文本。

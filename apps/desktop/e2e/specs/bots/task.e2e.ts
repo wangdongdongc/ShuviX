@@ -300,12 +300,12 @@ describe('E-4 —— 自动标题对聊天会话也生效', () => {
     provider.reset()
     provider.script(
       next({ decision: 'reply', reason: '寒暄', reply: '你好，我在。' }, isGate),
-      // titler 自己动手改名（session-config），下一轮才交结构化结果
+      // titler 自己动手改名（session 工具），下一轮才交结构化结果
       {
         toolCalls: [
           {
             id: 'call_cfg',
-            name: 'session-config',
+            name: 'session',
             args: JSON.stringify({ action: 'set-title', title: '鉴权排查' })
           }
         ],

@@ -73,7 +73,7 @@ export interface SessionSettings {
    * （同一条记忆在同一处出现两次，比少一处入口更糟）。
    */
   memorySlug?: string
-  /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session-config 工具）。缺省视同 'user' */
+  /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
   /**
    * 聊天会话的未读 bot 回复数（A4）。bot 落树 +1（settings 写顺带 touch updatedAt，

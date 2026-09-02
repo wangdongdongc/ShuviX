@@ -146,7 +146,7 @@ export const WIKI_WRITER_SPEC: BuiltinProfileSpec = {
  * 标题生成 agent —— auto-title 内置工作流的执行侧（dispatch-only：切成主会话人格无意义）。
  * 模型走 agent md `shuvix-model` 的通用链路：内置档案不声明 → 跟随派发方 = 会话当前模型；
  * 想钉住便宜模型就覆盖 `~/.shuvix/agents/titler.md` 写上 `shuvix-model`
- * （旧的「标题模型」专项设置已废弃）。经 session-config 工具落标题。
+ * （旧的「标题模型」专项设置已废弃）。经 session 工具落标题。
  */
 export const TITLER_SPEC: BuiltinProfileSpec = {
   name: 'titler',

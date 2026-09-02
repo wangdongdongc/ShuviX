@@ -23,7 +23,7 @@ Two-phase automatic session titles, as a workflow:
   automation wrote (the user has not renamed the session), regenerate once from
   the accumulated conversation.
 
-The `titler` agent applies the title itself through its `session-config` tool
+The `titler` agent applies the title itself through its `session` tool
 and reports what it did through the `next` result contract below. To customize
 the wording rules, override the `titler` agent (`~/.shuvix/agents/titler.md`);
 to change _when_ titles happen, override this file
@@ -46,7 +46,7 @@ const out = await run(
   'titler',
   [
     'Derive a concise title for this session from the conversation excerpt below,',
-    'apply it with the session-config tool, then finish.',
+    'apply it with the session tool, then finish.',
     '',
     '<conversation>',
     source.slice(-1000),

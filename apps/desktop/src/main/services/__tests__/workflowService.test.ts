@@ -88,7 +88,7 @@ beforeEach(() => {
     displayName: name,
     description: '',
     systemPrompt: 'BODY',
-    tools: ['session-config'],
+    tools: ['session'],
     instructionFiles: [],
     projectAwareness: false,
     dispatchOnly: true,

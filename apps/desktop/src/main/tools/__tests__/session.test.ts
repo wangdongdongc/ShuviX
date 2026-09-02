@@ -1,5 +1,5 @@
 /**
- * session-config 工具 —— auto-title 业务的执行侧收口。
+ * session 工具 —— auto-title 业务的执行侧收口。
  *
  * 钉住的是三条硬边界：
  *   - **目标会话恒取 ToolContext.sessionId、不收 sessionId 参数** —— schema 层就没有
@@ -28,13 +28,13 @@ vi.mock('../../services/sessionService', () => ({
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 
-type SessionConfigModule = typeof import('../sessionConfig')
-let mod: SessionConfigModule
-let tool: InstanceType<SessionConfigModule['SessionConfigTool']>
+type SessionModule = typeof import('../session')
+let mod: SessionModule
+let tool: InstanceType<SessionModule['SessionTool']>
 
 beforeAll(async () => {
-  mod = await import('../sessionConfig')
-  tool = new mod.SessionConfigTool({ sessionId: 's1' } as ToolContext)
+  mod = await import('../session')
+  tool = new mod.SessionTool({ sessionId: 's1' } as ToolContext)
 })
 
 beforeEach(() => {
@@ -47,9 +47,9 @@ beforeEach(() => {
 const setTitle = (title?: string): Promise<unknown> =>
   tool.execute('tc-1', { action: 'set-title', ...(title !== undefined ? { title } : {}) })
 
-describe('SessionConfigTool — 参数面与目标会话边界', () => {
+describe('SessionTool — 参数面与目标会话边界', () => {
   it('schema 不含 sessionId（目标会话恒取 ToolContext，参数层就没有这个洞）', () => {
-    expect(Object.keys(mod.SessionConfigParamsSchema.properties)).toEqual(['action', 'title'])
+    expect(Object.keys(mod.SessionParamsSchema.properties)).toEqual(['action', 'title'])
   })
 
   it('未知 action → 错误列出合法值 set-title', async () => {
@@ -72,7 +72,7 @@ describe('SessionConfigTool — 参数面与目标会话边界', () => {
   })
 })
 
-describe('SessionConfigTool — set-title 校验与写入', () => {
+describe('SessionTool — set-title 校验与写入', () => {
   it.each([
     ['缺失', undefined],
     ['空串', ''],
@@ -107,21 +107,21 @@ describe('SessionConfigTool — set-title 校验与写入', () => {
   })
 })
 
-describe('SessionConfigTool — 注册与描述', () => {
-  it('模块加载即完成 registerBuiltinTool（name session-config、group system）', () => {
+describe('SessionTool — 注册与描述', () => {
+  it('模块加载即完成 registerBuiltinTool（name session、group system）', () => {
     expect(mocks.registerBuiltinTool).toHaveBeenCalledTimes(1)
     const entry = mocks.registerBuiltinTool.mock.calls[0][0] as {
       name: string
       group: string
       factory: (ctx: ToolContext) => unknown
     }
-    expect(entry.name).toBe('session-config')
+    expect(entry.name).toBe('session')
     expect(entry.group).toBe('system')
-    expect(entry.factory({ sessionId: 's2' } as ToolContext)).toBeInstanceOf(mod.SessionConfigTool)
+    expect(entry.factory({ sessionId: 's2' } as ToolContext)).toBeInstanceOf(mod.SessionTool)
   })
 
   it('描述文案含上限 60（LLM 直接从描述得知长度约束）', () => {
-    expect(mod.SESSION_CONFIG_DESCRIPTION).toContain('60')
+    expect(mod.SESSION_DESCRIPTION).toContain('60')
     expect(tool.description).toContain('60')
   })
 })

@@ -2,8 +2,8 @@
 shuvix: agent v1
 shuvix-builtin: true
 name: titler
-description: Names the current session — derives a concise title from the conversation and applies it via session-config.
-shuvix-tools: session-config
+description: Names the current session — derives a concise title from the conversation and applies it via the session tool.
+shuvix-tools: session
 shuvix-displayName: Titler
 shuvix-dispatch-only: true
 ---
@@ -22,5 +22,5 @@ Bad (vague): "Code changes", "对话记录" · Bad (too long): a full sentence d
 
 ## Steps
 
-1. Call `session-config` with action `set-title` and your title — this renames the session this task belongs to.
+1. Call `session` with action `set-title` and your title — this renames the session this task belongs to.
 2. Finish. When a `next` tool is available, end by calling it with `{"title": "<the title you set>"}`; otherwise reply with the title text only.

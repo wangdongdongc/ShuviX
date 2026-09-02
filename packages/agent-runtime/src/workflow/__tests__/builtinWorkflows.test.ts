@@ -71,7 +71,7 @@ const TITLER: InProcessAgentType = {
   name: 'titler',
   displayName: 'Titler',
   description: '',
-  tools: ['session-config'],
+  tools: ['session'],
   systemPrompt: 'You name chat sessions.'
 }
 

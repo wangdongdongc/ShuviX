@@ -2,8 +2,8 @@
 shuvix: agent v1
 shuvix-builtin: true
 name: titler
-description: 現在のセッションに名前を付ける —— 会話内容から簡潔なタイトルを導き、session-config ツールで適用する。
-shuvix-tools: session-config
+description: 現在のセッションに名前を付ける —— 会話内容から簡潔なタイトルを導き、session ツールで適用する。
+shuvix-tools: session
 shuvix-displayName: タイトル生成
 shuvix-dispatch-only: true
 ---
@@ -22,5 +22,5 @@ shuvix-dispatch-only: true
 
 ## 手順
 
-1. `session-config` を action `set-title` で呼び、タイトルを渡す —— このタスクが属するセッションの名前が変わります。
+1. `session` を action `set-title` で呼び、タイトルを渡す —— このタスクが属するセッションの名前が変わります。
 2. 終了する。ツールに `next` がある場合は `{"title": "<設定したタイトル>"}` を渡して `next` を呼んで終える。なければタイトルのテキストだけを返信する。

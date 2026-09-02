@@ -1,15 +1,17 @@
 /**
- * session-config 工具 —— 让 agent 读改**自己所属会话**的会话级配置。
+ * session 工具 —— 让 agent 读改**自己所属会话**的会话级能力。
  *
  * 目标会话恒取 ToolContext.sessionId（root=自身；spawned/workflow=归属会话）——
  * 刻意不收 sessionId 参数：一是 LLM 抄 uuid 会抄错，二是「只能动自己所属的会话」
  * 是比参数校验更硬的边界。会话域 workflow run 的 agent（如内置 titler）因此天然
  * 落在触发它的那个会话上。
  *
- * v1 仅 `set-title`（自动标题业务）；action 枚举为后续扩展留位（未知 action 的错误
- * 文案列出合法值 —— 5250adc 的纠正性引导纪律）。写入经 sessionService.updateTitle
- * (origin='auto')：落库 + 记 titleOrigin + 广播 titleChanged，各端会话列表即时刷新。
- * 无专属安全客体 —— 要设门用 L1 全工具门（tool.name == 'session-config'）。
+ * 单一 action 枚举而非「每能力一个工具」：会话相关的处理能力会持续增加，工具面越少
+ * 模型越不容易挑错，扩展只需在 ACTIONS 里加一项 + 一个 case（未知 action 的错误文案
+ * 列出合法值 —— 5250adc 的纠正性引导纪律）。当前仅 `set-title`（自动标题业务），
+ * 写入经 sessionService.updateTitle(origin='auto')：落库 + 记 titleOrigin + 广播
+ * titleChanged，各端会话列表即时刷新。
+ * 无专属安全客体 —— 要设门用 L1 全工具门（tool.name == 'session'）。
  */
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
@@ -21,14 +23,14 @@ import { sessionDao } from '../dao/sessionDao'
 import { sessionService } from '../services/sessionService'
 import { t } from '../i18n'
 
-export const SESSION_CONFIG_TOOL_NAME = 'session-config'
+export const SESSION_TOOL_NAME = 'session'
 
 /** 标题长度上限（会话列表一行可辨；超长直接拒绝让模型改短，而不是静默截断） */
 const TITLE_MAX_CHARS = 60
 
 const ACTIONS = ['set-title'] as const
 
-export const SessionConfigParamsSchema = Type.Object({
+export const SessionParamsSchema = Type.Object({
   action: Type.Unsafe<(typeof ACTIONS)[number]>({
     type: 'string',
     enum: [...ACTIONS],
@@ -41,18 +43,18 @@ export const SessionConfigParamsSchema = Type.Object({
   )
 })
 
-export const SESSION_CONFIG_DESCRIPTION = `Read or change configuration of the session this task belongs to. Actions:
+export const SESSION_DESCRIPTION = `Read or change the session this task belongs to. Actions:
 - "set-title": rename the session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters). The rename is applied immediately and shows up in the session list.`
 
-export class SessionConfigTool extends BaseTool<typeof SessionConfigParamsSchema> {
-  readonly name = SESSION_CONFIG_TOOL_NAME
+export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
+  readonly name = SESSION_TOOL_NAME
   readonly label: string
-  readonly description = SESSION_CONFIG_DESCRIPTION
-  readonly parameters = SessionConfigParamsSchema
+  readonly description = SESSION_DESCRIPTION
+  readonly parameters = SessionParamsSchema
 
   constructor(private readonly ctx: ToolContext) {
     super()
-    this.label = t(BUILTIN_TOOL_PRESENTATIONS[SESSION_CONFIG_TOOL_NAME].labelKey)
+    this.label = t(BUILTIN_TOOL_PRESENTATIONS[SESSION_TOOL_NAME].labelKey)
   }
 
   async preExecute(): Promise<void> {
@@ -67,12 +69,18 @@ export class SessionConfigTool extends BaseTool<typeof SessionConfigParamsSchema
     _toolCallId: string,
     params: { action: (typeof ACTIONS)[number]; title?: string }
   ): Promise<AgentToolResult<undefined>> {
-    if (params.action !== 'set-title') {
-      throw new Error(
-        `Unknown action "${String(params.action)}". Valid actions: ${ACTIONS.join(', ')}`
-      )
+    switch (params.action) {
+      case 'set-title':
+        return this.setTitle(params.title)
+      default:
+        throw new Error(
+          `Unknown action "${String(params.action)}". Valid actions: ${ACTIONS.join(', ')}`
+        )
     }
+  }
 
+  /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
+  private setTitle(rawTitle: string | undefined): AgentToolResult<undefined> {
     const sessionId = this.ctx.sessionId
     const session = sessionDao.pick(sessionId, ['title', 'settings'])
     if (!session) {
@@ -85,7 +93,7 @@ export class SessionConfigTool extends BaseTool<typeof SessionConfigParamsSchema
       )
     }
 
-    const title = (params.title ?? '').trim()
+    const title = (rawTitle ?? '').trim()
     if (!title) {
       throw new Error('Pass the new title in `title` (a non-empty string).')
     }
@@ -104,14 +112,14 @@ export class SessionConfigTool extends BaseTool<typeof SessionConfigParamsSchema
 }
 
 registerBuiltinTool({
-  name: SESSION_CONFIG_TOOL_NAME,
+  name: SESSION_TOOL_NAME,
   group: 'system',
-  getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS[SESSION_CONFIG_TOOL_NAME].labelKey),
-  getHint: () => t('tool.sessionConfigHint'),
-  factory: (ctx: ToolContext) => new SessionConfigTool(ctx),
-  presentation: BUILTIN_TOOL_PRESENTATIONS[SESSION_CONFIG_TOOL_NAME].presentation,
+  getLabel: () => t(BUILTIN_TOOL_PRESENTATIONS[SESSION_TOOL_NAME].labelKey),
+  getHint: () => t('tool.sessionHint'),
+  factory: (ctx: ToolContext) => new SessionTool(ctx),
+  presentation: BUILTIN_TOOL_PRESENTATIONS[SESSION_TOOL_NAME].presentation,
   describe: () => ({
-    description: SESSION_CONFIG_DESCRIPTION,
-    parameters: SessionConfigParamsSchema
+    description: SESSION_DESCRIPTION,
+    parameters: SessionParamsSchema
   })
 })
