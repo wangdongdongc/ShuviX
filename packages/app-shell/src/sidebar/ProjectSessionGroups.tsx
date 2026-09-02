@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts, type Session } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { ProjectMemoryFolder, type ProjectMemoryAdapter } from './ProjectMemoryFolder'
+import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
@@ -124,15 +125,35 @@ export function ProjectSessionGroups({
     return map
   }, [sessions])
 
-  // 折叠了子会话的父会话（本地 UI 状态，与项目组折叠同形）。缺省展开 ——
-  // 子会话就是要被看见的，藏起来等于让这个能力隐形
-  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(() => new Set())
+  // 展开了子会话的父会话（本地 UI 状态，与知识库目录的展开集同形）。**缺省折叠** ——
+  // 侧栏的骨架是会话列表，一条会话带出来的几条子会话默认摊开会把它挤没。
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set())
   const toggleSubs = (id: string): void =>
-    setCollapsedParents((prev) => {
+    setExpandedParents((prev) => {
       const next = new Set(prev)
       if (!next.delete(id)) next.add(id)
       return next
     })
+
+  // 新建的子会话自动展开它的父会话：agent 刚开出来的那条要立刻可见，否则「它到底建了没有」
+  // 只能靠数字。判据是**这一轮新出现的 id**，所以首次挂载（此前的子会话全是「新」的）
+  // 不触发 —— 那不是新建，是本来就在。
+  const seenChildren = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    const current = new Set<string>()
+    const fresh: string[] = []
+    for (const [parentId, list] of childrenByParent) {
+      for (const child of list) {
+        current.add(child.id)
+        if (seenChildren.current && !seenChildren.current.has(child.id)) fresh.push(parentId)
+      }
+    }
+    const firstPass = seenChildren.current === null
+    seenChildren.current = current
+    if (firstPass || fresh.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setExpandedParents((prev) => new Set([...prev, ...fresh]))
+  }, [childrenByParent])
 
   // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
   // 绑定项目记忆的笔记本会话不进列表 —— 它们由组内的「项目记忆」子文件夹按磁盘条目呈现
@@ -232,7 +253,7 @@ export function ProjectSessionGroups({
             )}
             {shownSessions.map((s) => {
               const children = childrenByParent.get(s.id) ?? []
-              const subCollapsed = collapsedParents.has(s.id)
+              const subCollapsed = !expandedParents.has(s.id)
               const row = (item: Session, isSub: boolean): React.JSX.Element => (
                 <SessionItem
                   key={item.id}
@@ -257,10 +278,13 @@ export function ProjectSessionGroups({
               )
               if (children.length === 0) return row(s, false)
               return (
-                <React.Fragment key={s.id}>
+                <div key={s.id}>
                   {row(s, false)}
-                  {!subCollapsed && children.map((c) => row(c, true))}
-                </React.Fragment>
+                  {/* 折叠动画与知识库目录同一个容器 */}
+                  <AnimatedCollapse open={!subCollapsed}>
+                    {children.map((c) => row(c, true))}
+                  </AnimatedCollapse>
+                </div>
               )
             })}
             {shownSessions.length < groupSessions.length && (

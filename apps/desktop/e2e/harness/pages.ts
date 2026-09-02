@@ -504,6 +504,13 @@ export interface SidebarPane {
   /** 某个父行显示的子会话数徽标（`data-sub-count`）；没有徽标返回 0 */
   subCountOf(title: string): Promise<number>
   /**
+   * 某个父行的子会话折叠态（`data-subs`）。**不能靠「子行在不在 DOM 里」判**——
+   * 折叠只是把 AnimatedCollapse 的高度收成 0，行仍然在。
+   */
+  subsStateOf(title: string): Promise<string>
+  /** 点父行行首那枚图标（折叠钮）；行不存在返回 false */
+  toggleSubs(title: string): Promise<boolean>
+  /**
    * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
    *
    * 「点完睡 600ms 就往下走」曾经是这里的做法：机器一慢，切换还没落定就开始断言，
@@ -583,6 +590,20 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       ),
     subCountOf: (title) =>
       main.eval<number>(`Number(${ROW(title)}?.getAttribute('data-sub-count') ?? 0)`),
+    subsStateOf: (title) => main.eval<string>(`${ROW(title)}?.getAttribute('data-subs') ?? ''`),
+    toggleSubs: async (title) => {
+      const clicked = await main.eval<boolean>(
+        `(() => {
+          const btn = ${ROW(title)}?.querySelector(':scope > button')
+          if (!btn) return false
+          btn.click()
+          return true
+        })()`
+      )
+      // 折叠动画 150ms（AnimatedCollapse 缺省）——等它落定再断言
+      if (clicked) await new Promise((r) => setTimeout(r, 250))
+      return clicked
+    },
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {

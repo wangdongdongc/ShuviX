@@ -241,6 +241,18 @@ describe('侧栏：唯一的产品差异', () => {
     // 子行只出现一次（没有既平铺一遍又嵌套一遍）
     expect((await sidebar.titles()).filter((t) => t === SUB_TITLE)).toHaveLength(1)
   })
+
+  it('新建的子会话自动展开父会话（缺省折叠，但刚建出来的那条必须立刻可见）', async () => {
+    // 本轮之前 sidebar 一直挂着，子会话是这一轮才出现的 id —— 自动展开的判据正是它
+    expect(await sidebar.subsStateOf(PARENT_TITLE)).toBe('expanded')
+  })
+
+  it('点行首图标折叠/展开（折叠只收高度，子行仍在 DOM 里 —— 所以判据是 data-subs）', async () => {
+    expect(await sidebar.toggleSubs(PARENT_TITLE)).toBe(true)
+    expect(await sidebar.subsStateOf(PARENT_TITLE)).toBe('collapsed')
+    expect(await sidebar.toggleSubs(PARENT_TITLE)).toBe(true)
+    expect(await sidebar.subsStateOf(PARENT_TITLE)).toBe('expanded')
+  })
 })
 
 describe('删除父会话 —— 递归带走子会话', () => {

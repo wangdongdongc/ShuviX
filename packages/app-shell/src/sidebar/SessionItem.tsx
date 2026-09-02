@@ -3,12 +3,17 @@
  *
  * 通用部分（图标/标题/流式脉冲/待输入计数/选中态/删除）两宿主共用；桌面专属能力
  * （悬浮 pin / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
+ *
+ * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
+ * paddingLeft（同 WikiGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
+ * 图标（同 WikiGroup 的 FolderClosed/FolderOpen 整行可点、ProjectMemoryFolder 的计数排版），
+ * 数量是标题后一个暗淡的小数字而不是一枚药丸。有子会话的行图标换成 MessagesSquare
+ * （两片叠起来的对话框 = 这里不止一场对话）。
  */
 import {
   Bot,
-  ChevronDown,
-  ChevronRight,
   MessageSquare,
+  MessagesSquare,
   FileText,
   PictureInPicture2,
   Settings2,
@@ -29,9 +34,9 @@ export interface SessionItemProps {
   isBot?: boolean
   /** 聊天会话的未读 bot 回复数（A4）：>0 时标题加粗 + accent 计数徽标 */
   unreadCount?: number
-  /** 子会话行：缩进一级 + 左侧竖线。除此之外与顶层会话行完全一致 */
+  /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
   isSub?: boolean
-  /** 拥有的子会话数（>0 时标题后出现折叠钮 + 计数） */
+  /** 拥有的子会话数（>0 时行首图标变成 MessagesSquare 且可点折叠，标题后跟一个计数） */
   subCount?: number
   /** 子会话折叠态（仅 subCount>0 时有意义） */
   subCollapsed?: boolean
@@ -68,13 +73,17 @@ export function SessionItem({
     <div
       onClick={() => onSelect(session.id)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(session.id, e) : undefined}
-      // 父子关系的稳定锚点（同 data-unread 的做法）：缩进靠 class 表达，
-      // 而 class 会随样式调整变化 —— e2e 认这两个属性
+      // 父子关系的稳定锚点（同 data-unread 的做法）：缩进与折叠态靠 class / 内联样式表达，
+      // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
+      // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}
+      data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}
+      // 缩进口径与知识库一致：基准 10px（pl-2.5），每层再进 12px
+      style={isSub ? { paddingLeft: 22 } : undefined}
       className={`group relative flex items-center gap-1.5 ${
-        isSub ? 'pl-6 border-l border-border-subtle/60 ml-3' : 'pl-2.5'
-      } pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+        isSub ? 'pr-1.5' : 'pl-2.5 pr-1.5'
+      } py-0.5 cursor-pointer transition-opacity duration-200 ${
         active
           ? 'bg-bg-active/80 text-text-primary'
           : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
@@ -103,6 +112,28 @@ export function SessionItem({
           size={11}
           className={`flex-shrink-0 ${isStreaming ? 'text-accent animate-pulse' : 'text-accent'}`}
         />
+      ) : subCount > 0 ? (
+        // 有子会话：两片叠起来的对话框 = 这里不止一场对话。图标本身就是折叠钮
+        // （同知识库目录行点图标展开），点行的其余部分照常打开这条会话
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleSubs?.(session.id)
+          }}
+          title={t('sidebar.subSessions', { count: subCount })}
+          className="flex-shrink-0 -m-0.5 p-0.5 rounded hover:bg-bg-active"
+        >
+          <MessagesSquare
+            size={11}
+            className={`${
+              isStreaming
+                ? 'text-accent animate-pulse'
+                : active
+                  ? 'text-accent'
+                  : 'text-text-tertiary/40'
+            }`}
+          />
+        </button>
       ) : (
         <MessageSquare
           size={11}
@@ -121,17 +152,13 @@ export function SessionItem({
           {session.title}
         </span>
         {subCount > 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleSubs?.(session.id)
-            }}
-            className="shrink-0 flex items-center gap-0.5 px-1 rounded text-[10px] tabular-nums text-text-tertiary hover:bg-bg-active hover:text-text-secondary"
-            title={t('sidebar.subSessions', { count: subCount })}
+          <span
+            className={`shrink-0 text-[10px] tabular-nums ${
+              subCollapsed ? 'text-text-tertiary/60' : 'text-text-tertiary/40'
+            }`}
           >
-            {subCollapsed ? <ChevronRight size={9} /> : <ChevronDown size={9} />}
             {subCount}
-          </button>
+          </span>
         )}
         {unreadCount > 0 && (
           <span
