@@ -44,6 +44,7 @@ const ACTIONS = [
   'set-title',
   'create-sub-session',
   'prompt-sub-session',
+  'wait-for-sub-sessions',
   'list-sub-sessions',
   'read-sub-session',
   'stop-sub-session'
@@ -81,12 +82,12 @@ export const SessionParamsSchema = Type.Object({
   run_in_background: Type.Optional(
     Type.Boolean({
       description:
-        'For "prompt-sub-session": return a receipt immediately instead of waiting for the answer. Use it to run several sub-sessions at once, or when the task is long and you have other work to do. You are notified when it finishes; read the answer with "read-sub-session".'
+        'For "prompt-sub-session": return a receipt immediately instead of waiting for the answer. Use it ONLY when you have other work to do right now, or when starting several sub-sessions to collect together with "wait-for-sub-sessions". If you need the reply before you can continue, leave this off and let the call wait — waiting costs nothing, while a receipt you then wait around for costs a request every time you check.'
     })
   ),
   timeout_seconds: Type.Optional(
     Type.Number({
-      description: `For "prompt-sub-session" in the foreground: how long to wait (default: ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running — it is NOT cancelled — and the call returns as if it had been started in the background.`
+      description: `How long to wait, for "prompt-sub-session" in the foreground and for "wait-for-sub-sessions" (default: ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running — it is NOT cancelled — and the call returns telling you so.`
     })
   )
 })
@@ -99,9 +100,12 @@ Actions:
 - "set-title": rename THIS session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters).
 - "create-sub-session": start an empty sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's project and model.
 - "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to get a receipt immediately instead.
+- "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
 - "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input).
-- "read-sub-session": the latest answer of \`sub_session_id\` — how you collect the result of a background turn.
+- "read-sub-session": the latest answer of \`sub_session_id\`.
 - "stop-sub-session": stop whatever \`sub_session_id\` is currently doing.
+
+Waiting is a single call that costs nothing while it waits. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that waiting would not have given you for free. If you need the answer to continue, use the foreground form — it cannot hang, because on timeout it leaves the sub-session running and tells you so. Start work in the background only when you genuinely have something else to do first, then collect it with "wait-for-sub-sessions".
 
 Write each message as if you were the user of that session: it does not see this conversation.`
 
@@ -114,6 +118,14 @@ interface SessionToolParams {
   run_in_background?: boolean
   timeout_seconds?: number
 }
+
+/**
+ * 后台/降级回执的收尾指引。**不写「你会被通知」**：完成通知只在这一轮还没结束时
+ * 插得进来（HarnessSession.notify 运行中 steer、空闲则排到下一轮），父级说完话就
+ * 收不到了 —— 那句承诺正是模型改用 sleep 轮询的原因。
+ */
+const COLLECT_HINT =
+  'When you need the result, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
 function text(...lines: string[]): AgentToolResult<undefined> {
@@ -158,6 +170,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         return this.createSubSession(params)
       case 'prompt-sub-session':
         return this.promptSubSession(params, signal)
+      case 'wait-for-sub-sessions':
+        return this.waitForSubSessions(params, signal)
       case 'list-sub-sessions':
         return this.listSubSessions()
       case 'read-sub-session':
@@ -204,23 +218,59 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     if ('error' in res) throw new Error(res.error)
 
     const id = (params.sub_session_id ?? '').trim()
-    // 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发
+    // 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。
+    // 收尾指引说的是**真实**机制：完成通知只在这一轮还没结束时插得进来，
+    // 所以要结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
     if (res.kind === 'started') {
       return text(
-        `Started in the background. The sub-session is working on it.`,
-        `You will be notified when it finishes; then read the answer with action "read-sub-session" (id: ${id}).`
+        `Started in the background. The sub-session is working on it (id: ${id}).`,
+        COLLECT_HINT
       )
     }
     if (res.kind === 'timeout') {
       return text(
-        `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going in the background.`,
-        `You will be notified when it finishes; read the answer with action "read-sub-session" (id: ${id}).`
+        `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going (id: ${id}).`,
+        COLLECT_HINT
       )
     }
     if (!res.answer) {
       return text(`The turn ended without a reply. Read the sub-session to see what happened.`)
     }
     return text(res.isError ? `The sub-session's turn failed:` : `Sub-session replied:`, res.answer)
+  }
+
+  private async waitForSubSessions(
+    params: SessionToolParams,
+    signal?: AbortSignal
+  ): Promise<AgentToolResult<undefined>> {
+    const id = params.sub_session_id?.trim()
+    const res = await subSessionRunner.wait({
+      parentId: this.ctx.sessionId,
+      ...(id ? { childId: id } : {}),
+      timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
+      signal
+    })
+    if ('error' in res) throw new Error(res.error)
+
+    if (res.results.length === 0) {
+      return text('No sub-sessions yet. Create one with action "create-sub-session".')
+    }
+    const head =
+      res.kind === 'timeout'
+        ? `Timed out waiting — the sub-sessions below are still running and were NOT cancelled.`
+        : res.kind === 'aborted'
+          ? `Wait interrupted — the sub-sessions below keep running.`
+          : `All done.`
+    // 一次交齐：等待的意义就是省掉「再 read 一遍」的那一轮请求
+    const blocks = res.results.map((r) => {
+      const answer = r.answer
+        ? `\n${r.isError ? 'Its last turn failed:' : 'Answer:'}\n${r.answer}`
+        : r.status === 'waiting-input'
+          ? '\nIt is waiting for the user to answer a question — it will not finish on its own.'
+          : '\n(no reply yet)'
+      return `${formatInfo(r)}${answer}`
+    })
+    return text(head, ...blocks)
   }
 
   private listSubSessions(): AgentToolResult<undefined> {

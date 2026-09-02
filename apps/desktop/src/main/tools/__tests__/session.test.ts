@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   // 断言的是「转调了什么」与「结果怎么排版」，不是子会话的语义（那是 runner 的用例）
   runnerCreate: vi.fn(),
   runnerPrompt: vi.fn(),
+  runnerWait: vi.fn(),
   runnerList: vi.fn(),
   runnerRead: vi.fn(),
   runnerStop: vi.fn()
@@ -38,6 +39,7 @@ vi.mock('../../services/subSessionRunner', () => ({
   subSessionRunner: {
     create: mocks.runnerCreate,
     prompt: mocks.runnerPrompt,
+    wait: mocks.runnerWait,
     list: mocks.runnerList,
     read: mocks.runnerRead,
     stop: mocks.runnerStop
@@ -60,6 +62,7 @@ beforeEach(() => {
   for (const fn of [
     mocks.runnerCreate,
     mocks.runnerPrompt,
+    mocks.runnerWait,
     mocks.runnerList,
     mocks.runnerRead,
     mocks.runnerStop
@@ -85,6 +88,7 @@ describe('SessionTool — 参数面与目标会话边界', () => {
       'run_in_background',
       'timeout_seconds'
     ])
+    // 参数面没有随 action 变多而膨胀：wait 复用 sub_session_id / timeout_seconds
     // 「改哪条会话」的选择权始终不给模型：本会话恒取 ToolContext.sessionId，
     // 而 sub_session_id 只能指向调用方自己的子会话（判定在 runner，见其用例）
     expect(keys).not.toContain('sessionId')
@@ -228,7 +232,11 @@ describe('SessionTool — 子会话 action', () => {
     )
     expect(mocks.runnerPrompt).toHaveBeenCalledWith(expect.objectContaining({ background: true }))
     expect(started).toMatch(/background/i)
-    expect(started).toContain('read-sub-session')
+    // 收尾指引指向 wait 而不是「你会被通知」——后者兑现不了（notify 只插得进还在跑的那一轮），
+    // 而正是那句话把模型推向 sleep 轮询
+    expect(started).toContain('wait-for-sub-sessions')
+    expect(started).toContain('Do NOT sleep and poll')
+    expect(started).not.toMatch(/notified/i)
 
     mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout' })
     const timedOut = textOf(
@@ -241,7 +249,7 @@ describe('SessionTool — 子会话 action', () => {
     )
     // 超时**没有**中止子会话 —— 这句话必须写在回执里，否则模型会以为工作被丢了
     expect(timedOut).toContain('NOT cancelled')
-    expect(timedOut).toContain('read-sub-session')
+    expect(timedOut).toContain('wait-for-sub-sessions')
   })
 
   it('失败的一轮照样回话（错误是子会话里的事实，父级要看见同一份）', async () => {
@@ -255,6 +263,46 @@ describe('SessionTool — 子会话 action', () => {
         })
       )
     ).toContain('boom')
+  })
+
+  it('wait-for-sub-sessions：不传 id = 等全部；结果一次交齐（含答复正文）', async () => {
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'settled',
+      results: [
+        { id: 'sub-1', title: 'A', status: 'idle', driven: false, updatedAt: 1, answer: 'A DONE' },
+        { id: 'sub-2', title: 'B', status: 'idle', driven: false, updatedAt: 2, answer: 'B DONE' }
+      ]
+    })
+    const out = textOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))
+    expect(mocks.runnerWait).toHaveBeenCalledWith(
+      expect.objectContaining({ parentId: 's1', timeoutSeconds: 300 })
+    )
+    // 不传 id 时不能塞一个空串进去（那会被当成「等某条不存在的子会话」）
+    expect(mocks.runnerWait.mock.calls[0][0]).not.toHaveProperty('childId')
+    expect(out).toContain('A DONE')
+    expect(out).toContain('B DONE')
+  })
+
+  it('wait 超时：说清仍在跑且没被中止', async () => {
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'timeout',
+      results: [{ id: 'sub-1', title: 'A', status: 'running', driven: true, updatedAt: 1 }]
+    })
+    const out = textOf(
+      await tool.execute('tc-1', { action: 'wait-for-sub-sessions', timeout_seconds: 30 })
+    )
+    expect(out).toContain('NOT cancelled')
+    expect(out).toContain('sub-1  [running]  A')
+  })
+
+  it('wait 到一条卡在 ask 上的：明说它不会自己好起来（否则父级会一直等）', async () => {
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'settled',
+      results: [{ id: 'sub-1', title: 'A', status: 'waiting-input', driven: false, updatedAt: 1 }]
+    })
+    expect(textOf(await tool.execute('tc-1', { action: 'wait-for-sub-sessions' }))).toContain(
+      'waiting for the user'
+    )
   })
 
   it('list-sub-sessions：每行 id + 状态 + 标题；空名单给出创建指引', async () => {

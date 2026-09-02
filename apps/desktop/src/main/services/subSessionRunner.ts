@@ -44,6 +44,13 @@ export interface SubSessionInfo {
   updatedAt: number
 }
 
+export interface WaitOutcome {
+  /** 'settled' = 全部落定；'timeout' = 到点仍有在跑的；'aborted' = 父会话被停止 */
+  kind: 'settled' | 'timeout' | 'aborted'
+  /** 等待期间关注的每条子会话（含最终状态与最新答复） */
+  results: Array<SubSessionInfo & { answer?: string; isError?: boolean }>
+}
+
 export interface PromptOutcome {
   /** 'answered' = 本轮跑完拿到答复；'timeout' = 降级成后台；'started' = 后台形态的启动回执 */
   kind: 'answered' | 'timeout' | 'started'
@@ -272,6 +279,88 @@ class SubSessionRunner {
       await run.done
     }
     return { kind: 'answered', ...(await this.lastAnswer(childId)) }
+  }
+
+  /**
+   * 阻塞等到子会话跑完并**一次性交回结果** —— 「起了几条、现在要收」的正解。
+   *
+   * 存在的理由是它替掉的那个东西：没有它，模型只能 `sleep` + 反复 list/read，
+   * 而每一轮轮询都是一次完整请求（系统提示词 + 整段历史 + 全部工具定义重发一遍），
+   * 换回来的往往是一句「还没好」。这里一次调用挂住,结果一次交齐。
+   *
+   * `childId` 省略 = 等本会话**此刻还没空闲的全部**子会话。
+   * `waiting-input`（卡在 ask 上等人回答）算落定 —— 它不会自己好起来，继续等只是白等，
+   * 结果里如实标出状态让父级去决定（催用户、还是先干别的）。
+   * 中止**不**级联杀子会话：等待是只读动作，父级被停不该连累后台在跑的活。
+   */
+  async wait(params: {
+    parentId: string
+    childId?: string
+    timeoutSeconds: number
+    signal?: AbortSignal
+  }): Promise<{ error: string } | WaitOutcome> {
+    const { parentId, childId, timeoutSeconds, signal } = params
+    const rejected = this.rejectIfNotNormal(parentId)
+    if (rejected) return { error: rejected }
+
+    let targets: string[]
+    if (childId) {
+      if (!this.ownChild(parentId, childId)) {
+        return { error: this.unknownChildError(parentId, childId) }
+      }
+      targets = [childId]
+    } else {
+      targets = sessionDao
+        .findChildren(parentId)
+        .map((s) => s.id)
+        .filter((id) => this.statusOf(id) === 'running')
+    }
+    if (targets.length === 0) {
+      return { kind: 'settled', results: await this.infoWithAnswers(parentId) }
+    }
+
+    const settled = (): boolean => targets.every((id) => this.statusOf(id) !== 'running')
+    const kind = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
+      let done = false
+      const finish = (r: 'settled' | 'timeout' | 'aborted'): void => {
+        if (done) return
+        done = true
+        clearInterval(tick)
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        resolve(r)
+      }
+      const onAbort = (): void => finish('aborted')
+      // 进程内轮询状态（200ms，不花任何模型成本）：本进程驱动的那些有 run.done 可等，
+      // 但用户自己在子会话里发起的那一轮没有，只能问运行时
+      const tick = setInterval(() => {
+        if (settled()) finish('settled')
+      }, 200)
+      const timer = setTimeout(() => finish('timeout'), Math.max(1, timeoutSeconds) * 1000)
+      if (signal?.aborted) return finish('aborted')
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (settled()) finish('settled')
+    })
+
+    return { kind, results: await this.infoWithAnswers(parentId, targets) }
+  }
+
+  /** 子会话快照 + 各自最新答复（wait 的返回形状；ids 省略 = 全部子会话） */
+  private async infoWithAnswers(
+    parentId: string,
+    ids?: string[]
+  ): Promise<Array<SubSessionInfo & { answer?: string; isError?: boolean }>> {
+    const children = sessionDao.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
+    return Promise.all(
+      children.map(async (s) => ({
+        id: s.id,
+        title: s.title,
+        status: this.statusOf(s.id),
+        driven: this.runs.has(s.id),
+        updatedAt: s.updatedAt,
+        ...(await this.lastAnswer(s.id))
+      }))
+    )
   }
 
   /** 前台等待：整轮结束 / 超时 / 父会话被中止，三者先到者胜 */

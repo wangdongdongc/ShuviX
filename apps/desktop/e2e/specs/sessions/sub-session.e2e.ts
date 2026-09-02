@@ -184,15 +184,31 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
         when: byUserText('后台跑')
       },
       { text: 'BG DONE.', when: byUserText('后台干活'), chunkDelayMs: 60 },
-      { text: 'started.', when: byUserText('后台跑') }
+      // 父级随后用一次 wait 收结果 —— 替掉「sleep + 反复 list/read」的那条路
+      {
+        toolCalls: [
+          {
+            id: 'call_wait',
+            name: 'session',
+            args: JSON.stringify({ action: 'wait-for-sub-sessions' })
+          }
+        ],
+        when: byUserText('后台跑')
+      },
+      { text: 'collected.', when: byUserText('后台跑') }
     )
     await promptParent('后台跑')
 
-    const receipt = toolResults(await listMessages(parentSid)).join('\n')
-    expect(receipt).toMatch(/background/i)
-    expect(receipt).toContain('read-sub-session')
-    // 回执不带内容：答复正文只能从子会话里读到
+    const results = toolResults(await listMessages(parentSid))
+    const receipt = results.find((r) => /background/i.test(r)) ?? ''
+    expect(receipt).toContain('wait-for-sub-sessions')
+    // 回执不带内容,也不再承诺「你会被通知」（notify 插不进已经结束的那一轮）
     expect(receipt).not.toContain('BG DONE.')
+    expect(receipt).not.toMatch(/notified/i)
+
+    // wait 一次交回答复：父级不必再 read 一遍
+    const collected = results.find((r) => r.includes('BG DONE.'))
+    expect(collected, 'wait 应把子会话的答复一次交回').toBeDefined()
 
     await until(
       async () => (await listMessages(subSid)).some((m) => m.content.includes('BG DONE.')),

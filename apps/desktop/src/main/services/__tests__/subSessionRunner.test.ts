@@ -418,6 +418,115 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
   })
 })
 
+describe('wait —— 替掉 sleep 轮询的那个原语', () => {
+  /** 让下一次 gatewayPrompt 挂住；返回放行它的函数 */
+  function startBackground(): () => void {
+    let release!: () => void
+    mocks.gatewayPrompt.mockReturnValue(
+      new Promise<void>((r) => {
+        release = r
+      })
+    )
+    return release
+  }
+
+  it('全部空闲时立刻返回（不为一个已经跑完的任务空等）', async () => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'DONE.' })
+    const res = (await runner.wait({ parentId: PARENT, timeoutSeconds: 5 })) as {
+      kind: string
+      results: Array<{ answer?: string }>
+    }
+    expect(res.kind).toBe('settled')
+    expect(res.results[0].answer).toBe('DONE.')
+  })
+
+  it('挂住直到子会话落定，并**一次交回答复** —— 省掉「再 read 一遍」的那一轮请求', async () => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    const busy = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(busy)
+    const release = startBackground()
+    await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60
+    })
+
+    const pending = runner.wait({ parentId: PARENT, timeoutSeconds: 30 })
+    // 还在跑：等待没有落定
+    let resolved = false
+    void pending.then(() => (resolved = true))
+    await new Promise((r) => setTimeout(r, 300))
+    expect(resolved).toBe(false)
+
+    mocks.findLastBySession.mockResolvedValue({ role: 'assistant', content: 'LATE ANSWER.' })
+    busy.isStreaming = false
+    release()
+    const res = (await pending) as { kind: string; results: Array<{ answer?: string }> }
+    expect(res.kind).toBe('settled')
+    expect(res.results[0].answer).toBe('LATE ANSWER.')
+  })
+
+  it('超时：如实回报仍在跑，且**不中止**子会话（等待是只读动作）', async () => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    const busy = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(busy)
+    const release = startBackground()
+    await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60
+    })
+
+    const res = (await runner.wait({ parentId: PARENT, timeoutSeconds: 1 })) as { kind: string }
+    expect(res.kind).toBe('timeout')
+    expect(busy.abort).not.toHaveBeenCalled()
+    release()
+  })
+
+  it('卡在 ask 上算落定 —— 它不会自己好起来，继续等只是白等', async () => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    const asking = fakeAgent({ isStreaming: true, pendingInputCount: 1 })
+    mocks.getAgentSession.mockReturnValue(asking)
+    const res = (await runner.wait({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30
+    })) as { kind: string; results: Array<{ status: string }> }
+    expect(res.kind).toBe('settled')
+    expect(res.results[0].status).toBe('waiting-input')
+  })
+
+  it('父会话被停止：立刻返回，**不**级联杀子会话（后台的活不该被连累）', async () => {
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 1 }])
+    const busy = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(busy)
+    const ac = new AbortController()
+    const pending = runner.wait({
+      parentId: PARENT,
+      childId: CHILD,
+      timeoutSeconds: 30,
+      signal: ac.signal
+    })
+    ac.abort()
+    expect(((await pending) as { kind: string }).kind).toBe('aborted')
+    expect(busy.abort).not.toHaveBeenCalled()
+  })
+
+  it('越权 id 与非普通会话走同一套准入', async () => {
+    mocks.pick.mockImplementation((id: string) =>
+      id === PARENT ? { settings: {}, parentId: null } : { settings: {}, parentId: 'other' }
+    )
+    expect(
+      err(await runner.wait({ parentId: PARENT, childId: 'stranger', timeoutSeconds: 5 }))
+    ).toContain('is not a sub-session')
+  })
+})
+
 describe('list / read / stop', () => {
   it('list：状态取自运行时 —— 用户自己在子会话里发消息同样算 running', async () => {
     mocks.findChildren.mockReturnValue([
