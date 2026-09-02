@@ -793,6 +793,10 @@
     "botInspectStages": "阶段 agent",
     "botStageMissing": "「{{ref}}」不存在，运行时回落内置",
     "botGateDegraded": "门控已降级（{{reason}}）—— 连续故障后 sticky 回落内置 bot-intent，重启进程恢复",
+    "botMaxHop": "接力深度上限",
+    "botMaxHopHint": "bot 回复 bot 最多能传多远。2 = 你 → A → B 即止；1 等于关掉 bot 之间的接力。只对「响应所有人」的 bot 生效。",
+    "botMaxFanout": "每轮消息上限",
+    "botMaxFanoutHint": "你的一条消息最多能引出多少条 bot 消息。管的是深度上限管不住的横向增长；触顶时这一轮停下并说明。",
     "botGateModel": "门控模型",
     "botGateModelHint": "全局设置 —— 写入 ~/.shuvix/agents/bot-intent.md 覆盖档案，所有走内置门控的 bot 共用",
     "botGateModelFollow": "跟随会话",
@@ -800,7 +804,8 @@
     "botNotesDisabled": "已关闭",
     "botNotesUsage": "{{chars}} 字符 · 待归纳事件 {{pending}}",
     "botNotesLastRun": "上次归纳 {{time}}",
-    "botNotesNever": "尚未归纳"
+    "botNotesNever": "尚未归纳",
+    "botRespondTo": "响应范围"
   },
   "about": {
     "description": "您的 AI 助手",
@@ -1022,8 +1027,7 @@
     "tasksLogCapped": "日志超过 50 MB —— 只显示尾部",
     "tasksNoOutput": "暂无输出",
     "tasksStatusEnded": "已结束",
-    "calendar": "日历",
-    "botDecisions": "Bot 决策"
+    "calendar": "日历"
   },
   "browser": {
     "back": "后退",
@@ -1139,15 +1143,9 @@
     "dialogOpenFolder": "打开 Bots 文件夹",
     "dialogCreate": "创建（{{count}} 名成员）",
     "activityIntent": "正在判断…",
-    "activityClaimed": "已接手，正在组织回复…",
     "activityQueued": "排队中 —— 前面的消息还在处理",
-    "activityWorking": "正在处理…",
     "stop": "停止",
     "failureLabel": "失败",
-    "rescueLabel": "还想回答：",
-    "silenceAllIgnored": "本轮没有成员回应 —— {{count}} 名成员均判定无需回应。",
-    "silenceAllFailed": "本轮没有成员回应 —— 成员在应答前出了故障。",
-    "silenceMixed": "本轮没有成员回应 —— 部分成员判定无需回应，其余出了故障。",
     "receiptQueued": "已排入 {{names}} 的队列，将按序作答",
     "statusOk": "完成",
     "statusWarn": "有保留",
@@ -1158,6 +1156,7 @@
     "manageSave": "保存（{{count}} 名成员）",
     "memberMissing": "md 已删除",
     "manageMembers": "管理成员",
-    "emptyHint": "给成员发第一条消息吧 —— 输入 @ 可点名让某位成员回答。"
+    "emptyHint": "给成员发第一条消息吧 —— 输入 @ 可点名让某位成员回答。",
+    "fanoutCapped": "本轮已达 {{count}} 条上限,不再继续接力。"
   }
 }

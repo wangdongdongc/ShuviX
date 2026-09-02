@@ -397,9 +397,7 @@ const api = {
       ipcRenderer.invoke('bot:saveByFile', params),
     deleteByFile: (params: { fileName: string }) => ipcRenderer.invoke('bot:deleteByFile', params),
     openFolder: () => ipcRenderer.invoke('bot:openFolder'),
-    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params),
-    decisions: (params: { sessionId: string; limit?: number }) =>
-      ipcRenderer.invoke('bot:decisions', params)
+    inspect: (params: { name: string }) => ipcRenderer.invoke('bot:inspect', params)
   },
 
   // ============ shuvix 契约 md 校验（frontmatter 属性卡） ============

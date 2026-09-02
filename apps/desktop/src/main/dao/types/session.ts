@@ -48,6 +48,25 @@ export interface SessionSettings {
    * 列表按它排序，上浮与未读同一笔账）；`session:markRead` 清零。仅聊天会话在维护。
    */
   unreadCount?: number
+  /**
+   * **聊天会话专属**的运行配置（v2）。
+   *
+   * 迁移 v15 把 provider/model 从本表删掉，理由是「运行配置的唯一事实源是会话树的
+   * model_change entry」—— 那对**有根会话**成立。聊天会话没有根 Agent，v2 之后连会话树
+   * 都没有（转写在 chat_messages 表里），所以它的配置需要另一个家，就是这里。
+   *
+   * 这不违反 v15 的单一事实源：两种会话形态的运行时根本不同，事实源各一份且互斥不相交
+   * （一个会话在创建那一刻就定死是哪一种）。`chat` 前缀是为了让读代码的人一眼看出
+   * 这条只对无根会话有意义。
+   *
+   * 刻意**不含 enabledTools**：任务段的 agent 就是 bot 自己，工具来自它 md 里的
+   * `shuvix-tools`，一个会话级的工具勾选在这里不表达任何东西（对应 UI 上隐藏 ToolPicker）。
+   */
+  chatRunConfig?: {
+    provider: string
+    model: string
+    thinkingLevel?: string
+  }
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */

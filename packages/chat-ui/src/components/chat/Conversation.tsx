@@ -2,18 +2,13 @@ import { useChatHost } from '@shuvix/chat-ui'
 import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import {
-  useChatStore,
-  selectIsStreaming,
-  selectPendingInputs,
-  type ChatMessage,
-  type AssistantMessage
-} from '../../stores/chatStore'
+import { useChatStore, selectIsStreaming, selectPendingInputs } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { MessageRenderer, STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
+import { MessageRenderer, type VisibleItem } from './MessageRenderer'
+import { buildVisibleItems, isAssistantMessage } from './conversationItems'
 import { StreamingFooter } from './StreamingFooter'
-import { BotActivityCards } from './BotActivityCards'
+import { BotTypingIndicator } from './BotTypingIndicator'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
 
@@ -22,86 +17,15 @@ function ConversationFooter(): React.JSX.Element {
   return (
     <>
       <StreamingFooter />
-      <BotActivityCards />
+      <BotTypingIndicator />
       <div aria-hidden style={{ height: 'var(--chat-input-h, 0px)' }} />
     </>
   )
 }
 
-/** 助手消息（会话树里一条 assistant entry = 一次 LLM 调用） */
-function isAssistantMessage(msg: ChatMessage): msg is AssistantMessage {
-  return msg.role === 'assistant' && msg.type === 'message'
-}
-
-/** 不含工具块 = 本轮终答，这张卡到此收口（与投影里 toolCalls.length === 0 同义） */
-function isFinalAnswer(msg: AssistantMessage): boolean {
-  return !msg.blocks.some((b) => b.type === 'tool')
-}
-
-/** 流式占位卡：正文/思考/工具调用由 AssistantBubble 自己从 store 读 */
-function streamingPlaceholder(sessionId: string): AssistantMessage {
-  return {
-    id: STREAMING_PLACEHOLDER_ID,
-    sessionId,
-    role: 'assistant',
-    type: 'message',
-    blocks: [],
-    content: '',
-    metadata: null,
-    model: '',
-    createdAt: 0
-  }
-}
-
-/**
- * 消息列表 → 对话流的项。
- *
- * 数据侧一条 entry 一条消息；呈现侧把**连续的 assistant 消息**收成一张卡
- * （过程在上、终答在下），遇到终答、用户消息或列表结束即收口。所以轮中 steer /
- * 中途 abort 都只是「这张卡没有终答」，不需要造合成消息去承载它们。
- *
- * 每项的 key 取组首消息 id：流式占位并入已有组时组首不变，本轮结束换成真实终答
- * 也不会让这一项重挂载 —— 展开着的工具卡/思考块因此不会被折回去。
- */
-export function buildVisibleItems(messages: ChatMessage[], isStreaming: boolean): VisibleItem[] {
-  const items: VisibleItem[] = []
-  let group: AssistantMessage[] = []
-
-  const flush = (streamingTail = false): void => {
-    if (group.length === 0) return
-    items.push({
-      key: group[0].id,
-      msg: group[group.length - 1],
-      msgs: group,
-      ...(streamingTail ? { isStreamingPlaceholder: true } : {})
-    })
-    group = []
-  }
-
-  for (const msg of messages) {
-    // 跳过 system_notify（但保留 error_event）
-    if (msg.role === 'system_notify' && msg.type !== 'error_event') continue
-
-    if (isAssistantMessage(msg)) {
-      group.push(msg)
-      if (isFinalAnswer(msg)) flush()
-      continue
-    }
-
-    flush()
-    items.push({ key: msg.id, msg })
-  }
-
-  if (isStreaming) {
-    const sessionId = group[0]?.sessionId || messages[messages.length - 1]?.sessionId || ''
-    group.push(streamingPlaceholder(sessionId))
-    flush(true)
-  } else {
-    flush()
-  }
-
-  return items
-}
+// 折叠规则本体搬去了 `conversationItems.ts`（纯逻辑，不牵扯渲染树）；按同名再导出，
+// ThreadDrawer 等既有 import 路径不动
+export { buildVisibleItems } from './conversationItems'
 
 /**
  * 对话区核心 —— 消息列表（虚拟滚动 + 归档回溯）+ 待处理输入 + 输入区。

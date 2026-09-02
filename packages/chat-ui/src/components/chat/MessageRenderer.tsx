@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { AssistantMessage, ChatMessage, ErrorEventMessage } from '../../stores/chatStore'
 import { useChatStore } from '../../stores/chatStore'
 import { UserBubble } from './UserBubble'
+import { BotBubble } from './BotBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { InstructionBubble } from './InstructionBubble'
 
@@ -28,6 +29,8 @@ export interface VisibleItem {
   msgs?: AssistantMessage[]
   /** 该组末尾是流式占位卡 */
   isStreamingPlaceholder?: boolean
+  /** 群聊气泡：上一项也是同一个 bot 说的 —— 合并头部，只留气泡 */
+  mergeHeader?: boolean
 }
 
 interface MessageRendererProps {
@@ -111,6 +114,12 @@ function MessageBody({
   }
 
   if (msg.role !== 'assistant' || !item.msgs) return null
+
+  // 群聊会话：bot 的发言是群里的另一个人，不是助手卡。
+  // 判据是 metadata.sender —— 只有聊天会话的消息带它（有根会话的助手消息永远没有）。
+  if (msg.metadata?.sender) {
+    return <BotBubble msg={msg} mergeHeader={item.mergeHeader} />
+  }
 
   return (
     <AssistantBubble

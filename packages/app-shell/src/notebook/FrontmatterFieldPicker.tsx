@@ -32,7 +32,9 @@ import {
   WORKFLOW_CONCURRENCY_KEY,
   WORKFLOW_CONCURRENCY_MODES,
   BOT_RESPOND_KEY,
-  BOT_RESPOND_MODES
+  BOT_RESPOND_MODES,
+  BOT_RESPOND_TO_KEY,
+  BOT_RESPOND_TO_MODES
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { ToolSelectList, type ToolItem } from '../common/ToolSelectList'
 
@@ -347,7 +349,9 @@ export function FrontmatterFieldPicker({
             ? WORKFLOW_CONCURRENCY_MODES
             : fieldKey === BOT_RESPOND_KEY
               ? BOT_RESPOND_MODES
-              : []
+              : fieldKey === BOT_RESPOND_TO_KEY
+                ? BOT_RESPOND_TO_MODES
+                : []
     return (
       <EnumField
         options={options}

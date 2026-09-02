@@ -6,7 +6,7 @@
  *  - **消息半边（M3′）**：无根会话的用户消息落盘、bot 消息的双 append、greeting 播种、
  *    在飞计数（树钉住用）与 abortSession 会师点；
  *  - **管线半边（M4′）**：L0 门 → cohort → 每成员一次 invoke，以及装配进脚本的
- *    `claim` / `turn` / `say` 三个回调。仲裁与 mailbox 的算法在 `bot/` 下各自成件。
+ *    `turn` / `say` 两个回调。L0 门与 mailbox 的算法在 `bot/` 下各自成件。
  *
  * 笔记写盘（M9′）、真意图段与窗口构建（M5′）、任务段与 BotReply 投影（M8′）尚未接上 ——
  * 内置管线此刻跑的是骨架脚本（确定性占位判定），链路是真的，判断还不是。
@@ -25,44 +25,33 @@ import { createHash } from 'crypto'
 import { basename, join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { shell } from 'electron'
-import type { AgentMessage, SessionTreeEntry } from '@earendil-works/pi-agent-core'
+import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import {
-  BOT_SENDER_CUSTOM_TYPE,
   DEFAULT_BOT_PIPELINE,
-  INLINE_TOKENS_CUSTOM_TYPE,
-  entriesToChatMessages,
   parseBotAgentRef,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
-  type BotSenderSidecar,
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
 import type { AgentPromptParams } from '@shuvix/chat-protocol/chatApi'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import type {
-  ChatMessage,
-  InlineToken,
-  SuppressedCandidate
-} from '@shuvix/chat-protocol/types/chatMessage'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { botReplyToMarkdown, coerceBotReply } from '@shuvix/chat-protocol/botReply'
 import { getDefaultBotsDir } from '../utils/paths'
 import { writeFileAtomic } from '../utils/atomicWrite'
 import { createLogger } from '../logger'
 import { t } from '../i18n'
-import {
-  addSessionTreePin,
-  drainSessionTreeLock,
-  getSessionTree,
-  readSessionRunConfig,
-  withSessionTreeLock
-} from './sessionStorage'
+import { chatMessageDao } from '../dao/chatMessageDao'
+import type { ChatMessageRow } from '../dao/types/chatMessage'
+import { rowToChatMessage } from './chatMessageProjection'
+import { setChatSessionPredicate } from './messageService'
+import { readChatAttachment, saveChatAttachments } from './chatAttachments'
 import { workflowService, workflowTriggers } from './workflowService'
 import { agentService } from './agentService'
 import { buildTurnCompletedFacts, isDefaultTitle } from './sessionTriggerFacts'
 import { appendBotDecision, botRunsDir, pruneBotRuns, type BotDecisionKind } from './bot/botJournal'
 import { runL0Gate, type L0Record, type LastBotSender } from './bot/botGate'
-import { CohortBarrier, type ClaimIntent, type ClaimVerdict } from './bot/botArbiter'
 import { BotMailbox, mailboxKey, type QueueItem, type TurnSlot } from './bot/botMailbox'
 import { BotNotesScheduler } from './bot/botNotesScheduler'
 import { electronEventSink } from './agentRuntimeAdapters'
@@ -70,6 +59,7 @@ import { registerUserInputParticipant } from './userInputBroker'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { messageService } from './messageService'
 import { sessionService } from './sessionService'
+import { settingsService } from './settingsService'
 
 const log = createLogger('Bot')
 
@@ -160,7 +150,7 @@ export function resolvePipeline(
 /**
  * 一次「某个 bot 应答某条消息」的全部身份与状态。
  *
- * **它先于 invoke 存在，所以 `claim`/`turn`/`say` 的闭包固化的是它，不是 runId** ——
+ * **它先于 invoke 存在，所以 `turn`/`say` 的闭包固化的是它，不是 runId** ——
  * runId 由引擎在内部生成，闭包拿不到，也不需要：三个回调要回答的是「我是谁、我在哪个
  * 会话、我在应答哪条消息」，这些在派发之前就全有了。runId 只是事后回填的一个别名，
  * 用来把决策记录与 run journal 交叉引用起来。
@@ -172,56 +162,17 @@ interface BotTicket {
   displayName: string
   messageSeq: number
   messageId: string
-  barrier: CohortBarrier
-  claimState: 'none' | 'won' | 'lost'
-  /**
-   * 仲裁给出的具体理由。`claimState` 把 ignored / lost / timeout 压成一个 'lost' ——
-   * 强制点只关心「能不能说」，而全体沉默的定性要分清「全员判定不接」（正常）与
-   * 「全都没跑到判定」（坏了），两者对用户的意味完全相反
-   */
-  claimReason?: ClaimVerdict['reason']
-  /** run 已收尾（超时 / 被中止 / settle）—— `say` 的硬闸，见下 */
+  /** 触发本轮的那条用户消息 id（扇出计数按它归组）。bot 回复原样继承 */
+  rootId: string
+  /** 触发消息的跳数；本 ticket 产出的回复是 hop + 1（循环护栏的纵向计数） */
+  hop: number
+  /** run 已收尾（超时 / 被中止）—— `say` 的硬闸，见下 */
   terminal: boolean
   /** 本 ticket 已经往会话里说过话 —— 可见结局兜底据此决定要不要再补一条失败气泡 */
   said: boolean
-  /**
-   * `say` 被仲裁挡下过。挡下之后脚本通常就抛到顶、run 记一个笼统的 `failed` ——
-   * 而「你的管线忘了调 claim」与「网络抖了一下」在提示里长得一模一样，写管线的人
-   * 第一次踩这个坑时线索太薄。带上它，沉默提示就能直接说出是哪一种
-   */
-  blockedBy?: 'arbitration_lost' | 'arbitration_bypassed'
   abort: AbortController
   /** meta 到达时回填 */
   runId?: string
-}
-
-/**
- * `claim(intent)` 的入参校验。值跨 vm realm 到达，`instanceof` 不可靠 —— 逐字段 typeof。
- * 形状不合法即抛：这是脚本 bug，不是沉默的理由。
- */
-export function asClaimIntent(raw: unknown): ClaimIntent {
-  if (typeof raw !== 'object' || raw === null) {
-    throw new Error('claim(intent): intent must be an object')
-  }
-  const d = raw as Record<string, unknown>
-  const decision = d.decision
-  if (
-    decision !== 'reply' &&
-    decision !== 'task' &&
-    decision !== 'clarify' &&
-    decision !== 'ignore'
-  ) {
-    throw new Error(`claim(intent): unknown decision "${String(decision)}"`)
-  }
-  const relevance = typeof d.relevance === 'number' ? d.relevance : NaN
-  if (!Number.isInteger(relevance) || relevance < 0 || relevance > 9) {
-    throw new Error('claim(intent): relevance must be an integer in 0..9')
-  }
-  return {
-    decision,
-    relevance,
-    reason: typeof d.reason === 'string' ? d.reason : undefined
-  }
 }
 
 /**
@@ -248,60 +199,68 @@ export function asSayContent(raw: unknown): string {
   throw new Error('say(reply): reply must be a non-empty string or carry a headline')
 }
 
-/** 一个 cohort 成员这一轮的结局 —— 全体沉默的判据由它们汇总而来 */
+/**
+ * 一个成员这一轮的结局 —— v2 起只进 run journal（没有仲裁，也就没有需要汇总定性的
+ * 「全体沉默」）。`outcome` 取脚本自报的值，脚本没报就用 run 本身怎么收的；
+ * **刻意不归一成一张封闭表** —— 自定义管线的 outcome 本就是开放的。
+ */
 interface MemberOutcome {
   botName: string
   displayName: string
   /** 这个成员往会话里放了东西没有（一条回复、或一条可见失败） */
   said: boolean
-  /**
-   * 这个成员这一轮的结局。取值域是三者的并：仲裁理由（`claim_*`，与决策记录的 kind 同源）、
-   * 脚本自报的 outcome（`gate-broken` / `task-pending` …）、run 本身怎么收的（`ok` /
-   * `failed` / 引擎的 reason）。**刻意不归一成一张封闭表** —— 自定义管线的 outcome 本就
-   * 是开放的，硬归一只会把它们全冲成 `other`
-   */
   outcome: string
-  /**
-   * 这个成员这一轮的票被用户中止过（per-bot 停止）。沉默判定据此对整轮闭嘴 ——
-   * §9.1「用户按停止不是无从解释的沉默」；barrier 级守卫只覆盖会话中止，覆盖不到这里
-   */
-  aborted?: boolean
 }
 
 /**
- * 一个成员这一轮的结局用哪句话说清楚。三级优先：
+ * bot→bot 接力两道护栏的**设置键与缺省值**（设计 §4.2）。
  *
- * 1. **仲裁理由**（宿主亲眼所见）—— 它是全体沉默定性的唯一依据，因为只有它证明这个成员
- *    真的进过仲裁。自定义管线可以一句 `outcome:'ignored'` 随口一说，那不算「判定不接」；
- * 2. 脚本自报的 outcome —— `gate-broken` / `task-pending` 这类，比「run 跑完了」有信息量；
- * 3. run 本身怎么收的。
+ * 放在全局设置而不是 bot md：它们是**会话级的安全阀**，让单个 bot 自己声明能触发多深，
+ * 等于把护栏交给被护的人。
+ *
+ *  - `maxHop = 2`：允许接一手（用户 → A → B 即止）。1 等价于关掉 bot→bot。
+ *  - `maxFanout = 8`：同一条用户消息引发的整棵传播树里 bot 消息的总数上限 ——
+ *    hop 管纵向，这个管横向（N 个 bot 互相回复是组合增长）。
+ *
+ * **缺省这一组下横向那道几乎打不到**：maxHop=2 让二跳消息不再派发，于是能读到扇出计数的
+ * 只有一跳消息（至多 N 条，N = 成员数），成员不到 8 个就够不着上限。这不是缺陷 —— 它是
+ * 为「把 maxHop 调大」准备的那道闸，而正因为 maxHop 可调，这道闸才必须一起可调。
  */
-function memberOutcome(
-  ticket: BotTicket,
-  scriptOutcome: string | undefined,
-  ended: string
-): string {
-  const r = ticket.claimReason
-  if (r && r !== 'won' && r !== 'solo') return `claim_${r}`
-  // 没有仲裁理由却被强制点挡下 = 压根没 claim（`arbitration_bypassed`）。这是管线的
-  // 写法问题，笼统的 'failed' 会让人往网络/模型上找原因
-  if (ticket.blockedBy) return ticket.blockedBy
-  return scriptOutcome || ended
-}
+export const BOT_MAX_HOP_KEY = 'bot.maxHop'
+export const BOT_MAX_FANOUT_KEY = 'bot.maxFanout'
+const BOT_LOOP_DEFAULTS = { maxHop: 2, maxFanout: 8 } as const
 
 /**
- * cohort 整体沉默了没有，以及该怎么定性（设计 §9 的可见结局不变式）。
- *
- * 只看「会话里多出东西了吗」：任何一个成员开了口，这一轮就有结局，不必提示。
- * 定性只分两类 —— 自判不接（沉默白名单里唯一的正常项）与其余（有东西坏了）。
+ * 实时读取两道护栏（同 `httpLog.enabled` 的口径：改了立刻生效，不必重建会话）。
+ * 写坏的值（非数、负数、小数）一律回落缺省 —— 设置项是纯文本键值，UI 之外还有
+ * `session-config` 工具这条写入口，一个 `maxHop: "很多"` 不该把护栏整个关掉。
  */
-export function cohortSilence(
-  outcomes: MemberOutcome[]
-): { reason: 'all_ignored' | 'all_failed' | 'mixed' } | null {
-  if (!outcomes.length || outcomes.some((o) => o.said)) return null
-  const ignored = outcomes.filter((o) => o.outcome === 'claim_ignored').length
-  if (ignored === outcomes.length) return { reason: 'all_ignored' }
-  return { reason: ignored ? 'mixed' : 'all_failed' }
+function readLoopLimits(): { maxHop: number; maxFanout: number } {
+  const num = (key: string, fallback: number): number => {
+    const raw = settingsService.get(key)
+    // 空串必须先挡掉：`Number('')` 是 0，而 0 不是「没设」—— 它会让 hop 判定当场触顶，
+    // 于是一个被清空的输入框静默地把接力整个关掉。下限取 1 同理（maxFanout 0 意味着
+    // 每一轮都立刻落一条「已达上限」的系统消息）
+    if (!raw?.trim()) return fallback
+    const n = Number(raw)
+    return Number.isInteger(n) && n >= 1 ? n : fallback
+  }
+  return {
+    maxHop: num(BOT_MAX_HOP_KEY, BOT_LOOP_DEFAULTS.maxHop),
+    maxFanout: num(BOT_MAX_FANOUT_KEY, BOT_LOOP_DEFAULTS.maxFanout)
+  }
+}
+
+/** 一条 bot 消息的署名与附带结构（写进 chat_messages 的那几列） */
+interface BotSender {
+  botName: string
+  displayName: string
+  /** 意图段判定（clarify 回连的判定材料） */
+  decision?: string
+  /** BotReply 结构化原文，仅供 UI */
+  reply?: unknown
+  /** 失败 / 降级通告 */
+  error?: true
 }
 
 /**
@@ -313,9 +272,21 @@ export function cohortSilence(
  */
 export interface BotAttachmentRef {
   sessionId: string
-  entryId: string
+  /** 承载附件的那条消息（chat_messages 的行 id） */
+  messageId: string
+  /** 该消息附件数组里的下标 */
   index: number
   mimeType: string
+}
+
+/** 行里的 inlineTokens 是 JSON 字符串；坏 JSON 当作没有，不让一条消息读不出来 */
+function parseInlineTokens(raw?: string): Record<string, InlineToken> | undefined {
+  if (!raw) return undefined
+  try {
+    return JSON.parse(raw) as Record<string, InlineToken>
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -346,11 +317,6 @@ export function isNoteWorthy(
  */
 function revisionOf(raw: string): string {
   return createHash('sha256').update(raw).digest('hex').slice(0, 16)
-}
-
-/** 被压制候选的暂存键：一轮仲裁 = 一条用户消息 = (会话, seq) */
-function suppressedKey(sessionId: string, messageSeq: number): string {
-  return `${sessionId}\u0000${messageSeq}`
 }
 
 class BotService {
@@ -607,8 +573,8 @@ class BotService {
    * **幂等**：每一步都先看目标状态再动手，重复跑一遍不会出错 —— 迁移做了一半崩掉时，
    * 下一次保存（或用户手动改回来再改过去）能把剩下的补上。
    *
-   * 历史消息里的署名**不迁**，那是刻意的：侧车自带落树当时的 displayName，历史不该因为
-   * 今天的一次改名而改写（这条纪律从 M3′ 起就写在署名侧车的注释里）。
+   * 历史消息里的署名**不迁**，那是刻意的：消息行存着落库当时的 displayName，历史不该因为
+   * 今天的一次改名而改写（这条纪律从 M3′ 的署名侧车起就在，v2 换成表之后原样保留）。
    */
   private migrateRename(oldName: string, newName: string): void {
     // ① 会话成员名单
@@ -686,6 +652,7 @@ class BotService {
       pipeline: DEFAULT_BOT_PIPELINE,
       pipelineInput: {},
       respond: 'auto',
+      respondTo: 'user',
       notesEnabled: true,
       agents: {},
       greeting: '',
@@ -769,31 +736,12 @@ class BotService {
    */
   private readonly inflight = new Map<string, number>()
 
-  /** 会话内单调的消息序 —— entry id 是 uuidv7 的随机尾，刻意不可排序，seq 只能宿主自铸。
-   *  进程内单调即可：mailbox 队列本来就是进程内的，重启不必续 */
-  private readonly seqBySession = new Map<string, number>()
   /** 在飞 ticket（per-bot 停止、会话级中止、journal 关联都查它） */
   private readonly tickets = new Map<string, BotTicket>()
   /** 已经硬路由过的 clarify entry —— 一条 clarify 只回连一次 */
   private readonly clarifyConsumed = new Map<string, Set<string>>()
   /** 禁写位：`abortSession` 期间 `say` 一律硬失败（drain 只排空队列，挡不住新写者） */
   private readonly blockWrites = new Map<string, number>()
-  /**
-   * 定局那一刻被压制的候选，键是 `<sessionId>\u0000<messageSeq>` —— 等胜者真的开口时
-   * 挂到它的署名侧车上（救济 chip 的数据源）。
-   *
-   * **不在定局时直接广播**：那时胜者可能还有一整个任务段要跑，chip 得跟着胜者那条消息走，
-   * 而不是提前孤零零地飘在会话里。取走即删（一轮只挂一次，任务段后续的 say 不再重复挂），
-   * cohort 收尾时无论取没取都清 —— 胜者半路失败的话就没人来取了。
-   */
-  private readonly suppressedBy = new Map<string, SuppressedCandidate[]>()
-  /**
-   * 会话里在飞的 barrier。**中止会话必须连它一起拆**：ticket / mailbox / workflow run
-   * 都在 `abortSession` 里拆掉了，唯独 barrier 会带着它的宽限窗定时器活到 3 秒之后 ——
-   * 那时会话早已收尾，它却仍会回调宿主、往 `suppressedBy` 里塞一份再也没人来取的名单。
-   * `ClaimVerdict.reason:'aborted'` 这一支也是因为没人调 `abort()` 才一直是死代码。
-   */
-  private readonly barriers = new Map<string, Set<CohortBarrier>>()
   /**
    * 在飞的用户询问，键是 requestId。
    *
@@ -858,7 +806,13 @@ class BotService {
 
   /** 主进程启动时装配（同 workflowService.init 的时机，避免 ESM 初始化环） */
   init(): void {
-    addSessionTreePin((sessionId) => this.isActive(sessionId))
+    // 「这是不是聊天会话」的判据注入 messageService（v2）：它据此在会话树与
+    // chat_messages 表之间分流，自己不依赖 dao 层。装配放在 init 而不是构造期 ——
+    // 构造期调用会让「mock 了 messageService 却没提供这个导出」的单测整片挂掉，
+    // 与 workflowService.init 的时机选择同一条理由（避免 ESM 初始化环与构造期耦合）
+    setChatSessionPredicate((sessionId) => sessionService.isBotSession(sessionId))
+
+    // v2 起聊天会话不再有会话树 —— 那条「在飞时钉住树、别被 LRU 逐出」的注册随之取消。
     // bot 路径的 run journal 落到该 bot 自己的目录；meta 是唯一带调用方身份的记录，
     // label 就是 ticketId
     workflowService.registerRunJournalSink((record) => {
@@ -916,46 +870,36 @@ class BotService {
     this.inputsClosed.delete(sessionId)
     this.enter(sessionId)
     try {
-      // LLM 看到的是展开后的全文；标记态原文进显示侧车（与网关有根路径同一形状）
+      // LLM 看到的是展开后的全文（管线 input 用它）；行里存标记态原文 + tokens 字典，
+      // 展开在读侧现做 —— 与 v1 投影的口径一致，只是不再需要一条独立的显示侧车
       const hasTokens = !!inlineTokens && Object.keys(inlineTokens).length > 0
       const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
-      const display = hasTokens ? { content: text, tokens: inlineTokens } : undefined
+      const display = hasTokens
 
-      const message: AgentMessage = {
-        role: 'user',
-        content: [
-          { type: 'text', text: promptText },
-          ...(images ?? []).map((img) => ({
-            type: 'image' as const,
-            data: img.data,
-            mimeType: img.mimeType
-          }))
-        ]
-      } as AgentMessage
+      // 附件先落盘（文件名要用消息 id，所以 id 提前生成），行里只留描述符
+      const messageId = uuidv4()
+      const attachments = saveChatAttachments(sessionId, messageId, images ?? [])
 
-      const ids = await withSessionTreeLock(
+      // **content 存标记态原文**（内联 token 未展开）+ tokens 字典：UI 据此渲染胶囊，
+      // 喂给模型的展开由读侧的 resolveTokensForAgent 现做（同 v1 投影的口径）。
+      // seq 由 DAO 在事务内分配 —— v1 为这件事维护的那套异步互斥不再需要
+      const row = chatMessageDao.append({
+        id: messageId,
         sessionId,
-        async (tree) => {
-          const sidecarId = display
-            ? await tree.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, display)
-            : null
-          const entryId = await tree.appendMessage(message)
-          // seq 在临界区内递增：它要与 entry 的先后严格一致
-          const seq = (this.seqBySession.get(sessionId) ?? 0) + 1
-          this.seqBySession.set(sessionId, seq)
-          return { sidecarId, entryId, seq }
-        },
-        sessionService.getById(sessionId)?.workingDirectory ?? ''
-      )
+        authorKind: 'user',
+        content: text,
+        ...(display ? { inlineTokens: JSON.stringify(inlineTokens) } : {}),
+        ...(attachments.length ? { attachments } : {}),
+        // 用户消息是它自己这一轮传播树的根
+        rootId: messageId,
+        hop: 0
+      })
 
-      const projected = await this.projectSlice(sessionId, [ids.sidecarId, ids.entryId])
-      if (projected) {
-        electronEventSink.broadcast({
-          type: 'user_message',
-          sessionId,
-          message: JSON.stringify(projected)
-        })
-      }
+      electronEventSink.broadcast({
+        type: 'user_message',
+        sessionId,
+        message: JSON.stringify(rowToChatMessage(row))
+      })
 
       // 会话域埋点：**聊天会话也 fire**，用户工作流因此能旁观这里发生的事（auto-title
       // 也就顺带对聊天会话生效了）。payload 只是会话此刻的事实，与订阅方无关
@@ -970,16 +914,19 @@ class BotService {
         text,
         inlineTokens,
         promptText,
-        messageId: ids.entryId,
-        messageSeq: ids.seq,
+        messageId: row.id,
+        messageSeq: row.seq,
+        rootId: row.rootId ?? row.id,
+        hop: row.hop,
+        author: { kind: 'user' },
         // **只带描述符，不带字节**：脚本的 input 会被原样写进 run journal（meta 记录带着
         // 整个 envelope），让 base64 进 input 等于每条带图消息都在磁盘上留下一份逐 bot 的
-        // 副本。真正的字节由 resolveAttachments 在派发那一刻按引用取回
-        attachments: (images ?? []).map((img, i) => ({
+        // 副本。真正的字节由 resolveAttachments 在派发那一刻按索引回读文件
+        attachments: attachments.map((_, i) => ({
           sessionId,
-          entryId: ids.entryId,
+          messageId: row.id,
           index: i,
-          mimeType: img.mimeType
+          mimeType: attachments[i].mimeType
         }))
       })
     } finally {
@@ -997,7 +944,7 @@ class BotService {
   /**
    * 等这个会话的在飞管线全部收尾。
    *
-   * **带上限**:中止已经把 ticket / barrier / mailbox / run 全拆了,正常情况下这里几乎
+   * **带上限**:中止已经把 ticket / mailbox / run 全拆了,正常情况下这里几乎
    * 立刻返回。上限是为了不让一个卡死的脚本把「删除会话」这类用户操作永久挂住 —— 宁可
    * 让极端情况下多出一次并发写(树是 append-only 的,最坏是多一条孤儿 entry),
    * 也不能让界面卡在那里。
@@ -1055,6 +1002,11 @@ class BotService {
     promptText: string
     messageId: string
     messageSeq: number
+    /** 触发本轮的用户消息 id 与这条消息的跳数 —— 传播护栏的两个计数从这里起算 */
+    rootId: string
+    hop: number
+    /** 这条消息是谁说的（bot 消息只触发 respond-to: all 的成员，且永不触发它自己） */
+    author: { kind: 'user' } | { kind: 'bot'; name: string }
     attachments?: BotAttachmentRef[]
   }): Promise<void> {
     const { sessionId, messageId, messageSeq, promptText } = ctx
@@ -1065,12 +1017,19 @@ class BotService {
     const known = new Map(this.listAll().map((b) => [b.file.name, b.file]))
     const paths = new Map(this.listAll().map((b) => [b.file.name, b.basePath]))
 
+    // 一轮读一次：`fanoutCapped` 的文案要报的正是这一次判定用的那个数
+    const limits = readLoopLimits()
     const gate = runL0Gate({
       members,
       known,
+      author: ctx.author,
+      hop: ctx.hop,
+      // 同一轮里已经落了多少条 bot 消息 —— 横向护栏的计数口
+      fanout: chatMessageDao.countBotMessagesByRoot(sessionId, ctx.rootId),
+      limits,
       text: ctx.text,
       inlineTokens: ctx.inlineTokens,
-      lastBotSender: await this.lastBotSender(sessionId),
+      lastBotSender: this.lastBotSender(sessionId),
       clarifyConsumed: this.clarifyConsumed.get(sessionId) ?? new Set()
     })
     this.recordL0(sessionId, messageId, messageSeq, gate.records)
@@ -1078,6 +1037,17 @@ class BotService {
       const seen = this.clarifyConsumed.get(sessionId) ?? new Set<string>()
       seen.add(gate.consumedClarifyEntryId)
       this.clarifyConsumed.set(sessionId, seen)
+    }
+    if (gate.fanoutExceeded) {
+      // 触顶不静默（设计 §4.2）：一条 system 行说明这一轮到此为止，而不是让接力凭空断掉
+      chatMessageDao.append({
+        sessionId,
+        authorKind: 'system',
+        content: t('bot.fanoutCapped', { count: limits.maxFanout }),
+        rootId: ctx.rootId,
+        hop: ctx.hop
+      })
+      electronEventSink.broadcast({ type: 'messages_reloaded', sessionId })
     }
     if (!gate.cohort.length) {
       // L0 把所有成员都筛掉了（全是 mention-only 而这条没提及谁）——**这一轮仍然算结束**。
@@ -1090,35 +1060,9 @@ class BotService {
     // 窗口只建一次，切好之后发给每个成员 —— 它要读一遍会话树 + 跑一次投影
     const window = await this.buildWindow(sessionId, messageId)
 
-    const barrier = new CohortBarrier(gate.cohort, {
-      onSettled: ({ unresponsive, suppressed }) => {
-        // 定局时连意图都还没交的成员：继续跑纯属烧钱。已 claim 的败者**不**中止 ——
-        // 让脚本按 verdict.won === false 自己优雅收尾，`say` 的强制点是兜底
-        for (const name of unresponsive) this.ticketOf(sessionId, name, messageSeq)?.abort.abort()
-        if (suppressed.length) {
-          this.suppressedBy.set(
-            suppressedKey(sessionId, messageSeq),
-            suppressed.map((s) => ({
-              name: s.botName,
-              // 显示名取 cohort 组建那一刻的快照，与署名侧车同理：bot 改名或被删之后，
-              // 历史消息上的 chip 仍该显示当初那个名字
-              displayName: known.get(s.botName)?.displayName ?? s.botName,
-              decision: s.decision,
-              relevance: s.relevance,
-              ...(s.reason ? { reason: s.reason } : {})
-            }))
-          )
-        }
-      }
-    })
-
-    const live = this.barriers.get(sessionId) ?? new Set<CohortBarrier>()
-    live.add(barrier)
-    this.barriers.set(sessionId, live)
-
     this.enter(sessionId)
     try {
-      const outcomes = await Promise.all(
+      await Promise.all(
         gate.cohort.map((botName) =>
           this.runPipeline({
             bot: known.get(botName)!,
@@ -1127,14 +1071,13 @@ class BotService {
             messageId,
             messageSeq,
             promptText,
-            barrier,
-            // 「还有别人可能接这条消息吗」—— 降级出声的判据
-            arbitrated: gate.cohort.length > 1,
-            // 「这条消息点名了我吗」—— 契约选择的判据（定向与单 bot 一样用 intentSolo）
+            // 「这条消息点名了我吗」—— 契约选择的判据（定向的消息不给 ignore）
             directed: gate.directed,
             members: gate.cohort,
             known,
             window,
+            rootId: ctx.rootId,
+            hop: ctx.hop,
             attachments: ctx.attachments
           }).catch((e) => {
             // 一个成员炸了不该拖垮整个 cohort：Promise.all 一 reject，后面的沉默判定
@@ -1144,66 +1087,18 @@ class BotService {
               botName,
               displayName: known.get(botName)?.displayName ?? botName,
               said: false,
-              outcome: 'pipeline_error',
-              // invoke 从不抛,这条 catch 只接意料外的炸——到不了这里的中止信息按未中止算
-              aborted: false
+              outcome: 'pipeline_error'
             }
           })
         )
       )
 
-      // 多 bot 的沉默是 cohort 整体的结局，逐成员补气泡会让每条消息多出 N 条噪音
-      // （M4′ 的 `!ctx.arbitrated` 正是为此留的口子，这里把它补完）。单 bot 会话不发 ——
-      // 那里的沉默只可能是失败，一条留痕的失败消息比一次转瞬即逝的提示更该有。
-      //
-      // **被中止的一轮也不发**：用户自己按的停止不属于「无从解释的沉默」，跟单 bot 那条
-      // 降级气泡的 `!signal.aborted` 是同一条纪律 —— 少了它，点一次停止就弹一条
-      // 「全体沉默：有东西坏了」。两个守卫各管一半：barrier.wasAborted 是会话级中止，
-      // outcomes 里的 aborted 位是 per-bot 停止（它刻意不动 barrier）
-      const silence =
-        gate.cohort.length > 1 && !barrier.wasAborted && !outcomes.some((o) => o.aborted)
-          ? cohortSilence(outcomes)
-          : null
-      if (silence) {
-        // 逐成员各记一条，而不是找个 `_cohort` 假目录记一条：决策记录按 bot 分目录，
-        // 回答的是「这个 bot 为什么没说话」—— 「这一轮谁都没说」正是它自己那份记录里
-        // 最该有、又只能由 cohort 视角给出的一句（否则要跨 N 个文件对账才看得出来）
-        for (const o of outcomes) {
-          appendBotDecision({
-            kind: 'cohort_silent',
-            sessionId,
-            botName: o.botName,
-            ticketId: '-',
-            messageSeq,
-            messageId,
-            detail: { reason: silence.reason, self: o.outcome }
-          })
-        }
-        // 胜者半路失败的场合，暂存里还躺着一份没人来取的候选名单 —— 而这恰恰是最需要
-        // 救济的一次：有人想接、赢家却哑了。没有胜者消息可挂，就挂到这条提示上
-        const orphaned = this.suppressedBy.get(suppressedKey(sessionId, messageSeq))
-        electronEventSink.broadcast({
-          type: 'bot_cohort_silent',
-          sessionId,
-          messageId,
-          reason: silence.reason,
-          members: outcomes.map((o) => ({
-            name: o.botName,
-            displayName: o.displayName,
-            outcome: o.outcome
-          })),
-          ...(orphaned?.length ? { suppressed: orphaned } : {})
-        })
-      }
       // 全员收尾之后才算「一轮结束」——聊天会话的一轮是 cohort 整体，不是某个成员。
       // **在 finally 之前**：放到在飞计数之外的话，`abortSession` 的会师点可以在这次
       // fire 还在飞时就落定，于是 auto-title 能在一个正在被删除/清空的会话上新起一个 run
       await this.fireTurnCompleted(sessionId, members)
     } finally {
       this.leave(sessionId)
-      this.suppressedBy.delete(suppressedKey(sessionId, messageSeq))
-      live.delete(barrier)
-      if (!live.size) this.barriers.delete(sessionId)
     }
   }
 
@@ -1221,32 +1116,32 @@ class BotService {
    * @param untilEntryId 截到这条 entry **之前**（新用户消息在派发前已经落树，
    *        不截的话它会和提示词里的 `{{message.text}}` 重复一遍）
    */
-  private async buildWindow(
+  private buildWindow(
     sessionId: string,
-    untilEntryId?: string
-  ): Promise<{ lines: string[]; after: (entryId: string) => string[] }> {
-    const msgs = await messageService.listBySession(sessionId)
-    const cut = untilEntryId ? msgs.findIndex((m) => m.id === untilEntryId) : -1
-    const upTo = cut >= 0 ? msgs.slice(0, cut) : msgs
-    const lineOf = (m: (typeof msgs)[number]): string => {
-      const who =
-        m.role === 'user'
-          ? 'User'
-          : ((m.metadata as { sender?: { displayName?: string } } | null)?.sender?.displayName ??
-            'Assistant')
-      // user 消息的 content 是标记态原文（内联 Token 还没展开）—— 还原成人读文本
+    untilMessageId?: string
+  ): { lines: string[]; after: (messageId: string) => string[] } {
+    const rows = chatMessageDao.findBySession(sessionId)
+    const cut = untilMessageId ? rows.findIndex((r) => r.id === untilMessageId) : -1
+    const upTo = cut >= 0 ? rows.slice(0, cut) : rows
+    const lineOf = (r: (typeof rows)[number]): string => {
+      // 谁说的直接是列 —— v1 要先投影成 ChatMessage 再从 metadata.sender 里挖
+      const who = r.authorKind === 'user' ? 'User' : (r.displayName ?? r.botName ?? 'Assistant')
+      // user 行的 content 是标记态原文（内联 Token 未展开）—— 还原成人读文本
       const text =
-        m.role === 'user' ? resolveTokensForAgent(m.content, m.metadata?.inlineTokens) : m.content
+        r.authorKind === 'user'
+          ? resolveTokensForAgent(r.content, parseInlineTokens(r.inlineTokens))
+          : r.content
       return `${who}: ${String(text ?? '').trim()}`
     }
+    const speaking = (r: (typeof rows)[number]): boolean => r.authorKind !== 'system'
     return {
-      lines: upTo.filter((m) => m.role === 'user' || m.role === 'assistant').map(lineOf),
-      after: (entryId: string) => {
-        const at = msgs.findIndex((m) => m.id === entryId)
+      lines: upTo.filter(speaking).map(lineOf),
+      after: (messageId: string) => {
+        const at = rows.findIndex((r) => r.id === messageId)
         if (at < 0) return []
-        return msgs
+        return rows
           .slice(at + 1)
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .filter(speaking)
           .map(lineOf)
       }
     }
@@ -1294,8 +1189,9 @@ class BotService {
       this.appendBotMessage(
         ticket.sessionId,
         { botName, displayName: ticket.displayName, error: true },
-        { content: t('bot.gateFallback', { name: ticket.displayName, count: health.streak }) }
-      ).catch((e) => log.warn(`回落提示落树失败 (${botName}):`, e))
+        { content: t('bot.gateFallback', { name: ticket.displayName, count: health.streak }) },
+        { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
+      ).catch((e) => log.warn(`回落提示落库失败 (${botName}):`, e))
     }
     this.gateHealth.set(botName, health)
   }
@@ -1313,12 +1209,12 @@ class BotService {
     messageId: string
     messageSeq: number
     promptText: string
-    barrier: CohortBarrier
-    arbitrated: boolean
     directed: boolean
     members: string[]
     known: Map<string, ParsedBotFile>
-    window: { lines: string[]; after: (entryId: string) => string[] }
+    window: { lines: string[]; after: (messageId: string) => string[] }
+    rootId: string
+    hop: number
     attachments?: BotAttachmentRef[]
   }): Promise<MemberOutcome> {
     const { bot, sessionId, messageId, messageSeq } = ctx
@@ -1332,8 +1228,8 @@ class BotService {
       displayName: bot.displayName,
       messageSeq,
       messageId,
-      barrier: ctx.barrier,
-      claimState: ctx.barrier.isSolo ? 'won' : 'none',
+      rootId: ctx.rootId,
+      hop: ctx.hop,
       terminal: false,
       said: false,
       abort: new AbortController()
@@ -1358,7 +1254,8 @@ class BotService {
       await this.appendBotMessage(
         sessionId,
         { botName: bot.name, displayName: bot.displayName, error: true },
-        { content: t('bot.pipelineMissing', { pipeline: pipeline.workflow }) }
+        { content: t('bot.pipelineMissing', { pipeline: pipeline.workflow }) },
+        { replyToId: messageId, rootId: ctx.rootId, hop: ctx.hop }
       )
       // said=true：这个成员确实往会话里放了东西（一条可见失败）。全体沉默的判据是
       // 「会话里什么都没多出来」，不是「脚本调过 say」—— 否则一条已经显形的失败
@@ -1394,7 +1291,6 @@ class BotService {
           agents: pipeline.agents,
           session: {
             id: sessionId,
-            arbitrated: ctx.arbitrated,
             directed: ctx.directed,
             members: ctx.members,
             // 其它成员的身份 —— 门控段据此判断「这条明显是冲着别人去的」
@@ -1448,21 +1344,20 @@ class BotService {
       // 可见结局兜底（设计 §9）：脚本自己抛了、没有可用模型、mailbox 超时 —— 这些今天
       // 在会话里什么都不会出现。
       //
-      // 谁该出这条气泡：**没有仲裁的场合，或者仲裁的胜者**。多 bot 会话里的败者与未表态者
-      // 一刀切会让每条消息多出 N−1 条错误气泡（那是设计要的沉默），但**胜者不在此列** ——
-      // 它正是那个欠着一条回复的人，它的失败恰恰最该看得见。顺带这也让被它压制的候选有处
-      // 可挂：气泡是一条正经的 bot 消息，救济 chip 跟着它走
-      const owesReply = !ctx.arbitrated || ticket.claimState === 'won'
-      if (!result.ok && !ticket.said && owesReply && !ticket.abort.signal.aborted) {
+      // v2 起**每个 bot 各自为自己的结局负责**：没有胜者，也就没有「只让胜者出声」
+      // 那条规则。它自己坏了就自己说 —— N 个同时坏就是 N 条错误气泡，在群聊形态下
+      // 这是正确的（每个成员各说各的），且失败本就罕见。
+      // 用户按的停止不在此列：那不是「无从解释的沉默」（设计 §9.1）
+      if (!result.ok && !ticket.said && !ticket.abort.signal.aborted) {
         await this.appendBotMessage(
           sessionId,
           {
             botName: bot.name,
             displayName: bot.displayName,
-            error: true,
-            ...(this.takeSuppressed(ticket) ?? {})
+            error: true
           },
-          { content: t('bot.runFailed', { name: bot.displayName }) }
+          { content: t('bot.runFailed', { name: bot.displayName }) },
+          { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
         )
         ticket.said = true
       }
@@ -1472,8 +1367,8 @@ class BotService {
         botName: bot.name,
         displayName: bot.displayName,
         said: ticket.said,
-        outcome: memberOutcome(ticket, output?.outcome, ended),
-        aborted: ticket.abort.signal.aborted
+        // 脚本自报优先，没报就用 run 本身怎么收的
+        outcome: output?.outcome || ended
       }
     } finally {
       ticket.terminal = true
@@ -1485,50 +1380,14 @@ class BotService {
   }
 
   /**
-   * 装配进脚本 API 的三个回调。
+   * 装配进脚本 API 的两个回调（v2 去掉 `claim` —— 没有仲裁了）。
    *
    * 值跨 vm realm 到达 —— `instanceof` 不可靠，一律逐字段 typeof 校验 + JSON 克隆。
    */
   private makeBotApi(ticket: BotTicket): Record<string, unknown> {
     const key = mailboxKey(ticket.sessionId, ticket.botName)
-    const decide = (kind: BotDecisionKind, detail?: Record<string, unknown>): void =>
-      appendBotDecision({
-        kind,
-        sessionId: ticket.sessionId,
-        botName: ticket.botName,
-        ticketId: ticket.ticketId,
-        runId: ticket.runId,
-        messageSeq: ticket.messageSeq,
-        messageId: ticket.messageId,
-        detail
-      })
 
     return {
-      claim: async (raw: unknown): Promise<ClaimVerdict> => {
-        const intent = asClaimIntent(raw)
-        const verdict = await ticket.barrier.claim(ticket.botName, intent)
-        ticket.claimState = verdict.won ? 'won' : 'lost'
-        ticket.claimReason = verdict.reason
-        decide(
-          verdict.reason === 'solo'
-            ? 'claim_solo'
-            : verdict.won
-              ? 'claim_won'
-              : verdict.reason === 'ignored'
-                ? 'claim_ignored'
-                : verdict.reason === 'timeout'
-                  ? 'claim_timeout'
-                  : // 中止不是「输了」。并进 claim_lost 会让排查的人去找那个并不存在的胜者，
-                    // 也会与沉默事件里的 claim_aborted 对不上号
-                    verdict.reason === 'aborted'
-                    ? 'claim_aborted'
-                    : 'claim_lost',
-          { decision: intent.decision, relevance: intent.relevance, winner: verdict.winner }
-        )
-        this.activity(ticket, verdict.won ? 'claimed' : 'silent', verdict.reason)
-        return { ...verdict }
-      },
-
       turn: async (fn?: unknown): Promise<unknown> => {
         const item: QueueItem = {
           ticketId: ticket.ticketId,
@@ -1559,18 +1418,7 @@ class BotService {
         //    少了这条闸，会出现「journal 记为超时失败、会话里却多出一条消息」的分叉
         if (ticket.terminal) throw new Error('this run has already ended')
         if (this.blockWrites.has(ticket.sessionId)) throw new Error('session is being torn down')
-        // ② 仲裁的**唯一强制点**：claim 返回 false 只是建议，落树才是有外部后果的动作
-        if (ticket.claimState === 'lost') {
-          ticket.blockedBy = 'arbitration_lost'
-          decide('arbitration_lost')
-          throw new Error('another bot won this message')
-        }
-        if (ticket.claimState === 'none' && !ticket.barrier.isSolo) {
-          // 隐式入场 = 给「不调 claim」发一张永远赢的票
-          ticket.blockedBy = 'arbitration_bypassed'
-          decide('arbitration_bypassed')
-          throw new Error('call claim() before say() in a multi-bot session')
-        }
+        // v2 起 say 就是纯粹的落库动作：没有仲裁，也就没有「赢了才能说」这道强制
         const content = asSayContent(raw)
         const botReply = coerceBotReply(raw)
         const o = (typeof opts === 'object' && opts !== null ? opts : {}) as {
@@ -1586,14 +1434,14 @@ class BotService {
             botName: ticket.botName,
             displayName: ticket.displayName,
             ...(decision ? { decision } : {}),
-            ...(this.takeSuppressed(ticket) ?? {}),
-            // 侧车存**校验过**的结构，与 content 里那份 markdown 同源（content 由
+            // 行里存**校验过**的结构，与 content 里那份 markdown 同源（content 由
             // botReplyToMarkdown 得来）—— 读写两侧同一个形状，UI 不必再自己防一遍
             ...(botReply ? { reply: botReply } : {}),
             // 脚本降级出声（门控破损/超时、任务失败等）—— 失败卡样式的数据源
             ...(o.error === true ? { error: true as const } : {})
           },
-          { content }
+          { content },
+          { replyToId: ticket.messageId, rootId: ticket.rootId, hop: ticket.hop }
         )
         if (messageId) {
           ticket.said = true
@@ -1607,18 +1455,18 @@ class BotService {
   /**
    * 附件句柄 → 派生 agent 上下文里的真实图片消息（引擎的 `resolveAttachments` 接缝）。
    *
-   * 句柄是**自包含**的（会话 + entry + 第几张）：引擎那一层没有会话上下文，它只是把脚本
-   * 转交的值原样递过来。字节**从会话树回读而不是在内存里另存一份** —— 消息可能在 mailbox
-   * 里排很久才轮到任务段，而树是这些字节唯一的权威副本；内存缓存要么跟着排队时长一起
-   * 泄漏，要么在超时那一刻恰好被清掉。
+   * 句柄是**自包含**的（会话 + 消息 + 第几张）：引擎那一层没有会话上下文，它只是把脚本
+   * 转交的值原样递过来。字节**按需从盘上回读而不是在内存里另存一份** —— 消息可能在
+   * mailbox 里排很久才轮到任务段，而盘上那份是这些字节唯一的权威副本；内存缓存要么跟着
+   * 排队时长一起泄漏，要么在超时那一刻恰好被清掉。
    *
    * 取不到就跳过那一张（少一张图的回答好过没有回答），不抛。
    */
   async resolveAttachments(refs: unknown[], ownerSessionId?: string): Promise<AgentMessage[]> {
-    const wanted = new Map<string, { sessionId: string; entryId: string; indexes: number[] }>()
+    const wanted = new Map<string, { sessionId: string; messageId: string; indexes: number[] }>()
     for (const raw of refs) {
       if (typeof raw !== 'object' || raw === null) continue
-      const d = raw as { sessionId?: unknown; entryId?: unknown; index?: unknown }
+      const d = raw as { sessionId?: unknown; messageId?: unknown; index?: unknown }
       if (typeof d.sessionId !== 'string' || !d.sessionId) continue
       // **只读本次 run 归属的那条会话**：句柄来自脚本，而脚本是用户写的 md —— 不设这道
       // 闸，任何工作流都能写一个指向别的会话的句柄，把那边的图片拉进本次上下文。不是越权
@@ -1627,12 +1475,12 @@ class BotService {
         log.warn(`附件句柄指向别的会话，已忽略：${d.sessionId}`)
         continue
       }
-      if (typeof d.entryId !== 'string' || !d.entryId) continue
+      if (typeof d.messageId !== 'string' || !d.messageId) continue
       if (!Number.isInteger(d.index) || (d.index as number) < 0) continue
-      const key = `${d.sessionId}\u0000${d.entryId}`
+      const key = `${d.sessionId}\u0000${d.messageId}`
       const slot = wanted.get(key) ?? {
         sessionId: d.sessionId,
-        entryId: d.entryId,
+        messageId: d.messageId,
         indexes: [] as number[]
       }
       slot.indexes.push(d.index as number)
@@ -1641,20 +1489,20 @@ class BotService {
     if (!wanted.size) return []
 
     const out: Array<{ type: 'image'; data: string; mimeType: string }> = []
-    for (const { sessionId, entryId, indexes } of wanted.values()) {
+    for (const { sessionId, messageId, indexes } of wanted.values()) {
       try {
-        const tree = await getSessionTree(sessionId)
-        const entry = tree ? await tree.getEntry(entryId) : null
-        if (!entry || entry.type !== 'message') continue
-        const content = (entry.message as { content?: unknown }).content
-        if (!Array.isArray(content)) continue
-        const images = content.filter(
-          (c): c is { type: 'image'; data: string; mimeType: string } =>
-            typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'image'
-        )
-        for (const i of indexes) if (images[i]) out.push(images[i])
+        const row = chatMessageDao.findById(messageId)
+        if (!row || row.sessionId !== sessionId) continue
+        const attachments = row.attachments ?? []
+        for (const i of indexes) {
+          const ref = attachments[i]
+          if (!ref) continue
+          // 字节在盘上：行里只有描述符（不把 base64 塞进表，见 chatAttachments 的说明）
+          const bytes = readChatAttachment(sessionId, ref)
+          if (bytes) out.push({ type: 'image', ...bytes })
+        }
       } catch (e) {
-        log.warn(`附件回读失败 session=${sessionId} entry=${entryId}:`, e)
+        log.warn(`附件回读失败 session=${sessionId} message=${messageId}:`, e)
       }
     }
     if (!out.length) return []
@@ -1748,7 +1596,7 @@ class BotService {
           file: basePath
         },
         agents: pipeline.agents,
-        session: { id: owner, arbitrated: false, directed: false, members: [] },
+        session: { id: owner, directed: false, members: [] },
         since,
         notes: bot.notes ?? ''
       }
@@ -1820,32 +1668,9 @@ class BotService {
     }
   }
 
-  /**
-   * 取走这一轮被压制的候选，交给即将落树的那条 bot 消息。
-   *
-   * **取走即删**：一轮只挂一次 —— 任务段会 say 好几次，每条都挂等于把「还有谁想回答」
-   * 重复 N 遍。两个调用点（正常回复、胜者的失败气泡）共用它，因为它们是同一件事的
-   * 两种结局：这条消息就是胜者对这一轮的交代。
-   */
-  private takeSuppressed(ticket: BotTicket): { suppressed: SuppressedCandidate[] } | null {
-    const key = suppressedKey(ticket.sessionId, ticket.messageSeq)
-    const list = this.suppressedBy.get(key)
-    if (!list?.length) return null
-    this.suppressedBy.delete(key)
-    return { suppressed: list }
-  }
-
-  private ticketOf(sessionId: string, botName: string, messageSeq: number): BotTicket | undefined {
-    for (const t of this.tickets.values()) {
-      if (t.sessionId === sessionId && t.botName === botName && t.messageSeq === messageSeq)
-        return t
-    }
-    return undefined
-  }
-
   private activity(
     ticket: BotTicket,
-    phase: 'started' | 'claimed' | 'queued' | 'working' | 'silent' | 'ended',
+    phase: 'started' | 'queued' | 'working' | 'silent' | 'ended',
     outcome?: string
   ): void {
     electronEventSink.broadcast({
@@ -1877,37 +1702,38 @@ class BotService {
    * `decision` 被丢掉，走投影会拿到一个恒为 undefined 的字段**且不报错**（表现为
    * 「回连从来不触发」）。也不用 findEntries —— 它不区分分支，回退后的旧分支会命中。
    */
-  private async lastBotSender(sessionId: string): Promise<LastBotSender | null> {
-    const tree = await getSessionTree(sessionId)
-    if (!tree) return null
-    const branch = await tree.getBranch()
-    for (let i = branch.length - 1; i >= 0; i--) {
-      const entry = branch[i]
-      if (entry.type !== 'custom' || entry.customType !== BOT_SENDER_CUSTOM_TYPE) continue
-      const data = entry.data as Partial<LastBotSender> | undefined
-      if (!data?.botName) return null
-      return { ...(data as LastBotSender), entryId: entry.id }
+  private lastBotSender(sessionId: string): LastBotSender | null {
+    const row = chatMessageDao.findLastBot(sessionId)
+    if (!row?.botName) return null
+    return {
+      botName: row.botName,
+      displayName: row.displayName ?? row.botName,
+      ...(row.decision ? { decision: row.decision } : {}),
+      entryId: row.id
     }
-    return null
   }
 
   /**
-   * bot 消息落树 —— 一次持锁内**连续 append 两条 entry**：署名侧车在前、assistant 在后。
+   * bot 消息落库 —— 一行，一次同步事务（seq 在事务里分配）。
    *
-   * 两者之间不得有任何 await 逃逸点（广播、日志、投影一律移到锁外）：投影层靠「紧邻」
-   * 配对它们，中间插进别人的消息就会让署名挂错人 —— 而错挂署名比丢署名更糟。
+   * v1 这里要在一次持锁内连着写两条 entry（署名侧车在前、assistant 在后，投影靠「紧邻」
+   * 把它们配对），中间不许有任何 await 逃逸点，否则署名会挂到别人头上。v2 把「谁说的」
+   * 变成行上的两列，那套纪律连同它要防的故障一起消失了。
    *
-   * 返回 assistant entry 的 id。
+   * `origin` 是「这条在回应什么」：它同时决定 replyToId/rootId/hop 三列的取值，以及
+   * **这条发言要不要触发接力**（开场白不带 origin —— 它不回应任何人）。
+   *
+   * 返回消息 id；空正文或会话正在关停时返回 null。
    */
   async appendBotMessage(
     sessionId: string,
-    sender: BotSenderSidecar,
-    message: { content: string; model?: string; provider?: string }
+    sender: BotSender,
+    message: { content: string },
+    origin?: { replyToId?: string; rootId?: string; hop?: number }
   ): Promise<string | null> {
-    // 投影对 assistant 消息有两处「整条吃掉」的早退（stopReason==='error' / blocks 为空），
-    // 落一条投不出来的 entry 只会留下一个无主侧车去污染下一条消息。宁可不落。
+    // 空正文投不成一条可读消息，落进去只会在会话里留一个空气泡。宁可不落。
     if (!message.content.trim()) {
-      log.warn(`bot "${sender.botName}" 的消息内容为空，未落树（session=${sessionId}）`)
+      log.warn(`bot "${sender.botName}" 的消息内容为空，未落库（session=${sessionId}）`)
       return null
     }
     if (this.blockWrites.has(sessionId)) {
@@ -1916,37 +1742,88 @@ class BotService {
     }
     this.enter(sessionId)
     try {
-      const assistant = {
-        role: 'assistant',
-        content: [{ type: 'text', text: message.content }],
-        // 切片投影里没有 model_change，assistant 消息只能靠自身兜底
-        model: message.model ?? '',
-        provider: message.provider ?? '',
-        stopReason: 'stop'
-      } as unknown as AgentMessage
-
-      const ids = await withSessionTreeLock(
+      const row = chatMessageDao.append({
         sessionId,
-        async (tree) => {
-          const sidecarId = await tree.appendCustomEntry(BOT_SENDER_CUSTOM_TYPE, { ...sender })
-          const entryId = await tree.appendMessage(assistant)
-          return { sidecarId, entryId }
-        },
-        sessionService.getById(sessionId)?.workingDirectory ?? ''
-      )
+        authorKind: 'bot',
+        botName: sender.botName,
+        displayName: sender.displayName,
+        content: message.content,
+        ...(sender.decision ? { decision: sender.decision } : {}),
+        ...(sender.reply ? { reply: JSON.stringify(sender.reply) } : {}),
+        ...(sender.error === true ? { isError: true } : {}),
+        ...(origin?.replyToId ? { replyToId: origin.replyToId } : {}),
+        ...(origin?.rootId ? { rootId: origin.rootId } : {}),
+        // 由 hop=h 的消息触发的回复是 h+1；开场白之类没有来源的记 0
+        hop: (origin?.hop ?? -1) + 1
+      })
 
-      const projected = await this.projectSlice(sessionId, [ids.sidecarId, ids.entryId])
-      if (projected) {
-        electronEventSink.broadcast({
-          type: 'assistant_message',
-          sessionId,
-          messageId: ids.entryId,
-          message: JSON.stringify(projected)
-        })
-      }
+      electronEventSink.broadcast({
+        type: 'assistant_message',
+        sessionId,
+        messageId: row.id,
+        message: JSON.stringify(rowToChatMessage(row))
+      })
       // 会话侧账（A4）：未读 +1、updatedAt 上浮、列表广播。正在看的一侧随后 markRead 清零
       sessionService.noteUnreadBotReply(sessionId)
-      return ids.entryId
+      // bot→bot 接力（v2）：这条消息也可能触发别的成员。**不 await** —— 调用它的正是
+      // 某个 bot 的 `say`，等下一跳跑完等于把接力做成同步递归。护栏（hop / 扇出 / 不响应
+      // 自己）在 L0 里统一判，这里只负责把「谁说的」交出去。
+      //
+      // **只有回应某条消息的发言才接力**（`origin` 在不在就是判据）：会话创建时播的开场白
+      // 没有 origin —— 它不回应任何人。少了这道判断，只要成员里有一个 respond-to: all，
+      // 建会话那一刻就会自动开跑一轮 bot 对话，用户一个字都还没说
+      if (origin) void this.relayToBots(sessionId, row)
+      return row.id
+    } finally {
+      this.leave(sessionId)
+    }
+  }
+
+  /**
+   * 一条 bot 消息是否要触发别的成员（v2 的 bot→bot 接力）。
+   *
+   * **缺省完全不进这条路径**：只要没有任何成员声明 `shuvix-bot-respond-to: all`，
+   * 这里第一句就返回 —— 与 v1「bot 的回复不触发 bot」的硬规则在行为与开销上都等价。
+   *
+   * 真正的护栏（hop 上限、单轮扇出上限、永不响应自己）统一在 L0 里判，不在这里重复：
+   * 两处判会随时间漂移，而 L0 本来就是「谁参与」的唯一裁决点。
+   *
+   * 只由**回应型**的落点触发（见 `appendBotMessage` 里的 `origin` 判据）。
+   *
+   * 调用点是 `void this.relayToBots(...)`，于是这个函数有两条别处没有的纪律：
+   *
+   *  - **在飞票在任何 await 之前就拿**。调用方 `appendBotMessage` 的 finally 紧接着就把
+   *    自己那张票还掉；票晚一步拿，`whenIdle` 就能在这条缝里看到归零 —— `abortSession`
+   *    于是在接力还没起跑时宣告落定，等它的 finally 撤掉禁写位，这一轮接力再若无其事地
+   *    往一个刚被清空/删除的会话里写。
+   *  - **函数体整个在 try 里**，短路判断也不例外。脱手的 Promise 逃出去一个异常就是主
+   *    进程级的 unhandled rejection，而名单读取与 bot 目录全扫同样可能抛。
+   */
+  private async relayToBots(sessionId: string, row: ChatMessageRow): Promise<void> {
+    if (!row.botName) return
+    // 会话正在关停：不起新的一轮（禁写位出了 abortSession 的 finally 就没了，
+    // 所以这道判断只在「起跑前」有意义，起跑后靠 ticket 的 abort 信号收）
+    if (this.blockWrites.has(sessionId)) return
+    this.enter(sessionId)
+    try {
+      const members = sessionService.getById(sessionId)?.settings?.bots ?? []
+      if (members.length < 2) return
+      const known = new Map(this.listAll().map((b) => [b.file.name, b.file]))
+      const anyRelay = members.some((m) => m !== row.botName && known.get(m)?.respondTo === 'all')
+      if (!anyRelay) return
+      await this.dispatchCohort({
+        sessionId,
+        text: row.content,
+        promptText: row.content,
+        messageId: row.id,
+        messageSeq: row.seq,
+        rootId: row.rootId ?? row.id,
+        hop: row.hop,
+        author: { kind: 'bot', name: row.botName }
+      })
+    } catch (e) {
+      // 接力失败不该反噬发言的那一方（它的消息已经落库并广播了）
+      log.warn(`bot→bot 接力失败 session=${sessionId} from=${row.botName}:`, e)
     } finally {
       this.leave(sessionId)
     }
@@ -2022,51 +1899,21 @@ class BotService {
       for (const t of [...this.tickets.values()]) {
         if (t.sessionId === sessionId) t.abort.abort()
       }
-      // barrier 也要拆：不拆的话它的宽限窗定时器会在会话收尾之后才 fire
-      for (const b of this.barriers.get(sessionId) ?? []) b.abort()
       // 在飞的询问也要收，并且**关上门**：blockWrites 出了 finally 就没了，而工具可能
       // 在整个 abortSession 落定之后才发出询问
       this.inputsClosed.add(sessionId)
       this.cancelPendingInputs(sessionId)
       this.mailbox.abortSession(sessionId)
       workflowService.abortSessionRuns(sessionId)
-      // **先等管线真的停下来,再排空写锁**。drain 只保证「此刻队列里的写入」落完,而一条
-      // 还在收尾的管线随时可能再拿一次锁 —— 三个调用点(回退/清空/删除会话)都拿这个方法
-      // 当「动树之前的安全前提」,顺序反了等于那个前提只在没有并发时成立
+      // 等管线真的停下来。v1 这里还要排空会话树的写锁 —— 那条保证在管线成为长命写者
+      // 之后本来就已经悄悄失效（drain 只排空「此刻队列里的」写入）。v2 的写者是一次
+      // 同步事务，没有「持锁跨越 await」这回事，`whenIdle` + 禁写位就是完整的前提
       await this.whenIdle(sessionId)
-      await drainSessionTreeLock(sessionId)
     } finally {
       const left = (this.blockWrites.get(sessionId) ?? 1) - 1
       if (left > 0) this.blockWrites.set(sessionId, left)
       else this.blockWrites.delete(sessionId)
     }
-  }
-
-  /**
-   * 对新 append 的 entry 切片跑投影 —— 广播的内容与 id 都取自它，
-   * 「流式所见」因此与「重开所见」逐字段同源。
-   *
-   * fallback 走 `readSessionRunConfig`（沿分支扫 model_change，与全量投影同一数据源）：
-   * 切片里没有 model_change，而 user 消息没有自身归属可兜底。
-   */
-  private async projectSlice(
-    sessionId: string,
-    ids: Array<string | null>
-  ): Promise<ChatMessage | null> {
-    const tree = await getSessionTree(sessionId)
-    if (!tree) return null
-    // 按调用方给的顺序逐条取，而不是过滤 getEntries()：顺序在这里是语义的一部分
-    // （署名侧车必须在前，投影才配得上对），而且 O(1) 取代对整棵树的一次扫描
-    const slice: SessionTreeEntry[] = []
-    for (const id of ids) {
-      if (!id) continue
-      const entry = await tree.getEntry(id)
-      if (entry) slice.push(entry)
-    }
-    if (!slice.length) return null
-    const cfg = await readSessionRunConfig(sessionId)
-    const [projected] = entriesToChatMessages(slice, sessionId, cfg.model ?? '', cfg.provider ?? '')
-    return projected ?? null
   }
 
   getUserDir(): string {

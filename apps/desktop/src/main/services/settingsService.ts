@@ -35,6 +35,14 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.focusMode',
     desc: 'true | false — fade unselected sidebar items, chat header, input area, settings button, and inactive right-panel tabs when a session is selected'
   },
+  'bot.maxHop': {
+    labelKey: 'settings.botMaxHop',
+    desc: 'number as string — how deep a bot→bot relay may go (user message is hop 0); default 2, i.e. user → A → B and stop. 1 disables bot→bot entirely. Only in effect for bots declaring shuvix-bot-respond-to: all'
+  },
+  'bot.maxFanout': {
+    labelKey: 'settings.botMaxFanout',
+    desc: 'number as string — max bot messages one user message may produce in total; default 8. Bounds the combinatorial width that the hop limit cannot'
+  },
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
   'tool.browser.ignoreCertificateErrors': {

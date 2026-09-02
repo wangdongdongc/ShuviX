@@ -307,16 +307,6 @@ export function useAgentEvents(): void {
         store.setBotMailbox(sid, event.botName, { active: event.active, queued: event.queued })
         break
 
-      case 'bot_cohort_silent':
-        // 聊天会话：这一轮一个字都没换来 —— 输入框上方的一次性提示
-        store.setBotSilence(sid, {
-          messageId: event.messageId,
-          reason: event.reason,
-          members: event.members,
-          suppressed: event.suppressed
-        })
-        break
-
       case 'input_request':
         // 统一的"用户输入请求"事件 — 命令询问 / 选择题 / SSH 凭证
         store.addPendingInput(sid, event.request)

@@ -192,7 +192,7 @@ export class SessionService {
    *    （无根 / 有根），把它清空等于中途换一种会话 —— 那不是「管理成员」该做的事，
    *    而且这个会话的历史里躺着 bot 消息，忽然给它接上一个根 Agent 只会让人困惑。
    *  - **不校验名字是否存在**（与 create 同口径）：bot md 是纯 md 驱动的，用户随时可能
-   *    删掉一个。缺失成员由降级表处理（L0 剔除、会话头部标灰），历史消息靠署名侧车自带的
+   *    删掉一个。缺失成员由降级表处理（L0 剔除、会话头部标灰），历史消息靠消息行自带的
    *    displayName 永不裂。**这个接口本身就是名单写坏之后的逃生口** —— 在这里校验，
    *    等于把逃生口也锁上。
    *  - 开场白只补**新增**的成员：老成员不重播，去重也按名单差集算。
@@ -219,6 +219,30 @@ export class SessionService {
     // 落盘之后再补开场白：seedGreetings 读的是 settings.bots，差集由调用方给
     if (added.length) await botService.seedGreetings(id, added)
     return { success: true, bots: next, added }
+  }
+
+  /**
+   * 改聊天会话的运行配置（v2）—— 部分更新，未给的键保持原值。
+   *
+   * 只对聊天会话有意义（有根会话的配置在会话树上）。不广播列表变更：模型切换不改变
+   * 会话在列表里的呈现，而 `updateSettings` 顺带 touch 的 updatedAt 会让它无端上浮 ——
+   * 那是「有新消息」才该有的信号。
+   */
+  updateChatRunConfig(
+    id: string,
+    patch: { provider?: string; model?: string; thinkingLevel?: string }
+  ): void {
+    if (!this.isBotSession(id)) return
+    const cur = sessionDao.pickSettings(id, ['chatRunConfig'])?.chatRunConfig
+    sessionDao.updateSettings(id, {
+      chatRunConfig: {
+        provider: patch.provider ?? cur?.provider ?? '',
+        model: patch.model ?? cur?.model ?? '',
+        ...((patch.thinkingLevel ?? cur?.thinkingLevel)
+          ? { thinkingLevel: patch.thinkingLevel ?? cur?.thinkingLevel }
+          : {})
+      }
+    })
   }
 
   /**
@@ -470,11 +494,20 @@ export class SessionService {
     const session = sessionDao.pick(sessionId, ['projectId'])
     if (!session) return null
 
-    // 运行配置的唯一事实源是会话树；树上没有（新会话/从未显式切换过）才回落默认
-    const tree = await readSessionRunConfig(sessionId)
-    const provider = tree.provider ?? this.getDefaultProvider()
-    const model = tree.model ?? this.getDefaultModel()
-    const thinkingLevel = tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
+    // 运行配置的事实源**按会话形态**分流（v2）：
+    //   有根会话 → 会话树的 model_change / thinking_level_change / active_tools_change entry
+    //   聊天会话 → settings.chatRunConfig（它没有根 Agent，v2 之后也没有会话树）
+    // 判据是形态（bots 非空）而不是「chatRunConfig 在不在」—— 刚建的聊天会话还没有那个键，
+    // 按存在性分流会让它掉回去读一棵根本不存在的树。两种形态互斥，创建那一刻就定死。
+    const cfg = sessionDao.pickSettings(sessionId, ['bots', 'chatRunConfig'])
+    const isChat = (cfg?.bots?.length ?? 0) > 0
+    const chat = isChat ? cfg?.chatRunConfig : undefined
+    const tree = isChat
+      ? { provider: undefined, model: undefined, thinkingLevel: undefined, enabledTools: undefined }
+      : await readSessionRunConfig(sessionId)
+    const provider = chat?.provider ?? tree.provider ?? this.getDefaultProvider()
+    const model = chat?.model ?? tree.model ?? this.getDefaultModel()
+    const thinkingLevel = chat?.thinkingLevel ?? tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
 
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities

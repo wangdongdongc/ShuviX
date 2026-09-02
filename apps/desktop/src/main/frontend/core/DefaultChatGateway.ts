@@ -147,18 +147,30 @@ export class DefaultChatGateway implements ChatGateway {
     baseUrl?: string,
     apiProtocol?: string
   ): Promise<void> {
+    // 聊天会话没有根 Agent、也没有会话树：配置落 settings.chatRunConfig（v2）
+    if (sessionService.isBotSession(sessionId)) {
+      sessionService.updateChatRunConfig(sessionId, { provider, model })
+      return
+    }
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setModel(provider, model, baseUrl, apiProtocol)
     else await appendModelChange(sessionId, provider, model)
   }
 
   async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
+    if (sessionService.isBotSession(sessionId)) {
+      sessionService.updateChatRunConfig(sessionId, { thinkingLevel: level })
+      return
+    }
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setThinkingLevel(level)
     else await appendThinkingLevelChange(sessionId, level)
   }
 
   async setEnabledTools(sessionId: string, tools: string[]): Promise<void> {
+    // 聊天会话不表达会话级工具勾选：任务段的 agent 就是 bot 自己，工具来自它 md 里的
+    // shuvix-tools。UI 上 ToolPicker 对聊天会话隐藏，这里是对应的后端守卫
+    if (sessionService.isBotSession(sessionId)) return
     const agent = sessionService.getAgentSession(sessionId)
     if (agent) await agent.setEnabledTools(tools)
     else await appendActiveToolsChange(sessionId, tools)

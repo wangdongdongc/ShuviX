@@ -205,6 +205,8 @@ export function BotSettings(): React.JSX.Element {
           )}
         </div>
 
+        <LoopLimitsBlock />
+
         <div className="border-t border-border-secondary p-2 flex items-center gap-1.5">
           <button
             onClick={() => void handleCreate()}
@@ -620,6 +622,72 @@ function InspectStrip({ name, warnings }: { name: string; warnings: string[] }):
  * 门控模型（全局）：读 bot-intent 档案（用户覆盖优先）的 shuvix-model，改动写回
  * ~/.shuvix/agents/bot-intent.md 覆盖文件（无覆盖文件则从内置原文创建一份再写）。
  */
+/**
+ * bot→bot 接力的两道全局护栏（设计 §4.2）。
+ *
+ * 放在**列表这一侧**而不是某个 bot 的详情里：它们是会话级的安全阀，与「当前选中哪个 bot」
+ * 无关；摆进详情面板会让人以为改的是那一个 bot 的事。
+ *
+ * 只对声明了「响应所有人」的 bot 有意义，所以缺省这一组（2 / 8）下大多数会话根本走不到 ——
+ * 这一块因此故意做得轻，不抢列表的注意力。
+ */
+function LoopLimitsBlock(): React.JSX.Element {
+  const { t } = useTranslation()
+  const [vals, setVals] = useState<{ hop: string; fanout: string }>({ hop: '', fanout: '' })
+
+  useEffect(() => {
+    void Promise.all([
+      window.api.settings.get('bot.maxHop'),
+      window.api.settings.get('bot.maxFanout')
+    ]).then(([hop, fanout]) => setVals({ hop: hop ?? '2', fanout: fanout ?? '8' }))
+  }, [])
+
+  // 空串不写盘：清空输入框是编辑中途的状态，不是「设成 0」。失焦时若仍是空则回读缺省
+  const write = (key: string, raw: string): void => {
+    const n = Number(raw)
+    if (!raw.trim() || !Number.isInteger(n) || n < 1) return
+    void window.api.settings.set({ key, value: String(n) })
+  }
+
+  const row = (
+    which: 'hop' | 'fanout',
+    key: string,
+    label: string,
+    hint: string,
+    fallback: string
+  ): React.JSX.Element => (
+    <label className="flex items-center gap-2" title={hint}>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-text-tertiary">{label}</span>
+      <input
+        type="number"
+        min={1}
+        value={vals[which]}
+        onChange={(e) => setVals((v) => ({ ...v, [which]: e.target.value }))}
+        onBlur={() => {
+          const raw = vals[which]
+          write(key, raw)
+          if (!raw.trim()) setVals((v) => ({ ...v, [which]: fallback }))
+        }}
+        className="w-12 rounded border border-border-secondary bg-bg-primary px-1 py-0.5 text-right text-[11px] text-text-secondary focus:border-accent/50 focus:outline-none"
+        data-bot-limit={which}
+      />
+    </label>
+  )
+
+  return (
+    <div className="space-y-1 border-t border-border-secondary px-2 py-2" data-bot-limits>
+      {row('hop', 'bot.maxHop', t('settings.botMaxHop'), t('settings.botMaxHopHint'), '2')}
+      {row(
+        'fanout',
+        'bot.maxFanout',
+        t('settings.botMaxFanout'),
+        t('settings.botMaxFanoutHint'),
+        '8'
+      )}
+    </div>
+  )
+}
+
 function GateModelRow(): React.JSX.Element {
   const { t } = useTranslation()
   const availableModels = useSettingsStore((s) => s.availableModels)

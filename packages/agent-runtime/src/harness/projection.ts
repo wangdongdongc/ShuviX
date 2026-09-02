@@ -13,7 +13,6 @@
  *   compactionSummary    → AssistantMessage + isCompactionSummary
  *   custom(instruction)  → UserTextMessage + isInstructionInjection
  *   custom(inline_tokens)→ 不产出消息；把紧随其后的 user 消息还原成标记文本 + inlineTokens
- *   custom(bot_sender)   → 不产出消息；给**紧邻的下一条** assistant 消息挂上 metadata.sender
  *   stopReason==='error' → ErrorEventMessage
  *
  * id 稳定性：消息 id **就是** entry id（不再有 `:think` / `:text` 派生后缀，工具块也不
@@ -28,11 +27,9 @@ import type {
   ChatMessage,
   ImageMeta,
   InlineToken,
-  SuppressedCandidate,
   ToolResultDetails,
   UsageInfo
 } from '@shuvix/chat-protocol/types/chatMessage'
-import { asBotReply, type BotReply } from '@shuvix/chat-protocol/botReply'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 
 /** 指令注入使用的 custom_message 类型标记（与 instructionInjector 共用） */
@@ -59,107 +56,15 @@ export interface InlineTokensSidecar {
 }
 
 /**
- * 署名侧车：聊天会话里 bot 回复落树时，在 assistant entry **之前**追加的纯 custom entry，
- * 携带「是哪个 bot 说的」。两条 entry 在同一次互斥持有内连续 append（botService），
- * 中间不得有任何 await 逃逸点 —— 本投影靠「紧邻」配对它们。
- *
- * 为什么署名不现查 bot md：bot 文件被删或改名之后，历史消息仍要显示当初那个名字。
- * 侧车自带 displayName，历史因此永不裂。
- *
- * 为什么是 `custom` 而不是 `custom_message`：前者只在注册了 entryProjectors 时才产模型
- * 消息，而全仓不注册（两端 `new Session(storage)` 都不传第二参）—— 侧车因此不进模型
- * 上下文。这是**实现事实而非类型保证**：谁将来给 Session 传了 projector map，侧车就会
- * 变成模型可见消息。
- */
-export const BOT_SENDER_CUSTOM_TYPE = 'shuvix:bot_sender'
-
-/** 署名侧车 entry 的 data 形状（botService 写入 / 本投影读取） */
-export interface BotSenderSidecar {
-  /** bot md 的文件名（稳定标识） */
-  botName: string
-  /** 落树当时的显示名 */
-  displayName: string
-  /** 意图段判定（M4′ 收窄为枚举）；clarify 回连谓词的数据源 */
-  decision?: string
-  /**
-   * 结构化回复原文，**仅供 UI**（卡片/气泡双形态）—— 模型看到的永远是 content 里那份
-   * markdown 投影。两者同源：content 由 `botReplyToMarkdown(reply)` 得来。
-   */
-  reply?: BotReply
-  /**
-   * 本条消息赢下仲裁时被压制的其它候选（救济 chip 的数据源）。
-   *
-   * **跟着消息持久化而不是走一次事件**：这是个可点击纠正的决策面，会话重开之后它必须
-   * 还在 —— 一次性事件在刷新那一刻就把救济丢了。也因此它与 live 广播是同一份数据，
-   * 「流式与重开一致」这条投影契约自动成立。
-   */
-  suppressed?: SuppressedCandidate[]
-  /**
-   * 这条消息是失败/降级通告（管线缺失、任务失败、门控回落、脚本 `say(…, {error:true})`），
-   * UI 据此上失败卡样式。**走侧车而不是 stopReason:'error'**：投影对 error 停机原因是
-   * 「整条吃掉」的早退（那是给真 · 半途中止的 assistant entry 的），标成 error 的失败
-   * 通告根本到不了渲染层。
-   */
-  error?: true
-}
-
-/**
  * ShuviX 写进会话树的全部侧车 customType。
  *
  * 回退/清空要**逐条跨越**它们才能落在真正的消息上：停在一条孤儿侧车上，它就会被
  * 下一条到达的消息当成自己的侧车消费掉（见 messageService.resolveRollbackTarget）。
- */
-export const SIDECAR_CUSTOM_TYPES: readonly string[] = [
-  INLINE_TOKENS_CUSTOM_TYPE,
-  BOT_SENDER_CUSTOM_TYPE
-]
-
-function asBotSenderSidecar(data: unknown): BotSenderSidecar | null {
-  if (typeof data !== 'object' || data === null) return null
-  const d = data as Record<string, unknown>
-  if (typeof d.botName !== 'string' || !d.botName) return null
-  if (typeof d.displayName !== 'string' || !d.displayName) return null
-  // 其余键原样带过；**会被 UI 遍历的两个（reply / suppressed）另有逐字段收窄** ——
-  // 它们来自磁盘，一条坏记录不该在渲染时炸掉整条会话
-  return d as unknown as BotSenderSidecar
-}
-
-/**
- * 侧车里的被压制候选 —— 逐条校验后才交给 UI。
  *
- * 侧车其余键是「原样带过」的，这一个不行：它是 UI 唯一会去遍历的字段，而数据来自磁盘上
- * 一份可能由旧版本、手工编辑或半截写入留下的 JSON。一条坏记录在这里被丢掉，总好过在
- * 渲染时炸掉整条会话。全部不合法时返回 undefined，让调用点连这个键都不铺。
+ * v2 起只剩内联 token 一种：bot 的署名侧车随「群聊转写迁进 chat_messages 表」一并
+ * 退场 —— 「谁说的」在那里是一列，不再需要靠「紧邻配对」把它绑到一条 assistant entry 上。
  */
-function suppressedOf(sender: BotSenderSidecar): SuppressedCandidate[] | undefined {
-  if (!Array.isArray(sender.suppressed)) return undefined
-  // 声明类型是给消费方看的；这里读的是磁盘上的 JSON，先退回 unknown 再逐条收窄
-  const raw = sender.suppressed as unknown[]
-  const ok: SuppressedCandidate[] = []
-  for (const c of raw) {
-    if (typeof c !== 'object' || c === null) continue
-    const d = c as Record<string, unknown>
-    if (typeof d.name !== 'string' || !d.name) continue
-    if (typeof d.displayName !== 'string' || !d.displayName) continue
-    if (d.decision !== 'reply' && d.decision !== 'task' && d.decision !== 'clarify') continue
-    if (
-      !Number.isInteger(d.relevance) ||
-      (d.relevance as number) < 0 ||
-      (d.relevance as number) > 9
-    )
-      continue
-    // **重建而不是放行**：与紧邻的 sender 同一条纪律 —— 侧车是磁盘数据，未知键原样带过
-    // 就等于把旧版本、手工编辑、半截写入留下的东西直接端给渲染层
-    ok.push({
-      name: d.name,
-      displayName: d.displayName,
-      decision: d.decision,
-      relevance: d.relevance as number,
-      ...(typeof d.reason === 'string' && d.reason ? { reason: d.reason } : {})
-    })
-  }
-  return ok.length ? ok : undefined
-}
+export const SIDECAR_CUSTOM_TYPES: readonly string[] = [INLINE_TOKENS_CUSTOM_TYPE]
 
 function asInlineTokensSidecar(data: unknown): InlineTokensSidecar | null {
   if (typeof data !== 'object' || data === null) return null
@@ -282,7 +187,6 @@ interface ProjectionState {
    *
    * 夹的若是**另一条署名侧车**，则后者胜出（取走之后又被重新赋值）——「紧邻」的直觉解。
    */
-  pendingSender: BotSenderSidecar | null
 }
 
 function projectUserMessage(
@@ -313,8 +217,7 @@ function projectAssistantMessage(
   entryId: string,
   sessionId: string,
   msg: AssistantMessage,
-  createdAt: number,
-  sender: BotSenderSidecar | null
+  createdAt: number
 ): void {
   // 实际产出这条消息的模型/provider，取自消息自身而非会话当前配置
   const model = msg.model || state.model
@@ -363,9 +266,7 @@ function projectAssistantMessage(
   // 什么都没产出（如首 token 前被中止）：不留空卡片
   if (blocks.length === 0 && !images) return
 
-  const suppressed = sender ? suppressedOf(sender) : undefined
   // 与 suppressed 同一条纪律：侧车是磁盘数据，交给渲染层之前逐字段重建
-  const reply = sender ? asBotReply(sender.reply) : null
 
   state.out.push({
     id: entryId,
@@ -380,16 +281,7 @@ function projectAssistantMessage(
     metadata: {
       // 一条 entry = 一次 LLM 调用，用量各归各，不跨消息累加
       usage: usageOf(msg),
-      images,
-      ...(sender
-        ? {
-            sender: { kind: 'bot' as const, name: sender.botName, displayName: sender.displayName },
-            ...(suppressed ? { suppressed } : {}),
-            ...(reply ? { reply } : {}),
-            // `=== true` 即收窄：侧车是磁盘数据，字符串 "true" 之类的赃值不放行
-            ...(sender.error === true ? { botFailure: true as const } : {})
-          }
-        : {})
+      images
     }
   })
 }
@@ -427,15 +319,11 @@ export function entriesToChatMessages(
     pendingToolBlocks: new Map(),
     model: fallbackModel,
     provider: fallbackProvider,
-    pendingInline: null,
-    pendingSender: null
+    pendingInline: null
   }
 
   for (const entry of entries) {
     const createdAt = Date.parse(entry.timestamp) || 0
-    // 署名侧车逐迭代取走：只有紧邻的下一条 entry 用得上它（见 pendingSender 的注释）
-    const sender = state.pendingSender
-    state.pendingSender = null
 
     if (entry.type === 'model_change') {
       state.model = entry.modelId
@@ -463,10 +351,6 @@ export function entriesToChatMessages(
       // 内联 Token 侧车：暂存，由紧随其后的 user 消息消费
       if (entry.customType === INLINE_TOKENS_CUSTOM_TYPE) {
         state.pendingInline = asInlineTokensSidecar(entry.data)
-        continue
-      }
-      if (entry.customType === BOT_SENDER_CUSTOM_TYPE) {
-        state.pendingSender = asBotSenderSidecar(entry.data)
         continue
       }
       // 未知 customType 静默跳过 —— 「不含侧车的树投影逐字节不变」由这一行保证
@@ -503,14 +387,7 @@ export function entriesToChatMessages(
         projectUserMessage(state, entry.id, sessionId, msg, createdAt)
         break
       case 'assistant':
-        projectAssistantMessage(
-          state,
-          entry.id,
-          sessionId,
-          msg as AssistantMessage,
-          createdAt,
-          sender
-        )
+        projectAssistantMessage(state, entry.id, sessionId, msg as AssistantMessage, createdAt)
         break
       case 'toolResult':
         projectToolResult(state, msg as Extract<AgentMessage, { role: 'toolResult' }>)

@@ -23,7 +23,7 @@ shuvix-workflow-input:
     occasion: { enum: [message, notes] }
     bot: { type: object, required: [name, displayName, description, file] }
     agents: { type: object, required: [intent, task, notes] }
-    session: { type: object, required: [id, arbitrated, directed, members] }
+    session: { type: object, required: [id, directed, members] }
     message: { type: object, required: [id, text] }
     window: { type: array }
     notes: { type: string }
@@ -42,15 +42,15 @@ shuvix-workflow-input:
 而不是这份被许多 bot、许多会话同时共用的文件。
 
 也没有一个「只有 bot 才能调用」的键 —— 调用路径不是准入检查。让这份文件成为 bot 管线的,
-只是它的脚本用了 `say`、`claim` 与 `turn`,而只有 bot 调用方会把这三个名字装配进脚本
+只是它的脚本用了 `say` 与 `turn`,而只有 bot 调用方会把这两个名字装配进脚本
 API。从别处启动它,它会在第一个名字上失败,和任何脚本踩到未定义函数一个样。
 
 > **状态。** 三段都是真的:门控、任务段(M8′)与笔记场合(M9′)均已落地。
 
 ## 管线
 
-一切都从 `input.*` 上读。脚本作用域里是基础 API 加上调用方装配的那几个
-(`say` / `claim` / `turn`)—— 它**不会**摊平 `input`,裸写 `message` 或 `agents`
+一切都从 `input.*` 上读。脚本作用域里是基础 API 加上调用方装配的那两个
+(`say` / `turn`)—— 它**不会**摊平 `input`,裸写 `message` 或 `agents`
 是 ReferenceError。摊平只发生在 `md prompt=` 块的渲染作用域里。
 
 **可选上下文是嵌套提示词,不是裸占位符。** 模板语言只有一样东西 —— `{{path}}`,
@@ -104,11 +104,10 @@ const otherLines = (input.session.others || []).map(function (o) {
   return '- ' + o.displayName + ': ' + o.description
 })
 
-// A message that named this bot — or that answers its own clarify — is addressed to it,
-// exactly like a one-on-one session: silence is not on the table and `ignore` is not on the
-// contract. `arbitrated` stays a separate question: it asks whether anyone else could still
-// pick this message up, which is what the degrade path below turns on.
-const solo = !input.session.arbitrated || input.session.directed
+// A message that named this bot — or that answers its own clarify — is addressed to it:
+// silence is not on the table and `ignore` is not on the contract. Every other message goes
+// through the normal gate, where this bot decides for itself whether it has anything to say.
+const solo = input.session.directed
 
 const notesBlock = notes ? prompt('notes', { notes: notes }) : ''
 const othersBlock = otherLines.length ? prompt('others', { others: otherLines }) : ''
@@ -145,27 +144,19 @@ try {
   log('gate ' + failure + ': ' + String((e && e.message) || e))
 }
 
-// 2 ── A broken contract or a timeout is a **fault, not a verdict**. With other bots around,
-//      step aside and let one of them answer. Alone, say so: in a one-on-one session silence
-//      and a broken bot look exactly alike.
+// 2 ── A broken contract or a timeout is a **fault, not a verdict**, and every bot answers
+//      for its own ending: say so. Silence is reserved for one thing only — the gate deciding
+//      this message was not for this bot.
 if (!intent) {
-  if (input.session.arbitrated) return { gate: failure, outcome: 'gate-' + failure }
   await say(prompt(failure === 'timeout' ? 'gateTimeout' : 'gateBroken'), { error: true })
   return { gate: failure, outcome: 'gate-' + failure }
 }
 
-// 3 ── Whose message is this? The host joins here. With one bot, or when this bot was named,
-//      it degenerates to a constant: no waiting, no grace window.
-const verdict = await claim(intent)
-if (!verdict.won) {
-  // "I judged this was not mine" and "someone else was judged a better fit" are different
-  // endings, and the run journal is where you go to tell them apart. Collapsing both into
-  // `yielded` is the same mistake as writing a slow claim down as a silent one.
-  const ending = verdict.reason === 'ignored' ? 'ignored' : 'yielded'
-  // `memorable` travels even when this bot does not answer. A bot that heard the preference
-  // clearly and handed the turn to a better-placed peer still learned it — tying what gets
-  // remembered to who won the message would teach exactly one bot per conversation.
-  return { gate: 'ok', outcome: ending, to: verdict.winner, memorable: !!intent.memorable }
+// 3 ── The gate judged this message is not for this bot. That is the one silence a bot is
+//      allowed: no message, no notice, just a line in the run journal. `memorable` still
+//      travels — a bot that heard a durable preference learned it whether or not it replies.
+if (intent.decision === 'ignore') {
+  return { gate: 'ok', outcome: 'ignored', memorable: !!intent.memorable }
 }
 
 // 4 ── Anything answerable in one line is answered here — don't open a task for it.
@@ -173,7 +164,7 @@ if (intent.decision !== 'task') {
   const line = typeof intent.reply === 'string' ? intent.reply.trim() : ''
   if (!line) {
     // It said it would speak and then wrote nothing. Same class of fault as never calling
-    // `next` — and past the claim there is nobody left to cover for us.
+    // `next` — and it already committed to answering.
     await say(prompt('gateBroken'), { error: true })
     return { gate: 'broken', outcome: 'gate-broken' }
   }
@@ -255,9 +246,8 @@ return await turn(async function (slot) {
       return { gate: 'ok', outcome: 'task-unshaped', queuedMs: slot.queuedMs }
     }
 
-    // Nothing usable came back. Past the claim there is nobody left to cover for us, so the
-    // failure has to be said out loud — silence here is indistinguishable from a dropped
-    // message, and this bot already took the turn.
+    // Nothing usable came back. The failure has to be said out loud — silence here is
+    // indistinguishable from a dropped message, and this bot already took the turn.
     await say(prompt(code === 'step_timeout' ? 'taskTimeout' : 'taskFailed'), { error: true })
     return {
       gate: 'ok',
@@ -339,17 +329,11 @@ async function recheck(slot, windowBlock) {
 ```json schema=intent
 {
   "type": "object",
-  "required": ["decision", "relevance", "reason"],
+  "required": ["decision", "reason"],
   "properties": {
     "decision": {
       "enum": ["reply", "task", "clarify", "ignore"],
       "description": "reply = you can answer fully right now with no tools; task = it needs work; clarify = one question unblocks you; ignore = plainly meant for another bot"
-    },
-    "relevance": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 9,
-      "description": "How squarely this message falls in YOUR remit — not how eager you are. One bot wins the message on this number."
     },
     "reason": { "type": "string", "maxLength": 200 },
     "reply": { "type": "string", "description": "The reply itself, for decision reply or clarify" },
@@ -371,13 +355,12 @@ async function recheck(slot, windowBlock) {
 ```json schema=intentSolo
 {
   "type": "object",
-  "required": ["decision", "relevance", "reason"],
+  "required": ["decision", "reason"],
   "properties": {
     "decision": {
       "enum": ["reply", "task", "clarify"],
       "description": "This message was addressed to you, so answering is not optional. reply = answer now; task = it needs work; clarify = ask the one question that unblocks you."
     },
-    "relevance": { "type": "integer", "minimum": 0, "maximum": 9 },
     "reason": { "type": "string", "maxLength": 200 },
     "reply": { "type": "string" },
     "task": {

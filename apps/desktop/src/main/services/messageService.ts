@@ -12,11 +12,38 @@
  */
 import { SIDECAR_CUSTOM_TYPES, entriesToChatMessages } from '@shuvix/agent-runtime'
 import { deleteSessionFile, getSessionTree, readSessionRunConfig } from './sessionStorage'
+import { chatMessageDao } from '../dao/chatMessageDao'
+import { rowsToChatMessages } from './chatMessageProjection'
+import { deleteChatAttachments, deleteSessionAttachments } from './chatAttachments'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+
+/**
+ * 「这是不是聊天会话」的判据 —— 由宿主注入（sessionService 在 init 时注册）。
+ *
+ * 不在这里直接读 sessionDao：那会让本模块依赖 dao 层，而 `dao/database` 的
+ * DatabaseManager **构造即打开 sqlite** —— 单测里（node，原生绑定是 Electron ABI）
+ * 一旦被拉进模块图就整个文件收集失败。注入同时也避开了 messageService ↔ sessionService
+ * 的循环依赖，与 `addSessionTreePin` / `setBgTaskNotifier` 是同一条习语。
+ *
+ * 未注册时恒 false（= 全部按有根会话处理），对测试与渠道端都是安全缺省。
+ */
+let chatSessionPredicate: (sessionId: string) => boolean = () => false
+
+export function setChatSessionPredicate(fn: (sessionId: string) => boolean): void {
+  chatSessionPredicate = fn
+}
+
+function isChatSession(sessionId: string): boolean {
+  return chatSessionPredicate(sessionId)
+}
 
 export class MessageService {
   /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
   async listBySession(sessionId: string): Promise<ChatMessage[]> {
+    // 聊天会话：平的一张表，没有压缩、没有分叉，读出来按 seq 就是顺序
+    if (isChatSession(sessionId)) {
+      return rowsToChatMessages(chatMessageDao.findBySession(sessionId))
+    }
     const session = await getSessionTree(sessionId)
     if (!session) return [] // 还没发过消息 → 没有转写文件
     const entries = await session.buildContextEntries()
@@ -34,8 +61,13 @@ export class MessageService {
     return msgs.length > 0 ? msgs[msgs.length - 1] : undefined
   }
 
-  /** 清空会话（直接删掉转写文件；下次发消息会重建） */
+  /** 清空会话（聊天会话删行 + 附件；有根会话删转写文件，下次发消息会重建） */
   clear(sessionId: string): void {
+    if (isChatSession(sessionId)) {
+      chatMessageDao.deleteBySession(sessionId)
+      deleteSessionAttachments(sessionId)
+      return
+    }
     deleteSessionFile(sessionId)
   }
 
@@ -56,12 +88,19 @@ export class MessageService {
     sessionId: string,
     messageId: string
   ): Promise<{ targetId: string | null } | undefined> {
+    // 聊天会话没有树也没有分支：回退就是「删掉这条及其之后」，目标即消息自身。
+    // 真正的删除在 applyRollback 里做（与有根会话同样的两步顺序：先关停写者再动数据）
+    if (isChatSession(sessionId)) {
+      const row = chatMessageDao.findById(messageId)
+      return row && row.sessionId === sessionId ? { targetId: messageId } : undefined
+    }
     const session = await getSessionTree(sessionId)
     if (!session) return undefined
     const entry = await session.getEntry(messageId)
     if (!entry) return undefined
-    // 消息前若有侧车（内联 Token 显示态 / bot 署名），**逐条**越过 —— 叶子停在一条
-    // 无主侧车上，它就会被下一条到达的消息当成自己的侧车消费掉（署名张冠李戴）
+    // 消息前若有侧车（内联 Token 的显示态），**逐条**越过 —— 叶子停在一条无主侧车上，
+    // 它就会被下一条到达的消息当成自己的侧车消费掉。这条路径只服务有根会话：v2 起聊天
+    // 会话走表，而署名侧车（bot 署名靠「消息前多写一条 entry、投影时紧邻配对」）随之退场
     let targetId = entry.parentId
     while (targetId) {
       const parent = await session.getEntry(targetId)
@@ -73,6 +112,16 @@ export class MessageService {
 
   /** 执行回退：把 leaf 移到 `resolveRollbackTarget` 给出的 entry 上 */
   async applyRollback(sessionId: string, targetId: string | null): Promise<boolean> {
+    if (isChatSession(sessionId)) {
+      if (!targetId) return false
+      // 硬删（群聊里「回退」就是撤回这条与后续）；顺带清掉这些消息的附件文件，
+      // 否则 chat-attachments 目录会攒下永远不再被引用的图片
+      const removed = chatMessageDao.deleteFromMessage(sessionId, targetId)
+      for (const row of removed) {
+        if (row.attachments?.length) deleteChatAttachments(sessionId, row.attachments)
+      }
+      return removed.length > 0
+    }
     const session = await getSessionTree(sessionId)
     if (!session) return false
     await session.moveTo(targetId)

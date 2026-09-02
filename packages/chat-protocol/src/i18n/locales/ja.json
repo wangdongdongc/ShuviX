@@ -793,6 +793,10 @@
     "botInspectStages": "段階 agent",
     "botStageMissing": "「{{ref}}」が存在しません。実行時は内蔵へフォールバック",
     "botGateDegraded": "ゲート降格（{{reason}}）—— 連続故障で内蔵 bot-intent に固定フォールバック。プロセス再起動で復帰",
+    "botMaxHop": "リレーの深さ上限",
+    "botMaxHopHint": "bot 同士のリレーが届く距離。2 = あなた → A → B で終了、1 は bot 同士のリレーを無効化。「全員に応答」の bot にのみ効きます。",
+    "botMaxFanout": "1 ラウンドのメッセージ上限",
+    "botMaxFanoutHint": "あなたの 1 通が生み出せる bot メッセージの総数。深さ上限では抑えられない横方向の増加を抑えます。上限に達するとそのラウンドは停止し、その旨を表示します。",
     "botGateModel": "ゲートモデル",
     "botGateModelHint": "グローバル設定 —— ~/.shuvix/agents/bot-intent.md 上書きファイルに書き込み。内蔵ゲートを使う全 bot で共有",
     "botGateModelFollow": "セッションに従う",
@@ -800,7 +804,8 @@
     "botNotesDisabled": "無効",
     "botNotesUsage": "{{chars}} 文字 · 未整理イベント {{pending}}",
     "botNotesLastRun": "前回の整理 {{time}}",
-    "botNotesNever": "未整理"
+    "botNotesNever": "未整理",
+    "botRespondTo": "応答対象"
   },
   "about": {
     "description": "あなたのAIアシスタント",
@@ -1022,8 +1027,7 @@
     "tasksLogCapped": "ログが 50 MB を超えています — 末尾のみ表示",
     "tasksNoOutput": "まだ出力はありません",
     "tasksStatusEnded": "終了",
-    "calendar": "カレンダー",
-    "botDecisions": "Bot 判断"
+    "calendar": "カレンダー"
   },
   "browser": {
     "back": "戻る",
@@ -1139,15 +1143,9 @@
     "dialogOpenFolder": "Bots フォルダを開く",
     "dialogCreate": "作成（メンバー {{count}} 名）",
     "activityIntent": "応答するか判断中…",
-    "activityClaimed": "対応中 —— 返信を作成しています…",
     "activityQueued": "順番待ち —— 前のメッセージを処理中",
-    "activityWorking": "処理中…",
     "stop": "停止",
     "failureLabel": "失敗",
-    "rescueLabel": "ほかに答えたいメンバー：",
-    "silenceAllIgnored": "このラウンドは誰も応答しませんでした —— {{count}} 名全員が応答不要と判断。",
-    "silenceAllFailed": "このラウンドは誰も応答しませんでした —— 全員が応答前にエラーになりました。",
-    "silenceMixed": "このラウンドは誰も応答しませんでした —— 一部は応答不要と判断、残りはエラー。",
     "receiptQueued": "{{names}} の順番待ちに追加 —— 順に返信します",
     "statusOk": "完了",
     "statusWarn": "留保あり",
@@ -1158,6 +1156,7 @@
     "manageSave": "保存（{{count}} 名）",
     "memberMissing": "md 削除済み",
     "manageMembers": "メンバー管理",
-    "emptyHint": "メンバーに最初のメッセージを送りましょう —— @ で特定のメンバーを指名できます。"
+    "emptyHint": "メンバーに最初のメッセージを送りましょう —— @ で特定のメンバーを指名できます。",
+    "fanoutCapped": "このラウンドは上限 {{count}} 件に達しました —— これ以上は中継しません。"
   }
 }

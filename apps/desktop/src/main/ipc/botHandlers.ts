@@ -1,6 +1,5 @@
 import { ipcMain } from 'electron'
 import { botService } from '../services/botService'
-import { readBotDecisions } from '../services/bot/botJournal'
 
 /**
  * Bot IPC 处理器 —— 设置页「Bots」tab（与工作流/策略页同形）。
@@ -62,11 +61,6 @@ export function registerBotHandlers(): void {
 
   /** 设置页详情的运行时读数：管线/阶段解析结果 + 门控降级 + 笔记调度状态 */
   ipcMain.handle('bot:inspect', (_e, params: { name: string }) => botService.inspect(params.name))
-
-  /** 某会话的决策记录（A4「Bot 决策」子视图；跨全部 bot 目录过滤合并） */
-  ipcMain.handle('bot:decisions', (_e, params: { sessionId: string; limit?: number }) =>
-    readBotDecisions(params.sessionId, params.limit)
-  )
 
   /** per-bot 停止（A2）：中止某成员对某条消息的应答；排队与其它消息不受影响 */
   ipcMain.handle(

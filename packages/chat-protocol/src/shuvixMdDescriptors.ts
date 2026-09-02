@@ -202,6 +202,16 @@ export const BOT_RESPOND_MODES = ['auto', 'mention-only'] as const
 export const BOT_RESPOND_KEY = 'shuvix-bot-respond'
 
 /**
+ * bot 响应谁说的话（v2）。与 `shuvix-bot-respond`（要不要被点名才响应）是**两个正交轴**，
+ * 刻意不合并成一个枚举 —— 两轴组合出最想要的那一档：`mention-only` + `all` =
+ * 「只有别的 bot 点名叫我，我才接话」，不需要发明第三个枚举值。
+ */
+export const BOT_RESPOND_TO_MODES = ['user', 'all'] as const
+
+/** 缺省 `user` = 只响应用户消息（与 v1 的硬规则逐字节等价） */
+export const BOT_RESPOND_TO_KEY = 'shuvix-bot-respond-to'
+
+/**
  * bot 定义文件（agent-runtime bot/botFile.ts 的键集）。设计见 docs/bot-design.md §4。
  *
  * bot md 是 **agent md 的超集**：前半段的键与 agent 卡逐行同义（正文即任务段系统提示词），
@@ -218,6 +228,7 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: AGENT_MODEL_KEY, labelKey: 'tool.subAgentModel', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: BOT_RESPOND_KEY, labelKey: 'settings.botRespond', kind: 'select' },
+    { key: BOT_RESPOND_TO_KEY, labelKey: 'settings.botRespondTo', kind: 'select' },
     { key: 'shuvix-bot-notes', labelKey: 'settings.botNotes', kind: 'boolean' },
     { key: 'shuvix-bot-greeting', labelKey: 'settings.botGreeting', kind: 'text' },
     { key: 'shuvix-bot-suggestions', labelKey: 'settings.botSuggestions', kind: 'list' },

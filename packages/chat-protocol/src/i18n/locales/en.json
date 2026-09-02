@@ -793,6 +793,10 @@
     "botInspectStages": "Stage agents",
     "botStageMissing": "“{{ref}}” does not exist; falls back to builtin at runtime",
     "botGateDegraded": "Gate degraded ({{reason}}) — sticky fallback to builtin bot-intent after repeated faults; restarts reset it",
+    "botMaxHop": "Relay depth limit",
+    "botMaxHopHint": "How far a bot→bot relay may travel. 2 = user → A → B, then stop; 1 turns bot→bot off. Only bots set to respond to everyone are affected.",
+    "botMaxFanout": "Messages per round",
+    "botMaxFanoutHint": "Total bot messages one of your messages may produce. Bounds the width the depth limit cannot; on reaching it the round stops and says so.",
     "botGateModel": "Gate model",
     "botGateModelHint": "Global — written to the ~/.shuvix/agents/bot-intent.md override; shared by every bot on the builtin gate",
     "botGateModelFollow": "Follow session",
@@ -800,7 +804,8 @@
     "botNotesDisabled": "Disabled",
     "botNotesUsage": "{{chars}} chars · {{pending}} events pending",
     "botNotesLastRun": "Last summarized {{time}}",
-    "botNotesNever": "Never summarized"
+    "botNotesNever": "Never summarized",
+    "botRespondTo": "Responds to"
   },
   "about": {
     "description": "Your AI Assistant",
@@ -1022,8 +1027,7 @@
     "tasksLogCapped": "Log exceeds 50 MB — only the tail is shown",
     "tasksNoOutput": "No output yet",
     "tasksStatusEnded": "Finished",
-    "calendar": "Calendar",
-    "botDecisions": "Bot decisions"
+    "calendar": "Calendar"
   },
   "browser": {
     "back": "Back",
@@ -1139,15 +1143,9 @@
     "dialogOpenFolder": "Open bots folder",
     "dialogCreate": "Create ({{count}} member(s))",
     "activityIntent": "Deciding whether to respond…",
-    "activityClaimed": "On it — composing a reply…",
     "activityQueued": "Queued — earlier messages are still being handled",
-    "activityWorking": "Working…",
     "stop": "Stop",
     "failureLabel": "failed",
-    "rescueLabel": "Also wanted to answer:",
-    "silenceAllIgnored": "No member responded this round — all {{count}} decided no response was needed.",
-    "silenceAllFailed": "No member responded this round — every member hit an error before answering.",
-    "silenceMixed": "No member responded this round — some decided not to, the rest hit errors.",
     "receiptQueued": "Queued for {{names}} — will be answered in order",
     "statusOk": "Done",
     "statusWarn": "With caveats",
@@ -1158,6 +1156,7 @@
     "manageSave": "Save ({{count}} member(s))",
     "memberMissing": "md deleted",
     "manageMembers": "Manage members",
-    "emptyHint": "Send the members your first message — type @ to direct it at someone."
+    "emptyHint": "Send the members your first message — type @ to direct it at someone.",
+    "fanoutCapped": "Reached this round’s cap of {{count}} messages — no further relay."
   }
 }

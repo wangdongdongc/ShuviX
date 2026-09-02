@@ -2,7 +2,7 @@
  * bot 的决策记录（设计 §9「可观测性与失败呈现」）。
  *
  * 回答的是**「这个 bot 为什么没说话」** —— 一条消息进来之后，每个成员各自经历了什么：
- * 被提及了没有、是不是 mention-only 被跳过、意图判成什么、仲裁赢了还是让了、
+ * 被提及了没有、是不是 mention-only 被跳过、意图判成什么、循环护栏拦没拦下、
  * 在 mailbox 里排了多久、最后收尾是什么结局。
  *
  * 落点 `~/.shuvix/bots/.runs/<bot>/decisions.jsonl`，与该 bot 的 run journal 同目录
@@ -32,6 +32,9 @@ export type BotDecisionKind =
   | 'l0_clarify_relink'
   | 'l0_mention_only_skipped'
   | 'l0_member_missing'
+  /** bot→bot 的两道护栏（只在 `respond-to: all` 下可能出现） */
+  | 'l0_hop_exceeded'
+  | 'l0_fanout_exceeded'
   | 'cohort_formed'
   // 派发
   | 'pipeline_not_found'
@@ -44,18 +47,6 @@ export type BotDecisionKind =
   | 'degraded_reply'
   | 'recheck_skipped'
   | 'say_blocked'
-  // 仲裁
-  | 'claim_solo'
-  | 'claim_won'
-  | 'claim_lost'
-  | 'claim_ignored'
-  | 'claim_timeout'
-  /** 会话被中止时还在等裁决 —— 与 claim_lost 分开，「有人按了停止」不是「输了」 */
-  | 'claim_aborted'
-  | 'arbitration_bypassed'
-  | 'arbitration_lost'
-  /** 这一轮 cohort 一个字都没换来 —— 每个成员的文件里各记一条（见 dispatchCohort） */
-  | 'cohort_silent'
   // mailbox
   | 'mailbox_queued'
   | 'mailbox_granted'
@@ -105,45 +96,6 @@ export function appendBotDecision(record: Omit<BotDecisionRecord, 'ts'>): void {
   } catch (e) {
     log.warn(`决策记录写入失败 (${record.botName}/${record.kind}):`, e)
   }
-}
-
-/**
- * 读某会话的决策记录（A4「Bot 决策」子视图的数据源）。
- *
- * 决策记录按 bot 分目录（「这个 bot 为什么没说话」是 per-bot 的问题），会话视角只能
- * 跨全部目录过滤合并 —— 这正是设计 §9 说的「跨文件对账」，收在这一个读函数里，
- * UI 不用知道目录形状。按 ts 升序、尾部截断；坏行/坏目录逐个跳过（追加账本可能
- * 有半截行，可观测性数据坏一条不该丢整页）。
- */
-export function readBotDecisions(sessionId: string, limit = 300): BotDecisionRecord[] {
-  const root = join(getDefaultBotsDir(), '.runs')
-  const out: BotDecisionRecord[] = []
-  if (!existsSync(root)) return out
-  let dirs: string[] = []
-  try {
-    dirs = readdirSync(root)
-  } catch {
-    return out
-  }
-  for (const dir of dirs) {
-    const file = join(root, dir, 'decisions.jsonl')
-    if (!existsSync(file)) continue
-    try {
-      for (const line of readFileSync(file, 'utf-8').split('\n')) {
-        if (!line) continue
-        try {
-          const rec = JSON.parse(line) as BotDecisionRecord
-          if (rec && rec.sessionId === sessionId) out.push(rec)
-        } catch {
-          /* 半截行跳过 */
-        }
-      }
-    } catch {
-      /* 单目录读失败跳过 */
-    }
-  }
-  out.sort((a, b) => a.ts - b.ts)
-  return out.slice(-limit)
 }
 
 /**

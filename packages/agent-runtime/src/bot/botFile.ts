@@ -22,7 +22,7 @@
  * 未知键忽略；类型不符 = 整份文件非法（null + warn 人读原因）。
  *
  * 只有一处比 agent md 严：**`description` 必填非空** —— 它不是风格选择而是功能要件，
- * 意图段靠它判断「这条消息与我相关吗」，没有描述的 bot 在多 bot 会话里无法参与仲裁。
+ * 意图段靠它判断「这条消息与我相关吗」，也是别的成员认识它的唯一材料（others 块）。
  *
  * ⚠️ **定义区硬失败，状态区软失败。** 上面那套「整份拒绝」纪律只作用于**定义**
  * （frontmatter）。笔记区是**状态**：它的任何结构异常都只记 anomaly + warn，绝不让整份
@@ -33,7 +33,12 @@
  * 不经这里 —— 宿主没有程序化的笔记写路径，也不需要。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import { BOT_RESPOND_KEY, BOT_RESPOND_MODES } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import {
+  BOT_RESPOND_KEY,
+  BOT_RESPOND_MODES,
+  BOT_RESPOND_TO_KEY,
+  BOT_RESPOND_TO_MODES
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseAgentSharedFields } from '../agentProfile/definitionFile'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { splitBotNotes } from './botNotes'
@@ -47,7 +52,12 @@ export const BOT_NOTES_KEY = 'shuvix-bot-notes'
 export const BOT_AGENTS_KEY = 'shuvix-bot-agents'
 export const BOT_GREETING_KEY = 'shuvix-bot-greeting'
 export const BOT_SUGGESTIONS_KEY = 'shuvix-bot-suggestions'
-export { BOT_RESPOND_KEY, BOT_RESPOND_MODES } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+export {
+  BOT_RESPOND_KEY,
+  BOT_RESPOND_MODES,
+  BOT_RESPOND_TO_KEY,
+  BOT_RESPOND_TO_MODES
+} from '@shuvix/chat-protocol/shuvixMdDescriptors'
 
 /** 缺省管线 —— 内置的 `bot-chat` workflow（意图门控 → 任务执行 → 记忆沉淀） */
 export const DEFAULT_BOT_PIPELINE = 'bot-chat'
@@ -57,6 +67,8 @@ const ROLE_RE = /^[a-zA-Z][\w-]*$/
 
 /** 门控模式：`auto` = 过意图段判断；`mention-only` = 未被 @ 提及即终止（零 LLM 成本） */
 export type BotRespondMode = (typeof BOT_RESPOND_MODES)[number]
+/** 响应谁说的话：`user` = 只响应用户消息（缺省）；`all` = 也响应其它 bot 的消息 */
+export type BotRespondToMode = (typeof BOT_RESPOND_TO_MODES)[number]
 
 export interface ParsedBotFile {
   name: string
@@ -78,6 +90,11 @@ export interface ParsedBotFile {
   pipelineInput: Record<string, unknown>
   /** 门控模式；缺省 'auto' */
   respond: BotRespondMode
+  /**
+   * 响应谁说的话（v2）。缺省 `user` —— 与 v1「bot 的回复不触发 bot」的硬规则等价。
+   * 置 `all` 时才有 bot→bot 接力，届时由 hop / 单轮扇出两道护栏保证终止（见 botGate）。
+   */
+  respondTo: BotRespondToMode
   /** 笔记开关：这个 bot 要不要维护自己的笔记；缺省 true */
   notesEnabled: boolean
   /** 开放的「角色 → agent ref」表；缺省空表（角色各走管线定义的缺省） */
@@ -160,6 +177,13 @@ export function parseBotDefinitionFile(
   if (respondRaw !== null && !(BOT_RESPOND_MODES as readonly unknown[]).includes(respondRaw)) {
     return reject(`'${BOT_RESPOND_KEY}' must be one of: ${BOT_RESPOND_MODES.join(' | ')}`)
   }
+  const respondToRaw = fields[BOT_RESPOND_TO_KEY] ?? null
+  if (
+    respondToRaw !== null &&
+    !(BOT_RESPOND_TO_MODES as readonly unknown[]).includes(respondToRaw)
+  ) {
+    return reject(`'${BOT_RESPOND_TO_KEY}' must be one of: ${BOT_RESPOND_TO_MODES.join(' | ')}`)
+  }
   const notesRaw = fields[BOT_NOTES_KEY] ?? null
   if (notesRaw !== null && typeof notesRaw !== 'boolean') {
     return reject(`'${BOT_NOTES_KEY}' must be a boolean (true / false)`)
@@ -232,6 +256,7 @@ export function parseBotDefinitionFile(
     pipeline: (pipelineRaw as string | null)?.trim() || DEFAULT_BOT_PIPELINE,
     pipelineInput: (inputRaw as Record<string, unknown> | null) ?? {},
     respond: (respondRaw as BotRespondMode | null) ?? 'auto',
+    respondTo: (respondToRaw as BotRespondToMode | null) ?? 'user',
     notesEnabled: notesRaw ?? true,
     agents,
     greeting: greetingRaw?.trim() ?? '',
@@ -267,6 +292,7 @@ export function serializeBotDefinitionFile(data: ParsedBotFile): string {
     fields[BOT_AGENTS_KEY] = Object.fromEntries(roles.map((r) => [r, data.agents[r]]))
   }
   if (data.respond !== 'auto') fields[BOT_RESPOND_KEY] = data.respond
+  if (data.respondTo !== 'user') fields[BOT_RESPOND_TO_KEY] = data.respondTo
   if (!data.notesEnabled) fields[BOT_NOTES_KEY] = false
   if (data.greeting.trim()) fields[BOT_GREETING_KEY] = data.greeting.trim()
   if (data.suggestions.length > 0) fields[BOT_SUGGESTIONS_KEY] = data.suggestions

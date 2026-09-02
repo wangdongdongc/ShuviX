@@ -5,11 +5,7 @@
  * 零外部依赖，作为前后端通信的唯一契约。
  */
 
-import type {
-  ToolResultDetails,
-  InlineToken,
-  SuppressedCandidate
-} from '@shuvix/chat-protocol/types/chatMessage'
+import type { ToolResultDetails, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { BgTaskInfo } from '@shuvix/chat-protocol/types/bgTask'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 
@@ -340,7 +336,7 @@ export interface ChatBotActivityEvent extends ChatEventBase {
    * started=管线起跑 | claimed=拿到本条消息 | queued=在 mailbox 里等 |
    * working=进独占段 | silent=让给别人或 L0 未参与 | ended=收尾
    */
-  phase: 'started' | 'claimed' | 'queued' | 'working' | 'silent' | 'ended'
+  phase: 'started' | 'queued' | 'working' | 'silent' | 'ended'
   /** ended / silent 时的结局，取值与决策记录的 kind 同源 */
   outcome?: string
   /** 本轮用户消息的 entry id（占位卡定位用） */
@@ -353,35 +349,6 @@ export interface ChatBotMailboxEvent extends ChatEventBase {
   botName: string
   active: { messageSeq: number; messageId: string } | null
   queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
-}
-
-/**
- * 一条用户消息在多 bot 会话里**一个字都没换来**（设计 §9 的可见结局不变式）。
- *
- * 为什么是事件而不是一条会话内消息：多 bot 的沉默是 cohort 整体的结局，逐成员补气泡会
- * 让每条消息多出 N 条噪音（M4′ 的 `!ctx.arbitrated` 正是为此而设，这里把它补完）。
- * 相对地，**单 bot 会话不发这个事件** —— 那里的沉默只可能是失败，落一条可见失败消息
- * 比一次转瞬即逝的提示更该留痕。
- *
- * `reason` 是给用户的定性：`all_ignored` 是唯一「正常」的沉默（沉默白名单只有模型判定
- * ignore），另两种意味着有东西坏了。`members` 带上各自结局，是为了让输入框上方那条
- * 一次性提示不必再去读 N 份 decisions.jsonl 才能说清「谁怎么了」。
- */
-export interface ChatBotCohortSilentEvent extends ChatEventBase {
-  type: 'bot_cohort_silent'
-  /** 本轮用户消息的 entry id */
-  messageId: string
-  /** all_ignored=全员判定不接 | all_failed=没有一个走到判定 | mixed=两者兼有 */
-  reason: 'all_ignored' | 'all_failed' | 'mixed'
-  /** cohort 成员各自的结局，取值与决策记录的 kind 同源 */
-  members: Array<{ name: string; displayName: string; outcome: string }>
-  /**
-   * 有过胜者、但它自己也哑了 —— 那些被它压制的候选在这里。
-   *
-   * 正常情况下这份名单挂在胜者那条消息上（`AssistantMeta.suppressed`）；胜者半路失败时
-   * 没有消息可挂，而这恰恰是最该给出救济的一次：有人想接，赢家却没说话。
-   */
-  suppressed?: SuppressedCandidate[]
 }
 
 export type ChatEvent =
@@ -411,7 +378,6 @@ export type ChatEvent =
   | ChatQueueUpdateEvent
   | ChatBotActivityEvent
   | ChatBotMailboxEvent
-  | ChatBotCohortSilentEvent
 
 // ─── 辅助类型 ──────────────────────────────────────────
 

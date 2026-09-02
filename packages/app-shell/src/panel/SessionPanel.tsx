@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Eye, FolderTree, ListTodo, X, Gavel } from 'lucide-react'
+import { Bot, Eye, FolderTree, ListTodo, X } from 'lucide-react'
 import {
   useChatStore,
   useSubAgentCount,
@@ -83,8 +83,7 @@ interface SessionPanelToolItem {
  */
 function useSessionPanelToolItems(
   sessionId: string | null,
-  includePreview: boolean,
-  includeBotDecisions = false
+  includePreview: boolean
 ): SessionPanelToolItem[] {
   const { t } = useTranslation()
   const subAgentCount = useSubAgentCount(sessionId)
@@ -98,10 +97,6 @@ function useSessionPanelToolItems(
       : []),
     ...(subAgentCount > 0
       ? [{ tool: 'subagent' as const, Icon: Bot, label: t('panel.subAgent'), badge: subAgentCount }]
-      : []),
-    // 聊天会话专属（宿主注入内容才出现）：「这个 bot 为什么没说话」的用户侧出口（设计 §9）
-    ...(includeBotDecisions
-      ? [{ tool: 'botDecisions' as const, Icon: Gavel, label: t('panel.botDecisions') }]
       : []),
     // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，Bot 是 Sub-agent 的，同栏必须一眼分得开。
     // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
@@ -126,18 +121,15 @@ function useSessionPanelToolItems(
  */
 export function SessionToolbar({
   sessionId,
-  showPreview = false,
-  showBotDecisions = false
+  showPreview = false
 }: {
   sessionId: string | null
   /** 是否显示 Preview 工具入口（与 SessionPanel 的 previewContent 注入配套） */
   showPreview?: boolean
-  /** 是否显示 Bot 决策工具入口（与 SessionPanel 的 botDecisionsContent 注入配套；聊天会话专属） */
-  showBotDecisions?: boolean
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const openTool = useSessionPanelTool(sessionId)
-  const tools = useSessionPanelToolItems(sessionId, showPreview, showBotDecisions)
+  const tools = useSessionPanelToolItems(sessionId, showPreview)
   // 专注模式淡化：与顶栏/侧栏/面板页签同一套判定与手感（悬浮即恢复不透明）。
   // 注意 hook 必须在下面的早退之前调用。
   const { dim } = useFocusDim()
@@ -197,27 +189,20 @@ export interface SessionPanelProps {
   filesContent: ReactNode
   /** Preview 工具的内容（可选注入：桌面悬浮窗 / 扩展传共享 PreviewPanel；桌面主窗不传 —— 预览在右侧面板） */
   previewContent?: ReactNode
-  /** Bot 决策工具的内容（可选注入：桌面对聊天会话传；缺省该工具页不出现） */
-  botDecisionsContent?: ReactNode
 }
 
 /** 会话面板卡片本体 —— 收起（或无会话）时渲染 null */
 export function SessionPanel({
   sessionId,
   filesContent,
-  previewContent,
-  botDecisionsContent
+  previewContent
 }: SessionPanelProps): React.JSX.Element | null {
   const rawTool = useSessionPanelTool(sessionId)
   const width = useSessionPanelStore((s) => s.width)
   if (!sessionId || !rawTool) return null
 
-  // 兜底：面板停在宿主未注入内容的工具页（不该发生 / 切到了非聊天会话）→ 回落到 Files
-  const tool =
-    (rawTool === 'preview' && !previewContent) ||
-    (rawTool === 'botDecisions' && !botDecisionsContent)
-      ? 'files'
-      : rawTool
+  // 兜底：面板停在 Preview 但宿主未注入 previewContent（不该发生）→ 回落到 Files
+  const tool = rawTool === 'preview' && !previewContent ? 'files' : rawTool
 
   return (
     // 外层：占位列（宽度参与 flex 布局），右/下留白让卡片「悬浮」；上留白略小使其贴近顶栏工具区。
@@ -286,18 +271,6 @@ export function SessionPanel({
           >
             <SubAgentPanel />
           </div>
-          {botDecisionsContent !== undefined && (
-            <div
-              className="absolute inset-0"
-              style={
-                tool === 'botDecisions'
-                  ? undefined
-                  : { visibility: 'hidden', pointerEvents: 'none' }
-              }
-            >
-              {botDecisionsContent}
-            </div>
-          )}
           <div
             className="absolute inset-0"
             style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}

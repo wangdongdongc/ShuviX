@@ -439,6 +439,57 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE sessions DROP COLUMN modelMetadata`)
       db.exec(`ALTER TABLE sessions DROP COLUMN systemPrompt`)
     }
+  },
+  {
+    version: 16,
+    description:
+      '群聊会话改用 chat_messages 表承载转写（v2）：新建表，并**删除**既有聊天会话（不做数据迁移）',
+    up: (db) => {
+      // 群聊消息是**平的**：没有分叉、没有工具块/思考块、没有压缩切点 —— 会话树的那些能力
+      // 一个都用不上，而「谁说的」在树的数据模型里只能靠署名侧车（消息前多写一条 custom
+      // entry，投影时靠「紧邻」配对）这种补丁表达。一列 authorKind + botName 取代整套机制。
+      //
+      // displayName 存**落库当时**的显示名：bot md 被删或改名后，历史消息仍然显示当初那个
+      // 名字（与 v1 的侧车同一条纪律，历史永不裂）。decision 是 clarify 回连的判定材料
+      // （上一条 bot 消息是某个 bot 的 clarify 时，下一条无提及消息硬路由回它）。
+      //
+      // hop / rootId 是 bot 响应 bot 的两道护栏：hop 保证链路必然终止（纵向），
+      // rootId 让「同一条用户消息引发了多少条 bot 消息」可数（横向）。缺省
+      // `shuvix-bot-respond-to: user` 下两者恒为 0 / 自身，护栏不生效也不花钱。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id           TEXT PRIMARY KEY,
+          sessionId    TEXT NOT NULL,
+          seq          INTEGER NOT NULL,
+          authorKind   TEXT NOT NULL,
+          botName      TEXT,
+          displayName  TEXT,
+          content      TEXT NOT NULL,
+          decision     TEXT,
+          reply        TEXT,
+          inlineTokens TEXT,
+          attachments  TEXT,
+          isError      INTEGER NOT NULL DEFAULT 0,
+          replyToId    TEXT,
+          rootId       TEXT,
+          hop          INTEGER NOT NULL DEFAULT 0,
+          createdAt    INTEGER NOT NULL
+        )
+      `)
+      // 会话内按 seq 取全量/区间（列表、回退区间、笔记增量窗）—— 唯一的查询形状
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_chat_messages_session_seq ON chat_messages(sessionId, seq)`
+      )
+
+      // **删除既有聊天会话**（产品裁决：不做数据迁移）。它们的转写在 JSONL 会话树里，
+      // 新渲染路径没有读它的来源；留着等于在侧栏里放几条点开就空白的会话，比删掉更糟。
+      // 对应的 `<userData>/data/sessions/<id>.jsonl` 成为孤儿文件 —— 与既有策略一致
+      // （sessionStorage 明确不做启动扫描兜底：后果只是几个不再被引用的文本文件）。
+      db.exec(`
+        DELETE FROM sessions
+        WHERE json_array_length(json_extract(settings, '$.bots')) > 0
+      `)
+    }
   }
 ]
 

@@ -31,6 +31,16 @@ export function getSessionsDir(): string {
   return ensureDir(join(getDataDir(), 'sessions'))
 }
 
+/**
+ * 群聊会话的附件目录：`<userData>/data/chat-attachments/<sessionId>/`
+ *
+ * 字节落盘、行里只存描述符 —— base64 进表会让「读整个会话」变得昂贵（同 http_logs
+ * 默认关闭的那条理由）。与 sessions/ 同级：都是运行时产物，备份时一起带走。
+ */
+export function getChatAttachmentsDir(sessionId: string): string {
+  return ensureDir(join(getDataDir(), 'chat-attachments', sessionId))
+}
+
 /** 用户配置目录：~/.shuvix/ */
 export function getUserConfigDir(): string {
   return ensureDir(join(homedir(), '.shuvix'))

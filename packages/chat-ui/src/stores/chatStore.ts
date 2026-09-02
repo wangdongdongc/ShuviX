@@ -24,7 +24,7 @@ export type {
   UserTextMeta,
   AssistantMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
-import type { ChatMessage, SuppressedCandidate } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { fillToolResult, upsertMessage } from './messageOps'
 export type { ToolResultDetails }
 
@@ -278,8 +278,6 @@ interface ChatState {
   sessionBotActivities: Record<string, Record<string, BotActivitySnapshot>>
   /** 聊天会话：各 session 各成员的 mailbox 快照（bot_mailbox 整份镜像；空快照即删键） */
   sessionBotMailbox: Record<string, Record<string, BotMailboxSnapshot>>
-  /** 聊天会话：最近一次「全体沉默」（一次性提示；新一轮活动/新用户消息/手动关闭即清） */
-  sessionBotSilence: Record<string, BotSilenceNotice>
 
   // Actions
   setSessions: (sessions: Session[]) => void
@@ -370,8 +368,6 @@ interface ChatState {
   ) => void
   /** bot_mailbox 事件唯一写入点：按 botName 整份替换；空快照即删键 */
   setBotMailbox: (sessionId: string, botName: string, snapshot: BotMailboxSnapshot) => void
-  /** bot_cohort_silent 事件写入点；null = 关闭提示（手动 ✕ / 新一轮开始） */
-  setBotSilence: (sessionId: string, notice: BotSilenceNotice | null) => void
   /** 清某会话全部 bot live 态（messages_reloaded：回退/清空后一切在飞展示作废） */
   clearBotLiveState: (sessionId: string) => void
   /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
@@ -501,7 +497,7 @@ export const selectSessionQueueCount = (s: ChatState): number => {
 export interface BotActivitySnapshot {
   botName: string
   displayName: string
-  phase: 'started' | 'claimed' | 'queued' | 'working'
+  phase: 'started' | 'queued' | 'working'
   /** 本轮用户消息的 entry id（占位卡定位/停止钮参数） */
   messageId?: string
   /** 该相位事件到达时刻（本地钟，仅供展示） */
@@ -514,15 +510,6 @@ export interface BotMailboxSnapshot {
   queued: Array<{ messageSeq: number; messageId: string; queuedAt: number }>
 }
 
-/** 聊天会话：一次「全体沉默」的一次性提示数据（bot_cohort_silent 镜像） */
-export interface BotSilenceNotice {
-  messageId: string
-  reason: 'all_ignored' | 'all_failed' | 'mixed'
-  members: Array<{ name: string; displayName: string; outcome: string }>
-  /** 胜者半路失败时无处可挂的救济名单（挂在提示上，而不是丢掉） */
-  suppressed?: SuppressedCandidate[]
-}
-
 const EMPTY_BOT_ACTIVITIES: Record<string, BotActivitySnapshot> = {}
 /** 当前会话的在飞成员活动（无活动时返回稳定空对象引用） */
 export const selectBotActivities = (s: ChatState): Record<string, BotActivitySnapshot> =>
@@ -533,10 +520,6 @@ const EMPTY_BOT_MAILBOX: Record<string, BotMailboxSnapshot> = {}
 /** 当前会话各成员的 mailbox 快照（无排队时返回稳定空对象引用） */
 export const selectBotMailbox = (s: ChatState): Record<string, BotMailboxSnapshot> =>
   (s.activeSessionId ? s.sessionBotMailbox[s.activeSessionId] : undefined) ?? EMPTY_BOT_MAILBOX
-
-/** 当前会话的全体沉默提示（无则 null） */
-export const selectBotSilence = (s: ChatState): BotSilenceNotice | null =>
-  (s.activeSessionId ? s.sessionBotSilence[s.activeSessionId] : undefined) ?? null
 
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
@@ -603,7 +586,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionThreadOpen: {},
   sessionBotActivities: {},
   sessionBotMailbox: {},
-  sessionBotSilence: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
   modelSupportsVision: false,
@@ -981,11 +963,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   handleBotActivity: (sessionId, ev) =>
     set((state) => {
-      const live =
-        ev.phase === 'started' ||
-        ev.phase === 'claimed' ||
-        ev.phase === 'queued' ||
-        ev.phase === 'working'
+      const live = ev.phase === 'started' || ev.phase === 'queued' || ev.phase === 'working'
       const cur = state.sessionBotActivities[sessionId]
       const patch: Partial<ChatState> = {}
       if (live) {
@@ -1001,12 +979,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               at: Date.now()
             }
           }
-        }
-        // 新一轮开始 = 上一轮的「全体沉默」提示已经过时
-        if (ev.phase === 'started' && state.sessionBotSilence[sessionId]) {
-          const rest = { ...state.sessionBotSilence }
-          delete rest[sessionId]
-          patch.sessionBotSilence = rest
         }
       } else {
         // ended / silent（以及未来未知相位）：该成员的在飞展示收摊
@@ -1042,17 +1014,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }),
 
-  setBotSilence: (sessionId, notice) =>
-    set((state) => {
-      if (!notice) {
-        if (!state.sessionBotSilence[sessionId]) return {}
-        const next = { ...state.sessionBotSilence }
-        delete next[sessionId]
-        return { sessionBotSilence: next }
-      }
-      return { sessionBotSilence: { ...state.sessionBotSilence, [sessionId]: notice } }
-    }),
-
   clearBotLiveState: (sessionId) =>
     set((state) => {
       const patch: Partial<ChatState> = {}
@@ -1065,11 +1026,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const next = { ...state.sessionBotMailbox }
         delete next[sessionId]
         patch.sessionBotMailbox = next
-      }
-      if (state.sessionBotSilence[sessionId]) {
-        const next = { ...state.sessionBotSilence }
-        delete next[sessionId]
-        patch.sessionBotSilence = next
       }
       return patch
     }),

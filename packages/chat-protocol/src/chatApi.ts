@@ -81,6 +81,16 @@ export interface SessionSettings {
    * 有根会话恒缺省。
    */
   unreadCount?: number
+  /**
+   * **聊天会话专属**的运行配置（v2）：它没有根 Agent，也没有会话树，所以模型/思考深度
+   * 存在这里，而不是像有根会话那样表达为树上的 model_change entry。两种形态互斥不相交。
+   * 不含 enabledTools —— 任务段的 agent 就是 bot 自己，工具来自它的 md。
+   */
+  chatRunConfig?: {
+    provider: string
+    model: string
+    thinkingLevel?: string
+  }
 }
 
 /**
