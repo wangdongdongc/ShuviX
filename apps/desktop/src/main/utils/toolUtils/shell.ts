@@ -42,6 +42,27 @@ function findBashOnPath(): string | null {
 }
 
 /**
+ * bash 的固定参数 —— `--norc` 不是可有可无的防御，是正确性要求。
+ *
+ * macOS 的 /bin/bash（Apple 版 3.2）启动时会做 rshd/sshd 探测：在非交互、非登录、未被当作
+ * sh 调用的前提下，若 `isnetconn(fd 0)` 为真且 SHLVL < 2，它就认定自己是被远程守护进程拉起
+ * 的，于是在执行 `-c` 命令**之前**先 source ~/.bashrc。而 `isnetconn` 只是 getpeername 成功
+ * 与否 —— **unix socketpair 也算数**。
+ *
+ * 后台任务恰好凑齐这三个条件：libuv 在 Unix 上用 socketpair() 实现 'pipe' stdio（后台把 stdin
+ * 留成管道供用户干涉，见 bgTaskService），而 Finder/launchd 拉起的打包应用环境里没有 SHLVL。
+ * 结果是后台任务 100% 会执行用户的 ~/.bashrc，前台（stdin 为 /dev/null，不是 socket）则永不
+ * 触发 —— 一个日常用 zsh 的用户可能从不知道自己 .bashrc 有问题，却只在后台任务上撞见它。
+ *
+ * ⚠️ 该 bug 在 `npm run dev` 下**复现不出来**：从终端启动会继承 SHLVL，恰好压住这条分支。
+ * 写回归测试必须显式 `delete env.SHLVL` 并复刻后台的 stdio 形态。
+ *
+ * 只加在 bash 分支上：sh 回退分支不受影响（act_like_sh 本身就是抑制条件），且能走到那个分支
+ * 的系统上 /bin/sh 多半是 dash/busybox，根本不认这个 flag。
+ */
+const BASH_ARGS = ['--norc', '-c']
+
+/**
  * 获取 shell 配置
  * 解析优先级：
  * 1. Windows: Git Bash → PATH 中的 bash
@@ -66,7 +87,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
     for (const path of paths) {
       if (existsSync(path)) {
-        cachedShellConfig = { shell: path, args: ['-c'] }
+        cachedShellConfig = { shell: path, args: [...BASH_ARGS] }
         return cachedShellConfig
       }
     }
@@ -74,7 +95,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // 回退：PATH 中查找 bash.exe
     const bashOnPath = findBashOnPath()
     if (bashOnPath) {
-      cachedShellConfig = { shell: bashOnPath, args: ['-c'] }
+      cachedShellConfig = { shell: bashOnPath, args: [...BASH_ARGS] }
       return cachedShellConfig
     }
 
@@ -83,16 +104,17 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
   // Unix: 优先 /bin/bash
   if (existsSync('/bin/bash')) {
-    cachedShellConfig = { shell: '/bin/bash', args: ['-c'] }
+    cachedShellConfig = { shell: '/bin/bash', args: [...BASH_ARGS] }
     return cachedShellConfig
   }
 
   const bashOnPath = findBashOnPath()
   if (bashOnPath) {
-    cachedShellConfig = { shell: bashOnPath, args: ['-c'] }
+    cachedShellConfig = { shell: bashOnPath, args: [...BASH_ARGS] }
     return cachedShellConfig
   }
 
+  // sh 回退刻意不加 --norc：dash/busybox 不认该 flag，且 sh 模式本身就不走 rshd 分支
   cachedShellConfig = { shell: 'sh', args: ['-c'] }
   return cachedShellConfig
 }
