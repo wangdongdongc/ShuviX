@@ -45,6 +45,14 @@ export interface ProjectSessionGroupsProps {
   /** 过滤掉无会话的项目组（日历视图用） */
   hideEmptyGroups?: boolean
   /**
+   * 在项目组外面套一层「项目」分节标题（与临时对话组同一形态：无图标、无折叠、悬停一颗 ⋮）。
+   * 侧栏传；日历视图按天渲染时不传 —— 那里一天里只有几条会话，多一层标题只是噪音。
+   *   - `dividerAbove`：上方还有别的东西时才画那条线（桌面的知识库分组；扩展没有）
+   *   - `onNewProject`：分节头菜单里的「打开文件夹」—— 它是新建项目**唯一**的常驻入口
+   *     （顶栏那颗 + 已收进来），故有项目没项目都要把分节标题渲染出来
+   */
+  projectsSection?: { dividerAbove?: boolean; onNewProject?: () => void }
+  /**
    * 项目记忆能力（宿主注入；桌面 window.api.memory，扩展无）。注入后每个项目组内多一层
    * 「项目记忆」子文件夹，绑定记忆的笔记本会话也随之从会话列表里移出去（避免同一条记忆
    * 在同一个组里出现两次）。未注入则两者都不发生 —— 那些会话仍按普通笔记本会话列出。
@@ -55,7 +63,9 @@ export interface ProjectSessionGroupsProps {
 /**
  * 按项目分组的会话列表（桌面/扩展共用）—— 项目为骨架，会话填入，末尾临时对话组
  * （摊开的纯分节：无图标无折叠，见 SessionGroup 的 temp 形态；仍受每组 20 条的
- * 「查看全部」限额约束）。
+ * 「查看全部」限额约束）。侧栏再经 projectsSection 给项目组套一层同形态的「项目」分节
+ * 标题 —— 于是「项目」与「临时对话」是两个并列的分节（各自上方一条分隔线），而不再是
+ * 顶栏标题与它下面的一切。
  * 数据读 chat-ui 的 chatStore（sessions/active/streams/pending/shared/telegram），项目列表由宿主传入。
  * 宿主差异走 caps（pin）+ 注入回调（编辑项目 / 会话配置 / 删除 / 选中）—— 行与组头的动作
  * 都在这里组装成菜单，SessionItem / SessionGroup 只负责把它挂到右键与 ⋮ 上。
@@ -75,6 +85,7 @@ export function ProjectSessionGroups({
   pinnedSessionIds,
   sessionsOverride,
   hideEmptyGroups,
+  projectsSection,
   memory
 }: ProjectSessionGroupsProps): React.JSX.Element {
   const { t } = useTranslation()
@@ -217,100 +228,134 @@ export function ProjectSessionGroups({
     })
   }
 
+  // 「项目」分节头菜单：只有「打开文件夹」一项（新建项目从顶栏那颗 + 收进来的）
+  const openProjectsMenu = (e: React.MouseEvent): void => {
+    const onNewProject = projectsSection?.onNewProject
+    if (!onNewProject) return
+    void showContextMenu(e, [{ id: 'new-project', label: t('sidebar.newProject') }], (action) => {
+      if (action === 'new-project') onNewProject()
+    })
+  }
+
+  /**
+   * 单个分组的渲染。项目组与临时组的组装完全一样，差别只在外层：项目组被套进「项目」
+   * 分节，临时组自己就是一个分节（见下面 return）。
+   */
+  const renderGroup = (
+    [groupKey, groupSessions]: [string, Session[]],
+    dividerAbove = false
+  ): React.JSX.Element => {
+    const isTemp = groupKey === TEMP_GROUP_KEY
+    const label = isTemp
+      ? t('sidebar.tempChats')
+      : projectNames[groupKey] || t('sidebar.unnamedProject')
+    // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
+    const groupDim = dim && activeGroupKey !== groupKey
+    const expanded = expandedGroups.has(groupKey)
+    const shownSessions =
+      expanded || groupSessions.length <= GROUP_VISIBLE_LIMIT
+        ? groupSessions
+        : groupSessions.slice(0, GROUP_VISIBLE_LIMIT)
+    return (
+      <SessionGroup
+        key={groupKey}
+        label={label}
+        variant={isTemp ? 'temp' : 'project'}
+        collapsed={isTemp ? undefined : collapsed.has(groupKey)}
+        onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
+        active={activeGroupKey === groupKey}
+        dim={groupDim}
+        showDividerAbove={dividerAbove}
+        onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
+      >
+        {memory && !isTemp && (
+          <ProjectMemoryFolder
+            projectId={groupKey}
+            adapter={memory}
+            // 折叠的项目组不扫盘（侧栏可能有几十个项目）
+            enabled={!collapsed.has(groupKey)}
+            activeSlug={activeMemory?.projectId === groupKey ? activeMemory.slug : null}
+            dim={dim && activeGroupKey === groupKey}
+          />
+        )}
+        {shownSessions.map((s) => {
+          const children = childrenByParent.get(s.id) ?? []
+          const subCollapsed = !expandedParents.has(s.id)
+          const row = (item: Session, isSub: boolean): React.JSX.Element => (
+            <SessionItem
+              key={item.id}
+              session={item}
+              active={activeSessionId === item.id}
+              isStreaming={sessionStreams[item.id]?.isStreaming}
+              pendingCount={pendingCounts[item.id]}
+              dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
+              isNotebook={!!item.settings.notebookPath}
+              isBot={!!item.settings.bots?.length}
+              unreadCount={item.settings.unreadCount}
+              isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
+              isSub={isSub}
+              subCount={isSub ? 0 : children.length}
+              subCollapsed={subCollapsed}
+              onToggleSubs={toggleSubs}
+              onSelect={handleSelect}
+              onMenu={hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined}
+            />
+          )
+          if (children.length === 0) return row(s, false)
+          return (
+            <div key={s.id}>
+              {row(s, false)}
+              {/* 折叠动画与知识库目录同一个容器 */}
+              <AnimatedCollapse open={!subCollapsed}>
+                {children.map((c) => row(c, true))}
+              </AnimatedCollapse>
+            </div>
+          )
+        })}
+        {shownSessions.length < groupSessions.length && (
+          <div
+            onClick={() =>
+              setExpandedGroups((prev) => {
+                const next = new Set(prev)
+                next.add(groupKey)
+                return next
+              })
+            }
+            // 与同组会话项一致：活动组内逐项淡化（本行永不是选中项，故恒淡）；
+            // 非活动组由 SessionGroup 整组淡化，这里不再叠加，否则 0.3×0.3 几乎不可见
+            className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
+              dim && activeGroupKey === groupKey ? 'opacity-30 hover:opacity-100' : ''
+            }`}
+          >
+            <span className="w-[11px] flex-shrink-0" />
+            <span className="text-[13px] truncate">{t('sidebar.viewAll')}</span>
+          </div>
+        )}
+      </SessionGroup>
+    )
+  }
+
+  // 项目组套进「项目」分节，临时组自己就是并列的另一个分节 ——
+  // 知识库分组由宿主经 groupsPrepend 插在两者之上，不属于任何一节
+  const projectGroups = visible.filter(([key]) => key !== TEMP_GROUP_KEY)
+  const tempGroup = visible.find(([key]) => key === TEMP_GROUP_KEY)
+
   return (
     <>
-      {visible.map(([groupKey, groupSessions], idx) => {
-        const isTemp = groupKey === TEMP_GROUP_KEY
-        const label = isTemp
-          ? t('sidebar.tempChats')
-          : projectNames[groupKey] || t('sidebar.unnamedProject')
-        // 非活动项目组在专注模式下整组淡化；活动组由逐项 dim 处理非选中会话
-        const groupDim = dim && activeGroupKey !== groupKey
-        const expanded = expandedGroups.has(groupKey)
-        const shownSessions =
-          expanded || groupSessions.length <= GROUP_VISIBLE_LIMIT
-            ? groupSessions
-            : groupSessions.slice(0, GROUP_VISIBLE_LIMIT)
-        return (
-          <SessionGroup
-            key={groupKey}
-            label={label}
-            variant={isTemp ? 'temp' : 'project'}
-            collapsed={isTemp ? undefined : collapsed.has(groupKey)}
-            onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
-            active={activeGroupKey === groupKey}
-            dim={groupDim}
-            showDividerAbove={isTemp && idx > 0}
-            onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
-          >
-            {memory && !isTemp && (
-              <ProjectMemoryFolder
-                projectId={groupKey}
-                adapter={memory}
-                // 折叠的项目组不扫盘（侧栏可能有几十个项目）
-                enabled={!collapsed.has(groupKey)}
-                activeSlug={activeMemory?.projectId === groupKey ? activeMemory.slug : null}
-                dim={dim && activeGroupKey === groupKey}
-              />
-            )}
-            {shownSessions.map((s) => {
-              const children = childrenByParent.get(s.id) ?? []
-              const subCollapsed = !expandedParents.has(s.id)
-              const row = (item: Session, isSub: boolean): React.JSX.Element => (
-                <SessionItem
-                  key={item.id}
-                  session={item}
-                  active={activeSessionId === item.id}
-                  isStreaming={sessionStreams[item.id]?.isStreaming}
-                  pendingCount={pendingCounts[item.id]}
-                  dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
-                  isNotebook={!!item.settings.notebookPath}
-                  isBot={!!item.settings.bots?.length}
-                  unreadCount={item.settings.unreadCount}
-                  isPinned={caps.pin ? pinnedSessionIds?.has(item.id) : undefined}
-                  isSub={isSub}
-                  subCount={isSub ? 0 : children.length}
-                  subCollapsed={subCollapsed}
-                  onToggleSubs={toggleSubs}
-                  onSelect={handleSelect}
-                  onMenu={
-                    hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined
-                  }
-                />
-              )
-              if (children.length === 0) return row(s, false)
-              return (
-                <div key={s.id}>
-                  {row(s, false)}
-                  {/* 折叠动画与知识库目录同一个容器 */}
-                  <AnimatedCollapse open={!subCollapsed}>
-                    {children.map((c) => row(c, true))}
-                  </AnimatedCollapse>
-                </div>
-              )
-            })}
-            {shownSessions.length < groupSessions.length && (
-              <div
-                onClick={() =>
-                  setExpandedGroups((prev) => {
-                    const next = new Set(prev)
-                    next.add(groupKey)
-                    return next
-                  })
-                }
-                // 与同组会话项一致：活动组内逐项淡化（本行永不是选中项，故恒淡）；
-                // 非活动组由 SessionGroup 整组淡化，这里不再叠加，否则 0.3×0.3 几乎不可见
-                className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
-                  dim && activeGroupKey === groupKey ? 'opacity-30 hover:opacity-100' : ''
-                }`}
-              >
-                <span className="w-[11px] flex-shrink-0" />
-                <span className="text-[13px] truncate">{t('sidebar.viewAll')}</span>
-              </div>
-            )}
-          </SessionGroup>
-        )
-      })}
+      {projectsSection ? (
+        // 一个项目都没有时也照样渲染：它的 ⋮ 是「打开文件夹」现在唯一的常驻入口
+        <SessionGroup
+          label={t('sidebar.projects')}
+          variant="section"
+          showDividerAbove={projectsSection.dividerAbove}
+          onMenu={projectsSection.onNewProject ? openProjectsMenu : undefined}
+        >
+          {projectGroups.map((group) => renderGroup(group))}
+        </SessionGroup>
+      ) : (
+        projectGroups.map((group) => renderGroup(group))
+      )}
+      {tempGroup && renderGroup(tempGroup, projectGroups.length > 0)}
     </>
   )
 }

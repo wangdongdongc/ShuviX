@@ -492,11 +492,11 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
 
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
- * CSS uppercase 不改 textContent），临时组与知识库组按 `data-group` 锚点认
- * —— 临时组是摊开的纯分节（无图标无 toggle 按钮），知识库组的标签是本地化文案，
- * 两者都只剩这个属性可认。
+ * CSS uppercase 不改 textContent），临时组 / 知识库组 / 「项目」分节标题按 `data-group`
+ * 锚点认 —— 临时组与分节标题是摊开的纯分节（无图标无 toggle 按钮），知识库组的标签是
+ * 本地化文案，三者都只剩这个属性可认。
  */
-export type GroupTarget = { project: string } | 'temp' | 'wiki'
+export type GroupTarget = { project: string } | 'temp' | 'wiki' | 'section'
 
 /**
  * 菜单项原样快照（对齐 `ContextMenuItem`；侧栏不用 role/submenu，故只留这四个键）。
@@ -633,8 +633,13 @@ export function sidebarPane(main: CdpClient): SidebarPane {
             (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
             ${JSON.stringify(target.project)}
         )`
-  /** 第一个「能建会话」的组头 —— 知识库组的菜单里只有刷新（原先它也没有那颗 + 按钮） */
-  const ACTION_HEADER = `${HEADERS}.find((h) => h.getAttribute('data-group') !== 'wiki')`
+  /**
+   * 第一个「能建会话」的组头 —— 按 data-group **正向**点名（项目组 / 临时组）：知识库组的
+   * 菜单里只有刷新，而「项目」分节标题（`section`）压根没有菜单，两者都不是这里要的。
+   */
+  const ACTION_HEADER = `${HEADERS}.find((h) =>
+    ['project', 'temp'].includes(h.getAttribute('data-group'))
+  )`
   /** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
   const MENU_BTN = (scope: string): string =>
     `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`

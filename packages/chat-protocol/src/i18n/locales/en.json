@@ -18,7 +18,8 @@
     "loading": "Loading…"
   },
   "sidebar": {
-    "title": "Projects",
+    "title": "ShuviX",
+    "projects": "Projects",
     "tempChats": "Temporary Chats",
     "archivedProjects": "Archived Projects",
     "unnamedProject": "Unnamed Project",

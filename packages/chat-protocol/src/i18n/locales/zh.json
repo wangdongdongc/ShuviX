@@ -18,7 +18,8 @@
     "loading": "加载中…"
   },
   "sidebar": {
-    "title": "项目",
+    "title": "ShuviX",
+    "projects": "项目",
     "tempChats": "临时对话",
     "archivedProjects": "已归档项目",
     "unnamedProject": "未命名项目",
