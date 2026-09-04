@@ -29,9 +29,9 @@ export interface ProjectSessionGroupsProps {
   /** 选中会话（缺省用 chatStore.setActiveSessionId） */
   onSelect?: (id: string) => void
   onDelete?: (id: string) => void
-  /** 编辑项目（项目组齿轮/右键）；临时组无 */
+  /** 项目配置（组头菜单里的一项）；临时组无 */
   onEditProject?: (projectId: string) => void
-  /** 会话配置入口（桌面：双击/齿轮打开 SessionConfigDialog） */
+  /** 会话配置入口（桌面：行菜单里的一项，打开 SessionConfigDialog） */
   onConfigureSession?: (id: string) => void
   /** 能力开关 */
   caps?: {
@@ -57,7 +57,8 @@ export interface ProjectSessionGroupsProps {
  * （摊开的纯分节：无图标无折叠，见 SessionGroup 的 temp 形态；仍受每组 20 条的
  * 「查看全部」限额约束）。
  * 数据读 chat-ui 的 chatStore（sessions/active/streams/pending/shared/telegram），项目列表由宿主传入。
- * 宿主差异走 caps（pin）+ 注入回调（右键菜单 / 编辑项目 / 会话配置 / 选中）。
+ * 宿主差异走 caps（pin）+ 注入回调（编辑项目 / 会话配置 / 删除 / 选中）—— 行与组头的动作
+ * 都在这里组装成菜单，SessionItem / SessionGroup 只负责把它挂到右键与 ⋮ 上。
  * 桌面日历视图按天复用本组件（sessionsOverride + hideEmptyGroups）。
  */
 export function ProjectSessionGroups({
@@ -180,8 +181,12 @@ export function ProjectSessionGroups({
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
-  // 会话右键菜单：配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
+  // 会话行菜单（右键整行 / 点行尾的 ⋮ 是同一份）：
+  // 配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
   const exportSession = useSessionExport()
+  // 空菜单不该长出一颗点了没反应的 ⋮ —— 逐项唯一的变数是「笔记本不提供导出」
+  const hasSessionMenu = (isNotebook: boolean): boolean =>
+    !!onConfigureSession || !!onDelete || !isNotebook
   const openSessionMenu = (id: string, e: React.MouseEvent): void => {
     const isNotebook = !!sessions.find((s) => s.id === id)?.settings.notebookPath
     const items: ContextMenuItem[] = []
@@ -199,7 +204,7 @@ export function ProjectSessionGroups({
     })
   }
 
-  // 分组右键菜单：新建对话 / 新建 Bot 会话（能力注入时）/（项目组）编辑项目
+  // 分组头菜单（右键组头 / 点 ⋮ 是同一份）：新建对话 / 新建 Bot 会话（能力注入时）/（项目组）项目配置
   const openGroupMenu = (key: string, isTemp: boolean, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [{ id: 'new-chat', label: t('sidebar.newChat') }]
     if (onNewBotChat) items.push({ id: 'new-bot-chat', label: t('sidebar.newBotChat') })
@@ -233,13 +238,10 @@ export function ProjectSessionGroups({
             variant={isTemp ? 'temp' : 'project'}
             collapsed={isTemp ? undefined : collapsed.has(groupKey)}
             onToggle={isTemp ? undefined : () => onToggleGroup(groupKey)}
-            onNewChat={() => onNewChat(isTemp ? null : groupKey)}
-            onNewBotChat={onNewBotChat ? () => onNewBotChat(isTemp ? null : groupKey) : undefined}
             active={activeGroupKey === groupKey}
             dim={groupDim}
             showDividerAbove={isTemp && idx > 0}
-            onEdit={isTemp || !onEditProject ? undefined : () => onEditProject(groupKey)}
-            onHeaderContextMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
+            onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
           >
             {memory && !isTemp && (
               <ProjectMemoryFolder
@@ -271,9 +273,9 @@ export function ProjectSessionGroups({
                   subCollapsed={subCollapsed}
                   onToggleSubs={toggleSubs}
                   onSelect={handleSelect}
-                  onDelete={onDelete}
-                  onConfigure={onConfigureSession}
-                  onContextMenu={openSessionMenu}
+                  onMenu={
+                    hasSessionMenu(!!item.settings.notebookPath) ? openSessionMenu : undefined
+                  }
                 />
               )
               if (children.length === 0) return row(s, false)

@@ -54,7 +54,8 @@
     "switchView": "Switch view",
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day",
-    "newBotChat": "New bot chat"
+    "newBotChat": "New bot chat",
+    "moreActions": "More actions"
   },
   "transcript": {
     "untitled": "Untitled Session",

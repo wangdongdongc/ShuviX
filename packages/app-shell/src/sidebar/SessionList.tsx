@@ -6,6 +6,7 @@ import { MessageSquarePlus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore, selectAllPendingCounts } from '@shuvix/chat-ui'
 import { SessionItem } from './SessionItem'
+import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 
 export interface SessionListProps {
   onNew: () => void
@@ -22,6 +23,14 @@ export function SessionList({ onNew, onSelect, onDelete }: SessionListProps): Re
   const sessionStreams = useChatStore((s) => s.sessionStreams)
   const pendingCounts = useChatStore(selectAllPendingCounts)
   const handleSelect = onSelect ?? setActiveSessionId
+  const showContextMenu = useContextMenu()
+
+  // 行动作全在菜单里（右键 / 行尾 ⋮），这里只有删除一项 —— 宿主没注入删除就没有菜单
+  const openMenu = (id: string, e: React.MouseEvent): void => {
+    void showContextMenu(e, [{ id: 'delete-session', label: t('sidebar.deleteSession') }], () =>
+      onDelete?.(id)
+    )
+  }
 
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
@@ -48,7 +57,7 @@ export function SessionList({ onNew, onSelect, onDelete }: SessionListProps): Re
               isStreaming={sessionStreams[s.id]?.isStreaming}
               pendingCount={pendingCounts[s.id]}
               onSelect={handleSelect}
-              onDelete={onDelete}
+              onMenu={onDelete ? openMenu : undefined}
             />
           ))
         )}

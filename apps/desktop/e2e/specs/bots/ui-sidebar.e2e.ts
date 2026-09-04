@@ -1,8 +1,8 @@
 /**
  * A0 · Bot 会话最小可聊面 —— 侧栏入口 + 成员多选对话框 + 创建流（B 组）。
  *
- * 被测面：SessionGroup 分组头的「新建 Bot 会话」入口（.lucide-bot 与
- * .lucide-message-square-plus 并排）、BotSessionDialog（空态出路 / 成员多选 /
+ * 被测面：SessionGroup 分组头菜单里的「新建 Bot 会话」入口（与「新建对话」同一份菜单）、
+ * BotSessionDialog（空态出路 / 成员多选 /
  * 项目归属提示 / 防重入）、创建后的会话形态（projectId + settings.bots）与
  * 侧栏行呈现（活动态 + bot 图标）。
  *
@@ -71,12 +71,11 @@ afterAll(async () => {
 
 describe('分组头入口与对话框空态', () => {
   // A0-11
-  it('项目组头悬停区有 Bot 入口，与「新建对话」并排', async () => {
-    const actions = await sidebar.groupHeaderActions({ project: PROJECT_NAME })
-    expect(actions).not.toBeNull()
-    expect(actions!.newChat).toBe(true)
-    expect(actions!.newBot).toBe(true)
-    expect(actions!.sameContainer).toBe(true)
+  it('项目组头菜单里有 Bot 入口，与「新建对话」同处一份菜单', async () => {
+    const items = await sidebar.groupMenuItems({ project: PROJECT_NAME })
+    expect(items).not.toBeNull()
+    expect(items).toContain('new-chat')
+    expect(items).toContain('new-bot-chat')
   })
 
   // A0-12 —— 本 spec 第一个打开对话框的用例：bots 目录必须还是空的

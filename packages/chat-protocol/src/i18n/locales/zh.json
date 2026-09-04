@@ -54,7 +54,8 @@
     "switchView": "切换视图",
     "today": "今天",
     "noSessionsOnDay": "当日无会话",
-    "newBotChat": "新建 Bot 会话"
+    "newBotChat": "新建 Bot 会话",
+    "moreActions": "更多操作"
   },
   "transcript": {
     "untitled": "未命名会话",

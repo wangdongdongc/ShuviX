@@ -523,7 +523,7 @@ export interface SidebarPane {
    */
   openSession(title: string): Promise<boolean>
   /**
-   * 点分组头的「新建对话」并等列表落定。
+   * 走分组头菜单的「新建对话」并等列表落定（第一个非知识库组头的 ⋮ → new-chat）。
    *
    * 会让渲染端重新拉全量会话列表（`setSessions(await session.list())`）。经 IPC 建的会话
    * 如今也有 `session.listChanged` 广播兜底（sessions-changed.e2e.ts 钉住），这一下不再是
@@ -532,14 +532,12 @@ export interface SidebarPane {
    */
   clickNewChat(): Promise<void>
   /**
-   * 分组头悬停操作区快照（A0 Bot 入口）：新建对话 / 新建 Bot 会话按钮是否存在、
-   * 是否并排（同一个操作容器）。按钮 opacity-0 只影响视觉，不影响存在性与可点性。
-   * 组头找不到返回 null。
+   * 分组头菜单里的动作 id（A0 Bot 入口）。组头不再有一排小图标 —— 新建对话 / 新建 Bot 会话 /
+   * 项目配置都在 ⋮ 与右键的同一份菜单里，故断言的是**菜单项**而非按钮。
+   * 打开一次菜单（不选任何项 = 取消）后读 e2e 桩记下的 items；组头或 ⋮ 找不到返回 null。
    */
-  groupHeaderActions(
-    target: GroupTarget
-  ): Promise<{ newChat: boolean; newBot: boolean; sameContainer: boolean } | null>
-  /** 点分组头的「新建 Bot 会话」（打开成员多选对话框；等待用 botDialogPane.waitOpen） */
+  groupMenuItems(target: GroupTarget): Promise<string[] | null>
+  /** 走分组头菜单的「新建 Bot 会话」（打开成员多选对话框；等待用 botDialogPane.waitOpen） */
   clickNewBotChat(target: GroupTarget): Promise<void>
   /** 当前活动会话行（bg-bg-active）存在且带 bot 图标 */
   activeRowIsBot(): Promise<boolean>
@@ -552,12 +550,16 @@ export interface SidebarPane {
   rowUnread(title: string): Promise<{ badge: string | null; bold: boolean } | null>
 }
 
-/** 主窗侧栏会话列表（SessionItem 无 data-*，按「含 span.truncate 的可点击行」认） */
+/**
+ * 主窗侧栏会话列表（SessionItem 无 data-*，按「含 span.truncate 的可点击行」认）。
+ *
+ * 行与组头的动作只剩一个入口：悬停浮现的 ⋮（点它与右键弹的是同一份菜单）。菜单本身是
+ * 原生的，e2e 驱动不了 —— bootstrap.cjs 把 `contextMenu:popup` 顶成了可脚本化的桩，
+ * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见 pickFromMenu）。
+ */
 export function sidebarPane(main: CdpClient): SidebarPane {
   const ROWS = `[...document.querySelectorAll('div[class*="cursor-pointer"]')]
     .filter((d) => d.querySelector(':scope > div > span.truncate'))`
-  const NEW_CHAT = `[...document.querySelectorAll('button')]
-    .find((b) => b.querySelector('.lucide-message-square-plus'))`
   /** 按标题定位会话行（标题在行内那层 span.truncate，与顶栏标题区分） */
   const ROW = (title: string): string =>
     `${ROWS}.find(
@@ -575,11 +577,51 @@ export function sidebarPane(main: CdpClient): SidebarPane {
             (h.querySelector('button span.truncate')?.textContent ?? '').trim() ===
             ${JSON.stringify(target.project)}
         )`
+  /** 第一个「能建会话」的组头 —— 知识库组的菜单里只有刷新（原先它也没有那颗 + 按钮） */
+  const ACTION_HEADER = `${HEADERS}.find((h) => h.getAttribute('data-group') !== 'wiki')`
+  /** 行/组头尾部那颗 ⋮（RowMenuButton）—— 侧栏一切动作如今的唯一入口 */
+  const MENU_BTN = (scope: string): string =>
+    `${scope}?.querySelector('.lucide-ellipsis-vertical')?.closest('button')`
+
+  /**
+   * 菜单桩（bootstrap.cjs 顶掉了 contextMenu:popup）：钉下一次弹出要选中的项，
+   * 并清掉上一次记下的 items。钉 null = 取消（只看菜单内容时用）。
+   */
+  const armMenu = (actionId: string | null): Promise<unknown> =>
+    main.eval(`(() => {
+      window.__E2E_MENU_PICK = ${JSON.stringify(actionId)}
+      window.__E2E_MENU_ITEMS = null
+      return true
+    })()`)
+
+  /** 桩记下的最近一次菜单项 id（弹出是异步的，等它到） */
+  const lastMenuIds = async (): Promise<string[]> => {
+    await until(
+      () => main.eval<boolean>(`Array.isArray(window.__E2E_MENU_ITEMS)`),
+      'context menu popped'
+    )
+    return main.eval<string[]>(`window.__E2E_MENU_ITEMS.filter((it) => it.id).map((it) => it.id)`)
+  }
+
+  /**
+   * 打开某处的 ⋮ 并选中一项：先钉选择再点按钮，随后核对该项**真的在**菜单里 ——
+   * 桩是照钉的 id 回的，菜单里没有这一项也不会报错，只是什么都不会发生（失败点会离真因很远）。
+   */
+  const pickFromMenu = async (scope: string, actionId: string, what: string): Promise<void> => {
+    await until(() => main.eval<boolean>(`!!${MENU_BTN(scope)}`), `${what} menu button`)
+    await armMenu(actionId)
+    await main.eval(`${MENU_BTN(scope)}.click()`)
+    const ids = await lastMenuIds()
+    if (!ids.includes(actionId)) {
+      throw new Error(
+        `menu item "${actionId}" not offered by ${what} (got: ${ids.join(', ') || '-'})`
+      )
+    }
+  }
 
   return {
     clickNewChat: async () => {
-      await until(() => main.eval<boolean>(`${NEW_CHAT} !== undefined`), 'session group header')
-      await main.eval(`${NEW_CHAT}.click()`)
+      await pickFromMenu(ACTION_HEADER, 'new-chat', 'session group header')
       await new Promise((r) => setTimeout(r, 800))
     },
     titles: () =>
@@ -624,30 +666,21 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       return true
     },
 
-    groupHeaderActions: async (target) => {
+    groupMenuItems: async (target) => {
       await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
-      return main.eval(`(() => {
-        const h = ${HEADER(target)}
-        if (!h) return null
-        // 一律先落到组头行内再找图标（.lucide-bot 在别处另有他用）
-        const bot = h.querySelector('.lucide-bot')?.closest('button') ?? null
-        const chat = h.querySelector('.lucide-message-square-plus')?.closest('button') ?? null
-        return {
-          newChat: !!chat,
-          newBot: !!bot,
-          sameContainer: !!bot && !!chat && bot.parentElement === chat.parentElement
-        }
-      })()`)
-    },
-    clickNewBotChat: async (target) => {
-      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      await armMenu(null)
       const clicked = await main.eval<boolean>(`(() => {
-        const btn = ${HEADER(target)}?.querySelector('.lucide-bot')?.closest('button')
+        const btn = ${MENU_BTN(HEADER(target))}
         if (!btn) return false
         btn.click()
         return true
       })()`)
-      if (!clicked) throw new Error('new-bot-chat entry not found on group header')
+      if (!clicked) return null
+      return lastMenuIds()
+    },
+    clickNewBotChat: async (target) => {
+      await until(() => main.eval<boolean>(`${HEADER(target)} !== undefined`), 'group header')
+      await pickFromMenu(HEADER(target), 'new-bot-chat', 'group header')
       await sleep(200)
     },
     activeRowIsBot: () =>

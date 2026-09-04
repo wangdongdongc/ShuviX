@@ -1,8 +1,12 @@
 /**
  * SessionItem —— 共享会话列表单行（prop 驱动），从桌面 Sidebar.renderSessionItem 抽出。
  *
- * 通用部分（图标/标题/流式脉冲/待输入计数/选中态/删除）两宿主共用；桌面专属能力
- * （悬浮 pin / 会话配置 / 右键菜单）通过可选 prop 注入，缺省即隐藏。
+ * 通用部分（图标/标题/流式脉冲/待输入计数/选中态）两宿主共用；桌面专属能力（悬浮 pin）
+ * 通过可选 prop 注入，缺省即隐藏。
+ *
+ * 行内**没有任何动作按钮**：配置/导出/删除这些动作统一收在行尾那颗 ⋮ 里（`onMenu`，与右键
+ * 同一份菜单，见 RowMenuButton）。菜单由容器组装 —— 一行能做什么取决于宿主注入了哪些回调，
+ * 那份判断本来就在容器手里（ProjectSessionGroups / SessionList）。
  *
  * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
  * paddingLeft（同 WikiGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
@@ -10,16 +14,9 @@
  * 数量是标题后一个暗淡的小数字而不是一枚药丸。有子会话的行图标换成 MessagesSquare
  * （两片叠起来的对话框 = 这里不止一场对话）。
  */
-import {
-  Bot,
-  MessageSquare,
-  MessagesSquare,
-  FileText,
-  PictureInPicture2,
-  Settings2,
-  Trash2
-} from 'lucide-react'
+import { Bot, MessageSquare, MessagesSquare, FileText, PictureInPicture2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { RowMenuButton } from './RowMenuButton'
 
 export interface SessionItemProps {
   session: { id: string; title: string }
@@ -42,11 +39,10 @@ export interface SessionItemProps {
   subCollapsed?: boolean
   onToggleSubs?: (id: string) => void
   onSelect: (id: string) => void
-  onDelete?: (id: string) => void
+  /** 行菜单（右键整行 / 点行尾的 ⋮ 走的是同一个回调）；缺省即无 ⋮ 也无右键 */
+  onMenu?: (id: string, e: React.MouseEvent) => void
   // —— 桌面专属（可选） ——
   isPinned?: boolean
-  onConfigure?: (id: string) => void
-  onContextMenu?: (id: string, e: React.MouseEvent) => void
 }
 
 export function SessionItem({
@@ -63,16 +59,14 @@ export function SessionItem({
   subCollapsed = false,
   onToggleSubs,
   onSelect,
-  onDelete,
-  isPinned = false,
-  onConfigure,
-  onContextMenu
+  onMenu,
+  isPinned = false
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div
       onClick={() => onSelect(session.id)}
-      onContextMenu={onContextMenu ? (e) => onContextMenu(session.id, e) : undefined}
+      onContextMenu={onMenu ? (e) => onMenu(session.id, e) : undefined}
       // 父子关系的稳定锚点（同 data-unread 的做法）：缩进与折叠态靠 class / 内联样式表达，
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
@@ -180,31 +174,12 @@ export function SessionItem({
           </span>
         )}
       </div>
-      <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-        {onConfigure && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onConfigure(session.id)
-            }}
-            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-text-secondary"
-            title={t('sessionConfig.title')}
-          >
-            <Settings2 size={11} />
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(session.id)
-            }}
-            className="p-0.5 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
-          >
-            <Trash2 size={11} />
-          </button>
-        )}
-      </div>
+      {onMenu && (
+        <RowMenuButton
+          className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+          onOpen={(e) => onMenu(session.id, e)}
+        />
+      )}
     </div>
   )
 }

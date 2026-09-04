@@ -54,7 +54,8 @@
     "switchView": "ビュー切り替え",
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません",
-    "newBotChat": "新しい Bot 会話"
+    "newBotChat": "新しい Bot 会話",
+    "moreActions": "その他の操作"
   },
   "transcript": {
     "untitled": "無題のセッション",

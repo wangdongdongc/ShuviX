@@ -14,12 +14,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FileText, FolderClosed, FolderOpen, RefreshCw, ScrollText } from 'lucide-react'
+import { FileText, FolderClosed, FolderOpen, ScrollText } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { WIKI_PROJECT_ID } from '@shuvix/chat-protocol/wiki'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { SessionGroup } from './SessionGroup'
 import { useFocusDim } from './useFocusDim'
+import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 
 /** listFiles 返回的单个文件：wiki 根下相对路径 + 条目显示名（取不到为 null，回退 stem） */
 export interface WikiFileInfo {
@@ -102,6 +103,7 @@ function buildTree(files: WikiFileInfo[]): WikiDirNode {
 export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
+  const showContextMenu = useContextMenu()
 
   // 活动会话是否为 wiki 笔记本（分组头高亮 + 命中行选中态）
   const activeNotePath = useChatStore((s) => {
@@ -214,17 +216,9 @@ export function WikiGroup({ listFiles, onSelectFile }: WikiGroupProps): React.JS
       onToggle={toggle}
       active={isWikiActive}
       dim={dim && !isWikiActive}
-      headerActions={
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            void scan()
-          }}
-          className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary/50 hover:text-text-secondary"
-          title={t('panel.filesRefresh')}
-        >
-          <RefreshCw size={11} />
-        </button>
+      // 组头菜单（右键 / ⋮）：知识库组只有「刷新」一件事可做
+      onMenu={(e) =>
+        void showContextMenu(e, [{ id: 'refresh', label: t('panel.filesRefresh') }], () => scan())
       }
     >
       {files !== null &&
