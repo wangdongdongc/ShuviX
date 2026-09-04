@@ -27,7 +27,13 @@ const log = createLogger('ProviderOAuth')
  * `registerBunOAuthFlows()` 正是为这种「已经静态打包进去了」的场景准备的注册入口：
  * 它用静态 import 把 xai 等四家的实现塞进 loader 表，动态 import 那条路就不会被走到。
  */
-registerBunOAuthFlows()
+try {
+  registerBunOAuthFlows()
+} catch (err) {
+  // 注册失败只该让订阅登录不可用，不该连累整个模块的加载 —— providerHandlers 依赖它，
+  // 一个顶层抛错会把所有 provider IPC 一起带走，症状会离病因非常远。
+  log.error('注册内置 OAuth 流程失败，订阅登录将不可用', err)
+}
 
 /**
  * 支持订阅登录的提供商表：provider slug → pi-ai 的 OAuth 流程。
@@ -84,19 +90,37 @@ export class ProviderOAuthService {
     return next
   }
 
+  /**
+   * provider 行 id → pi-ai slug。
+   *
+   * 内置 provider 的 id **不一定**等于 slug：历史上有过一次「提供商 ID 迁移至 UUIDv7」
+   * (7eb9d83)，那之后建的库里内置行的 id 是 uuid、只有 name 是 slug，而且没有迁回的迁移 ——
+   * 于是同一个版本在新库上 id='xai'、在老库上 id='0193…'。所以凡是「这是哪一家」的判断都
+   * 必须看 name，`modelResolver` 里的 `providerInfo.name.toLowerCase()` 同源。
+   *
+   * 凭据仍按 id 读写：那是行的主键，与它叫什么无关。
+   */
+  private slugOf(providerId: string): string | undefined {
+    const name = providerDao.pick(providerId, ['name'])?.name
+    return name ? name.toLowerCase() : undefined
+  }
+
   private flow(providerId: string): OAuthAuth | undefined {
-    const factory = OAUTH_PROVIDERS[providerId]
+    const slug = this.slugOf(providerId)
+    if (!slug) return undefined
+    const factory = OAUTH_PROVIDERS[slug]
     if (!factory) return undefined
-    let cached = this.flows.get(providerId)
+    let cached = this.flows.get(slug)
     if (!cached) {
       cached = factory()
-      this.flows.set(providerId, cached)
+      this.flows.set(slug, cached)
     }
     return cached
   }
 
   supports(providerId: string): boolean {
-    return providerId in OAUTH_PROVIDERS
+    const slug = this.slugOf(providerId)
+    return !!slug && slug in OAUTH_PROVIDERS
   }
 
   status(providerId: string): ProviderOAuthStatus {

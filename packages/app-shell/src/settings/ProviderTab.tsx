@@ -351,8 +351,11 @@ export function ProviderTab({
       try {
         const status = await oauthApi.status(providerId)
         setOauthStatus((prev) => ({ ...prev, [providerId]: status }))
-      } catch {
-        // 状态查询失败不该拦住整个设置页：当作不支持处理，用户仍可用 API Key
+      } catch (err) {
+        // 状态查询失败不该拦住整个设置页：当作不支持处理，用户仍可用 API Key。
+        // 但必须留痕 —— 这里静默吞过一次，症状是「某台机器上订阅登录入口就是不出现」，
+        // 没有任何报错可查。
+        console.warn('[ProviderTab] oauth status query failed', err)
       }
     },
     [oauthApi]
